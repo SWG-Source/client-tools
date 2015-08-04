@@ -1,0 +1,629 @@
+/***** INCLUDES ********************************************************/
+include library.static_item;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+const string DATATABLE_SCHEDULE						= "datatables/scheduled_drop/schedule.iff";
+const string DATATABLE_PROMOTIONS					= "datatables/scheduled_drop/promotions.iff";
+const string DATATABLE_SERVER_PERCENTAGES			= "datatables/scheduled_drop/server_percentages.iff";
+
+const string DATATABLE_SCHEDULE_PROMO_NAME			= "promotion_name";
+const string DATATABLE_SCHEDULE_PROMO_LIST			= "promotion_list";
+const string DATATABLE_SCHEDULE_PROMO_TYPE			= "promotion_type";
+const string DATATABLE_SCHEDULE_PROMO_MAX_DROPS		= "max_drops";
+
+const string DATATABLE_SCHEDULE_PROMO_START_HOUR	= "start_hour";
+const string DATATABLE_SCHEDULE_PROMO_START_MINUTE	= "start_minute";
+const string DATATABLE_SCHEDULE_PROMO_START_SECOND	= "start_second";
+
+const string DATATABLE_SCHEDULE_PROMO_START_MONTH	= "start_month";
+const string DATATABLE_SCHEDULE_PROMO_START_DAY		= "start_day";
+const string DATATABLE_SCHEDULE_PROMO_START_YEAR	= "start_year";
+
+const string DATATABLE_SCHEDULE_PROMO_END_HOUR		= "end_hour";
+const string DATATABLE_SCHEDULE_PROMO_END_MINUTE	= "end_minute";
+const string DATATABLE_SCHEDULE_PROMO_END_SECOND	= "end_second";
+
+const string DATATABLE_SCHEDULE_PROMO_END_MONTH		= "end_month";
+const string DATATABLE_SCHEDULE_PROMO_END_DAY		= "end_day";
+const string DATATABLE_SCHEDULE_PROMO_END_YEAR		= "end_year";
+
+const string DATATABLE_SERVER_PERCENTAGES_MAX		= "max_drop_percentage";
+
+const string DATATABLE_PROMO_LIST					= "promotion_list";
+const string DATATABLE_PROMO_STATIC_ITEM_NAME		= "card_name";
+const string DATATABLE_PROMO_WEIGHT					= "weight";
+
+const string CLUSTER_OBJVAR_PROMOTIONS				= "tcg.promotions";
+const string CLUSTER_OBJVAR_PROMOTION_COUNTS		= "tcg.counts";
+const string CLUSTER_OBJVAR_LAST_UPDATE				= "tcg.last_update_date";
+
+const string PLAYER_SCRIPTVAR_DROP_TIME				= "tcg.lastCardDropTime";
+
+const int DROP_CHANCE_COMBAT_NORMAL			= 400;
+const int DROP_CHANCE_COMBAT_ELITE			= 320;
+const int DROP_CHANCE_COMBAT_BOSS			= 200;
+const int DROP_CHANCE_COMBAT_SPACE			= 400;
+const int DROP_CHANCE_ENTERTAINER			= 400;
+const int DROP_CHANCE_CRAFTER				= 300;
+
+const int SYSTEM_UNKNOWN					= 0;
+const int SYSTEM_COMBAT_NORMAL				= 1;
+const int SYSTEM_COMBAT_ELITE				= 2;
+const int SYSTEM_COMBAT_BOSS				= 3;
+const int SYSTEM_COMBAT_SPACE				= 4;
+const int SYSTEM_ENTERTAINER				= 5;
+const int SYSTEM_CRAFTER					= 6;
+
+const int CARD_DELAY_COMBAT_NORMAL			= 10;
+const int CARD_DELAY_COMBAT_ELITE			= 12;
+const int CARD_DELAY_COMBAT_BOSS			= 20;
+const int CARD_DELAY_COMBAT_SPACE			= 10;
+const int CARD_DELAY_ENTERTAINER			= 20;
+const int CARD_DELAY_CRAFTER				= 20;
+const int CARD_DELAY_DEFAULT				= 20;
+
+const string [] systemTypes				= { "ERROR_unknown", "combat_normal", "combat_elite", "combat_boss", "combat_space", "entertainer", "crafter" };
+
+void testingSpam(obj_id self, string str)
+{
+	if(isIdValid(self) && isGod(self) && hasObjVar(self, "qa_tcg"))
+		sendSystemMessageTestingOnly(self, str);
+}
+
+string [] getPromotionList()
+{
+	return dataTableGetStringColumn(DATATABLE_PROMOTIONS, DATATABLE_PROMO_LIST);
+}
+
+string [] getStaticItems()
+{
+	return dataTableGetStringColumn(DATATABLE_PROMOTIONS, DATATABLE_PROMO_STATIC_ITEM_NAME);
+}
+
+int [] getStaticItemWeights()
+{
+	return dataTableGetIntColumn(DATATABLE_PROMOTIONS, DATATABLE_PROMO_WEIGHT);
+}
+
+int getWeightTotal(dictionary [] promotionList)
+{
+	int weight = 0;
+
+	if(promotionList == null || promotionList.length <= 0)
+	{
+		return 0;
+	}
+
+	for(int i = 0, j = promotionList.length; i < j; i++)
+	{
+		weight += promotionList[i].getInt("promotionWeight");
+	}
+
+	return weight;
+}
+
+int getRandomStaticItem(dictionary [] promotionList)
+{
+	if(promotionList == null || promotionList.length <= 0)
+	{
+		return -1;
+	}
+
+	int weightTotal = getWeightTotal(promotionList);
+	int roll = rand(1, weightTotal);
+	int index = -1;
+	int currentWeight = 0;
+
+	for(int i = 0, j = promotionList.length; i < j; i++)
+	{
+		currentWeight += promotionList[i].getInt("promotionWeight");
+
+		if(currentWeight >= roll)
+		{
+			index = i;
+			break;
+		}
+	}
+
+	return index;
+}
+
+dictionary [] getStaticItemsForAllPromotions(string [] promotionNames)
+{
+	if(promotionNames == null || promotionNames.length <= 0)
+	{
+		return null;
+	}
+
+	// concatArrays
+	string [] allPromotionLists = getPromotionList();
+	string [] allItems = getStaticItems();
+	int [] allWeights = getStaticItemWeights();
+
+	if(allItems == null || allItems.length <= 0)
+	{
+		return null;
+	}
+
+	// Now check to see what promotions are in the list versus what promotions are actually running
+
+	resizeable dictionary [] allStaticItems = new dictionary[0];
+
+	for(int i = 0, j = promotionNames.length; i < j; i++)
+	{
+		for(int k = 0, l = allItems.length; k < l; k++)
+		{
+			string promotionList = dataTableGetString(DATATABLE_SCHEDULE, promotionNames[i], DATATABLE_SCHEDULE_PROMO_LIST);
+
+			if(allPromotionLists[k] == promotionList)
+			{
+				dictionary cardEntry = new dictionary();
+
+				cardEntry.put("promotionName", promotionNames[i]);
+				cardEntry.put("promotionList", allPromotionLists[k]);
+				cardEntry.put("promotionItem", allItems[k]);
+				cardEntry.put("promotionWeight", allWeights[k]);
+
+				allStaticItems = utils.addElement(allStaticItems, cardEntry);
+			}
+		}
+	}
+
+	return allStaticItems;
+}
+
+string [] getSchedulerPromotions()
+{
+	return dataTableGetStringColumn(DATATABLE_SCHEDULE, DATATABLE_SCHEDULE_PROMO_NAME);
+}
+
+int [] getSchedulerMaxDrops()
+{
+	return dataTableGetIntColumn(DATATABLE_SCHEDULE, DATATABLE_SCHEDULE_PROMO_MAX_DROPS);
+}
+
+string [] getScheduledPromotions(string promotionType)
+{
+	obj_id self = getSelf();
+
+	string [] promotions = getSchedulerPromotions();
+
+	if(promotions == null || promotions.length <= 0)
+	{
+		return null;
+	}
+
+	resizeable string [] scheduledPromotions = new string[0];
+
+	int currentDate = getCalendarTime();
+
+	testingSpam(self, "currentDate: " + currentDate + " realTime: " + getCalendarTimeStringLocal(currentDate));
+
+	for(int i = 0, promotionsLength = promotions.length; i < promotionsLength; i++)
+	{
+		dictionary currentPromotion = dataTableGetRow(DATATABLE_SCHEDULE, promotions[i]);
+
+		if(!currentPromotion.getString(DATATABLE_SCHEDULE_PROMO_TYPE).equals(promotionType))
+		{
+			// LOG("tcg", "Promo invalid.  " + currentPromotion.getString(DATATABLE_SCHEDULE_PROMO_TYPE) + " for type: " + promotionType + " result: " + currentPromotion.getString(DATATABLE_SCHEDULE_PROMO_TYPE).equals(promotionType));
+			continue;
+		}
+
+		int startHour = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_START_HOUR);
+		int startMinute = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_START_MINUTE);
+		int startSecond = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_START_SECOND);
+
+		int startMonth = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_START_MONTH);
+		int startDay = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_START_DAY);
+		int startYear = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_START_YEAR);
+
+		// Not all months are equal in length, so we must give some slack.
+		// getCalendarTime(int year, int month, int day, int hour, int minute, int second);
+
+		int startDate = getCalendarTime(startYear, startMonth, startDay, startHour, startMinute, startSecond);
+
+		int endHour = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_END_HOUR);
+		int endMinute = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_END_MINUTE);
+		int endSecond = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_END_SECOND);
+
+		int endMonth = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_END_MONTH);
+		int endDay = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_END_DAY);
+		int endYear = currentPromotion.getInt(DATATABLE_SCHEDULE_PROMO_END_YEAR);
+
+		int endDate = getCalendarTime(endYear, endMonth, endDay, endHour, endMinute, endSecond);
+
+		testingSpam(self, "Scheduled Promotion: " + currentPromotion.getString(DATATABLE_SCHEDULE_PROMO_NAME) + " Start: " + startDate + " End: " + endDate);
+
+		if(startDate <= currentDate && endDate >= currentDate)
+		{
+			scheduledPromotions = utils.addElement(scheduledPromotions, currentPromotion.getString(DATATABLE_SCHEDULE_PROMO_NAME));
+		}
+	}
+
+	return scheduledPromotions;
+}
+
+// Cluster support
+
+// Maximum amount of cards to drop in a promotion.
+int getPromotionMaxDrop(string promotion)
+{
+	return modifyPromotionCountByServer(dataTableGetInt(DATATABLE_SCHEDULE, promotion, DATATABLE_SCHEDULE_PROMO_MAX_DROPS));
+}
+
+// All promotions and their maximum drops from the schedule datatable.
+dictionary [] getPromotionMaxDrops(string [] promotions)
+{
+	obj_id self = getSelf();
+
+	resizeable int [] maxDrops = new int[0];
+
+	string [] allPromotions = getSchedulerPromotions();
+	int [] allDrops = getSchedulerMaxDrops();
+
+	resizeable dictionary [] promotionsWithDrops = new dictionary[0];
+
+	testingSpam(self, "getPromotionMaxDrops allPromotions.length: " + allPromotions.length + " promotions.length: " + promotions.length);
+
+	// Big O notation on this makes baby Monty cry...
+	for(int i = 0, j = promotions.length; i < j; i++)
+	{
+		for(int k = 0, l = allPromotions.length; k < l; k++)
+		{
+			testingSpam(self, "allPromotions[" + k + "]: " + allPromotions[k] + " promotions[" + i + "]: " + promotions[i] + " allDrops[" + k + "]: " + allDrops[k]);
+
+			if(promotions[i].equals(allPromotions[k]))
+			{
+				dictionary tempPromotion = new dictionary();
+
+				tempPromotion.put("promotion", promotions[i]);
+				tempPromotion.put("promotionMaxDrops", modifyPromotionCountByServer(allDrops[k]));
+
+				promotionsWithDrops = utils.addElement(promotionsWithDrops, tempPromotion);
+			}
+		}
+	}
+
+	return promotionsWithDrops;
+}
+
+int modifyPromotionCountByServer(int promotionCount)
+{
+	string serverName = toLower(getConfigSetting("CentralServer", "clusterName"));
+	float percentOfCount = 0.0f;
+
+	if(serverName == null || serverName.length() <= 0)
+	{
+		percentOfCount = 0.01f;
+	}
+	else
+	{
+		percentOfCount = dataTableGetFloat(scheduled_drop.DATATABLE_SERVER_PERCENTAGES, serverName, scheduled_drop.DATATABLE_SERVER_PERCENTAGES_MAX);
+
+		if(percentOfCount <= 0.0f)
+		{
+			percentOfCount = 0.01f;
+		}
+	}
+
+	return (int)((float)promotionCount * percentOfCount);
+}
+
+// When did this last cluster get updated?
+int getLastClusterUpdateTime()
+{
+	obj_id planet = getPlanetByName("tatooine");
+
+	return getIntObjVar(planet, CLUSTER_OBJVAR_LAST_UPDATE);
+}
+
+void setLastClusterUpdateTime(int date)
+{
+	obj_id planet = getPlanetByName("tatooine");
+
+	setObjVar(planet, CLUSTER_OBJVAR_LAST_UPDATE, date);
+}
+
+void removeLastClusterUpdateTime()
+{
+	obj_id planet = getPlanetByName("tatooine");
+
+	if(!isIdValid(planet))
+	{
+		return;
+	}
+
+	removeObjVar(planet, CLUSTER_OBJVAR_LAST_UPDATE);
+}
+
+void removeClusterPromotions()
+{
+	obj_id planet = getPlanetByName("tatooine");
+
+	string [] promotions = getSchedulerPromotions();
+
+	for(int i = 0, j = promotions.length; i < j; i++)
+	{
+		removeObjVar(planet, "tcg." + promotions[i] + ".count");
+	}
+}
+
+// Send a message to the cluster
+void setClusterPromotions(dictionary [] promotionsWithMaxDrops)
+{
+	// All our data is centralized on tatooine and then replicated automatically through proxy to the other planets
+	obj_id planet = getPlanetByName("tatooine");
+
+	if(!hasScript(planet, "systems.tcg.planet_scheduler"))
+	{
+		attachScript(planet, "systems.tcg.planet_scheduler");
+	}
+
+	// Message the cluster to erase the tcg objvar tree.
+	if(promotionsWithMaxDrops == null || promotionsWithMaxDrops.length <= 0)
+	{
+		messageTo(planet, "clearPromotions", null, 1.0f, false);
+		return;
+	}
+
+	for(int i = 0, j = promotionsWithMaxDrops.length; i < j; i++)
+	{
+		messageTo(planet, "setPromotion", promotionsWithMaxDrops[i], 1.0f, false);
+	}
+}
+
+// Determine if the cluster needs to be initialized or simply updated and place the data on the Tatooine planet object.
+void instantiatePromotionsOnCluster()
+{
+	int lastUpdate = getLastClusterUpdateTime();
+	int currentDate = getCalendarTime();
+
+	// If we have instantiated the data on the planet within the last thirty minutes, do not do anything.
+	if(currentDate - lastUpdate < 1800)
+	{
+//		LOG("planet", "instantiatePromotionsOnCluster already completed on this planet");
+		return;
+	}
+
+	// Setup cards
+	string [] currentPromotions = getScheduledPromotions("card");
+
+	obj_id self = getSelf();
+
+	testingSpam(self, "Card promotions length: " + currentPromotions.length);
+
+	// If no promotions are running, then erase the cluster promotions.
+	if(currentPromotions == null)
+	{
+		setClusterPromotions(null);
+	}
+	else
+	{
+		setClusterPromotions(getPromotionMaxDrops(currentPromotions));
+	}
+
+	// Setup boosters/starters
+	currentPromotions = getScheduledPromotions("item");
+
+	testingSpam(self, "Item promotions length: " + currentPromotions.length);
+
+	if(currentPromotions != null && currentPromotions.length > 0)
+	{
+		setClusterPromotions(getPromotionMaxDrops(currentPromotions));
+	}
+}
+
+// Make sure the promotions on the cluster have cards they can still drop. -1 is infinite drops.
+string [] validatePromotionsVersusCluster(string [] promotionNames)
+{
+	obj_id planet = getPlanetByName("tatooine");
+
+	if(!isIdValid(planet) || !exists(planet) || promotionNames == null || promotionNames.length <= 0)
+	{
+		return null;
+	}
+
+	resizeable string [] validatedPromotions = new string[0];
+
+	for(int i = 0, j = promotionNames.length; i < j; i++)
+	{
+		int countLeft = getIntObjVar(planet, "tcg." + promotionNames[i] + ".count");
+
+		// There are still available cards to drop or the drop is infinite?
+		if(countLeft > 0 || countLeft == -1)
+		{
+			validatedPromotions = utils.addElement(validatedPromotions, promotionNames[i]);
+		}
+	}
+
+	return validatedPromotions;
+}
+
+int cardDelay(int systemToDrop)
+{
+	switch(systemToDrop)
+	{
+		case SYSTEM_COMBAT_NORMAL: return CARD_DELAY_COMBAT_NORMAL;
+		case SYSTEM_COMBAT_ELITE: return CARD_DELAY_COMBAT_ELITE;
+		case SYSTEM_COMBAT_BOSS: return CARD_DELAY_COMBAT_BOSS;
+		case SYSTEM_COMBAT_SPACE: return CARD_DELAY_COMBAT_SPACE;
+		case SYSTEM_ENTERTAINER: return CARD_DELAY_ENTERTAINER;
+		case SYSTEM_CRAFTER: return CARD_DELAY_CRAFTER;
+		case SYSTEM_UNKNOWN: return CARD_DELAY_DEFAULT;
+		default: return CARD_DELAY_DEFAULT;
+	}
+}
+
+boolean hasCardDelay(obj_id player, int systemToDrop)
+{
+	int gameTime = getGameTime();
+
+	if(!isIdValid(player))
+	{
+		return true;
+	}
+
+	if(isGod(player) && hasObjVar(player, "qa_tcg_always_drop"))
+	{
+		return false;
+	}
+
+	if(utils.hasScriptVar(player, PLAYER_SCRIPTVAR_DROP_TIME))
+	{
+		int lastDropTime = utils.getIntScriptVar(player, PLAYER_SCRIPTVAR_DROP_TIME);
+
+		if(gameTime < lastDropTime + cardDelay(systemToDrop))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/*
+boolean isTCGTurnedOn()
+{
+//	return utils.checkConfigFlag("ScriptFlags","TCGTurnedOn");
+	string config = getConfigSetting("GameServer", "TCGTurnedOn");
+
+	LOG("tcg", "config: " + config);
+
+	if(config != null && config.equals("off"))
+	{
+		return false;
+	}
+
+	return true;
+}
+*/
+
+// "can haz card?"
+boolean canDropCard(int systemToDrop)
+{
+	switch(systemToDrop)
+	{
+		case SYSTEM_COMBAT_NORMAL: return (rand(1, DROP_CHANCE_COMBAT_NORMAL) == 1 ? true : false);
+		case SYSTEM_COMBAT_ELITE: return (rand(1, DROP_CHANCE_COMBAT_ELITE) == 1 ? true : false);
+		case SYSTEM_COMBAT_BOSS: return (rand(1, DROP_CHANCE_COMBAT_BOSS) == 1 ? true : false);
+		case SYSTEM_COMBAT_SPACE: return (rand(1, DROP_CHANCE_COMBAT_SPACE) == 1 ? true : false);
+		case SYSTEM_ENTERTAINER: return (rand(1, DROP_CHANCE_ENTERTAINER) == 1 ? true : false);
+		case SYSTEM_CRAFTER: return (rand(1, DROP_CHANCE_CRAFTER) == 1 ? true : false);
+		case SYSTEM_UNKNOWN: return false;
+		default: return false;
+	}
+}
+
+obj_id dropCard(int systemToDrop, obj_id container)
+{
+	obj_id self = getSelf();
+
+	obj_id card = null;
+	string typeName = "card";
+	string staticItemName = "";
+	string promotionName = "";
+
+/*
+	if(!isTCGTurnedOn())
+	{
+		if(isIdValid(self) && isGod(self) && hasObjVar(self, "qa_tcg"))
+		{
+			sendSystemMessageTestingOnly(self, "TCG: Promotion is turned off on this server.");
+		}
+
+		return null;
+	}
+*/
+
+	// Always check to see if the cluster has been updated.
+	instantiatePromotionsOnCluster();
+
+	if(!isIdValid(container) || !exists(container))
+	{
+		CustomerServiceLog("tcg", "ERROR: dropCard() Container to place card in is null.");
+		return null;
+	}
+
+//	LOG("tcg", "dropCard() typeName: " + typeName);
+
+	string [] scheduledPromotions = getScheduledPromotions(typeName);
+
+	// Switch to items, if no card promotions are running.
+	if(scheduledPromotions == null || scheduledPromotions.length <= 0)
+	{
+		typeName = "item";
+		scheduledPromotions = getScheduledPromotions(typeName);
+
+		if(scheduledPromotions == null || scheduledPromotions.length <= 0)
+		{
+			testingSpam(self, "Scheduled Drops: Promotion log is empty.");
+
+			CustomerServiceLog("tcg", "No promotions");
+			return null;
+		}
+	}
+
+	string [] promotions = validatePromotionsVersusCluster(scheduledPromotions);
+
+//	LOG("tcg", "dropCard() promotions.length: " + promotions.length);
+
+	if(promotions == null || promotions.length <= 0)
+	{
+		testingSpam(self, "TCG: Promotions from cluster is empty.");
+
+		CustomerServiceLog("tcg", "No valid promotions left on cluster.");
+		return null;
+	}
+
+	dictionary [] promotionalItems = getStaticItemsForAllPromotions(promotions);
+
+//	LOG("tcg", "dropCard() promotions.length: " + promotions.length + " promotionalItems.length: " + promotionalItems.length);
+
+	int index = getRandomStaticItem(promotionalItems);
+
+//	LOG("tcg", "dropCard() promotions.length: " + promotions.length + " promotionalItems.length: " + promotionalItems.length + " index: " + index);
+
+	if(promotionalItems.length > index && index >= 0)
+	{
+		staticItemName = promotionalItems[index].getString("promotionItem");
+		promotionName = promotionalItems[index].getString("promotionName");
+	}
+	else
+	{
+		CustomerServiceLog("tcg", "ERROR dropCard() tcg.getRandomStaticItem(promotionalItems) out of bounds index for type: " + staticItemName + ".");
+		return null;
+	}
+
+	card = static_item.createNewItemFunction(staticItemName, container);
+
+	if(!isIdValid(card) || !exists(card))
+	{
+		if(isIdValid(self) && isGod(self) && hasObjVar(self, "qa_tcg"))
+		{
+			sendSystemMessageTestingOnly(self, "TCG: Static item creation failed: " + staticItemName);
+		}
+
+		CustomerServiceLog("tcg", "ERROR dropCard() could not create a " + typeName + " (" + staticItemName + ") with target container " + container);
+		return null;
+	}
+
+
+	// Log what was dropped in the "tcg_drop" file.  This should be the only place we log anything to that file.
+	// The general "tcg" file is for errors and notifications.
+	obj_id planet = getPlanetByName("tatooine");
+	int remainder = getIntObjVar(planet, "tcg." + promotionName + ".count");
+
+	testingSpam(self, ",Source_system," + systemTypes[systemToDrop] + ",Dropped_type," + typeName + ",Remaining_left," + remainder +",Promotion," + promotionName + ",Dropped_static_item," + staticItemName + ",Container_dropped_in," + container + ",Container_name," + getName(container) + ",Time," + getCalendarTimeStringLocal(getCalendarTime()));
+
+	CustomerServiceLog("tcg_drop", ",Source_system," + systemTypes[systemToDrop] + ",Dropped_type," + typeName + ",Remaining_left," + remainder +",Promotion," + promotionName + ",Dropped_static_item," + staticItemName + ",Container_dropped_in," + container + ",Container_name," + getName(container) + ",Time," + getCalendarTimeStringLocal(getCalendarTime()));
+
+	// Decriment the promotion it's associated with.
+	dictionary params = new dictionary();
+
+	params.put("promotionName", promotionName);
+
+	messageTo(planet, "reducePromotion", params, 1.0f, true);
+
+	return card;
+}

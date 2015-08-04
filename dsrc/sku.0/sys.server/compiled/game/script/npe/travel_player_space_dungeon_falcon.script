@@ -1,0 +1,307 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        travel_player_space_dungeon_falcon
+ * Description:  Attaches to a player that handles traveling to a space dungeon
+ * @author       Vijay Thakkar
+ * @version      1.0
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.space_dungeon;
+include library.space_dungeon_data;
+include library.utils;
+include library.sui;
+include library.prose;
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_UNABLE_TO_FIND_DUNGEON	   	  = new string_id("dungeon/space_dungeon", "unable_to_find_dungeon");
+const string_id SID_NO_TICKET				  = new string_id("dungeon/space_dungeon", "no_ticket");
+const string_id SID_REQUEST_TRAVEL	   	          = new string_id("dungeon/space_dungeon", "request_travel");
+const string_id SID_REQUEST_TRAVEL_OUTSTANDING		  = new string_id("dungeon/space_dungeon", "request_travel_outstanding");
+
+/***** TRIGGERS ********************************************************/
+trigger OnClusterWideDataResponse(string manage_name, string dungeon_type, int request_id, string[] element_name_list, dictionary[] dungeon_data, int lock_key)
+{
+	// This trigger is fired whenever a request for space dungeon travel has been made.
+	LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse");
+
+	// Get the player that initiated this trigger.
+	obj_id player = space_dungeon.getDungeonTraveler(self, request_id);
+
+	// this player should always be us
+	if (player != self)
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- got a request to send a player that is not self, self: " + self + " request " + player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		if (isIdValid(player))
+			space_dungeon.cleanupPlayerTicketObjvars(player);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id ticket = null;
+
+	if (hasObjVar(player, space_dungeon.VAR_TICKET_USED))
+		ticket = getObjIdObjVar(player, space_dungeon.VAR_TICKET_USED);
+	else
+	{
+		//-- player can be used as the ticket, and carries all the necessary ticket information as objvars
+		ticket = player;
+	}
+
+	// Make sure the player ticket is still valid
+	if (!isIdValid(ticket) || !ticket.isAuthoritative())
+	{
+		sendSystemMessage(player, space_dungeon.SID_ILLEGAL_TICKET);
+		space_dungeon.cleanupPlayerTicketObjvars(player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	if (!manage_name.equals("dungeon"))
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- ignorning manage_name " + manage_name + " because it is not dungeon.");
+		space_dungeon.cleanupPlayerTicketObjvars(player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		return SCRIPT_CONTINUE;
+	}
+	if (request_id < 1)
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- invalid request_id value of " + request_id);
+		space_dungeon.cleanupPlayerTicketObjvars(player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		return SCRIPT_CONTINUE;
+	}
+	if (dungeon_data == null)
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- dungeon_data is null.");
+		space_dungeon.cleanupPlayerTicketObjvars(player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		return SCRIPT_CONTINUE;
+	}
+	if (element_name_list == null)
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- element_name_list is null.");
+		space_dungeon.cleanupPlayerTicketObjvars(player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		return SCRIPT_CONTINUE;
+	}
+	if (dungeon_type == null)
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- dungeon_type is null.");
+		space_dungeon.cleanupPlayerTicketObjvars(player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// The dungeon type is the dungeon name with a wildcard search (ie: dungeon_name*)
+	string dungeon_name = dungeon_type.substring(0, dungeon_type.length() - 1);
+	//LOG("space_dungeon", "dungeon_name ->" + dungeon_name);
+
+	// Check to make certain that the name is in the dungeon datatable.
+	if (false == space_dungeon_data.isValidDungeon(dungeon_name))
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- dungeon name of " + dungeon_name + " is not in the dungeon datatable.");
+		space_dungeon.cleanupPlayerTicketObjvars(player);
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	Vector potential_dungeons = new Vector();
+
+	// Pull the data we need from the dictionary.
+	for (int i = 0; i < dungeon_data.length; i++)
+	{
+		dictionary dungeon = dungeon_data[i];
+		obj_id dungeon_id = dungeon.getObjId("dungeon_id");
+		int session_id = dungeon.getInt("session_id");
+		float[] dungeon_position = {dungeon.getFloat("position_x"), dungeon.getFloat("position_y"), dungeon.getFloat("position_z")};
+				
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- session_id ->" + session_id + " dungeon_instance ->" + element_name_list[i] + " " +dungeon_position[0]+ " " +dungeon_position[1]+ " " +dungeon_position[2]);
+		
+		if (!isIdValid(dungeon_id))
+		{
+			LOG("space_dungeon", "travel_player_space_dungeon_falcon.OnClusterWideDataResponse -- bad data found for dungeon entry " + i + ". Ignoring.");
+			continue;
+		}
+		
+		// this would mark this as an instance we can travel to
+		if (session_id < 1)
+			potential_dungeons.add(new Integer(i));
+	}
+
+	// if we found at least one area we could potentially travel to... start the travel
+	if (potential_dungeons.size() > 0)
+	{
+		// pick a random one
+		int randomPotentialDungeonsIndex = rand(0, potential_dungeons.size()-1);
+		int dungeonIndex = ((Integer)potential_dungeons.get(randomPotentialDungeonsIndex)).intValue();
+
+		dictionary dungeon = dungeon_data[dungeonIndex];
+		obj_id dungeon_id = dungeon.getObjId("dungeon_id");
+		int session_id = dungeon.getInt("session_id");
+
+		// Mark the player with his dungeon session id
+		setObjVar(player, space_dungeon.VAR_SESSION_ID, lock_key);
+
+		// Update the cluster data with the session_id.
+		dictionary dungeon_update = new dictionary();
+		dungeon_update.put("session_id", lock_key);
+		updateClusterWideData(manage_name, element_name_list[dungeonIndex], dungeon_update, lock_key);
+
+		// Release the lock on the dungeon data
+		releaseClusterWideDataLock(manage_name, lock_key);
+
+		// Send a message to the dungeon to mark it's session id.  After this is acknowledged, the transport starts.
+		dictionary d = new dictionary();
+		d.put("session_id", lock_key);
+		d.put("request_id", request_id);
+		d.put("player", player);
+		d.put("ticket_collector", self);
+		if (hasObjVar(ticket, space_dungeon.VAR_TICKET_QUEST_TYPE))
+			d.put("quest_type", getStringObjVar(ticket, space_dungeon.VAR_TICKET_QUEST_TYPE));
+
+		// need to set some objvars to allow the transfer into space
+		setObjVar(self, "space.launch.ship", dungeon_id);
+		setObjVar(self, "space.launch.startIndex", 0); // 0 is pilot
+
+		setObjVar(self, space_dungeon.VAR_EJECT_OVERRIDE, 1);
+
+		// we place this on the player to allow the transition to space. the fallback here is handled in npe.scriptlib via sendPlayerToTutorial
+		setObjVar(self, "space.launch.worldLoc", new location(0, 0, 0, "tutorial"));
+
+		messageTo(dungeon_id, "msgSetSessionId", d, 0.0f, false);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Release the lock on the dungeon data
+	releaseClusterWideDataLock(manage_name, lock_key);
+
+	// Clean up the player's ticket data
+	space_dungeon.cleanupPlayerTicketObjvars(player);
+	space_dungeon.removeDungeonTraveler(self, request_id);
+
+	// Could not find a dungeon.  Check for a "fictional" reason to deny entry. If that doesn't exist, give the
+	// generic response.
+	LIVE_LOG("npe", "Could not find a falcon instance for player " + self + " something has definately gone wrong! Maybe too many people are in the tutorial planet asking for falcon instances)");
+	string_id success = space_dungeon_data.getDungeonFailureString(dungeon_name);
+	if (success == null)
+		sendSystemMessage(player, SID_UNABLE_TO_FIND_DUNGEON);
+	else
+		sendSystemMessage(player, success);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgEjectedFromDungeon()
+{
+	resetShipOwner(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	resetShipOwner(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogout()
+{
+	resetShipOwner(self);
+	return SCRIPT_CONTINUE;
+}
+
+void resetShipOwner(obj_id self)
+{
+	obj_id containing_dungeon = space_dungeon.getDungeonIdForPlayer(self);
+
+	if (isIdValid(containing_dungeon) && isGameObjectTypeOf(getGameObjectType(containing_dungeon), GOT_ship))
+	{
+		LOG("npe", "Player "+self+" is resetting the ship owner to null for the falcon instance they are in ("+containing_dungeon+")");
+		setOwner(containing_dungeon, null);
+	}
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgStartDungeonTravel()
+{
+	int session_id = params.getInt("session_id");
+	LOG("space_dungeon", "msgStartDungeonTravel -- session_id ->" + session_id);
+
+	obj_id dungeon_id = params.getObjId("dungeon_id");
+	if (!isIdValid(dungeon_id))
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.msgStartDungeonTravel -- dungeon_id is invalid for " + self + ".");
+		return SCRIPT_CONTINUE;
+	}
+	string dungeon_name = params.getString("dungeon_name");
+	if (dungeon_id == null)
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.msgStartDungeonTravel -- dungeon_name is null for " + self + ".");
+		return SCRIPT_CONTINUE;
+	}
+	int request_id = params.getInt("request_id");
+	obj_id player = space_dungeon.getDungeonTraveler(self, request_id);
+	if (!isIdValid(player))
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.msgStartDungeonTravel -- player is null for " + self);
+		return SCRIPT_CONTINUE;
+	}
+	space_dungeon.removeDungeonTraveler(self, request_id);
+	if (player.isAuthoritative())
+	{
+		location dungeon_loc = params.getLocation("dungeon_loc");
+		if (dungeon_loc == null)
+		{
+			LOG("space_dungeon", "travel_player_space_dungeon_falcon.msgStartDungeonTravel -- location is null for " + self + ".");
+			return SCRIPT_CONTINUE;
+		}
+
+		space_dungeon.moveSinglePlayerIntoDungeon(player, dungeon_id, dungeon_name, dungeon_loc);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgDungeonTravelComplete()
+{
+	// if they are coming from another dungeon and it should be reset now that they are in another dungeon, reset it
+	if (hasObjVar(self, space_dungeon.VAR_RESET_DUNGEON))
+	{
+		obj_id dungeon_id = getObjIdObjVar(self, space_dungeon.VAR_RESET_DUNGEON);
+		dictionary d = new dictionary();
+		messageTo(dungeon_id, "msgManualDungeonReset", d, 0.0f, false);
+		removeObjVar(self, space_dungeon.VAR_RESET_DUNGEON);
+	}
+
+	obj_id dungeon = space_dungeon.getDungeonIdForPlayer(self);
+
+	if (!isIdValid(dungeon))
+	{
+		LOG("space_dungeon", "travel_player_space_dungeon_falcon.msgDungeonTravelComplete - can't get id of dungeon I am in");
+		return SCRIPT_CONTINUE;
+	}
+
+	// I need to make myself the owner to allow the transfer to complete and use the turret in the ship
+	setOwner(dungeon, self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+

@@ -1,0 +1,198 @@
+include library.create;
+include library.utils;
+include library.ai_lib;
+include library.factions;
+include library.regions;
+include library.uberlair;
+
+inherits theme_park.poi.base;
+
+const string CREATURE_TABLE = "datatables/mob/creatures.iff";
+
+
+/* -----------------12/5/2002 8:20PM-----------------
+ * This script is attached to a POI object by the POI Launch
+ * script.
+ * --------------------------------------------------*/
+trigger OnAttach()
+{
+
+
+	initializePoi( self );
+	messageTo( self, "handleNpcLairDecay", null, 604800.0f, true );//one week
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize ()
+{
+	initializePoi( self );
+	return SCRIPT_CONTINUE;
+}
+
+/* -----------------12/7/2002 12:41PM----------------
+ * Creates the theater (building) and spawns all the
+ * mobiles.
+ *
+ * @param poiBaseObject	the central poi object
+ * --------------------------------------------------*/
+void initializePoi( obj_id poiBaseObject )
+{
+	LOG("uber", "INITIALIZEPOI FUNCTION");
+	string lairType = getStringObjVar( poiBaseObject, "spawning.lairType" ); // the name of the uber lair to make
+	
+
+	string strFaction = utils.getFactionSubString(lairType);
+	if(strFaction!=null)
+	{
+		setObjVar(poiBaseObject, factions.FACTION, strFaction);
+	}
+
+	//obj_id target = poiCreateObject( poiBaseObject, getStringObjVar( poiBaseObject, "spawning.target" ), 0, 0);
+
+	createTheater( poiBaseObject, lairType );
+
+
+
+}
+messageHandler handleTargetDestroyed()
+{
+	poiComplete( POI_SUCCESS );
+	return SCRIPT_CONTINUE;
+}
+
+/*
+this moves all important npc lair elements into the appropriate location within the theater.
+it will move all mobs to allowable spawn locations, and the objectives to the correct destination.
+
+*/
+
+messageHandler handleTheaterComplete()
+{
+	LOG("uber", "HANDLETHEATERCOMPLETE MESSAGEHANDLER ");
+	obj_id objTheater = params.getObjId("master");
+	if(objTheater==null)
+	{
+		//LOG("theater", "params is "+params.toString());
+		return SCRIPT_CONTINUE;
+	}
+
+
+	if(hasObjVar(self, factions.FACTION))
+	{
+		string strFaction = getStringObjVar(self, factions.FACTION);
+		// we need to make all of the theater objects factionsl
+		obj_id[] objChildren = getObjIdArrayObjVar(objTheater, "theater.children");
+		if(objChildren!=null)
+		{
+			for(int intI = 0; intI<objChildren.length; intI++)
+			{
+				factions.setFaction(objChildren[intI], strFaction);
+			}
+		}
+	}
+
+	setObjVar(self, "theater.objTheater", objTheater);
+	
+	obj_id[] objLargeMobSpawners = getObjIdArrayObjVar(objTheater, "theater.objLargeMobSpawners");
+	
+	uberlair.spawnBossMobiles(self, objLargeMobSpawners);
+	messageTo(self, "spawnMobiles", null, 3, false);
+	// REGIONS!
+	
+	
+	
+	// now we make our formation(s)	
+	return SCRIPT_CONTINUE;
+}
+
+void createTheater( obj_id poiBaseObject, string lairType )
+{
+	LOG("uber", "CREATE THEATER FUNCTION");
+	
+	string buildingToSpawn = null;
+	string lairDatatable = "datatables/uberlair/" + lairType + ".iff";
+	
+	string[] buildings = dataTableGetStringColumnNoDefaults(lairDatatable, "strTheater");	
+	if ( buildings == null )
+	{
+		LOG("uberlair", "no building");
+		return;
+	}
+	if ( buildings.length == 0 )
+	{
+		LOG("uberlair", "no building");			
+		return;
+	}
+	buildingToSpawn = buildings[ rand(0, buildings.length -1 ) ];
+	setObjVar( poiBaseObject, "spawning.buildingType", buildingToSpawn );
+	obj_id mainBuilding = poiCreateObject( buildingToSpawn, 0f, 0f );
+	
+	// OVERLOAD REGIONS
+	
+	string[] strOverLoadRegions = dataTableGetStringColumnNoDefaults(lairDatatable, "strOverloadRegions");
+	float[] fltOverLoadRegionSizes = dataTableGetFloatColumnNoDefaults(lairDatatable, "fltRegionSizes");
+	int[] intMinRegionDifficulties = dataTableGetIntColumnNoDefaults(lairDatatable, "intMinRegionDifficulty");
+	int[] intMaxRegionDifficulties = dataTableGetIntColumnNoDefaults(lairDatatable, "intMaxRegionDifficulty");
+	if(strOverLoadRegions.length>0)
+	{
+		if(!hasObjVar(poiBaseObject, "uberlair.strRegionName"))
+		{
+			// WE MAKE A REGION.. format is "name-obj_id");
+			int intRoll = rand(0, strOverLoadRegions.length-1);
+			string strRegionName = strOverLoadRegions[intRoll];
+			strRegionName = strRegionName + "-"+poiBaseObject.toString();
+			float fltRegionSize = fltOverLoadRegionSizes[intRoll];		
+			int intMinRegionDifficulty = intMinRegionDifficulties[intRoll];
+			int intMaxRegionDifficulty = intMaxRegionDifficulties[intRoll];
+			createCircleRegion(getLocation(poiBaseObject), fltRegionSize, strRegionName, regions.PVP_REGION_TYPE_NORMAL, regions.BUILD_TRUE, regions.MUNI_FALSE, regions.GEO_OVERLOAD, intMinRegionDifficulty,intMaxRegionDifficulty, regions.SPAWN_TRUE, regions.MISSION_NONE, false, false);
+			setObjVar(poiBaseObject, "uberlair.strRegionName", strRegionName);	
+		}
+	
+	}
+	// made the main theater, it'll do its thang now	
+
+}
+trigger OnDestroy()
+{
+	
+	string strName = getStringObjVar(self, "uberlair.strRegionName");
+	location locTest = getLocation(self);
+	string strPlanet = locTest.area;
+	region rgnOverLoadRegion = getRegion(strPlanet, strName);
+	if(rgnOverLoadRegion==null)
+	{
+		LOG("DESIGNER_FATAL", "Missing region of name "+strName+" on planet "+strPlanet);
+		return SCRIPT_CONTINUE;
+	}
+	deleteRegion(rgnOverLoadRegion);
+	return SCRIPT_CONTINUE;
+	
+
+}
+
+messageHandler mobDestroyed()
+{
+	location locSpawnLocation = params.getLocation("locSpawnLocation");
+	string strType = params.getString("strType");
+	string strScript = params.getString("strScript");
+	LOG("uber", "params is "+params.toString());
+	uberlair.respawnMobile(self, locSpawnLocation, strType, strScript);
+	return SCRIPT_CONTINUE;
+
+}
+messageHandler spawnMobiles()
+{
+	LOG("uber", "SPAWN_NPC_LAIR_MOBILS MESSAGEHANDLER");
+	obj_id objTheater = getObjIdObjVar(self, "theater.objTheater");
+	obj_id[] objMobSpawners = getObjIdArrayObjVar(objTheater, "theater.objMobSpawners");	
+	uberlair.spawnNpcLairMobiles(self, objMobSpawners);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnFormations()
+{
+	LOG("uber", "SPAWN_formations MESSAGEHANDLER");
+	uberlair.createFormations(self);
+	return SCRIPT_CONTINUE;
+}

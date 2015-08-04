@@ -1,0 +1,176 @@
+include library.quests;
+include library.utils;
+
+trigger OnQuestActivated(int questRow)
+{
+	LOG("newquests", "talk_to_npc - OnQuestActivated(" + questRow + ")");
+	if(quests.isMyQuest(questRow, "quest.task.talk_to_npc"))
+	{
+		String questName = quests.getDataEntry(questRow, "NAME");
+		obj_id target = null;
+		
+		
+		// determine which NPC the player should speak with
+		String objvarName = "quest." + questName + ".target";
+		if(hasObjVar(self, objvarName))
+		{
+			target = getObjIdObjVar(self, objvarName);
+		}
+		else
+		{
+			String targetName = quests.getDataEntry(questRow, "TARGET");
+			if(targetName != null && targetName.length() > 0)
+			{
+				// target refers to some other spawned NPC
+				target = quests.getTargetForQuest(self, targetName);
+			}
+			else
+			{
+				target = quests.getQuestGiver(questRow, self);
+			}
+		}
+		
+		// determine whether the task should generate a waypoint to the
+		// target
+		objvarName = "quest." + questName + ".parameter";
+		// by default, activate a waypoint to the NPC
+		boolean parameter = true;
+		if(hasObjVar(self, objvarName))
+		{
+			parameter = getBooleanObjVar(self, objvarName);
+		}
+		else
+		{
+			String parameterName = quests.getDataEntry(questRow, "PARAMETER");
+			if(parameterName != null && parameterName.length() > 0)
+			{
+				if(parameterName.equals("false"))
+				{
+					parameter = false;
+				}
+				else if(utils.stringToInt(parameterName) == 0)
+				{
+					parameter = false;
+				}
+			}
+		}
+		
+		if(isIdValid(target))
+		{
+			attachScript(target, "quest.utility.npc_start_conversation_notification");
+
+			// todo in the morning - set player id objvars on the target NPC
+			objvarName = "quest." + self;
+			setObjVar(target, objvarName, questName);
+			
+			LOG("newquests", "talk_to_npc - OnQuestActivated() - quest activated");
+			if(parameter)
+			{
+				// request the NPC's location to set a waypoint
+				dictionary locationRequestParameters = new dictionary();
+				locationRequestParameters.put("source", self);
+				locationRequestParameters.put("quest_name", questName);
+				messageTo(target, "locationRequest", locationRequestParameters, 0.0f, false);
+				LOG("newquests", "talk_to_npc - OnQuestActivated() - requesting npc(" + target + ") location to activate a waypoint");
+			}
+		}
+		else
+		{
+			LOG("newquests", "talk_to_npc - OnQuestActivated() failed to setup quest because the target could not be determined, failing the quest");
+			quests.complete(questName, self, false);
+		}
+	}
+	
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler receiveLocationResponse()
+{
+	if(params != null)
+	{
+		String questName = params.getString("quest_name");
+		if(questName != null && questName.length() > 0)
+		{
+			if(quests.isActive(questName, self))
+			{
+				location npcLocation = params.getLocation("location");
+				if(npcLocation != null)
+				{
+					obj_id waypoint = createWaypointInDatapad(self, npcLocation);
+					String summary = quests.getDataEntry(questName, "JOURNAL_ENTRY_SUMMARY");
+					if(summary != null && summary.length() > 0)
+					{
+						setWaypointName(waypoint, summary);
+					}
+					else
+					{
+						setWaypointName(waypoint, "missing task summary for " + questName);
+					}
+
+					setWaypointColor(waypoint, "yellow");
+					setWaypointActive(waypoint, true);
+					string objvarName = "quest." + questName + ".waypoint";
+					setObjVar(self, objvarName, waypoint);
+				}
+				else
+				{
+					LOG("newquests", "talk_to_npc - receiveLocationResponse() - the location sent by the NPC was null, waypoint not activated");
+				}
+			}
+			else
+			{
+				LOG("newquests", "talk_to_npc - receiveLocationResponse() - " + questName + " is no longer active, a waypoint will not be created");
+			}
+		}
+		else
+		{
+			LOG("newquests", "talk_to_npc - receiveLocationResponse() - could not extract quest_name from params, failing to activate a waypoint");
+		}
+	}
+	else
+	{
+		LOG("newquests", "talk_to_npc - receiveLocationResponse() - params was null, cannot create a waypoint");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler npcStartConversationNotification()
+{
+	if(params != null)
+	{
+		obj_id source = params.getObjId("source");
+		if(source != null)
+		{
+			String questName = params.getString("quest_name");
+			if(questName != null && questName.length() > 0)
+			{
+				// complete this quest task successfully!
+				String objvarName = "quest." + questName + ".waypoint";
+				if(hasObjVar(self, objvarName))
+				{
+					obj_id waypoint = getObjIdObjVar(self, objvarName);
+					if(isIdValid(waypoint))
+					{
+						destroyWaypointInDatapad(waypoint, self);
+					}
+				}
+				quests.complete(questName, self, true);
+			}
+			else
+			{
+				LOG("newquests", "talk_to_npc - npcStartConversationNotification() - could not determine quest name, ignoring message");
+			}
+		}
+		else
+		{
+			LOG("newquests", "talk_to_npc - npcStartConversationNotification() - source object id is null, ignoring message");
+		}
+	}
+	else
+	{
+		LOG("newquests", "talk_to_npc - npcStartConversationNotification() - params is null, ignoring message");
+	}
+
+	return SCRIPT_CONTINUE;
+}

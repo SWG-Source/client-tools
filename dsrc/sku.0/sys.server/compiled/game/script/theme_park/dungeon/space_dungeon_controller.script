@@ -1,0 +1,255 @@
+/**********************************************************************
+ * Copyright (c)2000-2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        space_dungeon_controller
+ * Description:  Attaches to the dungeon object to control travel and accessibility functions.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.space_dungeon;
+include library.space_dungeon_data;
+include library.utils;
+include library.prose;
+include library.locations;
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_SESSION_UPDATE					= new string_id ("dungeon/space_dungen", "session_time_update");
+const boolean LOGGING							= true;
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	// Register the dungeon with the cluster-wide data system.
+	space_dungeon.intializeSpaceDungeon(self);
+	if (!hasObjVar(self, "isControllerObject"))
+		setObjVar(self, "isControllerObject", 1);
+		
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnClusterWideDataResponse(string manage_name, string dungeon_name, int request_id, string[] element_name_list, dictionary[] dungeon_data, int lock_key)
+{
+	//LOG("space_dungeon", "space_dungeon_controller.OnClusterWideDataResponse");
+
+	// This trigger is called on initialization of the dungeon object.  Player travel request fire this same
+	// trigger on the ticket collector (item.travel_ticket.travel_space_dungeon)
+
+	// Register the dungeon as cluster wide data
+	string name = space_dungeon.getDungeonName(self);
+	string scene = getCurrentSceneName();
+	location loc = getLocation(self);
+	
+	// add in some logging to try and track down borked instances =\
+	if (dungeon_data != null && dungeon_data.length == 1 && dungeon_data[0].containsKey("scene"))
+	{
+		string oldScene = dungeon_data[0].getString("scene");
+		
+		if (oldScene != null && scene != null && !oldScene.equals(scene))
+		{
+			LOG("space_dungeon", "space_dungeon_controller.OnClusterWideDataResponse -- !!! scene has changed from "+oldScene+" to "+scene+"! This is very bad! Somehow this space_dungeon has moved planets - expect bad things to happen because of it. In order to lessen the pain, this instance ("+manage_name+":"+dungeon_name+") will die an honorable death and kill itself now");
+			
+			removeClusterWideData(manage_name, space_dungeon.getDungeonInstanceName(self), lock_key);
+			releaseClusterWideDataLock(manage_name, lock_key);
+			destroyObject(self);
+
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	dictionary dungeon_info = new dictionary();
+	dungeon_info.put("dungeon_id", self);
+	dungeon_info.put("scene", scene);
+	dungeon_info.put("session_id", -1);
+	dungeon_info.put("position_x", loc.x);
+	dungeon_info.put("position_y", loc.y);
+	dungeon_info.put("position_z", loc.z);
+	dungeon_info.put("buildout_area", locations.getBuildoutAreaName(self));
+	dungeon_info.put("buildout_row", locations.getBuildoutAreaRow(self));
+
+	LOG("space_dungeon", "dungeon_instance ->" + space_dungeon.getDungeonInstanceName(self));
+
+	replaceClusterWideData(manage_name, space_dungeon.getDungeonInstanceName(self), dungeon_info, true, lock_key);
+	releaseClusterWideDataLock(manage_name, lock_key);
+
+	messageTo(self, "msgSpaceDungeonCleanup", null, 1.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnBuildoutObjectRegisterWithController(obj_id registeringObject)
+{
+	//LOG("space_dungeon", "OnBuildoutObjectRegisterWithController registered=" + registeringObject + " with dungeon=" + self );
+
+	if (!hasObjVar(registeringObject, "ignoreInBuildoutArray"))
+		space_dungeon.registerObjectWithDungeon(self, registeringObject);
+	
+	setObjVar(registeringObject, "dungeonController", self);
+
+	return SCRIPT_CONTINUE;
+}
+
+string getDungeonRemainingTimeString(obj_id dungeon)
+{
+	int currentTime = getGameTime();
+	int sessionEnd = getIntObjVar(dungeon, space_dungeon.VAR_DUNGEON_END_TIME);
+	int sessionTimeRemaining = sessionEnd - currentTime;
+	doLogging("getDungeonRemainingTimeString", "sessionTimeRemaining: "+sessionTimeRemaining);
+	if (sessionTimeRemaining < 1)
+	{
+		doLogging("getDungeonRemainingTimeString", "sessionTimeRemaining less than one, calling End Dungeon Session");
+		space_dungeon.endDungeonSession(dungeon);
+	}
+	return utils.formatTimeVerbose(sessionTimeRemaining);
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgSetSessionId()
+{
+	int request_id = params.getInt("request_id");
+	int session_id = params.getInt("session_id");
+	LOG("space_dungeon", "space_dungeon_controller.msgSetSessionId -- " + session_id + " / " + request_id);
+
+	if (session_id < 0)
+	{
+		LOG("space_dungeon", "space_dungeon_controller.msgSetSessionId -- invalid session_id given for " + self);
+		return SCRIPT_CONTINUE;
+	}
+
+	setObjVar(self, space_dungeon.VAR_SESSION_ID, session_id);
+	if (params.containsKey("quest_type"))
+	{
+		string quest_type = params.getString("quest_type");
+		if (quest_type != null && quest_type.length() > 0)
+			setObjVar(self, space_dungeon.VAR_QUEST_TYPE, quest_type);
+	}
+
+	space_dungeon.setDungeonTimeObjVars(self);
+
+	// Once the id is set, we can start moving players over.
+	obj_id collector = params.getObjId("ticket_collector");
+	if (isIdValid(collector))
+	{
+		dictionary d = new dictionary();
+		d.put("dungeon_id", self);
+		d.put("dungeon_name", space_dungeon.getDungeonName(self));
+		d.put("dungeon_loc", getLocation(self));
+		d.put("session_id", session_id);
+		d.put("request_id", request_id);
+		messageTo(collector, "msgStartDungeonTravel", d, 0.0f, false);
+	}
+	else
+		LOG("space_dungeon", "space_dungeon_controller.msgSetSessionId -- collector is invalid for session id set on " + self + ".");
+
+	dictionary dict = new dictionary();
+	dict.put("sessionId", session_id);
+	messageTo(self, "handleSessionTimerUpdate", dict, 0.0f, false);
+	messageTo(self, "handleLockoutTimerUpdate", dict, 300.0f, false);
+	
+	// Call for dungeon spawning.
+	messageTo(self, "beginSpawn", null, 5.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLockoutTimerUpdate()
+{
+	space_dungeon.setDungeonLockoutTimer(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgManualDungeonReset()
+{
+	LOG("space_dungeon", "space_dungeon_controller.msgManualDungeonReset received for " + self + ".");
+	messageTo (self, "cleanOutDungeon", null, 0.0f, false );
+	space_dungeon.endDungeonSession(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSessionTimerUpdate()
+{
+	int sessionId = space_dungeon.getDungeonSessionId(self);
+	int passedSessionId = params.getInt("sessionId");
+	doLogging("handleSessionTimerUpdate", "Session ID vs Passed ID: "+sessionId+", "+passedSessionId);
+	if (sessionId == passedSessionId && sessionId != -1)
+	{
+		string timeRemaining = getDungeonRemainingTimeString(self);
+		string message = "This session will end in "+timeRemaining;
+		
+		
+		int nextMessage = space_dungeon.calculateNextMessage(self);
+		doLogging("handleSessionTimerUpdate", "nextMessage > -1 precheck: "+nextMessage);
+		if (nextMessage > 0)
+		{
+			obj_id[] players = space_dungeon.getPlayersInInstance(self);
+			params.put("message", message);
+
+			if (players != null && players.length > 0)
+			{
+				doLogging("handleSessionTimerUpdate", "Time remaining: "+timeRemaining+", players to notify: "+players.length);
+				utils.messageTo(players, "handleInstanceTimeRemainingMessage", params, 0.0f, false);
+			}
+
+			dictionary dict = new dictionary();
+			dict.put("sessionId", sessionId);
+			doLogging("handleSessionTimerUpdate", "Sending next message in ("+nextMessage+") seconds");
+			messageTo(self, "handleSessionTimerUpdate", dict, nextMessage, false);
+		}
+		else
+		{
+			doLogging("handleSessionTimerUpdate", "Next message was not greater than 0, calling for dungeon reset");
+			space_dungeon.endDungeonSession(self);
+
+		}
+	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler addPlayerToParticipantIdList()
+{
+	obj_id player = params.getObjId(space_dungeon.PLAYER_ID);
+	space_dungeon.incrementDungeonParticipantCounter(self, player);
+	
+	string buildout_area = hasObjVar(self, space_dungeon.VAR_BUILDOUT_AREA) ? getStringObjVar(self, space_dungeon.VAR_BUILDOUT_AREA) : "invalid";
+	int buildout_row = hasObjVar(self, space_dungeon.VAR_BUILDOUT_ROW) ? getIntObjVar(self, space_dungeon.VAR_BUILDOUT_ROW) : -1;
+	
+	params.put("buildout_area", buildout_area);
+	params.put("buildout_row", buildout_row);
+	
+	messageTo(player, "stampDungeonArea", params, 0.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removePlayerFromParticipantIdList()
+{
+	obj_id player = params.getObjId(space_dungeon.PLAYER_ID);
+	space_dungeon.decrementDungeonParticipantCounter(self, player);
+	
+	string buildout_area = hasObjVar(self, space_dungeon.VAR_BUILDOUT_AREA) ? getStringObjVar(self, space_dungeon.VAR_BUILDOUT_AREA) : "invalid";
+	int buildout_row = hasObjVar(self, space_dungeon.VAR_BUILDOUT_ROW) ? getIntObjVar(self, space_dungeon.VAR_BUILDOUT_ROW) : -1;
+
+	params.put("buildout_row", buildout_row);
+	params.put("buildout_area", buildout_area);
+	messageTo(player, "removeDungeonArea", params, 0.0f, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+
+void doLogging(string section, string message)
+{
+	if(LOGGING)
+		LOG("logging/space_dungeon_controller/"+section, message);
+}

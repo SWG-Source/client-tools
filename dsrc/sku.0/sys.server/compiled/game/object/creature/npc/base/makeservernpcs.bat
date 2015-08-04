@@ -1,0 +1,15 @@
+copy weequay_base_male.tpf aqualish_base_male.tpf
+copy weequay_base_male.tpf bith_base_male.tpf
+copy weequay_base_male.tpf bith_base_female.tpf
+copy weequay_base_male.tpf devaronian_base_male.tpf
+copy weequay_base_male.tpf gran_base_male.tpf
+copy weequay_base_male.tpf ishi_tib_base_male.tpf
+copy weequay_base_male.tpf ithorian_base_male.tpf
+copy weequay_base_male.tpf marauder_base_male.tpf
+copy weequay_base_male.tpf nikto_base_male.tpf
+copy weequay_base_male.tpf quarren_base_male.tpf
+copy weequay_base_male.tpf tusken_raider_base_male.tpf
+copy weequay_base_male.tpf weequay_base_male.tpf
+copy weequay_base_male.tpf ewok_base_male.tpf
+copy weequay_base_male.tpf ewok_base_female.tpf
+copy weequay_base_male.tpf kowakian_monkey_lizard_base_male.tpf

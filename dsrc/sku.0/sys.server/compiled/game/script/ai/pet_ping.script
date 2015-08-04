@@ -1,0 +1,297 @@
+//----------------------------------------------------------
+// pet_ping.script
+// -----------------------------------------------------------------------
+// This script is a re-hash of vehicle_ping.script, altered to function for pets
+// Original script notes listed below.
+//
+// This script is attached to a vehicle.  It is setup to
+// send a ping to the vehicle's vehicle control device (PCD).
+// If the PCD does not respond to the ping in a timely fashion
+// or it responds with an indication that this vehicle is not
+// supposed to be out, the vehicle is destroyed.  A positive
+// acknowledgement from the PCD is required for the vehicle
+// to continue to exist in the world.
+//----------------------------------------------------------
+
+include library.callable;
+include library.pet_lib;
+include library.utils;
+
+//----------------------------------------------------------
+
+const string PCDPING_PCD_SCRIPT_NAME         = "ai.pcd_ping_response";
+
+const string PCDPING_SEND_MESSAGE_NUMBER     = "pcdping.sendMsgNumber";
+const string PCDPING_LAST_ACK_MESSAGE_NUMBER = "pcdping.lastAckNumber";
+
+const string PCDPING_MESSAGE_PET_ID_NAME = "petId";
+const string PCDPING_MESSAGE_MESSAGE_ID_NAME = "messageId";
+const string PCDPING_MESSAGE_RIDER_ID_NAME   = "riderId";
+
+const string PCDPING_PING_CALLBACK_NAME      = "petPingCallback";
+const string PCDPING_PCD_MESSAGEHANDLER_NAME = "handlePetPing";
+
+const int    PCDPING_MAX_UNACKNOWLEDGED_MESSAGE_COUNT = 3;
+const int    PCDPING_PING_INTERVAL_INITIAL            = 1;
+const int    PCDPING_PING_INTERVAL_STANDARD           = 300;
+const int    PCDPING_PING_INTERVAL_RETRY              = 30;
+
+const boolean debug = false;
+
+//----------------------------------------------------------
+
+trigger OnAttach()
+{
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.OnAttach(): self = [" + self + "] entered");
+
+	//-- Initialize pcd ping variables.
+	// Note: these objvars are not expensive because pets are not persisted.
+	setObjVar(self, PCDPING_SEND_MESSAGE_NUMBER, 0);
+	setObjVar(self, PCDPING_LAST_ACK_MESSAGE_NUMBER, 0);
+
+	//-- Kick off the first ping heartbeat now.
+	messageTo(self, PCDPING_PING_CALLBACK_NAME, null, PCDPING_PING_INTERVAL_INITIAL, false);
+
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.OnAttach(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+/**
+ * This is the heartbeat callback function for the pet/pcd ping system.
+ */
+
+messageHandler petPingCallback()
+{
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.petPingCallback(): self = [" + self + "] entered");
+
+
+	obj_id player = getRiderId(self);
+	if(!isValidId(player) && pet_lib.isMount(self))
+	{
+		pet_lib.storePet(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	//-- Setup the new pet ping message number.  These get incremented by 1 each ping callback.
+	const int previousMessageNumber = getIntObjVar(self, PCDPING_SEND_MESSAGE_NUMBER);
+	const int newMessageNumber = previousMessageNumber + 1;
+	setObjVar(self, PCDPING_SEND_MESSAGE_NUMBER, newMessageNumber);
+
+	//-- If previousMessageNumber == 0, this means we're just starting.
+	if (previousMessageNumber == 0)
+		ensurePcdHasSisterScript(self);
+
+	//-- Retrieve the last PCD-acknowledged message number.
+	const int mostRecentAcknowledgedMessageNumber = getIntObjVar(self, PCDPING_LAST_ACK_MESSAGE_NUMBER);
+
+	//-- Check if we've exceeded the maximum number of unacknowledged
+	const int unacknowledgedGap = previousMessageNumber - mostRecentAcknowledgedMessageNumber;
+	if (unacknowledgedGap > PCDPING_MAX_UNACKNOWLEDGED_MESSAGE_COUNT)
+	{
+		boolean killSuccess = doPingBasedKill(self, "pet received no acknowledgement from PCD, killing pet with unacknowleged gap=[" + unacknowledgedGap + "]. PCD appears to be unloaded.");
+		if (killSuccess)
+			return SCRIPT_CONTINUE;
+		else
+		{
+			LOG("mounts-bug", "pet_ping.petPingCallback(): doPingBasedKill() failed for pet=[" + self + "], continuing ping loop so that we can try to kill it later.");
+			// continue through here so we requeue the callback for another attempt (or possible recovery) later.
+		}
+	}
+
+	//-- Determine next callback interval based on whether our most recent send was acknowledged.
+	//   If our most recent send has been acknowledged, use the infrequent, standard time interval
+	//   for this callback.  Otherwise accelerate the ping so we get rid of this suspect pet
+	//   more rapidly.
+	const int nextCallbackInterval = (unacknowledgedGap <= 0) ? PCDPING_PING_INTERVAL_STANDARD : PCDPING_PING_INTERVAL_RETRY;
+
+	//-- Setup ping message to the pet control device.
+	// Get the PCD id.
+	obj_id controlDevice = callable.getCallableCD(self);
+	
+	const boolean hasValidPcd = isIdValid(controlDevice);
+
+	if (!hasValidPcd)
+	{
+		boolean killSuccess = doPingBasedKill(self, "pet does not have a valid PCD objvar");
+		if (killSuccess)
+			return SCRIPT_CONTINUE;
+		else
+		{
+			LOG("mounts-bug", "pet_ping.petPingCallback(): doPingBasedKill() failed for pet=[" + self + "], continuing ping loop so that we can try to kill it later.");
+			// continue through here so we requeue the callback for another attempt (or possible recovery) later.
+		}
+	}
+	else
+	{
+		// Construct the dictionary of info about this pet that we'll pass to the PCD.
+		dictionary messageData = new dictionary();
+
+		messageData.put(PCDPING_MESSAGE_PET_ID_NAME, self);
+		messageData.put(PCDPING_MESSAGE_MESSAGE_ID_NAME, newMessageNumber);
+
+		// If this pet has a rider, include the rider id.
+		obj_id riderId = getRiderId(self);
+		if (isIdValid(riderId))
+			messageData.put(PCDPING_MESSAGE_RIDER_ID_NAME, riderId);
+
+		// Send the ping message to the PCD, get it there as fast as possible.
+		messageTo(controlDevice, PCDPING_PCD_MESSAGEHANDLER_NAME, messageData, 1, false);
+
+		if (debug)
+			LOG("pcdping-debug", "pet_ping.petPingCallback(): self = [" + self + "] sent ping message to PCD.");
+	}
+
+
+	//-- Enqueue next pet ping callback.
+	messageTo(self, PCDPING_PING_CALLBACK_NAME, null, nextCallbackInterval, false);
+
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.petPingCallback(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+/**
+ * This message is sent by the PCD and received by the pet
+ * when the PCD is in agreement that this pet should be out.
+ */
+
+messageHandler handlePositiveAcknowledgementFromPcd()
+{
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.handlePositiveAcknowledgementFromPcd(): self = [" + self + "] entered");
+
+	//-- Extract the acknowledgement message number from the message data.
+	const int ackMessageNumber = params.getInt(PCDPING_MESSAGE_MESSAGE_ID_NAME);
+
+	//-- Retrieve the last acknowledged message number for the pet.
+	const int mostRecentAckMessageNumber = getIntObjVar(self, PCDPING_LAST_ACK_MESSAGE_NUMBER);
+
+	//-- Apply message ack number if it is larger than the largest ack number we've seen so far.
+	if (ackMessageNumber > mostRecentAckMessageNumber)
+	{
+		// This message is an ack to a newer message number than the previous highest ack.  Store it.
+		setObjVar(self, PCDPING_LAST_ACK_MESSAGE_NUMBER, ackMessageNumber);
+
+		if (debug)
+			LOG("pcdping-debug", "pet_ping.handlePositiveAcknowledgementFromPcd(): processed newer positive PCD ack number=[" + ackMessageNumber + "]");
+	}
+	else
+	{
+		// Skip this ack --- it's an ack for an older message when we've already received a newer one.
+		if (debug)
+			LOG("pcdping-debug", "pet_ping.handlePositiveAcknowledgementFromPcd(): discarded older positive PCD ack number=[" + ackMessageNumber + "], highest ack is [" + mostRecentAckMessageNumber + "]");
+	}
+
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.handlePositiveAcknowledgementFromPcd(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+/**
+ * This message is sent by the PCD and received by the pet
+ * when the PCD does not believe this pet should be out.
+ */
+
+messageHandler handleNegativeAcknowledgementFromPcd()
+{
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.handleNegativeAcknowledgementFromPcd(): self = [" + self + "] entered");
+
+	//-- Destroy the pet now.
+	const boolean killSuccess = doPingBasedKill(self, "PCD indicated that this pet should not exist");
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.handleNegativeAcknowledgementFromPcd(): self = [" + self + "] attempted to kill pet per PCD request.  killSuccess=[" + killSuccess + "]");
+
+	if (debug)
+		LOG("pcdping-debug", "pet_ping.handleNegativeAcknowledgementFromPcd(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+boolean doPingBasedKill(obj_id pet, string reason)
+{
+	if(debug)
+		LOG("pcdping-debug", "pet_ping.doPingBasedKill(): pet = [" + pet + "] entered");
+
+	//-- Log the ping-based kill.
+	LOG("pcdping-kill", "Killing pet id=[" + pet + "]: reason=[" + reason + "]");
+
+	//-- Destroy the pet.
+
+	// Dismount the rider of this mount/pet if there's anything on it.
+	obj_id rider = getRiderId(pet);
+
+	if(isIdValid(rider))
+	{
+		// Do the dismount immediately.
+		boolean dismountSuccess = pet_lib.doDismountNow(rider);
+
+		if(!dismountSuccess)
+		{
+			LOG("mounts-bug", "pet_ping.doPingBasedKill(): creature [" + pet + "], rider [" + rider + "] failed to dismount.  Will still try to kill the pet.");
+		}
+	}
+
+	// Destroy the pet.
+	obj_id petControlDevice = callable.getCallableCD(pet);
+	pet_lib.savePetInfo(pet, petControlDevice);
+	utils.setScriptVar(pet, "stored", true);
+
+	boolean killSuccess = destroyObject(pet);
+
+	if(!killSuccess)
+	{
+		LOG("pcdping-kill", "failed to destroy pet=[" + pet + "].");
+	}
+
+	if(debug)
+	{
+		LOG("pcdping-debug", "pet_ping.doPingBasedKill(): pet = [" + pet + "] exited");
+	}
+
+	return killSuccess;
+}
+
+//----------------------------------------------------------
+
+void ensurePcdHasSisterScript(obj_id pet)
+{
+	//-- Double check that the PCD for this pet has the PCD sister script attached.
+	// @todo might as well handle this here and remove the one that attaches the script
+	// to the PCD via the pet_control_device.script's OnInitialize() trigger.
+
+	// Get the pet control device.
+	obj_id controlDevice = callable.getCallableCD(pet);
+
+	// Ensure that the PCD has the pet ping response script attached.
+	if(isIdValid(controlDevice) && !hasScript(controlDevice, PCDPING_PCD_SCRIPT_NAME))
+	{
+		if (debug)
+		{
+			LOG("pcdping-debug", "pet_ping.ensurePcdHasSisterScript(): attaching script [" + PCDPING_PCD_SCRIPT_NAME + "] to PCD id=[" + controlDevice + "]");
+		}
+
+		attachScript(controlDevice, PCDPING_PCD_SCRIPT_NAME);
+	}
+	else
+	{
+		if (debug)
+		{
+			LOG("pcdping-debug", "pet_ping.ensurePcdHasSisterScript(): couldn't attach script [" + PCDPING_PCD_SCRIPT_NAME + "] to PCD because didn't have objvar");
+		}
+	}
+
+}
+
+//----------------------------------------------------------

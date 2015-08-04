@@ -1,0 +1,330 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        squad_leader.scriptlib
+ * Description:  utility functions for squad leader abilities
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+include library.chat;
+include library.skill;
+include library.prose;
+
+/***** CONSTANTS *******************************************************/
+const int MAX_SKILL_VALUE   = 20;  //the max skill value for this type of skill
+const int MIN_SKILL_VALUE   = 0;   //the min skill value for this type of skill
+const int MAX_GROUP_SIZE    = 20;  //the maximum group size the game allows
+const string SKILL_NAME     = "outdoors_squadleader";
+
+const string_id SID_SYS_SL		= new string_id( "squad_leader", "squad_leader_command" );
+const string_id SID_NOT_IN_A_GROUP	= new string_id( "squad_leader", "not_in_a_group" );
+const string_id SID_MESSAGE_PARAMETERS	= new string_id( "squad_leader", "message_parameters" );
+
+
+/***** FUNCTIONS **************************************************
+void    sendSquadLeaderCommand(obj_id squadLeader, string command)
+void    displayCommand(obj_id squadLeader, obj_id groupMember, string command)
+boolean hasSkillsToSendCommand(obj_id squadLeader, int groupSize)
+
+/*****************************************************************
+ * @brief	determines all the squad leader's group members and
+ *          then sends them a command message
+ *
+ * @param	obj_id  squadLeader
+ * @param   string  command
+ *
+ * @return  void
+ *****************************************************************/
+void sendSquadLeaderCommand( obj_id squadLeader, string command )
+{
+	obj_id groupId        = getGroupObject( squadLeader );
+	obj_id[] groupMembers = getGroupMemberIds( groupId );
+	
+	if(command.equals("a") || command.equals("c"))
+	{
+		//these handy little do dads are appended to the params by C++
+		//they are used to determine what targeting mode the player is in
+		sendSystemMessage(squadLeader, SID_MESSAGE_PARAMETERS);
+		return;
+	}
+	// remove leading @'s to prevent name from being interpreted as code string
+	int i = 0;
+	int textlen = command.length();
+	while(textlen > i && '@' == command.charAt(i))
+	{
+		++i;
+	}
+
+	command = command.substring(i, textlen);
+	
+	if(command == null || command.equals(""))
+	{
+		sendSystemMessage(squadLeader, SID_MESSAGE_PARAMETERS);
+		return;
+	}
+	
+	if ( groupMembers != null )
+	{
+		// Send command to the entire group.
+		for ( int j=0; j < groupMembers.length; ++j )
+		{
+			displayCommand( squadLeader, groupMembers[j], command );
+		}
+
+	}
+	else
+	{
+//		LOG( "squad_leader", "The squad leaders group members were not found." );
+		sendSystemMessage(squadLeader, SID_NOT_IN_A_GROUP);
+		return;
+	}
+
+}//sendSquadLeaderCommand
+
+
+boolean sendSquadWaypoint(obj_id officer, location wayLoc)
+{
+	if(!isIdValid(officer) || !exists(officer))
+		return false;
+	
+	
+	obj_id groupId        = getGroupObject( officer );
+	obj_id[] groupMembers = getGroupMemberIds( groupId );
+	
+	dictionary dict = new dictionary();
+	dict.put("wayLoc", wayLoc);
+	
+	
+	if ( groupMembers != null )
+	{
+		for ( int i=0; i < groupMembers.length; ++i )
+		{
+			messageTo(groupMembers[i], "createOfficerGroupWaypoint", dict, 0, false);	
+		}
+
+	}
+	else
+	{
+		sendSystemMessage(officer, SID_NOT_IN_A_GROUP);
+		return false;
+	}
+	
+	return true;
+}
+
+
+/*****************************************************************
+ * @brief	prints the squad leader's command as a prose type
+ *		    system message to all members of the group
+ *
+ * @param	obj_id  squadLeader
+ * @param   obj_id  groupMember
+ * @param   string  command
+ *
+ * @return  void
+ *****************************************************************/
+void displayCommand( obj_id squadLeader, obj_id groupMember, string command )
+{
+	if ( groupMember != null )
+	{
+		prose_package pp = prose.getPackage( SID_SYS_SL, getName( squadLeader ), command );
+		sendSystemMessageProse( groupMember, pp );
+		return;
+	}
+	else
+	{
+//		LOG( "squad_leader", "One of the squad leader's group members were NULL." );
+		return;
+	}
+
+}//displayCommand
+
+
+/*****************************************************************
+ * @brief	determines if the squad leader has the skill requirements
+ *          to send a command to their group members
+ *
+ * @param	obj_id  squadLeader
+ * @param   int     groupSize
+ *
+ * @return  boolean
+ *****************************************************************/
+boolean hasSkillsToSendCommand(obj_id squadLeader, int groupSize)
+{
+	string skillPointScale = MIN_SKILL_VALUE + ".." + MAX_SKILL_VALUE;
+	int percent = skill.check(squadLeader, SKILL_NAME, skillPointScale);
+
+	int groupPercent = groupSize / MAX_GROUP_SIZE;
+
+	if(percent >= groupPercent)
+		return true;
+
+	return false;
+
+}//ableToSendCommand
+
+obj_id[] getSquadTargets(obj_id self, string requiredSkill)
+{
+	// Check skill mod.
+	if ( !hasSkill( self, requiredSkill ) )
+	{
+		// You are not skilled enough to use this ability
+		showFlyTextPrivate(self, self, new string_id("combat_effects", "action_failed"), 1.5f, colors.WHITE);
+		combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "squad_leader_no_skill"));
+		return null;
+	}
+
+	// Get group info.
+	obj_id groupId = getGroupObject( self );
+	if ( groupId == null )
+	{
+		// You must have a group to use this ability
+		showFlyTextPrivate(self, self, new string_id("combat_effects", "action_failed"), 1.5f, colors.WHITE);
+		combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "squad_leader_no_group"));
+		return null;
+	}
+
+	obj_id[] groupMembers = getGroupMemberIds( groupId );
+	obj_id groupLeaderId = getGroupLeaderId( groupId );
+	if ( (self != groupLeaderId) || (groupMembers == null) )
+	{
+		// You must be the leader of your group to use this ability
+		showFlyTextPrivate(self, self, new string_id("combat_effects", "action_failed"), 1.5f, colors.WHITE);
+		combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "squad_leader_not_leader"));
+		return null;
+	}
+	
+	return groupMembers;
+}
+
+boolean setSquadCommandText(string command, string params)
+{
+	obj_id self = getSelf();
+	string varName = "combat."+command+"String";
+	
+ 	int intLength = params.length();
+ 	if ( intLength > 64 )
+ 	{
+ 		sendSystemMessage( self, new string_id("error_message","string_too_long") );
+ 		return false;
+	}
+
+	string strString = params.substring( 0,intLength );
+	setObjVar( self, varName, strString );
+	
+	return true;
+}
+
+string getSquadCommandText(string command)
+{
+	obj_id self = getSelf();
+	string varName = "combat."+command+"String";
+
+	string text = getStringObjVar( self, varName );
+
+	return text;
+}
+
+void barkSquadCommand(string command, string defaultText)
+{
+	obj_id self = getSelf();
+
+	string text = getSquadCommandText(command);
+	if ( (text == null) || text.equals("") )
+		text = defaultText;
+	
+}
+
+obj_id[] getValidGroupMembers(obj_id self)
+{
+	obj_id gid = getGroupObject(self);
+	
+	if (!group.isGroupObject(gid))
+		return null;
+	
+	obj_id[] groupMembers = getGroupMemberIds(gid);
+	resizeable obj_id[] validMembers = new obj_id[0];
+	
+	for (int i = 0; i < groupMembers.length; i++)
+	{
+		if (!(isIdValid(groupMembers[i]) && exists(groupMembers[i]) && isPlayer(groupMembers[i]) && getDistance(self, groupMembers[i]) < 64.0f))
+			continue;
+
+		validMembers = utils.addElement(validMembers, groupMembers[i]);
+	}
+	
+	return validMembers;
+}
+
+void validateRallyPoint(obj_id player)
+{
+	if (!hasObjVar(player, "sl.rallyPoint"))
+		return;
+	
+	obj_id gid = getGroupObject(player);
+	obj_id rallyGroup = getObjIdObjVar(player, "sl.rallyPoint.group");
+	if (rallyGroup != gid)
+	{
+		clearRallyPoint(player);
+	}
+}
+
+void clearRallyPoint(obj_id player)
+{
+	if (!hasObjVar(player, "sl.rallyPoint"))
+		return;
+	
+	obj_id rallyPoint = getObjIdObjVar(player, "sl.rallyPoint.id");
+
+	destroyWaypointInDatapad(rallyPoint, player);
+	removeObjVar(player, "sl.rallyPoint");
+}
+
+int getCalledShotAccuracyBonus(obj_id attacker, obj_id defender)
+{
+	obj_id gid = getGroupObject(attacker);
+	if (!group.isGroupObject(gid))
+		return 0;
+	
+	if (!utils.hasScriptVar(defender, "calledShot."+gid))
+		return 0;
+	
+	return utils.getIntScriptVar(defender, "calledShot."+gid+".accuracy");
+}
+
+int getCalledShotDamageBonus(obj_id attacker, obj_id defender)
+{
+	obj_id gid = getGroupObject(attacker);
+	if (!group.isGroupObject(gid))
+		return 0;
+	
+	if (!utils.hasScriptVar(defender, "calledShot."+gid))
+		return 0;
+	
+	return utils.getIntScriptVar(defender, "calledShot."+gid+".damage");
+}
+
+void clearCalledShotEffect(obj_id attacker, obj_id defender)
+{
+	obj_id gid = getGroupObject(attacker);
+	if (!group.isGroupObject(gid))
+		return;
+	
+	if (!utils.hasScriptVar(defender, "calledShot."+gid))
+		return;
+	
+	utils.removeScriptVarTree(defender, "calledShot."+gid);
+	stopClientEffectObjByLabel(new obj_id[]{defender}, defender, "calledShot."+gid);
+}
+
+float getLeadershipMod(obj_id player)
+{
+	int skillMod = getEnhancedSkillStatisticModifier(player, "leadership");
+	if (skillMod > 200) skillMod = 200;
+	float modifier = (skillMod + 75f) / 200f;
+	
+	return modifier;
+}

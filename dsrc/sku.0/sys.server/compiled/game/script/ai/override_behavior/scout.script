@@ -1,0 +1,438 @@
+include ai.ai_combat;
+include library.gcw;
+include library.utils;
+include library.ai_lib;
+include library.factions;
+include library.colors;
+include library.faction_perk;
+include library.jedi;
+
+const string SCRIPTVAR_SCOUT_TARGET			= "behavior.scout.target";
+const string SCRIPTVAR_SCANNED				= "behavior.scout.scanned";
+const string SCRIPTVAR_SCAN_STATUS			= "behavior.scout.scan_status";
+const string SCRIPTVAR_ATTACKED				= "behavior.scout.attacked";
+const string SCRIPTVAR_CALLED_SUPPORT		= "behavior.scout.calledSupport";
+const string CONTRABAND_SEARCH_STF		= "imperial_presence/contraband_search";
+
+trigger OnAttach()
+{
+	createTriggerVolume( ai_lib.AGGRO_VOLUME_NAME, 0, false );
+
+	stop(self);
+
+	gcw.assignScanInterests(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	if ( utils.hasScriptVar( self, "petBeingInitialized") )
+		return SCRIPT_CONTINUE;
+
+	//debugSpeakMsg( self, "I see " + getName( breacher ) );
+	if ( hasObjVar( breacher, "gm") )
+	{
+		//debugSpeakMsg( self, "you are a gm" );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isMob( breacher ) )
+	{
+		//debugSpeakMsg( self, "you are not a mob" );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( breacher == self || ai_lib.isAiDead( breacher ) || ai_lib.isAiDead( self ))
+	{
+		//debugSpeakMsg( self, "somethin is dead" );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( volumeName.equals( ai_lib.AGGRO_VOLUME_NAME ))
+	{
+		//debugSpeakMsg( self, " i see " + getName( breacher ) );
+		//debugSpeakMsg( breacher, "entering aggro");
+		if ( !ai_lib.isInCombat( self ) )
+		{
+			int reaction = factions.getFactionReaction( self, breacher );
+			if ( reaction == factions.REACTION_NEGATIVE )
+			{
+				//debugSpeakMsg( self, "reaction is negative");
+				return SCRIPT_OVERRIDE;
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTargetAssignment()
+{
+	if (utils.hasScriptVar(self, SCRIPTVAR_CALLED_SUPPORT) )
+		return SCRIPT_CONTINUE;
+
+	obj_id target = params.getObjId("target");
+
+	if (!isIdValid(target))
+	{
+			acquireNewTarget(self);
+			return SCRIPT_CONTINUE;
+	}
+
+	obj_id playerCurrentMount = getMountId (target);
+	if ( isIdValid( playerCurrentMount ) )
+	{
+		obj_id mountId = getMountId(target);
+		if (isIdValid(mountId))
+			sendSystemMessage(target, new string_id(CONTRABAND_SEARCH_STF,"dismount"));
+
+		utils.dismountRiderJetpackCheck(target);
+	}
+
+	if ( isIdValid(target))
+		scoutTarget(self, target);
+
+	return SCRIPT_CONTINUE;
+}
+
+void scoutTarget( obj_id npc, obj_id target )
+{
+	if ( !isIdValid(npc) || !isIdValid(target) || npc == target )
+		return;
+
+	location here = getLocation(target);
+	if ( here == null )
+		return;
+
+	if ( isIdValid(here.cell) )
+		return;
+
+	utils.setScriptVar(npc, SCRIPTVAR_SCOUT_TARGET, target);
+
+	if ( ai_lib.isInCombat(npc) )
+		return;
+
+	ai_lib.aiFollow( npc, target, 32f, 74f );
+}
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id wpn, int[] damage)
+{
+	//debugSpeakMsg(self, "OnCreatureDamaged("+attacker+"): -> attempting to flee...");
+	//ai_combat.fleeFromCombat(self, attacker);
+
+	if (utils.hasScriptVar(self, SCRIPTVAR_ATTACKED))
+		return SCRIPT_CONTINUE;
+
+	string_id msg = new string_id(CONTRABAND_SEARCH_STF, "probot_distress_fly");
+	showFlyText(self, msg, 1.0f, colors.TOMATO);
+
+	int actionCode = gcw.AC_ATTACK;
+
+	dictionary d1 = new dictionary();
+	d1.put("actionCode", actionCode);
+	d1.put("target", attacker);
+	messageTo(self, "callLambdaSupport", d1, 30f, false);
+	//messageTo(self, "reportActivities", d1, 35, false);
+
+	utils.setScriptVar(self, SCRIPTVAR_ATTACKED, 1);
+	acquireNewTarget(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDefenderCombatAction( obj_id attacker, obj_id weapon, int combatResult )
+{
+	//debugSpeakMsg(self, "OnCreatureDamaged("+attacker+"): -> attempting to flee...");
+	//ai_combat.fleeFromCombat(self, attacker);
+
+	if (utils.hasScriptVar(self, SCRIPTVAR_ATTACKED))
+		return SCRIPT_CONTINUE;
+
+	string_id msg = new string_id(CONTRABAND_SEARCH_STF, "probot_distress_fly");
+	showFlyText(self, msg, 1.0f, colors.TOMATO);
+
+	int actionCode = gcw.AC_ATTACK;
+
+	dictionary d1 = new dictionary();
+	d1.put("actionCode", actionCode);
+	d1.put("target", attacker);
+	messageTo(self, "callLambdaSupport", d1, 30f, false);
+	messageTo(self, "reportActivities", d1, 35, false);
+
+	utils.setScriptVar(self, SCRIPTVAR_ATTACKED, 1);
+	acquireNewTarget(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowTargetLost(obj_id oldTarget)
+{
+	//need new scout target?
+	acquireNewTarget(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowWaiting(obj_id target)
+{
+	if ( !utils.hasScriptVar(self, SCRIPTVAR_SCAN_STATUS) )
+	{
+		resizeable obj_id[] scanned = utils.getResizeableObjIdArrayScriptVar(self, SCRIPTVAR_SCANNED);
+		if ( scanned != null && scanned.length > 0 )
+		{
+			if ( utils.getElementPositionInArray(scanned, target) > -1 )
+			{
+				acquireNewTarget(self);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		sendSystemMessage(target, new string_id(CONTRABAND_SEARCH_STF,"probe_scan"));
+
+		string_id msg = new string_id(CONTRABAND_SEARCH_STF, "probe_scan_fly");
+		showFlyText(self, msg, 1.0f, colors.TOMATO);
+
+		utils.setScriptVar(self, SCRIPTVAR_SCAN_STATUS, target);
+
+		dictionary d = new dictionary();
+		d.put("target", target);
+		messageTo(self, "handleScanComplete", d, 60f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleScanComplete()
+{
+	if ( ai_lib.isAiDead(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	utils.removeScriptVar(self, SCRIPTVAR_SCAN_STATUS);
+
+	if ( utils.hasScriptVar(self, SCRIPTVAR_CALLED_SUPPORT) || ai_lib.isDead(self) )
+		return SCRIPT_CONTINUE;
+
+	obj_id target = params.getObjId("target");
+
+	obj_id oldTarget = utils.getObjIdScriptVar(self, SCRIPTVAR_SCOUT_TARGET);
+	if ( !isIdValid(target) || target != oldTarget )
+		return SCRIPT_CONTINUE;
+
+	utils.setScriptVar(target, "scan_successful",1);
+
+	if (ai_lib.checkForSmuggler(target))
+	{
+		acquireNewTarget(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int myFac = pvpGetAlignedFaction(self);
+	int tFac = pvpGetAlignedFaction(target);
+
+	if ( pvpAreFactionsOpposed(myFac, tFac) )
+	{
+		if ( isPlayer(target) && pvpGetType( target ) == PVPTYPE_DECLARED)
+		{
+			string_id msg = new string_id(CONTRABAND_SEARCH_STF, "probot_support_fly");
+			showFlyText(self, msg, 1.0f, colors.TOMATO);
+			utils.setScriptVar (target, "scan_successful", 1);
+
+			int actionCode = gcw.AC_ATTACK;
+
+			dictionary d1 = new dictionary();
+			d1.put("actionCode", actionCode);
+			d1.put("target", target);
+
+			messageTo(self, "callLambdaSupport", d1, 10f, false);
+			acquireNewTarget(self);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	//debugSpeakMsg(self, "OnFollowWaiting("+target+"): -> scanning...");
+	float rating = gcw.scan(self, target);
+
+	resizeable obj_id[] scanned = utils.getResizeableObjIdArrayScriptVar(self, SCRIPTVAR_SCANNED);
+	scanned = utils.addElement(scanned, target);
+	if ( scanned != null && scanned.length > 0 )
+		utils.setScriptVar(self, SCRIPTVAR_SCANNED, scanned);
+
+	//debugSpeakMsg(self, "scan rating for target("+target+") = " + rating);
+	if ( rating > 15f )
+	{
+		sendSystemMessage(target, new string_id(CONTRABAND_SEARCH_STF, "probe_scan_positive"));
+		//call lambda squad
+		int actionCode = gcw.AC_SCAN;
+
+
+		dictionary d1 = new dictionary();
+		d1.put("actionCode", actionCode);
+		d1.put("target", target);
+
+		messageTo(self, "callLambdaSupport", d1, 10f, false);
+		acquireNewTarget(self);
+	}
+	else
+	{
+		sendSystemMessage(target, new string_id(CONTRABAND_SEARCH_STF, "probe_scan_negative"));
+		acquireNewTarget(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnFleeTargetLost(obj_id oldTarget)
+{
+	//need new scout target?
+	if ( !ai_lib.isInCombat(self) )
+	{
+		obj_id target = utils.getObjIdScriptVar(self, SCRIPTVAR_SCOUT_TARGET);
+		if ( !isIdValid(target) || !exists(target) || !target.isLoaded() )
+			acquireNewTarget(self);
+		else
+			scoutTarget(self, target);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void acquireNewTarget(obj_id self)
+{
+	if ( !isIdValid(self) )
+		return;
+
+	if (utils.hasScriptVar(self, SCRIPTVAR_CALLED_SUPPORT) )
+		return;
+
+	utils.removeScriptVar(self, SCRIPTVAR_SCOUT_TARGET);
+
+	if ( ai_lib.isInCombat(self) )
+	{
+		messageTo(self, "handleNeedTarget", null, 10f, false);
+		return;
+	}
+
+	obj_id[] players = getPlayerCreaturesInRange(self, 100f);
+	if ( players == null || players.length == 0 )
+	{
+		destroyObject(self);
+		return;
+	}
+
+	utils.removeScriptVar(self, SCRIPTVAR_ATTACKED);
+
+	resizeable obj_id[] scanned = utils.getResizeableObjIdArrayScriptVar(self, SCRIPTVAR_SCANNED);
+	resizeable obj_id[] unscanned = utils.removeElements(new Vector(Arrays.asList(players)), scanned);
+	if ( unscanned != null && unscanned.length > 0 )
+	{
+		obj_id target = unscanned[rand(0,unscanned.length-1)];
+		if ( isIdValid(target) && (!utils.hasScriptVar(target, "scan_successful")))
+		{
+			scoutTarget(self, target);
+			return;
+		}
+	}
+
+	ai_lib.wander(self);
+	messageTo(self, "handleNeedTarget", null, 15f, false);
+}
+
+messageHandler handleNeedTarget()
+{
+	acquireNewTarget(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler callLambdaSupport()
+{
+	if (ai_lib.isDead(self))
+		return SCRIPT_CONTINUE;
+
+	obj_id target = params.getObjId("target");
+	int actionCode = params.getInt("actionCode");
+
+	if ( !isIdValid(self) || !isIdValid(target) )
+		return SCRIPT_CONTINUE;
+
+	if ( utils.hasScriptVar(self, SCRIPTVAR_CALLED_SUPPORT) )
+		return SCRIPT_CONTINUE;
+
+	//debugSpeakMsg(self, "calling lambda support");
+	utils.setScriptVar(self, SCRIPTVAR_CALLED_SUPPORT, getGameTime());
+
+	dictionary d = new dictionary();
+	d.put("actionCode", actionCode);
+	d.put("actionTarget", target);
+
+	if ( actionCode == gcw.AC_SCAN )
+	{
+		int interests = utils.getIntScriptVar(self, gcw.SCRIPTVAR_SCAN_INTEREST);
+		d.put("scanInterests", interests);
+	}
+
+	location there = getLocation(target);
+
+	if(there == null)
+	{													// I don't think that this would happen, but that
+														// null pointer exception came from somewhere...
+		utils.removeScriptVar(self, SCRIPTVAR_CALLED_SUPPORT);
+		return SCRIPT_CONTINUE;
+	}
+
+	location tmp = utils.getRandomLocationInRing(there, 5f, 10f);
+	if ( tmp != null )
+		there = tmp;
+
+	if ( there != null )
+		gcw.spawnViaLambdaPerGeo(there, d);
+
+
+	messageTo(self, "handleClearSupportCall", null, 180f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleClearSupportCall()
+{
+	if ( ai_lib.isDead(self) )
+		return SCRIPT_CONTINUE;
+
+	if (utils.hasScriptVar(self, "lambda_strike"))
+			utils.removeScriptVar(self, "lambda_strike");
+
+	utils.removeScriptVar(self, SCRIPTVAR_CALLED_SUPPORT);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler reportActivities ()
+{
+	if (ai_lib.isDead(self) )
+		return SCRIPT_CONTINUE;
+
+	obj_id target = params.getObjId("target");
+	int actionCode = params.getInt("actionCode");
+
+	if (!isIdValid(target))
+		return SCRIPT_CONTINUE;
+
+	if( utils.hasScriptVar(self, "lambda_strike"))
+		return SCRIPT_CONTINUE;
+
+	if(target == null)						// Weird stuff going on in this method with null pointer
+		return SCRIPT_CONTINUE;				// exceptions. Adding in an extra check just in case.
+
+	sendSystemMessage(target, new string_id(CONTRABAND_SEARCH_STF,"report_activities"));
+	utils.setScriptVar(self, "lambda_strike", getGameTime());
+	if(!isJedi(target))
+	{
+		pvpMakeDeclared(target);
+		//CustomerServiceLog("CONTRABAND_SCANNING: ", "("+ target + ")"+ getFirstName(target) + " made Overt by Probot Scan");
+		CustomerServiceLog("CONTRABAND_SCANNING: ", "%TU made Overt by Probot Scan", target, null);
+	}
+	else
+	{
+		jedi.doJediTEF(target);
+	}
+	return SCRIPT_CONTINUE;
+}

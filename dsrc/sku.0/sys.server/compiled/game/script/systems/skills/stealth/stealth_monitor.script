@@ -1,0 +1,285 @@
+// script does nothing but house the stealth related Triggers so as to minimize the number
+// of players that receive trigger notifications
+
+include library.beast_lib;
+include library.buff;
+include library.group;
+include library.stealth;
+include library.sui;
+
+trigger OnLocomotionChanged(int newLocomotion, int oldLocomotion)
+{
+	stealth.OnLocomotionChange(self, oldLocomotion, newLocomotion);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnChangedPosture(int before, int after)
+{
+	stealth.OnPostureChanged(self, before, after);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogout()
+{
+	string invis = stealth.getInvisBuff(self);
+	if(invis != null)
+	{
+		buff.removeBuff(self, invis);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	if(sui.hasEventFlag(self, sui.CD_EVENT_STEALTHED))
+	{
+		sui.cancelCountdownTimer(self, sui.CD_EVENT_STEALTHED);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	if(sui.hasEventFlag(self, sui.CD_EVENT_STEALTHED))
+	{
+		sui.cancelCountdownTimer(self, sui.CD_EVENT_STEALTHED);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler updatePassiveRevealList()
+{
+	string invis = stealth.getInvisBuff(self);
+
+	if(beast_lib.isBeast(self))
+	{
+		invis = "invis";
+	}
+
+	if(invis == null || invis.length() < 1)
+	{
+		removeTriggerVolume(stealth.INVIS_BREAK_RADIUS_FAR);
+		removeTriggerVolume(stealth.INVIS_BREAK_RADIUS_NEAR);
+		detachScript(self, "systems.skills.stealth.stealth_monitor");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(beast_lib.isBeast(self))
+	{
+		createTriggerVolume(stealth.INVIS_BREAK_RADIUS_FAR, stealth.INVIS_BREAK_NEAR_DISTANCE + 1.0f, true);
+		createTriggerVolume(stealth.INVIS_BREAK_RADIUS_NEAR, stealth.INVIS_BREAK_NEAR_DISTANCE, true);
+	}
+
+	messageTo(self, "updatePassiveRevealList", null, 10, false);
+	dictionary revealList = getPassiveRevealList(self);
+
+	if(revealList == null)
+	{
+		// This guy hasnt been seen by anyone so we cannot do any checking but we still need to keep the loop check going
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] ids = revealList.getObjIdArray("id");
+	int[] range = revealList.getIntArray("range");
+
+	// Make sure the array is not messed up before doing any updates to it
+	if((ids != null) && (ids.length > 0) && (range != null) && (range.length > 0) && (ids.length == range.length))
+	{
+		int currentRange = 0;
+
+		for(int i = 0; i < ids.length; ++i)
+		{
+			if(isIdValid(ids[i]))
+			{
+				// Check if the ID exists - if it doesnt remove them - they arent on this game server
+				if(!exists(ids[i]))
+				{
+					removePassiveReveal(self, ids[i]);
+					continue;
+				}
+
+				if(group.inSameGroup(self, ids[i]))
+				{
+					continue;
+				}
+				location here = getLocation(self);
+				location there = getLocation(ids[i]);
+				currentRange = (int)getDistance(here, there);
+				int revealRange = range[i];
+
+				if (currentRange <= revealRange)
+				{
+					continue;// Leave em alone
+				}
+
+				else if (currentRange <= getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_NEAR))
+				{
+					continue;// Leave em alone
+				}
+				else if (currentRange <= getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_FAR))
+				{
+					if(stealth.testBubbleBreached(self, ids[i], stealth.PASSIVE_BREACH_FAR))
+					{
+						addPassiveReveal(self, ids[i], (int)getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_FAR));
+					}
+					else
+					{
+						removePassiveReveal(self, ids[i]);
+					}
+				}
+				else
+				{
+					removePassiveReveal(self, ids[i]);
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	string invis = stealth.getInvisBuff(self);
+
+	if(beast_lib.isBeast(self))
+	{
+		invis = "invis";
+	}
+
+	if(invis == null || invis.length() < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	/*if(invis.equals("invis_blendIn") || invis.startsWith("invis_sp_buff_invis"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	*/
+
+	if (invis.startsWith("invis_sp_buff_invis_notrace"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (isDead(breacher) || isIncapacitated(breacher))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(group.inSameGroup(self, breacher))
+	{
+		addPassiveReveal(self, breacher, 1);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Chapter 4 - We no longer break stealth passive
+	// We now reveal the player only to the person that observed them
+
+	int breacherRevealRange = getPassiveRevealRange(self, breacher);
+
+	if(volumeName.equals(stealth.INVIS_BREAK_RADIUS_FAR))
+	{
+		if (breacherRevealRange < 0)
+		{
+			if(stealth.testBubbleBreached(self, breacher, stealth.PASSIVE_BREACH_FAR))
+			{
+				addPassiveReveal(self, breacher, (int)getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_FAR));
+			}
+		}
+	}
+
+	if(volumeName.equals(stealth.INVIS_BREAK_RADIUS_NEAR))
+	{
+		if (breacherRevealRange < 0)
+		{
+			if(stealth.testBubbleBreached(self, breacher, stealth.PASSIVE_BREACH_NEAR))
+			{
+				addPassiveReveal(self, breacher, (int)getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_NEAR));
+			}
+
+		}
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited( string volumeName, obj_id breacher )
+{
+	string invis = stealth.getInvisBuff(self);
+	if(beast_lib.isBeast(self))
+	{
+		invis = "invis";
+	}
+
+	if(invis == null || invis.length() < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(invis.equals("invis_sp_buff_invis_notrace"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isDead(breacher) || isIncapacitated(breacher))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(group.inSameGroup(self, breacher))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(volumeName.equals(stealth.INVIS_BREAK_RADIUS_FAR))
+	{
+		removeTriggerVolumeEventSource(stealth.INVIS_BREAK_RADIUS_NEAR, breacher);
+		int breacherRevealRange = getPassiveRevealRange(self, breacher);
+
+		if (breacherRevealRange < 0)
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		if (breacherRevealRange <= (int)getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_FAR))
+		{
+			removePassiveReveal(self, breacher);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if(volumeName.equals(stealth.INVIS_BREAK_RADIUS_NEAR))
+	{
+		int breacherRevealRange = getPassiveRevealRange(self, breacher);
+		if (breacherRevealRange < (int)getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_NEAR))
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		location here = getLocation(self);
+		location there = getLocation(breacher);
+
+		float range = getDistance(here, there);
+
+		if (range < getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_FAR))
+		{
+			if(stealth.testBubbleBreached(self, breacher, stealth.PASSIVE_BREACH_FAR))
+			{
+				addPassiveReveal(self, breacher, (int)getTriggerVolumeRadius(self, stealth.INVIS_BREAK_RADIUS_FAR));
+			}
+			else
+			{
+				removePassiveReveal(self, breacher);
+			}
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}

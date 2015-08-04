@@ -1,0 +1,274 @@
+//------------------------------------------------
+// rescue_duty.script
+// Brandon Reinhart
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_create;
+include library.space_quest;
+include library.space_utils;
+include library.space_crafting;
+include library.space_transition;
+include library.utils;
+include library.ship_ai;
+include library.prose;
+include library.money;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits space.quest_logic.rescue;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_RESCUE_REWARD				= new string_id( "space/quest", "rescue_reward" );
+const string_id SID_ABANDONED_DUTY				= new string_id( "space/quest", "destroy_abandoned" );
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the type of ship being rescued.
+	string[] targetShips = dataTableGetStringColumn( qTable, "targetShipTypes" );
+	space_quest.cleanArray( self, "targetShipTypes", targetShips );
+
+	// Get rewards.
+	setObjVar( self, "reward", questInfo.getInt( "reward" ) );
+	setObjVar( self, "killReward", questInfo.getInt( "killReward" ) );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	// Set us up if we are in the appropriate zone.
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearMissionWaypoint( self );
+			space_quest.showQuestUpdate( self, SID_ABANDONED_DUTY );
+			space_quest.setQuestWon( player, self );
+		}
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( hasObjVar( self, "initialized" ) )
+		return SCRIPT_OVERRIDE;
+
+	removeObjVar( self, "target" );
+	removeObjVar( self, "targets" );
+	removeObjVar( self, "deadships" );
+
+	// Determine the starting location of the target ship.
+	buildRandomNavList( self );
+	string[] recoveryPoints = getStringArrayObjVar( self, "recoveryPath" );
+	if ( recoveryPoints == null )
+		return SCRIPT_OVERRIDE;
+	string destPoint = recoveryPoints[0];
+	java.util.StringTokenizer st = new java.util.StringTokenizer( destPoint, ":" );
+	string scene = st.nextToken();
+	destPoint = st.nextToken();
+	if ( getCurrentSceneName().startsWith( scene ) )
+		findTargetStart( self, player, destPoint );
+
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 1, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// buildRandomNavList
+//------------------------------------------------
+
+void buildRandomNavList( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	string path = "recoveryPath";
+	string[] escortPoints = getStringArrayObjVar( self, path );
+	if ( escortPoints == null )
+		return;
+
+	int i = rand( 0, escortPoints.length-1 );
+
+	int k = 0;
+	string[] preSortPoints = new string[escortPoints.length];
+	for ( int j=i; j<escortPoints.length; j++ )
+	{
+		preSortPoints[k++] = escortPoints[j];
+	}
+	for ( int j=0; j<i; j++ )
+	{
+		preSortPoints[k++] = escortPoints[j];
+	}
+
+	if ( rand() < 0.25 )
+	{
+		string[] sortedPoints = new string[escortPoints.length];
+		for ( int j=preSortPoints.length-1; j>=0; j-- )
+		{
+			sortedPoints[j] = preSortPoints[j];
+		}
+		setObjVar( self, path, sortedPoints );
+	}
+	else
+	{
+		setObjVar( self, path, preSortPoints );
+	}
+}
+
+//------------------------------------------------
+// createTargetShip
+//------------------------------------------------
+
+obj_id createTargetShip( obj_id self )
+{
+	string[] shipTypes = getStringArrayObjVar( self, "targetShipTypes" );
+	string shipType = shipTypes[rand(0,shipTypes.length-1)];
+	transform trans = getTransformObjVar( self, "escort_transform" );
+	transform spawnLoc = space_quest.getRandomPositionInSphere( trans, 100, 200 );
+	return space_create.createShipHyperspace( shipType, spawnLoc );
+}
+
+//------------------------------------------------
+// recoveryComplete
+//------------------------------------------------
+
+messageHandler recoveryComplete()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id ship = params.getObjId( "ship" );
+
+	// Notify the player.
+	string_id update = new string_id( "spacequest/"+questType+"/"+questName, "recovery_success" );
+	questUpdate( self, update );
+
+	// Warp the ship out.
+	string_id abort = new string_id( "spacequest/"+questType+"/"+questName, "complete" );
+	prose_package pp = prose.getPackage( abort, 0 );
+	space_quest.groupTaunt( ship, player, pp );
+	messageTo( self, "cleanupShipsMsg", null, 2.f, false );
+
+	// Give the reward to the player.
+	int reward = getIntObjVar( self, "reward" );
+	int rewardships = getIntObjVar( self, "rewardships" );
+	removeObjVar( self, "rewardships" );
+	int killreward = getIntObjVar( self, "killReward" );
+	rewardships *= killreward;
+	reward += rewardships;
+	money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward );
+	pp = prose.getPackage( SID_RESCUE_REWARD, reward );
+	sendQuestSystemMessage( player, pp );
+
+	// Find a new escort.
+	removeObjVar( self, "initialized" );
+	removeObjVar( self, "attacksok" );
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 10.f, false );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// Phrases
+//------------------------------------------------
+
+string getCompletePhrase( obj_id self )
+{
+	int reasons = getIntObjVar( self, "numResponses" );
+	return "complete_"+rand(1,reasons);
+}
+
+string getCapturePhrase1( obj_id self )
+{
+	int reasons = getIntObjVar( self, "numResponses" );
+	return "rescue_phase_1_"+rand(1,reasons);
+}
+
+string getCapturePhrase2( obj_id self )
+{
+	int reasons = getIntObjVar( self, "numResponses" );
+	return "rescue_phase_2_"+rand(1,reasons);
+}
+
+//------------------------------------------------
+// questAborted
+//------------------------------------------------
+
+void questAborted( obj_id self )
+{
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestWon( player, self );
+}

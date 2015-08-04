@@ -1,0 +1,420 @@
+include library.utils;
+include library.combat;
+include library.static_item;
+include library.colors;
+include library.buff;
+include library.vehicle;
+
+const string CYBERNETICS_TABLE = "datatables/cybernetic/cybernetic.iff";
+const string PROC_TABLE = "datatables/proc/proc.iff";
+
+const string REAC_BASE 		= "reactive_proc.";
+
+
+
+void executeProcEffects( obj_id attacker, obj_id defender)
+{
+	executeProcEffects(attacker, defender, null);
+}
+
+void executeProcEffects( obj_id attacker, obj_id defender, combat_data actionData)
+{
+	weapon_data weaponData = getWeaponData(getCurrentWeapon(attacker));
+	string params = "";
+
+	prose_package pp = new prose_package();
+
+	if(actionData !=  null)
+	{
+		if(actionData.params != null && !actionData.params.equals(""))
+			params == actionData.params;
+	}
+
+	if(!isMob(attacker))
+	{
+		return;
+	}
+
+	if(vehicle.isRidingVehicle(attacker))
+	{
+		return;
+	}
+
+	if (utils.hasScriptVar( attacker, "currentProcList" ) )
+	{
+
+		// Offensive AOE damage should not fire procs.
+		if(actionData.attackType == combat.CONE || actionData.attackType == combat.AREA || actionData.attackType == combat.TARGET_AREA)
+		{
+			return;
+		}
+
+		resizeable string[] procEffects = utils.getResizeableStringArrayScriptVar( attacker, "currentProcList" );
+
+		if ( procEffects != null && procEffects.length > 0  )
+		{
+			for ( int i = 0; i < procEffects.length; ++i )
+			{
+				dictionary parms = dataTableGetRow(PROC_TABLE, procEffects[i] );
+				if ( parms != null )
+				{
+					int procChance = parms.getInt( "procChance" );
+					//LOG("proc", "Proc: Inital Chance " +procChance);
+
+					int expertiseProcChance = (int)getSkillStatisticModifier(attacker, procEffects[i]);
+
+					// If you can spend points to raise the chance through expertise, use that percent chance instead.
+					if(expertiseProcChance > 0)
+					{
+						procChance = expertiseProcChance;
+
+						// If the expertise uses a kill meter, then get the kill meter's value and multiply it by the chance.
+						if(procEffects[i].startsWith("kill_meter_"))
+						{
+							procChance *= getKillMeter(attacker);
+						}
+					}
+					//LOG("proc", "Proc: Expertise Proc Chance "+procChance);
+
+					string noSelfProcBuffs = parms.getString( "noSelfProcBuffs" );
+					string noTargetProcBuffs = parms.getString( "noTargetProcBuffs" );
+
+					if(isGod(attacker) || isGod(defender))
+						LOG("expertise", "Proc: " + parms.getString("procString") + " noSelfProcBuffs: " + noSelfProcBuffs + " noTargetProcBuffs: " + noTargetProcBuffs);
+
+					// Never proc if the proc should cast a buff that already exists on the source of the proc or the target
+					if(buff.hasAnyBuffInList(attacker, noSelfProcBuffs) || buff.hasAnyBuffInList(defender, noTargetProcBuffs))
+					{
+						continue;
+					}
+
+					string requiredBuffs = parms.getString( "requiredSelfBuffs" );
+
+					//if(isGod(attacker) || isGod(defender))
+						//LOG("expertise", "Proc: " + parms.getString("procString") + " requiredBuffs: " + requiredBuffs);
+
+					// Never proc if the buff required to proc is not on the source of the proc
+					if(requiredBuffs.length() > 0 && !buff.hasAnyBuffInList(attacker, requiredBuffs))
+					{
+						continue;
+					}
+
+
+					//Attempt to normalize the procs. Some weapons fire more often than others, so we need to lower thier chances
+					if (procChance != 100)
+						procChance  = Math.round(weaponData.attackSpeed * (float)procChance);
+					//LOG("proc", "Proc:Adjusted Proc Chance " + adjustedProcChance);
+					//LOG("proc", "Proc:Int Adjusted Proc Chance " + ((int)adjustedProcChance));
+
+					//if(isGod(attacker) || isGod(defender))
+						//LOG("expertise", "Proc: " + parms.getString("procString") + " Chance: " + procChance + " adjustedProcChance: " + adjustedProcChance);
+
+					if ( rand(0,99) < procChance )
+					{
+						string procCommand = parms.getString( "procString" );
+						if (procCommand != null)
+						{
+							if(combat.canUseWeaponWithAbility(attacker, weaponData, procCommand, false))
+							{
+								queueCommand(attacker, getStringCrc(procCommand.toLowerCase()), defender, params, COMMAND_PRIORITY_DEFAULT);
+								pp = prose.setStringId(pp, new string_id("proc/proc", procCommand));
+								showFlyTextPrivateProseWithFlags(attacker, attacker, pp, 1.5f, colors.LEMONCHIFFON, FLY_TEXT_FLAG_IS_CRITICAL_HIT );
+
+							}
+						}
+					}
+				}
+			}
+		}
+
+	}
+
+	if(!isMob(defender))
+	{
+		return;
+	}
+
+	if(vehicle.isRidingVehicle(defender))
+	{
+		return;
+	}
+
+	if (utils.hasScriptVar( defender, "currentReacList" ) )
+	{
+		resizeable string[] reacEffects = utils.getResizeableStringArrayScriptVar( defender, "currentReacList" );
+		if ( reacEffects != null && reacEffects.length > 0  )
+		{
+			for ( int i = 0; i < reacEffects.length; ++i )
+			{
+				dictionary reacParms = dataTableGetRow(PROC_TABLE, reacEffects[i] );
+				if ( reacParms != null )
+				{
+					int reacChance = reacParms.getInt( "procChance" );
+
+					int expertiseReacChance = (int)getSkillStatisticModifier(defender, reacEffects[i]);
+
+					// If you can spend points to raise the chance through expertise, use that percent chance instead.
+					if(expertiseReacChance > 0)
+					{
+						reacChance = expertiseReacChance;
+
+						// If the expertise uses a kill meter, then get the kill meter's value and multiply it by the chance.
+						if(reacEffects[i].startsWith("kill_meter_"))
+						{
+							reacChance *= getKillMeter(defender);
+						}
+					}
+
+					string noSelfProcBuffs = reacParms.getString( "noSelfProcBuffs" );
+					string noTargetProcBuffs = reacParms.getString( "noTargetProcBuffs" );
+
+					// Never proc if the proc should cast a buff that already exists on the source of the proc or the target
+					if(buff.hasAnyBuffInList(defender, noSelfProcBuffs) || buff.hasAnyBuffInList(attacker, noTargetProcBuffs))
+					{
+						return;
+					}
+
+					if (reacChance != 100)
+						reacChance = Math.round(weaponData.attackSpeed * (float)reacChance);
+
+					if ( rand(0,99) < reacChance )
+					{
+						string reacCommand = reacParms.getString( "procString" );
+
+						if (reacCommand != null)
+						{
+							combat_data abilityData = combat_engine.getCombatData(reacCommand);
+							string cooldownGroup = abilityData.cooldownGroup;
+							float cooldownTime = abilityData.cooldownTime;
+							boolean canProc = false;
+							int timeLapse = -1;
+
+							if (utils.hasScriptVar(defender, REAC_BASE + cooldownGroup))
+							{
+								int lastProc = utils.getIntScriptVar(defender, REAC_BASE+cooldownGroup);
+								timeLapse = getGameTime() - lastProc;
+
+								if (timeLapse >= cooldownTime)
+									canProc = true;
+							}
+							else
+							{
+								canProc = true;
+							}
+
+
+							if (canProc)
+							{
+								if (queueCommand(defender, getStringCrc(reacCommand.toLowerCase()), attacker, "", COMMAND_PRIORITY_DEFAULT))
+								{
+									LOG("procCommand", "Reac -- " + reacCommand + " activated");
+									utils.setScriptVar(defender, REAC_BASE + cooldownGroup, getGameTime());
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+	}
+
+}
+
+//This function builds a string array that is stored as a script var, 'currentProcList'
+//This array contains a list of procs that are currently accessible and valid for the player
+//Sources for procs are weapons, cybernetics, buffs, and expertise
+void buildCurrentProcList( obj_id player )
+{
+//	LOG("procCommand","checking for active procs");
+	resizeable string [] currentProcList = new string[0];
+
+	//Check for procs on the weapon equipped
+	obj_id weapon = getCurrentWeapon(player);
+	if(static_item.isStaticItem(weapon))
+	{
+		dictionary itemData = static_item.getStaticItemWeaponDictionary(weapon);
+		string procEffect = itemData.getString("proc_effect");
+		if (procEffect != null && procEffect !="")
+		{
+			string[] weaponProcEffects = split(procEffect, ',');
+			for ( int i = 0; i < weaponProcEffects.length; ++i )
+				currentProcList.addElement(weaponProcEffects[i]);
+		}
+	}
+	else
+	{
+		//get the objvar from the weapon
+		if (hasObjVar(weapon, "procEffect"))
+		{
+			string[] weaponProcEffects = getStringArrayObjVar(weapon, "procEffect");
+			for ( int i = 0; i < weaponProcEffects.length; ++i )
+				currentProcList.addElement(weaponProcEffects[i]);
+		}
+	}
+
+	//Check for procs on buffs
+	if (utils.hasScriptVar( player, "procBuffEffects" ) )
+	{
+		string[] buffProcEffects = utils.getStringArrayScriptVar( player, "procBuffEffects" );
+		for ( int i = 0; i < buffProcEffects.length; ++i )
+			currentProcList.addElement(buffProcEffects[i]);
+	}
+
+	//Check for procs on cybernetics
+	if (utils.hasScriptVar( player, "cyberneticItems" ) )
+	{
+		string[] installedCybernetics = utils.getStringArrayScriptVar( player, "cyberneticItems" );
+		string procString = null;
+
+		for ( int i = 0; i < installedCybernetics.length; ++i )
+		{
+			procString = dataTableGetString(CYBERNETICS_TABLE, installedCybernetics[i], "procEffectString" );
+			if ( procString != null && procString != "" )
+				currentProcList.addElement(procString);
+			procString = null;
+		}
+	}
+
+	//Check for procs in the expertise proc/reactive script var
+	if (utils.hasScriptVar( player, "expertiseProcReacList" ) )
+	{
+		resizeable string[] expertiseList = utils.getResizeableStringArrayScriptVar( player, "expertiseProcReacList" );
+		for ( int i = 0; i < expertiseList.length; ++i )
+			if (expertiseList[i].endsWith("_proc"))
+				currentProcList.addElement(expertiseList[i]);
+	}
+
+	//Finish, since we roll for everything in your proclist we need to disallow multiple entries of the same type for offensive procs
+	//This means you are limited to 1 proc per unique proc type even if it is on multiple pieces of gear/buffs,etc
+	if(currentProcList.length > 0)
+	{
+		//make a temp list
+		resizeable string [] tempProcList = new string[0];
+
+		for ( int i = 0; i < currentProcList.length; ++i )
+		{
+			//only add unique procnames to the new temp list
+			if( !tempProcList.contains(currentProcList[i]) )
+				tempProcList.addElement(currentProcList[i]);
+			//LOG("proc", "List " + i +") " + currentProcList[i]);
+		}
+		//set the proclist on the player
+		utils.setScriptVar(player, "currentProcList", tempProcList);
+	}
+	else
+		if (utils.hasScriptVar( player, "currentProcList" ) )
+			utils.removeScriptVar(player, "currentProcList");
+}
+
+//This function builds a string array that is stored as a script var, 'currentReacList'
+//This array contains a list of reactives that are currently accessible and valid for the player
+//Sources for reactives are wearables, cybernetics, buffs, and expertise
+void buildCurrentReacList( obj_id player )
+{
+//	LOG("procCommand","checking for active reacs");
+	resizeable string [] currentReacList = new string[0];
+
+	//Check for procs on the wearables equipped
+	const string strWear[] = {
+					"chest2",
+					"chest1",
+					"hat",
+					"bicep_r",
+					"bicep_l",
+					"bracer_upper_r",
+					"bracer_upper_l",
+					"pants2",
+					"pants1",
+					"bandolier",
+					"wrist_r",
+					"wrist_l",
+					"gloves",
+					"ring_r",
+					"ring_l",
+					"utility_belt",
+					"shoes"
+
+				};
+
+	for(int intI = 0; intI < strWear.length; intI++)
+	{
+
+		obj_id wearable = getObjectInSlot(player, strWear[intI]);
+		if (!isIdNull(wearable))
+		{
+			if(static_item.isStaticItem(wearable))
+			{
+				//need to check whether it exists on the armor table or the item table
+				dictionary wearableData = null;
+				string wearableName = static_item.getStaticItemName(wearable);
+				if (static_item.getStaticObjectType(wearableName) == 2)
+					wearableData = static_item.getStaticArmorDictionary(wearable);
+				else	wearableData = static_item.getStaticItemDictionary(wearable);
+
+				if (wearableData != null)
+				{
+					string reacEffect = wearableData.getString("reactive_effect");
+					if (reacEffect != null && reacEffect !="")
+					{
+						string [] wearableReacEffects = split(reacEffect, ',');
+						for ( int i = 0; i < wearableReacEffects.length; ++i )
+						{
+							currentReacList.addElement(wearableReacEffects[i]);
+//							LOG("procCommand", "Worn reactive found: " + wearableReacEffects[i]);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	//Check for reacs on buffs
+	if (utils.hasScriptVar( player, "reacBuffEffects" ) )
+	{
+		string[] buffReacEffects = utils.getStringArrayScriptVar( player, "reacBuffEffects" );
+		for ( int i = 0; i < buffReacEffects.length; ++i )
+			currentReacList.addElement(buffReacEffects[i]);
+	}
+
+	//Check for reacs on cybernetics
+	if (utils.hasScriptVar( player, "cyberneticItems" ) )
+	{
+		string[] installedCybernetics = utils.getStringArrayScriptVar( player, "cyberneticItems" );
+		string reacString = null;
+
+		for ( int i = 0; i < installedCybernetics.length; ++i )
+		{
+			reacString = dataTableGetString(CYBERNETICS_TABLE, installedCybernetics[i], "reacEffectString" );
+			if ( reacString != null && reacString != "" )
+				currentReacList.addElement(reacString);
+			reacString = null;
+		}
+	}
+
+	//Check for reacs in the expertise proc/reactive script var
+	if (utils.hasScriptVar( player, "expertiseProcReacList" ) )
+	{
+		resizeable string[] expertiseList = utils.getResizeableStringArrayScriptVar( player, "expertiseProcReacList" );
+
+		for ( int i = 0; i < expertiseList.length; ++i )
+			if (expertiseList[i].endsWith("_reac"))
+			{
+//				LOG("procCommand","Attempting to add " + expertiseList[i] + " as an expertise reac.");
+				currentReacList.addElement(expertiseList[i]);
+			}
+	}
+
+	if(currentReacList.length > 0)
+	{
+//		LOG("procCommand", "Reac List---");
+//		for ( int i = 0; i < currentReacList.length; ++i )
+//			LOG("procCommand", "List " + i +") " + currentReacList[i]);
+
+		utils.setScriptVar(player, "currentReacList", currentReacList);
+	}
+	else
+		if (utils.hasScriptVar( player, "currentReacList" ) )
+			utils.removeScriptVar(player, "currentReacList");
+
+}

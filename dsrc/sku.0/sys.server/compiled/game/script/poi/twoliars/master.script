@@ -1,0 +1,299 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        master.script
+ * Description:  master poi object script: POI = twoliars
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.poi;
+include library.scenario;
+include library.ai_lib;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits theme_park.poi.base;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string SCENARIO_NAME					= "twoliars";
+const string LOG_NAME						= "poiTwoLiars Master";
+const string SCENARIO_THEATER				= "object/building/poi/tatooine_fugitive_camp_medium.iff";
+const string BASE_PATH						= "poi." + SCENARIO_NAME;
+const string MEDIATOR_TYPE					= "MEDIATOR_TYPE";
+const string ANTAGONIST_TYPE				= "ANTAGONIST_TYPE";
+const string SCRIPT_ANTAGONIST				= BASE_PATH + ".antagonist";
+const string SCRIPT_MEDIATOR				= BASE_PATH + ".mediator";
+const string TBL							= "datatables/poi/" + SCENARIO_NAME + "/setup.iff";
+const int	 mediatorCoordsX[]				= { 8, -5, -2, 0, -6, -3 };
+const int	 mediatorCoordsZ[]				= { 7, -6,  6, 4, 6, -6 };
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	if ( !scenario.initScenario( self, TBL ) )
+		scenario.cleanup( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnUnloadedFromMemory
+//------------------------------------------------
+
+trigger OnUnloadedFromMemory()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanupScenario
+//------------------------------------------------
+
+messageHandler cleanupScenario()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// destroySelf
+//------------------------------------------------
+
+messageHandler destroySelf()
+{
+	destroyObject( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initScenario
+//
+// Called by message from OnAttach.
+// This calls all methods necessary to set up the POI.
+//------------------------------------------------
+
+messageHandler initScenario()
+{
+	// Validate parameters.
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		scenario.cleanup(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Environment Setup
+	*/
+
+	// Get our mediator type.
+	string mtype = params.getString( "MEDIATOR_TEMPLATE" );
+	setObjVar( self, MEDIATOR_TYPE, mtype );
+
+	// Get our antagonist type.
+	string atype = params.getString( "ANTAGONIST_TEMPLATE" );
+	setObjVar( self, ANTAGONIST_TYPE, atype );
+
+	// Create teams.
+	scenario.createTeam( self, "mediator", self.toString() + "_mediator" );
+	scenario.createTeam( self, "antagonist", self.toString() + "_antagonist" );
+
+	/*
+	Spawn Theaters
+	*/
+
+	if ( !createTheaters( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//  createTheaters
+//
+//  Spawns the theaters for the scenario.
+//------------------------------------------------
+
+boolean createTheaters( obj_id self )
+{
+	// Create the camp theater.
+	obj_id theater = poi.createObject( SCENARIO_THEATER, 0, 0 );
+
+	// Store theater reference.
+	setObjVar( self, "theater", theater );
+
+	return true;
+}
+
+//------------------------------------------------
+// handleTheaterComplete
+//
+// Called when the theaters load.
+//------------------------------------------------
+
+messageHandler handleTheaterComplete()
+{
+	/*
+	Spawn Antagonist
+	*/
+
+	if ( !createAntagonist( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Spawn Mediators
+	*/
+
+	if ( !createMediators( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Set titles.
+	messageTo( self, "setTitles", null, 2, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// createAntagonist
+//
+// Creates the antagonist.
+//------------------------------------------------
+
+boolean createAntagonist( obj_id self )
+{
+	// Spawn the scenario antagonist (pirate captain).
+	string type = getStringObjVar( self, ANTAGONIST_TYPE );
+	string ident = "antagonist_0";
+	location loc = getLocation( self );
+//	loc.x += 4;
+//	loc.z += -9;
+	obj_id antagonist = scenario.createTeamNpc( self, "antagonist", type, ident, loc );
+	if ( (antagonist == null) || (antagonist == obj_id.NULL_ID) )
+		return false;
+
+	// Assign initial behavior to the antagonist.
+	attachScript( antagonist, SCRIPT_ANTAGONIST );
+	ai_lib.setDefaultCalmBehavior( antagonist, ai_lib.BEHAVIOR_SENTINEL );
+
+	return true;
+}
+
+//------------------------------------------------
+// createMediators
+//
+// Creates the mediator group.
+//------------------------------------------------
+
+boolean createMediators( obj_id self )
+{
+	location baseloc = getLocation( self );
+	string type = getStringObjVar( self, MEDIATOR_TYPE );
+	if ( !type.equals("") )
+	{
+		// Diminishing array to randomize our placement.
+		int coord_idx[] = new int[6];
+		for( int i=0; i<6; i++ )
+		{
+			coord_idx[i] = i;
+		}
+
+		// Diminishing array to randomize our initial statements.
+		int statement_idx[] = new int[6];
+		for( int i=0; i<6; i++ )
+		{
+			statement_idx[i] = i;
+		}
+
+		for ( int i = 5; i >= 0; i-- )
+		{
+			string ident = "mediator_" + (i + 1);
+
+			// Determine our random start location.
+			int index = rand( 0, i );
+			int idx = coord_idx[index];
+			coord_idx[index] = coord_idx[i];
+			coord_idx[i] = -1;
+
+			// Determine our random initial saying.
+			int sindex = rand( 0, i );
+			int sidx = statement_idx[sindex];
+			statement_idx[sindex] = statement_idx[i];
+			statement_idx[i] = -1;
+
+			location loiterloc = new location( baseloc );
+			loiterloc.x += mediatorCoordsX[idx];
+			loiterloc.z += mediatorCoordsZ[idx];
+
+			obj_id mediator = scenario.createTeamNpc( self, "mediator", type, ident, loiterloc );
+			if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+			{
+				LOG( LOG_NAME, "Couldn't create mediator minion." );
+			}
+			else
+			{
+				setYaw( mediator, rand(0, 359) );
+				attachScript( mediator, SCRIPT_MEDIATOR );
+				ai_lib.setDefaultCalmBehavior( mediator, ai_lib.BEHAVIOR_SENTINEL );
+
+				// Set obj vars.
+				setObjVar( mediator, "m_index", i );
+				setObjVar( self, "m_" + i, getName( mediator ) );
+				setObjVar( mediator, "s_index", sidx );
+			}
+		}
+	}
+
+	return true;
+}
+
+//------------------------------------------------
+// setTitles
+//------------------------------------------------
+
+messageHandler setTitles()
+{
+	// Set the title of the captain.
+	obj_id m = poi.findObject( "mediator_0" );
+	if ( (m == null) || (m == obj_id.NULL_ID) || ai_lib.isInCombat( m ) )
+		return SCRIPT_CONTINUE;
+	poi.setTitle( m, "m_title" );
+
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,230 @@
+include library.trace;
+include library.fs_dyn_village;
+include library.utils;
+include java.util.Enumeration;
+
+void tryDetachScript()
+{
+	obj_id selph = getSelf();
+	deltadictionary dd = selph.getScriptVars();
+	Enumeration keys = dd.keys();
+	while(keys.hasMoreElements())
+	{
+		string key = (string)(keys.nextElement());
+		if(key.startsWith(fs_dyn_village.SCRIPT_VAR_DATA_REQUEST))
+		{
+			return;
+		}
+	}
+	
+	//LOG("fs_quest", "!!!*** Detaching DataHandler from " + selph + " ***!!!");
+	detachScript(selph, fs_dyn_village.SCRIPT_FS_DATAHANDLER);
+	return;
+}
+
+trigger OnLogin()
+{
+	tryDetachScript();
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	tryDetachScript();
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnClusterWideDataResponse(string manager_name, string dataset_name, int request_id, string[] element_name_list, dictionary[] cluster_data, int lock_key)
+{
+	//trace.log(fs_dyn_village.LOG_CHAN, "fs_village_master::OnClusterWideDataResponse: Object " + self + ", " + manager_name + ", " + dataset_name + ", " + request_id);
+
+	if(!manager_name.equals(fs_dyn_village.DYNVILLAGE_CLUSTER_NAME))
+	{
+		trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> " + self + " Ignoring cluster manager name " + manager_name, self, trace.TL_ERROR_LOG);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Figure out the data mode
+	int data_mode = -1;
+	if (utils.hasScriptVar(self, fs_dyn_village.SCRIPT_VAR_DATA_REQUEST + "." + request_id))
+	{
+		data_mode = utils.getIntScriptVar(self, fs_dyn_village.SCRIPT_VAR_DATA_REQUEST + "." + request_id);
+		utils.removeScriptVar(self, fs_dyn_village.SCRIPT_VAR_DATA_REQUEST + "." + request_id);
+	}
+	else
+	{
+		trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> cannot find a data_mode for request_id " + request_id + " on " + self, self, trace.TL_ERROR_LOG);
+		releaseClusterWideDataLock(manager_name, lock_key);
+		return SCRIPT_CONTINUE;
+	}
+
+	//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> data_mod=" + data_mode);
+
+	// Get the params for this data mode
+	string str_params = null;
+	if(utils.hasScriptVar(self, fs_dyn_village.SCRIPT_VAR_PARAMS_REQUEST + "." + request_id))
+	{
+		str_params = utils.getStringScriptVar(self, fs_dyn_village.SCRIPT_VAR_PARAMS_REQUEST + "." + request_id);
+		utils.removeScriptVar(self, fs_dyn_village.SCRIPT_VAR_PARAMS_REQUEST + "." + request_id);
+	}
+
+	// grab the response handler
+	string handler = null;
+	if (utils.hasScriptVar(self, fs_dyn_village.SCRIPT_VAR_HANDLER_REQ + "." + request_id))
+	{
+		handler = utils.getStringScriptVar(self, fs_dyn_village.SCRIPT_VAR_HANDLER_REQ + "." + request_id);
+		utils.removeScriptVar(self, fs_dyn_village.SCRIPT_VAR_HANDLER_REQ + "." + request_id);
+	}
+
+	if(data_mode == -1 || str_params == null)
+	{
+		//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> invalid request data found " + data_mode + "/" + str_params + "/" + handler);
+		releaseClusterWideDataLock(manager_name, lock_key);
+		return SCRIPT_CONTINUE;
+	}
+
+
+	if(element_name_list == null || element_name_list.length < 1)
+	{
+		// There is no data returned.
+		//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> No data returned from cluster although it should have been initilized already.", null, trace.TL_ERROR_LOG);		
+		
+		if(handler != null && handler.length() > 0)
+		{
+			dictionary result = new dictionary();
+			result.put("success", false);
+			messageTo(self, handler, result, 0.0f, false);
+		}
+		
+		releaseClusterWideDataLock(manager_name, lock_key);
+		return SCRIPT_CONTINUE;
+	}
+
+	switch (data_mode)
+	{
+		case fs_dyn_village.DATAMODE_ADD_OBJID:
+		{
+			// Requesting insert/update of obj_id
+			java.util.StringTokenizer st = new java.util.StringTokenizer(str_params, "|");
+			if(st.countTokens() < 2)
+			{
+				//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> str_params is invalid: " + str_params);
+				releaseClusterWideDataLock(manager_name, lock_key);
+				return SCRIPT_CONTINUE;
+			}
+
+			string obj_id_key = st.nextToken();
+			obj_id id = utils.stringToObjId(st.nextToken());
+
+			if(!isIdValid(id))
+			{
+				//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> Error converting params (" + str_params +") into a valid obj_id for update.");
+				releaseClusterWideDataLock(manager_name, lock_key);
+				return SCRIPT_CONTINUE;
+			}
+
+			dictionary result = new dictionary();
+			result.put("success", true);
+			result.put("registeredId", id);
+			result.put("key", obj_id_key);
+
+			dictionary currentdata = cluster_data[0];
+			currentdata.put(obj_id_key, id);
+
+			replaceClusterWideData(fs_dyn_village.DYNVILLAGE_CLUSTER_NAME, element_name_list[0], currentdata, false, lock_key);
+			releaseClusterWideDataLock(manager_name, lock_key);
+
+			if(handler != null && handler.length() > 0)
+			{
+				messageTo(self, handler, result, 0.0f, false);
+			}
+			break;
+		}
+
+		case fs_dyn_village.DATAMODE_GET_OBJID:
+		{
+			dictionary dgo = new dictionary();
+			dgo.put("key", str_params);
+			if(cluster_data[0].containsKey(str_params))
+			{
+				dgo.put("success", true);
+				dgo.put(str_params, cluster_data[0].getObjId(str_params));
+			}
+			else
+			{
+				dgo.put("success", false);
+				obj_id nullid = obj_id.NULL_ID;
+				dgo.put(str_params, nullid);
+				//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::.OnClusterWideDataResponse: -> unable to find obj_id for " + str_params);
+			}
+
+			messageTo(self, handler, dgo, 0.0f, false);
+			break;
+		}
+
+		case fs_dyn_village.DATAMODE_ADD_INT:
+		{
+			// Requesting insert/update of an integer
+			java.util.StringTokenizer st = new java.util.StringTokenizer(str_params, "|");
+			if(st.countTokens() < 2)
+			{
+				//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> str_params is invalid: " + str_params);
+				releaseClusterWideDataLock(manager_name, lock_key);
+				return SCRIPT_CONTINUE;
+			}
+
+			string int_key = st.nextToken();
+			int val = utils.stringToInt(st.nextToken());
+
+			dictionary dai = new dictionary();
+			dai.put("success", true);
+			dai.put("registeredInt", val);
+			dai.put("key", int_key);
+
+			dictionary currentData = cluster_data[0];
+			currentData.put(int_key, val);
+
+			replaceClusterWideData(fs_dyn_village.DYNVILLAGE_CLUSTER_NAME, element_name_list[0], currentData, false, lock_key);
+			releaseClusterWideDataLock(manager_name, lock_key);
+
+			messageTo(self, handler, dai, 0.0f, false);
+			break;
+		}
+
+		case fs_dyn_village.DATAMODE_GET_INT:
+		{
+			dictionary dgi = new dictionary();
+			dgi.put("key", str_params);
+			//LOG("fs_quest", "Requesting integer " + str_params);
+			if(cluster_data[0].containsKey(str_params))
+			{
+				dgi.put("success", true);
+				dgi.put(str_params, cluster_data[0].getInt(str_params));
+			}
+			else
+			{
+				dgi.put("success", false);
+				dgi.put(str_params, -1);
+				//trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::.OnClusterWideDataResponse: -> unable to find integer for " + str_params);
+			}
+
+			messageTo(self, handler, dgi, 0.0f, false);
+			break;
+		}
+
+		default:
+		{
+			trace.log(fs_dyn_village.LOG_CHAN, "fs_datahandler::OnClusterWideDataResponse: -> invalid data_mode value of " + data_mode + " on " + self, self, trace.TL_ERROR_LOG);
+			releaseClusterWideDataLock(manager_name, lock_key);
+			break;
+		}
+	}
+
+	utils.removeScriptVar(self, fs_dyn_village.SCRIPT_VAR_DATA_REQUEST 		+ "." + request_id);
+	utils.removeScriptVar(self, fs_dyn_village.SCRIPT_VAR_PARAMS_REQUEST 	+ "." + request_id);
+	utils.removeScriptVar(self, fs_dyn_village.SCRIPT_VAR_HANDLER_REQ 		+ "." + request_id);
+
+	tryDetachScript();
+	return SCRIPT_CONTINUE;
+}
+

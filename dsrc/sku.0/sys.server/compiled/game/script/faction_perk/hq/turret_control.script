@@ -1,0 +1,487 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.hq;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.money;
+include library.factions;
+include library.player_structure;
+include library.turret;
+include library.ai_lib;
+
+inherits terminal.base.base_terminal;
+
+/***** CONSTANTS *******************************************************/
+
+const string BTN_ATTACK								= "@" + "hq" + ":btn_attack";
+
+const string_id MNU_TURRET_CONTROL					= new string_id("hq", "mnu_turret_control");
+
+const string_id ATTACK_TARGETS						= new string_id("hq", "attack_targets");
+const string_id ADMIN_ONLY							= new string_id("hq", "admin_only");
+const string_id CONTROL_TITLE						= new string_id("hq", "control_title");
+const string_id TURRET_CONTROL						= new string_id("hq", "turret_control");
+const string_id CURRENT_TARGET						= new string_id("hq", "current_target");
+const string_id TARGET_HEALTH						= new string_id("hq", "target_health");
+const string_id NONE_ACTIVE							= new string_id("hq", "none_active");
+const string_id NO_TARGETS							= new string_id("hq", "no_targets");
+const string_id INVALID_TARGET						= new string_id("hq", "invalid_target");
+const string_id DECLARED_ONLY						= new string_id("hq", "declared_only");
+const string_id NO_LINE_OF_SITE						= new string_id("hq", "no_line_of_site");
+const string_id IN_USE								= new string_id("hq", "in_use");
+const string_id ALREADY_ATTACKING					= new string_id("hq", "already_attacking");
+
+const string CONTROL_TURRET							= "controlling.turret";
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	createTriggerVolume("turret_control_range", 5, true);
+
+	if ( hasScript(self, hq.SCRIPT_TERMINAL_DISABLE) )
+		detachScript(self, hq.SCRIPT_TERMINAL_DISABLE);
+
+	if(utils.hasScriptVar(self, "sui.in_use"))
+		utils.removeScriptVar(self, "sui.in_use");
+
+	messageTo (self, "handleSetControl", null, 5f, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string volName, obj_id who)
+{
+	if(!isIdValid(who))
+		return SCRIPT_CONTINUE;
+
+	if(utils.hasScriptVar(self, "sui.in_use"))
+	{
+		obj_id player = utils.getObjIdScriptVar(self, "sui.in_use");
+		if(player == who)
+		{
+			string scriptvar_sui = player + ".control.sui";
+			sui.closeSUI(player, utils.getIntScriptVar(self, scriptvar_sui));
+			utils.removeScriptVar(self, scriptvar_sui);
+			utils.removeScriptVar(self, "sui.in_use");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+messageHandler handleSetControl()
+{
+	obj_id structure = player_structure.getStructure(self);
+	if ( !isIdValid(structure) )
+		return SCRIPT_CONTINUE;
+
+	obj_var_list ovl = getObjVarList(structure, hq.VAR_DEFENSE_TURTERMINALS);
+	//debugSpeakMsg(self, "OVL is " + ovl);
+	if ( ovl == null )
+		return SCRIPT_CONTINUE;
+
+	int numTypes = ovl.getNumItems();
+	//debugSpeakMsg(self, "Number of items in list is " + numTypes);
+	for ( int i = 0; i < numTypes; i++ )
+	{
+		obj_var ov = ovl.getObjVar(i);
+		string ovName = ov.getName();
+		obj_id[] data = ov.getObjIdArrayData();
+
+		int pos = utils.getElementPositionInArray(data, self);
+		//debugSpeakMsg(self, "Position in list is " + pos);
+		if ( pos > -1 )
+		{
+			if (pos == 0)
+			{
+				setObjVar(self, "control1", 1);
+			}
+			else if (pos == 1)
+			{
+				setObjVar(self, "control2", 1);
+			}
+			else if (pos == 2)
+			{
+				setObjVar(self, "control3", 1);
+			}
+			else if (pos == 3)
+			{
+				setObjVar(self, "control4", 1);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	obj_id structure = player_structure.getStructure(player);
+	if ( !isIdValid(structure) )
+		return SCRIPT_CONTINUE;
+
+	if(utils.hasScriptVar(self, "sui.in_use"))
+	{
+		obj_id oldPlayer = utils.getObjIdScriptVar(self, "sui.in_use");
+		if(oldPlayer != player)
+		{
+			if (oldPlayer.isLoaded())
+			{
+				sendSystemMessage(player, IN_USE);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				utils.removeScriptVar(self, "sui.in_use");
+			}
+		}
+	}
+
+	if ( pvpGetAlignedFaction(player) == pvpGetAlignedFaction(structure) )
+	{
+		/*		gcw faction change  2/21/05
+		if ( pvpGetType(player) != PVPTYPE_DECLARED )
+		{
+			sendSystemMessage(player, DECLARED_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+		 */
+		if (factions.isOnLeave(player))
+		{
+			sendSystemMessage(player, DECLARED_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+
+	}
+
+	if(!player_structure.isAdmin(structure, player))
+	{
+		int rank = pvpGetCurrentGcwRank( player );
+		if (rank < 4 )
+		{
+			sendSystemMessage(player, ADMIN_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	int mnuControl = mi.addRootMenu(menu_info_types.SERVER_MENU1, MNU_TURRET_CONTROL);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	obj_id structure = player_structure.getStructure(player);
+	if ( !isIdValid(structure) )
+		return SCRIPT_CONTINUE;
+
+	if ( pvpGetAlignedFaction(player) == pvpGetAlignedFaction(structure) )
+	{
+		if ( pvpGetType(player) != PVPTYPE_DECLARED )
+		{
+			sendSystemMessage(player, DECLARED_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	//default menu functionality
+	if ( item == menu_info_types.ITEM_USE )	//generic use
+	{
+		//open holocron page!
+
+		return SCRIPT_CONTINUE;
+	}
+
+	//turret control specific functionality
+	if ( item == menu_info_types.SERVER_MENU1 )			//target - turret
+	{
+		dictionary params = new dictionary();
+		params.put("player", player);
+		messageTo(self, "handleTurretAssignment", params, 1f, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/***** SELECT TARGET *************************************************/
+messageHandler handleTurretAssignment()
+{
+	obj_id structure = player_structure.getStructure(self);
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(structure) || (!isIdValid(player)))
+		return SCRIPT_CONTINUE;
+
+	utils.setScriptVar(self, "sui.in_use", player);
+
+	if (hasObjVar(self, "control1"))
+	{
+		obj_id turret = getObjIdObjVar(structure, "turret1");
+		if(!exists(turret))
+		{
+			removeObjVar(self, CONTROL_TURRET);
+		}
+		else
+		{
+			setObjVar(self, CONTROL_TURRET, turret);
+		}
+	}
+	else if (hasObjVar(self, "control2"))
+	{
+		obj_id turret = getObjIdObjVar(structure, "turret2");
+		if(!exists(turret))
+		{
+			removeObjVar(self, CONTROL_TURRET);
+		}
+		else
+		{
+			setObjVar(self, CONTROL_TURRET, turret);
+		}
+	}
+	else if (hasObjVar(self, "control3"))
+	{
+		obj_id turret = getObjIdObjVar(structure, "turret3");
+		if(!exists(turret))
+		{
+			removeObjVar(self, CONTROL_TURRET);
+		}
+		else
+		{
+			setObjVar(self, CONTROL_TURRET, turret);
+		}
+	}
+	else if (hasObjVar(self, "control4"))
+	{
+		obj_id turret = getObjIdObjVar(structure, "turret4");
+		if(!exists(turret))
+		{
+			removeObjVar(self, CONTROL_TURRET);
+		}
+		else
+		{
+			setObjVar(self, CONTROL_TURRET, turret);
+		}
+	}
+	showTurretControl(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTargetSelection()
+{
+	obj_id player = sui.getPlayerId(params);
+	//debugSpeakMsg(self, "player is " + player);
+	if ( !isIdValid(player) )
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		return SCRIPT_CONTINUE;
+	}
+
+	int intState = getState(player, STATE_FEIGN_DEATH);
+
+	if (isDead(player) || isIncapacitated(player) || intState > 0)
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id structure = player_structure.getStructure(player);
+	obj_id cturret = getObjIdObjVar(self, CONTROL_TURRET);
+	//debugSpeakMsg(self, "turret I am controlling is " + cturret);
+	if (!isIdValid(cturret) )
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] targets = utils.getObjIdBatchScriptVar(cturret, turret.SCRIPTVAR_TARGETS);
+
+	if ( targets == null || targets.length == 0 )
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		return SCRIPT_CONTINUE;
+	}
+
+	int bp = sui.getIntButtonPressed(params);
+	//debugSpeakMsg(self, "you have selected " + bp);
+	if ( bp == sui.BP_CANCEL )
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( bp == sui.BP_REVERT )
+	{
+		showTurretControl(self, player);
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = sui.getListboxSelectedRow(params);
+	//debugSpeakMsg(self, "index selected is " + idx);
+	if ( idx == -1 || idx > targets.length-1 )
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id target = targets[idx];
+
+	string tarName = getEncodedName(target);
+
+	//debugSpeakMsg(self, "target selected is " + target);
+	if ( !isIdValid(target) )
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !exists(target) || !target.isLoaded() )
+	{
+		utils.removeScriptVar(self, "sui.in_use");
+		sendSystemMessage(player, INVALID_TARGET);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!canSee(cturret, target))
+	{
+		sendSystemMessage(player, NO_LINE_OF_SITE);
+		showTurretControl(self, player);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (utils.hasScriptVar(cturret, turret.SCRIPTVAR_ENGAGED))
+		{
+			obj_id oldTarget = utils.getObjIdScriptVar(cturret, turret.SCRIPTVAR_ENGAGED);
+			if(oldTarget == target)
+			{
+				sendSystemMessage(player, ALREADY_ATTACKING);
+				showTurretControl(self, player);
+				return SCRIPT_CONTINUE;
+			}
+
+			//debugSpeakMsg(self, "Changing target");
+			utils.removeScriptVar(cturret, turret.SCRIPTVAR_ENGAGED);
+			utils.setScriptVar(cturret, turret.SCRIPTVAR_ENGAGED, target);
+			turret.disengage(cturret);
+			turret.engageTarget(cturret, target);
+			messageTo(cturret, "handleTurretAttack", null, 1, false);
+			prose_package ppAttack = prose.getPackage(ATTACK_TARGETS, tarName);
+			sendSystemMessageProse(player, ppAttack);
+			showTurretControl(self, player);
+		}
+	else
+		{
+			//debugSpeakMsg(self, "Changing target");
+			utils.setScriptVar(cturret, turret.SCRIPTVAR_ENGAGED, target);
+			prose_package ppAttack = prose.getPackage(ATTACK_TARGETS, tarName);
+			turret.engageTarget(cturret, target);
+			messageTo(cturret, "handleTurretAttack", null, 1, false);
+			sendSystemMessageProse(player, ppAttack);
+			showTurretControl(self, player);
+		}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *************************************************/
+
+void showTurretControl(obj_id terminal, obj_id player)
+{
+	if ( !isIdValid(terminal) || !isIdValid(player) )
+		return;
+
+	string scriptvar_sui = player + ".control.sui";
+
+	if ( utils.hasScriptVar(terminal, scriptvar_sui) )
+	{
+		sui.closeSUI(player, utils.getIntScriptVar(terminal, scriptvar_sui));
+		utils.removeScriptVar(terminal, scriptvar_sui);
+	}
+
+	int intState = getState(player, STATE_FEIGN_DEATH);
+
+	if (isDead(player) || isIncapacitated(player)|| intState > 0)
+		return;
+
+	obj_id structure = player_structure.getStructure(player);
+	if ( !isIdValid(structure) )
+		return;
+
+	resizeable string[] entries = new string[0];
+	resizeable obj_id[] opt = new obj_id[0];
+	obj_id cturret = getObjIdObjVar(terminal, CONTROL_TURRET);
+	//debugSpeakMsg(terminal, "my turret is " + cturret);
+
+	if (cturret == null)
+	{
+		sendSystemMessage(player, NONE_ACTIVE);
+		return;
+	}
+
+	int max_hp = getMaxHitpoints(cturret);
+	int tur_hp = getHitpoints(cturret);
+
+	if(!utils.hasScriptVar(cturret, turret.SCRIPTVAR_ENGAGED))
+	{
+		utils.removeScriptVar(terminal, "sui.in_use");
+		sendSystemMessage(player, NO_TARGETS);
+		return;
+	}
+
+	obj_id ctarget = utils.getObjIdScriptVar(cturret, turret.SCRIPTVAR_ENGAGED);
+
+	//debugSpeakMsg(terminal, "my target is " + ctarget + " my turret is " + cturret + " scriptvar is " + turret.SCRIPTVAR_ENGAGED);
+
+	string cTarName = getEncodedName(ctarget);
+
+	string turNam = getEncodedName(cturret);
+
+	resizeable obj_id[] targets = utils.getResizeableObjIdBatchScriptVar(cturret, turret.SCRIPTVAR_TARGETS);
+	//debugSpeakMsg(terminal, "obj_id scriptvar is " + targets);
+	int numTar = targets.length;
+	//debugSpeakMsg(terminal, "I have " + numTar + "targets");
+	int cur_hp = 0;
+	for ( int i = 0; i < numTar; i++ )
+	{
+		obj_id target = targets[i];
+		//debugSpeakMsg(terminal, "obj id target is " + target);
+
+		string tarName = getEncodedName(target);
+
+		//entries = utils.addElement(entries, toUpper(tarName));
+		//opt = utils.addElement(opt, obj_id.NULL_ID);
+		cur_hp = getAttrib(target, 0);
+		//debugSpeakMsg(terminal, "target hp are " + cur_hp);
+		entries = utils.addElement(entries, tarName + "     - " + " " + localize( TARGET_HEALTH ) + " ["+cur_hp+"]");
+	}
+
+	//string title = "testing";
+	//string prompt = "testing";
+	string title = utils.packStringId(CONTROL_TITLE);
+	string prompt = utils.packStringId(TURRET_CONTROL) + " " + turNam + " ["+tur_hp+"/"+max_hp+"]";
+	prompt += "\n\n";
+	prompt += utils.packStringId(CURRENT_TARGET) + " " + cTarName + " " + utils.packStringId(TARGET_HEALTH) + " " + " ["+cur_hp+"]";
+
+	//debugSpeakMsg(terminal, "I am now here " + terminal + " player " + player + " title " + title + " prompt " + prompt);
+	int pid = sui.listbox(terminal, player, prompt, sui.OK_CANCEL_REFRESH, title, entries, "handleTargetSelection");
+
+	if(pid > -1)
+	{
+		sui.setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, BTN_ATTACK);
+		utils.setScriptVar(terminal, scriptvar_sui, pid);
+		//setSUIProperty(pid, sui.LISTBOX_TITLE, sui.PROP_TEXT, localize( CONTROL_TITLE ));
+		//sui.showSUIPage(pid);
+	}
+}
+
+
+
+

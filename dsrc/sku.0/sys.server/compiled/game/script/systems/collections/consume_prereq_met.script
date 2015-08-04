@@ -1,0 +1,172 @@
+/*
+systems.collections.consume_loot.script
+Used to trigger a collection update when double clicked
+Authors: Jesse Benjamin, James Michener, and Jeff Haskell
+*/
+
+//libraries
+include library.collection;
+include library.sui;
+include library.utils;
+include library.static_item;
+
+//constants
+
+const string PID_NAME					= "collectionConsume";
+const string SCRIPTVAR_LIST				= "collections.availableCollections";
+
+const string_id SID_CONSUME_PROMPT			= new string_id("collection", "consume_item_prompt");
+const string_id SID_CONSUME_TITLE			= new string_id("collection", "consume_item_title");
+const string_id SID_CONSUME_ITEM			= new string_id("collection", "consume_item");
+const string_id SID_REPORT_CONSUME_ITEM_FAIL		= new string_id("collection", "report_consume_item_fail");
+const string_id SID_ALREADY_HAVE_SLOT			= new string_id("collection", "already_have_slot");
+const string_id SID_ALREADY_FINISHED_COLLECTION		= new string_id("collection", "already_finished_collection");
+const string_id STR_COLLECTION_LIST_PROMPT		= new string_id("collection", "collection_list_prompt");
+const string_id STR_COLLECTION_LIST_TITLE		= new string_id("collection", "collection_list_title");
+
+
+//triggers
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//set collectionItem to self
+	obj_id collectionItem = self;
+	
+	//check for has origOwnerCheck
+	if(hasObjVar(collectionItem, static_item.ORIG_OWNER))
+	{
+		if(static_item.userIsOrigOwner(collectionItem, player))
+			return SCRIPT_CONTINUE;
+	}
+	
+	//can only consume if you have it picked up
+	if(utils.isNestedWithinAPlayer(collectionItem))
+	{
+		mi.addRootMenu (menu_info_types.SERVER_MENU1, SID_CONSUME_ITEM);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+	
+	//check for has origOwnerCheck
+	if(hasObjVar(self, static_item.ORIG_OWNER))
+	{
+		if(static_item.userIsOrigOwner(self, player))
+			return SCRIPT_CONTINUE;
+	}
+	
+	if (item == menu_info_types.SERVER_MENU1  && utils.isNestedWithinAPlayer(self))
+	{
+		if(sui.hasPid(player, PID_NAME))
+		{
+			int pid = sui.getPid(player, PID_NAME);
+			forceCloseSUIPage(pid);
+		}
+		string pageName = getStringObjVar(self, collection.OBJVAR_PAGE_NAME);
+		string[] slotNames = getAllCollectionSlotsInCategoryInPage(pageName, collection.CATEGORY_PREREQ_MET);
+		
+		if(slotNames == null || slotNames.length <= 0)
+			return SCRIPT_CONTINUE;
+		
+		boolean hasCompletedAll = true;
+		
+		for(int i = 0; i < slotNames.length; ++i)
+		{
+			if(hasCompletedCollectionSlotPrereq(player, slotNames[i]) && !hasCompletedCollectionSlot(player, slotNames[i]))
+			{
+				hasCompletedAll = false;
+				//modifyCollectionSlotValue(player, slotNames[i], 1);
+				int pid = sui.msgbox(self, player, "@" + SID_CONSUME_PROMPT, sui.YES_NO, "@" + SID_CONSUME_TITLE, "handlerSuiAddToCollection");
+				sui.setPid(player, pid, PID_NAME);
+				utils.setScriptVar(player, "collection.slotName", slotNames[i]);
+				return SCRIPT_CONTINUE;
+			}
+		}
+		if(hasCompletedAll)
+			sendSystemMessage(player, SID_ALREADY_FINISHED_COLLECTION);		
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+
+//messageHandlers
+
+
+messageHandler handlerSuiAddToCollection ()
+{
+	
+	//set collectionItem to self
+	obj_id collectionItem = self;
+	
+	//check params
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+	
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!sui.hasPid(player, PID_NAME))
+		return SCRIPT_CONTINUE;
+	
+	
+	string slotName = utils.getStringScriptVar(player, "collection.slotName");
+	utils.removeScriptVarTree(player, "collection");
+	string[] slotInfo = getCollectionSlotInfo(slotName);
+	string collectionName = slotInfo[COLLECTION_INFO_INDEX_COLLECTION];
+	
+	//Check to make sure they havent completed the collection yet.
+	if(!hasCompletedCollection(player, collectionName))
+	{		
+		//check to see if they already have this slot completed
+		if(!hasCompletedCollectionSlot(player, slotName) && !slotName.equals(""))
+		{
+			//Update the player with the slot
+			if(modifyCollectionSlotValue(player, slotName, 1))
+			{
+				CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + ") will now be destroyed.");
+				destroyObject(collectionItem);
+			}
+			else
+			{
+				//tell cs we failed
+				CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + ") will NOT be destroyed.");
+				//tell the player we failed
+				sendSystemMessage(player, SID_REPORT_CONSUME_ITEM_FAIL);
+			}
+			sui.removePid(player, PID_NAME);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//tell the player They have already finished all collections for this item
+			sendSystemMessage(player, SID_ALREADY_HAVE_SLOT);
+			sui.removePid(player, PID_NAME);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		//tell the player They have already finished the collection
+		sendSystemMessage(player, SID_ALREADY_FINISHED_COLLECTION);
+	}
+	sui.removePid(player, PID_NAME);
+	return SCRIPT_CONTINUE;
+}

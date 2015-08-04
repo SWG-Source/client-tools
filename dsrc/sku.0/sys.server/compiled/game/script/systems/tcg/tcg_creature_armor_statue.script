@@ -1,0 +1,281 @@
+include library.ai_lib;
+include library.beast_lib;
+include library.create;
+include library.incubator;
+include library.player_structure;
+include library.static_item;
+include library.sui;
+include library.utils;
+
+//inherits terminal.base.base_terminal;
+
+const string_id SID_VAC_ARMOR = new string_id("tcg", "start_statue");
+const string_id SID_NOT_IN_HOUSE = new string_id("tcg", "not_in_house");
+const string_id SID_NO_CREATURE_IN_DP = new string_id("tcg", "no_creature_in_dp");
+const string_id SID_VAC_ARMOR_ADDED = new string_id("tcg", "armor_added");
+const string_id SID_VAC_ARMOR_REMOVED = new string_id("tcg", "armor_removed");
+
+/***** TRIGGERS ********************************************************/
+
+// When opening the radial menu on the statue, the player will get the armor swap option if he passes the location check
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	
+	if(!isIdValid(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(checkLocation(self, player))
+	{
+		int menu = mi.addRootMenu(menu_info_types.ITEM_USE, SID_VAC_ARMOR);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// If the armor swap option is called from the radial, check location again and get a list of creature mounts in the 
+// players datapad. If no creatures of the given type in the data pad, exit and tell teh player why
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+
+	if(item == menu_info_types.ITEM_USE && isIdValid(player))
+	{
+		if(!checkLocation(self, player))
+		{
+			sendSystemMessage(player, SID_NOT_IN_HOUSE);
+			return SCRIPT_CONTINUE;
+		}
+		
+		obj_id[] eligibleMounts = getCreatureMountList(self, player);
+		
+		if( eligibleMounts!= null && eligibleMounts.length > 0 )
+		{
+			startArmorSwap(self, player, eligibleMounts);
+			return SCRIPT_CONTINUE;
+		}
+		
+		sendSystemMessage(player, SID_NO_CREATURE_IN_DP);	
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+// This method ensures that the player is inside a player structure and that the player is the owner of the player structure
+boolean checkLocation(obj_id item, obj_id player)
+{
+	if(!isIdValid(item))
+	{
+		return false;
+	}
+
+	if(!utils.isInHouseCellSpace(item))
+	{
+		return false;
+	}
+	
+	if(!utils.isNestedWithinAPlayer(item))
+	{
+		obj_id house = getTopMostContainer(item);
+		if(isIdValid(house) && player_structure.isBuilding(house) && player_structure.isOwner(house, player))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Gets the content of the players datapad and returns an array of all elements in the datapad that has the pet.creaturename
+// 
+obj_id[] getCreatureMountList(obj_id self, obj_id player)
+{
+	obj_id dataPad = utils.getPlayerDatapad(player);
+	resizeable obj_id[] data = getResizeableContents(dataPad);
+	resizeable obj_id[] ownedEligibleMounts = new Vector();
+	for(int i = 0; i < data.length; i++)
+	{
+		obj_id bcd = data[i];
+		if ( hasObjVar(bcd, "pet.creatureName") )
+		{
+			string cName = getStringObjVar(bcd, "pet.creatureName");
+			string[] eligibleMounts = getEligibleBeastsList(self);
+			if ( eligibleMounts != null && eligibleMounts.length > 0 )
+			{
+				for ( int j = 0; j < eligibleMounts.length; j++ )
+				{
+					string mountName = eligibleMounts[j];
+					if( cName.equals(mountName) )
+					{
+						ownedEligibleMounts.addElement(bcd);
+					}
+				}
+			}
+		}
+	}
+	
+	obj_id[] mountsArray = new obj_id[ownedEligibleMounts.size()];
+	ownedEligibleMounts.toArray(mountsArray);
+	Arrays.sort(mountsArray);
+	
+	return mountsArray;
+}
+
+string[] getEligibleBeastsList(obj_id self)
+{
+	if ( hasObjVar(self, "armored_creature_type") )
+	{
+		string datatable = "datatables/tcg/armored_creature_swap.iff";
+		string armoredCreatureType = getStringObjVar(self, "armored_creature_type");
+
+		string eligibleBeastsString = dataTableGetString(datatable, armoredCreatureType, "eligible_beasts");
+		if ( eligibleBeastsString != null && eligibleBeastsString.length() > 0 )
+		{
+			string[] eligibleBeasts = split(eligibleBeastsString, ',');
+			if ( eligibleBeasts != null && eligibleBeasts.length > 0 )
+			{
+				return eligibleBeasts;
+			}
+		}
+	}
+	
+	return null;
+}
+
+string getArmoredMountName(obj_id self)
+{
+	if ( hasObjVar(self, "armored_creature_type") )
+	{
+		string datatable = "datatables/tcg/armored_creature_swap.iff";
+		string armoredCreatureType = getStringObjVar(self, "armored_creature_type");
+
+		string armoredMountName = dataTableGetString(datatable, armoredCreatureType, "armored_version");
+		if ( armoredMountName != null && armoredMountName.length() > 0 )
+		{
+			return armoredMountName;
+		}
+	}
+	
+	return "";
+}
+
+string getMountName(obj_id bcd, obj_id player)
+{	
+	string mountType = getStringObjVar(bcd, "pet.creatureName");
+	string_id mountNameSid = new string_id(ai_lib.CREATURE_NAME_FILE, mountType);
+
+	string mountName = localize(mountNameSid);
+
+	if(hasObjVar(bcd, "pet.mountName"))
+	{
+		mountName = getStringObjVar(bcd, "pet.mountName");
+	}
+
+	return mountName;
+}
+
+// Generates the SUI window that lists the eligible mounts in the players datapad. It then generates the SUI window
+void startArmorSwap(obj_id self, obj_id player, obj_id[] playerEligibleMounts)
+{
+	//utils.setScriptVar(player, "mountList", playerEligibleMounts);
+	String[] mountNameList = new string[playerEligibleMounts.length];
+	for(int i = 0; i < playerEligibleMounts.length; i++)
+	{
+		obj_id bcd = playerEligibleMounts[i];
+		
+		string mountName = getMountName(bcd, player);
+		string mountType = getStringObjVar(bcd, "pet.creatureName");
+		
+		string armoredMountName = getArmoredMountName(self);
+		if( mountType.equals(armoredMountName) )
+		{
+			mountName = mountName+" - Armored - Remove Armor from the Mount";
+		}
+		else
+		{
+			mountName = mountName+" - Unarmored - Add Armor to the Mount";
+		}
+		mountNameList[i] = mountName;
+	}
+
+	stageMenu(self, player, "Please select a mount.", "Armored Mount Statue", mountNameList, "mountChoice", true, "choice", "mountList.mountNames");
+}
+
+messageHandler mountChoice()
+{
+	obj_id container = getTopMostContainer(getSelf());
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+			
+	if(btn == sui.BP_CANCEL)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!isIdValid(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!isIdValid(container))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] eligibleMounts = getCreatureMountList(self, player);
+	string armoredMountName = getArmoredMountName(self);
+	
+	obj_id bcd = eligibleMounts[idx];
+
+	if( hasObjVar(bcd, "pet.creatureName") )
+	{
+		string mountType = getStringObjVar(bcd, "pet.creatureName");
+		if( mountType.equals(armoredMountName) )
+		{	
+			string unarmoredMountName = getStringObjVar(bcd, "unarmoredMountName");
+			removeObjVar(bcd, "unarmoredMountName");
+			
+			setObjVar(bcd, "pet.creatureName", unarmoredMountName);
+			sendSystemMessage(player, SID_VAC_ARMOR_REMOVED);			
+		}
+		else
+		{
+			setObjVar(bcd, "pet.creatureName", armoredMountName);
+			setObjVar(bcd, "unarmoredMountName", mountType);
+			sendSystemMessage(player, SID_VAC_ARMOR_ADDED);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/********************************** SUI  Methods*************************/
+// This method handles the creation of the SUI window
+
+void stageMenu(obj_id self, obj_id player, string prompt, string title, string[] options, string myHandler, boolean cancel, string PIDVar, string scriptVar)
+{
+	closeOldWindow(player, scriptVar);
+	int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, options, myHandler, false, false);
+	//sui.listboxUseOtherButton(pid, "Back");
+	sui.showSUIPage(pid);
+	setWindowPid(player, pid, PIDVar);
+	utils.setScriptVar(player, scriptVar, options );
+}
+
+void closeOldWindow(obj_id player, string scriptVar)
+{
+	if ( utils.hasScriptVar(player, scriptVar))
+	{
+		int oldpid = utils.getIntScriptVar(player, scriptVar);
+		forceCloseSUIPage (oldpid);
+		utils.removeScriptVarTree(player, scriptVar);
+	}
+}
+
+void setWindowPid(obj_id player, int pid, string scriptVar)
+{
+	if (pid > -1)
+	{
+		utils.setScriptVar(player, scriptVar, pid);
+	}
+}

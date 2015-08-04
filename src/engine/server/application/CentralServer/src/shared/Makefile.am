@@ -1,0 +1,93 @@
+AUTOMAKE_OPTIONS=foreign
+SUBDIRS = . AuctionTransferGameAPI
+noinst_LTLIBRARIES=libCentralServershared.la
+libCentralServershared_la_CXXFLAGS=-I$(srcdir)/../$(platform) \
+	-I$(archive_dir)/include \
+	-I$(unicode_dir)/include \
+	-I$(localization_dir)/include \
+	-I$(engine_dir)/shared/library/sharedCommandParser/include/public \
+	-I$(engine_dir)/shared/library/sharedCompression/include/public \
+	-I$(engine_dir)/shared/library/sharedDebug/include/public \
+	-I$(engine_dir)/shared/library/sharedFile/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundationTypes/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundation/include/public \
+	-I$(engine_dir)/shared/library/sharedGame/include/public \
+	-I$(engine_dir)/shared/library/sharedLog/include/public \
+	-I$(engine_dir)/shared/library/sharedMath/include/public \
+	-I$(engine_dir)/shared/library/sharedMathArchive/include/public \
+	-I$(engine_dir)/shared/library/sharedMemoryManager/include/public \
+	-I$(engine_dir)/shared/library/sharedMessageDispatch/include/public \
+	-I$(engine_dir)/shared/library/sharedNetwork/include/public \
+	-I$(engine_dir)/shared/library/sharedNetworkMessages/include/public \
+	-I$(engine_dir)/shared/library/sharedObject/include/public \
+	-I$(engine_dir)/shared/library/sharedRandom/include/public \
+	-I$(engine_dir)/shared/library/sharedThread/include/public \
+	-I$(engine_dir)/shared/library/sharedUtility/include/public \
+	-I$(stlport_dir)/stlport \
+	-I$(perforce_dir)/include \
+	-I$(platform_dir) \
+	-I$(udplibrary_dir) \
+	-I$(singleton_dir)/include \
+	-I$(unicodeArchive_dir)/include/public \
+	-I$(localizationArchive_dir)/include/public \
+	-I$(fileInterface_dir)/include/public \
+	-I$(engine_dir)/server/library/serverKeyShare/include/public \
+	-I$(engine_dir)/server/library/serverMetrics/include/public \
+	-I$(engine_dir)/server/library/serverNetworkMessages/include/public \
+	-I$(engine_dir)/server/library/serverUtility/include/public \
+	-I$(engine_dir)/server/application/CentralServer/src/shared/AuctionTransferGameAPI \
+	-I$(platform_dir)/utils/Base \
+	-Wno-ctor-dtor-privacy \
+	-DEXTERNAL_DISTRO \
+	-DNAMESPACE=AuctionTransfer
+
+libCentralServershared_la_SOURCES=CentralServer.cpp \
+	CentralServer.h \
+	CentralCSHandler.cpp \
+	CentralCSHandler.h \
+	CentralServerMetricsData.cpp \
+	CentralServerMetricsData.h \
+	CharacterCreationTracker.cpp \
+	CharacterCreationTracker.h \
+	ChatServerConnection.cpp \
+	ChatServerConnection.h \
+	ConfigCentralServer.cpp \
+	ConfigCentralServer.h \
+	ConnectionServerConnection.cpp \
+	ConnectionServerConnection.h \
+	ConsoleCommandParser.cpp \
+	ConsoleCommandParserDatabase.cpp \
+	ConsoleCommandParserDatabase.h \
+	ConsoleCommandParserGame.cpp \
+	ConsoleCommandParserGame.h \
+	ConsoleCommandParserLoginServer.cpp \
+	ConsoleCommandParserLoginServer.h \
+	ConsoleCommandParser.h \
+	ConsoleConnection.cpp \
+	ConsoleConnection.h \
+	ConsoleManager.cpp \
+	ConsoleManager.h \
+	CustomerServiceConnection.cpp \
+	CustomerServiceConnection.h \
+	FirstCentralServer.h \
+	GameServerConnection.cpp \
+	GameServerConnection.h \
+	LoginServerConnection.cpp \
+	LoginServerConnection.h \
+	PlanetManager.cpp \
+	PlanetManager.h \
+	PlanetServerConnection.cpp \
+	PlanetServerConnection.h \
+	TaskConnection.cpp \
+	TaskConnection.h \
+	TransferServerConnection.cpp \
+	TransferServerConnection.h \
+	UniverseManager.cpp \
+	UniverseManager.h \
+	StationPlayersCollectorConnection.cpp \
+	StationPlayersCollectorConnection.h \
+	AuctionTransferClient.cpp \
+	AuctionTransferClient.h 
+
+
+include $(engine_dir)/../make_include/engine.include

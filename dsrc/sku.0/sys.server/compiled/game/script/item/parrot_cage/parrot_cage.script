@@ -1,0 +1,244 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        parrot.script
+ * Description:  script for talking parrot
+ * @author       $Author: Matthew Kwid$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+include library.utils;
+include library.debug;
+include java.util.StringTokenizer;
+include library.chat;
+include library.craftinglib;
+
+/***** INHERITS ********************************************************/
+
+/***** CONSTANTS *******************************************************/
+const string PARROT_VOLUME       = "parrot_trigger_volume";
+const float  HEARING_RADIUS      = 6.0f;
+const string VAR_MESSAGE         = "spoken_message";
+const string VAR_BIRD_RESPONSE   = "bird_response";
+const string VAR_SPEECH_IGNORE   = "ignore_next_speech";
+const string VAR_MATCHES         = "bird_response_matches";
+const string[] BIRD_SOUNDS       = {"SQUACK!", "TWEET", "YIPE!", "WEK?", "AAAAAWK!", "AWK", "CRACKER?", "ZIP"};
+const int    SOUND_CHANCE        = 60; //percent chance that a bird sound will be included in the response
+const int    NO_REPLY_PERCENT    = 50; //percent that the bird is guaranteed not to reply
+const string VAR_SPECIAL_MESSAGE = "bird_special_message";
+const float SPECIAL_LOC_RADIUS   = 3f;  //the location around the treasure that must be empty
+const int   LOOT_RADIUS_MAX      = 50; //this value is how far the treasure will be away from the parrot
+const int   MATCH_COUNT          = 50; //amount of complete matches the bird has to make for treasure
+
+const string PARROT_TREASURE_SCRIPT = "item.parrot_cage.parrot_treasure";
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnInitialize()
+{
+	debug.debugAllMsg("DEBUG", self, "#############Parrot script initialized############");
+	setObjVar(self, VAR_MESSAGE, "no_message_yet");
+	setObjVar(self, VAR_SPECIAL_MESSAGE, false);
+	setObjVar(self, VAR_BIRD_RESPONSE, "no_response_yet");
+	setObjVar(self, VAR_MATCHES, 0);
+	return SCRIPT_CONTINUE;
+}//OnInitialize
+
+/********************************************************************************************
+ * @brief trigger handler when hearing someone speak the parrot repeats part of phrases
+ *
+ * @return trigger  SCRIPT_CONTINUE
+ *
+*********************************************************************************************/
+trigger OnHearSpeech(obj_id speaker, String message)
+{
+	string previousMessage = getStringObjVar(self, VAR_MESSAGE);
+
+	if(hasObjVar(self, "ignore_me") || getDistance(speaker, self) > HEARING_RADIUS)
+		return SCRIPT_CONTINUE;
+
+   	setObjVar(self, "ignore_me", "to_ignore_next_speech_trigger");
+	debug.debugAllMsg("DEBUG", self, "#############Last Player Message: " + getStringObjVar(self, VAR_MESSAGE) + "############");
+
+	dictionary params = new dictionary();
+	params.put("parrot", self);
+	params.put("speaker", speaker);
+	params.put("message", message);
+
+	messageTo(self, "parrotSpeak", params, 1.5f, true);
+	setObjVar(self, VAR_MESSAGE, message);
+  	return SCRIPT_CONTINUE;
+
+}//OnHearSpeech
+
+/***** MESSAGE HANDLERS ********************************************************/
+
+messageHandler parrotSpeak()
+{
+	debug.debugAllMsg("DEBUG", self, "#############parrotSpeak()############");
+
+	obj_id parrot        = (obj_id)params.get("parrot");
+	obj_id speaker       = (obj_id)params.get("speaker");
+	string message       = (string)params.get("message");
+	StringTokenizer st   = new StringTokenizer(message);
+	int wordCount        = st.countTokens();
+	int startingPosition = rand(0, wordCount - 1);
+	int wordsLeft        = wordCount - startingPosition;
+	int numberToSpeak    = rand(0, wordsLeft);
+	string parrotText    = new string();
+	int chanceSound      = rand(0, 100);
+	boolean soundOnEnd   = false;
+	boolean noBirdSounds = false;
+
+	//debug.debugAllMsg("DEBUG", self, "#############wordCount: " + wordCount + "############");
+    //debug.debugAllMsg("DEBUG", self, "#############startingPosition: " + startingPosition + "############");
+	//debug.debugAllMsg("DEBUG", self, "#############wordsLeft: " + wordsLeft + "############");
+	//debug.debugAllMsg("DEBUG", self, "#############numberToSpeak: " + numberToSpeak + "############");
+	//debug.debugAllMsg("DEBUG", self, "#############chanceSound: " + chanceSound + "############");
+
+	if(chanceSound < SOUND_CHANCE)
+	{
+		chanceSound = rand(0, BIRD_SOUNDS.length);
+		//debug.debugAllMsg("DEBUG", self, "#############chanceSound: " + chanceSound + "############");
+
+		if(chanceSound < BIRD_SOUNDS.length)
+		{
+			if(rand(0,1) == 1)
+				parrotText += BIRD_SOUNDS[chanceSound];
+			else
+				soundOnEnd = true;
+		}
+	}
+	else
+		noBirdSounds = true;
+
+	int index = 0;
+	int tokenCount = 0;
+	while(st.hasMoreTokens())
+	{
+		++index;
+		if(index >= startingPosition && index <= (startingPosition + numberToSpeak))
+		{
+			parrotText += " " + st.nextToken();
+			++tokenCount;
+		}
+		else
+			st.nextToken();
+	}
+
+	if(soundOnEnd)
+	  	parrotText += " " + BIRD_SOUNDS[chanceSound];
+
+	chanceSound = rand(0, 100);
+
+	if(parrotText != null && !parrotText.equals("") && chanceSound > NO_REPLY_PERCENT)
+	{
+		//parrotText   = message;   //the special conditions for testing
+		//noBirdSounds = true;      //the special conditions for testing
+		//tokenCount   = wordCount; //the special conditions for testing
+
+		if(tokenCount == wordCount && noBirdSounds && wordCount > 4)
+		{
+			int matches = getIntObjVar(self, VAR_MATCHES);
+			setObjVar(self, VAR_MATCHES, ++matches);
+
+			setObjVar(self, VAR_BIRD_RESPONSE, "no_response_yet");  //to keep from special message happening the next matched message
+
+			if(!hasScript(speaker, PARROT_TREASURE_SCRIPT) && matches > MATCH_COUNT)
+			{
+				chat.chat (parrot, parrotText);
+				messageTo(self, "specialMessage", params, 1.5f, true);
+				debug.debugAllMsg("DEBUG", self, "#############SPECIAL MESSAGE TRIGGERED!!!!############");
+				return SCRIPT_CONTINUE;
+			}
+		}
+		else
+		{
+			chat.chat (parrot, parrotText);
+			setObjVar(self, VAR_BIRD_RESPONSE, parrotText);
+			debug.debugAllMsg("DEBUG", self, "#############Parrot response: " + parrotText + "############");
+		}
+	}
+
+	removeObjVar(self, "ignore_me");
+	return SCRIPT_CONTINUE;
+
+}//parrotSpeak
+
+messageHandler specialMessage()
+{
+	debug.debugAllMsg("DEBUG", self, "#############specialMessage()############");
+
+	obj_id parrot  = (obj_id)params.get("parrot");
+	obj_id speaker = (obj_id)params.get("speaker");
+
+	debug.debugAllMsg("DEBUG", self, "#############creating special message and location############");
+	location parrotLoc  = getLocation(parrot);
+	location desiredLoc = parrotLoc;
+	desiredLoc          = findSpotNear(parrot, parrotLoc, LOOT_RADIUS_MAX);
+
+	for(int i=0; i < 5 && !isValidLocation(desiredLoc, SPECIAL_LOC_RADIUS); ++i)
+		desiredLoc    = findSpotNear(parrot, parrotLoc, LOOT_RADIUS_MAX);
+
+	if(desiredLoc != null)
+	{
+		debug.debugAllMsg("DEBUG", self, "#############" + desiredLoc.toString() + "############");
+
+	  	string_id specialMessage = new string_id("item_n", "bird_special_message");
+		chat.chat (parrot, getName(speaker));
+	  	chat.chat (parrot, specialMessage);
+
+		string locationStr = new string();
+		StringTokenizer st = new StringTokenizer(desiredLoc.toString());
+		for(int i=0; i < 3 && st.hasMoreTokens(); ++i)
+			locationStr += st.nextToken();
+
+		locationStr = locationStr.substring(1);
+		locationStr = locationStr.substring(0, locationStr.length()-2);
+		chat.chat (parrot, locationStr);
+
+		attachScript(speaker, PARROT_TREASURE_SCRIPT);
+
+		params.put("specialLoc", desiredLoc);
+	   	messageTo(speaker, "createTreasureLocation", params, 0, true);
+	}
+	else
+	{
+	 	debug.debugAllMsg("DEBUG", self, "#############The special parrot location is bad############");
+	}
+
+	messageTo(self, "resetBirdHearing", null, 10, true);
+	return SCRIPT_CONTINUE;
+
+}//specialMessage
+
+messageHandler resetBirdHearing()
+{
+	removeObjVar(self, "ignore_me");
+	setObjVar(self, VAR_MATCHES, 0);
+	return SCRIPT_CONTINUE;
+}//resetBirdHearing
+
+
+
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if (hasObjVar(self, craftinglib.COMPONENT_ATTRIBUTE_OBJVAR_NAME + ".useModifier"))
+	{
+		names[idx] = "usemodifier";
+		int attrib = (int)getFloatObjVar(self, craftinglib.COMPONENT_ATTRIBUTE_OBJVAR_NAME + ".useModifier");
+		attribs[idx] = "" + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}

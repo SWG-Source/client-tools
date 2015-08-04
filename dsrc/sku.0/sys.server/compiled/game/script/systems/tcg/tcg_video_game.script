@@ -1,0 +1,244 @@
+/***** INCLUDES ********************************************************/
+//item_tcg_loot_reward_series1_video_game_table
+include library.utils;
+include library.tcg;
+
+const string MINIGAME_PARAM_PREFIX 		= "minigame_mahjong";
+//---pregame
+const string MINIGAME_GAMENAME_MAHJONG 		= "mahjong";
+const string MINIGAME_VARNAME_GAME 		= "game";
+const string MINIGAME_VARNAME_TABLE 		= "table";
+//---postgame
+const string MINIGAME_PARAM_RESULT 		= "result";
+const string MINIGAME_VARNAME_SCORE 		= "score";
+const string MINIGAME_VARNAME_PLAYER 		= "player";
+const string MINIGAME_VARNAME_DEFAULT_LAYOUT 	= "layout";
+
+const string[] TCG_MAHJONG_LAYOUTS		=
+{
+	"classic",
+	"tie_fighter",
+	"death_star",
+	"jedi_temple"
+};
+
+trigger OnInitialize()
+{
+	if(!hasObjVar(self, tcg.TABLE_HIGHSCORE_SLOTS))
+		setupInitialScores(self);
+		
+	//fixing the death star layout - the layout was named exp_death_star and code 
+	//returned death - so the scores would never register.  We now have 
+	//layout exp_death_star objvars that we no longer need.
+	if(hasObjVar(self, "minigame_table.highscores.exp_death_star"))
+	{
+		removeObjVar(self, "minigame_table.highscores.exp_death_star");
+		tcg.setupDeathStarFix(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if(idx == -1)
+		return SCRIPT_CONTINUE;		
+
+	if(!hasObjVar(self, tcg.TABLE_HIGHSCORE_SLOTS))
+		setupInitialScores(self);
+		
+	for(int i = 0; i <= TCG_MAHJONG_LAYOUTS.length-1; i++)
+	{
+		names[idx] = "mahjong_" + TCG_MAHJONG_LAYOUTS[i] + "_high_scores";
+		attribs[idx] = getHighScores(self, TCG_MAHJONG_LAYOUTS[i]);
+		idx++;
+	}
+	
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("ui", "play_minigame"));
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(item == menu_info_types.ITEM_USE)
+		playGame(self, player);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler clientMinigameResult()
+{
+	dictionary data = params.getDictionary(MINIGAME_PARAM_RESULT);
+	if(data == null)
+		return SCRIPT_CONTINUE;
+
+	int score = data.getInt(MINIGAME_VARNAME_SCORE);
+	if(score <= 0)
+		return SCRIPT_CONTINUE;
+
+	obj_id player = data.getObjId(MINIGAME_VARNAME_PLAYER);
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	string layout = data.getString(MINIGAME_VARNAME_DEFAULT_LAYOUT);
+	if(layout == null || layout.equals(""))
+		return SCRIPT_CONTINUE;
+	
+	layout = verifyLayOut(self, layout);
+	if(layout == null || layout.equals(""))
+		return SCRIPT_CONTINUE;
+
+	string gameTime = getCalendarTimeStringLocal(getCalendarTime());
+	string gameData = score + "." + getPlayerFullName(player) + "." + layout + "." + gameTime;
+
+	checkScore(self, score, gameData, layout);		
+	return SCRIPT_CONTINUE;
+}
+
+boolean playGame(obj_id table, obj_id player)
+{
+	if(!isValidId(table) || !exists(table))
+		return false;
+
+	if(!isValidId(player) || !exists(player))
+		return false;
+
+	dictionary data = new dictionary();
+	data.put(MINIGAME_VARNAME_GAME, MINIGAME_GAMENAME_MAHJONG);
+	data.put(MINIGAME_VARNAME_TABLE, table);
+
+	clientMinigameOpen(player, data);
+	return true;
+}
+
+boolean setupInitialScores(obj_id table)
+{
+	if(!isValidId(table) || !exists(table))
+		return false;
+
+
+	for(int i = 0; i < TCG_MAHJONG_LAYOUTS.length; i++)
+	{
+		int idx = rand(0, tcg.DEFAULT_HIGH_SCORE_MODIFIER.length-1);
+		float modifier = tcg.DEFAULT_HIGH_SCORE_MODIFIER[idx];
+		setUpLayOutScores(table, TCG_MAHJONG_LAYOUTS[i], modifier);
+	}		
+	return true;
+}
+
+boolean setUpLayOutScores(obj_id table, string layout, float modifier)
+{
+	if(!isValidId(table) || !exists(table))
+		return false;
+	if(layout == null || layout.equals(""))
+		return false;
+	if(modifier < 0)
+		return false;
+
+	for(int i = 1; i <= tcg.MAX_NUMBER_OF_HIGH_SCORES; i++)
+	{
+		int randomPosition = rand(0,tcg.DEFAULT_HIGH_SCORE_LIST.length-1);
+		string name = tcg.DEFAULT_HIGH_SCORE_LIST[randomPosition];
+		float score = ((tcg.EST_MAX_SCORE * modifier) / i);
+		int scoreInt = (int)score;
+		string timeDate = getCalendarTimeStringLocal(getCalendarTime());
+		string stringData = scoreInt + "." + name + "." + layout + "." + timeDate;
+		setObjVar(table, tcg.TABLE_HIGHSCORE_SLOTS+"."+layout+".slot_"+i, stringData);
+	}
+	return true;	
+}
+
+boolean checkScore(obj_id table, int newScore, string gameData, string layout)
+{
+	if(!isValidId(table) || !exists(table))
+		return false;	
+
+	if(newScore <= 0)
+		return false;
+
+	if(gameData == null || gameData.equals(""))
+		return false;
+
+	if(layout == null || layout.equals(""))
+		return false;
+
+	int newHsSlot = -1;
+	// insert the new score in the appropriate high slot
+	for(int i = tcg.MAX_NUMBER_OF_HIGH_SCORES - 1; i >= 1; i--)
+	{
+		string slot = getStringObjVar(table, tcg.TABLE_HIGHSCORE_SLOTS+"."+layout+".slot_" + i);
+		string[] slotContents = split(slot, '.');
+		if(slotContents == null || slotContents.length <= 0)
+			continue;
+
+		if(newScore > utils.stringToInt(slotContents[0]))
+			newHsSlot = i;
+		else
+			break;
+	}
+	
+	//Didn't beat a score
+	if(newHsSlot < 0)
+		return true;
+		
+	// newHsSlot is where the newscore should be inserted
+	// shift all existing slots at newHsSlot downward to
+	// make room for the new high score
+		
+	for(int i = tcg.MAX_NUMBER_OF_HIGH_SCORES; i >= newHsSlot; i--)
+	{
+		if(i < 5 && i > 0)
+		{
+			string moveMe = getStringObjVar(table, tcg.TABLE_HIGHSCORE_SLOTS+"."+layout+".slot_" + i);	
+			setObjVar(table, tcg.TABLE_HIGHSCORE_SLOTS+"."+layout+".slot_" + (i+1), moveMe);
+		}
+	}
+	setObjVar(table, tcg.TABLE_HIGHSCORE_SLOTS+"."+layout+".slot_" + newHsSlot, gameData);
+	
+	return true;
+}
+
+string getHighScores(obj_id table, string layout)
+{
+	if(!isValidId(table) || !exists(table))
+		return null;	
+
+	string data = "\n";
+	for(int i = 1; i <= tcg.MAX_NUMBER_OF_HIGH_SCORES; i++)
+	{
+		string slot = getStringObjVar(table, tcg.TABLE_HIGHSCORE_SLOTS+"."+layout+".slot_" + i);
+		if(slot.indexOf(layout) > 0)
+		{
+			string[] slotContents = split(slot, '.');
+			if(slotContents == null || slotContents.length <= 0)
+				continue;
+
+			data += "\\^005" + i + ". \\%015" + slotContents[1] + " \\%060" + utils.stringToInt(slotContents[0]) + "\n";
+		}
+	}
+	return data;
+}
+
+string verifyLayOut(obj_id self, string layout)
+{
+	if(layout == null || layout.equals(""))
+		return null;
+
+	string[] removalSpaces = split(layout, ' ');
+	layout = removalSpaces[0].trim();
+	
+	layout = toLower(layout);
+	
+	for(int i = 0; i < TCG_MAHJONG_LAYOUTS.length; i++)
+	{
+		
+		if(TCG_MAHJONG_LAYOUTS[i].startsWith(layout))
+			return TCG_MAHJONG_LAYOUTS[i];
+	}
+	return null;
+}

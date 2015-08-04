@@ -1,0 +1,253 @@
+include library.jedi_trials;
+include library.locations;
+include library.prose;
+include library.quests;
+include library.utils;
+
+// constants
+
+const string_id SID_MENU_USE_TRACKING	= new string_id("quest/force_sensitive/fs_crafting", "tracking_device_menu_use");
+const string_id SID_NEEDS_TRACKING_DATA	= new string_id("quest/force_sensitive/fs_crafting", "tracking_device_needs_data");
+const string_id SID_WRONG_PLANET_MSG	= new string_id("quest/force_sensitive/fs_crafting", "tracking_device_wrong_planet");
+const string_id SID_CANNOT_FIND_LOC		= new string_id("quest/force_sensitive/fs_crafting", "tracking_device_no_loc");
+const string_id SID_TARGET_LOCATED		= new string_id("quest/force_sensitive/fs_crafting", "tracking_device_target_located");
+const string_id SID_TARGET_RELOCATED	= new string_id("quest/force_sensitive/fs_crafting", "tracking_device_target_relocated");
+const string_id SID_NOT_ON_QUEST		= new string_id("quest/force_sensitive/fs_crafting", "tracking_device_not_on_quest");
+
+const string_id SID_TRACKING_DEVICE_DESTROYED		= new string_id ("quest/force_sensitive/fs_crafting", "crafting4_tracking_device_destroyed");
+const string_id SID_TRACKING_DEVICE_DESTROYED_OVER	= new string_id ("quest/force_sensitive/fs_crafting", "crafting4_tracking_device_destroyed_over");
+
+const string NEEDS_TRACKING_DATA_OBJVAR	= "fs_crafting4.tracking.needsTrackingData";
+
+const string TARGET_PLANET_OBJVAR		= "fs_crafting4.tracking.targetPlanet";
+const string TARGET_LOC_OBJVAR			= "fs_crafting4.tracking.targetLoc";
+const string TARGET_WAYPOINT_OBJVAR		= "fs_crafting4.tracking.targetWaypoint";
+
+const string FS_CRAFTING4_PLAYER_SCRIPT	= "quest.force_sensitive.fs_crafting4_player";
+
+trigger OnAttach()
+{
+	messageTo(self, "handleInitialSetup", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleInitialSetup()
+{
+	setObjVar(self, NEEDS_TRACKING_DATA_OBJVAR, true);
+	
+	obj_id owner = utils.getContainingPlayer(self);
+	if ( isIdValid( owner ) )
+	{
+		setObjVar(self, "owner", owner);
+		quests.complete("fs_crafting4_quest_02", owner, true);
+		
+		// Customer Service Log
+		string custLogMsg = "FS Phase 4 Crafting Quest: Player %TU has completed the tracking device loot kit and now has the tracking device.";
+		CustomerServiceLog("FS_Phase4_Crafting", custLogMsg, owner);
+	}
+	else
+	{
+		destroyObject(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	if( !hasObjVar(self, "cleaningUp") )
+	{
+		obj_id owner = getObjIdObjVar(self, "owner");
+		if ( isIdValid( owner ) )
+		{
+			if ( !quests.isComplete("fs_crafting4_quest_06", owner) )
+			{
+				
+				if ( hasScript(owner, FS_CRAFTING4_PLAYER_SCRIPT) )
+				{
+					sendSystemMessage(owner, SID_TRACKING_DEVICE_DESTROYED);
+				}
+				else
+				{
+					sendSystemMessage(owner, SID_TRACKING_DEVICE_DESTROYED_OVER);
+				}
+				
+				quests.deactivate("fs_crafting4_quest_05", owner);
+				quests.deactivate("fs_crafting4_quest_04", owner);
+				quests.deactivate("fs_crafting4_quest_03", owner);
+				quests.deactivate("fs_crafting4_quest_02", owner);
+				
+				int id = quests.getQuestId("fs_crafting4_quest_05");
+				clearCompletedQuest(owner, id);
+
+				id = quests.getQuestId("fs_crafting4_quest_04");
+				clearCompletedQuest(owner, id);
+
+				id = quests.getQuestId("fs_crafting4_quest_03");
+				clearCompletedQuest(owner, id);
+
+				id = quests.getQuestId("fs_crafting4_quest_02");
+				clearCompletedQuest(owner, id);
+
+				id = quests.getQuestId("fs_crafting4_quest_01");
+				clearCompletedQuest(owner, id);
+				
+				quests.activate("fs_crafting4_quest_01", owner, null);
+
+				// Customer Service Log
+				string custLogMsg = "FS Phase 4 Crafting Quest: Player %TU has destroyed their tracking device loot kit and are being reset to quest step 01.";
+				CustomerServiceLog("FS_Phase4_Crafting", custLogMsg, owner);
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi) 
+{
+	obj_id owner = getObjIdObjVar(self, "owner");
+	if ( isIdValid(owner) && player != owner )
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	mi.addRootMenu(menu_info_types.ITEM_USE, SID_MENU_USE_TRACKING);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect (obj_id player, int item) 
+{
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+		
+	obj_id owner = getObjIdObjVar(self, "owner");
+	if ( isIdValid(owner) && player != owner )
+		 return SCRIPT_CONTINUE;
+
+	if(item == menu_info_types.ITEM_USE) 
+	{
+		if ( !isOnQuest(self, player) )
+		{
+			sendSystemMessage(player, SID_NOT_ON_QUEST);
+		}
+		else
+		{
+			// tracking device does not have tracking data
+			if ( hasObjVar(self, NEEDS_TRACKING_DATA_OBJVAR) )
+			{
+				sendSystemMessage(player, SID_NEEDS_TRACKING_DATA);
+			}
+			else
+			{				
+				location here = getLocation(player);
+				string curPlanet = here.area;
+
+				if ( !hasObjVar(player, TARGET_PLANET_OBJVAR) )
+				{
+					// initialize device with random target planet.
+					// random target planet will never be the player's current planet.
+					string newTargetPlanet = jedi_trials.chooseRandomPlanet(player);
+					setObjVar(player, TARGET_PLANET_OBJVAR, newTargetPlanet);
+					
+					string_id sid_newTargetPlanet = new string_id("jedi_trials", newTargetPlanet);
+
+					prose_package sid_message = prose.getPackage( SID_WRONG_PLANET_MSG, sid_newTargetPlanet);
+					sendSystemMessageProse(player, sid_message);
+				}
+				else if ( !curPlanet.equals(getStringObjVar(player, TARGET_PLANET_OBJVAR)) )
+				{
+					// already initialized, but player is on wrong planet
+					string targetPlanet = getStringObjVar(player, TARGET_PLANET_OBJVAR);
+					
+					string_id sid_targetPlanet = new string_id("jedi_trials", targetPlanet);
+					
+					prose_package sid_message = prose.getPackage( SID_WRONG_PLANET_MSG, sid_targetPlanet);
+					sendSystemMessageProse(player, sid_message);
+				}
+				else if ( !hasObjVar(player, TARGET_LOC_OBJVAR) )
+				{
+					// player is on correct planet, but target loc has not been chosen
+					location newTargetLoc = locations.getRandomGoodLocation(here, 900.0f, 1800.0f, 32.0f);
+					if ( newTargetLoc != null )
+					{
+						if ( !locations.isInMissionCity(newTargetLoc) )
+						{
+							setObjVar(player, TARGET_LOC_OBJVAR, newTargetLoc);
+
+							obj_id waypoint = createWaypointInDatapad(player, newTargetLoc);
+							setWaypointName(waypoint, "Downed Satellite");
+							setWaypointActive(waypoint, true);
+
+							setObjVar(player, TARGET_WAYPOINT_OBJVAR, waypoint);
+
+							// requestLocation is not working correctly
+							requestLocation(player, "crafting4_target_downed_satellite", newTargetLoc, 300.0f, 32.0f, true, false);
+
+							messageTo(player, "handleSetLocationTarget", null, 1, false);
+
+							sendSystemMessage(player, SID_TARGET_LOCATED);
+						}
+						else
+						{
+							sendSystemMessage(player, SID_CANNOT_FIND_LOC);
+						}
+					}
+					else
+					{
+						sendSystemMessage(player, SID_CANNOT_FIND_LOC);
+					}
+				}
+				else
+				{
+					if ( hasObjVar(player, TARGET_WAYPOINT_OBJVAR) )
+					{
+						obj_id oldWaypoint = getObjIdObjVar(player, TARGET_WAYPOINT_OBJVAR);
+						removeObjVar(player, TARGET_WAYPOINT_OBJVAR);
+						if ( isIdValid(oldWaypoint) )
+						{
+							destroyWaypointInDatapad(oldWaypoint, player);
+						}
+					}
+
+					location targetLoc = getLocationObjVar(player, TARGET_LOC_OBJVAR);
+					if ( targetLoc != null )
+					{
+						obj_id newWaypoint = createWaypointInDatapad(player, targetLoc);
+						setWaypointName(newWaypoint, "Downed Satellite");
+						setWaypointActive(newWaypoint, true);
+						
+						setObjVar(player, TARGET_WAYPOINT_OBJVAR, newWaypoint);
+
+						messageTo(player, "handleSetLocationTarget", null, 1, false);
+
+						sendSystemMessage(player, SID_TARGET_RELOCATED);
+					}
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean isOnQuest(obj_id self, obj_id player)
+{
+	if ( hasScript(player, FS_CRAFTING4_PLAYER_SCRIPT) )
+	{
+		// check that they are on an allowed quest step
+		boolean hasQuest = false;
+
+		string[] validQuests = {"fs_crafting4_quest_03", "fs_crafting4_quest_04"};
+
+		for( int i = 0; i < validQuests.length; i++ )
+		{
+			if ( quests.isActive(validQuests[i], player) )
+			{
+				return true;
+			}
+		}
+	}
+	
+	return false;
+}

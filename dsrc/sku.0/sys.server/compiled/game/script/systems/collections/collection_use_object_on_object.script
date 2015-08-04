@@ -1,0 +1,271 @@
+/*
+
+This script is placed on an object to make the object usable when the player has a specific
+Object Targeted.
+*/
+
+include library.buff;
+include library.collection;
+include library.groundquests;
+include library.static_item;
+include library.sui;
+include library.utils;
+
+//constants
+const string_id SID_INVALID_TARGET			= new string_id("collection", "invalid_target");
+const string_id NOT_WHILE_INCAPPED			= new string_id ("quest/ground/util/quest_giver_object", "not_while_incapped");
+const string_id MUST_DISMOUNT				= new string_id ("collection", "must_dismount");
+const string_id CREATURE_IS_DEAD			= new string_id ("collection", "creature_is_dead");
+const string_id OBJECT_DESTROYED			= new string_id ("collection", "object_destroyed");
+
+const string OBJECT_KEY 				= "quest.object_key";
+const string COLLECTION_OBJECT_TABLE			= "datatables/collection/use_object_on_object.iff";
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{	
+	if(!canManipulate(player, self, true, true, 15, true))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!utils.isNestedWithinAPlayer(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	if(mid != null)
+	{
+		mid.setServerNotify(true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+
+	if(utils.getContainingPlayer(self) != player)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	//congrats! You clicked on the USE option, lets see if you pass all the checks
+	if(item != menu_info_types.ITEM_USE)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(isIncapacitated(player) || isDead(player))
+	{
+		sendSystemMessage(player, new string_id("player_structure", "while_dead"));
+		return SCRIPT_CONTINUE;
+	}
+	if(getState(player, STATE_RIDING_MOUNT) == 1)
+	{
+		sendSystemMessage(player, MUST_DISMOUNT);
+		return SCRIPT_CONTINUE;
+	}
+	if(isDead(player) || isIncapacitated(player))
+	{
+		sendSystemMessage(player, NOT_WHILE_INCAPPED);
+		return SCRIPT_CONTINUE;
+	}
+
+	//LOG("device_log","OnObjectMenuSelect validation ok");
+	//get the lookAtTarget
+	obj_id intended = getIntendedTarget(player);
+	
+	if(!isIdValid(intended))
+	{
+		//both targets are null	
+		sendSystemMessage(player, SID_INVALID_TARGET);				
+	}
+	else
+	{	
+		setObjVar(self, "owner", player);
+		//LOG("device_log","OnObjectMenuSelect checking target");
+		//check to see if the target qualifies
+		checkValidTarget(player, intended, self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean checkValidTarget(obj_id player, obj_id target, obj_id self)
+{
+	//LOG("device_log","checkValidTarget checking target");
+
+	if(!isValidId(player) || !exists(player))
+	{
+		return false;	
+	}
+
+	if(!isValidId(target) || !exists(target))
+	{
+		return false;	
+	}
+
+	if(!isValidId(self) || !exists(self))
+	{
+		return false;	
+	}
+	
+	if(!hasObjVar(self, OBJECT_KEY))
+	{
+		if(hasScript(self, "item.special.nodestroy"))
+		{
+			detachScript(self, "item.special.nodestroy");
+		}
+		messageTo(self, "handleDestroy", null, 0, false);
+		return false;		
+	}
+
+	//LOG("device_log","checkValidTarget initial validation completed.");
+
+	string keyString = getStringObjVar(self, OBJECT_KEY);
+	if(keyString == null || keyString.length() <= 0)
+	{
+		if(hasScript(self, "item.special.nodestroy"))
+		{
+			detachScript(self, "item.special.nodestroy");
+		}
+		messageTo(self, "handleDestroy", null, 0, false);
+		return false;		
+	}
+	
+	int tableRow = dataTableSearchColumnForString(keyString, "objectKey", COLLECTION_OBJECT_TABLE);
+	if(tableRow < 0)
+	{
+		return false;		
+	}	
+
+	dictionary collectionDataDict = dataTableGetRow(COLLECTION_OBJECT_TABLE, tableRow);
+	if(collectionDataDict == null)
+	{
+		return false;		
+	}
+
+	string collectionName = collectionDataDict.getString("collectionName");
+	if(collectionName == null || collectionName.length() <= 0)
+	{
+		return false;		
+	}
+	//LOG("device_log","checkValidTarget secondary validation completed.");
+
+
+	//If a quest is required for this to work, there needs to be
+	//a quest name and signal name for this part to succeed.
+	int questRequired = collectionDataDict.getInt("questRequired");
+		//LOG("device_log","checkValidTarget questRequired: "+questRequired);
+
+	string questName = collectionDataDict.getString("questName");
+		//LOG("device_log","checkValidTarget questName: "+questName);
+
+	string taskName = collectionDataDict.getString("taskName");
+		//LOG("device_log","checkValidTarget taskName: "+taskName);
+
+	if(questRequired > 0 && ((questName == null || questName.length() <= 0) || (taskName == null || taskName.length() <= 0)))
+	{
+		return false;		
+	}
+
+	//LOG("device_log","checkValidTarget quest section okay");
+	
+	//If the player somehow kept the object, destroy
+	if(hasCompletedCollection(player, collectionName))
+	{
+		messageTo(self, "handleDestroy", null, 0, false);
+		return false;		
+	}
+
+	//LOG("device_log","checkValidTarget getting collection slot data");
+	//check a second time in case the player has attained the last slot in the collection
+	if(hasCompletedCollection(player, collectionName))
+	{
+		if(hasScript(self, "item.special.nodestroy"))
+		{
+			detachScript(self, "item.special.nodestroy");
+		}
+		messageTo(self, "handleDestroy", null, 0, false);
+		return false;		
+		
+	}
+	
+	if(questRequired > 0)
+	{
+		if(!groundquests.isQuestActive(player, questName))
+		{
+			if(hasScript(self, "item.special.nodestroy"))
+			{
+				detachScript(self, "item.special.nodestroy");
+			}
+			messageTo(self, "handleDestroy", null, 0, false);
+			return false;		
+		}
+		if(!groundquests.isTaskActive(player, questName, taskName))
+		{
+			if(hasScript(self, "item.special.nodestroy"))
+			{
+				detachScript(self, "item.special.nodestroy");
+			}
+			messageTo(self, "handleDestroy", null, 0, false);
+			return false;		
+		}
+	}
+
+	if(!keyString.equals(getStringObjVar(target, OBJECT_KEY)))
+	{
+		return false;	
+	}
+
+	if(isMob(target) && (isDead(target) || isIncapacitated(target)))
+	{
+		sendSystemMessage(player, CREATURE_IS_DEAD);	
+		return false;		
+	}
+	
+	string collectonSlot = collectionDataDict.getString("collectonSlot");	
+	if(collectonSlot != null && collectonSlot.length() > 0)
+	{
+		//SPLIT for multiple
+		string[] allSlots = split(collectonSlot, ',');
+		for(int j = 0; j < allSlots.length; j++)
+		{
+			if(!hasCompletedCollectionSlotPrereq(player, allSlots[j]))
+			{
+				//You must have prereq before attempting to use on target
+				break;
+			}
+			if(hasCompletedCollectionSlot(player, allSlots[j]))
+			{
+				//This slot attained, find another slot in the array
+				continue;
+			}
+			
+			//Slot found, award the player with the slot
+			modifyCollectionSlotValue(player, allSlots[j], 1);
+			
+			string handleTarget = collectionDataDict.getString("handleTarget");
+			if(handleTarget != null && handleTarget.length() > 0)
+			{
+				messageTo(target, handleTarget, null, 0, false);
+			}
+			break;
+		}
+	}
+	return true;
+}
+
+messageHandler handleDestroy()
+{
+	if(hasObjVar(self, "owner"))
+	{
+		obj_id player = getObjIdObjVar(self, "owner");
+		sendSystemMessage(player, OBJECT_DESTROYED);
+	}
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}

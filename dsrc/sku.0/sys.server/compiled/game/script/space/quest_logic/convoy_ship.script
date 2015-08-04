@@ -1,0 +1,235 @@
+//------------------------------------------------
+// convoy_ship.script
+// Brandon Reinhart
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.ai_lib;
+include library.chat;
+include library.space_combat;
+include library.space_content;
+include library.space_crafting;
+include library.space_transition;
+include library.space_quest;
+include library.space_utils;
+include library.prose;
+include library.utils;
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize ()
+{
+	setCondition( self, CONDITION_CONVERSABLE );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	setCondition( self, CONDITION_CONVERSABLE );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest( obj_id player, menu_info menuInfo )
+{
+	int menu = menuInfo.addRootMenu( menu_info_types.CONVERSE_START, null );
+	menu_info_data menuInfoData = menuInfo.getMenuItemById( menu );
+	menuInfoData.setServerNotify( false );
+	setCondition ( self, CONDITION_CONVERSABLE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnStartNpcConversation
+//------------------------------------------------
+
+trigger OnStartNpcConversation( obj_id player )
+{
+	obj_id npc = self;
+
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	if ( !exists( quest ) )
+		return SCRIPT_CONTINUE;
+
+	// Ignore the person hailing us if they aren't on this quest.
+	if ( !space_quest.isOnThisGroupQuest( quest, player ) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar( quest, "underway" ) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string questName = getStringObjVar( quest, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( quest, space_quest.QUEST_TYPE );
+	string_id greeting = new string_id( "spacequest/"+questType+"/"+questName, "ship_greeting" );
+
+	string_id[] responses = new string_id[1];
+	responses[0] = new string_id( "spacequest/"+questType+"/"+questName, "get_moving" );
+//	responses[1] = new string_id( "spacequest/"+questType+"/"+questName, "status_report" );
+
+	npcStartConversation( player, npc, "convoy_ship", greeting, responses );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnNpcConversationResponse
+//------------------------------------------------
+
+trigger OnNpcConversationResponse( string conversationId, obj_id player, string_id response )
+{
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	if ( !exists( quest ) )
+		return SCRIPT_CONTINUE;
+	string questName = getStringObjVar( quest, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( quest, space_quest.QUEST_TYPE );
+
+/*	if ( response == "status_report" )
+	{
+		prose_package pp = prose.getPackage( new string_id( "spacequest/"+questType+"/"+questName, "health_report" ), 0 );
+		dogfightTauntPlayer( self, player, pp );
+		return SCRIPT_CONTINUE;
+	}
+	else*/ if ( response == "get_moving" )
+	{
+		if ( !hasObjVar( quest, "convoy_arrived" ) )
+		{
+			prose_package pp = prose.getPackage( new string_id( "spacequest/"+questType+"/"+questName, "no_convoy" ), 0 );
+			dogfightTauntPlayer( self, player, pp );
+			return SCRIPT_CONTINUE;
+		}
+		else if ( !hasObjVar( quest, "underway" ) )
+		{
+			prose_package pp = prose.getPackage( new string_id( "spacequest/"+questType+"/"+questName, "lets_move" ), 0 );
+			dogfightTauntPlayer( self, player, pp );
+			space_utils.notifyObject( quest, "startConvoyPathing", null );
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			prose_package pp = prose.getPackage( new string_id( "spacequest/"+questType+"/"+questName, "were_moving" ), 0 );
+			dogfightTauntPlayer( self, player, pp );
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// registerDestination
+//------------------------------------------------
+
+messageHandler registerDestination()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set our final destination notification.
+	obj_id quest = params.getObjId( "quest" );
+	location loc = params.getLocation( "loc" );
+	addLocationTarget3d( "dest", loc, 1000 );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnArrivedAtLocation
+//
+// We may have arrived at a key quest location.
+// Forward this message to our quest objects.
+//------------------------------------------------
+
+trigger OnArrivedAtLocation( string name )
+{
+	// Forward the notification to our quest object.
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	if ( name.equals( "dest" ) )
+	{
+		// We arrived at our warp out spot.
+		dictionary params = new dictionary();
+		params.put( "ship", self );
+		space_utils.notifyObject( quest, "shipArrived", params );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// objectDestroyed
+// Called from the combat system when the ship is destroyed.
+//------------------------------------------------
+
+messageHandler objectDestroyed()
+{
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	dictionary outparams = new dictionary();
+	outparams.put( "ship", self );
+	space_utils.notifyObject( quest, "convoyShipDestroyed", outparams );
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnShieldsDepleted
+//------------------------------------------------
+
+messageHandler OnShieldsDepleted()
+{
+	// We lost our shields!
+	// See if we need to tell the player about this.
+	if ( hasObjVar( self, "shieldsComplain" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "shieldsComplain", 1 );
+
+	// Complain to our guy that we are in trouble.
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	string questName = getStringObjVar( quest, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( quest, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( quest, space_quest.QUEST_OWNER );
+	string_id warning = new string_id( "spacequest/"+questType+"/"+questName, "shields_depleted" );
+	prose_package pp = prose.getPackage( warning, 0 );
+	space_quest.groupTaunt( self, player, pp );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnHullNearlyDestroyed
+//------------------------------------------------
+
+messageHandler OnHullNearlyDestroyed()
+{
+	// Our hull is damaged!
+	// See if we need to tell the player about this.
+	if ( hasObjVar( self, "hullComplain" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "hullComplain", 1 );
+
+	// Complain to our guy that we are in trouble.
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	string questName = getStringObjVar( quest, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( quest, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( quest, space_quest.QUEST_OWNER );
+	string_id warning = new string_id( "spacequest/"+questType+"/"+questName, "hull_half" );
+	prose_package pp = prose.getPackage( warning, 0 );
+	space_quest.groupTaunt( self, player, pp );
+
+	return SCRIPT_CONTINUE;
+}

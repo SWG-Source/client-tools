@@ -1,0 +1,204 @@
+include library.utils;
+include library.proc;
+include library.sui;
+include library.skill;
+
+const string JEDI_AUTO_ALLOCATION_TABLE				= "datatables/expertise/autoallocation_jedi.iff";
+
+const string_id SID_SUI_EXPERTISE_INTRODUCTION_TITLE		= new string_id("expertise_d", "sui_expertise_introduction_title");
+const string_id SID_SUI_EXPERTISE_INTRODUCTION_BODY		= new string_id("expertise_d", "sui_expertise_introduction_body");
+
+
+// This is called by ongetskill, onskilllost to recompile the scriptvar array of all the expertise-based procs and reactives
+//get a list of all the skill mods
+//parse the list of any skill mods that begin with 'expertise_' and (end with '_proc' OR end with '_reac'), add them to a resizable string array
+//at the end, if the array is not null or empty '', then assign it to a fixed string array
+void cacheExpertiseProcReacList (obj_id player)
+{
+	string[] skillModList = getSkillStatModListingForPlayer(player);
+	resizeable string[] expertiseProcReacList = new string[0];
+
+	for ( int i = 0; i < skillModList.length; ++i )
+	{
+		if ( (skillModList[i].startsWith("expertise_") || skillModList[i].startsWith("kill_meter_")) && (skillModList[i].endsWith("_proc")||skillModList[i].endsWith("_reac")))
+		{
+			expertiseProcReacList.addElement(skillModList[i]);
+		}
+	}
+
+	if (expertiseProcReacList.length > 0)
+	{
+		//for ( int i = 0; i < expertiseProcReacList.length; ++i )
+			//LOG("procCommand", "Added expertise proc/reac:" + expertiseProcReacList[i]);
+
+		utils.setScriptVar(player, "expertiseProcReacList", expertiseProcReacList);
+	}
+	else
+	{
+		if (utils.hasScriptVar( player, "expertiseProcReacList" ) )
+			utils.removeScriptVar(player, "expertiseProcReacList");
+	}
+
+	proc.buildCurrentProcList(player);
+	proc.buildCurrentReacList(player);
+
+}
+
+void autoAllocateExpertiseByLevel (obj_id player, boolean onLevel)
+{
+//This function is called to check to see if the player character meets criteria to be autoallocated.
+//* It checks for a skill called 'expertise' and if the player is level 10 or higher, if not it opts out and returns; else
+//* It gets the player's profession
+//* It then references the appropriate data-table (expertise/autoallocation.tab) to:
+//   * Recurse through the entries on the table that match the profession and all levels up to the player's current level, adding any expertise listed
+//* Adds the skill 'expertise'
+	int playerLevel = getLevel(player);
+	//LOG("EXPERTISE:","Player is level " + playerLevel);
+
+	if (playerLevel>9)
+	{
+		string playerClass = getSkillTemplate(player);
+		grantSkill(player, "expertise");
+		displayIntroductionToExpertise(player);
+	}
+
+
+	return;
+}
+
+void displayIntroductionToExpertise(obj_id player)
+{
+
+	string title = utils.packStringId(SID_SUI_EXPERTISE_INTRODUCTION_TITLE);
+	string prompt = utils.packStringId(SID_SUI_EXPERTISE_INTRODUCTION_BODY);
+
+	int pid = sui.msgbox(player, player, prompt, sui.OK_ONLY, title, "introToExpertise");
+
+	if ( pid > - 1 )
+	{
+		sui.setAutosaveProperty(pid, false);
+		sui.setSizeProperty(pid, 400, 225);
+		sui.setLocationProperty(pid, 200, 200);
+		flushSUIPage(pid);
+	}
+
+}
+
+boolean hasExpertiseAllocated(obj_id player)
+{
+	string[] skillList = getSkillListingForPlayer(player);
+	if (skillList != null)
+	{
+		for ( int i = 0; i < skillList.length; ++i )
+			if (skillList[i].startsWith("expertise_"))
+				return true;
+	}
+	return false;
+}
+
+string[] getExpertiseAllocation(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return null;
+
+	if(!hasExpertiseAllocated(player))
+		return null;
+
+	string[] skillList = getSkillListingForPlayer(player);
+	resizeable string[] resizeExpertiseAllocated = new string[0];
+
+	if (skillList != null)
+	{
+		for (int i = 0; i < skillList.length; ++i)
+		{
+			if (skillList[i].startsWith("expertise_"))
+			{
+				resizeExpertiseAllocated = utils.addElement(resizeExpertiseAllocated, skillList[i]);
+			}
+		}
+	}
+
+	string[] finalExpertiseAllocated = new string[resizeExpertiseAllocated.size()];
+	resizeExpertiseAllocated.toArray(finalExpertiseAllocated);
+
+	return finalExpertiseAllocated;
+}
+
+//function to determine whether a player is the right profession for this expertise
+//if not we log the cheater log
+boolean isProfAllowedSkill(obj_id player, string skillName)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	if(skillName == null || skillName.equals(""))
+		return false;
+
+	string skillTemplate = getSkillTemplate(player);
+	string profession = skill.getProfessionName(skillTemplate);
+	boolean isTrader = false;
+
+	//the datatable will return "trader" for all traders
+	//we need to determine between each trader
+	if(profession.equals("trader"))
+	{
+		isTrader = true;
+		//domestics
+		if(skillTemplate.equals("trader_0a"))
+			profession = "trader_dom";
+
+		//structure
+		if(skillTemplate.equals("trader_0b"))
+			profession = "trader_struct";
+
+		//munitions
+		if(skillTemplate.equals("trader_0c"))
+			profession = "trader_mun";
+
+		//engineering
+		if(skillTemplate.equals("trader_0d"))
+			profession = "trader_eng";
+
+	}
+
+	//get the row this expertise is on
+	int row = dataTableSearchColumnForString(skillName, "NAME", skill.DATATABLE_EXPERTISE);
+
+	//validate row
+	if(row < 0)
+	{
+		return false;
+	}
+
+	//get the required profession for this expertise
+	string reqProf = dataTableGetString(skill.DATATABLE_EXPERTISE, row, "REQ_PROF");
+	//verify that you are the correct profession
+	if(!reqProf.equals(profession))
+	{
+		//if you are a trader, find out if this expertise is available to all traders
+		if(reqProf.equals("trader") && isTrader)
+		{
+			return true;
+		}
+
+		//find out if this expertise is available to all professions, like Beast Master
+		else if(reqProf.equals("all"))
+		{
+			return true;
+		}
+
+		//if you got here, then you prolly are trying to get an expertise you arent allowed to have
+		else
+		{
+			//possible exploiter
+			//LOG it
+			CustomerServiceLog("SuspectedCheaterChannel: ", "DualProfessionCheat: Player " + getFirstName(player) + "(" + player + ") attempted to give themselves an exptertise they cannot have.");
+			CustomerServiceLog("SuspectedCheaterChannel: ", "DualProfessionCheat: Player " + getFirstName(player) + "(" + player + ") Their profession is " + profession + " and the skill was " + skillName + ".");
+			return false;
+		}
+	}
+	else
+	{
+		return true;
+	}
+}

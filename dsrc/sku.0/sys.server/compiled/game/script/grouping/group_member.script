@@ -1,0 +1,734 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        group_member.script
+ * Description:  script for group members
+ * @author       $Author: Probably Ryan since there's a const that calls a const from another library...but who knows, could have been anyone$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.xp;
+include library.group;
+include library.utils;
+include library.prose;
+include library.money;
+include library.sui;
+include library.combat;
+
+/***** INHERITS ********************************************************/
+
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_GROUP_CREDIT_SPLIT_FAILED	= new string_id("group", "credit_split_failed");
+const string_id SID_LOOT_FREE_FOR_ALL			= new string_id("group", "loot_free_for_all");
+const string_id SID_LOOT_MASTER_LOOTER			= new string_id("group", "loot_master_looter");
+const string_id SID_LOOT_LOTTERY				= new string_id("group", "loot_lottery");
+const string_id SID_LOOT_RANDOM					= new string_id("group", "loot_random");
+
+const string SCRIPT_ME						= group.SCRIPT_GROUP_MEMBER;
+const string_id[] LOOT_OPTIONS = {
+										SID_LOOT_FREE_FOR_ALL,
+										SID_LOOT_MASTER_LOOTER,
+										SID_LOOT_LOTTERY,
+										SID_LOOT_RANDOM
+									};
+
+/***** TRIGGER *********************************************************/
+
+trigger OnInitialize()
+{
+	if ( !isIdValid(getGroupObject(self)) )
+		detachScript(self, SCRIPT_ME);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	obj_id groupObject = getGroupObject(self);
+	if(isIdValid(groupObject))
+	{
+		// tell the group object that a new member has
+		// just been added. The group object uses this
+		// information to track mission locations, for example.
+		dictionary groupObjectMessageData = new dictionary();
+		groupObjectMessageData.put("memberObjectId", self);
+		messageTo(groupObject, "addGroupMember", groupObjectMessageData, 0, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated(obj_id killer)
+{
+	//LOG("grouping","TRIGGER:OnIncap:: (" + self + ") " + getName(self));
+	obj_id myGroup = getGroupObject(self);
+	if ( !isIdValid(myGroup) )
+	{
+		//I AM NOT GROUPED!!
+		detachScript(self, SCRIPT_ME);
+		return SCRIPT_CONTINUE;
+	}
+
+	group.notifyIncapacitation(myGroup, self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	group.destroyGroupWaypoint(self);
+	deltadictionary scriptVars = self.getScriptVars();
+	if(scriptVars != null)
+	{
+		scriptVars.remove("updateSequence");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogout()
+{
+	detachScript(self, SCRIPT_ME);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	deltadictionary scriptVars = self.getScriptVars();
+	if(scriptVars != null)
+	{
+		group.destroyGroupWaypoint(self);
+		scriptVars.remove("updateSequence");
+	}
+
+	obj_id groupObject = getGroupObject(self);
+
+	if(isIdValid(groupObject))
+	{
+		if(utils.hasScriptVar(groupObject, combat.VAR_GROUP_VOLLEY_TARGET))
+		{
+			//LOG("combat", "Found volley target objvar on group object.");
+			obj_id target = utils.getObjIdScriptVar(groupObject, combat.VAR_GROUP_VOLLEY_TARGET);
+			//LOG("combat", "Stopping client effect playing on target " + target + " for client " + self);
+			stopClientEffectObjByLabel(new obj_id[]{self}, target, combat.ID_VOLLEY_FIRE_PARTICLE);
+		}	
+
+		// send a message to the group object removing this member	
+		dictionary msgData = new dictionary();
+		msgData.put("sender", self);
+		messageTo(groupObject, "removeGroupMember", msgData, 0, false);
+	}	
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGEHANDLERS **************************************************/
+/***** DEATH HANDLERS **************************************************/
+/*
+messageHandler handlePlayerDeath()
+{
+	LOG("grouping","HANDLER:handlePlayerDeath:: (" + self + ") " + getName(self));
+	obj_id myGroup = getGroupObject(self);
+	if ( !isIdValid(myGroup) )
+	{
+		//I AM NOT GROUPED!!
+		detachScript(self, SCRIPT_ME);
+		return SCRIPT_CONTINUE;
+	}
+
+	group.notifyDeath(myGroup, self);
+	return SCRIPT_CONTINUE;
+}
+*/
+
+messageHandler volleyTargetDone()
+{
+	//LOG("combat", "groupMember received 'volleyTargetDone'");
+	if(!params.containsKey("objTarget"))
+	{
+		//LOG("combat", "missing objTarget in message. Not turning off particle.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id target = params.getObjId("objTarget");
+	//LOG("combat", "Turning off marker particle playing on target " + target + " for client " + self);
+	stopClientEffectObjByLabel(new obj_id[]{self}, target, combat.ID_VOLLEY_FIRE_PARTICLE);
+	//                         client,objectPlayingEffect,	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCloneRespawn()
+{
+	LOG("grouping","HANDLER:handleCloneRespawn:: (" + self + ") " + getName(self));
+	obj_id myGroup = getGroupObject(self);
+	if ( !isIdValid(myGroup) )
+	{
+		//I AM NOT GROUPED!!
+		detachScript(self, SCRIPT_ME);
+		return SCRIPT_CONTINUE;
+	}
+
+	group.notifyCloned(myGroup, self);
+	return SCRIPT_CONTINUE;
+}
+
+/***** LOOTING REQUEST HANDLERS **************************************************/
+commandHandler cmdSplitCreditsWithGroup()
+{
+	if ( params != null && !params.equals("") )
+	{
+		int amt = utils.stringToInt(params);
+		if ( amt > 0 )
+		{
+			group.splitCoins(amt);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	//notify syntax!
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRequestSplitShare()
+{
+	if ( params != null && !params.equals("") )
+	{
+		obj_id target = params.getObjId("target");
+		int amt = params.getInt("amt");
+		if ( isIdValid(target) && amt > 0 )
+			transferCashTo(target, self, amt, group.HANDLER_SPLIT_SUCCESS, group.HANDLER_SPLIT_FAILURE, params);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRequestPayoutShare()
+{
+	if ( params != null && !params.equals("") )
+	{
+		obj_id target = params.getObjId("target");
+		int amt = params.getInt("amt");
+		if ( isIdValid(target) && amt > 0 )
+			transferBankCreditsTo(target, self, amt, group.HANDLER_SPLIT_SUCCESS, group.HANDLER_SPLIT_FAILURE, params);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePayoutRequest()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	string acct = params.getString(money.DICT_ACCT_NAME);
+	int amt = params.getInt(money.DICT_AMOUNT);
+	if ( acct != null && !acct.equals("") && amt > 0 )
+		transferBankCreditsFromNamedAccount(acct, self, amt, "handlePayoutComplete", "noHandler", params);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePayoutComplete()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id target = params.getObjId("msg.id");
+	string handler = params.getString("msg.handler");
+	if ( isIdValid(target) && handler != null && !handler.equals("") )
+		messageTo(target, handler, params, 0, false);
+
+	int amt = params.getInt(money.DICT_AMOUNT);
+	if ( amt > 0 )
+		group.splitBank(amt, params);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSplitSuccess()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	int dividend = params.getInt("amt");
+	if ( dividend == 0 )
+		return SCRIPT_CONTINUE;
+
+	if ( !isPlayer(self) )
+	{
+		obj_id gid = getGroupObject(self);
+		if ( isIdValid(gid) )
+			transferCashTo(self, getGroupLeaderId(gid), dividend, "noHandler", "noHandler", params);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	string reason = params.getString("reason");
+	string_id reasonId = params.getStringId("reasonId");
+	if ( (reason == null || reason.equals("")) && reasonId == null )
+	{
+		prose_package ppSplit = prose.getPackage(new string_id("group","prose_split"), dividend);
+		sendSystemMessageProse(self, ppSplit);
+	}
+	else
+	{
+		if ( reasonId != null )
+		{
+			sendSystemMessage(self, reasonId);
+
+			prose_package ppSplit = prose.getPackage(new string_id("group","prose_split"), dividend);
+			sendSystemMessageProse(self, ppSplit);
+		}
+		else
+		{
+			prose_package ppSplitReason = prose.getPackage(new string_id("group","prose_split_reason"), reason, dividend);
+			sendSystemMessageProse(self, ppSplitReason);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSplitFailure()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id target = params.getObjId("target");
+	if ( !isIdValid(target) )
+		return SCRIPT_CONTINUE;
+
+	if ( target != self )
+	{
+		messageTo(target, group.HANDLER_SPLIT_SUCCESS, params, 0f, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	sendSystemMessage(self, SID_GROUP_CREDIT_SPLIT_FAILED);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSquadLeaderXpNotify()
+{
+	xp.notifySquadLeaderXp(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler updateGroupWaypoint()
+{
+	// the group object has decided to update the group waypoint
+	// and sent this message.
+	if(params != null)
+	{
+		// work around a limitation in the messageTo system on the C
+		// side. messageTo's are not delivered in the order they
+		// were sent. Extract a sequence number from the message
+		// and discard the message if the sequence number is
+		// less than the last sequence that was handled.
+		int sequence = params.getInt("updateSequence");
+		deltadictionary scriptVars = self.getScriptVars();
+		if(scriptVars != null)
+		{
+			int lastUpdateMessage = scriptVars.getInt("updateSequence");
+			if(lastUpdateMessage < sequence)
+			{
+				// this is a new message. update the local version
+				// of the sequence to check the next updateGroupWaypoint
+				// message
+				lastUpdateMessage = sequence;
+				scriptVars.put("updateSequence", lastUpdateMessage);
+
+				// get the waypoint location and set this group member's
+				// groupWaypoint to the new location. This will create
+				// the waypoint if it does not currently exist.
+				location newWaypointLocation = params.getLocation("waypointLocation");
+				if(newWaypointLocation != null)
+				{
+					// the waypoint obj_id is stored in an objvar to handle
+					// cases where the object is unloaded without first
+					// having an opportunity to destroy the waypoint object
+					// in the character's datapad (e.g. a server crashes). If
+					// this were a ScriptVar, the player would begin accumulating
+					// multiple "group" waypoints.
+					obj_id groupWaypoint = getObjIdObjVar(self, "groupWaypoint");
+					if(groupWaypoint != null)
+					{
+						setWaypointLocation(groupWaypoint, newWaypointLocation);
+					}
+					else
+					{
+						groupWaypoint = createWaypointInDatapad(self, newWaypointLocation);
+						setObjVar(self, "groupWaypoint", groupWaypoint);
+					}
+
+					// Touch up the UI by naming, activating and coloring the
+					// waypoint
+					setWaypointName(groupWaypoint, "@group:groupwaypoint");
+					setWaypointColor(groupWaypoint, "yellow");
+					setWaypointActive(groupWaypoint, true);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler missionWaypointUpdated()
+{
+	// a mission object is advising the group member
+	// that the waypoint location has changed. Other members
+	// in the group that have a copy of the location need to
+	// update their information.
+	if(params != null)
+	{
+		obj_id missionObject = params.getObjId("missionId");
+		if(isIdValid(missionObject))
+		{
+			// retrieve the new location from the mission object.
+			// it is safe to do this because the group member's
+			// mission object is contained in the character's
+			// datapad. Containment rules gaurantee that the
+			// mission object is loaded and on the same server
+			// as the character.
+			location missionStartLocation = getMissionStartLocation(missionObject);
+			obj_id groupObject = getGroupObject(self);
+			if(groupObject != null)
+			{
+				// send the request to the group object. The
+				// group will respond by starting the location
+				// calculation protocol (clearing out all old
+				// information, request new information, and making
+				// a determination about the closest mission objective).
+				messageTo(groupObject, "recaclulateNearestGroupWaypoint", null, 0, false);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler waitForMissionObjectDestruction()
+{
+	// the group member script is sending this
+	// message to itself while waiting for a
+	// mission object to completely destroy itself
+	// or cleanup. This branch will bail out after
+	// sending another waitForMissionObjectDestruction
+	// message if the script needs to wait some more.
+	if(params != null)
+	{
+		obj_id missionObject = params.getObjId("missionId");
+		if(isIdValid(missionObject))
+		{
+			obj_id player = getMissionHolder(missionObject);
+			if(isIdValid(player))
+			{
+				// The mission isn't finished cleaning up, wait ...
+				messageTo(self, "waitForMissionObjectDestruction", params, 1, false);
+				return SCRIPT_CONTINUE;
+			}
+		}
+	}
+
+	// there is no need to wait any longer.
+	// send the notification to the group object
+	obj_id groupObject = getGroupObject(self);
+	if(groupObject != null)
+	{
+		// the group object will recalculate the
+		// nearestGroupMission location after receiving
+		// this message
+		messageTo(groupObject, "removeMissionLocation", null, 0, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler missionObjectDestroyed()
+{
+	// a mission object is advising the group member
+	// that it is being destroyed
+	if(params != null)
+	{
+		// wait for the destruction/cleanup to complete
+		messageTo(self, "waitForMissionObjectDestruction", params, 5, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroyGroupWaypoint()
+{
+	// the group object is asking this
+	// group member to destroy its group
+	// waypoint.
+	group.destroyGroupWaypoint(self);
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler cmdGroupLootSet()
+{
+	if (!group.isGrouped(self)) // If you're not in a group you can't set group loot options
+	{
+		string_id leaderOnly = new string_id (group.GROUP_STF, "group_only");
+		sendSystemMessage (self, leaderOnly);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id leader = group.getLeader (self);
+
+	if (leader == null) // if the leader doesn't exist you certainly can't set group loot options!
+	{
+		string_id leaderNull = new string_id (group.GROUP_STF, "notFound");
+		sendSystemMessage (self, leaderNull);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id team = group.getGroupObject (leader);
+
+	int lootType = getGroupLootRule(team);
+
+	if (leader != self)// if you're not the leader you can't set group loot options
+	{
+		if (lootType == 0)
+		{
+			string_id leaderOnly = new string_id (group.GROUP_STF, "leader_only_free4all");
+			sendSystemMessage (self, leaderOnly);
+			return SCRIPT_CONTINUE;
+		}
+
+		else if (lootType == 1)
+		{
+			string_id leaderOnly = new string_id (group.GROUP_STF, "leader_only_master");
+			sendSystemMessage (self, leaderOnly);
+			return SCRIPT_CONTINUE;
+		}
+
+		else if (lootType == 2)
+		{
+			string_id leaderOnly = new string_id (group.GROUP_STF, "leader_only_lottery");
+			sendSystemMessage (self, leaderOnly);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			string_id leaderOnly = new string_id (group.GROUP_STF, "leader_only");
+			sendSystemMessage (self, leaderOnly);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	groupLootSui(self); // apparently you're the leader, so set away
+	return SCRIPT_CONTINUE;
+}
+
+int groupLootSui(obj_id self)
+{
+	int pid = createSUIPage(sui.SUI_LISTBOX, self, self, "handleLootOptionSelected");
+
+	string_id sid_title = new string_id (group.GROUP_STF, "set_loot_type_title");
+	string_id sid_text = new string_id (group.GROUP_STF, "set_loot_type_text");
+
+	string title = getString (sid_title);
+	string text = getString (sid_text);
+
+	string_id sid_select = new string_id (group.GROUP_STF, "select");
+	string_id sid_cancel = new string_id (group.GROUP_STF, "cancel");
+
+	string select = getString (sid_select);
+	string cancel = getString (sid_cancel);
+
+	if (text == null || text == "")
+	{
+		text = "Choose from the following:";
+	}
+
+	if (title == null || title == "")
+	{
+		title = "CHOOSE GROUP LOOT TYPE";
+	}
+
+	string loot_options[] = new string[LOOT_OPTIONS.length];
+	for (int i = 0; i < LOOT_OPTIONS.length; i++)
+	{
+		loot_options[i] = utils.packStringId(LOOT_OPTIONS[i]);
+	}
+
+	sui.listbox(self, self, text, sui.OK_CANCEL, title, loot_options, "handleLootOptionSelected", true, false);
+
+	setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title);
+	setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, text);
+
+	sui.listboxButtonSetup(pid, sui.OK_CANCEL_REFRESH);
+	setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, select);
+	setSUIProperty(pid, sui.LISTBOX_BTN_OTHER, sui.PROP_TEXT, cancel);
+
+	clearSUIDataSource(pid, sui.LISTBOX_DATASOURCE);
+
+	subscribeToSUIProperty(pid, sui.LISTBOX_LIST, sui.PROP_SELECTEDROW);
+	subscribeToSUIProperty(pid, sui.LISTBOX_TITLE, sui.PROP_TEXT);
+
+	//sui.showSUIPage( pid );
+	return pid;
+}
+
+messageHandler handleLootOptionSelected()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+	obj_id groupObject = group.getGroupObject (player);
+	obj_id[] objMembersWhoExist = utils.getLocalGroupMemberIds(groupObject);
+
+	if (player == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string newTypeString = "free4all";
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( idx == -1 )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	switch (idx)
+	{
+		case 0:
+		setGroupLootRule(groupObject, group.FREE_FOR_ALL);
+		newTypeString = "free4all";
+		break;
+
+		case 1:
+		setGroupLootRule(groupObject, group.MASTER_LOOTER);
+		newTypeString = "master";
+		break;
+
+		case 2:
+		setGroupLootRule(groupObject, group.LOTTERY);
+		newTypeString = "lotto";
+		break;
+
+		case 3:
+		setGroupLootRule(groupObject, group.RANDOM);
+		newTypeString = "random";
+		break;
+	}
+
+	dictionary param = new dictionary();
+	param.put ("selection", "selected_" + newTypeString);
+	string_id message = new string_id (group.GROUP_STF, "selected_" + newTypeString);
+
+	for(int intI = 0; intI < objMembersWhoExist.length; intI++)
+	{
+		if (objMembersWhoExist[intI] != player)
+		{
+			messageTo(objMembersWhoExist[intI], "groupLootChangedSui", param, 1, true);
+		}
+	}
+
+	sendSystemMessage (self, message);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler groupLootChangedSui()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string selection = params.getString("selection");
+	string_id message = new string_id (group.GROUP_STF, selection);
+
+	int pid = createSUIPage (sui.SUI_MSGBOX, self, self, "lootTypeReset");
+	setObjVar (self, "group.lottosui", pid);
+
+	string_id sidlootChanged = new string_id (group.GROUP_STF, "loot_changed");
+
+	string text = getString (message);
+	string title = getString (sidlootChanged);
+
+	if (title == null || title == "")
+	{
+		title = "LOOT CHANGED";
+	}
+
+	if (text == null || text == "")
+	{
+		text = "Choose";
+	}
+
+	// Add elements text.
+	//setSUIProperty(pid, "", "Size", "450,375");
+	setSUIProperty(pid, "", "Size", "450,375");
+	setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title);
+	setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, text);
+
+	// Add buttons.
+	sui.msgboxButtonSetup(pid, sui.YES_NO);
+
+	string_id sid_leave = new string_id (group.GROUP_STF, "leave_group");
+	string_id sid_ok = new string_id (group.GROUP_STF, "ok");
+
+	string str_leave = getString (sid_leave);
+	string str_ok = getString (sid_ok);
+
+	setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, str_ok);
+	setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, str_leave );
+
+	subscribeToSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT);
+
+	// Show dialog.
+	showSUIPage( pid );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler lootTypeReset()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = params.getObjId ("player");
+	string widgetName = params.getString("eventWidgetName");
+	int bp = sui.getIntButtonPressed( params );
+
+	if (!isIdValid(player))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( widgetName == null )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (bp == sui.BP_CANCEL)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (bp == sui.BP_OK)
+	{
+		queueCommand(player, ##"leaveGroup", player, "", COMMAND_PRIORITY_FRONT);
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+

@@ -1,0 +1,1332 @@
+// -----------------------------------------------------------------------
+// Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+// All Rights Reserved
+// -----------------------------------------------------------------------
+// This is the base player mission script. all players will have this script. It handles any special global functionality we're going to use
+
+
+
+
+// Dan really really really wanted this to be named mission_player.script
+
+
+// Mission has been assigned to the player. Now we've got to setup the mission object (because we're missing functions), and continue
+
+include library.utils;
+include library.skill;
+include library.money;
+include library.group;
+include library.factions;
+include library.prose;
+include library.hq;
+include library.jedi;
+include library.city;
+include library.missions;
+include library.space_utils;
+include library.session;
+
+inherits systems.missions.base.mission_player_base;
+
+//constants
+const string[] OPS_APPEARANCES =
+{
+	"object/mobile/dressed_rebel_trooper_human_female_01.iff",
+	"object/mobile/dressed_rebel_trooper_twk_female_01.iff",
+	"object/mobile/dressed_rebel_trooper_bith_m_01.iff",
+	"object/mobile/dressed_rebel_trooper_sullustan_male_01.iff"
+};
+
+const string_id IMPROVED_JOB_MARKET_MESSAGE 		= new string_id("city/city", "improved_job_market_message");
+
+
+trigger OnInitialize()
+{
+	// cleanup hack for rogue draft schematics.
+
+	const string[]  strSchematics = {
+
+					"object/draft_schematic/item/quest_item/attunement_grid.iff",
+					"object/draft_schematic/item/quest_item/current_alternator.iff",
+					"object/draft_schematic/item/quest_item/feedback_controller.iff",
+					"object/draft_schematic/item/quest_item/output_governor.iff",
+					"object/draft_schematic/item/quest_item/power_regulator.iff"
+					};
+	// so we go through the missions and check for these scn
+	for(int intI = 0; intI<strSchematics.length; intI++)
+	{
+		boolean boolHasMission = false;
+		if(hasSchematic(self, strSchematics[intI]))
+		{
+			obj_id[] objMissions = getMissionObjects(self);
+			if((objMissions!=null)&&(objMissions.length>0))
+			{
+				for(int intM = 0; intM<objMissions.length; intM++)
+				{
+					if(hasObjVar(objMissions[intM], "strSchematic"))
+					{
+						string strSchematic = getStringObjVar(objMissions[intM], "strSchematic");
+						string strTest = strSchematics[intI]; /// preprocesser bug, so we pull it into a variable
+						if(strSchematic==strTest)
+						{
+							intM = objMissions.length;
+							boolHasMission = true;
+						}
+					}
+				}
+			}
+			if(!boolHasMission)
+			{
+				revokeSchematic(self, strSchematics[intI]);
+			}
+		}
+	}
+
+
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+
+
+
+trigger OnPlayerRequestMissionBoard(obj_id objPlayer, obj_id objMissionTerminal, obj_id[] objMissionData)
+{
+	if (objMissionData.length < 10)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	location locTest = getMissionLocation(self);
+	if(!areMissionsAllowed(locTest))
+	{
+		sendSystemMessageTestingOnly(self, "missions only work on naboo and tatooine, you are on "+locTest.area);
+
+
+	}
+
+	int city_id = getCityAtLocation( getLocation( objMissionTerminal ), 0 );
+	if ( cityExists( city_id ) && city.isCityBanned( objPlayer, city_id ) )
+	{
+		sendSystemMessage( objPlayer, new string_id( "city/city", "city_banned" ) );
+		return SCRIPT_CONTINUE;
+	}
+
+	if(hasObjVar(objMissionTerminal, "intBounty"))
+	{
+		if(!hasSkill(self, "class_bountyhunter_phase1_novice"))
+		{
+			string_id strSpam = new string_id("mission/mission_generic", "not_bounty_hunter_terminal");
+			sendSystemMessage(self, strSpam);
+			return SCRIPT_OVERRIDE;
+		}
+
+	}
+
+	float fltTerminalRewardModifier = 1.0f;
+	if ( utils.hasScriptVar(objPlayer, "slicing.terminal") )
+	{
+		obj_id objSlicedTerminal = utils.getObjIdScriptVar(objPlayer, "slicing.terminal");
+		if ( objSlicedTerminal == objMissionTerminal )
+		{
+			fltTerminalRewardModifier = utils.getFloatScriptVar( objPlayer, "slicing.terminal_bonus" );
+			if ( fltTerminalRewardModifier<1 )
+			{
+				fltTerminalRewardModifier = 1.0f;
+			}
+
+		}
+
+	}
+
+	//// CITY SPECIALIZATION: IMPROVED JOB MARKET
+	//// If the city the player is getting a mission in has spec missions, grant a 20% bonus to the rewards.
+	city_id = city.checkCity( objPlayer, false );
+	if ( city_id > 0 && city.cityHasSpec( city_id, city.SF_SPEC_MISSIONS ) )
+	{
+		//Inform the player they will receive bonuses because of the City Specialization: Improved Job Market.
+		string message = getString(IMPROVED_JOB_MARKET_MESSAGE);
+		sendConsoleMessage(objPlayer, message);
+
+		fltTerminalRewardModifier += 0.15f;
+	}
+	////
+
+	debugServerConsoleMsg(self, "locTest is "+locTest);
+	string strPlanet = locTest.area;
+	obj_id objMasterSpawner;
+	string strFaction ="";
+
+
+	string strDestroyFaction = "";
+
+// Moving strPlayerFaction out of this statement so it can be used elsewhere
+	string strPlayerFaction = factions.getFaction(self);
+
+	if(hasObjVar(objMissionTerminal, "faction"))
+	{
+		strFaction = getStringObjVar(objMissionTerminal, "faction");
+		strDestroyFaction=strFaction;
+		if(factions.isCovert(self))
+		{
+			//LOG("factions", "COVERT");
+//			string strPlayerFaction = factions.getFaction(self);
+			//LOG("faction", "strPlayreFaction is "+strPlayerFaction);
+
+			if(strFaction==strPlayerFaction) // same side
+			{
+				strDestroyFaction= strFaction+"_military";
+			}
+			else
+			{
+				strDestroyFaction= strFaction +"_non_military";
+			}
+
+		}
+		else
+		{
+			//LOG("factions", " not COVERT");
+			strDestroyFaction= strFaction+"_non_military";
+
+		}
+	}
+
+	obj_id objHq = null;
+	obj_id topMost = getTopMostContainer(objMissionTerminal);
+	if ( isIdValid(topMost) && hasObjVar(topMost, hq.VAR_HQ_BASE) )
+		objHq = topMost;
+
+
+	obj_id objMission;
+
+	int intLevel = 0;
+	intLevel = skill.getGroupLevel(self);
+
+	if(hasObjVar(objMissionTerminal, "intBounty"))
+	{
+
+		debugServerConsoleMsg(self, "making bounty mission");
+		string opposingFaction = "";
+
+		if(strPlayerFaction!=null)
+		{
+			if(strPlayerFaction.equals("Imperial"))
+				opposingFaction = "Rebel";
+
+			if(strPlayerFaction.equals("Rebel"))
+				opposingFaction = "Imperial";
+		}
+
+		int intBountyDifficulty = getBountyDifficulty(objPlayer);
+		int intPlayerDifficulty = getLevel(objPlayer);
+
+		int pvpBountyCount = 0;
+
+		for(int intI = 0; intI<objMissionData.length; intI++)
+		{
+			cleanMissionObject(objMissionData[intI]);
+			obj_id objTest = null;
+			LOG("missions", "Making regular missions");
+
+
+		// Try and make the first PvP bounties smugglers on a PVP smuggler mission
+			if(pvpBountyCount < 1)
+			{
+				objTest = createJediBountyMission(objMissionData[intI], objMissionTerminal, strFaction, intPlayerDifficulty, objPlayer, missions.BOUNTY_FLAG_SMUGGLER);
+
+				if(objTest == null)
+				{
+					// If we can't get a smuggler bounty, just try and make a regular PvP bounty
+					objTest = createJediBountyMission(objMissionData[intI], objMissionTerminal, strFaction, intPlayerDifficulty, objPlayer, missions.BOUNTY_FLAG_NONE);
+
+					if(objTest == null)
+						objTest = createDynamicBountyMission(objMissionData[intI], objMissionTerminal, intBountyDifficulty, intPlayerDifficulty, locTest.area, strFaction);
+				}
+			}
+
+		// Try and make the next two PvP bounties of our opposite faction.
+			if(pvpBountyCount >= 1 && pvpBountyCount < 3)
+			{
+				objTest = createJediBountyMission(objMissionData[intI], objMissionTerminal, opposingFaction, intPlayerDifficulty, objPlayer, missions.BOUNTY_FLAG_NONE);
+
+				if(objTest == null)
+				{
+					objTest = createDynamicBountyMission(objMissionData[intI], objMissionTerminal, intBountyDifficulty, intPlayerDifficulty, locTest.area, strFaction);
+				}
+			}
+
+		// Try and make the next two PvP bounties of whatever faction
+			if(pvpBountyCount >= 3 && pvpBountyCount < 5)
+			{
+				objTest = createJediBountyMission(objMissionData[intI], objMissionTerminal, strFaction, intPlayerDifficulty, objPlayer, missions.BOUNTY_FLAG_NONE);
+
+				if(objTest == null)
+				{
+					objTest = createDynamicBountyMission(objMissionData[intI], objMissionTerminal, intBountyDifficulty, intPlayerDifficulty, locTest.area, strFaction);
+				}
+
+			}
+		// The rest are PvE missions.
+			if(pvpBountyCount >= 5)
+			{
+				objTest = createDynamicBountyMission(objMissionData[intI], objMissionTerminal, intBountyDifficulty, intPlayerDifficulty, locTest.area, strFaction);
+			}
+
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI], 0);
+
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+			pvpBountyCount++;
+		}
+
+	}
+	else if(hasObjVar(objMissionTerminal, "intScout"))
+	{
+
+		// hunting and partial recon missions
+
+		for(int intI = 0; intI<objMissionData.length; intI = intI+2)
+		{
+			cleanMissionObject(objMissionData[intI]);
+			cleanMissionObject(objMissionData[intI+1]);
+
+			obj_id objTest = createHuntingMission(objMissionData[intI], objMissionTerminal, intLevel, "");
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI], 0);
+
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+
+			objTest =  createReconMission(objMissionData[intI+1], objMissionTerminal, getMissionLocation(self), intLevel, strPlanet, "");
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI+1], 0);
+
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI+1], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+
+		}
+
+	}
+	else if(hasObjVar(objMissionTerminal, "intEntertainer"))
+	{
+		// dancer and musician missions
+		for(int intI = 0; intI<objMissionData.length; intI = intI+2)
+		{
+			cleanMissionObject(objMissionData[intI]);
+			cleanMissionObject(objMissionData[intI+1]);
+			obj_id objTest  = createDancerMission(objMissionData[intI], objMissionTerminal, 0, strFaction);
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI], 0);
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+
+			objTest = createMusicianMission(objMissionData[intI+1], objMissionTerminal, 0, strFaction);
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI+1], 0);
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI+1], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+
+		}
+
+
+	}
+	else if(hasObjVar(objMissionTerminal, "intArtisan"))
+	{
+		// crafting and survey missions
+
+		for(int intI = 0; intI<objMissionData.length; intI = intI+2)
+		{
+			cleanMissionObject(objMissionData[intI]);
+			cleanMissionObject(objMissionData[intI+1]);
+			obj_id objTest = createSurveyMission(objMissionData[intI], objMissionTerminal, intLevel, strFaction);
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI], 0);
+
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+
+
+			objTest  = createCraftingMission(objMissionData[intI+1], objMissionTerminal, getMissionLocation(self), intLevel, strFaction);
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI+1], 0);
+
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI+1], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+
+
+		}
+
+	}
+
+
+	else
+	{
+		for(int intI = 0; intI<objMissionData.length; intI = intI+2)
+		{
+			cleanMissionObject(objMissionData[intI]);
+			cleanMissionObject(objMissionData[intI+1]);
+
+
+			obj_id objTest = createDeliverMissionFromLocation(objMissionData[intI], self, locTest, intLevel, locTest.area, strFaction, fltTerminalRewardModifier);
+
+			if(objTest==null)
+			{
+				setMissionStatus(objMissionData[intI], 0);
+
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+
+			// capping mission difficulty at 90 
+			int destructionMissionLevel = intLevel + rand(-2, 2);
+
+			if(destructionMissionLevel > 90)
+				destructionMissionLevel = 90;
+
+			objTest = createDestructionMissionDataFromLocation(objMissionData[intI+1], self, locTest, destructionMissionLevel,  locTest.area, strDestroyFaction, fltTerminalRewardModifier);
+			
+			
+			if(!isIdValid(objTest))
+			{
+				setMissionStatus(objMissionData[intI+1], 0);
+			}
+			else
+			{
+				setMissionStatus(objMissionData[intI+1], 1);
+				if ( isIdValid(objHq) )
+					setObjVar(objTest, "hq", objHq);
+			}
+		}
+
+
+	}
+
+	if ( utils.hasScriptVar(objPlayer, "slicing.terminal") )
+	{
+		obj_id objSlicedTerminal = utils.getObjIdScriptVar( objPlayer, "slicing.terminal" );
+		if ( objSlicedTerminal == objMissionTerminal )
+		{
+			utils.removeScriptVar( objPlayer, "slicing.terminal" );
+			utils.removeScriptVar( objPlayer, "slicing.terminal_bonus" );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+
+
+
+
+
+
+messageHandler OnMissionAssigned() // we need this for in-field player assigned missions
+{
+
+	// mission has been assigned, start the mission and handoff control to the mission object.
+	playMusic(self, "sound/music_mission_accepted.snd");
+	obj_id objMission = params.getObjId("missionObject");
+	LOG("mission", "starting mission "+objMission.toString());
+	startMission(objMission);
+	return SCRIPT_CONTINUE;
+
+}
+
+messageHandler OnAssignMission()
+{
+	// by default, the mission system will create a new mission object
+	// and associate it with the creature that has the mission
+
+	LOG("LOG_CHANNEL", "Mission Assigned -- " + params);
+
+	if(params==null)
+	{
+		debugServerConsoleMsg(self, "Params is most definitely Null");
+	}
+	else
+	{
+		debugServerConsoleMsg(self, "Params is "+params.toString());
+	}
+
+	obj_id objMessageSource = params.getObjId("messageSource");
+	if(objMessageSource==null)
+	{
+		debugServerConsoleMsg(self, "messageSource is null");
+	}
+
+	obj_id objMissionData = params.getObjId("missionData");
+	string strMissionType = getMissionType(objMissionData);
+
+	if(strMissionType == null || strMissionType.equals(""))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	debugServerConsoleMsg(self, "OnAssignMission mission type = " + strMissionType);
+
+	session.logActivity(self, session.ACTIVITY_MISSION_TERMINAL);
+	if (strMissionType=="bounty")
+	{
+		// prevent player from having more than one bounty mission
+		obj_id objBountyMission = getBountyMission(self);
+		if (objBountyMission!=null)
+		{
+			string_id strSpam = new string_id("mission/mission_generic", "too_many_missions");
+			sendSystemMessage(self, strSpam);
+			return SCRIPT_CONTINUE;
+		}
+		messageTo(self, "informantComm", null, 5.0f, false);
+	}
+	if(strMissionType=="assassin")
+	{
+		// prevent player from having more than one assassinate mission
+		obj_id objAssassinMission = getAssassinMission(self);
+		if(objAssassinMission!=null)
+		{
+
+			string_id strSpam = new string_id("mission/mission_generic", "too_many_missions");
+			sendSystemMessage(self, strSpam);
+			return SCRIPT_CONTINUE;
+		}
+
+	}
+
+	obj_id[] objMissionArray = getMissionObjects(self);
+	if(objMissionArray!=null)
+	{
+		if(objMissionArray.length>=MAX_MISSIONS )
+		{
+			//LOG("missions", "mission length is "+objMissionArray.length);
+			string_id strSpam = new string_id("mission/mission_generic", "too_many_missions");
+			sendSystemMessage(self, strSpam);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if(objMessageSource != null)
+	{
+		debugServerConsoleMsg(self, "objMissionData is "+objMissionData.toString());
+		if(objMissionData != null)
+		{
+			int intBond = 0;
+			if(intBond>0)
+			{
+				debugServerConsoleMsg(self, "Mission Has Bond");
+
+				int intCurrentBalance = getBankBalance(self);
+				if(intCurrentBalance<=intBond)
+				{
+					debugServerConsoleMsg(self, "You need more money in your bank to take this mission");
+					return SCRIPT_CONTINUE;
+				}
+				// bond is verified, we kick out above otherwise
+				// now lets make the object
+				obj_id objMission = objMissionData;
+				dictionary dctParams = new dictionary();
+
+				dctParams.put("missionObject", objMission); // syntax is different because its supposed to be hidden from designers
+				dctParams.put("objMessageSource", objMessageSource);
+
+				transferBankCreditsTo(self, objMissionData, intBond, "bondTransferSuccess", "bondTransferFail", dctParams);
+				debugServerConsoleMsg(self, "Mission Object Id is "+objMission.toString());
+			}
+			else
+			{
+				obj_id objMission =  objMissionData;
+				debugServerConsoleMsg(objMission, "Mission Object Succesfully Created without a BOND");
+				if(objMission==null)
+				{
+					debugServerConsoleMsg(self, "SEE? ITS NULL!!!");
+					return SCRIPT_CONTINUE;
+				}
+				debugServerConsoleMsg(objMission, "Mission Object is "+objMission.toString());
+
+				if (strMissionType.equals("bounty"))
+				{
+					// Jedi bounty missions must register before they can be started.
+					if(hasObjVar(objMessageSource, "objTarget"))
+					{
+						// Set-up the jedi bounty stuff.
+						obj_id target = getObjIdObjVar(objMessageSource, "objTarget");
+						LOG("LOG_CHANNEL", "target ->" + target + " self ->" + self);
+						if (!isIdValid(target))
+						{
+							LOG("LOG_CHANNEL", "mission_player.bondTransferSuccess: Invalid target obj_id");
+							return SCRIPT_CONTINUE;
+						}
+
+						utils.setScriptVar(self, "bounty_hunter.jedi_mission", objMessageSource);
+						requestJediBounty(target, self, "msgJediMissionStartConfirmed", "msgJediMissionStartFailed");
+						debugServerConsoleMsg(self, "Waiting for requestJediBountyResult for hunter " + self);
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				dictionary dctParams = new dictionary();
+				dctParams.put("missionObject", objMission);
+				////LOG("mission_spam", "Mesaging to "+objMessageSource);
+
+				startMission(objMission);
+				debugServerConsoleMsg(self, "Mission Object Id is "+objMission.toString());
+			}
+		}
+	}
+
+	debugServerConsoleMsg(self, "done with onAssignMission Trigger");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bondTransferSuccess()
+{
+	obj_id objMessageSource = params.getObjId("objMessageSource");
+
+	debugServerConsoleMsg(self, "Bond Succesfully Transferred to Mission Data Object");
+
+	startMission(objMessageSource);
+
+	return SCRIPT_CONTINUE;
+
+}
+
+messageHandler bondTransferFailure()
+{
+	// not enough credits, kick out of mission assignment
+	debugServerConsoleMsg(self, "You need more bond money to take this mission");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgJediMissionStartConfirmed()
+{
+	debugServerConsoleMsg(self, "requestJediBountyResult for hunter " + self + " success");
+
+	// The jedi bounty mission has been registered.  Start it up.
+	if (utils.hasScriptVar(self, "bounty_hunter.jedi_mission"))
+	{
+		obj_id jedi_mission = utils.getObjIdScriptVar(self, "bounty_hunter.jedi_mission");
+		utils.removeScriptVar(self, "bounty_hunter.jedi_mission");
+		if (isIdValid(jedi_mission))
+		{
+			obj_id bounty_mission = getBountyMission(self);
+			if (isIdValid(bounty_mission))
+			{
+				string_id message = new string_id("mission/mission_generic", "too_many_missions");
+				sendSystemMessage(self, message);
+			}
+			else
+				startMission(jedi_mission);
+
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	string_id message = new string_id("mission/mission_generic", "jedi_mission_start_failed");
+	sendSystemMessage(self, message);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgJediMissionStartFailed()
+{
+	debugServerConsoleMsg(self, "requestJediBountyResult for hunter " + self + " fail");
+
+	if (utils.hasScriptVar(self, "bounty_hunter.jedi_mission"))
+		utils.removeScriptVar(self, "bounty_hunter.jedi_mission");
+
+	string_id message = new string_id("mission/mission_generic", "jedi_mission_start_failed");
+	sendSystemMessage(self, message);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler setupSpawn()
+{
+
+	// we need to reset the spawn information to recreate the spawned objects.
+	debugServerConsoleMsg(self, "setupSpawn message received on the player");
+
+	location locSpawnLocation = params.getLocation("locSpawnLocation");
+
+	obj_id objMission = params.getObjId("objMission");
+
+	debugServerConsoleMsg(self, "Player receives spawn setup message for "+locSpawnLocation.toString());
+	debugServerConsoleMsg(self, "distnace for trigger is "+MISSION_SPAWN_TRIGGER_RANGE);
+	debugServerConsoleMsg(self, "objMission is "+objMission.toString());
+	addLocationTarget(objMission.toString(), locSpawnLocation, MISSION_SPAWN_TRIGGER_RANGE ); // yeah its fucked but we need
+	// a unique location target per mission.
+
+	return SCRIPT_CONTINUE;
+
+}
+
+
+trigger OnArrivedAtLocation(string strName)
+{
+	// strName is the object id of the mission we're dorking with
+	// check if its in the mission object list, then go to town
+	// now we reconstituted the objvar, and now we've gotta check if its in the assigned mission listing
+
+	debugServerConsoleMsg(self, "ARRIVED AT LOCATION "+strName);
+	debugServerConsoleMsg(self, "Above Conversion to long");
+
+	Long lngId;
+
+	try
+	{
+		lngId = new Long(strName); // convert the string to a long so we can make an obj_id
+	} // try with error handling
+	catch (NumberFormatException err)
+	{
+		debugServerConsoleMsg(self, "Long Conversion Failed, Continuing to next onArrivedAtLocation");
+		return SCRIPT_CONTINUE;
+	}
+
+
+	debugServerConsoleMsg(self, "Above conversion to obj_id");
+	obj_id objMission = obj_id.getObjId(lngId.longValue());
+	debugServerConsoleMsg(self, "Above Mission Array thing");
+
+	removeLocationTarget  (strName); // Cleanup.. might not be needed
+
+
+
+	obj_id[] objMissionArray = getMissionObjects(self);
+
+	if (objMissionArray==null)
+	{
+		debugServerConsoleMsg(self, "NULL OBJIDARRAY! BAD");
+
+	}
+
+	debugServerConsoleMsg(self, "got Mission Array");
+
+	if(utils.isObjIdInArray(objMissionArray, objMission))
+	{
+		debugServerConsoleMsg(self, "sending message to "+objMission);
+		missionArrival(objMission);
+
+	}
+
+
+
+	return SCRIPT_CONTINUE;
+
+}
+
+messageHandler cleanupLocationTarget()
+{
+	debugServerConsoleMsg(self, "cleaning up location targets on player, message received");
+
+	string strLocationTarget = (string)params.get("strLocationTarget");
+	debugServerConsoleMsg(self, "strLocationTarget is "+strLocationTarget);
+
+	removeLocationTarget(strLocationTarget);
+	debugServerConsoleMsg(self, "locationTargets was removed");
+
+	return SCRIPT_CONTINUE;
+
+
+
+}
+
+trigger OnAttach()
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler setupArrivedAtLocation()
+{
+	float fltDistance = params.getFloat("fltDistance");
+	obj_id objMission = params.getObjId("objMission");
+	location locTargetLocation = params.getLocation("locTargetLocation");
+	addLocationTarget(objMission.toString(), locTargetLocation, fltDistance); // yeah its fucked but we need
+	// a unique location target per mission.
+	return SCRIPT_CONTINUE;
+}
+
+//***********************************BOUNTY HUNTER TRACKING STUFF******************************************************************
+
+messageHandler bountyIncomplete()
+{
+	obj_id target = params.getObjId("target");
+	if ( isIdValid(target) )
+	{
+		obj_id bountyMission = getBountyMission(self);
+		if ( isIdValid(bountyMission) )
+		{
+			obj_id missionTarget = getObjIdObjVar(bountyMission, "objTarget");
+			if ( missionTarget == target)
+				messageTo(bountyMission, "bountyIncomplete", params, 0, true);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bountyFailure()
+{
+	obj_id target = params.getObjId("target");
+	if ( isIdValid(target) )
+	{
+		obj_id bountyMission = getBountyMission(self);
+		if ( isIdValid(bountyMission) )
+		{
+			obj_id missionTarget = getObjIdObjVar(bountyMission, "objTarget");
+			if ( missionTarget == target)
+				messageTo(bountyMission, "bountyFailure", params, 0, true);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bountySuccess()
+{
+	obj_id target = params.getObjId("target");
+	if ( isIdValid(target) )
+	{
+		obj_id bountyMission = getBountyMission(self);
+		if ( isIdValid(bountyMission) )
+		{
+			obj_id missionTarget = getObjIdObjVar(bountyMission, "objTarget");
+			if ( missionTarget == target)
+				messageTo(bountyMission, "bountySuccess", params, 0, true);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destruction_Arrival()
+{
+
+	obj_id objMission = params.getObjId("objMission");
+
+
+	if(!createDestructionTarget(objMission, self))
+	{
+		//LOG("mission", "destrcution target was not created");
+		sendDestructionIncomplete(objMission);
+		// incomplete state goes here
+
+	} // spawns everything we need
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler assassin_Arrival()
+{
+	obj_id objMission = params.getObjId("objMission");
+	if(!createAssassinTarget(objMission))
+	{
+		sendAssassinIncomplete(objMission);
+	}
+	return SCRIPT_CONTINUE;
+
+}
+messageHandler recon_Arrival()
+{
+	debugServerConsoleMsg(self, "got recon arrival message");
+	obj_id objMission = params.getObjId("objMission");
+
+
+	if(!createReconTarget(objMission, self))
+	{
+		////LOG("mission", "destrcution target was not created");
+		sendReconIncomplete(objMission);
+		// incomplete state goes here
+
+	} // spawns everything we need
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+
+messageHandler deliver_Arrival()
+{
+
+	obj_id objMission = params.getObjId("objMission");
+
+	int intState = getIntObjVar(objMission, "intState");
+	debugServerConsoleMsg(self, "Arrived Location state is "+intState);
+
+	if (intState==missions.STATE_DYNAMIC_DROPOFF)
+	{
+		if(!createDeliverDropoffNPC(objMission))
+		{
+			sendDeliverIncomplete(objMission);
+			return SCRIPT_CONTINUE;
+		}
+
+
+
+	}
+
+	else if (intState==missions.STATE_DYNAMIC_PICKUP)
+	{
+		if(!createDeliverPickupNPC(objMission))
+		{
+			sendDeliverIncomplete(objMission);
+			return SCRIPT_CONTINUE;
+		}
+
+
+
+	}
+
+
+	else
+	{
+
+
+		debugServerConsoleMsg(self, "Something so horribly fucked happened here. I got a state thats not defined anywhere in a t mission");
+
+	}
+
+
+	return SCRIPT_CONTINUE;
+
+
+}
+
+
+messageHandler crafting_Arrival()
+{
+
+	obj_id objMission = params.getObjId("objMission");
+
+	int intState = getIntObjVar(objMission, "intState");
+	debugServerConsoleMsg(self, "Arrived Location state is "+intState);
+
+	if (intState==missions.STATE_DYNAMIC_DROPOFF)
+	{
+		if(!createCraftingDropoffNPC(objMission))
+		{
+			sendCraftingIncomplete(objMission);
+			return SCRIPT_CONTINUE;
+		}
+
+
+
+	}
+
+	else if (intState==missions.STATE_DYNAMIC_PICKUP)
+	{
+		if(!createCraftingPickupNPC(objMission))
+		{
+			sendCraftingIncomplete(objMission);
+			return SCRIPT_CONTINUE;
+		}
+
+
+
+	}
+
+
+	else
+	{
+
+
+		debugServerConsoleMsg(self, "Something so horribly fucked happened here. I got a state thats not defined anywhere in a t mission");
+
+	}
+
+
+	return SCRIPT_CONTINUE;
+
+
+}
+
+messageHandler fetch_Arrival()
+{
+	obj_id objMission = params.getObjId("objMission");
+	obj_id objMissionData = getMissionData(objMission);
+
+	int intState = getIntObjVar(objMission, "intState");
+	debugServerConsoleMsg(self, "Arrived Location state is "+intState);
+
+	if (intState==missions.STATE_DYNAMIC_START)
+	{
+		if(!createFetchDropoffNPC(objMission))
+		{
+			fetchIncomplete(objMission);
+			return SCRIPT_CONTINUE;
+		}
+		// we need to change the waypoint
+	}
+
+	if (intState==missions.STATE_DYNAMIC_PICKUP)
+	{
+		if(!createFetchPickupNPC(objMission))
+		{
+			fetchIncomplete(objMission);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else if(intState ==missions.STATE_DYNAMIC_DROPOFF)
+	{
+		if(!createFetchDropoffNPC(objMission))
+		{
+			fetchIncomplete(objMission);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		debugServerConsoleMsg(self, "Something so horribly fucked happened here. I got a state thats not defined anywhere in a fetch mission");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler escort_Arrival()
+{
+	obj_id objMission = params.getObjId("objMission");
+	if(!createEscortTarget(objMission))
+	{
+		escortIncomplete(objMission);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bounty_Arrival()
+{
+	obj_id objMission = params.getObjId("objMission");
+	obj_id target = createBountyTarget(objMission);
+	if(!isIdValid(target))
+	{
+		if(hasObjVar (objMission, "targetInWater"))
+		{	
+			int numberOfFails = getIntObjVar(objMission, "targetInWater");
+			++numberOfFails;
+			setObjVar(objMission, "targetInWater", numberOfFails);
+			
+			if(numberOfFails > 5)
+			{
+				setObjVar(self, "intState", missions.STATE_MISSION_COMPLETE);
+				messageTo(objMission, "bountyIncomplete", null, 0, true);
+				return SCRIPT_CONTINUE;
+			}
+		}
+		// CLEANUP, target in water, droid starting over..
+		utils.removeScriptVar(objMission, "intTracking");
+		
+		string planet = getCurrentSceneName ();
+		location locSpawnLocation = getGoodBountyDestination(planet);
+		setObjVar(objMission, "locSpawnLocation", locSpawnLocation);
+		utils.removeScriptVar(self, "intTracking");
+		messageTo(objMission, "targetInWater", null, 1, false);
+		sendSystemMessage(self, SID_MISSION_TARGET_IN_WATER);
+		
+		if(!hasObjVar (objMission, "targetInWater"))
+			setObjVar(objMission, "targetInWater", 1);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler setup_Spawn_Overload()
+{
+	string strOverloadTemplate = params.getString("strOverloadTemplate");
+
+	string[] strSpawnOverloadArray = getStringArrayObjVar(self, "strSpawnOverloadArray");
+
+	string strTest = getStringObjVar(self, "strSpawnOverloadArray");
+	debugServerConsoleMsg(self, "strTest is "+strTest);
+
+	if(strSpawnOverloadArray==null)
+	{
+
+		if(hasObjVar(self, "strSpawnOverloadArray"))
+		{
+			debugServerConsoleMsg(self, "Not getting the array even though its tehre!");
+
+		}
+
+		debugServerConsoleMsg(self, "SpawnOverloadArray was null, not appending");
+		string[] strNewArray = new string[1];
+		strNewArray[0] = strOverloadTemplate;
+		setObjVar(self, "strSpawnOverloadArray", strNewArray);		// Suppress linting - We know that this array will
+																	// always be at least one element long
+		return SCRIPT_CONTINUE;
+	}
+	string[] strNewSpawnOverloadArray = new string[strSpawnOverloadArray.length+1];
+
+	int intI = 0;
+
+	while (intI<strSpawnOverloadArray.length)
+	{
+		strNewSpawnOverloadArray[intI] = strSpawnOverloadArray[intI]; // copies the arrays
+
+
+		intI = intI+1;
+
+	}
+	// now add the last one to the slots
+
+	strNewSpawnOverloadArray[strNewSpawnOverloadArray.length-1] = strOverloadTemplate;
+	setObjVar(self, "strSpawnOverloadArray", strNewSpawnOverloadArray);
+	return SCRIPT_CONTINUE;
+
+}
+
+
+messageHandler informantComm()
+{
+	obj_id player = self;
+
+	if(!hasSkill(player, "class_bountyhunter_phase1_novice"))
+		return SCRIPT_CONTINUE;
+
+	obj_id objMission= getBountyMission(self);
+	if(objMission==null)
+		return SCRIPT_CONTINUE;
+	
+	obj_id objMissionHolder = getMissionHolder(objMission);
+
+	obj_id objMissionData = getMissionData(objMission);
+	int intInformantLevel = getIntObjVar(objMissionData, "intInformantLevel");
+
+	dictionary dctParams = new dictionary();
+
+	int intState = getIntObjVar(objMission, "intState");
+
+	if(intState!=STATE_BOUNTY_INFORMANT)
+		return SCRIPT_CONTINUE;
+
+	if(!hasObjVar(objMissionData, "intPlayerMission"))
+	{
+
+		int intIndex= rand(1, 5);
+		int randAppearance = rand(0, 3);
+
+		if(intInformantLevel==INFORMANT_EASY)
+		{
+			string_id strResponse = new string_id("mission/mission_bounty_informant", "target_easy_"+intIndex);
+
+			prose_package pp = prose.getPackage(strResponse);
+			commPlayers(self, OPS_APPEARANCES[randAppearance], null, 15, player, pp);
+			updateMissionWaypoint(objMission, getLocationObjVar(objMission, "locSpawnLocation"));
+			// now we setup the waypoint to the target
+			strResponse = new string_id("mission/mission_bounty_informant", "target_location_received");
+			sendSystemMessage(player, strResponse);
+			setObjVar(objMission, "intState", STATE_BOUNTY_PROBE);
+		}
+		else if (intInformantLevel==INFORMANT_MEDIUM)
+		{
+			string_id strResponse = new string_id("mission/mission_bounty_informant", "target_medium_"+intIndex);
+
+			prose_package pp = prose.getPackage(strResponse);
+			commPlayers(self, OPS_APPEARANCES[randAppearance], null, 15, player, pp);
+
+			//location locSpawnLocation = getMissionStartLocation(objMissionData);
+			location locSpawnLocation = utils.getLocationObjVar(objMissionData, "locSpawnLocation");
+			string strPlanet = locSpawnLocation.area;
+			string strPlanetResponse = "target_hard_"+strPlanet+"_1";
+			strResponse = new string_id("mission/mission_bounty_informant", strPlanetResponse);
+			pp = prose.getPackage(strResponse);
+			commPlayers(self, OPS_APPEARANCES[randAppearance], null, 15, player, pp);
+
+			strResponse = new string_id("mission/mission_bounty_informant", "target_biological_signature"); // needs prose package
+			sendSystemMessage(player, strResponse);
+			setObjVar(objMission, "intState", STATE_BOUNTY_PROBE);
+
+			// Don't move the target for non-dynamic missions.
+			if (hasObjVar(objMission, "intMissionDynamic"))
+			{
+				// flag the mission so it knows it should have a moveTarget loop going
+				setObjVar(objMission, "movingTarget", 1);
+				dctParams.put("moveTargetSequence", utils.getIntScriptVar(self, "moveTargetSequence"));
+				messageTo(objMission, "moveTarget", dctParams, rand(30, 60), false);
+			}
+
+			// setup the waypoint
+
+		}
+		else if(intInformantLevel==INFORMANT_HARD)
+		{
+			string_id strResponse = new string_id("mission/mission_bounty_informant", "target_hard_"+intIndex);
+
+			prose_package pp = prose.getPackage(strResponse);
+			commPlayers(self, OPS_APPEARANCES[randAppearance], null, 15, player, pp);
+			strResponse = new string_id("mission/mission_bounty_informant", "target_biological_signature");
+			sendSystemMessage(player, strResponse);
+			setObjVar(objMission, "intState", STATE_BOUNTY_PROBE);
+
+			// Don't move the target for non-dynamic missions.
+			if (hasObjVar(objMission, "intMissionDynamic"))
+			{
+				// flag the mission so it knows it should have a moveTarget loop going
+				setObjVar(objMission, "movingTarget", 1);
+				dctParams.put("moveTargetSequence", utils.getIntScriptVar(self, "moveTargetSequence"));
+				messageTo(objMission, "moveTarget", dctParams, rand(30, 60), false);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler addListener()
+{
+
+
+	obj_id objListener = params.getObjId("objListener");
+	if(objListener==null)
+	{
+		LOG("DESIGNER_FATAL", "Null listener was passed to "+self);
+		return SCRIPT_CONTINUE;
+	}
+
+	string strObjVar = params.getString("strObjVar");
+	if(strObjVar==null)
+	{
+
+		LOG("DESIGNER_FATAL", "Null objvar name was passed to "+self);
+	}
+
+	resizeable obj_id[] objListeners = new obj_id[0];
+	if(hasObjVar(self, strObjVar))
+	{
+		objListeners = getResizeableObjIdArrayObjVar(self, strObjVar);
+
+	}
+	for(int intI = 0; intI<objListeners.length; intI++)
+	{
+
+		if(objListeners[intI]==objListener)
+		{
+			LOG("DESIGNER_FATAL", "objListener of "+objListener+" is alread listening to "+self);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	objListeners = utils.addElement(objListeners, objListener);
+
+	if((objListeners != null) && (objListeners.length > 0)) {
+
+		setObjVar(self, strObjVar, objListeners);
+	}
+	return SCRIPT_CONTINUE;
+
+}
+
+
+
+messageHandler removeListener()
+{
+	obj_id objListener = params.getObjId("objListener");
+	if(objListener==null)
+	{
+		LOG("DESIGNER_FATAL", "Null listener was passed to "+self);
+		return SCRIPT_CONTINUE;
+	}
+	string strObjVar = params.getString("strObjVar");
+	if(strObjVar==null)
+	{
+
+		LOG("DESIGNER_FATAL", "Null objvar name was passed to "+self);
+	}
+
+	resizeable obj_id[] objListeners = new obj_id[0];
+	if(hasObjVar(self, strObjVar))
+	{
+		objListeners = getResizeableObjIdArrayObjVar(self, strObjVar);
+
+	}
+	else
+	{
+		return SCRIPT_CONTINUE; // no listeners
+	}
+	for(int intI = 0; intI<objListeners.length; intI++)
+	{
+		if(objListeners[intI]==objListener)
+		{
+			objListeners = utils.removeElement(objListeners, objListener);
+			setObjVar(self,strObjVar, objListeners);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	LOG("DESIGNER_FATAL", "Someone called removeListener for an object that doesn't exist on the listener objvar");
+	LOG("DESIGNER_FATAL", "target is "+self+" and listener is "+objListener);
+
+	return SCRIPT_CONTINUE;
+
+
+
+}
+
+commandHandler findAssassinTarget()
+{
+	obj_id objTarget = target;
+	if(!isIdValid(target))
+	{
+		return SCRIPT_CONTINUE;
+
+	}
+	if(!exists(objTarget))
+	{
+		string_id strSpam = new string_id("mission/mission_generic", "no_assassin_target");
+		sendSystemMessage(self, strSpam);
+		return SCRIPT_CONTINUE;
+	}
+	location locTarget = getLocation(objTarget);
+	location locCurrentLocation = getLocation(self);
+	float fltDistance = getDistance(locTarget, locCurrentLocation);
+	if(fltDistance<32)
+	{
+		// Flag them as attackable
+		pvpSetPermanentPersonalEnemyFlag(objTarget, self);
+	}
+	// where are they
+	string_id strDirection = utils.getCardinalDirectionForPoints(locCurrentLocation , locTarget);
+	int intDistance = (int)fltDistance;
+	prose_package ppTargetLoc= prose.getPackage(new string_id("mission/mission_generic", "assassin_target_location"), strDirection, intDistance);
+	sendSystemMessageProse(self, ppTargetLoc);
+	return SCRIPT_CONTINUE;
+
+}
+

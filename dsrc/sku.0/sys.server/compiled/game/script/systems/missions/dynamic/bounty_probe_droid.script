@@ -1,0 +1,388 @@
+
+include library.ai_lib;
+include library.regions;
+include library.locations;
+include library.groundquests;
+include library.utils;
+include library.bounty_hunter;
+
+inherits systems.missions.base.mission_dynamic_base;
+
+
+
+trigger OnAttach()
+{
+
+
+	int intDroidType = getIntObjVar(self, "intDroidType");
+	if(intDroidType==DROID_PROBOT)
+	{
+		setCount(self, 10);
+
+	}
+	else if(intDroidType==DROID_SEEKER)
+	{
+		setCount(self, 20);
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//debugServerConsoleMsg(self, "creating grenade menu");
+	int intRootMenu;
+
+	obj_id objBountyMission = getBountyMission(player);
+	if(objBountyMission==null)
+		return SCRIPT_CONTINUE;
+
+	if (!utils.isProfession( player, utils.BOUNTY_HUNTER ) )
+	{
+		string_id strResponse = new string_id("mission/mission_generic", "bounty_no_ability");
+		sendSystemMessage(player, strResponse);
+		return SCRIPT_CONTINUE;
+	}
+
+	int intDroidType = getIntObjVar(self, "intDroidType");
+	if(intDroidType==DROID_PROBOT)
+	{
+		string_id strProbeId = new string_id("mission/mission_generic", "probe_droid_summon");
+		intRootMenu = mi.addRootMenu (menu_info_types.SERVER_PROBE_DROID_FIND_TARGET, strProbeId);
+		return SCRIPT_CONTINUE;
+	}
+
+	string_id strActivateId = new string_id("mission/mission_generic", "probe_droid_activate"); // not consts because i want them down here
+	string_id strFindId = new string_id("mission/mission_generic", "probe_droid_find_target");
+	string_id strTrackId = new string_id("mission/mission_generic", "probe_droid_track_target");
+	intRootMenu = mi.addRootMenu (menu_info_types.SERVER_PROBE_DROID_ACTIVATE, strActivateId);
+
+	mi.addSubMenu(intRootMenu, menu_info_types.SERVER_PROBE_DROID_FIND_TARGET, strFindId);
+
+	if(hasCommand(player, "droid_track"))
+		mi.addSubMenu(intRootMenu, menu_info_types.SERVER_PROBE_DROID_TRACK_TARGET, strTrackId );
+
+  	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(item==menu_info_types.EXAMINE)
+	{
+		return SCRIPT_CONTINUE;
+
+	}
+	if(item==menu_info_types.ITEM_DESTROY)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//debugServerConsoleMsg(self, "selecting the item");
+
+	int intDroidType = getIntObjVar(self, "intDroidType");
+
+	obj_id objBountyMission = getBountyMission(player);
+	if(objBountyMission==null)
+	{
+		string_id strSpam = new string_id("mission/mission_generic", "bounty_no_mission");
+		sendSystemMessage(player, strSpam);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (!utils.isProfession( player, utils.BOUNTY_HUNTER ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id objMission = getBountyMission(player);
+
+
+	int intState = getIntObjVar(objMission, "intState");
+
+	if(intState!=STATE_BOUNTY_PROBE)
+	{
+		string_id strSpam = new string_id("mission/mission_generic", "bounty_no_signature");
+		sendSystemMessage(player, strSpam);
+		return SCRIPT_CONTINUE;
+
+
+	}
+	if(utils.hasScriptVar(objMission, "intTracking"))
+	{
+		string_id strSpam = new string_id("mission/mission_generic", "bounty_already_tracking");
+		sendSystemMessage(player, strSpam);
+		return SCRIPT_CONTINUE;
+
+	}
+
+	if(hasObjVar(objMission, "objTarget")) // it's a jedi mission
+	{
+		// is the jedi online/offline
+		obj_id objTarget = getObjIdObjVar(objMission, "objTarget");
+		if(objTarget!=null)
+		{
+			dictionary dctJediInfo = requestJedi(objTarget);
+			if(dctJediInfo==null)
+			{
+				// target not available.
+				string_id strSpam = new string_id("mission/mission_generic", "jedi_not_online");
+				sendSystemMessage(player, strSpam);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				boolean boolOnline = dctJediInfo.getBoolean("online");
+				if(!boolOnline)
+				{
+					// target not available
+					string_id strSpam = new string_id("mission/mission_generic", "jedi_not_online");
+					sendSystemMessage(player, strSpam);
+					return SCRIPT_CONTINUE;
+				}
+			}
+		}
+
+	}
+
+	dictionary dctParams = new dictionary();
+	dctParams.put("objPlayer", player);
+	setObjVar(self, "objPlayer", player);
+	debugServerConsoleMsg(self, "Droid Type is "+intDroidType);
+
+	if(item==menu_info_types.SERVER_PROBE_DROID_TRACK_TARGET)
+	{
+		bounty_hunter.probeDroidTrackTarget(player, self);
+	}
+	else if(item==menu_info_types.SERVER_PROBE_DROID_FIND_TARGET)
+	{
+		location currentPlayerLocation = getLocation(player);
+		
+		if(isValidId(currentPlayerLocation.cell))
+		{
+			string_id strResponse = new string_id("mission/mission_generic", "not_in_house");
+			sendSystemMessage(player, strResponse);
+			return SCRIPT_CONTINUE;		
+		}
+		
+		if(intDroidType == DROID_PROBOT)
+		{
+			bounty_hunter.callProbot(player, self, objMission);
+		
+		}
+		if(intDroidType == DROID_SEEKER)
+		{
+			string_id strSpam = new string_id("mission/mission_generic", "seeker_droid_launched");
+			sendSystemMessage(player, strSpam);
+			debugServerConsoleMsg(self, "seeker");
+			dctParams.put("intDroidType", intDroidType);
+			dctParams.put("objDroid", self);
+			dctParams.put("intTrackType", DROID_FIND_TARGET);
+			
+			//saving the information above on the mission in case the NPC tries to spawn in the water.
+			
+			setObjVar(objMission, "intDroidType", intDroidType);
+			setObjVar(objMission, "objDroid", self);
+			setObjVar(objMission, "intTrackType", DROID_FIND_TARGET);
+
+			if(!hasObjVar(objMission, "intMissionDynamic"))
+				dctParams.put("playerBounty", 1);
+
+			// let's make the seeeker droid
+			location locHeading= getHeading(player);
+			location locSpawnLocation = getLocation(player);
+
+
+			locSpawnLocation.x = locSpawnLocation.x + locHeading.x;
+			locSpawnLocation.z = locSpawnLocation.z + locHeading.z;
+
+			obj_id objSeeker = createObject("object/creature/npc/droid/bounty_seeker.iff", locSpawnLocation);
+			messageTo(objSeeker, "takeOff", null, 5, true);
+			messageTo(objMission, "halfwayNotification", dctParams, 40, true);
+			messageTo(objMission, "halfwayNotification", dctParams, 60, true);			
+			messageTo(objMission, "findTarget", dctParams, 10, true);
+
+			int intCount = getCount(self);
+			intCount = intCount - 1;
+
+			if(intCount < 0)
+			{
+				destroyObject(self);
+			}
+			else
+			{
+				setCount(self, intCount);
+			}
+		}
+
+	}
+	else if (item==menu_info_types.SERVER_PROBE_DROID_ACTIVATE)
+	{
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// we need to do the following
+messageHandler droid_Probot_Start()
+{
+	// we setup objvars on the player
+
+	// first can we spawn a probe droid at all?
+	debugServerConsoleMsg(self, "PROBE_DROID STARTED");
+	obj_id objPlayer = params.getObjId("objPlayer");
+
+	location locCurrentLocation = getLocation(objPlayer);
+
+	region rgnCities[] = getRegionsWithMunicipalAtPoint(locCurrentLocation, regions.MUNI_TRUE);
+	region geoCities[] = getRegionsWithGeographicalAtPoint(locCurrentLocation, regions.GEO_CITY);
+
+	if( rgnCities != null || geoCities != null )
+	{
+		debugServerConsoleMsg(self, "cities!");
+		string_id strResponse = new string_id("mission/mission_generic", "probe_droid_bad_location");
+		sendSystemMessage(objPlayer, strResponse);
+		return SCRIPT_CONTINUE; // NADA, You're in a city you punk!
+	}
+
+	location locSpawnLocation = groundquests.getRandom2DLocationAroundLocation(objPlayer, 3, 3, 64, 64);
+
+	if(locSpawnLocation != null)
+	{
+		if(isSpaceScene())
+		{
+			string_id strResponse = new string_id("mission/mission_generic", "in_space");
+			sendSystemMessage(objPlayer, strResponse);
+			return SCRIPT_CONTINUE;
+		}
+
+		rgnCities = getRegionsWithMunicipalAtPoint(locSpawnLocation, regions.MUNI_TRUE);
+		geoCities = getRegionsWithGeographicalAtPoint(locSpawnLocation, regions.GEO_CITY);
+
+		if(rgnCities != null || geoCities != null )
+		{
+			debugServerConsoleMsg(self, "cities2");
+			string_id strResponse = new string_id("mission/mission_generic", "probe_droid_bad_location");
+			sendSystemMessage(objPlayer, strResponse);
+			return SCRIPT_CONTINUE; // NADA, You're in a city you punk!
+
+		}		
+
+		// we got a good location..
+		// we need to make our probot spawner.. woohoo
+		setObjVar(self, "locSpawnLocation", locSpawnLocation);
+		// now we need to start the countdown to the whozit
+		int intTrackType = params.getInt("intTrackType");
+		obj_id objMission = getBountyMission(objPlayer);
+
+		if(!isIdValid(objMission))
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		utils.setScriptVar(objMission, "intTracking", 1);
+		setObjVar(self, "objMission", objMission);
+		setObjVar(self, "intTrackType", intTrackType);
+
+		dictionary dctParams = new dictionary();
+
+		string_id strResponse = new string_id("mission/mission_generic", "probe_droid_launch_prep");
+		sendSystemMessage(objPlayer, strResponse);
+
+		dctParams.put("intCountDown", 6);
+		messageTo(self, "probe_Droid_Countdown", dctParams, 20, true);
+	}
+	else
+	{
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler probe_Droid_Countdown()
+{
+	int intCountDown = params.getInt("intCountDown");
+	debugServerConsoleMsg(self, "intCountDown is "+intCountDown);
+	obj_id objPlayer = getObjIdObjVar(self, "objPlayer");
+	intCountDown = intCountDown-1;
+	if(intCountDown==0)
+	{
+
+		location locSpawnLocation = getLocationObjVar(self, "locSpawnLocation");
+
+		// play particle effect
+		location locTest = getLocation(objPlayer);
+		locSpawnLocation.y = locTest.y;
+		//locSpawnLocation = getLocation(objPlayer);
+		playClientEffectLoc(objPlayer, "clienteffect/probot_delivery.cef", locSpawnLocation, 0);
+
+		//destroyObject(objSpawner);
+
+
+		messageTo(self, "probe_Droid_Spawn", null, 4, true);
+
+
+	}
+	else
+	{
+		string_id strResponse = new string_id("mission/mission_generic", "probe_droid_arrival_"+intCountDown);
+		sendSystemMessage(objPlayer, strResponse);
+		dictionary dctParams = new dictionary();
+		dctParams.put("intCountDown", intCountDown);
+		messageTo(self, "probe_Droid_Countdown", dctParams, 1, true);
+
+	}
+	return SCRIPT_CONTINUE;
+
+}
+messageHandler probe_Droid_Spawn()
+{
+	location locSpawnLocation = getLocationObjVar(self, "locSpawnLocation");
+	string_id strResponse = new string_id("mission/mission_generic", "probe_droid_arrival");
+
+	//playClientEffectLoc(self, "", locSpawnLocation);
+	obj_id objPlayer = getObjIdObjVar(self, "objPlayer");
+	sendSystemMessage(objPlayer, strResponse);
+	int intTrackType = getIntObjVar(self, "intTrackType");
+	int intDroidType = getIntObjVar(self, "intDroidType");
+
+	obj_id objMission = getBountyMission(objPlayer);
+	if(objMission==null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+
+	obj_id objDroid = createObject(	"object/creature/npc/droid/imperial_probot_bounty.iff", locSpawnLocation);
+	if(objDroid==null)
+	{
+
+		debugServerConsoleMsg(self, "Null probe droid!");
+
+	}
+	attachScript(objDroid, "systems.missions.dynamic.bounty_probot");
+	setMovementRun(objDroid);
+	follow(objDroid, objPlayer, 3.f, 5.f);
+
+	dictionary dctParams = new dictionary();
+	dctParams.put("objPlayer", objPlayer);
+	dctParams.put("intTrackType", intTrackType);
+	dctParams.put("intDroidType", intDroidType);
+	dctParams.put("objMission", objMission);
+	//obj_id objWaypoint = createWaypointInDatapad(objPlayer, locSpawnLocation);
+	//setWaypointActive(objWaypoint, true);
+
+	messageTo(objDroid, "setup_Droid", dctParams, 0, true);
+	int intCount = getCount(self);
+	intCount = intCount - 1;
+	if(intCount<0)
+	{
+		destroyObject(self);
+	}
+	else
+	{
+		setCount(self, intCount);
+	}
+	return SCRIPT_CONTINUE;
+}

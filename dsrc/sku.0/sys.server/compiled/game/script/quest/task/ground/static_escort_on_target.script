@@ -1,0 +1,135 @@
+// This script goes on a creature spawned by the static_escort quest task type.
+
+include library.groundquests;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+const String dataTableColumnPathToPointPre      ="PATH_TO_POINT_POINT_";
+const String dataTableColumnLocationXPre        ="LOCATION_X_POINT_";
+const String dataTableColumnLocationYPre        ="LOCATION_Y_POINT_";
+const String dataTableColumnLocationZPre        ="LOCATION_Z_POINT_";
+
+//objvars on escort target
+const String objvarQuest              = "quest.static_escort";
+const String objvarOnCreatureOwner    = "quest.static_escort.owner";
+const String objvarOnCreatureQuestCrc = "quest.static_escort.questCrc";
+const String objvarOnCreatureTaskId   = "quest.static_escort.taskId";
+const String objvarPathToPoint        = "quest.static_escort.pathToPoint";
+const String objvarStartingX          = "quest.static_escort.startingX";
+const String objvarStartingY          = "quest.static_escort.startingY";
+const String objvarStartingZ          = "quest.static_escort.startingZ";
+const String objvarGoingHome          = "quest.static_escort.goingHome";
+const String objvarOnEscort           = "quest.static_escort.onEscort";
+
+const String taskType = "static_escort_on_target";
+
+const String scriptNameEscortOnTarget = "quest.task.ground.static_escort_on_target";
+
+// ---------------------------------------------------------------------
+
+messageHandler messageStartStaticEscort()
+{
+	//store current position, so we can come back here at the end
+	location l = getLocation(self);
+	setObjVar(self, objvarStartingX, l.x);
+	setObjVar(self, objvarStartingY, l.y);
+	setObjVar(self, objvarStartingZ, l.z);
+	setObjVar(self, objvarOnEscort, "true");
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	//tell owner that we died
+	if(hasObjVar(self, objvarOnCreatureOwner) && hasObjVar(self, objvarOnCreatureQuestCrc) && hasObjVar(self, objvarOnCreatureTaskId))
+	{
+		obj_id player = getObjIdObjVar(self, objvarOnCreatureOwner);
+		int questCrc  = getIntObjVar  (self, objvarOnCreatureQuestCrc);
+		int taskId    = getIntObjVar  (self, objvarOnCreatureTaskId);
+		dictionary params = new dictionary();
+		params.put("source",   self);
+		params.put("questCrc", questCrc);
+		params.put("taskId",   taskId);
+
+		messageTo(player, "messageEscortTaskCreatureDied", params, 0, false);
+	}
+    return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnMovePathComplete()
+{
+	//see if we're returning to start location
+	String goingHome = getStringObjVar(self, objvarGoingHome);
+	if(goingHome != null && goingHome == "true")
+	{
+		//clear all objvar data, so we're ready for next escort
+		removeObjVar(self, objvarQuest);
+		detachScript(self, scriptNameEscortOnTarget);
+	}
+	//otherwise, we hit an escort location
+	else
+	{
+		//get the quest and task we're involved in
+		obj_id player = getObjIdObjVar(self, objvarOnCreatureOwner);
+		int questCrc  = getIntObjVar  (self, objvarOnCreatureQuestCrc);
+		int taskId    = getIntObjVar  (self, objvarOnCreatureTaskId);
+
+		//determine the next path point index
+		int reachedPathPoint = getIntObjVar(self, objvarPathToPoint);
+		int nextPathPoint    = reachedPathPoint + 1;
+
+		//get the next point, path to it
+		int useNextPoint = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnPathToPointPre + nextPathPoint);
+		if(useNextPoint == 0)
+		{
+			groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "OnMovePathComplete", "The next escort point is flagged as unused, so completing the task");
+			questCompleteTask(questCrc, taskId, player);
+		}
+		else
+		{
+			String xLoc = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnLocationXPre + nextPathPoint);
+			String yLoc = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnLocationYPre + nextPathPoint);
+			String zLoc = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnLocationZPre + nextPathPoint);
+			location escortPoint = new location(utils.stringToFloat(xLoc), utils.stringToFloat(yLoc), utils.stringToFloat(zLoc), getCurrentSceneName());
+			setObjVar(self, objvarPathToPoint, nextPathPoint);
+			pathTo(self, escortPoint);
+			groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "OnMovePathComplete", "escort target + " + self + " pathing to new point [" + escortPoint.x + ", " + escortPoint.y + ", " + escortPoint.z + "]");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler messageResetStaticEscortTarget()
+{
+	//get the quest and task we're involved in
+	obj_id player = getObjIdObjVar(self, objvarOnCreatureOwner);
+	int questCrc  = getIntObjVar  (self, objvarOnCreatureQuestCrc);
+	int taskId    = getIntObjVar  (self, objvarOnCreatureTaskId);
+
+	//send target back to starting point
+	float x = getFloatObjVar(self, objvarStartingX);
+	float y = getFloatObjVar(self, objvarStartingY);
+	float z = getFloatObjVar(self, objvarStartingZ);
+	location startingPoint = new location(x, y, z, getCurrentSceneName());
+	pathTo(self, startingPoint);
+
+	groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "messageResetStaticEscortTarget", "escort target " + self + " going home to [" + startingPoint.x + ", " + startingPoint.y + ", " + startingPoint.z + "]");
+	
+	//remove static_escort specific objvars
+	removeObjVar(self, objvarQuest);
+
+	//now put one back to say that we're walking home
+	setObjVar(self, objvarGoingHome, "true");
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------

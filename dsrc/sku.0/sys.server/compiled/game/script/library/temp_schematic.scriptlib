@@ -1,0 +1,192 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.prose;
+
+/***** CONSTANTS *******************************************************/
+
+const int DEFAULT_USE_COUNT					= 1;
+
+const string VAR_TEMP_SCHEMATIC_BASE				= "temp_schematic";
+const string VAR_TEMP_SCHEMATIC_BIO_LINK			= "bioLinkSchematic.schematic";
+const string STF						= "temp_schematic";
+
+const string_id PROSE_TEMP_GRANT				= new string_id(STF, "prose_temp_grant");
+const string_id PROSE_USES_LEFT					= new string_id(STF, "prose_uses_left");
+
+const string_id PROSE_TEMP_REVOKE				= new string_id(STF, "prose_temp_revoke");
+
+const string_id PROSE_USES_DECREMENTED				= new string_id(STF, "prose_uses_decremented");
+const string_id PROSE_SCHEMATIC_EXPIRED				= new string_id(STF, "prose_schematic_expired");
+const string LIMITED_USE_DATA_TABLE 				= "datatables/crafting/limited_use_schematics.iff";
+const string COL_SCHEMATIC_NAME 		 		= "schematic_name";
+const string COL_SCHEMATIC_USES 		 		= "schematic_uses";
+
+/***** FUNCTIONS *******************************************************/
+boolean grant(obj_id player, string schematic, int useCount)
+{
+	return grant(player, obj_id.NULL_ID, schematic, useCount);
+}
+
+boolean grant(obj_id player, obj_id bioLink, string schematic, int useCount)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || schematic == null || schematic.equals("") )
+		return false;
+
+	return grant(player, bioLink, getObjectTemplateCrc(schematic), useCount);
+}
+
+boolean grant(obj_id player, int schematic, int useCount)
+{
+	return grant(player, obj_id.NULL_ID, schematic, useCount);
+}
+
+boolean grant(obj_id player, obj_id bioLink, int schematic, int useCount)
+{
+
+	if ( !isIdValid(player) || !isPlayer(player) || schematic == 0 )
+		return false;
+
+	string ovpath = VAR_TEMP_SCHEMATIC_BASE + "." + schematic;
+	if ( hasSchematic(player, schematic) && !hasObjVar(player, ovpath) )
+		return false;
+
+	boolean litmus = true;
+	if ( !hasSchematic(player, schematic) )
+		litmus = grantSchematic(player, schematic);
+
+	if ( litmus )
+	{
+		int total = useCount + getIntObjVar(player, ovpath);
+		setObjVar(player, ovpath, total);
+
+		string_id product_name = getProductNameFromSchematic(schematic);
+
+		prose_package ppTempGrant = prose.getPackage(PROSE_TEMP_GRANT, product_name, useCount);
+		sendSystemMessageProse(player, ppTempGrant);
+
+		prose_package ppUsesLeft = prose.getPackage(PROSE_USES_LEFT, product_name, total);
+		sendSystemMessageProse(player, ppUsesLeft);
+		//check for bioLinkage
+		if(isIdValid(bioLink))
+		{
+			//set the bioLink Identifier
+			setObjVar(player, VAR_TEMP_SCHEMATIC_BIO_LINK + "." + schematic, bioLink);			
+		}
+		return true;
+	}
+
+	return false;
+}
+
+boolean grant(obj_id player, string schematic)
+{
+	return grant(player, schematic, DEFAULT_USE_COUNT);
+}
+
+boolean grant(obj_id player, int schematic)
+{
+	return grant(player, schematic, DEFAULT_USE_COUNT);
+}
+
+boolean revoke(obj_id player, string schematic)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || schematic == null || schematic.equals("") )
+		return false;
+	return revoke(player, getObjectTemplateCrc(schematic));
+}
+
+boolean revoke(obj_id player, int schematic)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || schematic == 0 )
+		return false;
+
+	string ovpath = VAR_TEMP_SCHEMATIC_BASE + "." + schematic;
+	if ( !hasObjVar(player, ovpath) )
+		return false;
+
+	if ( revokeSchematic(player, schematic) )
+	{
+		removeObjVar(player, ovpath);
+
+		string_id product_name = getProductNameFromSchematic(schematic);
+
+		prose_package ppTempRevoke = prose.getPackage(PROSE_TEMP_REVOKE, product_name);
+		sendSystemMessageProse(player, ppTempRevoke);
+		return true;
+	}
+
+	return false;
+}
+
+boolean decrement(obj_id player, string schematic)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || schematic == null || schematic.equals("") )
+		return false;
+	return decrement(player, getObjectTemplateCrc(schematic));
+}
+
+boolean decrement(obj_id player, int schematic)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || schematic == 0 )
+		return false;
+
+	string ovpath = VAR_TEMP_SCHEMATIC_BASE + "." + schematic;
+	int cnt = getIntObjVar(player, ovpath);
+	boolean isLimitedUseSchematic = false;
+	//check datatable, if its in there the number will be greater than 0
+	int limitedUse = dataTableSearchColumnForInt(schematic, COL_SCHEMATIC_NAME, LIMITED_USE_DATA_TABLE);
+	
+	//checking if limited use is in table and player stripped their temp_schematic objvars somehow
+	if(limitedUse >= 0)
+		isLimitedUseSchematic = true;
+
+	if ( cnt == 0 && !isLimitedUseSchematic)
+		return false;
+
+	string_id product_name = getProductNameFromSchematic(schematic);
+
+	cnt--;
+	setObjVar(player, ovpath, cnt);
+	if ( cnt <= 0 )
+	{
+		prose_package ppExpire = prose.getPackage(PROSE_SCHEMATIC_EXPIRED, product_name);
+		sendSystemMessageProse(player, ppExpire);
+		
+		//check for the bioLink Identifier and remove
+		if(hasObjVar(player, VAR_TEMP_SCHEMATIC_BIO_LINK + "." + schematic))
+			removeObjVar(player, VAR_TEMP_SCHEMATIC_BIO_LINK + "." + schematic);
+		
+		return revoke(player, schematic);
+	}
+	else
+	{
+		prose_package ppExpire = prose.getPackage(PROSE_USES_DECREMENTED, product_name);
+		sendSystemMessageProse(player, ppExpire);
+
+		prose_package ppUsesLeft = prose.getPackage(PROSE_USES_LEFT, product_name, cnt);
+		sendSystemMessageProse(player, ppUsesLeft);
+	}
+
+	return true;
+}
+
+boolean decrement(obj_id player, obj_id manufacturingSchematic)
+{
+	if ( !isIdValid(player) || !isIdValid(manufacturingSchematic) )
+		return false;
+
+	return decrement(player, getDraftSchematicCrc(manufacturingSchematic));
+}
+
+//gets the bioLink objId for the schematic passed in
+obj_id getBioLinkSchematicId(obj_id player, int schematic)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || !exists(player) || schematic == 0 )
+		return obj_id.NULL_ID;
+	
+	if(hasObjVar(player, VAR_TEMP_SCHEMATIC_BIO_LINK + "." + schematic))
+		return getObjIdObjVar(player, VAR_TEMP_SCHEMATIC_BIO_LINK + "." + schematic);
+	
+	return obj_id.NULL_ID;
+}

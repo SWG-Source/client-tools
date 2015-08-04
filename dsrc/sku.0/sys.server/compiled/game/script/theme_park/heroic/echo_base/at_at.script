@@ -1,0 +1,321 @@
+include library.ai_lib;
+include library.beast_lib;
+include library.instance;
+include library.pclib;
+include library.pet_lib;
+include library.trial;
+include library.utils;
+
+trigger OnAttach()
+{
+	detachScript(self, "ai.creature_combat");
+	//aiEquipPrimaryWeapon(self);
+	removeTriggerVolume(ai_lib.ALERT_VOLUME_NAME);
+	removeTriggerVolume(ai_lib.AGGRO_VOLUME_NAME);
+	setRegenRate(self, HEALTH, 0);
+	setForceShowHam(self, true);
+
+	obj_id parent = trial.getParent(self);
+
+	if(!isIdValid(parent))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int team = instance.getInstanceTeam(parent);
+
+	if(team == 1)
+	{
+		int currentHitpoints = getMaxHealth(self);
+		int hitPointAdjust = currentHitpoints / 5; //20% increase for Rebel Instance (makes it harder)
+		currentHitpoints += hitPointAdjust;
+		trial.setHp(self, currentHitpoints);
+	}
+
+	messageTo(self, "findTarget", null, rand(5.0f, 10.0f), false);
+	messageTo(self, "findVehicleTarget", null, rand(5.0f, 10.0f), false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitateTarget(obj_id target)
+{
+	if(!isIdValid(target))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!isPlayer(target) && !pet_lib.isPet(target) && !beast_lib.isBeast(target))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(aiIsKiller(self))
+	{
+		if(pet_lib.isPet(target))
+		{
+			pet_lib.killPet(target);
+		}
+		else if(beast_lib.isBeast(target))
+		{
+			beast_lib.killBeast(target, self);
+		}
+		else
+		{
+			pclib.coupDeGrace(target, self);
+		}
+	}
+
+	trial.bumpSession(self, "target");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler findTarget()
+{
+	//If they are invuln - then the battlefield portion is over - stop shooting...you won't do damage anyway.
+	if(isInvulnerable(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	obj_id [] allTar = getObjectsInCone(self, utils.findLocInFrontOfTarget(self, 96.0f), 96.0f, 30.0f);
+	resizeable obj_id[] validTargets = new obj_id[0];
+
+	if (allTar == null || allTar.length == 0)
+	{
+		messageTo(self, "findTarget", null, rand(2.0f, 4.0f), false);
+		return SCRIPT_CONTINUE;
+	}
+
+	for (int i=0;i<allTar.length;i++)
+	{
+
+		if (allTar[i] == self)
+			continue;
+
+		if (!pvpCanAttack(self, allTar[i]))
+			continue;
+
+		validTargets.add(allTar[i]);
+	}
+
+	if (validTargets == null || validTargets.length == 0)
+	{
+		messageTo(self, "findTarget", null, rand(2.0f, 4.0f), false);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id target = validTargets[rand(0, validTargets.length - 1)];
+
+	if (!isIdValid(target))
+		target = validTargets[rand(0, validTargets.length - 1)];
+
+	if (!isIdValid(target) || !exists(target))
+	{
+		messageTo(self, "findTarget", null, rand(2.0f, 4.0f), false);
+		return SCRIPT_CONTINUE;
+	}
+
+	string templateName = getTemplateName(self);
+	
+	if(templateName.equals("object/mobile/hailfire_droid.iff"))
+	{
+		queueCommand(self, ##"gcw_rocket_launch", target, "", COMMAND_PRIORITY_DEFAULT);
+	}
+	else
+	{
+		queueCommand(self, ##"hoth_atat_shoot", target, "", COMMAND_PRIORITY_DEFAULT);
+	}
+
+	messageTo(self, "findTarget", null, rand(4.0f, 6.0f), false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id weapon, int[] damage)
+{
+	int time = utils.getIntScriptVar(self, "last_mine");
+
+	int now = getGameTime();
+	if (now > time)
+	{
+		queueCommand(self, ##"hoth_atat_mine", self, "", COMMAND_PRIORITY_DEFAULT);
+		utils.setScriptVar(self, "last_mine", now + 12);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler atatGeneratorShoot()
+{
+	obj_id[] generator = trial.getObjectsInInstanceByObjVar(self, "hoth_generator");
+
+	if(generator == null || generator.length < 0)
+	{
+		LOG("doLogging", "Main Generator does not exist - list is null or zero - no 'charged shot' will be fired.");
+		return SCRIPT_CONTINUE;
+	}
+
+	location loc = getLocation(self);
+	obj_id player = getClosestPlayer(loc);
+
+	if(!isIdValid(player))
+	{
+		//we always want an audience
+		player = self;
+	}
+	if(generator.length > 1)
+	{
+		LOG("doLogging", "Mulitple Main Generators same instance shooting with ATAT(" + self + ") at Generator[0](" + generator[0] + ").");
+	}
+	else
+	{
+		if(!isIdValid(generator[0]))
+		{
+			LOG("doLogging", "Generator obj_id is Invalid! did not exist in instance - can not blow up.");
+			return SCRIPT_CONTINUE;
+		}
+		location generatorLoc = getLocation(generator[0]);
+
+		LOG("doLogging", "ATAT(" + self + ") shoots and destroys Main Generator(" + generator[0] + ").");
+
+		createClientProjectileObjectToLocation(player, "object/weapon/ranged/turret/shared_turret_energy.iff", self, "muzzle", generatorLoc, 125.0f, 5.0f, false, 0, 0, 0, 0);
+		createClientProjectileObjectToLocation(player, "object/weapon/ranged/turret/shared_turret_energy.iff", self, "muzzle2", generatorLoc, 125.0f, 5.0f, false, 0, 0, 0, 0);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler findVehicleTarget()
+{
+	if(isInvulnerable(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	obj_id [] allTar = getObjectsInCone(self, utils.findLocInFrontOfTarget(self, 96.0f), 96.0f, 30.0f);
+	resizeable obj_id[] validTargets = new obj_id[0];
+
+	if (allTar == null || allTar.length == 0)
+	{
+		messageTo(self, "findVehicleTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	for (int i=0;i<allTar.length;i++)
+	{//STATE_RIDING_MOUNT
+		if(isPlayer(allTar[i]) && pvpCanAttack(self, allTar[i]) && getState(allTar[i], STATE_RIDING_MOUNT) == 1)
+		{
+			LOG("maggie", "Player Found - Added and Exited");
+			validTargets.add(allTar[i]);
+			break;
+		}
+		if(ai_lib.isVehicle(allTar[i]) && allTar[i] != self && pvpCanAttack(self, allTar[i]) && !isDead(allTar[i]))
+			validTargets.add(allTar[i]);
+	}
+
+	if (validTargets == null || validTargets.length == 0)
+	{
+		messageTo(self, "findVehicleTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id target = validTargets[rand(0, validTargets.length - 1)];
+
+	if (!isIdValid(target) || !exists(target))
+	{
+		messageTo(self, "findVehicleTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	location loc = getLocation(self);
+	obj_id player = getClosestPlayer(loc);
+
+	if(!isIdValid(player))
+	{
+		player = self;
+	}
+	if(getDistance(self, target) < 20.0f)
+	{
+		//we are too close - this would look bad visually
+		messageTo(self, "findVehicleTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!isDead(target) && exists(target))
+	{
+		queueCommand(self, ##"hoth_atat_vehicle_shoot", target, "", COMMAND_PRIORITY_DEFAULT);
+		createClientProjectileObjectToObject(player, "object/weapon/ranged/turret/shared_turret_energy.iff", self, "l_turretgun", target, "root", 125.0f, 3.0f, false, 0, 0, 0, 0);
+		createClientProjectileObjectToObject(player, "object/weapon/ranged/turret/shared_turret_energy.iff", self, "r_turretgun", target, "root", 125.0f, 3.0f, false, 0, 0, 0, 0);
+		//damage(target, DAMAGE_ENERGY, HIT_LOCATION_BODY, rand(15000, 30000));
+
+	}
+	messageTo(self, "findVehicleTarget", null, rand(2.0f, 4.0f), false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	int advanceObjvar;
+	if(hasObjVar(self, "advancePoint") && hasObjVar(self, "atatNumber"))
+	{
+		advanceObjvar = getIntObjVar(self, "advancePoint");
+		trial.sendSequenceTrigger(getStringObjVar(self, "atatNumber") + "_spawnPoint_" + advanceObjvar);
+		LOG("maggie", getStringObjVar(self, "atatNumber") + " has advanced to Point: " + advanceObjvar);
+	}
+	else
+	{
+		string atatNumber = getStringObjVar(self, "atatNumber");
+		trial.sendSequenceTrigger(atatNumber + "_respawn");
+		LOG("maggie", getStringObjVar(self, "atatNumber") + " has defaulted to original spawn location.");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler ATATforceCheck()
+{
+	string atatNumber = "";
+	int maxDeathCount = 5;
+	int checkpoint = 0;
+	int numDead = 0;
+
+	if(isDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	//ATAT has had the forceCheck objvar added
+	if(hasObjVar(self, "checkpoint") && hasObjVar(self, "forceDead"))
+	{
+		numDead = getIntObjVar(self, "forceDead");
+		if(numDead >= maxDeathCount/* || numDead >= maxDeathCount -1*/)
+		{
+			//get ATAT number for triggerId
+			if(hasObjVar(self, "atatNumber"))
+			{
+				//get atatNumber to determine who to reinforce
+				atatNumber = getStringObjVar(self, "atatNumber");
+				//determine location to spawn new force
+				if(hasObjVar(self, "checkpoint"))
+				{
+					checkpoint = getIntObjVar(self, "checkpoint");
+				}
+
+				//build the triggerId to call - and call it - example: at1_checkpoint_1
+				trial.sendSequenceTrigger(atatNumber + "_spawnForce_" + checkpoint);
+				//set the forces objvar to zero since we've respawn their reinforcements
+				setObjVar(self, "forceDead", 0);
+
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler ATATnumDeadIncrement()
+{
+	if(hasObjVar(self, "forceDead"))
+	{
+		int numDead = getIntObjVar(self, "forceDead");
+		numDead++;
+		setObjVar(self, "forceDead", numDead);
+	}
+	else //needs a numDead objvar - set to 1
+	{
+		setObjVar(self, "forceDead", 1);
+	}
+	return SCRIPT_CONTINUE;
+}

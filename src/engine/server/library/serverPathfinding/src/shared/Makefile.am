@@ -1,0 +1,70 @@
+AUTOMAKE_OPTIONS=foreign
+noinst_LTLIBRARIES=libserverPathfindingshared.la
+libserverPathfindingshared_la_CXXFLAGS=-I$(srcdir)/../../include/public \
+	-I$(srcdir)/../../include/private \
+	-I$(srcdir)/../../src/$(platform) \
+	-I$(engine_dir)/server/library/serverGame/include/public \
+	-I$(engine_dir)/server/library/serverScript/include/public \
+	-I$(engine_dir)/server/library/serverUtility/include/public \
+	-I$(engine_dir)/server/library/serverNetworkMessages/include/public \
+	-I$(engine_dir)/shared/library/sharedCollision/include/public \
+	-I$(engine_dir)/shared/library/sharedCompression/include/public \
+	-I$(engine_dir)/shared/library/sharedDebug/include/public \
+	-I$(engine_dir)/shared/library/sharedFile/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundation/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundationTypes/include/public \
+	-I$(engine_dir)/shared/library/sharedGame/include/public \
+	-I$(engine_dir)/shared/library/sharedLog/include/public \
+	-I$(engine_dir)/shared/library/sharedMath/include/public \
+	-I$(engine_dir)/shared/library/sharedMathArchive/include/public \
+	-I$(engine_dir)/shared/library/sharedMessageDispatch/include/public \
+	-I$(engine_dir)/shared/library/sharedMemoryManager/include/public \
+	-I$(engine_dir)/shared/library/sharedNetwork/include/public \
+	-I$(engine_dir)/shared/library/sharedNetworkMessages/include/public \
+	-I$(engine_dir)/shared/library/sharedObject/include/public \
+	-I$(engine_dir)/shared/library/sharedPathfinding/include/public \
+	-I$(engine_dir)/shared/library/sharedRandom/include/public \
+	-I$(engine_dir)/shared/library/sharedSkillSystem/include/public \
+	-I$(engine_dir)/shared/library/sharedSynchronization/include/public \
+	-I$(engine_dir)/shared/library/sharedTerrain/include/public \
+	-I$(engine_dir)/shared/library/sharedThread/include/public \
+	-I$(engine_dir)/shared/library/sharedUtility/include/public \
+	-I$(stlport_dir)/stlport \
+	-I$(boost_dir) \
+	-I$(singleton_dir)/include \
+	-I$(udplibrary_dir) \
+	-I$(archive_dir)/include \
+	-I$(unicode_dir)/include \
+	-I$(unicodeArchive_dir)/include/public \
+	-I$(localization_dir)/include \
+	-I$(localizationArchive_dir)/include/public \
+	-I$(crypto_dir)/include \
+	-I$(fileInterface_dir)/include/public \
+	-I$(game_dir)/shared/library/swgSharedUtility/include/public \
+	-Wno-ctor-dtor-privacy
+libserverPathfindingshared_la_SOURCES=CityPathGraph.cpp \
+	CityPathGraph.h \
+	CityPathGraphManager.cpp \
+	CityPathGraphManager.h \
+	CityPathNode.cpp \
+	CityPathNode.h \
+	FirstServerPathfinding.h \
+	PathAutoGenerator.cpp \
+	PathAutoGenerator.h \
+	ServerPathBuilder.cpp \
+	ServerPathBuilder.h \
+	ServerPathBuildManager.cpp \
+	ServerPathBuildManager.h \
+	ServerPathfindingConstants.cpp \
+	ServerPathfindingConstants.h \
+	ServerPathfinding.cpp \
+	ServerPathfinding.h \
+	ServerPathfindingMessaging.cpp \
+	ServerPathfindingMessaging.h \
+	ServerPathfindingNotification.cpp \
+	ServerPathfindingNotification.h \
+	SetupServerPathfinding.cpp \
+	SetupServerPathfinding.h 
+
+
+include $(engine_dir)/../make_include/engine.include

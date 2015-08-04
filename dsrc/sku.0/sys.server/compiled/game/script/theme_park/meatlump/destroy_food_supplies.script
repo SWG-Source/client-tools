@@ -1,0 +1,350 @@
+include library.buff;
+include library.collection;
+include library.consumable;
+include library.sui;
+include library.stealth;
+include library.utils;
+
+const boolean LOGGING_ON				= false; 
+
+const string VAR_PREFIX					= "meatlump_food_supplies"; 
+const string PID_NAME					= VAR_PREFIX + ".pid"; 
+const string CALIBRATION_GOAL				= VAR_PREFIX + ".goal";
+const string CALIBRATION_TRIES				= VAR_PREFIX + ".tries";
+const string CALIBRATION_MAX_TRIES			= VAR_PREFIX + ".max_tries";
+
+const string CAPTION					= "Mix Biological Yeast";
+const string DEVICE_TEMPLATE				= "object/tangible/meatlump/event/slicing_device_meatlump_food.iff";
+const string DEVICE_OBJVAR				= "puzzle";
+
+const string_id SID_OPEN				= new string_id("meatlump/meatlump", "food_calibration_use");
+const string_id YOU_FAILED				= new string_id("meatlump/meatlump", "you_failed");
+const string_id YOU_CANCELED_EARLY			= new string_id("meatlump/meatlump", "you_canceled_early");
+const string_id YOU_HAVE_DEBUFF				= new string_id("meatlump/meatlump", "you_have_debuff");
+const string_id YOU_NEED_DEVICE				= new string_id("meatlump/meatlump", "you_need_device");
+
+const string CALIBRATION_ATTEMPTS_REMAINING		= "@meatlump/meatlump:food_calibration_attempts_remaining";
+const string CALIBRATION_SUCCESS			= "@meatlump/meatlump:food_calibration_success";
+const string CALIBRATION_FAILURE			= "@meatlump/meatlump:food_calibration_failure";
+const string CALIBRATION_DESCRIPTION			= "@meatlump/meatlump:food_calibration_description";
+const string SUI_SLIDER1				= "@meatlump/meatlump:food_calibration_slider1";
+const string SUI_SLIDER2				= "@meatlump/meatlump:food_calibration_slider2";
+const string SUI_SLIDER3				= "@meatlump/meatlump:food_calibration_slider3";
+const string FOOD_PUZZLE_BUFF				= "food_supplies_puzzle_buff";
+
+const int DEFAULT_TRIES					= 10;
+const int BUFF_TRIES_INCREASE				= 10;
+
+const int[] DEFAULT_GOAL_CURRENT_ARRAY = 
+{
+	0, 
+	0,  
+	0
+};
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//add the use option
+	mi.addRootMenu(menu_info_types.ITEM_USE, SID_OPEN);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	obj_id collectionItem = self;
+	//check to make sure the slot collection data is on the object
+
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	else if(!collection.canCollectCollectible(player, self))
+		return SCRIPT_CONTINUE;
+	else if(buff.hasBuff(player, "food_supplies_puzzle_downer"))
+	{
+		sendSystemMessage(player, YOU_HAVE_DEBUFF);
+		return SCRIPT_CONTINUE;		
+	}
+	else if(!consumable.decrementObjectInventoryOrEquipped(player, DEVICE_TEMPLATE, DEVICE_OBJVAR))
+	{
+		sendSystemMessage(player, YOU_NEED_DEVICE);
+		return SCRIPT_CONTINUE;		
+	}
+	
+	closeOldWindow(player);
+	blog("OnObjectMenuSelect");
+	yeastAdjustmentPuzzle(collectionItem, player);
+
+	return SCRIPT_CONTINUE;
+}
+
+//This is the function that creates the player SUI. The SUI is refreshed each time the player
+//uses the UI until they cancel, lose or they win.
+boolean yeastAdjustmentPuzzle(obj_id collectionItem, obj_id player) 
+{
+	blog("gyroReceiverPuzzle - INIT");
+	if(!isIdValid(collectionItem) || !exists(collectionItem))
+		return false;
+	else if(!isIdValid(player) || !exists(player))
+		return false;	
+	else if(!collection.checkState(player)) //player interrupted
+		return false;
+		
+	dictionary params = new dictionary();
+	int pid = createSUIPage("/Script.calibration.game3", collectionItem, player);
+	sui.setPid(player, pid, PID_NAME);
+	setSUIAssociatedLocation(pid, collectionItem);
+	setSUIMaxRangeToObject(pid, collection.MAX_RANGE_TO_COLLECT);
+	params.put("callingPid", pid);
+
+	blog("gyroReceiverPuzzle - PID: "+pid);
+
+	int[] goal = new int[DEFAULT_GOAL_CURRENT_ARRAY.length];
+	System.arraycopy(DEFAULT_GOAL_CURRENT_ARRAY, 0, goal, 0, DEFAULT_GOAL_CURRENT_ARRAY.length);
+
+	if(goal.length != DEFAULT_GOAL_CURRENT_ARRAY.length)
+		return false;
+		
+	for(int i = 0; i < goal.length; i++) 
+		goal[i] = rand(0, 100);
+
+
+	int calibrationTries = DEFAULT_TRIES;
+	int calibrationMaxTries = DEFAULT_TRIES;
+	//CHECK FOR BUFF HERE
+	if(buff.hasBuff(player, FOOD_PUZZLE_BUFF))
+	{
+		calibrationTries += BUFF_TRIES_INCREASE;
+		calibrationMaxTries += BUFF_TRIES_INCREASE;
+		blog("HASBUFF: TRUE");
+	}
+		blog("HASBUFF?");
+	
+	utils.setScriptVar(collectionItem, CALIBRATION_GOAL, goal);
+	utils.setScriptVar(collectionItem, CALIBRATION_TRIES, calibrationTries);
+	utils.setScriptVar(collectionItem, CALIBRATION_MAX_TRIES, calibrationMaxTries);
+
+	setSUIProperty(pid, "top.sliders.1.slider", "Value", "100");
+	setSUIProperty(pid, "top.sliders.2.slider", "Value", "100");
+	setSUIProperty(pid, "top.sliders.3.slider", "Value", "100");
+
+	setSUIProperty(pid, "top.sliders.1.title", "Text", SUI_SLIDER1);
+	setSUIProperty(pid, "top.sliders.2.title", "Text", SUI_SLIDER2);
+	setSUIProperty(pid, "top.sliders.3.title", "Text", SUI_SLIDER3);
+
+	setSUIProperty(pid, "bg.caption.lbltitle", "Text", CAPTION);
+	setSUIProperty(pid, "description.desc", "Text", CALIBRATION_DESCRIPTION);
+	setSUIProperty(pid, "description.attempts", "Text", CALIBRATION_ATTEMPTS_REMAINING + " 100%");
+
+	//this loop colors the bottom squares for the SUI 
+	//based on the random goal ints received above.
+	for(int i = 0; i < goal.length; i++) 
+	{
+		float pct = (float)goal[i] / 100.0f;
+		int dec = (int)(255*pct);
+		string hex = Integer.toHexString(dec);
+		if(hex.length() == 1)
+			hex = "0" + hex;
+		string hexValue = "#" + hex + hex + hex;
+		setSUIProperty(pid, "top.bars.server." + (i+1), "Color", hexValue);
+	}
+
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "%buttonOK%", "yeastReceiverPuzzleCallback");
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "%buttonOK%", "top.sliders.1.slider", "Value");
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "%buttonOK%", "top.sliders.2.slider", "Value");
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "%buttonOK%", "top.sliders.3.slider", "Value");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onClosedCancel, "%button0%", "closeSui");
+
+	setSUIAssociatedObject(pid, player);
+	setSUIMaxRangeToObject(pid, 10.0f);
+	showSUIPage(pid);
+	blog("gyroReceiverPuzzle - SUI Created");
+	flushSUIPage(pid);
+	return true;
+}
+
+//The messageHandler that handles the slider variations 
+messageHandler yeastReceiverPuzzleCallback() 
+{
+	blog("gyroReceiverPuzzleCallback - INIT");
+
+	string widgetName = params.getString("eventWidgetName");
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	else if(!collection.checkState(player)) //player interrupted
+		return SCRIPT_CONTINUE;
+		
+	int pid = sui.getPid(player, PID_NAME);
+	blog("gyroReceiverPuzzleCallback - PID: "+pid);
+	if(widgetName.equalsIgnoreCase("btnCancel") || widgetName.equalsIgnoreCase("")) 
+	{
+		if(buff.applyBuff(player, "food_supplies_puzzle_downer"));
+		{
+			sendSystemMessage(player, YOU_CANCELED_EARLY);
+		}	
+		blog("gyroReceiverPuzzleCallback - btnCancel");
+		removePlayerVars(player);
+		forceCloseSUIPage(pid);
+		return SCRIPT_CONTINUE;
+	} 
+	blog("gyroReceiverPuzzleCallback - buttonOK");
+
+	int[] current = new int[DEFAULT_GOAL_CURRENT_ARRAY.length];
+	System.arraycopy(DEFAULT_GOAL_CURRENT_ARRAY, 0, current, 0, DEFAULT_GOAL_CURRENT_ARRAY.length);
+	
+	int[] goal = utils.getIntArrayScriptVar(self, CALIBRATION_GOAL);
+	int tries = utils.getIntScriptVar(self, CALIBRATION_TRIES);
+	int max_tries = utils.getIntScriptVar(self, CALIBRATION_MAX_TRIES);
+
+	boolean win = true;
+	blog("gyroReceiverPuzzleCallback - loop start");
+	//this loop takes the slider changes the player made and makes a comparison to the
+	//hex in the goal. If the player is 5 above or below we let them have it.
+	for(int i = 0; i < current.length; i++) 
+	{
+		current[i] = utils.stringToInt(params.getString("top.sliders." + (i+1) + ".slider.Value"));
+		int delta = goal[i] - current[i];
+		if(delta < -5 || delta > 5)
+			win = false;
+
+		float pct = (float)current[i] / 100.0f;
+		int dec = (int)(255*pct);
+		string hex = Integer.toHexString(dec);
+		if(hex.length() == 1)
+			hex = "0" + hex;
+		string hexValue = "#" + hex + hex + hex;
+		setSUIProperty(pid, "top.bars.player." + (i+1), "Color", hexValue);
+	}
+	blog("gyroReceiverPuzzleCallback - loop finish");
+	//decrement the player attempts.
+	tries--;
+	int integrity = (int)(((float)tries / (float)max_tries) * 100);
+
+	if(win) 
+	{
+		blog("gyroReceiverPuzzleCallback - YOU WIN");
+		rewardPlayer(self, player);
+	} 
+	else if(tries <= 0) 
+	{
+		blog("gyroReceiverPuzzleCallback - I LOSE");
+
+		subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "%buttonOK%", "noCallback");
+		setSUIProperty(pid, "%buttonOK%", "Visible", "false");
+		setSUIProperty(pid, "top.sliders.1.slider", "GetsInput", "false");
+		setSUIProperty(pid, "top.sliders.2.slider", "GetsInput", "false");
+		setSUIProperty(pid, "top.sliders.3.slider", "GetsInput", "false");
+		setSUIProperty(pid, "description.desc", "Text", CALIBRATION_FAILURE);
+		//color all the bars Red
+		for(int i = 0; i < current.length; i++) {
+
+			float pct = (float)current[i] / 100.0f;
+			int dec = (int)(255*pct);
+			string hex = Integer.toHexString(dec);
+			if(hex.length() == 1)
+				hex = "0" + hex;
+			string hexValue = "#" + hex + "0000";
+			setSUIProperty(pid, "top.bars.player." + (i+1), "Color", hexValue);
+			setSUIProperty(pid, "top.bars.server." + (i+1), "Color", hexValue);			
+		}
+		setSUIProperty(pid, "description.attempts", "Text", CALIBRATION_ATTEMPTS_REMAINING + " " + integrity + "%");
+		if(buff.applyBuff(player, "food_supplies_puzzle_downer"));
+		{
+			sendSystemMessage(player, YOU_FAILED);
+		}
+		closeOldWindow(player);
+		removePlayerVars(player);
+	} 
+	else 
+	{
+		blog("gyroReceiverPuzzleCallback - Try again");
+		setSUIProperty(pid, "description.attempts", "Text", CALIBRATION_ATTEMPTS_REMAINING + " " + integrity + "%");
+	}
+
+	utils.setScriptVar(self, CALIBRATION_TRIES, tries);
+	flushSUIPage(pid);
+	return SCRIPT_CONTINUE;
+}
+
+//This function gives the player a win
+boolean rewardPlayer(obj_id collectionItem, obj_id player)
+{
+	blog("rewardPlayer - init");
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	else if(!exists(collectionItem) || !exists(player))
+		return false;
+	blog("rewardPlayer - validation complete");
+
+	if(!collection.rewardPlayerCollectionSlot(player, collectionItem))
+	{
+		blog("rewardPlayer - rewardPlayerCollectionSlot = FAIL!!!");
+		closeOldWindow(player);
+		removePlayerVars(player);
+		return false;
+	}
+	blog("rewardPlayer - rewardPlayerCollectionSlot = SUCCESS");
+	
+	closeOldWindow(player);
+	removePlayerVars(player);
+
+	//false not to create SUI
+	return true;
+}
+
+messageHandler closeSui()
+{
+	blog("closeSui - init");
+
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	if(buff.applyBuff(player, "food_supplies_puzzle_downer"));
+	{
+		blog("closeSui applying food_supplies_puzzle_downer");
+	
+		sendSystemMessage(player, YOU_CANCELED_EARLY);
+	}
+
+	blog("closeSui");
+	closeOldWindow(player);
+	removePlayerVars(player);
+	return SCRIPT_CONTINUE;
+}
+
+void closeOldWindow(obj_id player)
+{
+	blog("closeOldWindow - init");
+
+	int pid = sui.getPid(player, PID_NAME);
+	blog("closeOldWindow - pid: "+pid);
+	if(pid > -1)
+	{
+		blog("closeOldWindow - force closing: "+pid);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+	}
+}
+
+void removePlayerVars(obj_id player)
+{
+	utils.removeScriptVarTree(player, VAR_PREFIX);
+	utils.removeObjVar(player, VAR_PREFIX);
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON)
+		LOG("minigame",msg);
+	return true;
+}

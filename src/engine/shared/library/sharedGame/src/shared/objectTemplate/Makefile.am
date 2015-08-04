@@ -1,0 +1,90 @@
+AUTOMAKE_OPTIONS=foreign
+lib_LTLIBRARIES=libsharedGamesharedobjectTemplate.la
+libsharedGamesharedobjectTemplate_la_CXXFLAGS=-I$(srcdir)/../../../include/public \
+	-I$(srcdir)/../../../include/private \
+	-I$(engine_dir)/shared/library/sharedCompression/include/public \
+	-I$(engine_dir)/shared/library/sharedDebug/include/public \
+	-I$(engine_dir)/shared/library/sharedFile/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundation/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundationTypes/include/public \
+	-I$(engine_dir)/shared/library/sharedLog/include/public \
+	-I$(engine_dir)/shared/library/sharedMath/include/public \
+	-I$(engine_dir)/shared/library/sharedMessageDispatch/include/public \
+	-I$(engine_dir)/shared/library/sharedMemoryManager/include/public \
+	-I$(engine_dir)/shared/library/sharedObject/include/public \
+	-I$(engine_dir)/shared/library/sharedRandom/include/public \
+	-I$(engine_dir)/shared/library/sharedSynchronization/include/public \
+	-I$(engine_dir)/shared/library/sharedTerrain/include/public \
+	-I$(engine_dir)/shared/library/sharedThread/include/public \
+	-I$(engine_dir)/shared/library/sharedUtility/include/public \
+	 \
+	-I$(boost_dir) \
+	-I$(udplibrary_dir) \
+	-I$(archive_dir)/include \
+	-I$(unicode_dir)/include \
+	-I$(unicodeArchive_dir)/include/public \
+	-I$(localization_dir)/include \
+	-I$(localizationArchive_dir)/include/public \
+	-I$(fileInterface_dir)/include/public \
+	-I$(game_dir)/shared/library/swgSharedUtility/include/public \
+	-Wno-ctor-dtor-privacy
+libsharedGamesharedobjectTemplate_la_SOURCES=SharedBattlefieldMarkerObjectTemplate.cpp \
+	SharedBattlefieldMarkerObjectTemplate.h \
+	SharedBuildingObjectTemplate.cpp \
+	SharedBuildingObjectTemplate.h \
+	SharedCellObjectTemplate.cpp \
+	SharedCellObjectTemplate.h \
+	SharedConstructionContractObjectTemplate.cpp \
+	SharedConstructionContractObjectTemplate.h \
+	SharedCreatureObjectTemplate.cpp \
+	SharedCreatureObjectTemplate.h \
+	SharedDraftSchematicObjectTemplate.cpp \
+	SharedDraftSchematicObjectTemplate.h \
+	SharedFactoryObjectTemplate.cpp \
+	SharedFactoryObjectTemplate.h \
+	SharedGroupObjectTemplate.cpp \
+	SharedGroupObjectTemplate.h \
+	SharedGuildObjectTemplate.cpp \
+	SharedGuildObjectTemplate.h \
+	SharedInstallationObjectTemplate.cpp \
+	SharedInstallationObjectTemplate.h \
+	SharedIntangibleObjectTemplate.cpp \
+	SharedIntangibleObjectTemplate.h \
+	SharedJediManagerObjectTemplate.cpp \
+	SharedJediManagerObjectTemplate.h \
+	SharedManufactureSchematicObjectTemplate.cpp \
+	SharedManufactureSchematicObjectTemplate.h \
+	SharedMissionObjectTemplate.cpp \
+	SharedMissionObjectTemplate.h \
+	SharedObjectTemplateClientData.cpp \
+	SharedObjectTemplateClientData.h \
+	SharedObjectTemplateInterface.cpp \
+	SharedObjectTemplateInterface.h \
+	SharedObjectTemplate.cpp \
+	SharedObjectTemplate.h \
+	SharedPlayerQuestObjectTemplate.h \
+	SharedPlayerQuestObjectTemplate.cpp \
+	SharedPlayerObjectTemplate.cpp \
+	SharedPlayerObjectTemplate.h \
+	SharedResourceContainerObjectTemplate.cpp \
+	SharedResourceContainerObjectTemplate.h \
+	SharedShipObjectTemplate.cpp \
+	SharedShipObjectTemplate.h \
+	SharedStaticObjectTemplate.cpp \
+	SharedStaticObjectTemplate.h \
+	SharedTangibleObjectTemplate.cpp \
+	SharedTangibleObjectTemplate.h \
+	SharedTerrainSurfaceObjectTemplate.cpp \
+	SharedTerrainSurfaceObjectTemplate.h \
+	SharedUniverseObjectTemplate.cpp \
+	SharedUniverseObjectTemplate.h \
+	SharedVehicleObjectTemplate.cpp \
+	SharedVehicleObjectTemplate.h \
+	SharedWaypointObjectTemplate.cpp \
+	SharedWaypointObjectTemplate.h \
+	SharedWeaponObjectTemplate.cpp \
+	SharedWeaponObjectTemplate.h
+
+libsharedGamesharedobjectTemplate_la_LDFLAGS=-avoid-version
+
+include $(engine_dir)/../make_include/engine.include

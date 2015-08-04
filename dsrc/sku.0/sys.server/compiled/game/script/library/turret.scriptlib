@@ -1,0 +1,484 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        turret.scriptlib
+ * Description:  function library for supplemental turret ai and functionality
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.utils;
+include library.factions;
+include library.battlefield;
+
+/***** CONSTANTS *******************************************************/
+
+const string ALERT_VOLUME_NAME = "alertTriggerVolume";
+const float ALERT_VOLUME_SIZE = 120.0f;
+const float FACTION_TURRET_RANGE = 96.0f;
+const float TURRET_RANGE = 80.0f;
+
+const string VOL_TOO_CLOSE	= "volTooClose";
+const float RANGE_TOO_CLOSE = 10f;
+
+const string VAR_TURRET_BASE				= "turret";
+
+const string VAR_IS_ACTIVE					= VAR_TURRET_BASE + ".isActive";
+const string VAR_IS_GENERIC					= VAR_TURRET_BASE + ".isGeneric";
+const string SCRIPTVAR_ENGAGED				= VAR_TURRET_BASE + ".engaged";
+const string SCRIPTVAR_TARGETS				= VAR_TURRET_BASE + ".targetList";
+
+const string OBJVAR_CAN_ATTACK = "turret.validTargetObjVar"; // this is the objvar the turret will look for on the target to see
+															//  if the target is valid - generic turrets only
+const string OBJVAR_TURRET_FRIEND = "turret.isFriend";	// friends never get attacked
+
+
+/***** FUNCTIONS *******************************************************/
+/***********************************************************************
+ * @brief	sets a turrets status to active
+ *
+ * @return 	void
+ ***********************************************************************/
+void activateTurret( obj_id turret )
+{
+	if ( !isIdValid(turret) )
+		return;
+
+	if( !hasObjVar(turret, "objWeapon") )
+		if ( !createWeapon(turret) )
+			return;
+
+	setObjVar(turret, VAR_IS_ACTIVE, true);
+}
+
+/***********************************************************************
+ * @brief	sets a turrets status to active
+ *
+ * @return 	void
+ ***********************************************************************/
+void deactivateTurret( obj_id turret )
+{
+	if ( !isIdValid(turret) )
+		return;
+
+	removeObjVar(turret, VAR_IS_ACTIVE);
+}
+
+/***********************************************************************
+ * @brief	determines if a turret is active
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isActive( obj_id turret )
+{
+	if ( !isIdValid(turret) )
+		return false;
+
+	if ( hasObjVar(turret, VAR_IS_ACTIVE) )
+		return true;
+
+	return false;
+}
+
+/***********************************************************************
+ * @brief	sets a turrets status to active
+ *
+ * @return 	void
+ ***********************************************************************/
+void engageTarget(obj_id turret, obj_id target)
+{
+	if ( !isIdValid(turret) || !isIdValid(target) )
+		return;
+
+	if ( !isActive(turret) )
+		return;//already active
+
+	utils.setScriptVar( turret, "ai.combat.isInCombat", true );
+	utils.setScriptVar(turret, SCRIPTVAR_ENGAGED, target);
+	setCombatTarget(turret, target);
+}
+
+/***********************************************************************
+ * @brief	sets a turrets status to active
+ *
+ * @return 	void
+ ***********************************************************************/
+void disengage( obj_id turret )
+{
+	if ( !isIdValid(turret) )
+		return;
+	utils.removeScriptVar( turret, "ai.combat.isInCombat");
+	utils.removeScriptVar(turret, SCRIPTVAR_ENGAGED);
+	setCombatTarget(turret, null);
+}
+
+/***********************************************************************
+ * @brief	determines if a turret is active
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isEngaged( obj_id turret )
+{
+	if ( !isIdValid(turret) )
+		return false;
+
+	if (utils.hasScriptVar( turret, "ai.combat.isInCombat"))
+		return true;
+
+	if ( utils.hasScriptVar(turret, SCRIPTVAR_ENGAGED) )
+		return true;
+
+	return false;
+}
+
+/***********************************************************************
+ * @brief	attempts to create a weapon object for the turret
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean createWeapon( obj_id turret )
+{
+	//LOG("turret","createWeapon: entered...");
+	if ( !isIdValid(turret) )
+		return false;
+
+	if( hasObjVar(turret, "objWeapon") )
+		return false; // already initialized. !
+
+	string strWeaponTemplate;
+	if( hasObjVar(turret, "strWeaponTemplate") )
+		strWeaponTemplate = getStringObjVar(turret, "strWeaponTemplate");
+	else
+		strWeaponTemplate = "object/weapon/ranged/turret/turret_block_large.iff";
+
+	obj_id objWeapon = createObject(strWeaponTemplate, turret, "");
+	if( !isIdValid(objWeapon) )
+	{
+		//LOG("combat_spam", "NULL WEAPON");
+		//LOG("turret","createWeapon: null weapon...");
+		return false;
+	}
+
+	//LOG("combat_spam", "objWeapon is "+objWeapon);
+	//LOG("turret", "objWeapon is "+objWeapon);
+	return setObjVar(turret, "objWeapon", objWeapon);
+}
+
+/***********************************************************************
+ * @brief	identifies if the target is a valid turret target on a GENERIC turret
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isValidTargetGeneric(obj_id turret, obj_id target)
+{
+	if ( !isIdValid(turret) || !isIdValid(target) )
+		return false;
+
+	if ( target == turret )
+		return false;
+
+	location there = getLocation(target);
+	location here = getLocation(turret);
+	if ( !isIdValid(here.cell))
+	{
+		//I am outdoors:
+		if ( there == null || isIdValid(there.cell) )
+			return false;
+	}
+	else
+	{
+		//I am indoors:
+		if ( there.cell != here.cell )
+			return false;//we're in different cells
+	}
+
+	float dist = getDistance(getLocation(turret), getLocation(target));
+	if ( dist > TURRET_RANGE + 1)
+	{
+		//debugSpeakMsg(target, "target is out of range " + dist);
+	 	return false;
+	}
+
+	return canGenericTurretAttackTarget(target);
+}
+
+//
+//  checks to see if this turret is set up as a generic turret
+//
+boolean isGenericTurret(obj_id turret)
+{
+	return hasObjVar(turret, VAR_IS_GENERIC);
+}
+
+//
+//  check the target of a generic turret against the presenc of an objvar
+//
+boolean canGenericTurretAttackTarget(obj_id target)
+{
+	if(!isIdValid(target) || !exists(target))
+	{
+		return false;
+	}
+	
+	if(hasObjVar(target, OBJVAR_TURRET_FRIEND))
+	{
+		return false;
+	}
+
+	obj_id self = getSelf();
+
+	if(!hasObjVar(self, OBJVAR_CAN_ATTACK))
+	{
+		return false;
+	}
+
+	string objvar = getStringObjVar(self, OBJVAR_CAN_ATTACK);
+	if(hasObjVar(target, objvar) || objvar.equals("all") || (objvar.equals("allPlayers") && isPlayer(target)))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+
+/***********************************************************************
+ * @brief	identifies if the target is a valid turret target
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isValidTarget(obj_id turret, obj_id target)
+{
+	if ( !isIdValid(turret) || !isIdValid(target) )
+		return false;
+
+	if ( target == turret )
+		return false;
+
+	location there = getLocation(target);
+	location here = getLocation(turret);
+	if ( !isIdValid(here.cell))
+	{
+		//I am outdoors:
+		if ( there == null || isIdValid(there.cell) )
+			return false;
+	}
+	else
+	{
+		//I am indoors:
+		if ( there.cell != here.cell )
+			return false;//we're in different cells
+	}
+
+	region btlField = battlefield.getBattlefield(turret);
+	if ( btlField != null )
+	{
+		if ( pvpIsEnemy(turret, target) )
+			return true;
+
+		return false;
+	}
+
+	float dist = getDistance(getLocation(turret), getLocation(target));
+	if ( dist > TURRET_RANGE + 1)
+	{
+		//debugSpeakMsg(target, "target is out of range " + dist);
+	 	return false;
+	}
+
+	/* commented out so that default pvp rules determine target validity
+	if ( isPlayer(target) )
+	{
+		boolean canAttack = pvpCanAttack(turret, target);
+		//LOG("turret","turret(" + turret + ") vs target(" + target + "): pvpCanAttack = " + canAttack);
+		return canAttack;
+	}
+	else
+	{
+		string myFaction = factions.getFaction( turret );
+		if ( myFaction == null )
+		{
+			myFaction = factions.getFactionNameByHashCode( pvpGetAlignedFaction( turret ) );
+		}
+
+		string yourFaction = factions.getFaction( target );
+		if ( yourFaction == null )
+		{
+			yourFaction = factions.getFactionNameByHashCode( pvpGetAlignedFaction( target ) );
+		}
+
+		//LOG("turret","turret faction = " + myFaction + " target faction = " + yourFaction);
+		if ( myFaction == null || yourFaction == null )
+			return false;
+
+		if ( factions.areFactionsOpposed(myFaction, yourFaction) )
+			return true;
+	}
+	*/
+
+	//replaces above
+
+	if ( isPlayer(target) )
+	{
+		//debugSpeakMsg(target, "target is player");
+		return pvpCanAttack(turret, target);
+	}
+	else
+	{
+		//debugSpeakMsg(target, "target is not a player");
+		return pvpIsEnemy(turret, target);
+	}
+
+	//return false;
+}
+
+/***********************************************************************
+ * @brief	adds a valid target to the target list
+ *
+ * @return 	void
+ ***********************************************************************/
+void addTarget(obj_id turret, obj_id target)
+{
+	//LOG("turret","addTarget: entered...");
+	if ( !isIdValid(turret) || !isIdValid(target) )
+	{
+		//LOG("turret","addTarget: invalid params");
+		//debugSpeakMsg(target, "I am invalid");
+		return;
+	}
+
+	if ( target == turret )
+		return;
+
+	if(!isGenericTurret(turret))
+	{
+		if ( !isValidTarget(turret, target) )
+		{
+			//debugSpeakMsg(target, "turret thinks I am invalid");
+			//LOG("turret","addTarget: not a valid target!");
+			return;
+		}
+	}
+	else
+	{
+		if(!isValidTargetGeneric(turret, target))
+		{
+			//LOG("turret", "addTarget: not a valid target for generic turret");
+			return;
+		}
+	}
+
+	float dist = getDistance(getLocation(turret), getLocation(target));
+	if ( dist > TURRET_RANGE + 1 /*|| dist < RANGE_TOO_CLOSE*/ )
+	{
+		//debugSpeakMsg(target, "I am out of range");
+		//LOG("turret","addTarget: target not within valid range!");
+		return;
+	}
+
+	if ( !utils.hasScriptVar(turret, SCRIPTVAR_TARGETS) )
+	{
+		resizeable obj_id[] targets = utils.addElement(null, target);
+		//LOG("turret","addTarget: attempting to set targets scriptvar");
+		utils.setBatchScriptVar(turret, SCRIPTVAR_TARGETS, targets);
+		//debugSpeakMsg(target, "adding me to targets list");
+	}
+	else
+	{
+		resizeable obj_id[] targets = utils.getResizeableObjIdBatchScriptVar(turret, SCRIPTVAR_TARGETS);
+		if ( targets != null && targets.length > 0 )
+		{
+			if ( !utils.isElementInArray(targets, target) )
+			{
+				targets = utils.addElement(targets, target);
+				//LOG("turret","addTarget: attempting to set targets scriptvar");
+				utils.setBatchScriptVar(turret, SCRIPTVAR_TARGETS, targets);
+				//LOG("turret","addTarget: targets scriptvar set!");
+				//debugSpeakMsg(target, "adding me to the targets list");
+			}
+		}
+	}
+
+	////LOG("turret","addTarget: fall-thru...");
+	if ( !isEngaged(turret) )
+	{
+		utils.setScriptVar( turret, "ai.combat.isInCombat", true);
+		messageTo(turret, "handleTurretAttack", null, 1, false);
+	}
+}
+
+/***********************************************************************
+ * @brief	adds a valid target to the target list
+ *
+ * @return 	void
+ ***********************************************************************/
+void addTargets(obj_id turret, obj_id[] target)
+{
+	if ( !isIdValid(turret) || (target == null) || (target.length == 0) )
+		return;
+
+	resizeable obj_id[] targets = utils.getResizeableObjIdBatchScriptVar(turret, SCRIPTVAR_TARGETS);
+	for ( int i = 0; i < target.length; i++ )
+	{
+		if ( isValidTarget(turret, target[i]) && !utils.isElementInArray(targets, target) )
+		{
+			targets = utils.addElement(targets, target[i]);
+		}
+	}
+
+	if ( (targets != null) && (targets.length > 0) )
+	{
+		utils.setBatchScriptVar(turret, SCRIPTVAR_TARGETS, targets);
+	}
+
+	if ( !isEngaged(turret) )
+	{
+		utils.setScriptVar( turret, "ai.combat.isInCombat", true);
+		messageTo(turret, "handleTurretAttack", null, 1, false);
+	}
+}
+
+/***********************************************************************
+ * @brief	removes a target from the valid target list
+ *
+ * @return 	void
+ ***********************************************************************/
+void removeTarget(obj_id turret, obj_id target)
+{
+	if ( !isIdValid(turret) || !isIdValid(target) )
+		return;
+
+	if ( !utils.hasScriptVar(turret, SCRIPTVAR_TARGETS) )
+		return;
+
+	resizeable obj_id[] targets = utils.getResizeableObjIdBatchScriptVar(turret, SCRIPTVAR_TARGETS);
+	if ( (targets == null) || (targets.length == 0) )
+		return;
+
+	obj_id engageTarget = utils.getObjIdScriptVar(turret, SCRIPTVAR_ENGAGED);
+
+	int idx = utils.getElementPositionInArray(targets, target);
+	if ( idx > -1 )
+	{
+		if ( isIdValid(engageTarget) )
+		{
+			if ( target == engageTarget )
+			{
+				disengage(turret);
+			}
+		}
+
+		targets = utils.removeElementAt(targets, idx);
+		if ( (targets == null) || (targets.length == 0) )
+		{
+			utils.removeBatchScriptVar(turret, SCRIPTVAR_TARGETS);
+			return;
+		}
+
+		utils.setBatchScriptVar(turret, SCRIPTVAR_TARGETS, targets);
+	}
+}
+

@@ -1,0 +1,208 @@
+//----------------------------------------------------------
+// pcd_ping_response.script
+// -----------------------------------------------------------------------
+// This script is a re-hash of pcd_ping_response.script, altered to function for pets
+// Original script notes listed below.
+//
+// This script is attached to a PCD.  It is setup to respond
+// to a ping initiated by the pet_ping.script attached
+// to a pet.  If the PCD fails to respond to a certain
+// number of ping requests or if the PCD does not think the
+// pinging pet should exist, the pet will destroy
+// itself, dismounting any players prior to destruction.
+//----------------------------------------------------------
+
+include library.callable;
+include library.utils;
+
+//----------------------------------------------------------
+
+const string PCDPING_MESSAGE_PCD_ID_NAME     = "pcdId";
+const string PCDPING_MESSAGE_PET_ID_NAME = "petId";
+const string PCDPING_MESSAGE_MESSAGE_ID_NAME = "messageId";
+const string PCDPING_MESSAGE_RIDER_ID_NAME   = "riderId";
+
+const string PCDPING_PET_MESSAGEHANDLER_POSITIVE_ACK_NAME = "handlePositiveAcknowledgementFromPcd";
+const string PCDPING_PET_MESSAGEHANDLER_NEGATIVE_ACK_NAME = "handleNegativeAcknowledgementFromPcd";
+const string PCDPING_PET_MESSAGEHANDLER_PACK_REQUEST_NAME = "handlePackRequest";
+
+const boolean debug = false;
+
+//----------------------------------------------------------
+
+trigger OnAttach()
+{
+	if (debug)
+		LOG("pcdping-debug", "pcd_ping_response.OnAttach(): self=[" + self + "] entered");
+
+	if (debug)
+		LOG("pcdping-debug", "pcd_ping_response.OnAttach(): self=[" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//---------------------------------------------------------
+/**
+ * This handles the message sent by pet_ping.script's petPingCallback messageHandler.
+ *
+ * The purpose of this messageHandler is to check whether the
+ * pinging pet should exist and respond with the results
+ * to that pet.
+ */
+
+messageHandler handlePetPing()
+{
+	//-- Retrieve message parameters.
+	const obj_id pingPetId = params.getObjId(PCDPING_MESSAGE_PET_ID_NAME);
+	const obj_id riderId = params.getObjId(PCDPING_MESSAGE_RIDER_ID_NAME);
+	const int pingMessageNumber = params.getInt(PCDPING_MESSAGE_MESSAGE_ID_NAME);
+
+	//-- Check which pet we think should be out in the world.
+	obj_id currentPetId = callable.getCDCallable(self);
+	const boolean shouldHavePet = isIdValid(currentPetId);
+
+	if (shouldHavePet)
+	{
+		if (pingPetId == currentPetId)
+		{
+			//-- PCD is controlling a pet and it matches the pet doing the ping.  Send positive acknowledgement.
+			sendPositiveAcknowledgement(self, pingPetId, pingMessageNumber);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//-- PCD is controlling a pet but received a ping from a
+			// different pet.  This indicates that the pet doing the
+			// ping should not be out.
+
+			// -TRF- remove the block that adjusts the PCD's idea of the current pet
+			// once we have our bugs worked out.
+
+			//-- The ping pet is not the PCD's expected pet.  For now,
+			// if there is a rider and that rider is the person holding the
+			// PCD, allow them to stay on board.
+			if (isIdValid(riderId) && isRiderOkayForPcd(self, riderId))
+			{
+				//-- Reset the PCD's idea of the current pet.  This is a hack and should be removed.
+				LOG("pcd-bug", "PCD id=[" + self + "]: received ping from pet id=[" + pingPetId + "] with rider id=[" + riderId + "]: PCD thinks pet id=[" + currentPetId + "] is out.  Reassigning PCD pet due to on-board rider and packing pet id=[" + currentPetId + "].");
+
+				// Destroy the pet that the PCD thinks is current since it is not what the PCD holder is riding.
+				messageTo(currentPetId, PCDPING_PET_MESSAGEHANDLER_PACK_REQUEST_NAME, null, 1, false);
+
+				// Reset our idea of the current pet to the one that is pinging us with the PCD owner on it.
+				callable.setCDCallable(self, pingPetId);
+
+				// Now the nasty part: tell the pet "you're cool!" when it really wasn't.
+				sendPositiveAcknowledgement(self, pingPetId, pingMessageNumber);
+			}
+			else
+			{
+				// Send the nack.
+				sendNegativeAcknowledgement(self, pingPetId, pingMessageNumber, "PCD does not expect pet=[" + pingPetId + "] to be the called pet.  It thinks pet=[" + currentPetId + "] is called.");
+			}
+		}
+	}
+	else
+	{
+		//-- PCD does not think it should be controlling a pet but
+		// just received a ping from a pet.  This indicates that the
+		// pet doing the ping should not be out.
+
+		// -TRF- remove the block that adjusts the PCD's idea of the
+		// current pet once we have our bugs worked
+		// out.
+
+		// No pet should be in the world.  For now, if there is a rider and that
+		// rider is the person holding the PCD, allow them to stay on board.
+		if (isIdValid(riderId) && isRiderOkayForPcd(self, riderId))
+		{
+			//-- Reset the PCD's idea of the current pet.  This is a hack and should be removed.
+			LOG("pcd-bug", "PCD id=[" + self + "]: received ping from pet id=[" + pingPetId + "] with rider id=[" + riderId + "]: PCD thinks no pet is out.  Reassigning PCD pet due to on-board rider.");
+
+			// Reset our idea of the current pet to the one that is pinging us with the PCD owner on it.
+			callable.setCDCallable(self, pingPetId);
+
+			// Now the nasty part: tell the pet "you're cool!" when it really wasn't.
+			sendPositiveAcknowledgement(self, pingPetId, pingMessageNumber);
+		}
+		else
+		{
+			// Send negative ack.
+			sendNegativeAcknowledgement(self, pingPetId, pingMessageNumber, "PCD does not expecting its pet to exist");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//---------------------------------------------------------
+
+dictionary createResponseDictionary(obj_id pcdId, int messageNumber)
+{
+	//-- Create and populate the dictionary.
+	dictionary messageData = new dictionary();
+	messageData.put(PCDPING_MESSAGE_PCD_ID_NAME, pcdId);
+	messageData.put(PCDPING_MESSAGE_MESSAGE_ID_NAME, messageNumber);
+
+	return messageData;
+}
+
+//---------------------------------------------------------
+
+void sendPositiveAcknowledgement(obj_id pcdId, obj_id petId, int messageNumber)
+{
+	//-- Create the response dictionary.
+	dictionary messageData = createResponseDictionary(pcdId, messageNumber);
+
+	//-- Send message.
+	if (debug)
+		LOG("pcdping-debug", "pcd_ping_response.sendPositiveAcknowledgement(): pcdId=[" + pcdId + "], petId=[" + petId + "], messageNumber=[" + messageNumber + "]: sending positive ack now.");
+
+	messageTo(petId, PCDPING_PET_MESSAGEHANDLER_POSITIVE_ACK_NAME, messageData, 1, false);
+}
+
+//---------------------------------------------------------
+
+void sendNegativeAcknowledgement(obj_id pcdId, obj_id petId, int messageNumber, string reason)
+{
+	//-- Create the response dictionary.
+	dictionary messageData = createResponseDictionary(pcdId, messageNumber);
+
+	//-- Send message.
+	LOG("pcdping-pcd", "pcd_ping_response.sendNegativeAcknowledgement(): pcdId=[" + pcdId + "], petId=[" + petId + "], messageNumber=[" + messageNumber + "]: sending negative ack now: reason=[" + reason + "].");
+	messageTo(petId, PCDPING_PET_MESSAGEHANDLER_NEGATIVE_ACK_NAME, messageData, 1, false);
+}
+
+//---------------------------------------------------------
+/**
+ * Determine whether the specified rider is valid for riding on a pet coming from the specified PCD.
+ *
+ * For now we will check if the PCD is ultimately contained by the rider.
+ *
+ * @return true if the PCD is held by the rider; false otherwise.
+ */
+
+boolean isRiderOkayForPcd(obj_id pcdId, obj_id riderId)
+{
+	// Validate args.
+	if (!isIdValid(pcdId) || !isIdValid(riderId))
+		return false;
+
+	// Go up the containment chain of the pcd.  If one of the containers
+	// is the rider, we're good.
+	for (obj_id testObjectId = getContainedBy(pcdId); isIdValid(testObjectId); testObjectId = getContainedBy(testObjectId))
+	{
+		if (testObjectId == riderId)
+		{
+			// One of the container parents of the pcd is the rider we're checking.
+			// This rider is fine to be riding on this pet.
+			return true;
+		}
+	}
+
+	// We didn't find the rider in the pcd's containment chain.  This means the
+	// rider is not holding this PCD.  The rider should not be on the pet.
+	return false;
+}
+
+//---------------------------------------------------------

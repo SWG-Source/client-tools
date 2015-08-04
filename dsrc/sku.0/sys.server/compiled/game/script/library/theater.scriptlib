@@ -1,0 +1,980 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        theater.scriptlib
+ * Description:  scene/theater scriptlib
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+include library.utils;
+include library.player_structure;
+include library.regions;
+
+
+/***** CONSTANTS *******************************************************/
+
+const float BASE_ITEM_AREA						= 3f;
+
+const int PERSIST_TIME							= 604800;
+
+//dictionary defines
+const string DICT_MASTER						= "master";
+const string DICT_CHILDREN						= "children";
+
+//spawnMethod defines
+const int SPAWN_RADIAL							= 0;
+const int SPAWN_DATATABLE_OFFSET				= 1;
+
+//persist defines
+const int PERSIST_NONE							= 0;
+const int PERSIST_ALL							= 1;
+const int PERSIST_SELF_ONLY						= 2;
+
+//datatable column defines
+const string TEMPLATE							= "TEMPLATE";
+const string X									= "X";
+const string Y									= "Y";
+const string Z									= "Z";
+const string YAW								= "YAW";
+
+//template objvars
+const string VAR_THEATER_BASE					= "theater";
+
+const string VAR_TBL							= VAR_THEATER_BASE + ".tbl";
+
+const string VAR_SPAWN_METHOD					= VAR_THEATER_BASE + ".spawnMethod";
+
+const string VAR_PERSIST						= VAR_THEATER_BASE + ".persist";
+const string VAR_PERSIST_TIME					= VAR_THEATER_BASE + ".persistTime";
+
+const string VAR_STAMP							= VAR_THEATER_BASE + ".stamp";
+
+const string VAR_RING_BASE						= VAR_THEATER_BASE + ".ring";
+const string VAR_RING_MIN						= VAR_RING_BASE + ".min";
+const string VAR_RING_MAX						= VAR_RING_BASE + ".max";
+
+const string VAR_SPAWN_LIST						= VAR_THEATER_BASE + ".spawnList";
+
+const string VAR_CHILDREN						= VAR_THEATER_BASE + ".children";
+const string VAR_BUILDINGS						= VAR_THEATER_BASE + ".buildings";
+
+const string VAR_PARENT							= VAR_THEATER_BASE + ".parent";
+
+const string VAR_BEEN_INITIALIZED				= "beenInitialized";
+
+//messageHandlers
+const string HANDLE_THEATER_SETUP				= "handleTheaterSetup";
+const string HANDLE_THEATER_COMPLETE			= "handleTheaterComplete";
+
+
+
+
+
+
+const int NUM_TO_SPAWN = 3;
+const float DELAY_TO_SPAWN = .50f;
+
+
+/***** NEW THEATER FUNCTIONS *******************************************************/
+
+/**
+ * Tests if we can spawn a new theater at a given location. NOTE: there's no current
+ * way to get the slope at a point, so we are just testing the regions at the point.
+ */
+boolean canSpawnTheaterAtLocation(location loc)
+{
+	region[] regionList = getRegionsAtPoint(loc);
+	if (regionList != null)
+	{
+		for (int i = 0; i < regionList.length; ++i)
+		{
+			if (regionList[i] != null)
+			{
+				if (regionList[i].getPvPType() == regions.PVP_REGION_TYPE_BATTLEFIELD_PVP)
+					return false;
+				if (regionList[i].getPvPType() == regions.PVP_REGION_TYPE_BATTLEFIELD_PVE)
+					return false;
+				if (regionList[i].getGeographicalType() == regions.GEO_CITY)
+					return false;
+			}
+		}
+	}
+	return true;
+}
+
+
+
+/***** OLD THEATER FUNCTIONS *******************************************************/
+
+
+/*****************************************************************
+ * @brief spawns a theater given the target base object
+ *
+ * @param obj_id target
+ *
+ * @return boolean; false on error
+ ******************************************************************/
+boolean spawn(obj_id target)
+{
+	//LOG("theater",target+" **************** SPAWN ENTRY: " + getGameTime() + " ********************");
+
+	if ( (target == null) || (target == obj_id.NULL_ID) )
+	{
+		return false;
+	}
+
+	////LOG("theater","messaging object: handler = " + HANDLE_THEATER_SETUP);
+	//messageTo(target, HANDLE_THEATER_SETUP, null, 1, false);
+
+	if ( !hasObjVar(target, VAR_THEATER_BASE) )
+	{
+		//LOG("theater","SPAWN: unable to locate objvar: " + VAR_THEATER_BASE);
+		return false;
+	}
+
+	int spawnMethod = getIntObjVar(target, VAR_SPAWN_METHOD);
+
+	obj_id[] children = new obj_id[0];
+	switch (spawnMethod)
+	{
+		case SPAWN_RADIAL:
+			//children = spawnRadial(target);
+			break;
+
+		case SPAWN_DATATABLE_OFFSET:
+			children = spawnDatatableOffset(target);
+			break;
+
+		default:
+			//LOG("theater","SPAWN: unknown spawnMethod = " + spawnMethod);
+			return false;
+	}
+
+	dictionary d = new dictionary();
+
+	if ( (children == null) || (children.length == 0) )
+	{
+	}
+	else
+	{
+		obj_id[] buildings = utils.getBuildingsInObjIdList(children);
+		if ( (buildings == null) || (buildings.length == 0) )
+		{
+		}
+		else
+		{
+			d.put(DICT_CHILDREN, buildings);
+		}
+	}
+
+	//LOG("theater","messaging object: handler = " + HANDLE_THEATER_COMPLETE);
+	messageTo(target, HANDLE_THEATER_COMPLETE, d, 2, false);
+
+
+	return true;
+}
+
+/*****************************************************************
+ * @brief sub function of spawn() - FOR INTERNAL USE ONLY - DO NOT CALL DIRECTLY
+ *
+ * @param obj_id target
+ *
+ * @return obj_id[]; null on error
+ ******************************************************************/
+obj_id[] spawnRadial(obj_id target)
+{
+	float fltSize = 0;
+	//LOG("theater","ENTER::SPAWN RADIAL: " + getGameTime());
+
+	if ( (target == null) || (target == obj_id.NULL_ID) )
+	{
+		return null;
+	}
+
+	string tbl = getStringObjVar(target, VAR_TBL);
+	if ( (tbl == null) || (tbl.equals("")) )
+	{
+		//LOG("theater","SPAWN RADIAL: invalid datatable parameter");
+		return null;
+	}
+
+	location myLoc = getLocation(target);
+
+	if ( !hasObjVar(target, VAR_RING_BASE) )
+	{
+		//LOG("theater","ABORT: unable to locate objvar: " + VAR_RING_BASE);
+		return null;
+	}
+
+	float ringMin = (float)getIntObjVar(target, VAR_RING_MIN);
+	float ringMax = (float)getIntObjVar(target, VAR_RING_MAX);
+
+	if ( (ringMin < 0.0f) || (ringMax <= 0.0f) || (ringMin >= ringMax) )
+	{
+		//LOG("theater","SPAWN RADIAL: invalid ring distance parameters");
+		//LOG("theater","RING: min = " + ringMin + " max = " + ringMax);
+		return null;
+	}
+
+	float iArea = BASE_ITEM_AREA;
+	float sArea = (ringMax - ringMin) / 2;
+
+	if ( !hasObjVar(target, VAR_SPAWN_LIST) )
+	{
+		//LOG("theater","SPAWN RADIAL: unable to locate objvar: " + VAR_SPAWN_LIST);
+		return null;
+	}
+
+	obj_var_list spawnList = getObjVarList(target, VAR_SPAWN_LIST);
+	if ( spawnList == null )
+	{
+		return null;
+	}
+
+	int numListItems = spawnList.getNumItems();
+	if ( numListItems < 1 )
+	{
+		//LOG("theater","SPAWN RADIAL: spawn list length < 1");
+		return null;
+	}
+
+	resizeable obj_id[] children = new obj_id[0];
+
+	if ( !dataTableOpen(tbl) )
+	{
+		//LOG("theater","SPAWN RADIAL: unable to open datatable: " + tbl);
+		return null;
+	}
+
+	string faction = "";
+	if ( hasObjVar(target, factions.FACTION) )
+	{
+		 faction = getStringObjVar(target, factions.FACTION);
+	}
+
+	int persistFlag = getIntObjVar(target, VAR_PERSIST);
+	switch (persistFlag)
+	{
+		case PERSIST_ALL:
+		case PERSIST_SELF_ONLY:
+			persistObject(target);
+			break;
+
+		default:
+			break;
+	}
+
+	int numCols = dataTableGetNumColumns(tbl);
+
+	for ( int i = 0; i < numListItems; i++ )
+	{
+		obj_var ov = spawnList.getObjVar(i);
+		string name = ov.getName();
+		int amt = ov.getIntData();
+
+		if ( dataTableHasColumn(tbl, name) )
+		{
+			string[] entries = dataTableGetStringColumn(tbl, name);
+			if ( (entries == null) || (entries.length == 0) )
+			{
+				//LOG("theater","SPAWN RADIAL::DATATABLE: column(" + name + ") was empty or invalid");
+			}
+			else
+			{
+				for ( int n = 0; n < amt; n++ )
+				{
+					int roll = rand(0, entries.length - 1);
+					string tpf = entries[roll];
+
+					int cnt = 0;
+					while ( tpf.equals("") )
+					{
+						roll = rand(0, entries.length - 1);
+						tpf = entries[roll];
+					}
+
+					location spawnLoc = utils.getRandomLocationInRing(myLoc, ringMin, ringMax);
+					if ( spawnLoc == null )
+					{
+						//LOG("theater","SPAWN RADIAL::SPAWN LOC: unable to get point in ring!");
+					}
+					else
+					{
+						location goodLoc = locations.getGoodLocationAroundLocation(spawnLoc, iArea, iArea, sArea, sArea);
+						if ( goodLoc == null )
+						{
+							//LOG("theater","SPAWN RADIAL::SPAWN LOC: unable to get good location!");
+						}
+						else
+						{
+							spawnLoc = goodLoc;
+						}
+
+						if ( spawnLoc.cell == obj_id.NULL_ID )
+						{
+							spawnLoc.y = getHeightAtLocation(spawnLoc.x, spawnLoc.z);
+						}
+
+						if ( spawnLoc != null )
+						{
+							float fltNewSize = getDistance(myLoc, spawnLoc);
+							if(fltNewSize>fltSize)
+							{
+
+								fltSize = fltNewSize;
+							}
+							obj_id child = createObject(tpf, spawnLoc);
+							if ( (child == null) || (child == obj_id.NULL_ID) )
+							{
+								//LOG("theater","SPAWN RADIAL::CHILD: obj_id returned as invalid");
+								//LOG("theater","SPAWN RADIAL::CHILD: tpf: " + tpf);
+							}
+							else
+							{
+								//LOG("theater","SPAWN RADIAL::CHILD: spawned (" + child + ") " + tpf);
+								//LOG("theater","SPAWN RADIAL::CHILD: spawnLoc = " + spawnLoc.toString());
+								setYaw(child, rand(-180,180));
+								children = utils.addElement(children, child);
+
+								if ( !faction.equals("") )
+								{
+									factions.setFaction(child, faction);
+								}
+
+								switch (persistFlag)
+								{
+									case PERSIST_ALL:
+										//persistObject(child);
+										break;
+								}
+
+								setObjVar(child, VAR_PARENT, target);
+							}
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			//LOG("theater","SPAWN RADIAL::SKIPPING: requested column name(" + name + ") does not exist");
+		}
+	}
+	setObjVar(target, "poi.fltSize", fltSize+20);
+	if ( (children == null) || (children.length == 0) )
+	{
+		//LOG("theater","SPAWN RADIAL::EXITING: no valid children!");
+		return null;
+	}
+	else
+	{
+		//LOG("theater","SPAWN RADIAL::EXITING: success!");
+		setObjVar(target, VAR_CHILDREN, children);
+	}
+
+	return children;
+}
+
+/*****************************************************************
+ * @brief sub function of spawn() - FOR INTERNAL USE ONLY - DO NOT CALL DIRECTLY
+ *			note: this function assumes a tbl format of as follows:
+ *			TEMPLATE	X	Y	Z	YAW
+ *
+ * @param obj_id target
+ *
+ * @return obj_id[]; null on error
+ ******************************************************************/
+obj_id[] spawnDatatableOffset(obj_id target)
+{
+	//LOG("theater", target+" spawning datable offset");
+	float fltSize = 0; // radius of theater. we'll keep track of this
+	// we need an array to track where the waypoints go
+	location[] locWaypoints = new location[0];
+
+	//LOG("theater","ENTER::SPAWN DATATABLE OFFSET: " + getGameTime());
+
+	if ( (target == null) || (target == obj_id.NULL_ID) )
+	{
+		return null;
+	}
+
+	string tbl = getStringObjVar(target, VAR_TBL);
+	if ( (tbl == null) || (tbl.equals("")) )
+	{
+		//LOG("theater","SPAWN DATATABLE OFFSET: invalid datatable parameter");
+		return null;
+	}
+	//LOG("theater", target+"datatble name is "+tbl);
+	if ( !dataTableOpen(tbl) )
+	{
+		//LOG("theater","SPAWN DATATABLE OFFSET: unable to open datatable: " + tbl);
+		return null;
+	}
+
+	string faction = "";
+	if ( hasObjVar(target, factions.FACTION) )
+	{
+		 faction = getStringObjVar(target, factions.FACTION);
+	}
+	else
+	{
+
+		faction = utils.getFactionSubString(tbl);
+		if(faction==null)
+		{
+			faction="";
+		}
+
+
+	}
+	int persistFlag = getIntObjVar(target, VAR_PERSIST);
+	switch (persistFlag)
+	{
+		case PERSIST_ALL:
+		case PERSIST_SELF_ONLY:
+			//persistObject(target);
+			break;
+
+		default:
+			break;
+	}
+
+	location myLoc = getLocation(target);
+	float tYaw = getYaw(target);
+	////LOG("theater", "target yaw = " + tYaw);
+
+	resizeable obj_id[] children = new obj_id[0];
+	resizeable obj_id[] objMobSpawners = new obj_id[0];
+	resizeable obj_id[] objLargeMobSpawners = new obj_id[0];
+	resizeable obj_id[] objObjectiveSpawners = new obj_id[0];
+	resizeable obj_id[] objWaypoints = new obj_id[0];
+
+
+	float[] fltX = dataTableGetFloatColumn(tbl, X);
+	float[] fltY = dataTableGetFloatColumn(tbl, Y);
+	float[] fltZ = dataTableGetFloatColumn(tbl, Z);
+	float[] fltYaw = dataTableGetFloatColumn(tbl, YAW);
+	string[] strTemplates = dataTableGetStringColumn(tbl, TEMPLATE);
+	int numRows = strTemplates.length;
+
+	for ( int i = 0; i < numRows; i++ )
+	{
+
+
+		string tpf = strTemplates[i];
+		float dx = fltX[i];
+		float dy = fltY[i];
+		float dz = fltZ[i];
+		float yaw =fltYaw[i];
+
+		location here = myLoc;
+
+		here = player_structure.transformDeltaWorldCoord(here, dx, dz, tYaw);
+
+		float fltNewSize = getDistance(myLoc, here);
+		if(fltNewSize>fltSize)
+		{
+			fltSize = fltNewSize; // so we can store how big the poi is
+		}
+
+
+
+
+		//LOG("theater", target+" spawning "+tpf+" at "+here);
+		obj_id child = createObject(tpf, here);
+		if ( !isIdValid(child) )
+		{
+			//LOG("theater","SPAWN DATATABLE OFFSET::CHILD: obj_id returned as invalid");
+			//LOG("theater","SPAWN DATATABLE OFFSET::CHILD: tpf: " + tpf);
+		}
+		else
+		{
+			if(tpf=="object/tangible/poi/theater/poi_mob_spawner.iff")
+			{
+				objMobSpawners = utils.addElement(objMobSpawners, child);
+
+			}
+			else if (tpf=="object/tangible/poi/theater/poi_objective_spawner.iff")
+			{
+				objObjectiveSpawners = utils.addElement(objObjectiveSpawners, child);
+
+			}
+			else if(tpf=="object/path_waypoint/path_waypoint.iff")
+			{
+				// we don't actually make waypoints, we store them till after we know how big the theater is
+				objWaypoints = utils.addElement(objWaypoints, child);
+
+			}
+			else if(tpf == "object/tangible/poi/theater/poi_mob_spawner_large.iff")
+			{
+				objLargeMobSpawners = utils.addElement(objLargeMobSpawners, child); // for atsts and stuff
+			}
+
+
+			////LOG("theater","SPAWN DATATABLE OFFSET::CHILD: spawned (" + child + ") " + tpf);
+			////LOG("theater","SPAWN DATATABLE OFFSET::CHILD: spawnLoc = " + here.toString());
+
+			setYaw(child, yaw + tYaw);
+			children = utils.addElement(children, child);
+			//LOG("theater", "faction is "+faction);
+			if ( !faction.equals("") )
+			{
+				//LOG("theater", "DECLARING FACTION TO "+faction);
+				factions.setFaction(child, faction);
+			}
+
+			switch (persistFlag)
+			{
+				case PERSIST_ALL:
+					//persistObject(child);
+					break;
+			}
+
+			setObjVar(child, VAR_PARENT, target);
+		}
+
+
+	}
+
+	setObjVar(target, "poi.fltSize", fltSize+20);
+
+	if ( objMobSpawners != null && objMobSpawners.length > 0 )
+		setObjVar(target, "theater.objMobSpawners", objMobSpawners);
+
+	if ( objMobSpawners != null && objObjectiveSpawners.length > 0 )
+		setObjVar(target, "theater.objObjectiveSpawners", objObjectiveSpawners);
+
+	if ( objMobSpawners != null && objLargeMobSpawners.length > 0 )
+		setObjVar(target, "theater.objLargeMobSpawners", objLargeMobSpawners);
+
+	if( objWaypoints != null && objWaypoints.length > 0 )
+	{
+
+	/*
+		// now we make the pathfinding crap
+		// to destroy our object, we use the name/planet
+		region rgnPathRegion = createCircleRegion(myLoc, fltSize, target.toString(), regions.PVP_REGION_TYPE_NORMAL, regions.BUILD_FALSE, regions.MUNI_FALSE, regions.GEO_PATHFIND, 0, regions.SPAWN_FALSE, regions.MISSION_NONE, false);
+		// now we make the waypoints
+		int intI = 0;
+
+		while(intI<locWaypoints.length)
+		{
+
+			string strWaypointName = "patrol"+intI;
+			setObjVar(objWaypoints[intI], "pathfinding.waypoint.name", strWaypointName);
+			intI = intI+1;
+		}
+		// AUSTIN'S NIFTY SCRIPT HOOK GOES HERE. IT SHOULD WORK WITHOUT FAIL!
+		setObjVar(target, "theater.pathNodes", objWaypoints.length);
+		reloadPathNodes(objWaypoints);
+
+	*/
+	}
+
+
+
+	if ( (children == null) || (children.length == 0) )
+	{
+		//LOG("theater","SPAWN DATATABLE OFFSET::EXITING: no valid children!");
+		return null;
+	}
+	else
+	{
+		//LOG("theater","SPAWN DATATABLE OFFSET::EXITING: success!");
+		setObjVar(target, VAR_CHILDREN, children);
+	}
+
+	return children;
+}
+
+void spawnDatatableOffsetQueued(obj_id target, int intIndex)
+{
+
+	boolean boolFinished = false;
+	//LOG("theater", target+" spawning datable offset");
+
+	if ( (target == null) || (target == obj_id.NULL_ID) )
+	{
+		return;
+	}
+
+	string tbl = getStringObjVar(target, VAR_TBL);
+	if ( (tbl == null) || (tbl.equals("")) )
+	{
+		//LOG("theater","SPAWN DATATABLE OFFSET: invalid datatable parameter");
+		return ;
+	}
+	//LOG("theater", target+"datatble name is "+tbl);
+	if ( !dataTableOpen(tbl) )
+	{
+		//LOG("theater","SPAWN DATATABLE OFFSET: unable to open datatable: " + tbl);
+		return;
+	}
+
+	string faction = "";
+	if ( hasObjVar(target, factions.FACTION) )
+	{
+		 faction = getStringObjVar(target, factions.FACTION);
+	}
+	else
+	{
+
+		faction = utils.getFactionSubString(tbl);
+		if(faction==null)
+		{
+			faction="";
+		}
+
+
+	}
+	location myLoc = getLocation(target);
+	float tYaw = getYaw(target);
+	////LOG("theater", "target yaw = " + tYaw);
+	if(!hasObjVar(target, "intPrespawned"))
+	{
+		//LOG("theater", "No objvar found");
+		setObjVar(target, "intPrespawned", 1);
+		// we make just a few things
+		resizeable obj_id[] objMobSpawners = new obj_id[0];
+		resizeable obj_id[] objLargeMobSpawners = new obj_id[0];
+		resizeable obj_id[] objObjectiveSpawners = new obj_id[0];
+		resizeable obj_id[] objWaypoints = new obj_id[0];
+		resizeable obj_id[] children = new obj_id[0];
+
+		float[] fltX = dataTableGetFloatColumn(tbl, X);
+		float[] fltY = dataTableGetFloatColumn(tbl, Y);
+		float[] fltZ = dataTableGetFloatColumn(tbl, Z);
+		float[] fltYaw = dataTableGetFloatColumn(tbl, YAW);
+		string[] strTemplates = dataTableGetStringColumn(tbl, TEMPLATE);
+		int numRows = strTemplates.length;
+		for(int i = 0; i <numRows; i++)
+		{
+			obj_id child = null;
+
+			string tpf = strTemplates[i];
+
+			if(tpf=="object/tangible/poi/theater/poi_mob_spawner.iff")
+			{
+				float dx = fltX[i];
+				float dy = fltY[i];
+				float dz = fltZ[i];
+				float yaw =fltYaw[i];
+
+				location here = myLoc;
+
+				here = player_structure.transformDeltaWorldCoord(here, dx, dz, tYaw);
+
+				child = createObject(tpf, here);
+				if(isIdValid(child))
+				{
+					objMobSpawners = utils.addElement(objMobSpawners, child);
+					children = utils.addElement(children, child);
+				}
+
+			}
+			else if (tpf=="object/tangible/poi/theater/poi_objective_spawner.iff")
+			{
+				float dx = fltX[i];
+				float dy = fltY[i];
+				float dz = fltZ[i];
+				float yaw =fltYaw[i];
+
+				location here = myLoc;
+
+				here = player_structure.transformDeltaWorldCoord(here, dx, dz, tYaw);
+
+				child = createObject(tpf, here);
+				if(isIdValid(child))
+				{
+					objObjectiveSpawners = utils.addElement(objObjectiveSpawners, child);
+					children = utils.addElement(children, child);
+				}
+
+			}
+			else if(tpf=="object/path_waypoint/path_waypoint.iff")
+			{
+				float dx = fltX[i];
+				float dy = fltY[i];
+				float dz = fltZ[i];
+				float yaw =fltYaw[i];
+
+				location here = myLoc;
+
+				here = player_structure.transformDeltaWorldCoord(here, dx, dz, tYaw);
+				child = createObject(tpf, here);
+				if(isIdValid(child))
+				{
+					objWaypoints = utils.addElement(objWaypoints, child);
+					children = utils.addElement(children, child);
+				}
+
+			}
+			else if(tpf == "object/tangible/poi/theater/poi_mob_spawner_large.iff")
+			{
+				float dx = fltX[i];
+				float dy = fltY[i];
+				float dz = fltZ[i];
+				float yaw =fltYaw[i];
+				location here = myLoc;
+				here = player_structure.transformDeltaWorldCoord(here, dx, dz, tYaw);
+				child = createObject(tpf, here);
+				if(isIdValid(child))
+				{
+					objLargeMobSpawners = utils.addElement(objLargeMobSpawners, child); // for atsts and stuff
+					children = utils.addElement(children, child);
+				}
+			}
+			else
+			{
+				int intStringIndex = tpf.indexOf("corral");
+				if(intStringIndex>-1)
+				{
+					float dx = fltX[i];
+					float dy = fltY[i];
+					float dz = fltZ[i];
+					float yaw =fltYaw[i];
+					location here = myLoc;
+					here = player_structure.transformDeltaWorldCoord(here, dx, dz, tYaw);
+					child = createObject(tpf, here);
+
+					if(isIdValid(child))
+					{
+						setYaw(child, yaw + tYaw);
+						setObjVar(child, VAR_PARENT, target);
+						children = utils.addElement(children, child);
+					}
+				}
+			}
+
+		}
+		if ( objMobSpawners.length > 0 )
+			setObjVar(target, "theater.objMobSpawners", objMobSpawners);
+		if ( objObjectiveSpawners.length > 0 )
+			setObjVar(target, "theater.objObjectiveSpawners", objObjectiveSpawners);
+		if ( objLargeMobSpawners.length > 0 )
+			setObjVar(target, "theater.objLargeMobSpawners", objLargeMobSpawners);
+		if ( children.length > 0 )
+			setObjVar(target, VAR_CHILDREN, children);
+		dictionary dctParams = new dictionary();
+		dctParams.put("master", target);
+		messageTo(target, HANDLE_THEATER_COMPLETE, dctParams, .50f, false);
+		dctParams = new dictionary();
+		dctParams.put("intIndex", 0);
+		messageTo(target, "continueTheater", dctParams, DELAY_TO_SPAWN, false);
+		return;
+
+	}
+	else
+	{
+		//LOG("theater", "found objvar");
+		resizeable obj_id[] children = getResizeableObjIdArrayObjVar(target, VAR_CHILDREN);
+		float[] fltX = dataTableGetFloatColumn(tbl, X);
+		float[] fltY = dataTableGetFloatColumn(tbl, Y);
+		float[] fltZ = dataTableGetFloatColumn(tbl, Z);
+		float[] fltYaw = dataTableGetFloatColumn(tbl, YAW);
+		string[] strTemplates = dataTableGetStringColumn(tbl, TEMPLATE);
+		int numRows = strTemplates.length;
+
+		for ( int i = intIndex; i < intIndex+NUM_TO_SPAWN; i++)
+		{
+			//LOG("theater", "i is "+i);
+			//LOG("theater", "intIndex is "+intIndex);
+			//LOG("theater", "numtospawn is "+NUM_TO_SPAWN);
+			if(i>=numRows)
+			{
+				if(children != null && children.length > 0) {
+
+					setObjVar(target, VAR_CHILDREN, children);
+
+				} else {
+
+					if(hasObjVar(target, VAR_CHILDREN)) {
+
+						removeObjVar(target, VAR_CHILDREN);
+					}
+				}
+				dictionary dctParams = new dictionary();
+				dctParams.put("objTheater", target);
+				messageTo(target, "theaterFinished", dctParams, 0, false);
+				return;
+			}
+			string tpf = strTemplates[i];
+			if(shouldSpawn(tpf))
+			{
+				float dx = fltX[i];
+				float dy = fltY[i];
+				float dz = fltZ[i];
+				float yaw = fltYaw[i];
+
+				float fltRadians = (float)Math.toRadians((tYaw * -1f));
+				float fltC = (float)Math.cos(fltRadians);
+				float fltS = (float)Math.sin(fltRadians);
+
+				location here = myLoc;
+
+				here.x += (dx * fltC) - (dz * fltS);
+			  	here.y += dy;
+  				here.z += (dx * fltS) + (dz * fltC);
+
+				//here = player_structure.transformDeltaWorldCoord(here, dx, dz, tYaw);
+
+				//LOG("theater", target+" spawning "+tpf+" at "+here);
+				obj_id child = createObject(tpf, here);
+				debugSpeakMsg( target, "a child " + child );
+				if ( (child == null) || (child == obj_id.NULL_ID) )
+				{
+					//LOG("theater","SPAWN DATATABLE OFFSET::CHILD: obj_id returned as invalid");
+					//LOG("theater","SPAWN DATATABLE OFFSET::CHILD: tpf: " + tpf);
+				}
+				else
+				{
+				////LOG("theater","SPAWN DATATABLE OFFSET::CHILD: spawned (" + child + ") " + tpf);
+					////LOG("theater","SPAWN DATATABLE OFFSET::CHILD: spawnLoc = " + here.toString());
+
+					setYaw(child, yaw + tYaw);
+					children = utils.addElement(children, child);
+					//LOG("theater", "faction is "+faction);
+					if ( !faction.equals("") )
+					{
+						//LOG("theater", "DECLARING FACTION TO "+faction);
+						factions.setFaction(child, faction);
+					}
+					setObjVar(child, VAR_PARENT, target);
+				}
+			}
+
+		}
+
+		setObjVar(target, "poi.fltSize", 82);
+		if(children != null && children.length > 0) {
+
+			setObjVar(target, VAR_CHILDREN, children);
+
+		} else {
+
+			if(hasObjVar(target, VAR_CHILDREN)) {
+
+				removeObjVar(target, VAR_CHILDREN);
+			}
+		}
+	}
+	dictionary dctParams = new dictionary();
+	dctParams.put("intIndex", intIndex + NUM_TO_SPAWN);
+	//LOG("theater", "sending index "+intIndex+NUM_TO_SPAWN);
+	messageTo(target, "continueTheater", dctParams, DELAY_TO_SPAWN, false);
+
+}
+
+
+
+
+boolean shouldSpawn(string tpf)
+{
+
+	if(tpf=="object/tangible/poi/theater/poi_mob_spawner.iff")
+	{
+		return false;
+	}
+	else if (tpf=="object/tangible/poi/theater/poi_objective_spawner.iff")
+	{
+		return false;
+	}
+	else if(tpf=="object/path_waypoint/path_waypoint.iff")
+	{
+		return false;
+	}
+	else if(tpf == "object/tangible/poi/theater/poi_mob_spawner_large.iff")
+	{
+		return false;
+	}
+	else
+	{
+		int intStringIndex = tpf.indexOf("corral");
+		if(intStringIndex>-1)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*****************************************************************
+ * @brief cleanup a theater given the target base object
+ *
+ * @param obj_id target
+ *
+ * @return boolean; false on error
+ ******************************************************************/
+boolean cleanup(obj_id target)
+{
+	location locTest = getLocation(target);
+
+	region rgnPathRegion = getRegion(target.toString(), locTest.area);
+	if(rgnPathRegion==null)
+	{
+		////LOG("theater", "Cleanup of region failed. REGION OF NAME "+target.toString()+"AND PLANET "+locTest.area+" DOES NOT EXIST");
+
+	}
+	else
+	{
+		deleteRegion(rgnPathRegion); // NUKE IT!
+	}
+
+	if ( (target == null) || (target == obj_id.NULL_ID) )
+	{
+		return false;
+	}
+
+
+	if ( !hasObjVar(target, VAR_CHILDREN) )
+	{
+		return false;
+	}
+
+	obj_id[] children = getObjIdArrayObjVar(target, VAR_CHILDREN);
+	if ( (children == null) || (children.length == 0) )
+	{
+		return false;
+	}
+
+	for ( int i = 0; i < children.length; i++ )
+	{
+		obj_id child = children[i];
+		if ( (child == null) || (child == obj_id.NULL_ID) )
+		{
+
+		}
+		else
+		{
+			destroyObject(child);
+		}
+	}
+
+
+	return true;
+}

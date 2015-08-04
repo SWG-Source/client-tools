@@ -1,0 +1,738 @@
+//-----------------------------------------------------------------
+//
+//-------------------------SAFE PUZZLE-----------------------------
+//
+//Player must unscramble the scrambled passphrase or make words using
+//3 or 4 letter words out of the scrambled passphrase.
+//
+//-----------------------------------------------------------------
+//-Jeff Haskell 2008
+
+include library.buff;
+include library.collection;
+include library.consumable;
+include library.loot;
+include library.sui;
+include library.stealth;
+include library.utils;
+include java.util.Random;
+
+
+const boolean LOGGING_ON				= true; 
+
+//When canceled or lost, the puzzle removes a partial amount of script vars
+//when won or player logs, all script vars are removed.
+const string VAR_PREFIX					= "meatlump_safe";
+const string NONIMPERATIVE_VAR_PREFIX			= "meatlump_safe_nonimperative";
+const string PID_NAME					= NONIMPERATIVE_VAR_PREFIX + ".pid"; 
+const string PASSWORD					= VAR_PREFIX + ".password";
+const string PASSWORD_SCRAMBLED				= VAR_PREFIX + ".password_scrambled";
+const string PASSWORD_ROW				= VAR_PREFIX + ".password_row";
+const string PASSWORD_POINTS_NEEDED			= VAR_PREFIX + ".password_points_needed";
+const string WRONG_ANSWER_THRESHOLD			= VAR_PREFIX + ".wrong_answer_threshold";
+const string UNSCRAMBLED_PASSWORD_ROW			= VAR_PREFIX + ".unscrambled_password_row";
+const string HAS_BUFF					= VAR_PREFIX + ".has_buff";
+
+const string PASSWORD_POINTS_CURRENT			= NONIMPERATIVE_VAR_PREFIX + ".password_points_current";
+const string CURRENTLY_SLICING				= NONIMPERATIVE_VAR_PREFIX + ".slicing";
+const string ANAGRAM_GUESS_LIST				= NONIMPERATIVE_VAR_PREFIX + ".anagram_guess_list";
+const string WRONG_ANSWER_COUNT				= NONIMPERATIVE_VAR_PREFIX + ".wrong_answer_count";
+const string TOTAL_ANSWER_COUNT				= NONIMPERATIVE_VAR_PREFIX + ".total_answer_count";
+
+const string OBJVAR_SLOT_NAME				= "collection.slotName";
+const string SAFE_CAPTION				= "OLD SAFE";
+const string DEVICE_TEMPLATE				= "object/tangible/meatlump/event/slicing_device_meatlump_safe.iff";
+const string DEVICE_OBJVAR				= "puzzle";
+const string SAFE_PUZZLE_BUFF				= "safe_puzzle_buff";
+
+const string PASSWORD_TABLE				= "datatables/theme_park/meatlump_safe_passwords.iff";
+
+const string_id SID_OPEN_SAFE				= new string_id("meatlump/meatlump", "meatlump_safe_open");
+const string_id SAFE_INTRO_TEXT				= new string_id("meatlump/meatlump", "safe_minigame_text");
+const string_id SID_ALREADY_GUESSED_PREVIOUS		= new string_id("meatlump/meatlump", "safe_guessed_previous");
+const string_id SID_YOU_FAILED_TO_SOLVE			= new string_id("meatlump/meatlump", "you_failed_to_solve_slicing_puzzle");
+const string_id YOU_FAILED				= new string_id("meatlump/meatlump", "you_failed");
+const string_id YOU_CANCELED_EARLY			= new string_id("meatlump/meatlump", "you_canceled_early");
+const string_id YOU_HAVE_DEBUFF				= new string_id("meatlump/meatlump", "you_have_debuff");
+const string_id YOU_NEED_DEVICE				= new string_id("meatlump/meatlump", "you_need_device");
+const string_id YOU_BUFFED_LATE				= new string_id("meatlump/meatlump", "you_buff_late");
+
+const int SKIPPED_COLUMNS				= 2;
+const int DEFAULT_ANAGRAM_POINT				= 1;
+const int BUFF_THRESHOLD_INCREASE			= 3; //if player has buff, this number increases the amount the player can fail
+const int BUFF_POINTS_NEEDED_DECREASE			= 1; //if player has buff, this number is subtracted from the points needed to win the puzzle.
+
+const string[] RESERVED_RULES_TO_IGNORE			= new string[] 
+{	"name_declined_number", 
+	"name_declined_syntax", 
+	"name_declined_fictionally_reserved", 
+	"name_declined_reserved" 
+};
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//add the use option
+	mi.addRootMenu(menu_info_types.ITEM_USE, SID_OPEN_SAFE);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+	obj_id collectionItem = self;
+	//check to make sure the slot collection data is on the object
+
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	else if(!collection.canCollectCollectible(player, self))
+		return SCRIPT_CONTINUE;
+	else if(buff.hasBuff(player, "safe_puzzle_downer"))
+	{
+		sendSystemMessage(player, YOU_HAVE_DEBUFF);
+		return SCRIPT_CONTINUE;		
+	}
+	else if(!consumable.decrementObjectInventoryOrEquipped(player, DEVICE_TEMPLATE, DEVICE_OBJVAR))
+	{
+		sendSystemMessage(player, YOU_NEED_DEVICE);
+		return SCRIPT_CONTINUE;		
+	}
+	
+	closeOldWindow(player);
+	blog("OnObjectMenuSelect");
+	createSafeSui(collectionItem, player);
+
+	return SCRIPT_CONTINUE;
+}
+
+//This is the function that creates the player SUI. The SUI is refreshed each time the player
+//uses the UI until they cancel or they win.
+boolean createSafeSui(obj_id collectionItem, obj_id player)
+{
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	else if(!collection.checkState(player)) //player interrupted
+		return false;
+
+	blog("createSafeSui - init");
+	
+	//The puzzle and player data are evaluated to see if the puzzle received is a previous or new puzzle
+	if(rerollPuzzleNeeded(collectionItem, player))
+	{
+		blog("setting up password for slicing session");
+		boolean varsSet = getRandomPassword(collectionItem, player);
+		if(!varsSet)
+			return false;
+	}
+	else
+		closeOldWindow(player);
+
+	blog("createSafeSui - CURRENTLY_SLICING set to true");
+	utils.setScriptVar(player, CURRENTLY_SLICING, true);
+
+	//count each answer right or wrong
+	if(utils.hasScriptVar(player, TOTAL_ANSWER_COUNT))
+	{
+		blog("createSafeSui - INCREMENTING TOTATL COUNT");	
+		int count = utils.getIntScriptVar(player, TOTAL_ANSWER_COUNT);
+		utils.setScriptVar(player, TOTAL_ANSWER_COUNT, count++);
+	}
+	else
+		utils.setScriptVar(player, TOTAL_ANSWER_COUNT, 0);
+		
+	//get all the script vars off the player for the minigame		
+	string jumbledPassword = utils.getStringScriptVar(player, PASSWORD_SCRAMBLED+"_"+collectionItem);
+	int datatableRow = utils.getIntScriptVar(player, PASSWORD_ROW+"_"+collectionItem);
+	int passwordPointsNeeded = utils.getIntScriptVar(player, PASSWORD_POINTS_NEEDED+"_"+collectionItem);
+	int passwordPointsCurrent = utils.getIntScriptVar(player, PASSWORD_POINTS_CURRENT);
+	int wrongAnswerCount = utils.getIntScriptVar(player, WRONG_ANSWER_COUNT);
+	int wrongAnswerThreshold = utils.getIntScriptVar(player, WRONG_ANSWER_THRESHOLD+"_"+collectionItem);
+	string questionnaireText = sui.colorWhite() + localize(SAFE_INTRO_TEXT);
+	string guessList = utils.getStringScriptVar(player, ANAGRAM_GUESS_LIST);
+
+	blog("createSafeSui - displaying SUI data");
+	
+	//construct the prompt dialog on the fly.
+	questionnaireText += sui.newLine(2);
+	questionnaireText += "Scrambled Password: ";
+	questionnaireText += sui.colorRed() + jumbledPassword + sui.colorWhite() + sui.newLine();
+	questionnaireText += "Total Fail Attempts: " + sui.colorRed() + wrongAnswerCount + sui.colorWhite() +sui.newLine();
+	questionnaireText += "Maximum Fail Attempts Allowed: " + sui.colorRed() + (wrongAnswerThreshold + 1) + sui.colorWhite() +sui.newLine();	
+	questionnaireText += "Points Needed: ";
+	questionnaireText += sui.colorRed() + passwordPointsNeeded + sui.colorWhite() + sui.newLine();
+	questionnaireText += "Current Points: ";
+	questionnaireText += sui.colorRed() + passwordPointsCurrent + sui.colorWhite() + sui.newLine(2);
+
+	//if the player has previously guessed correctly, a list of guesses are included in 
+	//green
+	if(guessList != null && !guessList.equals(""))
+	{
+		questionnaireText += sui.colorGreen() + guessList + sui.colorWhite() + sui.newLine();
+	}	
+
+	//Custom UI section that uses a UI and passes the correct entry data to the messge handler
+	dictionary params = new dictionary();
+	int pid = createSUIPage("/Script.questionnaire", collectionItem, player);
+	setSUIAssociatedLocation(pid, collectionItem);
+	setSUIMaxRangeToObject(pid, 8);
+	params.put("callingPid", pid);
+	sui.setPid(player, pid, PID_NAME);
+	
+	setSUIProperty(pid, "Prompt.lblPrompt", "LocalText", questionnaireText);
+	setSUIProperty(pid, "bg.caption.lblTitle", "Text", SAFE_CAPTION);
+	setSUIProperty(pid, "Prompt.lblPrompt", "Editable", "false");
+	setSUIProperty(pid, "Prompt.lblPrompt", "GetsInput", "false");
+	setSUIProperty(pid, "txtInput", "Editable", "true");
+	setSUIProperty(pid, "txtInput", "GetsInput", "true");
+
+	setSUIProperty(pid, "btnOk", "Visible", "true");
+	setSUIProperty(pid, "btnCancel", "Visible", "true");
+
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onClosedOk, "%button2%", "txtInput", "LocalText");
+	
+	subscribeToSUIEvent(pid, sui_event_type.SET_onClosedOk, "%button2%", "handleDialogInput");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onClosedCancel, "%button0%", "closeSui");
+
+	showSUIPage(pid);
+	flushSUIPage(pid);
+
+	return true;
+}
+
+//Sui Input handled here. This is where the player quesses are 
+//processed
+messageHandler handleDialogInput()
+{
+	blog("handleDialogInput");
+	
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	blog("handleDialogInput - player validated");
+	blog("handleDialogInput - params: "+params);
+
+	//confirm the player guess text was passed.
+	if(params.getString("txtInput.LocalText") == null)
+		return SCRIPT_CONTINUE;		
+
+	blog("handleDialogInput - validation completed: ");
+
+	//if the text was passed create a var with the text
+	string playerGuess = params.getString("txtInput.LocalText");
+	blog("handleDialogInput - playerGuess: "+playerGuess);
+
+	//compare the unscrambled password with the player guess
+	string correctPassword = utils.getStringScriptVar(player, PASSWORD+"_"+self);
+	if(playerGuess == correctPassword)
+	{
+		blog("handleDialogInput - Password Solved!! Rewardign Player");
+		rewardPlayer(self, player);
+		return SCRIPT_CONTINUE;		
+	}
+	//catch any foul language just in case the foul language is in fact in the
+	//data table -- we don't want to give points for words like gay, tits, etc.
+	else if(isNameReserved(playerGuess, RESERVED_RULES_TO_IGNORE))
+	{
+		blog("handleDialogInput - reserved or foul language");
+		if(!incrementWrongAnswer(self, player))
+		{
+			applyPuzzleDebuff(self, player);
+			return SCRIPT_CONTINUE;
+		}	
+		
+		createSafeSui(self, player);
+		return SCRIPT_CONTINUE;		
+	}
+	//if the player has a previous list of guesses and the player is attempting to use the
+	//same guess they have previously used they are given a message and nothing changes.
+	else if(utils.hasScriptVar(player, ANAGRAM_GUESS_LIST) && !checkGuessList(self, player, playerGuess))
+	{
+		blog("handleDialogInput - player attempted to reuse a previously used guess: " + playerGuess);
+		sendSystemMessage(player, SID_ALREADY_GUESSED_PREVIOUS);
+		if(!incrementWrongAnswer(self, player))
+		{
+			applyPuzzleDebuff(self, player);
+			return SCRIPT_CONTINUE;
+		}	
+		
+		createSafeSui(self, player);
+		return SCRIPT_CONTINUE;
+	}
+	//check length. None of the words allowed should be greater than 4.
+	else if(playerGuess.length() > 4)
+	{
+		blog("handleDialogInput - USED AN ENTRY LONGER THAN 4");
+		if(!incrementWrongAnswer(self, player))
+		{
+			applyPuzzleDebuff(self, player);
+			return SCRIPT_CONTINUE;
+		}	
+		
+		createSafeSui(self, player);
+		return SCRIPT_CONTINUE;		
+	}
+	
+	blog("handleDialogInput - Guess != password");
+	//if the player failed to unscramble the password then the guess will
+	//be compared to the table row.
+	int datatableRow = utils.getIntScriptVar(player, PASSWORD_ROW+"_"+self);
+	if(datatableRow < 0)
+		return SCRIPT_CONTINUE;
+
+	//get the total cols from the datatable	minus the first few columns that are used
+	//for other things.
+	int totalCols = (dataTableGetNumColumns(PASSWORD_TABLE) - SKIPPED_COLUMNS);
+	if(totalCols < 0)
+		return SCRIPT_CONTINUE;
+
+	//get the entire row	
+	dictionary dictRow = dataTableGetRow(PASSWORD_TABLE, datatableRow);
+	if(dictRow == null)
+		return SCRIPT_CONTINUE;
+
+	blog("handleDialogInput - Datatable Validation Complete");
+	//this bool is to make sure we are not giving the player a SUI
+	//after they win
+	boolean recreateSui = true;
+	boolean incrementWrong = true;
+	//Loop through each of the table words and find a match if possible
+	for(int i = 1; i < totalCols; i++)
+	{
+		string anagram = dictRow.getString("anagram"+i);
+		if(anagram == null || anagram.equals(""))
+			continue;
+		else if(!playerGuess.equals(anagram))
+			continue;
+		else
+		{
+			//found a match
+			blog("handleDialogInput - match found for: " + playerGuess);
+			recreateSui = givePoints(self, player, anagram);
+			incrementWrong = false;
+			break;
+		}
+	}
+	
+	blog("handleDialogInput - Almost done, about to recreate SUI.");
+	//if the player wins they get no new SUI
+	if(incrementWrong)
+		if(!incrementWrongAnswer(self, player))
+		{
+			applyPuzzleDebuff(self, player);
+			return SCRIPT_CONTINUE;
+		}
+	else if(recreateSui)
+		createSafeSui(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+boolean applyPuzzleDebuff(obj_id collectionItem, obj_id player)
+{
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+
+	closeOldWindow(player);
+	removePlayerNonImperativeVars(player);	
+	return true;
+}
+
+boolean incrementWrongAnswer(obj_id collectionItem, obj_id player)
+{
+	blog("incrementWrongAnswer - INIT");
+
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	blog("incrementWrongAnswer - Player and Collection Obj are valid");
+	
+	if(!utils.hasScriptVar(player, WRONG_ANSWER_COUNT))
+	{
+		blog("incrementWrongAnswer - WRONG_ANSWER_COUNT var not found. Must have been a cancel and restart");
+		utils.setScriptVar(player, WRONG_ANSWER_COUNT, 0);
+		//return false;
+	}
+	else if(!utils.hasScriptVar(player, WRONG_ANSWER_THRESHOLD+"_"+collectionItem))
+	{
+		blog("incrementWrongAnswer - WRONG_ANSWER_THRESHOLD var not found");
+		return false;
+	}
+
+	int currentCount = utils.getIntScriptVar(player, WRONG_ANSWER_COUNT);
+	int threshold = utils.getIntScriptVar(player, WRONG_ANSWER_THRESHOLD+"_"+collectionItem);
+	
+	blog("incrementWrongAnswer - WRONG_ANSWER_COUNT: "+currentCount);
+	blog("incrementWrongAnswer - WRONG_ANSWER_THRESHOLD: "+threshold);
+	
+	if(currentCount < 0 || threshold < 0)
+		return false;
+
+	blog("incrementWrongAnswer - currentCount: " + currentCount);
+	blog("incrementWrongAnswer - threshold: " + threshold);
+
+	if(currentCount >= threshold)
+	{
+		if(buff.applyBuff(player, "safe_puzzle_downer"));
+		{
+			sendSystemMessage(player, YOU_FAILED);
+		}	
+		return false;
+	}
+	
+	blog("incrementWrongAnswer - INCREMENTING " + currentCount);
+	utils.setScriptVar(player, WRONG_ANSWER_COUNT, currentCount+1);
+	blog("incrementWrongAnswer - INCREMENTED " + utils.getIntScriptVar(player, WRONG_ANSWER_COUNT));
+	return true;
+}
+
+//This function gets a random row from the table then scrambles the password.
+//This function should only be called once per safe craching session
+boolean getRandomPassword(obj_id collectionItem, obj_id player)
+{
+	if(!isValidId(collectionItem) || !exists(collectionItem)) 
+		return false;
+	else if(!isValidId(player) || !exists(player)) 
+		return false;
+
+	blog("getRandomPassword - init");	
+
+	//get all datatable rows and select a random row
+	int datatableLength = dataTableGetNumRows(PASSWORD_TABLE);
+	int randomNum = rand(0, datatableLength-1);
+	if(randomNum < 0)
+		return false;
+
+	string password =  dataTableGetString(PASSWORD_TABLE, randomNum, "password");
+	if(password == null || password.equals(""))
+		return false;
+
+	//get the points needed to win with guesses
+	int pointsNeeded =  dataTableGetInt(PASSWORD_TABLE, randomNum, "points_needed");
+	if(pointsNeeded < 0)
+		return false;
+	int threshold =  dataTableGetInt(PASSWORD_TABLE, randomNum, "threshold");
+	if(threshold < 0)
+		return false;
+		
+	int iteration = 0;
+	string scrambled = password;
+	while(scrambled.equals(password) && iteration < 2)
+	{
+		scrambled = scramblePassword(password);
+		if(scrambled == null || scrambled.equals(""))
+			return false;
+		iteration ++;
+	}
+	
+	//CHECK FOR BUFF HERE
+	boolean hasBuff = false;
+	if(buff.hasBuff(player, SAFE_PUZZLE_BUFF))
+	{
+		blog("getRandomPassword - Giving player buff var");	
+		utils.setScriptVar(player, HAS_BUFF+"_"+collectionItem, true);
+		if(pointsNeeded > 1)
+			pointsNeeded -= BUFF_POINTS_NEEDED_DECREASE;
+		
+		threshold += BUFF_THRESHOLD_INCREASE;
+	}
+	
+	//set everything as a scriptvar on the player	
+	utils.setScriptVar(player, PASSWORD+"_"+collectionItem, password);
+	utils.setScriptVar(player, PASSWORD_SCRAMBLED+"_"+collectionItem, scrambled);
+	utils.setScriptVar(player, PASSWORD_ROW+"_"+collectionItem, randomNum);
+	utils.setScriptVar(player, PASSWORD_POINTS_NEEDED+"_"+collectionItem, pointsNeeded);
+	utils.setScriptVar(player, PASSWORD_POINTS_CURRENT, 0);
+	utils.setScriptVar(player, WRONG_ANSWER_THRESHOLD+"_"+collectionItem, threshold); 
+	utils.setScriptVar(player, WRONG_ANSWER_COUNT, 0); // for counting wrong answers
+	utils.setScriptVar(player, TOTAL_ANSWER_COUNT, 0); // for counting iterations
+	utils.setScriptVar(player, UNSCRAMBLED_PASSWORD_ROW+"_"+collectionItem, randomNum); // for finding out if the buff has already modified the points/threshold
+	
+	return true;
+}
+
+boolean rerollPuzzleNeeded(obj_id collectionItem, obj_id player)
+{
+	if(!isValidId(collectionItem) || !exists(collectionItem)) 
+		return false;
+	else if(!isValidId(player) || !exists(player)) 
+		return false;
+
+	blog("rerollPuzzleNeeded - init");
+	
+	boolean hasBuff = false;
+	boolean alreadyBuffed = false;
+	boolean slicing = false;
+	boolean counting = false;
+	boolean hasPassword = false;
+
+	//do we have a buff?
+	if(buff.hasBuff(player, SAFE_PUZZLE_BUFF))
+		hasBuff = true;
+	
+	//do we already have a scriptvar stating we had buff when we first init the puzzle?
+	if(utils.hasScriptVar(player, HAS_BUFF+"_"+collectionItem))
+		alreadyBuffed = true;
+	
+	//find out if the player is slicing already
+	if(utils.hasScriptVar(player, CURRENTLY_SLICING))
+		slicing = true;
+	
+	//find out if the player is counting iterations in an existing puzzle
+	if(utils.hasScriptVar(player, TOTAL_ANSWER_COUNT))
+		counting = true;
+	
+	//find out if the player is counting iterations in an existing puzzle
+	if(utils.hasScriptVar(player, PASSWORD+"_"+collectionItem))
+		hasPassword = true;
+
+	blog("rerollPuzzleNeeded - hasBuff: "+hasBuff+" alreadyBuffed: "+alreadyBuffed+ " slicing: "+slicing+" counting: "+counting+ " hasPassword: "+hasPassword);	
+
+	if(!counting && slicing && hasPassword)
+	{
+		blog("rerollPuzzleNeeded - Player clicked on the puzzle more than once without cancel. We DO NOT need Reroll.");
+		return false; //catestrophic failure somewhere
+	}
+	else if(counting && !slicing)
+	{
+		blog("rerollPuzzleNeeded - ERROR: player is counting but has no slicing var. We need Reroll.");	
+		return true; //catestrophic failure somewhere
+	}
+	else if(!counting && !slicing && !hasPassword)
+	{
+		blog("rerollPuzzleNeeded - player is not counting, slicing and has no password.  We need Reroll.");	
+		return true; //player using puzzle for first time		
+	}
+	else if(counting && slicing && alreadyBuffed && hasPassword)
+	{
+		blog("rerollPuzzleNeeded - player is counting, slicing and already has buff. NOT DISTURBING.");	
+		return false; //player solving puzzle so do not disturb
+	}
+	else if(!counting && !slicing && hasBuff && !alreadyBuffed)
+	{
+		blog("rerollPuzzleNeeded - player is not counting, not slicing, doesnt already have buff but has a buff now. We need Reroll.");	
+		return true; //player solving puzzle so do not disturb
+	}
+	else if(counting && slicing && hasBuff && !alreadyBuffed)
+	{
+		blog("rerollPuzzleNeeded - player has used buff while solving puzzle. NOT DISTURBING.");			
+		sendSystemMessage(player, YOU_BUFFED_LATE);
+		return false;
+	}
+	else if(!counting && !slicing && !hasBuff && alreadyBuffed)
+	{
+		blog("rerollPuzzleNeeded - player had a buff at one time but stopped solving puzzle and has come back. Reroll needed.");
+		utils.removeScriptVar(player, HAS_BUFF+"_"+collectionItem);
+		return true;
+	}
+	
+	blog("rerollPuzzleNeeded - None of the conditions met. NOT DISTURBING.");			
+	return false;
+}
+
+//this function takes the password and scrambles, then reverses the password
+//to make it difficult to guess.
+string scramblePassword(string password)
+{
+	if(password == null || password.equals(""))
+		return null;
+		
+	//scramble password
+	string reversedPassword = "";
+	string scrambled = "";
+	java.util.Random r;	
+	r = new java.util.Random();
+	
+	for(int i = 0; i < password.length(); i++)
+	{
+	    if (r.nextBoolean())
+		scrambled = scrambled + password.charAt(i);
+	    else
+		scrambled = password.charAt(i) + scrambled;
+	}
+
+	for(int d = (password.length() - 1); d >= 0; d--)
+	{
+		reversedPassword += scrambled.charAt(d);
+	}
+	if(reversedPassword == null || reversedPassword.equals("") || reversedPassword.length() < 0)
+		return null;
+	else if(reversedPassword.length() != password.length())
+		return null;
+
+	return scrambled;	
+}
+
+//This function checks a players list of previous guesses. It takes the player's 
+//current guess and compares it to previous guesses. If no matches are found the 
+//function returns true.
+boolean checkGuessList(obj_id collectionItem, obj_id player, string anagram)
+{
+	blog("checkGuessList");	
+
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	else if(anagram == null || anagram.equals(""))
+		return false;
+
+	blog("checkGuessList validation completed. anagram = "+anagram);	
+	
+	if(!utils.hasScriptVar(player, ANAGRAM_GUESS_LIST))
+		return true;
+
+	blog("checkGuessList anagram list found");	
+		
+	string guessList = utils.getStringScriptVar(player, ANAGRAM_GUESS_LIST);
+	if(guessList == null || guessList.equals(""))
+		return false;
+	
+	blog("checkGuessList guessList populated with previous list: " + guessList);	
+
+	//split list at comma
+	string[] splitAnagramList = split(guessList, ',');
+	if(splitAnagramList == null || splitAnagramList.length < 0)
+		return false;
+
+	int listLength = splitAnagramList.length;
+	blog("checkGuessList listLength: "+listLength);	
+	for(int i = 0; i < listLength; i++)
+	{
+		blog("checkGuessList splitAnagramList:" + splitAnagramList[i].trim() + "* anagram:"+anagram);	
+		//get rid of leading white space
+		if(splitAnagramList[i].trim().equals(anagram))
+			return false;
+	}
+	
+	blog("checkGuessList went through the entire list and found no match.");	
+	return true;
+}
+
+//This function gives players points for each guess they get right. The
+//function also adds correct guesses to the previous list
+boolean givePoints(obj_id collectionItem, obj_id player, string anagram)
+{
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	else if(anagram == null || anagram.equals(""))
+		return false;
+	int passwordPointsNeeded = utils.getIntScriptVar(player, PASSWORD_POINTS_NEEDED+"_"+collectionItem);
+	int passwordPointsCurrent = utils.getIntScriptVar(player, PASSWORD_POINTS_CURRENT);
+	if(passwordPointsNeeded < 0 || passwordPointsCurrent < 0)
+		return false;		
+	else if(passwordPointsNeeded == passwordPointsCurrent)
+	{
+		rewardPlayer(collectionItem, player);
+		//false not to create SUI
+		return false;				
+	}
+	else if(passwordPointsCurrent >= passwordPointsNeeded)
+	{
+		rewardPlayer(collectionItem, player);
+		//false not to create SUI		
+		return false;		
+	}
+
+	string guessList = utils.getStringScriptVar(player, ANAGRAM_GUESS_LIST);
+	if(guessList != null && !guessList.equals(""))
+		utils.setScriptVar(player, ANAGRAM_GUESS_LIST, guessList + ", " + anagram);
+	else
+		utils.setScriptVar(player, ANAGRAM_GUESS_LIST, anagram);
+	
+	int point = DEFAULT_ANAGRAM_POINT;
+	//add buff modifiers here
+	if((passwordPointsCurrent + point) >= passwordPointsNeeded)
+	{
+		rewardPlayer(collectionItem, player);
+		//false not to create SUI		
+		return false;				
+	}
+	
+	utils.setScriptVar(player, PASSWORD_POINTS_CURRENT, passwordPointsCurrent+point);
+	createSafeSui(collectionItem, player);
+
+	return true;
+}
+
+//This function gives the player a win
+boolean rewardPlayer(obj_id collectionItem, obj_id player)
+{
+	blog("rewardPlayer - init");
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	else if(!exists(collectionItem) || !exists(player))
+		return false;
+	blog("rewardPlayer - validation complete");
+	
+	if(!collection.rewardPlayerCollectionSlot(player, collectionItem))
+	{
+		blog("rewardPlayer - rewardPlayerCollectionSlot = FAIL!!!");
+		closeOldWindow(player);
+		removePlayerNonImperativeVars(player);
+		return false;
+	}
+	blog("rewardPlayer - rewardPlayerCollectionSlot = GIVE LOOT");
+	//give player their loot
+	loot.giveMeatlumpPuzzleLoot(player, true, false);
+	
+	blog("rewardPlayer - rewardPlayerCollectionSlot = SUCCESS");
+	closeOldWindow(player);
+	removePlayerNonImperativeVars(player);
+	//player won, no need to keep any script vars.
+	removePlayerImperativeVars(player);
+	
+	return true;
+}
+
+messageHandler closeSui()
+{
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+	if(buff.applyBuff(player, "safe_puzzle_downer"));
+	{
+		sendSystemMessage(player, YOU_CANCELED_EARLY);
+	}	
+
+	blog("closeSui");
+	closeOldWindow(player);
+	//no longer removed to avoid players from using cancel 
+	//to get an easier puzzle
+	blog("closeSui - removePlayerNonImperativeVars");	
+	removePlayerNonImperativeVars(player);
+	return SCRIPT_CONTINUE;
+}
+
+void closeOldWindow(obj_id player)
+{
+	int pid = sui.getPid(player, PID_NAME);
+	if(pid > -1)
+	{
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+	}
+}
+
+void removePlayerNonImperativeVars(obj_id player)
+{
+	utils.removeScriptVarTree(player, NONIMPERATIVE_VAR_PREFIX);
+	utils.removeObjVar(player, NONIMPERATIVE_VAR_PREFIX);
+}
+
+void removePlayerImperativeVars(obj_id player)
+{
+	utils.removeScriptVarTree(player, VAR_PREFIX);
+	utils.removeObjVar(player, VAR_PREFIX);
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON)
+		LOG("minigame",msg);
+	return true;
+}

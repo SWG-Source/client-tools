@@ -1,0 +1,917 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        mediator.script
+ * Description:  mediator object script: POI = prisonbreak
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+/*
+	In the core scenario, the meditor is a farmer holding several pirates prisoner.
+*/
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.ai_lib;
+include library.poi;
+include library.scenario;
+include library.utils;
+include library.chat;
+include library.group;
+include library.badge;
+include ai.ai;
+include ai.ai_combat;
+
+//-----------------------------------------------
+// Inherits
+//-----------------------------------------------
+
+inherits poi.base.scenario_actor;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string SCRIPT_CONVERSE				= "npc.converse.npc_converse_menu";
+const string LOG_NAME						= "poiPrisonBreak Mediator";
+const string ALERT_VOLUME_NAME 				= "alertTriggerVolume";
+
+// Conversation states.
+const int	CONV_GREET						= 0;	// Player hasn't spoken to anyone and needs a greeting.
+const int	CONV_INSULT						= 1;	// Player insulted the antagonist leader.
+const int	CONV_NOHELP						= 2;	// Player refused to help the antagonist leader.
+const int	CONV_YESHELP					= 3;	// Player said he would help the antagonist leader.
+const int	CONV_TALKMEDIATOR				= 4;	// Player needs to ask for work.
+const int	CONV_CHECKGUARD					= 5;	// Player told to check on guard.
+const int	CONV_GUARDPEEING				= 6;	// Player told the guard to go pee.
+const int	CONV_GUARDHOLDINGIT				= 7;	// Player told the guard to hold it.
+const int	CONV_MAYBEHELP					= 8;	// Player has been greeted by the antagonist and might help.
+const int	CONV_SABOTAGEPLAN				= 9;	// Player has been tasked with sabotage.
+
+const string joyEmotes[] = { "thank", "cheer", "applaud", "laugh", "softclap", "yes", "glow" };
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnIncapacitated
+//------------------------------------------------
+
+trigger OnIncapacitated( obj_id killer )
+{
+	// Call death handler (used for guard).
+	messageTo( self, scenario.HANDLER_MY_DEATH, null, 2, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnStartNpcConversation
+//
+// NOTE: Need to clean this up.  It's a mess.
+//------------------------------------------------
+
+trigger OnStartNpcConversation( obj_id speaker )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	// Get base object reference.
+	obj_id poiMaster = poi.getBaseObject(self);
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation ( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Look up our progress.
+	int progress = scenario.getPlayerProgress( speaker );
+
+	// Check to see if we are the leader.
+	boolean isLeader = poi.isNpcTagged( self, "mediator_0" );
+
+	// Check to see if we are the guard.
+	boolean isGuard = poi.isNpcTagged( self, "mediator_1" );
+
+	// Check to see if the antagonists have been defeated.
+	boolean antagonistsDead = false;
+	boolean someDead = false;
+	obj_id[] antagonists = scenario.getTeamMembers( "antagonist" );
+	int deadcount = scenario.getDeadTeamMemberCount( poiMaster, "antagonist" );
+	if ( deadcount == antagonists.length )
+		antagonistsDead = true;
+	else if ( deadcount > 0 )
+		someDead = true;
+
+	// Check to see if the speaker has credit.
+	boolean speakerCredit = scenario.hasKillCredit( poiMaster, "antagonist", speaker );
+
+	// Check to see if the mediator leader is dead.
+	boolean leaderDead = hasObjVar( poiMaster, "mediatorLeaderDead" );
+
+	//------------------------------------------------
+	// Minion chatter.
+	//------------------------------------------------
+
+	if ( !isLeader )
+	{
+		if ( isGuard )
+		{
+			// Handle guard chatter.
+			guardChatter( self, convo, speaker, poiMaster, antagonistsDead, speakerCredit, leaderDead );
+		}
+		else
+		{
+			// Handle normal minion chatter.
+			minionChatter( self, convo, speaker, poiMaster, antagonistsDead, speakerCredit, leaderDead );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	//------------------------------------------------
+	// Leader chatter.
+	//------------------------------------------------
+
+	// Msg/response vars.
+	string_id msg = new string_id( convo, "m_greet_0" );
+	resizeable string_id[] responses = new string_id[0];
+
+	// Special conversation states.
+	if ( antagonistsDead )
+	{
+		// The prisoners are all dead.
+		if ( !speakerCredit )
+		{
+			// This player had nothing to do with this event.
+			poi.quickSay( self, chat.CHAT_STATE, chat.MOOD_EXUBERANT, "m_minion_wesurvived" );
+		}
+		else if ( hasObjVar( poiMaster, "playerSabotage" ) )
+		{
+			// The player stopped the pirates.  Major victory.
+			poi.quickSay( self, chat.CHAT_STATE, chat.MOOD_EXUBERANT, "m_majorvictory" );
+
+			// Finish the scenario.  !FINISH!
+			dictionary params = new dictionary();
+			params.put( "victory", true );
+			params.put( "speaker", speaker );
+			messageTo( self, "finishScenario", params, 0, false );
+		}
+		else
+		{
+			// The player let the pirates out to begin with.  Minor victory.
+			poi.quickSay( self, chat.CHAT_STATE, chat.MOOD_EXUBERANT, "m_minorvictory" );
+
+			// Finish the scenario.  !FINISH!
+			dictionary params = new dictionary();
+			params.put( "victory", true );
+			params.put( "speaker", speaker );
+			messageTo( self, "finishScenario", params, 0, false );
+		}
+
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+	else if ( hasObjVar( poiMaster, "sabotage" ) )
+	{
+		// A player put the POI into sabotage mode.
+		if ( progress == CONV_SABOTAGEPLAN )
+		{
+			// This guy knows the plan.
+			scenario.say( self, convo, "m_distractguard", false );
+		}
+		else
+		{
+			// This guy doesn't know the plan.
+			scenario.say( self, convo, "m_soontheypay", false );
+		}
+
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Choose something to say based on this player's progress.
+	switch ( progress )
+	{
+		// Player has not spoken to us yet.
+		case CONV_GREET:
+		case CONV_INSULT:
+		case CONV_NOHELP:
+		case CONV_MAYBEHELP:
+			msg = new string_id( convo, "m_greet" );
+			responses = utils.addElement( responses, new string_id(convo, "r_m_greet_whatprisoners") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// Player needs to ask about work.
+		case CONV_TALKMEDIATOR:
+			msg = new string_id( convo, "m_busy" );
+			responses = utils.addElement( responses, new string_id(convo, "r_anywork") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// We told the player to check up on the guard.
+		case CONV_CHECKGUARD:
+			msg = new string_id( convo, "m_didyoucheck" );
+			responses = utils.addElement( responses, new string_id(convo, "r_noillcheck") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// We checked on the guard.
+		case CONV_GUARDPEEING:
+		case CONV_GUARDHOLDINGIT:
+			msg = new string_id( convo, "m_didyoucheck" );
+			responses = utils.addElement( responses, new string_id(convo, "r_hesdoingfine") );
+			if ( progress == CONV_GUARDPEEING )
+				responses = utils.addElement( responses, new string_id(convo, "r_hesonbreak") );
+			else if ( progress == CONV_GUARDHOLDINGIT )
+				responses = utils.addElement( responses, new string_id(convo, "r_heneedsabreak") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// The player was asked to distract the guard.
+		case CONV_YESHELP:
+			msg = new string_id( convo, "m_busy" );
+			responses = utils.addElement( responses, new string_id(convo, "r_prisonersplanning") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// The player already spoke to us.
+		default:
+			scenario.say( self, convo, "m_busy", false );
+			npcEndConversation( speaker );
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// guardChatter
+//------------------------------------------------
+
+void guardChatter( obj_id self, string convo, obj_id speaker, obj_id poiMaster, boolean antagonistsDead, boolean speakerCredit, boolean leaderDead )
+{
+	// Look up the player's progress.
+	int progress = scenario.getPlayerProgress( speaker );
+	int idx;
+
+	// See if we should punt to normal chatter.
+	if ( leaderDead || antagonistsDead )
+	{
+		minionChatter( self, convo, speaker, poiMaster, antagonistsDead, speakerCredit, leaderDead );
+		return;
+	}
+
+	if ( hasObjVar( self, "peeing" ) )
+	{
+		// We are busy peeing.
+		poi.quickSay( self, "m_minion_guard_peeing" );
+		npcEndConversation( speaker );
+		return;
+	}
+
+	resizeable string_id[] responses = new string_id[0];
+	string_id msg;
+	switch ( progress )
+	{
+		// The player has been told to check up on us.
+		case CONV_CHECKGUARD:
+			// Say our normal line.
+			idx = rand( 1, 4 );
+			msg = new string_id( convo, "m_minion_guard_" + idx  );
+
+			// Add the player response.
+			responses = utils.addElement( responses, new string_id(convo, "r_toldtocheckyou") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// The player was asked to distract the guard.
+		case CONV_YESHELP:
+		case CONV_SABOTAGEPLAN:
+			// Say our normal line.
+			idx = rand( 1, 4 );
+			msg = new string_id( convo, "m_minion_guard_" + idx  );
+
+			// Add the player response.
+			responses = utils.addElement( responses, new string_id(convo, "r_whatshappening") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// Say some guard chatter.
+		default:
+			idx = rand( 1, 4 );
+			poi.quickSay( self, "m_minion_guard_" + idx );
+
+			// Cut off the convo (no responses).
+			npcEndConversation( speaker );
+			break;
+	}
+}
+
+//------------------------------------------------
+// minionChatter
+//------------------------------------------------
+
+void minionChatter( obj_id self, string convo, obj_id speaker, obj_id poiMaster, boolean antagonistsDead, boolean speakerCredit, boolean leaderDead )
+{
+	if ( leaderDead )
+	{
+		// If the leader is dead, we mourn.
+		if ( !speakerCredit )
+		{
+			// This player had nothing to do with t`his event.
+			poi.quickSay( self, chat.CHAT_EULOGIZE, chat.MOOD_SAD, "m_minion_leaderdead" );
+		}
+		else if ( hasObjVar( poiMaster, "playerSabotage" ) )
+		{
+			// Player stopped the pirates, but the leader died.  Minor failure.
+			int idx = rand( 1, 2 );
+			poi.quickSay( self, chat.CHAT_COMPLAIN, chat.MOOD_SAD, "m_minion_minorfailure_" + idx );
+
+			// Finish the scenario.  !FINISH!
+			messageTo( self, "finishScenario", null, 0, false );
+		}
+		else
+		{
+			// The pirates escaped and the leader died.  Major failure.
+			int idx = rand( 1, 2 );
+			poi.quickSay( self, chat.CHAT_SHOUT, chat.MOOD_DISMAYED, "m_minion_majorfailure_" + idx );
+
+			// Finish the scenario.  !FINISH!
+			messageTo( self, "finishScenario", null, 0, false );
+		}
+	}
+	else if ( antagonistsDead )
+	{
+		// The prisoners are all dead and the leader survived.
+		if ( !speakerCredit )
+		{
+			// This player had nothing to do with this event.
+			poi.quickSay( self, chat.CHAT_STATE, chat.MOOD_EXUBERANT, "m_minion_wesurvived" );
+		}
+		else if ( hasObjVar( poiMaster, "playerSabotage" ) )
+		{
+			// The leader survived and the player stopped the pirates.  Major victory.  No finish here, leader handles finish.
+			int idx = rand( 1, 2 );
+			poi.quickSay( self, chat.CHAT_STATE, chat.MOOD_EXUBERANT, "m_minion_majorvictory_" + idx );
+		}
+		else
+		{
+			// The leader survived, but the player let the pirates out to begin with.  No finish here, leader handles finish.
+			int idx = rand( 1, 2 );
+			poi.quickSay( self, chat.CHAT_STATE, chat.MOOD_EXUBERANT, "m_minion_minorvictory_" + idx );
+		}
+	}
+	else
+	{
+		// Say some guard chatter.
+		int idx = rand( 1, 4 );
+		poi.quickSay( self, "m_minion_" + idx );
+	}
+
+	// Cut off the convo (no responses).
+	npcEndConversation( speaker );
+}
+
+//------------------------------------------------
+// OnNpcConversationResponse
+//------------------------------------------------
+
+trigger OnNpcConversationResponse( string convoName, obj_id speaker, string_id response )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get reference to conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Validate our conversation.
+	if ( !convoName.equals(convo) )
+	{
+		LOG( LOG_NAME, "Convo files do not match!!" );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Look up the player's progress.
+	int progress = scenario.getPlayerProgress( speaker );
+
+	// Check to see if we are the leader.
+	boolean isLeader = poi.isNpcTagged( self, scenario.MEDIATOR + "_0" );
+
+	// Check to see if we are the guard.
+	boolean isGuard = poi.isNpcTagged( self, scenario.MEDIATOR + "_1" );
+
+	// Only the leader and the guard chat.
+	if ( !isGuard && !isLeader )
+		return SCRIPT_CONTINUE;
+
+	// Respond to the player's comment.
+	string aId = response.getAsciiId();
+	string_id msg = new string_id();
+	resizeable string_id[] responses = new string_id[0];
+
+	// Zero out responses.
+	npcSetConversationResponses( speaker, responses );
+
+	// Handle the guard's responses.
+	if ( isGuard )
+	{
+		// I was told to check on you.
+		if ( ( aId.equals("r_toldtocheckyou") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_guard_allsquiet" ) );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_gotellmaster") );
+			npcSetConversationResponses( speaker, responses );
+		}
+
+		// Player says he'll go tell the farm master.
+		else if ( ( aId.equals("r_gotellmaster") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_guard_needtopee" ) );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_pee_goodidea") );
+			responses = utils.addElement( responses, new string_id(convo, "r_pee_badidea") );
+			npcSetConversationResponses( speaker, responses );
+		}
+
+		// Player thinks peeing is a good idea.
+		else if ( ( aId.equals("r_pee_goodidea") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_guard_pee_goodidea" ) );
+
+			// Set our progress, depending on which side we are helping.
+			if ( progress == CONV_CHECKGUARD )
+				scenario.setPlayerProgress( speaker, CONV_GUARDPEEING );
+
+			// Guard goes to pee right away.
+			messageTo( self, "goPee", null, 2, false );
+
+			// Track our peeing state.
+			setObjVar( self, "peeing", true );
+		}
+
+		// Player thinks peeing is a bad idea.
+		else if ( ( aId.equals("r_pee_badidea") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_guard_pee_badidea" ) );
+
+			// Set our progress, depending on which side we are helping.
+			if ( progress == CONV_CHECKGUARD )
+				scenario.setPlayerProgress( speaker, CONV_GUARDHOLDINGIT );
+
+			// Guard goes to pee after a timer.
+			messageTo( self, "goPee", null, 20, false );
+
+			// Track our peeing state.
+			setObjVar( self, "peeing", true );
+		}
+
+		// Player is distracting the guard.
+		else if ( ( aId.equals("r_whatshappening") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_guard_needtopee" ) );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_pee_goodidea") );
+			responses = utils.addElement( responses, new string_id(convo, "r_pee_badidea") );
+			npcSetConversationResponses( speaker, responses );
+		}
+	}
+	// Handle the leader's responses.
+	else if ( isLeader )
+	{
+		// Who are these prisoners?
+		if ( ( aId.equals("r_m_greet_whatprisoners") ) )
+		{
+			// Add the player to the scenario.
+			//scenario.addPlayer( poiMaster, speaker );
+			scenario.setPlayerProgress( speaker, CONV_TALKMEDIATOR );
+
+			// Tell our story.
+			npcSpeak( speaker, new string_id( convo, "m_tellprisoners" ) );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_tp_whynotkillthem") );
+			responses = utils.addElement( responses, new string_id(convo, "r_tp_bettermovethem") );
+			npcSetConversationResponses( speaker, responses );
+		}
+
+		// Player suggests we kill them.
+		else if ( ( aId.equals("r_tp_whynotkillthem") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_nokillthem" ) );
+			scenario.setPlayerProgress( speaker, CONV_TALKMEDIATOR );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_anywork") );
+			npcSetConversationResponses( speaker, responses );
+		}
+
+		// Player suggests we move them.
+		else if ( ( aId.equals("r_tp_bettermovethem") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_cantmovethem" ) );
+			scenario.setPlayerProgress( speaker, CONV_TALKMEDIATOR );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_anywork") );
+			npcSetConversationResponses( speaker, responses );
+		}
+
+		// Player wants work.
+		else if ( ( aId.equals("r_anywork") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_checktheguard" ) );
+			scenario.setPlayerProgress( speaker, CONV_CHECKGUARD );
+		}
+
+		// Player is going to go check the guard.
+		else if ( ( aId.equals("r_noillcheck") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_yeahyoudothat" ) );
+		}
+
+		// The guard is doing fine.
+		else if ( ( aId.equals("r_hesdoingfine") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_excellent" ) );
+		}
+
+		// The guard is on break.
+		else if ( ( aId.equals("r_hesonbreak") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_whatbreak" ) );
+		}
+
+		// The guard needs a break.
+		else if ( ( aId.equals("r_heneedsabreak") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_nobreak" ) );
+		}
+
+		// The player tells the farm master that the prisoners are planning something.
+		else if ( ( aId.equals("r_prisonersplanning") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_whatbreakout" ) );
+			scenario.setPlayerProgress( speaker, CONV_TALKMEDIATOR );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_prisonershavebomb") );
+			npcSetConversationResponses( speaker, responses );
+		}
+
+		// The player explains the bomb plan.
+		else if ( ( aId.equals("r_prisonershavebomb") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_abomb" ) );
+			scenario.setPlayerProgress( speaker, CONV_TALKMEDIATOR );
+
+			// Set player responses.
+			responses = utils.addElement( responses, new string_id(convo, "r_distractanyway") );
+			npcSetConversationResponses( speaker, responses );
+		}
+
+		// Distract them anyway? You crazy?
+		else if ( ( aId.equals("r_distractanyway") ) )
+		{
+			// Make a response.
+			npcSpeak( speaker, new string_id( convo, "m_theplan" ) );
+
+			// Put the POI into sabotage mode.
+			setObjVar( poiMaster, "sabotage", true );
+			scenario.setPlayerProgress( speaker, CONV_SABOTAGEPLAN );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// finishScenario
+//
+// Called when the scenario is finished for a mediator victory.
+//------------------------------------------------
+
+messageHandler finishScenario()
+{
+	// The scenario is complete!
+	obj_id poiMaster = poi.getBaseObject(self);
+	scenario.complete( poiMaster );
+
+	// Tell everyone to celebrate!
+	if ( (params != null) && params.getBoolean( "victory" ) )
+	{
+		// Reward his group.
+		obj_id speaker = params.getObjId( "speaker" );
+		if ( group.isGroupObject(speaker) )
+		{
+			obj_id[] members = getGroupMemberIds( speaker );
+			if ( (members == null) || (members.length == 0) )
+			{
+			}
+			else
+			{
+				for ( int n = 0; n < members.length; n++ )
+				{
+					if ( !badge.hasBadge( members[n], "poi_prisonbreak" ) )
+						badge.grantBadge( members[n], "poi_prisonbreak" );
+					else
+						badge.notifyHasBadge( members[n], "poi_prisonbreak" );
+				}
+			}
+		}
+		else
+		{
+			if ( !badge.hasBadge( speaker, "poi_prisonbreak" ) )
+				badge.grantBadge( speaker, "poi_prisonbreak" );
+			else
+				badge.notifyHasBadge( speaker, "poi_prisonbreak" );
+		}
+
+		obj_id[] mediators = scenario.getTeamMembers( poiMaster, "mediator" );
+		if ( mediators == null )
+			return SCRIPT_CONTINUE;
+		for ( int i=0; i<mediators.length; i++ )
+		{
+			obj_id a = mediators[i];
+			if ( (a == null) || (a == obj_id.NULL_ID) )
+				continue;
+
+			messageTo( a, "celebrateVictory", null, 0, false );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSawAttack(obj_id defender, obj_id[] attackers)
+{
+	return SCRIPT_CONTINUE;
+
+/*	if ( !isIdValid( defender ) || getTarget( self ) == defender )
+		return SCRIPT_CONTINUE;
+
+	if ( attackers == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id poiMaster = poi.getBaseObject( self );
+	obj_id[] mediators = scenario.getTeamMembers( poiMaster, "mediator" );
+	obj_id[] antagonists = scenario.getTeamMembers( poiMaster, "antagonist" );
+
+	boolean mediatorAttacked = false;
+	for (int i = 0; i < mediators.length; i++)	
+	{
+		if (defender == mediators[i])
+			mediatorAttacked = true;
+	}
+	if (!mediatorAttacked)
+		return SCRIPT_CONTINUE;
+
+	boolean antagonistAttacking = false;
+	for (int i = 0; i < antagonists.length; i++)
+	{
+		for (int j = 0; j < attackers.length; j++)
+		{
+			if (attackers[j] == antagonists[i])
+				antagonistAttacking = true;
+		}
+	}
+	if (!antagonistAttacking)
+		return SCRIPT_CONTINUE;
+	
+	if ( !canSee( self, defender ) )
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( defender == self || ai_lib.isAiDead( defender ))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !ai_lib.isInCombat(self) )
+	{
+		obj_id enemy = antagonists[rand(0,antagonists.length-1)];
+		startCombat( self, enemy );
+	}
+	
+	return SCRIPT_OVERRIDE;*/
+}
+
+//------------------------------------------------
+// celebrateVictory
+//------------------------------------------------
+
+messageHandler celebrateVictory()
+{
+	stop( self );
+	int whichsocial = rand( 0, 6 );
+	queueCommand( self, ##"social", null, joyEmotes[whichsocial], COMMAND_PRIORITY_DEFAULT );
+	messageTo( self, "resumeDefaultCalmBehavior", null, 3, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// goPee
+//
+// Called by the master.
+//------------------------------------------------
+
+messageHandler goPee()
+{
+	// We've been guarding a long time.  Better go relieve ourselves.
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Indicate what we are doing.
+	poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_NONE, "m_minion_gopee" );
+
+	// Go to the pee location.
+	location peeLoc = new location( getLocation( self ) );
+	peeLoc.x -= 15;
+	peeLoc.z += 15;
+	setMovementRun( self );
+	ai_lib.aiPathTo( self, peeLoc );
+
+	// Tell the master that we are gone.
+	messageTo( poiMaster, "guardGone", null, 10, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleMyDeath
+//
+// Keeps track of mediator death.
+//------------------------------------------------
+
+messageHandler handleMyDeath()
+{
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Record when leader dies.
+	if ( poi.isNpcTagged( self, scenario.MEDIATOR + "_0" ) )
+		setObjVar( poiMaster, "mediatorLeaderDead", true );
+
+	// If the guard dies and we haven't tried our breakout plan, do it now.
+	if ( hasObjVar( self, "guard" ) && !hasObjVar( poiMaster, "bombPlan" ) )
+		messageTo( poiMaster, "guardGone", null, 3, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnTriggerVolumeEntered
+//------------------------------------------------
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	if ( hasObjVar( breacher, "gm") )
+		return SCRIPT_OVERRIDE;
+
+	if ( ai_lib.isInCombat( self ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( breacher == self )
+		return SCRIPT_OVERRIDE;
+
+	if ( isIncapacitated(self) )
+		return SCRIPT_OVERRIDE;
+
+	if ( !isMob( breacher ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( ai_lib.isMonster( breacher ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( volumeName == ALERT_VOLUME_NAME )
+	{
+		// Never the leader.
+		if ( poi.isNpcTagged( self, "mediator_0" ) )
+			return SCRIPT_OVERRIDE;
+
+		// Get reference to base.
+		obj_id poiMaster = poi.getBaseObject( self );
+		if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+			return SCRIPT_CONTINUE;
+
+		// We can only trigger once in a while.
+		if ( hasObjVar( poiMaster, "recentlySpoke" ) )
+			return SCRIPT_OVERRIDE;
+		setObjVar( poiMaster, "recentlySpoke", true );
+
+		// Reset timer.
+		messageTo( self, "resetSpeakTimer", null, 60*5, false );
+
+		// Turn to breacher.
+		faceTo( self, breacher );
+
+		// Randomly choose something to do.
+		int i = rand( 0, 4 );
+		if ( i == 0 )
+		{
+			// Greet them.
+			queueCommand( self, ##"social", breacher, "hail", COMMAND_PRIORITY_DEFAULT );
+		}
+		else
+		{
+			// Say something.
+			poi.quickSay( self, "m_approachchatter_" + i );
+		}
+
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// resetSpeakTimer
+//------------------------------------------------
+
+messageHandler resetSpeakTimer()
+{
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Allow us to breach-speak again.
+	removeObjVar( poiMaster, "recentlySpoke" );
+
+	return SCRIPT_CONTINUE;
+}
+

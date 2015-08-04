@@ -1,0 +1,555 @@
+// ======================================================================
+//
+// camp_survivor.script
+// Copyright 2004, Sony Online Entertainment
+// All Rights Reserved.
+//
+// Created with SwgConversationEditor 1.37 - DO NOT EDIT THIS AUTO-GENERATED FILE!
+//
+// ======================================================================
+
+// ======================================================================
+// Library Includes
+// ======================================================================
+
+include library.ai_lib;
+include library.attrib;
+include library.chat;
+include library.collection;
+include library.conversation;
+include library.create;
+include library.groundquests;
+include library.spawning;
+include library.utils;
+
+// ======================================================================
+// Script Constants
+// ======================================================================
+
+string c_stringFile = "conversation/camp_survivor";
+
+// ======================================================================
+// Script Conditions
+// ======================================================================
+
+boolean camp_survivor_condition__defaultCondition (obj_id player, obj_id npc)
+{
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
+boolean camp_survivor_condition_isOwner (obj_id player, obj_id npc)
+{
+	return hasObjVar(npc, "myEscort") && player == getObjIdObjVar(npc, "myEscort");
+}
+
+// ----------------------------------------------------------------------
+
+boolean camp_survivor_condition_isCloseToCamp (obj_id player, obj_id npc)
+{
+	if(!hasObjVar(npc, "objParent"))
+		return false;
+	obj_id objParent = getObjIdObjVar(npc, "objParent");
+	if(!isValidId(objParent))
+		return false;
+	location locationObjParent = getLocationObjVar(npc, "locationObjParent");
+	if(locationObjParent == null)
+		return false;
+		
+	if(utils.getDistance2D(locationObjParent, getLocation(npc)) <= 70)
+		return true;
+		
+	return false;
+}
+
+// ----------------------------------------------------------------------
+
+boolean camp_survivor_condition_isUnclaimedSpawner (obj_id player, obj_id npc)
+{
+	faceTo(npc, player);
+	return (!hasObjVar(npc, "myEscort"));
+}
+
+// ======================================================================
+// Script Actions
+// ======================================================================
+
+void camp_survivor_action_startDestroyTimer (obj_id player, obj_id npc)
+{
+	//in 90 frames if the player has not finished conversation, the NPC despawns.
+	messageTo(npc, "cleanUpWhileConversing", null, 90, false);
+}
+
+// ----------------------------------------------------------------------
+
+void camp_survivor_action_claimSpawner (obj_id player, obj_id npc)
+{
+	if(!hasObjVar(npc, "questName") || !hasObjVar(npc, "locationObjParent"))
+	{
+		messageTo(npc, "cleanUpCampNpcAndParent", null, 1, false);
+		return;
+	}
+
+	string questName = getStringObjVar(npc, "questName");
+	if(questName == null && questName.length() <= 0)		
+	{
+		messageTo(npc, "cleanUpCampNpcAndParent", null, 1, false);
+		return;
+	}
+	
+	if(hasObjVar(npc, "myEscort") && getObjIdObjVar(npc, "myEscort") == player && groundquests.isQuestActive(player, questName))
+	{
+		//the player already is the escort, and already has the quest.
+		//hopefully there is no need to speak to this player.
+		return;
+	}
+	
+	setObjVar(npc, "myEscort", player);
+	
+	if(groundquests.hasCompletedQuest(player, questName))
+	{
+		groundquests.clearQuest(player, questName); 	
+	}
+	if(!groundquests.isQuestActive(player, questName))
+	{
+		groundquests.grantQuest(player, questName); 
+	}
+
+	location locationObjParent = getLocationObjVar(npc, "locationObjParent");
+	if(locationObjParent == null)
+		return;
+			
+	setInvulnerable(npc, false);	
+	pathTo(npc, locationObjParent);
+	//this stops the cleanUpWhileConversing from destroying the NPC early
+	setObjVar(npc, "ignoreEarlyDestroy", 1);
+
+	messageTo(npc, "spawnEnemies", null, 0, false);
+	messageTo(npc, "checkOwnerValidity", null, 10, false);	
+}
+
+// ======================================================================
+// Script %TO Tokens
+// ======================================================================
+
+// ======================================================================
+// Script %DI Tokens
+// ======================================================================
+
+// ======================================================================
+// Script %DF Tokens
+// ======================================================================
+
+// ======================================================================
+// handleBranch<n> Functions 
+// ======================================================================
+
+int camp_survivor_handleBranch2 (obj_id player, obj_id npc, string_id response)
+{
+	//-- [BRANCH NOTE] 
+	//-- NPC: Please help me make it to the nearest camp.
+
+	//-- [RESPONSE NOTE] 
+	//-- PLAYER: Alright, lead the way.
+	if (response == "s_96")
+	{
+		//-- [NOTE] 
+		if (camp_survivor_condition__defaultCondition (player, npc))
+		{
+			camp_survivor_action_claimSpawner (player, npc);
+
+			//-- NPC: Thanks! Follow me!
+			string_id message = new string_id (c_stringFile, "s_97");
+			utils.removeScriptVar (player, "conversation.camp_survivor.branchId");
+
+			npcEndConversationWithMessage (player, message);
+
+			return SCRIPT_CONTINUE;
+		}
+
+	}
+
+	return SCRIPT_DEFAULT;
+}
+
+// ----------------------------------------------------------------------
+
+// ======================================================================
+// User Script Triggers
+// ======================================================================
+
+const string_id SID_YOU_WENT_TOO_FAR		= new string_id("theme_park/outbreak/outbreak","delivery_you_went_too_far");
+
+trigger OnInitialize ()
+{
+	if ((!isTangible (self)) || (isPlayer (self)))
+		detachScript(self, "conversation.camp_survivor");
+
+	setCondition (self, CONDITION_CONVERSABLE);
+	setCondition (self, CONDITION_INTERESTING);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach ()
+{
+	setCondition (self, CONDITION_CONVERSABLE);
+	setCondition (self, CONDITION_INTERESTING);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathComplete()
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+		
+	if(ai_lib.isInCombat (self))
+		return SCRIPT_CONTINUE;	
+	
+	obj_id parentObject = getObjIdObjVar(self, "objParent");
+	if(!isValidId(parentObject))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_survivor_spawning.OnMovingPathComplete() Master Object does not exist");
+		return SCRIPT_CONTINUE;
+	}
+
+	location locationObjParent = getLocationObjVar(self, "locationObjParent");
+	if(locationObjParent == null)
+		return SCRIPT_CONTINUE;
+				
+	pathTo(self, locationObjParent);
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuRequest (obj_id player, menu_info menuInfo)
+{
+	int menu = menuInfo.addRootMenu (menu_info_types.CONVERSE_START, null);
+	menu_info_data menuInfoData = menuInfo.getMenuItemById (menu);
+	menuInfoData.setServerNotify (false);
+	setCondition (self, CONDITION_CONVERSABLE);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated (obj_id killer)
+{
+	clearCondition (self, CONDITION_CONVERSABLE);
+	detachScript (self, "conversation.camp_survivor");
+
+	if(hasObjVar(self, "myEscort"))
+	{
+		obj_id player = getObjIdObjVar(self, "myEscort");
+		if(isValidId(player) && exists(player))
+		{	
+			string questName = getStringObjVar(self, "questName");
+			if(questName != null && questName.length() > 0)
+			{
+				string failMessage = getStringObjVar(self,"failMessage");
+				if(failMessage != null && failMessage.length() > 0)
+				{
+					if(groundquests.isQuestActive(player, questName))
+					{
+						groundquests.sendSignal(player, failMessage); 
+					}
+				}
+			}
+		}
+	}
+
+	obj_id parent = getObjIdObjVar(self,"mySpawner");
+	if(isValidId(parent))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.cleanUpCampNpcAndParent() Destroying parent: "+parent);
+		messageTo(parent, "destroySelf", null, 1, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanUpWhileConversing()
+{
+	if(hasObjVar(self, "ignoreEarlyDestroy"))
+			return SCRIPT_CONTINUE;
+			
+	messageTo(self, "cleanUpCampNpcAndParent", null, 1, false);
+	return SCRIPT_CONTINUE;	
+}
+
+messageHandler cleanUpCampNpcAndParent()
+{
+	CustomerServiceLog("outbreak_themepark", "survivor_pathing.cleanUpCampNpcAndParent() Initalized Message Handler.");
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, "myEscort"))
+	{
+		obj_id player = getObjIdObjVar(self, "myEscort");
+		if(isValidId(player) && exists(player))
+		{	
+			string questName = getStringObjVar(self, "questName");
+			if(questName != null && questName.length() > 0)
+			{
+				string creatureType = getStringObjVar(self,"creature_type");
+				if(creatureType != null && creatureType.length() > 0)
+				{
+					if(groundquests.isQuestActive(player, questName))
+					{
+						groundquests.sendSignal(player, creatureType); 
+					}
+					if(!hasCompletedCollectionSlot(player, creatureType + "_counter"))
+					{
+						modifyCollectionSlotValue(player, creatureType + "_counter", 1);
+					}				
+				}
+			}
+		}
+	}
+
+	obj_id parent = getObjIdObjVar(self, "mySpawner");
+	if(isValidId(parent))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.cleanUpCampNpcAndParent() Destroying parent: "+parent);
+		messageTo(parent, "destroySelf", null, 1, false);
+	}
+	CustomerServiceLog("outbreak_themepark", "survivor_pathing.cleanUpCampNpcAndParent() Destroying self.");
+
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnEnemies()
+{
+	CustomerServiceLog("outbreak_themepark", "survivor_pathing.spawnEnemies() Initalized Message Handler.");
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+		
+	if(!hasObjVar(self, "myEscort"))
+		return SCRIPT_CONTINUE;
+		
+	obj_id player = getObjIdObjVar(self, "myEscort");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;	
+
+	int combatLevel = getLevel(player);
+	if(combatLevel < 0 || combatLevel > 90)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_survivor.spawnEnemies() Player "+player+" has a level that is invalid. Player level is: "+combatLevel+". Aborting the camp defense.");
+		return SCRIPT_CONTINUE;	
+	}
+		
+	for(int i = 0; i < 2; i++)
+	{
+		//CREATE THE MOB
+		obj_id mob = create.object("outbreak_afflicted_defense", spawning.getRandomLocationAtDistance(getLocation(self), 10.0f));
+		if(!isValidId(mob) || !exists(mob))
+		{
+			CustomerServiceLog("outbreak_themepark", "camp_survivor.spawnEnemies() Mob: "+mob+" could not be created!");
+			return SCRIPT_CONTINUE;
+		}
+
+		CustomerServiceLog("outbreak_themepark", "camp_survivor.spawnEnemies() Mob level is set to match player level");		
+
+		//If you are initializing a creature, you NEED this objvar
+		setObjVar(mob, create.INITIALIZE_CREATURE_DO_NOT_SCALE_OBJVAR, 1);	
+
+		dictionary creatureDict = utils.dataTableGetRow("datatables/mob/creatures.iff", "outbreak_afflicted_defense");
+		if(creatureDict != null)
+		{
+			create.initializeCreature (mob, "outbreak_afflicted_defense", creatureDict, combatLevel);
+		}
+		CustomerServiceLog("outbreak_themepark", "camp_survivor.spawnEnemies() Mob level is set to match player level.");
+
+		setInvulnerable(mob, false);
+		clearCondition(mob, CONDITION_CONVERSABLE);
+		setMovementRun(mob);
+		setBaseRunSpeed(mob, (getBaseRunSpeed(self)-8));			
+		setAttributeAttained(mob, attrib.OUTBREAK_AFFLICTED);
+		setObjVar(mob, "ow/sener", player);
+
+		attachScript(mob, "theme_park.outbreak.dynamic_enemy");
+		startCombat(mob, self);
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkOwnerValidity()
+{
+	if(!hasObjVar(self, "myEscort"))
+		return SCRIPT_CONTINUE;
+
+	obj_id owner = getObjIdObjVar(self, "myEscort");
+	if(!isValidId(owner) || !exists(owner))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_survivor.checkOwnerValidity() Mob: "+self+" FAILED TO FIND OWNER OBJVAR.");	
+		return SCRIPT_CONTINUE;	
+	}
+
+	location ownerLoc = getLocation(owner);
+	float distanceCheck = utils.getDistance2D(getLocation(self), ownerLoc);
+	if(distanceCheck > 20)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_survivor.checkOwnerValidity() Mob: "+self+" has been left alone and is destroying self, failing quest for player. The distance between player and NPC was: "+distanceCheck);
+	
+		//You went too far away message
+		sendSystemMessage(owner, SID_YOU_WENT_TOO_FAR);
+		if(groundquests.isQuestActive(owner, "camp_alpha_survivor_rescue"))
+		{
+			groundquests.sendSignal(owner, "outbreak_camp_alpha_survivor_failed"); 
+		}
+		else if(groundquests.isQuestActive(owner, "camp_beta_survivor_rescue"))
+		{
+			groundquests.sendSignal(owner, "outbreak_camp_beta_survivor_failed"); 
+		}
+		else if(groundquests.isQuestActive(owner, "camp_gamma_survivor_rescue"))
+		{
+			groundquests.sendSignal(owner, "outbreak_camp_gamma_survivor_failed"); 
+		}
+		else 
+		{
+			groundquests.sendSignal(owner, "outbreak_camp_delta_survivor_failed"); 	
+		}
+		messageTo(self, "cleanUpCampNpcAndParent", null, 1, false);		
+		return SCRIPT_CONTINUE;					
+	}
+
+	obj_id parentObject = getObjIdObjVar(self, "objParent");
+	if(!isValidId(parentObject))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_survivor_spawning.OnMovingPathComplete() Master Object does not exist");
+		return SCRIPT_CONTINUE;
+	}
+
+	location locationObjParent = getLocationObjVar(self, "locationObjParent");
+	if(locationObjParent == null)
+		return SCRIPT_CONTINUE;
+	if(!ai_lib.isInCombat (self))
+	{		
+		pathTo(self, locationObjParent);
+	}
+	
+	messageTo(self, "checkOwnerValidity", null, 10, false);
+	return SCRIPT_CONTINUE;		
+}
+
+// ======================================================================
+// Script Triggers
+// ======================================================================
+
+//-- This function should move to base_class.java
+boolean npcStartConversation(obj_id player, obj_id npc, string convoName, string_id greetingId, prose_package greetingProse, string_id[] responses)
+{
+	Object[] objects = new Object[responses.length];
+	System.arraycopy(responses, 0, objects, 0, responses.length);
+	return npcStartConversation(player, npc, convoName, greetingId, greetingProse, objects);
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnStartNpcConversation (obj_id player)
+{
+	obj_id npc = self;
+
+	if (ai_lib.isInCombat (npc) || ai_lib.isInCombat (player))
+		return SCRIPT_OVERRIDE;
+
+	//-- [NOTE] 
+	if (camp_survivor_condition_isCloseToCamp (player, npc))
+	{
+		//-- NPC: I see the camp from here...I'm going for it!
+		string_id message = new string_id (c_stringFile, "s_9");
+		chat.chat (npc, player, message);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	//-- [NOTE] 
+	if (camp_survivor_condition_isUnclaimedSpawner (player, npc))
+	{
+		camp_survivor_action_startDestroyTimer (player, npc);
+
+		//-- NPC: Please help me make it to the nearest camp.
+		string_id message = new string_id (c_stringFile, "s_73");
+		int numberOfResponses = 0;
+
+		boolean hasResponse = false;
+
+		//-- PLAYER: Alright, lead the way.
+		boolean hasResponse0 = false;
+		if (camp_survivor_condition__defaultCondition (player, npc))
+		{
+			++numberOfResponses;
+			hasResponse = true;
+			hasResponse0 = true;
+		}
+
+		if (hasResponse)
+		{
+			int responseIndex = 0;
+			string_id responses [] = new string_id [numberOfResponses];
+
+			if (hasResponse0)
+				responses [responseIndex++] = new string_id (c_stringFile, "s_96");
+
+			utils.setScriptVar (player, "conversation.camp_survivor.branchId", 2);
+
+			npcStartConversation (player, npc, "camp_survivor", message, responses);
+		}
+		else
+		{
+			chat.chat (npc, player, message);
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	//-- [NOTE] 
+	if (camp_survivor_condition_isOwner (player, npc))
+	{
+		camp_survivor_action_claimSpawner (player, npc);
+
+		//-- NPC: Ready?  Lets go!
+		string_id message = new string_id (c_stringFile, "s_8");
+		chat.chat (npc, player, message);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	//-- [NOTE] 
+	if (camp_survivor_condition__defaultCondition (player, npc))
+	{
+		//-- NPC: Someone else is helping me.
+		string_id message = new string_id (c_stringFile, "s_60");
+		chat.chat (npc, player, message);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	chat.chat (npc, "Error:  All conditions for OnStartNpcConversation were false.");
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnNpcConversationResponse (string conversationId, obj_id player, string_id response)
+{
+	if (conversationId != "camp_survivor")
+		return SCRIPT_CONTINUE;
+
+	obj_id npc = self;
+
+	int branchId = utils.getIntScriptVar (player, "conversation.camp_survivor.branchId");
+
+	if (branchId == 2 && camp_survivor_handleBranch2 (player, npc, response) == SCRIPT_CONTINUE)
+		return SCRIPT_CONTINUE;
+
+	chat.chat (npc, "Error:  Fell through all branches and responses for OnNpcConversationResponse.");
+
+	utils.removeScriptVar (player, "conversation.camp_survivor.branchId");
+
+	return SCRIPT_CONTINUE;
+}
+
+// ======================================================================
+

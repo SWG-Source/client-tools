@@ -1,0 +1,5497 @@
+
+include library.ai_lib;
+include library.beast_lib;
+include library.combat_consts;
+include library.healing;
+include library.groundquests;
+include library.sequencer;
+include library.weapons;
+include library.combat;
+include library.vehicle;
+include library.prose;
+include library.jedi;
+include library.pet_lib;
+include library.dot;
+include library.colors;
+include library.utils;
+include library.ai_lib;
+include library.group;
+include library.powerup;
+include library.chat;
+include library.xp;
+include library.loot;
+include library.metrics;
+include library.heavyweapons;
+include library.grenade;
+include library.buff;
+include library.armor;
+include library.scout;
+include library.squad_leader;
+include library.factions;
+include ai.ai_combat;
+include library.cybernetic;
+include library.stealth;
+include library.pclib;
+include library.locations;
+include library.city;
+include library.create;
+include library.luck;
+include library.proc;
+include library.smuggler;
+include library.session;
+include library.storyteller;
+include library.sui;
+include library.movement;
+include library.target_dummy;
+
+const float MAX_THROWING_DISTANCE  = 30;
+
+//// pvp damage modifiers
+const float PVP_DAMAGE_REDUCTION_VALUE = .75f; // 50% of normal damage in pvp combat
+const float UNIVERSAL_ACTION_COST_MULTIPLIER = 1.0f;
+const string JEDI_COMBAT_DATATABLE = "datatables/jedi/jedi_combat_data.iff";
+const int MAX_TARGET_ARRAY_SIZE = 10;
+const int ALLOWED_LOS_FAILURES = 10;
+const int TARGET_COMMAND = -2;
+
+// doCombatPreCheck return values
+const int PRECHECK_SUCCESS		= -1;
+const int PRECHECK_OVERRIDE		= 0;
+const int PRECHECK_CONTINUE		= 1;
+
+const int HIT_RESULT_MISS		= 0;
+const int HIT_RESULT_DODGE		= 1;
+const int HIT_RESULT_PARRY		= 2;
+const int HIT_RESULT_GLANCING		= 3;
+const int HIT_RESULT_BLOCK		= 4;
+const int HIT_RESULT_CRITICAL		= 5;
+const int HIT_RESULT_PUNISHING		= 6;
+const int HIT_RESULT_HIT		= 7;
+const int HIT_RESULT_EVADE		= 8;
+const int HIT_RESULT_STRIKETHROUGH	= 9;
+
+const string PROGRESSIVE_DAMAGE_COUNTER		= "hitData.progressive.counter";
+
+const string_id SID_NONE = new string_id();
+
+/*
+THIS IS COMBAT BASE
+all combat effects live here
+along with any other foundation functions
+pay attention to the flow of messages and structure of objvars
+*/
+
+boolean combatStandardAction(string actionName, obj_id self, obj_id target, string params, string successHandler, string failHandler)
+{
+	return combatStandardAction(actionName, self, target, getCurrentWeapon(self), params, null, false, false, 0);
+}
+
+boolean combatStandardAction(string actionName, obj_id self, obj_id target, string params, string successHandler, string failHandler, int overloadDamage)
+{
+	return combatStandardAction(actionName, self, target, getCurrentWeapon(self), params, null, false, false, overloadDamage);
+}
+
+boolean combatStandardAction(string actionName, obj_id self, obj_id target, string params, string successHandler, string failHandler, boolean testPetBar)
+{
+	return combatStandardAction(actionName, self, target, getCurrentWeapon(self), params, null, false, testPetBar, 0);
+}
+
+boolean combatStandardAction(string actionName, obj_id self, obj_id target, string params)
+{
+	return combatStandardAction(actionName, self, target, getCurrentWeapon(self), params, null, false, false, 0);
+}
+
+void sendPerformSpam(obj_id actor, obj_id target, string_id message, string actionName, int spam_type)
+{
+	string_id actionStringId = new string_id("cmd_n", actionName);
+	prose_package pp = new prose_package();
+	pp = prose.setStringId(pp, message);
+	pp = prose.setTU(pp, actor);
+	pp = prose.setTT(pp, target);
+	pp = prose.setTO(pp, actionStringId);
+
+	sendCombatSpamMessageProse(actor, target, pp, true, true, true, spam_type);
+}
+
+boolean combatStandardAction(string actionName, obj_id self, obj_id target, obj_id objWeapon,  string params, combat_data actionData, boolean isTangibleAttacking)
+{
+	return combatStandardAction(actionName, self, target, objWeapon, params, actionData, isTangibleAttacking, false, 0);
+}
+
+boolean combatStandardAction(string actionName, obj_id self, obj_id target, obj_id objWeapon,  string params, combat_data actionData, boolean isTangibleAttacking, boolean testPetBar, int overloadDamage)
+{
+	//sendSystemMessageTestingOnly(self, "params='" + params + "'");
+
+	// PROFILER_START("combat_base.combatStandardAction");
+
+	// PROFILER_START("combat_base.combatStandardAction - top");
+
+	if (combat.isStunned(self))
+	{
+		// PROFILER_STOP("combat_base.combatStandardAction");
+		return false;
+	}
+
+	boolean triggerPetBar = false;
+	obj_id player = self;
+
+	// LOG("combat_base", "combatStandardAction 1 " + actionName);
+
+	if (testPetBar && isPlayer(self))
+	{
+		obj_id beast = beast_lib.getBeastOnPlayer(self);
+		if (!isIdValid(beast) || !exists(beast) || !beast_lib.canPerformCommand(self, beast, actionName))
+		{
+			// PROFILER_STOP("combat_base.combatStandardAction - top");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			return false;
+		}
+		//This is a pet bar ability and I am the player performing. Set target to pets target if I can and set self to my pet.
+		target = isIdValid(getTarget(beast)) ? getTarget(beast) : getIntendedTarget(self);
+		self = beast;
+		objWeapon = getCurrentWeapon(self);
+		triggerPetBar = true;
+	}
+
+	// removing illegal weapons taken from storyteller npcs using an exploit
+	// no weapon in the game with a weapon speed of 2 or higher is a player weapon (as of 09/29/08)
+	if ( weapons.checkForIllegalStorytellerWeapon(self, objWeapon) )
+	{
+		weapons.handleIllegalStorytellerWeapon(self, objWeapon, "combatStandardAction");
+		utils.setScriptVar(objWeapon, "illegalStorytellerWeapon", true);
+
+		/*startCombat(target, self);
+		return false;*/
+	}
+
+	// In the case of heavy weapons, the attackers target is being set as a valid target
+	// and bypassing the validation. This will force that target to be null if
+	// the target fails the storyteller combat check.
+	if( !storyteller.storytellerCombatCheck(self, target) )
+	{
+		target = obj_id.NULL_ID;
+	}
+
+	boolean verbose = false;
+	boolean isEggWeapon = utils.hasScriptVar(objWeapon, "objOwner");
+
+	// Load action data from datatable
+	if (actionData == null)
+	{
+		actionData = combat_engine.getCombatData(actionName);
+	}
+
+	actionData = attackOverrideByBuff(self, actionData);
+
+	if(actionData == null)
+	{
+		combat.combatLog(self, target, "combatStandardAction", "Attack Aborted - Not a valid combat action - "+actionName);
+		// PROFILER_STOP("combat_base.combatStandardAction - top");
+		// PROFILER_STOP("combat_base.combatStandardAction");
+		return false;
+	}
+
+	// LOG("combat_base", "combatStandardAction 2 " + actionName);
+
+
+	//This is a hack to make force throw work, yay force throw.
+	if(isEggWeapon && actionName.equals("forceThrow"))
+	{
+		self = utils.getObjIdScriptVar(objWeapon, "objOwner");
+
+		// The weapon is invalid, if the original object passed was an egg.
+		objWeapon = getCurrentWeapon(self);
+	}
+
+
+	combat.combatLog(self, target, "combatStandardAction", "who=" + getName(self) + ", actionName=" + actionName + ", target = " + target + ", params.length=" + params.length() + ", params=" + params +", weapon=" + getName(objWeapon));
+	boolean isGroundTarget = getWeaponType(objWeapon) == WEAPON_TYPE_GROUND_TARGETTING;
+	boolean isDirectionTarget = getWeaponType(objWeapon) == WEAPON_TYPE_DIRECTIONAL;
+	boolean isLocationTargetOk = actionData.delayAttackEggPosition == 3; // LOCATION
+
+	float xTarget = -1;
+	float yTarget = -1;
+	float zTarget = -1;
+	obj_id cellTarget  = null;
+	location targetLoc = null;
+	boolean isAutoAiming = false;
+
+	if(params != null && params != "")
+	{
+		actionData.params = params;
+		java.util.StringTokenizer st = new java.util.StringTokenizer(params);
+		int paramCount = st.countTokens();
+		long cellId = 0;
+
+		if(paramCount >= 7)
+		{
+			xTarget = Float.parseFloat(st.nextToken());
+			yTarget = Float.parseFloat(st.nextToken());
+			zTarget = Float.parseFloat(st.nextToken());
+			cellId =  Long.parseLong(st.nextToken());
+
+			if(cellId != 0)
+			{
+				cellTarget = obj_id.getObjId(cellId);
+				xTarget = Float.parseFloat(st.nextToken());
+				yTarget = Float.parseFloat(st.nextToken());
+				zTarget = Float.parseFloat(st.nextToken());
+			}
+
+			targetLoc = new location(xTarget, yTarget, zTarget, getCurrentSceneName(), cellTarget);
+		}
+
+
+		string lastArg = "";
+		while(st.hasMoreTokens()) // extract auto-aim/clicky mode
+		{
+			lastArg = st.nextToken();
+		}
+
+		if(lastArg.equals("a")) // c == clicky mode.  a == auto aim
+		{
+			isAutoAiming = true;
+		}
+
+		/*
+		if(params.length() > 0)
+		{
+			sendSystemMessageTestingOnly(self, "***TargetLoc=" + targetLoc.toString());
+		}
+		*/
+	}
+
+	//this allows a 3rd party object to create a delayed attack at the location of the 3rd party
+	//ie a trap or mine object that explodes
+	if(params.equals("") && isLocationTargetOk)
+	{
+		targetLoc = getLocation(objWeapon);
+	}
+
+	if(utils.hasScriptVar(objWeapon, "isAutoAimed")) // should only happen for secondary explosions
+	{
+		isAutoAiming = utils.getBooleanScriptVar(objWeapon, "isAutoAimed");
+	}
+
+	//sendSystemMessageTestingOnly(self, "AutomAiming=" + isAutoAiming);
+
+	boolean isSpecialAttack = actionData.commandType == combat.RIGHT_CLICK_SPECIAL;
+	//sendSystemMessageTestingOnly(self, "1 - validTarget=" + actionData.validTarget);
+
+	int hitType = actionData.hitType;
+	boolean isDelayedAttack = false;
+
+	if(!isTangibleAttacking)
+	{
+		// force location targeted weapons to use delayed attack
+		isDelayedAttack = (hitType == combat.DELAY_ATTACK);// || isGroundTarget; // DELAY_ATTACK==6
+	}
+
+	// PROFILER_STOP("combat_base.combatStandardAction - top");
+
+	// PROFILER_START("combat_base.combatStandardAction - middle");
+
+	// Load the weapon data
+	weapon_data weaponData = getOverloadedWeaponData(self, objWeapon,  actionData);
+
+	if(weaponData == null)
+	{
+		string logString = "getOverloadedWeaponData failed to return data for self: " + self + " " +
+			" actionData: " + actionData;
+
+		if(isIdValid(self))
+		{
+			logString += (isPlayer(self) ? " a player object" : " a non-player object");
+		}
+
+		if(isIdValid(objWeapon))
+		{
+			logString += " objWeapon: " + objWeapon + " getName(objWeapon): " +  getName(objWeapon);
+
+			if(!utils.hasScriptVar(objWeapon, "dctWeaponStats"))
+			{
+				logString += " dctWeaponStats: null";
+			}
+			else
+			{
+				logString += " dctWeaponStats: exists";
+			}
+		}
+		else
+		{
+			logString += " objWeapon: null dctWeaponStats: null";
+		}
+
+		CustomerServiceLog("combat_errors: ", logString);
+
+		// PROFILER_STOP("combat_base.combatStandardAction - middle");
+		// PROFILER_STOP("combat_base.combatStandardAction");
+		return false;
+	}
+
+
+	// LOG("combat_base", "combatStandardAction 3 " + actionName);
+
+	// Validate that this action can be used with this weapon only for non-delayed attacks or delayed attacks on the initial execution
+	if(!isTangibleAttacking)
+	{
+		if (!combat.canUseWeaponWithAbility(self, weaponData, actionData, verbose))
+		{
+			// Player feedback handled in canUseWeaponWithAbility()
+			combat.combatLog(self, null, "combatStandardAction", "Aborting Attack - Not able to use this action ("+actionName+") with the current weapon");
+			// PROFILER_STOP("combat_base.combatStandardAction - middle");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			return false;
+		}
+	}
+
+
+	// LOG("combat_base", "combatStandardAction 4 " + actionName);
+
+	// +++ overloadWeapon data
+	// Determine the correct combat target.
+	obj_id combatTarget = target;
+
+	if(isTangibleAttacking)
+	{
+		//sendSystemMessageTestingOnly(self, "IsTangibleAttacking - overriding validTarget");
+		actionData.validTarget = actionData.validEggTarget;
+	}
+
+	if (isSpecialAttack && !isTangibleAttacking)
+	{
+		combatTarget = getCorrectCombatTarget(self, target, actionData, verbose);
+		if(!isIdValid(combatTarget))
+		{
+			combat.combatLog(self, target, "combatStandardAction", "Attack Failed - No valid combat target");
+			// PROFILER_STOP("combat_base.combatStandardAction - middle");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			return false;
+		}
+	}
+	else if(!isTangibleAttacking && !isGroundTarget && !isDirectionTarget)
+	{
+		combatTarget = getCorrectCombatTarget(self, target, actionData, verbose);
+		if(!isIdValid(combatTarget))
+		{
+			// Player feedback handled in getCorrectCombatTarget()
+			combat.combatLog(self, target, "combatStandardAction", "Attack Failed - No valid combat target");
+			// PROFILER_STOP("combat_base.combatStandardAction - middle");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			return false;
+		}
+	}
+
+	// LOG("combat_base", "combatStandardAction 5 " + actionName);
+
+
+	attacker_data attackerData = new attacker_data();
+	defender_data[] defenderData = null;
+
+	if(isGroundTarget || isDirectionTarget)
+	{
+		actionData.targetLoc = targetLoc;
+	}
+
+	if (isLocationTargetOk && targetLoc != null)
+	{
+		actionData.targetLoc = targetLoc;
+	}
+
+	if(!isTangibleAttacking)
+	{
+		actionData = modifyActionDataByExpertise(self, actionData);
+	}
+
+	stealth.clearPreviousInvis(self);
+
+	// Clear invisibility if this action cannot be used while invisible
+	stealth.testInvisCombatAction(self, target, actionData);
+
+	// PROFILER_STOP("combat_base.combatStandardAction - middle");
+
+	// dont get combat defenders if this is the first execution of a delayed attack, otherwise do.
+	if(!isDelayedAttack)
+	{
+		// PROFILER_START("combat_base.combatStandardAction - !isDelayedAttack");
+		// Create array of valid defenders
+		obj_id[] defenders = getCombatDefenders(self, combatTarget, weaponData, actionData, isSpecialAttack);
+
+		if(defenders == null || defenders.length == 0)
+		{
+			//sendSystemMessageTestingOnly(self, "Attack failed - no valid targets");
+			combat.combatLog(self, target, "combatStandardAction", "Attack Failed - No valid targets");
+
+			if(weaponData.weaponType == WEAPON_TYPE_DIRECTIONAL && !isEggWeapon)
+			{
+				// gotta do this so other clients can see the bolts/fire/etc
+				attacker_results  atkRslt = new attacker_results();
+				defender_results[] dfndRslt = new defender_results[0];
+				atkRslt.id = self;
+				atkRslt.weapon = weaponData.id;
+				atkRslt.actionName = getStringCrc(toLower(actionName));
+				atkRslt.useLocation = true;
+				atkRslt.targetLocation = new vector(targetLoc.x, targetLoc.y, targetLoc.z);
+				atkRslt.targetCell = targetLoc.cell;
+				atkRslt.endPosture = (combat.isMeleeWeapon(weaponData.id) || combat.isLightsaberWeapon(weaponData.id))? POSTURE_UPRIGHT : getPosture(self);
+				string anim = actionData.animDefault;
+
+				// Clear invisibility if this action cannot be used while invisible
+				stealth.testInvisCombatAction(self, target, actionData);
+
+				doCombatResults(anim, atkRslt, dfndRslt);
+
+				// PROFILER_STOP("combat_base.combatStandardAction - !isDelayedAttack");
+				// PROFILER_STOP("combat_base.combatStandardAction");
+				return true;
+			}
+
+			// PROFILER_STOP("combat_base.combatStandardAction - !isDelayedAttack");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+
+			// Stealth could have been removed, so we must try to reinstate it.
+			stealth.reinstateInvisFromCombat(self);
+			return false;
+		}
+
+		weapon_data junkData = new weapon_data();
+		defenderData = new defender_data[defenders.length];
+
+		// CHECK TO SEE IF HEALING NEEDS TO GO THROUGH GET COMBAT DATA
+		if (!getCombatData(self, defenders, attackerData, defenderData, junkData))
+		{
+			string msg = "ERROR::combatStandardAction:" + actionData.actionName + ") call to getCombatData returned false";
+			CustomerServiceLog("combat_errors", msg);
+			// PROFILER_STOP("combat_base.combatStandardAction - !isDelayedAttack");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			stealth.reinstateInvisFromCombat(self);
+			return false;
+		}
+
+		// PROFILER_STOP("combat_base.combatStandardAction - !isDelayedAttack");
+	}
+	else
+	{
+		attackerData.id = self;
+		defender_data dat = new defender_data();
+		dat.id = target;
+		defenderData = new defender_data[]{dat};
+	}
+
+
+	// LOG("combat_base", "combatStandardAction 6 " + actionName);
+
+	//sendSystemMessageTestingOnly(self, "6 - action cost = " + actionData.actionCost);
+	// Attempt to drain action cost only for non delayed attacks or the initial loop on a delayed attack
+	int[] actionCost = null;
+
+	if(!isTangibleAttacking)
+	{
+		// PROFILER_START("combat_base.combatStandardAction - action cost");
+		actionCost = combat.getActionCost(self, weaponData, actionData);
+
+		if(!combat.canDrainCombatActionAttributes(self, actionCost))
+		{
+			showFlyTextPrivate(self, self, new string_id("combat_effects", "action_too_tired"), 1.5f, colors.GOLDENROD);
+
+			if (verbose)
+			{
+				combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "pool_drain_fail"));
+			}
+
+			combat.combatLog(self, self, "combatStandardAction", "Aborting Attack - Insufficient ability points for action");
+			// PROFILER_STOP("combat_base.combatStandardAction - action cost");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			stealth.reinstateInvisFromCombat(self);
+			return false;
+		}
+
+		int killMeterCost = (int)actionData.vigorCost;
+
+		if (killMeterCost > 0)
+		{
+			if (!beast_lib.isBeast(attackerData.id) && isPlayer(attackerData.id))
+			{
+				if (!combat.canDrainKillMeter(attackerData.id, killMeterCost))
+				{
+					showFlyTextPrivate(self, self, new string_id("combat_effects", "need_more_kills"), 1.5f, colors.FIREBRICK);
+					// PROFILER_STOP("combat_base.combatStandardAction - action cost");
+					// PROFILER_STOP("combat_base.combatStandardAction");
+
+					stealth.reinstateInvisFromCombat(self);
+					return false;
+				}
+
+				combat.drainKillMeter(attackerData.id, killMeterCost);
+			}
+		}
+
+		// PROFILER_STOP("combat_base.combatStandardAction - action cost");
+	}
+
+	// LOG("combat_base", "combatStandardAction 7 " + actionName);
+
+
+	// HEALING BRANCH-OFF
+	boolean isHeal = hitType == combat.HEAL;
+	boolean isRevive = hitType == combat.REVIVE;
+
+	if(isHeal || isRevive)
+	{
+		// PROFILER_START("combat_base.combatStandardAction - healing");
+		combat.combatLog(self, combatTarget, "combatStandardAction", "Heal Action - Branching off to healing functionality");
+
+		if(!doHealingPreCheck(actionData, attackerData, defenderData, verbose))
+		{
+			combat.combatLog(self, combatTarget, "combatStandardAction", "Attack Failed - Healing precheck failed");
+			// PROFILER_STOP("combat_base.combatStandardAction - healing");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			stealth.reinstateInvisFromCombat(self);
+			// LOG("combat_base", "combatStandardAction 7 !doHealingPreCheck " + actionName);
+			return false;
+		}
+
+		if(!combat.canDrainCombatActionAttributes(self, actionCost))
+		{
+			// PROFILER_STOP("combat_base.combatStandardAction - healing");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			stealth.reinstateInvisFromCombat(self);
+			// LOG("combat_base", "combatStandardAction 7 !combat.canDrainCombatActionAttributes " + actionName);
+			return false;
+		}
+
+		if (actionData.performanceSpamStrId.isValid() && !isTangibleAttacking)
+		{
+			sendPerformSpam(self, combatTarget, actionData.performanceSpamStrId, actionName, COMBAT_RESULT_GENERIC);
+		}
+
+		boolean success = false;
+
+		if(isHeal)
+			success = healing.performHealDamage(attackerData, defenderData, actionData);
+
+		// LOG("combat_base", "combatStandardAction 7 success: " + success + " " + actionName);
+
+
+		if(isRevive)
+			success = healing.performRevivePlayer(attackerData, defenderData, actionData, actionData.addedDamage > 0);
+
+		if(success)
+			stealth.testInvisNonCombatAction(self, target, actionData);
+
+		if(success)
+		{
+			LOG("combat_base", "combatStandardAction 7 success " + actionName);
+
+			if(!combat.drainCombatActionAttributes(self, actionCost))
+			{
+				combat.combatLog(self, combatTarget, "combatStandardAction", "ERROR:Insufficient action not caught in canDrainCombatActionAttributes()");
+				// PROFILER_STOP("combat_base.combatStandardAction - healing");
+				// PROFILER_STOP("combat_base.combatStandardAction");
+				stealth.reinstateInvisFromCombat(self);
+				return false;
+			}
+
+			string anim = actionData.animDefault;
+
+			attacker_results cbtAttackerResults = new attacker_results();
+
+			obj_id defender = self;
+
+			if(isIdValid(target) && target != self && !isDead(target))
+				defender = target;
+
+			defender_results[] cbtDefenderResults = new defender_results[1];
+			cbtDefenderResults[0] = new defender_results(); // data struct newing
+			cbtDefenderResults[0].id = defender;
+			cbtDefenderResults[0].endPosture = getPosture(defender);
+			cbtDefenderResults[0].result = COMBAT_RESULT_HIT;
+
+			cbtAttackerResults.id = self;
+			cbtAttackerResults.weapon = null;
+			cbtAttackerResults.actionName = getStringCrc(toLower(actionName));
+			cbtAttackerResults.endPosture = getPosture(self);
+
+			doCombatResults(anim, cbtAttackerResults, cbtDefenderResults);
+		}
+
+		// PROFILER_STOP("combat_base.combatStandardAction - healing");
+		// PROFILER_STOP("combat_base.combatStandardAction");
+		return success;
+
+	}
+	else if(!isTangibleAttacking)
+	{
+		// PROFILER_START("combat_base.combatStandardAction - !isTangibleAttacking");
+		// Does Distance and LOS checks - has to happen for all stages of all attacks
+		if(!doCombatPreCheck(actionData, attackerData, weaponData, defenderData, verbose))
+		{
+			combat.combatLog(self, combatTarget, "combatStandardAction", "Attack Failed - Combat precheck failed");
+			// PROFILER_STOP("combat_base.combatStandardAction - !isTangibleAttacking");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			stealth.reinstateInvisFromCombat(self);
+			return false;
+		}
+
+		boolean isSingleTargetAttack = actionData.hitType == -1 && actionData.attackType == combat.SINGLE_TARGET;
+
+		if(!isSingleTargetAttack && !combat.drainCombatActionAttributes(self, actionCost))
+		{
+			showFlyTextPrivate(self, self, new string_id("combat_effects", "action_too_tired"), 1.5f, colors.GOLDENROD);
+			// Problem with drainCombatActionAttributes()!! Error cases should have been caught in canDrainCombatActionAttributes()
+			combat.combatLog(self, combatTarget, "combatStandardAction", "ERROR:Insufficient action not caught in canDrainCombatActionAttributes()");
+			// PROFILER_STOP("combat_base.combatStandardAction - !isTangibleAttacking");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			stealth.reinstateInvisFromCombat(self);
+			return false;
+		}
+
+		if (actionData.performanceSpamStrId.isValid())
+		{
+			sendPerformSpam(self, combatTarget, actionData.performanceSpamStrId, actionName, COMBAT_RESULT_GENERIC);
+		}
+
+		// PROFILER_STOP("combat_base.combatStandardAction - !isTangibleAttacking");
+	}
+
+
+	// LOG("combat_base", "combatStandardAction 8 " + actionName);
+
+	// Results structs store client animation related data
+	attacker_results   attackerResults = new attacker_results();
+	defender_results[] defenderResults = new defender_results[defenderData.length];
+
+	if(!isDelayedAttack)
+	{
+		// PROFILER_START("combat_base.combatStandardAction - runHitEngine");
+		// Calculate Hit
+		hit_result[] hitData = null;
+		hitData = runHitEngine(attackerData, weaponData, defenderData, attackerResults, defenderResults, actionData, isTangibleAttacking, isAutoAiming, overloadDamage);
+
+		if (hitData == null)
+		{
+			string msg = " Attack Failed - No hit data returned";
+			CustomerServiceLog("combat_errors", "ERROR::combatStandardAction:"+actionData.actionName +" " +msg);
+			combat.combatLog(self, combatTarget, "combatStandardAction", msg);
+			// PROFILER_STOP("combat_base.combatStandardAction - runHitEngine");
+			// PROFILER_STOP("combat_base.combatStandardAction");
+			stealth.reinstateInvisFromCombat(self);
+			return false;
+		}
+
+		// PROFILER_STOP("combat_base.combatStandardAction - runHitEngine");
+	}
+	else if(isGroundTarget && !isSpecialAttack) // send the animations to observing clients
+	{
+		// PROFILER_START("combat_base.combatStandardAction - isGroundTarget");
+
+		attacker_results  atkRslt = new attacker_results();
+		defender_results[] dfndRslt = new defender_results[0];
+		atkRslt.id = self;
+		atkRslt.weapon = weaponData.id;
+		atkRslt.actionName = getStringCrc(toLower(actionName));
+		atkRslt.useLocation = true;
+		atkRslt.targetLocation = new vector(targetLoc.x, targetLoc.y, targetLoc.z);
+		
+		atkRslt.targetCell = targetLoc.cell;
+		atkRslt.endPosture = (combat.isMeleeWeapon(weaponData.id) || combat.isLightsaberWeapon(weaponData.id))? POSTURE_UPRIGHT : getPosture(self);
+		string anim = actionData.animDefault;
+		doCombatResults(anim, atkRslt, dfndRslt);
+
+		// PROFILER_STOP("combat_base.combatStandardAction - isGroundTarget");
+	}
+
+
+	// LOG("combat_base", "combatStandardAction 9 " + actionName);
+
+//	stealth.testInvisCombatAction(self, target, actionData);
+	// PROFILER_START("combat_base.combatStandardAction - bottom");
+
+	if((isDelayedAttack)&&(!isTangibleAttacking))
+	{
+		if(utils.hasScriptVar(self, combat.DIED_RECENTLY))
+			utils.removeScriptVar(self, combat.DIED_RECENTLY);
+
+		LOG("combat_base", "startDelayedAttack");
+		startDelayedAttack(self, combatTarget, objWeapon, actionName, actionData, isGroundTarget, isAutoAiming);
+	}
+	if (beast_lib.isChargeAttack(actionName))
+	{
+		setLocation(self, getLocation(target));
+	}
+
+	// NPC's and creatures use a separate table for cooldowns than players
+	if(!isPlayer(self) && !beast_lib.isBeast(self))
+	{
+		setCommandTimerValue(self, TIMER_COOLDOWN, 0f);
+	}
+
+	if (triggerPetBar)
+	{
+		combat_data cd = combat_engine.getCombatData(actionName);
+		string cooldownGroup = cd.cooldownGroup;
+		int groupCrc = getStringCrc(cooldownGroup);
+		sendCooldownGroupTimingOnly(player, groupCrc, cd.cooldownTime);
+	}
+
+	// LOG("combat_base", "combatStandardAction 10 " + actionName);
+
+	// PROFILER_STOP("combat_base.combatStandardAction - bottom");
+	// PROFILER_STOP("combat_base.combatStandardAction");
+	return true;
+}
+
+void startDelayedAttack(obj_id attacker, obj_id target, obj_id objWeapon, string attackName, combat_data actionData, boolean instantHit, boolean isAutoAimed)
+{
+	//sendSystemMessageTestingOnly(attacker, "Delayed attack started. Attacker=" + attacker);
+	int eggPosition = actionData.delayAttackEggPosition;
+	location where = getLocation(attacker);
+
+	//sendSystemMessageTestingOnly(attacker, "eggPosition=" + eggPosition);
+	if(eggPosition == 2) // TARGETED_OBJECT
+	{
+		where = getLocation(target);
+	}
+	else if(eggPosition == 3) // LOCATION
+	{
+		where = actionData.targetLoc;
+	}
+
+
+	obj_id egg = combat.makeTrackerEgg(attacker, where, actionData);
+	// copy weapon stats
+	//sendSystemMessageTestingOnly(attacker, "LocAtk: " + where.toString());
+	//sendSystemMessageTestingOnly(attacker, "SelfLoc: " + getLocation(attacker).toString());
+	if(!isIdValid(egg))
+	{
+		//sendSystemMessageTestingOnly(attacker, "Failed to create egg at " + where.toString());
+		return;
+	}
+
+	dictionary dctWeaponStats = utils.getDictionaryScriptVar(objWeapon, "dctWeaponStats");
+	utils.setScriptVar(egg, "dctWeaponStats", dctWeaponStats);
+	utils.setScriptVar(egg, "isAutoAimed", isAutoAimed);
+	doStandardDelayedAction(egg, target, attackName, actionData, instantHit);
+}
+
+void doStandardDelayedAction(obj_id objEgg, obj_id target, string attackName, combat_data actionData, boolean instantHit)
+{
+	float delay = actionData.delayAttackInterval;
+	string strEffect = actionData.delayAttackParticle;
+	int intLoops = actionData.delayAttackLoops;
+	boolean boolDestroy = true;
+
+	if(intLoops>1)
+	{
+		if(!utils.hasScriptVar(objEgg, "intLoopsLeft"))
+		{
+			utils.setScriptVar(objEgg, "intLoopsLeft", intLoops);
+			boolDestroy = false;
+		}
+		else
+		{
+			intLoops = utils.getIntScriptVar(objEgg, "intLoopsLeft");
+			if(intLoops>1)
+			{
+				boolDestroy = false;
+			}
+		}
+
+	}
+
+	//sendSystemMessageTestingOnly(obj_id.getObjId(10014554), "instantHit=" + instantHit);
+	if(instantHit)
+	{
+		float initDelay = actionData.initialDelayAttackInterval;
+		//sendSystemMessageTestingOnly(obj_id.getObjId(10014554), "initDelay=" + initDelay);
+		if(initDelay >= 0)
+		{
+			delay = initDelay;
+		}
+	}
+
+	obj_id objOwner = utils.getObjIdScriptVar(objEgg, "objOwner");
+	//either lengthen the time on delay attacks or reduce the time between delayed attacks
+	if(isIdValid(objOwner))
+	{
+		delay += (int)getSkillStatisticModifier(objOwner, "expertise_delay_line_" + actionData.specialLine);
+		delay -= (int)getSkillStatisticModifier(objOwner, "expertise_delay_reduce_line_" + actionData.specialLine);
+	}
+	//cap this so no negative numbers!
+	if(delay < 0)
+		delay = 0;
+
+	doDelayedParticle(objEgg, strEffect, delay, false);
+	doDelayedAttack(objEgg, attackName, target, delay, "", boolDestroy);
+	return;
+}
+
+void doDelayedParticle(obj_id objEgg, string strEffect, float fltDelay, boolean boolCleanup)
+{
+	dictionary dctParams = new dictionary();
+	dctParams.put("strEffect", strEffect);
+	dctParams.put("boolCleanup", boolCleanup);
+	utils.setScriptVar(objEgg, "handleDelayedParticle", dctParams);
+	messageTo(objEgg, "handleDelayedParticle", dctParams, fltDelay, false);
+	return;
+}
+
+void doDelayedAttack(obj_id objEgg, string strAttack, obj_id objTarget, float fltDelay, string strEffect, boolean boolCleanup)
+{
+	dictionary dctParams = new dictionary();
+	dctParams.put("strCommand", strAttack);
+	dctParams.put("objTarget", objTarget);
+	dctParams.put("boolCleanup", boolCleanup);
+	dctParams.put("strEffect", strEffect);
+	utils.setScriptVar(objEgg, "handleDelayedAttack", dctParams);
+	messageTo(objEgg, "handleDelayedAttack", dctParams, fltDelay, false);
+}
+
+
+obj_id getCorrectCombatTarget(obj_id self, obj_id curTarget, boolean verbose)
+{
+	return getCorrectCombatTarget(self, curTarget, "", new combat_data(), verbose);
+}
+
+obj_id getCorrectCombatTarget(obj_id self, obj_id curTarget, combat_data actionData, boolean verbose)
+{
+	return getCorrectCombatTarget(self, curTarget, "", actionData, verbose);
+}
+
+obj_id getCorrectCombatTarget(obj_id self, obj_id curTarget, string params, combat_data actionData, boolean verbose)
+{
+	obj_id newTarget = curTarget;
+	int validTargetType = actionData.validTarget;
+	//sendSystemMessageTestingOnly(self, "validTargetType is "+validTargetType);
+	boolean isOffensive = (validTargetType != combat.VALID_TARGET_FRIEND && validTargetType != combat.VALID_TARGET_DEAD);
+
+	if(actionData.actionName.equals("me_stasis_1") || actionData.actionName.startsWith("bm_mend_pet") || actionData.actionName.equals("bm_soothing_comfort_1") || actionData.actionName.startsWith("bm_revive") )
+	{
+		return newTarget;
+	}
+
+	if (validTargetType == -1)
+	{
+		return self;
+	}
+
+	// Cannot attack self
+	if (newTarget == self)
+	{
+		int intHitType = actionData.hitType;
+		if(isOffensive)
+		{
+			if (verbose)
+			{
+				combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "shoot_self"));
+				//showFlyTextPrivate(self, self, new string_id("combat_effects", "target_invalid_fly"), 1.5f, colors.WHITE);
+			}
+			combat.combatLog(self, curTarget, "getCorrectCombatTarget", "Cannot attack self - returning null target");
+			//sendSystemMessageTestingOnly(self, "returning null");
+			return null;
+		}
+	}
+
+	// Cannot attack dead target
+	if (isOffensive && isDead(newTarget))
+	{
+		if (verbose)
+		{
+			combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "invalid_target"));
+			//showFlyTextPrivate(self, self, new string_id("combat_effects", "target_invalid_fly"), 1.5f, colors.WHITE);
+		}
+		combat.combatLog(self, newTarget, "getCorrectCombatTarget", "Invalid Target - Target is Dead");
+		return null;
+	}
+
+	// Cannot attack incapped target
+	if (isOffensive && isIncapacitated(newTarget))
+	{
+		if (verbose)
+		{
+			combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "invalid_target"));
+			//showFlyTextPrivate(self, self, new string_id("combat_effects", "target_invalid_fly"), 1.5f, colors.WHITE);
+		}
+		combat.combatLog(self, newTarget, "getCorrectCombatTarget", "Invalid Target - Target is Incapped");
+		return null;
+	}
+
+	if(!isOffensive && (newTarget != self) && (!isIdValid(newTarget) || pvpCanAttack(self, newTarget) || !pvpCanHelp(self, newTarget)))
+	{
+		newTarget = self;
+	}
+
+	// Validate target for action
+	if (!combat.validateTarget(newTarget, actionData.validTarget))
+	{
+		if (verbose)
+		{
+			combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "invalid_target"));
+			//showFlyTextPrivate(self, self, new string_id("combat_effects", "target_invalid_fly"), 1.5f, colors.WHITE);
+		}
+		combat.combatLog(self, curTarget, "getCorrectCombatTarget", "Invalid target as defined in datatable - returning null target");
+		return null;
+	}
+
+	// Cannot target an item contained by a player
+	obj_id container = getContainedBy(newTarget);
+	if (isPlayer(container))
+	{
+		string msg = "Cannot attack item contained by player - returning null target";
+		CustomerServiceLog("combat_errors", "ERROR::getCorrectCombatTarget:"+msg);
+		//combat.combatLog(self, curTarget, "getCorrectCombatTarget", msg);
+		return null;
+	}
+
+	// Validate PvP attack rules
+	if ((!isOffensive && !pvpCanHelp(self, newTarget)) ||
+		(isOffensive && !pvpCanAttack(self, newTarget)))
+	{
+		if (verbose)
+		{
+			combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "invalid_pvp_target"));
+			//showFlyTextPrivate(self, self, new string_id("combat_effects", "target_invalid_fly"), 1.5f, colors.WHITE);
+		}
+		combat.combatLog(self, curTarget, "getCorrectCombatTarget", "Not a valid PvP target - returning null target");
+		//sendSystemMessage(self, new string_id("cbt_spam", "target_pvp_single"));
+		return null;
+	}
+
+	// Cannot attack target under cover TODO
+	if (isOffensive && stealth.hasInvisibleBuff(newTarget))
+	{
+		int range = getPassiveRevealRange(newTarget, self);
+
+		if (range >= 0)
+		{
+			stealth.checkForAndMakeVisible(newTarget);
+		}
+		else
+		{
+			if (verbose)
+			{
+				combat.sendCombatSpamMessage(self, new string_id("cbt_spam", "invalid_target"));
+				//showFlyTextPrivate(self, self, new string_id("combat_effects", "target_invalid_fly"), 1.5f, colors.WHITE);
+			}
+			//combat.combatLog(self, newTarget, "getCorrectCombatTarget", "Invalid Target - Target is Incapped");
+			return null;
+		}
+	}
+
+	return newTarget;
+}
+
+boolean isInAttackRange(obj_id attacker, obj_id target, string actionName, boolean verbose)
+{
+	if(!isIdValid(attacker) || !exists(attacker) || !isIdValid(target) || !exists(target))
+	{
+		return false;
+	}
+
+	combat_data actionData = combat_engine.getCombatData(actionName);
+
+	if(actionData == null)
+	{
+		return false;
+	}
+
+	obj_id weapon = getCurrentWeapon(attacker);
+
+	if(!isIdValid(weapon) || !exists(weapon))
+	{
+		return false;
+	}
+
+	weapon_data weaponData = getOverloadedWeaponData(attacker, weapon, actionData);
+
+	if(weaponData == null)
+	{
+		return false;
+	}
+
+	return isInAttackRange(attacker, target, actionData, weaponData, verbose);
+}
+
+boolean isInAttackRange(obj_id attacker, obj_id target, combat_data actionData, weapon_data weaponData, boolean verbose)
+{
+	// Validate max combat range
+	float dist = getDistance(attacker, target);
+
+	float adjustMin = 0.0f;
+	float adjustMax = 0.0f;
+
+	if(dist > combat_engine.getMaxCombatRange() && actionData.ignore_distance == 0)
+	{
+		if(verbose)
+		{
+			showFlyTextPrivate(attacker, attacker, new string_id("combat_effects", "range_too_far"), 1.5f, colors.MEDIUMTURQUOISE);
+			combat.sendCombatSpamMessage(attacker, new string_id("cbt_spam", "out_of_range_far"), COMBAT_RESULT_OUT_OF_RANGE);
+		}
+
+		combat.combatLog(attacker, target, "doCombatPreCheck", "Aborting Attack - Target is further than max combat range");
+
+		return false;
+	}
+
+	//cybernetic throwRange mod:
+	if(actionData.overloadWeaponType == WEAPON_TYPE_THROWN)
+	{
+		weaponData.maxRange = cybernetic.getThrowRangeMod(attacker, weaponData.maxRange);
+	}
+	else
+	{
+		int intWeaponCategory = combat.getWeaponCategory(weaponData.weaponType);
+
+		if(intWeaponCategory == combat.RANGED_WEAPON)
+		{
+			weaponData.maxRange = cybernetic.getRangedRangeMod(attacker, weaponData.maxRange );
+		}
+		else
+		{
+			adjustMax = 6.0f; // 4 meter slop
+		}
+	}
+
+	// Expertise range bonus for weapons
+	float rangeMod = getSkillStatisticModifier(attacker, "expertise_range_bonus_" + weaponData.weaponType);
+	weaponData.maxRange += rangeMod;
+
+	// Validate combat ranges
+	float actionMaxRange = actionData.maxRange;
+
+	if(actionMaxRange > 0)
+	{
+		weaponData.maxRange = actionMaxRange;
+	}
+
+	// Expertise action command range bonus
+	rangeMod = getSkillStatisticModifier(attacker, "expertise_range_line_" + actionData.specialLine);
+
+	if(rangeMod != 0)
+	{
+		weaponData.maxRange += rangeMod;
+	}
+
+	if(dist > (weaponData.maxRange + adjustMax) && actionData.ignore_distance == 0)
+	{
+		if(verbose)
+		{
+			showFlyTextPrivate(attacker, attacker, new string_id("combat_effects", "range_too_far"), 1.5f, colors.MEDIUMTURQUOISE);
+			combat.sendCombatSpamMessage(attacker, new string_id("cbt_spam", "out_of_range_far"), COMBAT_RESULT_OUT_OF_RANGE);
+		}
+
+		combat.combatLog(attacker, target, "doCombatPreCheck", "Aborting Attak - Target is further than max range modified");
+
+		return false;
+	}
+
+	return true;
+}
+
+boolean doCombatPreCheck(combat_data actionData, attacker_data attackerData, weapon_data weaponData, defender_data[] defenderData, boolean verbose)
+{
+	verbose = false;
+	// MOVE TO CODE
+	// Check server PvP enabled setting
+	if ((isPlayer(attackerData.id) && isPlayer(defenderData[0].id)) && (attackerData.id != defenderData[0].id))
+	{
+		String setting = getConfigSetting("GameServer", "disablePvP");
+		if ( setting != null && (setting.equals("1") || setting.equals("true")))
+		{
+			if (verbose)
+				//sendSystemMessageTestingingOnly(attackerData.id, "PVP IS DISABLED.");
+
+			return false;
+		}
+	}
+
+	// Cannot attack from a vehicle
+/*
+	if(vehicle.isRidingVehicle(attackerData.id))
+	{
+		if (verbose)
+		{
+			showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("combat_effects", "cant_attack_fly"), 1.5f, colors.WHITE);
+			combat.sendCombatSpamMessage(attackerData.id, new string_id("cbt_spam", "attack_fail_vehicle"));
+		}
+		combat.combatLog(attackerData.id, defenderData[0].id, "doCombatPreCheck", "Aborting Attack - Riding vehicle");
+		return false;
+	}
+
+
+	// Cannot attack while mount is galloping
+	obj_id mount = getMountId(attackerData.id);
+	if (isIdValid(mount))
+	{
+		if(pet_lib.isGalloping(mount))
+		{
+			if (verbose)
+			{
+				showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("combat_effects", "cant_attack_fly"), 1.5f, colors.WHITE);
+				combat.sendCombatSpamMessage(attackerData.id, new string_id("cbt_spam", "attack_fail_gallop"));
+			}
+			combat.combatLog(attackerData.id, defenderData[0].id, "doCombatPreCheck", "Aborting Attack - Riding galloping mount");
+			return false;
+		}
+	}
+*/
+	// Cannot attack while dead
+	if (isDead(attackerData.id))
+	{
+		if (verbose)
+		{
+			showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("combat_effects", "cant_attack_fly"), 1.5f, colors.WHITE);
+			combat.sendCombatSpamMessage(attackerData.id, new string_id("cbt_spam", "attack_fail_dead"));
+		}
+		combat.combatLog(attackerData.id, defenderData[0].id, "doCombatPreCheck", "Aborting Attack - Attacker is dead");
+		return false;
+	}
+
+	// Cannot attack while incapped
+	if (isIncapacitated(attackerData.id))
+	{
+		if (verbose)
+		{
+			showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("combat_effects", "cant_attack_fly"), 1.5f, colors.WHITE);
+			combat.sendCombatSpamMessage(attackerData.id, new string_id("cbt_spam", "attack_fail_incap"));
+		}
+		combat.combatLog(attackerData.id, defenderData[0].id, "doCombatPreCheck", "Aborting Attack - Attacker is incapped");
+		return false;
+	}
+
+	if(!isInAttackRange(attackerData.id, defenderData[0].id, actionData, weaponData, verbose))
+	{
+		return false;
+	}
+
+	// LOS check
+	boolean cansee = false;
+	//sendSystemMessageTestingOnly(attackerData.id, "WeaponType=" + weaponData.weaponType);
+	if(actionData.specialLine.equals("ignore_los") || actionData.specialLine.equals("co_remote_detonator"))
+	{
+		cansee = true;
+	}
+	else if(weaponData.weaponType == WEAPON_TYPE_GROUND_TARGETTING)
+	{
+		int isSpecialAttack = actionData.commandType;
+
+		if(actionData.specialLine.equals("no_proc"))
+		{
+			cansee = true;
+		}
+		else if (isSpecialAttack == combat.RIGHT_CLICK_SPECIAL && combat.isHeavyWeapon(weaponData))
+		{
+			cansee = true; //only specials that don't require targets can be used with Heavy Weapons
+		}
+		else
+		{
+			location where = actionData.targetLoc;
+			where.y += 0.5f; // gotta raise the loc, or canSee will fail as it will collide with the terrain at that location. woohoo.
+			cansee = canSee(attackerData.id, where);
+			//sendSystemMessageTestingOnly(obj_id.getObjId(10014554), "CanSee 1");
+			//sendSystemMessageTestingOnly(attackerData.id, "CanSeeLoc " + attackerData.id + ", " + where.toString() + " = " + cansee);
+		}
+	}
+	else if(weaponData.weaponType == WEAPON_TYPE_DIRECTIONAL)
+	{
+		cansee = true; // not aiming at something, just pointing in a direction
+	}
+	else
+	{
+		cansee = canSee(attackerData.id, defenderData[0].id);
+		//sendSystemMessageTestingOnly(obj_id.getObjId(10014554), "CanSee 2");
+	}
+
+	if(!cansee)
+	{
+		if(verbose)
+		{
+			showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("combat_effects", "cant_see"), 1.5f, colors.MEDIUMTURQUOISE);
+			combat.sendCombatSpamMessage(attackerData.id, new string_id("cbt_spam", "out_of_range_close"), COMBAT_RESULT_OUT_OF_RANGE);
+		}
+
+		return false;
+	}
+
+	// Set combat states
+	setState(attackerData.id, STATE_PEACE, false);
+
+	return true;
+}
+
+obj_id getNextHatedTarget(obj_id self, obj_id[] tempDefenders, obj_id currentTarget)
+{
+	if(tempDefenders == null || tempDefenders.length == 0)
+	{
+		return null;
+	}
+
+	for(int i = 0; i < tempDefenders.length; i++)
+	{
+		if(tempDefenders[i] != currentTarget && isOnHateList(self, tempDefenders[i]))
+		{
+			return tempDefenders[i];
+		}
+	}
+
+	return null;
+}
+
+obj_id[] getCombatDefenders(obj_id self, obj_id target, weapon_data weaponData, combat_data actionData, boolean isSpecialAttack)
+{
+	int validTargetType = actionData.validTarget;
+	int attackType = actionData.attackType;
+	int hitType = actionData.hitType;
+	boolean isOffensive = true;
+	int pvpOnly = actionData.pvp_only;
+
+	if(validTargetType == combat.VALID_TARGET_FRIEND || validTargetType == combat.VALID_TARGET_DEAD || hitType == combat.HEAL || hitType == combat.REVIVE)
+	{
+		isOffensive = false;
+	}
+
+	boolean fromTrap = hitType == combat.DELAY_ATTACK;
+	//LOG("meh", "hitType=" + hitType + ", fromTrap=" + fromTrap + ", self=" + self + ", getSelf()=" + getSelf());
+
+	obj_id   source = self;
+	obj_id[] defenders = null;
+	// Dead kitten counter: 4
+	if(actionData.actionName.equals("me_stasis_1") || actionData.actionName.startsWith("bm_mend_pet") || actionData.actionName.equals("bm_soothing_comfort_1")  || actionData.actionName.startsWith("bm_revive") )
+	{
+		isOffensive = false;
+	}
+
+	if((!isOffensive || hitType == combat.NON_ATTACK) && validTargetType == combat.VALID_TARGET_NONE)
+	{
+		target = self;
+	}
+
+	if (validTargetType == -1 /* NONE */ && attackType == combat.SINGLE_TARGET)
+	{
+		defenders = new obj_id[1];
+		defenders[0] = target;
+		return defenders;
+	}
+
+	if(attackType == combat.SINGLE_TARGET)
+	{
+		if(defenders == null || defenders.length == 0)
+		{
+			int rolls = actionData.attack_rolls == 1 ? 1 : actionData.attack_rolls - 1;
+
+			defenders = new obj_id[rolls];
+			for (int q=0;q<defenders.length;q++)
+			{
+				defenders[q] = target;
+			}
+		}
+	}
+	else if (attackType == combat.CONE)
+	{
+		float length = actionData.coneLength;
+		float width = actionData.coneWidth;
+
+		string actionName = actionData.actionName;
+		string specialLine = actionData.specialLine;
+		float expertiseConeLengthBonus = 0.0f;
+		float expertiseConeWidthBonus = 0.0f;
+
+		if(actionName != null && actionName != "")
+			expertiseConeLengthBonus = getSkillStatisticModifier(self, "expertise_cone_length_single_" + actionName);
+
+		if(specialLine != null && specialLine != "")
+			expertiseConeLengthBonus += getSkillStatisticModifier(self, "expertise_cone_length_line_" + specialLine);
+
+		if (specialLine != null && actionName != "")
+			expertiseConeWidthBonus += (float)getSkillStatisticModifier(self, "expertise_cone_width_line_"+ specialLine);
+
+		length += expertiseConeLengthBonus;
+
+		// Only get half of the cone bonus since cone width is doubled in the get targets method.
+		width += (expertiseConeWidthBonus / 2.0f);
+
+		// Weapon range can be modified to be higher than the cone length.  If the actionData.maxRange is undefined
+		// for the action, then use the weapon's range.
+		if(actionData.maxRange == 0)
+		{
+			length = weaponData.maxRange;
+		}
+
+		//combat.combatLog(self, target, "getCombatDefenders", "Attack Type = CONE");
+		//combat.combatLog(self, target, "getCombatDefenders", "Cone Length = "+length+"; Cone Width = "+width);
+		if(!isOffensive)
+		{
+			// Width is an angle to the sides of your target;  IE: 20 degree width is a total of 40 degrees.
+			defenders = getObjectsInCone(fromTrap ? weaponData.id /*getSelf()*/ : self, target, length, width);
+		}
+		else
+		{
+			if(weaponData.weaponType == WEAPON_TYPE_DIRECTIONAL)
+			{
+				location where = actionData.targetLoc;
+
+				// Width is an angle to the sides of your target;  IE: 20 degree width is a total of 40 degrees.
+				defenders = pvpGetTargetsInCone(self, self, where, length, width);
+			}
+			else
+			{
+				// Width is an angle to the sides of your target;  IE: 20 degree width is a total of 40 degrees.
+				defenders = pvpGetTargetsInCone(self, fromTrap ? weaponData.id /*getSelf()*/ : self, target, length, width);
+			}
+		}
+
+		if (defenders == null || defenders.length < 1)
+		{
+			defenders = new obj_id[1];
+			defenders[0] = target;
+		}
+
+		combat.combatLog(self, target, "getCombatDefenders", "CONE TARGET: Defender count = "+defenders.length);
+	}
+	else if (attackType == combat.AREA || attackType == combat.TARGET_AREA)
+	{
+		float area = actionData.coneLength; // also used as attack size
+
+		string actionName = actionData.actionName;
+		string specialLine = actionData.specialLine;
+		float expertiseConeLengthBonus = 0.0f;
+
+		if(actionName != null && actionName != "")
+			expertiseConeLengthBonus = getSkillStatisticModifier(self, "expertise_area_size_single_" + actionName);
+
+		if(specialLine != null && specialLine != "")
+			expertiseConeLengthBonus += getSkillStatisticModifier(self, "expertise_area_size_line_" + specialLine);
+
+		area += expertiseConeLengthBonus;
+
+		if (area <= 0)
+		{
+			area = weaponData.maxRange;
+		}
+		if (attackType == combat.AREA)
+		{
+			combat.combatLog(self, target, "getCombatDefenders", "Attack Type = combat.AREA");
+			combat.combatLog(self, target, "getCombatDefenders", "Area Effect = "+area);
+			if (!isOffensive)
+			{
+				defenders = getCreaturesInRange(fromTrap? weaponData.id /*getSelf()*/ : self, area);
+			}
+			else
+			{
+				defenders = pvpGetTargetsInRange(self, fromTrap? weaponData.id /*getSelf()*/ : self, area);
+			}
+
+			combat.combatLog(self, target, "getCombatDefenders", "AREA SELF: self = "+self);
+
+		}
+		else
+		{
+			combat.combatLog(self, target, "getCombatDefenders", "Attack Type = combat.TARGET_AREA");
+			combat.combatLog(self, target, "getCombatDefenders", "Area Effect = "+area);
+			if (!isOffensive)
+			{
+				defenders = getCreaturesInRange(target, area);
+			}
+			else
+			{
+				defenders = pvpGetTargetsInRange(self, fromTrap? weaponData.id /*getSelf()*/ : target, area);
+			}
+
+			source = target;
+		}
+
+		if (defenders == null || defenders.length < 1 && actionData.commandType == combat.LEFT_CLICK_DEFAULT)
+		{
+			defenders = new obj_id[1];
+			defenders[0] = target;
+		}
+
+		combat.combatLog(self, target, "getCombatDefenders", "AREA EFFECT: Defender count = "+defenders.length);
+	}
+	else if (attackType == combat.RAMPAGE)
+	{
+		float area = actionData.coneLength; // also used as attack size
+		obj_id[] areaTargets = pvpGetTargetsInRange(self, self, area);
+
+		float maxHate = 0;
+		obj_id rampageTarget = null;
+
+		for (int i = 0; i < areaTargets.length; i++)
+		{
+			if (areaTargets[i] == target)
+				continue;
+
+			if (isOnHateList(self, areaTargets[i]))
+			{
+				float targetHate = getHate(self, areaTargets[i]);
+				//sendSystemMessageTestingOnly(obj_id.getObjId(10014554), "CanSee 3");
+				if (targetHate > maxHate && combat.cachedCanSee(self, areaTargets[i]))
+				{
+					rampageTarget = areaTargets[i];
+					maxHate = targetHate;
+				}
+			}
+		}
+
+		if (isIdValid(rampageTarget))
+		{
+			defenders = new obj_id[1];
+			target = rampageTarget;
+			defenders[0] = rampageTarget;
+		}
+		else
+		{
+			defenders = new obj_id[1];
+			defenders[0] = target;
+		}
+		combat.combatLog(self, target, "getCombatDefenders", "RAMPAGE: Defender count = "+defenders.length);
+	}
+	else if (attackType == combat.RANDOM_HATE_TARGET)
+	{
+		obj_id[] potentialTargets = getHateList(self);
+		float max_range = 64.0f;
+
+		resizeable obj_id[] validTargets = new obj_id[0];
+
+		for (int i=0;i<potentialTargets.length;i++)
+		{
+			if (potentialTargets[i] != target && combat.cachedCanSee(self, potentialTargets[i]) && !isDead(potentialTargets[i]))
+			{
+				if (getDistance(self, potentialTargets[i]) < max_range)
+					utils.addElement(validTargets, potentialTargets[i]);
+			}
+		}
+
+		if (validTargets == null || validTargets.length == 0)
+		{
+			defenders = new obj_id[1];
+			defenders[0] = target;
+		}
+		else
+		{
+			target = validTargets[rand(0, validTargets.length - 1)];
+			defenders = new obj_id[1];
+			defenders[0] = target;
+		}
+
+	}
+	else if (attackType == combat.RANDOM_HATE_TARGET_CONE)
+	{
+		float length = actionData.coneLength;
+		float width = actionData.coneWidth;
+		float max_range = length;
+
+		obj_id[] potentialTargets = getHateList(self);
+
+		resizeable obj_id[] validTargets = new obj_id[0];
+
+		for (int i=0;i<potentialTargets.length;i++)
+		{
+			if (potentialTargets[i] != target && combat.cachedCanSee(self, potentialTargets[i]) && !isDead(potentialTargets[i]))
+			{
+				if (getDistance(self, potentialTargets[i]) < max_range)
+					utils.addElement(validTargets, potentialTargets[i]);
+			}
+		}
+
+		if (validTargets == null || validTargets.length == 0)
+		{
+			defenders = pvpGetTargetsInCone(self, self, target, length, width);
+		}
+		else
+		{
+			target = validTargets[rand(0, validTargets.length - 1)];
+			defenders = pvpGetTargetsInCone(self, self, target, length, width);
+		}
+
+	}
+	else if (attackType == combat.RANDOM_HATE_TARGET_CONE_TERMINUS)
+	{
+		float width = actionData.coneWidth;
+		float max_range = 64.0f;
+		obj_id[] potentialTargets = getHateList(self);
+
+		resizeable obj_id[] validTargets = new obj_id[0];
+
+		for (int i=0;i<potentialTargets.length;i++)
+		{
+			if (potentialTargets[i] != target && combat.cachedCanSee(self, potentialTargets[i]))
+			{
+				if (getDistance(self, potentialTargets[i]) < max_range)
+					utils.addElement(validTargets, potentialTargets[i]);
+			}
+		}
+		if (validTargets == null || validTargets.length == 0)
+		{
+			defenders = pvpGetTargetsInCone(self, self, target, getDistance(self, target) + 5.0f, width);
+		}
+		else
+		{
+			target = validTargets[rand(0, validTargets.length - 1)];
+			max_range = getDistance(self, target) + 5.0f;
+			defenders = pvpGetTargetsInCone(self, self, target, max_range, width);
+		}
+
+	}
+	else if (attackType == combat.HATE_LIST)
+	{
+		obj_id[] hateTargets = getHateList(self);
+
+		resizeable obj_id[] validTargets = new obj_id[0];
+		int max_range = 90;
+
+		for (int i=0;i<hateTargets.length;i++)
+		{
+			if (hateTargets[i] != target && canSee(self, hateTargets[i]))
+			{
+				if (getDistance(self, hateTargets[i]) < max_range)
+					utils.addElement(validTargets, hateTargets[i]);
+			}
+		}
+
+		defenders = validTargets;
+
+	}
+	else if (attackType == combat.RANDOM_HATE_MULTI)
+	{
+		obj_id[] hateTargets = getHateList(self);
+		int max_targets = (int) actionData.coneLength;
+
+		if (hateTargets.length == 1)
+		{
+			defenders = new obj_id[1];
+			defenders[0] = target;
+		}
+		else
+		{
+			obj_id[] randomTargets = new obj_id[max_targets];
+			resizeable obj_id[] targetList = (resizeable obj_id[])hateTargets.clone();
+
+			targetList = utils.shuffleArray(targetList);
+
+			if (max_targets > hateTargets.length )
+				max_targets = hateTargets.length;
+
+			for (int i=0;i<max_targets;i++)
+			{
+				randomTargets[i] = targetList[i];
+			}
+
+			defenders = randomTargets;
+		}
+	}
+	else if (attackType == combat.AREA_PROGRESSIVE)
+	{
+		float area = actionData.coneLength; // also used as attack size
+
+		if (area <= 0)
+		{
+			area = weaponData.maxRange;
+		}
+
+		defenders = pvpGetTargetsInRange(self, self, area);
+	}
+	else if (attackType == combat.SPLIT_DAMAGE_TARGET_AREA)
+	{
+		float area = actionData.coneLength; // also used as attack size
+		float targets = actionData.coneWidth; // Number of targets to split the damage.
+
+		obj_id[] targetsInArea = pvpGetTargetsInRange(self, fromTrap? weaponData.id /*getSelf()*/ : target, area);
+
+		defenders = new obj_id[2];
+		defenders[0] = target;
+
+		for (int i=0;i<targetsInArea.length;i++)
+		{
+			if (targetsInArea[i] !=target)
+			{
+				defenders[1] = targetsInArea[i];
+				break;
+			}
+		}
+	}
+	else if (attackType == combat.DISTANCE_FARTHEST)
+	{
+		obj_id[] hateList = getHateList(self);
+
+		obj_id farthest = getHateTarget(self);
+		float farDist = 0.0f;
+
+		for (int i=0;i<hateList.length;i++)
+		{
+			if (getDistance(self, hateList[i]) >= farDist)
+			{
+				farthest = hateList[i];
+				farDist = getDistance(self, hateList[i]);
+			}
+		}
+
+		defenders = new obj_id[1];
+		defenders[0] = farthest;
+		target = farthest;
+	}
+	else
+	{
+		defenders = new obj_id[1];
+		defenders[0] = target;
+		combat.combatLog(self, target, "getCombatDefenders", "DEFAULT: Defender count = "+defenders.length);
+	}
+
+	defenders = validateDefenders(self, target, defenders, source, MAX_TARGET_ARRAY_SIZE, validTargetType, isOffensive, fromTrap? weaponData.id : null, combat.isHeavyWeapon(weaponData), isSpecialAttack, actionData.specialLine.equals("ignore_los")? true : false, pvpOnly, actionData);
+
+	utils.setScriptVar(self, combat.CHARGE_TARGET, target);
+
+
+	return defenders;
+}
+
+hit_result[] runHitEngine(attacker_data attackerData, weapon_data weaponData, defender_data[] defenderData, attacker_results attackerResults, defender_results[] defenderResults, combat_data actionData, boolean isTangibleAttacking)
+{
+	return runHitEngine(attackerData, weaponData, defenderData, attackerResults, defenderResults, actionData, isTangibleAttacking, true, 0);
+}
+
+hit_result[] runHitEngine(attacker_data attackerData, weapon_data weaponData, defender_data[] defenderData, attacker_results attackerResults, defender_results[] defenderResults, combat_data actionData, boolean isTangibleAttacking, boolean isAutoAiming, int overloadDamage)
+{
+	hit_result[] 	hitData 		= new hit_result[defenderData.length];
+	obj_id[]  		defenders 		= new obj_id[defenderData.length];// data tracking for callDefenderCombatAction call at the end
+	int[] 			results 		= new int[hitData.length];
+	string[] 		playbackNames 	= new string[defenderData.length];	// Client animation result data
+	string 			strAttack 		= actionData.actionName;
+	attackerResults.id 				= attackerData.id;
+	attackerResults.weapon 			= weaponData.id;
+
+	// PROFILER_START("combat_base.runHitEngine - top");
+
+	attackerResults.endPosture = (!isTangibleAttacking && (combat.isMeleeWeapon(weaponData.id) || combat.isLightsaberWeapon(weaponData.id)))? POSTURE_UPRIGHT : getPosture(attackerData.id);
+
+	// Apply attacker buff/debuff - this happens regardless of whether or not the attack "hits"
+	combat.applyAttackerCombatBuffs(attackerData.id, actionData);
+	int hitType = actionData.hitType;
+
+	// Check if action is actually a combat action
+	if(hitType == combat.NON_ATTACK)
+	{
+		// PROFILER_START("combat_base.runHitEngine - NON_ATTACK");
+
+		combat.combatLog(attackerData.id, defenderData[0].id, "runHitEngine", "Non-Combat action - Skipping hitEngine");
+
+		attackerResults.endPosture = getPosture(attackerData.id);
+
+		for(int i = 0; i < defenderData.length; i++)
+		{
+			hitData[i] = new hit_result();
+
+			if(i == 0)
+			{
+				hitData[i].success = true;
+			}
+			else
+			{
+				hitData[i].success = false;
+			}
+
+			if(actionData.validTarget == combat.VALID_TARGET_FRIEND && pvpCanHelp(attackerData.id, defenderData[i].id))
+			{
+				pvpHelpPerformed(attackerData.id, defenderData[i].id);
+				combat.applyDefenderCombatBuffs(attackerData.id, defenderData[i].id, weaponData, actionData);
+			}
+
+			defenderResults[i] = new defender_results();
+			defenderResults[i].id = defenderData[i].id;
+			defenderResults[i].endPosture = getPosture(defenderData[i].id);
+		}
+
+		// PROFILER_STOP("combat_base.runHitEngine - NON_ATTACK");
+
+		// PROFILER_STOP("combat_base.runHitEngine - top");
+		return hitData;
+	}
+
+	// PROFILER_START("combat_base.runHitEngine - fillAttackerCombatAttributes");
+
+	boolean isHeavyWeapon = combat.isHeavyWeapon(weaponData);
+	int attackerLevel = getLevel(attackerData.id);
+	boolean criticalHit = false;
+	boolean seriesStrikethrough		= false;
+
+	attackerData = combat.fillAttackerCombatAttributes(attackerData);
+
+	// Off the Cuff ability makes critical hits 100%.  DOT's and default click attacks should NOT be affected by this ability.
+	if(utils.hasScriptVar(attackerData.id, "nextCritHit") && actionData.commandType != combat.LEFT_CLICK_DEFAULT)
+	{
+		actionData.increaseCritical += 100.0f;
+		actionData.reduceParry += 100;
+		actionData.reduceDodge += 100;
+		actionData.reduceBlock += 100;
+		actionData.reduceGlancing += 100;
+		actionData.increaseStrikethrough -= 100;
+	}
+
+	utils.removeScriptVar(attackerData.id, PROGRESSIVE_DAMAGE_COUNTER);
+
+	// PROFILER_STOP("combat_base.runHitEngine - fillAttackerCombatAttributes");
+
+	if(combat.isCommandoBonus(attackerData.id, weaponData, actionData.commandType))
+	{
+		// PROFILER_START("combat_base.runHitEngine - isCommandoBonus");
+
+		float devastationBonus = combat.getDevastationChance(attackerData.id);
+
+		if(rand(0.0f, 99.0f) < devastationBonus)
+		{
+			//old max becomes new min, 1.5 damage on max
+			weaponData.minDamage = weaponData.maxDamage;
+			weaponData.maxDamage *= 1.5f;
+			showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("combat_effects", "devastation"), 1.5f, colors.VIOLETRED);
+		}
+
+		if(actionData.buffNameTarget.length()==0 || actionData.buffNameTarget.equals(""))
+		{
+			//Commando DOTs going through buff system now!
+			//Commando Passive DoT Chance 10% base
+			int passiveDotBonus = 10;
+			passiveDotBonus += getEnhancedSkillStatisticModifierUncapped(attackerData.id, "commando_passive_dot");
+			if(rand(0, 99) < passiveDotBonus)
+			{
+				//go get the name for the single target version of the buff
+				string commandoDotName = heavyweapons.getHeavyWeaponDotName(attackerData.id, weaponData, true);
+				if(commandoDotName != null && commandoDotName != "")
+					actionData.buffNameTarget = commandoDotName;
+			}
+		}
+
+		// PROFILER_STOP("combat_base.runHitEngine - isCommandoBonus");
+	}
+
+	// PROFILER_START("combat_base.runHitEngine - defenderData loop");
+
+	boolean isPlayerAttacker 	= isPlayer(attackerData.id);
+	int 	intWeaponAttackType = getWeaponAttackType(weaponData.id);
+	boolean isRanged 			= (intWeaponAttackType == ATTACK_TYPE_RANGED);
+	boolean specialAttack 		= actionData.commandType == combat.RIGHT_CLICK_SPECIAL;
+	int critDamageIncrease 		= getEnhancedSkillStatisticModifierUncapped(attackerData.id, "expertise_critical_damage_increase");
+
+	// Loop through defenders
+	for (int i = 0; i < defenderData.length; i++)
+	{
+		// PROFILER_START("combat_base.runHitEngine - defenderData loop - fillDefenderCombatAttributes");
+
+		float minDamage = (float)weaponData.minDamage;
+		float maxDamage = (float)weaponData.maxDamage;
+
+		hitData[i] = new hit_result();
+		float distance = 0;
+		boolean isPlayerDefender = isPlayer(defenderData[i].id);
+
+		obj_id oldDefender = defenderData[i].id;
+
+		if(hitType != combat.NON_DAMAGE_ATTACK)
+		{
+			obj_id newDefender = combat.directDamageToDifferentTarget(attackerData.id, defenderData[i].id);
+
+			if(oldDefender != newDefender)
+			{
+				defenderData[i].id = newDefender;
+			}
+		}
+
+		defenderData[i] = combat.fillDefenderCombatAttributes(defenderData[i]);
+
+		// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - fillDefenderCombatAttributes");
+
+		// PROFILER_START("combat_base.runHitEngine - defenderData loop - get hit tables");
+
+		/**********************************START OF DAMAGE CALC**************************************/
+		int 	defenderLevel 			= getLevel(defenderData[i].id);
+
+		// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - get hit tables");
+
+		if (hitType == combat.NON_DAMAGE_ATTACK)
+		{
+			hitData[i].success = true;
+		}
+		else
+		{
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - combat result");
+
+			int 	defResult			= getDefenderResult(attackerData, defenderData[i], actionData, isAutoAiming);
+			int		atkResult			= getAttackerResult(attackerData, defenderData[i], actionData, isAutoAiming);
+
+			switch(defResult)
+			{
+				case HIT_RESULT_DODGE:
+					hitData[i].success = false;
+					hitData[i].dodge = true;
+					break;
+				case HIT_RESULT_PARRY:
+					hitData[i].success = false;
+					hitData[i].parry = true;
+					break;
+				case HIT_RESULT_GLANCING:
+					hitData[i].success = true;
+					hitData[i].glancing = true;
+					break;
+				case HIT_RESULT_BLOCK:
+					hitData[i].success = true;
+					hitData[i].blockResult = true;
+					break;
+				case HIT_RESULT_EVADE:
+					hitData[i].success = true;
+					hitData[i].evadeResult = true;
+					break;
+				case HIT_RESULT_HIT:
+					hitData[i].success = true;
+					break;
+				default:
+					hitData[i].success = true;
+					break;
+			}
+
+			if (hitData[i].success == true)
+			{
+				switch(atkResult)
+				{
+					case HIT_RESULT_MISS:
+						hitData[i].success = false;
+						hitData[i].miss = true;
+						break;
+					case HIT_RESULT_CRITICAL:
+						hitData[i].success = true;
+						hitData[i].critical = true;
+						hitData[i].glancing = false;
+						break;
+					case HIT_RESULT_PUNISHING:
+						hitData[i].success = true;
+						hitData[i].crushing = true;
+						break;
+					case HIT_RESULT_STRIKETHROUGH:
+						hitData[i].success = true;
+						hitData[i].strikethrough = true;
+						hitData[i].glancing = false;
+						break;
+				}
+			}
+
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - combat result");
+		}
+
+		// PROFILER_START("combat_base.runHitEngine - defenderData loop - drain action");
+
+		int[] actionCost = combat.getSuccessBasedSingleTargetActionCost(hitData[i], actionData, attackerData.id, weaponData);
+		combat.drainCombatActionAttributes(attackerData.id, actionCost);
+
+		// Set PvP flags
+		int validTargetType = actionData.validTarget;
+		if(validTargetType == combat.VALID_TARGET_FRIEND && pvpCanHelp(attackerData.id, defenderData[i].id))
+		{
+			pvpHelpPerformed(attackerData.id, defenderData[i].id);
+		}
+		else if(pvpCanAttack(attackerData.id, defenderData[i].id))
+		{
+			pvpAttackPerformed(attackerData.id, defenderData[i].id);
+		}
+
+		defenderResults[i] = new defender_results();
+		defenderResults[i].id = defenderData[i].id;
+		defenderResults[i].endPosture = getPosture(defenderData[i].id);
+
+		// Put the defender in combat
+		if(validTargetType != combat.VALID_TARGET_FRIEND && defenderData[i].id != attackerData.id && hitData[i].success)
+		{
+			startCombat(defenderData[i].id, attackerData.id);
+
+			if(oldDefender != defenderData[i].id)
+			{
+				startCombat(oldDefender, attackerData.id);
+			}
+		}
+
+		if(combat.isDamageImmune(attackerData.id, defenderData[i].id, actionData))
+		{
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - drain action");
+			if (defenderData.length == 1)
+			{
+				// Set it to no hit spam so we don't get the "You did no damage" text.
+				actionData.hitSpam = combat.NO_HIT_SPAM;
+			}
+			continue;
+		}
+
+		if (combat.hasPrescience(attackerData.id, defenderData[i].id, actionData))
+		{
+			if (defenderData.length == 1)
+			{
+				actionData.hitSpam = combat.NO_HIT_SPAM;
+			}
+
+			continue;
+		}
+
+		if(!hitData[i].success)
+		{
+			// Recording combat data for target dummy use - this is where miss, parry, and dodge get recorded.
+			// For successful attacks, the data is sent after all of the damage modification is complete in doWrappedDamage().
+			target_dummy.sendTargetDummyCombatData(attackerData.id, defenderData[i].id, actionData, hitData[i]);
+		}
+
+		// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - drain action");
+
+		if(hitData[i].success)
+		{
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success");
+
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - damage redirect");
+
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - damage redirect");
+
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - hit result");
+
+			defenderResults[i].result = COMBAT_RESULT_HIT;
+
+			if (beast_lib.isBeast(attackerData.id))
+				addHate(defenderData[i].id, getMaster(attackerData.id), 0);
+
+			if (hitData[i].strikethrough)
+			{
+				hitData[i].strikethroughAmmount = combat.getStrikethroughValue(attackerData.id, defenderData[i].id);
+				seriesStrikethrough |= true;
+			}
+
+			if (hitData[i].evadeResult)
+			{
+				hitData[i].evadeAmmount = combat.getEvasionRoll(defenderData[i].id);
+			}
+
+			if (hitData[i].blockResult)
+			{
+				hitData[i].block = combat.getBlockAmmount(defenderData[i].id);
+			}
+
+			if (hitData[i].crushing)
+			{
+				minDamage = maxDamage * 1.5f;
+				maxDamage = (maxDamage * 1.5f) + 1.0f;
+
+			}
+
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - hit result");
+
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - getRawDamage");
+
+			dictionary rawDict = getRawDamage(attackerData.id, weaponData, actionData, hitData[i], minDamage, maxDamage, defenderData.length);
+			minDamage = rawDict.getFloat("minDamage");
+			maxDamage = rawDict.getFloat("maxDamage");
+
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - getRawDamage");
+
+			if (hitData[i].glancing)
+			{
+				// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - glancing");
+
+				minDamage *= 0.35f;
+				maxDamage *= 0.35f;
+				weaponData.elementalValue *= 0.35f;
+				hitData[i].critDamage = 1;
+				string_id critSpam = new string_id("combat_effects", "glancing_blow");
+				prose_package ppc = new prose_package();
+				ppc = prose.setStringId(ppc, critSpam);
+
+				showFlyTextPrivateProseWithFlags(defenderData[i].id, defenderData[i].id, ppc, 1.5f, colors.LIMEGREEN, FLY_TEXT_FLAG_IS_GLANCING_BLOW );
+
+				hasSkill( defenderData[i].id, "expertise_fs_general_alacrity_1" );
+				playClientEffectObj(defenderData[i].id, "appearance/pt_jedi_alacrity.prt", defenderData[i].id, "");
+
+				// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - glancing");
+			}
+
+
+			if (hitData[i].critical)
+			{
+				// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - critical");
+
+				float damageMod = combat.doCriticalHitEffect(attackerData, defenderData[i], weaponData, hitData[i], actionData);
+				float critBonus = 1.0f + ((float)critDamageIncrease / 100.0f);
+				damageMod += (float)critDamageIncrease / 100.0f;
+				minDamage = maxDamage * critBonus;
+				maxDamage = maxDamage * damageMod;// * critBonus;
+				criticalHit = true;
+				// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - critical");
+			}
+
+
+			hitData[i].damage = rand((int)minDamage,(int)maxDamage);
+
+			if(hitType != combat.NON_DAMAGE_ATTACK)
+			{
+				// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - applyDamage");
+
+				hitData[i] = applyDamage(attackerData.id, defenderData[i].id, weaponData, hitData[i], actionData, (i==0), overloadDamage);
+
+				// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - applyDamage");
+			}
+			else
+			{
+				hitData[i].damage = 0;
+			}
+
+			// Apply special effects for grenades and heavy weapons
+			effect_data defenderEffect = new effect_data();
+
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - applyDefenderCombatBuffs");
+			// Apply defender buff/debuff
+			combat.applyDefenderCombatBuffs(attackerData.id, defenderData[i].id, weaponData, actionData);
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - applyDefenderCombatBuffs");
+
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - checkForSkillAcquisition");
+			beast_lib.checkForSkillAcquisition(attackerData.id, defenderData[i].id, actionData.actionName);
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - checkForSkillAcquisition");
+
+			// perform proc effect
+			if (!actionData.specialLine.equals("no_proc"))
+			{
+				// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - executeProcEffects");
+				proc.executeProcEffects(attackerData.id, defenderData[i].id, actionData);
+				// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - executeProcEffects");
+			}
+			else
+			{
+				hitData[i].proc = true;
+			}
+
+			if (actionData.effectOnTarget != null && actionData.effectOnTarget != "")
+				playClientEffectObj(defenderData[i].id, actionData.effectOnTarget, defenderData[i].id, "");
+
+			int luckyBreakChance = getSkillStatisticModifier(attackerData.id, "expertise_lucky_break_chance");
+
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - luckyBreakChance");
+			// Expertise conditional proc Lucky Break
+			if(luckyBreakChance > 0 && buff.hasBuff(attackerData.id, "sm_feeling_lucky") &&
+				!buff.hasBuff(attackerData.id, "sm_lucky_break") &&
+				!buff.hasBuff(attackerData.id, "sm_lucky_break_recourse") &&
+				rand(0,99) < luckyBreakChance)
+			{
+				buff.applyBuff(attackerData.id, "sm_lucky_break");
+
+				string_id luckySID = new string_id("cbt_spam", "sm_lucky_break_proc");
+				sendCombatSpamMessage(attackerData.id, defenderData[i].id, luckySID, true, true, true, COMBAT_RESULT_BUFF);
+			}
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - luckyBreakChance");
+
+			// PROFILER_START("combat_base.runHitEngine - defenderData loop - hitData[i].success - hasBuff");
+
+			// Expertise conditional proc Card Up Your Sleeve (sm_double_hit buff).  Must get a lucky break to get this buff.
+			if(buff.hasBuff(attackerData.id, "sm_lucky_break"))
+			{
+				int doubleHitChance = (int)getSkillStatisticModifier(attackerData.id, "expertise_double_hit_chance");
+
+				if(doubleHitChance > 0 && !buff.hasBuff(attackerData.id, "sm_double_hit") &&
+					!buff.hasBuff(attackerData.id, "sm_double_hit_recourse") &&
+					rand(0,99) < doubleHitChance)
+				{
+					buff.applyBuff(attackerData.id, "sm_double_hit");
+
+					string_id doubleHitSID = new string_id("cbt_spam", "sm_double_hit_proc");
+					sendCombatSpamMessage(attackerData.id, defenderData[i].id, doubleHitSID, true, true, true, COMBAT_RESULT_BUFF);
+				}
+			}
+
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success - hasBuff");
+
+			// PROFILER_STOP("combat_base.runHitEngine - defenderData loop - hitData[i].success");
+		}
+		else if(hitData[i].dodge)
+		{
+			if (!hasScript(defenderData[i].id, "player.player_countdown") && !movement.hasMovementModifier(defenderData[i].id))
+			{
+				defenderResults[i].result = COMBAT_RESULT_EVADE;
+			}
+			else
+				defenderResults[i].result = COMBAT_RESULT_MISS;
+		}
+		else if(hitData[i].parry)
+		{
+			defenderResults[i].result = COMBAT_RESULT_BLOCK;
+
+			weapon_data attackerWeapon = getWeaponData(getCurrentWeapon(attackerData.id));
+			weapon_data defenderWeapon = getWeaponData(getCurrentWeapon(defenderData[i].id));
+
+			boolean isRangedAttacker = false;
+			boolean isLightSaber = false;
+
+			if (attackerWeapon != null)
+			{
+				isRangedAttacker = combat.isRangedWeapon(attackerWeapon.weaponType);
+			}
+
+			if (defenderWeapon != null)
+			{
+				isLightSaber = jedi.isLightsaber(defenderWeapon.id);
+			}
+
+			if (isRangedAttacker && isLightSaber)
+			{
+				defenderResults[i].result = COMBAT_RESULT_LIGHTSABER_BLOCK;
+			}
+
+			// Since a parry is technically a hit that was deflected, we shal allow proc effects to occur.
+			if (!actionData.specialLine.equals("no_proc"))
+			{
+				proc.executeProcEffects(attackerData.id, defenderData[i].id, actionData);
+			}
+			else
+			{
+				hitData[i].proc = true;
+			}
+
+			// If a defender can saber reflect your attack and this attack is not a saber reflect (avoid infinite loop), then saber reflect on a saber block.
+			if(isLightSaber && buff.hasBuff(defenderData[i].id, "fs_saber_reflect") && !strAttack.equals("fs_saber_reflect"))
+			{
+				queueCommand(defenderData[i].id, ##"fs_saber_reflect", attackerData.id, "", COMMAND_PRIORITY_DEFAULT);
+			}
+
+			int addDefenderDamageToAction = getSkillStatisticModifier(defenderData[i].id, "expertise_damage_add_to_action");
+
+			// Recover action on a successful parry.
+			if(addDefenderDamageToAction > 0)
+			{
+				float halfOfMod = addDefenderDamageToAction / 2.0f;
+				int actionToAdd = Math.round((halfOfMod / 100.0f) * (float)getMaxAction(defenderData[i].id));
+				combat.gainCombatActionAttribute(defenderData[i].id, actionToAdd);
+			}
+		}
+		else
+		{
+			defenderResults[i].result = COMBAT_RESULT_MISS;
+		}
+
+		if (defenderResults[i].result != COMBAT_RESULT_TETHERED)
+		{
+			combat.addHateProcess(attackerData.id, defenderData[i].id, hitData[i], actionData);
+		}
+
+
+		// Create the animation string to display the correct animation
+		/*
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "ActionName=" + actionData.actionName);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "AnimDefault::" + actionData.animDefault);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Unarmed::" + actionData.anim_unarmed);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "OneHandMelee::" + actionData.anim_onehandmelee);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "TwoHandMelee::" + actionData.anim_twohandmelee);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Polearm::" + actionData.anim_polearm);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Pistol::" + actionData.anim_pistol);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "LightRifle::" + actionData.anim_lightRifle);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Carbine::" + actionData.anim_carbine);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Rifle::" + actionData.anim_rifle);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Heavy::" + actionData.anim_heavyweapon);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Thrown::" + actionData.anim_thrown);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "Saber::" + actionData.anim_onehandlightsaber);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "TwoHandSaber::" + actionData.anim_twohandlightsaber);
+		sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "PolearmSaber::" + actionData.anim_polearmlightsaber);
+		*/
+
+		playbackNames[i] = combat.getActionAnimation(actionData, combat.getWeaponStringType(weaponData.weaponType));
+		//sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "" + attackerData.id + " animating=" + playbackNames[i] +", actionName=" + actionData.actionName);
+
+		if(hitType == combat.NON_DAMAGE_ATTACK && hasScript(defenderData[i].id, "player.player_logout"))
+		{
+			defenders[i] = null;
+		}
+		else
+		{
+			defenders[i] = defenderData[i].id;
+		}
+
+		results[i] = defenderResults[i].result;
+	}
+
+
+	// PROFILER_STOP("combat_base.runHitEngine - defenderData loop");
+
+	// If this buff is a one shot critical hit, then remove the buff.
+	if(criticalHit && utils.hasScriptVar(attackerData.id, "critRemoveBuffNames") && actionData.commandType != combat.LEFT_CLICK_DEFAULT)
+	{
+		// PROFILER_START("combat_base.runHitEngine - critRemoveBuffNames");
+
+		utils.removeScriptVar(attackerData.id, "nextCritHit");
+
+		resizeable string[] buffNames = utils.getResizeableStringArrayScriptVar(attackerData.id, "critRemoveBuffNames");
+
+		buff.removeBuffs(attackerData.id, buffNames);
+
+		// PROFILER_STOP("combat_base.runHitEngine - critRemoveBuffNames");
+	}
+
+	if (seriesStrikethrough)
+	{
+		int stproc = getEnhancedSkillStatisticModifierUncapped(attackerData.id, "expertise_onstrikethrough_proc_sp_resonance");
+		if (stproc > 0)
+		{
+			buff.partyBuff(attackerData.id, "sp_critbuff_resonance");
+		}
+	}
+
+	if (criticalHit)
+	{
+		int critproc = getEnhancedSkillStatisticModifierUncapped(attackerData.id, "expertise_oncrit_proc_sp_savagery");
+		if (critproc > 0)
+		{
+			buff.partyBuff(attackerData.id, "sp_critbuff_savagery");
+		}
+	}
+	if (utils.hasScriptVar(attackerData.id, buff.ON_ATTACK_REMOVE) && actionData.commandType != combat.LEFT_CLICK_DEFAULT)
+	{
+		// PROFILER_START("combat_base.runHitEngine - ON_ATTACK_REMOVE");
+
+		resizeable string[] buffList = utils.getResizeableStringArrayScriptVar(attackerData.id, buff.ON_ATTACK_REMOVE);
+
+		for (int i=0;i<buffList.length;i++)
+		{
+			if (buff.hasBuff(attackerData.id, buffList[i]))
+				buff.removeBuff(attackerData.id, buffList[i]);
+		}
+
+		// PROFILER_STOP("combat_base.runHitEngine - ON_ATTACK_REMOVE");
+	}
+
+	if (actionData.hitSpam != combat.NO_HIT_SPAM)
+	{
+		// PROFILER_START("combat_base.runHitEngine - hitSpam");
+
+		obj_id currentWeapon = null;
+		if (actionData.hitSpam == combat.ACTION_NAME)
+		{
+			string_id attackId = new string_id("cmd_n", actionData.actionName);
+			combat.doBasicCombatSpam(attackId, SID_NONE, currentWeapon, attackerResults, defenderResults, hitData);
+		}
+		else if (actionData.hitSpam == combat.WEAPON_NAME)
+		{
+			if (weaponData.weaponName != null)
+			{
+				combat.doBasicCombatSpam(SID_NONE, weaponData.weaponName, currentWeapon, attackerResults, defenderResults, hitData);
+			}
+			else if (isValidId(weaponData.id))
+			{
+				combat.doBasicCombatSpam(SID_NONE, weaponData.weaponName, weaponData.id, attackerResults, defenderResults, hitData);
+			}
+			else if (isValidId(attackerResults.weapon))
+			{
+				combat.doBasicCombatSpam(SID_NONE, weaponData.weaponName, attackerResults.weapon, attackerResults, defenderResults, hitData);
+			}
+			else if (isValidId(getCurrentWeapon(attackerResults.id)))
+			{
+				combat.doBasicCombatSpam(SID_NONE, weaponData.weaponName, getCurrentWeapon(attackerResults.id), attackerResults, defenderResults, hitData);
+			}
+			else
+			{
+				combat.doBasicCombatSpam(SID_NONE, SID_NONE, currentWeapon, attackerResults, defenderResults, hitData);
+			}
+
+		}
+		else // if (actionData.hitSpam == combat.NO_ATTACK_NAME) (let weapon check fall thru to this)
+		{
+			combat.doBasicCombatSpam(SID_NONE, SID_NONE, currentWeapon, attackerResults, defenderResults, hitData);
+		}
+
+		// PROFILER_STOP("combat_base.runHitEngine - hitSpam");
+	}
+
+	// PROFILER_START("combat_base.runHitEngine - doMultiDefenderCombatResults");
+
+	if(actionData.hitType != 6 /*DELAY_ATTACK*/  || actionData.delayAttackLoopsDone == 0 ) // don't want character to animate when trap/grenade goes off
+	{
+		// Play the correct animations for attacker and defenders
+		doMultiDefenderCombatResults(playbackNames, attackerResults, defenderResults, weaponData, actionData, hitData);
+	}
+
+	// PROFILER_STOP("combat_base.runHitEngine - doMultiDefenderCombatResults");
+
+	//Perform additional Killing Spree Attack
+	int rampageAttacks = getEnhancedSkillStatisticModifierUncapped(attackerData.id, "expertise_co_killing_spree_target");
+	if ( actionData.commandType == combat.LEFT_CLICK_DEFAULT && buff.hasBuff(attackerData.id, "co_killing_spree") && rampageAttacks > 0)
+	{
+		// PROFILER_START("combat_base.runHitEngine - co_killing_spree_attack");
+
+		obj_id[] hateList = getHateList(attackerData.id);
+		for (int q=0;q<rampageAttacks;q++)
+		{
+			if (hateList != null && hateList.length > 0)
+			{
+				queueCommand(attackerData.id, ##"co_killing_spree_attack", hateList[rand(0, hateList.length -1)], "", COMMAND_PRIORITY_IMMEDIATE);
+			}
+		}
+
+		// PROFILER_STOP("combat_base.runHitEngine - co_killing_spree_attack");
+	}
+
+	// PROFILER_START("combat_base.runHitEngine - callDefenderCombatAction");
+
+	// call onDefenderCombatAction on everyone involved
+
+	callDefenderCombatAction(defenders, results, attackerData.id, weaponData.id);
+
+	// PROFILER_STOP("combat_base.runHitEngine - callDefenderCombatAction");
+
+	// PROFILER_STOP("combat_base.runHitEngine - top");
+
+	return hitData;
+}
+
+int getDefenderResult(attacker_data attackerData, defender_data defenderData, combat_data actionData, boolean autoAim)
+{
+	if (combat.isAreaAttack(actionData.attackType))
+		return getAreaDefenderResult(attackerData, defenderData, actionData, autoAim);
+	else
+		return getSingleTargetDefenderResult(attackerData, defenderData, actionData, autoAim);
+}
+
+int getAttackerResult(attacker_data attackerData, defender_data defenderData, combat_data actionData, boolean autoAim)
+{
+	if (combat.isAreaAttack(actionData.attackType))
+		return getAreaAttackResult(attackerData, defenderData, actionData, autoAim);
+	else
+		return getSingleTargetAttackResult(attackerData, defenderData, actionData, autoAim);
+}
+
+int getAreaDefenderResult(attacker_data attackerData, defender_data defenderData, combat_data actionData, boolean autoAim)
+{
+	obj_id attacker = attackerData.id;
+	obj_id defender = defenderData.id;
+
+
+	// Stunned targets cannot defend themselves.
+	if (movement.hasStunEffect(defenderData.id))
+		return HIT_RESULT_HIT;
+
+
+	// Get defender actions
+	int glancingBlow = Math.round(10.0f * combat.getGlancingBlowChance(attackerData, defenderData, actionData));
+	int evasionChance = Math.round(10.0f * combat.getEvasionChance(attackerData, defenderData));
+	int blockChance = Math.round(10.0f * combat.getBlockChance(attackerData, defenderData, actionData));
+	int loaded_dice = getEnhancedSkillStatisticModifierUncapped(defenderData.id, "hit_table_add_defender_position");
+	int impossible_odds = getEnhancedSkillStatisticModifierUncapped(defenderData.id, "hit_table_defender_add_hit");
+
+	glancingBlow = glancingBlow < 0 ? 0 : glancingBlow;
+	evasionChance = evasionChance < 0 ? 0 : evasionChance;
+	blockChance = blockChance < 0 ? 0 : blockChance;
+	loaded_dice = loaded_dice < 0 ? 0 : loaded_dice;
+	impossible_odds = impossible_odds < 0 ? 0 : impossible_odds;
+
+	evasionChance = evasionChance >= 1000 ? 1000 : evasionChance;
+	blockChance = blockChance + evasionChance < 1000 ? blockChance + evasionChance : 1000;
+	glancingBlow = glancingBlow + blockChance < 1000 ? glancingBlow + blockChance : 1000;
+	impossible_odds = blockChance + impossible_odds < 1000 + impossible_odds ? blockChance + impossible_odds : 1000 + impossible_odds;
+
+	int defRollResult = rand(1, 1000) + loaded_dice;
+
+	if (defRollResult <= evasionChance)
+		return HIT_RESULT_EVADE;
+
+	if (defRollResult <= blockChance)
+		return HIT_RESULT_BLOCK;
+
+	if (defRollResult <= glancingBlow)
+		return HIT_RESULT_GLANCING;
+
+	if (defRollResult <= impossible_odds)
+		return HIT_RESULT_HIT;
+
+	return HIT_RESULT_HIT;
+}
+
+int getAreaAttackResult(attacker_data attackerData, defender_data defenderData, combat_data actionData, boolean autoAim)
+{
+	obj_id attacker = attackerData.id;
+	obj_id defender = defenderData.id;
+
+	boolean attackCanPunish = actionData.canBePunishing == 1;
+	boolean mobCanPunish = utils.getIntScriptVar(attackerData.id, "combat.immune.no_punish") == 0 ? true : false;
+	int punishingBlow = 0;
+
+	if (attackCanPunish && mobCanPunish)
+		punishingBlow =	Math.round(10.0f * combat.getPunishingBlowChance(attackerData, defenderData));
+
+	punishingBlow = punishingBlow < 0 ? 0 : punishingBlow;
+
+	int criticalChance = Math.round(10.0f * combat.getCriticalHitChance(attackerData, defenderData, actionData, autoAim));
+	criticalChance = criticalChance < 0 ? 0 : criticalChance;
+
+	int length = 1000 - punishingBlow < 0 ? 0 : 1000 - punishingBlow;
+
+	criticalChance = criticalChance >= length ? length : criticalChance;
+	punishingBlow += criticalChance;
+
+	int attackRollResult = rand(1, 1000);
+
+	if (attackRollResult <= criticalChance)
+		return HIT_RESULT_CRITICAL;
+
+	if (attackRollResult <= punishingBlow)
+		return HIT_RESULT_PUNISHING;
+
+	return HIT_RESULT_HIT;
+}
+
+int getSingleTargetDefenderResult(attacker_data attackerData, defender_data defenderData, combat_data actionData, boolean autoAim)
+{
+	obj_id attacker = attackerData.id;
+	obj_id defender = defenderData.id;
+	int loaded_dice = getEnhancedSkillStatisticModifierUncapped(defenderData.id, "hit_table_add_defender_position");
+	int impossible_odds = getEnhancedSkillStatisticModifierUncapped(defenderData.id, "hit_table_defender_add_hit");
+	int hit_always = getEnhancedSkillStatisticModifierUncapped(attacker, "hit_always");
+
+	if(hit_always > 0)
+	{
+		return HIT_RESULT_HIT;
+	}
+
+	// Stunned targets cannot defend themselves.
+	if (movement.hasStunEffect(defenderData.id))
+		return HIT_RESULT_HIT;
+
+	weapon_data attackerWeapon = getWeaponData(getCurrentWeapon(attacker));
+	weapon_data defenderWeapon = getWeaponData(getCurrentWeapon(defender));
+
+	boolean isRangedAttacker = false;
+	boolean isRangedDefender = false;
+	boolean isLightSaber = false;
+
+	if (attackerWeapon != null)
+	{
+		isRangedAttacker = combat.isRangedWeapon(attackerWeapon.weaponType);
+	}
+
+	if (defenderWeapon != null)
+	{
+		isRangedDefender = combat.isRangedWeapon(defenderWeapon.weaponType);
+		isLightSaber = jedi.isLightsaber(defenderWeapon.id);
+	}
+
+	//Get glancing and Punishing blow chance. This is primarily derived by level but modifiers can change the outcome.
+	int glancingBlow = Math.round(10.0f * combat.getGlancingBlowChance(attackerData, defenderData, actionData));
+	glancingBlow = glancingBlow < 0 ? 0 : glancingBlow;
+	//Get the defender Combat Atrributes.
+	int dodgeChance = Math.round(10.0f * combat.getDodgeChance(attackerData, defenderData, actionData));
+	dodgeChance = dodgeChance < 0 ? 0 : dodgeChance;
+	int parryChance = Math.round(10.0f * combat.getParryChance(attackerData, defenderData, actionData));
+	parryChance = parryChance < 0 ? 0 : parryChance;
+	int blockChance = Math.round(10.0f * combat.getBlockChance(attackerData, defenderData, actionData));
+	blockChance = blockChance < 0 ? 0 : blockChance;
+
+	// Can parry is a melee/melee action, unless you are a jedi
+	if (isRangedDefender || (isRangedAttacker && !isLightSaber))
+		parryChance = 0;
+
+	dodgeChance = dodgeChance >= 1000 ? 1000 : dodgeChance;
+	parryChance = dodgeChance + parryChance < 1000 ? dodgeChance + parryChance : 1000;
+	blockChance = blockChance + parryChance < 1000 ? blockChance + parryChance : 1000;
+	glancingBlow = glancingBlow + blockChance < 1000 ? glancingBlow + blockChance : 1000;
+	impossible_odds = blockChance + impossible_odds < 1000 + impossible_odds ? blockChance + impossible_odds : 1000 + impossible_odds;
+
+	int defRollResult = rand(1, 1000) + loaded_dice;
+
+//	LOG("combat_base", "getSingleTargetDefenderResult defRollResult: " + defRollResult + " loaded_dice: " + loaded_dice + " dodgeChance: " + dodgeChance +
+//		" parryChance: " + parryChance + " blockChance: " + blockChance + " glancingBlow: " + glancingBlow + " impossible_odds: " + impossible_odds);
+
+	if (defRollResult <= dodgeChance)
+		return HIT_RESULT_DODGE;
+
+	if (defRollResult <= parryChance)
+		return HIT_RESULT_PARRY;
+
+	if (defRollResult <= blockChance)
+		return HIT_RESULT_BLOCK;
+
+	if (defRollResult <= glancingBlow)
+		return HIT_RESULT_GLANCING;
+
+	if (defRollResult <= impossible_odds)
+		return HIT_RESULT_HIT;
+
+	return HIT_RESULT_HIT;
+}
+
+int getSingleTargetAttackResult(attacker_data attackerData, defender_data defenderData, combat_data actionData, boolean autoAim)
+{
+	obj_id attacker = attackerData.id;
+	obj_id defender = defenderData.id;
+
+	int crit_always = getEnhancedSkillStatisticModifierUncapped(attacker, "crit_always");
+
+	if(crit_always > 0)
+	{
+		return HIT_RESULT_CRITICAL;
+	}
+
+	weapon_data attackerWeapon = getWeaponData(getCurrentWeapon(attacker));
+	weapon_data defenderWeapon = getWeaponData(getCurrentWeapon(defender));
+
+	boolean isRangedAttacker = false;
+	boolean isRangedDefender = false;
+	boolean isLightSaber = false;
+
+	if (attackerWeapon != null)
+	{
+		isRangedAttacker = combat.isRangedWeapon(attackerWeapon.weaponType);
+	}
+
+	if (defenderWeapon != null)
+	{
+		isRangedDefender = combat.isRangedWeapon(defenderWeapon.weaponType);
+		isLightSaber = jedi.isLightsaber(defenderWeapon.id);
+	}
+
+	// Get base miss chance
+	int missChance = Math.round(10.0f * combat.getMissChance(attackerData, defenderData, actionData, autoAim));
+	missChance = missChance < 0 ? 0 : missChance;
+	//Get glancing and Punishing blow chance. This is primarily derived by level but modifiers can change the outcome.
+	int punishingBlow = Math.round(10.0f * combat.getPunishingBlowChance(attackerData, defenderData));
+	punishingBlow = punishingBlow < 0 ? 0 : punishingBlow;
+	//Get the attacker combat attributes
+	int criticalChance = Math.round(10.0f * combat.getCriticalHitChance(attackerData, defenderData, actionData, autoAim));
+	criticalChance = criticalChance < 0 ? 0 : criticalChance;
+	int strikethroughChance = Math.round(10.0f * combat.getStrikethroughChance(attackerData, defenderData, actionData));
+	strikethroughChance = strikethroughChance < 0 ? 0 : strikethroughChance;
+
+	int length = 1000 - punishingBlow < 0 ? 0 : 1000 - punishingBlow;
+
+	missChance = missChance > length ? length : missChance;
+	strikethroughChance = strikethroughChance + missChance < length ? strikethroughChance + missChance : length;
+	criticalChance = criticalChance + strikethroughChance < length ? criticalChance + strikethroughChance : length;
+	punishingBlow += criticalChance;
+	int attackRollResult = rand(1, 1000);
+
+	int stvalue = strikethroughChance - missChance;
+	int critvalue = criticalChance - strikethroughChance;
+
+//	LOG("combat_base", "getSingleTargetAttackResult attackRollResult: " + attackRollResult + " stvalue: " + stvalue + " critvalue: " + critvalue +
+//		" missChance: " + missChance + " strikethroughChance: " + strikethroughChance + " criticalChance: " + criticalChance + " punishingBlow: " + punishingBlow);
+
+	if (attackRollResult <= missChance)
+		return HIT_RESULT_MISS;
+
+	if (attackRollResult <= strikethroughChance)
+		return HIT_RESULT_STRIKETHROUGH;
+
+	if (attackRollResult <= criticalChance)
+		return HIT_RESULT_CRITICAL;
+
+	if (attackRollResult <= punishingBlow)
+		return HIT_RESULT_PUNISHING;
+
+	return HIT_RESULT_HIT;
+}
+
+void displayHitTable(obj_id attacker, obj_id defender, int[] defTable, int[] atkTable, int defResult, int atkResult)
+{
+
+	if (!isGod(attacker) && !isGod(defender))
+		return;
+
+	int miss = 0;
+	int dodge = 0;
+	int parry = 0;
+	int glancing = 0;
+	int block = 0;
+	int critical = 0;
+	int punishing = 0;
+	int hit = 0;
+	int evade = 0;
+	int strikethrough = 0;
+
+	for (int i=0;i<defTable.length;i++)
+	{
+		switch (defTable[i])
+		{
+			case HIT_RESULT_MISS:
+				miss++;
+				break;
+			case HIT_RESULT_DODGE:
+				dodge++;
+				break;
+			case HIT_RESULT_PARRY:
+				parry++;
+				break;
+			case HIT_RESULT_GLANCING:
+				glancing++;
+				break;
+			case HIT_RESULT_BLOCK:
+				block++;
+				break;
+			case HIT_RESULT_CRITICAL:
+				critical++;
+				break;
+			case HIT_RESULT_PUNISHING:
+				punishing++;
+				break;
+			case HIT_RESULT_HIT:
+				hit++;
+				break;
+			case HIT_RESULT_EVADE	:
+				evade++;
+				break;
+			case HIT_RESULT_STRIKETHROUGH:
+				strikethrough++;
+				break;
+		}
+	}
+
+	for (int i=0;i<atkTable.length;i++)
+	{
+		switch (atkTable[i])
+		{
+			case HIT_RESULT_MISS:
+				miss++;
+				break;
+			case HIT_RESULT_DODGE:
+				dodge++;
+				break;
+			case HIT_RESULT_PARRY:
+				parry++;
+				break;
+			case HIT_RESULT_GLANCING:
+				glancing++;
+				break;
+			case HIT_RESULT_BLOCK:
+				block++;
+				break;
+			case HIT_RESULT_CRITICAL:
+				critical++;
+				break;
+			case HIT_RESULT_PUNISHING:
+				punishing++;
+				break;
+			case HIT_RESULT_HIT:
+				hit++;
+				break;
+			case HIT_RESULT_EVADE	:
+				evade++;
+				break;
+			case HIT_RESULT_STRIKETHROUGH:
+				strikethrough++;
+				break;
+		}
+	}
+
+	if (isPlayer(attacker))
+	{
+		LOG("atkHitTable", "Forming Hit Table");
+		LOG("atkHitTable", getName(attacker)+" Vs. "+getName(defender));
+		LOG("atkHitTable", "Miss "+miss);
+		LOG("atkHitTable", "Dodge "+dodge);
+		LOG("atkHitTable", "Parry "+parry);
+		LOG("atkHitTable", "Glancing "+glancing);
+		LOG("atkHitTable", "Block "+block);
+		LOG("atkHitTable", "Critical "+critical);
+		LOG("atkHitTable", "Punishing "+punishing);
+		LOG("atkHitTable", "Hit "+hit);
+		LOG("atkHitTable", "Evade "+evade);
+		LOG("atkHitTable", "Strikethrough "+strikethrough);
+		LOG("atkHitTable", "Defender Result was "+getHitResultByName(defResult));
+		LOG("atkHitTable", "Attacker Results was "+getHitResultByName(atkResult));
+		LOG("atkHitTable", "xx");
+	}
+	if (!isPlayer(attacker))
+	{
+		LOG("defHitTabel", "Forming Hit Table");
+		LOG("defHitTable", getName(attacker)+" Vs. "+getName(defender));
+		LOG("defHitTable", "Miss "+miss);
+		LOG("defHitTable", "Dodge "+dodge);
+		LOG("defHitTable", "Parry "+parry);
+		LOG("defHitTable", "Glancing "+glancing);
+		LOG("defHitTable", "Block "+block);
+		LOG("defHitTable", "Critical "+critical);
+		LOG("defHitTable", "Punishing "+punishing);
+		LOG("defHitTable", "Hit "+hit);
+		LOG("defHitTable", "Evade "+evade);
+		LOG("defHitTable", "Strikethrough "+strikethrough);
+		LOG("defHitTable", "Defender Result was "+getHitResultByName(defResult));
+		LOG("defHitTable", "Attacker Results was "+getHitResultByName(atkResult));
+		LOG("defHitTable", "xx");
+	}
+
+	if (hasObjVar(attacker, "viewHitTable"))
+	{
+		sendSystemMessageTestingOnly(attacker, "Forming Hit Table");
+		sendSystemMessageTestingOnly(attacker, getName(attacker)+" Attacking. "+getName(defender));
+		sendSystemMessageTestingOnly(attacker, "Miss "+miss);
+		sendSystemMessageTestingOnly(attacker, "Dodge "+dodge);
+		sendSystemMessageTestingOnly(attacker, "Parry "+parry);
+		sendSystemMessageTestingOnly(attacker, "Glancing "+glancing);
+		sendSystemMessageTestingOnly(attacker, "Block "+block);
+		sendSystemMessageTestingOnly(attacker, "Critical "+critical);
+		sendSystemMessageTestingOnly(attacker, "Punishing "+punishing);
+		sendSystemMessageTestingOnly(attacker, "Hit "+hit);
+		sendSystemMessageTestingOnly(attacker, "Evade "+evade);
+		sendSystemMessageTestingOnly(attacker, "Strikethrough "+strikethrough);
+		sendSystemMessageTestingOnly(attacker, ""+getHitResultByName(defResult));
+		sendSystemMessageTestingOnly(attacker, ""+getHitResultByName(atkResult));
+		sendSystemMessageTestingOnly(attacker, "xx");
+
+	}
+
+	if (hasObjVar(defender, "viewHitTable"))
+	{
+		sendSystemMessageTestingOnly(defender, "Forming Hit Table");
+		sendSystemMessageTestingOnly(defender, getName(attacker)+" Attacking. "+getName(defender));
+		sendSystemMessageTestingOnly(defender, "Miss "+miss);
+		sendSystemMessageTestingOnly(defender, "Dodge "+dodge);
+		sendSystemMessageTestingOnly(defender, "Parry "+parry);
+		sendSystemMessageTestingOnly(defender, "Glancing "+glancing);
+		sendSystemMessageTestingOnly(defender, "Block "+block);
+		sendSystemMessageTestingOnly(defender, "Critical "+critical);
+		sendSystemMessageTestingOnly(defender, "Punishing "+punishing);
+		sendSystemMessageTestingOnly(defender, "Hit "+hit);
+		sendSystemMessageTestingOnly(defender, "Evade "+evade);
+		sendSystemMessageTestingOnly(defender, "Strikethrough "+strikethrough);
+		sendSystemMessageTestingOnly(defender, ""+getHitResultByName(defResult));
+		sendSystemMessageTestingOnly(defender, ""+getHitResultByName(atkResult));
+		sendSystemMessageTestingOnly(defender, "xx");
+
+	}
+}
+
+string getHitResultByName(int hitResult)
+{
+	string hitType = "None";
+	switch (hitResult)
+	{
+		case HIT_RESULT_MISS:
+			hitType = "Miss";
+			break;
+		case HIT_RESULT_DODGE:
+			hitType = "Dodge";
+			break;
+		case HIT_RESULT_PARRY:
+			hitType = "Parry";
+			break;
+		case HIT_RESULT_GLANCING:
+			hitType = "Glancing";
+			break;
+		case HIT_RESULT_BLOCK:
+			hitType = "Block";
+			break;
+		case HIT_RESULT_CRITICAL:
+			hitType = "Critical";
+			break;
+		case HIT_RESULT_PUNISHING:
+			hitType = "Punishing";
+			break;
+		case HIT_RESULT_HIT:
+			hitType = "Hit";
+			break;
+		case HIT_RESULT_EVADE	:
+			hitType = "Evade";
+			break;
+		case HIT_RESULT_STRIKETHROUGH:
+			hitType = "Strikethrough";
+			break;
+	}
+
+	return hitType;
+}
+
+hit_result applyDamage(obj_id attacker, obj_id defender, weapon_data weaponData, hit_result hitData, combat_data actionData, boolean primaryTarget)
+{
+	return applyDamage(attacker, defender, weaponData, hitData, actionData, primaryTarget, 0);
+}
+
+hit_result applyDamage(obj_id attacker, obj_id defender, weapon_data weaponData, hit_result hitData, combat_data actionData, boolean primaryTarget, int overloadDamage)
+{
+	// Modify raw damage
+
+
+	// Apply damage
+	doWrappedDamage(attacker, defender, weaponData, hitData, actionData, overloadDamage);
+
+	// Combat DoTs removed?
+	//dot.applyCombatDots(attacker, defender, hitData, weaponData, 1.0f);
+
+	return hitData;
+}
+
+//if the overloadWeapon column is 0, then NO VALUES will be overloaded.
+// if any given value is -1, then the default weaponData will be used instead.
+weapon_data getOverloadedWeaponData(obj_id self, obj_id objWeapon, combat_data actionData)
+{
+	if(!isIdValid(self))
+	{
+		return null;
+	}
+
+	if(!isIdValid(objWeapon))
+	{
+		return getWeaponData(getCurrentWeapon(self));
+	}
+
+	if(actionData.overloadWeapon > 0)
+	{
+		return weapons.fillWeaponData(objWeapon, actionData);
+	}
+
+	weapon_data weaponData = weapons.getNewWeaponData(objWeapon);
+
+	if(weaponData == null)
+	{
+		CustomerServiceLog("combat_errors: ", "getOverloadedWeaponData weaponData: null for objWeapon: " + objWeapon + " getName(objWeapon): " + getName(objWeapon));
+
+		weaponData = getWeaponData(getCurrentWeapon(self));
+	}
+	else
+	{
+		weaponData.elementalValue = isPlayer(self) ? weaponData.elementalValue * 2 : weaponData.elementalValue;
+	}
+
+	return weaponData;
+}
+
+// All modification to weapon min/max damage ranges go here
+dictionary getRawDamage(obj_id attacker, weapon_data weaponData, combat_data actionData, hit_result hitData, float minDamage, float maxDamage, int numTargets)
+{
+	int addedDamage = actionData.addedDamage;
+	if (actionData.attackType == combat.AREA_PROGRESSIVE)
+	{
+		addedDamage += utils.getIntScriptVar(attacker, PROGRESSIVE_DAMAGE_COUNTER);
+		utils.setScriptVar(attacker, PROGRESSIVE_DAMAGE_COUNTER, addedDamage);
+	}
+	if (actionData.attackType == combat.SPLIT_DAMAGE_TARGET_AREA)
+	{
+		addedDamage = Math.round((float)addedDamage / (float)numTargets);
+	}
+
+	float percentAddFromWeapon = actionData.percentAddFromWeapon;
+
+	// Do all the weapon cert checks and reduce damage to minimal amount if failed
+	if (!combat.checkWeaponCerts(attacker, weaponData, false))
+	{
+		combat.combatLog(attacker, null, "getRawDamage", "Weapon Certification Failed.  Modifying damage to 5 min, 10 max.");
+		minDamage = 5.0f;
+		maxDamage = 10.0f;
+	}
+
+	if (beast_lib.isBeastMaster(attacker) || beast_lib.isBeast(attacker))
+	{
+		minDamage = minDamage + (minDamage * (beast_lib.getBeastModDamageBonus(attacker) / 100.0f));
+		maxDamage = maxDamage + (maxDamage * (beast_lib.getBeastModDamageBonus(attacker) / 100.0f));
+	}
+
+	combat.combatLog(attacker, null, "getRawDamage", "RAW DAMAGE Damage = "+minDamage+"-"+maxDamage);
+	float speed = weaponData.attackSpeed;
+
+	if(speed == 0 || (isMob(attacker) && beast_lib.isBeast(attacker))) // some magical instances where attackSpeed == 0...
+	{
+		speed = 1.0f; // avoid divide by zero
+	}
+
+	minDamage *= percentAddFromWeapon;
+	maxDamage *= percentAddFromWeapon;
+
+	if(addedDamage > 0) // special attack damage?
+	{
+		// Normalize the addedDamage, based on DPS so that slow firing heavy hitting weapons aren't always better for specials
+		float dps = ((minDamage + maxDamage) / 2.0f) / speed;
+		float totalAddedDamage = dps + addedDamage;
+		float normalizedSpecialDmg = totalAddedDamage - ((minDamage + maxDamage) / 2);
+
+		minDamage += normalizedSpecialDmg;
+		maxDamage += normalizedSpecialDmg;
+	}
+
+	float damageAddFromLevel = (float)getEnhancedSkillStatisticModifierUncapped(attacker, "level_add_to_damage");
+
+	if (damageAddFromLevel > 0.0f)
+	{
+		float levelDamageMod = getLevel(attacker) * (damageAddFromLevel / 100.0f);
+
+		// Normalize by weapon speed.
+		minDamage += levelDamageMod * speed;
+		maxDamage += levelDamageMod * speed;
+	}
+
+	// Add strength bonus to melee
+	if(getWeaponType(weaponData.id) >= 0)
+	{
+		if (combat.isMeleeWeapon(weaponData.id) || combat.isLightsaberWeapon(weaponData.id))
+		{
+			int strengthBonus = 0;
+			strengthBonus += Math.round((float)getEnhancedSkillStatisticModifierUncapped(attacker, "strength_modified") / 3.0f);
+			strengthBonus += Math.round((float)getSkillStatisticModifier(attacker, "strength") / 3.0f);
+
+			minDamage += strengthBonus;
+			maxDamage += strengthBonus;
+		}
+	}
+
+	// Add in enraged damage
+	float enragedMod = utils.getFloatScriptVar(attacker, "damageDealtMod.value");
+	if (enragedMod > 0)
+	{
+		minDamage *= enragedMod;
+		maxDamage *= enragedMod;
+	}
+
+	// Apply action damage multiplier=
+	combat.combatLog(attacker, null, "getRawDamage", "Final Modified Damage = "+minDamage+"-"+maxDamage);
+
+	//put in a varience so min is never larger than max
+	if (minDamage > maxDamage - 1)
+		minDamage = maxDamage - 1;
+
+	// Cap Min damage so we cant go negative
+	if (minDamage < 1)
+		minDamage = 1;
+
+	// Remove Elemental Damage for Specials not using weapon damage
+	if (percentAddFromWeapon == 0.0)
+	{
+		weaponData.elementalValue = 0;
+	}
+
+	// This is the hacky way to handle damage bonus
+	if (utils.hasScriptVar(attacker, "private_damage_bonus"))
+	{
+		minDamage = minDamage * (1 + utils.getFloatScriptVar(attacker, "private_damage_bonus"));
+		maxDamage = maxDamage * (1 + utils.getFloatScriptVar(attacker, "private_damage_bonus"));
+	}
+
+	dictionary dict = new dictionary();
+
+	dict.put("minDamage", minDamage);
+	dict.put("maxDamage", maxDamage);
+
+	return dict;
+}
+
+int expertiseDamageModify(obj_id attacker, obj_id defender, hit_result hitData, combat_data actionData)
+{
+	int newDamage = hitData.damage;
+
+	int damageDecrease = getSkillStatisticModifier(attacker, "expertise_damage_decrease_chance"); //utils.getIntScriptVar(attacker, "spotASuckerDamageDecrease");
+
+	// Spot a Sucker decreases damage
+	if(damageDecrease > 0)
+	{
+		float spotASuckerDecreaseChance = rand(0, damageDecrease) * 0.01f;
+
+		if(spotASuckerDecreaseChance > 1.0f)
+		{
+			spotASuckerDecreaseChance = 1.0f;
+		}
+
+		newDamage *= 1.0f - spotASuckerDecreaseChance;
+	}
+
+	float smugglerRankBonus = (float)getSkillStatisticModifier(attacker, "expertise_sm_rank_damage_bonus");
+
+	// Increases damage per rank from the Smuggling System
+	if(smugglerRankBonus > 0)
+	{
+		smugglerRankBonus *= 0.01f;
+
+		newDamage += newDamage * smugglerRankBonus;
+	}
+
+	int jediAnticipateAggression = getSkillStatisticModifier(defender, "expertise_damage_reduce_anticipate_aggression");
+
+	if(jediAnticipateAggression > 0)
+	{
+		float conversionPercentage = jediAnticipateAggression / 100.0f;
+		int oldDamage = hitData.damage;
+		newDamage -= (int)(oldDamage * conversionPercentage);
+
+		if (rand(0,9) < 1)
+			playClientEffectObj(defender, "appearance/pt_jedi_anticipate_aggression.prt", defender, "root");
+
+	}
+
+	damageDecrease = getSkillStatisticModifier(defender, "damage_decrease_percentage");
+
+	if(damageDecrease > 0)
+	{
+		newDamage -= (int)(hitData.damage * (float)((float)damageDecrease / 100.0f));
+	}
+
+	int areaDamageDecrease = getSkillStatisticModifier(defender, "area_damage_decrease_percentage");
+
+	if(areaDamageDecrease > 0 && combat.isAreaAttack(actionData.attackType))
+	{
+		newDamage -= (int)(hitData.damage * (float)((float)areaDamageDecrease / 100.0f));
+	}
+
+	int areaDamageResist = getSkillStatisticModifier(defender, "area_damage_resist_full_percentage");
+
+	if(areaDamageResist > 0 && combat.isAreaAttack(actionData.attackType) && rand(0, 99) < areaDamageResist)
+	{
+		newDamage = 0;
+	}
+
+	// Is this a critical hit? expertise crit damage doubler
+	if(hitData.critDamage > 0)
+	{
+		// Double the damage, if the script var is set.
+		if(utils.hasScriptVar(attacker, "critDoubleDamage") && actionData.commandType != combat.LEFT_CLICK_DEFAULT)
+		{
+			newDamage *= 2;
+			playClientEffectObj(defender, "appearance/pt_smuggler_end_line.prt", defender, "");
+		}
+
+		if(utils.hasScriptVar(attacker, "critRoot") && actionData.commandType != combat.LEFT_CLICK_DEFAULT)
+		{
+			buff.applyBuff(defender, attacker, "sm_nerf_herder_root");
+		}
+	}
+
+	newDamage = ai_lib.triggerSharedHealthLink(defender, newDamage);
+
+	return newDamage;
+}
+
+void doWrappedDamage(obj_id attacker, obj_id defender, weapon_data weaponData, hit_result hitData, combat_data actionData)
+{
+	doWrappedDamage(attacker, defender, weaponData, hitData, actionData, 0);
+}
+void clog(string message)
+{
+	debugSpeakMsg(getSelf(), message);
+}
+
+void doWrappedDamage(obj_id attacker, obj_id defender, weapon_data weaponData, hit_result hitData, combat_data actionData, int overloadDamage)
+{
+	// PROFILER_START("combat_base.doWrappedDamage - top");
+
+	boolean dmgSpecial = false;
+	boolean evade = hitData.evadeResult;
+	boolean block = hitData.blockResult;
+	float armorBypass = actionData.bypassArmor;
+	float siphonLife = actionData.convertDamageToHealth;
+	hitData.rawDamage = hitData.damage; // store it so we can do neat calcs on it.
+	int maxDamage = hitData.rawDamage + weaponData.elementalValue;
+	string dotType = actionData.dotType;
+
+	if(utils.hasScriptVar(defender, "elemental_vulnerability.type_heat"))
+	{
+		float value = utils.getFloatScriptVar(defender, "elemental_vulnerability.type_heat.value");
+		boolean exclusive = utils.getBooleanScriptVar(defender, "elemental_vulnerability.type_heat.exclusive");
+
+		if (exclusive)
+		{
+			hitData.rawDamage = 0;
+			maxDamage = 0;
+		}
+		if (weaponData.elementalType == DAMAGE_ELEMENTAL_HEAT)
+		{
+			weaponData.elementalValue *= value;
+		}
+		else if (exclusive)
+		{
+			weaponData.elementalValue *= 0.0f;
+		}
+	}
+
+	if(utils.hasScriptVar(defender, "elemental_vulnerability.type_electrical"))
+	{
+		float value = utils.getFloatScriptVar(defender, "elemental_vulnerability.type_electrical.value");
+		boolean exclusive = utils.getBooleanScriptVar(defender, "elemental_vulnerability.type_electrical.exclusive");
+
+		if (exclusive)
+		{
+			hitData.rawDamage = 0;
+			maxDamage = 0;
+		}
+		if (weaponData.elementalType == DAMAGE_ELEMENTAL_ELECTRICAL)
+		{
+			weaponData.elementalValue *= value;
+		}
+		else if (exclusive)
+		{
+			weaponData.elementalValue *= 0.0f;
+		}
+	}
+
+	if(utils.hasScriptVar(defender, "elemental_vulnerability.type_cold"))
+	{
+		float value = utils.getFloatScriptVar(defender, "elemental_vulnerability.type_cold.value");
+		boolean exclusive = utils.getBooleanScriptVar(defender, "elemental_vulnerability.type_cold.exclusive");
+
+		if (exclusive)
+		{
+			hitData.rawDamage = 0;
+			maxDamage = 0;
+		}
+		if (weaponData.elementalType == DAMAGE_ELEMENTAL_COLD)
+		{
+			weaponData.elementalValue *= value;
+		}
+		else if (exclusive)
+		{
+			weaponData.elementalValue *= 0.0f;
+		}
+	}
+
+	if (utils.hasScriptVar(defender, "elemental_vulnerability.type_acid"))
+	{
+		float value = utils.getFloatScriptVar(defender, "elemental_vulnerability.type_acid.value");
+		boolean exclusive = utils.getBooleanScriptVar(defender, "elemental_vulnerability.type_acid.exclusive");
+
+		if (exclusive)
+		{
+			hitData.rawDamage = 0;
+			maxDamage = 0;
+		}
+
+		if (weaponData.elementalType == DAMAGE_ELEMENTAL_ACID)
+		{
+			weaponData.elementalValue *= value;
+		}
+		else if (exclusive)
+		{
+			weaponData.elementalValue *= 0.0f;
+		}
+	}
+
+	if (beast_lib.isBeastMaster(defender) || beast_lib.isBeast(defender))
+	{
+		hitData.rawDamage = hitData.rawDamage - (int)(hitData.rawDamage * (beast_lib.getBeastModDamageReduction(defender) / 100.0f));
+	}
+
+	int evadeReduction = 0;
+
+	if(hitData.evadeResult)
+	{
+		float evadeValue = hitData.evadeAmmount;
+
+		if(evadeValue == -1)
+		{
+			hitData.rawDamage = 0;
+			weaponData.elementalValue = 0;
+			hitData.evadeAmmount = 100.0f;
+			dotType = null;
+
+		}
+		else
+		{
+			float percentReduction = rand(evadeValue / 2.0f, evadeValue);
+			evadeReduction = (int)(hitData.rawDamage * ( percentReduction / 100.0f));
+			weaponData.elementalValue = (int)(weaponData.elementalValue * (percentReduction / 100.0f));
+			hitData.rawDamage -= evadeReduction;
+			hitData.evadeAmmount = percentReduction;
+		}
+	}
+
+	// PROFILER_STOP("combat_base.doWrappedDamage - top");
+
+	// PROFILER_START("combat_base.doWrappedDamage - applyDotEffect");
+
+	// do Our Dots!
+	if(dotType != null && dotType.length() > 0)
+	{
+		int dotIntensity = actionData.dotIntensity;
+		int dotDuration = actionData.dotDuration;
+
+		// Derive DoT damage from weapon damage.
+		if(dotIntensity == 0)
+		{
+			dotIntensity = (int)(hitData.rawDamage * actionData.percentAddFromWeapon);
+		}
+
+		string specialName = actionData.actionName;
+		string specialLine = actionData.specialLine;
+		int expertiseDotDurationBonus = 0;
+		float expertiseDotDamageBonus = getEnhancedSkillStatisticModifierUncapped(attacker, "expertise_damage_all");
+
+		if(isMob(defender) && !isPlayer(defender) && !isIdValid(getMaster(defender)))
+		{
+			expertiseDotDamageBonus += getEnhancedSkillStatisticModifierUncapped(attacker, "expertise_damage_npc");
+		}
+
+		if(specialLine != null && specialLine.length() > 0)
+		{
+			expertiseDotDurationBonus = getEnhancedSkillStatisticModifierUncapped(attacker, "expertise_dot_duration_line_" + specialLine);
+			expertiseDotDurationBonus += getEnhancedSkillStatisticModifierUncapped(attacker, "expertise_dot_duration_single_" + specialName);
+			expertiseDotDamageBonus += getEnhancedSkillStatisticModifierUncapped(attacker, "expertise_dot_damage_line_" + specialLine);
+
+		}
+
+		float dotIntensityFloat = (float)dotIntensity * (1.0f + (expertiseDotDamageBonus/100.0f) );
+		dotIntensity = (int)dotIntensityFloat;
+		dotDuration += expertiseDotDurationBonus;
+
+		int targetAttrib = dotType.equals("disease") ? ACTION : HEALTH;
+
+		boolean rslt = dot.applyDotEffect(defender, attacker, dotType, dotType+""+attacker, targetAttrib, 100, dotIntensity, dotDuration);
+	}
+
+	// PROFILER_STOP("combat_base.doWrappedDamage - applyDotEffect");
+
+	// PROFILER_START("combat_base.doWrappedDamage - middle");
+
+	// apply remaining damage
+
+
+	hitData.damage = (hitData.rawDamage);
+
+	hitData.damageType = weaponData.damageType;
+
+	//if we are an force powers overloadedweapon change our combat spam to the correct damage type
+	if (actionData.overloadWeapon > 0)
+	{
+		hitData.damageType = actionData.overloadWeaponDamageType;
+	}
+
+	// PROFILER_START("combat_base.doWrappedDamage - expertiseDamageModify");
+	hitData.damage = expertiseDamageModify(attacker, defender, hitData, actionData);
+	// PROFILER_STOP("combat_base.doWrappedDamage - expertiseDamageModify");
+
+	//Expertise damage bonuses
+	float expertiseDamageBonus = 0;
+	obj_id expert = attacker;
+
+	if(!isPlayer(attacker) && utils.hasScriptVar(attacker, "objOwner") )
+		expert = utils.getObjIdObjVar(attacker, "objOwner");
+
+	int killMeter = getKillMeter(expert);
+
+	if(actionData.percentAddFromWeapon > 0.0f)
+	{
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_weapon_all");
+		
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_weapon_" + combat.getCorrectedWeaponType(weaponData.weaponType));
+		expertiseDamageBonus += killMeter * getSkillStatisticModifier(expert, "kill_meter_damage_weapon_all");
+	}
+
+	expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_all");
+
+	if(isMob(defender) && !isPlayer(defender) && !isIdValid(getMaster(defender)))
+	{
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(attacker, "expertise_damage_npc");
+	}
+
+	if(getWeaponType(weaponData.id) >= 0)
+	{
+		if ( (combat.isMeleeWeapon(weaponData.id)) || (combat.isLightsaberWeapon(weaponData.id)) )
+		{
+			expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_melee");
+		}
+
+		if (combat.isRangedWeapon(weaponData.id))
+		{
+			expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_ranged");
+		}
+	}
+
+	string specialLine = actionData.specialLine;
+	string actionName = actionData.actionName;
+
+	if(specialLine != null && specialLine != "")
+	{
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(defender, "expertise_damage_line_vulnerability_" + specialLine);
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_line_" + specialLine);
+		expertiseDamageBonus += killMeter * getSkillStatisticModifier(expert, "kill_meter_damage_line_" + specialLine);
+	}
+
+	if(actionName != null && actionName != "")
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_single_" + actionName);
+
+	if(actionName != null && actionName != "")
+	{
+		if(combat.isAreaAttack(actionData.attackType))
+		{
+			expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "expertise_damage_area_effect");
+		}
+	}
+
+	if(hasObjVar(attacker, "specialNicheType"))
+	{
+		string subType = getStringObjVar(attacker, "specialNicheType");
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(defender, "increase_damage_taken_from_"+subType);
+		expertiseDamageBonus -= getEnhancedSkillStatisticModifierUncapped(defender, "reduce_damage_taken_from_"+subType);
+
+	}
+
+	if(hasObjVar(defender, "specialNicheType"))
+	{
+
+		string subType = getStringObjVar(defender, "specialNicheType");
+		expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(attacker, "increase_damage_dealt_to_"+subType);
+		expertiseDamageBonus -= getEnhancedSkillStatisticModifierUncapped(attacker, "reduce_damage_dealt_to_"+subType);
+	}
+
+	if(overloadDamage > 0)
+	{
+		hitData.damage = overloadDamage;
+		armorBypass = 100.0f;
+	}
+
+	if(actionData.scaleByDefenderWeaponSpeed > 0)
+	{
+		obj_id defenderWeapon = getCurrentWeapon(defender);
+
+		if(isIdValid(defenderWeapon))
+		{
+			float defenderWeaponSpeed = getWeaponAttackSpeed(getCurrentWeapon(defender));
+
+			// damage * scale * pistol (ie: 1000 damage * 0.5 scale * 0.4 = 200 damage OR 1000 damage * 1.0 scale * 0.4 = 400 damage)
+			hitData.damage *= actionData.scaleByDefenderWeaponSpeed * defenderWeaponSpeed;
+		}
+	}
+
+	expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(expert, "combat_multiply_damage_dealt");
+	expertiseDamageBonus += getEnhancedSkillStatisticModifierUncapped(defender, "combat_multiply_damage_taken");
+
+
+	float tempDamageFloat = (float)hitData.damage;
+	tempDamageFloat = tempDamageFloat * (1.0f + ((float)expertiseDamageBonus / 100.0f) );
+
+	int expertiseDamageReduction = 0;
+	expertiseDamageReduction += getEnhancedSkillStatisticModifierUncapped(expert, "combat_divide_damage_dealt");
+	expertiseDamageReduction += getEnhancedSkillStatisticModifierUncapped(defender, "combat_divide_damage_taken");
+	expertiseDamageReduction = expertiseDamageReduction > 100 ? 100 : expertiseDamageReduction;
+
+	tempDamageFloat = tempDamageFloat * (1.0f - ((float)expertiseDamageReduction / 100.0f));
+	hitData.damage = (int)tempDamageFloat;
+
+	hitData.damage += getEnhancedSkillStatisticModifierUncapped(expert, "combat_add_damage_dealt");
+	hitData.damage -= getEnhancedSkillStatisticModifierUncapped(expert, "combat_subtract_damage_dealt");
+	hitData.damage += getEnhancedSkillStatisticModifierUncapped(defender, "combat_add_damage_taken");
+	hitData.damage -= getEnhancedSkillStatisticModifierUncapped(defender, "combat_subtract_damage_taken");
+
+	if(isPlayer(attacker))
+	{
+		session.logActivity(attacker, isPlayer(defender)? session.ACTIVITY_PVP : session.ACTIVITY_PVE);
+	}
+
+	hitData.blockedDamage += combat.applyArmorProtection(attacker, defender, weaponData, hitData, armorBypass, expertiseDamageBonus);
+
+	if (hitData.damage < 0)
+		hitData.damage = 0;
+
+
+	healing.applyLifeSiphonHeal(attacker, defender, hitData.damage, siphonLife, actionData.actionName);
+
+	int addDefenderDamageToAction = getSkillStatisticModifier(defender, "expertise_damage_add_to_action");
+
+	if(addDefenderDamageToAction > 0)
+	{
+		int actionToAdd = (int)(hitData.damage * (float)(addDefenderDamageToAction / 100.0f));
+		combat.gainCombatActionAttribute(defender, actionToAdd);
+
+		// 10% chance to play client effect for reactive response
+		if(rand(0,9) < 1)
+			playClientEffectObj(defender, "appearance/pt_jedi_reactive_response.prt", defender, "root");
+	}
+
+	int addAttackerDamageToAction = getSkillStatisticModifier(attacker, "expertise_attacker_action_gain");
+
+	if(addAttackerDamageToAction > 0)
+	{
+		int actionToAdd = (int)(hitData.damage * (float)(addAttackerDamageToAction / 100.0f));
+		combat.gainCombatActionAttribute(attacker, actionToAdd);
+
+		// 10% chance to play client effect for tempt hatred
+		if(rand(0,9) < 1)
+			playClientEffectObj(attacker, "appearance/pt_jedi_tempt_hatred.prt", attacker, "");
+	}
+
+	// PROFILER_STOP("combat_base.doWrappedDamage - middle");
+
+	// PROFILER_START("combat_base.doWrappedDamage - doDamage");
+
+	// Recording combat data for target dummy use
+	target_dummy.sendTargetDummyCombatData(attacker, defender, actionData, hitData);
+
+	//This is where we Finally Apply the Damage
+	doDamage(attacker, defender, hitData);
+
+	int expertiseActionDamage = 0;
+
+	if(specialLine != null && specialLine.length() > 0)
+	{
+		expertiseActionDamage = getSkillStatisticModifier(attacker, "expertise_action_damage_line_" + specialLine);
+	}
+
+	//damage reduce action amount from the defender, flat value from combat data, make sure you drain to 0 if they have less than the flat amount
+	int flatActionDamage = 	getAction(defender) < actionData.flatActionDamage + expertiseActionDamage ? getAction(defender) : actionData.flatActionDamage + expertiseActionDamage;
+
+	if(flatActionDamage > 0)
+		drainAttributes(defender, flatActionDamage, 0);
+
+	doKillMeterUpdate(attacker, defender, hitData.damage);
+
+	// PROFILER_STOP("combat_base.doWrappedDamage - doDamage");
+
+	// PROFILER_START("combat_base.doWrappedDamage - isPlayer");
+
+	if(isPlayer(attacker))
+	{
+		string_id strSpam = new string_id("combat_effects", "damage_fly");
+		prose_package pp = new prose_package();
+		pp = prose.setStringId(pp, strSpam);
+		pp = prose.setDI(pp, -(hitData.damage + hitData.elementalDamage));
+		string strName = actionData.actionName;
+
+		float textSize = 1.5f;
+		color combatColor = colors.RED;
+
+		/*  this block is for after we get code support for the color size changing on hits
+
+		float textSize = 1.0f;
+		color combatColor = colors.FIREBRICK;
+
+		if(hitData.critDamage > 0)
+		{
+			textSize = 1.5f;
+			combatColor = colors.RED;
+		}
+		*/
+
+		if((strName.equals("meleeHit"))||(strName.equals("rangedShot"))||(strName.equals("saberHit")))
+		{
+			if(hitData.critDamage > 0 && hitData.critDamage < 7)
+			{
+				string_id critSpam = new string_id("combat_effects", "critical_hit_" + hitData.critDamage);
+				prose_package ppc = new prose_package();
+				ppc = prose.setStringId(ppc, critSpam);
+				ppc = prose.setDI(ppc, -(hitData.damage + hitData.elementalDamage));
+				showFlyTextPrivateProseWithFlags(defender, attacker, ppc, 1.5f, combat.getCriticalColor(hitData.critDamage), FLY_TEXT_FLAG_IS_DAMAGE_FROM_PLAYER );
+			}
+			else
+			{
+				showFlyTextPrivateProseWithFlags(defender, attacker, pp, textSize, combatColor, FLY_TEXT_FLAG_IS_DAMAGE_FROM_PLAYER);
+			}
+		}
+		else
+		{
+			if(hitData.critDamage > 0 && hitData.critDamage < 7)
+			{
+				string_id critSpam = new string_id("combat_effects", "critical_hit_" + hitData.critDamage);
+				prose_package ppc = new prose_package();
+				ppc = prose.setStringId(ppc, critSpam);
+				ppc = prose.setDI(ppc, -(hitData.damage + hitData.elementalDamage));
+				showFlyTextPrivateProseWithFlags(defender, attacker, ppc, 1.5f, combat.getCriticalColor(hitData.critDamage), FLY_TEXT_FLAG_IS_DAMAGE_FROM_PLAYER );
+			}
+			else
+			{
+				showFlyTextPrivateProseWithFlags(defender, attacker, pp, 1.5f, colors.DARKORANGE, FLY_TEXT_FLAG_IS_DAMAGE_FROM_PLAYER);
+			}
+		}
+	}
+
+	// PROFILER_STOP("combat_base.doWrappedDamage - isPlayer");
+
+	// PROFILER_START("combat_base.doWrappedDamage - beasts");
+
+	if(beast_lib.isBeast(defender) || pet_lib.isPet(defender))
+	{
+		obj_id master = getMaster(defender);
+
+		if(isIdValid(master) && exists(master))
+		{
+			string_id strSpam = null;
+			color combatHue = colors.YELLOW;
+
+			if(hitData.critDamage > 0 && hitData.critDamage < 7)
+			{
+				strSpam = new string_id("combat_effects", "critical_hit_" + hitData.critDamage);
+				combatHue =  combat.getCriticalColor(hitData.critDamage);
+			}
+			else
+			{
+				strSpam = new string_id("combat_effects", "damage_fly");
+			}
+
+			prose_package pp = new prose_package();
+			pp = prose.setStringId(pp, strSpam);
+			pp = prose.setDI(pp, -(hitData.damage + hitData.elementalDamage));
+
+			showFlyTextPrivate(defender, master, pp, 1.5f, combatHue);
+		}
+	}
+
+	if(beast_lib.isBeast(attacker) || pet_lib.isPet(attacker))
+	{
+		obj_id master = getMaster(attacker);
+
+		if(isIdValid(master) && exists(master))
+		{
+			string_id strSpam = null;
+			color combatHue = colors.RED;
+
+			if(hitData.critDamage > 0 && hitData.critDamage < 7)
+			{
+				strSpam = new string_id("combat_effects", "critical_hit_" + hitData.critDamage);
+				combatHue =  combat.getCriticalColor(hitData.critDamage);
+			}
+			else
+			{
+				strSpam = new string_id("combat_effects", "damage_fly");
+			}
+
+			prose_package pp = new prose_package();
+			pp = prose.setStringId(pp, strSpam);
+			pp = prose.setDI(pp, -(hitData.damage + hitData.elementalDamage));
+
+			showFlyTextPrivate(defender, master, pp, 1.5f, combatHue);
+		}
+	}
+
+	// PROFILER_STOP("combat_base.doWrappedDamage - beasts");
+
+	// PROFILER_START("combat_base.doWrappedDamage - assignDamageCredit");
+	combat.assignDamageCredit(attacker, defender, weaponData, hitData.damage);
+	// PROFILER_STOP("combat_base.doWrappedDamage - assignDamageCredit");
+}
+
+obj_id[] truncateTargetArray(obj_id[] array, obj_id target, int size)
+{
+	if (array.length <= size+1)
+	{
+		return array;
+	}
+
+	obj_id[] truncArray = new obj_id[size];
+	truncArray[0] = target;
+
+	int source = 0;
+	int dest = 1;
+
+	while (source < size)
+	{
+		if (array[source] != target)
+		{
+			truncArray[dest] = array[source];
+			dest++;
+		}
+
+		source++;
+	}
+
+	return truncArray;
+}
+
+void sortDefendersByPlayer(obj_id[] defenders)
+{
+	resizeable obj_id[] playerList = new obj_id[0];
+	resizeable obj_id[] objectList = new obj_id[0];
+
+	for(int i = 0; i < defenders.length; i++)
+	{
+		if(isPlayer(defenders[i]))
+		{
+			utils.addElement(playerList, defenders[i]);
+		}
+		else
+		{
+			utils.addElement(objectList, defenders[i]);
+		}
+	}
+
+	if((playerList.length + objectList.length) == defenders.length)
+	{
+		obj_id[] tempPlayerList = playerList;
+		obj_id[] tempObjectList = objectList;
+
+		defenders = utils.concatArrays(tempPlayerList, tempObjectList);
+	}
+}
+
+obj_id[] validateDefenders(obj_id attacker, obj_id target, obj_id[] defenders, obj_id source, int maxDefenders, int validTargetType, boolean isOffensiveAction, obj_id losSourceObj, boolean isHeavyWeapon, boolean isSpecialAttack, boolean ignoreLOS, int pvpOnly, combat_data actionData)
+{
+	//boolean isOffensiveAction = (validTargetType != combat.VALID_TARGET_FRIEND && validTargetType != combat.VALID_TARGET_DEAD);
+
+	resizeable obj_id[] validDefenders = new obj_id[0];
+
+	if(defenders == null || defenders.length == 0)
+		return validDefenders;
+
+	combat.combatLog(attacker, target, "validateDefenders", "Attempting to put target at start of list");
+	//sendSystemMessageTestingOnly(obj_id.getObjId(10012011), "isHeavyWeapon=" + isHeavyWeapon + ", isSpecial=" + isSpecialAttack);
+
+	if(isIdValid(target) && (!isOffensiveAction || attacker != target))
+	{
+		if(!factions.ignorePlayer(attacker, target))
+		{
+			obj_id pvpAttacker = attacker;
+			obj_id pvpTarget = target;
+
+			if(isMob(attacker) && !isPlayer(attacker) && isIdValid(getMaster(attacker)))
+			{
+				pvpAttacker = getMaster(attacker);
+			}
+
+			if(isMob(target) && !isPlayer(target) && isIdValid(getMaster(target)))
+			{
+				pvpTarget = getMaster(target);
+			}
+
+			if(!isOffensiveAction || pvpCanAttack(pvpAttacker, pvpTarget))
+			{
+				validDefenders = utils.addElement(validDefenders, target);
+			}
+		}
+		else
+		{
+			combat.combatLog(attacker, target, "validateDefenders", "Invalid Target - Attacker or Target is flagged as playerIgnore");
+		}
+	}
+
+	if(!isOffensiveAction)
+	{
+		sortDefendersByPlayer(defenders);
+	}
+
+	// LOG("stealth", "losSourceObj=" + losSourceObj);
+	losSourceObj = losSourceObj != null? losSourceObj : attacker;
+	//sendSystemMessageTestingOnly(obj_id.getObjId(10014554), "CanSee 5 - losSource=" + losSourceObj + "(" + getName(losSourceObj) + ")");
+
+	if(isIdValid(target) && target != attacker && (!combat.cachedCanSee(losSourceObj, target) && !ignoreLOS))
+	{
+		showFlyTextPrivate(attacker, attacker, new string_id("combat_effects", "cant_see"), 1.5f, colors.MEDIUMTURQUOISE);
+		combat.combatLog(attacker, target, "validateDefenders", "Invalid Target - Fail LOS check");
+
+		return null;
+	}
+
+	// Check the attackers socialGroup for later checks
+	string attackerSocialGroup = null;
+
+	if(!isPlayer(attacker) && !pet_lib.isPet(attacker))
+	{
+		attackerSocialGroup = ai_lib.getSocialGroup(attacker);
+	}
+
+	for (int i= 0; i < defenders.length; i++)
+	{
+		if (isInvulnerable(defenders[i]))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Defender is invulnerable");
+			continue;
+		}
+
+		// target already in list and not allowed by multiple attack rolls.
+		if (defenders[i] == target && actionData.attack_rolls == 1)
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Skipping target");
+			continue;
+		}
+
+		// add in PvP check for PvP only combat actions
+		if (pvpOnly == 1 && !isPlayer(defenders[i]))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Skipping target - is not a Player");
+			continue;
+		}
+
+		// Must be valid oid
+		if (!isIdValid(defenders[i]))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Invalid ObjId");
+			continue;
+		}
+
+		// Buildings cannot be damaged by AOE, only direct target
+		if (isGameObjectTypeOf(defenders[i], GOT_building))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Is a building");
+			continue;
+		}
+
+		// Can only perform friendly actions on a mobile object
+		if (!isOffensiveAction && !isMob(defenders[i]))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Not a mobile object");
+			continue;
+		}
+
+		// Can't perform friendly actions on a vehicle
+		if (!isOffensiveAction && vehicle.isVehicle(defenders[i]))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Is a vehicle");
+			continue;
+		}
+
+		// Cannot attack dead target
+		if (isOffensiveAction && isDead(defenders[i]) || getState(defenders[i], STATE_FEIGN_DEATH) > 0)
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Target is Dead");
+			continue;
+		}
+
+		// Cannot attack incapped target
+		if (isOffensiveAction && isIncapacitated(defenders[i]))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Target is Incapped");
+			continue;
+		}
+
+		// Must be valid PvP target
+		if(isOffensiveAction)
+		{
+			obj_id pvpAttacker = attacker;
+			obj_id pvpTarget = defenders[i];
+
+			if(isMob(attacker) && !isPlayer(attacker) && isIdValid(getMaster(attacker)))
+			{
+				pvpAttacker = getMaster(attacker);
+			}
+
+			if(isMob(defenders[i]) && !isPlayer(defenders[i]) && isIdValid(getMaster(defenders[i])))
+			{
+				pvpTarget = getMaster(defenders[i]);
+			}
+
+			if(!pvpCanAttack(pvpAttacker, pvpTarget))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Failed PvP check");
+			continue;
+		}
+		}
+
+		if (!isOffensiveAction && (!pvpCanHelp(attacker, defenders[i]) || pvpCanAttack(attacker, defenders[i])))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Failed PvP check");
+			continue;
+		}
+
+		// Can't attack target in the same socialGroup
+		if (isOffensiveAction && attackerSocialGroup != null && attackerSocialGroup.equals(ai_lib.getSocialGroup(defenders[i])))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Same AI social group");
+			continue;
+		}
+
+		//sendSystemMessageTestingOnly(obj_id.getObjId(10014554), "CanSee 6");
+		if(!combat.cachedCanSee(losSourceObj, defenders[i]) && !ignoreLOS)
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Fail LOS check");
+			continue;
+		}
+
+
+		if (isOffensiveAction && factions.ignorePlayer(attacker, defenders[i]))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - Attacker or Defender is flagged as playerIgnore");
+			continue;
+		}
+
+		if (!combat.validateTarget(defenders[i], validTargetType))
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - failed valid target check");
+			continue;
+		}
+
+		if(pet_lib.getPetType(defenders[i]) == pet_lib.PET_TYPE_FAMILIAR)
+		{
+			combat.combatLog(attacker, defenders[i], "validateDefenders", "Invalid Target - familiar");
+			continue;
+		}
+
+		// Valid target add to array
+		combat.combatLog(attacker, defenders[i], "validateDefenders", "Valid Target - Adding Defender: "+defenders[i]);
+		validDefenders = utils.addElement(validDefenders, defenders[i]);
+
+		if (validDefenders.length == maxDefenders)
+			break;
+	}
+
+	combat.combatLog(attacker, defenders[0], "validateDefenders", "Valid defender count = "+validDefenders.length);
+
+	return validDefenders;
+}
+
+obj_id[] validateDefenders(obj_id attacker, obj_id target, obj_id[] defenders, obj_id source, int maxDefenders, int validTargetType, boolean isOffensiveAction, obj_id losSourceObj, boolean isHeavyWeapon, boolean isSpecialAttack)
+{
+	return validateDefenders(attacker, target, defenders, source, maxDefenders, validTargetType, isOffensiveAction, null, false, false, false, 0, null);
+}
+
+obj_id[] validateDefenders(obj_id attacker, obj_id target, obj_id[] defenders, obj_id source, int maxDefenders, int validTargetType, boolean isOffensiveAction)
+{
+	return validateDefenders(attacker, target, defenders, source, maxDefenders, validTargetType, isOffensiveAction, null, false, false);
+}
+
+defender_results[] createDefenderResultsArray(int size)
+{
+	defender_results[] defenderResults = new defender_results[size];
+
+	for (int i = 0; i < size; i++)
+	{
+		defenderResults[i] = new defender_results();
+	}
+
+	return defenderResults;
+}
+
+hit_result[] createHitResultsArray(int size)
+{
+	hit_result[] hitData = new hit_result[size];
+
+	for (int i = 0; i < size; i++)
+	{
+		hitData[i] = new hit_result();
+	}
+
+	return hitData;
+}
+
+attacker_results[] createAttackerResultsArray(int size)
+{
+	attacker_results[] attackerResults = new attacker_results[size];
+
+	for (int i = 0; i < size; i++)
+	{
+		attackerResults[i] = new attacker_results();
+	}
+
+	return attackerResults;
+}
+
+boolean shouldPlayAnimation(obj_id objAttacker, combat_data actionData)
+{
+	return true;
+
+
+}
+void doMultiDefenderCombatResults(string[] playbackNames, attacker_results attackerResults, defender_results[] defenderResults, weapon_data weaponData, combat_data actionData, hit_result[] cbtHitData)
+{
+
+
+	// Read trail info from datatable
+	int weaponTrail = actionData.intWeapon;
+	int leftHandTrail = actionData.intLeftHand;
+	int rightHandTrail = actionData.intRightHand;
+	int leftFootTrail = actionData.intLeftFoot;
+	int rightFootTrail = actionData.intRightFoot;
+
+	if (playbackNames == null || playbackNames.length == 0 || attackerResults == null || defenderResults == null || defenderResults.length == 0 ||
+		weaponData == null || actionData == null || cbtHitData == null || cbtHitData.length == 0)
+	{
+
+		boolean pbnull = playbackNames == null;
+		boolean pbzero = playbackNames.length == 0;
+		boolean atkres = attackerResults == null;
+		boolean defres = defenderResults == null;
+		boolean deflen = defenderResults.length == 0;
+		boolean weadat = weaponData == null;
+		boolean actdat = actionData == null;
+		boolean cbtdat = cbtHitData == null;
+		CustomerServiceLog("COMBAT_exception", "Error in doMultiDefenderCombatResult: playbackNames == null : "+pbnull+
+					", playbackNames.length == 0: "+pbzero+", attackerResults == null: "+atkres+
+					", defenderResults == null : "+defres+", defenderResults.length == 0 : "+deflen+
+					", weaponData == null : "+weadat+", actionData == null : "+actdat+
+					", cbtHitData = null : "+cbtdat);
+
+		return;
+	}
+
+	boolean addDamageAmount = (cbtHitData.length == defenderResults.length);
+
+	boolean boolPlayAnim = shouldPlayAnimation(attackerResults.id, actionData);
+
+	// Set trail info in attacker results
+	if (weaponData.weaponType == WEAPON_TYPE_UNARMED)
+	{
+		if (leftHandTrail > 0)
+			attackerResults.setTrail(attacker_results.TRAIL_LHAND, true);
+
+		if (rightHandTrail > 0)
+			attackerResults.setTrail(attacker_results.TRAIL_RHAND, true);
+
+		if (leftFootTrail > 0)
+			attackerResults.setTrail(attacker_results.TRAIL_LFOOT, true);
+
+		if (rightFootTrail > 0)
+			attackerResults.setTrail(attacker_results.TRAIL_RFOOT, true);
+	}
+	else
+	{
+		if (weaponTrail > 0 || combat.isLightsaberWeapon(weaponData.weaponType))
+			attackerResults.setTrail(attacker_results.TRAIL_WEAPON, true);
+	}
+
+	if (actionData.actionName == "" || actionData.actionName == null)
+		return;
+
+	// Store the action name for use by the bolt animation system
+	attackerResults.actionName = getStringCrc(actionData.actionName.toLowerCase());
+
+	// Play hit/miss animations for attacker and defenders
+	if (defenderResults.length > 1)
+	{
+		if (defenderResults[0] == null || cbtHitData[0] == null)
+			return;
+
+		// Special defender array with only the first defender
+		defender_results[] defenderResult = new defender_results[1];
+		defenderResult[0] = defenderResults[0]; // copy first defender
+
+		//TPERRY - added copying damage to the defenderResult
+		if (addDamageAmount)
+		{
+			defenderResult[0].damageAmount = cbtHitData[0].damage;
+		}
+
+		// play animation for attacker and first defender
+		//sendSystemMessageTestingOnly(obj_id.getObjId(10219418), "boolPlayAnim=" + boolPlayAnim);
+		if(boolPlayAnim)
+		{
+			if (playbackNames[0] != null && playbackNames[0] != "")
+				doCombatResults(playbackNames[0], attackerResults, defenderResult);
+		}
+
+		// Temp result struct to play correct animation on each remaining defender.
+		attacker_results animationResults = new attacker_results();
+
+		// Loop through remaining defenders and play animations
+		for (int i = 1; i < defenderResults.length; i++)
+		{
+			if (playbackNames[i] == null || playbackNames[i] == "" || defenderResults[i] == null)
+				continue;
+
+			// animationResults.endPosture = defenderResults[i].endPosture;
+			// animationResults.id = defenderResults[i].id;
+			defenderResult[0].endPosture = defenderResults[i].endPosture;
+			defenderResult[0].id = defenderResults[i].id;
+
+			// I'm not entirely sure why we're doing this. I -think- that doCombatResults
+			// has the capability to perform a different result for each defender in the
+			// array based on the COMBAT_RESULT of that defender
+			if(defenderResults[i].result==COMBAT_RESULT_HIT)
+			{
+				// we need to change our posture to whatever, and play the scramble
+				// if (playbackNames[i].endsWith("medium"))
+				//	doCombatResults("get_hit_medium", animationResults, null);
+				// else
+				//	doCombatResults("get_hit_light", animationResults, null);
+
+				doCombatResults(playbackNames[i], null, defenderResult);
+			}
+			else if (defenderResults[i].result == COMBAT_RESULT_EVADE)
+			{
+				// doCombatResults("dodge", animationResults, null);
+				doCombatResults(playbackNames[i], null, defenderResult);
+			}
+			else if (defenderResults[i].result == COMBAT_RESULT_BLOCK)
+			{
+				// doCombatResults("dodge", animationResults, null);
+				doCombatResults(playbackNames[i], null, defenderResult);
+			}
+			else if (defenderResults[i].result == COMBAT_RESULT_MISS)
+			{
+				// doCombatResults("dodge", animationResults, null);
+				doCombatResults(playbackNames[i], null, defenderResult);
+			}
+			else if (defenderResults[i].result == COMBAT_RESULT_TETHERED)
+			{
+				defenderResults[i].result = COMBAT_RESULT_MISS;
+
+				// doCombatResults("dodge", animationResults, null);
+				doCombatResults(playbackNames[i], null, defenderResult);
+
+				defenderResults[i].result = COMBAT_RESULT_TETHERED;
+			}
+		}
+	}
+	else
+	{
+		// Only one defender so pass data through
+		if (playbackNames[0] != null && playbackNames[0] != "" && defenderResults[0] != null)
+		{
+			//TPERRY - added copying damage to the defenderResult
+			if (addDamageAmount)
+			{
+				defenderResults[0].damageAmount = cbtHitData[0].damage + cbtHitData[0].elementalDamage;
+			}
+
+			// TODO: Fix doCombatResults to work right with COMBAT_RESULT_TETHERED and clean this up
+			// Tethered AI cannot be hit at all.  Change result to miss for animation to work right then restore
+			if (defenderResults[0].result == COMBAT_RESULT_TETHERED)
+			{
+				defenderResults[0].result = COMBAT_RESULT_MISS;
+
+				if(boolPlayAnim)
+				{
+					doCombatResults(playbackNames[0], attackerResults, defenderResults);
+				}
+
+				defenderResults[0].result = COMBAT_RESULT_TETHERED;
+			}
+
+			if(boolPlayAnim)
+			{
+				doCombatResults(playbackNames[0], attackerResults, defenderResults);
+			}
+		}
+	}
+}
+
+void doBasicGrenadeCombatResults(string[] playbackNames, attacker_results attackerResults, defender_results[] defenderResults, weapon_data weaponData, combat_data actionData, hit_result[] hitData)
+{
+	string attackAnim = "throw_grenade";
+
+	// dertermine the distance of target for animation name generation
+	string distance = "_near";
+	float range = getDistance(attackerResults.id, defenderResults[0].id);
+
+
+	// Determine hit strength
+	string hitStrength = "_light";
+	int avgDamage = (weaponData.minDamage + weaponData.maxDamage) / 2;
+
+	// grenade type
+	string grenadeName = getGrenadeType(weaponData.id);
+	attackAnim += distance+"_"+grenadeName;
+
+	// Must null out weapon id for grenade anims to work right
+	attackerResults.weapon = null;
+
+	boolean addDamageAmount = (hitData.length == defenderResults.length);
+
+	//
+	if (defenderResults.length > 1)
+	{
+		// Special defender array with only the first defender
+		defender_results[] defenderResult = new defender_results[1];
+		defenderResult[0] = defenderResults[0]; // copy first defender
+
+		//TPERRY - added copying damage to the defenderResult
+		if (addDamageAmount)
+		{
+			defenderResult[0].damageAmount = hitData[0].damage;
+		}
+
+		// play animation for attacker and first defender
+		if (playbackNames[0] != "")
+			doCombatResults(attackAnim, attackerResults, defenderResult);
+
+		// Temp result struct to play correct animation on each remaining defender.
+		attacker_results animationResults = new attacker_results();
+
+		// Loop through remaining defenders and play animations
+		for (int i = 1; i < defenderResults.length; i++)
+		{
+			animationResults.endPosture = defenderResults[i].endPosture;
+			animationResults.id = defenderResults[i].id;
+
+			if(defenderResults[i].result==COMBAT_RESULT_HIT)
+			{
+				if (hitData[i].damage > avgDamage)
+					hitStrength = "_medium";
+				else
+					hitStrength = "_light";
+
+				doCombatResults("get_hit_grenade"+distance+hitStrength, animationResults, null);
+			}
+		}
+	}
+	else
+	{
+		//TPERRY - added copying damage to the defenderResult
+		if (addDamageAmount)
+		{
+			defenderResults[0].damageAmount = hitData[0].damage;
+		}
+		doCombatResults(attackAnim, attackerResults, defenderResults);
+	}
+
+	return;
+}
+
+
+////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////
+// Old Combat Stuff
+////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////
+
+boolean checkPosture(obj_id objAttacker, obj_id objDefender)
+{
+	if(isDead(objDefender))
+	{
+		return false;
+	}
+	if(isIncapacitated(objDefender))
+	{
+		return false;
+	}
+	return true;
+}
+
+boolean didHit(hit_result[] cbtHitData)
+{
+	int intI = 0;
+
+	while(intI<cbtHitData.length)
+	{
+		if(cbtHitData[intI].success==true)
+		{
+			return true;
+		}
+
+		intI = intI+1;
+	}
+	return false;
+}
+
+void finalizeMineDamage(obj_id objAttacker, weapon_data cbtWeaponData, defender_data[] cbtDefenderData,hit_result[] cbtHitData, defender_results[] cbtDefenderResults)
+{
+	obj_id[]  objDefenders = new obj_id[cbtDefenderData.length]; // for our docombataction things
+	int[] intResults = new int[cbtHitData.length];
+
+	int intI = 0;
+
+	while(intI<cbtDefenderData.length)
+	{
+
+		if(cbtHitData[intI].success)
+		{
+			// A HIT
+			if ( damage(cbtDefenderData[intI].id, cbtWeaponData.damageType, cbtHitData[intI].hitLocation, cbtHitData[intI].damage) )
+			{
+				//debugSpeakMsg(objAttacker, "hit target: " + cbtDefenderData[intI].id + " " + getName(cbtDefenderData[intI].id) + " for " + cbtHitData[intI].damage + " pts");
+			}
+			else
+			{
+				//debugSpeakMsg(objAttacker, "!damage: ID:" + cbtDefenderData[intI].id + " DT:" + cbtWeaponData.damageType + " DAM:" + cbtHitData[intI].damage + " HitLoc:"+cbtHitData[intI].hitLocation);
+			}
+		}
+		else
+		{
+			//debugSpeakMsg(objAttacker, "MISSED target: " + cbtDefenderData[intI].id + " " + getName(cbtDefenderData[intI].id));
+		}
+		objDefenders[intI] = cbtDefenderData[intI].id;
+		intResults[intI] = cbtDefenderResults[intI].result;
+		intI = intI+1;
+
+	}
+}
+
+color getHitColor(int intHitLocation)
+{
+	switch (intHitLocation)
+	{
+		case HIT_LOCATION_BODY: return colors.RED;
+		case HIT_LOCATION_HEAD :return colors.BLUE;
+		case HIT_LOCATION_R_ARM : return colors.RED;
+		case HIT_LOCATION_L_ARM : return colors.RED;
+		case HIT_LOCATION_R_LEG : return colors.GREEN;
+		case HIT_LOCATION_L_LEG : return colors.GREEN;
+	}
+	return colors.WHITE;
+}
+
+void doCombatFlyText(defender_data[] defenderData, obj_id attacker, hit_result[] hitData, defender_results[] defenderResults)
+{
+	float textSize = 1.5f;
+
+	for (int i = 0; i < hitData.length; i++)
+	{
+		string_id strSpam = null;
+		color textColor = colors.WHITE;
+
+		if (defenderResults[i].result == COMBAT_RESULT_BLOCK || defenderResults[i].result == COMBAT_RESULT_LIGHTSABER_BLOCK)
+			strSpam = new string_id("combat_effects", "block");
+		else if (defenderResults[i].result == COMBAT_RESULT_EVADE)
+			strSpam = new string_id("combat_effects", "dodge");
+		else if (defenderResults[i].result == COMBAT_RESULT_COUNTER)
+			strSpam = new string_id("combat_effects", "counterattack");
+		else if (defenderResults[i].result == COMBAT_RESULT_MISS)
+			strSpam = new string_id("combat_effects", "miss");
+		else if (defenderResults[i].result == COMBAT_RESULT_TETHERED)
+		{
+			strSpam = new string_id("combat_effects", "tethered");
+			textSize = 5f;  // Make big for debugging
+		}
+
+		if (strSpam != null)
+		{
+			if (isPlayer(attacker) && isMob(defenderData[i].id) && (!vehicle.isDriveableVehicle(defenderData[i].id)))
+			{
+				showCombatTextPrivate(defenderData[i].id, attacker, attacker, strSpam, textSize, textColor);
+			}
+
+			if (isPlayer(defenderData[i].id) && isMob(defenderData[i].id) && (!vehicle.isDriveableVehicle(defenderData[i].id)))
+			{
+				showCombatTextPrivate(defenderData[i].id, attacker, defenderData[i].id, strSpam, textSize, textColor);
+			}
+		}
+	}
+}
+
+string getHitSpam(hit_result cbtHitData)
+{
+	int intHitLocation = cbtHitData.hitLocation;
+	string strId = "";
+	switch (intHitLocation)
+	{
+		case HIT_LOCATION_BODY: return  "body";
+		case HIT_LOCATION_HEAD :return "head";
+		case HIT_LOCATION_R_ARM : return "rarm";
+		case HIT_LOCATION_L_ARM : return "larm";
+		case HIT_LOCATION_R_LEG : return "rleg";
+		case HIT_LOCATION_L_LEG : return "lleg";
+	}
+	return strId;
+}
+
+boolean checkForFumbles(hit_result[] hitData)
+{
+	return false;
+}
+
+void doFumble(attacker_data cbtAttackerData, weapon_data cbtWeaponData, int intAttackerPosture, string strAnimationAction)
+{
+// set the attacker results
+// play the playback script
+// maybe   to the attacker?
+// make sure the defender results are nulled out.
+	string_id strSpam = new string_id("cbt_spam", "fumble");
+	int intFumbleDamage = rand(cbtWeaponData.minDamage, cbtWeaponData.maxDamage);
+
+
+	return;
+}
+
+boolean isImmuneToStateChange(obj_id target)
+{
+	if(vehicle.isDriveableVehicle(target))
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a PLAYER VEHICLE");
+		return true;
+	}
+
+	if ( ai_lib.aiGetNiche(target)==NICHE_DROID )
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a DROID");
+		return true;
+	}
+
+	if ( ai_lib.aiGetNiche(target)==NICHE_VEHICLE )
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a VEHICLE");
+		return true;
+	}
+
+	if ( ai_lib.isAndroid(target))
+	{
+		return true;
+	}
+
+	if (ai_lib.isTurret(target))
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a TURRET");
+		return true;
+	}
+
+	return false;
+}
+
+void doWarcryCombatResults(string strAnimationAction, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults)
+{
+	if(cbtDefenderResults.length>1)
+	{
+		attacker_results cbtAnimationResults = new attacker_results();
+		defender_results[] cbtDefenderResult = new defender_results[1];
+
+		cbtDefenderResult[0] = cbtDefenderResults[0]; // our first combination
+
+		doCombatResults(strAnimationAction, cbtAttackerResults, cbtDefenderResult);
+
+		for (int i = 0; i < cbtDefenderResults.length; i++)
+		{
+			cbtAnimationResults.endPosture = cbtDefenderResults[i].endPosture;
+			cbtAnimationResults.id = cbtDefenderResults[i].id;
+
+			if(cbtDefenderResults[i].result==COMBAT_RESULT_HIT)
+			{
+				// we need to change our posture to whatever, and play the scramble
+				doCombatResults("get_hit_light", cbtAnimationResults, null);
+			}
+		}
+	}
+	else
+	{
+		doCombatResults(strAnimationAction, cbtAttackerResults, cbtDefenderResults);
+	}
+
+}
+
+void doSuppressionFireResults(string strPlaybackName, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults, combat_data dctCombatInfo)
+{
+// what else do we need?
+/*
+			public static final int COMBAT_RESULT_MISS     = 0;
+			public static final int COMBAT_RESULT_HIT      = 1;
+			public static final int COMBAT_RESULT_BLOCK    = 2;
+			public static final int COMBAT_RESULT_EVADE    = 3;
+			public static final int COMBAT_RESULT_REDIRECT = 4;
+			public static final int COMBAT_RESULT_COUNTER  = 5;
+			public static final int COMBAT_RESULT_FUMBLE   = 6;
+
+
+*/
+
+	// we need to check if it's a multi defender action
+	// if it is
+	// we need to do some whackiness
+
+	int intLeftFoot = dctCombatInfo.intLeftFoot;
+	int intRightFoot = dctCombatInfo.intRightFoot;
+	int intWeapon = dctCombatInfo.intWeapon;
+	int intRightHand = dctCombatInfo.intRightHand;
+	int intLeftHand = dctCombatInfo.intLeftHand; // these above are for the trails
+	if(jedi.isLightsaber(cbtAttackerResults.weapon))
+	{
+		intWeapon = 1; // lightsbaers always have trails, regardless of anything else.
+	}
+
+	if(intLeftFoot>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_LFOOT, true);
+	}
+	if(intRightFoot>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_RFOOT, true);
+	}
+	if(intLeftHand>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_LHAND, true);
+	}
+	if(intRightHand>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_RHAND, true);
+	}
+	if(intWeapon>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_WEAPON, true);
+	}
+
+	if(cbtDefenderResults.length>1)
+	{
+		int intI = 1;
+		attacker_results cbtAnimationResults = new attacker_results();
+		defender_results[] cbtDefenderResult = new defender_results[1];
+
+		cbtDefenderResult[0] = cbtDefenderResults[0]; // our first combination
+
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResult);
+
+		while(intI<cbtDefenderResults.length)
+		{
+			// we need to check what the defender results were
+			// change that to an attacker
+			// and continue
+			// so we've got the following possiblities
+
+			// hit with posture change
+			// block
+			cbtAnimationResults.endPosture = cbtDefenderResults[intI].endPosture;
+			cbtAnimationResults.id = cbtDefenderResults[intI].id;
+
+			if(cbtDefenderResults[intI].result==COMBAT_RESULT_HIT)
+			{
+				// we need to change our posture to whatever, and play the scramble
+				doCombatResults("posture_scramble", cbtAnimationResults, null);
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_EVADE)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_BLOCK)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+			}
+			else
+			{
+			}
+
+			intI = intI+1;
+		}
+	}
+	else
+	{
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResults);
+	}
+}
+
+void doChargeResults(string strPlaybackName, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults)
+{
+// what else do we need?
+/*
+			public static final int COMBAT_RESULT_MISS     = 0;
+			public static final int COMBAT_RESULT_HIT      = 1;
+			public static final int COMBAT_RESULT_BLOCK    = 2;
+			public static final int COMBAT_RESULT_EVADE    = 3;
+			public static final int COMBAT_RESULT_REDIRECT = 4;
+			public static final int COMBAT_RESULT_COUNTER  = 5;
+			public static final int COMBAT_RESULT_FUMBLE   = 6;
+
+
+*/
+
+	// we need to check if it's a multi defender action
+	// if it is
+	// we need to do some whackiness
+
+	if(cbtDefenderResults.length>1)
+	{
+		int intI = 1;
+		attacker_results cbtAnimationResults = new attacker_results();
+		defender_results[] cbtDefenderResult = new defender_results[1];
+
+		cbtDefenderResult[0] = cbtDefenderResults[0]; // our first combination
+
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResult);
+
+		while(intI<cbtDefenderResults.length)
+		{
+			// we need to check what the defender results were
+			// change that to an attacker
+			// and continue
+			// so we've got the following possiblities
+
+			// hit with posture change
+			// block
+			cbtAnimationResults.endPosture = cbtDefenderResults[intI].endPosture;
+			cbtAnimationResults.id = cbtDefenderResults[intI].id;
+
+			if(cbtDefenderResults[intI].result==COMBAT_RESULT_HIT)
+			{
+				// we need to change our posture to whatever, and play the scramble
+				doCombatResults("change_posture", cbtAnimationResults, null);
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_EVADE)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_BLOCK)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+			}
+
+			intI = intI+1;
+		}
+	}
+	else
+	{
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResults);
+	}
+}
+
+string getPlaybackIntensity(string strPlaybackName, hit_result[] cbtHitData, weapon_data cbtWeaponData)
+{
+	string strNewAction = new string();
+	strNewAction = strPlaybackName;
+
+	int intMidDamage = (cbtWeaponData.minDamage+cbtWeaponData.maxDamage)/2;
+	if(cbtHitData[0].damage>intMidDamage)
+	{
+		strNewAction = strNewAction+"_medium";
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+	else
+	{
+		strNewAction = strNewAction+"_light";
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+	return strNewAction;
+}
+
+string getThrownWeaponStringType(obj_id objWeapon)
+{
+	string strType = "";
+	string strTemplate = getGrenadeType(objWeapon);
+	if(strTemplate==null)
+	{
+		strType = "";
+	}
+
+	strType = strType + strTemplate;
+
+	return strType;
+}
+
+string getHeavyWeaponStringType(obj_id objWeapon)
+{
+	string strType = "heavy_";
+	string strTemplate = getHeavyWeaponType(objWeapon);
+	if(strTemplate==null)
+	{
+		strType = "";
+	}
+
+	strType = strType + strTemplate;
+	//return strType;
+	return strTemplate;
+
+}
+
+string[] makeStringArray(int intLength)
+{
+	int intI = 0;
+	string[] strArray = new string[intLength];
+	while(intI<intLength)
+	{
+		strArray[intI] = "";
+		intI = intI+1;
+	}
+	return strArray;
+}
+
+boolean checkWeaponData(obj_id objPlayer, obj_id objTarget, int intAttackCategory, weapon_data cbtWeaponData, string strCommand, string strWeaponType)
+{
+
+// we gotta check to make sure you have the correct ability to do this action.
+
+	float fltDistance = getDistance( objPlayer, objTarget );
+	if(fltDistance>cbtWeaponData.maxRange)
+	{
+		combat.sendCombatSpamMessage(objPlayer, new string_id("cbt_spam", "out_of_range"), COMBAT_RESULT_OUT_OF_RANGE);
+		sendSystemMessage(objPlayer, new string_id("cbt_spam", "out_of_range_single"));
+		return false;
+	}
+
+	if(intAttackCategory!=combat.ALL_WEAPONS)
+	{
+		if((intAttackCategory==combat.RANGED_WEAPON)||(intAttackCategory==combat.MELEE_WEAPON))
+		{
+			int intWeaponCategory = combat.getWeaponCategory(cbtWeaponData.weaponType);
+			if(intWeaponCategory!=intAttackCategory)
+			{
+				string_id strSpam = new string_id("cbt_spam", "no_attack_wrong_weapon");
+
+				sendSystemMessage(objPlayer, strSpam);
+				return false;
+			}
+		}
+		else if(intAttackCategory==combat.ALL_LIGHTSABERS)
+		{
+			if(!jedi.isLightsaber(cbtWeaponData.weaponType))
+			{
+				string_id strSpam = new string_id("cbt_spam", "no_attack_wrong_weapon");
+
+				sendSystemMessage(objPlayer, strSpam);
+				return false;
+			}
+		}
+		else if(intAttackCategory==combat.FORCE_POWER)
+		{
+			if(!jedi.isLightsaber(cbtWeaponData.weaponType))
+			{
+				if(cbtWeaponData.weaponType!=WEAPON_TYPE_UNARMED)
+				{
+					// NO FORCE POWERS FOR YOU
+					//sendSystemMessageTestingingOnly(objPlayer, "You cannot perform force powers with this weapon.");
+				}
+
+			}
+
+		}
+		else if(intAttackCategory!=cbtWeaponData.weaponType)
+		{
+
+			string_id strSpam = new string_id("cbt_spam", "no_attack_wrong_weapon");
+
+			sendSystemMessage(objPlayer, strSpam);
+			return false;
+		}
+	}
+
+	if(strCommand!="")
+	{
+		// we need to check out abilities
+		string strAbility = strWeaponType+strCommand;
+		if(!hasCommand(objPlayer, strAbility))
+		{
+			string_id strSpam = new string_id("cbt_spam", "no_ability");
+			sendSystemMessage(objPlayer, strSpam);
+			return false;
+		}
+
+	}
+
+	return true;
+
+}
+boolean checkCommands(obj_id objPlayer, string strCommand, string strWeaponType)
+{
+	if(strCommand!="")
+	{
+		// we need to check out abilities
+		string strAbility = strWeaponType+strCommand;
+		if(!hasCommand(objPlayer, strAbility))
+		{
+			string_id strSpam = new string_id("cbt_spam", "no_ability");
+			sendSystemMessage(objPlayer, strSpam);
+			return false;
+		}
+
+	}
+	return true;
+
+}
+
+
+boolean checkForCombatActions(obj_id objPlayer)
+{
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_melee"))
+	{
+
+		return true;
+	}
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_ranged"))
+	{
+
+		return true;
+	}
+
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_general"))
+	{
+
+		return true;
+	}
+	return false;
+}
+
+
+
+string getGrenadeType(obj_id objGrenade)
+{
+
+	string strTemplate = getTemplateName(objGrenade);
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_cryoban.iff")
+	{
+		return "cryoban";
+
+	}
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_fragmentation_light.iff")
+	{
+		return "fragmentation";
+	}
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_fragmentation.iff")
+	{
+		return "fragmentation";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_glop.iff")
+	{
+		return "glop";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_imperial_detonator.iff")
+	{
+		return "imperial_detonator";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_proton.iff")
+	{
+		return "proton";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_thermal_detonator.iff")
+	{
+		return "thermal_detonator";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_bug_bomb.iff")
+	{
+		return "bug_bomb";
+
+	}
+	return "fragmentation";
+
+
+}
+
+
+
+string getHeavyWeaponType(obj_id objHeavyWeapon)
+{
+
+	string strTemplate = getTemplateName(objHeavyWeapon);
+	string hw = "heavyweapon";
+
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_rocket_laucher.iff")
+	{
+		//return "rocket_launcher";
+		return hw;
+	}
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_lightning_beam.iff")
+	{
+		//return "lightning_beam";
+		return hw;
+	}
+
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_particle_beam.iff")
+	{
+		//return "particle_beam";
+		return hw;
+	}
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_acid_beam.iff")
+	{
+		//return "acid_beam";
+		return hw;
+	}
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_flame_thrower.iff")
+	{
+		//return "flame_thrower";
+		return "rifle";
+	}
+
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_beam.iff")
+	{
+		return "rifle_beam";// not used
+
+	}
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_acid_beam.iff")
+	{
+		//return "rifle_acid";
+		return "rifle";
+	}
+
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_lightning.iff")
+	{
+		//return "rifle_lightning";
+		return "carbine";
+	}
+
+
+	//return "rocket_launcher";
+	return hw;
+}
+
+void clearQueue(obj_id objPlayer)
+{
+	queueClearCommandsFromGroup(objPlayer, ##"combat_general");
+	queueClearCommandsFromGroup(objPlayer, ##"combat_melee");
+	queueClearCommandsFromGroup(objPlayer, ##"combat_ranged");
+
+
+
+}
+
+boolean callSupplyDrop(obj_id self, int supplyId)
+{
+	location loc = getLocation(self);
+
+	if(isIdValid(loc.cell))
+	{
+		sendSystemMessage(self, new string_id("combat_effects", "not_indoors"));
+		return false;
+	}
+
+	if(locations.isInCity(loc))
+	{
+		sendSystemMessage(self, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+
+	if(city.isInCity(loc))
+	{
+		sendSystemMessage(self, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+
+	obj_id shuttle = createObject("object/creature/npc/theme_park/lambda_shuttle.iff", loc);
+
+	if(!isIdValid(shuttle))
+		return false;
+
+	dictionary d = new dictionary();
+	d.put("owner", self);
+	d.put("supplyId", supplyId);
+
+	attachScript(shuttle, "systems.combat.combat_supply_drop_controller");
+
+	messageTo(shuttle, "startLandingSequence", d, 5.0f, false);
+
+	if(supplyId < 13)
+	{
+		prose_package pp = new prose_package();
+		prose.setStringId(pp, new string_id("combat_effects", "supply_drop_comm"));
+		commPlayers(self, "object/mobile/npe/npe_hutt_minion.iff", "sound/sys_comm_other.snd", 5f, self, pp);
+	}
+	else
+	{
+		prose_package pp = new prose_package();
+		prose.setStringId(pp, new string_id("spam", "officer_reinforcement_com"));
+		commPlayers(self, "object/mobile/npe/npe_hutt_minion.iff", "sound/sys_comm_other.snd", 5f, self, pp);
+	}
+
+	return true;
+}
+
+boolean canCallSupplyDrop(obj_id self)
+{
+	location loc = getLocation(self);
+
+	if(isIdValid(loc.cell))
+	{
+		sendSystemMessage(self, new string_id("combat_effects", "not_indoors"));
+		return false;
+	}
+
+	if(locations.isInCity(loc))
+	{
+		sendSystemMessage(self, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+
+	if(city.isInCity(loc))
+	{
+		sendSystemMessage(self, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+
+	return true;
+}
+
+boolean callFavor(obj_id self, int which)
+{
+	location loc = getLocation(self);
+
+	string buddyObj = "summon_smuggler_buddy_";
+	string buddyScript = "ai.smuggler_buddy";
+	string buddyName = "smuggler_buddy_name";
+
+	if(which == 1)
+	{
+		buddyObj = "summon_smuggler_medic_";
+		buddyScript = "ai.smuggler_medic";
+		buddyName = "smuggler_medic_name";
+	}
+
+	if(!isIdValid(loc.cell))
+	{
+		int x = rand(-3, 3);
+		int z = rand(-3, 3);
+
+		loc.x += x;
+		loc.z += z;
+	}
+
+	int playerLevel = getLevel(self);
+
+	int summonLevel = playerLevel / 10;
+
+	// Make sure the summonLevel is 1 to 9
+	if(summonLevel < 1)
+	{
+		summonLevel = 1;
+	}
+	else
+	{
+		if(summonLevel > 9)
+		{
+			summonLevel = 9;
+		}
+	}
+
+	buddyObj += summonLevel;
+
+	obj_id target = getHateTarget(self);
+
+	if(!isIdValid(target))
+	{
+		sendSystemMessage(self, new string_id("combat_effects", "no_target_for_buddy"));
+		return false;
+	}
+
+	obj_id buddy = create.object(buddyObj, loc, getLevel(self));
+
+	if(!isIdValid(buddy))
+		return false;
+
+	setName(buddy, new string_id("combat_effects", buddyName));
+	attachScript(buddy, buddyScript);
+
+	if(!isIdValid(loc.cell))
+	{
+		loc.x += 30;
+		setHomeLocation(buddy, loc);
+	}
+
+	setMaster(buddy, self);
+
+	startCombat(buddy, target);
+
+	return true;
+}
+
+boolean doHealingPreCheck(combat_data actionData, attacker_data attackerData, defender_data[] defenderData, boolean verbose)
+{
+	// Cannot heal from a vehicle
+	if(vehicle.isRidingVehicle(attackerData.id))
+	{
+		if (verbose)
+		{
+			sendSystemMessage(attackerData.id, new string_id("cbt_spam", "attack_fail_vehicle_single"));
+		}
+		combat.combatLog(attackerData.id, defenderData[0].id, "doHealingPreCheck", "Aborting Action - Riding vehicle");
+		return false;
+	}
+
+	// Cannot heal while mount is galloping
+	obj_id mount = getMountId(attackerData.id);
+	if (isIdValid(mount))
+	{
+		if(pet_lib.isGalloping(mount))
+		{
+			if (verbose)
+			{
+				sendSystemMessage(attackerData.id, new string_id("cbt_spam", "attack_fail_gallop_single"));
+			}
+			combat.combatLog(attackerData.id, defenderData[0].id, "doHealingPreCheck", "Aborting Action - Riding galloping mount");
+			return false;
+		}
+	}
+
+	// Cannot heal while knocked down
+	if (attackerData.posture == POSTURE_KNOCKED_DOWN)
+	{
+		if (verbose)
+		{
+			sendSystemMessage(attackerData.id, new string_id("cbt_spam", "attack_fail_knockdown_single"));
+		}
+		combat.combatLog(attackerData.id, defenderData[0].id, "doHealingPreCheck", "Aborting Action - Attacker id knocked down");
+		return false;
+	}
+
+	// Validate combat ranges
+	float actionMaxRange = actionData.maxRange;
+	float dist = getDistance(attackerData.id, defenderData[0].id);
+
+	if (dist > actionMaxRange)
+	{
+		if (verbose)
+		{
+			sendSystemMessage(attackerData.id, new string_id("cbt_spam", "out_of_range_far_single"));
+			showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("combat_effects", "range_too_far"), 1.0f, colors.MEDIUMTURQUOISE);
+		}
+		combat.combatLog(attackerData.id, defenderData[0].id, "doHealingPreCheck", "Aborting Action - Target is further than max range");
+		return false;
+	}
+
+	if((ai_lib.isDroid(defenderData[0].id) && !ai_lib.isDroid(attackerData.id)) || (ai_lib.isAndroid(defenderData[0].id) && !ai_lib.isAndroid(attackerData.id)))
+	{
+		if(verbose)
+		{
+			sendSystemMessage(attackerData.id, new string_id("cbt_spam", "cannot_heal_droid"));
+			showFlyTextPrivate(attackerData.id, attackerData.id, new string_id("cbt_spam", "cannot_heal_droid"), 1.0f, colors.MEDIUMTURQUOISE);
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
+boolean hasFullActionPool(obj_id target)
+{
+	int currentAction = getAction(target);
+	int maxAction = getMaxAction(target);
+
+	if(currentAction == maxAction)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+boolean healthToActionConversion(obj_id target, int healthCost, int actionGain)
+{
+	int currentHealth = getHealth(target);
+	int modifiedHealth = currentHealth - healthCost;
+
+	attrib_mod[] healthMods = getHealthModifiers(target);
+	int healthModsValue = 0;
+
+	for(int i = 0; i < healthMods.length; i++)
+	{
+		healthModsValue += healthMods[i].getValue();
+	}
+
+	if(healthModsValue < 0)
+	{
+		sendSystemMessage(target, new string_id("spam", "not_well_enough") );
+		return false;
+	}
+
+	if(modifiedHealth < 1)
+	{
+		showFlyTextPrivate(target, target, new string_id("spam", "low_health"), 1.0f, colors.RED);
+		return false;
+	}
+
+	int currentAction = getAction(target);
+	int maxAction = getMaxAction(target);
+	int modifiedAction = currentAction + actionGain;
+	int trueActionGained = 0;
+
+	if(modifiedAction > maxAction)
+	{
+		setAction(target, maxAction);
+		trueActionGained = maxAction -  currentAction;
+	}
+	else
+	{
+		setAction(target, modifiedAction);
+		trueActionGained = actionGain;
+	}
+
+	setHealth(target, modifiedHealth);
+	string_id actionStringId = new string_id("spam", "plus_action");
+	prose_package pp = new prose_package();
+	pp = prose.setStringId(pp, actionStringId);
+	pp = prose.setDI(pp, trueActionGained);
+
+	showFlyTextPrivate(target, target, pp, 1.1f, colors.YELLOW);
+	playClientEffectObj(target, "clienteffect/medic_reckless_stimulation.cef", target, "root");
+
+	return true;
+}
+void doMedicEvasion(obj_id medic)
+{
+	obj_id[] thoseWhoHateMe = getHateList(medic);
+	int medicLevel = getLevel(medic);
+
+	string evasionScriptVarName = "me_evasion." + medic;
+
+	if(thoseWhoHateMe.length != 0 && thoseWhoHateMe != null)
+	{
+		for(int i = 0; i < thoseWhoHateMe.length; i++)
+		{
+			int haterLevel = getLevel(thoseWhoHateMe[i]);
+			int levelSpread = medicLevel - haterLevel;
+			int baseChance = 93;
+			int difficultyClass = getIntObjVar(thoseWhoHateMe[i], "difficultyClass");
+
+			if(difficultyClass > 1)
+				baseChance = -45;
+
+			if(levelSpread < -24)
+				levelSpread = -24;
+			int roll = rand(1, 100);
+
+//			debugSpeakMsg(medic, "baseChance: " + baseChance + " levelSpread: " + levelSpread + " baseChance: " + baseChance + " roll: " + roll + " total chance: " + (roll + baseChance + (levelSpread * 3)));
+
+			if(roll + baseChance + (levelSpread * 3) > 100)
+			{
+				removeHateTarget(medic, thoseWhoHateMe[i]);
+				removeHateTarget(thoseWhoHateMe[i], medic);
+
+				// Checked in ai_combat_target.isValidTarget()
+				utils.setScriptVar(thoseWhoHateMe[i], evasionScriptVarName, 1);
+			}
+			else
+			{
+				float hate = getHate(medic, thoseWhoHateMe[i]);
+				float oldHate = hate;
+
+				hate /= 2;
+
+//				debugSpeakMsg(medic, "oldHate: " + oldHate + " new hate: " + hate);
+
+				setHate(medic, thoseWhoHateMe[i], hate);
+
+				// You failed!  You better not have the scriptvar on this creature.
+				utils.removeScriptVar(thoseWhoHateMe[i], evasionScriptVarName);
+			}
+		}
+	}
+
+	return;
+}
+
+combat_data modifyActionDataByExpertise(obj_id self, combat_data actionData)
+{
+	if (stealth.hasInvisibleBuff(self) || buff.hasBuff(self, "sp_smoke_mirrors"))
+	{
+		float expertise_defense_overpower = (float)getEnhancedSkillStatisticModifierUncapped(self, "expertise_avoidance_overpower");
+		actionData.reduceParry += expertise_defense_overpower;
+		actionData.reduceDodge += expertise_defense_overpower;
+		actionData.reduceBlock += expertise_defense_overpower;
+		actionData.reduceGlancing += expertise_defense_overpower;
+	}
+
+	//Armor bypass by special_line
+	float armorBypass = (float)getEnhancedSkillStatisticModifierUncapped(self, "expertise_armor_bypass_"+actionData.specialLine);
+
+	if (armorBypass > 0.0f)
+	{
+		armorBypass = armorBypass / 100.0f;
+		armorBypass += actionData.bypassArmor;
+		armorBypass = armorBypass > 1.0f ? 1.0f : armorBypass;
+		// Zero out strikethrough since AB and ST are mutually exclusive.
+		actionData.increaseStrikethrough = -1000.0f;
+		actionData.bypassArmor = armorBypass;
+	}
+
+	float damToHeal = (float)getEnhancedSkillStatisticModifierUncapped(self, "expertise_damage_to_healing_"+actionData.specialLine);
+
+	// You can't make an attack that is not already a drain into a drain, but you can improve a drain.
+	if (damToHeal > 0.0f && actionData.convertDamageToHealth > 0.0f)
+	{
+		damToHeal = damToHeal / 100.0f;
+		actionData.convertDamageToHealth += damToHeal;
+	}
+
+	float flawlessBead = (float)getEnhancedSkillStatisticModifierUncapped(self, "flawless_bead");
+
+	if (flawlessBead > 0 && actionData.commandType != combat.LEFT_CLICK_DEFAULT)
+	{
+		actionData.reduceParry += flawlessBead;
+		actionData.reduceDodge += flawlessBead;
+		actionData.reduceBlock += flawlessBead;
+		actionData.reduceGlancing += flawlessBead;
+	}
+
+	return actionData;
+}
+
+void runHitSimulator(obj_id self, int[] atkTable, int[] defTable)
+{
+	if (!isGod(self) && !utils.hasObjVar(self, "runHitSimulator"))
+		return;
+
+
+	int hitLoops = 0;
+
+	if (hasObjVar(self, "runHitSimulator"))
+		hitLoops = getIntObjVar(self, "runHitSimulator");
+
+	if (hitLoops < 1)
+	{
+		utils.removeObjVar(self, "runHitSimulator");
+		return;
+	}
+
+	hitLoops--;
+
+	utils.setObjVar(self, "runHitSimulator", hitLoops);
+
+
+	if(utils.hasScriptVar(self, "hitpid"))
+	{
+		int bellpid = utils.getIntScriptVar(self, "hitpid");
+		sui.forceCloseSUIPage(bellpid);
+	}
+
+	int hitNumber = 1000;
+
+	int miss = 0;
+	int dodge = 0;
+	int parry = 0;
+	int glancing = 0;
+	int block = 0;
+	int critical = 0;
+	int punishing = 0;
+	int dhit = 0;
+	int ahit = 0;
+	int hit = 0;
+	int evade = 0;
+	int strikethrough = 0;
+
+	for (int i=0;i<defTable.length;i++)
+	{
+		switch (defTable[i])
+		{
+			case HIT_RESULT_MISS:
+				miss++;
+				break;
+			case HIT_RESULT_DODGE:
+				dodge++;
+				break;
+			case HIT_RESULT_PARRY:
+				parry++;
+				break;
+			case HIT_RESULT_GLANCING:
+				glancing++;
+				break;
+			case HIT_RESULT_BLOCK:
+				block++;
+				break;
+			case HIT_RESULT_CRITICAL:
+				critical++;
+				break;
+			case HIT_RESULT_PUNISHING:
+				punishing++;
+				break;
+			case HIT_RESULT_EVADE	:
+				evade++;
+				break;
+			case HIT_RESULT_STRIKETHROUGH:
+				strikethrough++;
+				break;
+		}
+	}
+
+	for (int i=0;i<atkTable.length;i++)
+	{
+		switch (atkTable[i])
+		{
+			case HIT_RESULT_MISS:
+				miss++;
+				break;
+			case HIT_RESULT_DODGE:
+				dodge++;
+				break;
+			case HIT_RESULT_PARRY:
+				parry++;
+				break;
+			case HIT_RESULT_GLANCING:
+				glancing++;
+				break;
+			case HIT_RESULT_BLOCK:
+				block++;
+				break;
+			case HIT_RESULT_CRITICAL:
+				critical++;
+				break;
+			case HIT_RESULT_PUNISHING:
+				punishing++;
+				break;
+			case HIT_RESULT_HIT:
+				if (defTable[i] == HIT_RESULT_HIT)
+					hit++;
+				break;
+			case HIT_RESULT_EVADE	:
+				evade++;
+				break;
+			case HIT_RESULT_STRIKETHROUGH:
+				strikethrough++;
+				break;
+		}
+	}
+
+	int test_miss = 0;
+	int test_dodge = 0;
+	int test_parry = 0;
+	int test_glancing = 0;
+	int test_block = 0;
+	int test_critical = 0;
+	int test_punishing = 0;
+	int test_hit = 0;
+	int test_evade = 0;
+	int test_strikethrough = 0;
+
+
+	int[] atkResult = new int[hitNumber];
+	int[] defResult = new int[hitNumber];
+
+
+
+	for(int i=0;i<hitNumber; i++)
+	{
+		defResult[i] = defTable[rand(0, defTable.length - 1)];
+		atkResult[i] = atkTable[rand(0, atkTable.length - 1)];
+	}
+
+	for (int i=0;i<defResult.length;i++)
+	{
+		switch (defResult[i])
+		{
+			case HIT_RESULT_MISS:
+				test_miss++;
+				break;
+			case HIT_RESULT_DODGE:
+				test_dodge++;
+				break;
+			case HIT_RESULT_PARRY:
+				test_parry++;
+				break;
+			case HIT_RESULT_GLANCING:
+				test_glancing++;
+				break;
+			case HIT_RESULT_BLOCK:
+				test_block++;
+				break;
+			case HIT_RESULT_CRITICAL:
+				test_critical++;
+				break;
+			case HIT_RESULT_PUNISHING:
+				test_punishing++;
+				break;
+			case HIT_RESULT_EVADE	:
+				test_evade++;
+				break;
+			case HIT_RESULT_STRIKETHROUGH:
+				test_strikethrough++;
+				break;
+		}
+	}
+
+	for (int i=0;i<atkResult.length;i++)
+	{
+		switch (atkResult[i])
+		{
+			case HIT_RESULT_MISS:
+				test_miss++;
+				break;
+			case HIT_RESULT_DODGE:
+				test_dodge++;
+				break;
+			case HIT_RESULT_PARRY:
+				test_parry++;
+				break;
+			case HIT_RESULT_GLANCING:
+				test_glancing++;
+				break;
+			case HIT_RESULT_BLOCK:
+				test_block++;
+				break;
+			case HIT_RESULT_CRITICAL:
+				test_critical++;
+				break;
+			case HIT_RESULT_PUNISHING:
+				test_punishing++;
+				break;
+			case HIT_RESULT_HIT:
+				if (defResult[i] == HIT_RESULT_HIT)
+					test_hit++;
+				break;
+			case HIT_RESULT_EVADE	:
+				test_evade++;
+				break;
+			case HIT_RESULT_STRIKETHROUGH:
+				test_strikethrough++;
+				break;
+		}
+	}
+
+
+//----------------------------------------------------------------------
+
+	int pid = createSUIPage(sui.SUI_MSGBOX, self, self, "noHandler");
+
+	setSUIProperty(pid, "", "Size", "650,375");
+	setSUIProperty(pid, sui.LISTBOX_TITLE, sui.PROP_TEXT, "Hit Result Analysis");
+
+	// Add buttons.
+	sui.listboxButtonSetup(pid, sui.OK_ONLY);
+	setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, "@cancel");
+
+	int passedTotal = miss+dodge+parry+glancing+block+critical+punishing+evade+strikethrough;
+	hit = 1000 - passedTotal > -1 ? 1000 - passedTotal : 0;
+
+	int simTotal = test_miss+test_dodge+test_parry+test_glancing+test_block+test_critical+test_punishing+test_evade+test_strikethrough;
+	test_hit = 1000 - simTotal > -1 ? 1000 - simTotal : 0;
+
+	string resultString = "Defender and Attacker Hit Table Values \n ";
+	resultString += "Passed hit_table Values \n ";
+	resultString += "Defender Dodge: "+(float)dodge/10.0f+" \n ";
+	resultString += "Defender Parry: "+(float)parry/10.0f+" \n ";
+	resultString += "Defender Evade: "+(float)evade/10.0f+" \n ";
+	resultString += "Defender Block: "+(float)block/10.0f+" \n ";
+	resultString += "Defender Glance: "+(float)glancing/10.0f+" \n\n ";
+	resultString += "Attacker Miss: "+(float)miss/10.0f+" \n ";
+	resultString += "Attacker Strikethrough: "+(float)strikethrough/10.0f+" \n ";
+	resultString += "Attacker Critical: "+(float)critical/10.0f+" \n ";
+	resultString += "Attacker Punishing: "+(float)punishing/10.0f+" \n ";
+	resultString += "Attacker Hit: "+(float)hit/10.0f+" \n\n\n";
+
+	resultString += "Simulated hit_table rolls ("+hitNumber+") itterations \n ";
+	resultString += "Defender Dodge: "+(float)test_dodge/10.0f+" \n ";
+	resultString += "Defender Parry: "+(float)test_parry/10.0f+" \n ";
+	resultString += "Defender Evade: "+(float)test_evade/10.0f+" \n ";
+	resultString += "Defender Block: "+(float)test_block/10.0f+" \n ";
+	resultString += "Defender Glance: "+(float)test_glancing/10.0f+" \n\n ";
+	resultString += "Attacker Miss: "+(float)test_miss/10.0f+" \n ";
+	resultString += "Attacker Strikethrough: "+(float)test_strikethrough/10.0f+" \n ";
+	resultString += "Attacker Critical: "+(float)test_critical/10.0f+" \n ";
+	resultString += "Attacker Punishing: "+(float)test_punishing/10.0f+" \n ";
+	resultString += "Attacker Hit: "+(float)test_hit/10.0f+" \n ";
+
+	setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, resultString);
+
+
+	showSUIPage(pid);
+	flushSUIPage(pid);
+
+	utils.setScriptVar(self, "hitpid", pid);
+
+}
+
+combat_data attackOverrideByBuff(obj_id self, combat_data actionData)
+{
+	int hasAO = getEnhancedSkillStatisticModifierUncapped(self, "attack_override_by_buff");
+
+	if (hasAO < 1)
+	{
+		return actionData;
+	}
+
+	int[] allBuffs = buff.getAllBuffs(self);
+
+
+	if (allBuffs == null || allBuffs.length == 0)
+	{
+		return actionData;
+	}
+
+	for (int i=0;i<allBuffs.length; i++)
+	{
+		string buffName = buff.getBuffNameFromCrc(allBuffs[i]);
+
+		if (buffName.length() != 0 && !buffName.equals("") && buffName.startsWith("attack_override_"+actionData.actionName))
+		{
+			string[] parse = split(buffName, '|');
+			string newAttack = parse[1];
+			return combat_engine.getCombatData(newAttack);
+		}
+	}
+
+	return actionData;
+}
+
+void doKillMeterUpdate(obj_id attacker, obj_id defender, int damage)
+{
+	if (!utils.isProfession(attacker, utils.COMMANDO) && !utils.isProfession(defender, utils.COMMANDO) || damage < 1)
+	{
+		return;
+	}
+
+	if (utils.isProfession(attacker, utils.COMMANDO))
+	{
+		int damageInterval = utils.getIntScriptVar(attacker, "km.damage_done");
+		damageInterval += damage;
+		if (damageInterval >= getLevel(attacker) * (15 - Math.round(getKillMeter(attacker) / 5.0f)))
+		{
+			utils.setScriptVar(attacker, "km.damage_done", 0);
+			combat.modifyKillMeter(attacker, 1);
+		}
+		else
+		{
+			utils.setScriptVar(attacker, "km.damage_done", damageInterval);
+		}
+	}
+
+
+	if (utils.isProfession(defender, utils.COMMANDO))
+	{
+		int damageInterval = utils.getIntScriptVar(defender, "km.damage_taken");
+		damageInterval += damage;
+		if (damageInterval >= getLevel(defender) * (25 - Math.round(getKillMeter(attacker) / 5.0f)))
+		{
+			utils.setScriptVar(defender, "km.damage_taken", 0);
+			combat.modifyKillMeter(defender, 1);
+		}
+		else
+		{
+			utils.setScriptVar(defender, "km.damage_taken", damageInterval);
+		}
+	}
+}

@@ -1,0 +1,299 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        medicine.script
+ * Description:  script for handling comestible consumption
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.sui;
+include library.factions;
+include library.utils;
+include library.ai_lib;
+include library.pet_lib;
+include library.healing;
+include library.consumable;
+include library.prose;
+include library.locations;
+include library.camping;
+
+/***** CONSTANTS *******************************************************/
+
+const string SCRIPT_DROID_MED 			= "item.comestible.droid_med";
+
+const string_id SID_NO_TARGET			= new string_id("error_message", "droid_repair_no_target");
+const string_id SID_TARGET_NOT_DROID	= new string_id("error_message", "droid_repair_target_not_droid");
+const string_id SID_NO_WOUND_KIT		= new string_id("error_message", "droid_repair_no_wound_kit");
+const string_id SID_NO_DAMAGE_KIT		= new string_id("error_message", "droid_repair_no_damage_kit");
+const string_id SID_MUST_WAIT		 	= new string_id("error_message", "droid_repair_must_wait");
+const string_id SID_UNWISE_REPAIR		= new string_id("error_message", "droid_repair_opposite_faction");
+const string_id SID_NO_WOUNDS			= new string_id("error_message", "droid_repair_no_wounds");
+const string_id SID_NO_DAMAGE			= new string_id("error_message", "droid_repair_no_damage");
+const string_id SID_NOT_DE				= new string_id("error_message", "droid_repair_not_droid_engineer");
+const string_id SID_YOU_IN_COMBAT		= new string_id("error_message", "droid_repair_you_in_combat");
+const string_id SID_DROID_IN_COMBAT		= new string_id("error_message", "droid_repair_droid_in_combat");
+const string_id SID_BAD_LOCATION		= new string_id("error_message", "droid_repair_not_valid_location");
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi) {
+
+	if(hasObjVar(self, consumable.VAR_CONSUMABLE_BASE))	{
+
+		menu_info_data mid = mi.getMenuItemByType(menu_info_types.EXAMINE);
+
+		if(mid != null) {
+
+			mid.setServerNotify(true);
+		}
+
+		menu_info_data mid2 = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+
+		if(mid2 != null) {
+
+			mid2.setServerNotify(true);
+
+		}
+
+	} else {
+
+		detachScript(self, SCRIPT_DROID_MED);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item) {
+
+	if(item == menu_info_types.ITEM_USE) {
+
+		obj_id target = getLookAtTarget(player);
+
+		if(target == null) {
+
+				sendSystemMessage(player, SID_NO_TARGET);
+
+				return SCRIPT_CONTINUE;
+
+		} else {
+
+			performDroidHealing(player, target, self);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs) {
+
+	attrib_mod[] am = getAttribModArrayObjVar(self, consumable.VAR_CONSUMABLE_MODS);
+
+	int idx = utils.getValidAttributeIndex(names);
+
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	int count = getCount(self);
+	if(count > 0) {
+
+		names[idx] = "quantity";
+		attribs[idx] = Integer.toString(count);
+		idx++;
+
+		if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	if(hasObjVar(self, "consumable.energy")) {
+
+		names[idx] = "examine_repair_energy";
+		attribs[idx] = Integer.toString(getIntObjVar(self, "consumable.energy"));
+		idx++;
+
+		if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+	} else {
+
+		if(am != null && am.length > 0) {
+
+			int val = am[0].getValue();
+
+			names[idx] = "examine_repair_power";
+			attribs[idx] = Integer.toString(val);
+			idx++;
+
+			if(idx >= names.length)
+				return SCRIPT_CONTINUE;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler healDroidDamage() {
+
+	if(target == null) {
+
+		sendSystemMessage(self, SID_NO_TARGET);
+
+		return SCRIPT_CONTINUE;
+
+	} else {
+
+		obj_id droid_med = healing.findDroidDamageMed(self);
+
+		if(droid_med == null) {
+
+			sendSystemMessage(self, SID_NO_DAMAGE_KIT);
+
+			return SCRIPT_CONTINUE;
+		}
+
+		performDroidHealing(self, target, droid_med);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler healDroidWound() {
+
+	if(target == null) {
+
+		sendSystemMessage(self, SID_NO_TARGET);
+
+		return SCRIPT_CONTINUE;
+
+	} else {
+
+		obj_id droid_med = healing.findDroidWoundMed(self);
+
+		if(droid_med == null) {
+
+			sendSystemMessage(self, SID_NO_WOUND_KIT);
+
+			return SCRIPT_CONTINUE;
+		}
+
+		performDroidHealing(self, target, droid_med);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean performDroidHealing(obj_id player, obj_id target, obj_id droid_med) {
+
+	int useTime = utils.getIntScriptVar(player, "pet_med.useTime");
+	int curTime = getGameTime();
+
+	// Make sure enough time has passed since last repair
+	if(curTime < useTime) {
+
+		int deltaTime = (useTime - curTime);
+		prose_package pp = prose.getPackage(SID_MUST_WAIT, deltaTime);
+		sendSystemMessageProse(player, pp);
+
+		return false;
+	}
+
+	// Make sure the droid is a pet
+	if(!pet_lib.isDroidPet(target)) {
+
+		sendSystemMessage(player, SID_TARGET_NOT_DROID);
+
+		return false;
+	}
+
+	// Make sure factions are not opposing
+	if(!factions.pvpDoAllowedHelpCheck(player, target))	{
+
+		sendSystemMessage(player, SID_UNWISE_REPAIR);
+
+		return false;
+	}
+
+	// If the kit repairs damage...
+	if(hasObjVar(droid_med, "consumable.energy")) {
+
+		// ...make sure the droid is damaged.
+		if(!healing.isDroidDamaged(target)) {
+
+			prose_package pp = prose.getPackage(SID_NO_DAMAGE, getEncodedName(target));
+			sendSystemMessageProse(player, pp);
+
+			return false;
+		}
+
+	// If the kit repairs wounds...
+	} else {
+
+		// ...make sure the player is a droid engineer
+		if(!isDroidEngineer(player)) {
+
+			sendSystemMessage(player, SID_NOT_DE);
+
+			return false;
+		}
+
+		// ,,.make sure the player is not in combat
+		if(ai_lib.isInCombat(player)) {
+
+			sendSystemMessage(player, SID_YOU_IN_COMBAT);
+
+			return false;
+		}
+
+		// ...make sure the droid is not in combat
+		if(ai_lib.isInCombat(target)) {
+
+			sendSystemMessage(player, SID_DROID_IN_COMBAT);
+
+			return false;
+		}
+
+		// ...make sure the player is near a city, camp, or residence
+		location playerLoc  = getLocation(player);
+		obj_id	 playerCamp = camping.getCurrentCamp(player);
+		if(!locations.isInMissionCity(playerLoc) && !isIdValid(playerCamp) && !pet_lib.isNearResidence(player)) {
+
+			sendSystemMessage(player, SID_BAD_LOCATION);
+
+			return false;
+		}
+
+		// ...make sure the droid is wounded
+		if(!healing.isDroidWounded(target)) {
+
+			prose_package pp = prose.getPackage(SID_NO_WOUNDS, getEncodedName(target));
+			sendSystemMessageProse(player, pp);
+
+			return false;
+		}
+	}
+
+	if(healing.performDroidRepair(player, target, droid_med, true)) {
+
+		doAnimationAction(player, "heal_other");
+		healing.playHealDamageEffect(getLocation(target));
+
+		useTime = curTime + 15;
+		utils.setScriptVar(player, "pet_med.useTime", useTime);
+
+		return true;
+	}
+
+	return false;
+}
+
+
+boolean isDroidEngineer(obj_id player) {
+
+	if(hasSkill(player, "class_engineering_phase1_novice"))
+		return true;
+
+	return false;
+}

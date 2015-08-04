@@ -1,0 +1,533 @@
+/**
+ * Copyright (C)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        firework.scriptlib
+ * Description:  for "firework" functions
+ * @author       $Author: rpalacio $
+ * @version      $Revision: #13 $
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.sui;
+include library.utils;
+include library.prose;
+
+/***** CONSTANTS *******************************************************/
+
+const int SHOW_EVENT_MAX				= 20;
+
+const float SHOW_DELAY_MIN				= 1f;
+const float SHOW_DELAY_MAX				= 10f;
+
+const string SCRIPT_PLAYER				= "item.firework.player";
+const string SCRIPT_FIREWORK_CLEANUP	= "item.firework.cleanup";
+const string SCRIPT_LAUNCHER			= "item.firework.launcher";
+
+const string VAR_FIREWORK_BASE			= "firework";
+
+const string VAR_FIREWORK_FX			= VAR_FIREWORK_BASE + ".fx";
+
+const string VAR_SHOW_BASE				= VAR_FIREWORK_BASE + ".show";
+const string VAR_SHOW_FX				= VAR_SHOW_BASE + ".fx";		//string[]
+const string VAR_SHOW_DELAY				= VAR_SHOW_BASE + ".delay";		//float[]
+
+const string SCRIPTVAR_COUNT			= VAR_FIREWORK_BASE + ".cnt";
+
+const string TBL_FX						= "datatables/firework/fx.iff";
+
+const string HANDLER_FIREWORK_PREPARE	= "handleFireworkPrepare";
+const string HANDLER_FIREWORK_IGNITE	= "handleFireworkIgnite";
+const string HANDLER_FIREWORK_LAUNCH	= "handleFireworkLaunch";
+const string HANDLER_FIREWORK_EXPLOSION	= "handleFireworkExplosion";
+const string HANDLER_FIREWORK_CLEANUP	= "handleFireworkCleanup";
+
+const string STF						= "firework";
+
+const string TEMPLATE_SHOW_LAUNCHER		= "object/static/firework/show_launcher.iff";
+
+const string_id SID_YOU_CANNOT_ADD			= new string_id(STF,"you_cannot_add");
+const string_id SID_NO_SHOWS_TO_REMOVE		= new string_id(STF,"no_shows_to_remove");
+const string_id SID_NO_SHOWS_TO_MODIFY		= new string_id(STF,"no_shows_to_modify");
+const string_id SID_NO_SHOWS_TO_DISPLAY		= new string_id(STF,"no_shows_to_display");
+const string_id SID_NO_NEED_TO_REORDER		= new string_id(STF,"no_need_to_reorder");
+const string_id SID_DUD_FIREWORK			= new string_id(STF,"dud_firework");
+
+
+/***** FUNCTIONS *******************************************************/
+/***** BASIC FIREWORK *******************************************************/
+boolean launch(obj_id target, obj_id firework)
+{
+	if ( !isIdValid(target) || !isIdValid(firework) )
+		return false;
+	
+	if ( !hasObjVar(firework, VAR_FIREWORK_BASE) )
+		makeRandomEffect(firework);
+	
+	string fx = getStringObjVar(firework, VAR_FIREWORK_FX);
+	if ( fx == null || fx.equals("") )
+		fx = getRandomFireworkEffect();
+	
+	dictionary params = new dictionary();
+	params.put("fx", fx);
+	
+	useCharge(firework);
+	
+	int cnt = utils.getIntScriptVar(target, SCRIPTVAR_COUNT);
+	cnt++;
+	
+	utils.setScriptVar(target, SCRIPTVAR_COUNT, cnt);
+	
+	if ( !hasScript(target, SCRIPT_PLAYER) )
+		attachScript(target, SCRIPT_PLAYER);
+		
+	messageTo(target, HANDLER_FIREWORK_PREPARE, params, 0, false);	
+	return true;
+}
+
+/***** FIREWORK SHOWS *******************************************************/
+void launchShow(obj_id target, obj_id show)
+{
+	if ( !isIdValid(target) || !isIdValid(show) )
+		return;
+	
+	resizeable string[] show_fx = getResizeableStringArrayObjVar(show, VAR_SHOW_FX);
+	resizeable float[] show_delay = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	if ( show_fx == null || show_fx.length == 0 || show_delay == null || show_delay.length == 0 )
+		return;
+
+	if ( show_fx.length != show_delay.length )
+		return;
+
+	location there = utils.findLocInFrontOfTarget(target, 0.75f);
+	if ( there == null )
+		there = getLocation(target);
+
+	//debugSpeakMsg(target, "attempting to launch show!");
+
+	obj_id launcher = createObject(TEMPLATE_SHOW_LAUNCHER, there);
+	if ( isIdValid(launcher) )
+	{
+		//debugSpeakMsg(target, "created launcher...");
+		attachScript(launcher, SCRIPT_LAUNCHER);
+		
+		dictionary d = new dictionary();
+		d.put("fx", show_fx);
+		d.put("delay", show_delay);
+		d.put("player", target);
+		d.put("idx", 0);
+		
+		messageTo(launcher, HANDLER_FIREWORK_LAUNCH, d, show_delay[0], false);
+		
+		destroyObject(show);
+	}
+}
+
+boolean addShowEvent(obj_id target, obj_id show, obj_id firework)
+{
+	if ( !isIdValid(target) || !isIdValid(show) || !isIdValid(firework) )
+		return false;
+	
+	if ( getCount(show) >= SHOW_EVENT_MAX )
+	{
+		sendSystemMessage(target, SID_YOU_CANNOT_ADD);
+		return false;
+	}
+	
+	string fw_fx = getStringObjVar(firework, VAR_FIREWORK_FX);
+	
+	resizeable string[] show_fx = getResizeableStringArrayObjVar(show, VAR_SHOW_FX);
+	show_fx = utils.addElement(show_fx, fw_fx);
+	
+	resizeable float[] show_delay = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	show_delay = utils.addElement(show_delay, SHOW_DELAY_MIN);
+	
+	boolean litmus = true;
+	litmus &= setObjVar(show, VAR_SHOW_FX, show_fx);
+	litmus &= setObjVar(show, VAR_SHOW_DELAY, show_delay);
+	
+	if ( litmus )
+	{
+		useCharge(firework);
+		incrementCount(show, 1);
+	}
+	
+	return litmus;
+}
+
+void removeShowEvent(obj_id target, obj_id show, int idx)
+{
+	if ( !isIdValid(target) || !isIdValid(show) || idx < 0 )
+		return;
+	
+	if ( getCount(show) == 0 )
+	{
+		sendSystemMessage(target, SID_NO_SHOWS_TO_REMOVE);
+		return;
+	}
+	
+	resizeable string[] show_fx = getResizeableStringArrayObjVar(show, VAR_SHOW_FX);
+	resizeable float[] show_delay = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	if ( show_fx == null || show_fx.length == 0 || show_delay == null || show_delay.length == 0 )
+		return;
+	
+	if ( show_fx.length != show_delay.length )
+		return;
+	
+	if ( idx >= show_fx.length )
+		return;
+	
+	show_fx = utils.removeElementAt(show_fx, idx);
+	show_delay = utils.removeElementAt(show_delay, idx);
+	
+	if ( show_fx.length != show_delay.length )
+		return;
+	
+	setObjVar(show, VAR_SHOW_FX, show_fx);
+	setObjVar(show, VAR_SHOW_DELAY, show_delay);
+	
+	incrementCount(show,-1);
+}
+
+void setShowEventDelay(obj_id target, obj_id show, int idx, float delay)
+{
+	if ( !isIdValid(target) || !isIdValid(show) || idx < 0 )
+		return;
+	
+	if ( getCount(show) == 0 )
+	{
+		sendSystemMessage(target, SID_NO_SHOWS_TO_MODIFY);
+		return;
+	}
+	
+	resizeable float[] show_delay = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	if ( show_delay == null || show_delay.length == 0 )
+		return;
+	
+	if ( idx >= show_delay.length )
+		return;
+	
+	if ( delay < 0.1f )
+		delay = 0.1f;
+	
+	if ( delay > SHOW_DELAY_MAX )
+		delay = SHOW_DELAY_MAX;
+	
+	show_delay[idx] = delay;
+	
+	setObjVar(show, VAR_SHOW_DELAY, show_delay);
+}
+
+/***** SUI FUNCTIONS *******************************************************/
+void showEventDataSUI(obj_id player, obj_id show)
+{
+	if ( !isIdValid(player) || !isIdValid(show) )
+		return;
+	
+	if ( getCount(show) == 0 )
+	{
+		sendSystemMessage(player, SID_NO_SHOWS_TO_DISPLAY);
+		return;
+	}
+	
+	cleanupSUIScriptVars(show);
+	
+	resizeable string[] entries = getShowListEntries(show);
+	if ( entries == null || entries.length == 0 )
+	{
+		sendSystemMessage(player, SID_NO_SHOWS_TO_DISPLAY);
+		return;
+	}
+	
+	string title = "@firework:data_title";
+	string prompt = "@firework:data_prompt";
+	int pid = sui.listbox(show, player, prompt, sui.OK_ONLY, title, entries, "handleEventDataSUI");
+	if ( pid > -1 )
+	{
+		setSUIScriptVars(show, pid, player);
+	}
+}
+
+void showRemoveEventSUI(obj_id player, obj_id show)
+{
+	if ( !isIdValid(player) || !isIdValid(show) )
+		return;
+	
+	if ( getCount(show) == 0 )
+	{
+		sendSystemMessage(player, SID_NO_SHOWS_TO_REMOVE);
+		return;
+	}
+	
+	cleanupSUIScriptVars(show);
+	
+	resizeable string[] entries = getShowListEntries(show);
+	if ( entries == null || entries.length == 0 )
+	{
+		sendSystemMessage(player, SID_NO_SHOWS_TO_DISPLAY);
+		return;
+	}
+	
+	string title = "@firework:remove_title";
+	string prompt = "@firework:remove_prompt";
+	int pid = sui.listbox(show, player, prompt, sui.OK_CANCEL, title, entries, "handleRemoveEventSUI");
+	if ( pid > -1 )
+	{
+		setSUIScriptVars(show, pid, player);
+	}
+}
+
+void showReorderEventsSUI(obj_id player, obj_id show)
+{
+	if ( !isIdValid(player) || !isIdValid(show) )
+		return;
+	
+	if ( getCount(show) == 0 )
+	{
+		sendSystemMessage(player, SID_NO_NEED_TO_REORDER);
+		return;
+	}
+	
+	cleanupSUIScriptVars(show);
+	
+	resizeable string[] entries = getShowListEntries(show);
+	if ( entries == null || entries.length < 0 )
+	{
+		sendSystemMessage(player, SID_NO_NEED_TO_REORDER);
+		return;
+	}
+	
+	string title = "@firework:reorder_title";
+	string prompt = "@firework:reorder_prompt";
+	int pid = sui.listbox(show, player, prompt, sui.MOVEUP_MOVEDOWN_DONE, title, entries, "handleReorderEventsSUI");
+	if ( pid > -1 )
+	{
+		setSUIScriptVars(show, pid, player);
+	}
+}
+
+void showModifyEventIndexSUI(obj_id player, obj_id show)
+{
+	if ( !isIdValid(player) || !isIdValid(show) )
+		return;
+	
+	if ( getCount(show) == 0 )
+	{
+		sendSystemMessage(player, SID_NO_SHOWS_TO_MODIFY);
+		return;
+	}
+	
+	cleanupSUIScriptVars(show);
+	
+	resizeable string[] entries = getShowListEntries(show);
+	if ( entries == null || entries.length == 0 )
+	{
+		sendSystemMessage(player, SID_NO_SHOWS_TO_MODIFY);
+		return;
+	}
+	
+	string title = "@firework:modify_index_title";
+	string prompt = "@firework:modify_index_prompt";
+	int pid = sui.listbox(show, player, prompt, sui.OK_CANCEL, title, entries, "handleModifyEventIndexSUI");
+	if ( pid > -1 )
+	{
+		setSUIScriptVars(show, pid, player);
+	}
+}
+
+void showModifyEventTimeSUI(obj_id player, obj_id show, int idx)
+{
+	if ( !isIdValid(player) || !isIdValid(show) || idx < 0 )
+		return;
+	
+	if ( getCount(show) == 0 )
+	{
+		sendSystemMessage(player, SID_NO_SHOWS_TO_MODIFY);
+		return;
+	}
+	
+	cleanupSUIScriptVars(show);
+	
+	resizeable float[] delays = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	if ( delays == null || delays.length == 0 || idx >= delays.length )
+		return;
+	
+	int current = (int)(delays[idx]*10);
+	int available = (int)(SHOW_DELAY_MAX*10) - current;
+	
+	string title = "@firework:modify_delay_title";
+	string prompt = "@firework:modify_delay_prompt";
+	int pid = sui.transfer(show, player, prompt, title, "Available", available, "Delay", current, "handleModifyEventTimeSUI");
+	if ( pid > -1 )
+	{
+		setSUIScriptVars(show, pid, player, idx);
+	}
+}
+
+void setSUIScriptVars(obj_id show, int pid, obj_id player)
+{
+	utils.setScriptVar(show, "firework.pid", pid);
+	utils.setScriptVar(show, "firework.player", player);
+}
+
+void setSUIScriptVars(obj_id show, int pid, obj_id player, int idx)
+{
+	utils.setScriptVar(show, "firework.pid", pid);
+	utils.setScriptVar(show, "firework.player", player);
+	utils.setScriptVar(show, "firework.idx", idx);
+}
+
+void removeSUIScriptVars(obj_id show)
+{
+	utils.removeScriptVar(show, "firework.pid");
+	utils.removeScriptVar(show, "firework.player");
+	utils.removeScriptVar(show, "firework.idx");
+}
+
+void cleanupSUIScriptVars(obj_id show)
+{
+	if ( utils.hasScriptVar(show, "firework.pid") )
+	{
+		int oldpid = utils.getIntScriptVar(show, "firework.pid");
+		obj_id player = utils.getObjIdScriptVar(show, "firework.player");
+		if ( isIdValid(player) )
+			sui.closeSUI(player, oldpid);
+		
+		removeSUIScriptVars(show);
+	}
+}
+
+Vector getShowListEntries(obj_id show)
+{
+	resizeable string[] show_fx = getResizeableStringArrayObjVar(show, VAR_SHOW_FX);
+	resizeable float[] show_delay = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	if ( show_fx == null || show_fx.length == 0 || show_delay == null || show_delay.length == 0 )
+		return null;
+	
+	if ( show_fx.length != show_delay.length )
+		return null;
+	
+	float time = 0;
+	resizeable string[] entries = new string[0];
+	for ( int i = 0; i < show_fx.length; i++ )
+	{
+		time += show_delay[i];
+		string sTime = utils.formatTime(time);
+		entries = utils.addElement(entries, "(" + sTime + "s) " + getString(new string_id("firework_n", show_fx[i])));
+	}
+	
+	if ( entries == null || entries.length == 0 )
+		return null;
+	
+	return entries;
+}
+
+void swapEvents(obj_id player, obj_id show, int idx1, int idx2)
+{
+	if ( !isIdValid(player) || !isIdValid(show) )
+		return;
+	
+	if ( idx1 < 0 || idx2 < 0 )
+	{
+		sendSystemMessage(player, new string_id(STF, "cannot_reorder"));
+		return;
+	}
+	
+	resizeable string[] show_fx = getResizeableStringArrayObjVar(show, VAR_SHOW_FX);
+	resizeable float[] show_delay = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	if ( show_fx == null || show_fx.length == 0 || show_delay == null || show_delay.length == 0 )
+		return;
+	
+	if ( show_fx.length != show_delay.length )
+		return;
+	
+	string tmpFx = show_fx[idx1];
+	float tmpDelay = show_delay[idx1];
+	
+	show_fx[idx1] = show_fx[idx2];
+	show_delay[idx1] = show_delay[idx2];
+	
+	show_fx[idx2] = tmpFx;
+	show_delay[idx2] = tmpDelay;
+	
+	setObjVar(show, VAR_SHOW_FX, show_fx);
+	setObjVar(show, VAR_SHOW_DELAY, show_delay);
+}
+
+void setEventDelay(obj_id player, obj_id show, int idx, float delay)
+{
+	if ( !isIdValid(player) || !isIdValid(show) )
+		return;
+	
+	if ( delay < 0.1f )
+		delay = 0.1f;
+	
+	if ( delay > SHOW_DELAY_MAX )
+		delay = SHOW_DELAY_MAX;
+	
+	resizeable float[] delays = getResizeableFloatArrayObjVar(show, VAR_SHOW_DELAY);
+	if ( delays == null || delays.length == 0 || idx >= delays.length )
+		return;
+	
+	delays[idx] = delay;
+	if ( setObjVar(show, VAR_SHOW_DELAY, delays) )
+	{
+		prose_package ppDelayUpdated = prose.getPackage(new string_id(STF, "prose_delay_update"), idx+1, delay);
+		sendSystemMessageProse(player, ppDelayUpdated);
+	}
+}
+
+/***** SUPPORT FUNCTIONS *******************************************************/
+void setEffect(obj_id firework, string fx, color pColor)
+{
+	if ( !isIdValid(firework) || fx == null || fx.equals("") || pColor == null )
+		return;
+	
+	setObjVar(firework, VAR_FIREWORK_FX, fx);
+}
+
+void makeRandomEffect(obj_id firework)
+{
+	if ( !isIdValid(firework) )
+		return;
+	
+	string fx =  getRandomFireworkEffect();
+	setObjVar(firework, VAR_FIREWORK_FX, fx);
+}
+
+string getRandomFireworkEffect()
+{
+	string[] names = dataTableGetStringColumn(TBL_FX, "name");
+	if ( names == null || names.length == 0 )
+		return null;
+	
+	int idx =  rand(0, names.length - 1);
+	return names[idx];	
+}
+
+void dud(obj_id target)
+{	
+	sendSystemMessage(target, SID_DUD_FIREWORK);
+	decrementFireworkCount(target);
+}
+
+void decrementFireworkCount(obj_id target)
+{
+	int cnt = utils.getIntScriptVar(target, firework.SCRIPTVAR_COUNT);
+	cnt--;
+	if ( cnt < 1 )
+	{
+		utils.removeScriptVar(target, firework.SCRIPTVAR_COUNT);
+		detachScript(target, firework.SCRIPT_PLAYER);
+	}
+}
+
+void useCharge(obj_id firework)
+{
+	incrementCount(firework, -1);
+	
+	int cnt = getCount(firework);
+	if ( cnt < 1 )
+		destroyObject(firework);
+}

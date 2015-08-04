@@ -1,0 +1,329 @@
+//----------------------------------------------------------
+//libraries
+include library.collection;
+include library.groundquests;
+include library.pgc_quests;
+include library.prose;
+include library.static_item;
+include library.storyteller;
+include library.sui;
+include library.utils;
+
+//----------------------------------------------------------
+//constants
+
+const string PID_NAME			= "chronicleRelicConsume";
+
+const int RELIC_CONSUME_ONE			= menu_info_types.SERVER_MENU11;
+const int RELIC_DECONSTRUCT_ONE		= menu_info_types.SERVER_MENU12;
+const int RELIC_DECONSTRUCT_ALL		= menu_info_types.SERVER_MENU13;
+const int RELIC_CONSUME_ALL			= menu_info_types.SERVER_MENU14;
+
+//----------------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//can only consume if you have it picked up
+	if(utils.isNestedWithinAPlayer(self))
+	{
+		string relicData = getStringObjVar(self, pgc_quests.PGC_RELIC_SLOT_DATA_OBJVAR);
+		string[] splitSlotNames = split(relicData, ':');
+
+		string slotName = splitSlotNames[1];
+		string collectionName = splitSlotNames[0];
+		
+		string_id consumeSid = new string_id("saga_system", "relic_consume");
+		string_id consumeAllSid = new string_id("saga_system", "relic_consume_all");
+		if ( !pgc_quests.canUseRelic(player, self, slotName, collectionName, false) )
+		{
+			consumeSid = new string_id("saga_system", "relic_consume_red");
+			consumeAllSid = new string_id("saga_system", "relic_consume_all_red");
+		}
+		
+		int menuConsume =mi.addRootMenu (RELIC_CONSUME_ONE, consumeSid);
+		mi.addSubMenu(menuConsume, RELIC_CONSUME_ALL, consumeAllSid);
+		
+		int menuDeconstruct = mi.addRootMenu (RELIC_DECONSTRUCT_ONE, new string_id("saga_system", "relic_deconstruct"));
+		mi.addSubMenu(menuDeconstruct, RELIC_DECONSTRUCT_ALL, new string_id("saga_system", "relic_deconstruct_all"));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+	if (  utils.isNestedWithinAPlayer(self) )
+	{
+		if ( item == RELIC_CONSUME_ONE || item == RELIC_CONSUME_ALL )
+		{
+			if(sui.hasPid(player, PID_NAME))
+			{
+				int pid = sui.getPid(player, PID_NAME);
+				forceCloseSUIPage(pid);
+			}
+			
+			string staticItemName = getStaticItemName(self);
+
+			string relicData = getStringObjVar(self, pgc_quests.PGC_RELIC_SLOT_DATA_OBJVAR);
+			string[] splitSlotNames = split(relicData, ':');
+
+			string slotName = splitSlotNames[1];
+			string collectionName = splitSlotNames[0];
+
+			//Check to make sure they havent completed the collection yet.
+			if( !hasCompletedCollection(player, collectionName) )
+			{		
+				//check to see if they already have this slot completed
+				if( !hasCompletedCollectionSlot(player, slotName) && !slotName.equals("") )
+				{
+					if ( item == RELIC_CONSUME_ONE )
+					{
+						//getUiConsumeMessageBox(self, player, "relic_consume_item_prompt", "relic_consume_item_title", "handlerSuiAddToQuestBuilder");
+						
+						pgc_quests.addRelicToQuestBuilder(player, self, false);
+					}
+					else if ( item == RELIC_CONSUME_ALL )
+					{
+						//getUiConsumeMessageBox(self, player, "relic_consume_item_all_prompt", "relic_consume_item_all_title", "handlerSuiAddToQuestBuilder");
+						//utils.setScriptVar(self, "relic_addQuestBuilderAll", true);
+						
+						pgc_quests.addRelicToQuestBuilder(player, self, true);
+					}
+					return SCRIPT_CONTINUE;
+				}
+				else
+				{
+					//
+					sendSystemMessage(player, new string_id("saga_system", "relic_count_at_max"));
+					
+					// CS Log
+					pgc_quests.logRelic(player, obj_id.NULL_ID, "Player attempted to add "+staticItemName+"(slot: "+slotName+") to their relic collection ("+collectionName+"), but that relic is already at max amount.");
+					return SCRIPT_CONTINUE;
+				}
+			}
+			else
+			{
+				//
+				sendSystemMessage(player, new string_id("saga_system", "relic_count_at_max"));
+				
+				// CS Log
+				pgc_quests.logRelic(player, obj_id.NULL_ID, "Player attempted to add "+staticItemName+"(slot: "+slotName+") to their relic collection, but they have already maxed out every single available relic of this type, "+collectionName+".");
+				return SCRIPT_CONTINUE;
+			}
+		}
+		else if ( item == RELIC_DECONSTRUCT_ONE )
+		{
+			//getUiConsumeMessageBox(self, player, "relic_deconstruct_item_prompt", "relic_deconstruct_item_title", "handlerSuiRelicDeconstruct");
+			
+			deconstructRelic(player, self, false);
+		}
+		else if ( item == RELIC_DECONSTRUCT_ALL )
+		{
+			//getUiConsumeMessageBox(self, player, "relic_deconstruct_all_prompt", "relic_deconstruct_all_title", "handlerSuiRelicDeconstruct");
+			//utils.setScriptVar(self, "relic_deconstructAll", true);
+			
+			deconstructRelic(player, self, true);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+	
+	if( exists(self) )
+	{
+		string staticItemName = getStaticItemName(self);
+		dictionary row = dataTableGetRow(storyteller.STORYTELLER_DATATABLE, staticItemName);
+		int relic_tier = row.getInt("relic_tier");
+
+		names[idx] = "pgc_relic_quality";
+		attribs[idx] = "" + relic_tier;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean getUiConsumeMessageBox(obj_id self, obj_id player, string prompt, string title, string handler)
+{
+	if( !isValidId(self) || !isValidId(player) )
+	{
+		return false;
+	}
+	
+	string_id prompt_sid = new string_id("saga_system", prompt);
+	string_id title_sid = new string_id("saga_system", title);
+	int pid = sui.msgbox(self, player, "@" + prompt_sid, sui.YES_NO, "@" + title_sid, handler);
+	sui.setPid(player, pid, PID_NAME);
+
+	return true;
+}
+
+messageHandler handlerSuiAddToQuestBuilder()
+{
+	//check params
+	if( params == null || params.isEmpty() )
+	{
+		if ( utils.hasScriptVar(self, "relic_addQuestBuilderAll") )
+			utils.removeScriptVar(self, "relic_addQuestBuilderAll");
+		return SCRIPT_CONTINUE;
+	}
+	
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	
+	if( !isIdValid(player) )
+	{
+		if ( utils.hasScriptVar(self, "relic_addQuestBuilderAll") )
+			utils.removeScriptVar(self, "relic_addQuestBuilderAll");
+		return SCRIPT_CONTINUE;
+	}
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		if ( utils.hasScriptVar(self, "relic_addQuestBuilderAll") )
+			utils.removeScriptVar(self, "relic_addQuestBuilderAll");
+		return SCRIPT_CONTINUE;
+	}
+
+	if( !sui.hasPid(player, PID_NAME) )
+	{
+		if ( utils.hasScriptVar(self, "relic_addQuestBuilderAll") )
+			utils.removeScriptVar(self, "relic_addQuestBuilderAll");
+		return SCRIPT_CONTINUE;
+	}
+
+	if( !utils.isNestedWithin(self, player) )
+	{
+		sui.removePid(player, PID_NAME);
+		if ( utils.hasScriptVar(self, "relic_addQuestBuilderAll") )
+			utils.removeScriptVar(self, "relic_addQuestBuilderAll");
+		return SCRIPT_CONTINUE;
+	}
+	
+	boolean addEntireStack = false;
+	if ( utils.hasScriptVar(self, "relic_addQuestBuilderAll") )
+	{
+		addEntireStack = true;
+		utils.removeScriptVar(self, "relic_addQuestBuilderAll");
+	}
+	
+	pgc_quests.addRelicToQuestBuilder(player, self, addEntireStack);
+	sui.removePid(player, PID_NAME);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlerSuiRelicDeconstruct()
+{
+	//check params
+	if( params == null || params.isEmpty() )
+	{
+		if ( utils.hasScriptVar(self, "relic_deconstructAll") )
+			utils.removeScriptVar(self, "relic_deconstructAll");
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+	
+	if( !isIdValid(player) )
+	{
+		if ( utils.hasScriptVar(self, "relic_deconstructAll") )
+			utils.removeScriptVar(self, "relic_deconstructAll");
+		return SCRIPT_CONTINUE;
+	}
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		if ( utils.hasScriptVar(self, "relic_deconstructAll") )
+			utils.removeScriptVar(self, "relic_deconstructAll");
+		return SCRIPT_CONTINUE;
+	}
+
+	if( !sui.hasPid(player, PID_NAME) )
+	{
+		if ( utils.hasScriptVar(self, "relic_deconstructAll") )
+			utils.removeScriptVar(self, "relic_deconstructAll");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if( !utils.isNestedWithin(self, player) )
+	{
+		sui.removePid(player, PID_NAME);
+		if ( utils.hasScriptVar(self, "relic_deconstructAll") )
+			utils.removeScriptVar(self, "relic_deconstructAll");
+		return SCRIPT_CONTINUE;
+	}
+	
+	boolean deconstructEntireStack = false;
+	if ( utils.hasScriptVar(self, "relic_deconstructAll") )
+	{
+		deconstructEntireStack = true;
+		utils.removeScriptVar(self, "relic_deconstructAll");
+	}
+	
+	deconstructRelic(player, self, deconstructEntireStack);
+	sui.removePid(player, PID_NAME);
+	return SCRIPT_CONTINUE;	
+}
+
+void deconstructRelic(obj_id player, obj_id self, boolean deconstructEntireStack)
+{
+	if( !utils.isNestedWithin(self, player) )
+	{
+		return;
+	}
+	
+	obj_id playerInventory = utils.getInventoryContainer(player);
+	
+	string relicData = getStringObjVar(self, pgc_quests.PGC_RELIC_SLOT_DATA_OBJVAR);
+	string[] splitSlotNames = split(relicData, ':');
+	string slotName = splitSlotNames[1];
+	string collectionName = splitSlotNames[0];
+	string[] relicCategoryData = getCollectionSlotCategoryInfo(slotName);
+	int relicLevel = pgc_quests.getTaskLevel(relicCategoryData);
+	
+	int numToDeconstruct = 1;
+	int stackcount = getCount(self);
+	if ( deconstructEntireStack && stackcount > 0 )
+	{
+		numToDeconstruct = stackcount;
+	}
+	
+	int actualCount = 0;
+	obj_id fragment = obj_id.NULL_ID;
+	for (int i = 0; i < numToDeconstruct; i++)
+	{
+		int fragmentCount = 1 + rand(0, 1+relicLevel/20);
+		actualCount += fragmentCount;
+
+		fragment = static_item.createNewItemFunction(pgc_quests.PGC_CHRONICLES_RELIC_FRAGMENT, playerInventory, fragmentCount);
+
+		// CS Log
+		pgc_quests.logRelic(player, obj_id.NULL_ID, "Player deconstructed a relic into fragments and received "+fragmentCount+" x "+pgc_quests.PGC_CHRONICLES_RELIC_FRAGMENT+"("+fragmentCount+")");
+
+		decrementCount(self);
+	}
+	
+	if ( isIdValid(fragment) )
+	{
+		pgc_quests.sendPlacedInInventorySystemMessage(player, fragment, actualCount);
+	}
+	return;
+}
+

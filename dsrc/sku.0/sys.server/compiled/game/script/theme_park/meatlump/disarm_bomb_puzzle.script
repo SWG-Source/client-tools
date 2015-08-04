@@ -1,0 +1,696 @@
+include library.buff;
+include library.collection;
+include library.consumable;
+include library.sui;
+include library.stealth;
+include library.utils;
+include java.lang.System;
+include java.util.Random;
+
+const boolean LOGGING_ON				= false; 
+
+const string VAR_PREFIX					= "meatlump_target_map"; 
+const string PID_NAME					= VAR_PREFIX + ".pid"; 
+const string CURRENTLY_DEFUSING				= VAR_PREFIX + ".defusing";
+const string BOMB_TIMER					= VAR_PREFIX + ".bomb_timer";
+const string TIMER_RUNNING				= VAR_PREFIX + ".timer_running";
+const string RED_WIRE					= VAR_PREFIX + ".red_wire";
+const string BLACK_WIRE					= VAR_PREFIX + ".black_wire";
+const string GREEN_WIRE					= VAR_PREFIX + ".green_wire";
+const string YELLOW_WIRE				= VAR_PREFIX + ".yellow_wire";
+const string BROWN_WIRE					= VAR_PREFIX + ".brown_wire";
+const string WHITE_WIRE					= VAR_PREFIX + ".white_wire";
+const string YELLOW_BROWN_WIRE				= VAR_PREFIX + ".yellow_brown_wire";
+const string RED_BLACK_WIRE				= VAR_PREFIX + ".red_black_wire";
+const string YELLOW_GREEN_WIRE				= VAR_PREFIX + ".yellow_green_wire";
+const string BLACK_WHITE_WIRE				= VAR_PREFIX + ".black_white_wire";
+const string WIRE_ARRAY					= VAR_PREFIX + ".wire_array";
+const string COLOR_ARRAY				= VAR_PREFIX + ".color_array";
+const string CUT_ARRAY 					= VAR_PREFIX + ".cut_array";
+const string BUTTON_NUMBER				= VAR_PREFIX + ".button_number";
+const string BEING_DEFUSED				= VAR_PREFIX + ".being_defused";
+const string TIME_DEFUSED				= VAR_PREFIX + ".time_defused";
+const string PLAYER_MAX_TIMER				= VAR_PREFIX + ".player_max_timer";
+const string PLAYER_BUFF				= VAR_PREFIX + ".player_buff";
+
+const string CAPTION					= "Disarm Bomb";
+const string DEVICE_TEMPLATE				= "object/tangible/meatlump/event/slicing_device_meatlump_bomb.iff";
+const string DEVICE_OBJVAR				= "puzzle";
+const string BOMB_PUZZLE_BUFF				= "bomb_defuse_puzzle_buff";
+
+const string_id SID_OPEN				= new string_id("meatlump/meatlump", "meatlump_defuse_bomb");
+const string_id BOMB_INTRO_TEXT				= new string_id("meatlump/meatlump", "bomb_intro_text");
+const string_id TOOK_TOO_LONG				= new string_id("meatlump/meatlump", "took_too_long");
+const string_id CURRENTLY_BEING_DEFUSED			= new string_id("meatlump/meatlump", "currently_being_defused");
+const string_id YOU_FAILED				= new string_id("meatlump/meatlump", "you_failed");
+const string_id YOU_CANCELED_EARLY			= new string_id("meatlump/meatlump", "you_canceled_early");
+const string_id YOU_HAVE_DEBUFF				= new string_id("meatlump/meatlump", "you_have_debuff");
+const string_id YOU_NEED_DEVICE				= new string_id("meatlump/meatlump", "you_need_device");
+
+const int MAX_RANGE_TO_COLLECT				= 3;
+const int DEFAULT_BOMB_TIMER				= 65;
+const int BUFF_TIMER_INCREASE				= 10;
+const int BUTTON_PENALTY				= 5;
+const int INITIAL_BUTTON_NUMBER				= 0;
+const int DEFUSE_TIME_OUT_SECONDS			= 120;
+const string[] WIRE_LIST =
+{
+	"Power Source \\#FF3300+\\#FFFFFF ", //1
+	"Power Source \\#222222-\\#FFFFFF ", //2
+	"Explosive \\#FF3300+\\#FFFFFF ", //3
+	"Explosive \\#222222-\\#FFFFFF ", //4
+	"Detonator \\#FF3300+\\#FFFFFF ", //5
+	"Detonator \\#222222-\\#FFFFFF ", //6
+	"Initiation System \\#FF3300+\\#FFFFFF ", //7
+	"Initiation System \\#222222-\\#FFFFFF ", //8
+	"Tamper System \\#FF3300+\\#FFFFFF ", //9
+	"Tamper System \\#222222-\\#FFFFFF " //10
+};
+
+const string[] COLOR_LIST =
+{
+	"\\#FF3300Red\\#FFFFFF", //1
+	"\\#222222Black\\#FFFFFF", //2
+	"\\#996600Brown\\#FFFFFF", //3
+	"\\#FFFF00Yellow\\#FFFFFF", //4
+	"White", //5
+	"\\#99FF33Green\\#FFFFFF", //6
+	"\\#FF3300Red \\#222222Black\\#FFFFFF", //7
+	"\\#FFFF00Yellow \\#99FF33Green\\#FFFFFF", //8
+	"\\#FFFF00Yellow \\#996600Brown\\#FFFFFF", //9
+	"\\#222222Black \\#FFFFFFWhite" //10
+};
+
+const string[] CUT_LIST =
+{
+	"cut_red", //1
+	"cut_black", //2
+	"cut_brown", //3
+	"cut_yellow", //4
+	"cut_white", //5
+	"cut_green", //6
+	"cut_red_black", //7
+	"cut_yellow_green", //8
+	"cut_yellow_brown", //9
+	"cut_black_white" //10
+};
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//add the use option
+	mi.addRootMenu(menu_info_types.ITEM_USE, SID_OPEN);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	obj_id collectionItem = self;
+
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	
+	if(utils.hasScriptVar(self, BEING_DEFUSED))
+	{
+		sendSystemMessage(player, CURRENTLY_BEING_DEFUSED);
+		return SCRIPT_CONTINUE;
+	}
+	else if(!collection.canCollectCollectible(player, self))
+		return SCRIPT_CONTINUE;
+	else if(buff.hasBuff(player, "bomb_defuse_puzzle_downer"))
+	{
+		sendSystemMessage(player, YOU_HAVE_DEBUFF);
+		return SCRIPT_CONTINUE;		
+	}
+	else if(!consumable.decrementObjectInventoryOrEquipped(player, DEVICE_TEMPLATE, DEVICE_OBJVAR))
+	{
+		sendSystemMessage(player, YOU_NEED_DEVICE);
+		return SCRIPT_CONTINUE;		
+	}
+	
+	closeOldWindow(player);
+	blog("OnObjectMenuSelect");
+	createBombUI(collectionItem, player);
+
+	return SCRIPT_CONTINUE;
+}
+
+//This is the function that creates the player SUI. The SUI is refreshed each time the player
+//uses the UI until they cancel or they win.
+boolean createBombUI(obj_id collectionItem, obj_id player)
+{
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	else if(!collection.checkState(player)) //player interrupted
+		return false;
+
+	blog("createBombUI - init");
+	if(!utils.hasScriptVar(player, CURRENTLY_DEFUSING))
+	{
+		blog("createBombUI - CURRENTLY_DEFUSING = false");
+		boolean varsSet = initializePlayer(collectionItem, player);
+		if(!varsSet)
+			return false;		
+
+		utils.setScriptVar(player, CURRENTLY_DEFUSING, true);
+	}
+	else
+		closeOldWindow(player);
+
+	blog("createBombUI - Getting Bomb Data");
+	string questionnaireText = getBombData(collectionItem, player);
+	if(questionnaireText == null || questionnaireText.equals(""))
+			return false;
+	
+	blog("createBombUI - CREATING SUI");	
+	//Custom UI section that uses a UI and passes the correct entry data to the messge handler
+	dictionary params = new dictionary();
+	int pid = createSUIPage("/Script.disarmBomb", collectionItem, player);
+	setSUIAssociatedLocation(pid, collectionItem);
+	setSUIMaxRangeToObject(pid, 8);
+	params.put("callingPid", pid);
+	sui.setPid(player, pid, PID_NAME);
+	
+	setSUIProperty(pid, "details.lblPrompt", "LocalText", questionnaireText);
+	setSUIProperty(pid, "bg.caption.lblTitle", "Text", CAPTION);
+	setSUIProperty(pid, "details.lblPrompt", "Editable", "false");
+	setSUIProperty(pid, "details.lblPrompt", "GetsInput", "false");
+
+	setSUIProperty(pid, "btnCancel", "Visible", "true");
+	//When the player cuts a wire the SUI will not show the button.
+	setSUIProperty(pid, "cut_red", "Visible", utils.getStringScriptVar(player, RED_WIRE));
+	setSUIProperty(pid, "cut_green", "Visible", utils.getStringScriptVar(player, GREEN_WIRE));
+	setSUIProperty(pid, "cut_yellow", "Visible", utils.getStringScriptVar(player, YELLOW_WIRE));
+	setSUIProperty(pid, "cut_brown", "Visible", utils.getStringScriptVar(player, BROWN_WIRE));
+	setSUIProperty(pid, "cut_white", "Visible", utils.getStringScriptVar(player, WHITE_WIRE));	
+	setSUIProperty(pid, "cut_yellow_brown", "Visible", utils.getStringScriptVar(player, YELLOW_BROWN_WIRE));
+	setSUIProperty(pid, "cut_red_black", "Visible", utils.getStringScriptVar(player, RED_BLACK_WIRE));
+	setSUIProperty(pid, "cut_yellow_green", "Visible", utils.getStringScriptVar(player, YELLOW_GREEN_WIRE));
+	setSUIProperty(pid, "cut_black_white", "Visible", utils.getStringScriptVar(player, BLACK_WHITE_WIRE));
+	setSUIProperty(pid, "cut_black", "Visible", utils.getStringScriptVar(player, BLACK_WIRE));
+	
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_red", "handleDialogInput");
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_red", "cut_red", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_black", "handleDialogInput");
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_black", "cut_black", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_green", "handleDialogInput");	
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_green", "cut_green", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_yellow", "handleDialogInput");
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_yellow", "cut_yellow", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_brown", "handleDialogInput");	
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_brown", "cut_brown", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_yellow_brown", "handleDialogInput");	
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_yellow_brown", "cut_yellow_brown", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_red_black", "handleDialogInput");	
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_red_black", "cut_red_black", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_yellow_green", "handleDialogInput");	
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_yellow_green", "cut_yellow_green", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_white", "handleDialogInput");
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_white", "cut_white", "LocalText");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onButton, "cut_black_white", "handleDialogInput");	
+	subscribeToSUIPropertyForEvent(pid, sui_event_type.SET_onButton, "cut_black_white", "cut_black_white", "LocalText");
+	
+	subscribeToSUIEvent(pid, sui_event_type.SET_onClosedCancel, "%button0%", "closeSui");
+
+	showSUIPage(pid);
+	flushSUIPage(pid);
+	blog("createBombUI - FINISHED CREATING SUI");	
+
+	//NO ONE ELSE CAN DEFUSE UNTIL THIS IS REMOVED
+	utils.setScriptVar(collectionItem, BEING_DEFUSED, player);
+	utils.setScriptVar(player, TIME_DEFUSED, getGameTime());
+	//FAIL SAFE - player cannot stand there with the UI open and greif other players wanting to complete the collection.
+	//they have 2 minutes to finish up the game.
+	messageTo(collectionItem, "removeDefuseVar", params, DEFUSE_TIME_OUT_SECONDS, false);
+	
+	return true;
+}
+
+boolean initializePlayer(obj_id collectionItem, obj_id player)
+{
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+
+	//CHECK FOR BUFF HERE
+	boolean hasBuff = false;
+	if(buff.hasBuff(player, BOMB_PUZZLE_BUFF))
+		hasBuff = true;
+
+	blog("HASBUFF: "+hasBuff);
+
+	blog("initializePlayer - init");	
+		
+	utils.setScriptVar(player, RED_WIRE, "true");
+	utils.setScriptVar(player, GREEN_WIRE, "true");
+	utils.setScriptVar(player, YELLOW_WIRE, "true");
+	utils.setScriptVar(player, BROWN_WIRE, "true");
+	utils.setScriptVar(player, WHITE_WIRE, "true");
+	utils.setScriptVar(player, YELLOW_BROWN_WIRE, "true");
+	utils.setScriptVar(player, RED_BLACK_WIRE, "true");
+	utils.setScriptVar(player, YELLOW_GREEN_WIRE, "true");
+	utils.setScriptVar(player, BLACK_WHITE_WIRE, "true");
+	utils.setScriptVar(player, BLACK_WIRE, "true");
+
+
+	//Create copies of wire and color arrays then shuffle them
+	Random rWire = new Random();
+	string[] wireArray = new string[WIRE_LIST.length];
+	System.arraycopy(WIRE_LIST, 0, wireArray, 0, WIRE_LIST.length);
+
+	Random rColor = new Random();
+	string[] colorArray = new string[COLOR_LIST.length];
+	System.arraycopy(COLOR_LIST, 0, colorArray, 0, COLOR_LIST.length);
+	string[] cutArray = new string[CUT_LIST.length];
+	System.arraycopy(CUT_LIST, 0, cutArray, 0, CUT_LIST.length);
+	
+	//SHUFFLE THE WIRE ORDER
+	for(int i=0; i<wireArray.length; i++) 
+	{
+		int randomPosition = rWire.nextInt(WIRE_LIST.length);
+		string temp = wireArray[i];
+		wireArray[i] = wireArray[randomPosition];
+		wireArray[randomPosition] = temp;
+	}
+	
+	//SHUFFLE THE COLOR ORDER AS WELL AS THE CUT ORDER
+	for(int i=0; i<colorArray.length; i++) 
+	{
+		int randomPosition = rColor.nextInt(COLOR_LIST.length);
+		string colorTemp = colorArray[i];
+		string cutTemp = cutArray[i];
+		colorArray[i] = colorArray[randomPosition];
+		cutArray[i] = cutArray[randomPosition];
+		colorArray[randomPosition] = colorTemp;
+		cutArray[randomPosition] = cutTemp;
+	}
+	
+	if(wireArray == null || colorArray == null || cutArray == null)
+		return false;
+	else if(wireArray.length != colorArray.length || wireArray.length != cutArray.length)
+		return false;	
+	
+	utils.setScriptVar(player, WIRE_ARRAY, wireArray);
+	utils.setScriptVar(player, COLOR_ARRAY, colorArray);
+	utils.setScriptVar(player, CUT_ARRAY, cutArray);	
+	utils.setScriptVar(player, BUTTON_NUMBER, INITIAL_BUTTON_NUMBER);
+
+	int modifiedTimer = DEFAULT_BOMB_TIMER;
+	if(hasBuff)
+		modifiedTimer += BUFF_TIMER_INCREASE;
+		
+	utils.setScriptVar(player, PLAYER_MAX_TIMER, modifiedTimer);
+	utils.setScriptVar(player, PLAYER_BUFF, hasBuff);
+
+	return true;
+}
+
+string getBombData(obj_id collectionItem, obj_id player)
+{
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return null;
+	else if(!utils.hasScriptVar(player, PLAYER_MAX_TIMER))
+		return null;
+		
+	blog("getBombData - init");
+	//begin constructing a string used in the prompt window of the puzzle
+	string questionnaireText = "Timer: ";
+		
+	int timer = utils.getIntScriptVar(player, PLAYER_MAX_TIMER);
+	if(timer < 0)
+		return null;
+	else if(utils.hasScriptVar(player, BOMB_TIMER))
+	{
+		blog("getBombData - Timer already ticking");
+	
+		timer = utils.getIntScriptVar(player, BOMB_TIMER) - 1;
+		utils.setScriptVar(player, BOMB_TIMER, timer);
+		if(timer < 0)
+			blowUpBomb(collectionItem, player);
+	}
+	else
+		utils.setScriptVar(player, BOMB_TIMER, timer);		
+
+	questionnaireText += "" + timer;
+	
+	questionnaireText += sui.newLine(2);
+	questionnaireText += localize(BOMB_INTRO_TEXT);
+	questionnaireText += sui.newLine(2);
+
+	string[] wires = utils.getStringArrayScriptVar(player, WIRE_ARRAY);
+	string[] colors = utils.getStringArrayScriptVar(player, COLOR_ARRAY);
+
+	if(wires == null || colors == null)
+		return null;
+	else if(wires.length != colors.length)
+		return null;
+	
+	//questionnaireText += "Button Number: " + buttonNumber + newLine(2);
+	
+	for(int i=0; i<colors.length; i++) 
+		questionnaireText += "" + (i+1) +". " + wires[i] + " is " + colors[i] + sui.newLine();
+	
+	blog("getBombData - returning to caller");
+	return questionnaireText;
+	
+}
+
+boolean blowUpBomb(obj_id collectionItem, obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+	else if(!isIdValid(collectionItem) || !exists(collectionItem))
+		return false;
+
+	if(buff.applyBuff(player, "bomb_defuse_puzzle_downer"));
+		sendSystemMessage(player, YOU_FAILED);
+	
+	dictionary params = new dictionary();
+	params.put("player", player);
+	
+	blog("blowUpBomb - closing SUI");
+	location loc = getLocation(collectionItem);
+	playClientEffectLoc(collectionItem, "clienteffect/combat_explosion_lair_large.cef", loc, 0);
+	
+	setPosture(player, POSTURE_INCAPACITATED);
+	int damageAmount = getAttrib(player, HEALTH) + 50;
+	damage(player, DAMAGE_KINETIC, HIT_LOCATION_BODY, damageAmount);
+	
+	closeOldWindow(player);
+	removePlayerVars(player);
+		
+	obj_id spawner = getObjIdObjVar(collectionItem, "spawn.spawner");
+	if(isValidId(spawner) && exists(spawner))
+		messageTo(spawner, "handleTangibleRespawn", null, 30, false);
+	
+	destroyObject(collectionItem);
+	//apply the debuff here
+	return true;
+}
+
+//Sui Input handled here. This is where the player quesses are 
+//processed
+messageHandler handleDialogInput()
+{
+	blog("handleDialogInput - init");
+	
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	blog("handleDialogInput - player validated");
+	blog("handleDialogInput - params: "+params);
+	
+	boolean hasBuff = false;
+	if(utils.hasScriptVar(player, PLAYER_BUFF))
+		hasBuff = utils.getBooleanScriptVar(player, PLAYER_BUFF);
+
+	//find out what button was pressed.
+	string wire = "";
+	if(params.getString("cut_red.LocalText") != null)
+	{
+		wire += "cut_red";
+		if(hasBuff)
+			utils.setScriptVar(player, RED_WIRE, "false");		
+	}
+	else if(params.getString("cut_black.LocalText") != null)
+	{
+		wire += "cut_black";
+		if(hasBuff)		
+			utils.setScriptVar(player, BLACK_WIRE, "false");
+	}
+	else if(params.getString("cut_green.LocalText") != null)
+	{
+		wire += "cut_green";
+		if(hasBuff)
+			utils.setScriptVar(player, GREEN_WIRE, "false");
+	}
+	else if(params.getString("cut_yellow.LocalText") != null)
+	{
+		wire += "cut_yellow";
+		if(hasBuff)
+			utils.setScriptVar(player, YELLOW_WIRE, "false");
+	}
+	else if(params.getString("cut_brown.LocalText") != null)
+	{
+		wire += "cut_brown";
+		if(hasBuff)
+			utils.setScriptVar(player, BROWN_WIRE, "false");
+	}
+	else if(params.getString("cut_yellow_brown.LocalText") != null)
+	{
+		wire += "cut_yellow_brown";
+		if(hasBuff)
+			utils.setScriptVar(player, YELLOW_BROWN_WIRE, "false");		
+	}
+	else if(params.getString("cut_red_black.LocalText") != null)
+	{
+		wire += "cut_red_black";
+		if(hasBuff)
+			utils.setScriptVar(player, RED_BLACK_WIRE, "false");		
+	}
+	else if(params.getString("cut_yellow_green.LocalText") != null)
+	{
+		wire += "cut_yellow_green";
+		if(hasBuff)
+			utils.setScriptVar(player, YELLOW_GREEN_WIRE, "false");
+	}
+	else if(params.getString("cut_white.LocalText") != null)
+	{
+		wire += "cut_white";
+		if(hasBuff)
+			utils.setScriptVar(player, WHITE_WIRE, "false");
+	}
+	else if(params.getString("cut_black_white.LocalText") != null)
+	{
+		wire += "cut_black_white";
+		if(hasBuff)
+			utils.setScriptVar(player, BLACK_WHITE_WIRE, "false");
+	}
+		
+	if(wire == null || wire.equals(""))
+	{
+		blog("createBombUI - wire == null");
+		messageTo(self, "closeSui", params, 0, false);
+	}
+	if(!utils.hasScriptVar(player, BUTTON_NUMBER))
+		return SCRIPT_CONTINUE;
+		
+	int button = utils.getIntScriptVar(player, BUTTON_NUMBER);
+	string[] cuts = utils.getStringArrayScriptVar(player, CUT_ARRAY);	
+	if(cuts == null)
+		return SCRIPT_CONTINUE;
+
+	if(!cuts[button].equals(wire))
+	{
+		blowUpBomb(self, player);
+		return SCRIPT_CONTINUE;		
+	}
+	
+	//sendSystemMessageTestingOnly(player, "You cut the right wire.");
+	if(button >= cuts.length - 1)
+	{
+		blog("createBombUI - PLAYER WINS");
+
+		rewardPlayer(self, player);
+		return SCRIPT_CONTINUE;		
+	}
+	blog("createBombUI - DECREMENTING TIMER");
+	
+	//calculate time
+	int timer = utils.getIntScriptVar(player, BOMB_TIMER);
+	timer = timer - BUTTON_PENALTY;	
+	utils.setScriptVar(player, BOMB_TIMER, timer);
+
+	//we only want to call this messageHandler once because
+	//it will call itself once started.
+	if(!utils.hasScriptVar(player, TIMER_RUNNING))
+	{
+		blog("createBombUI - Starting the TIMER");
+		utils.setScriptVar(player, TIMER_RUNNING, true);	
+		messageTo(self, "refreshSuiBombTimerData", params, 1, false);
+	}
+	utils.setScriptVar(player, BUTTON_NUMBER, button + 1);
+	blog("createBombUI - Re-calling createBombUI");
+	createBombUI(self, player);
+	blog("createBombUI - DONE Re-calling createBombUI");
+	return SCRIPT_CONTINUE;
+}
+
+//This function gives the player a win
+boolean rewardPlayer(obj_id collectionItem, obj_id player)
+{
+	blog("rewardPlayer - init");
+	if(!isValidId(collectionItem) || !isValidId(player))
+		return false;
+	else if(!exists(collectionItem) || !exists(player))
+		return false;
+	
+	//remove scriptvar from the Bomb so other player's can use it.
+	utils.removeScriptVar(collectionItem, BEING_DEFUSED);
+	
+	blog("rewardPlayer - validation complete");
+	
+	if(!collection.rewardPlayerCollectionSlot(player, collectionItem))
+	{
+		blog("rewardPlayer - rewardPlayerCollectionSlot = FAIL!!!");
+		closeOldWindow(player);
+		removePlayerVars(player);
+		return false;
+	}
+	
+	blog("rewardPlayer - rewardPlayerCollectionSlot = SUCCESS");
+	closeOldWindow(player);
+	removePlayerVars(player);
+	//false not to create SUI
+	return true;
+}
+
+//This refreshes the UI
+messageHandler refreshSuiBombTimerData()
+{
+	blog("refreshSuiBombTimerData - init");
+
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	blog("refreshSuiBombTimerData - player id: "+player);
+
+	if(!sui.hasPid(player, PID_NAME))
+	{
+		blog("refreshSuiBombTimerData - no PID");
+		return SCRIPT_CONTINUE;
+	}
+	blog("refreshSuiBombTimerData - player has a pid scriptvar");
+	int currentPid = sui.getPid(player, PID_NAME);
+	blog("refreshSuiBombTimerData - currentPid: "+ currentPid);
+	//int callingPid = params.getInt("callingPid");
+	//blog("refreshSuiBombTimerData - callingPid: "+ callingPid);
+	//if(callingPid != currentPid)
+	//	return SCRIPT_CONTINUE;	
+
+	//int pid = sui.getPid(player, PID_NAME);
+	
+	string bombData = getBombData(self, player);
+
+	if(bombData == null || bombData.equals(""))
+		return SCRIPT_CONTINUE;
+		
+	setSUIProperty(currentPid, "details.lblPrompt", "LocalText", bombData);
+	flushSUIPage(currentPid);
+	messageTo(self, "refreshSuiBombTimerData", params, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeDefuseVar()
+{
+	blog("removeDefuseVar - init");
+	if(utils.hasScriptVar(self, BEING_DEFUSED))
+	{
+		obj_id player = utils.getObjIdScriptVar(self, BEING_DEFUSED);
+		if(utils.hasScriptVar(player, TIME_DEFUSED))
+		{
+			int playerTime = utils.getIntScriptVar(player, TIME_DEFUSED);
+			int currentTime = getGameTime();
+			blog("removeDefuseVar - playerTime: "+playerTime+" currentTime: "+currentTime+" playerTime - currentTime = "+(currentTime - playerTime));			
+			if((currentTime - playerTime) < DEFUSE_TIME_OUT_SECONDS)
+				return SCRIPT_CONTINUE;
+		}
+		blog("removeDefuseVar - valid player");	
+		//if the player is in the middle of defusing exit out
+		if(utils.hasScriptVar(player, BOMB_TIMER) && utils.hasScriptVar(player, PLAYER_MAX_TIMER))
+		{
+			int timer = utils.getIntScriptVar(player, BOMB_TIMER);
+			int maxtimer = utils.getIntScriptVar(player, PLAYER_MAX_TIMER);
+			
+			if(timer < maxtimer)
+			{
+				blog("removeDefuseVar - has bomb timer");
+				return SCRIPT_CONTINUE;
+			}
+		}
+		blog("closeSui player validated");
+		blog("removeDefuseVar - has bomb timer");
+		
+		closeOldWindow(player);
+		removePlayerVars(player);
+		sendSystemMessage(player, TOOK_TOO_LONG);
+	}	
+	//remove scriptvar from the Bomb so other player's can use it.
+	blog("removeDefuseVar - removing scriptvar");	
+	
+	utils.removeScriptVar(self, BEING_DEFUSED);	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler closeSui()
+{
+	blog("closeSui - init");
+
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	int maxTimer = utils.getIntScriptVar(player, PLAYER_MAX_TIMER);
+	if(maxTimer < 0)
+		return SCRIPT_CONTINUE;
+	else if(utils.hasScriptVar(player, BOMB_TIMER))
+	{
+		int currentTimer = utils.getIntScriptVar(player, BOMB_TIMER);
+		if(currentTimer < 0)
+			return SCRIPT_CONTINUE;
+		else if(currentTimer < maxTimer)
+		{
+			blowUpBomb(self, player);
+			return SCRIPT_CONTINUE;			
+		}
+	}
+	
+	if(utils.hasScriptVar(self, BEING_DEFUSED))
+		utils.removeScriptVar(self, BEING_DEFUSED);	
+
+	if(buff.applyBuff(player, "bomb_defuse_puzzle_downer"));
+	{
+		sendSystemMessage(player, YOU_CANCELED_EARLY);
+	}	
+
+	blog("closeSui player validated");
+	closeOldWindow(player);
+	removePlayerVars(player);
+	return SCRIPT_CONTINUE;
+}
+
+void closeOldWindow(obj_id player)
+{
+	blog("closeOldWindow - init");
+
+	int pid = sui.getPid(player, PID_NAME);
+	blog("closeOldWindow - pid: "+pid);
+	if(pid > -1)
+	{
+		blog("closeOldWindow - force closing: "+pid);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+	}
+}
+
+void removePlayerVars(obj_id player)
+{
+	utils.removeScriptVarTree(player, VAR_PREFIX);
+	utils.removeObjVar(player, VAR_PREFIX);
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON)
+		LOG("minigame",msg);
+	return true;
+}

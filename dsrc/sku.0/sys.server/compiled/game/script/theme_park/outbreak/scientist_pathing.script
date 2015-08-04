@@ -1,0 +1,188 @@
+include library.ai_lib;
+include library.attrib;
+include library.chat;
+include library.create;
+include library.factions;
+include library.groundquests;
+include library.stealth;
+include library.trial;
+include library.utils;
+
+const boolean LOGGING_ON			= true;
+const string SCRIPT_LOG				= "outbreak_pathing";
+const string PATHING_NODE			= "pathing_node";
+const string SPAWNER_PATH			= "spawner_path";
+const string SUCCESS_SIGNAL			= "success_signal";
+const string FAIL_SIGNAL			= "fail_signal";
+const string UPDATE_SIGNAL			= "update_signal";
+const string STORMTROOPER_RETREAT		= "stormtrooper_retreat";
+const int RADIUS				= 100;
+
+const string STRINGFILE				= "theme_park/outbreak/outbreak";
+
+
+trigger OnCreatureDamaged( obj_id attacker, obj_id weapon, int[] damage )
+{
+	if(!hasObjVar(self,"invln"))
+		return SCRIPT_CONTINUE;	
+		
+	setAttrib(self, HEALTH, getMaxAttrib( self, HEALTH ));
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+	if(!hasObjVar(self,"invln"))
+		return SCRIPT_CONTINUE;	
+
+	setHitpoints(self, getMaxHitpoints(self));
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	if(!hasObjVar(self, "guard"))
+		return SCRIPT_CONTINUE;	
+		
+	int randTaunt = rand(1,5);
+	if(randTaunt < 0)
+		return SCRIPT_CONTINUE;
+	string_id strSpam = new string_id(STRINGFILE, "stormtrooper_guard_combat_0"+randTaunt);
+	chat.chat(self,strSpam);	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated(obj_id killer)
+{
+	if(!hasObjVar(self, "guard"))
+		return SCRIPT_CONTINUE;	
+		
+	int randTaunt = rand(1,5);
+	if(randTaunt < 0)
+		return SCRIPT_CONTINUE;
+	string_id strSpam = new string_id(STRINGFILE, "stormtrooper_guard_death_0"+randTaunt);
+	chat.chat(self,strSpam);
+	
+	messageTo(self, "blowUp", null, 2, false);
+ 	return SCRIPT_CONTINUE;
+}
+
+messageHandler blowUp()
+{
+	obj_id[] playerTargets = trial.getValidPlayersInRadius(self, 7);
+	obj_id[] npcTargets = getNPCsInRange(getLocation(self), 10);
+	
+	playClientEffectLoc(self, "clienteffect/combat_explosion_lair_large.cef", getLocation(self), 0.4f);
+
+	if(playerTargets != null && playerTargets.length > 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "beast_pathing.blowUp() Valid player in radius found.");
+	
+		for(int i=0;i<playerTargets.length;i++)
+		{	
+			CustomerServiceLog("outbreak_themepark", "beast_pathing.blowUp() Valid player #"+i+" is about to be incapped.");
+			setPosture(playerTargets[i], POSTURE_INCAPACITATED);
+			int damageAmount = getAttrib(playerTargets[i], HEALTH) + 1000;			
+			damage(playerTargets[i], DAMAGE_KINETIC, HIT_LOCATION_BODY, damageAmount);
+		}
+	}
+
+	if(npcTargets != null && npcTargets.length > 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "beast_pathing.blowUp() Valid NPCs in radius.");	
+	
+		for(int a=0;a<npcTargets.length;a++)
+		{	
+			if(factions.getFaction(npcTargets[a]).equals("afflicted"))
+			{
+				setPosture(npcTargets[a], POSTURE_INCAPACITATED);
+			}
+		}
+	}
+	destroyObject(self);
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	if(!hasObjVar(self,"nomi_rhane"))
+		return SCRIPT_CONTINUE;	
+		
+	obj_id owner = getObjIdObjVar(self, "owner");
+	if(!isValidId(owner) || !exists(owner))
+		return SCRIPT_CONTINUE;	
+
+	if(groundquests.isTaskActive(owner, "outbreak_quest_facility_05_imperial", "coverSurvivors")
+	|| groundquests.isTaskActive(owner, "outbreak_quest_facility_05_rebel", "coverSurvivors")
+	|| groundquests.isTaskActive(owner, "outbreak_quest_facility_05_neutral", "coverSurvivors"))
+	{
+		groundquests.sendSignal(owner, "allDoneSurvivors");
+		utils.removeScriptVar(owner, "survivorsRescued");		
+	}		
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnMovePathComplete()
+{
+	CustomerServiceLog("outbreak_themepark", "survivor_pathing.OnMovePathComplete() initialized.");
+	if(!hasObjVar(self, "guard"))
+		return SCRIPT_CONTINUE;	
+	if(!hasObjVar(self, "givenPath"))
+		return SCRIPT_CONTINUE;	
+	if(hasObjVar(self, "secondPath"))
+		return SCRIPT_CONTINUE;	
+	string_id strSpam = new string_id(STRINGFILE, "stormtrooper_guard_go");
+	chat.chat(self,strSpam);
+
+	messageTo(self, "startMovingGuardAfterDelay", null, 15, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startMovingGuardAfterDelay()
+{
+	obj_id[] wayPointList = getAllObjectsWithObjVar(getLocation(self), RADIUS, STORMTROOPER_RETREAT);
+	if(wayPointList == null || wayPointList.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.OnMovePathComplete() the NPC failed to find any objects within "+RADIUS+" of "+getLocation(self));
+		return SCRIPT_CONTINUE;
+	}
+
+	location[] wayPtLocs = new location[wayPointList.length];
+	//we need to make absolute sure that the waypoints are in order!!!
+	for(int i = 0; i < wayPointList.length; i++)
+	{
+		int orderNumber = getIntObjVar(wayPointList[i], STORMTROOPER_RETREAT) - 1;
+		if(orderNumber < 0)
+		{
+			continue;
+		}
+		wayPtLocs[orderNumber] = getLocation(wayPointList[i]); 
+	}
+
+	if(wayPtLocs == null || wayPtLocs.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.OnMovePathComplete() unable to get a list of locations for hte NPC");
+		return SCRIPT_CONTINUE;
+	}
+	CustomerServiceLog("outbreak_themepark", "survivor_pathing.OnMovePathComplete() Stormtrooper making retreat.");
+	
+	patrolOnce(self, wayPtLocs, 0);
+	setObjVar(self, "secondPath", 1);
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler cleanUpNpcTimer()
+{
+	CustomerServiceLog("outbreak_themepark", "scientist_pathing.cleanUpNpcTimer() Initalized Message Handler.");
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON)
+		LOG(SCRIPT_LOG,msg);
+	return true;
+}

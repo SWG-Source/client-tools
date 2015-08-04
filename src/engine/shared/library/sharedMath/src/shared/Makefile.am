@@ -1,0 +1,72 @@
+AUTOMAKE_OPTIONS=foreign
+noinst_LTLIBRARIES=libsharedMathshared.la
+SUBDIRS=core debug
+libsharedMathshared_la_CXXFLAGS=-I$(srcdir)/../../include/public \
+	-I$(engine_dir)/shared/library/sharedCompression/include/public \
+	-I$(engine_dir)/shared/library/sharedDebug/include/public \
+	-I$(engine_dir)/shared/library/sharedFile/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundation/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundationTypes/include/public \
+	-I$(engine_dir)/shared/library/sharedMath/include/public \
+	-I$(engine_dir)/shared/library/sharedMemoryManager/include/public \
+	-I$(engine_dir)/shared/library/sharedRandom/include/public \
+	-I$(engine_dir)/shared/library/sharedSynchronization/include/public \
+	-I$(engine_dir)/shared/library/sharedThread/include/public \
+	 \
+	-I$(fileInterface_dir)/include/public \
+	-Wno-ctor-dtor-privacy
+libsharedMathshared_la_SOURCES=CatmullRomSpline.cpp \
+	CatmullRomSpline.h \
+	CompressedQuaternion.cpp \
+	CompressedQuaternion.h \
+	ConfigSharedMath.cpp \
+	ConfigSharedMath.h \
+	FirstSharedMath.h \
+	IndexedTriangleList.cpp \
+	IndexedTriangleList.h \
+	Line2d.h \
+	MxCifQuadTree.cpp \
+	MxCifQuadTree.h \
+	MxCifQuadTreeBounds.cpp \
+	MxCifQuadTreeBounds.h \
+	PackedArgb.cpp \
+	PackedArgb.h \
+	PackedRgb.cpp \
+	PackedRgb.h \
+	PaletteArgb.cpp \
+	PaletteArgb.h \
+	PaletteArgbList.cpp \
+	PaletteArgbList.h \
+	Plane.cpp \
+	Plane.h \
+	PolySolver.cpp \
+	PolySolver.h \
+	Quaternion.cpp \
+	Quaternion.h \
+	Rectangle2d.cpp \
+	Rectangle2d.h \
+	SetupSharedMath.cpp \
+	SetupSharedMath.h \
+	SpatialSubdivision.cpp \
+	SpatialSubdivision.h \
+	Sphere.cpp \
+	Sphere.h \
+	SphereTree.h \
+	SphereTreeNode.h \
+	Transform.cpp \
+	Transform.h \
+	Transform2d.cpp \
+	Transform2d.h \
+	Vector.cpp \
+	Vector.h \
+	Vector2d.h \
+	VectorArgb.cpp \
+	VectorArgb.h \
+	Volume.cpp \
+	Volume.h \
+	WaveForm.cpp \
+	WaveForm.h \
+	WaveForm3D.cpp \
+	WaveForm3D.h
+
+include $(engine_dir)/../make_include/engine.include

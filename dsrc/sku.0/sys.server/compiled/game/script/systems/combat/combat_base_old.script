@@ -1,0 +1,4436 @@
+include library.combat;
+include library.vehicle;
+include library.prose;
+include library.jedi;
+include library.pet_lib;
+include library.dot;
+include library.colors;
+include library.utils;
+include library.ai_lib;
+include library.group;
+include library.powerup;
+include library.chat;
+include library.skill;
+include library.xp;
+include library.city;
+include library.metrics;
+
+
+//#define COMBATLOG 1;
+
+
+const int CONE = 0;
+const int SINGLE_TARGET= 1;
+const int AREA = 2;
+const int TARGET_AREA = 3; // area around target
+const int DUAL_WIELD = 4; // 2 targets sometimes
+
+// pvp damage modifiers
+const float PVP_DAMAGE_VALUE = .25f; // 25% of normal damage in pvp combat
+const int MIN_PVP_DAMAGE = 40; // 40 damage min damage for pvp;
+
+const float UNIVERSAL_ACTION_COST_MULTIPLIER = 1.0f;
+
+const string COMBAT_DATATABLE = "datatables/combat/combat_data.iff";
+const float KNOCKED_DOWN_DAMAGE_INCREASE = 1.50f; // 50% more damage when knocked down
+
+const string JEDI_COMBAT_DATATABLE = "datatables/jedi/jedi_combat_data.iff";
+
+const string_id IMMUNE_TO_EFFECT		= new string_id("combat_effects","immune_to_effect");
+const string_id EFFECT_NOT_HOLD			= new string_id("combat_effects","effect_not_hold");
+const string_id SID_CANNOT_USE_FORCE	= new string_id("combat_effects","cannot_use_force");
+
+
+
+/// particles for effects and crap
+
+const int MARKER_BLINDED = 2;
+const int MARKER_DAMAGED = 3;
+const int MARKER_DIZZIED = 4;
+const int MARKER_SUPPRESSIONFIRE = 5;
+const int MARKER_INTIMIDATED = 6;
+const int MARKER_KNOCKDOWN = 7;
+const int MARKER_STARTLE = 8;
+const int MARKER_STARTLED = 9;
+const int MARKER_STUNNED = 10;
+const int MARKER_SURPRISED = 11;
+const int MARKER_BODYSHOT = 12;
+const int MARKER_HEADSHOT = 13;
+const int MARKER_LEGSHOT = 14;
+
+
+
+
+
+const float POSTURE_CHANGE_DELAY = 2.5f; // delay for queued actions
+const float POSTURE_KNOCKED_DOWN_DELAY = 5.0f;
+
+const int WOUND_ROLL_VALUE = 95;
+
+const int MAX_TARGET_ARRAY_SIZE = 10;
+
+const int ALLOWED_LOS_FAILURES = 10;
+
+
+
+const float MAX_COMBAT_DISTANCE= 96.0f;
+const float MAX_COMBAT_RANGE= 96.0f;
+
+
+const float MELEE_TARGET_DISTANCE = 24;
+
+const float MAX_THROWING_DISTANCE = 48;
+
+const float CLOSE_THROWING_DISTANCE = 10f;
+const float MEDIUM_THROWING_DISTANCE = 20f;
+const float FAR_THROWING_DISTANCE = 32f;
+
+const int TARGET_COMMAND = -2;
+
+// posture define
+const int POSTURE_DOWN = -2; // decrease posture 1 tick
+const int POSTURE_UP = -3; // increase posture 1 tick
+
+
+
+const int POSTURE_UPRIGHT_ACTIVE_DEFENSE_MOD = 10;
+const int POSTURE_CROUCHED_ACTIVE_DEFENSE_MOD = 0;
+const int PRONE_ACTIVE_DEFENSE_MOD = 0-20;
+
+
+const float TIMESLICE_VALUE = 1f; // how many ticks does each time mod knock off/increase
+
+const int BASE_TO_HIT = 75;
+const int BASE_UNSKILLED = -50;
+const int TO_HIT_MAX = 100;
+const int TO_HIT_MIN = 0;
+
+const int UNSKILLED_PENALTY = -15;
+
+const int FUMBLE_VALUE = 1;
+
+
+const int COMBAT_ROLL_MIN = 1; // min/max values for all combat rolls
+const int COMBAT_ROLL_MAX = 200;
+
+const int DEFENDER_MOD_MAX = 125;  // Maximum dodge/block/counterattack skill mod total
+
+const int DIZZY_CHECK_VALUE = 85;
+
+// STATE DEFINES:
+// defender tohit states
+const float BLINDED_DEFENSE_MODIFIER = 0-60f;
+const float STUNNED_DEFENSE_MODIFIER = 0-50f;
+const float STUNNED_DAMAGE_MODIFIER = 0-.20f;
+const float INTIMIDATED_DEFENSE_MODIFIER = 0-20f;
+const float INTIMIDATED_DAMAGE_MODIFIER = 0-.50f;
+
+const float BERSERK_DEFENSE_MODIFIER = 0-60f;
+const float TUMBLING_DEFENSE_MODIFIER = 25f;
+const float NIGHT_TIME_DEFENSE_MODIFIER = 30f;
+const float FLARE_DEFENSE_MODIFIER = 0-30f;
+
+// attacker tohit states
+const float BLINDED_TO_HIT_MODIFIER = 0-60f;
+const float BERSERK_TO_HIT_MODIFIER = 20f;
+
+const float RALLIED_DEFENSE_MODIFIER = 30f;
+const float RALLIED_TO_HIT_MODIFIER = 50f;
+
+
+// attacker time modifiers
+const float BERSERK_TIME_MODIFIER = 0;
+
+// attacker damage modifiers
+const float BERSERK_DAMAGE_MODIFIER = 75;// Actual damage increase for new damage modifications, pre 1.5 bonus
+
+const float FEIGN_DEATH_DAMAGE_MODIFIER = 1.25f;
+const float FEIGN_DEATH_PENALTY = -30;
+
+
+//evasion bar stuff
+
+const int EVASIVE_EVADE_MOD = 25;
+const int AGGRESSIVE_COUNTERATTACK_MOD = 25;
+
+const float MELEE_WEAPON_DAMAGE_BONUS = 1.25f;
+
+const int COMBAT_ATTITUDE_NONE = 0;
+const int COMBAT_ATTITUDE_COUNTERATTACK = 1; // we dont use states anumore
+const int COMBAT_ATTITUDE_BLOCK = 2;
+const int COMBAT_ATTITUDE_DODGE = 3;
+const int COMBAT_ATTITUDE_UNARMED = 4; // special
+
+const int CLOSE_QUARTER_FIGHTING_MOD = 0-20;
+
+
+// RANDOM NOTES
+// we might end up forgoing the use of hasEffect if the code becomes authoriatiative via teh command table
+// the function will exist
+// but the objvar wont be authoritative
+
+
+/*
+
+THIS IS COMBAT BASE
+all combat effects live here
+along with any other foundation functions
+pay attention to the flow of messages and structure of objvars
+*/
+
+obj_id[] validateDefenders(obj_id attacker, obj_id[] objDefenders)
+{
+	// @todo: a better solution to this would be to null out defenders that aren't valid, and have
+	// the calling routine handle null entries
+
+	// Check the attackers socialGroup for later checks
+	string attackerSocialGroup = null;
+	if (!isPlayer(attacker) && !pet_lib.isPet(attacker))
+	{
+		attackerSocialGroup = ai_lib.getSocialGroup(attacker);
+	}
+
+	resizeable obj_id[] objValidDefenders = new obj_id[0];
+
+	for(int intI = 0; intI<objDefenders.length; intI++)
+	{
+		// Can't aatack invalid target
+		if (!isIdValid(objDefenders[intI]))
+			continue;
+
+		// Can't attack dead target
+		if (isDead(objDefenders[intI]))
+			continue;
+
+		// Can't attack incap target
+		if (isIncapacitated(objDefenders[intI]))
+			continue;
+
+		// Can't attack target in the same socialGroup
+		if (attackerSocialGroup != null && attackerSocialGroup.equals(ai_lib.getSocialGroup(objDefenders[intI])))
+			continue;
+
+		////LOG("combat", "Validated "+objDefenders[intI]);
+		objValidDefenders= utils.addElement(objValidDefenders, objDefenders[intI]);
+	}
+
+	////LOG("combat", "final return is "+objValidDefenders.length);
+	return objValidDefenders;
+}
+
+boolean checkPosture(obj_id objAttacker, obj_id objDefender)
+{
+	//LOG("combat_bugs", "Checking Postures of target"+objDefender);
+	if(isDead(objDefender))
+	{
+		//LOG("combat_bugs", "Dead defender "+objDefender);
+		return false;
+	}
+	if(isIncapacitated(objDefender))
+	{
+		//LOG("combat_bugs", "Incapacitated defender "+objDefender);
+		return false;
+	}
+	////LOG("combat", "returning true");
+	return true;
+}
+
+
+boolean checkTargets(obj_id objAttacker, obj_id objDefender)
+{
+
+	obj_id objTarget = getTarget(objAttacker);
+	if(objTarget==objDefender)
+	{	// already targeted
+		return true;
+
+
+
+	}
+
+	// i need to queue the command
+	// then queue the target as immediate
+	// then return script_override
+	return false;
+
+
+
+
+
+
+
+}
+int doCombatPreCheck(obj_id objPlayer, obj_id objTarget, int intCommand)
+{
+	return doCombatPreCheck(objPlayer, objTarget, intCommand, true);
+}
+
+int doCombatPreCheck(obj_id objPlayer, obj_id objTarget, int intCommand, boolean changeCombatTarget)
+{
+
+	if(vehicle.isRidingVehicle(objPlayer))
+	{
+		return SCRIPT_OVERRIDE;
+
+	}
+	obj_id objMount = getMountId(objPlayer);
+
+
+	//LOG("combat", "mount is "+objMount);
+	if(objMount!=null)
+	{
+		if(pet_lib.isGalloping(objMount))
+		{
+			//LOG("combat", "returning overrid");
+			return SCRIPT_OVERRIDE;
+		}
+	}
+
+
+
+	if(changeCombatTarget && !(checkTargets(objPlayer, objTarget))) // is target and current target the same object?
+	{
+		////LOG("combat_spam","targets don't match");
+		if(checkPosture(objPlayer, objTarget)) // the targets dont match, retargeting if i can
+		{
+			////LOG("combat_spam","checkPostures passed, reenqueueing");
+			////debugServerConsoleMsg(null, "QUEUEING DEFAULT ATTACK IN NON docommbatprecheck");
+			queueCommand(objPlayer, ##"combatTarget", objTarget,"", COMMAND_PRIORITY_FRONT);
+			queueCommand(objPlayer, intCommand, null,"", COMMAND_PRIORITY_FRONT);
+			// retarget and re-enqueue
+			return SCRIPT_OVERRIDE;
+		}
+		return SCRIPT_OVERRIDE;
+
+	}
+	else
+	{
+		if(!(checkPosture(objPlayer, objTarget)))
+		{
+			//my target is down
+			////LOG("combat_spam", "bad postures for a target that i already have");
+			return SCRIPT_OVERRIDE; // go get a new target
+
+
+
+		}
+
+
+
+
+	}
+	float fltDistance = getDistance(objPlayer, objTarget);
+	if(fltDistance>MAX_COMBAT_RANGE)
+	{
+		if(isPlayer(objPlayer))
+		{
+			setTarget(objPlayer, null); // clearing target due to extreme range
+			clearQueue(objPlayer);
+		}
+		if(isPlayer(objTarget))
+		{
+			setTarget(objTarget, null);
+
+			clearQueue(objTarget);
+		}
+		return SCRIPT_OVERRIDE;
+
+	}
+
+	// now we need to check if you're in the right posture, with the right weapon
+	if(fltDistance<7)
+	{
+		int intPosture = getPosture(objPlayer);
+		if(intPosture==POSTURE_PRONE)
+		{
+			obj_id objWeapon = getCurrentWeapon(objPlayer);
+			if(objWeapon!=null)
+			{
+				int intWeaponCategory = combat.getWeaponCategory(getWeaponType(objWeapon));
+
+				if(intWeaponCategory == combat.RANGED_WEAPON)
+				{
+					// NO SIREE BOB, TOO CLOSE FOR THAT!
+					if(!(objPlayer.hasScriptVar("minRangeWarning")))
+					{
+
+						deltadictionary dctVars = objPlayer.getScriptVars();
+						dctVars.put("minRangeWarning", 1);
+						string_id strSpam = new string_id("combat_effects", "prone_ranged_too_close");
+						sendSystemMessage(objPlayer, strSpam);
+
+
+					}
+					else
+					{
+
+					}
+					//queueDelay(objPlayer, 2.0f);
+					return SCRIPT_CONTINUE;
+				}
+				else
+				{
+					if(objPlayer.hasScriptVar("minRangeWarning"))
+					{
+
+						deltadictionary dctVars = objPlayer.getScriptVars();
+						dctVars.remove("minRangeWarning");
+					}
+				}
+			}
+		}
+		else
+		{
+			if(objPlayer.hasScriptVar("minRangeWarning"))
+			{
+
+				deltadictionary dctVars = objPlayer.getScriptVars();
+				dctVars.remove("minRangeWarning");
+			}
+
+		}
+	}
+	else
+	{
+		if(objPlayer.hasScriptVar("minRangeWarning"))
+		{
+
+			deltadictionary dctVars = objPlayer.getScriptVars();
+			dctVars.remove("minRangeWarning");
+		}
+
+	}
+	
+	return -1;
+
+
+}
+
+// START SECTION FOR FUNCTIONS THAT SHOULD BE MOVED TO C
+
+
+boolean drainCombatActionAttributes(obj_id objPlayer, int intHealthCost, int intActionCost, int intMindCost, int intAction, float fltDelay)
+{
+	if(!(drainAttributesFastRegen(objPlayer, intHealthCost, intActionCost, intMindCost)))
+	{
+		string_id strSpam = new string_id("cbt_spam", "pool_drain_fail");
+
+		strSpam = new string_id("cbt_spam", "pool_drain_fail_single");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+	else
+	{
+		////LOG("combat", "queing delay of "+fltDelay);
+		//queueDelay(objPlayer, fltDelay);  // WHERE WE APPLY THE DEFAULT DELAY
+
+		return true;
+	}
+
+
+}
+boolean drainAttributesFastRegen(obj_id objPlayer, int intHealthCost, int intActionCost, int intMindCost)
+{
+	if(drainAttributes(objPlayer, intActionCost, intMindCost))
+	{
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+
+
+	/*int intRealHealthCost = testDrainAttribute(objPlayer, HEALTH, intHealthCost);
+	int intRealMindCost = testDrainAttribute(objPlayer, MIND, intMindCost);
+	int intRealActionCost = testDrainAttribute(objPlayer, ACTION, intActionCost);
+	//LOG("combat", "modiifed cost is HEALTH:"+intRealHealthCost+" MIND:"+intRealMindCost+" ACTION:"+ intRealActionCost);
+
+	if((intRealHealthCost<0)||(intRealMindCost<0)||(intRealActionCost<0))
+	{
+		return false;
+
+	}
+	else
+	{
+		//attrib_mod createAttribMod(int attrib, int value, float duration, float attack, float decay)
+		attrib_mod[] attrTest = new attrib_mod[3];
+		attrTest[0] = utils.createAttribMod(HEALTH, -1 * intRealHealthCost,0, 0, 25.0f);
+		attrTest[1] = utils.createAttribMod(ACTION, -1 * intRealActionCost,0, 0, 25.0f);
+		attrTest[2] = utils.createAttribMod(MIND,-1 *  intRealMindCost,0, 0, 25.0f);
+		addAttribModifiers(objPlayer, attrTest);
+		return true;
+	}*/
+
+
+
+
+}
+
+boolean checkAttributeCost(obj_id objTarget, dictionary dctCost)
+{
+	int intHealthCost = dctCost.getInt("intHealthCost");
+	int intActionCost = dctCost.getInt("intActionCost");
+	int intMindCost = dctCost.getInt("intMindCost");
+
+
+	int intCurrentHealth = getAttrib(objTarget, HEALTH);
+	int intCurrentAction = getAttrib(objTarget, ACTION);
+	int intCurrentMind = getAttrib(objTarget, MIND);
+
+	if(intCurrentHealth<intHealthCost)
+	{
+
+		return false;
+
+
+	}
+	if(intCurrentAction<intActionCost)
+	{
+
+		return false;
+
+	}
+
+	if(intCurrentMind<intMindCost)
+	{
+
+		return false;
+
+
+	}
+	return true;
+
+}
+
+
+// END SECTION FOR FUNCTIONS THAT SHOULD BE MOVED TO C
+
+
+dictionary getRawActionCost(obj_id objPlayer, string strWeaponType, string[] strCostMods, int intRawHealth, int intRawAction, int intRawMind, float fltHealthModifier, float fltActionModifier, float fltMindModifier)
+{
+
+
+	intRawHealth = (int)(intRawHealth * UNIVERSAL_ACTION_COST_MULTIPLIER );
+	intRawAction = (int)(intRawAction * UNIVERSAL_ACTION_COST_MULTIPLIER );
+	intRawMind = (int)(intRawMind * UNIVERSAL_ACTION_COST_MULTIPLIER );
+
+	int intHealthCost = (int)(intRawHealth * fltHealthModifier);
+	int intActionCost = (int)(intRawAction * fltActionModifier);
+	int intMindCost = (int)(intRawMind * fltMindModifier);
+
+	// now we need to get the skill modifiers specified in the script
+	// this might have to be converted to a decimal.. Currently it is assumed to be .%% instead of %X
+	float fltSkillCostMod = getSkillModifiers(objPlayer, strWeaponType+"_", strCostMods);
+	
+
+
+
+
+	intHealthCost = intHealthCost + (int)(intHealthCost * fltSkillCostMod); //greater skill cost mod value is better
+	intActionCost = intActionCost + (int)(intActionCost* fltSkillCostMod);
+	intMindCost = intMindCost+ (int)(intMindCost* fltSkillCostMod);
+
+
+	dictionary dctReturnValues = new dictionary();
+	dctReturnValues.put("intHealthCost", intHealthCost);
+	dctReturnValues.put("intActionCost", intActionCost);
+	dctReturnValues.put("intMindCost", intMindCost);
+	return dctReturnValues;
+
+}
+
+// support function. gets the total of all of the modifiers passed
+float getSkillModifiers(obj_id objPlayer,string strAdditiveString,  string[] strSkillMods)
+{
+	int intI = 0;
+
+	float fltSkillMod = 0;
+	////LOG("combat_spam", "GETTING SKILL MODIFIERS");
+
+	while(intI<strSkillMods.length)
+	{
+		fltSkillMod = fltSkillMod + getEnhancedSkillStatisticModifier(objPlayer, strAdditiveString+strSkillMods[intI]);
+		////LOG("combat_spam", "Getting skill mod for "+strAdditiveString+strSkillMods[intI]);
+		////LOG("combat_spam", "fltSkill mod is "+fltSkillMod);
+		intI =intI+1;
+	}
+	return fltSkillMod;
+}
+
+
+
+float calculateTime(obj_id objPlayer, string strWeaponType, float fltDefaultTime, string[] strTimeMods)
+{
+
+
+	// fltDefaultTime is the baseline
+	// we modify it using strTimeMods,
+	// fltTimeMod is a number. it is either positive or nega
+	// positive is worse, negative is better
+	// we add the time mode * timeslice modifier to the default time
+	////LOG("combat_spam","Raw Action time is "+fltDefaultTime);
+
+
+	float fltTimeMod = getSkillModifiers(objPlayer,strWeaponType+"_" , strTimeMods);
+
+
+	////LOG("combat_spam", "skill mod is "+fltTimeMod);
+	
+
+
+	////LOG("combat_spam","raw time mod is "+fltTimeMod);
+	fltTimeMod = fltTimeMod / 100;
+
+
+
+	////LOG("combat_spam", "modified tiume mod is "+fltTimeMod);
+	fltDefaultTime = fltDefaultTime -(fltTimeMod * fltDefaultTime);
+
+/********************************************************************************
+* Code for Attack Speed Debuff, Not currently used.
+* Adjustments are made to base combat speed after all other modifiers are applied
+
+	if (utils.hasScriptVar(objPlayer, "speedDelayPotency"))
+	{
+
+		int delayStart = utils.getIntScriptVar(objPlayer, "speedDelayEffectStart");
+		int delayEnd = utils.getIntScriptVar(objPlayer, "speedDelayEffectEnd");
+		float potency = utils.getFloatScriptVar(objPlayer, "speedDelayPotency");
+
+		if (delayEnd > getGameTime())
+		{
+			int math = delayEnd - delayStart;
+
+			float debugTime = fltDefaultTime;
+
+			fltDefaultTime = fltDefaultTime * potency;
+			if (fltDefaultTime < 1.0f)
+			{
+				fltDefaultTime = 1.0f * potency;
+			}
+
+		}
+
+		if (delayEnd <= getGameTime())
+		{
+			utils.removeScriptVar(objPlayer, "speedDelayEffectStart");
+			utils.removeScriptVar(objPlayer, "speedDelayEffectEnd");
+			utils.removeScriptVar(objPlayer, "speedDelayPotency");
+		}
+	}
+**********************************************************************************/
+
+
+	if(fltDefaultTime<TIMESLICE_VALUE)
+	{
+		fltDefaultTime = TIMESLICE_VALUE; // our minimum
+
+
+	}
+	return fltDefaultTime;
+}
+
+weapon_data getRawDamage(obj_id objPlayer, weapon_data cbtWeaponData,float fltDamageModifier, string[] strDamageMods, boolean boolDontIgnoreCerts)
+{
+
+
+	// the return skill mod is a % value to increase/decrease..
+	obj_id objWeapon = cbtWeaponData.id;
+	// check for certifications
+	if(isPlayer(objPlayer))
+	{
+
+		if(boolDontIgnoreCerts)
+		{
+			if(!combat.hasCertification(objPlayer, objWeapon))
+			{
+				cbtWeaponData.minDamage = 5;
+				cbtWeaponData.maxDamage = 10;
+			}
+		}
+	}
+
+
+	// end certification checks
+
+
+	float fltMinDamage =(float) cbtWeaponData.minDamage;
+	float fltMaxDamage =(float) cbtWeaponData.maxDamage;
+
+
+	int intState = 0;
+	if(intState>0)
+	{
+
+		if(isMeleeWeapon(cbtWeaponData.id))
+		{
+
+			fltMinDamage = fltMinDamage + BERSERK_DAMAGE_MODIFIER;
+			fltMaxDamage = fltMaxDamage + BERSERK_DAMAGE_MODIFIER;
+
+
+		}
+
+
+	}
+
+	////LOG("combat", "raw minDamage is "+fltMinDamage);
+	////LOG("combat", "raw maxDaamge is "+fltMaxDamage);
+
+
+	// we modify min/max damage now
+
+	if(cbtWeaponData.weaponType==WEAPON_TYPE_UNARMED)
+	{
+		int intSkillMod = getSkillStatisticModifier(objPlayer, "unarmed_damage");
+		fltMinDamage = fltMinDamage + intSkillMod;
+		fltMaxDamage = fltMaxDamage + intSkillMod;
+
+
+	}
+
+
+	// DAMAGE INCREASE HACK HERE
+	if(isPlayer(objPlayer))
+	{
+
+		fltMinDamage = fltMinDamage * 1.5f;
+		fltMaxDamage = fltMaxDamage * 1.5f;
+	}
+	else
+	{
+
+		fltMinDamage = fltMaxDamage / 2;
+		fltMinDamage = fltMinDamage * 1.0f;
+		fltMaxDamage = fltMaxDamage * 1.0f;
+
+	}
+
+	////LOG("combat", "new minDamage is "+fltMinDamage);
+	////LOG("combat", "new maxDamage is "+fltMaxDamage);
+	if((cbtWeaponData.weaponType==WEAPON_TYPE_POLEARM)||(cbtWeaponData.weaponType==WEAPON_TYPE_1HAND_MELEE)||(cbtWeaponData.weaponType==WEAPON_TYPE_2HAND_MELEE))
+	{
+
+		fltMinDamage = fltMinDamage * 1.25f;
+		fltMaxDamage = fltMaxDamage * 1.25f;
+
+	}
+
+	////LOG("combat", "new melee minDamage is "+fltMinDamage);
+	////LOG("combat", "new melee maxDamage is "+fltMaxDamage);
+	// END DAMAGE INCREASE HACK
+	////LOG("combat_spam", "Min Damage is "+fltMinDamage);
+	////LOG("combat_spam", "Max Damage is "+fltMaxDamage);
+
+	
+	float fltStateMod = 0;
+	if(fltStateMod<0)
+	{
+		fltStateMod = 0;
+	}
+	////LOG("combat_spam", "fltStateMod = "+fltStateMod);
+	////LOG("combat_spam", "fltDamageModifier is "+fltDamageModifier);
+
+	fltMinDamage = fltMinDamage * fltDamageModifier;
+	fltMaxDamage = fltMaxDamage * fltDamageModifier;
+	fltMinDamage = fltMinDamage * fltStateMod;
+	fltMaxDamage = fltMaxDamage * fltStateMod;
+
+	////LOG("combat", "final minDamage is "+fltMinDamage);
+	////LOG("combat", "final maxDamage is "+fltMaxDamage);
+
+	cbtWeaponData.minDamage = (int)fltMinDamage;
+	cbtWeaponData.maxDamage = (int)fltMaxDamage;
+
+
+
+
+	////LOG("combat_spam", "New Min Damage is "+cbtWeaponData.minDamage);
+	////LOG("combat_spam", "New MAX Damage is "+cbtWeaponData.maxDamage);
+
+
+	if(cbtWeaponData.minDamage<=0)
+	{
+		cbtWeaponData.minDamage=1;
+
+
+
+	}
+
+	// HACK
+
+
+	// END HACK
+
+	return cbtWeaponData;
+
+
+
+
+}
+
+int getHitMod(obj_id objPlayer, string strWeaponType, string[] strToHitMods)
+{
+	return getHitMod(objPlayer,strWeaponType, strToHitMods, null); // overload
+
+}
+
+int getHitMod(obj_id objPlayer, string strWeaponType, string[] strToHitMods, dictionary dctCombatInfo)
+{
+	int intToHitBonus = 0;
+
+	float fltToHitMod = 0;
+	float fltStateMod = 0;
+	if(!isPlayer(objPlayer)) // not a player, but a mob.. the hint is the use of the "ismob" ability
+	{
+		fltToHitMod =(float) getMobHitMod(objPlayer); // no its not a player even if its actually called "objPlayer" It's a mob. See above comment
+	}
+	else
+	{		// we need to checkk posture!!
+
+		string strOverloadAccuracyMod = null;
+		if(dctCombatInfo!=null)
+		{
+			strOverloadAccuracyMod = dctCombatInfo.getString("strOverloadAccuracyMod");
+		}
+		if((strOverloadAccuracyMod!=null)&&(strOverloadAccuracyMod!=""))
+		{
+			fltToHitMod = getEnhancedSkillStatisticModifier(objPlayer, strOverloadAccuracyMod);
+		}
+		else
+		{
+			fltToHitMod = 0;
+			fltToHitMod = fltToHitMod + getSkillModifiers(objPlayer, strWeaponType+"_", strToHitMods);
+			if(fltToHitMod==0)
+			{
+				fltToHitMod =fltToHitMod + (float)UNSKILLED_PENALTY;
+			}
+		}
+	}
+	
+	// we now have a numerical value that will be added to the roll to determine the hit
+	// it is a whole number so we don't fuck with multiplication and the like
+	intToHitBonus = (int)(fltToHitMod + fltStateMod);
+
+	if ( utils.hasScriptVar(objPlayer, "inAlignedStructure") )
+	{// this is for advanced faction perks.
+
+		if(strWeaponType=="pistol")
+		{
+			if(hasSkill(objPlayer, "combat_pistol_novice"))
+			{
+				float fltHitBonus = (float)intToHitBonus;
+				fltHitBonus = fltHitBonus * 1.15f; // 15% bonus
+				intToHitBonus = (int)fltHitBonus;
+
+			}
+
+		}
+		else if(strWeaponType=="carbine")
+		{
+			if(hasSkill(objPlayer, "combat_carbine_novice"))
+			{
+				float fltHitBonus = (float)intToHitBonus;
+				fltHitBonus = fltHitBonus * 1.15f; // 15% bonus
+				intToHitBonus = (int)fltHitBonus;
+			}
+
+		}
+	}
+
+
+	return intToHitBonus;
+
+}
+
+
+
+hit_result[] runHitEngine(attacker_data cbtAttackerData, weapon_data cbtWeaponData, defender_data[] cbtDefenderData)
+{
+	return runHitEngine(cbtAttackerData, cbtWeaponData, cbtDefenderData, false);
+}
+hit_result[] runHitEngine(attacker_data cbtAttackerData, weapon_data cbtWeaponData, defender_data[] cbtDefenderData, boolean boolAllowHitSelf)
+{
+	float fltDefenseModifier = 0;
+	hit_result[] cbtHitData = new hit_result[cbtDefenderData.length];
+
+	// Degrade the weapon quality.
+	boolean degradedWeapon = false;
+	int degradeRoll = rand( 1, 100 );
+	if ( degradeRoll < 5 )
+	{
+		if ( damageWeapon( cbtAttackerData.id, cbtWeaponData.id, 1 ) )
+			degradedWeapon = true;
+	}
+
+	if ( hasObjVar(cbtWeaponData.id, powerup.VAR_POWERUP_USES_LEFT) )
+	{
+		powerup.decrementUseCounter(cbtWeaponData.id);
+		if ( !degradedWeapon && rand(1,100) < 15 )
+			damageWeapon( cbtAttackerData.id, cbtWeaponData.id, 1 );
+	}
+
+
+	////LOG("combat_spam","cbtHitData length is "+cbtHitData.length);
+
+/*
+	if(isPlayer(cbtAttackerData.id))
+	{
+		// WE CHANGE OUR WEAPON DATA HERE!
+		if(cbtWeaponData.zeroRangeMod<0)
+		{
+			cbtWeaponData.zeroRangeMod = 0;
+		}
+
+
+		if(cbtWeaponData.minDamage<50)
+		{
+			cbtWeaponData.minDamage = 50;
+
+		}
+		if(cbtWeaponData.maxDamage<60)
+		{
+			cbtWeaponData.maxDamage =60;
+		}
+
+		// END HACK
+	}
+
+
+
+*/
+	int intOldMinDamage = cbtWeaponData.minDamage; // we save these off since we monkey with them wiht damage mitigation
+	int intOldMaxDamage = cbtWeaponData.maxDamage;
+
+
+	for(int intI = 0; intI<cbtDefenderData.length; intI++)
+	{
+
+
+		if(!(isMob(cbtDefenderData[intI].id)))
+		{
+			cbtAttackerData.scriptMod = 500;
+
+
+		}
+
+
+
+		////LOG("combat_spam","intI is "+intI);
+		obj_id objTest = null;
+		int intK = 0;
+
+		
+		int intState = 0;
+		if(intState>0)
+		{
+			int intPosture = cbtDefenderData[intI].posture;
+			if(intPosture!=POSTURE_INCAPACITATED)
+			{
+				fltDefenseModifier = -100000f; // YOU NO GET DEFENSE! I'm sorry! (feigning)
+
+
+			}
+			else
+			{
+				fltDefenseModifier = FEIGN_DEATH_PENALTY;
+
+
+			}
+
+
+		}
+		else
+		{
+
+		// we need to modify hit data based on defender states
+			
+			combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "State Defense Mods = "+fltDefenseModifier);
+		}
+
+		// we improve the odds of hitting based on attacker/defender skill mods and attacker types
+		// what kind of weapon is the attacker using?
+		int intWeaponCategory = combat.getWeaponCategory(getWeaponType(cbtWeaponData.id));
+		string strDefenseBonus = "";
+		string strMitigationMod = "";
+		if(intWeaponCategory == combat.RANGED_WEAPON)
+		{
+			strDefenseBonus = "ranged_defense";
+			strMitigationMod = "ranged_damage_mitigation";
+
+
+
+		}
+		else
+		{
+			strMitigationMod = "melee_damage_mitigation";
+			strDefenseBonus = "melee_defense";
+		}
+
+		int baseDefense = getEnhancedSkillStatisticModifier(cbtDefenderData[intI].id, strDefenseBonus);
+		if (baseDefense > DEFENDER_MOD_MAX)
+			baseDefense = DEFENDER_MOD_MAX;
+		combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Base Defense = "+baseDefense);
+		fltDefenseModifier += baseDefense;
+
+		float hitBonus = getHitBonus(intWeaponCategory, cbtDefenderData[intI].id);
+		combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "toHit Mod = -"+hitBonus);
+		fltDefenseModifier  -= hitBonus;
+
+		cbtWeaponData = calculateDamageMitigation(cbtDefenderData[intI].id, strMitigationMod, cbtWeaponData, intOldMinDamage, intOldMaxDamage); // modify the damage ranges based on mitigation commands
+
+		//// CITY SPECIALIZATION: STRONGHOLD
+		//// If the city the player is defending in has spec stronghold and the player is militia, grant a 50 point defensive bonus.
+		if ( isPlayer( cbtDefenderData[intI].id ) && isPlayer( cbtAttackerData.id ) )
+		{
+			int city_id = city.checkCity( cbtDefenderData[intI].id, false );
+			if ( city_id > 0 && city.cityHasSpec( city_id, city.SF_SPEC_STRONGHOLD ) && city.isMilitiaOfCity( cbtDefenderData[intI].id, city_id ) )
+			{
+				combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Stronghold Bonus = +90");
+				fltDefenseModifier += 90;
+			}
+		}
+		////
+
+		// Try to dodge the damage with any special effects on the defender.  12/17/03
+		if ( utils.hasScriptVar( cbtDefenderData[intI].id, "food.dodge_attack.eff" ) )
+		{
+			// Possible food buff dodge.
+			int eff = utils.getIntScriptVar( cbtDefenderData[intI].id, "food.dodge_attack.eff" );
+			combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Food Dodge Buff = +"+eff);
+			fltDefenseModifier += eff;
+		}
+
+		// Increase chance to hit with accuracy buffs.  12/17/03
+		if ( utils.hasScriptVar( cbtAttackerData.id, "food.attack_accuracy.eff" ) )
+		{
+			// Possible food buff hit.
+			int eff = utils.getIntScriptVar( cbtAttackerData.id, "food.attack_accuracy.eff" );
+			combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Food Accuracy Mod = -"+eff);
+			fltDefenseModifier -= eff;
+		}
+
+		// Dead Eye 01/08/04
+		if ( utils.hasScriptVar( cbtAttackerData.id, "dead_eye.active" ) )
+		{
+			int dea = utils.getIntScriptVar( cbtAttackerData.id, "dead_eye.active" );
+			float dur = utils.getFloatScriptVar( cbtAttackerData.id, "dead_eye.dur" );
+			if ( getGameTime() - dea < dur )
+			{
+				int eff = utils.getIntScriptVar( cbtAttackerData.id, "dead_eye.eff" );
+				combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Dead Eye Mod = -"+eff);
+				fltDefenseModifier -= eff;
+			}
+		}
+
+		// Check for a trap based reduction in these mods.
+		obj_id checkId = cbtDefenderData[intI].id;
+		if ( isIdValid(checkId) && utils.hasScriptVar( checkId, "trapmod.enable" ) )
+		{
+			if ( intWeaponCategory == combat.RANGED_WEAPON )
+			{
+				if ( utils.hasScriptVar( checkId, "trapmod.ranged_defense" ) )
+				{
+					int eff = utils.getIntScriptVar( checkId, "trapmod.ranged_defense" );
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Trap Ranged Mod = -"+eff);
+					fltDefenseModifier -= eff;
+				}
+			}
+			else
+			{
+				if ( utils.hasScriptVar( checkId, "trapmod.melee_defense" ) )
+				{
+					int eff = utils.getIntScriptVar( checkId, "trapmod.melee_defense" );
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Trap Melee Mod = -"+eff);
+					fltDefenseModifier -= eff;
+				}
+			}
+		}
+
+		// Check for a group squad leader bonus to these mods.
+		if ( isIdValid(checkId) && group.isGrouped(checkId) )
+		{
+			obj_id groupLeader = group.getLeader(checkId);
+			if ( intWeaponCategory == combat.RANGED_WEAPON )
+			{
+				int eff = getEnhancedSkillStatisticModifier( groupLeader, "group_ranged_defense" );
+				combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "SL Ranged Bonus = +"+eff);
+				fltDefenseModifier += eff;
+			}
+			else
+			{
+				int eff = getEnhancedSkillStatisticModifier( groupLeader, "group_melee_defense" );
+				combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "SL Melee Bonus = +"+eff);
+				fltDefenseModifier += eff;
+			}
+		}
+
+		combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "runHitEngine", "Final Defense Mod = "+fltDefenseModifier);
+		cbtDefenderData[intI].scriptMod = (int)fltDefenseModifier;
+		//LOG("combat_rolls", "attacker Skill mod is "+cbtAttackerData.weaponSkillMod);
+		////LOG("combat_spam","calculating hit");
+		////LOG("combat_spam","cbtAttackerData.id is"+cbtAttackerData.id);
+		////LOG("combat_spam","cbtDefenderData.id is "+cbtDefenderData[intI].id);
+		////LOG("combat_spam","CbtWeaponData.id is "+cbtWeaponData.id);
+		////LOG("combat_spam","defenderlocomotion is "+getLocomotion(cbtDefenderData[intI].id));
+		////LOG("combat_spam","defenderPosture is "+getPosture(cbtDefenderData[intI].id));
+		////LOG("combat_spam","attackerlocomotion is "+getLocomotion(cbtAttackerData.id));
+		////LOG("combat_spam","attakcerPosture is "+getPosture(cbtAttackerData.id));
+		////LOG("combat_spam", "mindamage is "+cbtWeaponData.minDamage);
+		////LOG("combat_spam", "maxdamage is "+cbtWeaponData.maxDamage);
+
+		cbtHitData[intI] = calculateHit(cbtAttackerData, cbtDefenderData[intI], cbtWeaponData);
+		////LOG("combat", "calculateHit damage for "+cbtDefenderData[intI].id+" damage is "+cbtHitData[intI].damage);
+		if(cbtAttackerData.id==cbtDefenderData[intI].id)
+		{
+
+			if(!boolAllowHitSelf)
+			{
+				cbtHitData[intI].success = false;
+			}
+		}
+		else
+		{
+			if (pvpCanAttack(cbtAttackerData.id, cbtDefenderData[intI].id))
+				pvpAttackPerformed(cbtAttackerData.id, cbtDefenderData[intI].id);
+		}
+
+		// now we change around our damage values based on weapons
+		obj_id objAttackerWeapon = cbtWeaponData.id;
+		obj_id objDefenderWeapon= getCurrentWeapon(cbtDefenderData[intI].id);
+
+		if(cbtHitData[intI].success)
+		{
+			/*
+			if(cbtHitData[intI].baseRoll>WOUND_ROLL_VALUE)
+			{
+				applyWound(cbtHitData[intI], cbtDefenderData[intI], cbtAttackerData);
+
+				depracated, we do this in doDamage
+
+
+			}
+			*/
+			// we check weapon types. if it's melee vs ranged we add a bonus
+			int intDefenderWeaponType = getWeaponType(objDefenderWeapon);
+			int intDefenderWeaponCategory =combat.getWeaponCategory(intDefenderWeaponType);
+
+			int intAttackerWeaponCategory = combat.getWeaponCategory(cbtWeaponData.weaponType);
+
+			////LOG("combat", "intAttackerWeaponCategory = "+intAttackerWeaponCategory);
+			////LOG("combat", "intDefenderWeaponCategory = "+intDefenderWeaponCategory);
+			if((intAttackerWeaponCategory!=combat.RANGED_WEAPON)&&(intDefenderWeaponCategory==combat.RANGED_WEAPON))
+			{
+				// we mod the damage up based on the weapon type
+
+				////LOG("combat", "raw damage is "+cbtHitData[intI].damage);
+				float fltDamageBonus = getDamageBonus(intDefenderWeaponType);
+				cbtHitData[intI].damage = (int)(cbtHitData[intI].damage * fltDamageBonus);
+				////LOG("combat", "modified damage is "+cbtHitData[intI].damage);
+			}
+			int intDefenderPosture = getPosture(cbtDefenderData[intI].id);
+			if(intDefenderPosture==POSTURE_KNOCKED_DOWN)
+			{
+				float fltDamage = cbtHitData[intI].damage;
+				fltDamage = fltDamage*KNOCKED_DOWN_DAMAGE_INCREASE;
+				cbtHitData[intI].damage = (int)fltDamage;
+
+			}
+
+
+		}
+
+
+
+
+
+		// we put our cansee management here. we only key off of the first target
+		if(intI==0) // only worry about the primary target
+		{
+			if(!(cbtHitData[intI].canSee))
+			{
+				//queueDelay(cbtAttackerData.id, 1.5f);
+
+				////LOG("combat", "LOS FAILURE");
+				if(!hasObjVar(cbtAttackerData.id, "combat.intLineOfSightFailed"))
+				{
+
+					int intLineOfSightFailed  = 1;
+					setObjVar(cbtAttackerData.id, "combat.intLineOfSightFailed", intLineOfSightFailed);
+					string_id strSpam = new string_id("cbt_spam", "los_fail");
+					sendSystemMessage(cbtAttackerData.id, 	strSpam);
+					strSpam = new string_id("cbt_spam", "los_recycle");
+
+					return null;
+
+
+				}
+				else
+				{
+
+					int intLineOfSightFailed = getIntObjVar(cbtAttackerData.id, "combat.intLineOfSightFailed");
+					intLineOfSightFailed = intLineOfSightFailed +1;
+
+					if(intLineOfSightFailed>=ALLOWED_LOS_FAILURES)
+					{
+						string_id strSpam = new string_id("cbt_spam", "target_lost");
+						sendSystemMessage(cbtAttackerData.id, strSpam);
+						removeObjVar(cbtAttackerData.id, "combat.intLineOfSightFailed");
+						clearQueue(cbtAttackerData.id);
+						setCombatTarget(cbtAttackerData.id, null);
+						return null;
+					}
+					else
+					{
+						setObjVar(cbtAttackerData.id, "combat.intLineOfSightFailed", intLineOfSightFailed);
+					}
+
+
+					string_id strSpam = new string_id("cbt_spam", "los_recycle");
+
+					return null;
+				}
+
+
+
+			}
+			else
+			{
+				if(hasObjVar(cbtAttackerData.id, "combat.intLineOfSightFailed"))
+				{
+
+					removeObjVar(cbtAttackerData.id, "combat.intLineOfSightFailed");
+				}
+
+
+
+			}
+		}
+
+
+
+		////LOG("combat_spam","calculated hit");
+		if(intState>0)
+		{
+			if(cbtDefenderData[intI].posture!=POSTURE_INCAPACITATED)
+			{
+
+				////LOG("combat_spam","intState is HUGE!");
+				cbtHitData[intI].damage = cbtHitData[intI].damage + (int)(cbtHitData[intI].damage * FEIGN_DEATH_DAMAGE_MODIFIER);
+				obj_id[] objEnemies = getWhoIsTargetingMe(cbtDefenderData[intI].id);
+				if(objEnemies!=null)
+				{
+					//LOG("combat_feign_spam", "ObjEnemies is not null");
+					int intJ = 0;
+					while(intJ<objEnemies.length)
+					{
+						//LOG("combat_feign_spam", "clearing "+objEnemies+" target");
+						if(isPlayer(objEnemies[intJ]))
+						{
+							setTarget(objEnemies[intJ], null); // clear target
+						}
+
+						queueClearCommandsFromGroup(objEnemies[intJ], ##"combat_general");
+						queueClearCommandsFromGroup(objEnemies[intJ], ##"combat_melee");
+						queueClearCommandsFromGroup(objEnemies[intJ], ##"combat_ranged");
+
+						intJ = intJ+1;
+
+
+					}
+
+				}
+
+			} // one shot
+			else
+			{
+				//LOG("combat_feign_spam", "objEnemies was null!");
+			}
+
+
+		}
+
+		obj_id objAttacker = cbtAttackerData.id;
+		////LOG("combat", "raw damage is {"+cbtHitData[intI].damage);
+		if(isPlayer(objAttacker))
+		{// PVP DAMAGE REDUCTION. pvp damage is handled on a different scale, so we reduce it here.
+			if(isPlayer(cbtDefenderData[intI].id))
+			{
+				float fltDamage = (float)cbtHitData[intI].damage;
+				if(fltDamage>MIN_PVP_DAMAGE)
+				{
+					fltDamage = fltDamage * PVP_DAMAGE_VALUE; // reduce damage.
+					if(fltDamage < MIN_PVP_DAMAGE)
+					{
+						fltDamage = MIN_PVP_DAMAGE + rand(1, 4);
+					}
+					cbtHitData[intI].damage = (int)fltDamage;
+					////LOG("combat", "reduced damage to "+fltDamage);
+				}
+
+			}
+		}
+
+
+
+		////LOG("combat_spam", "cbtDefenderData["+intI+"].id is "+cbtDefenderData[intI].id.toString());
+		////LOG("combat_spam", "cbtHitData["+intI+"].success is "+cbtHitData[intI].success);
+		////LOG("combat_spam", "cbtHitData["+intI+"].canSeeis "+cbtHitData[intI].canSee);
+		////LOG("combat_spam", "cbtHitData["+intI+"].finalRoll is "+cbtHitData[intI].finalRoll);
+		////LOG("combat_spam", "cbtHitData["+intI+"].baseRoll is "+cbtHitData[intI].baseRoll);
+		////LOG("combat_spam", "damage is "+cbtHitData[intI].damage);
+
+
+	}
+
+	return cbtHitData;
+
+}
+
+boolean didHit(hit_result[] cbtHitData)
+{
+
+	int intI = 0;
+
+	while(intI<cbtHitData.length)
+	{
+
+		if(cbtHitData[intI].success==true)
+		{
+			return true;
+
+		}
+
+		intI = intI+1;
+	}
+	return false;
+}
+
+
+
+void finalizeDamage(obj_id objAttacker, weapon_data cbtWeaponData, defender_data[] cbtDefenderData,hit_result[] cbtHitData, defender_results[] cbtDefenderResults, dictionary dctCombatInfo)
+{ // we might have to change tehse to take actual obj_id arrays.. unsure as of yet
+
+	obj_id[]  objDefenders = new obj_id[cbtDefenderData.length]; // for our docombataction things
+	int[] intResults = new int[cbtHitData.length];
+
+
+
+	for(int intI = 0; intI<cbtHitData.length; intI++)
+	{
+
+		if(cbtHitData[intI].success)
+		{
+
+			float fltDamageMultiplier = getFloatObjVar(cbtDefenderData[intI].id, "fltDamageModifier");
+			if(fltDamageMultiplier>0)
+			{
+				////LOG("combat", "damage modifier being used");
+				cbtHitData[intI].damage = (int)(cbtHitData[intI].damage * fltDamageMultiplier);
+			}
+
+
+			// A HIT
+			////LOG("combat", "cbtHitData[intI].damage is "+cbtHitData[intI].damage);
+			////LOG("combat", "objAttacker is "+objAttacker);
+			////LOG("combat", "cbtDEfenderData[intI].id is "+cbtDefenderData[intI].id);
+			////LOG("combat", "weapon id is "+cbtWeaponData.id);
+			// TOUGHNESS CALCULATIONS GO HERE!
+			int intWeaponCategory = combat.getWeaponCategory(cbtWeaponData.weaponType);
+			if ((intWeaponCategory != combat.RANGED_WEAPON)||(isJedi(cbtDefenderData[intI].id)))
+			{
+				// We need to check toughness values for everyone else
+				obj_id objDefenderWeapon = getCurrentWeapon(cbtDefenderData[intI].id);
+				int intWeaponType = getWeaponType(objDefenderWeapon);
+				string strModName = getWeaponStringType(intWeaponType);
+				strModName = strModName +"_toughness";
+				int intMod = getSkillStatisticModifier(cbtDefenderData[intI].id, strModName);
+				float fltModifier =intMod;
+				if(fltModifier>95)
+				{
+					fltModifier = 95;
+
+				}
+				fltModifier = fltModifier /100;
+
+				////LOG("combat", "intMod is "+intMod);
+				////LOG("combat", "strMod is "+strModName);
+				////LOG("combat", "fltModifier is "+fltModifier);
+				////LOG("combat", "CbtHitData[intI].damage is "+cbtHitData[intI].damage);
+				cbtHitData[intI].damage = cbtHitData[intI].damage - (int)(cbtHitData[intI].damage * fltModifier);
+				////LOG("combat", "CbtHitData[intI].damage  modified is "+cbtHitData[intI].damage);
+			}
+
+
+			if(dctCombatInfo==null)
+			{
+				////LOG("combat", "Doing daamge of value "+cbtHitData[intI].damage+" to "+cbtDefenderData[intI].id);
+				doWrappedDamage(objAttacker, cbtDefenderData[intI].id, cbtWeaponData.id, cbtHitData[intI], dctCombatInfo);
+				dot.applyCombatDots(objAttacker, cbtDefenderData[intI].id, cbtHitData[intI], cbtWeaponData, 1.0f);
+			}
+			else
+			{
+				// more current combat actions pass in dctCombatInfo. This is used to overload the body/leg/head hit stuff from datatables
+				// it's much simpler to add modify.. eventually old combat stuff will be updated to this spec.
+				int intHitHead	= dctCombatInfo.getInt("intHitHead"); // whether we do direct damage to the head
+				int intHitBody	= dctCombatInfo.getInt("intHitBody"); // same as above for body
+				int intHitLegs	= dctCombatInfo.getInt("intHitLegs"); // same as above for legs
+				float fltBleedingValue = dctCombatInfo.getFloat("fltBleedingValue"); // % of damage to apply in bleeding
+
+				if((intHitHead==0)&&(intHitBody==0)&&(intHitLegs==0))
+				{
+					// normal damage stuff.
+					////LOG("combat", "Doing daamge of value "+cbtHitData[intI].damage+" to "+cbtDefenderData[intI].id);
+					doWrappedDamage(objAttacker, cbtDefenderData[intI].id, cbtWeaponData.id, cbtHitData[intI], dctCombatInfo);
+					dot.applyCombatDots(objAttacker, cbtDefenderData[intI].id, cbtHitData[intI], cbtWeaponData, 1.0f);
+				}
+				else
+				{
+					int intRawDamage = cbtHitData[intI].damage; // store it so we can do neat calcs on it.
+					int intLocationTotals = intHitHead+ intHitBody + intHitLegs; // for calcs
+
+					// we need to make our hit location array
+
+					if(intHitHead>0)
+					{
+						int[] intHitLocations= {
+									HIT_LOCATION_HEAD
+									};
+						cbtHitData[intI].hitLocation = intHitLocations[rand(0, intHitLocations.length-1)];
+						cbtHitData[intI].damage = intRawDamage / intLocationTotals;
+						doWrappedDamage(objAttacker, cbtDefenderData[intI].id, cbtWeaponData.id, cbtHitData[intI], dctCombatInfo);
+					}
+					if(intHitLegs>0)
+					{
+						int[] intHitLocations= {
+									HIT_LOCATION_R_LEG,
+									HIT_LOCATION_L_LEG
+									};
+						cbtHitData[intI].hitLocation = intHitLocations[rand(0, intHitLocations.length-1)];
+						cbtHitData[intI].damage = intRawDamage / intLocationTotals;
+						doWrappedDamage(objAttacker, cbtDefenderData[intI].id, cbtWeaponData.id, cbtHitData[intI], dctCombatInfo);
+
+					}
+					if(intHitBody>0)
+					{
+						int[] intHitLocations= {
+									HIT_LOCATION_L_ARM,
+									HIT_LOCATION_R_ARM,
+									HIT_LOCATION_BODY
+									};
+						cbtHitData[intI].hitLocation = intHitLocations[rand(0, intHitLocations.length-1)];
+						cbtHitData[intI].damage = intRawDamage / intLocationTotals;
+						doWrappedDamage(objAttacker, cbtDefenderData[intI].id, cbtWeaponData.id, cbtHitData[intI], dctCombatInfo);
+					}
+					cbtHitData[intI].damage = intRawDamage; // for combat spam
+				}
+				if(fltBleedingValue>0)
+				{	// we need to apply bleeding effects
+
+					int intBleedingDuration = dctCombatInfo.getInt("intBleedingDuration");
+					int intBleedMind = dctCombatInfo.getInt("intBleedMind");
+					int intBleedHealth = dctCombatInfo.getInt("intBleedHealth");
+					int intBleedAction = dctCombatInfo.getInt("intBleedAction");
+					int intBleedTotals = intBleedMind + intBleedAction + intBleedHealth;
+					// bleeding damage is raw damage * fltBleedingValue / number of stats
+					float fltRawDamage = (float)cbtHitData[intI].damage;
+					fltRawDamage = fltRawDamage * fltBleedingValue;
+					fltRawDamage = fltRawDamage / intBleedTotals;
+					int intBleedDamage = (int)fltRawDamage;
+
+					if(intBleedMind>0)
+					{
+						// mind bleeding
+						dot.applyBleedingEffect(cbtDefenderData[0].id, "bleedingMindSpecial"+objAttacker,MIND,intBleedDamage,intBleedingDuration);
+
+					}
+					if(intBleedHealth>0)
+					{
+						dot.applyBleedingEffect(cbtDefenderData[0].id, "bleedingHealthSpecial"+objAttacker,HEALTH,intBleedDamage,intBleedingDuration);
+
+					}
+					if(intBleedAction>0)
+					{
+						dot.applyBleedingEffect(cbtDefenderData[0].id, "bleedingActionSpecial"+objAttacker,ACTION,intBleedDamage,intBleedingDuration);
+					}
+				}
+
+
+
+			}
+
+		}
+		else
+		{
+			////LOG("combat", "A miss");
+		}
+		objDefenders[intI] = cbtDefenderData[intI].id;
+		intResults[intI] = cbtDefenderResults[intI].result;
+
+
+	}
+	doCombatFlyText(cbtDefenderData,objAttacker, cbtHitData, cbtDefenderResults);
+	// call onDEfenderCombatAction on everyone involved
+	callDefenderCombatAction(objDefenders, intResults, objAttacker, cbtWeaponData.id);
+
+	return;
+}
+
+void doWrappedDamage( obj_id objAttacker, obj_id objDefender, obj_id objWeapon, hit_result cbtHitData, dictionary dctCombatInfo )
+{
+	// Mitigate the damage with any special effects on the defender.  12/17/03
+	if ( utils.hasScriptVar( objDefender, "food.mitigate_damage.eff" ) )
+	{
+		// Possible food buff mitigation.
+		int eff = utils.getIntScriptVar( objDefender, "food.mitigate_damage.eff" );
+		int dur = utils.getIntScriptVar( objDefender, "food.mitigate_damage.dur" );
+		dur--; // Decrement the count for each hit mitigated.
+		if ( dur <= 0 )
+		{
+			clearBuffIcon( objDefender, "food.mitigate_damage" );
+			utils.removeScriptVarTree( objDefender, "food.mitigate_damage" );
+		}
+		else
+			utils.setScriptVar( objDefender, "food.mitigate_damage.dur", dur );
+		int mitigated = (int) (cbtHitData.damage * (eff/100.f));
+		cbtHitData.damage -= mitigated;
+		if ( cbtHitData.damage < 0 )
+			cbtHitData.damage = 0;
+
+	}
+
+	// This is a wrapper for doDamage. If we overload weapon, we use the damage function and not doDamage.
+	if ( dctCombatInfo == null )
+	{
+		doDamage( objAttacker, objDefender, objWeapon, cbtHitData );
+		return;
+	}
+	else
+	{
+		int intOverloadWeapon = dctCombatInfo.getInt("intOverloadWeapon");
+		if ( intOverloadWeapon > 0 )
+		{
+			int intDamageType = dctCombatInfo.getInt("intDamageType");
+			int intDamageRating = dctCombatInfo.getInt("intDamageRating");
+
+			if ( (intDamageType>-1)||(intDamageRating>-1) )
+			{
+				// OVERLOAD! We use the damage function isntead of doDamage. not ideal, but it mens we can change
+				// damage type and armor rating
+				if ( intDamageType < 0 )
+					intDamageType = 0;
+				if ( intDamageRating < 0 )
+					intDamageRating = 0;
+
+				////LOG("combat", "Doing damage in special damage call");
+				////LOG("combat", "objDefender is "+objDefender);
+				////LOG("combat", "intDamageType is "+intDamageType);
+				////LOG("combat", "intDamageRating is "+intDamageRating);
+				////LOG("combat", "location is "+cbtHitData.hitLocation);
+				////LOG("combat", "damage is "+cbtHitData.damage);
+				damage( objDefender, intDamageType, cbtHitData.hitLocation, cbtHitData.damage );
+				xp.updateCombatXpList( objDefender, objAttacker, "jedi_general", cbtHitData.damage );
+				return;
+			}
+			else
+			{
+				doDamage( objAttacker, objDefender, objWeapon, cbtHitData );
+				return;
+			}
+		}
+		else
+		{
+			doDamage( objAttacker, objDefender, objWeapon, cbtHitData );
+			return;
+		}
+	}
+}
+
+
+
+void finalizeMineDamage(obj_id objAttacker, weapon_data cbtWeaponData, defender_data[] cbtDefenderData,hit_result[] cbtHitData, defender_results[] cbtDefenderResults)
+{
+
+
+	obj_id[]  objDefenders = new obj_id[cbtDefenderData.length]; // for our docombataction things
+	int[] intResults = new int[cbtHitData.length];
+
+	int intI = 0;
+
+	while(intI<cbtDefenderData.length)
+	{
+
+		if(cbtHitData[intI].success)
+		{
+			// A HIT
+			if ( damage(cbtDefenderData[intI].id,  cbtWeaponData.damageType, cbtHitData[intI].hitLocation,  cbtHitData[intI].damage) )
+			{
+				//debugSpeakMsg(objAttacker, "hit target: " + cbtDefenderData[intI].id + " " + getName(cbtDefenderData[intI].id) + " for " + cbtHitData[intI].damage + " pts");
+			}
+			else
+			{
+				//debugSpeakMsg(objAttacker, "!damage: ID:" + cbtDefenderData[intI].id + " DT:" + cbtWeaponData.damageType + " DAM:" + cbtHitData[intI].damage + " HitLoc:"+cbtHitData[intI].hitLocation);
+			}
+		}
+		else
+		{
+			////LOG("combat", "A miss");
+			//debugSpeakMsg(objAttacker, "MISSED target: " + cbtDefenderData[intI].id + " " + getName(cbtDefenderData[intI].id));
+		}
+		objDefenders[intI] = cbtDefenderData[intI].id;
+		intResults[intI] = cbtDefenderResults[intI].result;
+		intI = intI+1;
+
+	}
+	return;
+}
+
+color getHitColor(int intHitLocation)
+{
+	switch (intHitLocation)
+	{
+		case HIT_LOCATION_BODY: return colors.RED;
+		case HIT_LOCATION_HEAD :return colors.BLUE;
+		case HIT_LOCATION_R_ARM : return colors.RED;
+		case HIT_LOCATION_L_ARM : return colors.RED;
+		case HIT_LOCATION_R_LEG : return colors.GREEN;
+		case HIT_LOCATION_L_LEG : return colors.GREEN;
+	}
+	return colors.WHITE;
+}
+void doCombatFlyText(defender_data[] cbtDefenderData,obj_id objAttacker, hit_result[] cbtHitData,defender_results[] cbtDefenderResults)
+{
+	for(int intI = 0; intI< cbtHitData.length; intI++)
+	{
+		string_id strSpam = null;
+		color colFlyText=colors.WHITE;
+		if(cbtHitData[intI].success)
+		{
+
+
+			string strId = getHitSpam(cbtHitData[intI]);
+			strSpam = new string_id("combat_effects", "hit_"+strId);
+			colFlyText = getHitColor(cbtHitData[intI].hitLocation);
+
+
+
+
+
+
+
+		}
+		else
+		{
+			if(cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+			{
+
+				strSpam = new string_id("combat_effects", "miss");
+			}
+			// MISS
+		}
+		if(strSpam!=null)
+		{
+
+			if(isMob(cbtDefenderData[intI].id)&&(!vehicle.isDriveableVehicle(cbtDefenderData[intI].id)))
+			{
+				showFlyTextPrivate(cbtDefenderData[intI].id, objAttacker, strSpam, 1.0f, colFlyText);
+			}
+		}
+	}
+
+}
+string getHitSpam(hit_result cbtHitData)
+{
+	int intHitLocation = cbtHitData.hitLocation;
+	string strId = "";
+	switch (intHitLocation)
+	{
+		case HIT_LOCATION_BODY: return  "body";
+		case HIT_LOCATION_HEAD :return "head";
+		case HIT_LOCATION_R_ARM : return "rarm";
+		case HIT_LOCATION_L_ARM : return "larm";
+		case HIT_LOCATION_R_LEG : return "rleg";
+		case HIT_LOCATION_L_LEG : return "lleg";
+	}
+	return strId;
+
+}
+
+boolean checkForFumbles(hit_result[] hitData)
+{
+
+	return false;
+	/*
+	// all data here is passed by reference, so be careful
+
+	int intI = 0;
+
+	while(intI<hitData.length)
+	{
+		if(hitData[intI].baseRoll<FUMBLE_VALUE)
+		{
+			////LOG("combat_spam","baseRoll for fumbles was "+hitData[intI].baseRoll);
+			//FUMBLE!
+			return true;
+
+		}
+
+		intI = intI+1;
+
+	}
+	return false; // all data is modified if needed
+*/
+}
+
+
+void setDefenderCombatResults(weapon_data cbtWeaponData, attacker_data cbtAttackerData, attacker_results cbtAttackerResults,hit_result[] cbtHitData, defender_data[] cbtDefenderData, defender_results[] cbtDefenderResults, string[] strBlockMods,int intBlockMod,string[] strEvadeMods, int intEvadeMod, string[] strCounterAttackMods, int intCounterAttackMod, boolean boolDefendable)
+{
+
+
+	// pass by reference
+
+	int intDefenderCombatState;
+	int intI = 0;
+
+	int intAttackerMod;
+	string strAttackerWeaponName = getWeaponStringType(cbtWeaponData.weaponType);
+
+
+	string strAttackerMod = "";
+	string strDefenderMod = "";
+	//LOG("combat_spam", "checking cbtdefenderdata length");
+
+	while(intI<cbtDefenderData.length)
+	{
+
+		//LOG("combat_spam", "checking cbtdefenderdata success");
+		if(cbtHitData[intI].success)
+		{
+			if(boolDefendable)
+			{
+
+				obj_id objDefenderWeapon = getCurrentWeapon(cbtDefenderData[intI].id);
+				int intDefenderWeaponType = getWeaponType(objDefenderWeapon);
+
+				string strDefenderWeaponName = getWeaponStringType(intDefenderWeaponType);
+				string[] strSkillMods = null;
+				int intEventMod = 0;
+				int intDefenderMod = 0;
+				//LOG("combat_spam", "cbtDEfenderData[intI].id is "+cbtDefenderData[intI].id);
+				
+
+				
+				
+				//LOG("combat_spam","intDefenderStates is "+intDefenderStates);
+
+				int intCombatAttitude = getCombatAttitude(cbtDefenderData[intI].id, intDefenderWeaponType);
+				//LOG("combat", "combat Attitude is "+intCombatAttitude);
+
+				
+				if(intCombatAttitude>0) // we're not intimidated or berserking
+				{
+					//LOG("combat_spam","not intimidated or berserking, so we're checking for counters");
+					//switch case goes here
+
+					//LOG("combat_spam","defender combat attitude is "+intCombatAttitude);
+					switch(intCombatAttitude)
+					{
+						case COMBAT_ATTITUDE_DODGE:
+									strSkillMods = strEvadeMods;
+									intEventMod = intEvadeMod;
+									intDefenderMod = EVASIVE_EVADE_MOD;
+									strAttackerMod = "anti_dodge";
+									strDefenderMod = "dodge"; // no damage
+									break;
+						case COMBAT_ATTITUDE_BLOCK:
+									strSkillMods = strBlockMods;
+									intEventMod = intBlockMod;
+									intDefenderMod = 0;
+									strAttackerMod = "anti_block";
+									strDefenderMod = "block"; // half damage
+									break;
+						case COMBAT_ATTITUDE_COUNTERATTACK:
+									strSkillMods = strCounterAttackMods;
+									intEventMod = intCounterAttackMod;
+									intDefenderMod = AGGRESSIVE_COUNTERATTACK_MOD;
+									strAttackerMod = "anti_counterattack";
+									strDefenderMod = "counterattack"; // attack
+									break;
+						case COMBAT_ATTITUDE_UNARMED:
+									int intRoll = rand(1, 3);
+									if(intRoll==1) // dodge
+									{
+										strSkillMods = strEvadeMods;
+										intEventMod = intEvadeMod;
+										intDefenderMod = EVASIVE_EVADE_MOD;
+										strAttackerMod = "anti_dodge";
+										strDefenderMod = "private_unarmed_passive_defense";
+										intCombatAttitude = COMBAT_ATTITUDE_DODGE;
+										break;
+									}
+									if(intRoll==2) // block
+									{
+
+										strSkillMods = strBlockMods;
+										intEventMod = intBlockMod;
+										intDefenderMod = 0;
+										strAttackerMod = "anti_block";
+										strDefenderMod = "private_unarmed_passive_defense";
+										intCombatAttitude = COMBAT_ATTITUDE_BLOCK;
+
+									}
+									if(intRoll==3) // counterattack
+									{
+										strSkillMods = strCounterAttackMods;
+										intEventMod = intCounterAttackMod;
+										intDefenderMod = AGGRESSIVE_COUNTERATTACK_MOD;
+										strAttackerMod = "anti_counterattack";
+										strDefenderMod = "private_unarmed_passive_defense";
+										intCombatAttitude = COMBAT_ATTITUDE_COUNTERATTACK;
+
+									}
+									break;
+
+
+
+					}
+					//LOG("combat_spam","intEventMod = "+intEventMod);
+					//LOG("combat_spam","intDefenderMod = "+intDefenderMod);
+
+
+					int intPostureDefenseMod = 0;
+					switch (cbtDefenderData[intI].posture)
+					{
+						// POTENTIALLY DEPRACATED
+						//case POSTURE_UPRIGHT: intPostureDefenseMod = POSTURE_UPRIGHT_ACTIVE_DEFENSE_MOD;
+
+						//case POSTURE_CROUCHED: intPostureDefenseMod = POSTURE_CROUCHED_ACTIVE_DEFENSE_MOD;
+
+						//case POSTURE_PRONE: intPostureDefenseMod = PRONE_ACTIVE_DEFENSE_MOD;
+
+					}
+					//LOG("combat_spam","intPostureMod = "+intPostureDefenseMod);
+
+					// we know we don't have any fumbles here, so we instead check for the success of the given opposite move
+
+					int intAttackerRoll = getSkillStatisticModifier(cbtAttackerData.id, strAttackerMod);
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "(deprecated)Base Attack Roll = "+intAttackerRoll);
+
+					int intDefenderRoll = getSkillStatisticModifier(cbtDefenderData[intI].id, strDefenderMod);
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Base Defense Roll = "+intDefenderRoll);
+					//LOG("combat", "strDefenderMod is "+strDefenderMod);
+					// Cap this value so it doesn't go out of control
+					if (intDefenderRoll > DEFENDER_MOD_MAX)
+						intDefenderRoll = DEFENDER_MOD_MAX;
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Modified Defense = "+intDefenderRoll);
+
+					//LOG("combat_spam","intAttackerRoll is "+intAttackerRoll);
+					//int intDefenderRoll =(int) getSkillModifiers(cbtDefenderData[intI].id,"", strSkillMods); DEPRACATED
+					//LOG("combat_spam","intDefenderRoll take 1 is "+intDefenderRoll);
+					intDefenderRoll = intDefenderRoll+ intPostureDefenseMod; // Penalty/bonus based on posture;
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Posture Defense Mod = "+intPostureDefenseMod);
+					//LOG("combat_spam","intDefenderRoll take 2 is "+intDefenderRoll);
+
+					int defenseRoll = rand(COMBAT_ROLL_MIN, COMBAT_ROLL_MAX);
+					intDefenderRoll += defenseRoll;
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Rand Defense Roll = "+defenseRoll);
+					//LOG("combat_spam","intDefenderRoll  Final is "+intDefenderRoll);
+
+
+					intAttackerRoll = cbtHitData[intI].finalRoll + intEventMod;
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "hitData Attack Roll = "+cbtHitData[intI].finalRoll);
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Event Modifier = "+intEventMod);
+
+
+					//LOG("combat_spam","intAttackerRoll is "+intAttackerRoll);
+
+					// center of being stuff goes here.
+					string strWeaponType = getWeaponStringType(getWeaponType(getCurrentWeapon(cbtDefenderData[intI].id))); // HA! NESTED!
+
+					int intBonus = utils.getIntScriptVar(cbtDefenderData[intI].id, "COB_"+strWeaponType); // Center of being bonus
+					//LOG("combat", "intBonus is "+intBonus);
+					intDefenderRoll = intDefenderRoll + intBonus;
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "COB Modifier = "+intBonus);
+					//LOG("combat", "post bonus defender roll is "+intDefenderRoll);
+
+
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Final Defense Roll = "+intDefenderRoll);
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Final Attack Roll = "+intAttackerRoll);
+
+					if(intDefenderRoll>=intAttackerRoll)
+					{
+
+						//SPECIAL EVENT!;
+						// not using case since this is liable to get hairy;
+
+						if(intCombatAttitude==COMBAT_ATTITUDE_DODGE)
+						{
+							//LOG("combat_spam","COMBAT_RESULT_EVADE");
+							cbtDefenderResults[intI].result = COMBAT_RESULT_EVADE;
+							cbtHitData[intI].success = false;
+							string_id strSpam = new string_id("combat_effects", "dodge");
+
+							showFlyTextPrivate(cbtDefenderData[intI].id, cbtAttackerData.id, strSpam, 1.0f, colors.WHITE);
+							combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Successful Dodge");
+
+							// evade
+
+						}
+						else if(intCombatAttitude==COMBAT_ATTITUDE_BLOCK)
+						{
+							//LOG("combat_spam","COMBAT_RESULT_BLOCK");
+							cbtDefenderResults[intI].result = COMBAT_RESULT_BLOCK;
+							cbtHitData[intI].damage = cbtHitData[intI].damage/2; // 50% damage reduction! FOOM
+							string_id strSpam = new string_id("combat_effects", "block");
+							showFlyTextPrivate(cbtDefenderData[intI].id, cbtAttackerData.id, strSpam, 1.0f, colors.WHITE);
+							combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Successful Block");
+							// BLOCK REDUCES DAMAGE
+
+							//cbtHitData[intI].success = false;
+
+							// block
+
+						}
+						else if (intCombatAttitude==COMBAT_ATTITUDE_COUNTERATTACK)
+						{
+							//LOG("combat_spam","COMBAT_RESULT_COUNTERATTACK");
+							doCounterAttack(cbtAttackerData.id, cbtDefenderData[intI].id);
+							cbtDefenderResults[intI].result = COMBAT_RESULT_COUNTER;
+							string_id strSpam = new string_id("combat_effects", "counterattack");
+							showFlyTextPrivate(cbtDefenderData[intI].id, cbtAttackerData.id, strSpam, 1.0f, colors.WHITE);
+							combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Successful Counterattack");
+
+
+							cbtHitData[intI].success = false;
+							// COUNTERATTACK! FOOM
+
+
+						}
+						else
+						{
+							// do nothing
+
+							//LOG("combat_spam","YOU GOT NOTHING ON ME COPPER! NO SPECIAL REACTION");
+							cbtDefenderResults[intI].result = COMBAT_RESULT_HIT;
+							combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Attack Hit");
+
+
+						}
+
+
+					}
+					else
+					{
+
+						cbtDefenderResults[intI].result = COMBAT_RESULT_HIT;
+						//LOG("combat_spam","Setting hit result because counters failed!");
+						combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Attack Hit");
+
+					}
+				}
+				else
+				{
+					// it's a plain ole hit
+					cbtDefenderResults[intI].result = COMBAT_RESULT_HIT;
+					//LOG("combat_spam","Setting hit result because no block/counter/evade");
+					combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Attack Hit");
+				}
+			}
+			else
+			{
+				cbtDefenderResults[intI].result = COMBAT_RESULT_HIT;  // plain ole hit for a non-defendable action
+				//LOG("combat_spam","Setting hit result because hitadata says to");
+				combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Attack Hit");
+
+
+
+			}
+		} // end hit result
+		else
+		{
+
+			cbtDefenderResults[intI].result = COMBAT_RESULT_MISS;
+			//LOG("combat_spam","Setting miss result because hitadata says to");
+			combatLog(cbtAttackerData.id, cbtDefenderData[intI].id, "setDefenderCombatResults", "Attack Missed");
+		}
+
+		intBlockMod = getSkillStatisticModifier(cbtDefenderData[intI].id, "saber_block");
+		if(intBlockMod>0)
+		{
+
+			LOG("jedi", "Hasjedi block c0mmand");
+			obj_id objDefenderWeapon = getCurrentWeapon(cbtDefenderData[intI].id);
+			int intWeaponType = getWeaponType(objDefenderWeapon);
+			LOG("jedi", "weapontType is "+intWeaponType);
+			if(jedi.isLightsaber(intWeaponType))
+			{
+				LOG("jedi", "it's a lightsaber");
+				// BLOCK!
+				int intWeaponCategory = combat.getWeaponCategory(getWeaponType(cbtWeaponData.id));
+				if(intWeaponCategory == combat.RANGED_WEAPON)
+				{
+
+					// is it a ranged weapon doing the attack? if so..
+
+					int intRoll = rand(0, 100);
+
+					if(intRoll<intBlockMod)
+					{
+						cbtDefenderResults[intI].result = COMBAT_RESULT_LIGHTSABER_BLOCK;
+						cbtHitData[intI].success = false; // MISS
+
+					}
+				}
+			}
+
+		}
+// END HACK
+		intI = intI+1;
+	}
+
+
+
+}
+
+
+int getCombatAttitude(obj_id objPlayer, int intWeaponType)
+{
+	//since vehicles are so hacktacular...
+	//lets just add one more hack to bypass the fact that creatures
+	//have default weapons - PS: Dan told me to do this
+	if ( vehicle.isVehicle(objPlayer) )
+		return -1;
+
+	// keyed off of weapon type!
+
+	// carbine - aggressive
+	// pistol - evasive
+	// rifle - block
+	// plus the other 4, which are whatever
+
+	switch(intWeaponType)
+	{
+		case WEAPON_TYPE_RIFLE : return COMBAT_ATTITUDE_BLOCK;
+		case WEAPON_TYPE_LIGHT_RIFLE : return COMBAT_ATTITUDE_COUNTERATTACK;
+		case WEAPON_TYPE_PISTOL : return COMBAT_ATTITUDE_DODGE;
+		case WEAPON_TYPE_HEAVY : return COMBAT_ATTITUDE_NONE;
+		case WEAPON_TYPE_1HAND_MELEE : return COMBAT_ATTITUDE_DODGE;
+		case WEAPON_TYPE_2HAND_MELEE: return COMBAT_ATTITUDE_COUNTERATTACK;
+		case WEAPON_TYPE_UNARMED: return COMBAT_ATTITUDE_UNARMED;
+		case WEAPON_TYPE_POLEARM: return COMBAT_ATTITUDE_BLOCK;
+		case WEAPON_TYPE_THROWN: return COMBAT_ATTITUDE_NONE;
+		case WEAPON_TYPE_WT_1HAND_LIGHTSABER: return COMBAT_ATTITUDE_NONE;
+		case WEAPON_TYPE_WT_2HAND_LIGHTSABER: return COMBAT_ATTITUDE_NONE;
+		case WEAPON_TYPE_WT_POLEARM_LIGHTSABER: return COMBAT_ATTITUDE_NONE;
+	}
+	return COMBAT_ATTITUDE_NONE;
+}
+
+
+
+
+void applyPostures(attacker_data cbtAttackerData, attacker_results cbtAttackerResults, hit_result[] cbtHitData, defender_data[] cbtDefenderData, defender_results[] cbtDefenderResults, int intAttackerEndPosture, int intDefenderEndPosture, weapon_data cbtWeaponData)
+{
+// PASS BY REFERENCE! CAUTION!
+	int intState = 0;
+
+	////LOG("combat_spam","cbtDefenderResults.length is "+cbtDefenderResults.length);
+	////LOG("combat_spam","cbtHitData.length is "+cbtHitData.length);
+	////LOG("combat_spam","cbtDefenderData.length is "+cbtDefenderData.length);
+
+	if (intDefenderEndPosture!=POSTURE_NONE)
+	{
+		for (int intI = 0; intI < cbtDefenderResults.length; intI++)
+		{
+			
+
+			////LOG("combat_spam","intI is" +intI);
+			// assign id's for results
+			// assign end postures
+			// ignore results since they're already set
+			// we either apply directly, or we do something weird.
+			if(cbtHitData[intI].success)
+			{
+				if(intDefenderEndPosture==POSTURE_DOWN)
+				{
+					if(canChangeTargetPosture(cbtAttackerData.id, cbtDefenderData[intI].id, intDefenderEndPosture))
+					{
+
+						if(!isPlayer(cbtDefenderData[intI].id))
+						{
+							string strXPType = xp.getWeaponXpType(cbtWeaponData.weaponType);
+							xp.updateCombatXpList(cbtDefenderData[intI].id, cbtAttackerData.id, strXPType, 100);
+						}
+						int intNewPosture = getLowerPosture(cbtDefenderData[intI].posture);
+						cbtDefenderResults[intI].endPosture = intNewPosture;
+						if(cbtDefenderData[intI].posture!=intNewPosture)
+						{
+							//queueDelay(cbtDefenderData[intI].id, POSTURE_CHANGE_DELAY);
+							//0, 1, 2 = stand/kneel/prone
+							string_id strSpam = new string_id("cbt_spam", "force_posture_change_"+intNewPosture);
+							sendSystemMessage(cbtDefenderData[intI].id, strSpam);
+						}
+					}
+					////LOG("combat_spam","defender["+intI+"] end posture is "+cbtDefenderResults[intI].endPosture);
+
+				}
+				else if(intDefenderEndPosture==POSTURE_UP)
+				{
+
+					if(canChangeTargetPosture(cbtAttackerData.id, cbtDefenderData[intI].id, intDefenderEndPosture))
+					{
+
+
+						if(!isPlayer(cbtDefenderData[intI].id))
+						{
+							string strXPType = xp.getWeaponXpType(cbtWeaponData.weaponType);
+							xp.updateCombatXpList(cbtDefenderData[intI].id, cbtAttackerData.id, strXPType, 100);
+						}
+
+						int intNewPosture = getHigherPosture(cbtDefenderData[intI].posture);
+						cbtDefenderResults[intI].endPosture = intNewPosture;
+						if(cbtDefenderData[intI].posture!=intNewPosture)
+						{
+
+							//0, 1, 2 = stand/kneel/prone
+							//queueDelay(cbtDefenderData[intI].id, POSTURE_CHANGE_DELAY);
+							string_id strSpam = new string_id("cbt_spam", "force_posture_change_"+intNewPosture);
+							sendSystemMessage(cbtDefenderData[intI].id, strSpam);
+						}
+					}
+
+
+					////LOG("combat_spam","defender["+intI+"] end posture is "+cbtDefenderResults[intI].endPosture);
+				}
+				else if(intDefenderEndPosture==POSTURE_KNOCKED_DOWN)
+				{
+
+					if(canChangeTargetPosture(cbtAttackerData.id, cbtDefenderData[intI].id, intDefenderEndPosture))
+					{
+						if(!isPlayer(cbtDefenderData[intI].id))
+						{
+							string strXPType = xp.getWeaponXpType(cbtWeaponData.weaponType);
+							xp.updateCombatXpList(cbtDefenderData[intI].id, cbtAttackerData.id, strXPType, 150);
+						}
+
+
+						//queueDelay(cbtDefenderData[intI].id, POSTURE_KNOCKED_DOWN_DELAY);
+						cbtDefenderResults[intI].endPosture = intDefenderEndPosture;
+						////LOG("combat", "setPosture to "+intDefenderEndPosture);
+						string_id strSpam = new string_id("cbt_spam", "posture_knocked_down");
+						sendSystemMessage(cbtDefenderData[intI].id, strSpam);
+					}
+
+
+
+				}
+				else
+				{
+					cbtDefenderResults[intI].endPosture = cbtDefenderData[intI].posture;
+				}
+
+				if(intState>0)
+				{
+					cbtDefenderResults[intI].endPosture = POSTURE_INCAPACITATED;
+					//setState(cbtDefenderResults[intI].id, STATE_FEIGN_DEATH, false);
+				}
+
+			}
+			else
+			{
+				cbtDefenderResults[intI].endPosture = cbtDefenderData[intI].posture; // no change
+
+			}
+
+			cbtDefenderResults[intI].id = cbtDefenderData[intI].id;
+
+		}
+		////LOG("combat_spam","Done with posture sets");
+	}
+	else
+	{
+		for (int intI = 0; intI < cbtHitData.length; intI++)
+		{
+			
+			if(intState>0)
+			{
+				cbtDefenderResults[intI].endPosture = POSTURE_INCAPACITATED;
+				//setState(cbtDefenderResults[intI].id, STATE_FEIGN_DEATH, false);
+			}
+			else
+			{
+
+				cbtDefenderResults[intI].endPosture = cbtDefenderData[intI].posture;
+				////LOG("combat_spam","defenderResults endPosture at index ["+intI+"] is "+cbtDefenderResults[intI].endPosture);
+			}
+
+			cbtDefenderResults[intI].id = cbtDefenderData[intI].id;
+			////LOG("combat_spam","defenderResults id at index ["+intI+"] is "+cbtDefenderResults[intI].id.toString());
+
+		}
+
+	}
+
+	////LOG("combat_spam","setting attacker postures");
+	if (intAttackerEndPosture!=POSTURE_NONE)
+	{
+
+			if(intAttackerEndPosture==POSTURE_DOWN)
+			{
+				int intNewPosture = getLowerPosture(cbtAttackerData.posture);
+				cbtAttackerResults.endPosture = intNewPosture;
+
+				////LOG("combat_spam","attacker end posture is "+cbtAttackerResults.endPosture);
+			}
+			else if(intAttackerEndPosture==POSTURE_UP)
+			{
+				int intNewPosture = getHigherPosture(cbtAttackerData.posture);
+				cbtAttackerResults.endPosture = intNewPosture;
+
+				////LOG("combat_spam","attacker end posture is "+cbtAttackerResults.endPosture);
+			}
+			else
+			{
+				cbtAttackerResults.endPosture = intAttackerEndPosture;
+				////LOG("combat_spam","attacker end posture is "+cbtAttackerResults.endPosture);
+			}
+
+
+
+			cbtAttackerResults.id = cbtAttackerData.id;
+
+			////LOG("combat_spam","attacker end posture is "+cbtAttackerResults.endPosture);
+	}
+	else
+	{
+		//LOG("posture_spam", "Attacker Posture gotten from combat data is "+cbtAttackerData.posture);
+		cbtAttackerResults.endPosture = cbtAttackerData.posture;
+		cbtAttackerResults.id = cbtAttackerData.id;
+
+	}
+
+	cbtAttackerResults.weapon = cbtWeaponData.id;
+
+	////LOG("combat_spam","attacker end posture is "+cbtAttackerResults.endPosture);
+	return;
+}
+
+
+
+
+
+void doFumble(attacker_data cbtAttackerData, weapon_data cbtWeaponData, int intAttackerPosture, string strAnimationAction)
+{
+// set the attacker results
+// play the playback script
+// maybe   to the attacker?
+// make sure the defender results are nulled out.
+	string_id strSpam = new string_id("cbt_spam", "fumble");
+	int intFumbleDamage = rand(cbtWeaponData.minDamage, cbtWeaponData.maxDamage);
+	
+
+	return;
+}
+
+void doCounterAttack(obj_id objAttacker, obj_id objDefender)
+{
+	// the attackers/defenders are to be switched in the command
+	// queue counterattack action as an instant
+		// make sure to add comamndhandler for this
+	if(isPlayer(objAttacker))
+	{
+		setObjVar(objAttacker, "combat.boolCounterAttack", true); // remove this after the attack
+		queueCommand(objDefender, ##"counterAttack", objAttacker, "", COMMAND_PRIORITY_FRONT);
+	}
+	else
+	{
+		setObjVar(objAttacker, "combat.doCounterAttack", 1); // remove this after the attack
+
+	}
+
+	return;
+
+}
+
+boolean isImmuneToStateChange(obj_id target)
+{
+	if(vehicle.isDriveableVehicle(target))
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a PLAYER VEHICLE");
+		return true;
+	}
+
+	if ( ai_lib.aiGetNiche(target)==NICHE_DROID )
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a DROID");
+		return true;
+	}
+
+	if ( ai_lib.aiGetNiche(target)==NICHE_VEHICLE )
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a VEHICLE");
+		return true;
+	}
+
+	if ( ai_lib.isAndroid(target))
+	{
+		return true;
+	}
+
+	if (ai_lib.isTurret(target))
+	{
+//		debugSpeakMsg(target, "State Application Failed because I am a TURRET");
+		return true;
+	}
+
+	return false;
+}
+
+
+boolean runDizzyCheck(obj_id objPlayer)
+{
+	int intState = 0;
+	if(intState>0)
+	{
+		// IM SO DIZZY!;
+		int intRoll = rand(1, 100);
+
+		if(intRoll<DIZZY_CHECK_VALUE)
+		{
+			if(!isPlayer(objPlayer)) // shutup
+			{
+				messageTo(objPlayer, "dizzyCheckFailed", null, 1, false); // i fell down but jeff will do it
+				return false;
+
+			}
+			else
+			{
+				string_id strSpam = new string_id("cbt_spam", "dizzy_fall_down_single");
+				sendSystemMessage(objPlayer, strSpam);
+				setPosture(objPlayer, POSTURE_KNOCKED_DOWN); // fall down and went boom
+
+				return true;
+			}
+
+
+		}
+
+
+	}
+	return false;
+
+
+}
+int getLowerPosture(int intPosture)
+{
+	if(intPosture==POSTURE_CROUCHED)
+	{
+
+
+		return POSTURE_PRONE;
+
+	}
+	if(intPosture==POSTURE_UPRIGHT)
+	{
+
+		return POSTURE_CROUCHED;
+
+
+	}
+	if(intPosture==POSTURE_PRONE)
+	{
+
+		return POSTURE_PRONE;
+	}
+	return intPosture;
+
+
+
+
+
+}
+
+int getHigherPosture(int intPosture)
+{
+	if(intPosture==POSTURE_CROUCHED)
+	{
+
+
+		return POSTURE_UPRIGHT;
+
+	}
+	if(intPosture==POSTURE_UPRIGHT)
+	{
+
+		return POSTURE_UPRIGHT;
+
+
+	}
+	if(intPosture==POSTURE_PRONE)
+	{
+
+		return POSTURE_CROUCHED;
+	}
+	return intPosture;
+
+}
+
+defender_results[] createDefenderResultsArray(int intSize)
+{
+
+	int intI = 0;
+	defender_results[] cbtDefenderResults = new defender_results[intSize];
+	while(intI<intSize)
+	{
+
+		cbtDefenderResults[intI] = new defender_results();
+		intI = intI+1;
+
+	}
+
+	return cbtDefenderResults;
+}
+
+hit_result[] createHitResultsArray(int intSize)
+{
+
+	int intI = 0;
+	hit_result[] cbtHitData = new hit_result[intSize];
+
+	while(intI<intSize)
+	{
+
+		cbtHitData[intI] = new hit_result();
+		intI = intI+1;
+
+	}
+
+	return cbtHitData;
+
+}
+attacker_results[] createAttackerResultsArray(int intSize)
+{
+	int intI = 0;
+	attacker_results[] cbtAttackerResults = new attacker_results[intSize];
+	while(intI<intSize)
+	{
+
+		cbtAttackerResults[intI] = new attacker_results();
+		intI = intI+1;
+
+	}
+
+	return cbtAttackerResults;
+
+
+
+
+}
+
+void doMultiDefenderCombatResults(string[] strPlaybackNames, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults, dictionary dctCombatInfo)
+{
+
+	int intLeftFoot = dctCombatInfo.getInt("intLeftFoot");
+	int intRightFoot = dctCombatInfo.getInt("intRightFoot");
+	int intWeapon = dctCombatInfo.getInt("intWeapon");
+	int intRightHand = dctCombatInfo.getInt("intRightHand");
+	int intLeftHand = dctCombatInfo.getInt("intLeftHand"); // these above are for the trails
+	if(jedi.isLightsaber(cbtAttackerResults.weapon))
+	{
+		intWeapon = 1; // lightsbaers always have trails, regardless of anything else.
+	}
+	if(intLeftFoot>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_LFOOT, true);
+	}
+	if(intRightFoot>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_RFOOT, true);
+	}
+	if(intLeftHand>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_LHAND, true);
+	}
+	if(intRightHand>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_RHAND, true);
+	}
+	if(intWeapon>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_WEAPON, true);
+	}
+
+
+	int intI = 1;
+	if(cbtDefenderResults.length>1)
+	{
+
+		attacker_results cbtAnimationResults = new attacker_results();
+		defender_results[] cbtDefenderResult = new defender_results[1];
+
+		cbtDefenderResult[0] = cbtDefenderResults[0]; // our first combination
+
+		doCombatResults(strPlaybackNames[0], cbtAttackerResults, cbtDefenderResult);
+
+		////LOG("combat_spam","doing combat results for length > 1");
+		while(intI<cbtDefenderResults.length)
+		{
+			cbtAnimationResults.endPosture = cbtDefenderResults[intI].endPosture;
+			cbtAnimationResults.id = cbtDefenderResults[intI].id;
+
+
+			if(cbtDefenderResults[intI].result==COMBAT_RESULT_HIT)
+			{
+				// we need to change our posture to whatever, and play the scramble
+				doCombatResults("get_hit"+strPlaybackNames[intI], cbtAnimationResults, null);
+
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_EVADE)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_BLOCK)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+
+
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+			{
+
+				doCombatResults("dodge", cbtAnimationResults, null);
+
+
+
+			}
+			else
+			{
+
+
+
+			}
+			intI = intI+1;
+
+
+
+
+		}
+
+
+
+
+	}
+	else
+	{
+
+		doCombatResults(strPlaybackNames[0], cbtAttackerResults, cbtDefenderResults);
+
+	}
+
+}
+
+void doWarcryCombatResults(string strAnimationAction, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults)
+{
+	int intI = 1;
+	if(cbtDefenderResults.length>1)
+	{
+
+		attacker_results cbtAnimationResults = new attacker_results();
+		defender_results[] cbtDefenderResult = new defender_results[1];
+
+		cbtDefenderResult[0] = cbtDefenderResults[0]; // our first combination
+
+		doCombatResults(strAnimationAction, cbtAttackerResults, cbtDefenderResult);
+
+		////LOG("combat_spam","doing combat results for length > 1");
+		while(intI<cbtDefenderResults.length)
+		{
+			cbtAnimationResults.endPosture = cbtDefenderResults[intI].endPosture;
+			cbtAnimationResults.id = cbtDefenderResults[intI].id;
+
+
+			if(cbtDefenderResults[intI].result==COMBAT_RESULT_HIT)
+			{
+				// we need to change our posture to whatever, and play the scramble
+				doCombatResults("get_hit_light", cbtAnimationResults, null);
+
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+			{
+				/*
+				// laugh and point!
+				defender_results[] cbtTargetResults = new defender_results[1];
+				cbtTargetResults[0] = new defender_results();
+				cbtTargetResults[0].id = cbtAttackerResults.id;
+				cbtTargetResults[0].id = cbtAttackerResults.weapon;
+				cbtTargetResults[0].endPosture = cbtAttackerResults.endPosture;
+				cbtTargetResults[0].result = COMBAT_RESULT_HIT;
+				doCombatResults("point_and_laugh", cbtAnimationResults, cbtTargetResults );
+				*/
+
+
+			}
+			else
+			{
+
+
+
+			}
+			intI = intI+1;
+
+
+
+
+		}
+
+
+
+
+	}
+	else
+	{
+
+		doCombatResults(strAnimationAction, cbtAttackerResults, cbtDefenderResults);
+	}
+
+}
+
+
+string getActionName(string strActionName, int intAttackNumber, hit_result[] cbtHitData, weapon_data cbtWeaponData)
+{
+
+// attack_low_right_medium_0
+
+	int intHitLocation = cbtHitData[0].hitLocation;
+
+	string strNewAction = strActionName;
+	if(intHitLocation==HIT_LOCATION_HEAD)
+	{
+		strNewAction = strNewAction+"_high";
+		// randomly pick between left/right/center top
+		int intRoll = rand(1, 3);
+		if(intRoll==1)
+		{
+			strNewAction = strNewAction+"_left";
+
+
+		}
+		else if (intRoll==2)
+		{
+			strNewAction = strNewAction+"_center";
+		}
+
+		else if (intRoll==3)
+		{
+			strNewAction = strNewAction+"_right";
+
+
+		}
+
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+
+	}
+
+	else if(intHitLocation==HIT_LOCATION_BODY)
+	{
+		strNewAction = strNewAction+"_mid_center";
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+	else if(intHitLocation==HIT_LOCATION_R_ARM)
+	{
+		strNewAction = strNewAction+"_mid_left";	// its backwards on teh attacker/defende3r
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+
+	else if(intHitLocation==HIT_LOCATION_L_ARM)
+	{
+		strNewAction = strNewAction+"_mid_right";	// its backwards on teh attacker/defende3r
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+
+	else if(intHitLocation==HIT_LOCATION_R_LEG)
+	{
+
+		strNewAction = strNewAction+"_mid_left";	// its backwards on teh attacker/defende3r
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+
+	else if(intHitLocation==HIT_LOCATION_L_LEG)
+	{
+		strNewAction = strNewAction+"_mid_right";	// its backwards on teh attacker/defende3r
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+
+	//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	////LOG("combat_spam","INT HIT LOCATION IS "+intHitLocation);
+
+	int intMidDamage = (cbtWeaponData.minDamage+cbtWeaponData.maxDamage)/2;
+	if(cbtHitData[0].damage>intMidDamage)
+	{
+		strNewAction = strNewAction+"_medium";
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+	else
+	{
+
+		strNewAction = strNewAction+"_light";
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+
+	//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	strNewAction = strNewAction+"_"+intAttackNumber;
+	//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	return strNewAction;
+
+
+}
+string[] makePlaybackNames(string strAnimationName,  hit_result[] cbtHitData, weapon_data cbtWeaponData)
+{
+	// do it once for the first attack in a multidefender sitaution
+	// then we just use the modifiers as needed.
+
+	string[] strPlaybackNames = new string[cbtHitData.length];
+	int intDamage;
+	int intMidpoint = (cbtWeaponData.minDamage+cbtWeaponData.maxDamage)/2;
+
+
+
+	intDamage = cbtHitData[0].damage;
+	if(intDamage>intMidpoint)
+	{
+		strPlaybackNames[0] = strAnimationName + "_medium";
+		////LOG("combat_spam","playback name 0 is "+strPlaybackNames[0]);
+
+	}
+	else
+	{
+		strPlaybackNames[0] = strAnimationName+"_light";
+		////LOG("combat_spam","playback name 0 is "+strPlaybackNames[0]);
+
+	}
+
+
+
+
+
+	int intI = 1;
+	while(intI<cbtHitData.length)
+	{
+
+		intDamage = cbtHitData[intI].damage;
+		if(intDamage>intMidpoint)
+		{
+			strPlaybackNames[intI] =strAnimationName+ "_medium";
+			////LOG("combat_spam","playback name "+intI+" is "+strPlaybackNames[intI]);
+
+
+		}
+		else
+		{
+			strPlaybackNames[intI] =strAnimationName+"_light";
+			////LOG("combat_spam","playback name "+intI+" is "+strPlaybackNames[intI]);
+
+		}
+
+		intI = intI+1;
+	}
+
+	return strPlaybackNames;
+
+}
+
+string[] makePlaybackNames(string strAnimationName,  hit_result[] cbtHitData, weapon_data cbtWeaponData, defender_results[] cbtDefenderResults)
+{
+	string[] strPlaybackNames = new string[cbtHitData.length];
+
+	int intDamage = 0;
+	int intMidpoint = (cbtWeaponData.minDamage+cbtWeaponData.maxDamage)/2;
+
+	for (int i = 0; i < cbtHitData.length; i++)
+	{
+		if (strAnimationName.startsWith("lower_posture"))
+			continue;
+
+		intDamage = cbtHitData[i].damage;
+
+		//if (getEnhancedSkillStatisticModifier(cbtDefenderResults[i].id, "force_armor"))
+		//{
+		//}
+		//else if (getEnhancedSkillStatisticModifier(cbtDefenderResults[i].id, "force_shield"))
+		//{
+		//}
+		//else
+		{
+			if (intDamage > intMidpoint)
+			{
+				strPlaybackNames[i] =strAnimationName+ "_medium";
+				////LOG("combat_spam","playback name "+i+" is "+strPlaybackNames[i]);
+			}
+			else
+			{
+				strPlaybackNames[i] =strAnimationName+"_light";
+				////LOG("combat_spam","playback name "+i+" is "+strPlaybackNames[i]);
+			}
+		}
+	}
+
+	return strPlaybackNames;
+}
+
+void doSuppressionFireResults(string strPlaybackName, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults, dictionary dctCombatInfo)
+{
+// what else do we need?
+/*
+			public static final int COMBAT_RESULT_MISS     = 0;
+			public static final int COMBAT_RESULT_HIT      = 1;
+			public static final int COMBAT_RESULT_BLOCK    = 2;
+			public static final int COMBAT_RESULT_EVADE    = 3;
+			public static final int COMBAT_RESULT_REDIRECT = 4;
+			public static final int COMBAT_RESULT_COUNTER  = 5;
+			public static final int COMBAT_RESULT_FUMBLE   = 6;
+
+
+*/
+
+	// we need to check if it's a multi defender action
+	// if it is
+	// we need to do some whackiness
+
+	int intLeftFoot = dctCombatInfo.getInt("intLeftFoot");
+	int intRightFoot = dctCombatInfo.getInt("intRightFoot");
+	int intWeapon = dctCombatInfo.getInt("intWeapon");
+	int intRightHand = dctCombatInfo.getInt("intRightHand");
+	int intLeftHand = dctCombatInfo.getInt("intLeftHand"); // these above are for the trails
+	if(jedi.isLightsaber(cbtAttackerResults.weapon))
+	{
+		intWeapon = 1; // lightsbaers always have trails, regardless of anything else.
+	}
+
+
+	if(intLeftFoot>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_LFOOT, true);
+	}
+	if(intRightFoot>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_RFOOT, true);
+	}
+	if(intLeftHand>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_LHAND, true);
+	}
+	if(intRightHand>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_RHAND, true);
+	}
+	if(intWeapon>0)
+	{
+		cbtAttackerResults.setTrail(attacker_results.TRAIL_WEAPON, true);
+	}
+
+
+	if(cbtDefenderResults.length>1)
+	{
+		int intI = 1;
+		attacker_results cbtAnimationResults = new attacker_results();
+		defender_results[] cbtDefenderResult = new defender_results[1];
+
+		cbtDefenderResult[0] = cbtDefenderResults[0]; // our first combination
+
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResult);
+		////LOG("combat_spam","doing combat results for length > 1");
+
+		while(intI<cbtDefenderResults.length)
+		{
+			// we need to check what the defender results were
+			// change that to an attacker
+			// and continue
+			// so we've got the following possiblities
+
+			// hit with posture change
+			// block
+			cbtAnimationResults.endPosture = cbtDefenderResults[intI].endPosture;
+			cbtAnimationResults.id = cbtDefenderResults[intI].id;
+
+			if(cbtDefenderResults[intI].result==COMBAT_RESULT_HIT)
+			{
+				cbtAnimationResults.clientEffectId = MARKER_SUPPRESSIONFIRE;
+				// we need to change our posture to whatever, and play the scramble
+				doCombatResults("posture_scramble", cbtAnimationResults, null);
+				////LOG("combat_spam","scrambling in secondary combat results");
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_EVADE)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+				////LOG("combat_spam","dodging in secondary combat results");
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_BLOCK)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+				////LOG("combat_spam","blocking in secondary combat results");
+
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+			{
+
+				doCombatResults("dodge", cbtAnimationResults, null);
+				////LOG("combat_spam","Missing in secondary combat results");
+
+
+			}
+			else
+			{
+
+
+			}
+
+
+			intI = intI+1;
+		}
+
+
+
+
+
+
+	}
+	else
+	{
+
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResults);
+	}
+
+
+}
+
+
+
+void doChargeResults(string strPlaybackName, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults)
+{
+// what else do we need?
+/*
+			public static final int COMBAT_RESULT_MISS     = 0;
+			public static final int COMBAT_RESULT_HIT      = 1;
+			public static final int COMBAT_RESULT_BLOCK    = 2;
+			public static final int COMBAT_RESULT_EVADE    = 3;
+			public static final int COMBAT_RESULT_REDIRECT = 4;
+			public static final int COMBAT_RESULT_COUNTER  = 5;
+			public static final int COMBAT_RESULT_FUMBLE   = 6;
+
+
+*/
+
+	// we need to check if it's a multi defender action
+	// if it is
+	// we need to do some whackiness
+
+	if(cbtDefenderResults.length>1)
+	{
+		int intI = 1;
+		attacker_results cbtAnimationResults = new attacker_results();
+		defender_results[] cbtDefenderResult = new defender_results[1];
+
+		cbtDefenderResult[0] = cbtDefenderResults[0]; // our first combination
+
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResult);
+		////LOG("combat_spam","doing combat results for length > 1");
+
+		while(intI<cbtDefenderResults.length)
+		{
+			// we need to check what the defender results were
+			// change that to an attacker
+			// and continue
+			// so we've got the following possiblities
+
+			// hit with posture change
+			// block
+			cbtAnimationResults.endPosture = cbtDefenderResults[intI].endPosture;
+			cbtAnimationResults.id = cbtDefenderResults[intI].id;
+
+			if(cbtDefenderResults[intI].result==COMBAT_RESULT_HIT)
+			{
+				// we need to change our posture to whatever, and play the scramble
+				doCombatResults("change_posture", cbtAnimationResults, null);
+
+				////LOG("combat_spam","scrambling in secondary combat results");
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_EVADE)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+				////LOG("combat_spam","dodging in secondary combat results");
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_BLOCK)
+			{
+				doCombatResults("dodge", cbtAnimationResults, null);
+				////LOG("combat_spam","blocking in secondary combat results");
+
+
+
+			}
+			else if (cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+			{
+
+				doCombatResults("dodge", cbtAnimationResults, null);
+				////LOG("combat_spam","Missing in secondary combat results");
+
+
+			}
+
+
+
+			intI = intI+1;
+		}
+
+
+
+
+
+
+	}
+	else
+	{
+
+		doCombatResults(strPlaybackName, cbtAttackerResults, cbtDefenderResults);
+	}
+
+
+}
+
+
+
+string getPlaybackIntensity(string strPlaybackName, hit_result[] cbtHitData, weapon_data cbtWeaponData)
+{
+
+	string strNewAction = new string();
+	strNewAction = strPlaybackName;
+
+
+	int intMidDamage = (cbtWeaponData.minDamage+cbtWeaponData.maxDamage)/2;
+	if(cbtHitData[0].damage>intMidDamage)
+	{
+		strNewAction = strNewAction+"_medium";
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+	else
+	{
+
+		strNewAction = strNewAction+"_light";
+		//////debugServerConsoleMsg(null , "StrAction is "+strNewAction);
+	}
+	return strNewAction;
+}
+
+
+string getThrownWeaponStringType(obj_id objWeapon)
+{
+	string strType = "";
+	string strTemplate = getGrenadeType(objWeapon);
+	if(strTemplate==null)
+	{
+		//LOG("DESIGNER_FATAL", "Object "+objWeapon+" of type "+getTemplateName(objWeapon)+" is not defined properly");
+		strType = "";
+	}
+
+	strType = strType + strTemplate;
+
+	return strType;
+}
+
+
+string getHeavyWeaponStringType(obj_id objWeapon)
+{
+	string strType = "heavy_";
+	string strTemplate = getHeavyWeaponType(objWeapon);
+	if(strTemplate==null)
+	{
+		//LOG("DESIGNER_FATAL", "Object "+objWeapon+" of type "+getTemplateName(objWeapon)+" is not defined properly");
+		strType = "";
+	}
+
+	strType = strType + strTemplate;
+	////LOG("combat", "returning "+strType);
+	return strType;
+
+}
+
+string getWeaponStringType(int intWeaponType)
+{
+
+
+	switch(intWeaponType)
+	{
+
+		case WEAPON_TYPE_RIFLE : return "rifle";
+		case WEAPON_TYPE_LIGHT_RIFLE : return "carbine";
+		case WEAPON_TYPE_PISTOL : return "pistol";
+		case WEAPON_TYPE_HEAVY : return "heavyweapon";
+		case WEAPON_TYPE_1HAND_MELEE : return "onehandmelee";
+		case WEAPON_TYPE_2HAND_MELEE: return "twohandmelee";
+		case WEAPON_TYPE_UNARMED: return "unarmed";
+		case WEAPON_TYPE_POLEARM: return "polearm";
+		case WEAPON_TYPE_THROWN: return "thrown";
+		case WEAPON_TYPE_WT_1HAND_LIGHTSABER: return "onehandlightsaber";
+		case WEAPON_TYPE_WT_2HAND_LIGHTSABER: return "onehandlightsaber";
+		case WEAPON_TYPE_WT_POLEARM_LIGHTSABER: return "polearmlightsaber";
+
+
+	}
+	return "";
+
+
+}
+
+
+
+string[] makeStringArray(int intLength)
+{
+	int intI = 0;
+	string[] strArray = new string[intLength];
+	while(intI<intLength)
+	{
+		strArray[intI] = "";
+		intI = intI+1;
+	}
+	return strArray;
+
+}
+
+
+
+
+
+obj_id getCorrectCombatTarget(obj_id objPlayer, obj_id objTarget, int intAction)
+{
+	obj_id objActualTarget= getCorrectCombatTarget(objPlayer, objTarget, intAction, "");
+	return objActualTarget;
+
+}
+
+
+obj_id getCorrectCombatTarget(obj_id objPlayer, obj_id objTarget, int intAction, string strParams)
+{
+
+	// if the target is 0 or null, get current target
+	// if that's fucked too, return null
+	if(!isIdValid(objTarget))
+	{
+		////LOG("combat_spam","Passed target was Invalid, getting Combat target");
+		objTarget = getTarget(objPlayer);
+
+		if(!isIdValid(objTarget))
+		{
+			////LOG("combat_spam","No combat target, getting lookAtTarget");
+			// need to get a target
+			objTarget = getLookAtTarget(objPlayer);
+			if(isIdValid(objTarget))
+			{
+				////LOG("combat", "got good target, requeuing everything");
+				// WAHOO
+				queueCommand(objPlayer, ##"combatTarget", objTarget, "", COMMAND_PRIORITY_FRONT); // re-enque
+				queueCommand(objPlayer, intAction, objTarget, strParams, COMMAND_PRIORITY_FRONT); // re-enque
+			}
+
+			return null;
+
+
+		}
+	}
+
+	if(objTarget==objPlayer)
+	{
+
+		string_id strSpam = new string_id("cbt_spam", "shoot_self");
+
+
+
+		////LOG("combat_spam","can't shoot yourself");
+
+		return null;
+
+	}
+
+
+	obj_id objContainer = getContainedBy(objTarget);
+	if(isPlayer(objContainer))
+	{
+
+		return null;
+	}
+	if(pvpCanAttack(objPlayer, objTarget))
+	{
+		////LOG("combat_spam", "returning "+objTarget);
+		return objTarget;
+	}
+	////LOG("combat_spam", "returning null from getCorrectCombatTarget, should kill loop");
+	return null;
+
+
+}
+
+boolean checkWeaponData(obj_id objPlayer, obj_id objTarget, int intAttackCategory, weapon_data cbtWeaponData, string strCommand, string strWeaponType)
+{
+
+// we gotta check to make sure you have the correct ability to do this action.
+
+
+	float fltDistance = getDistance( objPlayer, objTarget );
+
+	if(cbtWeaponData.maxRange<10.0f)
+	{
+		cbtWeaponData.maxRange = 10;
+
+	}
+	if(fltDistance>cbtWeaponData.maxRange)
+	{
+		string_id strSpam = new string_id("cbt_spam", "out_of_range");
+
+
+		strSpam = new string_id("cbt_spam", "out_of_range_single");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+
+	if(intAttackCategory!=combat.ALL_WEAPONS)
+	{
+
+		if((intAttackCategory==combat.RANGED_WEAPON)||(intAttackCategory==combat.MELEE_WEAPON))
+		{
+			int intWeaponCategory = combat.getWeaponCategory(cbtWeaponData.weaponType);
+			if(intWeaponCategory!=intAttackCategory)
+			{
+				string_id strSpam = new string_id("cbt_spam", "no_attack_wrong_weapon");
+				
+				sendSystemMessage(objPlayer, strSpam);
+				return false;
+			}
+		}
+		else if(intAttackCategory==combat.ALL_LIGHTSABERS)
+		{
+			if(!jedi.isLightsaber(cbtWeaponData.weaponType))
+			{
+				string_id strSpam = new string_id("cbt_spam", "no_attack_wrong_weapon");
+				
+				sendSystemMessage(objPlayer, strSpam);
+				return false;
+			}
+		}
+		else if(intAttackCategory==combat.FORCE_POWER)
+		{
+			if(!jedi.isLightsaber(cbtWeaponData.weaponType))
+			{
+				if(cbtWeaponData.weaponType!=WEAPON_TYPE_UNARMED)
+				{
+					// NO FORCE POWERS FOR YOU
+					sendSystemMessage(objPlayer, SID_CANNOT_USE_FORCE);
+
+				}
+
+			}
+
+		}
+		else if(intAttackCategory!=cbtWeaponData.weaponType)
+		{
+
+			string_id strSpam = new string_id("cbt_spam", "no_attack_wrong_weapon");
+			
+			sendSystemMessage(objPlayer, strSpam);
+			return false;
+		}
+	}
+
+	if(strCommand!="")
+	{
+		// we need to check out abilities
+		string strAbility = strWeaponType+strCommand;
+		if(!hasCommand(objPlayer, strAbility))
+		{
+			string_id strSpam = new string_id("cbt_spam", "no_ability");
+			sendSystemMessage(objPlayer, strSpam);
+			////LOG("combat", "no ability of type "+strAbility);
+			return false;
+		}
+
+	}
+
+	return true;
+
+}
+boolean checkCommands(obj_id objPlayer, string strCommand, string strWeaponType)
+{
+	if(strCommand!="")
+	{
+		// we need to check out abilities
+		string strAbility = strWeaponType+strCommand;
+		if(!hasCommand(objPlayer, strAbility))
+		{
+			string_id strSpam = new string_id("cbt_spam", "no_ability");
+			sendSystemMessage(objPlayer, strSpam);
+			////LOG("combat", "no ability of type "+strAbility);
+			return false;
+		}
+
+	}
+	return true;
+
+}
+
+
+boolean checkForCombatActions(obj_id objPlayer)
+{
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_melee"))
+	{
+
+		return true;
+	}
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_ranged"))
+	{
+
+		return true;
+	}
+
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_general"))
+	{
+
+		return true;
+	}
+	return false;
+}
+
+
+
+string getGrenadeType(obj_id objGrenade)
+{
+
+	string strTemplate = getTemplateName(objGrenade);
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_cryoban.iff")
+	{
+		return "cryoban";
+
+	}
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_fragmentation_light.iff")
+	{
+		return "fragmentation";
+	}
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_fragmentation.iff")
+	{
+		return "fragmentation";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_glop.iff")
+	{
+		return "glop";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_imperial_detonator.iff")
+	{
+		return "imperial_detonator";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_proton.iff")
+	{
+		return "proton";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_thermal_detonator.iff")
+	{
+		return "thermal_detonator";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/grenade/grenade_bug_bomb.iff")
+	{
+		return "bug_bomb";
+
+	}
+	return "fragmentation";
+
+
+}
+
+
+
+string getHeavyWeaponType(obj_id objHeavyWeapon)
+{
+
+	string strTemplate = getTemplateName(objHeavyWeapon);
+
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_rocket_laucher.iff")
+	{
+		return "rocket_launcher";
+
+	}
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_lightning_beam.iff")
+	{
+		return "lightning_beam";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_particle_beam.iff")
+	{
+		return "particle_beam";
+
+	}
+	if(strTemplate=="object/weapon/ranged/heavy/heavy_acid_beam.iff")
+	{
+		return "acid_beam";
+
+	}
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_flame_thrower.iff")
+	{
+		return "flame_thrower";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_beam.iff")
+	{
+		return "rifle_beam";
+
+	}
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_acid_beam.iff")
+	{
+		return "rifle_acid";
+
+	}
+
+	if(strTemplate=="object/weapon/ranged/rifle/rifle_lightning.iff")
+	{
+		return "rifle_lightning";
+
+	}
+
+
+	//LOG("DESIGNER_FATAL", "template of "+strTemplate+" is not defined properly");
+
+	return "rocket_launcher";
+}
+
+void doBasicGrenadeCombatResults(attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults, hit_result[] cbtHitData, obj_id objTarget, weapon_data cbtWeaponData)
+{
+
+	////LOG("combat_spam", "grenade results!");
+	string strDefense = "get_hit_grenade";
+
+
+	string strAttack = "throw_grenade";
+
+	string strDistance = "_near";
+
+	int intI = 1;
+
+	float fltDistance = getDistance(cbtAttackerResults.id, objTarget);
+
+	if(fltDistance<CLOSE_THROWING_DISTANCE)
+	{
+		strDistance = "_near";
+
+	}
+	else if (fltDistance<MEDIUM_THROWING_DISTANCE)
+	{
+		strDistance = "_medium";
+
+	}
+	else if (fltDistance<FAR_THROWING_DISTANCE)
+	{
+
+
+		strDistance = "_far";
+
+
+	}
+	////LOG("combat_spam", "distance is "+fltDistance);
+	////LOG("combat_spam", "strDistance is "+strDistance);
+	// grenade type
+	string strGrenadeType = getGrenadeType(cbtWeaponData.id);
+	strAttack = strAttack + strDistance+"_"+strGrenadeType;
+
+	strDefense = strDefense+strDistance;
+	////LOG("combat_spam", "strAttack is "+strAttack);
+	////LOG("combat_spam", "strDEfense is "+strDefense);
+
+	string[] strPlaybackNames = makePlaybackNames(strDefense, cbtHitData, cbtWeaponData);
+
+	// lets do the basics
+	////LOG("combat_spam", "making playback names");
+
+	defender_results[] cbtDefenderResult = new defender_results[1];
+	cbtDefenderResult[0] = new defender_results();
+	attacker_results cbtAttackerResult = new attacker_results();
+	cbtDefenderResult[0].id = objTarget;
+
+	cbtDefenderResult[0].endPosture = getPosture(objTarget);
+	////LOG("combat_spam", "grenade attack string is "+strAttack);
+	cbtAttackerResults.weapon = null; // for animations to work correctly
+
+	doCombatResults(strAttack, cbtAttackerResults, cbtDefenderResult);
+
+	while(intI<strPlaybackNames.length)
+	{
+		////LOG("combat_spam", "checking for hits/misses for grenades");
+		// if it's a hit we do stuff
+		if(cbtHitData[intI].success)
+		{
+			////LOG("combat_spam", "Grenade hits, doing combat results");
+			// now we do gothits for everyone else
+
+			cbtAttackerResult.id = cbtDefenderResults[intI].id;
+			cbtAttackerResult.endPosture = cbtDefenderResults[intI].endPosture;
+			doCombatResults(strPlaybackNames[intI], cbtAttackerResult, null);
+		}
+		else
+		{
+
+			////LOG("combat_spam", "Missed throwing, so i'm doing nothing!");
+
+		}
+
+
+		intI = intI+1;
+
+
+	}
+
+	return;
+}
+
+void doMineFieldResults(string strParticle, attacker_results cbtAttackerResults, defender_results[] cbtDefenderResults, hit_result[] cbtHitData, obj_id objTarget, weapon_data cbtWeaponData)
+{
+
+	string[] strPlaybackNames = makePlaybackNames("get_hit", cbtHitData, cbtWeaponData);
+	for(int intI = 0; intI<cbtHitData.length; intI++)
+	{
+		if(intI==0)
+		{
+			// play the explosion here.
+			location locParticleLocation = getLocation(cbtDefenderResults[0].id);
+			playClientEffectLoc(cbtDefenderResults[0].id, strParticle, locParticleLocation, 0);
+		}
+		attacker_results cbtAnimationResults = new attacker_results();
+		////LOG("combat", "posture is "+cbtDefenderResults[intI].endPosture);
+		cbtAnimationResults.endPosture = cbtDefenderResults[intI].endPosture;
+		cbtAnimationResults.id = cbtDefenderResults[intI].id;
+		if(cbtDefenderResults[intI].result==COMBAT_RESULT_HIT)
+		{
+			// we need to change our posture to whatever, and play the scramble
+			doCombatResults(strPlaybackNames[intI], cbtAnimationResults, null);
+
+		}
+		else if (cbtDefenderResults[intI].result==COMBAT_RESULT_EVADE)
+		{
+			doCombatResults(strPlaybackNames[intI], cbtAnimationResults, null);
+		}
+		else if (cbtDefenderResults[intI].result==COMBAT_RESULT_BLOCK)
+		{
+			doCombatResults(strPlaybackNames[intI], cbtAnimationResults, null);
+		}
+		else if (cbtDefenderResults[intI].result==COMBAT_RESULT_MISS)
+		{
+
+			doCombatResults(strPlaybackNames[intI], cbtAnimationResults, null);
+		}
+		else
+		{
+
+
+
+		}
+
+	}
+	return;
+}
+
+
+void yellText(obj_id objSpeaker, string strText)
+{
+
+	//LOG("combat_charge", "Yelling "+strText);
+
+	//command queue "spatialChat" "<chat type> <mood type> <text...>"
+	string strType = "none none "+strText;
+	//LOG("combat_charge", "Strtype is "+strType);
+	//LOG("combat_charge", "speaker is "+objSpeaker);
+	chat._chat(objSpeaker, null, chat.CHAT_YELL, null, strText, null, null);
+
+
+
+	return;
+}
+
+
+void clearQueue(obj_id objPlayer)
+{
+	queueClearCommandsFromGroup(objPlayer, ##"combat_general");
+	queueClearCommandsFromGroup(objPlayer, ##"combat_melee");
+	queueClearCommandsFromGroup(objPlayer, ##"combat_ranged");
+
+
+
+}
+
+obj_id[] truncateTargetArray(obj_id[] objArray, obj_id objTarget, int intLength)
+{
+
+	// we're going to sort and truncate the  array to a new size.
+	////LOG("combat", "Length is "+objArray.length);
+	////LOG("combat", "intLength is "+intLength);
+
+	resizeable obj_id[] objTruncatedArray = new obj_id[0];
+	objTruncatedArray = utils.addElement(objTruncatedArray, objTarget);
+
+	////LOG("combat", "intLength is "+intLength);
+	for (int i = 0; i <= intLength; i++)
+	{
+		if (i == objArray.length)
+			break;
+
+		////LOG("combat", "i is "+i+" intLength is "+intLength);
+		////LOG("combat", "objArray[i] is "+objArray[i]);
+		////LOG("combat", "target is "+objTarget);
+
+		if(objArray[i]!=objTarget)
+			utils.addElement(objTruncatedArray, objArray[i]);
+	}
+
+	return objTruncatedArray;
+}
+
+
+
+void clearFeignIncapacitation(obj_id objPlayer, int intPosture)
+{
+
+	// clear funcs for ai handling of feigning
+	
+	string_id strSpam = new string_id("cbt_spam", "stand");
+
+	setPosture(objPlayer, intPosture);
+
+	if ( isPlayer( objPlayer ) )
+	{
+		dictionary parms = new dictionary();
+		parms.put( "player", objPlayer );
+		broadcastMessage("handleSawRecapacitation", parms);
+	}
+
+}
+
+
+
+void setTurretTarget(obj_id objTurret, obj_id objTarget)
+{
+	// sets target objvar. ASYCNHRONOUS!
+	dictionary dctParams = new dictionary();
+	dctParams.put("objTarget", objTarget);
+	messageTo(objTurret, "setTarget", dctParams,0, true);
+	return;
+
+
+}
+
+void startTurretAttack(obj_id objTurret, obj_id objTarget)
+{
+// be careful with this. It should keep turrets from attacking too much.. use setTurretTarget
+	dictionary dctParams = new dictionary();
+	dctParams.put("objTarget", objTarget);
+	messageTo(objTurret, "startAttack", dctParams, 0, true);
+
+
+}
+
+
+void applyWound(hit_result cbtHitData, defender_data cbtDefenderData, attacker_data cbtAttackerData)
+{
+
+// this isn't used, uncomment if we move wounds back to script
+
+return;
+/*
+// where
+// health is 0-2
+	// action is 3-5
+	// mind i s6-8
+
+	int intHitLocation = cbtHitData.hitLocation;
+	int intWoundStat;
+
+	if(intHitLocation==HIT_LOCATION_HEAD)
+	{
+		intWoundStat = rand(0,2);
+
+	}
+	else if((intHitLocation==HIT_LOCATION_BODY)||(intHitLocation==HIT_LOCATION_R_ARM)||(intHitLocation==HIT_LOCATION_L_ARM))
+	{
+		intWoundStat = rand(3,5);
+
+	}
+	else if ((intHitLocation==HIT_LOCATION_R_LEG)||(intHitLocation==HIT_LOCATION_L_LEG))
+	{
+		intWoundStat = rand(6,8);
+
+
+	}
+
+
+	return;
+
+	//void applyWound(cbtHitData[intI], cbtDefenderData[intI], cbtAttackerData);
+	*/
+}
+
+
+string getStatName(int intStat)
+{
+
+
+	switch(intStat)
+	{
+
+		case HEALTH: return "health";
+		case CONSTITUTION: return "constitution";
+		case ACTION: return "action";
+		case STAMINA: return "stamina";
+		case MIND: return "mind";
+		case WILLPOWER: return "willpower";
+
+
+	}
+	return "";
+}
+
+int getMobHitMod(obj_id objMob)
+{
+	int intToHitChance = getSkillStatMod(objMob, "toHitChance");
+	return intToHitChance;
+
+}
+
+
+
+int checkTrapMod( int mod, string modName, obj_id checkId )
+{
+	if ( isIdValid(checkId) && utils.hasScriptVar( checkId, "trapmod.enable" ) )
+	{
+		if ( utils.hasScriptVar( checkId, "trapmod.enable" ) )
+		{
+			if ( modName.equals( "stun_defense" ) )
+			{
+				if ( utils.hasScriptVar( checkId, "trapmod.stun_defense" ) )
+					mod -= utils.getIntScriptVar( checkId, "trapmod.stun_defense" );
+			}
+			else if ( modName.equals( "dizzy_defense" ) )
+			{
+				if ( utils.hasScriptVar( checkId, "trapmod.dizzy_defense" ) )
+					mod -= utils.getIntScriptVar( checkId, "trapmod.dizzy_defense" );
+			}
+			else if ( modName.equals( "intimidate_defense" ) )
+			{
+				if ( utils.hasScriptVar( checkId, "trapmod.intimidate_defense" ) )
+					mod -= utils.getIntScriptVar( checkId, "trapmod.intimidate_defense" );
+			}
+		}
+		return mod;
+	}
+	return 0;
+}
+
+int[] getCombatEffectsFromDataTable(dictionary dctCombatInfo)
+{
+	////LOG("combat", "dctCombatInfo is "+dctCombatInfo);
+	resizeable int[] intEffects = new int[0];
+	for(int intI = 0; intI<3; intI++)
+	{	int intIndex = intI+1;
+		string strEffect = "intEffect"+intIndex;
+		int intEffect = dctCombatInfo.getInt(strEffect);
+		////LOG("combat", "got "+strEffect+" from datatable with a value of"+intEffect);
+
+
+		if(intEffect!=-1)
+		{
+			////LOG("combat", "adding "+intEffect+" to array");
+			intEffects = utils.addElement(intEffects, intEffect);
+		}
+	}
+	for(int intI = 0; intI< intEffects.length; intI++)
+	{
+		////LOG("combat", "for final array, entry "+intI+" is "+intEffects[intI]);
+	}
+	return intEffects;
+
+}
+
+float[] getCombatEffectDurationsFromDataTable(dictionary dctCombatInfo, int[] intEffects)
+{
+	resizeable float[] fltDurations = new float[0];
+	for(int intI = 0; intI<intEffects.length; intI++)
+	{
+
+		string strTest = "fltEffectDuration"+(intI+1);
+		float fltDuration = dctCombatInfo.getFloat(strTest);
+		////LOG("combat_spam", "fltDuration2 is "+fltDuration);
+		////LOG("combat_spam", "feffect is2 "+intEffects[intI]);
+
+
+		fltDurations = utils.addElement(fltDurations, fltDuration);
+
+	}
+	return fltDurations;
+}
+
+
+
+
+
+obj_id[] getCombatDefenders(obj_id objPlayer, obj_id objTarget, dictionary dctCombatInfo)
+{
+
+	////LOG("combat", "dctCombatInfo is "+dctCombatInfo.toString());
+
+
+
+	int intAttackType = dctCombatInfo.getInt("intAttackType");
+	////LOG("combat", "intAttackType is "+intAttackType);
+	////LOG("combat", "AREA is "+AREA);
+	////LOG("combat", "CONE is "+CONE);
+
+	if(intAttackType==CONE)
+	{
+		float fltConeLength = dctCombatInfo.getFloat("fltConeLength");
+		float fltConeWidth = dctCombatInfo.getFloat("fltConeWidth");
+		obj_id[] objDefenders = pvpGetTargetsInCone(objPlayer, objPlayer, objTarget, fltConeLength, fltConeWidth);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "Cone:Init Defender Array = "+objDefenders.length+"("+listArrayContents(objDefenders)+")");
+		objDefenders = truncateTargetArray(objDefenders, objTarget, MAX_TARGET_ARRAY_SIZE);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "Cone:Truncate Defender Array = "+objDefenders.length+"("+listArrayContents(objDefenders)+")");
+		objDefenders = validateDefenders(objPlayer, objDefenders);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "Cone:Validate Defender Array = "+objDefenders.length+"("+listArrayContents(objDefenders)+")");
+		if(objDefenders==null)
+		{
+			////LOG("combat_spam","objDefenders was null for some reason");
+			objDefenders = new obj_id[1];
+			objDefenders[0] = objTarget;
+
+		}
+		else if (objDefenders.length<1)
+		{
+			objDefenders = new obj_id[1];
+			objDefenders[0] = objTarget;
+		}
+		return objDefenders;
+	}
+	else if(intAttackType==AREA)
+	{
+		////LOG("combat", "AREA ATTACK");
+		////LOG("combat", "dctCombatInfo is "+dctCombatInfo.toString());
+		float fltConeLength = dctCombatInfo.getFloat("fltConeLength"); // also used as attack size
+		float fltConeWidth = dctCombatInfo.getFloat("fltConeWidth");
+
+		if(fltConeLength<=0)
+		{
+			obj_id objWeapon = getCurrentWeapon(objPlayer);
+			float fltDistance = getMaxRange(objWeapon);
+
+			fltConeLength = fltDistance;
+
+		}
+		obj_id[] objDefenders = pvpGetTargetsInRange(objPlayer, objPlayer, fltConeLength);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "Area:Init Defender Array = "+objDefenders.length+"("+listArrayContents(objDefenders)+")");
+		////LOG("combat", "Targets in range is "+objDefenders.length);
+		objDefenders = truncateTargetArray(objDefenders, objTarget, MAX_TARGET_ARRAY_SIZE);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "Area:Truncate Defender Array = "+objDefenders.length+"("+listArrayContents(objDefenders)+")");
+		////LOG("combat", "Truncated Targets in range is "+objDefenders.length);
+		objDefenders = validateDefenders(objPlayer, objDefenders);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "Area:Validate Defender Array = "+objDefenders.length+"("+listArrayContents(objDefenders)+")");
+		////LOG("combat", "Validated Targets in range is "+objDefenders.length);
+		if(objDefenders==null)
+		{
+
+			////LOG("combat_spam","objDefenders was null for some reason");
+			objDefenders = new obj_id[1];
+			objDefenders[0] = objTarget;
+
+		}
+		else if (objDefenders.length<1)
+		{
+
+			objDefenders = new obj_id[1];
+			objDefenders[0] = objTarget;
+		}
+		////LOG("combat", "objDefenders.length is "+objDefenders.length);
+
+		return objDefenders;
+
+	}
+	else if(intAttackType==TARGET_AREA)
+	{
+		float fltConeLength = dctCombatInfo.getFloat("fltConeLength"); // also used as attack size
+
+
+		obj_id[] objDefenders = pvpGetTargetsInRange(objPlayer, objTarget, fltConeLength);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "TgtArea:Init Defender Array = "+objDefenders.length+"("+objDefenders.toString()+")");
+		objDefenders = truncateTargetArray(objDefenders, objTarget, MAX_TARGET_ARRAY_SIZE);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "TgtArea:Truncate Defender Array = "+objDefenders.length+"("+objDefenders.toString()+")");
+		objDefenders = validateDefenders(objPlayer, objDefenders);
+		combatLog(objPlayer, objTarget, "getCombatDefenders", "TgtArea:Validate Defender Array = "+objDefenders.length+"("+objDefenders.toString()+")");
+
+		if(objDefenders==null)
+		{
+
+			////LOG("combat_spam","objDefenders was null for some reason");
+			objDefenders = new obj_id[1];
+			objDefenders[0] = objTarget;
+
+		}
+		else if (objDefenders.length<1)
+		{
+
+			objDefenders = new obj_id[1];
+			objDefenders[0] = objTarget;
+		}
+		////LOG("combat", "objDefenders.length is "+objDefenders.length);
+
+		return objDefenders;
+
+	}
+	else if(intAttackType==DUAL_WIELD)
+	{
+		// we make an array of 2 elements
+		// 1st is the target, 2nd is the look at target, or the combat target, depending on whether the lookat is valid
+		obj_id[] objDefenders = new obj_id[2];
+		objDefenders[0] = objTarget;
+		obj_id objTest = getLookAtTarget(objPlayer);
+		if(isIdValid(objTest))
+		{
+			if(pvpCanAttack(objPlayer, objTest))
+			{
+				// ATTACk
+				objDefenders[1] = objTest;
+			}
+			else
+			{
+				objDefenders[1] = objTarget;
+
+			}
+		}
+		else
+		{
+			objDefenders[1] = objTarget;
+
+		}
+		return objDefenders;
+
+	}
+	else
+	{
+		obj_id[] objDefenders = new obj_id[1];
+		objDefenders[0] = objTarget;
+		return objDefenders;
+	}
+
+}
+
+float getDamageBonus(int intWeaponType)
+{
+	switch(intWeaponType)
+	{
+		case WEAPON_TYPE_RIFLE : return 1.0f;
+		case WEAPON_TYPE_LIGHT_RIFLE : return 1.0f;
+		case WEAPON_TYPE_PISTOL : return 1.00f;
+		case WEAPON_TYPE_HEAVY : return 1.0f;
+		case WEAPON_TYPE_1HAND_MELEE : return 1.0f;
+		case WEAPON_TYPE_2HAND_MELEE: return 1.0f;
+		case WEAPON_TYPE_UNARMED:return 1.0f;
+		case WEAPON_TYPE_POLEARM: return 1.0f;
+		case WEAPON_TYPE_THROWN: return 1.0f;
+		case WEAPON_TYPE_WT_1HAND_LIGHTSABER: return 1.0f;
+		case WEAPON_TYPE_WT_2HAND_LIGHTSABER: return 1.0f;
+		case WEAPON_TYPE_WT_POLEARM_LIGHTSABER: return 1.0f;
+	}
+	return 1.0f;
+
+}
+
+boolean isMeleeWeapon(obj_id objWeapon)
+{
+	int intWeaponType = getWeaponType(objWeapon);
+	switch(intWeaponType)
+	{
+		case WEAPON_TYPE_RIFLE : return false;
+		case WEAPON_TYPE_LIGHT_RIFLE : return false;
+		case WEAPON_TYPE_PISTOL : return false;
+		case WEAPON_TYPE_HEAVY : return false;
+		case WEAPON_TYPE_1HAND_MELEE : return true;
+		case WEAPON_TYPE_2HAND_MELEE: return true;
+		case WEAPON_TYPE_UNARMED:return true;
+		case WEAPON_TYPE_POLEARM: return true;
+		case WEAPON_TYPE_THROWN: return false;
+		case WEAPON_TYPE_WT_1HAND_LIGHTSABER: return true;
+		case WEAPON_TYPE_WT_2HAND_LIGHTSABER: return true;
+		case WEAPON_TYPE_WT_POLEARM_LIGHTSABER: return true;
+	}
+	return false;
+
+
+}
+
+float getLungeRange(weapon_data cbtWeaponData)
+{
+
+	float fltRange = cbtWeaponData.maxRange;
+
+	if(fltRange<10.0f)
+	{
+		fltRange = 10;
+
+	}
+
+	fltRange = fltRange * 3;
+
+	if(fltRange>20)
+	{
+		fltRange = 20.0f;
+
+	}
+	return fltRange;
+
+
+}
+
+boolean damageWeapon( obj_id owner, obj_id weaponid, int amount )
+{
+	if ( !isPlayer( owner ) )
+		return false;
+
+	int hp = getHitpoints( weaponid );
+	int maxhp = getMaxHitpoints( weaponid );
+	if ( hp > 0 )
+	{
+		hp -= amount;
+		setHitpoints( weaponid, hp );
+
+		if ( (hp+amount == maxhp) )
+		{
+			// First time degrading, log weapon stats
+			metrics.logWeaponStatus(owner, weaponid);
+		}
+		else if ( (hp < ((maxhp/4)*3)) && (hp+amount >= ((maxhp/4)*3)) )
+		{
+			// Fell below 75%, log weapon stats
+			metrics.logWeaponStatus(owner, weaponid);
+		}
+		else if ( (hp < maxhp/2) && (hp+amount >= maxhp/2) )
+		{
+			// Fell below 50%, warn player and log weapon stats
+			string_id strSpam = new string_id("combat_effects", "weapon_half");
+			sendSystemMessage( owner, strSpam );
+
+			metrics.logWeaponStatus(owner, weaponid);
+		}
+		else if ( (hp < maxhp/4) && (hp+amount >= maxhp/4) )
+		{
+			// Fell below 25%, wran player and log weapon stats
+			string_id strSpam = new string_id("combat_effects", "weapon_quarter");
+			sendSystemMessage( owner, strSpam );
+
+			metrics.logWeaponStatus(owner, weaponid);
+		}
+
+		return true;
+	}
+	return false;
+}
+
+boolean canChangeTargetPosture(obj_id objAttacker, obj_id objDefender, int intChangeType)
+{
+
+// wrapper function for posture change defense mods. the funcs that call this are a little busy so i broke it out into a function
+
+	if(vehicle.isDriveableVehicle(objDefender))
+	{
+		return false;
+	}
+
+	if ( ai_lib.aiGetNiche( objDefender)==NICHE_VEHICLE )
+	{
+		//debugSpeakMsg(objDefender, "Posture Change Application Failed because I am a VEHICLE");
+		return false;
+	}
+
+	if (ai_lib.isTurret(objDefender))
+	{
+		//debugSpeakMsg(objDefender, "Posture change Application Failed because I am a TURRET");
+		return false;
+	}
+
+
+	int intPostureModifier =0;
+	intPostureModifier = getLevel(objDefender);
+	intPostureModifier = intPostureModifier -5; // normalize difficulty down to 0 (players start at 5) ((anything under 5th level has the default % chance to change posture))
+	if(intPostureModifier<0)
+	{
+		intPostureModifier = 0;
+	}
+
+	if(intChangeType==POSTURE_KNOCKED_DOWN)
+	{
+		int intPostureChangeMod = getSkillStatisticModifier(objDefender, "knockdown_defense");
+		int intRoll = rand(0, 100);
+		intPostureChangeMod = intPostureChangeMod + intPostureModifier;
+		if(intPostureChangeMod>90)
+		{
+			intPostureChangeMod = 90;
+		}
+		int intKnockDownTime = utils.getIntScriptVar(objDefender, "combat.intKnockdownTime");
+		int intCurrentTime = getGameTime();
+		////LOG("combat", "intCurrentTime is "+intCurrentTime);
+		int intDifference = intCurrentTime - intKnockDownTime;
+		////LOG("combat", "intDifference is "+intDifference);
+		////LOG("combat", "intRoll is "+intRoll);
+
+		if(intDifference<30)
+		{
+			intPostureChangeMod = 500; // no knockdown for the time being.
+		}
+		////LOG("combat", "intPostureChangeMod is "+intPostureChangeMod);
+		if(intRoll>intPostureChangeMod)
+		{
+			utils.setScriptVar(objDefender, "combat.intKnockdownTime", intCurrentTime);
+			return true;
+		}
+		string_id strSpam = new string_id("cbt_spam", "knockdown_fail");
+		sendSystemMessage(objAttacker, strSpam);
+		return false;
+
+	}
+	else if(intChangeType==POSTURE_UP)
+	{
+		int intPostureChangeMod = getSkillStatisticModifier(objDefender, "posture_change_up_defense");
+		int intRoll = rand(0, 100);
+		intPostureChangeMod = intPostureChangeMod + intPostureModifier;
+		if(intPostureChangeMod>90)
+		{
+			intPostureChangeMod = 90;
+		}
+		int intPostureChangeTime = utils.getIntScriptVar(objDefender, "combat.intPostureChangeTime");
+		int intCurrentTime = getGameTime();
+		int intDifference = intCurrentTime - intPostureChangeTime;
+		if(intDifference<30)
+		{
+			intPostureChangeMod = 500;
+		}
+		if(intRoll<intPostureChangeMod)
+		{
+
+			utils.setScriptVar(objDefender, "combat.intPostureChangeTime", getGameTime());
+			return true;
+		}
+		string_id strSpam = new string_id("cbt_spam", "posture_change_fail");
+		sendSystemMessage(objAttacker, strSpam);
+		return false;
+	}
+
+
+
+	else if(intChangeType==POSTURE_DOWN)
+	{
+		int intPostureChangeMod = getSkillStatisticModifier(objDefender,  "posture_change_down_defense");
+		intPostureChangeMod = intPostureChangeMod + intPostureModifier;
+		if(intPostureChangeMod>95)
+		{
+			intPostureChangeMod = 96;
+		}
+		int intRoll = rand(0, 100);
+
+		int intPostureChangeTime = utils.getIntScriptVar(objDefender, "combat.intPostureChangeTime");
+		int intCurrentTime = getGameTime();
+		int intDifference = intCurrentTime - intPostureChangeTime;
+		if(intDifference<30)
+		{
+			intPostureChangeMod = 500;
+
+		}
+		if(intRoll>intPostureChangeMod)
+		{
+			utils.setScriptVar(objDefender, "combat.intPostureChangeTime", getGameTime());
+			return true;
+		}
+		string_id strSpam = new string_id("cbt_spam", "posture_change_fail");
+		sendSystemMessage(objAttacker, strSpam);
+		return false;
+	}
+	return false; // bad posture passed in.
+
+}
+
+// applies the combat delay for delaying moves (panicshot, warcry, etcetera)
+boolean applyCombatEffectDelay(obj_id objAttacker, obj_id objTarget, float fltDelay, boolean showAttackerSuccessMessage, boolean showDefenderSuccessMessage, string appliedDelay)
+{
+
+	int intLastDelay = utils.getIntScriptVar(objTarget, "combat.intLastDelay");
+	int intCurrentTime= getGameTime();
+	int intDifference = intCurrentTime - intLastDelay;
+	////LOG("combat", "difference is "+intDifference);
+	if(intDifference<30)
+	{
+		string_id strSpam = new string_id("combat_effects", "combat_delay_resist");
+		if(isPlayer(objAttacker))
+		{
+			sendSystemMessage(objAttacker, strSpam);
+		}
+		////LOG("combat", "returning false");
+		return false;
+	}
+	else
+	{
+		utils.setScriptVar(objTarget, "combat.intLastDelay", intCurrentTime);
+		utils.setScriptVar(objTarget, appliedDelay, fltDelay);
+		string_id strSpam = new string_id("combat_effects", "delay_applied_self");
+		int intDelay = (int)fltDelay;
+		prose_package proseTest = prose.getPackage(strSpam, intDelay);
+
+		if(isPlayer(objTarget))
+		{
+			if(showDefenderSuccessMessage)
+			{
+				sendSystemMessageProse(objTarget, proseTest);
+			}
+		}
+
+		strSpam = new string_id("combat_effects", "delay_applied_other");
+		proseTest = prose.getPackage(strSpam, objTarget, intDelay);
+		if(isPlayer(objAttacker))
+		{
+			if(showAttackerSuccessMessage)
+			{
+				sendSystemMessageProse(objAttacker, proseTest);
+			}
+		}
+		//queueDelay(objTarget, fltDelay);
+	}
+	return true;
+
+}
+
+
+
+
+void doCombatAnimationResults(string strPlaybackName, attacker_results cbtAttackerResults, hit_result[] cbtHitData, weapon_data cbtWeaponData, defender_results[] cbtDefenderResults, dictionary dctCombatInfo)
+{
+// for futrue additions, this will handle all of the more complex flipflopping between combat animations.
+
+
+	int intUseAbsoluteAnimation = dctCombatInfo.getInt("intUseAbsoluteAnimation");
+	if(intUseAbsoluteAnimation>0)
+	{
+		//LOG("jedi", "strPlaybackName is "+strPlaybackName);
+		doSuppressionFireResults(strPlaybackName, cbtAttackerResults,cbtDefenderResults, dctCombatInfo);
+	}
+	else
+	{
+
+		string[] strPlaybackNames = makePlaybackNames(strPlaybackName, cbtHitData, cbtWeaponData);
+		//LOG("jedi", "strPlaybackName is "+strPlaybackNames[0]);
+		doMultiDefenderCombatResults(strPlaybackNames, cbtAttackerResults, cbtDefenderResults, dctCombatInfo); // change this to doSuppressionFireResults if posture changes are needed.
+	}
+	return;
+
+}
+
+weapon_data getOverloadedWeaponData(weapon_data cbtWeaponData, dictionary dctCombatInfo)
+{
+
+	int intOverloadWeapon = dctCombatInfo.getInt("intOverloadWeapon");
+	if(intOverloadWeapon>0)
+	{
+		cbtWeaponData.minDamage = dctCombatInfo.getInt("intMaxDamage");
+		cbtWeaponData.minDamage = dctCombatInfo.getInt("intMaxDamage");
+		cbtWeaponData.minRange= dctCombatInfo.getFloat("fltMinRange");
+		cbtWeaponData.maxRange = dctCombatInfo.getFloat("fltMaxRange");
+		cbtWeaponData.accuracy = dctCombatInfo.getInt("intAccuracy");
+		cbtWeaponData.attackSpeed = dctCombatInfo.getFloat("fltAttackSpeed");
+		//LOG("jedi", "cbtWeaponData.attackSpeed is "+cbtWeaponData.attackSpeed);
+		cbtWeaponData.attackCost = dctCombatInfo.getInt("intAttackCost");
+		cbtWeaponData.isDisabled = false;
+		return cbtWeaponData;
+	}
+	else
+	{
+		return cbtWeaponData;
+	}
+
+}
+
+
+void doForceChokeSpam(obj_id objTarget)
+{
+	string_id strText = new string_id("combat_effects", "choke"); // flytext
+	string_id strSpam = new string_id("combat_effects", "choke_single"); // system message
+	sendSystemMessage(objTarget, strSpam);
+	color colTest = colors.RED;
+	showFlyText(objTarget, strText, 1, colTest);
+	return;
+
+
+}
+void doForceWeaken(obj_id objTarget, obj_id objAttacker, float fltMultiplier)
+{
+
+
+	for(int intI = 0; intI<=WILLPOWER; intI++)
+	{
+		int intBaseValue = rand(-200, -100);
+		int intValue = (int)(intBaseValue* fltMultiplier);
+		float fltBaseDuration = rand(15, 30);
+		float fltDuration = fltBaseDuration * fltMultiplier;
+		addAttribModifier(objTarget, intI, intValue, fltDuration, rand(15f, 30f), rand(15f, 30f));
+	}
+	return;
+
+}
+
+
+weapon_data calculateDamageMitigation(obj_id objDefender, string strDefenderCommand, weapon_data cbtWeaponData, int intMinDamage, int intMaxDamage)
+{
+	// we finagle min/maxdamage into real damage values and return them in the weapon data struct.
+	// Make sure  to use the PASSED VALUES as teh weapon data is fucked with every iteration in the defender array
+	float fltMinDamage = (float)intMinDamage;
+	float fltMaxDamage = (float)intMaxDamage;
+
+	////LOG("combat", "command is "+strDefenderCommand);
+	////LOG("combat", "old min is "+fltMinDamage);
+	float fltLimit =1.0f;
+	if(hasCommand(objDefender, strDefenderCommand+"_1"))
+	{
+		fltLimit = 0.80f; // 80% of range
+
+	}
+	if(hasCommand(objDefender, strDefenderCommand+"_2"))
+	{
+		fltLimit = 0.60f;
+	}
+	if(hasCommand(objDefender, strDefenderCommand+"_3"))
+	{
+		fltLimit = 0.40f;
+	}
+
+	////LOG("combat", "old max is "+fltMaxDamage);
+	float fltDifference = fltMaxDamage - fltMinDamage;
+	////LOG("combat", "difference is "+fltDifference);
+	float fltDamage = fltDifference * fltLimit;
+	////LOG("combat", "fltLimit is "+fltLimit);
+	fltMaxDamage = fltMinDamage + fltDamage; // new max
+	////LOG("combat", "new max damage is "+fltMaxDamage);
+
+	cbtWeaponData.maxDamage = (int)fltMaxDamage;
+	return cbtWeaponData;
+
+}
+
+float getHitBonus(int intWeaponCategory, obj_id objDefender)
+{
+	int intWeaponType = getWeaponType(getCurrentWeapon(objDefender));
+	if(intWeaponCategory==combat.RANGED_WEAPON)
+	{
+		// ranged weapon from ther attacker.
+		switch (intWeaponType)
+		{
+			case WEAPON_TYPE_RIFLE : return 0f;
+			case WEAPON_TYPE_LIGHT_RIFLE : return 0f;
+			case WEAPON_TYPE_PISTOL : return 0f;
+			case WEAPON_TYPE_HEAVY : return 0f;
+			case WEAPON_TYPE_1HAND_MELEE : return 0f;
+			case WEAPON_TYPE_2HAND_MELEE: return 0f;
+			case WEAPON_TYPE_UNARMED: return 0f;
+			case WEAPON_TYPE_POLEARM: return 0f;
+			case WEAPON_TYPE_THROWN: return 0f;
+			case WEAPON_TYPE_WT_1HAND_LIGHTSABER: return 0f;
+			case WEAPON_TYPE_WT_2HAND_LIGHTSABER: return 0f;
+			case WEAPON_TYPE_WT_POLEARM_LIGHTSABER: return 0f;
+		}
+
+	}
+	else
+	{
+		// melee weapon from the attacker
+		switch (intWeaponType)
+		{
+			case WEAPON_TYPE_RIFLE : return 100f;
+			case WEAPON_TYPE_LIGHT_RIFLE : return 75f;
+			case WEAPON_TYPE_PISTOL : return 20f;
+			case WEAPON_TYPE_HEAVY : return 100f;
+			case WEAPON_TYPE_1HAND_MELEE : return 0f;
+			case WEAPON_TYPE_2HAND_MELEE: return 0f;
+			case WEAPON_TYPE_UNARMED: return 0f;
+			case WEAPON_TYPE_POLEARM: return 0f;
+			case WEAPON_TYPE_THROWN: return 0f;
+			case WEAPON_TYPE_WT_1HAND_LIGHTSABER: return 0f;
+			case WEAPON_TYPE_WT_2HAND_LIGHTSABER: return 0f;
+			case WEAPON_TYPE_WT_POLEARM_LIGHTSABER: return 0f;
+		}
+
+
+	}
+	return 0f;
+
+
+
+}
+
+void combatLog(obj_id attacker, obj_id defender, string logName, string logMsg)
+{
+#ifdef COMBATLOG
+	const string[] enabledLogs = {
+									"setDefenderCombatResults",
+									"runHitEngine",
+									"getCombatDefenders",
+									"end" };
+
+	if (utils.getElementPositionInArray (enabledLogs, logName) == -1)
+		return;
+
+	string attackerName = getEncodedName(attacker);
+	string defenderName = getEncodedName(defender);
+	if (attackerName.startsWith("@")) attackerName = localize(getNameStringId(attacker));
+	if (defenderName.startsWith("@")) defenderName = localize(getNameStringId(defender));
+
+	LOG ("combat_log", attackerName+"("+attacker+") ATTACKS "+defenderName+"("+defender+")\t:"+logName+"::"+logMsg);
+#endif
+}
+
+string listArrayContents(obj_id[] array)
+{
+	string output = "";
+
+	for (int i = 0; i < array.length; i++)
+	{
+		output += array[i];
+
+		if (i < array.length - 1)
+			output += ", ";
+	}
+
+	return output;
+}

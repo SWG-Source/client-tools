@@ -1,0 +1,347 @@
+
+/*************************************************************/
+
+include library.city;
+include library.create;
+include library.groundquests;
+include library.locations;
+include library.utils;
+
+/************************************************************/
+const boolean LOGGING_ON			= false; 
+
+const string_id	CALL_SHIP  			= new string_id ("meatlump/meatlump", "comlink_use");
+const string_id MUST_DISMOUNT			= new string_id ("quest/ground/util/quest_giver_object", "must_dismount");
+const string_id PLAYER_IN_CELL			= new string_id ("quest/ground/util/quest_giver_object", "player_in_cell");
+const string_id NOT_WHILE_INCAPPED		= new string_id ("quest/ground/util/quest_giver_object", "not_while_incapped");
+const string_id SID_NOT_WHILE_IN_COMBAT		= new string_id("base_player", "not_while_in_combat");
+const string_id SID_COMLINK_ERROR		= new string_id("meatlump/meatlump", "comlink_error");
+const string_id SID_COMLINK_WRONG_PLANET	= new string_id("meatlump/meatlump", "comlink_wrong_planet");
+
+const string MEATLUMP_LOG			= "meatlump_weapons_delivery";
+
+const string QUEST_NAME				= "quest/mtp_hideout_retrieve_delivery";
+const string QUEST_BEGINNING_TASK_ACTIVE	= "useComlink";
+const string QUEST_SHUTTLE_TASK_ACTIVE		= "shuttleLanded";
+const string QUEST_ENEMIES_KILLED_ACTIVE	= "okCallShuttle";
+const string ENEMY_MOB				= "mtp_delivery_ambush_ragtag_blackjack";
+const string SHUTTLE_TEMPLATE			= "object/creature/npc/theme_park/event_transport.iff";
+
+const string SHUTTLE_LAND_QUEST_SIGNAL		= "shuttleLandedDelivery";
+const string SHUTTLE_COMM_TOO_HOT_QUEST_SIGNAL	= "shuttleTooHotCommSignal";
+const string SHUTTLE_COMM_OK_QUEST_SIGNAL	= "shuttleOkCommSignal";
+
+const string SHUTTLE_SCRIPT			= "theme_park.meatlump.quest_shuttle_event";
+const string ENEMY_SCRIPT			= "theme_park.meatlump.quest_ragtag_attack_event";
+const string NO_TRADE_SCRIPT			= "item.special.nomove";
+
+const string ENEMY_SPAWNED_OBJVAR		= "meatlump.enemy_spawned";
+const string ENEMY_KILLED_OBJVAR		= "meatlump.enemy_killed";
+const string OWNER_OBJVAR			= "meatlump.owner";
+const string COMLINK_OBJVAR			= "meatlump.comlink";
+const string USED_OBJVAR			= "meatlump.been_used";
+const string RAGTAG_ARRAY_OBJVAR		= "meatlump.ragtag_array";
+
+const int NORMAL_MOB_COUNT 			= 2;
+const int EPIC_MOB_COUNT 			= 4;
+
+const int MOB_LEVEL_HANDICAP 			= 6;
+
+trigger OnAttach()
+{
+	attachScript(self, NO_TRADE_SCRIPT);
+	return SCRIPT_CONTINUE;
+}
+
+//checks to make sure the template of the object is in the datatable and checks the validity of the quest before changing USE to Call Ship
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	blog("OnObjectMenuRequest init ");
+
+	if(!utils.isNestedWithinAPlayer(self))
+		return SCRIPT_CONTINUE;
+	else if(hasObjVar(self, USED_OBJVAR) && !hasObjVar(self, OWNER_OBJVAR))
+			return SCRIPT_CONTINUE;		
+	else if(hasObjVar(self, USED_OBJVAR) && hasObjVar(self, OWNER_OBJVAR))
+	{
+		if(getObjIdObjVar(self, OWNER_OBJVAR) != player)
+			return SCRIPT_CONTINUE;			
+	}
+	blog("OnObjectMenuRequest giving menu option.");
+
+	int menuOption = mi.addRootMenu (menu_info_types.ITEM_USE, CALL_SHIP);
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	blog("OnObjectMenuSelect init.");
+
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	if(hasObjVar(self, USED_OBJVAR) && hasObjVar(self, OWNER_OBJVAR))
+	{
+		blog("OnObjectMenuSelect - has USED_OBJVAR and OWNER_OBJVAR. Comparing to check player owner.");	
+		if(getObjIdObjVar(self, OWNER_OBJVAR) != player)
+		{
+			blog("OnObjectMenuSelect - has USED_OBJVAR and OWNER_OBJVAR buy the incorrect player is using comlink.");		
+			return SCRIPT_CONTINUE;			
+		}
+		else
+		blog("OnObjectMenuSelect - has USED_OBJVAR and OWNER_OBJVAR. Comparing to check player owner.");	
+
+	}
+	if(item == menu_info_types.ITEM_USE)
+	{
+		blog("OnObjectMenuSelect - ITEM_USE");		
+	
+		//check the location before doing anything
+		//the player must not be indoors, or in a city
+		if(!wildLocation(player) || !checkScene(self, player))
+		{
+			blog("OnObjectMenuSelect - Not WIld Loc");		
+			return SCRIPT_CONTINUE;
+		}
+		// checks for combat
+		else if(getState(player, STATE_COMBAT) > 0)
+		{
+			sendSystemMessage(player, SID_NOT_WHILE_IN_COMBAT);
+			return SCRIPT_CONTINUE;
+		}
+		else if(getState(player, STATE_RIDING_MOUNT) == 1)
+		{
+			sendSystemMessage(player, MUST_DISMOUNT);
+			return SCRIPT_CONTINUE;
+		}
+		else if(isDead(player) || isIncapacitated(player))
+		{
+			sendSystemMessage(player, NOT_WHILE_INCAPPED);
+			return SCRIPT_CONTINUE;
+		}
+		//or in a cell
+		else if (getTopMostContainer(player) != player)
+		{
+			sendSystemMessage(player, PLAYER_IN_CELL);
+			return SCRIPT_CONTINUE;
+		}
+		//the specific task needed to land the shuttle must be active
+		else if(!groundquests.isTaskActive(player, QUEST_NAME, QUEST_BEGINNING_TASK_ACTIVE) && !groundquests.isTaskActive(player, QUEST_NAME, QUEST_SHUTTLE_TASK_ACTIVE))
+		{
+			blog("OnObjectMenuSelect - QUEST_BEGINNING_TASK_ACTIVE not found");							
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(!spawnEvent(self, player))
+		{
+			sendSystemMessage(player, SID_COMLINK_ERROR);
+			blog("OnObjectMenuSelect - spawnEvent FAILED");					
+		}
+		else
+			blog("OnObjectMenuSelect - spawnEvent SUCCESS");		
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// Check to see if the quest object should be destroyed or not.
+void destroySelf(obj_id self)
+{
+	detachScript(self,"item.special.nodestroy");
+	destroyObject(self);
+}
+
+//------------------------------------------------------------
+boolean wildLocation(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+		
+	location loc = getLocation(player);
+
+	if(isIdValid(loc.cell))
+	{
+		sendSystemMessage(player, new string_id("combat_effects", "not_indoors"));
+		return false;
+	}
+
+	if(locations.isInMissionCity(loc))
+	{
+		sendSystemMessage(player, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+
+	if(city.isInCity(loc))
+	{
+		sendSystemMessage(player, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+	return true;
+}
+
+boolean spawnEvent(obj_id self, obj_id player)
+{
+	blog("spawnEvent - Init");					
+
+	if(!isIdValid(player) || !exists(player))
+		return false;
+	else if(!wildLocation(player))
+		return false;
+
+	blog("spawnEvent - Wild Location confirmed");					
+	
+	if(!hasObjVar(self, USED_OBJVAR))
+		setObjVar(self, USED_OBJVAR, true);
+	if(!hasObjVar(self, OWNER_OBJVAR))
+		setObjVar(self, OWNER_OBJVAR, player);
+	
+	if(!hasObjVar(self, ENEMY_SPAWNED_OBJVAR) && !groundquests.isTaskActive(player, QUEST_NAME, QUEST_ENEMIES_KILLED_ACTIVE))
+	{
+		blog("spawnEvent - Player is spawing Ragtags");						
+		spawnRagTags(self, player);
+		return true;
+	}
+	else if(hasObjVar(self, ENEMY_SPAWNED_OBJVAR) && groundquests.isTaskActive(player, QUEST_NAME, QUEST_SHUTTLE_TASK_ACTIVE))
+	{
+		blog("spawnEvent - Player is spawing Shuttle");						
+		spawnShuttle(self, player);
+		return true;		
+	}
+
+	return false;
+}
+
+boolean spawnShuttle(obj_id self, obj_id player)
+{
+	blog("spawnShuttle - init");						
+
+	if(!isIdValid(player) || !exists(player))
+		return false;
+	blog("spawnShuttle - player validated");						
+
+	location landingLoc = getRandomLocationAroundPlayer(self, player);
+	blog("spawnShuttle - received landingLoc: "+landingLoc);						
+	obj_id shuttle = createObject(SHUTTLE_TEMPLATE, landingLoc);
+	if(!isIdValid(shuttle))
+		return false;
+
+	blog("spawnShuttle - shuttle: "+shuttle);					
+	attachScript(shuttle, SHUTTLE_SCRIPT);
+	setObjVar(shuttle, OWNER_OBJVAR, player);
+	
+	//UPDATE PLAYER QUEST
+	groundquests.sendSignal(player, SHUTTLE_LAND_QUEST_SIGNAL);
+	
+	blog("spawnShuttle - shuttle landing sequesnce sent");					
+
+	messageTo(shuttle, "startLandingSequence", null, 0.0f, false);
+	//DESTROY THE COMLINK
+	destroySelf(self);
+	
+	return true;
+}
+
+boolean spawnRagTags(obj_id self, obj_id player)
+{
+	blog("spawnRagTags - init");						
+
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	blog("spawnRagTags - about to send signal to Quest");						
+	//signal to player saying landing zone too hot
+	groundquests.sendSignal(player, SHUTTLE_COMM_TOO_HOT_QUEST_SIGNAL);
+
+	blog("spawnRagTags - sent signal to Quest");						
+		
+	//slight delay, then spawn enemies
+	messageTo(self, "spawnEnemies", null, 2, false);
+	blog("spawnRagTags - setting objvar on comlink");						
+	setObjVar(self, ENEMY_SPAWNED_OBJVAR, true);
+	return true;
+}
+
+location getRandomLocationAroundPlayer(obj_id self, obj_id player)
+{
+	blog("getRandomLocationAroundPlayer - init");						
+
+	if(!isIdValid(player) || !exists(player))
+		return null;
+	//get the player location and then offset that location
+	location loc = getLocation(player);
+	float treasureXdelta = rand(15f, 18f);
+	float treasureZdelta = rand(15f, 18f);
+
+	loc.x += treasureXdelta;
+	loc.z += treasureZdelta;	
+	loc.y = getHeightAtLocation(loc.x, loc.z);
+	blog("getRandomLocationAroundPlayer - returning: "+loc);						
+	return loc;
+}
+
+messageHandler spawnEnemies()
+{
+	blog("spawnEnemies - Init");						
+
+	obj_id player = getObjIdObjVar(self, OWNER_OBJVAR);
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	blog("spawnEnemies - Creating empty resizable obj_id array");						
+
+	resizeable obj_id[] ragtags = null;
+	int mobLevel = (getLevel(player) - MOB_LEVEL_HANDICAP);
+	blog("spawnEnemies - Mob Level for all Spawns: "+mobLevel);						
+	
+	for (int i = 0; i < NORMAL_MOB_COUNT; i++)
+	{
+		location spawnLoc  = getRandomLocationAroundPlayer(self, player);
+	
+		obj_id mob = create.object(ENEMY_MOB, spawnLoc, mobLevel);
+		if(!isValidId(mob) || !exists(mob))
+			return SCRIPT_CONTINUE;
+
+		attachScript(mob, ENEMY_SCRIPT);	
+		faceTo(mob, player);
+		setObjVar(mob, OWNER_OBJVAR, player);
+		setObjVar(mob, COMLINK_OBJVAR, self);
+		
+		if(i == 0)
+			messageTo(mob, "barkAttack", null, 2, false);
+
+		ragtags = utils.addElement(ragtags, mob);
+	}
+
+	blog("spawnEnemies - Successfully finished loop");						
+	
+	if(ragtags != null && ragtags.length > 0)
+		setObjVar(self, RAGTAG_ARRAY_OBJVAR, ragtags);
+
+	blog("spawnEnemies - ragtag list length: "+ragtags.length);						
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean checkScene(obj_id self, obj_id player)
+{	
+	//validate planet
+	if(!isValidId(player) || !exists(player))
+		return false;
+
+	string scene = getCurrentSceneName();
+	if(scene.equals("corellia"))
+		return true;
+
+	// This is the wrong planet.
+	sendSystemMessage(player, SID_COMLINK_WRONG_PLANET);//"You need to be on Corellia to use this comlink.", null);
+	return false;
+}
+
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON)
+		LOG(MEATLUMP_LOG,msg);
+	return true;
+}

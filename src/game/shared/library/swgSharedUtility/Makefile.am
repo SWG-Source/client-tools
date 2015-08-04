@@ -1,0 +1,6 @@
+AUTOMAKE_OPTIONS=foreign
+SUBDIRS=src .
+lib_LTLIBRARIES=libswgSharedUtility.la
+libswgSharedUtility_la_LIBADD=src/shared/libswgSharedUtilityshared.la 
+libswgSharedUtility_la_SOURCES=src/shared/FirstSwgSharedNetworkMessages.h
+libswgSharedUtility_la_LDFLAGS=-avoid-version

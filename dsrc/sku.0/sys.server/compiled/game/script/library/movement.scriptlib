@@ -1,0 +1,725 @@
+include library.utils;
+
+// CONSTANTS //////////////////////////
+
+const int MT_BOOST		= 1;
+const int MT_SNARE		= 2;
+const int MT_PERMABOOST = 3;
+const int MT_PERMASNARE = 4;
+const int MT_ROOT		= 5;
+const int MT_STUN		= 6;
+const int MT_MEZMERIZE	= 7;
+const int MT_ALL		= 99;
+
+const string MOVEMENT_OBJVAR 	= "movement";
+const string MOVEMENT_TABLE 	= "datatables/movement/movement.iff";
+
+// API FUNCTIONS //////////////////////
+
+boolean refresh(obj_id target)
+{
+	boolean result = false;
+
+	if(isIdValid(target))
+	{
+		float modifier = _recalculateMovementModifiers(target);
+
+		if(setMovementPercent(target, modifier))
+		{
+			result = true;
+		}
+		else
+		{
+			LOG("combat", "MOVEMENT MANAGER - ERROR: Could not set movement percent of " + modifier + " on " + getName(target) + " (" + target + ")");
+		}
+	}
+
+	return result;
+}
+
+/**
+ * Checks to see if a specified movement modifier can be applied to a target. A modifier cannot be applied if the
+ * target is invalid, the modifier does not exist, the target already has the specified modifier, or the target already
+ * has a stronger modifier from the same group.
+ *
+ * @param target		the player or mob to check
+ * @param name			the name of the modifier
+ * @return 				true if the modifier can be applied, false if it cannot
+ *
+ */
+boolean canApplyMovementModifier(obj_id target, string name)
+{
+	if(!isIdValid(target))
+		return false;
+
+	if(!isPlayer(target) && !isMob(target))
+		return false;
+
+	if(!isValidModifier(name))
+		return false;
+
+	if(!isPlayer(target) && !canAffectOnFoot(name))
+		return false;
+
+	//check for immunity here
+	if(checkForMovementImmunity(target, name))
+		return false;
+
+	if(hasMovementModifier(target, name))
+		return false;
+
+	return true;
+}
+
+/**
+ * Applies the specified movement modifier to the target (Uses default strength from datatable.)
+ *
+ * @param target		the player or mob
+ * @param name			the name of the modifier
+ * @return 				true if the modifier was applied, false if an error occured
+ *
+ */
+boolean applyMovementModifier(obj_id target, string name)
+{
+	return applyMovementModifier(target, name, -1.0f);
+}
+
+/**
+ * Applies the specified movement modifier to the target
+ *
+ * @param target		the player or mob
+ * @param name			the name of the modifier
+ * @param strength		the strength of the buff (-1 to use default from datatable)
+ * @return 				true if the modifier was applied, false if an error occured
+ *
+ */
+boolean applyMovementModifier(obj_id target, string name, float strength)
+{
+	if(!isIdValid(target))
+		return false;
+
+	//if(isGod(target))
+		//sendSystemMessageTestingOnly(target, "Attempting to apply modifier: " + name);
+
+	if(!isPlayer(target) && !isMob(target))
+		return false;
+
+	if(!canApplyMovementModifier(target, name))
+		return false;
+
+	boolean customStr = true;
+
+	if(strength == -1)
+	{
+		customStr = false;
+		strength = getStrength(name);
+	}
+
+	if(getSkillStatisticModifier(target, "expertise_movement_buff_" + name) != 0)
+	{
+		customStr = true;
+		strength += strength * (getSkillStatisticModifier(target, "expertise_movement_buff_" + name) / 100.0f);
+	}
+
+	utils.setScriptVar(target, MOVEMENT_OBJVAR + "." + name + ".time", getGameTime());
+
+	if(customStr)
+		utils.setScriptVar(target, MOVEMENT_OBJVAR + "." + name + ".strength", strength);
+
+	const boolean result = refresh(target);
+
+	//if (result && isGod(target))
+	//	sendSystemMessageTestingOnly(target, "Final Speed Modifier: " + getMovementPercent(target));
+
+	return result;
+}
+
+/**
+ * Removes the specified movement modifier from the target
+ *
+ * @param target		the player or mob
+ * @param name			the name of the modifier
+ * @return 				true if the modifier was removed, false if an error occured
+ *
+ */
+boolean removeMovementModifier(obj_id target, string name)
+{
+	return removeMovementModifier(target, name, true);
+}
+
+/**
+ * Removes the specified movement modifier from the target
+ *
+ * @param target		the player or mob
+ * @param name			the name of the modifier
+ * @param recalculate	specifies if the movement speed should be recalculated after removal
+ * @return 				true if the modifier was removed, false if an error occured
+ *
+ */
+boolean removeMovementModifier(obj_id target, string name, boolean recalculate)
+{
+	if(!isIdValid(target))
+	{
+		return false;
+	}
+	if(!isPlayer(target) && !isMob(target))
+	{
+		return false;
+	}
+	if(!hasMovementModifier(target, name))
+	{
+		debugSpeakMsg(target, "I have no movement modifier, thus I cannot remove one");
+		return false;
+	}
+
+	if(utils.hasScriptVar(target, MOVEMENT_OBJVAR + "." + name + ".time"))
+		utils.removeScriptVarTree(target, MOVEMENT_OBJVAR + "." + name);
+
+	combat.removeCombatMovementModifierEffect(target, name);
+
+	boolean result = true;
+
+	if(recalculate)
+	{
+		result = refresh(target);
+
+//		if (result && isGod(target))
+//			sendSystemMessageTestingOnly(target, "Removing modifier '" + name + "'  New speed: " + getMovementPercent(target));
+	}
+
+	return result;
+}
+
+/**
+ * Clears all movement modifiers from the target
+ *
+ * @param target		the player or mob
+ * @return 				true if all modifiers were removed, false if not
+ *
+ */
+boolean removeAllModifiers(obj_id target)
+{
+	string[] mods = getAllModifiers(target);
+
+	if(mods == null || mods.length == 0)
+		return false;
+
+	for(int i = 0; i < mods.length; i++)
+	{
+		removeMovementModifier(target, mods[i], false);
+	}
+
+	return refresh(target);
+}
+
+/**
+ * Clears all movement modifiers, of a specific type, from the target
+ *
+ * @param target		player or mob
+ * @param type			int
+ *
+ */
+boolean removeAllModifiersOfType(obj_id target, int type)
+{
+	string[] mods = getAllModifiers(target);
+
+	if(mods == null || mods.length == 0)
+		return false;
+
+	boolean removed = false;
+	for(int i = 0; i < mods.length; i++)
+	{
+		if(getType(mods[i])==type && buff.canBeDispelled(mods[i]))
+		{
+			removeMovementModifier(target, mods[i], false);
+			removed = true;
+		}
+	}
+
+	if (removed)
+		return refresh(target);
+	else
+		return false;
+
+}
+
+/**
+ * Checks to see if the target has any movement modifiers
+ *
+ * @param target		the player or mob
+ * @return 				true if the target has any modifiers, false if not
+ *
+ */
+boolean hasMovementModifier(obj_id target)
+{
+	deltadictionary dd = target.getScriptVars();
+	java.util.Enumeration keys = dd.keys();
+	while(keys.hasMoreElements())
+	{
+		string key = (string)(keys.nextElement());
+		if(key.startsWith(MOVEMENT_OBJVAR + "."))
+			return true;
+	}
+
+	return false;
+}
+
+/**
+ * Checks to see if the target has the specified movement modifier
+ *
+ * @param target		the player or mob
+ * @param name			the name of the modifier
+ * @return 				true if the target has the specified modifier, false if not
+ *
+ */
+boolean hasMovementModifier(obj_id target, string name)
+{
+	if(utils.hasScriptVar(target, MOVEMENT_OBJVAR + "." + name + ".time"))
+		return true;
+
+	return false;
+}
+
+
+// OTHER FUNCTIONS ////////////////////
+
+// Returns the type of movement modifier
+int getType(string name)
+{
+	return getType(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the type of movement modifier
+int getType(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+		return dataTableGetInt(MOVEMENT_TABLE, row, "type");
+	return MT_ROOT;
+}
+
+// Returns the strength of the modifier
+float getStrength(string name)
+{
+	return getStrength(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the strength of the modifier
+float getStrength(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+		return dataTableGetFloat(MOVEMENT_TABLE, row, "strength");
+	return 0;
+}
+
+// Returns the custom strength of the modifier currently on the target if available, otherwise default strength
+float getCurrentStrength(obj_id target, string name)
+{
+	if(hasObjVar(target, MOVEMENT_OBJVAR + "." + name + ".strength"))
+		return getFloatObjVar(target, MOVEMENT_OBJVAR + "." + name + ".strength");
+
+	if(utils.hasScriptVar(target, MOVEMENT_OBJVAR + "." + name + ".strength"))
+		return utils.getFloatScriptVar(target, MOVEMENT_OBJVAR + "." + name + ".strength");
+
+	return getStrength(name);
+}
+
+// Returns whether or not the modifier exists in the datatable
+boolean isValidModifier(string name)
+{
+	return isValidModifier(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not the modifier exists in the datatable
+boolean isValidModifier(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	return (row >= 0);
+}
+
+// Returns whether or not the modifier is a 'root' type
+boolean isRoot(string name)
+{
+	return (isRoot(getStringCrc(name.toLowerCase())) || isStunEffect(name));
+}
+
+// Returns whether or not the modifier is a 'root' type
+boolean isRoot(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+		return (dataTableGetInt(MOVEMENT_TABLE, row, "type") == MT_ROOT );
+	return false;
+}
+
+// Returns whether or not the modifier is a 'snare' type
+boolean isSnare(string name)
+{
+	return isSnare(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not the modifier is a 'snare' type
+boolean isSnare(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+	{
+		int type = dataTableGetInt(MOVEMENT_TABLE, row, "type");
+		if (type == MT_SNARE || type == MT_PERMASNARE)
+			return true;
+	}
+	return false;
+}
+
+// Returns whether or not the modifier is persisted when the character logs off
+boolean isPersisted(string name)
+{
+	return isPersisted(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not the modifier is persisted when the character logs off
+boolean isPersisted(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+		return (dataTableGetInt(MOVEMENT_TABLE, row, "persistence") == 1);
+	return false;
+}
+
+boolean canAffectOnFoot(string name)
+{
+	return canAffectOnFoot(getStringCrc(name.toLowerCase()));
+}
+
+boolean canAffectOnFoot(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+		return (dataTableGetInt(MOVEMENT_TABLE, row, "affects_onfoot") == 1);
+	return false;
+}
+
+boolean canAffectVehicles(string name)
+{
+	return canAffectVehicles(getStringCrc(name.toLowerCase()));
+}
+
+boolean canAffectVehicles(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+		return (dataTableGetInt(MOVEMENT_TABLE, row, "affects_vehicle") == 1);
+	return false;
+}
+
+boolean canAffectMounts(string name)
+{
+	return canAffectMounts(getStringCrc(name.toLowerCase()));
+}
+
+boolean canAffectMounts(int nameCrc)
+{
+	int row = dataTableSearchColumnForInt(nameCrc, "name", MOVEMENT_TABLE);
+	if ( row >= 0 )
+		return (dataTableGetInt(MOVEMENT_TABLE, row, "affects_mount") == 1);
+	return false;
+}
+
+boolean isStunEffect(string name)
+{
+	return dataTableGetInt(MOVEMENT_TABLE, name, "type") == MT_STUN;
+}
+
+boolean hasStunEffect(obj_id target)
+{
+	string[] movementMods = getAllModifiers(target);
+
+	if (movementMods == null || movementMods.length == 0)
+		return false;
+
+	for (int i=0;i<movementMods.length;i++)
+	{
+		if (isStunEffect(movementMods[i]))
+		{
+//			debugSpeakMsg(target, "Effect: "+movementMods[i]+" is a stun effect currently on my character");
+			return true;
+		}
+	}
+
+	return false;
+}
+
+string[] getAllStunEffects(obj_id target)
+{
+	string[] movementMods = getAllModifiers(target);
+
+	if (movementMods == null || movementMods.length == 0)
+		return null;
+
+	resizeable string[] effectList = new string[0];
+
+	for (int i=0;i<movementMods.length;i++)
+	{
+		if (isStunEffect(movementMods[i]))
+			effectList.add(movementMods[i]);
+	}
+
+	return utils.toStaticStringArray(effectList);
+}
+
+// Returns an array that contains all the modifiers currently on the target
+string[] getAllModifiers(obj_id target)
+{
+	Vector mods = new Vector();
+
+	deltadictionary dd = target.getScriptVars();
+	java.util.Enumeration keys = dd.keys();
+	while(keys.hasMoreElements())
+	{
+		string key = (string)(keys.nextElement());
+		if(key.startsWith(MOVEMENT_OBJVAR + ".") && key.endsWith(".time"))
+		{
+			string[] vars = split(key, '.');
+
+			mods.add(vars[1]);
+		}
+	}
+
+	return utils.toStaticStringArray(mods);
+}
+
+// Returns the percentage amount by which to modify speed for the specified modifier
+float _getMovementPercentageAdjustment(obj_id target, string name)
+{
+	int type = getType(name);
+	float pct = getCurrentStrength(target, name);
+	pct /= 100.0f;
+
+	if(type == MT_SNARE || type == MT_PERMASNARE)
+		pct *= -1.0f;
+
+	return pct;
+}
+
+// Returns the sum of all movement modifiers currently on the target
+float _recalculateMovementModifiers(obj_id target)
+{
+	float boostMod = 0.0f;
+	float snareMod = 0.0f;
+	float permaBoost = 0.0f;
+	float permaSnare = 1.0f;
+
+	string[] mods = getAllModifiers(target);
+
+	testStunEffects(target);
+
+	if(mods == null || mods.length == 0)
+	{
+		return 1.0f;
+	}
+
+	obj_id mount = getMountId(target);
+
+
+	for(int i = 0; i < mods.length; i++)
+	{
+		if(isPlayer(target) && isIdValid(mount))
+		{
+			if(hasScript(mount,"systems.vehicle_system.vehicle_base"))
+			{
+				if(!canAffectVehicles(mods[i]))
+					continue;
+			}
+			else
+			{
+				if(!canAffectMounts(mods[i]))
+					continue;
+			}
+		}
+		else
+		{
+			if(!canAffectOnFoot(mods[i]))
+				continue;
+		}
+
+
+
+		if(isRoot(mods[i]))
+			return 0.0f;
+
+		float adj = _getMovementPercentageAdjustment(target, mods[i]);
+
+		if(adj == Float.NEGATIVE_INFINITY)
+			continue;
+
+		int type = getType(mods[i]);
+		switch(type)
+		{
+			// Only the highest boost takes effect
+			case MT_BOOST:
+					if (adj > boostMod)
+						boostMod = adj;
+					break;
+
+			// Only the highest snare takes effect
+			case MT_SNARE:
+					if (adj < snareMod)
+						snareMod = adj;
+					break;
+
+			// Perma boosts are additive
+			case MT_PERMABOOST:
+					permaBoost += adj;
+					break;
+
+			// Perma snares are multiplicitive
+			case MT_PERMASNARE:
+					permaSnare *= (1.0f + adj);
+					break;
+		}
+	}
+
+
+	// Can only have one snare OR one boost, snare has higher priority.
+	if (snareMod < 0.0)
+	{
+		boostMod = 0.0f;
+	}
+
+	// Add all the permaboosts and highest boost to base run speed
+	float modifier = 1.0f + permaBoost + boostMod;
+
+	// Multiply base run by cumulated permasnares and highest snare
+	modifier = modifier * permaSnare * (1.0f + snareMod);
+
+	if(modifier < 0.0f)
+		modifier = 0.0f;
+
+	return modifier;
+}
+
+boolean checkForMovementImmunity(obj_id target, string name)
+{
+	//LOG("Immunity//MOVEMENT:", "Checking if this buff/movement modifier has an immunity on ---"+getName(target));
+
+	int modifierType = getType(name);
+
+	if(isPlayer(target) && !buff.canBeDispelled(name) )
+		return false;
+
+	boolean resisted = false;
+
+	int stunResist = getEnhancedSkillStatisticModifierUncapped(target, "movement_resist_stun");
+	int snareResist = getEnhancedSkillStatisticModifierUncapped(target, "movement_resist_snare");
+	int rootResist = getEnhancedSkillStatisticModifierUncapped(target, "movement_resist_root");
+	//Mez is not implemented, i'm just ahead of the curve here.
+	//int mezResist = getEnhancedSkillStatisticModifierUncapped(target, "movement_resist_mez");
+
+	if (modifierType == MT_STUN)
+	{
+		if (rand(1, 99) < stunResist)
+			resisted = true;
+	}
+	else if (modifierType == MT_SNARE)
+	{
+		if (rand(1, 99) < snareResist)
+			resisted = true;
+	}
+	else if (modifierType ==MT_ROOT)
+	{
+		if (rand(1, 99) < rootResist)
+			resisted = true;
+	}
+	//LOG("Immunity//MOVEMENT:", "Result of this buff/movement modifier immunity = "+resisted+" from "+name+" with snareResist = "+snareResist);
+	return resisted;
+}
+
+boolean testStunEffects(obj_id target)
+{
+	boolean isStunned =hasStunEffect(target);
+
+	setState(target, STATE_STUNNED, isStunned);
+
+	float turnRate = isStunned ? 0.0f : 360.0f;
+
+	//setTurnRate(target, turnRate);
+
+	return isStunned;
+}
+
+void updateMovementImmunity(obj_id target)
+{
+
+	int stunResist = getEnhancedSkillStatisticModifierUncapped(target, "movement_resist_stun");
+	int snareResist = getEnhancedSkillStatisticModifierUncapped(target, "movement_resist_snare");
+	int rootResist = getEnhancedSkillStatisticModifierUncapped(target, "movement_resist_root");
+
+	dictionary dict = new dictionary();
+	dict.put("self", target);
+	if (stunResist >= 100)
+	{
+		if (removeAllModifiersOfType(target, movement.MT_STUN))
+		{
+			string_id cureMovementMsg = new string_id ("spam", "cure_dot");
+			dict.put("detriment", "stunned");
+			dict.put("msgId", cureMovementMsg);
+			messageTo(target, "messageDetrimentalRemoved", dict, 0.0f, false);
+		}
+	}
+
+	if (snareResist >= 100)
+	{
+		if (removeAllModifiersOfType(target, movement.MT_SNARE))
+		{
+			string_id cureMovementMsg = new string_id ("spam", "cure_dot");
+			dict.put("detriment", "snared");
+			dict.put("msgId", cureMovementMsg);
+			messageTo(target, "messageDetrimentalRemoved", dict, 0.0f, false);
+		}
+	}
+
+	if (rootResist >= 100)
+	{
+		if (removeAllModifiersOfType(target, movement.MT_ROOT))
+		{
+			string_id cureMovementMsg = new string_id ("spam", "cure_dot");
+			dict.put("detriment", "rooted");
+			dict.put("msgId", cureMovementMsg);
+			messageTo(target, "messageDetrimentalRemoved", dict, 0.0f, false);
+		}
+	}
+
+}
+
+// Overrides current movement percentage rate and sets the actor to state walk.
+void performWalk(obj_id actor)
+{
+	removeObjVar(actor, "run");
+	setMovementPercent(actor, 1.0f);
+	setMovementWalk(actor);
+}
+
+// Initializes a new movement percentage rate and sets the actor to state run.
+void performRun(obj_id actor, string speed)
+{
+	removeObjVar(actor, "run");
+
+	float rate = utils.stringToFloat(speed);
+
+	setObjVar(actor, "run", rate);
+
+	setMovementPercent(actor, rate);
+	setMovementRun(actor);
+}
+
+// Initializes a new movement percentage rate and sets the actor to state run.
+void performRun(obj_id actor, float rate)
+{
+	removeObjVar(actor, "run");
+
+	setObjVar(actor, "run", rate);
+
+	setMovementPercent(actor, rate);
+	setMovementRun(actor);
+}

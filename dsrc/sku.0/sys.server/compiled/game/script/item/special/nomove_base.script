@@ -1,0 +1,138 @@
+
+include library.sui;
+include library.utils;
+include library.pet_lib;
+include library.player_structure;
+include library.structure;
+include library.space_transition;
+include library.space_utils;
+
+// This script contains the basic nomove logic.  
+// It is inherited by nomove.script, nomove_container.script and other nomove scripts
+
+// Do not define OnAboutToBeTransfered or OnTransferred in any top level script that 
+// uses this script and keep all transfer logic here.
+
+trigger OnAboutToBeTransferred(obj_id dest, obj_id transferer)
+{
+	if ( !isIdValid(transferer))
+		return SCRIPT_CONTINUE;
+
+	if (!isPlayer(transferer))
+		return SCRIPT_CONTINUE;
+				
+	obj_id owner = getOwner(self);
+	if ( !isIdValid(owner) || !isPlayer(owner))
+		owner = transferer;
+
+	if(pet_lib.isPet(dest))
+		return SCRIPT_OVERRIDE;
+		
+	if(owner != transferer)
+	{
+		// if the no trade item is a "shared" no trade item and is immediately
+		// contained in a structure cell, and is being transferred to the
+		// transferer's inventory (i.e. picked up), also allow the transfer if
+		// the transferer is on the same account as the current owner of the item
+		if (isNoTradeShared(self))
+		{
+			obj_id container = getContainedBy(self);
+			if (isIdValid(container) && getTemplateName(container).equals(structure.TEMPLATE_CELL))
+			{
+				if (isIdValid(dest))
+				{
+					obj_id transfererInv = utils.getInventoryContainer(transferer);
+					if (isIdValid(transfererInv) && (dest == transfererInv))
+					{
+						int transfererStationId = getPlayerStationId(transferer);
+						if ((transfererStationId != 0) && (transfererStationId == getPlayerStationId(owner)))
+							return SCRIPT_CONTINUE;
+					}
+				}
+			}
+		}
+
+		string name = getString(getNameStringId(self));
+		string msg = "You are not the owner of " + name + "\n";
+		msg += " This item may only be picked up by the owner.";
+		string title = "INFO";
+		sui.msgbox(transferer, transferer, msg, sui.OK_ONLY, title, "noHandler");
+		return SCRIPT_OVERRIDE;
+	}
+
+	location loc = getLocation(transferer);
+	obj_id inv = utils.getInventoryContainer(owner);
+	obj_id bank = utils.getPlayerBank(owner);
+	obj_id cell = loc.cell;
+	obj_id appearanceInv = getAppearanceInventory(owner);
+	
+	LOG ("nomove", "Source = " + transferer + "; Dest = " + dest + "; Owner = " + owner + "; Inv = " + inv + "; Bank = " + bank + "; Appearance Inventory = " + appearanceInv);
+	if (!isIdValid(inv) || !isIdValid(bank) )
+		return SCRIPT_OVERRIDE;
+
+	if (dest == owner || dest == inv || dest == bank || dest == appearanceInv)
+		return SCRIPT_CONTINUE;
+
+	boolean inPlayerHouseOrPOB = false;
+	if (isIdValid(cell)) 
+	{
+		if(dest == cell)
+		{
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+		 	obj_id currentParent = getContainedBy(dest);
+		 	while(isIdValid(currentParent) && !inPlayerHouseOrPOB)
+		 	{
+		 		inPlayerHouseOrPOB = currentParent == cell;
+		 		currentParent = getContainedBy(currentParent);
+		 	}
+		
+		}
+	}
+
+	// Check to see if we are placing this into a container held by the player.
+	obj_id player = utils.getContainingPlayer(dest);
+	
+
+	if (player == transferer || inPlayerHouseOrPOB)
+	{
+		// If this container is already noTrade then allow the transfer
+		if (hasObjVar(dest, "noTrade"))
+			return SCRIPT_CONTINUE;
+		
+		// Otherwise flag the container as noTrade, by adding the nomove_container script to it and allow the transfer
+		attachScript(dest, "item.special.nomove_container");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (isGod(transferer))
+	{
+		sendSystemMessageTestingOnly(transferer, "[GOD MODE] You have been allowed to move a No Trade item.  This item may now be tradable by players if it is in a container!");
+		return SCRIPT_CONTINUE;
+	}
+
+	// Not a valid place to move the object
+	string name = getString(getNameStringId(self));
+	string msg = name + " may only be equipped by the owner, placed in the owner's inventory, the owner's house, a container in the owners house (must be in the same room when transferring), or placed in the owner's bank.";
+	string title = "INFO";
+	sui.msgbox(owner, owner, msg, sui.OK_ONLY, title, "noHandler");
+ 	return SCRIPT_OVERRIDE;
+}
+
+//the item went from a creatures corpse or loot container to a players backpack, set the objvar there
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{	
+	// Make sure that we are not being deleted...
+	if (isIdValid(self))
+	{
+		if (hasObjVar(self, "noTrade"))
+			return SCRIPT_CONTINUE;
+
+		if (utils.isNestedWithinAPlayer(destContainer))
+			setObjVar(self, "noTrade", true);
+	}
+		
+	return SCRIPT_CONTINUE;	
+}

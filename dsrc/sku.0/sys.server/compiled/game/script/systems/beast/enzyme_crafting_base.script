@@ -1,0 +1,619 @@
+include library.hue;
+include library.utils;
+
+
+const int ITEM_CENTRIFUGE		= 0;
+const int ITEM_PROCESSOR		= 1;
+const int ITEM_COMBINER			= 2;
+
+
+const int CENTRIFUGE_RUNTIME		= 60*60*3; // 3 hours
+const int PROCESSOR_RUNTIME		= 60*60*2; // 2 hours
+const int COMBINER_RUNTIME		= 60*60*3; // 3 hours
+
+const float SINGLE_STAGE_CAP		= 4.6f;
+
+const string ENZYME_TYPE_3		= "object/tangible/loot/beast/enzyme_3.iff";
+const string[] ENZYME_ELEMENT_LIST	= 
+					{
+						"object/tangible/loot/beast/enzyme_3_element_1.iff",
+						"object/tangible/loot/beast/enzyme_3_element_2.iff",
+						"object/tangible/loot/beast/enzyme_3_element_3.iff",
+						"object/tangible/loot/beast/enzyme_3_element_4.iff",
+						"object/tangible/loot/beast/enzyme_3_element_5.iff"
+					};
+
+const string CENTRIFUGE_USE		= "object/tangible/component/genetic_engineering/centrifuge_use_tray.iff";
+const string PROCESSOR_USE		= "object/tangible/component/genetic_engineering/processor_use_mold.iff";
+const string COMBINER_USE		= "object/tangible/component/genetic_engineering/combiner_use_capsule.iff";
+
+const string CRAFTED_PURITY		= "crafting.enzyme_purity";
+const string CRAFTED_MUTAGEN		= "crafting.enzyme_mutagen";
+
+const string ENZYME_PURITY		= "enzyme.enzyme_purity";
+const string ENZYME_MUTAGEN		= "enzyme.enzyme_mutagen";
+const string ENZYME_TRAIT		= "enzyme.enzyme_trait";
+
+const string ENZYME_PROCESSED		= "enzyme.enzyme_processed";
+const string ELEMENT_PROCESSED		= "enzyme.element_processed";
+
+const string SYSTEM			= "system";
+const string FINISH_TIME		= "system.finish_time";
+const string PROCESS_PURITY		= "system.enzyme_purity";
+const string PROCESS_MUTAGEN		= "system.enzyme_mutagen";
+const string PROCESS_TRAITS		= "system.enzyme_traits";
+
+const string_id ERROR_ON_START		= new string_id("beast", "error_on_start");
+const string_id NOT_BEASTMASTER		= new string_id("beast", "beast_master_use_only");
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	if (!canBeTransfered())
+		return SCRIPT_OVERRIDE;
+		
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if (isInOperation())
+		return SCRIPT_OVERRIDE;
+		
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if (isInOperation() && (isIdValid(transferer) && isPlayer(transferer)))
+		return SCRIPT_OVERRIDE;
+	else if (!isValidComponentForMachine(item))
+		return SCRIPT_OVERRIDE;
+		
+ 	return SCRIPT_CONTINUE;
+}
+
+
+int getMachineType()
+{
+	string template = utils.getTemplateFilenameNoPath(getSelf());
+	if (template == null || template == "")
+		return -1;
+		
+	if (template.startsWith("centrifuge"))
+		return ITEM_CENTRIFUGE;
+	
+	if (template.startsWith("processor"))
+		return ITEM_PROCESSOR;
+		
+	if (template.startsWith("combiner"))
+		return ITEM_COMBINER;
+		
+	return -1;
+}
+
+boolean isInOperation()
+{
+	return hasObjVar(getSelf(), FINISH_TIME);
+}
+
+void  completeAnyOperations()
+{
+	if (!hasObjVar(getSelf(), FINISH_TIME))
+		return;
+		
+	int finishTime = getIntObjVar(getSelf(), FINISH_TIME);
+	
+	if (getGameTime() < finishTime)
+		return;
+		
+	completeProcess();
+}
+
+void terminateProcess()
+{
+	removeObjVar(getSelf(), SYSTEM);
+}
+
+boolean canBeTransfered()
+{
+	return (!isInOperation() && !containsItems());
+}
+
+boolean isInValidOperatingLocation()
+{
+	return utils.isInHouseCellSpace(getSelf());
+}
+
+boolean containsItems()
+{
+	return (getContents(getSelf()) != null && getContents(getSelf()).length > 0);
+}
+
+int getTimeToFinishInt()
+{
+	int timeAtComplete = hasObjVar(getSelf(), FINISH_TIME) ? getIntObjVar(getSelf(), FINISH_TIME) : -1;
+	
+	if (timeAtComplete == -1)
+		return -1;
+	
+	return timeAtComplete - getGameTime();
+}
+
+string getTimeToFinishString()
+{
+	return utils.formatTimeVerbose(getTimeToFinishInt());
+}
+
+boolean isValidComponentForMachine(obj_id passedItem)
+{
+	string itemToCheck = getTemplateName(passedItem);
+	
+	int machineType = getMachineType();
+	
+	boolean isValidItem = false;	
+	
+	switch (machineType)
+	{
+		case ITEM_CENTRIFUGE:
+			if (itemToCheck == ENZYME_TYPE_3 && !isEnzymeProcessed(passedItem))
+				isValidItem = true;
+			else if (itemToCheck == CENTRIFUGE_USE)
+				isValidItem = true;
+			else if (getElementType(passedItem) > 0)
+				isValidItem = true;				
+			break;
+		case ITEM_PROCESSOR:
+			if (getElementType(passedItem) > 0 && !isElementProcessed(passedItem))
+				isValidItem = true;
+			else if (itemToCheck == PROCESSOR_USE)
+				isValidItem = true;
+			break;
+		case ITEM_COMBINER:
+			if (getElementType(passedItem) > 0 && isElementProcessed(passedItem))
+				isValidItem = true;
+			else if (itemToCheck == COMBINER_USE)
+				isValidItem = true;
+			else if (itemToCheck == ENZYME_TYPE_3)
+				isValidItem = true;
+			break;
+		default:
+			break;
+	}
+	
+	return isValidItem;
+}
+
+boolean isEnzymeProcessed(obj_id enzyme)
+{
+	return hasObjVar(enzyme, ENZYME_PROCESSED) ? getBooleanObjVar(enzyme, ENZYME_PROCESSED) : false;
+}
+
+boolean isElementProcessed(obj_id element)
+{
+	return hasObjVar(element, ELEMENT_PROCESSED) ? getBooleanObjVar(element, ELEMENT_PROCESSED) : false;
+}
+
+int getElementType(obj_id element)
+{
+	string passedObject = getTemplateName(element);
+	
+	for (int i=0;i<ENZYME_ELEMENT_LIST.length;i++)
+	{
+		if (passedObject.equals(ENZYME_ELEMENT_LIST[i]))
+			return i + 1;
+	}
+	
+	return -1;
+}
+
+boolean isReadyToOperate()
+{
+	int machineType = getMachineType();
+	
+	if (!containsItems())
+		return false;
+	
+	boolean isReady = false;
+	switch (machineType)
+	{
+		case ITEM_CENTRIFUGE:
+			isReady =  validateCentrifugeOperation();
+			break;
+		case ITEM_PROCESSOR:
+			isReady = validateProcessorOperation();
+			break;
+		case ITEM_COMBINER:
+			isReady = validateCombinerOperation();
+			break;
+		default:
+			isReady = false;
+			break;
+	}
+	
+	return isReady;
+}
+
+boolean validateCentrifugeOperation()
+{
+	obj_id[] contents = getContents(getSelf());
+	
+	boolean hasTray = false;
+	boolean hasUnprocessedEnzyme = false;
+
+	for (int i=0;i<contents.length;i++)
+	{
+		string objectTemplate = getTemplateName(contents[i]);
+
+		if (objectTemplate == ENZYME_TYPE_3 && !isEnzymeProcessed(contents[i]))
+			hasUnprocessedEnzyme = true;
+
+		if (objectTemplate == CENTRIFUGE_USE)
+			hasTray = true;
+	}
+			
+	return (hasTray && hasUnprocessedEnzyme);
+}
+
+boolean validateProcessorOperation()
+{
+	obj_id[] contents = getContents(getSelf());
+	
+	boolean hasCapsule = false;
+	boolean hasElement = false;
+	
+	for (int i=0;i<contents.length;i++)
+	{
+		string objectTemplate = getTemplateName(contents[i]);
+		
+		if (objectTemplate.indexOf("enzyme_3_element") > -1 && !isElementProcessed(contents[i]))
+			hasElement = true;
+			
+		if (objectTemplate == PROCESSOR_USE)
+			hasCapsule = true;
+	}
+	
+	return (hasElement && hasCapsule);
+}
+
+boolean validateCombinerOperation()
+{
+	obj_id[] contents = getContents(getSelf());
+	
+	boolean hasMold = false;
+	boolean hasFiveElements = false;
+	int fiveElements = 11111;
+	
+	for (int i=0;i<contents.length;i++)
+	{
+		string objectTemplate = getTemplateName(contents[i]);
+
+		if (objectTemplate == COMBINER_USE)
+			hasMold = true;
+		
+		if (objectTemplate == ENZYME_ELEMENT_LIST[0])
+			fiveElements -= 1;
+			
+		if (objectTemplate == ENZYME_ELEMENT_LIST[1])
+			fiveElements -= 10;
+			
+		if (objectTemplate == ENZYME_ELEMENT_LIST[2])
+			fiveElements -= 100;
+			
+		if (objectTemplate == ENZYME_ELEMENT_LIST[3])
+			fiveElements -= 1000;
+			
+		if (objectTemplate == ENZYME_ELEMENT_LIST[4])
+			fiveElements -= 10000;
+		
+	}
+	
+	if (fiveElements == 0)
+		hasFiveElements = true;
+	
+	return (hasMold && hasFiveElements);
+}
+
+int startProcess(obj_id player)
+{
+	return startProcess(player, -1);
+}
+
+int startProcess(obj_id player, int time)
+{
+	int machineType = getMachineType();
+	
+	switch (machineType)
+	{
+		case ITEM_CENTRIFUGE:
+			return startCentrifuge(player, time);
+			
+		case ITEM_PROCESSOR:
+			return startProcessor(player, time);
+			
+		case ITEM_COMBINER:
+			return startCombiner(player, time);
+			
+	}
+	
+	return -1;
+}
+
+void completeProcess()
+{
+	int machineType = getMachineType();
+	
+	switch (machineType)
+	{
+		case ITEM_CENTRIFUGE:
+			stopCentrifuge();
+			break;
+		case ITEM_PROCESSOR:
+			stopProcessor();
+			break;
+		case ITEM_COMBINER:
+			stopCombiner();
+			break;
+	}
+}
+
+
+int startCentrifuge(obj_id player, int time)
+{
+	obj_id tray = getObjIdByTemplate(CENTRIFUGE_USE);
+	
+	float machinePurity = getFloatObjVar(getSelf(), CRAFTED_PURITY) / 2.0f;
+	float trayPurity = getFloatObjVar(tray, CRAFTED_PURITY) * 1.5f;
+	
+	float machineMutagen = getFloatObjVar(getSelf(), CRAFTED_MUTAGEN) / 2.0f;
+	float trayMutagen = getFloatObjVar(tray, CRAFTED_MUTAGEN) * 1.5f;
+	
+	float craftedPurity = (machinePurity + trayPurity) / 2.0f;
+	float craftedMutagen = (machineMutagen + trayMutagen) / 2.0f;
+
+	//cap the crafted purity because I gave away too much on the tools
+	craftedPurity = craftedPurity > SINGLE_STAGE_CAP ? SINGLE_STAGE_CAP : craftedPurity;
+	
+	int geneticEngineeringMod = getEnhancedSkillStatisticModifierUncapped(player, "expertise_bm_genetic_engineering");
+	
+	float ge_mod = 1.0f + (geneticEngineeringMod / 100.0f);
+	
+	craftedPurity *= ge_mod;
+	craftedMutagen *= ge_mod;
+	
+	int addedTime = time < 0 ?  CENTRIFUGE_RUNTIME : time;
+	int timeAtComplete = getGameTime() + addedTime;
+	
+	setObjVar(getSelf(), PROCESS_PURITY, craftedPurity);
+	setObjVar(getSelf(), PROCESS_MUTAGEN, craftedMutagen);
+	setObjVar(getSelf(), FINISH_TIME, timeAtComplete);
+	
+	destroyObject(tray);
+	
+	return timeAtComplete;
+}
+
+int startProcessor(obj_id player, int time)
+{
+	obj_id capsule = getObjIdByTemplate(PROCESSOR_USE);
+
+	float machinePurity = getFloatObjVar(getSelf(), CRAFTED_PURITY) / 2.0f;
+	float capsulePurity = getFloatObjVar(capsule, CRAFTED_PURITY) * 1.5f;
+	
+	float machineMutagen = getFloatObjVar(getSelf(), CRAFTED_MUTAGEN) / 2.0f;
+	float capsuleMutagen = getFloatObjVar(capsule, CRAFTED_MUTAGEN) * 1.5f;
+	
+	float craftedPurity = (machinePurity + capsulePurity) / 2.0f;
+	float craftedMutagen = (machineMutagen + capsuleMutagen) / 2.0f;
+
+	//cap the crafted purity because I gave away too much on the tools
+	craftedPurity = craftedPurity > SINGLE_STAGE_CAP ? SINGLE_STAGE_CAP : craftedPurity;
+	
+	int geneticEngineeringMod = getEnhancedSkillStatisticModifierUncapped(player, "expertise_bm_genetic_engineering");
+	
+	float ge_mod = 1+ (geneticEngineeringMod / 100.0f);
+	
+	craftedPurity *= ge_mod;
+	craftedMutagen *= ge_mod;
+	
+	int addedTime = time < 0 ? PROCESSOR_RUNTIME : time;
+	
+	int timeAtComplete = getGameTime() + addedTime;
+	
+	setObjVar(getSelf(), PROCESS_PURITY, craftedPurity);
+	setObjVar(getSelf(), PROCESS_MUTAGEN, craftedMutagen);
+	setObjVar(getSelf(), FINISH_TIME, timeAtComplete);
+	
+	destroyObject(capsule);	
+	
+	return timeAtComplete;
+}
+
+int startCombiner(obj_id player, int time)
+{
+	obj_id mold = getObjIdByTemplate(COMBINER_USE);
+	
+	float machinePurity = getFloatObjVar(getSelf(), CRAFTED_PURITY) / 2.0f;
+	float moldPurity = getFloatObjVar(mold, CRAFTED_PURITY) * 1.5f;
+	
+	float machineMutagen = getFloatObjVar(getSelf(), CRAFTED_MUTAGEN) / 2.0f;
+	float moldMutagen = getFloatObjVar(mold, CRAFTED_MUTAGEN) * 1.5f;
+	
+	float craftedPurity = (machinePurity + moldPurity) / 2.0f;
+	float craftedMutagen = (machineMutagen + moldMutagen) / 2.0f;
+
+	//cap the crafted purity because I gave away too much on the tools
+	craftedPurity = craftedPurity > SINGLE_STAGE_CAP ? SINGLE_STAGE_CAP : craftedPurity;
+	
+	int geneticEngineeringMod = getEnhancedSkillStatisticModifierUncapped(player, "expertise_bm_genetic_engineering");
+	
+	float ge_mod = 1+ (geneticEngineeringMod / 100.0f);
+	
+	craftedPurity *= ge_mod;
+	craftedMutagen *= ge_mod;
+	
+	int addedTime = time < 0 ? COMBINER_RUNTIME : time;
+	int timeAtComplete = getGameTime() + addedTime;
+	
+	setObjVar(getSelf(), PROCESS_PURITY, craftedPurity);
+	setObjVar(getSelf(), PROCESS_MUTAGEN, craftedMutagen);
+	setObjVar(getSelf(), FINISH_TIME, timeAtComplete);
+	
+	destroyObject(mold);	
+	
+	return timeAtComplete;
+}
+
+
+void stopCentrifuge()
+{
+	obj_id enzyme = getObjIdByTemplate(ENZYME_TYPE_3);
+
+	float enzymePurity = getFloatObjVar(enzyme, ENZYME_PURITY);
+	float enzymeMutagen = getFloatObjVar(enzyme, ENZYME_MUTAGEN);
+	
+	float craftedPurity = getFloatObjVar(getSelf(), PROCESS_PURITY);
+	float craftedMutagen = getFloatObjVar(getSelf(), PROCESS_MUTAGEN);
+	
+	float newPurityOne = enzymePurity + rand(craftedPurity / 2.0f, craftedPurity);
+	float newPurityTwo = enzymePurity + rand(craftedPurity / 2.0f, craftedPurity);
+	
+	float newMutagenOne = enzymeMutagen + rand(craftedMutagen / 2.0f, craftedMutagen);
+	float newMutagenTwo = enzymeMutagen + rand(craftedMutagen / 2.0f, craftedMutagen);
+	
+	string trait = getStringObjVar(enzyme, ENZYME_TRAIT);
+
+	destroyObject(enzyme);
+	
+	int elementOneType = rand(0,4);
+	int elementTwoType = rand(0,4);
+	obj_id elementOne = createObject(ENZYME_ELEMENT_LIST[elementOneType], getSelf(), "");
+	obj_id elementTwo = createObject(ENZYME_ELEMENT_LIST[elementTwoType], getSelf(), "");
+	
+	setObjVar(elementOne, ENZYME_PURITY, newPurityOne);
+	setObjVar(elementOne, ENZYME_MUTAGEN, newMutagenOne);
+	setObjVar(elementOne, ENZYME_TRAIT, trait);
+	
+	setObjVar(elementTwo, ENZYME_PURITY, newPurityTwo);
+	setObjVar(elementTwo, ENZYME_MUTAGEN, newMutagenTwo);
+	setObjVar(elementTwo, ENZYME_TRAIT, trait);
+	
+	hue.setColor(elementOne, hue.INDEX_1, 5);
+	hue.setColor(elementTwo, hue.INDEX_1, 5);
+	
+	removeObjVar(getSelf(), SYSTEM);
+}
+
+void stopProcessor()
+{
+	obj_id[] contents = getContents(getSelf());
+	obj_id element = contents[0];
+
+	float enzymePurity = getFloatObjVar(element, ENZYME_PURITY);
+	float enzymeMutagen = getFloatObjVar(element, ENZYME_MUTAGEN);
+	
+	float craftedPurity = getFloatObjVar(getSelf(), PROCESS_PURITY);
+	float craftedMutagen = getFloatObjVar(getSelf(), PROCESS_MUTAGEN);
+	
+	float newPurity = enzymePurity + rand(craftedPurity / 2.0f, craftedPurity);
+	
+	float newMutagen = enzymeMutagen + rand(craftedMutagen / 2.0f, craftedMutagen);
+	
+	setObjVar(element, ENZYME_PURITY, newPurity);
+	setObjVar(element, ENZYME_MUTAGEN, newMutagen);
+	setObjVar(element, ELEMENT_PROCESSED, true);
+	
+	colorElement(element);
+	removeObjVar(getSelf(), SYSTEM);
+}
+
+void stopCombiner()
+{
+	float avgElementPurity = averagePurityFromElements();
+	float avgElementMutagen = averageMutagenFromElements();
+	
+	float craftedPurity = getFloatObjVar(getSelf(), PROCESS_PURITY);
+	float craftedMutagen = getFloatObjVar(getSelf(), PROCESS_MUTAGEN);
+	
+	float newPurity = avgElementPurity + rand(craftedPurity / 2.0f, craftedPurity);
+	
+	if (newPurity > 20.0f)
+		newPurity = 20.0f;
+		
+	float newMutagen = avgElementMutagen + rand(craftedMutagen / 2.0f, craftedMutagen);
+
+	clearToolContents();
+	
+	obj_id enzyme = createObject(ENZYME_TYPE_3, getSelf(), "");
+	
+	setObjVar(enzyme, ENZYME_PURITY, newPurity);
+	setObjVar(enzyme, ENZYME_MUTAGEN, newMutagen);
+	setObjVar(enzyme, ENZYME_TRAIT, "NONE");
+	
+	setObjVar(enzyme, ENZYME_PROCESSED, true);
+	removeObjVar(getSelf(), SYSTEM);
+}
+
+
+float averagePurityFromElements()
+{
+	float total = 0.0f;
+	for (int i=0;i<ENZYME_ELEMENT_LIST.length;i++)
+	{
+		obj_id element = getObjIdByTemplate(ENZYME_ELEMENT_LIST[i]);
+		total += getFloatObjVar(element, ENZYME_PURITY);
+	}
+
+	return (total / ENZYME_ELEMENT_LIST.length);
+}
+
+float averageMutagenFromElements()
+{
+	float total = 0.0f;
+	for (int i=0;i<ENZYME_ELEMENT_LIST.length;i++)
+	{
+		obj_id element = getObjIdByTemplate(ENZYME_ELEMENT_LIST[i]);
+		total += getFloatObjVar(element, ENZYME_MUTAGEN);
+	}
+
+	return (total / ENZYME_ELEMENT_LIST.length);
+}
+
+void clearToolContents()
+{
+	obj_id[] contents = getContents(getSelf());
+	
+	if (contents == null || contents.length == 0)
+		return;
+
+	for (int i=0;i<contents.length;i++)
+		destroyObject(contents[i]);
+}
+
+obj_id getObjIdByTemplate(string template)
+{
+	obj_id[] contents = getContents(getSelf());
+	
+	if (contents == null || contents.length == 0)
+		return null;
+		
+	for (int i=0;i<contents.length;i++)
+	{
+		string objectTemplate = getTemplateName(contents[i]);
+		
+		if (objectTemplate == template)
+			return contents[i];
+	}
+	
+	return null;
+}
+
+void colorElement(obj_id element)
+{
+	string template = getTemplateName(element);
+	
+	for (int i=0;i<ENZYME_ELEMENT_LIST.length;i++)
+	{
+		if (template == ENZYME_ELEMENT_LIST[i])
+			hue.setColor(element, hue.INDEX_1, i);	
+	}
+}	

@@ -1,0 +1,529 @@
+include library.ai_lib;
+include library.buff;
+include library.chat;
+include library.prose;
+include library.trial;
+include library.utils;
+
+const string DATATABLE					= "datatables/quest/jedi_collection/jedi_robe_collection.iff";
+const string DATA_UTTERANCE				= "utterance_msg";
+const string DATA_SLOT_AWARDED			= "slot_awarded";
+const string DATA_SUCCESS_MSG			= "success_msg";
+const string DATA_FAILURE_MSG			= "failure_msg";
+const string DATA_FAILURE_DEBUFF		= "failure_debuff";
+
+const string LIGHT_JEDI_VOLUME			= "jedi_event_light_jedi";
+const float LIGHT_JEDI_MAX_DISTANCE		= 7.0f;
+const int LIGHT_JEDI_DISTANCE_INTERVAL	= 3;
+const int LIGHT_JEDI_EVENT_DURATION		= 180;
+
+const string OBJVAR_EVENT_NAME			= "jediRobeEventName";
+const string SCRIPTVAR_EVENT_PLAYER		= "jediRobeEventPlayer";
+
+trigger OnAttach()
+{
+	ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+	trial.setInterest(self);
+	
+	messageTo(self, "jediEventInitializeNpc", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler jediEventInitializeNpc()
+{
+	obj_id player = utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+
+	if ( isIdValid(player) )
+	{
+		string eventName = getStringObjVar(self, OBJVAR_EVENT_NAME);
+		dictionary eventData = dataTableGetRow(DATATABLE, eventName);
+		if ( eventData == null || eventData.isEmpty() )
+		{
+			messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+			return SCRIPT_CONTINUE;
+		}
+		
+		obj_id parent = trial.getParent(self);
+		if ( !isIdValid(parent) )
+		{
+			messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+			return SCRIPT_CONTINUE;
+		}
+
+		string utterance = eventData.getString(DATA_UTTERANCE);
+		if ( utterance != null && utterance.length() > 0 )
+		{
+			prose_package pp = new prose_package ();
+			pp.stringId = new string_id("quest2", utterance);
+
+			string playerName = getName(player);
+			if ( playerName != null && playerName.length() > 0 )
+			{
+				prose.setTO(pp, playerName);
+				chat.publicChat(self, player, null, null, pp);
+			}
+		}
+
+		dictionary webster = new dictionary();
+		webster.put("player", player);
+		webster.put("count", 1);
+		
+		messageTo(self, "jediEventCombatCheck", webster, 2, false);
+		
+		if ( eventName.equals("light_jedi") )
+		{
+			messageTo(self, "jediEventDistanceCheck", webster, LIGHT_JEDI_DISTANCE_INTERVAL, false);
+			
+			dictionary resetDict = trial.getSessionDict(parent);
+			messageTo(self, "jediEventLightJediHandler", resetDict, LIGHT_JEDI_EVENT_DURATION, false);
+		}
+		else
+		{
+			buff.applyBuff(self, "jedi_statue_self_dps_debuff");
+		}
+		
+		// Make sure the jedi is attacking his target.
+		if ( !ai_lib.isInCombat(self) )
+		{
+			startCombat(self, player);
+			addHate(self, player, 1000.0f);
+		}
+	}
+	else
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler jediEventLightJediHandler()
+{
+	obj_id parent = trial.getParent(self);
+	
+	int passed  = params.getInt(trial.MESSAGE_SESSION);
+	int current = trial.getSession(parent);
+	//debugSpeakMsg(parent, "jediEventLightJediHandler... (current = "+ current+" and passed = "+passed);
+	
+	if ( !isInvulnerable(self) && trial.verifySession(parent, params) )
+	{		
+		jediEventEnded(self, utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER));
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler jediEventDistanceCheck()
+{
+	if ( !isInvulnerable(self) && !hasFailedJediEvent(self) )
+	{
+		obj_id player = params.getObjId("player");
+		if ( !isIdValid(player) || !exists(player) )
+		{
+			messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+			return SCRIPT_CONTINUE;
+		}
+
+		location jediLoc = getLocation(self);
+		location playerLoc = getLocation(player);
+		location creationLoc = aiGetHomeLocation(self);
+		
+		float distanceCheck = utils.getDistance2D(jediLoc, creationLoc);
+		if ( distanceCheck > LIGHT_JEDI_MAX_DISTANCE )
+		{
+			if ( isGod(player) )
+			{
+				sendSystemMessage(player, "God Mode Failure Message: Player ran away - the coward...", "");
+			}
+			
+			setJediEventFailed(self, player);
+			jediEventEnded(self, player);
+		}
+		else
+		{
+			dictionary webster = new dictionary();
+			webster.put("player", player);
+			messageTo(self, "jediEventDistanceCheck", webster, 3, false);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler jediEventCombatCheck()
+{
+	//sendSystemMessage(player, "jediEventCombatCheck called...", "");
+	if ( !isInvulnerable(self) )
+	{
+		obj_id player = params.getObjId("player");
+		int count = params.getInt("count");
+		if ( !isIdValid(player) || !exists(player) )
+		{
+			messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+			return SCRIPT_CONTINUE;
+		}
+
+		obj_id[] playerHateList = getHateList(player);
+		if ( playerHateList != null )
+		{
+			//obj_id entry = (playerHateList.length > 0) ? playerHateList[0] : null;
+			//sendSystemMessage(player, "playerHateList.length = "+playerHateList.length+" and first entry = "+ entry, "");
+			if( playerHateList.length > 1 || (playerHateList.length > 0 && playerHateList[0] != self) )
+			{
+				if ( isGod(player) )
+				{
+					sendSystemMessage(player, "God Mode Message: Player has someone other than the NPC Statue Jedi on their hate list. Event failed.", "");
+				}
+				setJediEventFailed(self, player);
+				jediEventEnded(self, player);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		// Make sure the jedi is attacking his target.
+		if ( !ai_lib.isInCombat(self) )
+		{
+			if ( count > 3 )
+			{
+				if ( isGod(player) )
+				{
+					sendSystemMessage(player, "God Mode Message: NPC Jedi is still not in combat after multiple attempts to force it. Event failed.", "");
+				}
+				setJediEventFailed(self, player);
+				jediEventEnded(self, player);
+				return SCRIPT_CONTINUE;
+			}
+
+			startCombat(self, player);
+			addHate(self, player, 1000.0f);
+		}
+
+		dictionary webster = new dictionary();
+		webster.put("player", player);
+		webster.put("count", ++count);	
+		messageTo(self, "jediEventCombatCheck", webster, 2, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id wpn, int[] damage)
+{
+	if ( hasFailedJediEvent(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( !hasObjVar(self, OBJVAR_EVENT_NAME) )
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	string eventName = getStringObjVar(self, OBJVAR_EVENT_NAME);
+	if ( eventName == null || eventName.length() < 1 )
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	float damageThreshold = 0.1f;
+	if ( eventName.equals("light_jedi") )
+	{
+		damageThreshold = 0.6f;
+	}
+
+	int maxHealth = getUnmodifiedMaxAttrib(self, HEALTH);
+	int currentHealth = getAttrib(self, HEALTH);
+
+	if ( currentHealth <= (maxHealth * damageThreshold) )
+	{
+		if ( eventName.equals("light_jedi") )
+		{
+			if ( isGod(attacker) )
+			{
+				sendSystemMessage(attacker, "God Mode Failure Message: : Damage threshold broken against light jedi.", "");
+			}
+			setJediEventFailed(self, attacker);
+		}
+		jediEventEnded(self, attacker);
+	}
+	else
+	{
+		int maxAction = getUnmodifiedMaxAttrib(self, ACTION);
+		int currentAction = getAttrib(self, ACTION);
+		int actionMod = (int) (maxAction*0.1);
+		int newAction = currentAction + actionMod;
+		if ( newAction > maxAction )
+		{
+			newAction = maxAction;
+		}
+		setAttrib(self, ACTION, newAction);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler makeJediEventStopCombat()
+{
+	utils.removeScriptVar( self, "ai.combat.isInCombat");
+	setCombatTarget(self, null);
+	//stopCombat(self);
+	//clearHateList(self);
+	ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+	buff.removeAllBuffs(self);
+	
+	
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id attacker = params.getObjId("attacker");
+	obj_id player = utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+	if ( !isIdValid(player) || !isIdValid(attacker) || attacker != player  )
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	string eventName = getStringObjVar(self, OBJVAR_EVENT_NAME);
+	if ( eventName == null || eventName.length() < 1 )
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	dictionary eventData = dataTableGetRow(DATATABLE, eventName);
+	if ( eventData == null || eventData.isEmpty() )
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	string endMsg = eventData.getString(DATA_SUCCESS_MSG);
+	string slotAwarded = eventData.getString(DATA_SLOT_AWARDED);
+	if ( hasFailedJediEvent(self) )
+	{
+		endMsg = eventData.getString(DATA_FAILURE_MSG);
+		CustomerServiceLog("jedi_cloak_statue_event", "(" + player + ") " + getName(player) + " has FAILED against the " + eventName + " statue event with buff list: ("+buffListForCSLog(player)+")");
+	}
+	else
+	{
+		modifyCollectionSlotValue(player, slotAwarded, 1);
+		CustomerServiceLog("jedi_cloak_statue_event", "(" + player + ") " + getName(player) + " has BEATEN the " + eventName + " statue event with buff list: ("+buffListForCSLog(player)+")");
+	}
+	
+	chat.publicChat(self, player, new string_id("quest2", endMsg));
+	
+	messageTo(self, "handleJediEventExit", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+string buffListForCSLog(obj_id player)
+{
+	string buffsString = "none";
+	int[] buffs = buff.getAllBuffs(player);
+	if ( buffs != null || buffs.length > 0)
+	{
+		buffsString = "";
+		for ( int i=0; i< buffs.length; i++ )
+		{
+			string buffName = buff.getBuffNameFromCrc(buffs[i]);
+			string ending = ", ";
+			if ( i == (buffs.length - 1) )
+			{
+				ending = "";
+			}
+			else if ( i == (buffs.length - 2) )
+			{
+				ending = ", and ";
+			}
+			buffsString = buffsString + buffName + ending;
+		}
+	}
+	return buffsString;
+}
+
+trigger OnHateTargetAdded(obj_id target)
+{
+	//debugSpeakMsg(self, "Trying to addHate target: "+target);
+	obj_id player = utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+	if ( isIdValid(player) )
+	{
+		if ( target != player )
+		{
+			if ( isGod(player) )
+			{
+				sendSystemMessage(player, "God Mode Failure Message: Someone else ("+target+") added to hate list.", "");
+			}
+			setJediEventFailed(self, player);
+			jediEventEnded(self, player);
+		}
+		
+		// doublecheck the hate list for disallowed targets
+		obj_id[] hateList =  getHateList(self);
+		if ( hateList != null )
+		{
+			if ( hateList.length > 1 )
+			{
+				if ( isGod(player) )
+				{
+					sendSystemMessage(player, "God Mode Failure Message: More than one entry on the jedi's hate list.", "");
+				}
+				setJediEventFailed(self, player);
+				jediEventEnded(self, player);
+			}
+			else
+			{
+				if ( hateList[0] != player )
+				{
+					if ( isGod(player) )
+					{
+						sendSystemMessage(player, "God Mode Failure Message: Someone other than the player is the top person on the hate list.", "");
+					}
+					setJediEventFailed(self, player);		
+					jediEventEnded(self, player);
+				}
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLostTarget(obj_id oldTarget)
+{
+	if ( hasFailedJediEvent(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+	if ( !isIdValid(player) )
+	{
+		messageTo(self, "handleJediEventDestroySelf", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( oldTarget != player )
+	{
+		if ( isGod(player) )
+		{
+			sendSystemMessage(player, "God Mode Failure Message: Jedi lost his target ("+oldTarget+") and that target was not the player who started the event.", "");
+		}
+		setJediEventFailed(self, player);
+		jediEventEnded(self, player);
+	}
+	else if ( isDead(oldTarget) || isIncapacitated(oldTarget) )
+	{
+		if ( isGod(player) )
+		{
+			sendSystemMessage(player, "God Mode Failure Message: Player is now either dead or incapped.", "");
+		}
+		setJediEventFailed(self, oldTarget);
+		jediEventEnded(self, oldTarget);
+	}
+	else
+	{
+		if ( !isInvulnerable(self) )
+		{
+			startCombat(self, oldTarget);
+			addHate(self, oldTarget, 1000.0f);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitateTarget(obj_id victim)
+{
+	if ( isGod(victim) )
+	{
+		sendSystemMessage(victim, "God Mode Failure Message: Player Incapacitated.", "");
+	}
+	
+	setJediEventFailed(self, victim);
+	jediEventEnded(self, victim);
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	obj_id player = utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+	if ( isIdValid(player) && pvpHasPersonalEnemyFlag(player, self) )
+	{
+		pvpRemovePersonalEnemyFlags(self, player);
+	}
+	
+	obj_id parent = trial.getParent(self);
+	dictionary webster = new dictionary();
+	webster.put("jediEventChild", self);
+
+	messageTo(parent, "jediEventChildDestroyed", webster, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleJediEventExit()
+{
+	setState(self, STATE_GLOWING_JEDI, true);
+	messageTo(self, "handleJediEventDestroySelf", null, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleJediEventDestroySelf()
+{
+	obj_id player = utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+	//sendSystemMessage(player, "God Mode Message: handleJediEventDestroySelf...", "");
+	
+	obj_id parent = trial.getParent(self);
+	dictionary webster = new dictionary();
+	webster.put("jediEventChild", self);
+
+	messageTo(parent, "jediEventChildDestroyed", webster, 1, false);
+	
+	trial.cleanupObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+void setJediEventFailed(obj_id self, obj_id player)
+{
+	//sendSystemMessage(player, "God Mode Message: setJediEventFailed called...", "");
+	utils.setScriptVar(self, "playerFailedjediEvent", true);
+
+	string eventName = getStringObjVar(self, OBJVAR_EVENT_NAME);
+	dictionary eventData = dataTableGetRow(DATATABLE, eventName);
+	if ( eventData != null && !eventData.isEmpty() )
+	{
+		string failureBuff = eventData.getString(DATA_FAILURE_DEBUFF);
+		buff.applyBuff(player, failureBuff);
+	}
+	return;
+}
+
+boolean hasFailedJediEvent(obj_id self)
+{
+	if ( utils.hasScriptVar(self, "playerFailedjediEvent") )
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+void jediEventEnded(obj_id self, obj_id player)
+{
+ 	//sendSystemMessage(player, "God Mode Message: jediEventEnded called...", "");
+ 	
+ 	int maxHealth = getUnmodifiedMaxAttrib(self, HEALTH);
+	setAttrib(self, HEALTH, maxHealth);
+	setInvulnerable(self, true);
+
+	pvpRemovePersonalEnemyFlags(self, player);
+	pvpRemovePersonalEnemyFlags(player, self);
+	
+	detachScript(self, "ai.creature_combat");
+			
+	dictionary webster = new dictionary();
+	webster.put("attacker", player);
+	messageTo(self, "makeJediEventStopCombat", webster, 1, false);
+	return;
+}

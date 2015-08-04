@@ -1,0 +1,238 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        biolink_item
+ * Description:  Implements bio-linked factional objects.
+ *
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+include library.factions;
+include library.faction_perk;
+include library.sui;
+include library.utils;
+include library.combat;
+
+/***** CONSTANTS *******************************************************/
+
+const string VAR_TEMP_BASE               = "biotemp";
+const string VAR_TEMP_EQUIP_FLAG         = "biotemp.equip";
+
+const string_id SID_POINTS_NEEDED_FOR_BIO_LINK   = new string_id("base_player", "faction_points_needed_for_bio_link");
+const string_id SID_ITEM_BIO_LINKED              = new string_id("base_player", "item_bio_linked");
+const string_id SID_MUST_EQUIP_FROM_INVENTORY    = new string_id("base_player", "must_equip_from_inventory");
+const string_id SID_MUST_BIO_LINK_FROM_INVENTORY = new string_id("base_player", "must_bio_link_from_inventory");
+const string_id SID_BIO_LINK_WRONG_OVERT_FACTION = new string_id("base_player", "bio_link_wrong_overt_faction");
+const string_id SID_BIO_LINK_WRONG_FACTION       = new string_id("base_player", "bio_link_wrong_faction");
+const string_id SID_BIO_LINK                     = new string_id("ui_radial", "bio_link");
+const string_id SID_BIO_LINK_MSG_PROMPT          = new string_id("sui", "bio_link_item_prompt");
+const string_id SID_SPEND_FACTION_POINTS_PROMPT  = new string_id("sui", "spend_faction_points");
+const string_id SID_BIO_LINK_MSG_TITLE           = new string_id("sui", "bio_link_item_title");
+const string_id SID_SPECIES_CANNOT_EQUIP         = new string_id("base_player", "species_cannot_equip");
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnAttach()
+{
+	// set us to the bio-link pending state
+	setBioLink(self, null);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	// verify that we are bio-linked
+	obj_id biolink = getBioLink(self);
+	if ( biolink == null )
+		setBioLink(self, null);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	// if we are about to be equipped, see if we are bio-linked pending
+	obj_id biolink = getBioLink(self);
+	if ( biolink == null )
+	{
+		setBioLink(self, null);
+		biolink = utils.OBJ_ID_BIO_LINK_PENDING;
+	}
+	if ( biolink == utils.OBJ_ID_BIO_LINK_PENDING && (isPlayer(destContainer) || isAPlayerAppearanceInventoryContainer(destContainer) ) )
+	{
+		// verify that we are in the player's inventory
+		obj_id containerPlayer = utils.getContainingPlayer(self);
+		obj_id appearanceInv = getAppearanceInventory(containerPlayer);
+
+		if ( containerPlayer != destContainer && destContainer != appearanceInv)
+		{
+			sendSystemMessage(containerPlayer, SID_MUST_EQUIP_FROM_INVENTORY);
+			return SCRIPT_OVERRIDE;
+		}
+		
+		obj_id player = null;
+		
+		if(containerPlayer == destContainer)
+		{
+			player = containerPlayer;
+		}
+		else
+		{
+			player = getContainedBy(destContainer);
+		}
+		
+		utils.setScriptVar(self, "destContainer", destContainer);
+
+		// ask the player if they want to bio-link this item
+		if ( !factions.canUseFactionItem(player, self) )
+			return SCRIPT_OVERRIDE;
+
+		int pid = sui.msgbox(self, player, "@" + SID_BIO_LINK_MSG_PROMPT, sui.YES_NO, "@" + SID_BIO_LINK_MSG_TITLE, "handleEquipBioLinkSui");
+		return SCRIPT_OVERRIDE;
+	}
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info item)
+{
+	// if we are bio-linked pending, add option for the player to bio-link us to them
+	obj_id biolink = getBioLink(self);
+	if ( biolink == utils.OBJ_ID_BIO_LINK_PENDING )
+	{
+		// make sure we are in the player's inventory
+		if ( isIdValid(player) && utils.getContainingPlayer(self) == player )
+		{
+			// make sure the player is the correct faction, if needed
+			if ( !hasObjVar(self, factions.VAR_FACTION) || factions.canUseFactionItem(player, self) )
+				item.addRootMenu(menu_info_types.BIO_LINK, SID_BIO_LINK);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.BIO_LINK )
+	{
+		if ( !_bioLinkItem(self, player, false, true) )
+			return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** CALLBACK FUNCTIONS **********************************************/
+
+/**
+ * Callback from the message box when a player tries to equip a bio-link pending object.
+ */
+messageHandler handleEquipBioLinkSui()
+{
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+	_bioLinkItem(self, player, true, true);
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Callback from the messagebox verifying that the player will spend their faction points.
+ */
+messageHandler handleSpendFactionPointsSui()
+{
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp != sui.BP_CANCEL )
+	{
+		obj_id player = sui.getPlayerId(params);
+		_bioLinkItem(self, player, false, false);
+	}
+	utils.removeScriptVar(self, VAR_TEMP_BASE);
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** SUPPORT FUNCTIONS ***********************************************/
+
+/**
+ * Verifies that the player can use the item and has enough faction points. The player is then asked to verify that they want to
+ * spend the points to link the item. If the player answers yes, we will be called agin with queryPlayer set to false.
+ *
+ * 09/14/06 - Faction points are no longer being used in this way and therefore players no longer required to spend points to
+ * bio-link these items.
+ *
+ */
+boolean _bioLinkItem(obj_id self, obj_id player, boolean equipAfterLink, boolean queryPlayer)
+{
+	if ( !isIdValid(self) || !isIdValid(player) )
+	{
+		CustomerServiceLog("Faction", "WARNING: biolink_item._bioLinkItem called with invalid player (%TU) or item (" + self + ")", player);
+		return false;
+	}
+
+	// verify that we're bio-linked pending
+	obj_id biolink = getBioLink(self);
+	if ( biolink != utils.OBJ_ID_BIO_LINK_PENDING )
+	{
+		CustomerServiceLog("Faction", "WARNING: Player %TU trying to bio-link item " + self + " that has link id " + biolink, player);
+		return false;
+	}
+
+	// verify that the item is in the player's inventory
+	if ( utils.getContainingPlayer(self) != player )
+	{
+		sendSystemMessage(player, SID_MUST_BIO_LINK_FROM_INVENTORY);
+		return false;
+	}
+
+	//verify that we can be equipped by player's species
+	string template = getTemplateName(self);
+	if ( (template.startsWith("object/tangible/wearables/") ) && (!canEquipWearable(player, self) ) )
+	{
+		sendSystemMessage(player, SID_SPECIES_CANNOT_EQUIP);
+		return false;
+	}
+	
+	//dont let them bio link if they cant equip the weapon
+	if (isWeapon(self))
+	{
+		if(!combat.hasCertification(player, self))
+		{
+			sendSystemMessage(player, SID_SPECIES_CANNOT_EQUIP);
+			return false;
+		}
+	}
+	// make sure the player is the correct faction, and that they have enough faction points
+	if ( hasObjVar(self, factions.VAR_FACTION) && !factions.canUseFactionItem(player, self) )
+	{
+		string_id errMsg = SID_BIO_LINK_WRONG_FACTION;
+		prose_package pp = new prose_package();
+		pp.stringId = errMsg;
+		pp.target.nameId = factions.getLocalizedFactionName(getStringObjVar(self, factions.VAR_FACTION));
+		sendSystemMessageProse(player, pp);
+		return false;
+	}
+
+	//factions.addFactionStanding(player, faction, -pointsNeeded);
+	setBioLink(self, player);
+	prose_package pp = new prose_package();
+	pp.stringId = SID_ITEM_BIO_LINKED;
+	sendSystemMessageProse(player, pp);
+	sendDirtyObjectMenuNotification(self);
+	
+	obj_id container = player;
+	if(utils.hasScriptVar(self, "destContainer"))
+		container = utils.getObjIdScriptVar(self,"destContainer");
+
+	// we've been bio-linked, go ahead and equip us
+	if ( equipAfterLink )
+		equip(self, container);
+
+	return true;
+}
+

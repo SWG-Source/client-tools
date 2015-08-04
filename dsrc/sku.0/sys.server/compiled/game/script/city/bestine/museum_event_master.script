@@ -1,0 +1,189 @@
+// Bestine museum event master script. 
+// Tracks the state of the museum event
+// and monitors when the museum event begins and ends.
+
+include library.utils;
+
+
+// const int EVENT_DURATION = 1209600; // museum event lasts 15 days
+// const int UNTIL_NEXT_EVENT = 1209600; // featured artwork is displayed for 30 days, but the next museumEvent starts halfway through that.
+const string DATATABLE_NAME = "datatables/city/bestine/bestine_museum_event.iff";
+
+trigger OnAttach()
+{
+	//begin museum event
+	messageTo(self, "beginBestineMuseumEvent", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+int getMuseumEventDuration()
+{
+	string durationConfigSetting = getConfigSetting("BestineEvents",  "MuseumEventDuration");
+	int museumEventDuration = utils.stringToInt (durationConfigSetting);
+	if (museumEventDuration == 0 || museumEventDuration == -1)
+		museumEventDuration = 1209600; // 15 days
+	
+	return museumEventDuration;
+}
+
+messageHandler beginBestineMuseumEvent()
+{
+	int museumEventNum = 1;
+	if ( hasObjVar(self, "bestine.museumEventEnded") )
+	{
+		museumEventNum = getIntObjVar(self, "bestine.museumEventEnded") + 1;
+		removeObjVar(self, "bestine.museumEventEnded");
+	}
+	
+	if ( !hasObjVar(self, "bestine.museumEventWinner") )
+	{
+			setObjVar(self, "bestine.museumEventWinner", "none");
+	}
+	
+	if ( hasObjVar(self, "bestine.timeNextEventStarts") )
+		removeObjVar(self, "bestine.timeNextEventStarts");
+	
+	setObjVar(self, "bestine.museumEventStarted", museumEventNum);
+	setObjVar(self, "bestine.votesForEntry01", 0);
+	setObjVar(self, "bestine.votesForEntry02", 0);
+	setObjVar(self, "bestine.votesForEntry03", 0);
+	
+	// choose artists for museum event
+	pickArtistsForEvent(self);
+	
+	// if could not choose 3 artists for the event, assume there were not enough left to pick and start over.
+	if ( !hasObjVar(self, "bestine.museumEventEntry01") || !hasObjVar(self, "bestine.museumEventEntry02")
+	|| !hasObjVar(self, "bestine.museumEventEntry03") )
+	{
+		removeObjVar(self, "bestine.previousArtworkIndexes");
+		pickArtistsForEvent(self);
+	}
+	
+	
+	obj_id museumBuildingObjId = getObjIdObjVar(self, "bestine.objMuseumBuilding");
+	messageTo(museumBuildingObjId, "handleMuseumEventStateChange", null, 1, false);
+	
+	// End the museum event after it's duration has run.
+	int museumEventDuration = getMuseumEventDuration();
+	messageTo(self, "endBestineMuseumEvent", null, museumEventDuration, true);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler endBestineMuseumEvent()
+{
+	int museumEventNum = 1;
+	if ( hasObjVar(self, "bestine.museumEventStarted") )
+	{
+		museumEventNum = getIntObjVar(self, "bestine.museumEventStarted");
+		removeObjVar(self, "bestine.museumEventStarted");
+	}
+	
+	setObjVar(self, "bestine.museumEventEnded", museumEventNum);
+	for (int i = 1; i <= 3; i++)
+	{
+		string votesObjVar = "bestine.votesForEntry0" + i;
+		string entryObjVar = "bestine.museumEventEntry0" + i;
+		string indexObjVar = "bestine.museumEventIndex0" + i;
+		
+		if ( hasObjVar(self, votesObjVar) )
+			removeObjVar(self, votesObjVar);
+		
+		if ( hasObjVar(self, entryObjVar) )
+			removeObjVar(self, entryObjVar);
+		
+		if ( hasObjVar(self, indexObjVar) )
+			removeObjVar(self, indexObjVar);
+	}
+		
+	obj_id museumBuildingObjId = getObjIdObjVar(self, "bestine.objMuseumBuilding");
+	messageTo(museumBuildingObjId, "handleMuseumEventStateChange", null, 1, false);
+	
+	// Begin the next museum event after the required duration.
+	int museumEventDuration = getMuseumEventDuration();
+	int timeNextEventStarts = getGameTime() + museumEventDuration;
+	setObjVar(self, "bestine.timeNextEventStarts", timeNextEventStarts);
+	messageTo(self, "beginBestineMuseumEvent", null, museumEventDuration, true);
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+void pickArtistsForEvent(obj_id self)
+{
+	// Choose 3 artists for the museum event.
+	// Each artist has a number of paintings they can offer.
+	// Check for which of their paintings have already been featured.
+	// If they have no paintings that have not been featured, try a different artist.
+	
+	string[] strArtists = dataTableGetStringColumnNoDefaults(DATATABLE_NAME, "artistNpc");
+	int numArtists = strArtists.length;
+	resizeable string[] vectArtists = new Vector();
+	for (int k = 0; k < (numArtists); k++)
+	{
+		string temp = strArtists[k];
+		vectArtists = utils.addElement(vectArtists, temp);
+	}
+	
+	resizeable int[] previousArtworkIndexes = new Vector();
+	if ( hasObjVar(self, "bestine.previousArtworkIndexes") )
+	{
+		previousArtworkIndexes = utils.getResizeableIntBatchObjVar(self, "bestine.previousArtworkIndexes");
+	}
+		
+	int entryChosen = 0;
+	while( (entryChosen < 3) && (vectArtists.size() > 0) )
+	{
+		int vectorSize = vectArtists.size();
+		int vectRow = rand(0, (vectorSize - 1));
+		string artistName = vectArtists[vectRow];
+		
+		int artistRow = utils.getElementPositionInArray(strArtists, artistName);
+		int numArtworksByArtist = dataTableGetInt(DATATABLE_NAME, artistRow, "numWorksOfArt");
+		
+		int artworkNum = 1;
+		boolean foundArtworkEntry = false;
+		while ( (artworkNum <= numArtworksByArtist) && (!foundArtworkEntry) )
+		{
+			int artistIndex = (artistRow*100) + artworkNum;
+			if ( previousArtworkIndexes.size() < 1 )
+			{
+				foundArtworkEntry = true;
+			}
+			else if ( (utils.getElementPositionInArray(previousArtworkIndexes, new Integer(artistIndex))) == -1)
+			{
+				foundArtworkEntry = true;
+			}
+			else
+			{
+				artworkNum = artworkNum + 1;
+			}
+		}
+
+		if ( foundArtworkEntry )
+		{
+			entryChosen = entryChosen + 1;
+			string entryObjVar = "bestine.museumEventEntry0" + entryChosen;
+			string indexObjVar = "bestine.museumEventIndex0" + entryChosen;
+			setObjVar(self, entryObjVar, artistName);
+			setObjVar(self, indexObjVar, artworkNum);
+		}
+		vectArtists = utils.removeElementAt(vectArtists, vectRow);
+	}
+}
+
+/*
+trigger OnHearSpeech(obj_id speaker, string text)
+{ 	
+ 	if (isGod(speaker))
+ 	{
+ 		int stringCheck = text.indexOf("pick");
+ 		if ( stringCheck > -1 )
+ 		{
+			pickArtistsForEvent(self);
+			return SCRIPT_OVERRIDE;
+ 		}
+ 	}
+ 	 return SCRIPT_CONTINUE;
+}
+*/

@@ -1,0 +1,330 @@
+/**********************************************************************
+ * Copyright (c)2000-2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        township
+ * Description:  Handles functionality/travel for township
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.space_skill;
+
+/***** CONSTANTS *******************************************************/
+
+const int MIN_LEVEL							= 70;
+const int TRAVEL_COST							= 2500;
+const int RANK_TWO_AMOUNT						= 200;
+const int RANK_THREE_AMOUNT						= 300;
+const int RANK_FOUR_AMOUNT						= 500;
+const int STAR_DESTROYER_COMM_DISTANCE					= 500;
+
+
+const string DATATABLE_TOWNSHIP						= "datatables/township/township.iff";
+const string DATATABLE_COLUMN_LOCATIONS				= "locations";
+const string DATATABLE_COLUMN_SUB_GROUPS			= "travelSubGroup";
+const string PID_VAR								= "auriliaTravel";
+
+const string GROUPS_SCRIPT_VAR						= "nexus.travel.groups";
+const string GROUPS_LOC_SCRIPTVAR					= "nexus.travel.locGroups";
+const string LOCATIONS_SCRIPT_VAR					= "nexus.travel.instances";
+
+// Vendor Lite
+const string OBJECT_FOR_SALE_ON_VENDOR				= "onSaleVendorLite";
+
+// Nova Orion Station
+const string MIDLITHE_CRYSTAL						= "item_nova_orion_space_resource_01_01";
+const string OBJVAR_KNOWS_CRYSTAL					= "township.knowsMidlithe";
+const string OBJVAR_NOVA_ORION_FACTION				= "township.nova_orion_faction";
+const string ORION_TRACKER_SLOT_NAME				= "orion_rank_tracker_01_01";
+const string NOVA_TRACKER_SLOT_NAME					= "nova_rank_tracker_01_01";
+const string NOVA_ORION_RESET_DATATABLE				= "datatables/quest/nova_orion/reset_nova_orion_quests.iff";
+
+const string_id PROMPT							= new string_id("nexus", "aurillian_drop_ship_prompt");
+const string_id TITLE							= new string_id("nexus", "aurillian_drop_ship_title");
+
+const string NOVA_ORION_FINALE_COMPLETED	= "novaOrionCompletedFinale";
+const string NOVA_ORION_OBJECT_FOR_SALE_SCRIPT = "theme_park.dungeon.nova_orion_station.nova_orion_object_for_sale";
+
+// Meatlump Theme-Park
+const string MTP_LUMP					= "item_meatlump_lump_01_01";
+const string MTP_OBJECT_FOR_SALE_SCRIPT = "theme_park.meatlump.mtp_object_for_sale";
+
+
+/***** TRIGGERS ********************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+
+boolean isTownshipEligible(obj_id player)
+{
+	if ( !isIdValid(player) )
+	{
+		LOG("force_sensitive", "township.isTownshipEligible -- player is invalid.");
+		return false;
+	}
+
+	if ( getLevel(player) >= MIN_LEVEL || space_skill.isMasterPilot(player))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+//function to give top level travel options from Aurilia
+boolean giveTravelListFromAurilia(obj_id player, obj_id npc)
+{
+	//validation
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	if(!isIdValid(npc) || !exists(npc))
+		return false;
+
+	if(sui.hasPid(player, township.PID_VAR))
+	{
+		int pid = sui.getPid(player, township.PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	//need to store location for sploiters
+	location npcLoc = getLocation(npc);
+	
+	utils.setScriptVar(player, "nexus.travel.npc_loc", npcLoc);
+	utils.setScriptVar(player, "nexus.travel.pid", true);
+
+	string[] subGroups = dataTableGetStringColumn(DATATABLE_TOWNSHIP, DATATABLE_COLUMN_SUB_GROUPS);
+	string[] locations = dataTableGetStringColumn(DATATABLE_TOWNSHIP, DATATABLE_COLUMN_LOCATIONS);
+	
+	resizeable string[] resizeGroups = new string[0];
+	resizeable string[] localizedGroups = new string[0];
+	
+	//validate your data
+	if(subGroups == null || locations == null)
+		return false;
+	
+	if(subGroups.length != locations.length)
+		return false;
+		
+	if(subGroups.length <= 0 || locations.length <= 0)
+		return false;
+	
+	//loop thru all the sub catagories, make a list of them
+	for(int i = 0; i < subGroups.length; ++i)
+	{
+		boolean foundAlready = false;
+		for(int j = 0; j < resizeGroups.size(); ++j)
+		{
+			//if you already have this catagory, dont save it
+			if(subGroups[i].equals(resizeGroups[j]))
+				foundAlready = true;
+		}
+		
+		//save catagory,since we dont have it already
+		if(!foundAlready)
+		{
+			utils.addElement(localizedGroups, "@nexus:" + subGroups[i]);
+			utils.addElement(resizeGroups, subGroups[i]);			
+		}
+	}
+	
+	//store the list of catagories
+	utils.setScriptVar(player, GROUPS_SCRIPT_VAR, resizeGroups);
+	utils.setScriptVar(player, GROUPS_LOC_SCRIPTVAR, localizedGroups);
+	//display list to player
+	int pid = sui.listbox( npc, player, utils.packStringId(PROMPT), sui.OK_CANCEL, utils.packStringId(TITLE), localizedGroups, "nexusTravelFromAurilliaSub", true );
+	//store the ID of the sui
+	sui.setPid(player, pid, PID_VAR);
+	return true;
+}
+
+//function to give travel locations when you know the catagory
+//called from message handler that displays the sub catagories to the player
+boolean displayTravelListBySub(obj_id player, obj_id npc, string sub)
+{
+	//validation
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	if(!isIdValid(npc) || !exists(npc))
+		return false;
+
+	if(sub == null || sub.equals(""))
+		return false;
+	
+	//close the other window if we have one open
+	if(sui.hasPid(player, township.PID_VAR))
+	{
+		int pid = sui.getPid(player, township.PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+
+	string[] subGroups = dataTableGetStringColumn(DATATABLE_TOWNSHIP, DATATABLE_COLUMN_SUB_GROUPS);
+	string[] locations = dataTableGetStringColumn(DATATABLE_TOWNSHIP, DATATABLE_COLUMN_LOCATIONS);
+	
+	resizeable string[] resizeLocations = new string[0];
+	resizeable string[] resizeGroups = new string[0];
+	resizeable string[] localizedLocations = new string[0];
+	
+	//validate data
+	if(subGroups == null || locations == null)
+		return false;
+	
+	if(subGroups.length != locations.length)
+		return false;
+		
+	if(subGroups.length <= 0 || locations.length <= 0)
+		return false;
+	
+	
+	//loop thru the sub catagories, when you find your selected catagory, save off the location
+	for(int i = 0; i < subGroups.length; ++i)
+	{
+		//does the catagory match?
+		if(subGroups[i].equals(sub))
+		{
+			//display in red if you dont have permission to go there.
+			if(transition.hasPermissionForZone(player, locations[i], "initialRequiredFlag"))
+			{
+				 utils.addElement(resizeLocations, locations[i]);
+				 utils.addElement(localizedLocations, "@nexus:" + locations[i]);
+			}
+			else
+			{
+				 utils.addElement(resizeLocations, locations[i]);
+				 utils.addElement(localizedLocations, "@nexus:" + locations[i] + "_no_perm");
+			}
+		}
+	}
+	
+	//store the list
+	utils.setScriptVar(player, LOCATIONS_SCRIPT_VAR, resizeLocations);
+	//display the list to the player
+	int pid = sui.listbox( npc, player, utils.packStringId(PROMPT), sui.OK_CANCEL_REFRESH, utils.packStringId(TITLE), localizedLocations, "nexusTravelFromAurillia", false, false);
+	sui.listboxUseOtherButton(pid, "Back");
+	sui.showSUIPage(pid);
+	//save the sui id
+	sui.setPid(player, pid, PID_VAR);
+	return true;
+}
+
+/*************************************************************/
+// Aurilia Vendor functions
+
+int getMidlitheCrystalCount(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return 0;
+	
+	int totalCount = 0;
+	
+	obj_id crystal = utils.getStaticItemInInventory(player, MIDLITHE_CRYSTAL);
+	
+	if(!isIdValid(crystal))
+		return 0;
+	totalCount = getCount(crystal);
+	
+	return totalCount;
+}
+
+/*************************************************************/
+
+void clearAllNovaOrionQuestStatus(obj_id player)
+{
+	// revoiking nova orion ground quests
+	string[] questsToReset = dataTableGetStringColumnNoDefaults(NOVA_ORION_RESET_DATATABLE, "quest_name");
+	for( int i = 0; i < questsToReset.length; i++ )
+	{
+		string groundQuestName = questsToReset[i];
+		if( groundquests.isQuestActiveOrComplete(player, groundQuestName) )
+		{
+			groundquests.clearQuest(player, groundQuestName);
+		}
+	}
+	
+	//revoking nova orion path choice
+	if ( hasObjVar(player, OBJVAR_NOVA_ORION_FACTION) )
+	{
+		removeObjVar(player, OBJVAR_NOVA_ORION_FACTION);
+	}
+	
+	// revoking nova orion rank collection slots
+	string[] slotsToReset = dataTableGetStringColumnNoDefaults(NOVA_ORION_RESET_DATATABLE, "rank_slot_name");
+	for( int p = 0; p < slotsToReset.length; p++ )
+	{
+		string slotRankName = slotsToReset[p];
+		long slotValue = getCollectionSlotValue(player, slotRankName);
+		modifyCollectionSlotValue(player, slotRankName, (-1*slotValue));
+	}
+	
+	if ( hasObjVar(player, NOVA_ORION_FINALE_COMPLETED) )
+	{
+		removeObjVar(player, NOVA_ORION_FINALE_COMPLETED);
+	}
+	
+	// revoking nova orion space quests
+	obj_var_list questList = getObjVarList(player, space_quest.QUEST_STATUS);
+	if(questList != null)
+	{
+		int spaceQuests = questList.getNumItems();
+		for (int sq = 0; sq < spaceQuests; ++sq)
+		{
+			obj_var spaceFields = questList.getObjVar(sq);
+			string questType = spaceFields.getName();
+
+			obj_var_list typeList = questList.getObjVarList(questType);
+			int questCount = typeList.getNumItems();
+
+			for (int j = 0; j < questCount; j++)
+			{
+				obj_var quest = typeList.getObjVar(j);
+				string spaceQuestName = quest.getName();
+
+				//construct a string based on /datatables/spacequest key 2 + key 3 + .iff
+				//LOG("revoke","DATATABLE STRING: /datatables/spacequest/" + questType + "/" + spaceQuestName + ".iff" );
+				string spaceTable = "/datatables/spacequest/" + questType + "/" + spaceQuestName + ".iff" ;
+				string questSeries = dataTableGetString( spaceTable, 0, "questSeries" );
+				if( questSeries != null && questSeries.length() > 0)
+				{
+					//remove the quest if it has pilot profession
+					if( questSeries == "nova_orion" )
+					{
+						space_quest.clearQuestFlags(player, questType, spaceQuestName);
+					}
+				}
+			}
+		}
+	}
+	return;
+}
+
+string_id getNovaOrionRumor(obj_id player)
+{
+	string stringFile = "utterance/nova_orion";
+	string_id rumor = new string_id (stringFile, "nova_orion_rumor_"+rand(1,9));
+	
+	int otherRumor = rand(0,19);
+	if ( groundquests.isQuestActiveOrComplete(player, "no_rank2_04") )
+	{
+		// 14 or 15
+		if ( otherRumor > 13 && otherRumor < 16 )
+		{
+			rumor = new string_id (stringFile, "nova_orion_katiara_rumor_"+rand(1,3));
+		}
+	}
+	
+	if ( groundquests.isQuestActiveOrComplete(player, "no_rank5_02") ||
+	groundquests.isQuestActiveOrComplete(player, "no_rank5_02_orion") )
+	{
+		// 16, 17, 18 or 19
+		if ( otherRumor > 17 )
+		{
+			rumor = new string_id (stringFile, "nova_orion_dark_jedi_rumor_"+rand(1,3));
+		}
+	}
+	
+	return rumor;
+}

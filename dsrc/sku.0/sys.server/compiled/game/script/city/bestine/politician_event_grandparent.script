@@ -1,0 +1,232 @@
+// this is the buildcluster object
+// it loooks for parent objects
+// if they don't exist, it does nothing
+// otherwise it makes a new one.
+
+include library.utils;
+
+const string MASTER_OBJECT_TEMPLATE = "object/tangible/poi/tatooine/bestine/bestine_politician_event_master_object.iff";
+const string VARNAME_ELECTION_STATUS = "strElectionStatus";
+const string VARNAME_ELECTION_WINNER = "strElectionWinner";
+const string VARNAME_ELECTION_NUM = "intElectionNum";
+
+const string MISSING_NPC_TEMPLATE = "object/tangible/spawning/static_npc/victor_questn_capitol.iff";
+
+trigger OnInitialize()
+{
+	messageTo(self, "bootStrap", null, 2, false);
+	messageTo(self, "spawnMissingNpc", null, 120, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bootStrap()
+{
+	deltadictionary dctScriptVars = self.getScriptVars();
+	obj_id[] objMasterObjectIds = getAllObjectsWithTemplate(getLocation(self), 10, MASTER_OBJECT_TEMPLATE);
+	if((objMasterObjectIds != null) && (objMasterObjectIds.length != 0))
+	{
+		dctScriptVars.put("objMasterObjectId", objMasterObjectIds[0]);
+		updatePoliticianEventStatus(self);
+	}
+	else
+	{
+		// if we can't find the master object, then we must make one and start the system from the very beginning.
+		location locTest = getLocation(self);
+		locTest.x = locTest.x +1;
+		obj_id objPoliticianEventMaster = createObject(MASTER_OBJECT_TEMPLATE, locTest);
+		persistObject(objPoliticianEventMaster);
+		
+		dctScriptVars.put("objMasterObjectId", objPoliticianEventMaster);
+		dctScriptVars.put(VARNAME_ELECTION_STATUS, "electionStarted");
+		dctScriptVars.put(VARNAME_ELECTION_WINNER, "none");
+		dctScriptVars.put(VARNAME_ELECTION_NUM, 1);
+		setObjVar(objPoliticianEventMaster, "bestine.tatooineCapitolObjId", self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnMissingNpc()
+{
+	obj_id objCapitolLobby = getCellId (self, "lobby");
+	location locMissingNpcSpawnerLocation = new location (6.10f, 0.30f, -0.49f, "tatooine", objCapitolLobby);
+	obj_id[] objMissingNpcSpawnerIds = getAllObjectsWithTemplate(locMissingNpcSpawnerLocation, 10, MISSING_NPC_TEMPLATE);
+	
+	if ( objMissingNpcSpawnerIds == null || objMissingNpcSpawnerIds.length < 1 )
+		obj_id missingNpc = createObject(MISSING_NPC_TEMPLATE, locMissingNpcSpawnerLocation);
+	
+	return SCRIPT_CONTINUE;
+}
+
+void updatePoliticianEventStatus(obj_id self)
+{
+	deltadictionary dctScriptVars = self.getScriptVars();
+	obj_id masterObjectId = dctScriptVars.getObjId("objMasterObjectId");
+	
+	int intElectionNum = 1;
+	obj_var_list varList = getObjVarList(masterObjectId, "bestine");
+	if ( varList != null )
+	{
+		int numItem = varList.getNumItems();
+		for ( int i = 0; i < numItem; i++ )
+		{
+			obj_var var = varList.getObjVar(i);
+			string varName = var.getName();
+			if ( varName.equals("electionStarted") )
+			{
+				intElectionNum = var.getIntData();
+				dctScriptVars.put(VARNAME_ELECTION_STATUS, "electionStarted");
+				dctScriptVars.put(VARNAME_ELECTION_NUM, intElectionNum);
+			}
+			else if ( varName.equals("electionEnded")  )
+			{
+				intElectionNum = var.getIntData();
+				dctScriptVars.put(VARNAME_ELECTION_STATUS, "electionEnded");
+				dctScriptVars.put(VARNAME_ELECTION_NUM, intElectionNum);
+				
+			}
+			else if ( varName.equals("electionWinner")  )
+			{
+				string strVarValue = var.getStringData();
+				dctScriptVars.put(VARNAME_ELECTION_WINNER, strVarValue);
+			}
+			else if ( varName.equals("votesForSean") )
+			{
+				int intVotesForSean = var.getIntData();
+				dctScriptVars.put("intVotesForSean", intVotesForSean);
+			}
+			else if ( varName.equals("votesForVictor")  )
+			{
+				int intVotesForVictor = var.getIntData();
+				dctScriptVars.put("intVotesForVictor", intVotesForVictor);
+			}
+			else if ( varName.equals("timeNextElectionStarts")  )
+			{
+				int timeNextElectionStarts = var.getIntData();
+				dctScriptVars.put("timeNextElectionStarts", timeNextElectionStarts);
+			}
+		}
+	}
+	return;
+}
+
+// message from persisted master object when election ends or begins.
+messageHandler handlePoliticianEventStateChange()
+{
+	updatePoliticianEventStatus(self);
+	
+	// let the governor, Tour Aryon, know that the election
+	// state has changed... either beginning or ending... so that
+	// she can determine the winner if the election has ended.
+	deltadictionary dctScriptVars = self.getScriptVars();
+	obj_id objBestineGovernor = dctScriptVars.getObjId("objBestineGovernor");
+	
+	dictionary dctParams = new dictionary();
+	dctParams.put(VARNAME_ELECTION_STATUS, dctScriptVars.getString(VARNAME_ELECTION_STATUS));
+	dctParams.put(VARNAME_ELECTION_WINNER, dctScriptVars.getString(VARNAME_ELECTION_WINNER));
+	dctParams.put(VARNAME_ELECTION_NUM, dctScriptVars.getInt(VARNAME_ELECTION_NUM));
+	
+	if (utils.hasScriptVar(self, "timeNextElectionStarts"))
+	{
+		dctParams.put("timeNextElectionStarts", dctScriptVars.getInt("timeNextElectionStarts"));
+	}
+	
+	messageTo(objBestineGovernor, "handleElectionStateChangeGovernorAlert", dctParams, 1, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// persist election winner and alert event npcs
+messageHandler handleSetElectionWinner()
+{
+	// get name of election winner from params sent by the governor
+	string strElectionWinner = params.getString(VARNAME_ELECTION_WINNER);
+	
+	deltadictionary dctScriptVars = self.getScriptVars();
+	obj_id masterObjectId = dctScriptVars.getObjId("objMasterObjectId");
+	setObjVar(masterObjectId, "bestine.electionWinner", strElectionWinner);
+	dctScriptVars.put(VARNAME_ELECTION_WINNER, strElectionWinner);
+		
+	dictionary dctParams = new dictionary();
+	dctParams.put(VARNAME_ELECTION_STATUS, dctScriptVars.getString(VARNAME_ELECTION_STATUS));
+	dctParams.put(VARNAME_ELECTION_WINNER, strElectionWinner);
+	dctParams.put(VARNAME_ELECTION_NUM, dctScriptVars.getInt(VARNAME_ELECTION_NUM));
+	
+	// let all registered NPCs know that the politician event's
+	// state has changed... either beginning or ending.
+	broadcastMessage("handlePoliticianEventStatusResponse", dctParams);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// event data for when the governor initializes
+messageHandler handleGovernorSetupRequest()
+{
+	obj_id objRequester = params.getObjId("objRequester");
+	
+	deltadictionary dctScriptVars = self.getScriptVars();
+	dctScriptVars.put("objBestineGovernor", objRequester);
+	
+	dictionary dctParams = new dictionary();
+	dctParams.put(VARNAME_ELECTION_STATUS, dctScriptVars.getString(VARNAME_ELECTION_STATUS));
+	dctParams.put(VARNAME_ELECTION_WINNER, dctScriptVars.getString(VARNAME_ELECTION_WINNER));
+	dctParams.put(VARNAME_ELECTION_NUM, dctScriptVars.getInt(VARNAME_ELECTION_NUM));
+	dctParams.put("intVotesForSean", dctScriptVars.getInt("intVotesForSean"));
+	dctParams.put("intVotesForVictor", dctScriptVars.getInt("intVotesForVictor"));
+	
+	if (utils.hasScriptVar(self, "timeNextElectionStarts"))
+	{
+		dctParams.put("timeNextElectionStarts", dctScriptVars.getInt("timeNextElectionStarts"));
+	}
+	
+	messageTo(objRequester, "handleGovernorSetupResponse", dctParams, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+// persisting election data on the master object
+messageHandler processGovernorDataStorageRequest()
+{
+	int intVotesForSean = params.getInt("intVotesForSean");
+	int intVotesForVictor = params.getInt("intVotesForVictor");
+	
+	deltadictionary dctScriptVars = self.getScriptVars();
+	obj_id masterObjectId = dctScriptVars.getObjId("objMasterObjectId");
+	
+	setObjVar(masterObjectId, "bestine.votesForSean", intVotesForSean);
+	setObjVar(masterObjectId, "bestine.votesForVictor", intVotesForVictor);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// message from NPCs who need information about the state of the politician event.
+messageHandler handlePoliticianEventStatusRequest()
+{
+	obj_id objRequester = params.getObjId("objRequester");
+	
+	// get current election status
+	deltadictionary dctScriptVars = self.getScriptVars();
+	
+	dictionary dctParams = new dictionary();
+	dctParams.put(VARNAME_ELECTION_STATUS, dctScriptVars.getString(VARNAME_ELECTION_STATUS));
+	dctParams.put(VARNAME_ELECTION_WINNER, dctScriptVars.getString(VARNAME_ELECTION_WINNER));
+	dctParams.put(VARNAME_ELECTION_NUM, dctScriptVars.getInt(VARNAME_ELECTION_NUM));
+	messageTo(objRequester, "handlePoliticianEventStatusResponse", dctParams, 1, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/*
+trigger OnHearSpeech(obj_id speaker, string text)
+{ 	
+ 	if (isGod(speaker))
+ 	{
+ 		int stringCheck = text.indexOf("update");
+ 		if ( stringCheck > -1 )
+ 		{
+			updatePoliticianEventStatus(self);
+			return SCRIPT_OVERRIDE;
+ 		}
+ 	}
+ 	 return SCRIPT_CONTINUE;
+}
+*/

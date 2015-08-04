@@ -1,0 +1,266 @@
+include library.utils;
+include library.ai_lib;
+include library.space_utils;
+include library.space_dungeon;
+include library.spawning;
+include library.create;
+
+
+messageHandler doHraccaSpawnEvent()
+{
+	if ( params == null )
+	{
+		return SCRIPT_CONTINUE;
+	}
+		
+	int maxPop = 1;
+	if ( hasObjVar(self, "intSpawnCount") )
+	{
+		maxPop = getIntObjVar(self, "intSpawnCount");
+	}
+	
+	if ( hasObjVar (self, "myCreations") )
+	{
+		resizeable obj_id[] theList = getResizeableObjIdArrayObjVar (self, "myCreations");
+		if (theList.length >= maxPop)
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	if ( params.containsKey("controllerObject") )
+	{
+		obj_id controllerObject = params.getObjId("controllerObject");
+		utils.setScriptVar(self, "controllerObject", controllerObject);
+	}
+	
+	location locTest = getLocation(self);
+	
+	string spawnType = getStringObjVar(self, "spawnType");
+	string whatToSpawn = getSpawnType(spawnType);
+	if( (whatToSpawn == null) )
+	{
+		//LOG("hracca_spawner", "whatToSpawn was null");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( params.containsKey("spawnChissOnly") && spawnType.equals("chiss") )
+	{
+		createMob(whatToSpawn, locTest, self);
+	}
+	else if ( params.containsKey("spawnKkorrwrot") && spawnType.equals("kkorrwrot") )
+	{
+		createMob(whatToSpawn, locTest, self);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+void  createMob(string whatToSpawn, location here, obj_id self)
+{
+	obj_id npc = create.object(whatToSpawn, here);	
+	if(!isIdValid(npc))
+	{
+		setName(self , "BAD MOB OF TYPE " + whatToSpawn);
+		return;
+	}
+	
+	int numSpawned = 1;
+	
+	if (!hasObjVar (self, "myCreations"))
+	{
+		resizeable obj_id[] myCreations = new obj_id[0];
+		utils.addElement (myCreations, npc);
+		if ( myCreations != null && myCreations.length > 0  )
+		{
+			setObjVar (self, "myCreations", myCreations);
+		}
+	}
+	else
+	{
+		resizeable obj_id[] spawnedList = getResizeableObjIdArrayObjVar (self, "myCreations");
+		spawnedList.add(npc);
+		
+		if ( spawnedList != null && spawnedList.length > 0 )
+		{
+			setObjVar (self, "myCreations", spawnedList);
+			numSpawned = spawnedList.length;
+		}
+	}
+
+	ai_lib.setDefaultCalmBehavior(npc, ai_lib.BEHAVIOR_LOITER);
+	
+	setObjVar(npc, "objParent", self);
+	attachScript(npc, "theme_park.kashyyyk.hracca_spawned_tracker");
+
+	// Have we reached the max population for this spawner or 
+	// do we need to spawn another?
+	int maxPop = 1;
+	if ( hasObjVar(self, "intSpawnCount") )
+	{
+		maxPop = getIntObjVar(self, "intSpawnCount");
+	}
+	
+	if ( numSpawned < maxPop )
+	{
+		messageTo(self, "doHraccaSpawnEvent", null, 2, false);
+	}
+	
+	
+	// If a chiss poacher, register with controller object
+	// and spawn chiss fog particle
+	if ( utils.hasScriptVar(self, "controllerObject") && whatToSpawn.equals("ep3_hracca_chiss_poacher_hunter") )
+	{
+		obj_id controllerObject = utils.getObjIdScriptVar(self, "controllerObject");
+		if ( isIdValid(controllerObject) )
+		{
+			dictionary webster = new dictionary();
+			webster.put ("chissPoacher", npc);
+			messageTo(controllerObject, "registerChissPoacher", webster, 1, false);
+		}
+		
+		string fogTemplate = "object/static/particle/pt_fog_kashyyyk_hracca_chiss_fog.iff";
+		obj_id fogParticleObj = createObject(fogTemplate, here);
+		setObjVar(self, "fogParticleObj", fogParticleObj);
+		
+	}
+	return;
+}
+
+string getSpawnType(string spawnType)
+{
+	// defaults to spawnType = chiss
+	string whatToSpawn = "ep3_hracca_chiss_poacher_hunter";
+	
+	if ( spawnType.equals("kkorrwrot") )
+	{
+		whatToSpawn = "ep3_hracca_kkorrwrot";
+	}
+	
+	return whatToSpawn;
+}
+
+messageHandler spawnDestroyed()
+{
+	if ( params.containsKey("deadNpc") )
+	{
+		obj_id deadNpc = params.getObjId ("deadNpc");
+		if ( isIdValid(deadNpc) )
+		{
+			// Remove chiss fog particle: first start fading effect, then message to destroy particle obj.
+			if ( hasObjVar(self, "fogParticleObj") )
+			{
+				obj_id fogParticleObj = getObjIdObjVar(self, "fogParticleObj");
+				if ( isIdValid(fogParticleObj) )
+				{
+					location fogLoc = getLocation(fogParticleObj);
+					obj_id controllerObject = utils.getObjIdScriptVar(self, "controllerObject");
+					if ( isIdValid(controllerObject) )
+					{
+						obj_id[] playersInInstance = space_dungeon.getPlayersInInstance(controllerObject);
+						if ( playersInInstance != null && playersInInstance.length > 0  )
+						{
+							playClientEffectLoc(playersInInstance, "appearance/pt_miasma_fog_chiss_orange_end.prt", fogLoc, 0.0f);
+							messageTo(self, "handleDeleteChissFog", null, 2, false);
+						}
+					}
+				}
+			}
+
+			// Tell controller object a chiss poacher was killed
+			string spawnType = getStringObjVar(self, "spawnType");
+			if ( utils.hasScriptVar(self, "controllerObject") && spawnType.equals("chiss")  )
+			{
+				obj_id controllerObject = utils.getObjIdScriptVar(self, "controllerObject");
+				if ( isIdValid(controllerObject) )
+				{
+					dictionary webster = new dictionary();
+					webster.put ("deadChissPoacher", deadNpc);
+					messageTo(controllerObject, "handleChissPoacherDestroyed", webster, 1, false);
+				}
+			}
+		}
+	}
+	
+	else if ( params.containsKey("destroyedNpc") )
+	{
+		obj_id destroyedNpc = params.getObjId ("destroyedNpc");
+		if ( hasObjVar (self, "myCreations") )
+		{
+			resizeable obj_id[] spawnedList = getResizeableObjIdArrayObjVar (self, "myCreations");
+
+			if(spawnedList.contains(destroyedNpc))
+			{
+				spawnedList.remove(destroyedNpc);
+
+				if (spawnedList != null && spawnedList.length > 0)
+				{
+					setObjVar (self, "myCreations", spawnedList);
+				}
+				else
+				{
+					removeObjVar (self, "myCreations");
+				}
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDeleteChissFog()
+{
+	obj_id fogParticleObj = getObjIdObjVar(self, "fogParticleObj");
+	if ( isIdValid(fogParticleObj) )
+	{
+		destroyObject(fogParticleObj);
+	}
+	removeObjVar(self, "fogParticleObj");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler doCleanupEvent()
+{
+	if (!hasObjVar (self, "myCreations"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	resizeable obj_id[] spawnedList = getResizeableObjIdArrayObjVar (self, "myCreations");
+	for ( int i = 0; i < spawnedList.length; i++ )
+	{
+		obj_id spawnedNpc = spawnedList[i];
+		if ( isIdValid(spawnedNpc) )
+		{
+			setObjVar(spawnedNpc, "cleaningUp", true);
+			destroyObject(spawnedNpc);
+		}
+	}
+	
+	if ( hasObjVar(self, "fogParticleObj") )
+	{
+		obj_id fogParticleObj = getObjIdObjVar(self, "fogParticleObj");
+		if ( isIdValid(fogParticleObj) )
+		{
+			destroyObject(fogParticleObj);
+			removeObjVar(self, "fogParticleObj");
+		}
+	}
+	
+	removeObjVar(self, "myCreations");
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+boolean canSpawnByConfigSetting()
+{
+	string disableSpawners = getConfigSetting("GameServer", "disableAreaSpawners");
+	if (disableSpawners == null)
+		return true;
+		
+	if (disableSpawners.equals("true") || disableSpawners.equals("1"))
+		return false;
+		
+	return true;		
+}

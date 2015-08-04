@@ -1,0 +1,616 @@
+include library.sequencer;
+include library.chat;
+include library.utils;
+include library.space_utils;
+include library.npe;
+
+
+trigger OnAttach()
+{
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnPreloadComplete()
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnDestroy()
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler doEvents()
+{
+
+
+	// check to see if we're in primary or loop mode. Primary uses the objvar, secondary uses the scriptvar
+	string strIndexScriptVar = "";
+	string strFileName = "";
+
+	// 2 modes for operation
+	// primary
+	// secondary
+	// delay setting
+	if(utils.hasScriptVar(self, "intSequenceStopped"))
+	{ // something external stopped us.
+	  // we need to find the correct index to restart the system.
+	  	if(utils.hasScriptVar(self, "intSequenceContinue"))
+	  	{
+	  		utils.removeScriptVar(self, "intSequenceStopped");
+	  		utils.removeScriptVar(self, "intSequenceContinue"); // we stopped, but got a continue before the messageto arrived
+
+	  	}
+	  	else
+	  	{
+	  		debugSpeakMsg(self, "I have STOPPED!");
+	  		utils.removeScriptVar(self, "intSequenceStopped");
+	  		// next doEvents, we're good to go
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+
+	// if a messageto comes in with a timestamp, and we don't have a timestamp, or the timestamp
+	// does not match, we toss it
+	if(params!=null)
+	{
+		int intMessageStamp = params.getInt("intSecondaryTableStamp");
+		int intMyStamp = utils.getIntScriptVar(self, "intSecondaryTableStamp");
+		if(intMessageStamp!=intMyStamp)
+		{
+			// IGNORE because it's legacy from the old secondayr looop
+			return SCRIPT_CONTINUE;
+
+		}
+	}
+	else if(utils.hasScriptVar(self, "intSecondaryTableStamp"))
+	{
+		// no stamp in messageto, but we have one, so KICK OUT
+		return SCRIPT_CONTINUE;
+
+	}
+
+	float fltDelay = runSequenceEvents(self);
+
+
+	if(fltDelay>-1)
+	{
+		if(fltDelay==0)
+		{
+			return SCRIPT_CONTINUE;
+		}
+		dictionary dctParams  = null;
+		if(utils.hasScriptVar(self, "strSecondaryTable"))
+		{
+			dctParams = new dictionary();
+			int intTime = getGameTime();
+			utils.setScriptVar(self, "intSecondaryTableStamp", intTime);
+			dctParams.put("intSecondaryTableStamp", intTime);
+		}
+		messageTo(self, "doEvents", dctParams, fltDelay, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+messageHandler interruptSequence()
+{
+	utils.setScriptVar(self, "intSequenceStopped", 1);
+	stopSequence(self);
+	return SCRIPT_CONTINUE;
+
+}
+void stopSequence(obj_id self)
+{
+	string strTable = "";
+	string strIndexScriptVar = "";
+		if(utils.hasScriptVar(self, "strSecondaryTable"))
+	{
+		// use alternate index and filename
+
+		strIndexScriptVar= "intSecondIndex";
+		strTable = utils.getStringScriptVar(self, "strSecondaryTable");
+	}
+	else
+	{
+		strIndexScriptVar= "intMainIndex";
+		strTable = getStringObjVar(self, "strSequenceTable");
+	}
+	string strFileName = "datatables/sequencer/event_sequence/"+strTable+".iff";
+	float[] fltTimes = dataTableGetFloatColumn(strFileName, "fltTime");
+	int intIndex = utils.getIntScriptVar(self, strIndexScriptVar);
+	// what's our "current" action.
+	if(intIndex>0)
+	{
+		intIndex = intIndex -1;
+	}
+	dictionary dctEventToRun = dataTableGetRow(strFileName, intIndex);
+	// is our index move?
+	string strAction =toLower( dctEventToRun.getString("strAction")); // what
+	if(strAction.equals("moveto"))
+	{
+		// we need to reset the index to this move so we can continue correctly.
+		utils.setScriptVar(self, strIndexScriptVar, intIndex);
+
+	}
+
+
+}
+
+float runSequenceEvents(obj_id self)
+{
+
+
+	string strIndexScriptVar = "";
+
+	string strTable = "";
+	if(utils.hasScriptVar(self, "strSecondaryTable"))
+	{
+		// use alternate index and filename
+
+		strIndexScriptVar= "intSecondIndex";
+		strTable = utils.getStringScriptVar(self, "strSecondaryTable");
+	}
+	else
+	{
+		strIndexScriptVar= "intMainIndex";
+		strTable = getStringObjVar(self, "strSequenceTable");
+
+
+	}
+	string strFileName = "datatables/sequencer/event_sequence/"+strTable+".iff";
+	LOG("npe" ,"strFileName is "+strFileName);
+	// attempt to pass intIndex by reference, unsure if this will work. Powered by hope!
+	boolean noMoreEvents = false;
+	float[] fltTimes = dataTableGetFloatColumn(strFileName, "fltTime");
+	int intIndex = utils.getIntScriptVar(self, strIndexScriptVar);
+	float fltCurrentEventTime = fltTimes[intIndex];
+	while (!noMoreEvents)
+	{
+		dictionary dctEventToRun = dataTableGetRow(strFileName, intIndex);
+		// process event
+		intIndex = processEvents(dctEventToRun, intIndex);
+		// check for more events
+
+		if(intIndex  == sequencer.CHANGE_TABLE)
+		{
+			if(utils.hasScriptVar(self, "strSecondaryTable"))
+			{
+				// reget times!
+				strFileName = "datatables/sequencer/event_sequence/"+utils.getStringScriptVar(self, "strSecondaryTable")+".iff";
+				fltTimes = dataTableGetFloatColumn(strFileName, "fltTime");
+				intIndex = 0;
+				strIndexScriptVar = "intSecondIndex";
+
+			}
+			// we reget fltTimes, and stuff.
+		}
+		else
+		{
+			if(intIndex ==sequencer.STOP_SEQUENCE)
+			{
+				return -1f;
+			}
+
+		}
+
+		float fltNextEvent = -1;
+
+		if(intIndex+1<fltTimes.length-1)
+		{
+			fltNextEvent = fltTimes[intIndex+1]; // so we don't go over
+		}
+		if(fltCurrentEventTime!=fltNextEvent)
+		{
+
+			noMoreEvents=true;
+
+			if(intIndex>fltTimes.length-1)
+			{
+				return -1f;
+			}
+		}
+
+	}
+
+	// intIndex is updated
+
+	LOG("npe", "updating "+strIndexScriptVar+" to "+intIndex);
+	utils.setScriptVar(getSelf(),strIndexScriptVar, intIndex);
+
+	float fltDelay = 0;
+	if(intIndex==0)
+	{
+
+		fltDelay = fltTimes[intIndex];
+	}
+	else
+	{
+		LOG("npe", "fltTimes[intIndex] is "+fltTimes[intIndex]);
+		LOG("npe", "fltTimes[intIndex-1] is "+fltTimes[intIndex-1]);
+		fltDelay = fltTimes[intIndex] - fltTimes[intIndex-1];
+	}
+	if(intIndex<fltTimes.length)
+	{
+		LOG("npe", "Returning "+fltDelay);
+		return fltDelay;
+	}
+	LOG("npe", "Returning "+fltDelay);
+	return -1f; // stop
+
+}
+
+
+
+
+
+// return value is whether to continue or wait for continue event. STOP_SEQUENCE or index
+int  processEvents(dictionary dctEventToRun, int intIndex)
+{
+	// return value
+
+// valid actins:
+// attack
+// moveto, arguments are run, walk
+//runto
+//posture (arguments are prone, stand, kneel
+// say, arguments are tbd
+// emote, arguments tbd
+	obj_id self = getSelf();
+	string strActor = dctEventToRun.getString("strActor"); // who
+	string strAction =toLower( dctEventToRun.getString("strAction")); // what
+
+	string strTarget = dctEventToRun.getString("strTarget"); // to who
+	string strData1  =toLower(dctEventToRun.getString("strData1")); // extra
+	string strData2 = toLower(dctEventToRun.getString("strData2"));// extra
+	int intTime = dctEventToRun.getInt("intTime");
+
+	// step 1. get objects.
+	obj_id objTarget = null;
+	obj_id objActor = null;
+	if(strActor!="")
+	{
+		objActor= sequencer.getSequenceObject(strActor);
+	}
+	if(strTarget!="")
+	{
+		objTarget = sequencer.getSequenceObject(strTarget);
+	}
+
+	LOG("han_solo_event", "Doing event line --- Actor is " + strActor + ", ID is " + objActor + " doing action " + strAction + " at target " + strTarget + ", ID " + objTarget);
+
+	if(strAction.equals("combatanimation"))
+	{
+		// data1 is the animation to use
+		// data2 is things like grenade templates
+		if(!isIdValid(objActor)  || isDead(objActor) || isDead(objTarget))
+		{
+			//do nothing
+		}
+		else
+		{
+			if(isIdValid(objTarget) && isIdValid(objTarget))
+			{
+				if(exists(objTarget) && exists(objActor))
+				{
+					startCombat(objActor, objTarget);
+					setTarget(objActor, objTarget);
+
+				}
+			}
+			sequencer.doCombatAnimation(objActor, objTarget, strData1);
+		}
+		//debugSpeakMsg(objActor, "attacking "+objTarget);
+
+	}
+	if(strAction.equals("combatanimationmultiple"))
+	{
+		// data1 is the animation to use
+		// data2 is things like grenade templates
+
+		// objActor is multiple people, comma delimited.  we'll cycle through this list til
+		// all of them are dead and hideously mutilated.  HURRAH!
+		string[] strTargets = split(strTarget, ',');
+		obj_id[] objTargets = new obj_id[strTargets.length];
+
+		for (int i = 0; i < strTargets.length; i++)
+		{
+			objTargets[i] = sequencer.getSequenceObject(strTargets[i]);
+		}
+
+		for (int i = 0; i < objTargets.length; i++)
+		{
+			if (!isIdValid(objActor)  || isDead(objActor) || isDead(objTargets[i]))
+			{
+				// do nothing!
+			}
+			else
+			{
+				if(isIdValid(objTargets[i]) && isIdValid(objTargets[i]))
+				{
+					if(exists(objTargets[i]) && exists(objActor))
+					{
+						startCombat(objActor, objTargets[i]);
+						setTarget(objActor, objTargets[i]);
+						sequencer.doCombatAnimation(objActor, objTargets[i], strData1);
+						break;
+					}
+				}
+			}
+		}
+	}
+	else if(strAction.equals("moveto"))
+	{
+		// fast or slow?!@?!@?
+		//debugSpeakMsg(objActor, "Moving to "+strTarget);//objTarget);
+
+		if(strData1=="run")
+		{
+			sequencer.runToSequenceObject(objActor, objTarget);
+
+		}
+		else if(strData1=="walk")
+		{
+			sequencer.walkToSequenceObject(objActor, objTarget);
+
+		}
+	}
+	else if(strAction.equals("faceto"))
+	{
+		faceTo(objActor, objTarget);
+	}
+	else if(strAction.equals("posture"))
+	{
+
+		// data 1 is the posture to go to
+		// valid postures are // stand, kneel and prone
+		//debugSpeakMsg(objActor, "setting posture to "+strData1);
+		if(strData1.equals("stand"))
+		{
+			setPosture(objActor, POSTURE_UPRIGHT);
+			sequencer.doCombatAnimation(objActor, objTarget, "posture_scramble");
+					}
+		else if(strData1.equals("kneel"))
+		{
+			setPosture(objActor, POSTURE_CROUCHED);
+			sequencer.doCombatAnimation(objActor, objTarget, "posture_scramble");
+		}
+		else if(strData1.equals("prone"))
+		{
+			setPosture(objActor, POSTURE_PRONE);
+			sequencer.doCombatAnimation(objActor, objTarget, "posture_scramble");
+		}
+
+	}
+	else if(strAction.equals("effect"))
+	{
+		//data 1 is the effect to play
+		//plays the clienteffect so that the actor can see it (player)
+
+		playClientEffectLoc(objActor, strData1, getLocation(objTarget), 0);
+	}
+	else if(strAction.equals("playmusic"))
+	{
+		//debugSpeakMsg(objActor, "Actor" + objActor + "is 	playing sound " + strData1);
+		play2dNonLoopingMusic(objActor, strData1);
+	}
+	else if(strAction.equals("spacechat"))
+	{
+
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		if (strData2.equals("") || strData2==null)
+			strData2="sound/sys_comm_generic.snd";
+		//space_utils.tauntPlayerWithSound(objTarget, objActor, strChat, strData2);
+
+		npe.commTutorialPlayer(objActor, objTarget, intTime, strChat, strData2, "");
+	}
+	else if(strAction.equals("tutorialcomm"))
+	{
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		if (strData2.equals("") || strData2==null)
+			strData2="sound/sys_comm_generic.snd";
+
+		npe.commTutorialPlayer(objActor, objTarget, intTime, strChat, strData2, "object/mobile/c_3po.iff");
+	}
+	else if(strAction.equals("jabbacomm"))
+	{
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		if (strData2.equals("") || strData2==null)
+			strData2="sound/sys_comm_generic.snd";
+
+		npe.commTutorialPlayer(objActor, objTarget, intTime, strChat, strData2, "object/mobile/jabba_the_hutt.iff");
+	}
+	else if(strAction.equals("hancomm"))
+	{
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		if (strData2.equals("") || strData2==null)
+			strData2="sound/sys_comm_generic.snd";
+
+		npe.commTutorialPlayer(objActor, objTarget, intTime, strChat, strData2, "object/mobile/npe/npe_han_solo.iff");
+	}
+	else if(strAction.equals("vadercomm"))
+	{
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		if (strData2.equals("") || strData2==null)
+			strData2="sound/sys_comm_generic.snd";
+
+		npe.commTutorialPlayer(objActor, objTarget, intTime, strChat, strData2, "object/mobile/darth_vader.iff");
+	}
+	else if(strAction.equals("wookieecomm"))
+	{
+		string stf = getStringObjVar(self, "strSequenceTable");
+
+		// This function exists so that we can switch string_ids for the stupid wookiee players
+		// I hate those walking carpets with a fiery passion
+		// Just to let you know...
+		// in case you wanted to...
+		string_id strChat = new string_id (stf, strData1);
+		if (getSpecies(objTarget) == SPECIES_WOOKIEE)
+		{
+			strChat = new string_id(stf, strData1+"_w");
+		}
+
+
+		if (strData2.equals("") || strData2==null)
+			strData2="sound/sys_comm_generic.snd";
+
+		npe.commTutorialPlayer(objActor, objTarget, intTime, strChat, strData2, "object/mobile/npe/npe_chewbacca.iff");
+	}
+	else if(strAction.equals("spacechatship"))
+	{
+
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		space_utils.tauntPilot(objTarget, objActor, strChat);
+	}
+	else if(strAction.equals("setanimationmood"))
+	{
+
+		setAnimationMood(objActor, strData1);
+	}
+	else if(strAction.equals("animation"))
+	{
+
+		doAnimationAction(objActor, strData1);
+	}
+
+	else if(strAction.equals("destroy"))
+	{
+
+		//destroys the target object
+		destroyObject(objTarget);
+	}
+	else if(strAction.equals("popup"))
+	{
+		//actor is who the popup goes off on
+		//stf is the name of the STF file, which should be the name of the sequence table too...
+		//data 1 is stf entry
+		//data 2 is the sound that plays
+
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		addNotification(objActor, utils.packStringId(strChat), false, 0, 0, 0, strData2);
+	}
+	else if(strAction.equals("messageto"))
+	{
+		//sends an arbitrary messageTo to objTarget
+		//message handler name is strData1
+		if (strTarget.equals("self"))
+			objTarget = self;
+
+		//debugSpeakMsg(objActor, "Messaging " + objTarget + " with handler " + strData1);
+		messageTo(objTarget, strData1, null, 0, true);
+	}
+	else if(strAction.equals("uihighlight"))
+	{
+		//newbieTutorialHighlightUIElement (objActor, strData1, 10.0f);
+
+	}
+	else if(strAction.equals("setobjvar"))
+	{
+		//str data 1 is the objvar name
+		//str data 2 is a string objvar
+
+		setObjVar(objActor, strData1, strData2);
+	}
+	else if(strAction.equals("setscriptvar"))
+	{
+		utils.setScriptVar(objActor, strData1, strData2);
+	}
+	else if(strAction.equals("checkforitem"))
+	{
+		//objActor should only ever be player
+		//this checks for an item in players inv
+
+		//strData1 is the object template name
+
+		//strData2 is a messageHandler that is sent to self if the object is found
+
+		obj_id foundItem = utils.getItemPlayerHasByTemplate(objActor, strData1);
+		if (isIdValid(foundItem))
+		{
+			messageTo(self, strData2, null, 0, true);
+		}
+
+	}
+	else if(strAction.equals("say"))
+	{
+
+		// data 1 is the string to say
+
+		//debugSpeakMsg(objActor, "Saying "+strData1);
+
+		//stf is the string file name, which should be the same name as the sequence table
+
+		string stf = getStringObjVar(self, "strSequenceTable");
+
+		string_id strChat = new string_id(stf, strData1);
+
+		chat.chat(objActor, strChat);
+
+	}
+	else if (strAction.equals("saysound"))
+
+	{
+		string stf = getStringObjVar(self, "strSequenceTable");
+		string_id strChat = new string_id(stf, strData1);
+		chat.chat(objActor, strChat);
+		play2dNonLoopingSound(objTarget, strData2);
+	}
+	// tstring_id strChat = new string_id(stf, strData1);hese 2 are SPECIAL
+	//waitForMessage
+	//lochat.chat(objActor, strChat);opEvents
+	// reset
+	else if(strAction.equals("stop"))
+	{
+		// pause
+		intIndex = intIndex+1;
+		utils.setScriptVar(self, "intMainIndex", intIndex); // to make sure when we switch back we don't immediately go to secondary
+
+		return sequencer.STOP_SEQUENCE;
+
+	}
+	else if(strAction.equals("secondtable"))
+	{
+		// we switch to secondary table, reset secondary index, and stuff
+		utils.setScriptVar(self, "intSecondIndex", 0);
+		utils.setScriptVar(self, "strSecondaryTable", strData1);
+		intIndex = intIndex+1;
+		LOG("npe", "Setting main index to "+intIndex);
+		utils.setScriptVar(self, "intMainIndex", intIndex); // to make sure when we switch back we don't immediately go to secondary
+		return sequencer.CHANGE_TABLE;
+	}
+	else if(strAction.equals("goto"))
+	{
+		// reset index to the above value.
+
+		intIndex = utils.stringToInt(strData1);
+		LOG("npe", "Going to "+intIndex);
+		return intIndex;
+	}
+	intIndex = intIndex+1;
+	return intIndex;
+}
+
+messageHandler continueMainTable()
+{
+	LOG("npe", "CLEANUP OF SECONDARY TABLE!");
+	utils.removeScriptVar(self, "strSecondaryTable");
+	utils.removeScriptVar(self, "intSecondIndex");
+	utils.removeScriptVar(self, "intSecondaryTableStamp");
+	messageTo(self, "doEvents", null, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+
+

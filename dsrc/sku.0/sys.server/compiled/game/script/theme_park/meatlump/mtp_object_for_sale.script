@@ -1,0 +1,228 @@
+include library.badge;
+include library.money;
+include library.prose;
+include library.static_item;
+include library.township;
+include library.trial;
+include library.utils;
+
+trigger OnAttach()
+{
+	setObjVar(self, township.OBJECT_FOR_SALE_ON_VENDOR, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (item == menu_info_types.ITEM_PUBLIC_CONTAINER_USE1)
+	{		
+		if( confirmFunds(self, player) )
+		{
+			processItemPurchase(self, player);
+		}
+		else
+		{
+			sendSystemMessage(player, new string_id("spam", "buildabuff_nsf_buffee"));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	if (names == null || attribs == null || names.length != attribs.length)
+		return SCRIPT_CONTINUE;
+
+	const int firstFreeIndex = getFirstFreeIndex(names);
+	if (firstFreeIndex >= 0 && firstFreeIndex < names.length)
+	{
+		names[firstFreeIndex] = utils.packStringId( new string_id ( "set_bonus", "vendor_cost"));
+		attribs[firstFreeIndex] = createPureConcatenatedJoy(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// String-fu to display the "Cost" attribute above.
+string createPureConcatenatedJoy(obj_id self)
+{
+	// The compiler says "\^" is an invalid escape character so we start with this so the examine info lines up nicely.
+	string pureConcatenatedJoy = getString(new string_id("set_bonus", "vendor_sale_object_justify_line")); 
+
+	int creditCost = 0;
+	int resourceCost = 1000;
+	
+	if ( hasObjVar(self, "item.object_for_sale.cash_cost") )
+	{
+		creditCost = getIntObjVar(self, "item.object_for_sale.cash_cost");
+	}
+	
+	if ( hasObjVar(self, "item.object_for_sale.resource_cost") )
+	{
+		resourceCost = getIntObjVar(self, "item.object_for_sale.resource_cost");
+	}
+
+	pureConcatenatedJoy += "["+resourceCost + "] " + getString(new string_id("static_item_n", township.MTP_LUMP)) +"\n";
+
+
+	if(creditCost > 0)
+	{
+		pureConcatenatedJoy += creditCost + getString(new string_id("set_bonus", "vendor_credits"));
+	}
+
+	return pureConcatenatedJoy;
+}
+
+// Make sure we have both the cash and all the resources needed first.
+boolean confirmFunds(obj_id self, obj_id player)
+{
+	boolean canPay = false;
+	boolean hasTheCredits = false;
+	boolean hasTheResources = false;
+
+	obj_id[] inventoryContents = getInventoryAndEquipment(player);
+
+	int creditCost = getIntObjVar(self, "item.object_for_sale.cash_cost");
+	int resourceCost = getIntObjVar(self, "item.object_for_sale.resource_cost");
+
+	// TODO: Actually check for credits.
+	if(creditCost < 1)
+	{
+		hasTheCredits = true;
+	}
+	
+	//check players total cash
+	if( creditCost > 0 )
+	{
+		if(money.hasFunds(player, money.MT_TOTAL, creditCost))
+		{
+			hasTheCredits = true;
+		}
+	}
+	
+	int resourcesInInventory = 0;
+
+	if( resourceCost > 0 )
+	{
+		for(int i = 0; i < inventoryContents.length; i++)
+		{
+			obj_id inventoryObject = inventoryContents[i];
+			string itemName = getStaticItemName(inventoryObject);
+			if (itemName != null && itemName != "")
+			{
+				if( itemName.equals(township.MTP_LUMP) )
+				{
+					int amountInResourceStack = getCount(inventoryObject);
+					if ( amountInResourceStack > 0 )
+					{
+						resourcesInInventory = resourcesInInventory + amountInResourceStack;
+					}
+				}	
+			}
+		}
+	}
+	
+	if( resourcesInInventory >= resourceCost )
+	{
+		hasTheResources = true;
+	}
+	
+	return hasTheCredits && hasTheResources;
+}
+
+// Now do almost the same thing we did above, only this time for reals.
+void processItemPurchase(obj_id self, obj_id player)
+{
+	obj_id inventory = utils.getInventoryContainer(player);
+	obj_id[] inventoryContents = getInventoryAndEquipment(player);
+
+	int creditCost = getIntObjVar(self, "item.object_for_sale.cash_cost");
+	int resourceCost = getIntObjVar(self, "item.object_for_sale.resource_cost");
+
+	string myName = static_item.getStaticItemName(self);	
+
+	obj_id purchasedItem = static_item.createNewItemFunction(myName, inventory);
+	
+	CustomerServiceLog("Heroic-Token: ", "player " + getFirstName(player) + "(" + player + ") purchased item " + myName + "(" + purchasedItem + ")");
+
+	if( !exists(purchasedItem) )
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_cant_purchase"));
+		return;
+	}
+
+	string readableName = getString(parseNameToStringId(getName(self)));
+	prose_package pp = new prose_package();
+	pp = prose.setStringId(pp, new string_id("set_bonus", "vendor_item_purchased"));
+	pp = prose.setTT(pp, readableName);
+	sendSystemMessageProse(player, pp);
+	
+	
+	//remove players cash if item has cash component
+	if( creditCost > 0 )
+	{
+		//put nasty note here, we need to go 3 levels up to find the vendor
+		obj_id containedBy = getContainedBy(getContainedBy(getContainedBy(self)));
+		money.requestPayment(player, containedBy, creditCost, "no_handler", null, false);
+	}
+
+	// Destroy resources
+	if ( resourceCost > 0 )
+	{
+		int remainingResourceCost = resourceCost;
+		
+		for(int i = 0; i < inventoryContents.length; i++)
+		{
+			if ( remainingResourceCost > 0 )
+			{
+				obj_id inventoryObject = inventoryContents[i];
+				string itemName = getStaticItemName(inventoryObject);
+				if (itemName != null && itemName != "")
+				{
+					if( itemName.equals(township.MTP_LUMP) )
+					{
+						int numInStack = getCount(inventoryObject);
+						if( numInStack > 0 )
+						{
+							if ( numInStack > remainingResourceCost )
+							{
+								setCount(inventoryObject, numInStack - remainingResourceCost);
+								remainingResourceCost = 0;
+							}
+							else
+							{
+								remainingResourceCost = remainingResourceCost - numInStack;
+								destroyObject(inventoryObject);
+							}						
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return;
+}
+
+string_id parseNameToStringId(string itemName)
+{
+	string[] parsedString = split(itemName, ':');
+
+	string_id itemNameSID;
+
+	if(parsedString.length > 1)
+	{
+		string stfFile = parsedString[0];
+		string reference = parsedString[1];
+		itemNameSID = new string_id(stfFile, reference);
+	}
+	else	// It's a resource or some other non-localized crap!
+	{
+		string stfFile = parsedString[0];
+		itemNameSID = new string_id(stfFile, " ");
+	}
+
+	return itemNameSID;
+
+}

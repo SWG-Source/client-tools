@@ -1,0 +1,374 @@
+// republic_assembly_tool.script  -- this script sits on a tool with an inventory. When you feed it items that match a table and hit 'assemble' it will try to give you a new item.
+// this script borrows heavily from a test script written by DRubenfield
+
+// ********************************************************************
+//					INCLUDES
+// ********************************************************************
+
+include library.create;
+include library.prose;
+include library.space_crafting;
+include library.static_item;
+include library.sui;
+include library.temp_schematic;
+include library.utils;
+include library.xp;
+
+// ********************************************************************
+//					CONSTS
+// ********************************************************************
+
+const int USAGE_DELAY 						= 15;
+const string ITEM_COMBINATION_TABLE			= "datatables/item/loot_cube/republic_assembly_tool.iff";
+
+const string ITEM_STF						="item_n";
+
+const boolean CONST_FLAG_DO_LOGGING			= false;
+
+const string[] BROKEN_COMPONENTS			= { "object/tangible/component/weapon/mustafar/tulrus_lance_core.iff",
+												"object/tangible/component/weapon/mustafar/rifle_coil_dp23.iff",
+												"object/tangible/component/weapon/mustafar/rifle_coil_dist.iff",
+												"object/tangible/component/weapon/mustafar/pistol_coil_ion.iff",
+												"object/tangible/component/weapon/mustafar/pistol_coil_dist.iff",
+												"object/tangible/component/weapon/mustafar/obsid_lance_core.iff",
+												"object/tangible/component/weapon/mustafar/lava_cannon_coil.iff",
+												"object/tangible/component/weapon/mustafar/flamer_coil.iff",
+												"object/tangible/component/weapon/mustafar/carbine_coil_sfor.iff",
+												"object/tangible/component/weapon/mustafar/2h_tulrus_sword_core.iff",
+												"object/tangible/component/weapon/mustafar/2h_obsid_sword_core.iff",
+												"object/tangible/component/weapon/mustafar/1h_obsid_sword_core.iff",
+												"object/tangible/component/weapon/mustafar/1h_bandit_sword_core.iff",
+												"object/tangible/component/structure/mustafar/must_transthermal_padding.iff",
+												"object/tangible/component/structure/mustafar/must_synth_creature_hide.iff",
+												"object/tangible/component/structure/mustafar/must_soft_light_source.iff",
+												"object/tangible/component/structure/mustafar/must_reinforced_support_beam.iff",
+												"object/tangible/component/structure/mustafar/must_power_converter.iff",
+												"object/tangible/component/structure/mustafar/must_micro_fiber_weave.iff",
+												"object/tangible/component/structure/mustafar/must_adhesive_friction_surface.iff" };
+
+// ********************************************************************
+//					TRIGGERS
+// ********************************************************************
+
+trigger OnReceivedItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	// every time we get an item we increment our current content's crc total.
+	debugLogging("OnReceivedItem", "entered");
+
+	fixBrokenComponents(item);
+
+	double ingredientCRC = 0;
+	if(utils.hasScriptVar(self,"ingredientCRC"));
+	{
+		ingredientCRC = utils.getDoubleScriptVar(self, "ingredientCRC");
+		debugLogging("OnReceivedItem", "found a pre-existing CRC. It was: "+ingredientCRC);
+	}
+
+	ingredientCRC  = ingredientCRC  + getStringCrc(getTemplateName(item));
+
+	debugLogging("OnReceivedItem", "calculating a new CRC. New item was: "+getStringCrc(getTemplateName(item))+" and new total is: "+ingredientCRC);
+
+	utils.setScriptVar(self, "ingredientCRC", ingredientCRC);
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnLostItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	// every time we lose an item we decrement our crc.
+	debugLogging("OnLostItem", "entered");
+	if(isValidId(item) && exists(item)) //we want to skip this if the player has constructed something and the items are being destroyed
+	{	
+		string template = getTemplateName(item);
+		if(template.startsWith("object/tangible/loot/mustafar/cube_loot/cube_loot_"))
+		{
+			if(!hasScript(item, "object.autostack"))
+				attachScript(item, "object.autostack");
+		}
+	}
+	
+	double ingredientCRC = utils.getDoubleScriptVar(self, "ingredientCRC");
+	ingredientCRC  = ingredientCRC  - getStringCrc(getTemplateName(item));
+
+	if(ingredientCRC < 0)
+		utils.setScriptVar(self, "ingredientCRC", 0);
+	else
+		utils.setScriptVar(self, "ingredientCRC", ingredientCRC);
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if ( !utils.isNestedWithin(self, player) )
+		return SCRIPT_CONTINUE;
+
+	string_id strSpam = new string_id("item_n", "republic_assembly_tool_menu");
+	mi.addRootMenu(menu_info_types.SERVER_MENU1, strSpam);
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	debugLogging("OnObjectMenuSelect", "entered");
+
+	if ( !utils.isNestedWithin(self, player) )	// you gotta be carrying this thing to use it.
+		return SCRIPT_CONTINUE;
+
+	if(utils.hasScriptVar(self, "useTimeStamp"))		// there's a delay before you can re-use the thing.
+	{
+		int currentTime = getGameTime();
+		int oldTime = utils.getIntScriptVar(self, "useTimeStamp");
+		int timeRemaining = currentTime - oldTime;
+		if(timeRemaining<USAGE_DELAY)
+		{
+			// delay still going
+			string_id strSpam = new string_id("item_n", "republic_assembly_tool_recharging");
+			prose_package pp = new prose_package();
+			prose.setStringId(pp, strSpam);
+			prose.setDI(pp, timeRemaining);
+			sendSystemMessageProse(player, pp);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( item == menu_info_types.SERVER_MENU1 )
+	{
+		obj_id clients[] = new obj_id[1];
+		clients[0] = player;
+
+		debugLogging("OnObjectMenuSelect", "chose menu option 1");
+		// assemble!
+		utils.setScriptVar(self, "useTimeStamp", getGameTime());
+		debugLogging("OnObjectMenuSelect", "activating the assembly tool");
+		obj_id newItem = activateAssemblyTool(self, player);
+		if(isIdValid(newItem))
+		{
+			string_id strSuccess = new string_id("item_n","republic_assembly_tool_successful");
+			playClientEffectObj(clients, "sound/item_som_jenha_tar_cube_combine.snd", player, "");
+			sendSystemMessage(player,strSuccess);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			debugLogging("OnObjectMenuSelect", "obj_id we got back was invalid: "+newItem);
+			string_id strFailure = new string_id("item_n","republic_assembly_tool_failure");
+			playClientEffectObj(clients, "sound/item_electronics_break.snd", player, "");
+			sendSystemMessage(player, strFailure);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ********************************************************************
+//					FUNCTIONS
+// ********************************************************************
+
+
+
+void debugLogging(string section, string message)
+{
+	if (CONST_FLAG_DO_LOGGING)
+	{
+		LOG("debug/republic_assembly_tool/"+section, message);
+		debugServerConsoleMsg(null, "@@@@@@@@@@@@@@@@@@@@ " + message);
+	}
+}
+
+//----------------------------------------------------------------------
+
+obj_id activateAssemblyTool(obj_id assemblyTool, obj_id objPlayer)
+{
+	debugLogging("activateAssemblyTool", "entered");
+
+	obj_id generatedItem = null;
+
+	double ingredientCRC = calcCurrentContentsCRC(assemblyTool);
+	if(ingredientCRC==0)
+	{
+		debugLogging("activateAssemblyTool", "no ingredientCRC. Returning null");
+		return null;
+	}
+
+	// the crc is the total we're using for calcs.
+	if(!utils.hasScriptVar(assemblyTool, "itemCRCs"))
+	{
+		debugLogging("activateAssemblyTool", "made the crc table and stored it");
+		utils.setScriptVar(assemblyTool, "itemCRCs", makeItemCRCArray());	// make the crc and set it as a scriptvar
+	}
+
+	double[] itemCRCs = utils.getDoubleArrayScriptVar(assemblyTool, "itemCRCs");
+
+	// we compare the total of the crcs of the items in the tool to the total of the crc's of the items in the datatable
+	for(int i = 0; i < itemCRCs.length; i++)
+	{
+		debugLogging("activateAssemblyTool", "looping through stored CRC array. This is loop number: "+i+" and there will be a total of around: "+itemCRCs.length);
+
+		if(itemCRCs[i]==ingredientCRC)
+		{
+			debugLogging("activateAssemblyTool", "Found a match ");
+			// you've got an item!
+			// destroy the contents
+			// make the item
+			// set the name
+			// attach the scripts
+
+			dictionary correctRow = dataTableGetRow(ITEM_COMBINATION_TABLE, i);
+			string finalObject = correctRow.getString("finalTemplate");
+			string finalScript = correctRow.getString("finalScript");
+			string finalName = correctRow.getString("finalName");
+
+			if ( finalObject.endsWith(".iff") )
+				generatedItem = createObjectInInventoryAllowOverload(finalObject, objPlayer);
+			else
+				generatedItem = static_item.createNewItemFunction(finalObject, objPlayer);
+
+			debugLogging("activateAssemblyTool", "made a new item. It was a: "+finalObject+" and had obj_id: "+generatedItem);
+			obj_id contents[] = getContents(assemblyTool);
+			debugLogging("activateAssemblyTool", "Got contents of the assembly tool. There are this many things: ->: "+contents.length);
+
+			if(isIdValid(generatedItem))
+			{
+				CustomerServiceLog("mustafar_cube", "%TU has created a '" + finalObject + "' (id: " + generatedItem + ")", objPlayer);
+
+				for(int j = 0; j< contents.length; j++)
+				{
+					debugLogging("activateAssemblyTool", "Going through each thing in the assembly tool. this is loop #: ->: "+j);
+
+					if(contents[j]!=generatedItem)
+					{
+						debugLogging("activateAssemblyTool", "found something that doesn't match the obj_id of the new item. Destroying it");
+						decrementCount(contents[j]);
+						// if item creation fails, this exceptions, so no cleanup						
+					}
+
+					if(!finalScript.equals("none"))
+					{
+						attachScript(generatedItem, finalScript);
+					}
+
+					if(!finalName.equals("none"))
+					{
+						setName(generatedItem,"");
+						int stringCheck = finalName.indexOf("_");
+						if ( stringCheck > -1 )
+							setName( generatedItem, new string_id( ITEM_STF, finalName ) );
+						else
+							setName(generatedItem, finalName);
+					}
+				}
+				obj_id contentsAgain[] = getContents(assemblyTool);
+				if(contentsAgain.length < 3)
+					putInOverloaded(generatedItem, assemblyTool);
+				else
+				{
+					obj_id pInv = utils.getInventoryContainer(objPlayer);
+					putInOverloaded(generatedItem, pInv);
+				}
+			}
+		}
+	}
+	return generatedItem;
+}
+
+//----------------------------------------------------------------------
+
+double[] makeItemCRCArray()		// might have to use doubles
+{
+	debugLogging("makeItemCRCArray", "entered");
+	int numRows = dataTableGetNumRows (ITEM_COMBINATION_TABLE);
+	debugLogging("makeItemCRCArray", "there are this many rows in the table -> "+numRows);
+
+	double[] crcs = new double[numRows];
+
+	for(int i = 0; i<numRows; i++)
+	{
+		debugLogging("makeItemCRCArray", "reading in row number:  "+i);
+
+		dictionary currentRow = dataTableGetRow(ITEM_COMBINATION_TABLE, i);
+		for (int j = 1; j <=3; j++)
+		{
+			string currentObject = currentRow.getString("item"+j);
+			debugLogging("makeItemCRCArray", "currentObject is: "+currentObject+" it is item# "+j);
+			int currentItemCRC = getStringCrc(currentObject);
+			crcs[i]+= currentItemCRC;
+		}
+	}
+	return crcs;
+}
+
+//----------------------------------------------------------------------
+
+double calcCurrentContentsCRC(obj_id assemblyTool)
+{
+	debugLogging("calcCurrentContentsCRC", "entered");
+	double ingredientCRC = 0;
+
+	obj_id contents[] = getContents(assemblyTool);
+	debugLogging("calcCurrentContentsCRC", "Got contents of the assembly tool. There are this many things: ->: "+contents.length);
+	for(int i = 0; i< contents.length; i++)
+	{
+		ingredientCRC += getStringCrc(getTemplateName(contents[i]));
+		debugLogging("calcCurrentContentsCRC", "Loop Number:  "+i+" and current ingredient CRC total is: "+ingredientCRC);
+	}
+	return ingredientCRC;
+}
+
+void fixBrokenComponents(obj_id item)
+{
+	string template = getTemplateName(item);
+	
+	if(template.startsWith("object/tangible/component/weapon/mustafar/") || template.startsWith("object/tangible/component/structure/mustafar/"))
+	{
+		for(int i = 0; i < BROKEN_COMPONENTS.length; i++)
+		{
+			if(template.equals(BROKEN_COMPONENTS[i]))
+			{
+				if(!isCrafted(item))
+					attachScript(item, "item.component.serialize");
+
+				break;
+			}
+		}
+	}
+}
+
+
+/*
+static_item createNewItem
+
+string template = getTemplateName(self);
+	if (template.endsWith("gen2.iff"))
+
+void  createMob(string strId, obj_id objLocationObject, location locLocation, float fltRadius, obj_id self)
+{
+	if(!spawning.checkSpawnCount(self))
+	{
+		return;
+	}
+	float spawnerYaw = getYaw(self);
+	// SPAWN@!@!@!@!@!
+	// the string is actuallywaht we spawn.
+	int intIndex = strId.indexOf(".iff");
+
+		if (template.endsWith("module_force_crystal.iff"))
+
+		if (template != null && template.indexOf("weapon_tool.iff") >= 0)
+
+	getTemplateName(objComponent)+
+
+
+		if ( objectName.endsWith(".iff") )
+
+
+
+setName( self, "" );
+setName( self, new string_id( ITEM_STF, "mcr_term_name_on" ) );
+*/

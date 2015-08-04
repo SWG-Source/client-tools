@@ -1,0 +1,252 @@
+include ai.ai_combat;
+include library.ai_lib;
+include library.create;
+include library.groundquests;
+include library.locations;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const String dataTableColumnCreatureType = "CREATURE_TYPE";
+const String dataTableColumnCount        = "COUNT";
+const String dataTableColumnMinDistance  = "MIN_DISTANCE";
+const String dataTableColumnMaxDistance  = "MAX_DISTANCE";
+
+const String dataTableColumnRelativeOffsetX = "RELATIVE_OFFSET_X";
+const String dataTableColumnRelativeOffsetZ = "RELATIVE_OFFSET_Z";
+
+
+const String objvarSpawnList  = "spawnList";
+
+const String scriptNameEncounterOnCreature = "quest.task.ground.encounter_on_creature";
+
+const String objvarOnCreatureOwner    = "quest.owner";
+const String objvarOnCreatureQuestCrc = "quest.questCrc";
+const String objvarOnCreatureTaskId   = "quest.taskId";
+const String objvarAttackOnSpawn      = "quest.attackOnSpawn";
+
+const String taskType = "encounter";
+const String dot = ".";
+
+const int cleanupTimeMin              = 300;
+const int cleanupTimeMax              = 600;
+
+// ---------------------------------------------------------------------
+
+//fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+		
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+
+	//gather data for this task
+	String creatureType = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnCreatureType);
+	int    minCount     = groundquests.getTaskIntDataEntry   (questCrc, taskId, dataTableColumnCount);
+	int    maxCount     = minCount;
+	float  minRadius    = groundquests.getTaskIntDataEntry   (questCrc, taskId, dataTableColumnMinDistance);
+	float  maxRadius    = groundquests.getTaskIntDataEntry   (questCrc, taskId, dataTableColumnMaxDistance);
+
+	String relativeOffsetXString = groundquests.getTaskStringDataEntry   (questCrc, taskId, dataTableColumnRelativeOffsetX);
+	String relativeOffsetZString = groundquests.getTaskStringDataEntry   (questCrc, taskId, dataTableColumnRelativeOffsetZ);
+	float relativeOffsetX = 0;
+	float relativeOffsetZ = 0;
+	if(relativeOffsetXString != null)
+		relativeOffsetX = utils.stringToFloat(relativeOffsetXString);
+	if(relativeOffsetZString != null)
+		relativeOffsetZ = utils.stringToFloat(relativeOffsetZString);
+
+	resizeable obj_id[] spawnList = new obj_id[0];
+	spawnList.clear();
+
+	int count = rand(minCount, maxCount);
+	for(int i = 0; i < count; ++i)
+	{
+		location l = null;
+		location locTest = getLocation(self);
+
+		if(!isIdValid(locTest.cell))
+		{
+			l = groundquests.getRandom2DLocationAroundLocation(self, relativeOffsetX, relativeOffsetZ, minRadius, maxRadius);
+			//sendSystemMessageTestingOnly(self, "Making an npc at location "+l);
+			// in the world!
+		}
+		else
+		{
+			// BLDG!@!                    
+			string strCell = getCellName(locTest.cell);
+			obj_id objBuilding = getTopMostContainer(self);
+			l = getGoodLocation(objBuilding, strCell);                                                             
+			//sendSystemMessageTestingOnly(self, "Making an npc in "+objBuilding+" at location "+l);
+		}
+
+		obj_id creature = create.createCreature(creatureType, l, true);
+		setObjVar(creature, objvarOnCreatureOwner, self);
+		setObjVar(creature, objvarOnCreatureQuestCrc, questCrc);
+		setObjVar(creature, objvarOnCreatureTaskId, taskId);
+		attachScript(creature, scriptNameEncounterOnCreature);
+		
+		// if we can be talked to, that probably means we shouldn't be attacking.
+		if(!hasCondition(creature, CONDITION_CONVERSABLE))
+		{
+			groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "Spawned " + creature + " at [" + l.x + ", " + l.y + ", " + l.z + "] to attack " + self);
+			startCombat(creature, self);
+		}
+	
+
+		//put on spawn list, track kills so that they get removed eventually
+		utils.addElement(spawnList, creature);
+	}
+
+	setObjVar(self, baseObjVar + dot + objvarSpawnList, spawnList);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler messageEncounterTaskCreatureDied()
+{
+	obj_id creature = params.getObjId("source");
+	int questCrc    = params.getInt  ("questCrc");
+	int taskId      = params.getInt  ("taskId");
+
+	String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+	String spawnListObjVarName = baseObjVar + dot + objvarSpawnList;
+	if(hasObjVar(self, spawnListObjVarName))
+	{
+		obj_id[] spawnList = getObjIdArrayObjVar(self, spawnListObjVarName);
+		if(spawnList != null)
+		{
+			for(int k = 0; k < spawnList.length; ++k)
+			{
+				obj_id spawn = spawnList[k];
+				if(spawn == creature)
+				{
+					groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "messageEncounterTaskCreatureDied", "[" + creature + "] being tracked for an encounter task was killed.");
+
+					if(spawnList.length == 1)
+					{
+						removeObjVar(self, spawnListObjVarName);
+						questCompleteTask(questCrc, taskId, self);
+					}
+					else
+					{
+						resizeable obj_id[] newSpawnListResizable = new obj_id[0];
+						for(int l = 0; l < spawnList.length; ++l)
+						{
+							if(spawnList[l] != spawnList[k])
+							{
+								utils.addElement(newSpawnListResizable, spawnList[l]);
+							}
+						}
+						obj_id[] newSpawnList = newSpawnListResizable;
+						setObjVar(self, spawnListObjVarName, newSpawnList);
+					}
+				}	
+			}
+		}	
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + " task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is failed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is cleared
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	//cleanup the creatures that still exist
+	String taskIdObjVarName = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+	if(taskIdObjVarName != null)
+	{
+		String spawnListObjVarName = taskIdObjVarName + dot + objvarSpawnList;
+		if(hasObjVar(player, spawnListObjVarName))
+		{
+			obj_id[] spawnList = getObjIdArrayObjVar(player, spawnListObjVarName);
+			if(spawnList != null)
+			{
+				for(int k = 0; k < spawnList.length; ++k)
+				{
+					obj_id spawn = spawnList[k];
+					if(!ai_lib.isAiDead(spawn))
+					{
+						//cleanup live encounter targets after a few minutes
+						dictionary params = new dictionary();
+						int cleanupTime = rand(cleanupTimeMin, cleanupTimeMax);
+						messageTo(spawn, "messageEncounterCleanup", params, cleanupTime, false);
+					}	
+				}
+			}	
+		}
+	}
+	
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnLogout()
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------

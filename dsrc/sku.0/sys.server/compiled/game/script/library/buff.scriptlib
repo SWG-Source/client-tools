@@ -1,0 +1,2171 @@
+include library.utils;
+include library.beast_lib;
+
+// CONSTANTS //////////////////////////
+
+const int MAX_EFFECTS			= 5;
+const int GROUP_BUFF_DISTANCE	= 100;
+
+const string BUFF_TABLE			= "datatables/buff/buff.iff";
+const string DEBUFF_STATE_PARALYZED	= "buff.state.paralyzed";
+const string AGGRO_TRANSFER_TO		= "aggroBuffTransfer";
+
+//buff dot types
+const string DOT_BLEEDING				= "dot_bleeding";
+const string DOT_POISON					= "dot_poison";
+const string DOT_DISEASE				= "dot_disease";
+const string DOT_FIRE					= "dot_fire";
+const string DOT_ACID					= "dot_acid";
+const string DOT_ENERGY					= "dot_energy";
+const string DOT_COLD					= "dot_cold";
+const string DOT_ELECTRICITY				= "dot_electricity";
+const string DOT_KINETIC				= "dot_kinetic";
+
+
+const string ON_ATTACK_REMOVE		= "onAttackRemoveBuffList";
+
+
+const int STATE_NONE			= -1;
+const int STATE_COVER			= 0;
+const int STATE_ALERT			= 4;
+const int STATE_BERSERK			= 5;
+const int STATE_FEIGN_DEATH		= 6;
+const int STATE_TUMBLING		= 10;
+const int STATE_RALLIED			= 11;
+const int STATE_STUNNED			= 12;
+const int STATE_BLINDED			= 13;
+const int STATE_DIZZY			= 14;
+const int STATE_INTIMIDATED		= 15;
+const int STATE_IMMOBILIZED		= 16;
+const int STATE_FROZEN			= 17;
+
+const int BUFF_DOT_TICK			= 2;
+
+// API FUNCTIONS //////////////////////
+
+boolean isParalyzed(obj_id target)
+{
+	deltadictionary dd = target.getScriptVars();
+	java.util.Enumeration keys = dd.keys();
+	while(keys.hasMoreElements())
+	{
+		string key = (string)(keys.nextElement());
+		if(key.startsWith(DEBUFF_STATE_PARALYZED))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Checks to see if a specified buff can be applied to a target. A buff cannot be applied if the
+ * target is invalid, the buff does not exist, or the target already has a stronger buff from the
+ * same group.
+ *
+ * @param target		the player or mob to check
+ * @param name			the name of the buff
+ * @return 				true if the buff can be applied, false if it cannot
+ *
+ */
+boolean canApplyBuff(obj_id target, string name)
+{
+	return canApplyBuff(target, null, getStringCrc(name.toLowerCase()));
+}
+
+boolean canApplyBuff(obj_id target, obj_id owner, string name)
+{
+	return canApplyBuff(target, owner, getStringCrc(name.toLowerCase()));
+}
+
+/**
+ * Checks to see if a specified buff can be applied to a target. A buff cannot be applied if the
+ * target is invalid, the buff does not exist, or the target already has a stronger buff from the
+ * same group.
+ *
+ * @param target		the player or mob to check
+ * @param name			the name of the buff
+ * @return 				true if the buff can be applied, false if it cannot
+ *
+ */
+boolean canApplyBuff(obj_id target, int nameCrc)
+{
+	return canApplyBuff(target, null, nameCrc);
+}
+
+boolean canApplyBuff(obj_id target, obj_id owner, int nameCrc)
+{
+	if(!isIdValid(target))
+		return false;
+
+	if(!isPlayer(target) && !isMob(target))
+		return false;
+
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return false;
+
+	if(hasBuff(target, nameCrc))
+		return true;
+
+	//added for Immunity to States
+	if(checkForStateImmunity(target, bdata))
+		return false;
+
+	int buffCRCs[] = _getAllBuffs(target);
+
+	if(buffCRCs == null || buffCRCs.length == 0)
+		return true;
+
+	int[] groups = getGroups(bdata);
+
+	if(groups == null || groups.length != 3)
+		return false;
+
+	int groupOne = groups[0];
+	int groupTwo = groups[1];
+
+	if(groupOne != 0 || groupTwo != 0)
+	{
+		int priority = bdata.priority;
+
+		for (int i = 0; i < buffCRCs.length; i++)
+		{
+			buff_data oldBuffData = combat_engine.getBuffData(buffCRCs[i]);
+
+			if(oldBuffData == null)
+				continue;
+
+			obj_id effectOwner = getBuffOwner(target, buffCRCs[i]);
+
+			int oldPriority = oldBuffData.priority;
+
+			if(priority < oldPriority)
+			{
+				int[] oldGroups = getGroups(oldBuffData);
+
+				if(oldGroups == null || oldGroups.length != 3)
+					continue;
+
+				int oldGroupOne = oldGroups[0];
+				int oldGroupTwo = oldGroups[1];
+				int oldBlockGroup = oldGroups[2];
+
+				if((groupOne != 0 && (groupOne == oldGroupOne || groupOne == oldGroupTwo)) ||
+			    	(groupTwo != 0 && (groupTwo == oldGroupOne || groupTwo == oldGroupTwo)) ||
+			    	(oldBlockGroup != 0 && (groupOne == oldBlockGroup || groupTwo == oldBlockGroup)))
+				{
+					return false;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
+/**
+ * Attempts to apply the specified buff on the target. Uses the default duration and effect values
+ * from the datatable
+ *
+ * @param target		the player or mob on which to apply the buff
+ * @param name			the name of the buff
+ * @return 				true if the buff was applied, false if an error occurred
+ *
+ */
+boolean applyBuff(obj_id target, string name)
+{
+	return applyBuff(target, null, getStringCrc(name.toLowerCase()), 0.0f, 0.0f);
+}
+
+boolean applyBuff(obj_id target, obj_id owner, string name)
+{
+	return applyBuff(target, owner, getStringCrc(name.toLowerCase()), 0.0f, 0.0f);
+}
+
+
+boolean[] applyBuff(obj_id[] targets, string name)
+{
+	if (targets == null || targets.length == 0)
+		return null;
+
+	boolean[] returnList = new boolean[targets.length];
+
+	for(int i = 0; i < targets.length; i++)
+	{
+		if(isIdValid(targets[i]))
+		{
+			returnList[i] = applyBuff(targets[i], name);
+		}
+		else
+		{
+			returnList[i] = false;
+		}
+	}
+
+	return returnList;
+}
+/**
+* Attemplts to apply the specified buff array on the target. Uses the default duration and effects values
+* from the datatable.
+*
+* @param target			the target on which to apply the buff
+* @buffList			the array list of the buffs in a string array
+* @results			a boolean array of success cases for the buff array
+*
+**/
+
+boolean[] applyBuff(obj_id target, string[] buffList)
+{
+	boolean[] results = new boolean[buffList.length];
+
+	for(int i = 0; i < buffList.length; i++)
+	{
+		results[i] = applyBuff(target, buffList[i]);
+	}
+
+	return results;
+}
+
+boolean[][] applyBuff(obj_id[] targets, string[] buffList)
+{
+	boolean[][] results = new boolean[targets.length][];
+
+	for(int i = 0;i < targets.length; i++)
+	{
+		results[i]= applyBuff(targets[i], buffList);
+	}
+
+	return results;
+}
+
+boolean[] applyBuff(obj_id[] targets, obj_id caster, string buffName)
+{
+	boolean[] results = new boolean[targets.length];
+
+	for(int i = 0; i < targets.length; i++)
+	{
+		results[i] = applyBuff(targets[i], caster, buffName);
+	}
+
+	return results;
+}
+
+/**
+ * Attempts to apply the specified buff on the target. Uses the default duration and effect values
+ * from the datatable
+ *
+ * @param target		the player or mob on which to apply the buff
+ * @param nameCrc		the name of the buff
+ * @return 				true if the buff was applied, false if an error occurred
+ *
+ */
+boolean applyBuff(obj_id target, int nameCrc)
+{
+	return applyBuff(target, null, nameCrc, 0.0f, 0.0f);
+}
+
+boolean applyBuff(obj_id target, obj_id owner, int nameCrc)
+{
+	return applyBuff(target, owner, nameCrc, 0.0f, 0.0f);
+}
+/**
+ * Attempts to apply the specified stacked buff on the target. Uses the default effect values
+ * from the datatable
+ *
+ * @param target		the player or mob on which to apply the buff
+ * @param name			the name of the buff
+ * @param stack			the stack amount of the buff
+ * @return 			true if the buff was applied, false if an error occurred
+ *
+ */
+
+boolean applyBuffWithStackCount(obj_id target, string name, int stack)
+{
+	return applyBuff(target, null, getStringCrc(name.toLowerCase()), 0.0f, 0.0f, stack);
+}
+
+boolean applyBuffWithStackCount(obj_id target, obj_id owner, string name, int stack)
+{
+	return applyBuff(target, owner, getStringCrc(name.toLowerCase()), 0.0f, 0.0f, stack);
+}
+
+/**
+ * Attempts to apply the specified buff on the target. Uses the default effect values
+ * from the datatable
+ *
+ * @param target		the player or mob on which to apply the buff
+ * @param name			the name of the buff
+ * @param duration		the duration of the buff
+ * @return 				true if the buff was applied, false if an error occurred
+ *
+ */
+boolean applyBuff(obj_id target, string name, float duration)
+{
+	return applyBuff(target, null, getStringCrc(name.toLowerCase()), duration, 0.0f);
+}
+
+boolean applyBuff(obj_id target, obj_id owner, string name, float duration)
+{
+	return applyBuff(target, owner, getStringCrc(name.toLowerCase()), duration, 0.0f);
+}
+
+/**
+ * Attempts to apply the specified buff on the target. Uses the default effect values
+ * from the datatable
+ *
+ * @param target		the player or mob on which to apply the buff
+ * @param nameCrc		the name of the buff
+ * @param duration		the duration of the buff
+ * @return 				true if the buff was applied, false if an error occurred
+ *
+ */
+boolean applyBuff(obj_id target, int nameCrc, float duration)
+{
+	return applyBuff(target, null, nameCrc, duration, 0.0f);
+}
+
+boolean applyBuff(obj_id target, obj_id owner, int nameCrc, float duration)
+{
+	return applyBuff(target, owner, nameCrc, duration, 0.0f);
+}
+
+/**
+ * Attempts to apply the specified buff on the target.
+ *
+ * @param target		the player or mob on which to apply the buff
+ * @param name			the name of the buff
+ * @param duration		the duration of the buff
+ * @param customValue	the value to use for effect1 (as defined in the datatable)
+ * @return 				true if the buff was applied, false if an error occurred
+ *
+ */
+boolean applyBuff(obj_id target, string name, float duration, float customValue)
+{
+	return applyBuff(target, null, getStringCrc(name.toLowerCase()), duration, customValue);
+}
+
+boolean applyBuff(obj_id target, obj_id owner, string name, float duration, float customValue)
+{
+	return applyBuff(target, owner, getStringCrc(name.toLowerCase()), duration, customValue);
+}
+
+/**
+ * Attempts to apply the specified buff on the target.
+ *
+ * @param target		the player or mob on which to apply the buff
+ * @param nameCrc		the name of the buff
+ * @param duration		the duration of the buff
+ * @param customValue	the value to use for effect1 (as defined in the datatable)
+ * @return 				true if the buff was applied, false if an error occurred
+ *
+ */
+boolean applyBuff(obj_id target, int nameCrc, float duration, float customValue)
+{
+	return applyBuff(target, null, nameCrc, duration, customValue);
+}
+
+boolean applyBuff(obj_id target, obj_id owner, int nameCrc, float duration, float customValue)
+{
+	return applyBuff(target, owner, nameCrc, duration, customValue, 1);
+}
+
+boolean applyBuff(obj_id target, obj_id owner, int nameCrc, float duration, float customValue, int stack)
+{
+	if(!canApplyBuff(target, owner, nameCrc))
+		return false;
+
+	int[] discarded = _getDiscardedBuffs(target, owner, nameCrc);
+
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+	{
+		LOG("buff.scriptlib", "Buff CRC failed (" + nameCrc + ")");
+		return false;
+	}
+
+	boolean isStackable = bdata.maxStacks > 1;
+
+	if(discarded != null && discarded.length > 0)
+	{
+		for(int i = 0; i < discarded.length; i++)
+		{
+			obj_id caster = getBuffCaster(target, discarded[i]);
+
+			// If we are about to remove the buff we are trying to apply, check for stackablity
+			if(nameCrc == discarded[i])
+			{
+
+				float oldBuffTime = getBuffTimeRemaining(target, discarded[i]);
+
+				if(!isStackable)
+				{
+					if(oldBuffTime <= duration)
+						_removeBuff(target, discarded[i]);
+				}
+
+			}
+			else
+			{
+				if(owner != caster && isStackable)
+				{
+					continue;
+				}
+				else
+					_removeBuff(target, discarded[i]);
+			}
+		}
+	}
+
+	string particle = bdata.particle;
+	string hardpoint = bdata.particleHardpoint;
+	string buffName = bdata.buffName;
+
+	if(particle != null && particle.length() > 0 && buffName != null && buffName.length() > 0)
+	{
+		string particles[] = split(particle, ',');
+		string hardpoints[] = split(hardpoint, ',');
+
+		if(particles.length > 1)
+		{
+			for(int i = 0; i < particles.length; i++)
+			{
+				if(hardpoints.length <= i || hardpoints[i].length() <= 0 || hardpoints[i].equals(""))
+				{
+					hardpoint = "";
+				}
+				else
+				{
+					hardpoint = hardpoints[i];
+				}
+
+				playClientEffectObj(target, particles[i], target, hardpoint, null, buffName);
+			}
+		}
+		else
+		{
+			if(hardpoint.length() <= 0 || hardpoint.equals(""))
+			{
+				hardpoint = "";
+			}
+
+			playClientEffectObj(target, particle, target, hardpoint, null, buffName);
+		}
+	}
+
+	if(isIdValid(owner))
+	{
+		utils.setScriptVar(target, "buffOwner." + nameCrc, owner);
+	}
+
+	if(isGroupBuff(nameCrc))
+	{
+		if(!isIdValid(owner))
+		{
+			utils.setScriptVar(target, "groupBuff."+nameCrc, target);
+		}
+		else
+		{
+			utils.setScriptVar(target, "groupBuff."+nameCrc, owner);
+		}
+	}
+	
+	if(stack < 1)
+		stack = 1;
+	
+	return _addBuff(target, owner, nameCrc, duration, customValue, stack);
+}
+
+/**
+ * Attempts to remove the specified buff from the target.
+ *
+ * @param target		the player or mob from which to remove the buff
+ * @param name			the name of the buff
+ * @return 				true if the buff was removed, false if an error occurred
+ *
+ */
+boolean removeBuff(obj_id target, string name)
+{
+	return removeBuff(target, getStringCrc(name.toLowerCase()));
+}
+
+/**
+ * Attempts to remove a string array of buffs from the target.
+ *
+ * @param target		the player or mob from which to remove the buff
+ * @param names			array of buff names
+ * @return 				true if the buff was removed, false if an error occurred
+ *
+ */
+boolean removeBuffs(obj_id target, resizeable string [] names)
+{
+	boolean success = true;
+
+	for(int i = 0; i < names.length; i++)
+	{
+		if(!removeBuff(target, names[i]))
+		{
+			success = false;
+		}
+	}
+
+	return success;
+}
+
+boolean removeBuffs(obj_id target, string [] names)
+{
+	boolean success = true;
+
+	for(int i = 0; i < names.length; i++)
+	{
+		if(!removeBuff(target, names[i]))
+		{
+			success = false;
+		}
+	}
+
+	return success;
+}
+
+/**
+ * Attempts to remove the specified buff from the target.
+ *
+ * @param target		the player or mob from which to remove the buff
+ * @param name			the name of the buff
+ * @return 				true if the buff was removed, false if an error occurred
+ *
+ */
+boolean removeBuff(obj_id target, int nameCrc)
+{
+	if(!isIdValid(target))
+		return false;
+
+	if(!isPlayer(target) && !isMob(target))
+		return false;
+
+	if(!isValidBuff(nameCrc))
+		return false;
+
+	utils.removeScriptVar(target, "buffOwner." + nameCrc);
+
+	return _removeBuff(target, nameCrc);
+}
+
+/**
+ * Attempts to remove all buffs from the target.
+ *
+ * @param target		the player or mob from which to remove the buffs
+ * @return 				true if the buffs were removed, false if an error occurred
+ *
+ */
+boolean removeAllBuffs(obj_id target)
+{
+	return removeAllBuffs(target, false);
+}
+
+/**
+ * Attempts to remove all buffs from the target.
+ *
+ * @param target		the player or mob from which to remove the buffs
+ * @param fromDeath		whether or not the buff removal is because of death. Some buffs are persisted through death.
+ * @return 			true if the buffs were removed, false if an error occurred
+ *
+ */
+boolean removeAllBuffs(obj_id target, boolean fromDeath)
+{
+	return removeAllBuffs(target, fromDeath, false);
+}
+
+boolean removeAllBuffs(obj_id target, boolean fromDeath, boolean fromRespec)
+{
+	if(!isIdValid(target))
+		return false;
+
+	if(!isPlayer(target) && !isMob(target))
+		return false;
+
+	if(isPlayer(target))
+		player_stomach.resetStomachs(target);
+
+	int[] buffs = getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return true;
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		buff_data bdata = combat_engine.getBuffData(buffs[i]);
+
+		if(bdata == null)
+		{
+			LOG("buff.scriptlib", "removeAllBuffs bdata is null");
+			continue;
+		}
+
+		int removeOnDeath = bdata.removeOnDeath; // dataTableGetInt(BUFF_TABLE, row, "REMOVE_ON_DEATH");
+		int removeOnRespec = bdata.removeOnRespec; // dataTableGetInt(BUFF_TABLE, row, "REMOVE_ON_RESPEC");
+
+		if(removeOnDeath == 0 && fromDeath)
+		{
+			continue;
+		}
+
+		if(removeOnRespec == 0 && fromRespec)
+		{
+			continue;
+		}
+
+		//by default all AI get buffs removed when combat ends
+		//there are cases where we dont want this to happen
+		//you have to actively flag the buff this way in buff.tab
+		if(isMob(target))
+		{
+			//check the table
+			int removeOnCombatEnd = bdata.aiRemoveOnCombatEnd; // dataTableGetInt(BUFF_TABLE, row, "AI_REMOVE_ON_COMBAT_END");
+
+			//if it is set to 0, then we dont remove the buff
+			//but only on living mobs, dead mobs need buff removed.
+			if(removeOnCombatEnd == 0 && !isDead(target) && !isIncapacitated(target))
+			{
+				//keep looping.
+				continue;
+			}
+		}
+
+		_removeBuff(target, buffs[i]);
+	}
+
+	return true;
+}
+
+// Attempts to remove all buffs from a target who are owned by a specific owner.
+boolean removeAllDebuffsByOwner(obj_id target, obj_id owner)
+{
+	if(!isIdValid(target) || !exists(target) || !isIdValid(owner) || !exists(owner))
+	{
+		return false;
+	}
+
+	// This function is for targets that are not the same as the owner.  Use removeAllBuffs(), instead.
+	if(target == owner)
+	{
+		return false;
+	}
+
+	int[] buffs = getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return true;
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		buff_data bdata = combat_engine.getBuffData(buffs[i]);
+
+		string curBuff = bdata.buffName;
+
+		if(bdata.debuff  == 1 && getBuffOwner(target, buffs[i]) == owner)
+		{
+			removeBuff(target, buffs[i]);
+		}
+	}
+
+	return true;
+}
+
+int[] getAllBuffsByEffect(obj_id target, string effect)
+{
+	if(!isIdValid(target) || !exists(target))
+	{
+		return null;
+	}
+
+	int[] buffs = getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return null;
+
+	resizeable int[] matchedBuffs = new int[0];
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		int j = 1;
+		buff_data bdata = combat_engine.getBuffData(buffs[i]);
+
+		string tempEffect = getEffectParam(bdata, 1); // 1..5
+		boolean matched = false;
+
+		while(!matched && j < 6 && tempEffect != null && tempEffect.length() > 0)
+		{
+			if(tempEffect.equals(effect))
+			{
+				utils.addElement(matchedBuffs, buffs[i]);
+				matched = true;
+			}
+
+			j++;
+			tempEffect = getEffectParam(bdata, j); // 1..5
+		}
+	}
+
+	if(matchedBuffs.length < 1)
+	{
+		return null;
+	}
+
+	return matchedBuffs;
+}
+
+/**
+ * Gets all of the buffs that are on the target in string format
+ *
+ * @param target		the player or mob from which to get buffs
+ * @return 				array of buff names, null if no buffs or error
+ *
+ */
+int[] getAllBuffs(obj_id target)
+{
+	if (!isIdValid(target))
+		return null;
+
+	if (!isPlayer(target) && !isMob(target))
+		return null;
+
+	return _getAllBuffs(target);
+}
+
+/**
+ * Checks to see if the target has any buffs applied
+ *
+ * @param target		the player or mob to check
+ * @return 				true if the target has any buffs, false if not
+ *
+ */
+boolean hasBuff(obj_id target)
+{
+	int[] buffCRCs = _getAllBuffs(target);
+
+	if(buffCRCs == null || buffCRCs.length == 0)
+		return false;
+
+	return true;
+}
+
+/**
+ * Checks to see if the target has the specified buff applied
+ *
+ * @param target		the player or mob to check
+ * @param name			the name of the buff to look for
+ * @return 				true if the target has the specified buff, false if not
+ *
+ */
+boolean hasBuff(obj_id target, string name)
+{
+	return _hasBuff(target, getStringCrc(name.toLowerCase()));
+}
+
+/**
+ * Checks to see if the target has the specified buff applied
+ *
+ * @param target		the player or mob to check
+ * @param name			the name of the buff to look for
+ * @return 				true if the target has the specified buff, false if not
+ *
+ */
+boolean hasBuff(obj_id target, int nameCrc)
+{
+	return _hasBuff(target, nameCrc);
+}
+
+/**
+ * Checks to see if the target has the specified buff applied
+ *
+ * @param target		the player or mob to check
+ * @param buffList		a comma delimited list of names of the buffs to look for
+ * @return 				true if the target has the specified buff, false if not
+ *
+ */
+boolean hasAnyBuffInList(obj_id target, string buffList)
+{
+	string[] buffs = split(buffList, ',');
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		if(hasBuff(target, buffs[i]))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Checks to see if the target has the specified buff applied
+ *
+ * @param target		the player or mob to check
+ * @param buffList		an array of names of the buffs to look for
+ * @return 				true if the target has the specified buff, false if not
+ *
+ */
+boolean hasAnyBuffInList(obj_id target, string[] buffList)
+{
+	for(int i = 0; i < buffList.length; i++)
+	{
+		if(hasBuff(target, buffList[i]))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Refreshes all buffs on a target
+ *
+ * @param target		the player or mob to check
+ * @return 				true if all buffs were refreshed, false if an error occurred
+ *
+ */
+boolean refreshAllBuffs(obj_id target)
+{
+	int[] buffs = _getAllBuffs(target);
+
+	if (buffs == null || buffs.length == 0)
+		return true;
+
+	float[] buffs_d = new float[buffs.length];
+	float[] buffs_v = new float[buffs.length];
+
+	for (int i = 0; i < buffs.length; i++)
+	{
+		buffs_d[i] = _getBuffTimeRemaining(target, buffs[i]);
+		buffs_v[i] = _getBuffCustomValue(target, buffs[i]);
+	}
+
+	removeAllBuffs(target, true);
+
+	boolean success = true;
+
+	for (int i = 0; i < buffs.length; i++)
+	{
+		if (buffs_d[i] <= 0.0f)
+			continue;
+
+		obj_id owner = getBuffOwner(target, buffs[i]);
+		if (isIdValid(owner) && owner != target)
+			continue;
+
+		success &= applyBuff(target, buffs[i], buffs_d[i], buffs_v[i]);
+	}
+
+	return success;
+}
+
+// OTHER FUNCTIONS ////////////////////
+
+string getBuffNameFromCrc(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return null;
+
+	return bdata.buffName;
+}
+
+// Returns the name of the first group to which the buff is assigned
+int getGroupOne(string name)
+{
+	return getGroupOne(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the name of the first group to which the buff is assigned
+int getGroupOne(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return 0;
+
+	if(bdata.buffGroup1 == null || bdata.buffGroup1.length() <= 0)
+	{
+		return 0;
+	}
+	else
+	{
+		return bdata.buffGroup1Crc;
+	}
+}
+
+// Returns the name of the second group to which the buff is assigned
+int getGroupTwo(string name)
+{
+	return getGroupTwo(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the name of the second group to which the buff is assigned
+int getGroupTwo(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return 0;
+
+	if(bdata.buffGroup2 == null || bdata.buffGroup2.length() <= 0)
+	{
+		return 0;
+	}
+	else
+	{
+		return bdata.buffGroup2Crc;
+	}
+}
+
+string getStringGroupTwo(string name)
+{
+	return getStringGroupTwo(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the name of the second group to which the buff is assigned
+string getStringGroupTwo(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return "";
+
+	if(bdata.buffGroup2 == null || bdata.buffGroup2.length() <= 0)
+	{
+		return "";
+	}
+	else
+	{
+		return bdata.buffGroup2;
+	}
+}
+
+
+// Returns the name of the second group to which the buff is assigned
+int getBlockGroup(string name)
+{
+	return getBlockGroup(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the name of the second group to which the buff is assigned
+int getBlockGroup(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return 0;
+
+	if(bdata.blockGroup == null || bdata.blockGroup.length() <= 0)
+	{
+		return 0;
+	}
+	else
+	{
+		return bdata.blockGroupCrc;
+	}
+}
+
+int[] getGroups(buff_data bdata)
+{
+	if(bdata == null)
+		return null;
+
+	int[] groups = new int[3];
+
+	if(bdata.buffGroup1 == null || bdata.buffGroup1.length() <= 0)
+		groups[0] = 0;
+	else
+		groups[0] = bdata.buffGroup1Crc;
+
+	if(bdata.buffGroup2 == null || bdata.buffGroup2.length() <= 0)
+		groups[1] = 0;
+	else
+		groups[1] = bdata.buffGroup2Crc;
+
+	if(bdata.blockGroup == null || bdata.blockGroup.length() <= 0)
+		groups[2] = 0;
+	else
+		groups[2] = bdata.blockGroupCrc;
+
+	return groups;
+}
+
+// Returns the name of boths groups to which the buff is assigned
+int[] getGroups(string name)
+{
+	return getGroups(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the name of both groups to which the buff is assigned
+int[] getGroups(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	return getGroups(bdata);
+}
+
+int getBuffOnTargetFromGroup(obj_id target, string group)
+{
+	return getBuffOnTargetFromGroup(target, getStringCrc(group));
+}
+
+int getBuffOnTargetFromGroup(obj_id target, int groupCrc)
+{
+	int[] buffs = getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return 0;
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		int[] groups = getGroups(buffs[i]);
+
+		if(groups == null || groups.length == 0)
+			continue;
+
+		for(int j = 0; j < groups.length; j++)
+		{
+			if(groups[j] == groupCrc)
+				return buffs[i];
+		}
+	}
+
+	return 0;
+}
+
+
+int[] getGroup2BuffsOnTarget(obj_id target, string groupName)
+{
+	int[] buffs = getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return null;
+
+	resizeable int[] allGroupBuffs = new int[0];
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		string tempGroupName = getStringGroupTwo(buffs[i]);
+
+		if(tempGroupName.startsWith(groupName))
+		{
+			utils.addElement(allGroupBuffs, buffs[i]);
+		}
+	}
+
+	return allGroupBuffs;
+}
+
+// Returns the group priority of the buff
+int getPriority(string name)
+{
+	return getPriority(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the group priority of the buff
+int getPriority(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return 0;
+
+	return bdata.priority;
+}
+
+// Returns the default duration of the buff from the datatable
+float getDuration(string name)
+{
+	return getDuration(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the default duration of the buff from the datatable
+float getDuration(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return 0f;
+
+	return bdata.duration;
+}
+
+// Returns the character state set by the buff if any
+int getState(string name)
+{
+	return getState(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the character state set by the buff if any
+int getState(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return STATE_NONE;
+
+	return bdata.buffState;
+}
+
+// Returns the message handler to be called upon completion of the buff
+string getCallback(string name)
+{
+	return getCallback(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the message handler to be called upon completion of the buff
+string getCallback(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return "";
+
+	return bdata.callback;
+}
+
+// Returns the particle effect to play while buff is active
+string getParticle(string name)
+{
+	return getParticle(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the particle effect to play while buff is active
+string getParticle(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return "";
+
+	return bdata.particle;
+}
+
+// Returns the particle hardpoint
+string getParticleHardpoint(string name)
+{
+	return getParticle(getStringCrc(name.toLowerCase()));
+}
+
+// Returns the particle hardpoint
+string getParticleHardpoint(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return "";
+
+	return bdata.particleHardpoint;
+}
+
+// Get the parameter of the specified effect
+string getEffectParam(string name, int effNum)
+{
+	return getEffectParam(getStringCrc(name.toLowerCase()), effNum);
+}
+
+string getEffectParam(int nameCrc, int effNum)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return null;
+
+	return getEffectParam(bdata, effNum);
+}
+
+// Get the parameter of the specified effect
+string getEffectParam(buff_data bdata, int effNum)
+{
+	if(effNum <= 0 || effNum > MAX_EFFECTS)
+		return null;
+
+	if(bdata == null)
+		return null;
+
+	switch(effNum)
+	{
+		case 1:
+			return bdata.effect1Param;
+		case 2:
+			return bdata.effect2Param;
+		case 3:
+			return bdata.effect3Param;
+		case 4:
+			return bdata.effect4Param;
+		case 5:
+			return bdata.effect5Param;
+	}
+
+	return null;
+}
+
+// Get the value of the specidied effect
+float getEffectValue(string name, int effNum)
+{
+	return getEffectValue(getStringCrc(name.toLowerCase()), effNum);
+}
+
+// Get the value of the specidied effect
+float getEffectValue(int nameCrc, int effNum)
+{
+	if(effNum <= 0 || effNum > MAX_EFFECTS)
+		return Float.NEGATIVE_INFINITY;
+
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return 0;
+
+	switch(effNum)
+	{
+		case 1:
+			return bdata.effect1Value;
+		case 2:
+			return bdata.effect2Value;
+		case 3:
+			return bdata.effect3Value;
+		case 4:
+			return bdata.effect4Value;
+		case 5:
+			return bdata.effect5Value;
+	}
+
+	return 0;
+}
+
+// Returns whether or not the buff is beneficial or detrimental
+boolean isDebuff(string name)
+{
+	return isDebuff(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not the buff is beneficial or detrimental
+boolean isDebuff(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return false;
+
+	int debuff = bdata.debuff;
+
+	return debuff == 1;
+}
+
+// Returns whether or not the buff can be removed by a player ability
+boolean canBeDispelled(string name)
+{
+	return canBeDispelled(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not the buff can be removed by a player ability
+boolean canBeDispelled(int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return false;
+
+	return bdata.dispellPlayer == 1;
+}
+
+// Returns whether or not the buff is a group buff or not
+boolean isGroupBuff(string name)
+{
+	return isGroupBuff(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not the buff is a group buff or not
+boolean isGroupBuff(int nameCrc)
+{
+	for (int i = 1; i <= MAX_EFFECTS; i++)
+	{
+		string effect = getEffectParam(nameCrc, i);
+
+		if(effect != null && effect.equals("group"))
+			return true;
+	}
+
+	return false;
+}
+
+// Returns whether or not the buff is an Aura buff or not
+boolean isAuraBuff(string name)
+{
+	return isAuraBuff(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not the buff is an Aura buff or not
+boolean isAuraBuff(int nameCrc)
+{
+	string groupTwo = getStringGroupTwo(nameCrc);
+
+	return groupTwo.indexOf( "aura" ) > -1;
+}
+
+
+// Returns whether or not a group buff is owned by the player
+boolean isOwnedBuff(string name)
+{
+	return isOwnedBuff(getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not a group buff is owned by the player
+boolean isOwnedBuff(int nameCrc)
+{
+	obj_id self = getSelf();
+	if (!utils.hasScriptVar(self, "groupBuff."+nameCrc))
+		return true;
+
+	obj_id owner = utils.getObjIdScriptVar(self, "groupBuff."+nameCrc);
+
+	if (isIdValid(owner) && owner == self)
+		return true;
+
+	return false;
+}
+
+// Checks to see if the buff is defined in the datatable
+boolean isValidBuff(string name)
+{
+	return isValidBuff(getStringCrc(name.toLowerCase()));
+}
+
+// Checks to see if the buff is defined in the datatable
+boolean isValidBuff(int nameCrc)
+{
+	return (combat_engine.getBuffData(nameCrc) != null);
+}
+
+// Returns a string array of buffs that would be removed when the specified one is added
+int[] _getDiscardedBuffs(obj_id target, int nameCrc)
+{
+	return _getDiscardedBuffs(target, null, nameCrc);
+}
+
+int[] _getDiscardedBuffs(obj_id target, obj_id owner, int nameCrc)
+{
+	buff_data bdata = combat_engine.getBuffData(nameCrc);
+
+	if(bdata == null)
+		return null;
+
+	return _getDiscardedBuffs(target, owner, bdata);
+}
+
+int[] _getDiscardedBuffs(obj_id target, obj_id owner, buff_data bdata)
+{
+	if(bdata == null)
+		return null;
+
+	int[] buffs = _getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return null;
+
+	int discardCount = 0;
+	int[] discarded = new int[buffs.length];
+	int[] groups = getGroups(bdata);
+
+	if(groups == null || groups.length != 3)
+		return null;
+
+	int groupOne = groups[0];
+	int groupTwo = groups[1];
+
+	if(groupOne != 0 || groupTwo != 0)
+	{
+		int priority = bdata.priority;
+
+		for(int i = 0; i < buffs.length; i++)
+		{
+			buff_data oldBuffData = combat_engine.getBuffData(buffs[i]);
+
+			if(oldBuffData == null)
+				continue;
+
+			obj_id effectOwner = getBuffOwner(target, buffs[i]);
+
+			if(isIdValid(effectOwner) && effectOwner != target)
+				continue;
+
+			int oldPriority = oldBuffData.priority;
+
+			if(priority >= oldPriority)
+			{
+				int[] oldGroups = getGroups(oldBuffData);
+
+				if(oldGroups == null || oldGroups.length != 3)
+					return null;
+
+				int oldGroupOne = oldGroups[0];
+				int oldGroupTwo = oldGroups[1];
+
+				if ((groupOne != 0 && (groupOne == oldGroupOne || groupOne == oldGroupTwo)) ||
+			    	(groupTwo != 0 && (groupTwo == oldGroupOne || groupTwo == oldGroupTwo)))
+				{
+					discarded[discardCount++] = buffs[i];
+				}
+			}
+		}
+	}
+
+	// pack the discarded array
+	int[] returnArray = new int[discardCount];
+	for ( int i = 0; i < discardCount; ++i )
+		returnArray[i] = discarded[i];
+
+	return returnArray;
+}
+
+// Returns the buff owner
+obj_id getBuffOwner(obj_id target, string name)
+{
+	return getBuffOwner(target, getStringCrc(name.toLowerCase()));
+}
+
+// Returns whether or not a group buff is owned by the player
+obj_id getBuffOwner(obj_id target, int nameCrc)
+{
+	if (!isGroupBuff(nameCrc))
+		return target;
+
+	if (!utils.hasScriptVar(target, "groupBuff."+nameCrc))
+		return null;
+
+	obj_id owner = utils.getObjIdScriptVar(target, "groupBuff."+nameCrc);
+
+	return owner;
+}
+
+// Add the effects of one or more group buffs owned by another player
+void addGroupBuffEffect(obj_id target, obj_id owner, int[] buffList, float[] strList, float[] durList)
+{
+	if (!isIdValid(target) || !isIdValid(owner))
+		return;
+
+	if (buffList == null || buffList.length < 1)
+		return;
+
+	for (int i = 0; i < buffList.length; i++)
+	{
+		utils.setScriptVar(target, "groupBuff."+buffList[i], owner);
+
+		applyBuff(target, owner, buffList[i], durList[i], strList[i]);
+
+		if(beast_lib.isBeastMaster(target) )
+		{
+			obj_id beast = beast_lib.getBeastOnPlayer(target);
+
+			if(isIdValid(beast) && !isIdNull(beast) )
+			{
+				applyBuff(beast, owner, buffList[i], durList[i], strList[i]);
+			}
+		}
+	}
+}
+
+// Remove the effects of one or more group buffs owned by another player
+void removeGroupBuffEffect(obj_id target, int[] buffList)
+{
+	if (!isIdValid(target))
+		return;
+
+	if (buffList == null || buffList.length < 1)
+		return;
+
+	for (int i = 0; i < buffList.length; i++)
+	{
+		obj_id owner = utils.getObjIdScriptVar(target, "groupBuff."+buffList[i]);
+
+		if (owner != target)
+		{
+//			if (!hasBuff(target, buffList[i]))
+//				continue;
+
+			_removeBuff(target, buffList[i]);
+
+			utils.removeScriptVar(target, "groupBuff."+buffList[i]);
+
+			if(beast_lib.isBeastMaster(target) )
+			{
+				obj_id beast = beast_lib.getBeastOnPlayer(target);
+
+				if(isIdValid(beast) && !isIdNull(beast) )
+				{
+					_removeBuff(beast, buffList[i]);
+				}
+			}
+		}
+	}
+}
+
+// Get the list of owned group buffs on a player
+int[] getOwnedGroupBuffs(obj_id target)
+{
+	if (!isIdValid(target))
+		return null;
+
+	int[] buffCrcList = getAllBuffs(target);
+//sendSystemMessageTestingOnly(target, "getOwnedGroupBuffs()::Buff List="+buffCrcList);
+
+	if (buffCrcList == null || buffCrcList.length < 1)
+		return null;
+
+	resizeable int[] buffList = new int[0];
+	for (int i = 0; i < buffCrcList.length; i++)
+	{
+		obj_id owner = utils.getObjIdScriptVar(target, "groupBuff."+buffCrcList[i]);
+//sendSystemMessageTestingOnly(target, "getOwnedGroupBuffs()::Buff Owner="+owner);
+
+//sendSystemMessageTestingOnly(target, "getOwnedGroupBuffs()::GroupBuff = "+isGroupBuff(buffCrcList[i]));
+//sendSystemMessageTestingOnly(target, "getOwnedGroupBuffs()::owner == target : "+(owner==target));
+		if (isIdValid(owner) && owner == target && isGroupBuff(buffCrcList[i]))
+			buffList = utils.addElement(buffList, buffCrcList[i]);
+	}
+
+	return buffList;
+}
+
+// Get the list of group buffs owned by someone else from a player
+int[] getGroupBuffEffects(obj_id target)
+{
+	if (!isIdValid(target))
+		return null;
+
+	int[] buffCrcList = getAllBuffs(target);
+
+	if (buffCrcList == null || buffCrcList.length < 1)
+		return null;
+
+	resizeable int[] buffList = new int[0];
+	for (int i = 0; i < buffCrcList.length; i++)
+	{
+		obj_id owner = utils.getObjIdScriptVar(target, "groupBuff."+buffCrcList[i]);
+
+		if (isIdValid(owner) && owner != target && isGroupBuff(buffCrcList[i]))
+			buffList = utils.addElement(buffList, buffCrcList[i]);
+	}
+
+	return buffList;
+}
+
+float[] getGroupBuffDuration(obj_id player, int[] buffList)
+{
+	if (buffList == null || buffList.length == 0)
+		return null;
+
+	float[] durationList = new float[buffList.length];
+
+	for (int i = 0; i < buffList.length; i++)
+	{
+		durationList[i] = _getBuffTimeRemaining(player, buffList[i]);
+	}
+
+	return durationList;
+}
+
+float[] getGroupBuffStrength(obj_id player, int[] buffList)
+{
+	if (buffList == null || buffList.length == 0)
+		return null;
+
+	float modifier = squad_leader.getLeadershipMod(player);
+
+	float[] strengthList = new float[buffList.length];
+
+	for (int i = 0; i < buffList.length; i++)
+	{
+		strengthList[i] = _getBuffCustomValue(player, buffList[i]);
+	}
+
+	return strengthList;
+}
+
+boolean checkForStateImmunity(obj_id target, buff_data bdata)
+{
+//Checks the buff (nameCrc) to see if it has a state attached; if so, does an immunity of the matching type exist on the target
+//if it exists, return true (immunity exists, do not apply the state)
+
+//	LOG("Immunity//STATE:", "Checking if this state has an immunity on ---"+getPlayerName(target));
+
+	if(bdata.buffState == STATE_NONE)
+	{
+		return false;
+	}
+	else if(bdata.buffState == STATE_STUNNED && utils.hasScriptVar(target, "immunity.state.stun"))
+	{
+		LOG("Immunity//STATE:", "Block a STUN state from being applied on ---"+getPlayerName(target));
+		return true;
+	}
+	else
+		return false;
+}
+
+boolean removeAllBuffsOfStateType(obj_id target, int stateType)
+{
+	boolean removed = false;
+
+	int[] buffs = getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return true;
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		if(isDebuff(buffs[i]) && getState(buffs[i]) == stateType)
+		{
+			_removeBuff(target, buffs[i]);
+			removed = true;
+		}
+	}
+
+	if(removed)
+		return true;
+	else
+		return false;
+}
+
+
+boolean toggleStance(obj_id player, string attemptedBuff)
+{
+	int[] buffs = getAllBuffs(player);
+
+	if(buffs == null)
+	{
+		return false;
+	}
+
+	buff_data attemptedBuffData = combat_engine.getBuffData(getStringCrc(attemptedBuff.toLowerCase()));
+
+	if(attemptedBuffData == null)
+	{
+		return false;
+	}
+
+	string groupAtt = attemptedBuffData.buffGroup1; // dataTableGetString(BUFF_TABLE, rowAtt, "GROUP1");
+
+	for(int i = 0; i < buffs.length; i++)
+	{
+		buff_data bdata = combat_engine.getBuffData(buffs[i]);
+
+		if(bdata == null)
+			continue;
+
+		string curBuff = bdata.buffName;
+
+		string groupCur = bdata.buffGroup1; // dataTableGetString(BUFF_TABLE, rowCur, "GROUP1");
+
+		if(groupCur.equals(groupAtt))
+		{
+//			LOG("StanceToggle:", "Match confirmed for " +curBuff + " to " + attemptedBuff + " on ---"+getPlayerName(player));
+			removeBuff(player, curBuff);
+
+			// While the stance toggled, it cast a different buff...
+			if(!curBuff.equals(attemptedBuff.toLowerCase()))
+			{
+				applyBuff(player, player, attemptedBuff);
+				return false;
+			}
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+boolean isInStance(obj_id player)
+{
+	if(!isPlayer(player))
+		return true;
+
+	if(hasBuff(player, "fs_buff_def_1_1"))
+		return true;
+
+	return false;
+}
+
+boolean isInFocus(obj_id player)
+{
+	if(!isPlayer(player))
+		return true;
+
+	if(hasBuff(player, "fs_buff_ca_1"))
+		return true;
+
+	return false;
+}
+
+boolean playStanceVisual(obj_id target, string effectName)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	buff_data bdata = combat_engine.getBuffData(getStringCrc(effectName.toLowerCase()));
+
+	if(bdata == null)
+		return false;
+
+	string effectPlayed = bdata.stanceParticle;
+
+	if(effectPlayed != null && effectPlayed.length() > 0)
+	{
+		playClientEffectObj(target, effectPlayed, target, "");
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
+
+// If the "buff" is really just an icon used with damage over time effects.
+boolean isDotIconOnlyBuff(string name)
+{
+	boolean isDotIconOnly = false;
+
+	if(name.equals("bleeding") || name.equals("poisoned") || name.equals("diseased")  || name.equals("onfire")  )
+		isDotIconOnly = true;
+
+	return isDotIconOnly;
+}
+
+
+/**
+* Return the current stack count of the buff
+*
+* @param target	the creature to get buff for
+* @param nameCrc   the buff crc to get info for
+*
+* @return 0 if the buff doesn't exist - otherwise return the stackcount
+*/
+
+long getBuffStackCount(obj_id target, int nameCrc)
+{
+    return _getBuffStackCount(target, nameCrc);
+}
+
+/**
+* Return the current stack count of the buff
+*
+* @param target	the creature to get buff for
+* @param nameCrc   the buff crc to get info for
+*
+* @return 0 if the buff doesn't exist - otherwise return the stackcount
+*/
+
+long getBuffStackCount(obj_id target, string nameCrc)
+{
+    return _getBuffStackCount(target, getStringCrc(nameCrc.toLowerCase()));
+}
+
+
+/**
+* Return true if the buff stack was decremented
+*
+* @param target	the creature to decrement
+* @param nameCrc   the buff crc to get info for
+*
+* @return false if the buff doesn't exist - true if it succeeded
+*/
+
+boolean decrementBuffStack(obj_id target, int nameCrc, int stacksToRemove)
+{
+    return _decrementBuffStack(target, nameCrc, stacksToRemove);
+}
+
+
+/**
+* Return true if the buff stack was decremented
+*
+* @param target	the creature to decrement
+* @param nameCrc   the buff crc to get info for
+*
+* @return false if the buff doesn't exist - true if it succeeded
+*/
+
+boolean decrementBuffStack(obj_id target, string nameCrc, int stacksToRemove)
+{
+    return _decrementBuffStack(target, getStringCrc(nameCrc.toLowerCase()), stacksToRemove);
+}
+
+/**
+* Return true if the buff stack was decremented
+*
+* @param target	the creature to decrement
+* @param nameCrc   the buff crc to get info for
+*
+* @return false if the buff doesn't exist - true if it succeeded
+*/
+
+boolean decrementBuffStack(obj_id target, int nameCrc)
+{
+    return _decrementBuffStack(target, nameCrc, 1);
+}
+
+
+/**
+* Return true if the buff stack was decremented
+*
+* @param target	the creature to decrement
+* @param nameCrc   the buff crc to get info for
+*
+* @return false if the buff doesn't exist - true if it succeeded
+*/
+
+boolean decrementBuffStack(obj_id target, string nameCrc)
+{
+    return _decrementBuffStack(target, getStringCrc(nameCrc.toLowerCase()), 1);
+}
+
+
+/**
+* Return the OID of the buff caster
+*
+* @param target	the creature to get buff for
+* @param nameCrc   the buff crc to get info for
+*
+* @return -1 if the buff or creature cant be found, 0 will return if no OID was supplied originally
+*/
+
+obj_id getBuffCaster(obj_id target, int nameCrc)
+{
+	obj_id caster = obj_id.NULL_ID;
+	caster = caster.getObjId(_getBuffCaster(target, nameCrc));
+
+	return caster;
+}
+
+/**
+* Return the OID of the buff caster
+*
+* @param target	the creature to get buff for
+* @param nameCrc   the buff crc to get info for
+*
+* @return -1 if the buff or creature cant be found, 0 will return if no OID was supplied originally
+*/
+
+obj_id getBuffCaster(obj_id target, string nameCrc)
+{
+	obj_id caster = obj_id.NULL_ID;
+	caster = caster.getObjId(_getBuffCaster(target, getStringCrc(nameCrc.toLowerCase())));
+
+	return caster;
+}
+
+/**
+ * Return the time remaining on this buff for this character
+ *
+ * @param target	the creature to get buff for
+ * @param nameCrc   the buff crc to get info for
+ *
+ * @return -1 / 0 for the 2 different "timeless" buffs, otherwise return the time left in seconds.
+ */
+
+float getBuffTimeRemaining(obj_id target, int nameCrc)
+{
+    return _getBuffTimeRemaining(target, nameCrc);
+}
+
+/**
+ * Return the time remaining on this buff for this character
+ * @param target	the creature to get buff for
+ * @param nameCrc   the buff crc to get info for
+ *
+ * @return -1 / 0 for the 2 different "timeless" buffs, otherwise return the time left in seconds.
+ */
+
+float getBuffTimeRemaining(obj_id target, string nameCrc)
+{
+    return _getBuffTimeRemaining(target, getStringCrc(nameCrc.toLowerCase()));
+}
+
+
+/**
+ * Return array of dotBuffs of specified type
+ * @param target	the creature to get the buff for
+ * @param type		the dot type
+ */
+
+int[] getAllDotBuffsOfType(obj_id target, string type)
+{
+	int[] allDotBuffs = getAllBuffsByEffect(target, "dot");
+
+	resizeable int[] allDotBuffsOfType = new int[0];
+
+	if(allDotBuffs == null || allDotBuffs.length <= 0)
+		return null;
+
+	for(int i = 0; i < allDotBuffs.length; ++i)
+	{
+		string param1 = getEffectParam(allDotBuffs[i], 1);
+
+		if(param1.equals(type))
+			utils.addElement(allDotBuffsOfType, allDotBuffs[i]);
+	}
+
+
+	return allDotBuffsOfType;
+}
+
+/**
+ * Halves the stack of all dots of the specified type.
+ * If the dot is only 1 stack, then it is removed
+ * @param target	the creature to get the buff for
+ * @param dotType	the dot type
+ * types are constants defined at top. Pass in "all" to perform on all dots
+ */
+
+boolean performBuffDotImmunity(obj_id target, string dotType)
+{
+
+	if(dotType.equals("all"))
+	{
+		int[] allDotBuffs = getAllBuffsByEffect(target, "dot");
+
+		if(allDotBuffs == null || allDotBuffs.length <= 0)
+			return false;
+
+		for(int i = 0; i < allDotBuffs.length; ++i)
+		{
+			removeBuff(target, allDotBuffs[i]);
+		}
+		return true;
+	}
+
+
+	int[] allBuffDotsOfType = buff.getAllDotBuffsOfType(target, dotType);
+
+	if(allBuffDotsOfType == null || allBuffDotsOfType.length <= 0)
+		return false;
+
+	for(int i = 0; i < allBuffDotsOfType.length; ++i)
+	{
+		removeBuff(target, allBuffDotsOfType[i]);
+	}
+
+	return true;
+}
+
+boolean isBuffDot(string buffName)
+{
+	string effectName = buff.getEffectParam(buffName, 2);
+	if(effectName.equals("dot"))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+void reduceBuffDotStackCount(obj_id target, string dotType, int count)
+{
+	int[] allBuffsOfType = buff.getAllDotBuffsOfType(target, dotType);
+
+	if (allBuffsOfType == null || allBuffsOfType.length == 0)
+		return;
+
+	for (int i=0;i<allBuffsOfType.length;i++)
+	{
+		long stackCount = getBuffStackCount(target, allBuffsOfType[i]);
+
+		if (stackCount <= count)
+		{
+			removeBuff(target, allBuffsOfType[i]);
+		}
+		else
+		{
+			decrementBuffStack(target, allBuffsOfType[i], count);
+		}
+	}
+}
+
+void divideBuffDotStackCount(obj_id target, string dotType, int reduction)
+{
+	int[] allBuffsOfType = buff.getAllDotBuffsOfType(target, dotType);
+
+	if (allBuffsOfType == null || allBuffsOfType.length == 0)
+		return;
+
+	for (int i=0;i<allBuffsOfType.length;i++)
+	{
+		long stackCount = getBuffStackCount(target, allBuffsOfType[i]);
+
+		if (stackCount <= 1)
+		{
+			removeBuff(target, allBuffsOfType[i]);
+		}
+		else
+		{
+			reduction = Math.round((float)stackCount * ((float)reduction / 100.0f));
+
+			reduction = reduction < 1 ? 1 : reduction;
+
+			if (stackCount <= reduction)
+			{
+				removeBuff(target, allBuffsOfType[i]);
+			}
+			else
+			{
+				decrementBuffStack(target, allBuffsOfType[i], reduction);
+			}
+		}
+	}
+}
+
+boolean removeAllAuraBuffs(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	int[] allBuffs = buff.getAllBuffs(player);
+
+	if(allBuffs != null && allBuffs.length > 0)
+	{
+		for(int i = 0; i < allBuffs.length; ++i)
+		{
+			if(buff.isAuraBuff(allBuffs[i]))
+			{
+				buff.removeBuff(player, allBuffs[i]);
+			}
+		}
+	}
+
+	return true;
+}
+//returns a buff with a specific effect
+//not the most effeciant but the best we can do.
+int getBuffWithEffect(obj_id player, string effect)
+{
+	//validate
+	if(!isIdValid(player) || !exists(player))
+		return -1;
+	if(effect == null || effect.equals(""))
+		return -1;
+
+	int[] allBuffs = getAllBuffs(player);
+
+	if(allBuffs != null && allBuffs.length > 0)
+	{
+		//loop thru all buffs, stop when we find the one with the effect we want
+		for(int i = 0; i < allBuffs.length; ++i)
+		{
+			string tempEffect = getEffectParam(allBuffs[i], 1);
+			if(effect.equals(tempEffect))
+				return allBuffs[i];
+		}
+	}
+	//we didnt find any.
+	return -1;
+}
+
+void partyBuff(obj_id caster, string buffName)
+{
+	resizeable obj_id[] toBuff = new obj_id[0];
+	obj_id myBeast = beast_lib.getBeastOnPlayer(caster);
+	obj_id groupId = getGroupObject(caster);
+
+	if (isIdValid(myBeast) && exists(myBeast))
+		toBuff.add(myBeast);
+
+	if (isIdValid(groupId))
+	{
+		obj_id[] groupPlayers = getGroupMemberIds(groupId);
+
+		for (int i=0;i<groupPlayers.length;i++)
+		{
+			if (isIdValid(groupPlayers[i]) && exists(groupPlayers[i]) && pvpCanHelp(caster, groupPlayers[i]) && getDistance(groupPlayers[i], caster) < 100.0f )
+			{
+				toBuff.add(groupPlayers[i]);
+				obj_id thisBeast = beast_lib.getBeastOnPlayer(groupPlayers[i]);
+				if (isIdValid(thisBeast) && exists(thisBeast))
+					toBuff.add(thisBeast);
+			}
+		}
+	}
+	else
+	{
+		toBuff.add(caster);
+	}
+
+	obj_id[] buffList = toBuff;
+	applyBuff(buffList, caster, buffName);
+}
+
+boolean decayBuff(obj_id target, String buffName)
+{
+	return decayBuff(target, getStringCrc(buffName.toLowerCase()), 0.10f);
+}
+
+boolean decayBuff(obj_id target, String buffName, float percent)
+{
+	return decayBuff(target, getStringCrc(buffName.toLowerCase()), percent);
+}
+
+boolean decayBuff(obj_id target, int buffCrc, float percent)
+{
+	if(!isIdValid(target) || !exists(target))
+		return false;
+
+	if(buffCrc == 0 || percent < 0.0f || percent > 1.0f)
+		return false;
+
+	return _decayBuff(target, buffCrc, percent);
+}
+
+boolean decayAllBuffsFromPvpDeath(obj_id target)
+{
+	return decayAllBuffsFromPvpDeath(target, 0.10f);
+}
+
+boolean decayAllBuffsFromPvpDeath(obj_id target, float percent)
+{
+	if(!isIdValid(target))
+		return false;
+
+	if(!isPlayer(target))
+		return false;
+
+	int[] buffs = getAllBuffs(target);
+
+	if(buffs == null || buffs.length == 0)
+		return true;
+
+	for(int i = 0; i < buffs.length; ++i)
+	{
+		buff_data bdata = combat_engine.getBuffData(buffs[i]);
+
+		if(bdata == null)
+		{
+			LOG("buff.scriptlib", "decayAllBuffsFromPvpDeath bdata is null");
+			continue;
+		}
+
+		int decayOnPvpDeath = bdata.decayOnPvpDeath;
+		int removalOnDeath = bdata.removeOnDeath;
+
+		if(decayOnPvpDeath == 0 && removalOnDeath == 0)
+		{
+			continue;
+		}
+		else if(decayOnPvpDeath == 0 && removalOnDeath == 1)
+		{
+			_removeBuff(target, buffs[i]);
+			continue;
+		}
+		else if(removalOnDeath == 0)
+			continue;
+
+		_decayBuff(target, buffs[i], percent);
+	}
+
+	return true;
+}

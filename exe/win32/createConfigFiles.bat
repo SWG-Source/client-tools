@@ -1,0 +1,11 @@
+@copy template_client.cfg client.cfg
+@copy template_tools.cfg  tools.cfg
+@copy template_AnimationEditor.cfg AnimationEditor.cfg
+@copy template_SwgGodClient.cfg SwgGodClient.cfg
+@copy template_ClientEffectEditor.cfg ClientEffectEditor.cfg
+@copy template_SwgConversationEditor.cfg SwgConversationEditor.cfg
+@copy template_ShipComponentEditor.cfg ShipComponentEditor.cfg
+@copy template_NpcEditor.cfg NpcEditor.cfg
+@copy template_QuestEditor.cfg QuestEditor.cfg
+@copy template_ParticleEditor.cfg ParticleEditor.cfg
+@copy template_LightningEditor.cfg LightningEditor.cfg

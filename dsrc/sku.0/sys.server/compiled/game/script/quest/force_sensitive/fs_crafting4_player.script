@@ -1,0 +1,225 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.fs_dyn_village;
+include library.fs_quests;
+include library.jedi_trials;
+include library.locations;
+include library.money;
+include library.quests;
+include library.sui;
+include library.utils;
+
+/***** INHERITS ********************************************************/
+
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_NO_MONEY_MSG		 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_no_money");
+const string_id SID_PURCHASE_MSG_01		 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_purchase_msg_01");
+const string_id SID_PURCHASE_MSG_02		 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_purchase_msg_02");
+const string_id SID_PURCHASE_MSG_03		 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_purchase_msg_03");
+const string_id SID_CRAFTING4_PHASE_OVER = new string_id ("quest/force_sensitive/fs_crafting", "crafting4_phase_over");
+const string_id SID_CRAFTING4_SUI_TITLE	 = new string_id ("quest/force_sensitive/fs_crafting", "crafting4_phase_change_title");
+
+const string_id SID_TRACKING_TARGET_UPDATED  = new string_id ("quest/force_sensitive/fs_crafting", "tracking_device_target_updated");
+
+const string TRACKING_DEVICE_TEMPLATE	= "object/tangible/loot/collectible/collectible_rewards/fs_tracking_device.iff";
+const string DOWNED_SATELLITE_TEMPLATE 	= "object/tangible/item/quest/force_sensitive/fs_crafting4_downed_satellite.iff";
+const string COMPUTER_CORE_TEMPLATE 	= "object/tangible/item/quest/force_sensitive/fs_crafting4_computer_core.iff";
+
+const string LOCATION_TARGET_NAME		= "crafting4_target_downed_satellite";
+
+const string NEEDS_TRACKING_DATA_OBJVAR	= "fs_crafting4.tracking.needsTrackingData";
+
+const string CRAFTING4_BASE_OBJVAR		= "fs_crafting4";
+const string TRACKING_BASE_OBJVAR		= "fs_crafting4.tracking";
+const string TARGET_LOC_OBJVAR			= "fs_crafting4.tracking.targetLoc";
+const string TARGET_WAYPOINT_OBJVAR		= "fs_crafting4.tracking.targetWaypoint";
+
+const string MASTER_OBJVAR				= "fs_crafting4.master";
+const string SATELLITE_OBJVAR			= "fs_crafting4.satellite";
+
+const string PHASE4_ENDED_OBJVAR		= "fs_crafting4.myPhase4Ended";
+
+
+const int TRACKING_DATA_COST			= 1100;
+
+/***** TRIGGERS ********************************************************/
+
+messageHandler msgQuestAbortPhaseChange()
+{	
+	setObjVar(self, PHASE4_ENDED_OBJVAR, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnQuestActivated(int questRow) {
+
+	string questName = quests.getDataEntry(questRow, "NAME");
+
+	if ( questName != null && questName.equals("fs_crafting4_quest_06") ) 
+	{
+		if ( hasObjVar(self, PHASE4_ENDED_OBJVAR) )
+		{
+			deactivateCrafting4Quest(self);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnArrivedAtLocation(string locationName)
+{
+	if ( locationName.equals(LOCATION_TARGET_NAME) )
+	{
+		location satelliteLoc = getLocationObjVar(self, TARGET_LOC_OBJVAR);
+		obj_id satellite = createObject(DOWNED_SATELLITE_TEMPLATE, satelliteLoc);
+		setObjVar(satellite, "owner", self);
+		
+		setObjVar(self, SATELLITE_OBJVAR, satellite);
+		
+		if ( utils.hasScriptVar(self, "trackingDevice.locationObject") )
+		{
+			obj_id locationObject = utils.getObjIdScriptVar(self, "trackingDevice.locationObject");
+			if ( isIdValid(locationObject) )
+			{
+				 locations.destroyLocationObject(locationObject);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+/*
+trigger OnExitedLocation(string locationName)
+{
+	if ( locationName.equals(LOCATION_TARGET_NAME) )
+	{
+		obj_id satellite = getObjIdObjVar(self, SATELLITE_OBJVAR);
+		
+		if ( isIdValid(satellite) )
+		{
+			removeObjVar(self, SATELLITE_OBJVAR);
+			messageTo(satellite, "cleanUpSelf", null, 60, false);
+
+			if ( !utils.playerHasItemByTemplateInBankOrInventory(self, COMPUTER_CORE_TEMPLATE) )
+			{
+				location targetLoc = getLocationObjVar(self, TARGET_LOC_OBJVAR);
+				if ( targetLoc != null )
+				{
+					addLocationTarget(LOCATION_TARGET_NAME, targetLoc, 64.0f);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+*/
+messageHandler handleSetLocationTarget()
+{
+	location targetLoc = getLocationObjVar(self, TARGET_LOC_OBJVAR);
+	addLocationTarget(LOCATION_TARGET_NAME, targetLoc, 64.0f);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLocationReceived (string locationId, obj_id locationObject, location locationLocation, float locationRadius)
+{
+	if ( isIdValid(locationObject) && locationLocation != null )
+	{
+		if ( locationId.equals("crafting4_target_downed_satellite") )
+		{
+			setObjVar(self, TARGET_LOC_OBJVAR, locationLocation);
+
+			obj_id oldWaypoint = getObjIdObjVar(self, TARGET_WAYPOINT_OBJVAR);
+			removeObjVar(self, TARGET_WAYPOINT_OBJVAR);
+			if ( isIdValid(oldWaypoint) )
+			{
+				destroyWaypointInDatapad(oldWaypoint, self);
+			}
+
+			obj_id newWaypoint = createWaypointInDatapad(self, locationLocation);
+			setWaypointName(newWaypoint, "Downed Satellite");
+			setWaypointActive(newWaypoint, true);
+
+			setObjVar(self, TARGET_WAYPOINT_OBJVAR, newWaypoint);
+
+			sendSystemMessage(self, SID_TRACKING_TARGET_UPDATED);
+
+			utils.setScriptVar(self, "trackingDevice.locationObject", locationObject);
+			messageTo(self, "handleSetLocationTarget", null, 1, false);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRemoveTrackingObjVars()
+{
+	removeObjVar(self, TRACKING_BASE_OBJVAR);
+	
+	obj_id trackingDevice = utils.getItemPlayerHasByTemplateInBankOrInventory(self, TRACKING_DEVICE_TEMPLATE);
+	setObjVar(trackingDevice, NEEDS_TRACKING_DATA_OBJVAR, true);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePurchaseTrackingData()
+{
+	if ( quests.isActive("fs_crafting4_quest_03", self) )
+	{
+		if (!money.hasFunds(self, money.MT_TOTAL, TRACKING_DATA_COST) )
+		{
+			string str_no_money = utils.packStringId(SID_NO_MONEY_MSG);
+			sui.msgbox(self, str_no_money);
+		}
+		else
+		{
+			obj_id starportDroid = utils.getObjIdScriptVar(self, "crafting4.starportDroid");
+			
+			utils.moneyOutMetric(self, "FS_QUESTS", TRACKING_DATA_COST);
+			money.requestPayment(self, starportDroid, TRACKING_DATA_COST, "pass_fail", null, true);
+			
+			sendSystemMessage(self, SID_PURCHASE_MSG_01);
+			messageTo(self, "handleTrackingDataPurchaseMsg02", null, rand(1,4), false);
+		}
+		
+		utils.removeScriptVar(self, "crafting4.starportDroid");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTrackingDataPurchaseMsg02()
+{
+	sendSystemMessage(self, SID_PURCHASE_MSG_02);
+	messageTo(self, "handleTrackingDataPurchaseMsg03", null, rand(1,2), false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTrackingDataPurchaseMsg03()
+{
+	sendSystemMessage(self, SID_PURCHASE_MSG_03);
+	obj_id trackingDevice = utils.getItemPlayerHasByTemplateInBankOrInventory(self, TRACKING_DEVICE_TEMPLATE);
+	removeObjVar(trackingDevice, NEEDS_TRACKING_DATA_OBJVAR);
+	
+	quests.complete("fs_crafting4_quest_03", self, true);
+	
+	// Customer Service Log
+	string custLogMsg = "FS Phase 4 Crafting Quest: Player %TU has purchased the rights to a downed satellite.";
+	CustomerServiceLog("FS_Phase4_Crafting", custLogMsg, self);
+		
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+
+void deactivateCrafting4Quest(obj_id self)
+{
+	string str_message = utils.packStringId(SID_CRAFTING4_PHASE_OVER);
+	jedi_trials.oneButtonMsgBox(self, self, "noHandler", SID_CRAFTING4_SUI_TITLE, str_message, jedi_trials.SID_CLOSE_BUTTON);
+	
+	quests.deactivate("fs_crafting4_quest_06", self);
+	
+	removeObjVar(self, CRAFTING4_BASE_OBJVAR);
+	detachScript(self, "quest.force_sensitive.fs_crafting4_player");
+	return;
+}

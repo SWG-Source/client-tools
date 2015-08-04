@@ -1,0 +1,218 @@
+
+/*************************************************************/
+
+include library.groundquests;
+include library.sui;
+include library.utils;
+
+/************************************************************/
+
+const string_id	RADIAL_INSPECT  = new string_id ("quest/ground/util/quest_giver_object", "radial_inspect");
+const string_id OFFER_QUEST_MSG	= new string_id	("quest/ground/util/quest_giver_object", "offer_quest");
+const string_id SUI_TITLE		= new string_id ("quest/ground/util/quest_giver_object", "sui_title");
+const string_id BUTTON_DECLINE  = new string_id ("quest/ground/util/quest_giver_object", "button_decline");
+const string_id BUTTON_ACCEPT	= new string_id ("quest/ground/util/quest_giver_object", "button_accept");
+
+const string_id ALREADY_COMPLETED_QUEST	= new string_id ("quest/ground/util/quest_giver_object", "already_completed_quest");
+const string_id ALREADY_HAS_QUEST		= new string_id ("quest/ground/util/quest_giver_object", "already_has_quest");
+const string_id DECLINED_QUEST			= new string_id ("quest/ground/util/quest_giver_object", "declined_quest");
+const string_id OBJECT_UPLOADED			= new string_id ("quest/ground/util/quest_giver_object", "object_uploaded");
+
+const string_id IMPERIAL_FACTION_REQ	= new string_id ("quest/ground/util/quest_giver_object", "imperial_faction_required");
+const string_id REBEL_FACTION_REQ		= new string_id ("quest/ground/util/quest_giver_object", "rebel_faction_required");
+
+const string DATATABLE				= "datatables/quest/ground/quest_giver_object.iff";
+const string QUEST_NAME				= "quest_name";
+const string QUEST_OFFER_TEXT		= "quest_offer_text";
+const string QUEST_IS_REPEATABLE	= "quest_is_repeatable";
+const string DO_NOT_DESTROY			= "do_not_destroy";
+const string IMPERIAL_ONLY			= "imperial_only";
+const string REBEL_ONLY				= "rebel_only";
+
+/*************************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{	
+	string myTemplate = getTemplateName(self);
+	dictionary objectQuestData = dataTableGetRow(DATATABLE, myTemplate);
+	if ( objectQuestData != null )
+	{
+		string questName = objectQuestData.getString(QUEST_NAME);
+		if ( questName != null && questName.length() > 0 )
+		{
+			if ( groundquests.isValidQuestName(questName) )
+			{
+				int menuOption = mi.addRootMenu ( menu_info_types.ITEM_USE, RADIAL_INSPECT);
+			}
+			else
+			{
+				if ( isGod(player) )
+				{
+					string errorMsg = "GODMODE MSG: questName provided for " + getTemplateName(self) + " in " + DATATABLE + " is invalid.";
+					sendSystemMessageTestingOnly(player, errorMsg);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.ITEM_USE)
+	{	
+		// Construct Quest Offer sui
+		if ( utils.hasScriptVar(player, "questGiver.openSui") )
+		{
+			int oldSui = utils.getIntScriptVar(player, "questGiver.openSui");
+			utils.removeScriptVar(player, "questGiver.openSui");
+			if ( oldSui > -1 )
+			{
+				forceCloseSUIPage(oldSui);
+			}
+		}
+
+		string_id sid_offerText = SUI_TITLE;
+
+		// To use non-default text for offering the quest, use the "quest_offer_text" column
+		// in the datatable of an entry in quest/ground/util/quest_giver_object.stf
+		string myTemplate = getTemplateName(self);
+		dictionary objectQuestData = dataTableGetRow(DATATABLE, myTemplate);
+		if ( objectQuestData != null )
+		{
+			string newOfferText = objectQuestData.getString(QUEST_OFFER_TEXT);
+			if ( newOfferText != null && newOfferText.length() > 0 )
+			{
+				sid_offerText = new string_id ("quest/ground/util/quest_giver_object", newOfferText);
+			}
+		}
+
+		string title = utils.packStringId(sid_offerText);
+		string testMsg = utils.packStringId(OFFER_QUEST_MSG);
+		string ok_button = utils.packStringId(BUTTON_ACCEPT);
+		string cancel_button = utils.packStringId(BUTTON_DECLINE);
+
+		// Create the dialog page.
+		int pid = sui.createSUIPage( sui.SUI_MSGBOX, self, player, "handleQuestOfferResponse");
+
+		// Add elements text.
+		setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title);
+		setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, testMsg);
+
+		// Add buttons.
+		sui.msgboxButtonSetup(pid, sui.YES_NO);
+		setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, ok_button);
+		setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, cancel_button);
+
+		// Show dialog.
+		utils.setScriptVar(player, "questGiver.openSui", pid);
+		sui.showSUIPage( pid );
+		// End sui construction
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+messageHandler handleQuestOfferResponse()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId( params );
+	
+	string myTemplate = getTemplateName(self);
+	dictionary objectQuestData = dataTableGetRow(DATATABLE, myTemplate);
+	if ( objectQuestData != null )
+	{
+		string questName = objectQuestData.getString(QUEST_NAME);
+		if ( questName != null && questName.length() > 0 )
+		{
+			int bp = sui.getIntButtonPressed( params );
+
+			// Check for Imperial only or Rebel only settings
+			int imperialOnly = objectQuestData.getInt(IMPERIAL_ONLY);
+			int rebelOnly = objectQuestData.getInt(REBEL_ONLY);
+			
+			int playerFaction = pvpGetAlignedFaction(player);
+			
+			if ( imperialOnly > 0 )
+			{
+				if ( playerFaction != ##"imperial" )
+				{
+					sendSystemMessage(player, IMPERIAL_FACTION_REQ);
+					return SCRIPT_CONTINUE;
+				}
+			}
+			else if ( rebelOnly > 0 )
+			{
+				if ( playerFaction != ##"rebel" )
+				{
+					sendSystemMessage(player, REBEL_FACTION_REQ);
+					return SCRIPT_CONTINUE;
+				}
+			}
+
+			// Check to see if the quest is set as repeatable.
+			int questIsRepeatable = objectQuestData.getInt(QUEST_IS_REPEATABLE);
+			if (!groundquests.hasCompletedQuest(player, "som_kenobi_reunite_shard_3"))
+			{
+				if (!groundquests.isQuestActive(player, "som_kenobi_reunite_shard_1"))
+				{
+					if (!groundquests.isQuestActive(player, "som_kenobi_reunite_shard_2"))
+					{
+						if (!groundquests.isQuestActive(player, "som_kenobi_reunite_shard_3"))
+						{
+							switch ( bp )
+							{
+								case sui.BP_OK:	// "Accept"
+									groundquests.grantQuest(player, questName);
+
+									// Check to see if the quest object should be destroyed or not.
+									int doNotDestroy = objectQuestData.getInt(DO_NOT_DESTROY);
+									if ( doNotDestroy < 1 )
+									{
+										sendSystemMessage(player, OBJECT_UPLOADED);
+										destroyObject(self);
+									}
+									break;
+								case sui.BP_CANCEL: // "Decline"
+									sendSystemMessage(player, DECLINED_QUEST);
+									break;
+							}
+						}
+						else
+						{
+							sendSystemMessage(player, ALREADY_HAS_QUEST);
+						}
+					}
+					else
+					{
+						sendSystemMessage(player, ALREADY_HAS_QUEST);
+					}
+				}
+				else
+				{
+					sendSystemMessage(player, ALREADY_HAS_QUEST);
+				}
+			}
+			else
+			{
+				sendSystemMessage(player, ALREADY_COMPLETED_QUEST);
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+
+//------------------------------------------------------------
+
+

@@ -1,0 +1,174 @@
+/***** INCLUDES ********************************************************/
+include library.buff;
+include library.collection;
+include library.create;
+include library.factions;
+include library.groundquests;
+include library.holiday;
+include library.pclib;
+include library.pet_lib;
+include library.static_item;
+include library.stealth;
+include library.sui;
+include library.trial;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+
+const string QUEST_NAME				= "u16_nym_themepark_weed_pulling_ver2";
+const string QUEST_TASK				= "disposeOfWeeds";
+const string QUEST_SIGNAL			= "hasDisposedOfWeeds";
+
+const string THEMEPARK				= "theme_park_nym/messages";
+
+const string_id SID_NOT_WHILE_MOUNTED		= new string_id(THEMEPARK, "dispose_weed_not_while_mounted");
+const string_id SID_ZIP_BAR			= new string_id(THEMEPARK, "dispose_weed_zip_bar");
+const string_id SID_MNU_USE			= new string_id(THEMEPARK, "dispose_weed");
+const string_id SID_NOT_SURE_HOW_DESTROY	= new string_id(THEMEPARK, "dispose_weed_not_sure_what_to_do");
+const string_id SID_ALRDY_COMPLETED_QUEST	= new string_id(THEMEPARK, "dispose_weed_already_completed_quest");
+
+const int COUNTDOWN_TIMER			= 3;
+
+const string SOUND_CUTE					= "sound/dianoga_dumpster.snd";
+
+const string ANIMATON_FEED				= "eat";
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+
+	if(isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	int mnu2 = mi.addRootMenu (menu_info_types.ITEM_USE, SID_MNU_USE);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	
+	if(isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if(pet_lib.isMounted(player))
+	{
+		sendSystemMessage(player, SID_NOT_WHILE_MOUNTED);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!groundquests.isQuestActive(player, QUEST_NAME))
+	{
+		sendSystemMessage(player, SID_NOT_SURE_HOW_DESTROY);	
+		CustomerServiceLog("nyms_themepark", "weed_quest_object.OnObjectMenuSelect() Player: "+player+" did not have the quest "+QUEST_NAME+" needed for this collection. canister: ("+self);	
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!groundquests.isTaskActive(player, QUEST_NAME, QUEST_TASK))
+	{
+		sendSystemMessage(player, SID_NOT_SURE_HOW_DESTROY);	
+		CustomerServiceLog("nyms_themepark", "weed_quest_object.OnObjectMenuSelect() Player: "+player+" did not have the quest "+QUEST_NAME+" needed for this collection. canister: ("+self);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	int startTime = 0;
+	int range = 3;
+	int flags = 0;
+
+	flags |= sui.CD_EVENT_INCAPACITATE;
+	flags |= sui.CD_EVENT_DAMAGED;
+
+	stealth.testInvisNonCombatAction(player, self);
+	int countdownSui = sui.smartCountdownTimerSUI(self, player, "quest_countdown_timer", SID_ZIP_BAR, startTime, COUNTDOWN_TIMER, "handleObjectSwapTimer", range, flags);
+	CustomerServiceLog("nyms_themepark", "weed_quest_object.OnObjectMenuSelect() Player: "+player+" is destroying blackwing canister: "+self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGE HANDLERS ************************************************/
+
+//Handling the count down timer for dressing a tree and stomping presents.
+messageHandler handleObjectSwapTimer()
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+
+	if(params == null || params.equals(""))
+		return SCRIPT_CONTINUE;
+	
+ 	int pid = params.getInt("id");
+	obj_id player = params.getObjId("player");
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+
+	// Cancel button is sent when player manually closes the countdown window,
+	// or when he/she moves out of range.
+	if(bp == sui.BP_CANCEL)
+	{
+		detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+		CustomerServiceLog("nyms_themepark", "weed_quest_object.handleObjectSwapTimer() cancelled");
+
+		return SCRIPT_CONTINUE;
+	}
+	
+	else if(bp == sui.BP_REVERT)
+	{
+		CustomerServiceLog("nyms_themepark", "weed_quest_object.handleObjectSwapTimer() Player: "+player+" failed to destroy the canister because the player moved or was disrupted. Deposit: "+self);
+
+		// Gets the reason why the timer was aborted
+		int event = params.getInt("event");
+
+		// You can handle the situation differently depending on the reason
+		if(event == sui.CD_EVENT_LOCOMOTION)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_locomotion"));
+		}
+		else if(event == sui.CD_EVENT_INCAPACITATE)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_incapacitated"));
+		}
+		else if(event == sui.CD_EVENT_DAMAGED)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_damaged"));
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR))
+	{
+		CustomerServiceLog("nyms_themepark", "weed_quest_object.handleObjectSwapTimer() no countdowntimer");
+		return SCRIPT_CONTINUE;
+	}
+	
+	int test_pid = getIntObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR);
+
+	if(pid != test_pid)
+	{
+		CustomerServiceLog("nyms_themepark", "weed_quest_object.handleObjectSwapTimer() pid != test_pid");
+		return SCRIPT_CONTINUE;
+	}
+
+	forceCloseSUIPage(pid);
+	detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+	
+	if(!groundquests.isTaskActive(player, QUEST_NAME, QUEST_TASK))
+	{
+		CustomerServiceLog("nyms_themepark", "weed_quest_object.handleObjectSwapTimer() Player: "+player+" did not have the quest "+QUEST_NAME+" needed for this collection. canister: ("+self);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	groundquests.sendSignal(player, QUEST_SIGNAL); 	
+	doAnimationAction(self, ANIMATON_FEED);
+	play2dNonLoopingSound(player, SOUND_CUTE);
+	return SCRIPT_CONTINUE;
+}

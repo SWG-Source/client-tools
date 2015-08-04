@@ -1,0 +1,309 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        quest_spawner
+ * Description:  attachs to the non-persisted quest spawners
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.create;
+include library.theater;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+// Scripts
+const string SCRIPT_CREATURE				= "quest.util.quest_creature";
+
+// ObjVars
+const string VAR_SPAWNER_MAX_POPULATION			= "quest_spawner.max_pop";
+const string VAR_SPAWNER_MAX				= "quest_spawner.max_spawn";
+const string VAR_SPAWNER_CURRENT_POPULATION		= "quest_spawner.current_pop";
+const string VAR_SPAWNER_CURRENT			= "quest_spawner.current_spawn";
+const string VAR_SPAWNER_TYPE				= "quest_spawner.type";
+const string VAR_SPAWNER_DATATABLE			= "quest_spawner.datatable";
+const string VAR_SPAWNER_TIME_EXPIRED			= "quest_spawner.time_expired";
+const string VAR_SPAWNED_BY				= "quest_spawner.spawned_by";
+const string VAR_THEATER				= "quest_spawner.theater";
+const string VAR_PULSE					= "quest_spawner.pulse";
+const string BATCH_VAR_SPAWNED_MOBS			= "quest_spawner.spawned_mobs";
+
+
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	messageTo(self, "msgQuestSpawnerPulse", null, 5.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgQuestSpawnerPulse()
+{
+	if (createSpawn(self))
+		LOG("quest", "quest_spawner.msgQuestSpawnerPulse -- createSpawn success.");
+	else
+		LOG("quest", "quest_spawner.msgQuestSpawnerPulse -- createSpawn failed.");
+	
+	int time_expired = getIntObjVar(self, VAR_SPAWNER_TIME_EXPIRED);
+	if (getGameTime() > time_expired)
+	{
+		LOG("quest", "quest_spawner.msgQuestSpawnerPulse -- time has expired for " + self);
+		messageTo(self, "msgQuestDestroySpawner", null, 10.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int current_spawn = getIntObjVar(self, VAR_SPAWNER_CURRENT);
+	int max_spawn = getIntObjVar(self, VAR_SPAWNER_MAX);
+	if (current_spawn >= max_spawn)
+	{
+		LOG("quest", "quest_spawner.msgQuestSpawnerPulse -- spawn limits of " + max_spawn + "/" + current_spawn + " has been reached for " + self);
+		messageTo(self, "msgQuestDestroySpawner", null, 10.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int pulse = getIntObjVar(self, VAR_PULSE);
+	if (pulse < 1)
+		pulse = 30;
+	
+	messageTo(self, "msgQuestSpawnerPulse", null, pulse, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgQuestDestroySpawner()
+{
+	if(hasObjVar(self, "quest_spawner.parent"))
+	{
+		obj_id parent = getObjIdObjVar(self, "quest_spawner.parent");
+		if(hasObjVar(parent, "attack_spawners"))
+		{
+			resizeable obj_id[] spawners = getResizeableObjIdArrayObjVar(parent, "attack_spawners");
+			spawners.remove(self);
+			if(spawners.length > 0)
+			{
+				setObjVar(parent, "attack_spawners", spawners);
+			}
+			else
+			{
+				removeObjVar(parent, "attack_spawners");
+			}
+		}
+	}
+	destroyObject(self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+dictionary getSpawnerData(string spawner_name, string datatable)
+{
+	if (spawner_name == null)
+	{
+		LOG("quest", "quest_spawner.getSpawnerData -- spawner_name is null");
+		return null;
+	}
+
+	int idx = dataTableSearchColumnForString(spawner_name, "type", datatable);
+	//LOG("LOG_CHANNEL", "idx ->" + idx);
+	if (idx == -1)
+	{
+		LOG("quest", "quest_spawner.getSpawnerData -- unable to find an entry for " + spawner_name);
+		return null;
+	}
+
+	int num_items = dataTableGetNumRows(datatable);
+	resizeable string[] spawn_template = new string[0];
+	resizeable int[] min_number = new int[0];
+	resizeable int[] max_number = new int[0];
+	resizeable int[] weight = new int[0];
+	resizeable string[] script = new string[0];
+	for (int i = idx + 1; i < num_items; i++)
+	{
+		//LOG("LOG_CHANNEL", "battlefield::getSpawnerData -- " + i);
+		dictionary row = dataTableGetRow(datatable, i);
+
+		// When the next spawner name is reached, we've gotten everything there is to get.
+		if (row.getString("type").length() > 0)
+			break;
+		else
+		{
+			spawn_template = utils.addElement(spawn_template, row.getString("spawn_template"));
+			min_number = utils.addElement(min_number, row.getInt("min_number"));
+			max_number = utils.addElement(max_number, row.getInt("max_number"));
+			weight = utils.addElement(weight, row.getInt("weight"));
+			if (row.getString("script") != null)
+				script = utils.addElement(script, row.getString("script"));
+			else
+				script = utils.addElement(script, "none");
+		}
+	}
+
+	dictionary spawn_data = new dictionary();
+	spawn_data.put("spawn_template", spawn_template);
+	spawn_data.put("min_number", min_number);
+	spawn_data.put("max_number", max_number);
+	spawn_data.put("weight", weight);
+	spawn_data.put("script", script);
+
+	return spawn_data;
+}
+
+boolean createSpawn(obj_id spawner)
+{
+	LOG("quest", "quest_spawner.createSpawn -- spawner ->" + spawner);
+
+	if (!isIdValid(spawner))
+	{
+		LOG("quest", "quest_spawner.createSpawn -- spawner is null.");
+		return false;
+	}
+
+	int max_population = getIntObjVar(spawner, VAR_SPAWNER_MAX_POPULATION);
+	int max_spawn = getIntObjVar(spawner, VAR_SPAWNER_MAX);
+
+	int current_population = 0;
+	if (hasObjVar(spawner, VAR_SPAWNER_CURRENT_POPULATION))
+		current_population = getIntObjVar(spawner, VAR_SPAWNER_CURRENT_POPULATION);
+
+	int current_spawn = 0;
+	if (hasObjVar(spawner, VAR_SPAWNER_CURRENT))
+		current_spawn = getIntObjVar(spawner, VAR_SPAWNER_CURRENT);
+
+	if (current_population >= max_population)
+	{
+		// Population can never exceed the maximum
+		LOG("quest", "quest_spawner.createSpawn -- Max population already reached for " + spawner);
+		return false;
+	}
+
+	if (current_spawn >= max_spawn)
+	{
+		// Population can never exceed the maximum
+		LOG("quest", "quest_spawner.createSpawn -- Max number of spawns already reached for " + spawner);
+		return false;
+	}
+	
+	string spawner_type = getStringObjVar(spawner, VAR_SPAWNER_TYPE);
+	string datatable = getStringObjVar(spawner, VAR_SPAWNER_DATATABLE);
+	dictionary spawn_data = getSpawnerData(spawner_type, datatable);
+	if (spawn_data == null)
+	{
+		LOG("quest", "quest_spawner.createSpawn -- can't find spawn data for spawner " + spawner + " in datatable " + datatable);
+		return false;
+	}
+
+	//LOG("LOG_CHANNEL", "spawn_data ->" + spawn_data);
+
+	if (spawn_data == null)
+	{
+		LOG("quest", "quest_spawner.createSpawn -- spawn_data is null for " + spawner);
+		return false;
+	}
+
+	string[] spawn_template = spawn_data.getStringArray("spawn_template");
+	int[] min_number = spawn_data.getIntArray("min_number");
+	int[] max_number = spawn_data.getIntArray("max_number");
+	int[] weight = spawn_data.getIntArray("weight");
+	string[] spawn_script = spawn_data.getStringArray("script");
+
+	if (spawn_template == null || min_number == null || max_number == null || weight == null)
+	{
+		LOG("quest", "quest_spawner.createSpawn -- spawn data contains a null array.");
+		return false;
+	}
+
+	// Determine which template to use based on the probability weights
+	int total_weight = 0;
+	for (int i = 0; i < weight.length; i++)
+	{
+		// Find the total of all weight probabilities.
+		total_weight = total_weight + weight[i];
+	}
+
+	//LOG("quest", "total_weight ->" + total_weight);
+
+	if (total_weight < 1)
+	{
+		LOG("quest", "quest_spawner.createSpawn -- total probility weight is < 1 for " + spawner);
+		return false;
+	}
+
+	int weight_index = rand(1, total_weight);
+
+	//LOG("quest", "weight_index ->" + weight_index);
+
+	int array_index = -1;
+	for (int i = 0; i < weight.length; i++)
+	{
+		// Turn the weight_index into an array index.
+		weight_index = weight_index - weight[i];
+		if (weight_index < 1)
+		{
+			array_index = i;
+			break;
+		}
+	}
+
+	//LOG("quest", "array_index ->" + array_index);
+	if (array_index == -1)
+	{
+		LOG("quest", "quest_spawner.createSpawn -- unable to find an array index for " + spawner);
+		return false;
+	}
+
+	// Now that we've got the index, create the critters.
+	int num_spawn = rand(min_number[array_index], max_number[array_index]);
+	string template = spawn_template[array_index];
+	string script = spawn_script[array_index];
+	location spawner_loc = getLocation(spawner);
+	
+	//resizeable obj_id[] spawned_mobs = new obj_id[0];
+	//LOG("quest", "num_spawn ->" + num_spawn + " template ->" + template);
+
+	while (num_spawn > 0)
+	{
+		if (max_population > current_population)
+		{
+			location spawn_loc = utils.getRandomAwayLocation(spawner_loc, 5.0f, 10.0f);
+			obj_id mob = create.createCreature(template, spawn_loc, true);
+			if (!isIdValid(mob))
+			{
+				LOG("quest", "quest_spawner.createSpawn -- unable to spawn creature " + template + " from spawner " + spawner);
+			}
+			
+			setObjVar(mob, VAR_SPAWNED_BY, spawner);
+			if (hasObjVar(spawner, theater.VAR_PARENT))
+			{
+				obj_id parent = getObjIdObjVar(spawner, theater.VAR_PARENT);
+				if (isIdValid(parent))
+					setObjVar(mob, VAR_THEATER, parent);
+			}
+			attachScript(mob, SCRIPT_CREATURE);
+			if (script != null && script.length() > 0 && !script.equals("none"))
+				attachScript(mob, script);
+
+			// Keep track of the spawner where the mob originated.
+
+			current_population++;
+			num_spawn--;
+		}
+		else
+			break;
+	}
+
+	setObjVar(spawner, VAR_SPAWNER_CURRENT_POPULATION, current_population);
+	setObjVar(spawner, VAR_SPAWNER_CURRENT, current_spawn + 1);
+	
+	return true;
+}
+

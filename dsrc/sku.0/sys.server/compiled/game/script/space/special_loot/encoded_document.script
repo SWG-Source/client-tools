@@ -1,0 +1,417 @@
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.sui;
+include library.scenario;
+include library.space_quest;
+include library.space_create;
+include library.ship_ai;
+include library.utils;
+/*
+include library.locations;
+include library.utils;
+include library.create;
+include library.ai_lib;
+*/
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_USE					= new string_id("space/encoded_doc", "use");
+const string_id SID_READ				= new string_id("space/encoded_doc", "read");
+const string_id STORE_WAYPOINT			= new string_id("space/encoded_doc", "stored_waypoint");
+const string_id WAYPOINT_EXISTS			= new string_id("space/encoded_doc", "waypoint_exists");
+const string_id NOT_IN_INV				= new string_id("space/encoded_doc", "not_in_inv");
+const string_id WRONG_ZONE				= new string_id("space/encoded_doc", "wrong_planet" );
+const string_id ACTION_WRONG_ZONE		= new string_id("space/encoded_doc", "action_wrong_planet" );
+const string_id NEED_WAYPOINT			= new string_id("space/encoded_doc", "need_waypoint" );
+
+const string    SID_STORE_WAYPOINT		= "@space/encoded_doc:store_waypoint";
+const string    SID_CLOSE				= "@space/encoded_doc:close";
+
+const string	EVENT_TABLE				= "datatables/spacequest/encoded_doc.iff";
+
+const string	VAR_INDEX				= "idx";
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Open the event table and get an entry.
+	dictionary eventEntry = scenario.getRandomScenario( EVENT_TABLE );
+	if ( (eventEntry == null) || (eventEntry.isEmpty()) )
+		return SCRIPT_CONTINUE;
+	int idx = eventEntry.getInt( scenario.DICT_IDX );
+	setObjVar( self, VAR_INDEX, idx );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest( obj_id player, menu_info mi )
+{
+	// Add option to search area to find pinpoint location.
+	dictionary eventEntry = dataTableGetRow( EVENT_TABLE, getIntObjVar( self, VAR_INDEX ) );
+
+	int mnu = mi.addRootMenu( menu_info_types.SERVER_MENU1, SID_USE );
+	mi.addSubMenu( mnu, menu_info_types.SERVER_MENU2, SID_READ );
+	mi.addSubMenu( mnu, menu_info_types.SERVER_MENU3, new string_id("space/encoded_doc", eventEntry.getString( "useOption" )) );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect( obj_id player, int item )
+{
+	if ( item == menu_info_types.SERVER_MENU2 )
+	{
+		// Display info dialog.
+		displayDialog( self, player );
+	}
+	else if ( item == menu_info_types.SERVER_MENU3 )
+	{
+		// The real use option was selected.
+		doAction( self, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// getWaypoint
+//------------------------------------------------
+
+obj_id getWaypoint( obj_id self, obj_id player )
+{
+	// Get event location.
+	location eventLoc = getLocationObjVar( self, "eventLoc" );
+
+	// Check to see if any waypoints are already to that location.
+	obj_id[] data = getWaypointsInDatapad( player );
+	if ( data != null )
+	{
+		for ( int i=0; i<data.length; i++ )
+		{
+			if ( data[i] == null )
+				continue;
+			location waypointLoc = getWaypointLocation( data[i] );
+			if ( (waypointLoc != null) && (waypointLoc == eventLoc) )
+			{
+				// Matching waypoint.
+				return data[i];
+			}
+		}
+	}
+
+	return null;
+}
+
+//------------------------------------------------
+// displayDialog
+//------------------------------------------------
+
+void displayDialog( obj_id self, obj_id player )
+{
+	// Make sure we are in the player's inventory.
+	obj_id inventory = getObjectInSlot( player, "inventory" );
+	if ( !contains( inventory, self ) )
+	{
+		sendSystemMessage( player, NOT_IN_INV );
+		return;
+	}
+
+	// Get our localization file.
+	if ( !dataTableOpen( EVENT_TABLE ) )
+		return;
+	dictionary eventEntry = dataTableGetRow( EVENT_TABLE, getIntObjVar( self, VAR_INDEX ) );
+	string entryName = eventEntry.getString( "eventName" );
+
+	// Get string ids.
+	string text = "@space/encoded_doc:text_" + entryName;
+	string title = "@space/encoded_doc:title_" + entryName;
+
+	// Check for speical text and title.
+	if ( hasObjVar( self, "map_text" ) )
+		text = "@space/encoded_doc:" + getStringObjVar( self, "map_text" );
+	if ( hasObjVar( self, "map_title" ) )
+		title = "@space/encoded_doc:" + getStringObjVar( self, "map_title" );
+
+	// Display the dialog.
+	createDialog( self, player, text, title );
+}
+
+//------------------------------------------------
+// createDialog
+//------------------------------------------------
+
+int createDialog( obj_id self, obj_id player, string text, string title )
+{
+	if ( player == null )
+		return -1;
+
+	// Create the dialog page.
+	int pid = sui.createSUIPage( sui.SUI_MSGBOX, self, player, "handleDialogInput" );
+
+	// Add elements text.
+	sui.setSUIProperty( pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, text );
+	sui.setSUIProperty (pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title );
+
+	// Add buttons.
+	sui.msgboxButtonSetup( pid, sui.OK_CANCEL );
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, SID_STORE_WAYPOINT );
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, SID_CLOSE );
+
+	// Show dialog.
+	sui.showSUIPage( pid );
+
+	return pid;
+}
+
+//------------------------------------------------
+// handleDialogInput
+//------------------------------------------------
+
+messageHandler handleDialogInput()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine which button was pressed.
+	obj_id player = sui.getPlayerId( params );
+	int bp = sui.getIntButtonPressed( params );
+	switch ( bp )
+	{
+		case sui.BP_CANCEL: // "Store Waypoint"
+			storeWaypoint( self, player );
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_OK:		// "Close"
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// storeWaypoint
+//------------------------------------------------
+
+void storeWaypoint( obj_id self, obj_id player )
+{
+	dictionary eventEntry = dataTableGetRow( EVENT_TABLE, getIntObjVar( self, VAR_INDEX ) );
+
+	// Check our planet.
+	string scene = getCurrentSceneName();
+	string docScene = eventEntry.getString( "eventZone" );
+	if ( (docScene == null) || !docScene.equals( scene ) )
+	{
+		sendSystemMessage( player, WRONG_ZONE );
+		return;
+	}
+
+	// Do we have a location stored?
+	location eventLoc;
+	if ( !hasObjVar( self, "storedLoc" ) )
+	{
+		// Generate a location.
+		// NEED GET GOOD SPACE LOCATION.
+		// Space zones are 16km x 16km, but only 15.5km x 15.5km is usable.
+		int locx, locy, locz;
+		if ( rand() > 0.5 )
+			locx = rand( 0, 7000 );
+		else
+			locx = rand( 0, 7000 );
+		if ( rand() > 0.5 )
+			locy = rand( 0, 7000 );
+		else
+			locy = rand( 0, 7000 );
+		if ( rand() > 0.5 )
+			locz = rand( 0, 7000 );
+		else
+			locz = rand( 0, 7000 );
+
+		eventLoc = new location( locx, locy, locz );
+		setObjVar( self, "storedLoc", eventLoc );
+	}
+	else
+	{
+		eventLoc = getLocationObjVar( self, "storedLoc" );
+	}
+
+	// Check to see if any waypoints are already to that location.
+	if ( getWaypoint( self, player ) != null )
+	{
+		sendSystemMessage( player, WAYPOINT_EXISTS );
+		return;
+	}
+
+	// Create a waypoint to that location.
+	obj_id waypoint = createWaypointInDatapad( player, eventLoc );
+	if ( isIdValid(waypoint) )
+	{
+		setWaypointVisible( waypoint, true );
+		setWaypointActive( waypoint, true );
+		setWaypointName( waypoint, "Document Coordinates" );
+		setWaypointColor( waypoint, "space" );
+
+		// Notify the player.
+		sendSystemMessage( player, STORE_WAYPOINT );
+	}
+}
+
+//------------------------------------------------
+// doAction
+//------------------------------------------------
+
+void doAction( obj_id self, obj_id player )
+{
+	dictionary eventEntry = dataTableGetRow( EVENT_TABLE, getIntObjVar( self, VAR_INDEX ) );
+	string entryName = eventEntry.getString( "eventName" );
+
+	// Check our planet.
+	string scene = getCurrentSceneName();
+	string docScene = eventEntry.getString( "eventZone" );
+	if ( (docScene == null) || !docScene.equals( scene ) )
+	{
+		sendSystemMessage( player, ACTION_WRONG_ZONE );
+		return;
+	}
+
+	// Do we have a location?
+	if ( !hasObjVar( self, "storedLoc" ) )
+	{
+		sendSystemMessage( player, NEED_WAYPOINT );
+		return;
+	}
+
+	// Are we close enough?
+	location storedLoc = getLocationObjVar( self, "storedLoc" );
+	location myLoc = getLocation( player );
+	float dist = getDistance( storedLoc, myLoc );
+	if ( dist > 300 )
+	{
+		sendSystemMessage( player, new string_id( "space/encoded_doc", "toofar_"+entryName ) );
+		return;
+	}
+
+	// Trigger our event!
+	sendSystemMessage( player, new string_id( "space/encoded_doc", "trigger_"+entryName ) );
+
+	dictionary outparams = new dictionary();
+	outparams.put( "player", player );
+	messageTo( self, "timerDone", outparams, 30 + rand(30,120), false );
+}
+
+//------------------------------------------------
+// timerDone
+//------------------------------------------------
+
+messageHandler timerDone()
+{
+	dictionary eventEntry = dataTableGetRow( EVENT_TABLE, getIntObjVar( self, VAR_INDEX ) );
+	string entryName = eventEntry.getString( "eventName" );
+
+	// Check our planet.
+	string scene = getCurrentSceneName();
+	string docScene = eventEntry.getString( "eventZone" );
+	if ( (docScene == null) || !docScene.equals( scene ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId( "player" );
+
+	// Find an origin point for this attack.
+	transform myt = getTransform_o2w( player );
+	transform attackorigin = space_quest.getRandomPositionInSphere( myt, 500, 600 );
+
+	// Spawn the event force.
+	// WARP
+	string spawnList = eventEntry.getString( "spawnList" );
+	string[] shipTypes = dataTableGetStringColumn( "datatables/spacequest/attacklists/" + spawnList + ".iff", "shipType" );
+	int[] shipCounts = dataTableGetIntColumn( "datatables/spacequest/attacklists/" + spawnList + ".iff", "shipCount" );
+	int[] shipBehaviors = dataTableGetIntColumn( "datatables/spacequest/attacklists/" + spawnList + ".iff", "behavior" );
+	string[] patrolLists = dataTableGetStringColumn( "datatables/spacequest/attacklists/" + spawnList + ".iff", "patrollist" );
+	for ( int i=0; i<shipTypes.length; i++ )
+	{
+		for ( int j=0; j<shipCounts[i]; j++ )
+		{
+			// WARP
+			transform spawnLoc = space_quest.getRandomPositionInSphere( attackorigin, 50, 100 );
+			obj_id newship = space_create.createShip( shipTypes[i], spawnLoc, null );
+
+			// Set behavior.
+			switch ( shipBehaviors[i] )
+			{
+				case 0: // attack
+					ship_ai.spaceAttack( newship, getPilotedShip( player ) );
+					break;
+
+				case 1: // loiter
+					break;
+
+				case 2: // patrol
+					string[] navPoints = dataTableGetStringColumn( "datatables/spacequest/navlists/" + patrolLists[i] + ".iff", "navPoints" );
+					transform[] epts = getEnemyPatrolTransforms( self, navPoints );
+					ship_ai.spacePatrol( newship, epts );
+					break;
+			}
+		}
+	}
+
+	// Notify the player.
+	sendSystemMessage( player, new string_id( "space/encoded_doc", "event_"+entryName ) );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// getEnemyPatrolTransforms
+//
+// Borrowed from player_spacequest.  Maybe should be generalized to a library.
+//------------------------------------------------
+
+transform[] getEnemyPatrolTransforms( obj_id self, string[] navPoints )
+{
+	// We access the quest manager directly.
+	// Normally we wouldn't be able to do this, but its okay since space zones are single server.
+	obj_id questManager = getNamedObject( space_quest.QUEST_MANAGER );
+	if ( questManager == null )
+		return null;
+	obj_id[] points = utils.getObjIdArrayScriptVar( questManager, "nav_list" );
+	transform[] translist = new transform[navPoints.length];
+	for ( int j=0; j<navPoints.length; j++ )
+	{
+		for ( int i=0; i<points.length; i++ )
+		{
+			string pointName = getStringObjVar( points[i], "nav_name" );
+			string nName = navPoints[j];
+
+			java.util.StringTokenizer st = new java.util.StringTokenizer( nName, ":" );
+			string scene = st.nextToken();
+			nName = st.nextToken();
+
+			if ( (pointName != null) && pointName.equals( nName ) )
+			{
+				translist[j] = getTransform_o2w( points[i] );
+				break;
+			}
+		}
+	}
+
+	return translist;
+}

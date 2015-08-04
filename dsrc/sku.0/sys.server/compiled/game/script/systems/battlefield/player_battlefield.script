@@ -1,0 +1,854 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        player_battlefield
+ * Description:  player script for the battlefield system
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.battlefield;
+include library.regions;
+include library.pclib;
+include library.factions;
+include library.player_structure;  // For time parsing
+include library.healing;
+include library.sui;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+const string VAR_PLACED_STRUCTURE				= "battlefield.placed_structure";
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	//if (hasObjVar(self, battlefield.VAR_BATTLEFIELD))
+	//	removeObjVar(self, battlefield.VAR_BATTLEFIELD);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogout()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::OnLogout");
+
+	// Kick the player out of the battlefield if he logs out.
+	region bf = battlefield.getBattlefield(self);
+	if (bf == null)
+		return SCRIPT_CONTINUE;
+
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	battlefield.expelPlayerFromBattlefield(self, master_object);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	if (hasObjVar(self, battlefield.VAR_BATTLEFIELD))
+		removeObjVar(self, battlefield.VAR_BATTLEFIELD);
+	
+	if (utils.hasScriptVar(self, battlefield.VAR_SELECTING_FACTION))
+		utils.removeScriptVar(self, battlefield.VAR_SELECTING_FACTION);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnPlaceStructure (obj_id player, obj_id deed, location position, int rotation)
+{
+	LOG("LOG_CHANNEL", "player_battlefield::OnPlaceStructure");
+
+	if (player != deed)
+		return SCRIPT_CONTINUE;
+
+	if (!hasObjVar(player, VAR_PLACED_STRUCTURE))
+		return SCRIPT_CONTINUE;
+
+	// Get battlefield/player info
+	region bf = battlefield.getBattlefield(self);
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	int faction_id = pvpBattlefieldGetFaction(player, bf);
+	string faction = factions.getFactionNameByHashCode(faction_id);
+
+	// Check to see if the placed position is near one of the player's faction battlefield constructors.
+	if (!battlefield.isNearBattlefieldConstructor(master_object, position, faction))
+	{
+		LOG("LOG_CHANNEL", self + " ->This is too far away from one of your constructors.");
+		sendSystemMessageTestingOnly(self, "This is too far away from one of your constructors.");
+		return SCRIPT_OVERRIDE;
+	}
+
+	// Get structure info
+	string template = getStringObjVar(player, VAR_PLACED_STRUCTURE);
+	removeObjVar(player, VAR_PLACED_STRUCTURE);
+	dictionary stats = battlefield.getBuildableStructureStats(master_object, template);
+	if (stats == null)
+	{
+		LOG("LOG_CHANNEL", player + " ->You cannot build that in this battlefield.");
+		sendSystemMessageTestingOnly(player, "You cannot build that in this battlefield.");
+		return SCRIPT_OVERRIDE;
+	}
+
+	// Check to make sure the location is still in the battlefield.
+	region bf_check = battlefield.getBattlefield(position);
+	if (bf_check == null)
+	{
+		LOG("LOG_CHANNEL", player + " ->You must place structures within the battlefield.");
+		sendSystemMessageTestingOnly(player, "You must place structures within the battlefield.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string name = stats.getString("name");
+	int cost = stats.getInt("cost");
+	int build_points = battlefield.getFactionBuildPoints(master_object, faction);
+
+	if (build_points < cost)
+	{
+		LOG("LOG_CHANNEL", self + " ->There are insufficent build points remaining.");
+		sendSystemMessageTestingOnly(self, "There are insufficent build points remaining.");
+		return SCRIPT_OVERRIDE;
+	}
+
+	battlefield.decrementFactionBuildPoints(master_object, faction, cost);
+
+	float placement_height = canPlaceStructure(template, position, rotation);
+	
+	if (placement_height == -9997.0f)
+	{
+		LOG("LOG_CHANNEL", player + " ->Internal code error: canPlaceStructure");
+		sendSystemMessageTestingOnly(player, "Internal code error: canPlaceStructure");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (placement_height == -9998.0f)
+	{
+		LOG("LOG_CHANNEL", player + " ->Internal script error: OnPlaceStructure");
+		sendSystemMessageTestingOnly(player, "Internal script error: OnPlaceStructure");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (placement_height == -9999.0f)
+	{
+		LOG("LOG_CHANNEL", player + " ->There is no room to place the structure here.");
+		sendSystemMessageTestingOnly(player, "There is no room to place the structure here.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Use the snap to terrain height for the construction site.
+	position.y = getHeightAtLocation(position.x, position.z);
+	stats.put("height", placement_height);
+	battlefield.startBuildingConstruction(master_object, player, position, rotation, stats);
+
+	return SCRIPT_OVERRIDE;
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgBattlefieldFactionSelected()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgBattlefieldFactionSelected");
+
+	utils.removeScriptVar(self, battlefield.VAR_SELECTING_FACTION);
+
+	if (hasObjVar(self, battlefield.VAR_BATTLEFIELD_TO_ENTER))
+	{
+		LOG("LOG_CHANNEL", "!!!!!!!!!player_battlefield::msgBattlefieldFactionSelected");
+		string button = params.getString("buttonPressed");
+		if (button.equals("Cancel") || button.equals("No"))
+		{
+			removeObjVar(self, battlefield.VAR_BATTLEFIELD);
+			return SCRIPT_CONTINUE;
+		}
+
+		// Get the selected faction
+		obj_id master_object = getObjIdObjVar(self, battlefield.VAR_BATTLEFIELD_TO_ENTER);
+		//LOG("LOG_CHANNEL", "master_object ->" + master_object);
+		removeObjVar(self, battlefield.VAR_BATTLEFIELD);
+		if (master_object.isLoaded())
+		{
+			// Check to see if the player has a declared faction.  If so, use that.
+			int selected_faction_id = pvpGetAlignedFaction(self);
+			string selected_faction = factions.getFactionNameByHashCode(selected_faction_id);
+
+			if (selected_faction == null)
+			{
+				// The player is not of a declared faction. Check his selection.
+				string[] factions = battlefield.getFactionsAllowed(master_object);
+				string[] factions_remaining = battlefield.getFactionsRemaining(master_object);
+				int row_selected = sui.getListboxSelectedRow(params);
+
+				if (row_selected == -1)
+					return SCRIPT_CONTINUE;
+
+				if (row_selected >= factions.length)
+				{
+					LOG("LOG_CHANNEL", self + " ->That is an invalid selection.");
+					sendSystemMessageTestingOnly(self, "That is an invalid selection.");
+					return SCRIPT_CONTINUE;
+				}
+				selected_faction = factions[row_selected];
+			}
+
+			// Check to see that the faction was not eliminated
+			if (battlefield.isFactionRemaining(master_object, selected_faction))
+			{
+				// Check to see that the faction sizes are balanced properly.
+				// Messaging for fail is handled by canJoinFaction.
+				if (battlefield.canJoinFaction(master_object, self, selected_faction))
+					battlefield.addPlayerToTeam(self, selected_faction, master_object);
+			}
+			else
+			{
+				LOG("LOG_CHANNEL", self + " ->That faction has been eliminated from the battle.");
+				sendSystemMessageTestingOnly(self, "That faction has been eliminated from the battle.");
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgEndBattlefieldGame()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgEndBattlefieldGame -- " + self);
+
+	// params keys: master_object, chatroom, chatroom_faction
+
+	// Clean up the player's game objvars.
+	if (hasObjVar(self, battlefield.VAR_BATTLEFIELD))
+	{
+		region bf = battlefield.getBattlefield(self);
+		if (bf != null)
+		{
+			obj_id bf_current = battlefield.getMasterObjectFromRegion(bf);
+			obj_id bf_entered = battlefield.getBattlefieldEntered(self);
+			// Don't remove anything if the player has data for another battlefield
+			if (bf_current == bf_entered)
+			{
+				// Exit the faction chatroom
+				string faction = battlefield.getPlayerTeamFaction(self);
+				if (faction != null)
+				{
+					string faction_chat_room = battlefield.getChatRoomNameFaction(bf_entered, faction);
+					chatExitRoom(faction_chat_room);
+					LOG("LOG_CHANNEL", self + " ->Exiting chatroom: " + faction_chat_room);
+				}
+
+				// Get rid of any battlefield waypoints
+				if (hasObjVar(self, battlefield.VAR_WAYPOINTS))
+				{
+					obj_id[] waypoint_list = getObjIdArrayObjVar(self, battlefield.VAR_WAYPOINTS);
+					if (waypoint_list != null)
+					{
+						for (int i = 0; i < waypoint_list.length; i++)
+						{
+							LOG("LOG_CHANNEL", "player_battlefield::msgEndBattlefieldGame -- waypoint " + waypoint_list[i] + "removed.");
+							if (isIdValid(waypoint_list[i]))
+								destroyWaypointInDatapad(waypoint_list[i], self);
+						}
+					}
+				}
+
+				// Remove the objvar but not the script.  The script is needed to enable
+				// commands that are still usable during an inactive battlefield.
+				removeObjVar(self, battlefield.VAR_BATTLEFIELD);
+			}
+		}
+		else
+		{
+			// Exit the battlefield chatroom.
+			string chatroom = params.getString("chatroom");
+			chatExitRoom(chatroom);
+			LOG("LOG_CHANNEL", self + " ->!!Exiting chatroom: " + chatroom);
+
+			// Exit the faction chatroom
+			if (params.containsKey("chatroom_faction"))
+			{
+				string chatroom_faction = params.getString("chatroom_faction");
+				chatExitRoom(chatroom_faction);
+				LOG("LOG_CHANNEL", self + " ->!!Exiting chatroom: " + chatroom_faction);
+			}
+
+			// Remove objvars, waypoints, and script.
+			cleanPlayer(self);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgJoinBattlefieldChat()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgJoinBattlefieldChat");
+
+	string chat_room = params.getString("chat_room");
+	chatEnterRoom(chat_room);
+
+	LOG("LOG_CHANNEL", self + " ->Joining chatroom: " + chat_room);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgExitBattlefieldChat()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgExitBattlefieldChat");
+
+	string chat_room = params.getString("chat_room");
+	chatExitRoom(chat_room);
+
+	LOG("LOG_CHANNEL", self + " ->Exiting chatroom: " + chat_room);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgBattlefieldDeath()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgBattlefieldDeath");
+
+	obj_id master_object = params.getObjId("master_object");
+
+	if (hasObjVar(self, pclib.VAR_BEEN_COUPDEGRACED))
+		removeObjVar(self, pclib.VAR_BEEN_COUPDEGRACED);
+
+	if (master_object != null)
+	{
+		// If the battle is active, kick the player out of the battlefield.
+		if (battlefield.isBattlefieldActive(master_object))
+		{
+			battlefield.expelPlayerFromBattlefield(self, master_object);
+			LOG("LOG_CHANNEL", self + " ->You are about to be resuscitated! You may not return to the battlefield until the current battle has ended.");
+			sendSystemMessageTestingOnly(self, "You are about to be resuscitated! You may not return to the battlefield until the current battle has ended.");
+			// battlefield.sendBattlefieldMessage(master_object, getFirstName(self) + " has been eliminated.");
+		}
+		else
+		{
+			LOG("LOG_CHANNEL", self + " ->You are about to be revived!");
+			sendSystemMessageTestingOnly(self, "You are about to be revived!");
+		}
+	}
+
+	if (hasObjVar(self, "combat.intIncapacitationCount"))
+		setObjVar(self, "combat.intIncapacitationCount", 0);
+		
+	pclib.resurrectPlayer(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgRemoveBattlefieldScript()
+{
+	// We need to handle removal of the battlefield script via message to insure that the player gets
+	// removed from the chat channels before the script gets detached.
+
+	LOG("LOG_CHANNEL", "player_battlefield::msgRemoveBattlefieldScript");
+
+	obj_id master_object = params.getObjId("master_object");
+
+	if (master_object.isLoaded())
+	{
+		// Exit the battlefield chatroom.
+		string chat_room = battlefield.getChatRoomNameAllFactions(master_object);
+		chatExitRoom(chat_room);
+		LOG("LOG_CHANNEL", self + " ->Exiting chatroom: " + chat_room);
+
+		// Exit the faction chatroom
+		string faction = battlefield.getPlayerTeamFaction(self);
+		if (faction != null)
+		{
+			string faction_chat_room = battlefield.getChatRoomNameFaction(master_object, faction);
+			chatExitRoom(faction_chat_room);
+			LOG("LOG_CHANNEL", self + " ->Exiting chatroom: " + faction_chat_room);
+		}
+	}
+
+	// Remove waypoints, objvars, script
+	cleanPlayer(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgBuildStructureSelected()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgBuildStructureSelected");
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel"))
+		return SCRIPT_CONTINUE;
+
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+		return SCRIPT_CONTINUE;
+
+	// get battlefield information
+	region bf = battlefield.getBattlefield(self);
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	int faction_id = pvpBattlefieldGetFaction(self, bf);
+	string faction = factions.getFactionNameByHashCode(faction_id);
+
+	// Check to see if the player can build.
+	if (!battlefield.canBuildBattlefieldStructure(master_object, self))
+	{
+		// messaging for the various fail cases is handled by the method.
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the stats for the item selected
+	string[] buildable_structures = battlefield.getBuildableStructures(master_object, faction);
+	if (row_selected >= buildable_structures.length)
+	{
+		LOG("LOG_CHANNEL", self + " ->That is an invalid selected.");
+		sendSystemMessageTestingOnly(self, "That is an invalid selected.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string structure_name = buildable_structures[row_selected];
+	dictionary structure_stats = battlefield.getBuildableStructureStats(master_object, structure_name);
+	if (structure_stats == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->Unable to create that structure in this battlefield.");
+		sendSystemMessageTestingOnly(self, "Unable to create that structure in this battlefield.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string template = structure_stats.getString("template");
+	string name = structure_stats.getString("name");
+	int cost = structure_stats.getInt("cost");
+
+	//LOG("LOG_CHANNEL", " template ->" + template + " name ->" + name + " cost ->" + cost);
+
+	int build_points = battlefield.getFactionBuildPoints(master_object, faction);
+	if (build_points < cost)
+	{
+		LOG("LOG_CHANNEL", self + " ->There are insufficent build points remaining.");
+		sendSystemMessageTestingOnly(self, "There are insufficent build points remaining.");
+		return SCRIPT_CONTINUE;
+	}
+
+	// Keep track of the template that the player wants to place.
+	setObjVar(self, VAR_PLACED_STRUCTURE, template);
+
+	// Go into placement mode.
+	enterClientStructurePlacementMode(self, self, template);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgGrantFactionStanding()
+{
+	string faction = params.getString("faction");
+	obj_id master_object = params.getObjId("battlefield");
+	float standing = params.getFloat("standing");
+
+	string player_faction = battlefield.getPlayerTeamFaction(self);
+	obj_id player_battlefield = battlefield.getBattlefieldEntered(self);
+	if (player_faction == null)
+		return SCRIPT_CONTINUE;
+	if (player_battlefield == null)
+		return SCRIPT_CONTINUE;
+
+	// Make sure the player is of the specified faction on the specified battlefield
+	if (faction.equals(player_faction))
+	{
+		if (master_object == player_battlefield)
+			factions.addFactionStanding(self, faction, standing);
+
+		LOG("LOG_CHANNEL", self + " ->Your " + faction + " faction standing has been increased by " + standing + " for your battlefield deeds.");
+		sendSystemMessageTestingOnly(self, "Your " + faction + " faction standing has been increased by " + standing + " for your battlefield deeds.");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgAddBattlefieldWaypoint()
+{
+	region bf = battlefield.getBattlefield(self);
+	if (bf == null)
+		return SCRIPT_CONTINUE;
+
+	obj_id structure = params.getObjId("structure");
+	if (structure.isLoaded())
+	{
+		battlefield.addBattlefieldWaypoint(self, structure);
+		LOG("LOG_CHANNEL", "player_battlefield::msgAddBattlefieldWaypoint -- adding waypoint to player " + self + " for " + structure);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgSelectFactionPrompt()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgSelectFactionPrompt -- " + self);	
+	
+	obj_id master_object = params.getObjId("master_object");
+	//LOG("LOG_CHANNEL", "battlefield ->" + master_object);
+	if (isIdValid(master_object))
+	{
+		LOG("LOG_CHANNEL", "battlefield ->" + master_object);
+		string[] factions_allowed = battlefield.getFactionsAllowed(master_object);
+		string prompt = "You are about to enter an active battlefield.  You must select a faction with which to ally yourself for the duration of the battle.";
+		sui.listbox(self, self, prompt, sui.OK_CANCEL, "Select Faction", factions_allowed, "msgBattlefieldFactionSelected");
+		//LOG("LOG_CHANNEL", "!!!battlefield ->" + master_object);
+		utils.setScriptVar(self, battlefield.VAR_SELECTING_FACTION, 1);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgVerifyFactionPrompt()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::msgVerifyFactionPrompt -- " + self);
+	obj_id master_object = params.getObjId("master_object");
+	string faction = params.getString("faction");
+	if (isIdValid(master_object))
+	{
+		string prompt = "You are about to enter an active battlefield. Would you like to aid the " + faction + " faction?";
+		sui.msgbox(self, self, prompt, sui.YES_NO, "msgBattlefieldFactionSelected");
+		utils.setScriptVar(self, battlefield.VAR_SELECTING_FACTION, 1);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgBattlefieldStatus()
+{
+	//LOG("LOG_CHANNEL", "player_battlefield::handleBattlefieldStatusUi");
+	region bf = battlefield.getBattlefield(self);
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	//LOG("LOG_CHANNEL", "master_object ->" + master_object);
+	utils.removeScriptVarTree(self, "battlefield.status");
+	
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_OK )	//refresh
+	{
+		if (!isIdValid(master_object))
+			sendSystemMessageTestingOnly(self, "Cannot found the battlefield. Cancelling refresh.");
+		else
+			queueCommand(self, ##"battlefieldStatus", null, "", COMMAND_PRIORITY_DEFAULT);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+commandHandler battlefieldStatus()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::BattlefieldStatus");
+	
+	if (utils.hasScriptVar(self, "battlefield.status.pid"))
+	{
+		int oldpid = utils.getIntScriptVar(self, "battlefield.status.pid");
+		sui.closeSUI(self, oldpid);
+		utils.removeScriptVarTree(self, "battlefield.status");
+	}
+
+	region bf = battlefield.getBattlefield(self);
+
+	if (bf == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be at a battlefield to do that.");
+		sendSystemMessageTestingOnly(self, "You must be at a battlefield to do that.");
+		return SCRIPT_CONTINUE;
+	}
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	if (!isIdValid(master_object))
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be at a battlefield to do that.");
+		sendSystemMessageTestingOnly(self, "You must be at a battlefield to do that.");
+		return SCRIPT_CONTINUE;
+	}
+
+	//LOG("LOG_CHANNEL", "bf ->" + bf);
+
+	if (params.equals("game"))
+	{
+		// Player is requesting specific game stats.
+		if (!battlefield.isBattlefieldActive(bf))
+		{
+			LOG("LOG_CHANNEL", self + " ->The battlefield must be active in order to get statistics.");
+			sendSystemMessageTestingOnly(self, "The battlefield must be active in order to get statistics.");
+		}
+		else
+		{
+			// Since these stats vary based on the game type, let that game script on the master object take care of it.
+			master_object = battlefield.getMasterObjectFromRegion(bf);
+			dictionary stat_params = new dictionary();
+			stat_params.put("player", self);
+			messageTo(master_object, "msgGameStats", stat_params, 0.0f, true);
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+	else if (params.equals("history"))
+	{
+		master_object = battlefield.getMasterObjectFromRegion(bf);
+		dictionary stat_params = new dictionary();
+		stat_params.put("player", self);
+		messageTo(master_object, "msgGameStatHistory", stat_params, 0.0f, true);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Compile list of stats
+	string name = battlefield.getBattlefieldLocalizedName(master_object);
+
+	// Pvp region type
+	int pvp_type = bf.getPvPType();
+	string pvp_type_str;
+	if (pvp_type == regions.PVP_REGION_TYPE_BATTLEFIELD_PVP)
+		pvp_type_str = "Player vs Player";
+	else
+		pvp_type_str = "Player vs Environment";
+
+	// Game type
+	string game_type = battlefield.getBattlefieldGameType(bf);
+
+	// Game status
+	string status;
+	int time;
+	string time_starting;
+	resizeable string[] num_factions = new string[0];
+	if (battlefield.isBattlefieldActive(bf))
+	{
+		status = "Active";
+		time = battlefield.getGameTimeRemaining(bf);
+		time_starting = "ending in";
+
+		// Get the teams
+		string[] factions_allowed = battlefield.getFactionsAllowed(bf);
+		for (int i = 0; i < factions_allowed.length; i++)
+		{
+			obj_id[] faction_team = battlefield.getFactionTeam(bf, factions_allowed[i]);
+			num_factions = utils.addElement(num_factions, factions_allowed[i] + " Team: " + faction_team.length);
+		}
+	}
+	else
+	{
+		int next_game = battlefield.getNextGameTime(bf);
+		if (next_game == -9999)
+		{
+			// Value of -9999 means that the battlefield has been disabled
+			status = "Disabled";
+			time = -9999;
+			time_starting = "";
+		}
+		else
+		{
+			status = "Inactive";
+			time = (next_game - getGameTime());
+			//LOG("LOG_CHANNEL", "2time ->" + time + "    " + battlefield.getNextGameTime(bf) + "/" + getGameTime());
+			time_starting = "starting in";
+		}
+	}
+
+	string time_message;
+	if (time > 0)
+	{
+		int[] conv_time = player_structure.convertSecondsTime(time);
+		time_message = player_structure.assembleTimeRemaining(conv_time);
+	}
+	else
+		time_message = "0 seconds.";
+
+	//assemble list of stats into a string array
+	resizeable string[] dsrc = new string[0];
+	dsrc = utils.addElement(dsrc, "Battlefield Name: " + name);
+	dsrc = utils.addElement(dsrc, "Battlefield Type: " + pvp_type_str);
+	dsrc = utils.addElement(dsrc, "Objective: " + game_type);
+	if (time == -9999)
+		dsrc = utils.addElement(dsrc, "Status: " + status);
+	else
+		dsrc = utils.addElement(dsrc, "Status: " + status + " (" + time_starting + " " + time_message + ")");
+		
+	dsrc = utils.concatArrays(dsrc, num_factions);
+	int pid = sui.listbox(self, self, "Battlefield Status", sui.REFRESH_CANCEL, "Battlefield Status", dsrc, "msgBattlefieldStatus");
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(self, "battlefield.status.pid", pid);
+		utils.setScriptVar(self, "battlefield.status.target", master_object);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler placeBattlefieldStructure()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::placeBattlefieldStructure");
+
+	region bf = battlefield.getBattlefield(self);
+	if (bf == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be in a battlefield to do that.");
+		sendSystemMessageTestingOnly(self, "You must be in a battlefield to do that.");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	if (!battlefield.isBattlefieldActive(master_object))
+	{
+		LOG("LOG_CHANNEL", self + " ->The battlefield must be active in order to do that.");
+		sendSystemMessageTestingOnly(self, "The battlefield must be active in order to do that.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string faction = battlefield.getPlayerTeamFaction(self);
+
+	if (!battlefield.canBuildBattlefieldStructure(master_object, self))
+	{
+		// messaging for the various fail cases is handled by the method.
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine what is buildable and its cost in this battlefield.  Stick it in a list box.
+	string[] buildable_structures = battlefield.getBuildableStructures(master_object, faction);
+	if (buildable_structures == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->You cannot build on this battlefield.");
+		sendSystemMessageTestingOnly(self, "You cannot build on this battlefield.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] dsrc = new string[buildable_structures.length];
+	for (int i = 0; i < buildable_structures.length; i++)
+	{
+		dictionary structure_info = battlefield.getBuildableStructureStats(master_object, buildable_structures[i]);
+		int cost = structure_info.getInt("cost");
+
+		dsrc[i] = buildable_structures[i] + " (Cost: " + cost + ")";
+	}
+	int build_points = battlefield.getFactionBuildPoints(master_object, faction);
+	string points = "points";
+	if (build_points == 1)
+		points = "point";
+	string prompt = "Select a structure to build.\n(" + build_points + " build " + points + " remaining.)";
+	sui.listbox(self, self, prompt, sui.OK_CANCEL, "Battlefield Constructor", dsrc, "msgBuildStructureSelected");
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler purchaseReinforcement()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::purchaseReinforcement");
+
+	region bf = battlefield.getBattlefield(self);
+	if (bf == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be in a battlefield to do that.");
+		sendSystemMessageTestingOnly(self, "You must be in a battlefield to do that.");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+
+	if (target == null || target == obj_id.NULL_ID)
+	{
+		target = getLookAtTarget(self);
+		if (target == null || target == obj_id.NULL_ID)
+		{
+			LOG("LOG_CHANNEL", self + " ->From which installation do you wish to purchase reinforcements?");
+			sendSystemMessageTestingOnly(self, "From which installation do you wish to purchase reinforcements?");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if (!battlefield.canBuildReinforcement(target))
+	{
+		LOG("LOG_CHANNEL", self + " ->Reinforcements are unavailable from that.");
+		sendSystemMessageTestingOnly(self, "Reinforcements are unavailable from that.");
+		return SCRIPT_CONTINUE;
+	}
+
+	// Make sure the player is near the installation.
+	location loc_player = getLocation(self);
+	location loc_target = getLocation(target);
+	if (loc_player.distance(loc_target) > battlefield.REINFORCEMENT_RANGE)
+	{
+		LOG("LOG_CHANNEL", self + " ->You are too far away from the installation.");
+		sendSystemMessageTestingOnly(self, "You are too far away from the installation.");
+		return SCRIPT_CONTINUE;
+	}
+
+	if (battlefield.buildReinforcement(master_object, target, self) == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->Reinforcement request denied.");
+		sendSystemMessageTestingOnly(self, "Reinforcement request denied.");
+	}
+	else
+	{
+		LOG("LOG_CHANNEL", self + " ->Your reinforcements have arrived.");
+		sendSystemMessageTestingOnly(self, "Your reinforcements have arrived.");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler repairBattlefieldStructure()
+{
+	LOG("LOG_CHANNEL", "player_battlefield::repairBattlefieldStructure");
+
+	region bf = battlefield.getBattlefield(self);
+	if (bf == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be in a battlefield to do that.");
+		sendSystemMessageTestingOnly(self, "You must be in a battlefield to do that.");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+
+	if (target == null || target == obj_id.NULL_ID)
+	{
+		target = getLookAtTarget(self);
+		if (target == null || target == obj_id.NULL_ID)
+		{
+			LOG("LOG_CHANNEL", self + " ->Which structure do you wish to repair?");
+			sendSystemMessageTestingOnly(self, "Which structure do you wish to repair?");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Make sure the player is near the installation.
+	location loc_player = getLocation(self);
+	location loc_target = getLocation(target);
+	if (loc_player.distance(loc_target) > battlefield.REINFORCEMENT_RANGE)
+	{
+		LOG("LOG_CHANNEL", self + " ->You are too far away from the structure.");
+		sendSystemMessageTestingOnly(self, "You are too far away from the structure.");
+		return SCRIPT_CONTINUE;
+	}
+
+	battlefield.repairBattlefieldStructure(master_object, self, target);
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+void cleanPlayer(obj_id player)
+{
+	if (player == null || player == obj_id.NULL_ID)
+		return;
+
+	// Get rid of any battlefield waypoints
+	if (hasObjVar(player, battlefield.VAR_WAYPOINTS))
+	{
+		obj_id[] waypoint_list = getObjIdArrayObjVar(player, battlefield.VAR_WAYPOINTS);
+		if (waypoint_list != null)
+		{
+			for (int i = 0; i < waypoint_list.length; i++)
+			{
+				obj_id waypoint = waypoint_list[i];
+				LOG("LOG_CHANNEL", "player_battlefield::cleanPlayer -- waypoint " + waypoint + "removed.");
+				//LOG("LOG_CHANNEL", "waypoint ->"  + waypoint);
+				if (isIdValid(waypoint))
+					destroyWaypointInDatapad(waypoint, player);
+			}
+		}
+	}
+
+	// Remove battlefield objvars and script
+	removeObjVar(player, battlefield.VAR_BATTLEFIELD);
+	detachScript(player, battlefield.SCRIPT_PLAYER_BATTLEFIELD);
+
+	return;
+}
+

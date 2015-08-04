@@ -1,0 +1,5911 @@
+include library.advanced_turret;
+include library.ai_lib;
+include library.armor;
+include library.buff;
+include library.camping;
+include library.chat;
+include library.collection;
+include library.combat;
+include library.colors;
+include library.create;
+include library.dot;
+include library.expertise;
+include library.event_perk;
+include library.factions;
+include library.groundquests;
+include library.group;
+include library.healing;
+include library.holiday;
+include library.jedi;
+include library.locations;
+include library.movement;
+include library.pclib;
+include library.proc;
+include library.prose;
+include library.regions;
+include library.skill;
+include library.stealth;
+include library.sui;
+include library.trial;
+include library.utils;
+include library.weapons;
+include library.beast_lib;
+include library.performance;
+include library.xp;
+
+const float ATTACK_RATE_DEPRICATED 	= 0.0f;
+const float DECAY_RATE_DEPRICATED	= 0.0f;
+
+const string SKILLS_DATATABLE 		= "datatables/skill/skills.iff";
+const string DATATABLE_BUFF_BUILDER 	= "datatables/buff/buff_builder.iff";
+
+const string INITIAL_GENERAL_PROTECTION = "amor.unmodifiedArmorValue";
+const string DATATABLE_COSTUME 		= "datatables/event/costume.iff";
+const string DATATABLE_RADAR_HUE	= "datatables/buff_data/radar_hue.iff";
+
+
+// IMPORTANT!!!: These integer values are used in buff.tab and should not be changed in this file.
+const int IMMUNITY_TO_POISON		= 1;
+const int IMMUNITY_TO_DISEASE		= 2;
+const int IMMUNITY_TO_FIRE		= 3;
+const int IMMUNITY_TO_BLEEDING		= 4;
+const int IMMUNITY_TO_ALL_DOTS		= 5;
+const int IMMUNITY_TO_ACID		= 6;
+const int IMMUNITY_TO_ENERGY		= 7;
+const int IMMUNITY_TO_STUN		= 12; //same as the enumeration in buffs.tab
+
+#define EXTRA_COST_DEBUG 0
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id weapon, int[] damage)
+{
+	if(buff.hasBuff(self, "channel_healing"))
+		buff.removeBuff(self, "channel_healing");
+
+	return SCRIPT_CONTINUE;
+
+}
+
+int attribAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int attribute = ATTRIB_ERROR;
+
+	LOG("expertise", "attribAddBuffHandler effectName: " + effectName + " subtype: " + subtype + " value: " + value);
+
+	if(subtype.equals("health"))
+		attribute = HEALTH;
+	else if(subtype.equals("constitution"))
+		attribute = CONSTITUTION;
+	else if(subtype.equals("action"))
+		attribute = ACTION;
+	else if(subtype.equals("stamina"))
+		attribute = STAMINA;
+	else if(subtype.equals("mind"))
+		attribute = MIND;
+	else if(subtype.equals("willpower"))
+		attribute = WILLPOWER;
+
+	if(attribute == ATTRIB_ERROR)
+		return SCRIPT_OVERRIDE;
+
+	attrib_mod am = new attrib_mod(effectName, attribute, (int)value, duration, ATTACK_RATE_DEPRICATED, DECAY_RATE_DEPRICATED, true, false, false);
+	addAttribModifier(self, am);
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+int attribRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasAttribModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+	return SCRIPT_CONTINUE;
+}
+
+int attribPercentAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int attribute = ATTRIB_ERROR;
+
+	if(subtype.equals("health"))
+		attribute = HEALTH;
+	else if(subtype.equals("constitution"))
+		attribute = CONSTITUTION;
+	else if(subtype.equals("action"))
+		attribute = ACTION;
+	else if(subtype.equals("stamina"))
+		attribute = STAMINA;
+	else if(subtype.equals("mind"))
+		attribute = MIND;
+	else if(subtype.equals("willpower"))
+		attribute = WILLPOWER;
+
+	if(attribute == ATTRIB_ERROR)
+		return SCRIPT_OVERRIDE;
+
+	//with buff stacking, you now need to multiply the value by the stack
+	//to get an accurate modifier
+	long stack = buff.getBuffStackCount(self, buffName) > 1 ? buff.getBuffStackCount(self, buffName) : 1;
+	value *= (int)stack;
+
+	value = 100.0f + value;
+	value /= 100.0f;
+
+	int maxAttrib = getUnmodifiedMaxAttrib(self, attribute);
+	float newAttrib = (float)maxAttrib * value;
+	int delta = (int)newAttrib - maxAttrib;
+
+	attrib_mod am = new attrib_mod(effectName, attribute, delta, duration, ATTACK_RATE_DEPRICATED, DECAY_RATE_DEPRICATED, true, false, false);
+	addAttribModifier(self, am);
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+	return SCRIPT_CONTINUE;
+}
+
+int attribPercentRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasAttribModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+	return SCRIPT_CONTINUE;
+}
+
+int skillAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	//with buff stacking, you now need to multiply the value by the stack
+	//to get an accurate modifier
+	long stack = buff.getBuffStackCount(self, buffName) > 1 ? buff.getBuffStackCount(self, buffName) : 1;
+	value *= (int)stack;
+
+	addSkillModModifier(self, effectName, subtype, (int)value, duration, false, true);
+
+	if((subtype.startsWith("constitution"))||(subtype.startsWith("stamina")))
+	{
+		messageTo(self, "recalcPools", null, 1, false);
+	}
+	else if(subtype.startsWith("expertise_innate_protection_"))
+	{
+		messageTo(self, "recalcArmor", null, 1, false);
+	}
+
+	if(subtype.startsWith("movement_resist"))
+	{
+		messageTo(self, "check_movement_immunity", null, 0.1f, false);
+	}
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+	return SCRIPT_CONTINUE;
+}
+
+int skillRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	if(effectName.lastIndexOf("_") > 0)
+	{
+		effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	}
+
+	stopClientEffectObjByLabel(self, effectName);
+	combat.removeCombatBuffEffect(self, effectName);
+	//sendSystemMessageTestingOnly(self, "BUFF name is "+effectName);
+	if((subtype.startsWith("constitution"))||(subtype.startsWith("stamina")))
+	{
+
+		messageTo(self, "recalcPools", null, 1, false);
+	}
+	else 	if(subtype.startsWith("expertise_innate_protection_"))
+	{
+		messageTo(self, "recalcArmor", null, 1, false);
+	}
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+	return SCRIPT_CONTINUE;
+}
+
+int armorBreakAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//with buff stacking, you now need to multiply the value by the stack
+	//to get an accurate modifier
+	long stack = buff.getBuffStackCount(self, buffName) > 1 ? buff.getBuffStackCount(self, buffName) : 1;
+	value *= (int)stack;
+
+	int armorScriptVarValue = 0;
+	if(stack == 1)
+	{
+		armorScriptVarValue = utils.getIntScriptVar(self, armor.SCRIPTVAR_CACHED_GENERAL_PROTECTION);
+		utils.setScriptVar(self, INITIAL_GENERAL_PROTECTION, armorScriptVarValue);
+	}
+	else
+		armorScriptVarValue = utils.getIntScriptVar(self, INITIAL_GENERAL_PROTECTION);
+
+
+	//players only get a percentage decreasee
+	if(subtype.equals("player") && isPlayer(self))
+	{
+		//since we are to do a percentage decrease if you are a player, we need to get total armor
+		//this scriptvar contains the armor from your actual armor pieces
+
+		//get expertise driven armor
+		float baseMod = getSkillStatisticModifier(self, "expertise_innate_protection");
+		baseMod += (float)armorScriptVarValue;
+
+		baseMod += getEnhancedSkillStatisticModifierUncapped(self, "expertise_innate_protection_all");
+
+		float modIncrease = baseMod * (value/100.0f);
+
+		addSkillModModifier(self, effectName, "expertise_innate_protection_all", (int)modIncrease, duration, false, false);
+		//string says reduces player targets armor by %TU% per application
+
+		//bounty hunters get teh added crit debuff
+		if(utils.isProfession(caster, utils.BOUNTY_HUNTER))
+		{
+			buff.applyBuff(self, caster, "bh_crit_hit_vuln");
+		}
+
+
+	}
+	//mobs get a flat amount
+	else if(subtype.equals("mob") && !isPlayer(self))
+	{
+		addSkillModModifier(self, effectName, "expertise_innate_protection_all", (int)value, duration, false, true);
+		//string says reduces non-player targets armor by %TU per application
+
+		//bounty hunters get teh added crit debuff
+		if(utils.isProfession(caster, utils.BOUNTY_HUNTER))
+		{
+			buff.applyBuff(self, caster, "bh_crit_hit_vuln");
+		}
+	}
+
+
+
+	messageTo(self, "recalcArmor", null, 1, false);
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+	return SCRIPT_CONTINUE;
+}
+
+int armorBreakRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	if(effectName.lastIndexOf("_") > 0)
+	{
+		effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	}
+
+	stopClientEffectObjByLabel(self, effectName);
+
+	combat.removeCombatBuffEffect(self, effectName);
+	messageTo(self, "recalcArmor", null, 1, false);
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	combat.cacheCombatData(self);
+	return SCRIPT_CONTINUE;
+}
+
+
+int skillPercentAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	float baseMod = getSkillStatisticModifier(self, subtype.substring(0, (subtype.lastIndexOf("_"))));
+	baseMod += getEnhancedSkillStatisticModifierUncapped(self, subtype);
+	float modIncrease = baseMod * (value/100.0f);
+
+	addSkillModModifier(self, effectName, subtype, (int)modIncrease, duration, false, false);
+
+//sendSystemMessageTestingOnly(self, "subtype = " + subtype.substring(0, (subtype.lastIndexOf("_"))) + " subType(mod) = " + subtype + " baseMod = " + baseMod + " modIncrease = " + modIncrease);
+
+	if((subtype.startsWith("constitution"))||(subtype.startsWith("stamina")))
+	{
+		messageTo(self, "recalcPools", null, .25f, false);
+
+	}
+	else	if(subtype.startsWith("expertise_innate_protection_"))
+	{
+		messageTo(self, "recalcArmor", null, .25f, false);
+	}
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+int skillPercentRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stopClientEffectObjByLabel(self, effectName);
+
+	combat.removeCombatBuffEffect(self, effectName);
+
+	if((subtype.startsWith("constitution"))||(subtype.startsWith("stamina")))
+	{
+
+		messageTo(self, "recalcPools", null, .25f, false);
+	}
+	else 	if(subtype.startsWith("expertise_innate_protection_"))
+	{
+		messageTo(self, "recalcArmor", null, .25f, false);
+	}
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler check_movement_immunity()
+{
+	movement.updateMovementImmunity(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler recalcPools()
+{
+	if(beast_lib.isBeast(self))
+	{
+		beast_lib.initializeBeastStats(beast_lib.getBeastBCD(self), self);
+	}
+	else
+	{
+		if(isPlayer(self))
+		{
+			skill.recalcPlayerPools(self, false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler recalcArmor()
+{
+	if(beast_lib.isBeast(self))
+	{
+		beast_lib.initializeBeastStats(beast_lib.getBeastBCD(self), self);
+	}
+	else
+	{
+		armor.recalculateArmorForPlayer(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int movementAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	if(value == 0)
+		value = -1;
+
+	if(movement.hasMovementModifier(self, effectName))
+		movement.removeMovementModifier(self, effectName, false);
+
+	movement.applyMovementModifier(self, effectName, value);
+
+	return SCRIPT_CONTINUE;
+}
+
+int movementRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stopClientEffectObjByLabel(self, effectName);
+
+	if(movement.hasMovementModifier(self, effectName))
+		movement.removeMovementModifier(self, effectName);
+
+	return SCRIPT_CONTINUE;
+}
+
+// The proxy buff is applied and then immediately swapped out for the real buff which s higher priority.
+// Allows us to have a buffs that "bounce" off themselves rather then over write/re-apply.
+int exclusiveProxyAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int[] buffs = buff.getAllBuffs(self);
+
+	if(subtype != null && !subtype.equals(""))
+	{
+		string[] buffsToApply = split(subtype, ',');
+
+		for(int i = 0; i < buffsToApply.length; ++i)
+		{
+			buff.applyBuff(self, caster, buffsToApply[i]);
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+
+	for (int i = 0; i < buffs.length; i++)
+	{
+		string thisBuffName = buff.getBuffNameFromCrc(buffs[i]);
+
+		if(thisBuffName.startsWith("exclusive_proxy_") )
+		{
+			string actualBuff = thisBuffName.substring(16, thisBuffName.length());
+			buff.applyBuff(self, self, actualBuff);
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int exclusiveProxyRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+// Apply a normal buff to all group members but yourself. Name of buff applied derived from the buff on yourself.
+int excludeSelfAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int[] buffs = buff.getAllBuffs(self);
+
+	for (int i = 0; i < buffs.length; i++)
+	{
+		string thisBuffName = buff.getBuffNameFromCrc(buffs[i]);
+		string actualBuff = "";
+
+		if(thisBuffName.startsWith("exclude_self_") )
+			actualBuff = thisBuffName.substring(13, thisBuffName.length());
+		else
+			continue;
+
+		obj_id gid = getGroupObject(self);
+
+		if (isIdValid(gid))
+		{
+			obj_id[] groupMembers = getGroupMemberIds(gid);
+
+			for (int j = 0; j < groupMembers.length; j++)
+			{
+				// Only apply a buff to members who are close enough
+				float dist = getDistance(groupMembers[j], self);
+				if (dist > buff.GROUP_BUFF_DISTANCE)
+					continue;
+
+				// Don't apply buffs to players we are not flagged to help
+				if (!pvpCanHelp(self, groupMembers[j]))
+				{
+					//And tell them why the buff didn't work.
+					prose_package pp = new prose_package();
+					pp.stringId = new string_id("spam", "group_buff_fail_pvp");
+					pp.target.set(groupMembers[j]);
+					sendSystemMessageProse(self, pp);
+					continue;
+				}
+
+				if(groupMembers[j] != self)
+					buff.applyBuff(groupMembers[j], self, actualBuff);
+			}
+		}
+
+		buff.removeBuff(self, thisBuffName);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int excludeSelfRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+
+
+int delayAttackAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, buff.DEBUFF_STATE_PARALYZED + "." + effectName, duration);
+	return SCRIPT_CONTINUE;
+}
+
+int delayAttackRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVar(self, buff.DEBUFF_STATE_PARALYZED + "." + effectName);
+
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stopClientEffectObjByLabel(self, effectName);
+	return SCRIPT_CONTINUE;
+}
+
+int suppressionAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int suppressionRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeSlowDownEffect(self); // can only have one suppression active
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stopClientEffectObjByLabel(self, effectName);
+
+	return SCRIPT_CONTINUE;
+}
+
+int scriptVarAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	utils.setScriptVar(self, "buff." + effectName + ".value", value);
+	return SCRIPT_CONTINUE;
+}
+
+int scriptVarRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	utils.removeScriptVarTree(self, "buff." + effectName);
+	stopClientEffectObjByLabel(self, effectName);
+
+	return SCRIPT_CONTINUE;
+}
+// Deprecated: Nothing should be calling this any more - buildabuff handles this
+int xpBonusAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+/*
+	string[] skillnames = dataTableGetStringColumn(SKILLS_DATATABLE, "NAME");
+	if(skillnames == null || skillnames.length == 0)
+		return SCRIPT_CONTINUE;
+
+	Vector xpList = new Vector();
+
+	for(int i = 0; i < skillnames.length; i++)
+	{
+		if(skillnames[i].indexOf(subtype) < 0)
+			continue;
+
+		string xpType = dataTableGetString(SKILLS_DATATABLE, skillnames[i], "XP_TYPE");
+
+		if(xpType == null || xpType.equals(""))
+			continue;
+
+		if(xpList.size() > 0)
+		{
+			boolean isDifferent = true;
+
+			for(int j = 0; j < xpList.size(); j++)
+			{
+				if(xpList.get(j).equals(xpType))
+					isDifferent = false;
+			}
+
+			if(isDifferent)
+				xpList.addElement(xpType);
+		}
+		else
+			xpList.addElement(xpType);
+	}
+
+	string[] xpArray = utils.toStaticStringArray(xpList);
+
+	if(xpArray == null || xpArray.length == 0)
+		return SCRIPT_CONTINUE;
+
+	value /= 100.0f;
+
+	utils.setScriptVar(self, "buff.xpBonus.types", xpArray);
+	utils.setScriptVar(self, "buff.xpBonus.value", value);
+*/
+	return SCRIPT_CONTINUE;
+}
+
+//this will probably never be called again
+int xpBonusRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVarTree(self, "buff.xpBonus");
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stopClientEffectObjByLabel(self, effectName);
+
+	return SCRIPT_CONTINUE;
+}
+
+//new hotness, this adds the bonus value for all xp types
+int xpBonusGeneralAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int playerLevel = getLevel(self);
+	if ( playerLevel < 90 )
+	{
+		CustomerServiceLog("buff", "xpBonusGeneralAddBuff Buff used by player: "+self+" Name: " +getName(self)+ " Player Level: "+playerLevel+" Effect: "+effectName+" subtype:"+subtype+" duration: "+duration+" value: "+value+" buffName: "+buffName+" caster: "+caster);
+		string[] xpArray = {"crafting", "combat_general", "entertainer", "space_combat_general", "chronicles"};
+
+		utils.setScriptVar(self, "buff.xpBonusGeneral.types", xpArray);
+		utils.setScriptVar(self, "buff.xpBonusGeneral.value", value / 100);
+	}
+	else if ( subtype.equals("tcg_xp_buff") )
+	{
+		CustomerServiceLog("buff", "xpBonusGeneralAddBuff Buff (TCG SPECIFIC BUFF OBJECT) used by player: "+self+" Name: " +getName(self)+ " Player Level: "+playerLevel+". Since player is 90th Lvl, this player receives a random collection object.");
+		obj_id collectionItem = collection.grantRandomCollectionItem(self, "datatables/loot/loot_items/collectible/magseal_loot.iff", "collections");
+		if(!isValidId(collectionItem) || !exists(collectionItem))
+		{
+			CustomerServiceLog("buff", "xpBonusGeneralAddBuff Buff (TCG SPECIFIC BUFF OBJECT) used by player: "+self+" Name: " +getName(self)+ " Player Level: "+playerLevel+". The collection system reports that a collectible object WAS NOT recieved by the player due to an internal error. Please notify SWG design.");
+		}
+
+		CustomerServiceLog("buff", "xpBonusGeneralAddBuff Buff (TCG SPECIFIC BUFF OBJECT) used by player: "+self+" Name: " +getName(self)+ " Player Level: "+playerLevel+". The collection system reports that the collectible object: "+getName(collectionItem)+" "+collectionItem+" was recieved by the player.");
+		buff.removeBuff(self, buffName);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int xpBonusGeneralRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVarTree(self, "buff.xpBonusGeneral");
+
+	return SCRIPT_CONTINUE;
+}
+
+// Instantly grant an amount of xp equal to a percentage of the total amount needed for the player to reach their next level.
+int xpGrantedGeneralAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int playerLevel = getLevel(self);
+
+	if ( playerLevel < 90 )
+	{
+		int xpGranted = xp.grantUnmodifiedXPPercentageOfLevel(self, value);
+
+		prose_package pp = new prose_package();
+		prose.setStringId(pp, new string_id("collection","reward_xp_amount"));
+		prose.setDI(pp, xpGranted);
+		sendSystemMessageProse(self, pp);
+	}
+	else if ( subtype.equals("tcg_xp_buff") )
+	{
+		obj_id collectionItem = collection.grantRandomCollectionItem(self, "datatables/loot/loot_items/collectible/magseal_loot.iff", "collections");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int xpGrantedGeneralRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int craftBonusAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	float mod = 0.02f;
+
+	if(subtype.equals("artisan"))
+		mod = 0.01f;
+
+	int intValue = (int)value;
+
+	utils.setScriptVar(self, "buff.craftBonus.types", intValue);
+	utils.setScriptVar(self, "buff.craftBonus.value", mod);
+
+	return SCRIPT_CONTINUE;
+}
+
+int craftBonusRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVarTree(self, "buff.craftBonus");
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stopClientEffectObjByLabel(self, effectName);
+
+	return SCRIPT_CONTINUE;
+}
+
+int forcePowerAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	addSkillModModifier(self, effectName, subtype, (int)value, duration, false, false);
+	//send a message to or else the force bar and meter will not update due to the mod being set and get in the same server frame
+	messageTo(self,"handleRecalculateForce", null, 0.1f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+int forcePowerRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	combat.removeCombatBuffEffect(self, effectName);
+	stopClientEffectObjByLabel(self, effectName);
+	jedi.recalculateForcePower(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+// -----------------------------------------
+
+int saberInterceptAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, combat.DAMAGE_REDIRECT, caster);
+	return SCRIPT_CONTINUE;
+}
+
+int saberInterceptRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVar(self, combat.DAMAGE_REDIRECT);
+	return SCRIPT_CONTINUE;
+}
+
+void procBuffAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	if (!utils.hasScriptVar( self, "procBuffEffects" ) )
+	{
+		string [] procBuffEffects = new string[1];
+		procBuffEffects[0] = effectName;
+		utils.setScriptVar( self, "procBuffEffects", procBuffEffects );
+	}
+	else
+	{
+		resizeable string [] procBuffEffects = utils.getResizeableStringArrayScriptVar(self, "procBuffEffects");
+		if (utils.getElementPositionInArray(procBuffEffects, effectName) == -1)
+		{
+			procBuffEffects.addElement(effectName);
+			utils.setScriptVar( self, "procBuffEffects", procBuffEffects );
+		}
+	}
+
+	proc.buildCurrentProcList(self);
+	return;
+}
+
+void procBuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+
+	if (utils.hasScriptVar( self, "procBuffEffects" ) )
+	{
+		resizeable string [] procBuffEffects = utils.getResizeableStringArrayScriptVar(self, "procBuffEffects");
+		procBuffEffects.removeElement(effectName);
+		if(procBuffEffects.size() < 1)
+			utils.removeScriptVar(self, "procBuffEffects");
+		else
+			utils.setScriptVar(self, "procBuffEffects", procBuffEffects);
+	}
+
+	stopClientEffectObjByLabel(self, effectName);
+
+	proc.buildCurrentProcList(self);
+	return;
+}
+
+void reactiveBuffAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+
+	if (!utils.hasScriptVar( self, "reacBuffEffects" ) )
+	{
+		string [] reacBuffEffects = new string[1];
+		reacBuffEffects[0] = effectName;
+		utils.setScriptVar( self, "reacBuffEffects", reacBuffEffects );
+	}
+	else
+	{
+		resizeable string [] reacBuffEffects = utils.getResizeableStringArrayScriptVar(self, "reacBuffEffects");
+		if (utils.getElementPositionInArray(reacBuffEffects, effectName) == -1)
+		{
+			reacBuffEffects.addElement(effectName);
+			utils.setScriptVar( self, "reacBuffEffects", reacBuffEffects );
+		}
+	}
+
+	proc.buildCurrentReacList(self);
+	return;
+}
+
+void reactiveBuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+
+	if (utils.hasScriptVar( self, "reacBuffEffects" ) )
+	{
+		resizeable string [] reacBuffEffects = utils.getResizeableStringArrayScriptVar(self, "reacBuffEffects");
+		reacBuffEffects.removeElement(effectName);
+		if(reacBuffEffects.size() < 1)
+			utils.removeScriptVar(self, "reacBuffEffects");
+		else
+			utils.setScriptVar(self, "reacBuffEffects", reacBuffEffects);
+	}
+
+	stopClientEffectObjByLabel(self, effectName);
+
+	proc.buildCurrentReacList(self);
+	return;
+}
+
+int stanceAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	buff.playStanceVisual(self, effectName);
+
+	if(subtype == "expertise_stance")
+	{
+		int parryMod = (int)getSkillStatisticModifier(self, "expertise_stance_parry");
+
+		if(parryMod > 0)
+			skillAddBuffHandler(self, "stanceParry", "expertise_parry", duration, parryMod, "", null);
+
+		int evasionMod = (int)getSkillStatisticModifier(self, "expertise_stance_evasion");
+
+		if(evasionMod > 0)
+			skillAddBuffHandler(self, "stanceEvasion", "expertise_evasion_chance", duration, evasionMod, "", null);
+
+		int stanceConstitutionBonus = (int)getSkillStatisticModifier(self, "expertise_stance_constitution");
+
+		if(stanceConstitutionBonus > 0)
+			skillAddBuffHandler(self, "stanceConstitution", "constitution_modified", duration, stanceConstitutionBonus, "", null);
+
+		// Saber Shackle
+		int stanceSaberShackle = (int)getSkillStatisticModifier(self, "expertise_stance_saber_throw_snare_chance");
+
+		if(stanceSaberShackle == 25)
+		{
+			buff.applyBuff(self, self, "fs_saber_shackle_1");
+		}
+		else if(stanceSaberShackle == 50)
+		{
+			buff.applyBuff(self, self, "fs_saber_shackle_2");
+		}
+		else if(stanceSaberShackle == 75)
+		{
+			buff.applyBuff(self, self, "fs_saber_shackle_3");
+		}
+		else if(stanceSaberShackle == 100)
+		{
+			buff.applyBuff(self, self, "fs_saber_shackle_4");
+		}
+
+		// Soothing Aura
+		int stanceSoothingAura = (int)getSkillStatisticModifier(self, "expertise_stance_healing_line_fs_heal");
+
+		if(stanceSoothingAura == 25)
+		{
+			buff.applyBuff(self, self, "fs_soothing_aura_1");
+		}
+		else if(stanceSoothingAura == 50)
+		{
+			buff.applyBuff(self, self, "fs_soothing_aura_2");
+		}
+		else if(stanceSoothingAura == 75)
+		{
+			buff.applyBuff(self, self, "fs_soothing_aura_3");
+		}
+		else if(stanceSoothingAura == 100)
+		{
+			buff.applyBuff(self, self, "fs_soothing_aura_4");
+		}
+
+		// Anticipate Aggression
+		int stanceAnticipateAggression = (int)getSkillStatisticModifier(self, "expertise_stance_anticipate_aggression");
+
+		if(stanceAnticipateAggression == 4)
+		{
+			buff.applyBuff(self, self, "fs_anticipate_aggression_1");
+		}
+		else if(stanceAnticipateAggression == 8)
+		{
+			buff.applyBuff(self, self, "fs_anticipate_aggression_2");
+		}
+
+		// Reactive Response
+		int stanceAddToAction = (int)getSkillStatisticModifier(self, "expertise_stance_damage_add_to_action");
+
+		if(stanceAddToAction == 2)
+		{
+			buff.applyBuff(self, self, "fs_reactive_response_1");
+		}
+		else if(stanceAddToAction == 4)
+		{
+			buff.applyBuff(self, self, "fs_reactive_response_2");
+		}
+
+		// Force Clarity proc
+		int stanceForceClarity = (int)getSkillStatisticModifier(self, "expertise_stance_fs_force_clarity");
+
+		if(stanceForceClarity > 0)
+		{
+			addSkillModModifier(self, "expertise_fs_force_clarity_1_proc", "expertise_fs_force_clarity_1_proc", (int)stanceForceClarity, -1, false, true);
+		}
+
+		int stanceFlurryProc = (int)getSkillStatisticModifier(self, "expertise_stance_flurry_proc");
+
+		if(stanceFlurryProc > 0)
+		{
+			addSkillModModifier(self, "expertise_fs_flurry_charge_proc", "expertise_fs_flurry_charge_proc", (int)stanceFlurryProc, -1, false, true);
+		}
+
+		if(stanceForceClarity > 0 || stanceFlurryProc > 0)
+		{
+			messageTo(self, "cacheExpertiseProcReacList", null, 2, false);
+		}
+
+		// Perceptive Sentinel
+		int stancePerceptiveSentinel = (int)getSkillStatisticModifier(self, "expertise_stance_perceptive_sentinel");
+
+		if(stancePerceptiveSentinel == 1)
+		{
+			buff.applyBuff(self, self, "fs_perceptive_sentinel_1");
+		}
+		else if(stancePerceptiveSentinel == 2)
+		{
+			buff.applyBuff(self, self, "fs_perceptive_sentinel_2");
+		}
+		else if(stancePerceptiveSentinel == 3)
+		{
+			buff.applyBuff(self, self, "fs_perceptive_sentinel_3");
+		}
+		else if(stancePerceptiveSentinel == 4)
+		{
+			buff.applyBuff(self, self, "fs_perceptive_sentinel_4");
+		}
+	}
+
+	if(subtype == "expertise_focus")
+	{
+		int critMod = (int)getSkillStatisticModifier(self, "expertise_focus_critical_buff_line");
+		utils.setScriptVar(self, "expertise_stance_critical", critMod);
+
+		float stanceStaminaBonus = (float)getSkillStatisticModifier(self, "expertise_focus_stamina");
+		float stanceSrengthBonus = (float)getSkillStatisticModifier(self, "expertise_focus_strength");
+
+		if(stanceStaminaBonus > 0)
+		{
+			skillAddBuffHandler(self, "focusStamina", "stamina_modified", duration, stanceStaminaBonus, "", null);
+		}
+
+		if(stanceSrengthBonus > 0)
+		{
+			skillAddBuffHandler(self, "focusStrength", "strength_modified", duration, stanceSrengthBonus, "", null);
+		}
+
+		// Ruthless Precision
+		int focusDamageIncrease = (int)getSkillStatisticModifier(self, "expertise_focus_damage_increase");
+
+		if(focusDamageIncrease == 2)
+		{
+			buff.applyBuff(self, self, "fs_ruthless_precision_1");
+		}
+		else if(focusDamageIncrease == 4)
+		{
+			buff.applyBuff(self, self, "fs_ruthless_precision_2");
+		}
+		else if(focusDamageIncrease == 6)
+		{
+			buff.applyBuff(self, self, "fs_ruthless_precision_3");
+		}
+		else if(focusDamageIncrease == 8)
+		{
+			buff.applyBuff(self, self, "fs_ruthless_precision_4");
+		}
+
+		// Tempt Hatred
+		int focusActionGain = (int)getSkillStatisticModifier(self, "expertise_focus_damage_add_to_action");
+
+		if(focusActionGain == 2)
+		{
+			buff.applyBuff(self, self, "fs_tempt_hatred_1");
+		}
+		else if(focusActionGain == 4)
+		{
+			buff.applyBuff(self, self, "fs_tempt_hatred_2");
+		}
+
+		int wracking_energy = getEnhancedSkillStatisticModifierUncapped(self, "expertise_fs_dm_armor_bypass");
+
+		if(wracking_energy > 0)
+			buff.applyBuff(self, self, "fs_wracking_energy_"+wracking_energy / 25);
+
+		int imp_drain = getEnhancedSkillStatisticModifierUncapped(self, "expertise_fs_imp_drain");
+
+		if(imp_drain == 33)
+		{
+			buff.applyBuff(self, self, "fs_imp_force_drain_1");
+		}
+		else if(imp_drain == 66)
+		{
+			buff.applyBuff(self, self, "fs_imp_force_drain_2");
+		}
+		else if(imp_drain == 100)
+		{
+			buff.applyBuff(self, self, "fs_imp_force_drain_3");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int stanceRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	// You can only have one stance/focus up at a time.  When one is removed, make sure everything is off.
+	utils.removeScriptVarTree(self, "expertise_stance_critical");
+	removeAttribOrSkillModModifier(self, "stanceParry");
+	removeAttribOrSkillModModifier(self, "stanceEvasion");
+	removeAttribOrSkillModModifier(self, "stanceConstitution");
+	removeAttribOrSkillModModifier(self, "focusStamina");
+	removeAttribOrSkillModModifier(self, "focusStrength");
+
+	messageTo(self, "recalcPools", null, 1, false);
+
+	// Remove Flurry Charges
+	buff.removeBuff(self, "jedi_reflect_flurry");
+
+	// Remove Saber Shackle
+	buff.removeBuff(self, "fs_saber_shackle_1");
+	buff.removeBuff(self, "fs_saber_shackle_2");
+	buff.removeBuff(self, "fs_saber_shackle_3");
+	buff.removeBuff(self, "fs_saber_shackle_4");
+
+	// Make sure to remove any soothing aura buffs
+	buff.removeBuff(self, "fs_soothing_aura_1");
+	buff.removeBuff(self, "fs_soothing_aura_2");
+	buff.removeBuff(self, "fs_soothing_aura_3");
+	buff.removeBuff(self, "fs_soothing_aura_4");
+
+	// Make sure to remove any anticipate aggression buffs
+	buff.removeBuff(self, "fs_anticipate_aggression_1");
+	buff.removeBuff(self, "fs_anticipate_aggression_2");
+
+	buff.removeBuff(self, "fs_reactive_response_1");
+	buff.removeBuff(self, "fs_reactive_response_2");
+
+	buff.removeBuff(self, "fs_perceptive_sentinel_1");
+	buff.removeBuff(self, "fs_perceptive_sentinel_2");
+	buff.removeBuff(self, "fs_perceptive_sentinel_3");
+	buff.removeBuff(self, "fs_perceptive_sentinel_4");
+
+	buff.removeBuff(self, "fs_saber_reflect");
+
+	buff.removeBuff(self, "fs_ruthless_precision_1");
+	buff.removeBuff(self, "fs_ruthless_precision_2");
+	buff.removeBuff(self, "fs_ruthless_precision_3");
+	buff.removeBuff(self, "fs_ruthless_precision_4");
+
+	buff.removeBuff(self, "fs_tempt_hatred_1");
+	buff.removeBuff(self, "fs_tempt_hatred_2");
+
+	buff.removeBuff(self, "fs_wracking_energy_1");
+	buff.removeBuff(self, "fs_wracking_energy_2");
+	buff.removeBuff(self, "fs_wracking_energy_3");
+	buff.removeBuff(self, "fs_wracking_energy_4");
+
+	buff.removeBuff(self, "fs_imp_force_drain_1");
+	buff.removeBuff(self, "fs_imp_force_drain_2");
+	buff.removeBuff(self, "fs_imp_force_drain_3");
+	buff.removeBuff(self, "fs_imp_force_drain_4");
+
+	removeAttribOrSkillModModifier(self, "expertise_fs_force_clarity_1_proc");
+	removeAttribOrSkillModModifier(self, "expertise_fs_flurry_charge_proc");
+	messageTo(self, "cacheExpertiseProcReacList", null, 2, false);
+
+	// Legacy stance code
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	combat.removeCombatBuffEffect(self, effectName);
+	utils.removeScriptVarTree(self, "stance." + subtype);
+
+	return SCRIPT_CONTINUE;
+}
+
+int dancePartyAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string [] danceList = 	{	"poplock",
+					"poplock2",
+					"popular",
+					"popular2",
+					"bunduki",
+					"bunduki2",
+					"breakdance",
+					"breakdance2",
+					"peiyi",
+					"freestyle",
+					"freestyle2",
+					"jazzy",
+					"jazzy2"
+				};
+
+	string randomDance = danceList[rand(0, danceList.length - 1)];
+	performance.effect(self, performance.PERFORMANCE_EFFECT_DANCE_FLOOR, 1);
+	obj_id[] everyone = getPlayerCreaturesInRange(getLocation(self), 20.f );
+
+	for(int i = 0; i < everyone.length; i++)
+	{
+
+		if(!combat.isInCombat(everyone[i]))
+		{
+			utils.setScriptVar(everyone[i], "event.dance_party", 1);
+			performance.startDance(everyone[i], randomDance);
+			performance.changeDance(everyone[i], randomDance);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int dancePartyRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+int missByLuckAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int luckPercentage = getSkillStatisticModifier(caster, "expertise_miss_by_luck");
+
+	float missIncrease = luckPercentage + 4.0f; // 4% base from skullduggery
+
+	int luckMod = getEnhancedSkillStatisticModifierUncapped(caster, "luck");
+	float luck = (float)getEnhancedSkillStatisticModifierUncapped(caster, "luck_modified") + luckMod;
+
+	float missAmount = luck * (missIncrease / 100.0f);
+
+	// debugSpeakMsg(self, "missByLuck combat_all_attack_miss owner: " + owner + " luck: " + luck + " effectName: " + effectName + " subtype: " + subtype + " duration: " + duration + " missAmount:" + missAmount);
+
+	skillAddBuffHandler(self, "missByLuck", "combat_all_attack_miss", duration, missAmount, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int missByLuckRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, "missByLuck");
+
+	return SCRIPT_CONTINUE;
+}
+
+int hitByLuckAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int luckPercentage = getSkillStatisticModifier(caster, "expertise_hit_by_luck");
+
+	float hitIncrease = luckPercentage + 4.0f; // 4% base from Sleight of Hand
+
+	int luckMod = getEnhancedSkillStatisticModifierUncapped(caster, "luck");
+	float luck = (float)getEnhancedSkillStatisticModifierUncapped(caster, "luck_modified") + luckMod;
+
+	float hitAmount = luck * (hitIncrease / 100.0f);
+
+	// debugSpeakMsg(self, "hitByLuck expertise_hit_by_luck owner: " + owner + " luck: " + luck + " effectName: " + effectName + " subtype: " + subtype + " duration: " + duration + " hitAmount:" + hitAmount);
+
+	skillAddBuffHandler(self, "hitByLuck", "hit_table_defender_add_hit", duration, hitAmount, "", null);
+
+	// hit_table_add_defender_position
+	luckPercentage = getSkillStatisticModifier(caster, "expertise_increase_hit_by_luck");
+
+	hitAmount = luck * (luckPercentage / 100.0f);
+
+	// debugSpeakMsg(self, "hitByLuck expertise_increase_hit_by_luck owner: " + owner + " luck: " + luck + " effectName: " + effectName + " subtype: " + subtype + " duration: " + duration + " hitAmount:" + hitAmount);
+
+	skillAddBuffHandler(self, "increaseHitByLuck", "hit_table_defender_add_hit", duration, hitAmount, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int hitByLuckRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, "hitByLuck");
+	removeAttribOrSkillModModifier(self, "increaseHitByLuck");
+
+	return SCRIPT_CONTINUE;
+}
+
+
+int pistolWhipAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int pistolWhipStun = getSkillStatisticModifier(caster, "expertise_stun_line_sm_pistol_whip");
+
+	// Beat Down expertise adds a percent chance to stun
+	if(pistolWhipStun > 0 && rand(0,99) < pistolWhipStun)
+	{
+		movementAddBuffHandler(self, effectName, subtype, duration, value, buffName, caster);
+	}
+	else
+	{
+		buff.removeBuff(self, "sm_pistol_whip");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int pistolWhipRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	// Remove the stun manually, since it is added manually
+	movementRemoveBuffHandler(self, effectName, subtype, duration, value, buffName, caster);
+
+	return SCRIPT_CONTINUE;
+}
+
+int slyLieAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int dodgeBonus = (int)getSkillStatisticModifier(self, "expertise_half_truth");
+
+	if(dodgeBonus > 0)
+		skillAddBuffHandler(self, "slyLieDodge", "combat_dodge", duration, dodgeBonus, "", null);
+
+	int strikethroughBonus = (int)getSkillStatisticModifier(self, "expertise_innocent_cargo");
+
+	if(strikethroughBonus > 0)
+		skillAddBuffHandler(self, "innocentCargoStrikethrough", "combat_strikethrough_chance", duration, strikethroughBonus, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int slyLieRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	removeAttribOrSkillModModifier(self, "slyLieDodge");
+	removeAttribOrSkillModModifier(self, "innocentCargoStrikethrough");
+
+	return SCRIPT_CONTINUE;
+}
+
+int fastTalkAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int agilityBonus = (int)getSkillStatisticModifier(self, "expertise_fake_id");
+
+	if(agilityBonus > 0)
+		skillAddBuffHandler(self, "fastTalkAgility", "agility_modified", duration, agilityBonus, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int fastTalkRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	removeAttribOrSkillModModifier(self, "fastTalkAgility");
+
+	return SCRIPT_CONTINUE;
+}
+
+int pvpAuraBuffSelfAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	attachScript (self, "player.gcw.pvp_aura_buff_controller");
+
+	return SCRIPT_CONTINUE;
+}
+
+int pvpAuraBuffSelfRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	detachScript (self, "player.gcw.pvp_aura_buff_controller");
+	removeObjVar (self, "pvp_aura_buff.faction");
+
+	return SCRIPT_CONTINUE;
+}
+
+// Next hit will be a critical hit
+int nextHitCritAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "nextCritHit", 1);
+
+	return SCRIPT_CONTINUE;
+}
+
+int nextHitCritRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVarTree(self, "nextCritHit");
+
+	return SCRIPT_CONTINUE;
+}
+
+// Critical hit will do double damage
+int critDoubleDamageAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "critDoubleDamage", 1);
+
+	return SCRIPT_CONTINUE;
+}
+
+int critDoubleDamageRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVarTree(self, "critDoubleDamage");
+
+	return SCRIPT_CONTINUE;
+}
+
+// Next hit will be a critical hit
+int critRootAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "critRoot", 1);
+
+	return SCRIPT_CONTINUE;
+}
+
+int critRootRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVarTree(self, "critRoot");
+
+	return SCRIPT_CONTINUE;
+}
+
+// Next critical hit removes the buff
+int critOnceAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	resizeable string[] effectNames = new Vector();
+
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	if(utils.hasScriptVar(self, "critRemoveBuffNames"))
+	{
+		effectNames = utils.getResizeableStringArrayScriptVar(self, "critRemoveBuffNames");
+	}
+
+	utils.addElement(effectNames, effectName);
+
+	utils.setScriptVar(self, "critRemoveBuffNames", effectNames);
+
+	return SCRIPT_CONTINUE;
+}
+
+// Remove the buff and its entry in the critical hit buff names script var array.
+int critOnceRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	resizeable string[] effectNames = new Vector();
+
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	if(utils.hasScriptVar(self, "critRemoveBuffNames"))
+	{
+		effectNames = utils.getResizeableStringArrayScriptVar(self, "critRemoveBuffNames");
+	}
+
+	int i = 0;
+
+	while(i < effectNames.length)
+	{
+		if(effectNames[i] == effectName)
+		{
+			utils.removeElementAt(effectNames, i);
+		}
+		else
+		{
+			i++;
+		}
+	}
+
+	if(effectNames.length == 0)
+	{
+		utils.removeScriptVar(self, "critRemoveBuffNames");
+	}
+	else
+	{
+		utils.setScriptVar(self, "critRemoveBuffNames", effectNames);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int junkDealerAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id player = utils.getObjIdScriptVar(self, "junkDealerBuffer");
+
+	utils.removeScriptVar(self, "junkDealerBuffer");
+
+	if(!isIdValid(player))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	int precisionBonus = (int)getSkillStatisticModifier(player, "expertise_buff_under_the_counter");
+
+	if(precisionBonus > 0)
+		skillAddBuffHandler(self, "junkDealerPrecision", "precision_modified", duration, precisionBonus, "", null);
+
+	int damageDecrease = (int)getSkillStatisticModifier(player, "expertise_buff_best_deal_ever");
+
+	if(damageDecrease > 0)
+		skillAddBuffHandler(self, "junkDealerDamageDecrease", "damage_decrease_percentage", duration, damageDecrease, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int junkDealerRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, "junkDealerPrecision");
+	removeAttribOrSkillModModifier(self, "junkDealerDamageDecrease");
+
+	return SCRIPT_CONTINUE;
+}
+
+int commandoSnareBonusAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(!isIdValid(self))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	string[] modifiers = movement.getAllModifiers(self);
+
+	boolean snared = false;
+
+	if(modifiers != null)
+	{
+		for(int i = 0; i < modifiers.length; i++)
+		{
+			if(movement.getType(modifiers[i]) == movement.MT_SNARE)
+			{
+				snared = true;
+			}
+		}
+	}
+
+	if(!snared)
+	{
+		buff.removeBuff(self, "co_youll_regret_that");
+
+		return SCRIPT_OVERRIDE;
+	}
+
+	int innateArmorBonus = (int)getSkillStatisticModifier(self, "expertise_youll_regret_that");
+
+	if(innateArmorBonus > 0)
+	{
+		skillAddBuffHandler(self, "commandoInnateArmorBonus", "expertise_innate_protection_all", duration, innateArmorBonus, "", null);
+		messageTo(self, "recalcArmor", null, 1.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+int commandoSnareBonusRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, "commandoInnateArmorBonus");
+	messageTo(self, "recalcArmor", null, .25f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+int commandoFlashBangAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	obj_id owner = utils.getObjIdScriptVar(self, "buffOwner." + getStringCrc(effectName.toLowerCase()));
+
+	if(!isIdValid(owner))
+	{
+		buff.removeBuff(self, effectName);
+		return SCRIPT_CONTINUE;
+	}
+
+	int precisionPenalty = (int)getSkillStatisticModifier(owner, "expertise_co_flash_bang");
+
+	if(precisionPenalty > 0)
+	{
+		skillAddBuffHandler(self, "commandoFlashBang", "precision_modified", duration, (precisionPenalty * -1), "", null);
+	}
+	else
+	{
+		buff.removeBuff(self, effectName);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int commandoFlashBangRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, "commandoFlashBang");
+	return SCRIPT_CONTINUE;
+}
+
+int commandoMuscleSpasmAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	obj_id owner = utils.getObjIdScriptVar(self, "buffOwner." + getStringCrc(effectName.toLowerCase()));
+
+	if(!isIdValid(owner))
+	{
+		buff.removeBuff(self, effectName);
+		return SCRIPT_CONTINUE;
+	}
+
+	int glancePenalty = (int)getSkillStatisticModifier(owner, "expertise_co_muscle_spasm");
+
+	if(glancePenalty > 0)
+	{
+		skillAddBuffHandler(self, "commandoMuscleSpasm", "glancing_blow_vulnerable", duration, glancePenalty, "", null);
+	}
+	else
+	{
+		buff.removeBuff(self, effectName);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int commandoMuscleSpasmRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, "commandoMuscleSpasm");
+	return SCRIPT_CONTINUE;
+}
+
+int commandoRiddleArmorAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string tempEffectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	obj_id owner = utils.getObjIdScriptVar(self, "buffOwner." + getStringCrc(tempEffectName.toLowerCase()));
+
+	if(!isIdValid(owner))
+	{
+		buff.removeBuff(self, tempEffectName);
+		return SCRIPT_CONTINUE;
+	}
+
+	value -= getSkillStatisticModifier(owner, "expertise_riddle_armor");
+
+	skillAddBuffHandler(self, effectName, "expertise_innate_protection_all", duration, value, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int commandoRiddleArmorRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, effectName);
+	messageTo(self, "recalcArmor", null, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+int radarInvisAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	setVisibleOnMapAndRadar(self, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+int radarInvisRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	setVisibleOnMapAndRadar(self, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+int onTargetAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(subtype == "expertise_on_target")
+	{
+		// Improved Position Secured
+		int posSecuredImproved = (int)getSkillStatisticModifier(self, "expertise_action_line_co_imp_pos_sec");
+
+		if(posSecuredImproved == 10)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_action_1");
+		}
+		else if(posSecuredImproved == 20)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_action_2");
+		}
+		else if(posSecuredImproved == 30)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_action_3");
+		}
+
+		// Burst Fire
+		int posSecuredBurstFire = (int)getSkillStatisticModifier(self, "expertise_co_pos_secured_line_burst_fire_proc");
+
+		if(posSecuredBurstFire == 10)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_proc_1");
+			messageTo(self, "cacheExpertiseProcReacList", null, 2, false);
+		}
+		else if(posSecuredBurstFire == 20)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_proc_2");
+			messageTo(self, "cacheExpertiseProcReacList", null, 2, false);
+		}
+
+		// On Target
+		int posSecuredOnTarget = (int)getSkillStatisticModifier(self, "expertise_co_pos_secured_line_critical");
+
+		if(posSecuredOnTarget == 2)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_critical_1");
+		}
+		else if(posSecuredOnTarget == 4)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_critical_2");
+		}
+		else if(posSecuredOnTarget == 6)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_critical_3");
+		}
+		else if(posSecuredOnTarget == 8)
+		{
+			buff.applyBuff(self, self, "co_pos_sec_critical_4");
+		}
+
+		// Base of Operations
+		int posSecuredBoO = (int)getSkillStatisticModifier(self, "expertise_co_pos_secured_line_armor");
+
+		if(posSecuredBoO == 1000)
+		{
+			buff.applyBuff(self, self, "co_base_of_operations");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int onTargetRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(hasSkillModModifier(self, effectName))
+		removeAttribOrSkillModModifier(self, effectName);
+
+	// Remove Improved Position Secured
+	buff.removeBuff(self, "co_pos_sec_action_1");
+	buff.removeBuff(self, "co_pos_sec_action_2");
+	buff.removeBuff(self, "co_pos_sec_action_3");
+
+	// Remove Burst Fire
+	buff.removeBuff(self, "co_pos_sec_proc_1");
+	buff.removeBuff(self, "co_pos_sec_proc_2");
+	messageTo(self, "cacheExpertiseProcReacList", null, 2, false);
+
+	// Remove On Target
+	buff.removeBuff(self, "co_pos_sec_critical_1");
+	buff.removeBuff(self, "co_pos_sec_critical_2");
+	buff.removeBuff(self, "co_pos_sec_critical_3");
+	buff.removeBuff(self, "co_pos_sec_critical_4");
+
+	// Remove Base of Operations
+	if (buff.hasBuff(self, "co_base_of_operations"))
+	{
+		obj_id baseOwner = buff.getBuffOwner(self, "co_base_of_operations");
+
+		if((baseOwner == self) || !isIdValid(baseOwner))
+			buff.removeBuff(self, "co_base_of_operations");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int immunityAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+//	LOG("Immunity BuffHandler:", "Attempting to apply immunity of " + subtype + " to "+ self);
+
+	//apply immunity scriptVar and cures based on subtype
+	string prefixBuilder = "";
+	int wholeValue = (int)value;
+	if(subtype.equals("dot_immunity"))
+	{
+		//add more Dot types as we need them
+		if(wholeValue == IMMUNITY_TO_POISON)
+		{
+			buff.performBuffDotImmunity(self, buff.DOT_POISON);
+
+			//Removes ALL (regardless of strength) existing Poison DoTs on the target
+			if (dot.removeDotsOfType(self, dot.DOT_POISON))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "poisoned", cureDotMsg);
+			}
+			prefixBuilder = "dot.poison";
+		}
+		else if(wholeValue == IMMUNITY_TO_DISEASE)
+		{
+			buff.performBuffDotImmunity(self, buff.DOT_DISEASE);
+
+			//Removes ALL (regardless of strength) existing Disease DoTs on the target
+			if (dot.removeDotsOfType(self, dot.DOT_DISEASE))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "diseased", cureDotMsg);
+			}
+			prefixBuilder = "dot.disease";
+		}
+		else if(wholeValue == IMMUNITY_TO_FIRE)
+		{
+			buff.performBuffDotImmunity(self, buff.DOT_FIRE);
+
+			//Removes ALL (regardless of strength) existing Fire DoTs on the target
+			if (dot.removeDotsOfType(self, dot.DOT_FIRE))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "on fire", cureDotMsg);
+			}
+			prefixBuilder = "dot.fire";
+		}
+		else if(wholeValue == IMMUNITY_TO_BLEEDING)
+		{
+			buff.performBuffDotImmunity(self, buff.DOT_BLEEDING);
+
+			//Removes ALL (regardless of strength) existing Bleeding DoTs on the target
+			if (dot.removeDotsOfType(self, dot.DOT_BLEEDING))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "bleeding", cureDotMsg);
+			}
+			prefixBuilder = "dot.bleeding";
+		}
+		else if(wholeValue == IMMUNITY_TO_ACID)
+		{
+			buff.performBuffDotImmunity(self, buff.DOT_ACID);
+
+			//Removes ALL (regardless of strength) existing Bleeding DoTs on the target
+			if (dot.removeDotsOfType(self, dot.DOT_ACID))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "acid splattered", cureDotMsg);
+			}
+			prefixBuilder = "dot.acid";
+		}
+		else if(wholeValue == IMMUNITY_TO_ENERGY)
+		{
+			buff.performBuffDotImmunity(self, buff.DOT_ENERGY);
+
+			//Removes ALL (regardless of strength) existing Bleeding DoTs on the target
+			if (dot.removeDotsOfType(self, dot.DOT_ENERGY))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "electrified", cureDotMsg);
+			}
+			prefixBuilder = "dot.energy";
+		}
+		else if(wholeValue == IMMUNITY_TO_ALL_DOTS)
+		{
+			buff.performBuffDotImmunity(self, "all");
+
+			if (dot.removeDotsOfType(self, dot.DOT_POISON))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "poisoned", cureDotMsg);
+			}
+			if (dot.removeDotsOfType(self, dot.DOT_DISEASE))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "diseased", cureDotMsg);
+			}
+			if (dot.removeDotsOfType(self, dot.DOT_FIRE))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "on fire", cureDotMsg);
+			}
+			if (dot.removeDotsOfType(self, dot.DOT_BLEEDING))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "bleeding", cureDotMsg);
+			}
+			if (dot.removeDotsOfType(self, dot.DOT_ACID))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "acid splattered", cureDotMsg);
+			}
+			if (dot.removeDotsOfType(self, dot.DOT_ENERGY))
+			{
+				string_id cureDotMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "electrified", cureDotMsg);
+			}
+
+			prefixBuilder = "dot.all";
+		}
+		else
+			return SCRIPT_OVERRIDE;
+	}
+	else if(subtype.equals("movement_immunity"))
+	{
+
+		//add more movement modifiers as we need them...
+		if(wholeValue == movement.MT_SNARE)
+		{
+			//Removes ALL (regardless of strength, but not permanent) existing SNARE movement modifiers on the target
+			if (removeAllModifiersOfType(self, movement.MT_SNARE))
+			{
+				string_id cureMovementMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "snared", cureMovementMsg);
+			}
+			prefixBuilder = "movement.snare";
+
+		}
+		else if(wholeValue == movement.MT_ROOT)
+		{
+			//Removes ALL (regardless of strength, but not permanent) existing ROOT movement modifiers on the target
+			if (removeAllModifiersOfType(self, movement.MT_ROOT))
+			{
+				string_id cureMovementMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "rooted", cureMovementMsg);
+			}
+			prefixBuilder = "movement.root";
+
+		}
+		else if (wholeValue == movement.MT_ALL)
+		{
+			removeAllModifiersOfType(self, movement.MT_SNARE);
+			removeAllModifiersOfType(self, movement.MT_ROOT);
+		}
+		else
+			return SCRIPT_OVERRIDE;
+	}
+	else if(subtype.equals("state_immunity"))
+	{
+		//add more states as we need them
+		if(wholeValue == buff.STATE_STUNNED)
+		{
+			//removes ALL (but only buffs marked as DEBUFF) (DE)Buffs that add the Stun State
+			if (buff.removeAllBuffsOfStateType(self, buff.STATE_STUNNED))
+			{
+				string_id cureStateMsg = new string_id ("spam", "cure_dot");
+				messageDetrimentalRemoved(self, "stunned", cureStateMsg);
+			}
+			prefixBuilder = "state.stun";
+		}
+		else
+			return SCRIPT_OVERRIDE;
+	}
+	else if(subtype.equals("debuff_purge"))
+	{
+		int numToPurge = wholeValue;
+
+		int[] allBuffs = buff.getAllBuffs(self);
+
+		for(int i = 0; i < allBuffs.length; i++)
+		{
+			string curBuff = buff.getBuffNameFromCrc(allBuffs[i]);
+
+			if(numToPurge < 1)
+				return SCRIPT_CONTINUE;
+
+			if(buff.isDebuff(curBuff) && !buff.isDotIconOnlyBuff(curBuff) && buff.canBeDispelled(curBuff) && !buff.isBuffDot(curBuff))
+			{
+				//get stack amount, if stack is greater than 1, then we decrement.
+				long stack = buff.getBuffStackCount(self, curBuff);
+				if(stack > 1 && numToPurge > 1)
+				{
+					if(stack > numToPurge)
+					{
+						buff.decrementBuffStack(self, curBuff, numToPurge);
+						return SCRIPT_CONTINUE;
+					}
+					else
+					{
+						buff.removeBuff(self, curBuff);
+						numToPurge -= stack;
+					}
+
+				}
+				else
+				{
+					buff.removeBuff(self, curBuff);
+					numToPurge--;
+				}
+			}
+		}
+
+	}
+	else if(subtype.equals("buff_purge"))
+	{
+		int numToPurge = wholeValue;
+
+		int[] allBuffs = buff.getAllBuffs(self);
+
+		for(int i = 0; i < allBuffs.length; i++)
+		{
+			string curBuff = buff.getBuffNameFromCrc(allBuffs[i]);
+
+			if(numToPurge < 1)
+				return SCRIPT_CONTINUE;
+
+			if(!buff.isDebuff(curBuff) && !buff.isDotIconOnlyBuff(curBuff) && buff.canBeDispelled(curBuff) )
+			{
+				buff.removeBuff(self, curBuff);
+				numToPurge--;
+			}
+		}
+
+	}
+	else
+		return SCRIPT_OVERRIDE;
+
+	if (!prefixBuilder == "")
+	{
+		utils.setScriptVar(self, "immunity." + prefixBuilder, wholeValue);
+//		LOG("ImmunityBEGIN:", "Successfully applied immunity of " + prefixBuilder + " to "+ self);
+	}
+	else
+	{
+//		LOG("Immunity BuffHandler:", "NOT SUCCESSFUL in applying immunity of " + subtype + " to "+ self);
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int dotReductionAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if (subtype.equals("dot_reduction_acid") || subtype.equals("dot_reduction_all") || subtype.equals("dot_reduction_elemental"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_ACID, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_ACID);
+	}
+	if (subtype.equals("dot_reduction_heat") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_elemental"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_FIRE, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_FIRE);
+	}
+	if (subtype.equals("dot_reduction_cold") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_elemental"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_COLD, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_COLD);
+	}
+	if (subtype.equals("dot_reduction_electrical") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_elemental"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_ELECTRICITY, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_ELECTRICITY);
+	}
+	if (subtype.equals("dot_reduction_kinetic") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_elemental"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_KINETIC, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_KINETIC);
+	}
+	if (subtype.equals("dot_reduction_energy") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_elemental"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_ENERGY, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_ENERGY);
+	}
+	if (subtype.equals("dot_reduction_poison") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_natural"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_POISON, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_POISON);
+	}
+	if (subtype.equals("dot_reduction_disease") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_natural"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_DISEASE, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_DISEASE);
+	}
+	if (subtype.equals("dot_reduction_bleeding") || subtype.equals("dot_reduction_all")|| subtype.equals("dot_reduction_natural"))
+	{
+		buff.reduceBuffDotStackCount(self, buff.DOT_BLEEDING, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_BLEEDING);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int dotReductionRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int dotDivisorAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if (subtype.equals("dot_divisor_acid") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_elemental"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_ACID, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_ACID);
+	}
+	if (subtype.equals("dot_divisor_heat") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_elemental"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_FIRE, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_FIRE);
+	}
+	if (subtype.equals("dot_divisor_cold") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_elemental"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_COLD, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_COLD);
+	}
+	if (subtype.equals("dot_rdivisor_electrical") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_elemental"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_ELECTRICITY, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_ELECTRICITY);
+	}
+	if (subtype.equals("dot_divisor_kinetic") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_elemental"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_KINETIC, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_KINETIC);
+	}
+	if (subtype.equals("dot_divisor_energy") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_elemental"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_ENERGY, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_ENERGY);
+	}
+	if (subtype.equals("dot_divisor_poison") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_natural"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_POISON, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_POISON);
+	}
+	if (subtype.equals("dot_divisor_disease") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_natural"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_DISEASE, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_DISEASE);
+	}
+	if (subtype.equals("dot_divisor_bleeding") || subtype.equals("dot_divisor_all") || subtype.equals("dot_divisor_natural"))
+	{
+		buff.divideBuffDotStackCount(self, buff.DOT_BLEEDING, (int)value);
+		dot.removeDotsOfType(self, dot.DOT_BLEEDING);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int dotDivisorRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+
+
+int immunityRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+//	LOG("Immunity BuffHandler:", "Attempting to remove immunity of " + subtype + " to "+ self);
+	string prefixBuilder = "";
+	int wholeValue = (int)value;
+	if(subtype.equals("dot_immunity"))
+	{
+		if(wholeValue == IMMUNITY_TO_POISON)
+			prefixBuilder = "dot.poison";
+		else if(wholeValue == IMMUNITY_TO_FIRE)
+			prefixBuilder = "dot.fire";
+		else if(wholeValue == IMMUNITY_TO_DISEASE)
+			prefixBuilder = "dot.disease";
+		else if(wholeValue == IMMUNITY_TO_BLEEDING)
+			prefixBuilder = "dot.bleeding";
+		else if(wholeValue == IMMUNITY_TO_ALL_DOTS)
+			prefixBuilder = "dot.all";
+		else
+			return SCRIPT_OVERRIDE;
+	}
+	else if(subtype.equals("movement_immunity"))
+	{
+		if(wholeValue == movement.MT_SNARE)
+			prefixBuilder = "movement.snare";
+		else if(wholeValue == movement.MT_ROOT)
+			prefixBuilder = "movement.root";
+		else
+			return SCRIPT_OVERRIDE;
+	}
+	else if(subtype.equals("state_immunity"))
+	{
+		if(wholeValue == buff.STATE_STUNNED)
+			prefixBuilder = "state.stun";
+		else
+			return SCRIPT_OVERRIDE;
+	}
+	else
+		return SCRIPT_OVERRIDE;
+
+	if (!prefixBuilder == "")
+	{
+		utils.removeScriptVarTree(self, "immunity." + prefixBuilder);
+//		LOG("ImmunityEND:", "SUCCESSFULLY removed immunity of " + prefixBuilder + " to "+ self);
+
+		effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+		stopClientEffectObjByLabel(self, effectName);
+	}
+	else
+		return SCRIPT_OVERRIDE;
+
+	return SCRIPT_CONTINUE;
+}
+
+int expertiseImmunityAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(!buff.isInStance(self))
+	{
+		// No buffs are applied, if the jedi is not in a stance.
+		buff.removeBuff(self, "fs_sh_0");
+		buff.removeBuff(self, "fs_sh_1");
+		buff.removeBuff(self, "fs_sh_2");
+		buff.removeBuff(self, "fs_sh_3");
+
+		// The recourse is automatically applied in the server, during removal of the buff.  This prevents
+		// the recourse from inadvertantly put on due to not being in a stance.
+		buff.removeBuff(self, "fs_dot_immunity_recourse");
+
+		return SCRIPT_OVERRIDE;
+	}
+
+	int wholeValue = (int)value;
+
+	int immunityType = (int)getSkillStatisticModifier(self, subtype + wholeValue);
+
+	if(immunityType != 0)
+		return immunityAddBuffHandler(self, effectName, subtype, duration, value, "", null);
+
+	return SCRIPT_OVERRIDE;
+}
+
+int expertiseImmunityRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return immunityRemoveBuffHandler(self, effectName, subtype, duration, value, "", null);
+}
+
+int expertiseChannelActionHealAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "buff_handler.lastForsakeFearPulse", getGameTime());
+	utils.setScriptVar(self, "buff_handler.totalForsakeFearPulses", 0);
+	utils.removeScriptVar(self, "buff_handler.channelForsakeFearCancelled");
+	utils.removeScriptVar(self, "buff_handler.channelForsakeFearSuccessful");
+
+	return SCRIPT_CONTINUE;
+}
+
+int expertiseChannelActionHealRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int cancelled = utils.getIntScriptVar(self, "buff_handler.channelForsakeFearCancelled");
+
+	int successful = utils.getIntScriptVar(self, "buff_handler.channelForsakeFearSuccessful");
+
+	if(cancelled == 0 && successful == 1)
+	{
+		// Wrap up the last few seconds of the channel
+		channelForsakeFear(self, effectName, true);
+	}
+
+	utils.removeScriptVar(self, "buff_handler.channelForsakeFearCancelled");
+	utils.removeScriptVar(self, "buff_handler.totalForsakeFearPulses");
+	utils.removeScriptVar(self, "buff_handler.lastForsakeFearPulse");
+	utils.removeScriptVar(self, "buff_handler.channelForsakeFearSuccessful");
+
+	return SCRIPT_CONTINUE;
+}
+
+int onIncapHealAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "buff_handler."+subtype, value);
+	return SCRIPT_CONTINUE;
+}
+
+int onIncapHealRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVar(self, "buff_handler."+subtype);
+
+	return SCRIPT_CONTINUE;
+}
+
+int healEffectAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(subtype.equals("healing_action") )
+	{
+		healing.healDamage(self, ACTION, (int)value);
+		return SCRIPT_CONTINUE;
+	}
+
+	else if(subtype.equals("healing_health") )
+	{
+		healing.healDamage(caster, self, HEALTH, (int)value);
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int healEffectRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+
+	return SCRIPT_CONTINUE;
+}
+
+int buildabuffAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(!utils.hasScriptVar(self, "performance.buildabuff.buffComponentKeys") || !utils.hasScriptVar(self, "performance.buildabuff.buffComponentValues") )
+	{
+		//sendSystemMessageTestingOnly(self, "buildabuffAddBuffHandler missing vital scriptVars");
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] buffComponentKeys = utils.getStringArrayScriptVar(self, "performance.buildabuff.buffComponentKeys");
+	int[] buffComponentValues = utils.getIntArrayScriptVar(self, "performance.buildabuff.buffComponentValues");
+	obj_id bufferId = utils.getObjIdScriptVar(self, "performance.buildabuff.bufferId");
+	
+#ifdef EXTRA_COST_DEBUG
+	{
+		CustomerServiceLog("SuspectedCheaterChannel: ", "Entered BuildABuffAdd Handler, dumping info...");
+		CustomerServiceLog("SuspectedCheaterChannel: ", "BufferId: " + bufferId + " IsValid: " + isIdValid(bufferId) + " Exists: " + exists(bufferId) + " isInternalDecay: " + utils.hasScriptVar(self, "buffDecay"));
+		for(int i = 0; i < buffComponentKeys.length; ++i)
+		{
+			CustomerServiceLog("SuspectedCheaterChannel: ", "BuffComponentKey[" + i + "] = " + buffComponentKeys[i]);
+		}
+		for(int i = 0; i < buffComponentValues.length; ++i)
+		{
+			CustomerServiceLog("SuspectedCheaterChannel: ", "BuffComponentValues[" + i + "] = " + buffComponentValues[i]);
+		}		
+	}
+#endif
+
+	boolean internalDecay = false;
+	if (utils.hasScriptVar(self, "buffDecay"))
+	{
+		internalDecay = true;
+		// Skip verification, this is an internal buff decay operation.
+		utils.removeScriptVar(self, "buffDecay");
+	}
+	
+#ifdef EXTRA_COST_DEBUG
+	CustomerServiceLog("SuspectedCheaterChannel: ", "Internal Decay = " + internalDecay);
+#endif
+	
+	int improv = 0;
+	if(isIdValid(bufferId) && exists(bufferId))
+		improv = (int)getSkillStatisticModifier(bufferId, "expertise_en_improv");
+		
+	if(internalDecay == true)
+	{
+		if(utils.hasScriptVar(self, "decayImprov"))
+			improv = utils.getIntScriptVar(self, "decayImprov");
+
+	}
+	else
+	{
+		utils.setScriptVar(self, "decayImprov", improv);
+		
+	}
+	
+	int improvDance = 0;
+	if (improv == 1 && isIdValid(bufferId) && exists(bufferId))
+	{
+		if(!camping.isInEntertainmentCamp(bufferId))
+		{
+			location loc = getLocation(bufferId);
+			if (isIdValid(loc.cell))
+			{
+				obj_id building = getTopMostContainer(loc.cell);
+				if (!hasObjVar(building, "healing.canhealshock") && !hasObjVar(loc.cell, "healing.canhealshock"))
+				{
+					region[] regs = getRegionsWithGeographicalAtPoint(getLocation(bufferId), regions.GEO_THEATER);
+					if (regs == null || regs.length == 0)
+					{
+						improvDance = 1;
+					}
+				}
+			}
+		}
+	}
+	
+	if(internalDecay == true)
+	{
+		if(utils.hasScriptVar(self, "decayImprovDance"))
+		{
+			improvDance = utils.getIntScriptVar(self, "decayImprovDance");
+#ifdef EXTRA_COST_DEBUG
+			CustomerServiceLog("SuspectedCheaterChannel: ",	"Using stored ImprovDance: " + improvDance);
+#endif
+		}
+
+	}
+	else
+	{
+		utils.setScriptVar(self, "decayImprovDance", improvDance);
+#ifdef EXTRA_COST_DEBUG
+		CustomerServiceLog("SuspectedCheaterChannel: ",	"Storing improvDance: " + improvDance);
+#endif
+			
+	}
+
+	
+	
+	// More hack validation. Make sure they aren't trying to spend more points then they have.
+	// You have 8 base + up to another 12 from expertise.
+	int actualPointsToSpend = 8;
+	if(isIdValid(bufferId) && exists(bufferId))
+		actualPointsToSpend += getEnhancedSkillStatisticModifierUncapped(bufferId, "expertise_en_inspire_base_point_increase");
+
+	int attemptingToSpendPoints = 0;
+	for(int i = 0; i < buffComponentKeys.length; i++)
+	{
+	
+		if(internalDecay == true)
+			break;
+		
+		dictionary buffData = dataTableGetRow(DATATABLE_BUFF_BUILDER, buffComponentKeys[i]);
+		int cost = buffData.getInt("COST") * buffComponentValues[i];
+		attemptingToSpendPoints += cost;
+
+		if(attemptingToSpendPoints > actualPointsToSpend && internalDecay == false)
+		{
+			sendSystemMessage(bufferId, "ERROR: Invalid data. Discrepancy logs generated.", null);
+			CustomerServiceLog("SuspectedCheaterChannel: ", "Player ("+getName(bufferId)+" : " + bufferId + ") has tried to spend more points on inspiration buffs then they have ("+attemptingToSpendPoints+")! The buff failed.");
+			
+/*#ifdef EXTRA_COST_DEBUG
+			{
+				
+				CustomerServiceLog("SuspectedCheaterChannel: ", "Dumping cost information for " + bufferId + ", total cost = " + attemptingToSpendPoints);
+				
+				for(int j = 0; j < buffComponentKeys.length; j++)
+				{
+					CustomerServiceLog("SuspectedCheaterChannel: ", "Player ( " + bufferId + " ) ComponentValue " + j + " = " + buffComponentValues[j]);
+				}
+			
+			}
+#endif*/			
+			
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if(buffComponentKeys.length == buffComponentValues.length && buffComponentKeys.length > 0 && buffComponentValues.length > 0)
+	{
+		for(int i = 0; i < buffComponentKeys.length; i++)
+		{
+			dictionary buffData = dataTableGetRow(DATATABLE_BUFF_BUILDER, buffComponentKeys[i]);
+			string effect = buffData.getString("AFFECTS");
+			string category = buffData.getString("CATEGORY");
+
+			int effectAmount = buffData.getInt("AFFECT_AMOUNT");
+			int maxTimes = buffData.getInt("MAX_TIMES_APPLIED");
+
+			if(buffComponentValues[i] > maxTimes)
+			{
+				if(internalDecay == false)
+				{
+					CustomerServiceLog("SuspectedCheaterChannel: ", "Player ("+getName(bufferId)+" : " + bufferId + ") has passed an out of bounds build-a-buff value (" + buffComponentValues[i] + ") which has a cap of (" + maxTimes + "). HAX!");
+					sendSystemMessage(bufferId, "ERROR: Capping invalid buff values. Discrepancy logs generated.", null);
+				}
+				buffComponentValues[i] = maxTimes;
+			}
+
+			float buffValue = effectAmount * buffComponentValues[i];
+			/*string buffScriptKey = "buildabuffvalue_" + i;
+
+			if(internalDecay && utils.hasScriptVar(self, buffScriptKey))
+			{
+				buffValue = utils.getFloatScriptVar(self, buffScriptKey);
+
+				if(buffValue > effectAmount * maxTimes)
+				{
+					buffValue = effectAmount * maxTimes;
+				}
+
+#ifdef EXTRA_COST_DEBUG
+				CustomerServiceLog("SuspectedCheaterChannel: ",	"Using stored stat value " + buffValue + " under the script var key: " + buffScriptKey);
+#endif
+			}*/
+			
+			if (improvDance == 1)
+			{
+				buffValue = (buffValue * 0.2f);
+			}
+
+			if(category.equals("attributes") || category.equals("resistances") || category.equals("combat"))
+			{
+				
+				if(category.equals("attributes") )
+				{
+					float attribModifier = 0.0f;
+					
+					if(isIdValid(bufferId) && exists(bufferId))
+						attribModifier = (float)(getEnhancedSkillStatisticModifierUncapped(bufferId, "expertise_en_inspire_attrib_increase")/100.0f);
+					
+					if(internalDecay == true)
+					{
+						if(utils.hasScriptVar(self, "decayAttribMod"))
+						{
+							attribModifier = utils.getFloatScriptVar(self, "decayAttribMod");
+#ifdef EXTRA_COST_DEBUG
+							CustomerServiceLog("SuspectedCheaterChannel: ",	"Using stored attribMod: " + attribModifier);
+#endif
+						}
+
+					}
+					else
+					{
+#ifdef EXTRA_COST_DEBUG
+						CustomerServiceLog("SuspectedCheaterChannel: ",	"Storing attribMod: " + attribModifier);
+#endif
+						utils.setScriptVar(self, "decayAttribMod", attribModifier);
+
+					}
+					
+					buffValue *= 1.0f + attribModifier;
+				}
+
+				else if(category.equals("resistances") )
+				{
+					float resistModifier = 0.0f;
+					
+					if(isIdValid(bufferId) && exists(bufferId))
+						resistModifier = (float)(getEnhancedSkillStatisticModifierUncapped(bufferId, "expertise_en_inspire_resist_increase")/100.0f);
+					
+					if(internalDecay == true)
+					{
+						if(utils.hasScriptVar(self, "decayResistMod"))
+							resistModifier = utils.getFloatScriptVar(self, "decayResistMod");
+
+					}
+					else
+					{
+						utils.setScriptVar(self, "decayResistMod", resistModifier);
+
+					}					
+					
+					buffValue *= 1.0f + resistModifier;
+				}
+
+				else if(category.equals("combat") )
+				{
+					float combatModifier = 0.0f;
+					
+					if(isIdValid(bufferId) && exists(bufferId))
+						combatModifier = getEnhancedSkillStatisticModifierUncapped(bufferId, "expertise_en_combat_buff_increase");
+					
+					if(internalDecay == true)
+					{
+						if(utils.hasScriptVar(self, "decayCombatMod"))
+							combatModifier = utils.getFloatScriptVar(self, "decayCombatMod");
+
+					}
+					else
+					{
+						utils.setScriptVar(self, "decayCombatMod", combatModifier);
+
+					}
+					
+					buffValue += combatModifier;
+				}
+#ifdef EXTRA_COST_DEBUG
+				{
+					
+					CustomerServiceLog("SuspectedCheaterChannel: ",	"Adding Stat Modifier: " + "buildabuff_" + effect + " Value = " + buffValue + " Duration = " + duration);
+					
+				}
+
+#endif
+
+				//utils.setScriptVar(self, buffScriptKey, buffValue);
+				
+				addSkillModModifier(self, "buildabuff_" + effect, effect, (int)buffValue, duration, false, true);
+
+				if((effect.startsWith("constitution"))||(effect.startsWith("stamina")))
+				{
+					messageTo(self, "recalcPools", null, .25f, false);
+				}
+				else 	if(effect.startsWith("expertise_innate_protection_"))
+				{
+					messageTo(self, "recalcArmor", null, .25f, false);
+				}
+			}
+			else if(category.equals("trade") )
+			{
+				//remove any xp buffs already on player
+				/*int xpBuff = buff.getBuffOnTargetFromGroup(self, "exp_buff");
+				if(xpBuff !=0)
+					buff.removeBuff(self, xpBuff);*/
+				
+				float tradeModifier = 0.0f;
+				
+				if(isIdValid(bufferId) && exists(bufferId))
+					tradeModifier = (float)(getEnhancedSkillStatisticModifierUncapped(bufferId, "expertise_en_inspire_trader_increase")/100.0f);
+					
+				if(internalDecay == true)
+				{
+					if(utils.hasScriptVar(self, "decayTradeMod"))
+						tradeModifier = utils.getFloatScriptVar(self, "decayTradeMod");
+
+				}
+				else
+				{
+					utils.setScriptVar(self, "decayTradeMod", tradeModifier);
+
+				}
+					
+				buffValue *= 1.0f + tradeModifier;
+				// Everyone gets an XP bonus to crafting
+				string[] xpArray = {"crafting", "combat_general", "entertainer", "space_combat_general"};
+
+				utils.setScriptVar(self, "buff.xpBonus.types", xpArray);
+				utils.setScriptVar(self, "buff.xpBonus.value", buffValue/100);
+#ifdef EXTRA_COST_DEBUG
+				{
+					
+					CustomerServiceLog("SuspectedCheaterChannel: ",	"Adding Stat Modifier: " + "buildabuff_" + effect + " Value = " + buffValue + " Duration = " + duration);
+					
+				}
+
+#endif
+				//utils.setScriptVar(self, buffScriptKey, buffValue);
+				
+				addSkillModModifier(self, "buildabuff_" + effect, effect, (int)buffValue, duration, false, true);
+			}
+			else if(category.equals("misc") )
+			{
+				if(effect.equals("movement_speed") )
+				{
+					if(value == 0)
+						value = 1;
+
+					if(movement.hasMovementModifier(self, "buildabuff_movement_speed"))
+						movement.removeMovementModifier(self, "buildabuff_movement_speed", false);
+
+					movement.applyMovementModifier(self, "buildabuff_movement_speed", buffValue);
+				}
+				else if(effect.equals("reactive_second_chance") )
+				{
+					int playerLevel = getLevel(self);
+					float reactiveModifier = 0.0f;
+					
+					if(isIdValid(bufferId) && exists(bufferId))
+						reactiveModifier = getEnhancedSkillStatisticModifierUncapped(bufferId, "expertise_en_inspire_proc_chance_increase");
+					
+					if(internalDecay == true)
+					{
+						if(utils.hasScriptVar(self, "decayReactiveMod"))
+							reactiveModifier = utils.getFloatScriptVar(self, "decayReactiveMod");
+
+					}
+					else
+					{
+						utils.setScriptVar(self, "decayReactiveMod", reactiveModifier);
+
+					}
+					
+					buffValue += reactiveModifier;
+
+					//utils.setScriptVar(self, buffScriptKey, buffValue);
+
+					if(playerLevel > 69)
+					{
+						addSkillModModifier(self, "expertise_buildabuff_heal_3_reac", "expertise_buildabuff_heal_3_reac", (int)buffValue, duration, false, true);
+					}
+					else if(playerLevel > 39 && playerLevel < 70)
+					{
+						addSkillModModifier(self, "expertise_buildabuff_heal_2_reac", "expertise_buildabuff_heal_2_reac", (int)buffValue, duration, false, true);
+					}
+					else
+					{
+						addSkillModModifier(self, "expertise_buildabuff_heal_1_reac", "expertise_buildabuff_heal_1_reac", (int)buffValue, duration, false, true);
+					}
+
+					messageTo(self, "cacheExpertiseProcReacList", null, 2, false);
+				}
+				else if(effect.equals("flush_with_success") )
+				{
+
+					//remove any xp buffs already on player
+					/*int xpBuff = buff.getBuffOnTargetFromGroup(self, "exp_buff");
+					if(xpBuff !=0)
+						buff.removeBuff(self, xpBuff);*/
+
+					string[] xpArray = {"crafting", "combat_general", "entertainer", "space_combat_general", "chronicles"};
+
+					utils.setScriptVar(self, "buff.xpBonus.types", xpArray);
+					utils.setScriptVar(self, "buff.xpBonus.value", buffValue/100.0f);
+				}
+				else // Otherwise it's a skill mod and add it.
+				{
+#ifdef EXTRA_COST_DEBUG
+					{
+						
+						CustomerServiceLog("SuspectedCheaterChannel: ",	"Adding Stat Modifier: " + "buildabuff_" + effect + " Value = " + buffValue + " Duration = " + duration);
+						
+					}
+
+#endif				
+					addSkillModModifier(self, "buildabuff_" + effect, effect, (int)buffValue, duration, false, true);
+				}
+			}
+		}
+		//During each buff - the player rolls for a chance to update his/her build-a-buff collection
+		if(!buff.hasBuff(self, "col_ent_invis_buff_tracker"))
+		{
+			collection.entertainerBuffCollection(self, bufferId, duration);
+		}
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(self, "Malformed buildabuff data passed to buildabuffAddBuffHandler.");
+	}
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	if(hasScript(self, "systems.buff_builder.buff_builder_cancel") )
+		detachScript(self, "systems.buff_builder.buff_builder_cancel");
+
+	return SCRIPT_CONTINUE;
+}
+
+int buildabuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string[] baseModList = dataTableGetStringColumn(DATATABLE_BUFF_BUILDER, "AFFECTS");
+
+	for(int i = 0; i < baseModList.length; i++)
+	{
+		if(hasSkillModModifier(self, "buildabuff_"+ baseModList[i]) )
+		{
+			removeAttribOrSkillModModifier(self, "buildabuff_"+ baseModList[i]);
+		}
+	}
+
+	if(hasSkillModModifier(self, "expertise_buildabuff_heal_1_reac") )
+	{
+		removeAttribOrSkillModModifier(self, "expertise_buildabuff_heal_1_reac");
+	}
+
+	if(hasSkillModModifier(self, "expertise_buildabuff_heal_2_reac") )
+	{
+		removeAttribOrSkillModModifier(self, "expertise_buildabuff_heal_2_reac");
+	}
+
+	if(hasSkillModModifier(self, "expertise_buildabuff_heal_3_reac") )
+	{
+		removeAttribOrSkillModModifier(self, "expertise_buildabuff_heal_3_reac");
+	}
+
+	messageTo(self, "recalcPools", null, 1, false);
+	messageTo(self, "recalcArmor", null, .25f, false);
+	messageTo(self, "cacheExpertiseProcReacList", null, 2, false);
+
+	utils.removeScriptVar(self, "performance.buildabuff.modNames");
+	utils.removeScriptVar(self, "performance.buildabuff.modValues");
+	utils.removeScriptVarTree(self, "buff.xpBonus");
+
+	if(movement.hasMovementModifier(self, "buildabuff_movement_speed"))
+		movement.removeMovementModifier(self, "buildabuff_movement_speed");
+
+	if(hasScript(self, "systems.buff_builder.buff_builder_cancel") )
+		detachScript(self, "systems.buff_builder.buff_builder_cancel");
+
+	trial.bumpSession(self, "displayDefensiveMods");
+	messageTo(self, "setDisplayOnlyDefensiveMods", trial.getSessionDict(self, "displayDefensiveMods") , 5, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+// Special case handler for medic's set bonus effect.
+int meDoomAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	showFlyText(self, new string_id("set_bonus", "doom_fly"), 2, colors.BLACK);
+
+	obj_id doomOwner = utils.getObjIdScriptVar(self, "me_doom.doom_owner");
+	int doomStage = utils.getIntScriptVar(self, "me_doom.doom_stage");
+
+	if(!isIdValid(doomOwner))
+	{
+		utils.removeScriptVar(self, "me_doom.doom_owner");
+		utils.removeScriptVar(self, "me_doom.doom_stage");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(doomStage > 3 || doomStage < 1)
+	{
+		utils.removeScriptVar(self, "me_doom.doom_owner");
+		utils.removeScriptVar(self, "me_doom.doom_stage");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(doomStage == 2)
+	{
+		dot.applyDotEffect(self, doomOwner, "bleeding", "me_doom_bleed", HEALTH, 100, 800, 5, true, null);
+	}
+
+	if(doomStage == 3)
+	{
+		dot.applyDotEffect(self, doomOwner, "fire", "me_doom_bleed", HEALTH, 100, 800, 5, true, null);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int meDoomRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id doomOwner = utils.getObjIdScriptVar(self, "me_doom.doom_owner");
+	int doomStage = utils.getIntScriptVar(self, "me_doom.doom_stage");
+
+	if(!isIdValid(doomOwner))
+	{
+		utils.removeScriptVar(self, "me_doom.doom_owner");
+		utils.removeScriptVar(self, "me_doom.doom_stage");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(doomStage > 3 || doomStage < 1)
+	{
+		utils.removeScriptVar(self, "me_doom.doom_owner");
+		utils.removeScriptVar(self, "me_doom.doom_stage");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(doomStage == 1)
+	{
+		utils.setScriptVar(self, "me_doom.doom_stage", 2);
+		buff.applyBuff(self, self, "me_doom", 10.0f);
+	}
+
+	if(doomStage == 2)
+	{
+		utils.setScriptVar(self, "me_doom.doom_stage", 3);
+		buff.applyBuff(self, self, "me_doom", 10.0f);
+	}
+
+	if(doomStage == 3)
+	{
+		utils.removeScriptVar(self, "me_doom.doom_owner");
+		utils.removeScriptVar(self, "me_doom.doom_stage");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// Hackery to prevent a race condition.
+messageHandler cacheExpertiseProcReacList()
+{
+	expertise.cacheExpertiseProcReacList(self);
+	proc.buildCurrentReacList(self);
+	proc.buildCurrentProcList(self);
+	return SCRIPT_CONTINUE;
+}
+
+
+// Heal an attribute by a percentage
+void healAttribPercent(obj_id who, int stat, int percent)
+{
+	int currentStatValue = getAttrib(who, stat);
+	int maxStatValue = getMaxAttrib(who, stat);
+
+	if(currentStatValue < maxStatValue)
+	{
+		int newStatValue = currentStatValue + (int)(maxStatValue * (float)(percent / 100));
+
+		if(newStatValue > maxStatValue)
+		{
+			setAttrib(who, stat, maxStatValue);
+		}
+		else
+		{
+			setAttrib(who, stat, newStatValue);
+		}
+	}
+}
+
+int channelForsakeFear(obj_id player, string buffName, boolean finishChannel)
+{
+
+	int lastForsakeFearPulse = utils.getIntScriptVar(player, "buff_handler.lastForsakeFearPulse");
+	int currentForsakeFearPulses = utils.getIntScriptVar(player, "buff_handler.totalForsakeFearPulses");
+	int gameTime = getGameTime();
+
+	int newTotal = gameTime - lastForsakeFearPulse + currentForsakeFearPulses;
+
+	if(finishChannel || (newTotal > 10))
+	{
+		newTotal = 10;
+	}
+
+	// Do not subtract action or attempt to heal no action
+	if(newTotal > currentForsakeFearPulses)
+	{
+		// Collect party members and set them on the Jedi casting this buff
+		if (group.isGrouped(player))
+		{
+			Vector party = group.getPCMembersInRange(player, 32f);
+			Vector channelToMembers = new Vector();
+			if ( party != null )
+			{
+				for ( int i = 0; i < party.size(); i++ )
+				{
+					obj_id who = (obj_id)party.elementAt(i);
+
+					// If a player is incapacitated or dead, the player will not have the buff...
+					if((obj_id)buff.getBuffOwner(who, buffName) == player)
+					{
+						healAttribPercent(who, ACTION, 6 * (newTotal - currentForsakeFearPulses));
+						playClientEffectObj(who, "appearance/pt_jedi_forsake_fear.prt", who, "");
+					}
+				}
+			}
+		}
+
+		healAttribPercent(player, ACTION, 6 * (newTotal - currentForsakeFearPulses));
+		playClientEffectObj(player, "appearance/pt_jedi_forsake_fear.prt", player, "");
+	}
+
+	if(!finishChannel)
+	{
+		dictionary parms = new dictionary();
+
+		parms.put("player", player);
+		parms.put("buffName", buffName);
+
+		utils.setScriptVar(player, "buff_handler.lastForsakeFearPulse", gameTime);
+		utils.setScriptVar(player, "buff_handler.totalForsakeFearPulses", newTotal);
+
+		messageTo(player, "checkChannelForsakeFear", parms, 1, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkChannelForsakeFear()
+{
+	obj_id player = params.getObjId("player");
+	string buffName = params.getString("buffName");
+
+	// If the countdown has been cancelled, successful, or finished, then this message should not be sent.
+	// If the countdown was successful, then the removal of the buff will wrap up any left over action healing required.
+	if(utils.hasScriptVar(player, "buff_handler.channelForsakeFearCancelled") ||
+		utils.hasScriptVar(player, "buff_handler.channelForsakeFearSuccessful") ||
+		!hasObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR))
+		return SCRIPT_CONTINUE;
+
+	channelForsakeFear(player, buffName, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler channelForsakeFearCountdownHandler()
+{
+	int pid = params.getInt("id");
+	obj_id player = params.getObjId("player");
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+
+	// Cancel button is sent when player manually closes the countdown window,
+	// or when he/she moves out of range.
+	if(bp == sui.BP_CANCEL)
+	{
+		// Detaching the script cleans up all the data for us.
+		// Not necessary, but probably good practice.
+		utils.setScriptVar(player, "buff_handler.channelForsakeFearCancelled", 1);
+
+		detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+
+		return SCRIPT_CONTINUE;
+	}
+	// Revert button is sent when the timer is aborted due to one of the
+	// specified events.
+	else if(bp == sui.BP_REVERT)
+	{
+		// Gets the reason why the timer was aborted
+		int event = params.getInt("event");
+
+		if(event == sui.CD_EVENT_LOCOMOTION)
+		{
+			utils.setScriptVar(player, "buff_handler.channelForsakeFearCancelled", 1);
+		}
+		else if(event == sui.CD_EVENT_INCAPACITATE)
+		{
+			utils.setScriptVar(player, "buff_handler.channelForsakeFearCancelled", 1);
+		}
+
+		// The player abortion script handles the cleanup in this case, so we don't have to.
+		return SCRIPT_CONTINUE;
+	}
+
+	// The OK button is sent on a successful message, but if we've gotten this
+	// far, then we know the timer wasn't aborted or cancelled.
+
+	// Get the ID off of the player. If it doesn't exist then this is an invalid message.
+	if(!hasObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR))
+		return SCRIPT_CONTINUE;
+
+	int test_pid = getIntObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR);
+
+	// If the IDs don't match, then this is an invalid message.
+	if(pid != test_pid)
+		return SCRIPT_CONTINUE;
+
+	// Don't forget to close the window!
+	forceCloseSUIPage(pid);
+
+	// Cleanup!
+	detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+
+	// DO SUCCESSFUL STUFF HERE!
+	utils.setScriptVar(player, "buff_handler.channelForsakeFearSuccessful", 1);
+
+	return SCRIPT_CONTINUE;
+}
+
+int actionDrainAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(value > getAction(self))
+	{
+		value = getAction(self);
+	}
+
+	drainAttributes(self, (int)value, 0);
+
+	if(!buff.hasBuff(self, "action_drain_immunity") )
+		buff.applyBuff(self, self, "action_drain_immunity");
+
+	return SCRIPT_CONTINUE;
+}
+
+int actionDrainRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int actionBurnAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "buff.action_burn.value", value);
+	return SCRIPT_CONTINUE;
+}
+
+int actionBurnRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVar(self, "buff.action_burn.value");
+	return SCRIPT_CONTINUE;
+}
+
+int actionRegenAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int actionMax = getMaxAction(self);
+	dictionary data = new dictionary();
+
+	data.put("actionMax", actionMax);
+	data.put("buffName", "sp_action_regen");
+	data.put("ticks", duration);
+	data.put("currentTick", 0);
+
+	messageTo(self, "actionRegenBuff", data, 1f, false);
+	return SCRIPT_CONTINUE;
+}
+
+int actionRegenRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler actionRegenBuff()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	string buffName = params.getString("buffName");
+
+	if(!buff.hasBuff(self, buffName))
+		return SCRIPT_CONTINUE;
+
+
+	//get max action
+	int maxAction = params.getInt("actionMax");
+	//get the ticks
+	float ticks = params.getFloat("ticks");
+	//devide the max action by the ticks to get the action heal amount
+	float healAmount = maxAction / ticks;
+
+	//add healAmount to current action
+	healing.healDamage(self, ACTION, (int)healAmount);
+
+	//find what tick we are on
+	int currentTick = params.getInt("currentTick");
+
+	if(currentTick < ticks)
+	{
+		params.put("currentTick", ++currentTick);
+		messageTo(self, "actionRegenBuff", params, 1f, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int bodyguardDefenderAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if (subtype.equals("shield_master_pet"))
+	{
+		obj_id master = getMaster(self);
+		if (!isIdValid(master))
+		{
+			buff.removeBuff(self, "bm_shield_master_pet");
+			return SCRIPT_CONTINUE;
+		}
+
+		buff.applyBuff(master, self, "bm_shield_master_player");
+		return SCRIPT_CONTINUE;
+	}
+
+	if (subtype.equals("protect_master"))
+	{
+		obj_id master = getMaster(self);
+
+		if (isIdValid(master) && exists(master))
+		{
+			utils.setScriptVar(master, combat.DAMAGE_REDIRECT, self);
+			buff.applyBuff(master, self, "bodyguard");
+		}
+
+
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int bodyguardDefenderRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if (subtype.equals("shield_master_pet"))
+	{
+		obj_id master = getMaster(self);
+		if (isIdValid(master) && exists(master))
+			buff.removeBuff(master, "bm_shield_master_player");
+
+		return SCRIPT_CONTINUE;
+	}
+
+	if (subtype.equals("protect_master"))
+	{
+		obj_id master = getMaster(self);
+
+		if (!isIdValid(master))
+			master = trial.getParent(self);
+
+		if (isIdValid(master) && exists(master))
+		{
+			buff.removeBuff(master, "bodyguard");
+			utils.removeScriptVar(master, combat.DAMAGE_REDIRECT);
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int cooldownModifyAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if (subtype.equals("cooldown_execute_all"))
+	{
+		string[] commandList = getCommandListingForPlayer(self);
+
+		if (commandList == null || commandList.length == 0)
+		{
+			debugSpeakMsg(self, "Command list was null or empty");
+			return SCRIPT_CONTINUE;
+		}
+
+		for (int i=0;i<commandList.length;i++)
+		{
+			combat_data cd = combat_engine.getCombatData(commandList[i]);
+
+			if (cd == null)
+				continue;
+
+			string cooldownGroup = cd.cooldownGroup;
+			int groupCrc = getStringCrc(cooldownGroup);
+
+			float coolDownLeft = getCooldownTimeLeft(self, groupCrc);
+
+			//debugSpeakMsg(self, "Action Name, Cooldown Group, Cooldown Remaining: "+cd.actionName+", "+cooldownGroup+", "+coolDownLeft);
+
+			if (coolDownLeft < value)
+			{
+				sendCooldownGroupTimingOnly(self, groupCrc, value);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int cooldownModifyRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int vulnerabilityAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	string type = "heat";
+	boolean exclusive = false;
+
+	if (subType.indexOf("exclusive") > -1)
+		exclusive = true;
+
+	if (subType.endsWith("acid"))
+		type = "acid";
+
+	if (subType.endsWith("cold"))
+		type = "cold";
+
+	if (subType.endsWith("electricity"))
+		type = "electrical";
+
+	utils.setScriptVar(self, "elemental_vulnerability.type_"+type, type);
+	utils.setScriptVar(self, "elemental_vulnerability.type_"+type+".value", value);
+	utils.setScriptVar(self, "elemental_vulnerability.type_"+type+".exclusive", exclusive);
+
+	return SCRIPT_CONTINUE;
+}
+void clog(string message)
+{
+	debugSpeakMsg(getSelf(), message);
+}
+
+int vulnerabilityRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	string type = "heat";
+
+	if (subType.endsWith("acid"))
+		type = "acid";
+
+	if (subType.endsWith("cold"))
+		type = "cold";
+
+	if (subType.endsWith("electricity"))
+		type = "electrical";
+
+	utils.removeScriptVar(self, "elemental_vulnerability.type_"+type);
+	utils.removeScriptVar(self, "elemental_vulnerability.type_"+type+".value");
+	utils.removeScriptVar(self, "elemental_vulnerability.type_"+type+".exclusive");
+
+
+	return SCRIPT_CONTINUE;
+}
+
+int removeIncapWeakenAddBuffHandler(obj_id self, string effectName, string subType, float duartion, float value, string buffName, obj_id caster)
+{
+	buff.removeBuff(self, "incapWeaken");
+
+	return SCRIPT_CONTINUE;
+}
+
+int removeIncapWeakenRemoveBuffHandler(obj_id self, string effectName, string subType, float duartion, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int axkvaContagionAddBuffHandler(obj_id self, string effectName, string subType, float duartion, float value, string buffName, obj_id caster)
+{
+	if (buff.hasBuff(self, "axkva_contagion_recourse"))
+		return SCRIPT_OVERRIDE;
+
+	playClientEffectObj(self, "appearance/pt_contagion_debuff.prt", self, "", null, "contagion");
+
+	return SCRIPT_CONTINUE;
+}
+
+int axkvaContagionRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	buff.applyBuff(self, self, "axkva_contagion_recourse");
+	stopClientEffectObjByLabel(self, self, "contagion");
+
+	obj_id axkva = getFirstObjectWithScript(getLocation(self), 250.0f, "theme_park.heroic.axkva_min.axkva");
+
+	if (!isIdValid(axkva) || ai_lib.isDead(axkva))
+		return SCRIPT_CONTINUE;
+
+	dictionary dict = new dictionary();
+	dict.put("player", self);
+	messageTo(axkva, "contagion_bomb", dict, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+int bodyguardMasterAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int bodyguardMasterRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int onNextAttackAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "next_hit_damage_bonus", value);
+	obj_id master = utils.getObjIdScriptVar(self, "temp.master");//beastmaster.getMaster(self);
+	if (isIdValid(master) && exists(master))
+		buff.applyBuff(master, self, "bm_preperation");
+
+	return SCRIPT_CONTINUE;
+}
+
+int onNextAttackRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVar(self, "bm_preperation");
+	return SCRIPT_CONTINUE;
+}
+
+int damageDealtModAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, "damageDealtMod.value", value);
+	utils.setScriptVar(self, "damageDealtMod.scale", getScale(self));
+	float enragedScale = (float)(getScale(self) * 1.3);
+	setScale(self, enragedScale);
+	return SCRIPT_CONTINUE;
+}
+
+int damageDealtModRemoveBuffHandler(obj_id self, string effectName, string subType, float druation, float value, string buffName, obj_id caster)
+{
+	float scale = utils.getFloatScriptVar(self, "damageDealtMod.scale");
+	if (scale > 0)
+		setScale(self, scale);
+
+	utils.removeScriptVarTree(self, "damageDealtMod");
+	return SCRIPT_CONTINUE;
+}
+
+int weaponSpeedModAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id weapon = getCurrentWeapon(self);
+	float currentAttackSpeed = getWeaponAttackSpeed(weapon);
+	utils.setScriptVar(self, "recordedAttackSpeed", ""+weapon+"-"+currentAttackSpeed);
+	float newAttackSpeed = currentAttackSpeed - (currentAttackSpeed * value);
+
+	if (isIdValid(weapon))
+	{
+		setWeaponAttackSpeed(weapon, newAttackSpeed);
+		weapons.setWeaponData(weapon);
+		utils.setScriptVar(weapon, "isCreatureWeapon", 1);
+	}
+	else
+		utils.removeScriptVar(self, "recordedAttackSpeed");
+
+	return SCRIPT_CONTINUE;
+}
+
+int weaponSpeedModRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	if (!utils.hasScriptVar(self, "recordedAttackSpeed"))
+		return SCRIPT_CONTINUE;
+
+	string weaponRecord = utils.getStringScriptVar(self, "recordedAttackSpeed");
+	string[] parse = split(weaponRecord, '-');
+	if (parse.length < 2)
+		return SCRIPT_CONTINUE;
+
+	obj_id weapon = utils.stringToObjId(parse[0]);
+	float weaponSpeed = utils.stringToFloat(parse[1]);
+
+	if (isIdValid(weapon))
+	{
+		setWeaponAttackSpeed(weapon, weaponSpeed);
+		weapons.setWeaponData(weapon);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// The commandHandler should check for the presence of the buff before allowing the command to fire for added safety.
+int commandGrantAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	if (subType == null || subType == "" )
+		return SCRIPT_CONTINUE;
+
+	if(!hasCommand(self, subType))
+		grantCommand(self, subType);
+
+	return SCRIPT_CONTINUE;
+}
+
+int commandGrantRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	if (subType == null || subType == "" )
+		return SCRIPT_CONTINUE;
+
+	if(hasCommand(self, subType))
+		revokeCommand(self, subType);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+///////////////////
+//  Group Buffs
+///////////////////
+
+trigger OnGroupMembersChanged(obj_id gid, obj_id[] groupMembers, obj_id[] addedMembers, obj_id[] removedMembers)
+{
+	int[] buffList = buff.getOwnedGroupBuffs(self);
+
+	if (buffList == null)
+		return SCRIPT_CONTINUE;
+
+	if (buffList.length < 1)
+		return SCRIPT_CONTINUE;
+
+	dictionary data = new dictionary();
+	data.put("owner", self);
+	data.put("buffList", buffList);
+	data.put("durList", buff.getGroupBuffDuration(self, buffList));
+	data.put("strList", buff.getGroupBuffStrength(self, buffList));
+
+	if (addedMembers != null && addedMembers.length > 0)
+	{
+		data.put("isAdding", true);
+
+		for (int i = 0; i < addedMembers.length; i++)
+		{
+			if (addedMembers[i] == self)
+			{
+				// I'm new to the group, give my buffs to all group members
+				for (int j = 0; j < groupMembers.length; j++)
+				{
+					if (groupMembers[j] == self)
+						continue;
+
+					messageTo(groupMembers[j], "setGroupBuffs", data, 0f, false);
+
+					// Add trigger volume event source
+					addTriggerVolumeEventSource("group_buff_breach", groupMembers[j]);
+				}
+				continue;
+			}
+
+			// Echo my buffs to the adding group member
+			messageTo(addedMembers[i], "setGroupBuffs", data, 0f, false);
+
+			// Add trigger volume event source
+			addTriggerVolumeEventSource("group_buff_breach", addedMembers[i]);
+		}
+	}
+
+	if (removedMembers != null && removedMembers.length > 0)
+	{
+		data.put("isAdding", false);
+
+		for (int i = 0; i < removedMembers.length; i++)
+		{
+			if (removedMembers[i] == self)
+			{
+				// I'm leaving the group, remove my buffs from all group members
+				for (int j = 0; j < groupMembers.length; j++)
+				{
+					if (groupMembers[j] == self)
+						continue;
+
+					messageTo(groupMembers[j], "setGroupBuffs", data, 0f, false);
+
+					// Remove trigger volume event source
+					removeTriggerVolumeEventSource("group_buff_breach", groupMembers[j]);
+				}
+				continue;
+			}
+
+			// Strip my buffs from the removing group member
+			messageTo(removedMembers[i], "setGroupBuffs", data, 0f, false);
+
+			// Remove trigger volume event source
+			removeTriggerVolumeEventSource("group_buff_breach", removedMembers[i]);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGroupDisbanded(obj_id group)
+{
+	int[] buffList = buff.getGroupBuffEffects(self);
+	if (buffList != null && buffList.length > 0)
+		buff.removeGroupBuffEffect(self, buffList);
+
+	return SCRIPT_CONTINUE;
+}
+trigger OnRemovedFromGroup(obj_id group)
+{
+	int[] buffList = buff.getGroupBuffEffects(self);
+	if (buffList != null && buffList.length > 0)
+		buff.removeGroupBuffEffect(self, buffList);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler setGroupBuffs()
+{
+	obj_id owner = params.getObjId("owner");
+	int[] buffList = params.getIntArray("buffList");
+	float[] durList = params.getFloatArray("durList");
+	float[] strList = params.getFloatArray("strList");
+	boolean isAdding = params.getBoolean("isAdding");
+
+	if (isAdding)
+	{
+		// New buffs inc, start em up.
+		if (owner != self)
+		{
+			// Only apply a buff to members who are close enough
+			float dist = getDistance(self, owner);
+			if (dist > buff.GROUP_BUFF_DISTANCE)
+				return SCRIPT_CONTINUE;
+
+			// Don't apply buffs to players we are not flagged to help
+			if (!pvpCanHelp(owner, self))
+			{
+				//And tell them why the buff didn't work.
+				prose_package pp = new prose_package();
+				pp.stringId = new string_id("spam", "group_buff_fail_pvp");
+				pp.target.set(self);
+				sendSystemMessageProse(owner, pp);
+
+				return SCRIPT_CONTINUE;
+			}
+
+			if (buffList != null && buffList.length > 0)
+			{
+				buff.addGroupBuffEffect(self, owner, buffList, strList, durList);
+			}
+		}
+	}
+	else
+	{
+		// Buffs dropping, clear em out.
+		if (owner != self)
+		{
+			if (buffList != null && buffList.length > 0)
+			{
+				buff.removeGroupBuffEffect(self, buffList);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int groupAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	int[] buffList = new int[1];
+	buffList[0] = getStringCrc(effectName.toLowerCase());
+
+	// Allow AI to buff eachother.
+	if (isMob(self) && !isPlayer(self) && isIdValid(caster) && self == caster)
+	{
+		obj_id[] buffAi = getCreaturesInRange(getLocation(self), 45.0f);
+
+		if (buffAi != null && buffAi.length > 0)
+		{
+			for (int i=0;i<buffAi.length;i++)
+			{
+				if (!isMob(buffAi[i]) && !isPlayer(buffAi[i]) || isDead(buffAi[i]))
+					continue;
+
+				if (factions.shareSocialGroup(self, buffAi[i]) || factions.isInFriendlyFaction(self, buffAi[i]))
+				{
+					buff.applyBuff(buffAi[i], self, effectName, duration, value);
+				}
+			}
+		}
+		return SCRIPT_CONTINUE;
+	}
+	// Check to see if we own the buff that was just applied
+	string var = "groupBuff."+buffList[0];
+	if (!utils.hasScriptVar(self, var))
+		return SCRIPT_CONTINUE;
+
+	obj_id owner = utils.getObjIdScriptVar(self, var);
+	// If we're a Beast Master, pass the buff to our beast too.
+	if(beast_lib.isBeastMaster(self) )
+	{
+		obj_id beast = beast_lib.getBeastOnPlayer(self);
+
+		if(isIdValid(beast) && !isIdNull(beast) && !isDead(beast))
+		{
+			buff.applyBuff(beast, owner, effectName, duration, value);
+		}
+	}
+
+	if (owner != self)
+		return SCRIPT_CONTINUE;
+/******************** Insert aura stuff ********************/
+	string group2 = buff.getStringGroupTwo(effectName);
+
+	if(group2 != null && !group2.equals("") && group2.indexOf( "aura" ) > -1)
+	{
+		group2 = group2.substring(0, (group2.lastIndexOf("_")));
+
+
+		//find all the buffs they have of this group
+		int[] group2Buffs = buff.getGroup2BuffsOnTarget(self, group2);
+
+
+		//initialize aura count
+		int auraCount = 0;
+
+		//find out how many auras we have going
+		for(int i = 0; i < group2Buffs.length; ++i)
+		{
+			float tempDuration = buff.getBuffTimeRemaining(self, group2Buffs[i]);
+			//Check to see if it is already a toggled buff
+			if(tempDuration == -1)
+				++auraCount;
+		}
+
+		//find out how many aura buffs the caster can maintain
+		int aurasAbleToMaintain = getEnhancedSkillStatisticModifierUncapped(self, "expertise_aura_maintain");
+		if((aurasAbleToMaintain - auraCount) >= 1)
+		{
+			buff.applyBuff(self, owner, effectName, -1);
+		}
+	}
+
+/******************** End aura stuff ********************/
+	// Create the trigger volume to add/remove this buff from group members
+	boolean newTriggerVolume = !hasTriggerVolume(self, "group_buff_breach");
+
+	if (newTriggerVolume)
+		createTriggerVolume("group_buff_breach", buff.GROUP_BUFF_DISTANCE, false);
+
+	obj_id gid = getGroupObject(self);
+	// No group to send effects to
+	if (!isIdValid(gid))
+		return SCRIPT_CONTINUE;
+
+	// This point out should only apply to the group buff owner
+	dictionary data = new dictionary();
+	data.put("owner", self);
+	data.put("buffList", buffList);
+	data.put("durList", buff.getGroupBuffDuration(self, buffList));
+	data.put("strList", buff.getGroupBuffStrength(self, buffList));
+	data.put("isAdding", true);
+
+	obj_id[] groupMembers = getGroupMemberIds(gid);
+	for (int i = 0; i < groupMembers.length; i++)
+	{
+		if (groupMembers[i] == self)
+			continue;
+
+		// Add the group member as an event source to the trigger volume
+		if (newTriggerVolume)
+			addTriggerVolumeEventSource("group_buff_breach", groupMembers[i]);
+
+		// Send a message to the group member to add the buff
+		messageTo(groupMembers[i], "setGroupBuffs", data, 0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int groupRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int[] ownedBuffs = buff.getOwnedGroupBuffs(self);
+	boolean lastGroupBuff = (ownedBuffs == null || ownedBuffs.length == 0);
+
+	obj_id gid = getGroupObject(self);
+
+	// No group to send effects to
+	if (!isIdValid(gid))
+	{
+		removeTriggerVolume("group_buff_breach");
+		return SCRIPT_CONTINUE;
+	}
+
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+
+	int[] buffList = new int[1];
+	buffList[0] = getStringCrc(effectName.toLowerCase());
+
+	// Check to see if we own the buff that was just applied
+	string var = "groupBuff."+buffList[0];
+	if (!utils.hasScriptVar(self, var))
+		return SCRIPT_CONTINUE;
+
+	obj_id owner = utils.getObjIdScriptVar(self, var);
+	utils.removeScriptVar(self, var);
+	if (owner != self)
+		return SCRIPT_CONTINUE;
+
+	// This point out should only apply to the group buff owner
+	dictionary data = new dictionary();
+	data.put("owner", self);
+	data.put("buffList", buffList);
+	data.put("isAdding", false);
+
+	obj_id[] groupMembers = getGroupMemberIds(gid);
+	for (int i = 0; i < groupMembers.length; i++)
+	{
+		if (groupMembers[i] == self)
+			continue;
+
+		// Remove the group member as an event source to the trigger volume
+		if (lastGroupBuff)
+			removeTriggerVolumeEventSource("group_buff_breach", groupMembers[i]);
+
+		// Send a message to the group member to remove the buff
+		messageTo(groupMembers[i], "setGroupBuffs", data, 0f, false);
+	}
+
+	// Clean up the trigger volume from the buff owner
+	if (lastGroupBuff)
+		removeTriggerVolume("group_buff_breach");
+
+	stopClientEffectObjByLabel(self, effectName);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	// Only handle trigger volumes for group buffs
+	if (!volumeName.equals("group_buff_breach"))
+		return SCRIPT_CONTINUE;
+
+	if (!group.inSameGroup(self, breacher))
+	{
+		removeTriggerVolumeEventSource("group_buff_breach", breacher);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (!pvpCanHelp(self, breacher))
+		return SCRIPT_CONTINUE;
+
+	int[] buffList = buff.getOwnedGroupBuffs(self);
+
+	float[] durList = buff.getGroupBuffDuration(self, buffList);
+	float[] strList = buff.getGroupBuffStrength(self, buffList);
+	buff.addGroupBuffEffect(breacher, self, buffList, strList, durList);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited( string volumeName, obj_id breacher )
+{
+	// Only handle trigger volumes for group buffs
+	if (!volumeName.equals("group_buff_breach"))
+		return SCRIPT_CONTINUE;
+
+	int[] buffList = buff.getOwnedGroupBuffs(self);
+
+	buff.removeGroupBuffEffect(breacher, buffList);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogout()
+{
+	if(hasTriggerVolume(self, "group_buff_breach"))
+	{
+		obj_id groupId = getGroupObject(self);
+
+		if(!isIdValid(groupId))
+			return SCRIPT_CONTINUE;
+
+		obj_id[] groupMembers = getGroupMemberIds(groupId);
+
+		if(groupMembers == null || groupMembers.length <= 0)
+			return SCRIPT_CONTINUE;
+
+		int[] buffList = buff.getOwnedGroupBuffs(self);
+
+		for(int i = 0; i < groupMembers.length; ++i)
+		{
+			buff.removeGroupBuffEffect(groupMembers[i], buffList);
+		}
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+
+void invisBuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stealth.invisBuffRemoved(self, effectName);
+}
+
+void invisBuffAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int costumeBuff = buff.getBuffOnTargetFromGroup(self, "shapechange");
+	if( costumeBuff != 0 )
+	{
+		buff.removeBuff(self, buffName);
+		sendSystemMessage(self, new string_id("spam", "costume_not_while_disguised"));
+		return;
+	}
+
+	effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	stealth.invisBuffAdded(self, effectName);
+	stopClientEffectObjByLabel(self, effectName);
+}
+
+void noBreakInvisRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string invis = stealth.getInvisBuff(self);
+
+	if(invis == null || invis.equals(""))
+		stealth.invisBuffRemoved(self, "");
+}
+
+messageHandler messageDetrimentalRemoved()
+{
+	obj_id me = params.getObjId("self");
+	string detriment = params.getString("detriment");
+	string_id msgId = params.getStringId("msgId");
+
+	messageDetrimentalRemoved(me, detriment, msgId);
+	return SCRIPT_CONTINUE;
+}
+
+void messageDetrimentalRemoved(obj_id self, string detriment, string_id msgId)
+{
+	prose_package ppRemoved = new prose_package();
+	prose.setTT(ppRemoved, detriment);
+	prose.setStringId(ppRemoved, msgId);
+
+	sendSystemMessageProse(self, ppRemoved);
+}
+
+trigger OnChangedPosture(int before, int after)
+{
+	if(buff.hasBuff(self, "bh_take_cover") )
+	{
+		buff.removeBuff(self, "bh_take_cover");
+		sendSystemMessage(self, new string_id("spam", "lost_cover") );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean removeAllModifiersOfType(obj_id target, int type)
+{
+	string[] mods = movement.getAllModifiers(target);
+
+	if(mods == null || mods.length == 0)
+		return false;
+
+	boolean removed = false;
+	for(int i = 0; i < mods.length; i++)
+	{
+		if(movement.getType(mods[i])==type)
+		{
+			if(utils.hasScriptVar(target, movement.MOVEMENT_OBJVAR + "." + mods[i] + ".time") && buff.canBeDispelled(mods[i]) )
+			{
+				utils.removeScriptVarTree(target, movement.MOVEMENT_OBJVAR + "." + mods[i]);
+				combat.removeCombatMovementModifierEffect(target, mods[i]);
+				removed = true;
+			}
+		}
+	}
+
+	if (removed)
+	{
+		movement.refresh(target);
+		return removed;
+	}
+	else
+		return false;
+}
+
+void channelHealAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int myAttribute = getAttributeType(subtype);
+	boolean worked = healing.useChannelHealItem(self, self, myAttribute);
+	int pid = sui.smartCountdownTimerSUI(self, self, "channel_heal", null, 0, 12, "", 0, 0);
+	utils.setScriptVar(self, "channelHeal.suiPid", pid);
+}
+
+void channelHealRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int pid = utils.getIntScriptVar(self, "channelHeal.suiPid");
+	forceCloseSUIPage(pid);
+	utils.removeScriptVarTree(self,"channelHeal");
+}
+
+int getAttributeType(string subtype)
+{
+	int attribute = 0;
+	if(subtype.equals("health"))
+		attribute = HEALTH;
+	else if(subtype.equals("constitution"))
+		attribute = CONSTITUTION;
+	else if(subtype.equals("action"))
+		attribute = ACTION;
+	else if(subtype.equals("stamina"))
+		attribute = STAMINA;
+	else if(subtype.equals("mind"))
+		attribute = MIND;
+	else if(subtype.equals("willpower"))
+		attribute = WILLPOWER;
+
+	return attribute;
+}
+
+
+void bmBeastFamilyAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	if(!isPlayer(self))
+	{
+		obj_id master = getMaster(self);
+
+		if(!isPlayer(master))
+			return;
+
+		if(!buff.hasBuff(master, buffName))
+			buff.applyBuff(master, self, buffName);
+
+		return;
+	}
+
+	obj_id player = self;
+
+	//get your beasts id
+	obj_id beast = beast_lib.getBeastOnPlayer(player);
+
+	if(!isIdValid(beast) || !exists(beast))
+	{
+		buff.removeBuff(player, buffName);
+		return;
+	}
+
+	//verify that your beast can use this command
+	obj_id bcd = beast_lib.getBeastBCD(beast);
+	string beastName = beast_lib.getBeastType(bcd);
+	dictionary beastDict = utils.dataTableGetRow(beast_lib.BEASTS_TABLE, beastName);
+	string specialAttackFamily = beastDict.getString("special_attack_family");
+
+	if(specialAttackFamily != subtype && subtype != "all")
+	{
+
+		buff.removeBuff(player, buffName);
+		return;
+	}
+
+	//apply the buff to both beast and player
+	buff.applyBuff(beast, self, buffName);
+	buff.applyBuff(player, self, buffName);
+	return;
+}
+
+void bmBeastFamilyRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+
+	if(!isPlayer(self))
+	{
+		buff.removeBuff(self, buffName);
+
+		obj_id master = getMaster(self);
+
+		if(!isPlayer(master))
+			return;
+
+		if(buff.hasBuff(master, buffName))
+			buff.removeBuff(master, buffName);
+
+		return;
+	}
+
+	obj_id player = self;
+
+	//get your beasts id
+	obj_id beast = beast_lib.getBeastOnPlayer(player);
+
+	if(!isIdValid(beast) || !exists(beast))
+	{
+
+		buff.removeBuff(player, buffName);
+		return;
+	}
+
+	//remove buff from player
+	buff.removeBuff(player, buffName);
+	//remove buff from beast
+	buff.removeBuff(beast, buffName);
+	return;
+}
+
+
+string getInitialBuffName(string effectName)
+{
+
+	string[] spiltEffectName = split(effectName, '_');
+	int loopTimes = spiltEffectName.length - 1;
+	string initialBuffName = spiltEffectName[0];
+	for(int i = 1; i < loopTimes; ++i)
+	{
+		initialBuffName += "_" + spiltEffectName[i];
+	}
+
+	return initialBuffName;
+}
+
+
+void bmBeastXpBuffAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//do nothing for now.
+	return;
+}
+
+void bmBeastXpBuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//need to remove the scriptVar
+	utils.removeScriptVarTree(self, "beastBuff");
+	return;
+}
+
+int combatStunAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+//	utils.setScriptVar(self, combat.TEMP_COMBAT_BLOCK, 1);
+	obj_id crystal = create.object("object/building/heroic/axkva_empty_crystal.iff", getLocation(self));
+	setObjVar(crystal, "player", self);
+	obj_id axkva = utils.getObjIdScriptVar(self, "axkva_min");
+	trial.setParent(axkva, crystal, false);
+	setLocation(self, getLocation(crystal));
+	attachScript(crystal, "theme_park.heroic.axkva_min.crystal_prison");
+
+	return SCRIPT_CONTINUE;
+}
+
+int combatStunRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVar(self, "axkva_crystal");
+//	utils.removeScriptVar(self, combat.TEMP_COMBAT_BLOCK);
+	return SCRIPT_CONTINUE;
+}
+
+int krixResonanceAddBuffHandler(obj_id self, string effectName, string subType, float duartion, float value, string buffName, obj_id caster)
+{
+
+	playClientEffectObj(self, "appearance/pt_contagion_debuff.prt", self, "", null, "resonance");
+
+	return SCRIPT_CONTINUE;
+}
+
+int krixResonanceRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	stopClientEffectObjByLabel(self, "resonance");
+
+	obj_id krix = getFirstObjectWithScript(getLocation(self), 250.0f, "theme_park.heroic.star_destroyer.krix");
+
+	if (!isIdValid(krix) || ai_lib.isDead(krix))
+		return SCRIPT_CONTINUE;
+
+	dictionary dict = new dictionary();
+	dict.put("player", self);
+	messageTo(krix, "contagion_bomb", dict, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler delayedAddBuff()
+{
+	string buffName = params.getString("buffName");
+	if (buffName == null || buffName == "")
+		return SCRIPT_CONTINUE;
+
+	buff.applyBuff(self, self, buffName);
+	return SCRIPT_CONTINUE;
+}
+
+int lureshContagionAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int lureshContagionRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id[] monkey = trial.getObjectsInDungeonWithObjVar(trial.getTop(self), "skreeg_id");
+
+	if (monkey == null || monkey.length == 0)
+		return SCRIPT_CONTINUE;
+
+	obj_id luresh = monkey[0];
+
+	if (!isIdValid(luresh) || !exists(luresh) || isDead(luresh))
+		return SCRIPT_CONTINUE;
+
+	obj_id[] players = trial.getValidTargetsInCell(trial.getTop(self), "r3");
+
+	if (players == null || players.length == 0)
+		return SCRIPT_CONTINUE;
+
+	obj_id topAction = null;
+	int currentAction = 0;
+
+	for (int i=0;i<players.length;i++)
+	{
+		int thisPlayer = getAction(players[i]);
+
+		if (thisPlayer > currentAction)
+			topAction = players[i];
+	}
+
+	if (!isIdValid(topAction))
+	{
+		topAction = self;
+	}
+
+	queueCommand(luresh, ##"minder_luresh_drain", topAction, "", COMMAND_PRIORITY_DEFAULT);
+
+	return SCRIPT_CONTINUE;
+}
+
+int razorBurstHandlerAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	int buffCrc = buff.getBuffOnTargetFromGroup(self, "rb_vulnerability");
+
+	if (buffCrc == 0)
+	{
+		buff.applyBuff(self, self, "razor_burst_vulnerability_1");
+		return SCRIPT_CONTINUE;
+	}
+
+	string myBuffName = buff.getBuffNameFromCrc(buffCrc);
+
+	string[] parse = split(myBuffName, '_');
+
+	int level = utils.stringToInt(parse[parse.length -1]);
+
+	level = level > 9 ? 10 : level + 1;
+
+	buff.applyBuff(self, self, "razor_burst_vulnerability_"+level);
+	return SCRIPT_CONTINUE;
+}
+
+
+int razorBurstHandlerRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int caretakerHandlerAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	int buffCrc = buff.getBuffOnTargetFromGroup(self, "ct_debuff");
+
+	if (buffCrc == 0)
+	{
+		buff.applyBuff(self, self, "caretaker_debuff_1");
+		return SCRIPT_CONTINUE;
+	}
+
+	string myBuffName = buff.getBuffNameFromCrc(buffCrc);
+
+	string[] parse = split(myBuffName, '_');
+	int level = utils.stringToInt(parse[parse.length -1]);
+
+	level = level > 9 ? 10 : level + 1;
+
+	buff.applyBuff(self, self, "caretaker_debuff_"+level);
+	return SCRIPT_CONTINUE;
+}
+
+int caretakerHandlerRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int closedFistBurnHandlerAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	playClientEffectObj(self, "appearance/pt_state_onfire.prt", self, "", null, "closed_fist_burn");
+	messageTo(self, "handle_closed_fist_burn", null, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handle_closed_fist_burn()
+{
+	if (!buff.hasBuff(self, "closed_fist_burn"))
+		return SCRIPT_CONTINUE;
+
+	obj_id closed_fist = getFirstObjectWithScript(getLocation(self), 250.0f, "theme_park.heroic.exar_kun.closed_fist");
+
+	if (!isIdValid(closed_fist) || !exists(closed_fist) || isDead(closed_fist))
+	{
+		buff.removeBuff(self, "closed_fist_burn");
+		return SCRIPT_CONTINUE;
+	}
+
+	location tarLoc = getLocation(self);
+	string targetData = ""+tarLoc.x+" "+tarLoc.y+" "+tarLoc.z+ " "+tarLoc.cell+ " "+tarLoc.x+ " "+tarLoc.y+ " "+tarLoc.z;
+	queueCommand(closed_fist, ##"closed_fist_burn_damage", self, targetData, COMMAND_PRIORITY_DEFAULT);
+	messageTo(self, "handle_closed_fist_burn", null, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+int closedFistBurnHandlerRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	stopClientEffectObjByLabel(self, "closed_fist_burn");
+	return SCRIPT_CONTINUE;
+}
+
+int closedFistBurnDebuffAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	int buffCrc = buff.getBuffOnTargetFromGroup(self, "cf_burn_debuff");
+
+	if (buffCrc == 0)
+	{
+		buff.applyBuff(self, self, "closed_fist_burn_debuff_1");
+		return SCRIPT_CONTINUE;
+	}
+
+	string myBuffName = buff.getBuffNameFromCrc(buffCrc);
+
+	string[] parse = split(myBuffName, '_');
+	int level = utils.stringToInt(parse[parse.length -1]);
+
+	level = level > 2 ? 3 : level + 1;
+
+	buff.applyBuff(self, self, "closed_fist_burn_debuff_"+level);
+	return SCRIPT_CONTINUE;
+}
+
+int closedFistBurnDebuffRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int kunChaosHandlerAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	int orderDebuffCrc = buff.getBuffOnTargetFromGroup(self, "kun_order_debuff");
+	int chaosDebuffCrc = buff.getBuffOnTargetFromGroup(self, "kun_chaos_debuff");
+
+	if (orderDebuffCrc == 0)
+	{
+		if (chaosDebuffCrc == 0)
+		{
+			buff.applyBuff(self, self, "kun_chaos_debuff_1");
+			return SCRIPT_CONTINUE;
+		}
+
+		string chaosBuffName = buff.getBuffNameFromCrc(chaosDebuffCrc);
+
+		string[] parse = split(chaosBuffName, '_');
+		int level = utils.stringToInt(parse[parse.length -1]);
+
+		level = level > 9 ? 10 : level + 1;
+
+		buff.applyBuff(self, self, "kun_chaos_debuff_"+level);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		string orderBuffName = buff.getBuffNameFromCrc(orderDebuffCrc);
+
+		string[] parse = split(orderBuffName, '_');
+		int level = utils.stringToInt(parse[parse.length -1]);
+
+		if (level == 1)
+		{
+			buff.removeBuff(self, "kun_order_debuff_1");
+			buff.applyBuff(self, self, "kun_chaos_debuff_1");
+			return SCRIPT_CONTINUE;
+		}
+
+		level = level - 1;
+
+		buff.applyBuff(self, self, "kun_order_debuff_"+level);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int kunChaosHandlerRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int kunOrderHandlerAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	int orderDebuffCrc = buff.getBuffOnTargetFromGroup(self, "kun_order_debuff");
+	int chaosDebuffCrc = buff.getBuffOnTargetFromGroup(self, "kun_chaos_debuff");
+
+	if (chaosDebuffCrc == 0)
+	{
+		if (orderDebuffCrc == 0)
+		{
+			buff.applyBuff(self, self, "kun_order_debuff_1");
+			return SCRIPT_CONTINUE;
+		}
+
+		string orderBuffName = buff.getBuffNameFromCrc(orderDebuffCrc);
+
+		string[] parse = split(orderBuffName, '_');
+		int level = utils.stringToInt(parse[parse.length -1]);
+
+		level = level > 9 ? 10 : level + 1;
+
+		buff.applyBuff(self, self, "kun_order_debuff_"+level);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		string chaosBuffName = buff.getBuffNameFromCrc(chaosDebuffCrc);
+
+		string[] parse = split(chaosBuffName, '_');
+		int level = utils.stringToInt(parse[parse.length -1]);
+
+		if (level == 1)
+		{
+			buff.removeBuff(self, "kun_chaos_debuff_1");
+			buff.applyBuff(self, self, "kun_order_debuff_1");
+			return SCRIPT_CONTINUE;
+		}
+
+		level = level - 1;
+
+		buff.applyBuff(self, self, "kun_chaos_debuff_"+level);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int kunOrderHandlerRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int setSpecialTypeAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	string special_type_name = subType.substring(15, subType.length());
+	setObjVar(self, "specialNicheType", special_type_name);
+	return SCRIPT_CONTINUE;
+}
+
+int setSpecialTypeRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	if (hasObjVar(self, "specialNicheType"))
+		removeObjVar(self, "specialNicheType");
+
+	return SCRIPT_CONTINUE;
+}
+
+int kunOpenSparkAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	playClientEffectObj(self, "appearance/pt_electric_flare_green.prt", self, "head", null, "kun_spark");
+	trial.bumpSession(self, "spark_handler");
+	messageTo(self, "openSparkHandler", trial.getSessionDict(self, "spark_handler"), 0.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler openSparkHandler()
+{
+	if (!trial.verifySession(self, params, "spark_handler"))
+		return SCRIPT_CONTINUE;
+
+	obj_id openHand = getFirstObjectWithScript(getLocation(self), 100.0f, "theme_park.heroic.exar_kun.open_hand");
+
+
+	if (!isIdValid(openHand) || !exists(openHand) || isDead(openHand))
+	{
+		buff.removeBuff(self, "kun_open_spark");
+		return SCRIPT_CONTINUE;
+	}
+
+	location selfLoc = getLocation(self);
+	location tesla = selfLoc;
+	tesla.x = -11.7f;
+	tesla.y = 11.0f;
+	tesla.z = -64.6f;
+
+	float travelDistance = getDistance(selfLoc, tesla);
+
+	float speed = travelDistance / 2.0f;
+
+	createClientProjectile(self, "object/weapon/ranged/pistol/shared_pistol_green_bolt.iff", tesla, selfLoc, speed, 2.0f, false, 255, 0, 0, 255);
+
+	string targetData = ""+selfLoc.x+" "+selfLoc.y+" "+selfLoc.z+" "+selfLoc.cell+" "+selfLoc.x+" "+selfLoc.y+" "+selfLoc.z;
+	queueCommand(openHand, ##"kun_open_coil", self, targetData, COMMAND_PRIORITY_DEFAULT);
+	messageTo(self, "openSparkHandler", trial.getSessionDict(self, "spark_handler"), 4.0f, false);
+	return SCRIPT_CONTINUE;
+
+}
+
+int kunOpenSparkRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	stopClientEffectObjByLabel(self, "kun_spark");
+	return SCRIPT_CONTINUE;
+}
+
+
+
+
+int callPickupCraftAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//all the functionality for this is in the player_travel.script and terminal_travel_instant.script.
+	return SCRIPT_CONTINUE;
+}
+
+int callPickupCraftRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	obj_id pickupCraft = utils.getObjIdScriptVar(self,"instantTravelShip.pickupCraft");
+	if(isIdValid(pickupCraft))
+		messageTo(pickupCraft, "cleanupShip", null, 0, false);
+
+	utils.removeScriptVarTree(self,"instantTravelShip");
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+int fs_choke_handlerAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int buffCrc = getStringCrc(subtype.toLowerCase());
+	obj_id owner = utils.getObjIdScriptVar(self, "buffOwner."+buffCrc);
+
+	//buff.applyBuff(self, owner, "fs_choke_snare");
+
+	int imp_choke = getEnhancedSkillStatisticModifierUncapped(owner, "expertise_fs_imp_choke");
+	imp_choke = imp_choke > 2 ? 2 : imp_choke;
+
+	if (imp_choke > 0)
+	{
+		buff.applyBuff(self, self, "fs_imp_choke_"+imp_choke);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int fs_choke_handlerRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+// ----- Jedi Master Cloak Collection NPCs
+int jediStatueLightDebuffAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string buffToApply = "jedi_statue_light_debuff_light";
+	if ( buff.isInFocus(self) )
+		buffToApply = "jedi_statue_light_debuff_dark";
+
+	buff.applyBuff(self, self, buffToApply);
+	return SCRIPT_CONTINUE;
+}
+
+int jediStatueLightDebuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int jediStatueDarkDebuffAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string buffToApply = "jedi_statue_dark_debuff_light";
+	if ( buff.isInFocus(self) )
+		buffToApply = "jedi_statue_dark_debuff_dark";
+
+	buff.applyBuff(self, self, buffToApply);
+	return SCRIPT_CONTINUE;
+}
+
+int jediStatueDarkDebuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+// -----------------------------------------
+
+int fs_flurry_procAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	buff.applyBuff(self, self, "attack_override_fs_dm_1|fs_flurry_1");
+	buff.applyBuff(self, self, "attack_override_fs_dm_2|fs_flurry_2");
+	buff.applyBuff(self, self, "attack_override_fs_dm_3|fs_flurry_3");
+	buff.applyBuff(self, self, "attack_override_fs_dm_4|fs_flurry_4");
+	buff.applyBuff(self, self, "attack_override_fs_dm_5|fs_flurry_5");
+	buff.applyBuff(self, self, "attack_override_fs_dm_6|fs_flurry_6");
+	buff.applyBuff(self, self, "attack_override_fs_dm_7|fs_flurry_7");
+	return SCRIPT_CONTINUE;
+}
+
+int fs_flurry_procRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	string[] buffList =
+			{
+				"attack_override_fs_dm_1|fs_flurry_1",
+				"attack_override_fs_dm_2|fs_flurry_2",
+				"attack_override_fs_dm_3|fs_flurry_3",
+				"attack_override_fs_dm_4|fs_flurry_4",
+				"attack_override_fs_dm_5|fs_flurry_5",
+				"attack_override_fs_dm_6|fs_flurry_6",
+				"attack_override_fs_dm_7|fs_flurry_7"
+			};
+
+	buff.removeBuffs(self, buffList);
+
+	return SCRIPT_CONTINUE;
+}
+
+int forceThrowAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int buffCrc = getStringCrc(subtype.toLowerCase());
+	obj_id owner = utils.getObjIdScriptVar(self, "buffOwner."+buffCrc);
+
+	//make sure they are in stance
+	if(!buff.isInStance(owner))
+		return SCRIPT_CONTINUE;
+
+	int stanceSaberShackle = (int)getSkillStatisticModifier(owner, "expertise_buff_chance_line_fs_force_throw");
+	stanceSaberShackle = stanceSaberShackle > 100 ? 100 : stanceSaberShackle;
+
+	if(stanceSaberShackle <= 0)
+		return SCRIPT_CONTINUE;
+
+	int rootChance = (stanceSaberShackle / 25) * 4; // 2 to 8 percent chance AFTER combat rolls
+
+	// Try to root
+	if(rand(0, 99) < rootChance)
+	{
+		buff.applyBuff(self, owner,"fs_force_throw_root");
+		buff.applyBuff(self, owner, getStringCrc("fs_force_throw_" + (stanceSaberShackle / 25)), duration); // fs_force_throw_1, 2, 3 and 4
+		return SCRIPT_CONTINUE;
+	}
+
+	// If no root, then try to snare.
+	if(rand(0, 99) < stanceSaberShackle)
+	{
+		buff.applyBuff(self, owner, getStringCrc("fs_force_throw_" + (stanceSaberShackle / 25)), duration); // fs_force_throw_1, 2, 3 and 4
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int forceThrowRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int aggroChannelAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(!exists(caster) || !isIdValid(caster))
+	{
+		//something is wrong
+		buff.removeBuff(self, buffName);
+		return SCRIPT_CONTINUE;
+	}
+	prose_package pp = new prose_package();
+	string casterName = "";
+	if(isPlayer(caster))
+		casterName = getFirstName(caster);
+	else
+		casterName = "@" + getName(caster);
+
+	prose.setTT(pp, casterName);
+
+	if(subtype.equals("target"))
+	{
+		//we want to link our channel to the caster
+		buff.applyBuff(caster, self, "aggroChannelself");
+		prose.setStringId(pp, new string_id("squad_leader", "aggro_channel_applied_target"));
+		sendSystemMessageProse(self, pp);
+
+	}
+	if(subtype.equals("self"))
+	{
+		prose.setStringId(pp, new string_id("squad_leader", "aggro_channel_applied_self"));
+		sendSystemMessageProse(self, pp);
+		utils.setScriptVar(self, buff.AGGRO_TRANSFER_TO, caster);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int aggroChannelRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	if(!exists(caster) || !isIdValid(caster))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(subtype.equals("target"))
+	{
+		//we want to link our channel to the caster
+		buff.removeBuff(caster, "aggroChannelself");
+	}
+	if(subtype.equals("self"))
+	{
+		obj_id buffed = utils.getObjIdScriptVar(self, buff.AGGRO_TRANSFER_TO);
+		buff.removeBuff(buffed, "aggroChannelTarget");
+		utils.removeScriptVar(self, buff.AGGRO_TRANSFER_TO);
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int dotAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	long stack = buff.getBuffStackCount(self, buffName) > 1 ? buff.getBuffStackCount(self, buffName) : 1;
+
+	dot.applyBuffDotEffect(self, caster, subtype, buffName + "_" + subtype, stack, HEALTH, 100, (int)value, (int)duration, true, buffName);
+
+	//dot.applyDotEffect(self, doomOwner, "bleeding", "me_doom_bleed", HEALTH, 100, 800, 5, true, null);
+	return SCRIPT_CONTINUE;
+}
+
+int dotRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	dot.removeBuffDotEffect(self, subtype, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+int expertiseDamageDecreaseAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int damageDecrease = (int)getSkillStatisticModifier(self, "expertise_damage_decrease_percentage");
+	if(damageDecrease > 0)
+		skillAddBuffHandler(self, effectName, "damage_decrease_percentage", duration, damageDecrease, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int expertiseDamageDecreaseRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(effectName.lastIndexOf("_") > 0)
+	{
+		effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	}
+
+	stopClientEffectObjByLabel(self, effectName);
+
+	int damageDecrease = (int)getSkillStatisticModifier(self, "expertise_damage_decrease_percentage");
+
+	if(damageDecrease > 0)
+		skillRemoveBuffHandler(self, effectName, "damage_decrease_percentage", duration, damageDecrease, "", null);
+
+	return SCRIPT_CONTINUE;
+}
+
+int onAttackRemoveAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	resizeable string[] removeBuffs = new string[0];
+
+	if (utils.hasScriptVar(self, buff.ON_ATTACK_REMOVE))
+	{
+		removeBuffs = 	utils.getResizeableStringArrayScriptVar(self, buff.ON_ATTACK_REMOVE);
+	}
+
+	if (removeBuffs != null && removeBuffs.length > 0)
+	{
+		removeBuffs.add(buffName);
+	}
+	else if (removeBuffs.indexOf(buffName) < 0)
+	{
+		removeBuffs.add(buffName);
+	}
+
+	utils.setScriptVar(self, buff.ON_ATTACK_REMOVE, removeBuffs);
+
+	return SCRIPT_CONTINUE;
+}
+
+int onAttackRemoveRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	resizeable string[] removeBuffs = new string[0];
+
+	if (utils.hasScriptVar(self, buff.ON_ATTACK_REMOVE))
+	{
+		removeBuffs = 	utils.getResizeableStringArrayScriptVar(self, buff.ON_ATTACK_REMOVE);
+	}
+	else
+		return SCRIPT_CONTINUE;
+
+	utils.removeScriptVar(self, buff.ON_ATTACK_REMOVE);
+
+	if (removeBuffs.indexOf(buffName) > -1)
+		removeBuffs.remove(buffName);
+
+	if (removeBuffs != null || removeBuffs.length > 0)
+	{
+		utils.setScriptVar(self, buff.ON_ATTACK_REMOVE, removeBuffs);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int supression_handlerAddBuffHandler(obj_id self, string effectName, string subytype, float duration, float value, string buffName, obj_id caster)
+{
+	float improvedSpeed = (float)getEnhancedSkillStatisticModifierUncapped(caster, "expertise_supression_speed");
+	int level = Math.round(improvedSpeed / 10.0f);
+	buff.applyBuff(self, caster, "co_supressing_fire_"+level);
+	return SCRIPT_CONTINUE;
+}
+
+int supression_handlerRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int movementSupressingEffectAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	float snareResist = 0.0f;
+	if (isMob(self) && !isPlayer(self))
+	{
+		snareResist = (float)getEnhancedSkillStatisticModifierUncapped(self, "movement_resist_snare");
+	}
+
+	snareResist = 1.0f - (snareResist / 100.0f);
+	snareResist = snareResist < 0.0f ? 0.0f : snareResist;
+	snareResist = snareResist > 1.0f ? 1.0f : snareResist;
+
+	value *= snareResist;
+	// Can't be 90, lolz.
+	value = value > 89.0f ? 89.0f : value;
+	addSlowDownEffect(caster, self, 96.0f, 0.01f, value, duration);
+	return SCRIPT_CONTINUE;
+}
+
+int movementSupressingEffectRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int damageImmuneAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	buff.performBuffDotImmunity(self, "all");
+	addSkillModModifier(self, "damageImmuneDotResistAll", "dot_resist_all", 100, duration, false, true);
+	addSkillModModifier(self, "damageImmuneDamageImmune", "damage_immune", 1, duration, false, true);
+
+	if(sui.hasEventFlag(self, sui.CD_EVENT_DAMAGE_IMMUNE))
+	{
+		sui.cancelCountdownTimer(self, sui.CD_EVENT_DAMAGE_IMMUNE);				
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int damageImmuneRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	removeAttribOrSkillModModifier(self, "damageImmuneDotResistAll");
+	removeAttribOrSkillModModifier(self, "damageImmuneDamageImmune");
+	return SCRIPT_CONTINUE;
+}
+
+int bhFlawlessAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	buff.applyBuff(self, "bh_flawless_proc_chance_1");
+	return SCRIPT_CONTINUE;
+}
+
+int bhFlawlessRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	buff.removeBuff(self, "bh_flawless_proc_chance_1");
+	return SCRIPT_CONTINUE;
+}
+
+// ------Meatlump Theme-park----------------
+int mtpMeatlumpAngryAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	ai_lib.setMood(self, chat.MOOD_ANGRY);
+	chat.setChatMood(self, chat.MOOD_ANGRY);
+
+	attachScript(self, "theme_park.meatlump.hideout.angry_meatlump");
+	return SCRIPT_CONTINUE;
+}
+
+int mtpMeatlumpAngryRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+int mtpMeatlumpHappyAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	ai_lib.setMood(self, chat.MOOD_HAPPY);
+	chat.setChatMood(self, chat.MOOD_HAPPY);
+
+	removeObjVar(self, "angryMeatlump");
+	detachScript(self, "theme_park.meatlump.hideout.angry_meatlump");
+	return SCRIPT_CONTINUE;
+}
+
+int mtpMeatlumpHappyRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+// --------Halloween Event-----------------
+int eventParticleAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string particleName = buff.getParticle(buffName);
+
+	dictionary params = new dictionary();
+	params.put("effectName", effectName);
+	params.put("particleName", particleName);
+	params.put("buffName", buffName);
+	messageTo(self, "eventParticleReload", params, 15.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+//re initializing particle effect so that the player can't outrun the spider swarm for example.
+messageHandler eventParticleReload()
+{
+	string particleName = params.getString("particleName");
+	string buffName = params.getString("buffName");
+	string effectName = params.getString("effectName");
+
+	stopClientEffectObjByLabel(self, effectName);
+
+	if(buff.hasBuff(self, buffName))
+	{
+		playClientEffectObj(self, particleName, self, "");
+		messageTo(self, "eventParticleReload", params, 15.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int eventParticleRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(effectName.lastIndexOf("_") > 0)
+	{
+		effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	}
+
+	stopClientEffectObjByLabel(self, effectName);
+
+	return SCRIPT_CONTINUE;
+}
+
+int costumeAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int row = dataTableSearchColumnForInt((int)value, "INDEX", DATATABLE_COSTUME);
+	if(row < 0)
+		return SCRIPT_CONTINUE;
+
+	string costume = dataTableGetString(DATATABLE_COSTUME, row, "APPEARANCE");
+	if ( getGender(self) == GENDER_FEMALE )
+	{
+		string female_costume = dataTableGetString(DATATABLE_COSTUME, row, "FEMALE_APPEARANCE");
+		if ( female_costume != null && female_costume.length() > 0 && !female_costume.equals("none") )
+		{
+			costume = female_costume;
+		}
+	}
+
+	if(costume == null || costume.length() <= 0)
+		return SCRIPT_CONTINUE;
+		
+	obj_id unequipedWeapon = utils.unequipWeaponHand(self);
+	if ( isIdValid(unequipedWeapon) )
+	{
+		setObjVar(self, "costume.unequipedWeapon", unequipedWeapon);
+	}
+
+	setObjectAppearance(self, costume);
+
+	attachScript(self, "event.halloween.trick_or_treater");
+
+	return SCRIPT_CONTINUE;
+}
+
+int costumeRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	revertObjectAppearance(self);
+	detachScript(self, "event.halloween.trick_or_treater");
+	
+	if ( hasObjVar(self, "costume.unequipedWeapon") )
+	{
+		obj_id unequipedWeapon = getObjIdObjVar(self, "costume.unequipedWeapon");
+		if ( isIdValid(unequipedWeapon) )
+		{
+			if ( exists(unequipedWeapon) && utils.isNestedWithin(unequipedWeapon, self) )
+			{
+				obj_id alreadyEquipped = getObjectInSlot(self, "hold_r");
+				if ( !isIdValid(alreadyEquipped) )
+				{
+					equip(unequipedWeapon, self);
+				}
+			}
+		}
+		
+		removeObjVar(self, "costume.unequipedWeapon");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int costumeBurningEffectAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	playClientEffectObj(self, "appearance/pt_state_onfire.prt", self, "", null, "costume_burning_effect");
+	
+	messageTo(self, "handleCostumeBurningBuffEffect", null, 15, false);
+	return SCRIPT_CONTINUE;
+}
+
+int costumeBurningEffectRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	stopClientEffectObjByLabel(self, "costume_burning_effect");
+	return SCRIPT_CONTINUE;
+}
+
+void checkToRefreshCostumeBurningEffect(obj_id self)
+{
+	int[] costumeBurningBuffs = buff.getAllBuffsByEffect(self, "costume_burning_effect");
+	if( costumeBurningBuffs != null && costumeBurningBuffs.length > 0 )
+	{
+		stopClientEffectObjByLabel(self, "costume_burning_effect");
+		playClientEffectObj(self, "appearance/pt_state_onfire.prt", self, "", null, "costume_burning_effect");
+		
+		messageTo(self, "handleCostumeBurningBuffEffect", null, 15, false);
+	}
+	return;
+}
+
+messageHandler handleCostumeBurningBuffEffect()
+{
+	checkToRefreshCostumeBurningEffect(self);
+	return SCRIPT_CONTINUE;
+}
+
+int lovedayHeartsEffectAddBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	playClientEffectObj(self, "appearance/pt_efol_hearts_02.prt", self, "head", null, "loveday_hearts_effect");
+	
+	messageTo(self, "handleLovedayHeartsEffect", null, 15, false);
+	return SCRIPT_CONTINUE;
+}
+
+int lovedayHeartsEffectRemoveBuffHandler(obj_id self, string effectName, string subType, float duration, float value, string buffName, obj_id caster)
+{
+	stopClientEffectObjByLabel(self, "loveday_hearts_effect");
+	return SCRIPT_CONTINUE;
+}
+
+void checkToRefreshLovedayHeartsEffect(obj_id self)
+{
+	int[] lovedayHeartsBuffs = buff.getAllBuffsByEffect(self, "loveday_hearts_effect");
+	if( lovedayHeartsBuffs != null && lovedayHeartsBuffs.length > 0 )
+	{
+		stopClientEffectObjByLabel(self, "loveday_hearts_effect");
+		playClientEffectObj(self, "appearance/pt_efol_hearts_02.prt", self, "head", null, "loveday_hearts_effect");
+		
+		messageTo(self, "handleCostumeBurningBuffEffect", null, 15, false);
+	}
+	return;
+}
+
+messageHandler handleLovedayHeartsEffect()
+{
+	checkToRefreshLovedayHeartsEffect(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnNewbieTutorialResponse(string action)
+{
+    if ( action.equals("clientReady") )
+    {
+		checkToRefreshCostumeBurningEffect(self);
+		checkToRefreshLovedayHeartsEffect(self);
+    }
+	return SCRIPT_CONTINUE;
+}
+
+int halloweenCooldownAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	float yaw = getYaw(self);
+	utils.setScriptVar(self, "yaw", yaw);
+	suspendMovement(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+int halloweenCooldownRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	float yaw = utils.getFloatScriptVar(self, "yaw");
+	setYaw(self, yaw);
+	utils.removeScriptVar(self, "yaw");
+	resumeMovement(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+int halloweenCoinLimitAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int now = getCalendarTime();
+	int secondsUntil = secondsUntilNextDailyTime(10, 0, 0);
+	int then = now + secondsUntil;
+
+	if (hasObjVar(self, event_perk.COUNTER_TIMESTAMP))
+	{
+		then = getIntObjVar(self, event_perk.COUNTER_TIMESTAMP);
+		if (now > then)
+		{
+			removeObjVar(self, event_perk.COUNTER_TIMESTAMP);
+			buff.removeBuff(self, "event_halloween_coin_limit");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if (!hasObjVar(self, event_perk.COUNTER_TIMESTAMP))
+		setObjVar(self, event_perk.COUNTER_TIMESTAMP, then);
+
+	return SCRIPT_CONTINUE;
+}
+
+int halloweenCoinLimitRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if (hasObjVar(self, event_perk.COUNTER_TIMESTAMP))
+	{
+		int now = getCalendarTime();
+		int then = getIntObjVar(self, event_perk.COUNTER_TIMESTAMP);
+		if (now >= then)
+		{
+			removeObjVar(self, event_perk.COUNTER_TIMESTAMP);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// --------Life Day Event-----------------
+
+int lifedayCompetitiveBuffRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string lifedayRunning = getConfigSetting("GameServer", "lifeday");
+
+	if (lifedayRunning != null && !lifedayRunning.equals("false"))
+	{
+		//We're saving the score board etc on tatooine.
+		obj_id tatooine = getPlanetByName("tatooine");
+
+		setObjVar(self, "lifeday.locked_out", 1);
+		string_id times_up = new string_id("event/life_day", "time_is_up");
+		sendSystemMessage(self, times_up);
+
+		//Checking if the player has scored high enough to be placed among the top three players on the server for the day.
+		if (!isIdValid(tatooine) || !exists(tatooine))
+			return SCRIPT_CONTINUE;
+
+		//Checking if it's a new day
+		dictionary params = new dictionary();
+		params.put ("player", self);
+		messageTo(tatooine, "lifeDayScoreBoardUpdate", params, 0.0f, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//Updating player position on scoreboard.
+messageHandler scoreBoardCheck()
+{
+	if (params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	if (hasObjVar(self, "lifeday.token_counter"))
+	{
+		int playerScore = getIntObjVar(self, "lifeday.token_counter");
+		string playerName = getName(self);
+		string scoreBoardEmpty = params.getString("scoreBoardEmpty");
+
+		string playerFaction = "null";
+
+		if (hasObjVar(self, "lifeday.neutral_imperial"))
+			playerFaction = "Imperial Mercenary";
+		if (hasObjVar(self, "lifeday.neutral_rebel"))
+			playerFaction = "Rebel Mercenary";
+		if (factions.isImperial(self))
+			playerFaction = "Imperial Soldier";
+		if (factions.isRebel(self))
+			playerFaction = "Rebel Soldier";
+
+		if (scoreBoardEmpty.equals ("true"))
+			updateScore (self, playerName, playerScore, playerFaction, "One", "true");
+
+		else
+		{
+			int thirdPlaceScore = params.getInt("thirdPlaceScore");
+			int secondPlaceScore = params.getInt("secondPlaceScore");
+			int firstPlaceScore = params.getInt("firstPlaceScore");
+
+			if (playerScore < thirdPlaceScore)
+				return SCRIPT_CONTINUE;
+
+			else if (playerScore >= firstPlaceScore)
+				updateScore (self, playerName, playerScore, playerFaction, "One", "false");
+
+			else if (playerScore >= secondPlaceScore)
+				updateScore (self, playerName, playerScore, playerFaction, "Two", "false");
+
+			else
+				updateScore (self, playerName, playerScore, playerFaction, "Three", "false");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+//Updating the score table with the players score.
+void updateScore (obj_id self, string playerName, int playerScore, string playerFaction, string position, string scoreBoardEmpty)
+{
+	//We're saving the score board etc on tatooine.
+	obj_id tatooine = getPlanetByName("tatooine");
+
+	int oneScore = 0;
+	string oneName = "";
+	string oneFaction = "";
+	obj_id oneId = null;
+
+	int twoScore = 0;
+	string twoName = "";
+	string twoFaction = "";
+	obj_id twoId = null;
+
+	if (hasObjVar(tatooine, "lifeday.positionOne.playerScore"))
+	{
+		oneScore = getIntObjVar (tatooine, "lifeday.positionOne.playerScore");
+		oneName = getStringObjVar (tatooine, "lifeday.positionOne.playerName");
+		oneFaction = getStringObjVar (tatooine, "lifeday.positionOne.playerFaction");
+		oneId = getObjIdObjVar (tatooine, "lifeday.positionOne.playerObjId");
+
+		if (hasObjVar(tatooine, "lifeday.positionTwo.playerScore"))
+		{
+			twoScore = getIntObjVar (tatooine, "lifeday.positionTwo.playerScore");
+			twoName = getStringObjVar (tatooine, "lifeday.positionTwo.playerName");
+			twoFaction = getStringObjVar (tatooine, "lifeday.positionTwo.playerFaction");
+			twoId = getObjIdObjVar (tatooine, "lifeday.positionTwo.playerObjId");
+		}
+	}
+
+	if (playerFaction.equals ("null"))
+		return;
+
+	if (scoreBoardEmpty.equals ("true"))
+		setObjVar (tatooine, "lifeday.emptyScoreBoard", "false");
+	//Moving down previous position holders.
+	if (position.equals ("One"))
+	{
+		if (isIdValid (twoId))
+		{
+			setObjVar (tatooine, "lifeday.positionThree.playerScore", twoScore);
+			setObjVar (tatooine, "lifeday.positionThree.playerName", twoName);
+			setObjVar (tatooine, "lifeday.positionThree.playerObjId", twoId);
+			setObjVar (tatooine, "lifeday.positionThree.playerFaction", twoFaction);
+		}
+		if (isIdValid (oneId))
+		{
+			setObjVar (tatooine, "lifeday.positionTwo.playerScore", oneScore);
+			setObjVar (tatooine, "lifeday.positionTwo.playerName", oneName);
+			setObjVar (tatooine, "lifeday.positionTwo.playerObjId", oneId);
+			setObjVar (tatooine, "lifeday.positionTwo.playerFaction", oneFaction);
+		}
+	}
+
+	if (position.equals ("Two"))
+	{
+		if (isIdValid (twoId))
+		{
+			setObjVar (tatooine, "lifeday.positionThree.playerScore", twoScore);
+			setObjVar (tatooine, "lifeday.positionThree.playerName", twoName);
+			setObjVar (tatooine, "lifeday.positionThree.playerObjId", twoId);
+			setObjVar (tatooine, "lifeday.positionThree.playerFaction", twoFaction);
+		}
+	}
+
+	setObjVar (tatooine, "lifeday.emptyScoreBoard", "false");
+	setObjVar (tatooine, "lifeday.position"+position+".playerScore", playerScore);
+	setObjVar (tatooine, "lifeday.position"+position+".playerName", playerName);
+	setObjVar (tatooine, "lifeday.position"+position+".playerObjId", self);
+	setObjVar (tatooine, "lifeday.position"+position+".playerFaction", playerFaction);
+
+	return;
+}
+//Updating planet
+void checkLifeDayData(obj_id planet)
+{
+	if (!hasObjVar(planet, "lifeday.time_stamp"))
+		newLifeDayTimeStamp(planet);
+
+	if (!hasObjVar(planet, "lifeday.emptyScoreBoard"))
+		setObjVar(planet, "lifeday.emptyScoreBoard", "true");
+
+	if (hasObjVar(planet, "lifeday.positionOne.playerScore"))
+	{
+		if (!newLifeDayDay(planet))
+			setObjVar(planet, "lifeday.emptyScoreBoard", "false");
+	}
+
+	if (newLifeDayDay(planet))
+	{
+		removeObjVar(planet, "lifeday");
+		setObjVar(planet, "lifeday.emptyScoreBoard", "true");
+		newLifeDayTimeStamp(planet);
+	}
+}
+//Checking if it's a new day
+boolean newLifeDayDay(obj_id planet)
+{
+	if (hasObjVar(planet, "lifeday.time_stamp"))
+	{
+		int now = getCalendarTime();
+		int then = getIntObjVar(planet, "lifeday.time_stamp");
+
+		if (now > then)
+			return true;
+		else
+			return false;
+	}
+	return true;
+}
+//Set a new time stamp for 10 a.m GMT.
+void newLifeDayTimeStamp(obj_id planet)
+{
+	int now = getCalendarTime();
+	int secondsUntil = secondsUntilNextDailyTime(10, 0, 0);
+	int then = now + secondsUntil;
+	setObjVar(planet, "lifeday.time_stamp", then);
+}
+// -----------------------------------------
+
+//proc resist handlers
+int procResistAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//do nothing now, this is handled somewhere else
+	return SCRIPT_CONTINUE;
+}
+
+int procResistRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//do nothing now, this is handled somewhere else
+	return SCRIPT_CONTINUE;
+}
+
+// -----------------------------------------
+
+// Hoth Wampa Boss Stuff
+
+// Snow Blast
+int wampaBossIceThrowPrepAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	sendWampaBossWarning(self, "wampa_boss_ice_throw_prep");
+	return SCRIPT_CONTINUE;
+}
+
+int wampaBossIceThrowPrepRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	queueCommand(caster, ##"wampa_boss_ice_throw", self, "", COMMAND_PRIORITY_IMMEDIATE);
+
+	obj_id[] otherPlayers = trial.getValidTargetsInRadiusIgnoreLOS(self, 8.0f);
+	if ( otherPlayers != null && otherPlayers.length > 0 )
+	{
+		for ( int i = 0; i < otherPlayers.length; i++ )
+		{
+			obj_id nextPlayer = otherPlayers[i];
+			if ( isIdValid(nextPlayer) && nextPlayer != self )
+			{
+				buff.applyBuff(nextPlayer, caster, "wampa_boss_ice_throw");
+				sendSystemMessage(nextPlayer, new string_id ("dungeon_strings", "wampa_boss_ice_throw"));
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// Tauntaun Throw
+int wampaBossTauntaunThrowPrepAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	sendWampaBossWarning(self, "wampa_boss_tauntaun_throw_prep");
+	return SCRIPT_CONTINUE;
+}
+
+int wampaBossTauntaunThrowPrepRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	queueCommand(caster, ##"wampa_boss_tauntaun_throw", self, "", COMMAND_PRIORITY_IMMEDIATE);
+
+	obj_id[] otherPlayers = trial.getValidTargetsInRadiusIgnoreLOS(self, 8.0f);
+	if ( otherPlayers != null && otherPlayers.length > 0 )
+	{
+		for ( int i = 0; i < otherPlayers.length; i++ )
+		{
+			obj_id nextPlayer = otherPlayers[i];
+			if ( isIdValid(nextPlayer) && nextPlayer != self )
+			{
+				buff.applyBuff(nextPlayer, caster, "wampa_boss_tauntaun_throw");
+				sendSystemMessage(nextPlayer, new string_id ("dungeon_strings", "wampa_boss_tauntaun_throw"));
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// Wampa Boss Special Attack Warning
+void sendWampaBossWarning(obj_id target, string messageId)
+{
+	string targetName = getName(target);
+
+	obj_id[] playersInArea = getPlayerCreaturesInRange(target, 250.0f);
+	if ( playersInArea != null && playersInArea.length > 0 )
+	{
+		for ( int i = 0; i < playersInArea.length; i++ )
+		{
+			obj_id player = playersInArea[i];
+			if ( isIdValid(player) && exists(player) )
+			{
+				string_id message = new string_id ("dungeon_strings", messageId);
+				prose_package pp = prose.getPackage(message, target, target);
+				prose.setTO(pp, targetName);
+
+				sendSystemMessageProse(player, pp);
+			}
+		}
+	}
+	return;
+}
+
+// Iceblock
+int iceblockEffectAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	dictionary webster = new dictionary();
+	webster.put("caster", caster);
+	webster.put("buffName", buffName);
+	messageTo(self, "handleDoIceblock", webster, 0.25f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDoIceblock()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string buffName = params.getString("buffName");
+	if ( isIncapacitated(self) || isDead(self) )
+	{
+		buff.removeBuff(self, buffName);
+	}
+	else
+	{
+		if ( !utils.hasScriptVar(self, "iceblock") && buff.hasBuff(self, buffName) )
+		{
+			obj_id caster = params.getObjId("caster");
+			obj_id iceblock = create.object("object/tangible/dungeon/hoth/ice_block.iff", getLocation(self));
+			if ( isIdValid(iceblock) )
+			{
+				if ( isIdValid(caster) )
+				{
+					trial.setParent(caster, iceblock, false);
+				}
+				setLocation(self, getLocation(iceblock));
+
+				utils.setScriptVar(self, "iceblock", iceblock);
+				utils.setScriptVar(iceblock, "iceblocked", self);
+				utils.setScriptVar(iceblock, "buffName", buffName);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int iceblockEffectRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id iceblock = utils.getObjIdScriptVar(self, "iceblock");
+	trial.cleanupObject(iceblock);
+
+	utils.removeScriptVar(self, "iceblock");
+	return SCRIPT_CONTINUE;
+}
+
+// -----------------------------------------
+
+int barricadeDefenderAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.setScriptVar(self, combat.DAMAGE_REDIRECT, caster);
+	return SCRIPT_CONTINUE;
+}
+
+int barricadeDefenderRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVar(self, combat.DAMAGE_REDIRECT);
+	return SCRIPT_CONTINUE;
+}
+
+int snowspeederInstructionsAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	string_id message = new string_id("theme_park/heroic", "hoth_snowspeeder_instructions");
+	string templateOverride = "object/mobile/dressed_echo_base_luke_skywalker.iff";
+
+	obj_id instructor = self;
+	if ( isIdValid(caster) )
+		instructor = caster;
+
+	utils.messagePlayer(instructor, self, message, templateOverride);
+	return SCRIPT_CONTINUE;
+}
+
+int snowspeederInstructionsRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	buff.applyBuff(self, "snowspeeder_instructions_block");
+	return SCRIPT_CONTINUE;
+}
+
+int radarHueAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	int row = dataTableSearchColumnForInt((int)value, "index", DATATABLE_RADAR_HUE);
+	if(row < 0)
+		return SCRIPT_CONTINUE;
+
+	int red = dataTableGetInt(DATATABLE_RADAR_HUE, row, "red");
+	int green = dataTableGetInt(DATATABLE_RADAR_HUE, row, "green");
+	int blue = dataTableGetInt(DATATABLE_RADAR_HUE, row, "blue");
+
+	if ( red < 0 )
+		red = 0;
+
+	if ( red > 255 )
+		red = 255;
+
+	if ( green < 0 )
+		green = 0;
+
+	if ( green > 255 )
+		green = 255;
+
+	if ( blue < 0 )
+		blue = 0;
+
+	if ( blue > 255 )
+		blue = 255;
+
+	setOverrideMapColor(self, red, green, blue);
+	return SCRIPT_CONTINUE;
+}
+
+int radarHueRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	clearOverrideMapColor(self);
+	return SCRIPT_CONTINUE;
+}
+
+int bhShieldsChargedAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int bhShieldsChargedRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int bhShieldsAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	attachScript(self, "player.skill.bh_shields");
+	string shield_buff = "bh_shields";
+	buff.applyBuff(self, shield_buff);
+	_decrementBuffStack(self, getStringCrc(shield_buff.toLowerCase()), -98);
+	return SCRIPT_CONTINUE;
+}
+
+int bhShieldsRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int sp_covert_masteryAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int sp_covert_masteryRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+int randomCollectionItemAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id collectionItem = collection.grantRandomCollectionItem(self, "datatables/loot/loot_items/collectible/magseal_loot.iff", "collections");
+	buff.removeBuff(self, buffName);
+
+	return SCRIPT_CONTINUE;
+}
+
+int randomCollectionItemRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+//new hotness, this adds the bonus value for all xp types
+int gcwBonusGeneralAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	CustomerServiceLog("buff", "gcwBonusGeneral Buff used by player: "+self+" Name: " +getName(self)+ " Effect: "+effectName+" subtype:"+subtype+" duration: "+duration+" value: "+value+" buffName: "+buffName+" caster: "+caster);
+	utils.setScriptVar(self, "buff.gcwBonusGeneral.value", value / 100);
+
+	return SCRIPT_CONTINUE;
+}
+
+int gcwBonusGeneralRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	utils.removeScriptVarTree(self, "buff.gcwBonusGeneral");
+
+	return SCRIPT_CONTINUE;
+}
+
+int battlefieldCommuncationsGlowAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	buff.removeBuff(self, "battlefield_radar_invisibility");
+
+	if(stealth.hasInvisibleBuff(self))
+	{
+		buff.removeBuff(self, stealth.getInvisBuff(self));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int battlefieldCommuncationsGlowRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(effectName.lastIndexOf("_") > 0)
+	{
+		effectName = effectName.substring(0, (effectName.lastIndexOf("_")));
+	}
+	
+	stopClientEffectObjByLabel(self, self, effectName);
+
+	buff.applyBuff(self, "battlefield_radar_invisibility");
+
+	return SCRIPT_CONTINUE;
+}
+
+//EMPIRE DAY EVENT HANDLERS
+int empireDayImperialRecruitmentAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int empireDayImperialRecruitmentRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//Remove the child Buff if it exists
+	if(buff.hasBuff(self, holiday.BUFF_IMPERIAL_RECRUITMENT_COUNTER))
+	{
+		buff.removeBuff(self, holiday.BUFF_IMPERIAL_RECRUITMENT_COUNTER);
+	}
+	modifyCollectionSlotValue(self, holiday.IMPERIAL_RECRUITING_COUNTER_SLOT, 1);
+	play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_COMPLETED);
+	setObjVar(self, holiday.EMPIRE_DAY_RECRUITMENT_LOCKED_OUT, true);
+	holiday.setEventLockOutTimeStamp(self, holiday.EMPIRE_DAY_RECRUITMENT_TIMESTAMP);
+	//The leaderboard must only be updated once both buffs are finished.
+	if(hasObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER))
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayImperialRecruitmentRemoveBuffHandler: Player: ("+self+") is IMPERIAL and updating leader board because this is the second buff.");	
+		if(!updateEmpireDayLeaderBoard(self, holiday.IMPERIAL_PLAYER))
+		{
+			CustomerServiceLog("holidayEvent", "buff_handler.empireDayImperialRecruitmentRemoveBuffHandler: updateEmpireDayLeaderBoard reports that updating score for Player: ("+self+") FAILED.");	
+		}
+		removeObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER);
+	}
+	else
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayImperialRecruitmentRemoveBuffHandler: Player: ("+self+") is finishing their first buff. The leader board will not be updated.");	
+		setObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER, true);
+	}		
+	return SCRIPT_CONTINUE;
+}
+
+int empireDayRebelResistanceAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int empireDayRebelResistanceRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//Remove the child Buff if it exists
+	if(buff.hasBuff(self, holiday.BUFF_REBEL_RESISTANCE_COUNTER))
+	{
+		buff.removeBuff(self, holiday.BUFF_REBEL_RESISTANCE_COUNTER);
+	}
+	modifyCollectionSlotValue(self, holiday.REBEL_RESISTANCE_COUNTER_SLOT, 1);
+	play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_COMPLETED);
+	setObjVar(self, holiday.EMPIRE_DAY_RESISTANCE_LOCKED_OUT, true);	
+	holiday.setEventLockOutTimeStamp(self, holiday.EMPIRE_DAY_RESISTANCE_TIMESTAMP);
+	//The leaderboard must only be updated once both buffs are finished.
+	if(hasObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER))
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayRebelResistanceRemoveBuffHandler: Player: ("+self+") is REBEL and updating leader board because this is the second buff.");		
+		if(!updateEmpireDayLeaderBoard(self, holiday.REBEL_PLAYER))
+		{
+			CustomerServiceLog("holidayEvent", "buff_handler.empireDayRebelResistanceRemoveBuffHandler: updateEmpireDayLeaderBoard reports that updating score for Player: ("+self+") FAILED.");	
+		}		
+		removeObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER);
+	}
+	else
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayRebelResistanceRemoveBuffHandler: Player: ("+self+") is finishing their first buff. The leader board will not be updated.");			
+		setObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER, true);
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+int empireDayImperialPropagandaAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int empireDayImperialPropagandaRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//Remove the child Buff if it exists
+	if(buff.hasBuff(self, holiday.BUFF_IMPERIAL_ANTIPROPAGANDA_COUNTER))
+	{		
+		buff.removeBuff(self, holiday.BUFF_IMPERIAL_ANTIPROPAGANDA_COUNTER);
+	}
+
+	modifyCollectionSlotValue(self, holiday.IMPERIAL_ANTIPROP_COUNTER_SLOT, 1);
+	play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_COMPLETED);
+	setObjVar(self, holiday.EMPIRE_DAY_PROPAGANDA_LOCKED_OUT, true);
+	holiday.setEventLockOutTimeStamp(self, holiday.EMPIRE_DAY_PROPAGANDA_TIMESTAMP);
+	//The leaderboard must only be updated once both buffs are finished.
+	if(hasObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER))
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayImperialPropagandaRemoveBuffHandler: Player: ("+self+") is IMPERIAL and updating leader board because this is the second buff.");		
+		if(!updateEmpireDayLeaderBoard(self, holiday.IMPERIAL_PLAYER))
+		{
+			CustomerServiceLog("holidayEvent", "buff_handler.empireDayImperialPropagandaRemoveBuffHandler: updateEmpireDayLeaderBoard reports that updating score for Player: ("+self+") FAILED.");	
+		}		
+		removeObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER);
+	}
+	else
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayImperialPropagandaRemoveBuffHandler: Player: ("+self+") is finishing their first buff. The leader board will not be updated.");	
+		setObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER, true);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int empireDayRebelVandalAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int empireDayRebelVandalRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	//Remove the child Buff if it exists
+	if(buff.hasBuff(self, holiday.BUFF_REBEL_PLAYER_VANDAL_COUNTER))
+	{		
+		buff.removeBuff(self, holiday.BUFF_REBEL_PLAYER_VANDAL_COUNTER);
+	}
+
+	modifyCollectionSlotValue(self, holiday.REBEL_VANDAL_COUNTER_SLOT, 1);
+	play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_COMPLETED);
+	setObjVar(self, holiday.EMPIRE_DAY_VANDAL_LOCKED_OUT, true);
+	holiday.setEventLockOutTimeStamp(self, holiday.EMPIRE_DAY_VANDAL_TIMESTAMP);
+	//The leaderboard must only be updated once both buffs are finished.
+	if(hasObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER))
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayRebelVandalRemoveBuffHandler: Player: ("+self+") is REBEL updating leader board because this is the second buff.");	
+		if(!updateEmpireDayLeaderBoard(self, holiday.REBEL_PLAYER))
+		{
+			CustomerServiceLog("holidayEvent", "buff_handler.empireDayRebelVandalRemoveBuffHandler: updateEmpireDayLeaderBoard reports that updating score for Player: ("+self+") FAILED.");	
+		}
+		removeObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER);
+	}
+	else
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.empireDayRebelVandalRemoveBuffHandler: Player: ("+self+") is finishing their first buff. The leader board will not be updated.");		
+		setObjVar(self, holiday.EMPIRE_DAY_BUFF_TRACKER, true);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean updateEmpireDayLeaderBoard(obj_id player, int faction)
+{
+	if(!isValidId(player) || !exists(player))
+	{
+		return false;
+	}
+
+	CustomerServiceLog("holidayEvent", "buff_handler.updateEmpireDayLeaderBoard: Updating leaderboard with Player: "+player+" of faction: "+faction+"score");	
+
+	if(!hasObjVar(player, holiday.PLAYER_EMPIRE_DAY_SCORE))
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.updateEmpireDayLeaderBoard: Updating leaderboard with Player: "+player+" HAS NO SCORE. FAILING UPDATE");	
+		return false;
+	}
+	
+	int playerScore = getIntObjVar(player, holiday.PLAYER_EMPIRE_DAY_SCORE);
+	if(playerScore <= 0)
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.updateEmpireDayLeaderBoard: Updating leaderboard with Player: "+player+" HAS A CORRUPT SCORE. FAILING UPDATE");	
+		return false;
+	}
+		
+	string playerName = getPlayerFullName(player);
+	if(playerName == null || playerName.length() <= 0)
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.updateEmpireDayLeaderBoard: Updating leaderboard with Player: "+player+" HAS AN INVALID NAME. FAILING UPDATE");	
+		return false;
+	}
+
+	obj_id tatooine = getPlanetByName("tatooine");
+	if(!isIdValid(tatooine) || !exists(tatooine))
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.updateEmpireDayLeaderBoard: Could not find Tatooine OID.");	
+		return false;	
+	}
+	
+	int factionPassed = holiday.IMPERIAL_PLAYER;
+	if(faction == holiday.REBEL_PLAYER)
+		factionPassed = holiday.REBEL_PLAYER;
+
+	CustomerServiceLog("holidayEvent", "buff_handler.updateEmpireDayLeaderBoard: FACTION PASSED: "+factionPassed);	
+
+
+	if(!holiday.setEmpireDayLeaderScores(tatooine, player, holiday.PLANET_VAR_EVENT_PREFIX + holiday.PLANET_VAR_EMPIRE_DAY + holiday.PLANET_VAR_SCORE, playerScore, playerName, factionPassed))
+	{
+		CustomerServiceLog("holidayEvent", "buff_handler.updateEmpireDayLeaderBoard: Player: ("+player+") " +playerName+ " was unable to attain leader board data. Their score was: "+playerScore);	
+		return false;	
+	}
+	return true;
+}
+
+// DEATH TROOPER BUFFS
+int deathTroopersAfflictedTossAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	messageTo(self, "createAfflicted", null, 1.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler createAfflicted()
+{
+	location loc = getLocation(self);
+
+	obj_id afflicted = create.object("outbreak_afflicted_lvl_90", loc);
+	
+	debugSpeakMsg(self, "Eww.  Gooy! " + afflicted);
+	
+	if(isIdValid(afflicted))
+	{
+		setHate(self, afflicted, 0);
+		setHate(afflicted, self, 0);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+int outbreakStackingInfectionAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if( utils.hasScriptVar(self, "outbreak.innoculated") ||	!isInBlackwingInfectionedArea(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( value < 1 )
+	{
+		value = 1.0f;
+	}
+	
+	if ( buff.getBuffStackCount(self, buffName) <= 1 )
+	{
+		dictionary webster = trial.getSessionDict(self, "outbreak_stacking_infection");
+		webster.put("value", value);
+		messageTo(self, "handleOutbreakStackingInfection", webster, value, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int outbreakStackingInfectionRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	trial.bumpSession(self, "outbreak_stacking_infection");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleOutbreakStackingInfection()
+{
+	if ( !trial.verifySession(self, params, "outbreak_stacking_infection") )
+		return SCRIPT_CONTINUE;
+
+	if(  utils.hasScriptVar(self, "outbreak.innoculated") || buff.hasBuff(self, "death_troopers_inoculation") ||
+		buff.hasBuff(self, "death_troopers_infection_3") || !isInBlackwingInfectionedArea(self) )
+	{
+		utils.setScriptVar(self, "outbreak.innoculated", true);
+		buff.removeBuff(self, "death_troopers_infection_2");
+		return SCRIPT_CONTINUE;
+	}
+
+	float value = params.getFloat("value");
+	if ( value < 1 )
+	{
+		value = 1.0f;
+	}
+	
+	int buffCrc = getStringCrc("death_troopers_infection_2");
+
+	buff_data bdata = combat_engine.getBuffData(buffCrc);
+	int buffMaxStacks = bdata.maxStacks;
+	long buffStack = buff.getBuffStackCount(self, buffCrc);
+	if ( buffStack >= buffMaxStacks )
+	{
+		// do nothing
+	}
+	else
+	{
+		buff.applyBuff(self, self, "death_troopers_infection_2");
+	}
+	
+	dictionary webster = trial.getSessionDict(self, "outbreak_stacking_infection");
+	webster.put("value", value);
+	messageTo(self, "handleOutbreakStackingInfection", webster, value, false);
+	return SCRIPT_CONTINUE;
+}
+
+boolean isInBlackwingInfectionedArea(obj_id self)
+{
+	if ( locations.isInRegion(self, "@dathomir_region_names:black_mesa") )
+		return true;
+		
+	obj_id building = getTopMostContainer(self);
+	if ( isIdValid(building) && getTemplateName(building).equals("object/building/dathomir/imperial_blackwing_facility.iff") )
+		return true;
+	
+	return false;
+}
+
+int killPlayerAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if(!isDead(self))
+	{
+		setPosture(self, POSTURE_INCAPACITATED);
+		pclib.killPlayer(self, self, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+// ************************************************
+
+int beastScaleChangeAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if ( beast_lib.isBeast(self) )
+	{
+		setScale(self, (beast_lib.getBeastScaleByLevel(self)*value));
+		setYaw(self, rand(0.0f, 360.0f));
+	}
+	return SCRIPT_CONTINUE;
+}
+
+int beastScaleChangeRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	setScale(self, beast_lib.getBeastScaleByLevel(self));
+	setYaw(self, rand(0.0f, 360.0f));
+	return SCRIPT_CONTINUE;
+}
+
+int beastAutoFeederAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id beastBCD = beast_lib.getBeastBCD(self);
+	if ( isIdValid(beastBCD) )
+	{	
+		obj_id player = beast_lib.getBCDPlayer(beastBCD);
+		boolean isHungry = false;
+		
+		int[] petFood = beast_lib.getBCDBeastFood(beastBCD);
+		if ( petFood != null && petFood.length > 0 )
+		{
+			int currentHungerStatus = petFood[beast_lib.PET_WHICH_FOOD];
+			if ( currentHungerStatus == beast_lib.PET_NO_FOOD )
+			{
+				isHungry = true;
+			}
+		}
+		else
+		{
+			// pet food status not found, so assume the beast is hungry
+			isHungry = true;
+		}
+		
+		if ( isHungry )
+		{
+			 beast_lib.feedBeastUsingAutoFeeder(self, player, buffName);
+		}
+		else
+		{
+			// beast not hungry so do nothing
+			obj_id autofeeder = utils.getObjIdScriptVar(self, beast_lib.getBeastBuffItemVar(buffName));
+			if ( isIdValid(autofeeder) )
+			{
+				obj_id beastFood = beast_lib.checkAutoFeederForBeastFood(autofeeder);
+				if ( !isIdValid(beastFood) )
+				{
+					//give a warning if the autofeeder does not have any beast food
+					sendSystemMessage(player, new string_id("tcg", "beast_auto_feeder_food_warning"));
+				}
+			}
+		}
+	}
+	else
+	{
+		// no beast control device found
+		buff.removeBuff(self, buffName);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+int beastAutoFeederBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	if ( utils.hasScriptVar(self, beast_lib.getBeastBuffItemVar(buffName)) )
+	{
+		utils.removeScriptVar(self, beast_lib.getBeastBuffItemVar(buffName));
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ************************************************
+
+int gcwSpyDestroyPatrolExplosivesAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int gcwSpyDestroyPatrolExplosivesRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int gcwGeneralResistanceStackAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+int gcwGeneralResistanceStackRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler gcwFatigueDecay()
+{
+	int gcwFatigueTime = params.getInt("gcwFatigueTime");
+	int gcwFatigueScriptTime = utils.getIntScriptVar(self, "gcw.fatigueTime");
+	
+	LOG("buff_handler", "gcwFatigueDecay  gcwFatigueTime: " + gcwFatigueTime + " gcwFatigueScriptTime: " + gcwFatigueScriptTime);
+	
+	if(gcwFatigueTime != gcwFatigueScriptTime)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(buff.hasBuff(self, "gcw_fatigue"))
+	{
+		long buffStack = buff.getBuffStackCount(self, "gcw_fatigue");
+
+		buff.removeBuff(self, "gcw_fatigue");
+
+		if(buffStack > 1)
+		{
+			buff.applyBuffWithStackCount(self, "gcw_fatigue", (int)buffStack - 1);
+		}
+
+		if(buff.hasBuff(self, "gcw_fatigue"))
+		{
+			int gameTime = getGameTime();
+
+			params.put("gcwFatigueTime", gameTime);
+			utils.setScriptVar(self, "gcw.fatigueTime", gameTime);
+
+			messageTo(self, "gcwFatigueDecay", params, 120.0f, false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// -----------------------------------------
+
+int gcwMiniTurretAddBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	obj_id turret = null;
+	location loc = getLocation(self);
+
+	
+	if(factions.getFactionFlag(self) == factions.FACTION_FLAG_IMPERIAL)
+	{
+		turret = advanced_turret.createTurret(self, loc, getYaw(self), advanced_turret.TYPE_BLOCK, advanced_turret.SIZE_MINI, 
+			advanced_turret.DAMAGE_ELEMENTAL_HEAT, 250, 500, 5000, 65.0f, 4.0f, "Imperial");
+	}
+
+	if(factions.getFactionFlag(self) == factions.FACTION_FLAG_REBEL)
+	{
+		turret = advanced_turret.createTurret(self, loc, getYaw(self), advanced_turret.TYPE_DISH, advanced_turret.SIZE_MINI, 
+			advanced_turret.DAMAGE_ELEMENTAL_HEAT, 250, 500, 5000, 65.0f, 2.0f, "Rebel");
+	}
+
+	if(isIdValid(turret) && exists(turret))
+	{
+		attachScript(turret, "systems.gcw.gcw_mini_turret");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+int gcwMiniTurretRemoveBuffHandler(obj_id self, string effectName, string subtype, float duration, float value, string buffName, obj_id caster)
+{
+	return SCRIPT_CONTINUE;
+}

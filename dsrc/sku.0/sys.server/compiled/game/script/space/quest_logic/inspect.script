@@ -1,0 +1,455 @@
+//------------------------------------------------
+// destroy.script
+// Brandon Reinhart
+//
+// Kill <n> of <ship_type>.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_quest;
+include library.space_utils;
+include library.space_transition;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_TARGET_WAYPOINTS		= new string_id( "space/quest", "inspect_target_waypoints" );
+const string_id SID_ABANDONED_INSPECT		= new string_id( "space/quest", "inspect_abandoned" );
+const string_id SID_RECOVERED_CARGO			= new string_id( "space/quest", "inspect_recovered_cargo" );
+const string_id SID_FOUND_CARGO				= new string_id( "space/quest", "inspect_found_cargo" );
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the type of ships we must inspect.
+	string[] ships = dataTableGetStringColumn( qTable, "shipList" );
+	space_quest.cleanArray( self, "shipTypes", ships );
+
+	// Store a list of our valid source spawners.
+	string[] spawns = dataTableGetStringColumn( qTable, "validSpawns" );
+	space_quest.cleanArray( self, "validSpawns", spawns );
+	int give_waypoint = questInfo.getInt( "giveSpawnWaypoint" );
+	setObjVar( self, "give_waypoint", give_waypoint );
+
+	// Grab our cargo type.
+	string cargo = questInfo.getString( "cargo" );
+	if ( cargo != null )
+	{
+		setObjVar( self, "cargo", cargo );
+	}
+
+	// Notify the player of the first objective (if we are already in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	// Add quest journal objectives.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set us up if we are in the appropriate zone.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearTargetWaypoints( self );
+			space_quest.showQuestUpdate( self, SID_ABANDONED_INSPECT );
+			space_quest.setQuestFailed( player, self, false );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id questManager = getNamedObject( space_quest.QUEST_MANAGER );
+	if ( questManager == null )
+		return SCRIPT_CONTINUE;
+
+	int give_waypoint = getIntObjVar( self, "give_waypoint" );
+	string[] spawns = getStringArrayObjVar( self, "validSpawns" );
+
+	// Update the quest journal.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 1, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	// Set the quest in progress now that we are in the right place.
+	space_quest._setQuestInProgress( self );
+
+	if ( spawns == null )
+		return SCRIPT_CONTINUE;
+
+	if ( hasObjVar( self, "target_waypoints" ) )
+		return SCRIPT_CONTINUE;
+
+	int added = 0;
+	for ( int i=0; i<spawns.length; i++ )
+	{
+		if ( give_waypoint == 1 )
+		{
+			java.util.StringTokenizer st = new java.util.StringTokenizer( spawns[i], ":" );
+			string scene = st.nextToken();
+			string point = st.nextToken();
+
+			added++;
+			dictionary outparams = new dictionary();
+			outparams.put( "spawner", point );
+			outparams.put( "player", player );
+			outparams.put( "name", "Possible Target Location" );
+			outparams.put( "quest", self );
+
+			outparams.put( "taskId", i + 3 );
+			outparams.put( "questId", questid );
+			outparams.put( "questName", "spacequest/"+questType+"/"+questName );
+
+			space_utils.notifyObject( questManager, "createWaypointToSpawner", outparams );
+		}
+	}
+	if ( added > 0 )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "added", added );
+		messageTo( self, "notifyTargetWaypoints", outparams, 1.f, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// notifyTargetWaypoints
+//------------------------------------------------
+
+messageHandler notifyTargetWaypoints()
+{
+	int added = params.getInt( "added" );
+	space_quest.showQuestUpdate( self, SID_TARGET_WAYPOINTS, added );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// createdWaypointToSpawner
+//------------------------------------------------
+
+messageHandler createdWaypointToSpawner()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id newpoint = params.getObjId( "waypoint" );
+	obj_id[] waypoints = getObjIdArrayObjVar( self, "target_waypoints" );
+	if ( waypoints == null )
+	{
+		waypoints = new obj_id[1];
+		waypoints[0] = newpoint;
+		setObjVar( self, "target_waypoints", waypoints );
+	}
+	else
+	{
+		obj_id[] newlist = new obj_id[waypoints.length+1];
+		for ( int i=0; i<waypoints.length; i++ )
+		{
+			newlist[i] = waypoints[i];
+		}
+		newlist[waypoints.length] = newpoint;
+		setObjVar( self, "target_waypoints", newlist );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// questCompleted
+//------------------------------------------------
+
+void questCompleted( obj_id self )
+{
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( questIsTaskActive( questid, 2, player ) )
+			questCompleteTask( questid, 2, player );
+	}
+
+	clearTargetWaypoints( self );
+
+	// We finished the quest!
+	space_quest.setQuestWon( player, self );
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+		clearTargetWaypoints( self );
+
+		obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+		space_quest.setQuestFailed( player, self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	if ( hasObjVar( self, "noAbort" ) )
+		return SCRIPT_CONTINUE;
+
+	clearTargetWaypoints( self );
+
+	// We aborted the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestAborted( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// clearTargetWaypoints
+//------------------------------------------------
+
+void clearTargetWaypoints( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id[] waypoints = getObjIdArrayObjVar( self, "target_waypoints" );
+	if ( waypoints != null )
+	{
+		for ( int i=0; i<waypoints.length; i++ )
+		{
+			if ( isIdValid(waypoints[i]) )
+				destroyWaypointInDatapad( waypoints[i], player );
+		}
+	}
+}
+
+//------------------------------------------------
+// removeQuest
+//------------------------------------------------
+
+messageHandler removeQuest()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	clearTargetWaypoints( self );
+
+	// Flag the main quest journal entry as finished.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( (questid != 0) && questIsQuestActive( questid, player ) )
+		questCompleteQuest( questid, player );
+
+	space_quest._removeQuest( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// checkSpecialEvent
+//------------------------------------------------
+
+boolean checkSpecialEvent( obj_id self, obj_id player, int inspectCount )
+{
+	// Do we have a special event?
+	if ( !hasObjVar( self, space_quest.QUEST_TRIGGER_EVENT ) )
+		return false;
+
+	int triggerEvent = getIntObjVar( self, space_quest.QUEST_TRIGGER_EVENT );
+	int triggerSC = getIntObjVar( self, space_quest.QUEST_TRIGGER_SC );
+	int triggerOn = getIntObjVar( self, space_quest.QUEST_TRIGGER_ON );
+	int triggerDelay = getIntObjVar( self, space_quest.QUEST_TRIGGER_DELAY );
+
+	if ( triggerEvent == 0 )
+		return false;
+	if ( triggerSC != 0 )
+		return false;
+	if ( triggerOn != inspectCount )
+		return false;
+
+	dictionary params = new dictionary();
+	params.put( "quest", self );
+	messageTo( player, "doSpecialEvent", params, triggerDelay, false );
+
+	return false;
+}
+
+//------------------------------------------------
+// inspectedShip
+//------------------------------------------------
+
+messageHandler inspectedShip()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	string shiptype = params.getString( "type" );
+	obj_id player = params.getObjId( "player" );
+
+	int inspectCount = getIntObjVar( self, "inspectCount" );
+	inspectCount++;
+	setObjVar( self, "inspectCount", inspectCount );
+
+	checkSpecialEvent( self, player, inspectCount );
+
+	// Is this our cargo?
+	string cargo = params.getString( "cargo" );
+	string cargoType = getStringObjVar( self, "cargo" );
+	if ( (cargo != null) && cargo.equals( cargoType ) )
+	{
+		sendQuestSystemMessage( player, SID_FOUND_CARGO );
+
+		// Update the quest journal.
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			questActivateTask( questid, 2, player );
+			if ( questIsTaskActive( questid, 1, player ) )
+				questCompleteTask( questid, 1, player );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// recoveredCargo
+//------------------------------------------------
+
+messageHandler recoveredCargo()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	string shiptype = params.getString( "type" );
+	string cargo = params.getString( "cargo" );
+	obj_id player = params.getObjId( "player" );
+	string[] shipTypes = getStringArrayObjVar( self, "shipTypes" );
+	string spawnerName = params.getString( "spawner" );
+
+	// Make sure this ship is of the correct type.
+	for ( int j=0; j<shipTypes.length; j++ )
+	{
+		string type = shipTypes[j];
+		if ( type.equals( shiptype ) )
+		{
+			// Is this ship from a valid spawner?
+			if ( hasObjVar( self, "validSpawns" ) )
+			{
+				string[] spawns = getStringArrayObjVar( self, "validSpawns" );
+				if ( spawns != null )
+				{
+					boolean match = false;
+					for ( int i=0; i<spawns.length; i++ )
+					{
+						java.util.StringTokenizer st = new java.util.StringTokenizer( spawns[i], ":" );
+						string scene = st.nextToken();
+						string point = st.nextToken();
+
+						if ( (spawnerName != null) && spawnerName.equals( point ) )
+						{
+							// This ship is from a valid spawner.
+							match = true;
+							break;
+						}
+					}
+					if ( !match )
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+			}
+
+			// Is this the right kind of cargo?
+			string cargoType = getStringObjVar( self, "cargo" );
+			if ( (cargo != null) && cargo.equals( cargoType ) )
+			{
+				// We won!
+				space_quest.showQuestUpdate( self, SID_RECOVERED_CARGO );
+				questCompleted( self );
+				return SCRIPT_CONTINUE;
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}

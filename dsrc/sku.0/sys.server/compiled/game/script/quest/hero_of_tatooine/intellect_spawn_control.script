@@ -1,0 +1,301 @@
+include library.utils;
+
+const string SPAWNER_DATATABLE			= "datatables/quest/hero_of_tatooine/intellect_spawner.iff";
+const string SPAWNER_OBJVAR				= "quest.hero_of_tatooine.intellect.spawner";
+const string SPAWNER_IDS				= SPAWNER_OBJVAR + ".ids";
+const string SPAWNER_STATUS				= SPAWNER_OBJVAR + ".status";
+const string SPAWNER_SPAWN_MODE			= SPAWNER_OBJVAR + ".spawning";
+
+const float VALIDATION_CHECK_TIME		= 180.0f;
+const float SPAWN_TIME					= 1800.0f;
+const float REVALIDATE_TIME				= 10800.0f;
+const float SPAWN_CHECK_TIME			= SPAWN_TIME + VALIDATION_CHECK_TIME;
+
+trigger OnAttach()
+{
+	if(!hasObjVar(self, SPAWNER_OBJVAR))
+		setupSpawnerObjVars(self);
+
+	messageTo(self, "handleForcedValidation", null, 600.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize() {
+
+	if(!hasObjVar(self, SPAWNER_OBJVAR))
+		setupSpawnerObjVars(self);
+
+	CustomerServiceLog("quest", "HERO OF TATOOINE - Initializing Mark of Intellect spawn control");
+
+	messageTo(self, "handleForcedValidation", null, 600.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnHearSpeech(obj_id speaker, string text) {
+
+	if(!isGod(speaker))
+		return SCRIPT_CONTINUE;
+
+	if(toLower(text).equals("force_intellect_spawn")) {
+
+		sendSystemMessageTestingOnly(speaker, "Beginning spawn sequence. It could take a few minutes...");
+		startSpawnSequence(self, 0.0f, true);
+
+	} else if(toLower(text).equals("find_intellect_spawn")) {
+
+		sendSystemMessageTestingOnly(speaker, "Requesting spawn location information...");
+		findSpawned(self, speaker);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleValidation() {
+
+	int spawn = params.getInt("spawn");
+	int number = params.getInt("number");
+
+	int[] status = getIntArrayObjVar(self, SPAWNER_STATUS);
+
+	if(status == null || status.length == 0)
+		return SCRIPT_CONTINUE;
+
+	if(number >= status.length)
+		return SCRIPT_CONTINUE;
+
+	if(status[number] != spawn) {
+
+		status[number] = spawn;
+		setObjVar(self, SPAWNER_STATUS, status);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSingleValidationCheck() {
+
+	if(countActiveSpawns(self) == 0)
+		validateAllSpawners(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAllValidationCheck() {
+
+	if(countActiveSpawns(self) == 0)
+		startSpawnSequence(self, SPAWN_TIME);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSpawnValidation() {
+
+	float time = params.getFloat("time");
+
+	if(hasObjVar(self, SPAWNER_SPAWN_MODE))
+		removeObjVar(self, SPAWNER_SPAWN_MODE);
+
+	if(countActiveSpawns(self) == 0)
+		startSpawnSequence(self, time);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCompletion() {
+
+	int number = params.getInt("number");
+
+	int[] status = getIntArrayObjVar(self, SPAWNER_STATUS);
+
+	if(status == null || status.length == 0) {
+
+		CustomerServiceLog("quest", "HERO OF TATOOINE - Intellect spawn control failing; Spawner status not available");
+		return SCRIPT_CONTINUE;
+	}
+
+	status[number] = 0;
+
+	setObjVar(self, SPAWNER_STATUS, status);
+
+	validateSpawners(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLocationResponse() {
+
+	obj_id seeker = params.getObjId("seeker");
+	location loc = params.getLocation("loc");
+
+	sendSystemMessageTestingOnly(seeker, "Intellect Spawn: " + loc.toString());
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleForcedValidation() {
+
+	CustomerServiceLog("quest", "HERO OF TATOOINE - Forcing Mark of Intellect validation");
+
+	validateAllSpawners(self);
+
+	messageTo(self, "handleForcedValidation", null, REVALIDATE_TIME, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+void setupSpawnerObjVars(obj_id self) {
+
+	int numRows = dataTableGetNumRows(SPAWNER_DATATABLE);
+	obj_id[] ids = new obj_id[numRows];
+	int[] status = new int[numRows];
+
+	for(int i = 0; i < numRows; i++)
+	{
+		string strObjId = dataTableGetString(SPAWNER_DATATABLE, i, 0);
+		obj_id spawner = utils.stringToObjId(strObjId);
+
+		ids[i] = spawner;
+		status[i] = 0;
+	}
+
+	if(ids != null && ids.length > 0 && status != null && status.length > 0)
+	{
+		setObjVar(self, SPAWNER_IDS, ids);
+		setObjVar(self, SPAWNER_STATUS, status);
+	}
+}
+
+void validateSpawners(obj_id self) {
+
+	if(countActiveSpawns(self) == 0) {
+
+		validateAllSpawners(self);
+		return;
+	}
+
+	obj_id[] ids = getObjIdArrayObjVar(self, SPAWNER_IDS);
+	int[] status = getIntArrayObjVar(self, SPAWNER_STATUS);
+
+	dictionary d = new dictionary();
+	d.put("controller", self);
+
+	for(int i = 0; i < ids.length; i++) {
+
+		if(status[i] == 1) {
+
+			d.put("number", i);
+			messageTo(ids[i], "handleValidate", d, 1.0f, true);
+		}
+	}
+
+	messageTo(self, "handleSingleValidationCheck", null, VALIDATION_CHECK_TIME, true);
+}
+
+void validateAllSpawners(obj_id self) {
+
+	obj_id[] ids = getObjIdArrayObjVar(self, SPAWNER_IDS);
+	int[] status = getIntArrayObjVar(self, SPAWNER_STATUS);
+
+	dictionary d = new dictionary();
+	d.put("controller", self);
+
+	for(int i = 0; i < ids.length; i++) {
+
+		d.put("number", i);
+		messageTo(ids[i], "handleValidate", d, 1.0f, true);
+	}
+
+	messageTo(self, "handleAllValidationCheck", null, VALIDATION_CHECK_TIME, true);
+}
+
+void startSpawnSequence(obj_id self, float time, boolean override) {
+
+	if(hasObjVar(self, SPAWNER_SPAWN_MODE) && !override) {
+
+		int spawn_time = getIntObjVar(self, SPAWNER_SPAWN_MODE);
+		int game_time = getGameTime();
+		int difference_time = (game_time - spawn_time);
+		
+		if(difference_time >= 0 && difference_time < 10800)
+		{
+			CustomerServiceLog("quest", "HERO OF TATOOINE - Intellect spawn control failing; Trying to spawn while currently in spawn mode. Spawn Time: "+spawn_time+" Game Time: "+game_time+". Difference: "+difference_time);
+			return;
+		}
+		else
+		{
+			CustomerServiceLog("quest", "HERO OF TATOOINE - Intellect autospawner attempting to spawn. Possibly for the first time. Spawn Time: "+spawn_time+" Game Time: "+game_time+". Difference: "+difference_time);
+		}
+	}
+
+	obj_id[] ids = getObjIdArrayObjVar(self, SPAWNER_IDS);
+	if ( ids == null )
+	{
+		CustomerServiceLog("quest", "HERO OF TATOOINE - Intellect autospawner cannot find a list of spawner IDs.  FAILING.");
+		return;
+	}
+
+	int randSpawn = rand(0, (ids.length - 1));
+
+	dictionary d = new dictionary();
+	d.put("controller", self);
+	d.put("number", randSpawn);
+	d.put("time", time);
+
+	setObjVar(self, SPAWNER_SPAWN_MODE, getGameTime());
+
+	float check_time = time + VALIDATION_CHECK_TIME;
+
+	CustomerServiceLog("quest", "HERO OF TATOOINE - Starting Mark of Intellect spawn sequence");
+
+	messageTo(ids[randSpawn], "handleSpawn", d, time, true);
+	messageTo(self, "handleSpawnValidation", d, check_time, true);
+}
+
+void startSpawnSequence(obj_id self, float time) {
+
+	startSpawnSequence(self, time, false);
+}
+
+void findSpawned(obj_id self, obj_id speaker) {
+
+	obj_id[] ids = getObjIdArrayObjVar(self, SPAWNER_IDS);
+	int[] status = getIntArrayObjVar(self, SPAWNER_STATUS);
+
+	dictionary d = new dictionary();
+	d.put("seeker", speaker);
+	d.put("controller", self);
+
+	boolean found = false;
+
+	for(int i = 0; i < status.length; i++)
+	{
+		if(status[i] == 1)
+		{
+			messageTo(ids[i], "handleLocationRequest", d, 1.0f, true);
+			found = true;
+		}
+	}
+
+	if(!found)
+		sendSystemMessageTestingOnly(speaker, "No active spawns found");
+}
+
+int countActiveSpawns(obj_id self) {
+
+	int[] status = getIntArrayObjVar(self, SPAWNER_STATUS);
+
+	if(status == null || status.length == 0)
+		return -1;
+
+	int count = 0;
+
+	for(int i = 0; i < status.length; i++) {
+
+		if(status[i] == 1)
+			count++;
+	}
+
+	return count;
+}

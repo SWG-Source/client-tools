@@ -1,0 +1,410 @@
+
+// mustafar events scriptlib - sets up oft-used functions used in the mustafar expansion.
+
+// ********************************************************************
+//					INCLUDES
+// ********************************************************************
+
+include ai.ai;
+include library.ai_lib;
+include library.chat;
+include library.create;
+include library.groundquests;
+include library.prose;
+include library.space_dungeon;
+include library.utils;
+include library.sui;
+
+// ********************************************************************
+//					CONSTS
+// ********************************************************************
+
+const string CONST_TBL_EVENT_DATA		= "datatables/dungeon/mustafar_trials/obiwan_finale/obiwan_event_data.iff";
+
+const string STF_OBI_MSGS			="mustafar/obiwan_finale";
+
+const string_id SID_OBIWAN_BUSY			= new string_id(STF_OBI_MSGS, "obi_busy_elsewhere");
+const string_id SID_ALREADY_COMPLETED		= new string_id(STF_OBI_MSGS, "obiquest_already_completed");
+const string_id SID_NO_OBI_CONVO_YET		= new string_id(STF_OBI_MSGS, "obiwan_finale_launch_before_convo");
+const string_id SID_NOT_READY			= new string_id(STF_OBI_MSGS, "not_prepared");
+const string_id SID_MOUNTED			= new string_id(STF_OBI_MSGS, "not_while_riding");
+
+
+
+const string[] REQUIRED_QUEST_NAMES	=
+						{
+							"som_kenobi_collectors_business_1",
+							"som_kenobi_cursed_shard_2",
+							"som_kenobi_hidden_treasure_2",
+							"som_kenobi_historian_2",
+							"som_kenobi_moral_choice_1",
+							"som_kenobi_reunite_shard_3",
+							"som_kenobi_samaritan_1",
+							"som_kenobi_serpent_shard_1",
+							"som_kenobi_symbiosis_1"
+						};
+
+const boolean CONST_FLAG_DO_LOGGING		= false;
+
+
+//constants for quest grant SUI - jandank, blistmok, tulrus items.
+const string STF				= "som/som_quest";
+const string QUEST_ACCEPT_OK			= "@"+STF+":quest_accept_ok";
+const string QUEST_ACCEPT_CANCEL		= "@"+STF+":quest_accept_cancel";
+const string BEGIN_QUEST_PROMPT			= "@"+STF+":begin_quest_prompt";
+const string BEGIN_QUEST_TITLE			= "@"+STF+":begin_quest_title";
+
+// ********************************************************************
+//					FUNCTIONS
+// ********************************************************************
+
+
+void debugLogging(string section, string message)
+{
+	if (CONST_FLAG_DO_LOGGING)
+		LOG("debug/mustafar/"+section, message);
+}
+
+
+//----------------------------------------------------------------------
+
+boolean canCallObiwan(obj_id player)
+{
+	return canCallObiwan(player, null, false);
+}
+
+//----------------------------------------------------------------------
+
+boolean canCallObiwan(obj_id player, obj_id recallObject)	//wrapper for canCallObiwan, which was altered to allow the player to receive feedback to why they can't call Obiwan.
+{
+	return canCallObiwan(player, recallObject, false);
+}
+
+//----------------------------------------------------------------------
+
+boolean canCallObiwan(obj_id player, obj_id recallObject, boolean giveFailureFeedback)
+{
+	debugLogging("canCallObiwan: ", " entered.");
+
+	string planetName = getCurrentSceneName();
+	if (!planetName.startsWith("mustafar"))
+		return false;
+
+
+	obj_id topMostContainer = getTopMostContainer(player);		// is the player outside?  (btw, this should handle mounts as well, but just in case, see further down)
+	if ( (topMostContainer != player) || (topMostContainer == null) )
+		return false;
+
+	obj_id dungeon = space_dungeon.getDungeonIdForPlayer(player);			// is the player in an instance?
+	if (isIdValid(dungeon))
+		return false;
+
+	if(isIdValid(getMountId(player)))	// is the player mounted?
+	{
+		if (giveFailureFeedback)
+			sendSystemMessage(player, SID_MOUNTED);
+		debugLogging("canCallObiwan: ", " player mounted. No call.");
+		return false;
+	}
+
+	if(hasObjVar(player, "didMustafarCrystalLair"))	// has the player not already accomplished this event?
+	{
+		sendSystemMessage(player, SID_ALREADY_COMPLETED);
+		debugLogging("canCallObiwan: ", " player has already completed final quest. No call.");
+		removeObjVar(player,"waitingOnObiwan");
+		removeObjVar(player,"quest.wait_for_signal.quest/som_kenobi_main_quest_3_b");
+		removeObjVar(player,"quest.wait_for_signal.quest/som_kenobi_main_quest_3");
+		return false;
+	}
+
+	if(!hasCompletedTrials(player) && !isGod(player))		// has the player accomplished the 10 quests yet?
+	{
+		if (giveFailureFeedback)
+			sendSystemMessage(player, SID_NOT_READY);
+		return false;
+	}
+
+	if(!obiwanAlreadyPresent(player, giveFailureFeedback))	// is there already an obiwan around? getObjects in range with a certain script?
+	{
+		debugLogging("canCallObiwan: ", " No obiwan in range. ok to call him.");
+		return true;
+	}
+
+	LOG("space_dungeon", "theme_park.dungeon.mustafar_trials.obiwan_finale.obiwan_recall_object.canCallObiwan");
+
+	return false;
+}
+
+//----------------------------------------------------------------------
+
+boolean obiwanAlreadyPresent(obj_id player, boolean giveFailureFeedback)
+{
+	debugLogging("obiwanAlreadyPresent: ", " entered.");
+
+	location currentLoc = getLocation(player);
+	obj_id obiwanObject = getFirstObjectWithObjVar(currentLoc, 100f, "mustafar_obiwan");
+	if(isIdValid(obiwanObject))
+	{
+		if (giveFailureFeedback)
+			sendSystemMessage(player, SID_OBIWAN_BUSY);
+		debugLogging("obiwanAlreadyPresent: ", "found a pre-existing obiwan object.");
+		return true;
+	}
+
+	debugLogging("obiwanAlreadyPresent: ", "there is no pre-existing obiwan object");
+	return false;
+}
+
+//----------------------------------------------------------------------
+
+obj_id callObiwan(obj_id player)
+{
+	return callObiwan(player, null, false, 0);
+}
+
+//----------------------------------------------------------------------
+
+obj_id callObiwan(obj_id player, boolean timeout)
+{
+	return callObiwan(player, null, timeout, 0);
+}
+
+//----------------------------------------------------------------------
+
+obj_id callObiwan(obj_id player, boolean timeout, int appearanceComment)
+{
+	return callObiwan(player, null, timeout, appearanceComment);
+}
+
+//----------------------------------------------------------------------
+
+obj_id callObiwan(obj_id player, obj_id landmark)
+{
+	return callObiwan(player, landmark, false, 0);
+}
+
+//----------------------------------------------------------------------
+
+obj_id callObiwan(obj_id player, obj_id landmark, boolean timeout)
+{
+	return callObiwan(player, landmark, timeout, 0);
+}
+//----------------------------------------------------------------------
+
+obj_id callObiwan(obj_id player, obj_id landmark, boolean timeout, int appearanceComment)
+{
+	debugLogging("//***// callObiwan: ", "////>>>> entered.");
+
+	location currentLoc = getLocation(player);
+	float landmarkDistanceOffset = 0f;
+	if (isIdValid(landmark))
+	{
+		location landmarkLoc = getLocation(landmark);
+		landmarkDistanceOffset = getDistance(player, landmark);
+		debugLogging("callObiwan: ", "landmark location is valid.");
+	}
+
+	float distance = landmarkDistanceOffset + 6f;
+	if (timeout)
+		if (distance < 11f)
+			distance = 11f;
+
+	location spawnLoc = utils.findLocInFrontOfTarget(player, distance);
+
+	obj_id obiwan = create.object ("som_kenobi_obi_wan_glowie", spawnLoc);
+	if (!isIdValid(obiwan))
+	{
+		debugLogging("callObiwan: ", "obiwan obj_id that we created is not valid");
+		return null;
+	}
+
+	//attachScript(obiwan, "theme_park.dungeon.mustafar_trials.obiwan_finale.obiwan_fader_handler");
+
+	//playClientEffectObj(obiwan, "clienteffect/pl_force_absorb.cef", obiwan, "");								<<<< add a cool 'appearance' effect when Obi shows up.
+
+	//setCreatureCover(obiwan, 125);
+	//setCreatureCoverVisibility(obiwan, false);
+	//playClientEffectObj(player, "clienteffect/combat_special_attacker_cover.cef", obiwan, "");
+	//messageTo (obiwan, "obiwanFadeIn", null, 5, false);
+
+	ai_lib.setDefaultCalmBehavior( obiwan, ai_lib.BEHAVIOR_SENTINEL );
+	faceTo(obiwan, player);
+	attachScript(obiwan,"theme_park.dungeon.mustafar_trials.obiwan_finale.obiwan_obi_facer");
+	setObjVar(obiwan,"mustafar_obiwan", 1);
+//	if(hasObjVar(player,"waitingOnObiwan"))
+//		removeObjVar(player,"waitingOnObiwan");
+
+	if (timeout)
+	{
+		utils.setScriptVar(obiwan, "player", player);
+		attachScript(obiwan, "theme_park.dungeon.mustafar_trials.obiwan_finale.obiwan_dynamic_timeout");
+	}
+
+	if (appearanceComment > 0)
+	{
+		string_id strSpam = new string_id(mustafar.STF_OBI_MSGS, "som_obi_greet_story_"+appearanceComment);
+		prose_package pp = prose.getPackage(strSpam);
+		prose.setTT( pp, player );
+		chat.chat (obiwan, player, pp);
+	}
+
+	return obiwan;
+}
+
+
+//----------------------------------------------------------------------
+
+void spawnContents(obj_id dungeon, string spawnType, int numberOfCopies)
+{
+	debugLogging("//***// spawnContents: ", "////>>>> entered. SpawnType requested was: "+spawnType);
+	string[] spawnTypeColumnData = dataTableGetStringColumnNoDefaults(CONST_TBL_EVENT_DATA, "dataType");
+
+	if (spawnTypeColumnData.length == 0)
+		return;
+
+	for (int i=0;i < spawnTypeColumnData.length;i++)
+	{
+		if (spawnTypeColumnData[i].equals(spawnType))
+		{
+
+			dictionary dict = dataTableGetRow(CONST_TBL_EVENT_DATA, i);
+			debugLogging("spawnContents: ", "Retrieving info for row("+i+")");
+
+			int locx = dict.getInt("locx");
+			int locy = dict.getInt("locy");
+			int locz = dict.getInt("locz");
+			location myself = getLocation (dungeon);
+			string scene = myself.area;
+			//string scene = getCurrentSceneName();
+			obj_id cell = getCellId(dungeon, "mainroom");			// <- name of instanced dungeon's cell
+			float yaw = dict.getFloat("yaw");
+			string script = dict.getString("script");
+			location spawnLoc = new location (locx, locy, locz, scene, cell);
+			string object = dict.getString("object");
+			if (dict.getString("dataType").equals("setpiece"))		//if the object isn't a creature, spawn it this way
+			{
+				debugLogging("//***// spawnContents: ", "////>>>> Going to try to spawn a 'setpiece'");
+
+				obj_id item = createObjectInCell(object, dungeon, "mainroom", spawnLoc);			// <- name of instanced dungeon's cell
+				if (!isIdValid(item))
+				{
+					debugLogging("spawnContents: ", "Tried to create invalid item("+object+")");
+					return;
+				}
+				setYaw(item, yaw);
+				if (!script.equals("none"))
+					attachScript(item, script);
+
+				utils.setScriptVar(item,"dungeon", dungeon);
+				debugLogging("spawnContents: ", "Created object("+object+"/"+item+") with script("+script+") with yaw ("+yaw);
+
+			}
+			else if (!dict.getString("dataType").equals("location") && !dict.getString("dataType").equals("forcePowerAttack"))	// if the object IS a creature, spawn it this way
+			{
+				debugLogging("//***// spawnContents: ", "////>>>> Going to try to spawn a creature of some kind");
+
+				if (numberOfCopies < 1)
+					numberOfCopies = 1;
+				for (int j=0;j < numberOfCopies;j++)
+				{
+					obj_id creature = create.object (object, spawnLoc);
+					string creatureName = ai_lib.getCreatureName (creature);
+					obj_id[] players = getPlayerCreaturesInRange (creature, 60.0f);
+
+					if (!isIdValid(creature))
+					{
+						debugLogging("spawnContents: ", "Tried to create invalid creature("+object+")");
+						return;
+					}
+					if (!script.equals("none"))
+						attachScript(creature, script);
+					if (creatureName.startsWith ("som_kenobi_finale_minion"))
+						addHate(creature, players[i], 1000f);
+
+					utils.setScriptVar(creature,"dungeon", dungeon);
+					debugLogging("spawnContents: ", "Created object("+object+"/"+creature+") with script("+script);
+				}
+			}
+		}
+	}
+	return;
+}
+
+
+//----------------------------------------------------------------------
+
+boolean moveBossAround(string moveTargetName, obj_id boss, obj_id dungeon)
+{
+	debugLogging("moveBoss: ", ">>>> entered.");
+
+	if(!isIdValid(dungeon))
+	{
+		debugLogging("moveBoss: ", ">>>> dungeon objId was invalid.");
+		return false;
+	}
+
+	int desiredDatatableRow = dataTableSearchColumnForString(moveTargetName, "dataType", mustafar.CONST_TBL_EVENT_DATA);
+	if (desiredDatatableRow < 0)
+	{
+		debugLogging("moveBoss: ", ">>>> desiredDatatableRow was no good");
+		return false;
+	}
+	dictionary dict = dataTableGetRow(mustafar.CONST_TBL_EVENT_DATA, desiredDatatableRow);
+	debugLogging("moveBoss: ", "Retrieving info for row("+desiredDatatableRow+")");
+
+	int locx = dict.getInt("locx");
+	int locy = dict.getInt("locy");
+	int locz = dict.getInt("locz");
+	string scene = getCurrentSceneName();
+	obj_id cell = getCellId(dungeon, "mainroom");			// <- name of instanced dungeon's cell
+	debugLogging("moveBoss: ", ">>>> locX: "+locx+" locY: "+locy+" locZ: "+locz+" scene: "+scene+" cell: "+cell);
+	location gotoLoc = new location (locx, locy, locz, scene, cell);
+
+	debugLogging("moveBoss: ", ">>>> executing pathTo.");
+	ai.pathTo(boss, gotoLoc);
+	return true;
+}
+
+//----------------------------------------------------------------------
+
+boolean hasCompletedTrials (obj_id player)
+{
+	for(int i = 0; i < REQUIRED_QUEST_NAMES.length; i++)	// has the player accomplished the trials quests yet?
+	{
+		if(!groundquests.hasCompletedQuest(player, REQUIRED_QUEST_NAMES[i]))
+			return false;
+	}
+	return true;
+}
+
+//----------------------------------------------------------------------
+
+boolean stillWithinDungeonCheck (obj_id player, obj_id dungeon)
+{
+	if(!isIdValid(player) || !isIdValid(dungeon))
+		return false;
+
+	obj_id currentTopMost = getTopMostContainer(player);
+	if (currentTopMost == dungeon)
+		return true;
+
+	return false;
+}
+
+void activateQuestAcceptSUI(obj_id player, obj_id self)
+{
+	// Create the dialog page.
+	int pid = sui.createSUIPage(sui.SUI_MSGBOX, self, player, "handleQuestOfferResponse");
+
+	// Add elements text.
+	setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, BEGIN_QUEST_TITLE);
+	setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, BEGIN_QUEST_PROMPT);
+
+	// Add buttons.
+	sui.msgboxButtonSetup(pid, sui.YES_NO);
+	setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, QUEST_ACCEPT_OK);
+	setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, QUEST_ACCEPT_CANCEL);
+
+	// Show dialog.
+	sui.showSUIPage( pid );
+}

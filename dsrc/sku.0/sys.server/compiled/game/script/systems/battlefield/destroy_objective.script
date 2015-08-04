@@ -1,0 +1,167 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        destroy_objective
+ * Description:  script that goes on the target destructible objects
+ *		 in a destroy mission.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.battlefield;
+include library.factions;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+const string VAR_WARNING_LEVEL				= "battlefield.warning_level";
+const string VAR_FACTION				= "battlefield.faction";
+
+const string_id SID_REPAIR_STRUCTURE    	      	= new string_id("battlefield", "repair_structure");
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	LOG("LOG_CHANNEL", "battlefield.destroy_objective::OnAttach -- " + self);
+
+	// We don't want to base destructible building script since this script overrides its triggers.
+	//if (hasScript(self, "systems.battlefield.destructible_building"))
+	//	detachScript(self, "systems.battlefield.destructible_building");
+
+	// Set hitpoints to critical object value1
+	if (hasObjVar(self, battlefield.VAR_VALUE1))
+	{
+		int hitpoints = (int)getFloatObjVar(self, battlefield.VAR_VALUE1);
+		setMaxHitpoints(self, hitpoints);
+		setHitpoints(self, hitpoints);
+	}
+
+	// Set repair cost to critical object value2
+	if (hasObjVar(self, battlefield.VAR_VALUE2))
+	{
+		int repair_cost = getIntObjVar(self, battlefield.VAR_VALUE2);
+		setObjVar(self, battlefield.VAR_REPAIR_COST, repair_cost);
+	}
+	else
+		setObjVar(self, battlefield.VAR_REPAIR_COST, 10);
+
+	region bf = battlefield.getBattlefield(self);
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	int faction_id = pvpBattlefieldGetFaction(self, bf);
+	string faction = factions.getFactionNameByHashCode(faction_id);
+	// Mark the faction on the object so that it can be read OnDestroy.
+	setObjVar(self, VAR_FACTION, faction_id);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+	LOG("LOG_CHANNEL", "destroy_objective::OnCombatDamaged");
+
+	region bf = battlefield.getBattlefield(self);
+	string name = getName(self);
+	int faction_id = pvpBattlefieldGetFaction(self, bf);
+	string faction = factions.getFactionNameByHashCode(faction_id);
+	//string objVar_name = battlefield.VAR_GAME + "." + faction + "_warning_level";
+
+	// warning_level determines what warning messages have already been sent.
+	int warning_level = 0;
+
+	if (hasObjVar(self, VAR_WARNING_LEVEL))
+		warning_level = getIntObjVar(self, VAR_WARNING_LEVEL);
+
+	int hitpoints = getHitpoints(self);
+	int max_hitpoints = getMaxHitpoints(self);
+
+	float percent_hp = (float)hitpoints / (float)max_hitpoints;
+
+	//LOG("LOG_CHANNEL", "percent ->" + percent_hp + " warning level ->" + warning_level);
+
+	if (percent_hp < .5)
+	{
+		if (warning_level == 0)
+		{
+			battlefield.sendFactionMessage(bf, faction, name + " is heavily damaged!");
+			setObjVar(self, VAR_WARNING_LEVEL, 1);
+		}
+	}
+
+	if (percent_hp < .25)
+	{
+		if (warning_level == 1)
+		{
+			battlefield.sendFactionMessage(bf, faction, name + " is severely damaged!");
+			setObjVar(self, VAR_WARNING_LEVEL, 2);
+		}
+	}
+
+	if (percent_hp < .1)
+	{
+		if (warning_level == 2)
+		{
+			battlefield.sendFactionMessage(bf, faction, name + " is about to be destroyed!");
+			setObjVar(self, VAR_WARNING_LEVEL, 3);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	LOG("LOG_CHANNEL", "destroy_objective::OnObjectDisabled");
+
+	// If the object was not destroyed in combat, we don't want to do anything.
+	if (!hasObjVar(self, battlefield.VAR_COMBAT_DESTROYED))
+		return SCRIPT_CONTINUE;
+
+	region bf = battlefield.getBattlefield(self);
+	obj_id master_object = battlefield.getMasterObjectFromRegion(bf);
+	string name = getName(self);
+	int faction_id = getIntObjVar(self, VAR_FACTION);
+	string faction = factions.getFactionNameByHashCode(faction_id);
+
+	// Determine what destroy objectives are left for the faction
+	string objVar_name = battlefield.VAR_GAME + "." + faction + "_destroy";
+	//LOG("LOG_CHANNEL", "bf ->" + master_object + " name ->" + name + " faction_id ->" + faction_id + " faction ->" + faction);
+	
+	resizeable obj_id[] destroy_objs = getResizeableObjIdArrayObjVar(master_object, objVar_name);
+
+	if (destroy_objs == null)
+	{
+		LOG("LOG_CHANNEL", "destroy_objective::OnObjectDisabled -- destroy_objs is null");
+		return SCRIPT_CONTINUE;
+	}
+
+	if (destroy_objs.length == 1)
+	{
+		// If this is the faction's last objective, it is eliminated.
+		dictionary params = new dictionary();
+		params.put("faction", faction);
+		messageTo(master_object, "msgEliminateFaction", params, 0.0f, true);
+	}
+	else
+	{
+		// Remove the destroyed object from the list.
+		int idx = utils.getElementPositionInArray(destroy_objs, self);
+		if (idx == -1)
+			LOG("LOG_CHANNEL", "battlefield.destroy_objective::OnObjectDisabled -- cannot find " + self + " in objective list.");
+		else
+		{
+			destroy_objs = utils.removeElementAt(destroy_objs, idx);
+			setObjVar(master_object, objVar_name, destroy_objs);
+		}
+	}
+
+	//battlefield.removeBattlefieldObject(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/

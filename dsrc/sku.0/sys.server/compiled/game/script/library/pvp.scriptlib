@@ -1,0 +1,2054 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.buff;
+include library.colors;
+include library.factions;
+include library.force_rank;
+include library.pet_lib;
+include library.prose;
+include library.sui;
+include library.trace;
+include library.utils;
+
+include java.lang.Math;
+
+/***** CONSTANTS *******************************************************/
+
+const int BUFFER_TIME					= 180;
+
+const string SCRIPTVAR_PVP_BASE				= "pvp";
+
+const string SCRIPTVAR_DAMAGE_BASE			= SCRIPTVAR_PVP_BASE +".damage";
+const string SCRIPTVAR_PVP_DAMAGE			= SCRIPTVAR_DAMAGE_BASE +".pvp";
+const string SCRIPTVAR_PVE_DAMAGE			= SCRIPTVAR_DAMAGE_BASE +".pve";
+const string SCRIPTVAR_PVP_STAMP			= SCRIPTVAR_DAMAGE_BASE +".stamp";
+
+// Contribution tracking
+const string	VAR_CREDIT_FOR_PVP_KILLS		= "creditForPvPKills";
+const string	VAR_ATTACKER_LIST			= VAR_CREDIT_FOR_PVP_KILLS + ".attackerList";
+const string	VAR_TOTAL_DAMAGE_TALLY			= VAR_CREDIT_FOR_PVP_KILLS + ".totalDamageTally";  //total damage done to target
+const string	VAR_LAST_PVP_DAMAGE_TIME		= "creditForPvPKillsTracking.lastDamageTimeStamp"; // last time we took pvp damage
+const string	VAR_LAST_PVP_DAMAGE_MSG_SENT		= "creditForPvPKillsTracking.clearContribsMsgPending"; //  have we setup the clear contribution callback?
+
+// PvP Ratings
+const int		MAX_RATING_DELTA		= 40;   // the max amount any player can gain or lose for a single match
+const boolean 	ENFORCE_MINIMUM_DELTA			= false; // winner must always gain 2 points, loser must always lose 2 points
+const string	VAR_PVP_RATING				= "pvp_rating.value";
+
+// VARIABLE ADJUSTERS APPLY TO BOTH RATING AND XP
+const float		MAX_RATING_AFFECT_ON_XP		= 0.50f;	  // the PvP XP gained/lost is modified by a player's PvP rating, currently the rating can modify the XP gain/loss by 50 %
+const int		MAX_RATING_DISPARITY		= 2000;	  // The maximum modification to PvP XP gain/loss is currently 50% and occurs when the rating disparity = = 2000.  If disparity > 2000 then disparity = 2000.
+const boolean	COUNT_PET_DAMAGE			= false;  // should a player's pet damage be added to a player's tally?
+const float		COUNT_PET_DAMAGE_PERCENT	= 0.25f;  // if counting pet damage, at what percentage should it be scaled?
+const int		CONTRIB_CLEAR_INTERVAL		= 180;	  // how often to check for clearing contributions. 3 min currently.
+const int		MAX_PLAYERS			= 30;	  // the max number of player that can be evaluated for XP/Ratings when a player dies
+const int		MAX_DISTANCE			= 80;	  // max # of feet a winner can be from a victim's corpse to get xp/rating from the death
+const string	VAR_PVP_LAST_KILLS			= "pvp_tracker.lastkills"; // stores the last XP_FARMING_TRACKING_SLOTS PvP kills for a player
+const string 	VAR_PVP_LAST_UPDATE			= "pvp_tracker.lastupdate"; // The last time a player was added to the kills tracker.
+const int		VISIBILITY_THRESHOLD		= 2000;	  // the threshold of visibility at which a player will begin to show up on bounty hunter terminals
+const int		INITIAL_RANKING_VALUE		= 1200;	  // initial PvP rating for a new player
+const int		XP_FARMING_TRACKING_SLOTS	= 20;	  // the number of players we track for PvP kills.  A value of 10 indicates that once i have slain
+const int		PVP_TRACKING_INTERVAL		= 259200; 	  // the time in which the PvP kill track list resets if it hasn't changed.
+													  // a player for PvP XP and/or Rating adjustments, i have to kill 9 other players before i can gain off of player #1 again
+// FORCE RANK XP DATA
+const string FRS_XP_DATATABLE				= "datatables/pvp/force_rank_xp.iff";
+const string FRS_DT_COLUMN_PREFIX			= "rank";
+const string FRS_DT_ROW_NONJEDI_PREFIX			= "nj"; // nj_xp_gain; nj_xp_loss; -- aplies to factioned non-jedis
+const string FRS_DT_ROW_BNTYHUNTER_PREFIX		= "bh";
+const string FRS_DT_ROW_PADAWAN_PREFIX			= "pw";
+const string FRS_DT_RANKED_JEDI_PREFIX			= "r"; //r0_xp_gain, r0_xp_loss, r3_xp_gain, ...
+const string FRS_DT_ROW_LOSS_SUFFIX			= "_xp_loss";
+const string FRS_DT_ROW_WIN_SUFFIX			= "_xp_gain";
+
+const string PVP_CS_LOG					= "pvp";
+
+const int PVP_STATE_NONE				= 0;
+const int PVP_STATE_INITIALIZE				= 1;
+const int PVP_STATE_NEW_BATTLE				= 2;
+const int PVP_STATE_BUILD_QUEUE				= 3;
+const int PVP_STATE_INVITE_QUEUE			= 4;
+const int PVP_STATE_INVITE_OVER				= 5;
+const int PVP_STATE_ABORT_QUEUE				= 6;
+const int PVP_STATE_BATTLE_SETUP			= 7;
+const int PVP_STATE_BATTLE_START			= 8;
+const int PVP_STATE_BATTLE_ENGAGED			= 9;
+const int PVP_STATE_BATTLE_END				= 10;
+const int PVP_STATE_BATTLE_CLEANUP			= 11;
+
+const string [] BATTLEFIELD_STATUS			=
+							{
+								"Loading",			// PVP_STATE_NONE
+								"Initializing",			// PVP_STATE_INITIALIZE
+								"Starting",			// PVP_STATE_NEW_BATTLE
+								"Reviewing Queue",		// PVP_STATE_BUILD_QUEUE
+								"Inviting Participants",	// PVP_STATE_INVITE_QUEUE
+								"Reviewing Invitations",	// PVP_STATE_INVITE_OVER
+								"Resetting",			// PVP_STATE_ABORT_QUEUE
+								"Battle Setting Up",		// PVP_STATE_BATTLE_SETUP
+								"Battle Started",		// PVP_STATE_BATTLE_START
+								"Battle Engaged",		// PVP_STATE_BATTLE_ENGAGED
+								"Battle Ending",		// PVP_STATE_BATTLE_END
+								"Battle Cleaning Up"		// PVP_STATE_BATTLE_CLEANUP
+							};
+
+const int BATTLEFIELD_DURATION				= 900; // 900
+const float BATTLEFIELD_INVITATION_WAIT_TIME		= 120.0f; // 120.0f
+const float BATTLEFIELD_SETUP_WAIT_TIME			= 120.0f; // 120.0f
+const float BATTLEFIELD_END_CLEANUP			= 30.0f; // 30.0f
+const float BATTLEFIELD_RUNNER_DURATION			= 95.0f; // 95.0f
+
+const int BATTLEFIELD_TYPE_NONE				= 0;
+const int BATTLEFIELD_TYPE_REINFORCEMENTS		= 1;
+const int BATTLEFIELD_TYPE_CAPTURE_THE_FLAG		= 2;
+
+const string BATTLEFIELD_ACTIVE_PLAYERS			= "battlefield.active_players";
+const string BATTLEFIELD_ACTIVE_REBEL_PLAYERS		= "battlefield.active_rebel_players";
+const string BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS	= "battlefield.active_imperial_players";
+
+const string COLOR_REBELS				= "\\" + colors_hex.COLOR_REBELS;
+const string COLOR_IMPERIALS				= "\\" + colors_hex.COLOR_IMPERIALS;
+
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+//-/-/-/-/-/-/-/-/-/-/-START PVP ** RATING ** SECTION/-/-/-/-/-/-/-/-/-/-/
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+
+//
+// compiles and modifies the winners list of a fight against @victim.  internal helper method.
+//
+obj_var[] _packageCombatWinners(obj_id victim)
+{
+	if(!isIdValid(victim))
+	{
+		trace.log("pvp_rating", "pvp.scriptlib._packageCombatWinners:-> victim is invalid.  not handing out points.", victim, trace.TL_WARNING);
+		return null;
+	}
+
+	if(!utils.hasScriptVar(victim, VAR_ATTACKER_LIST))
+	{
+		trace.log("pvp_rating", "pvp.scriptlib._packageCombatWinners:-> victim missing scriptvars. not handing out points.", victim, trace.TL_WARNING);
+		return null;
+	}
+
+	obj_id[] attackerList = utils.getObjIdBatchScriptVar(victim, VAR_ATTACKER_LIST);
+	if(attackerList == null || attackerList.length == 0 )
+	{
+		trace.log("pvp_rating", "pvp.scriptlib._packageCombatWinners:-> attackerList is bunk.  Bailing.", victim, trace.TL_WARNING);
+		return null;
+	}
+
+	obj_var[] damArray = new obj_var[attackerList.length];
+	for(int i = 0; i < attackerList.length; i++)
+	{
+		damArray[i] = new obj_var(attackerList[i].toString(), utils.getIntScriptVar(victim, VAR_ATTACKER_LIST + "." + attackerList[i] + ".damage"));
+	}
+
+	if(damArray == null || damArray.length == 0)
+	{
+		trace.log("pvp_rating", "pvp.scriptlib._packageCombatWinners:-> damArray is bunk. Bailing..", victim, trace.TL_WARNING);
+		return null;
+	}
+
+	obj_var[] killers = list.quickSort(0, attackerList.length - 1, damArray);
+	if((killers == null) || (killers.length == 0))
+	{
+		trace.log("pvp_rating", "pvp.scriptlib._packageCombatWinners:-> killers obj_var[] is bunk. Bailing..", victim, trace.TL_WARNING);
+		return null;
+	}
+
+	// cull killers down to top MAX_PLAYERS, if necessary
+	string logPlayers = "";
+	if(killers.length > MAX_PLAYERS)
+	{
+		obj_var[] tmpArray = new obj_var[MAX_PLAYERS];
+		for(int i = 0; i < MAX_PLAYERS; i++)
+		{
+			tmpArray[i] = killers[i];
+			logPlayers += "" + killers[i] + ",";
+		}
+
+		killers = tmpArray;
+	}
+
+	if (killers.length > 0 && force_rank.isForceRanked(utils.stringToObjId(killers[killers.length-1].getName())))
+	{
+		if (pvp.isPvpDeath(victim))
+			utils.setScriptVar(victim, "jedi.rankedDeath", 1);
+	}
+
+	// CS logging
+	trace.log(PVP_CS_LOG, "%TU died [in part] to PvP damage. " + killers.length + " players contributed to the death: [" + logPlayers + "]", victim, trace.TL_CS_LOG);
+
+	return killers;
+}
+
+//
+// constructs a prose package for those times a player has gained or lost PvP rating points do to a PvP death
+//
+prose_package getPvPRatedProsePackage(obj_id winner, obj_id loser, boolean winnerPackage)
+{
+	string stringId 		= "";
+	string stringFile 		= "pvp_rating";
+	string[] phrases 		= null;
+	obj_id actor			= null;
+	obj_id target			= null;
+
+	if(winnerPackage)
+	{
+		actor = winner;
+		target = loser;
+	}
+	else
+	{
+		actor = loser;
+		target = winner;
+	}
+
+	if(isSpecies(actor, SPECIES_TRANDOSHAN))
+	{ // Trandoshan win/loss packets
+		if(!winnerPackage)
+		{
+			phrases = new string[3];
+			phrases[0] = "trandoshan_killed1";
+			phrases[1] = "trandoshan_killed1";
+			phrases[2] = "trandoshan_killed1";
+		}
+		else
+		{
+			phrases = new string[3];
+			phrases[0] = "trandoshan_win1";
+			phrases[1] = "trandoshan_win1";
+			phrases[2] = "trandoshan_win1";
+		}
+	}
+	else
+	{
+		// all other races win/loss packets
+		if(!winnerPackage)
+		{
+			phrases = new string[3];
+			phrases[0] = "killed1";
+			phrases[1] = "killed2";
+			phrases[2] = "killed3";
+		}
+		else
+		{
+			phrases = new string[3];
+			phrases[0] = "win1";
+			phrases[1] = "win2";
+			phrases[2] = "win3";
+		}
+	}
+
+	stringId = phrases[rand(0, phrases.length -1)];
+
+	prose_package pp_msg = new prose_package();
+	pp_msg.stringId = new string_id(stringFile, stringId);
+	pp_msg.actor.set(actor);
+	pp_msg.target.set(utils.getRealPlayerFirstName(target));
+	pp_msg.digitInteger = getCurrentPvPRating(actor);
+
+	return pp_msg;
+}
+
+//
+// constructs a prose package for those times where a player cannot gain or lose PvP rating points because they have
+// already engaged in combat with that player recently
+//
+prose_package getPvPThrottleProsePackage(obj_id winner, obj_id loser, boolean winnerPackage)
+{
+	string stringId 		= "";
+	string stringFile 		= "pvp_rating";
+	obj_id actor			= null;
+	obj_id target			= null;
+
+	if(winnerPackage)
+	{
+		actor = winner;
+		target = loser;
+	}
+	else
+	{
+		actor = loser;
+		target = winner;
+	}
+
+	if(isSpecies(actor, SPECIES_TRANDOSHAN))
+	{
+		if(winnerPackage)
+		{
+			stringId = "rating_throttle_trandoshan_winner";
+		}
+		else
+		{
+			stringId = "rating_throttle_trandoshan_loser";
+		}
+	}
+	else
+	{
+		if(winnerPackage)
+		{
+			stringId = "rating_throttle_winner";
+		}
+		else
+		{
+			stringId = "rating_throttle_loser";
+		}
+	}
+
+	prose_package pp_msg = new prose_package();
+	pp_msg.stringId = new string_id(stringFile, stringId);
+	pp_msg.actor.set(actor);
+	pp_msg.target.set(utils.getRealPlayerFirstName(target));
+	pp_msg.digitInteger = getCurrentPvPRating(actor);
+
+
+	return pp_msg;
+}
+
+//
+// construcs prose packages for those times when a player cannot gain or lose pvp rating points because the loser is at the
+// floor of points (i.e doesnt have enough points to lose)
+//
+prose_package getPvPRatingFloorProsePackage(obj_id winner, obj_id loser, boolean winnerPackage)
+{
+	string stringId 		= "";
+	string stringFile 		= "pvp_rating";
+	obj_id actor			= null;
+	obj_id target			= null;
+
+	if(winnerPackage)
+	{
+		actor = winner;
+		target = loser;
+	}
+	else
+	{
+		actor = loser;
+		target = winner;
+	}
+
+	if(isSpecies(actor, SPECIES_TRANDOSHAN))
+	{
+		if(winnerPackage)
+		{
+			stringId = "rating_floor_trandoshan_winner";
+		}
+		else
+		{
+			stringId = "rating_floor_trandoshan_loser";
+		}
+	}
+	else
+	{
+		if(winnerPackage)
+		{
+			stringId = "rating_floor_winner";
+		}
+		else
+		{
+			stringId = "rating_floor_loser";
+		}
+	}
+
+	prose_package pp_msg = new prose_package();
+	pp_msg.stringId = new string_id(stringFile, stringId);
+	pp_msg.actor.set(actor);
+	pp_msg.target.set(utils.getRealPlayerFirstName(target));
+	pp_msg.digitInteger = getCurrentPvPRating(actor);
+
+	return pp_msg;
+}
+
+//
+// adjusts the pvp ratings and Force Rank XP for @victim and all players that took part in his/her death
+//
+void adjustPvPPoints(obj_id victim)
+{
+	// objvars look like this...
+	// creditForPvPKills.attackerList
+	// creditForPvPKills.attackerList.1311.damage
+	// creditForPvPKills.attackerList.2455.damage
+	// creditForPvPKills.attackerList.2343.damage
+
+	int totalDamageTally = 0;
+	if (utils.hasScriptVar(victim, VAR_TOTAL_DAMAGE_TALLY))
+		totalDamageTally = (int) utils.getIntScriptVar(victim, VAR_TOTAL_DAMAGE_TALLY);
+
+
+	if(totalDamageTally < 0)
+	{
+		return;
+	}
+
+	obj_var[] winners = _packageCombatWinners(victim);
+	if (winners == null)
+		return;
+
+	boolean victimDeathCountsForPoints = false;
+	boolean onlyThrottledAttackers = true;
+	obj_id messageWinner = null;
+	int victimRatingDelta = 0;
+	int victimXPDelta	 = 0;
+	dictionary darkJediXPRequests = new dictionary();
+	darkJediXPRequests.put("victim", victim);
+	darkJediXPRequests.put("totalDamageToVictim", totalDamageTally);
+
+	dictionary darkJediPvPAction = new dictionary(); // used to store dmg amounts and types against dark jedi who might be involved in a pvp ACTION
+	darkJediPvPAction.put("victim", victim);
+	darkJediPvPAction.put("totalDamageToVictim", totalDamageTally);
+
+	for(int i = 0; i < winners.length; i++)
+	{
+		obj_var winnerVar = winners[i];
+
+		int dam = winnerVar.getIntData();
+		obj_id winner = utils.stringToObjId(winnerVar.getName());
+
+		//the percentage of player damage / total damage inflicted on target
+		float percentContribution = ((float)dam / totalDamageTally);
+
+		trace.log("pvp_rating", "Calculating point exchange for winner " + winnerVar.getName(), victim, trace.TL_DEBUG);
+
+		if((!isIdValid(winner)) 		||
+		   (!winner.isLoaded()) 		||
+		   (winner.isBeingDestroyed()) 	||
+		   (winner == victim)
+		  )
+		{
+			//hrmm
+			trace.log("pvp_rating", "pvp.scriptlib.adjustPvPRatings: killer is invalid, !isLoaded, or isBeingDestroyed. ignoring...", winner, trace.TL_WARNING);
+			continue;
+		}
+
+		else // killer is valid
+		{
+			messageWinner = winner; // this is used for the "you've died to blah blah" message
+
+			// neither XP nor ratings can be affected if the winner has killed the victim recently (victim is in winners last 10 victims list)
+			if(!hasKilledVictimRecently(winner, victim))
+			{
+				onlyThrottledAttackers = false;
+				if(getDistance(winner, victim) > MAX_DISTANCE)
+				{
+					continue;
+				}
+
+				// In the case of duels or players going on leave after doing damage do not award them pvp rating -PMW
+				if ( !pvpCanAttack(victim, winner) )
+				{
+					continue;
+				}
+
+				if(canAffectForceRankXPChange(victim, winner))
+				{
+					// need to see if this was two dark jedis fighting.  if so, we need to send the XP request to the enclave
+					// for validation.  see comments in canAffectForceRankXPChange for details.
+					if(force_rank.getCouncilAffiliation(victim) == force_rank.DARK_COUNCIL && force_rank.getCouncilAffiliation(winner) == force_rank.DARK_COUNCIL)
+					{
+						darkJediXPRequests.put(winner, percentContribution);
+						darkJediPvPAction.put(winner, percentContribution);
+					}
+					else
+					{
+						// Grant Force Rank XP to the winner
+						int xpAdjustment = getAdjustedForceRankXPDelta(victim, winner, percentContribution, false);
+						if(xpAdjustment != 0)
+						{
+							force_rank.adjustForceRankXP(winner, xpAdjustment);
+						}
+
+						victimXPDelta += getAdjustedForceRankXPDelta(victim, winner, percentContribution, true);
+						trace.log("force_rank", "Winner " + utils.getRealPlayerFirstName(winner) + "(" + winner + ") was awarded " + xpAdjustment + " Council XP for their " + percentContribution*100 + "% contribution to the death of %TU", victim, trace.TL_CS_LOG | trace.TL_DEBUG);
+					}
+				}
+				else
+				{
+					// still need to check if they are both dark council...
+					if(force_rank.getCouncilAffiliation(victim) == force_rank.DARK_COUNCIL && force_rank.getCouncilAffiliation(winner) == force_rank.DARK_COUNCIL)
+					{
+						darkJediPvPAction.put(winner, percentContribution);
+					}
+				}
+
+				// Grant PvP Rating points
+				int winnerDelta = getAdjustedPvPRatingDelta(victim, winner, percentContribution, false);
+				int winnerCur   = getCurrentPvPRating(winner);
+
+				trace.log(PVP_CS_LOG, "Winner " + utils.getRealPlayerFirstName(winner) + "(" + winner + ") was awarded " + winnerDelta + " PvP Rating Points for their " + percentContribution*100 + "% contribution to the death of %TU", victim, trace.TL_CS_LOG | trace.TL_DEBUG);
+				setCurrentPvPRating(winner, winnerCur + winnerDelta);
+
+				// track victim delta
+				victimRatingDelta += getAdjustedPvPRatingDelta(victim, winner, percentContribution, true);
+
+				// message the winner (victim gets message after all the winners are notified)
+				prose_package ppr = getPvPRatedProsePackage(winner, victim, true);
+				sendSystemMessageProse(winner, ppr);
+
+				// sploit inhibitor so that people can't farm each other for XP repeatedly
+				registerPlayerKill(winner, victim);
+			}
+			else
+			{
+				// still need to check if they are both dark council...because even if killed recently, can still kill for PVP_ACTION, well give em the XP too
+				if(force_rank.getCouncilAffiliation(victim) == force_rank.DARK_COUNCIL && force_rank.getCouncilAffiliation(winner) == force_rank.DARK_COUNCIL)
+				{
+					darkJediPvPAction.put(winner, percentContribution);
+				}
+				else
+				{
+					// message the winner to let them know they cant gain off of that victim yet
+					prose_package pp = getPvPThrottleProsePackage(winner, victim, true);
+					sendSystemMessageProse(winner, pp);
+					trace.log(PVP_CS_LOG, "PvP points not awarded to " + utils.getRealPlayerFirstName(winner) + "(" + winner + ") for participation in death of %TU - recently killed.", victim, trace.TL_CS_LOG | trace.TL_DEBUG);
+				}
+			}
+		}
+	}
+
+	/*
+	if(darkJediXPRequests.size() > 2) //  >2 because there are always 2 items in the dictionary from init at method beginning
+	{
+		if(hasObjVar(victim, force_rank.VAR_MY_ENCLAVE_ID))
+		{
+			obj_id myEnclave = getObjIdObjVar(victim, force_rank.VAR_MY_ENCLAVE_ID);
+			messageTo(myEnclave, "XPDeathValidateRequest", darkJediXPRequests, 0, false);
+		}
+	}
+
+	// need to deal with dark jedi death due to PvP action
+	if(hasObjVar(victim, force_rank.VAR_NOTIFY_ENCLAVE_OF_DEATH) && darkJediPvPAction.size() > 2)
+	{
+		obj_id darkEnclave = getObjIdObjVar(victim, force_rank.VAR_NOTIFY_ENCLAVE_OF_DEATH);
+		messageTo(darkEnclave, "msgVictimizedJediDeath", darkJediPvPAction, 0, false);
+	}
+	*/
+
+	if(victimXPDelta != 0)
+	{
+		trace.log("force_rank", "%TU lost a total of " + victimXPDelta + " Council XP due to normal pvp for this death.", victim, trace.TL_CS_LOG);
+		force_rank.adjustForceRankXP(victim, victimXPDelta);
+	}
+
+	if(victimRatingDelta != 0) // loser has died to at least one valid winner.
+	{
+		trace.log(PVP_CS_LOG, "%TU lost a total of " + victimRatingDelta + " PvP rating points to normal pvp for this death.", victim, trace.TL_CS_LOG);
+		// system message the victim
+		setCurrentPvPRating(victim, getCurrentPvPRating(victim) + victimRatingDelta);
+		prose_package pp = getPvPRatedProsePackage(messageWinner, victim, false);
+		sendSystemMessageProse(victim, pp);
+	}
+	else if(onlyThrottledAttackers && isIdValid(messageWinner))
+	{
+		prose_package pp = getPvPThrottleProsePackage(messageWinner, victim, false);
+		sendSystemMessageProse(victim, pp);
+	}
+
+	return;
+}
+
+//
+// checks any rules to see if these two people can affect each other's force rank XP.
+// this is where we check for faction alignment, vendettas, banishments, etc
+//
+boolean canAffectForceRankXPChange(obj_id victim, obj_id winner)
+{
+	// if neither person is force ranked, then we can stop right here
+	if((!force_rank.isForceRanked(victim)) && (!force_rank.isForceRanked(winner)))
+	{
+		return false;
+	}
+
+	// **at this point, we have at least one person who is force ranked...**
+	// if they're in opposing factions and at least one of them is a jedi,
+	// this has to be a light vs. dark fight - someone is gaining or losing XP
+	boolean isOpposed = isInOpposingPvPFactions(victim, winner);
+	if(isOpposed)
+	{
+		return true;
+	}
+
+	// we know now that the two players are not opposed - check for light vs light and dark vs dark fights
+	int winnerCouncil = force_rank.getCouncilAffiliation(winner);
+	int victimCouncil = force_rank.getCouncilAffiliation(victim);
+
+	if((victimCouncil == force_rank.LIGHT_COUNCIL && winnerCouncil == force_rank.LIGHT_COUNCIL) ||
+	   (victimCouncil == force_rank.DARK_COUNCIL  && winnerCouncil == force_rank.DARK_COUNCIL))
+	{
+		return false;
+	}
+
+
+	// we now know that...
+	// 1. Either victim or winner is force ranked
+	// 2. Winner and victim are not opposing faction members
+	// 3. Winner and victim are not part of the same council affiliation
+
+	// From that we can extrapolate that either victim or winner is a neutral.
+	// If that neutral is either a padawan or a bounty hunter, XP is going be lost/gained
+	int winnerFaction = pvpGetAlignedFaction(winner);
+	int victimFaction = pvpGetAlignedFaction(victim);
+
+	if(winnerFaction == 0 && (isPadawan(winner) || isBountyHunter(winner)))
+	{
+		// victim is the FR jedi and loses some points for being killed by either a non-factioned padawan or bounty hunter
+		return true;
+	}
+
+	if(victimFaction == 0 && (isPadawan(victim) || isBountyHunter(victim)))
+	{
+		// winner is FR jedi and gains some points for killing either a non-factioned padawan or bounty hunter
+		return true;
+	}
+
+	/*********** CODE BELOW HAS BEEN COMMENTED AND IS TO BE USED ONLY WHEN BANISHMENT/COUNCIL PURGES ARE ENABLED AGAIN********
+
+	// at this point we can assume that both people are force ranked and of the same alignment (at least one person force ranked, and both people in the same
+	// faction).  We also know that no Padawans and no Bounty hunters are involved in the battle.
+
+	// now we know we're dealing with two ranked, dark jedi.  check for being part of the same
+	// vendetta, if the victim is banished or the victim is being council-purged.
+	// since we have to be authoritative with the enclave to read the data that lets us know if
+	// the two players are part of any Dark Jedi special case PvP scenarios (vendetta, banishment, etc)
+	// we have to send a message to the enclave to validate the kill.  the check for dark jedi happens
+	// in the method that calls this one.  the message handler to finally dish out the XP after the kill
+	// has been validated can be found in player_force_rank::XPDeathValidateResponse
+
+	/*
+	if(!hasObjVar(victim, force_rank.VAR_MY_ENCLAVE_ID)
+	{
+		LOG("pvp_rating", "pvp::canAffectForceRankXPChange: -> Missing enclave objvar on victim.  bailing out and denying pvp XP delta.");
+		return false;
+	}
+
+	obj_id darkEnclave = getObjVar(victim, VAR_MY_ENCLAVE_ID);
+	if(force_rank.isPartOfSameVendetta(victim, winner, darkEnclave))
+	{
+		return true;
+	}
+
+	force_rank.isPvPActionVictim(victim, force_rank.ACTION_BANISHMENT, darkEnclave)
+	force_rank.isPvPActionVictim(victim, force_rank.ACTION_COUNCIL_PURGE, darkEnclave)
+	*/
+	return true;
+}
+
+//
+// Returns the Force Rank XP delta for @player based on a fight against @opponent and
+// whether or not the @playerWon the fight or not.  The delta is unmodified at this stage.
+// Currently the XP Delta comes from a datatable (FRS_XP_DATATABLE)
+//
+int getRawForceRankXPDelta(obj_id player, boolean playerWon, obj_id opponent)
+{
+	int playerRank 		= force_rank.getForceRank(player);
+	int opponentRank	= force_rank.getForceRank(opponent);
+
+	if(playerRank < 0)
+	{
+		// @player is not ranked, hence needs no adjustments to the force ranking xp.
+		return 0;
+	}
+
+	string columnName 	= "";
+	string rowName  	= "";
+	string rowPrefix	= "";
+	string rowSuffix	= "";
+
+	columnName = "rank" + playerRank; // <-- this is the @player in the data table
+
+	// check if we killed a factioned individual
+	if(isInOpposingPvPFactions(player, opponent))
+	{
+		rowPrefix = FRS_DT_ROW_NONJEDI_PREFIX;
+	}
+
+	// padawn?
+	if(isPadawan(opponent))
+	{
+		rowPrefix = FRS_DT_ROW_PADAWAN_PREFIX;
+	}
+
+	// ranked jedi?
+	if(opponentRank > -1)
+	{
+		rowPrefix = FRS_DT_RANKED_JEDI_PREFIX + opponentRank;
+	}
+
+	// bounty hunter?
+	if(isBountyHunter(opponent))
+	{
+		rowPrefix = FRS_DT_ROW_BNTYHUNTER_PREFIX;
+	}
+
+	// win or lose against opponent?
+	if(playerWon)
+	{
+		rowSuffix = FRS_DT_ROW_WIN_SUFFIX;
+	}
+	else
+	{
+		rowSuffix = FRS_DT_ROW_LOSS_SUFFIX;
+	}
+
+	rowName = rowPrefix + rowSuffix; // <-- this is the opponent in the data table
+
+	int xpDelta = dataTableGetInt(FRS_XP_DATATABLE, rowName, columnName);
+	if(xpDelta == -1)
+	{
+		return 0; // -1 if the column can't be found, so return zero so that nothing happens.
+	}
+
+	if(!playerWon)
+	{
+		xpDelta *= -1;
+	}
+
+	trace.log("pvp_rating", "Force Rank XP Delta for player " + utils.getRealPlayerFirstName(player) + " is " + xpDelta, player, trace.TL_DEBUG);
+	return xpDelta;
+}
+
+//
+// gets an adjusted rating delta for eaither victim or killer, based on the percentCOntribution of the killer to the victim's death
+//
+int getAdjustedForceRankXPDelta(obj_id victim, obj_id killer, double percentContribution, boolean gettingVictimsDelta)
+{
+	string wonlost = "winning the battle against";
+	if(gettingVictimsDelta)
+	{
+		wonlost = "losing the battle to";
+	}
+
+	obj_id targetPlayer = null;
+	obj_id opponent 	= null;
+
+	if(gettingVictimsDelta)
+	{
+		targetPlayer = victim;
+		opponent = killer;
+	}
+	else
+	{
+		targetPlayer = killer;
+		opponent = victim;
+	}
+
+	int targetRat = getCurrentPvPRating(targetPlayer);
+	int opponentRat = getCurrentPvPRating(opponent);
+	int disparity = Math.abs(targetRat - opponentRat);
+
+	if(disparity > MAX_RATING_DISPARITY)
+	{
+		disparity = MAX_RATING_DISPARITY;
+	}
+
+	trace.log("pvp_rating", "Target " + utils.getRealPlayerFirstName(targetPlayer) + "'s PvP rating is " + targetRat + "; Opponent " + utils.getRealPlayerFirstName(opponent) + "'s rating is " + opponentRat + " for a final disparity of " + disparity, opponent, trace.TL_DEBUG);
+
+	// this is the % of XP adjustment, based on total PvP Rating disparity
+	float pvpRatingXPAdjustment = ((float)disparity / (float)MAX_RATING_DISPARITY) * (float)MAX_RATING_AFFECT_ON_XP;
+
+	trace.log("pvp_rating", "Rating Disparity is " + disparity + ", creating an XP mod of " + (pvpRatingXPAdjustment*100) + "% (" + pvpRatingXPAdjustment + ")", null, trace.TL_DEBUG);
+
+	//
+	// Do the targets adjustments
+	//
+	int targetDelta = getRawForceRankXPDelta(targetPlayer, !gettingVictimsDelta, opponent);
+	trace.log("pvp_rating", utils.getRealPlayerFirstName(targetPlayer) + "'s raw target player XP Delta for " + wonlost + " opponent " + utils.getRealPlayerFirstName(opponent) + " is " + targetDelta, targetPlayer, trace.TL_DEBUG);
+
+	if(targetDelta != 0)
+	{
+		// adjust the point delta by the amount of killer contribution to victim's death
+		targetDelta = (int)((float) targetDelta * percentContribution);
+		trace.log("pvp_rating", "After modifying the XP delta with the % contribution the adjusted XP delta for " + utils.getRealPlayerFirstName(targetPlayer) + " is " + targetDelta, null, trace.TL_DEBUG);
+
+		// adjust the point delta further given the PvP Rating disparity between the two players
+		if((targetRat < opponentRat && gettingVictimsDelta) || (targetRat > opponentRat && !gettingVictimsDelta))
+		{
+			targetDelta -= (int)((float)targetDelta * pvpRatingXPAdjustment);
+		}
+		else
+		{
+			targetDelta += (int)((float)targetDelta * pvpRatingXPAdjustment);
+		}
+
+		trace.log("pvp_rating", "After adjusting target " + utils.getRealPlayerFirstName(targetPlayer) + "'s XP delta against the RatingDisparity adjustment of " + pvpRatingXPAdjustment + ", the **FINAL** adjusted XP Delta is " + targetDelta, targetPlayer, trace.TL_DEBUG);
+	}
+
+	return targetDelta;
+}
+
+//
+// gets PvP Ratings delta for either @loser or @winner, based on the @percentInvolvement of the winner
+//
+int getAdjustedPvPRatingDelta(obj_id loser, obj_id winner, double percentInvolvement, boolean gettingVictimsDelta)
+{
+	if(percentInvolvement > 1.0)
+	{
+		trace.log("pvp_rating", "pvp.scriptlib.getAdjustedPvPRatingDelta:-> percentInvolvement > 1.0 (" + percentInvolvement + "). Bailing.", loser, trace.TL_WARNING | trace.TL_DEBUG);
+		return 0;
+	}
+
+	obj_id targetPlayer = null;
+	obj_id opponent 	= null;
+
+	if(gettingVictimsDelta)
+	{
+		targetPlayer = loser;
+		opponent = winner;
+	}
+	else
+	{
+		targetPlayer = winner;
+		opponent = loser;
+	}
+
+	// Get current ratings
+	int targetRating = getCurrentPvPRating(targetPlayer);
+	int opponentRating = getCurrentPvPRating(opponent);
+
+	// Get deltas at 100%
+	int targetDelta = getPvPRatingDelta(targetRating, opponentRating, (!gettingVictimsDelta));
+	trace.log("pvp_rating", utils.getRealPlayerFirstName(targetPlayer) + "'s raw RATING DELTA, based on a battle against " + utils.getRealPlayerFirstName(opponent) + " is " + targetDelta, targetPlayer, trace.TL_DEBUG);
+
+	// Adjust deltas based on rules
+	targetDelta = _massageDeltaWithRules(targetDelta, !gettingVictimsDelta);
+	trace.log("pvp_rating", "After adjusting " + utils.getRealPlayerFirstName(targetPlayer) + "'s raw RATING DELTA, based on Min/Max loss/gain rules, the adjusted delta is " + targetDelta, targetPlayer, trace.TL_DEBUG);
+
+	// scale deltas
+	targetDelta *= percentInvolvement;
+	trace.log("pvp_rating", "After scaling " + utils.getRealPlayerFirstName(targetPlayer) + "'s delta, based on the % involvement vs. opponent (" + utils.getRealPlayerFirstName(opponent) + "), the **FINAL** adjusted delta is " + targetDelta, targetPlayer, trace.TL_DEBUG);
+
+	return targetDelta;
+}
+
+//
+// returns current pvp rating for @player
+//
+int getCurrentPvPRating(obj_id player)
+{
+	if(!isIdValid(player))
+	{
+		trace.log("pvp_rating", "pvp_rating.scriptlib:-> Can't fetch PvP Rating for Invalid player ID.  Bailing.", player, trace.TL_ERROR_LOG | trace.TL_DEBUG);
+		return -1;
+	}
+
+	return getIntObjVar(player, VAR_PVP_RATING);
+}
+
+//
+// sets a new pvp @rating on @player and returns success or failure of the operation
+//
+boolean setCurrentPvPRating(obj_id player, int rating)
+{
+	if(!isIdValid(player))
+	{
+		trace.log("pvp_rating", "pvp_rating.scriptlib:-> Can't set PvP Rating for Invalid player ID.  Bailing.", player, trace.TL_ERROR_LOG | trace.TL_DEBUG);
+		return false;
+	}
+
+	setObjVar(player, VAR_PVP_RATING, rating);
+
+	// If force ranked, update the council pvp board.
+	//int council = force_rank.getCouncilAffiliation(player);
+	//if (council != -1)
+	//	force_rank.updatePvpBoardData(player, rating, council, "msgUpdatePvpBoard");
+
+	return true;
+}
+
+//
+// private helper method that makes any necessary adjustments to a rating @delta value, based on various rules, given
+// wheter or not the player @wonFight
+//
+int _massageDeltaWithRules(int delta, boolean wonFight)
+{
+	// No one can ever gain or lose more than 40 points
+	if(Math.abs(delta) > MAX_RATING_DELTA)
+	{
+		if(wonFight)
+		{
+			delta = MAX_RATING_DELTA;
+		}
+		else
+		{
+			delta = MAX_RATING_DELTA * -1;
+		}
+	}
+
+	// Winner must never lose points,
+	if(delta < 0 && wonFight)
+	{
+		delta = 0;
+	}
+	// Loser must never gain points.
+	else if(delta > 0 && (!wonFight))
+	{
+		delta = 0;
+	}
+
+	// Winner must always gain at least two points,
+	// loser must always lose at least two points
+	// -=-=currently disabled=-=-
+	if(ENFORCE_MINIMUM_DELTA)
+	{
+		if(delta < 2 && wonFight)
+		{
+			delta = 2;
+		}
+		else if(delta > -2 && (!wonFight))
+		{
+			delta = -2;
+
+		}
+	}
+
+	return delta;
+}
+
+//
+// calculates and returns the PvP Rating delta
+// for a fight, given the @oldRating, the @opponentRating and wether or not
+// the player with the @oldRating @wonFight or not
+//
+int getPvPRatingDelta(int oldRating, int opponentRating, boolean wonFight)
+{
+	int score = 1;
+	if(!wonFight)
+	{
+		score = -1;
+	}
+
+	int newRating 	= oldRating  + (score * 21) + ((opponentRating - oldRating) / 25);
+	int ratingDelta = newRating - oldRating;
+
+	trace.log("pvp_rating", "pvp::getPvPRatingDelta -> returned " + ratingDelta);
+	return ratingDelta;
+}
+
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+///-/-/-/-/-/-/-/-/-START CREDIT FOR PVP  SECTION/-/-/-/-/-/-/-/-/-/-/-/-/
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+
+//
+// Updates the script vars on @target with new total damage and ads @dam to @attacker's total
+//
+void updateDamageContributorList(obj_id target, obj_id attackr, int dam)
+{
+	obj_id realAttacker = attackr;
+
+	if (!isIdValid(target) || (!isIdValid(realAttacker)))
+	{
+		trace.log("pvp_rating.scriptlib", "updateDamageContributorList:-> Target or Attacker is invalid. Bailing.", target, trace.TL_WARNING | trace.TL_DEBUG);
+		return;
+	}
+
+	// are we getting attacked by a pet?
+	if(pet_lib.isPet(realAttacker))
+	{
+		if(!COUNT_PET_DAMAGE)
+		{
+			//trace.log("pvp_rating.scriptlib", "updateDamageContributorList:-> Ignoring damage from pet.", realAttacker, trace.TL_DEBUG);
+			return;
+		}
+
+		if(!pet_lib.hasMaster(realAttacker))
+		{
+			//trace.log("pvp_rating.scriptlib", "updateDamageContributorList:-> Pet has no master. Ignoring damage.", realAttacker, trace.TL_WARNING | trace.TL_DEBUG);
+			return;
+		}
+
+		realAttacker = getMaster(attackr); // pet's master has already been validated in previous call to pet_lib.hasMaster
+
+		//trace.log("pvp_rating.scriptlib", "updateDamageContributorList:-> Scaling pet damage of " + dam + " down by " + COUNT_PET_DAMAGE_PERCENT, realAttacker);
+		// adjust damage
+		dam = (int)((float)dam * COUNT_PET_DAMAGE_PERCENT);
+		//trace.log("pvp_rating.scriptlib", "updateDamageContributorList:-> Pet damage now " + dam + ".", realAttacker);
+	}
+	else if(!isPlayer(realAttacker))
+	{
+		//trace.log("pvp_rating.scriptlib", "updateDamageContributorList:-> Ignoring NPC Damage.", realAttacker);
+		return;
+	}
+
+	if(dam > 0)
+	{
+		// Update last PvP damage timestamp
+		updatePvPDamageTimeStamp(target);
+
+		// Update total damage done.
+		double tally = utils.getIntScriptVar(target, VAR_TOTAL_DAMAGE_TALLY); //how much total damage has been done?
+		tally += dam;
+		utils.setScriptVar(target, VAR_TOTAL_DAMAGE_TALLY, (int)tally);
+
+		// Setup objvars for this attacker if they don't exist
+		resizeable obj_id[] attackerList = utils.getResizeableObjIdBatchScriptVar(target, VAR_ATTACKER_LIST);
+		if(attackerList != null && attackerList.length > 0)
+		{
+			if (utils.getElementPositionInArray(attackerList, realAttacker) == -1)
+			{
+				attackerList = utils.addElement(attackerList, realAttacker);
+				utils.setBatchScriptVar(target, VAR_ATTACKER_LIST, attackerList);
+			}
+		}
+		else
+		{
+			attackerList = utils.addElement(attackerList, realAttacker);
+			utils.setBatchScriptVar(target, VAR_ATTACKER_LIST, attackerList);
+		}
+
+		// Update damage for this attacker
+		string basePath = VAR_ATTACKER_LIST + "." + realAttacker;
+		string damPath = basePath + ".damage";
+
+		int totalDamage = dam + utils.getIntScriptVar(target, damPath);  //add any previous damage done by player
+		utils.setScriptVar(target, damPath, totalDamage);      //setting the player's net Id as a String = key and damage = value
+
+		//trace.log("pvp_rating", utils.getRealPlayerFirstName(realAttacker) + " now has " + totalDamage+ " credits.", realAttacker);
+	}
+
+	return;
+}
+
+
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+///-/-/-/-/-/-/-/-/-START HOUSEKEEPING FOR XP & RATINGS/-/-/-/-/-/-/-/-/-/
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+
+//
+// @returns true if @attacker can affect a rating/force ranking update as a result of killing @victim based on the
+// the @attacker's VAR_PVP_LAST_KILLS list.
+//
+boolean hasKilledVictimRecently(obj_id attacker, obj_id victim)
+{
+	boolean rslt = true;
+
+	// try grabbing the list of objvars
+	obj_id[] victimList = utils.getObjIdBatchObjVar(attacker, VAR_PVP_LAST_KILLS);
+
+	if(victimList != null)
+	{
+		// exists in victim list?
+		if(utils.getElementPositionInArray(victimList, victim) == -1)
+		{
+			rslt = false;
+		}
+	}
+	else // list is null, cause we don't have one set yet, we return true
+	{
+		rslt = false;
+	}
+
+	// trace.log("pvp_rating", "pvp.scriptlib::hasKilledVictimRecently(attacker:" + utils.getRealPlayerFirstName(attacker) +
+	//	", victim:" + utils.getRealPlayerFirstName(victim) + ") returned: " + rslt, attacker);
+	return rslt;
+}
+
+//
+// adds the @victim to the @attacker's VAR_PVP_LAST_KILLS list. this will disable any further
+// PvP related point updates based on any subsequent battles in which @attacker kills @victim.
+// Note that if @victim should kill @attacker PvP related points will be updated.
+// @attacker can once again affect a PvP related point update against @victim once @attacker
+// adds enough people (more than XP_FARMING_TRACKING_SLOTS) to his VAR_PVP_LAST_KILLS list, thus
+// bumping the @victim off.  Currently registering as script vars.  if it becomes a problem that
+// players are logging out a bunch to clear these, then we need to consider objvars
+//
+void registerPlayerKill(obj_id attacker, obj_id victim)
+{
+	// try grabbing the list of objvars
+	resizeable obj_id[] victimList = utils.getResizeableObjIdBatchObjVar(attacker, VAR_PVP_LAST_KILLS);
+
+	if(victimList != null && victimList.length > 0)
+	{
+		// sanity check - don't want to add the victim again for some strange reason
+		if(utils.getElementPositionInArray(victimList, victim) == -1)
+		{
+			//trace.log("pvp_rating", "pvp.scriptlib::registerPlayerKill-> 1. adding victim " + utils.getRealPlayerFirstName(victim) + " to " + utils.getRealPlayerFirstName(attacker) + "'s victim list.", attacker);
+			victimList = utils.addElement(victimList, victim);
+			while(victimList.length > XP_FARMING_TRACKING_SLOTS)
+			{
+				victimList = utils.removeElementAt(victimList, 0);
+			}
+
+			utils.setResizeableBatchObjVar(attacker, VAR_PVP_LAST_KILLS, victimList);
+			trace.log(PVP_CS_LOG, "Adding " + utils.getRealPlayerFirstName(victim) + "(" + victim + ") to last-50-victim-list of %TU", attacker, trace.TL_CS_LOG);
+		}
+		else
+		{
+			//trace.log("pvp_rating", "pvp.scriptlib::registerPlayerKill:-> tried adding a victim that was already in our list.  shouldn't happen.  ignoring request.", attacker, trace.TL_WARNING);
+			return;
+		}
+	}
+	else
+	{
+		victimList = utils.addElement(victimList, victim);
+		while(victimList.length > XP_FARMING_TRACKING_SLOTS)
+		{
+			victimList = utils.removeElementAt(victimList, 0);
+		}
+
+		utils.setResizeableBatchObjVar(attacker, VAR_PVP_LAST_KILLS, victimList);
+	}
+
+	setObjVar(attacker, VAR_PVP_LAST_UPDATE, getGameTime() + PVP_TRACKING_INTERVAL);
+
+	return;
+}
+
+//
+// Whipes all of the credit vars off of the player.  Normally called if no PvP damage has been sustained for PVP_DAMAGE_CLEAR_INTERVAL seconds
+//
+boolean cleanupCreditForPvPKills(obj_id whichPlayer)
+{
+	utils.removeScriptVarTree(whichPlayer, "creditForPvPKills");
+	utils.removeScriptVarTree(whichPlayer, "creditForPvPKillsTracking");
+
+	if (hasObjVar(whichPlayer, VAR_PVP_LAST_UPDATE))
+	{
+		int last_update = getIntObjVar(whichPlayer, VAR_PVP_LAST_UPDATE);
+		if (last_update < getGameTime())
+		{
+			// The kill tracker list has expired.
+			removeObjVar(whichPlayer, VAR_PVP_LAST_KILLS);
+			removeObjVar(whichPlayer, VAR_PVP_LAST_UPDATE);
+		}
+	}
+
+	return true;
+}
+
+//
+// Sets a timestamp for the last time we took eligible PvP damage
+//
+void updatePvPDamageTimeStamp(obj_id player)
+{
+	int now = getGameTime();
+
+	setupClearPvPDamageCallback(player);
+	utils.setScriptVar(player, VAR_LAST_PVP_DAMAGE_TIME, now);
+
+	return;
+}
+
+//
+// Sends a timed message to self if one isn't already pending.  msg is handled in player_pvp.
+// message handler determines if the contributions scriptvars should be cleared or not
+//
+void setupClearPvPDamageCallback(obj_id player)
+{
+	if(utils.hasScriptVar(player, VAR_LAST_PVP_DAMAGE_MSG_SENT))
+	{
+		return;
+	}
+
+	messageTo(player, "checkPvPDamageTime", null, CONTRIB_CLEAR_INTERVAL, false);
+	utils.setScriptVar(player, VAR_LAST_PVP_DAMAGE_MSG_SENT, true);
+
+	return;
+}
+
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+//-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/-/
+
+// convenience functions to determine various player states.  encpasulated in seperate methods as
+// criteria for some of these may change
+
+boolean isBountyHunter(obj_id player)
+{
+	return hasSkill(player, "class_bountyhunter_phase2_novice");
+}
+
+boolean isPadawan(obj_id player)
+{
+	return hasSkill(player, "force_title_jedi_rank_02"); // padawan title box
+}
+
+boolean isInOpposingPvPFactions(obj_id player1, obj_id player2)
+{
+	if ( isPlayer( player1 ) && pvpGetType(player1) == PVPTYPE_NEUTRAL )
+		return false;
+	else if ( isPlayer( player2 ) && pvpGetType(player2) == PVPTYPE_NEUTRAL )
+		return false;
+	else
+		return(pvpAreFactionsOpposed(pvpGetAlignedFaction(player1), pvpGetAlignedFaction(player2)));
+}
+
+
+/***** BASE FUNCTIONS **************************************************/
+/*****************************************************************
+ * @brief	grants a waypoint to the specified object to the player
+ *
+ * @param	obj_id	player
+ *
+ * @return	boolean;
+ *****************************************************************/
+boolean updatePlayerDamageTracking(obj_id player, obj_id attacker, obj_id wpn, int[] damage)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || !isIdValid(attacker) || !isIdValid(wpn) )
+		return false;
+
+	if ( damage == null || damage.length == 0 )
+		return false;
+
+	long tmpTotal = 0;
+	for ( int i = 0; i < damage.length; i++ )
+		tmpTotal += damage[i];
+
+	if ( tmpTotal > Integer.MAX_VALUE )
+		tmpTotal = Integer.MAX_VALUE;
+
+	int totalDamage = (int)tmpTotal;
+	if ( isPvpDamageSource(player, attacker) )
+	{
+		int currentDamage = utils.getIntScriptVar(player, SCRIPTVAR_PVP_DAMAGE);
+
+		long newTotal = currentDamage + totalDamage;
+		if ( newTotal > Integer.MAX_VALUE )
+			newTotal = Integer.MAX_VALUE;
+
+		utils.setScriptVar(player, SCRIPTVAR_PVP_DAMAGE, (int)newTotal);
+		utils.setScriptVar(player, SCRIPTVAR_PVP_STAMP, getGameTime());
+	}
+	else	//not PVP damage
+	{
+		int currentDamage = utils.getIntScriptVar(player, SCRIPTVAR_PVE_DAMAGE);
+
+		long newTotal = currentDamage + totalDamage;
+		if ( newTotal > Integer.MAX_VALUE )
+			newTotal = Integer.MAX_VALUE;
+
+		utils.setScriptVar(player, SCRIPTVAR_PVE_DAMAGE, (int)newTotal);
+	}
+
+	return true;
+}
+
+/*****************************************************************/
+boolean isPvpDamageSource(obj_id player, obj_id attacker)
+{
+	if ( !isIdValid(player) || !isIdValid(attacker) )
+		return false;
+
+	if ( pet_lib.isPet(attacker) )
+	{
+		obj_id master = getMaster(attacker);
+		if ( isIdValid(master) && master.isLoaded() )
+			attacker = master;
+	}
+
+	if ( isPlayer(attacker) )
+		return true;
+
+	if ( isPlayer( player ) && pvpGetType(player) == PVPTYPE_NEUTRAL )
+		return false;
+
+	return pvpAreFactionsOpposed(pvpGetAlignedFaction(player), pvpGetAlignedFaction(attacker));
+}
+
+/*****************************************************************/
+void validatePlayerDamageTracking(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return;
+
+	int now = getGameTime();
+	int stamp = utils.getIntScriptVar(player, SCRIPTVAR_PVP_STAMP);
+	int delta = now - stamp;
+
+	if ( delta < BUFFER_TIME )
+		return;
+
+	for ( int i = 0; i < 3; i++ )
+	{
+		int attrib = i*3;
+		if ( getAttrib(player, attrib) < getWoundedMaxAttrib(player, attrib) )
+			return;
+	}
+
+	clearPlayerDamageTracking(player);
+}
+
+/*****************************************************************/
+void clearPlayerDamageTracking(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return;
+
+	utils.removeScriptVarTree(player, SCRIPTVAR_DAMAGE_BASE);
+}
+
+/*****************************************************************/
+boolean isPvpDeath(obj_id player)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || !isDead(player) )
+		return false;
+
+	int now = getGameTime();
+	int stamp = utils.getIntScriptVar(player, SCRIPTVAR_PVP_STAMP);
+	int delta = now - stamp;
+
+	if ( delta >= BUFFER_TIME )
+		return false;
+
+	int pvpDamage = utils.getIntScriptVar(player, SCRIPTVAR_PVP_DAMAGE);
+	int pveDamage = utils.getIntScriptVar(player, SCRIPTVAR_PVE_DAMAGE);
+
+	//sendSystemMessageTestingOnly(player, "pvp death = "+(pvpDamage > pveDamage));
+	return (pvpDamage > pveDamage);
+}
+
+void incrementPlayerDeathBounty(obj_id killer, obj_id victim)
+{
+	if(!isIdValid(killer) || !isIdValid(victim))
+		return;
+
+	if(!isPlayer(killer) || !isPlayer(victim))
+		return;
+
+	if(hasKilledVictimRecently(killer, victim))
+		return;
+
+	registerPlayerKill(killer, victim);
+
+	int bounty = 0;
+
+	if(hasObjVar(killer, "bounty.amount"))
+		bounty = getIntObjVar(killer, "bounty.amount");
+
+	bounty += 1000;
+
+	setObjVar(killer, "bounty.amount", bounty);
+
+	if(bounty >= 10000)
+	{
+		setJediBountyValue(killer, bounty);
+	}
+
+	// int visibilityDelta = (int)(pvpRating / 6.0f);
+	// changeJediVisibility(killer, visibilityDelta);
+
+	CustomerServiceLog("bounty", "A bounty of 1000 credits has been automatically put on %TU for killing %TT", killer, victim);
+}
+
+// Handles the warping of players to locations in a battlefield.
+void battlefieldWarp(obj_id player, location loc)
+{
+	// If the player we're inviting is dead, then we should revive them.
+	if(isIncapacitated(player) || isDead(player))
+	{
+		// Close the cloning location selection window, so they do not warp
+		//   themselves out of the battlefield after they've been moved to the battlefield.
+		int closeSui = utils.getIntScriptVar(player, pclib.VAR_SUI_CLONE);
+
+		forceCloseSUIPage(closeSui);
+
+		// Battlefield players do not get cloning sickness.
+		utils.setScriptVar(player, "no_cloning_sickness", 1);
+		pclib.playerRevive(player);
+	}
+
+	// Set non-combatant (outside of pvp region)
+	pvpMakeCovert(player);
+
+	utils.warpPlayer(player, loc);
+}
+
+void bfActivePlayersAnnounce(obj_id controller, string_id announcement)
+{
+	resizeable obj_id[] players = new obj_id[0];
+
+	if(utils.hasResizeableObjIdBatchScriptVar(controller, BATTLEFIELD_ACTIVE_PLAYERS))
+	{
+		players = utils.getResizeableObjIdBatchScriptVar(controller, BATTLEFIELD_ACTIVE_PLAYERS);
+	}
+
+	dictionary params = new dictionary();
+
+	if(players != null && players.length > 0)
+	{
+		for(int i = 0, j = players.length; i < j; i++)
+		{
+			if(!isIdValid(players[i]) || !exists(players[i]))
+			{
+				continue;
+			}
+
+			sendSystemMessage(players[i], announcement);
+		}
+	}
+}
+
+void bfMessagePlayers(obj_id controller, string faction, string message, dictionary params)
+{
+	resizeable string[] players = new string[0];
+
+	if(utils.hasResizeableStringBatchScriptVar(controller, faction))
+	{
+		players = utils.getResizeableStringBatchScriptVar(controller, faction);
+	}
+
+	if(players != null && players.length > 0)
+	{
+//		blog(controller, " bfMessagePlayers players.length: " + players.length);
+
+		for(int i = 0, j = players.length; i < j; i++)
+		{
+			if(players[i] == null || players[i].length() < 1)
+			{
+				continue;
+			}
+
+			string [] playerInfo = split(players[i], '^');
+
+			if(playerInfo == null || playerInfo.length < 1)
+			{
+				continue;
+			}
+
+			obj_id player = utils.stringToObjId(playerInfo[0]);
+
+			if(!isIdValid(player))
+			{
+				continue;
+			}
+
+			messageTo(player, message, params, 1.0f, false);
+		}
+	}
+}
+
+void bfMessagePlayersOnBattlefield(obj_id controller, string faction, string message, dictionary params)
+{
+	resizeable string[] players = new string[0];
+
+	if(utils.hasResizeableStringBatchScriptVar(controller, faction))
+	{
+		players = utils.getResizeableStringBatchScriptVar(controller, faction);
+	}
+
+	if(players != null && players.length > 0)
+	{
+//		LOG("gcw_" ,"bfMessagePlayers players.length: " + players.length);
+
+		for(int i = 0, j = players.length; i < j; i++)
+		{
+			if(players[i] == null || players[i].length() < 1)
+			{
+				continue;
+			}
+
+			string [] playerInfo = split(players[i], '^');
+
+			if(playerInfo == null || playerInfo.length < 1)
+			{
+				continue;
+			}
+
+			obj_id player = utils.stringToObjId(playerInfo[0]);
+
+			if(!isIdValid(player) || !exists(player))
+			{
+				continue;
+			}
+
+			messageTo(player, message, params, 1.0f, false);
+		}
+	}
+}
+
+resizeable dictionary[] bfActiveAppendStatistics(obj_id controller, string scriptVar, resizeable dictionary[] battlefieldTeams)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return null;
+	}
+
+	resizeable string[] activelTeam = new string[0];
+
+	if(utils.hasResizeableStringBatchScriptVar(controller, scriptVar))
+	{
+		activelTeam = utils.getResizeableStringBatchScriptVar(controller, scriptVar);
+	}
+
+	if(activelTeam != null && activelTeam.length > 0)
+	{
+		int count = 0;
+
+		for(int i = 0, j = activelTeam.length; i < j; i++)
+		{
+			// Validate the string
+			if(activelTeam[i] == null || activelTeam[i].length() < 1)
+			{
+				continue;
+			}
+			
+			string [] activeMember = split(activelTeam[i], '^');
+			
+			// Malformed data for member?
+			if(activeMember.length < 9)
+			{
+				continue;
+			}
+			
+			dictionary member = new dictionary();
+			
+			member.put("player", utils.stringToObjId(activeMember[0]));
+
+			// We do not need to put activeMember index 1 in this dictionary (calendar time)
+
+			member.put("name", activeMember[2]);
+
+			if(scriptVar.equals(BATTLEFIELD_ACTIVE_REBEL_PLAYERS))
+			{
+				member.put("faction", factions.FACTION_FLAG_REBEL);
+			}
+			else if(scriptVar.equals(BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS))
+			{
+				member.put("faction", factions.FACTION_FLAG_IMPERIAL);
+			}
+
+			member.put("kills", utils.stringToInt(activeMember[3]));
+			member.put("deaths", utils.stringToInt(activeMember[4]));
+			member.put("damage", utils.stringToInt(activeMember[5]));
+			member.put("healing", utils.stringToInt(activeMember[6]));
+			member.put("captures", utils.stringToInt(activeMember[7]));
+			member.put("assists", utils.stringToInt(activeMember[8]));
+			
+			// Add this member to the rest of em...
+			utils.addElement(battlefieldTeams, member);
+			count++;
+		}
+		
+		// Store the size of the team in the battlefield teams vector.
+		if(battlefieldTeams.length > 0)
+		{
+			battlefieldTeams[0].put(scriptVar, count);
+		}
+	}
+
+	return battlefieldTeams;
+}
+
+resizeable dictionary[] bfActiveGetStatistics(obj_id controller)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return null;
+	}
+
+	Vector battlefieldTeams = new Vector();
+
+	battlefieldTeams = bfActiveAppendStatistics(controller, BATTLEFIELD_ACTIVE_REBEL_PLAYERS, battlefieldTeams);
+	battlefieldTeams = bfActiveAppendStatistics(controller, BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS, battlefieldTeams);
+
+	return battlefieldTeams;
+}
+
+string[][] bfStatisticsToArray(resizeable dictionary[] battlefieldPlayers, boolean colored)
+{
+	if(battlefieldPlayers == null || battlefieldPlayers.length < 1)
+	{
+		return null;
+	}
+	
+	string[][] scoreData = new string[battlefieldPlayers.length][8];
+
+	for(int i = 0, j = battlefieldPlayers.length; i < j; i++)
+	{
+		int faction = battlefieldPlayers[i].getInt("faction");
+
+		string color = COLOR_IMPERIALS;
+		string factionName = "Imperial";
+
+		if(faction == factions.FACTION_FLAG_REBEL)
+		{
+			color = COLOR_REBELS;
+			factionName = "Rebel";
+		}
+
+		if(!colored)
+		{
+			color = "";
+		}
+
+		scoreData[i][1] = color + factionName;
+
+		string name = battlefieldPlayers[i].getString("name");
+
+		if(name == null || name.length() < 1)
+		{
+			name = "Unknown";
+		}
+
+		int kills = battlefieldPlayers[i].getInt("kills");
+		int deaths = battlefieldPlayers[i].getInt("deaths");
+		int damage = battlefieldPlayers[i].getInt("damage");
+		int healing = battlefieldPlayers[i].getInt("healing");
+		int captures = battlefieldPlayers[i].getInt("captures");
+		int assists = battlefieldPlayers[i].getInt("assists");
+
+		scoreData[i][0] = color + name;
+		scoreData[i][2] = "" + kills;
+		scoreData[i][3] = "" + assists;
+		scoreData[i][4] = "" + deaths;
+		scoreData[i][5] = "" + damage;
+		scoreData[i][6] = "" + healing;
+		scoreData[i][7] = "" + captures;
+	}
+
+	return scoreData;
+}
+
+boolean bfIsValidAndEngaged(obj_id player)
+{
+	// Is the attacker valid?
+	if(!isIdValid(player) || !exists(player))
+	{
+		return false;
+	}
+
+	if(!utils.hasScriptVar(player, "battlefield.active"))
+	{
+		return false;
+	}
+
+	obj_id controller = utils.getObjIdScriptVar(player, "battlefield.active");
+
+	// If the controller is invalid or the controller does not exist, the player is not on a battlefield.
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return false;
+	}
+
+	int bfState = utils.getIntScriptVar(controller, "battlefield.state");
+
+	// We do not record battlefield data for phases outside of a running battle.
+	if(bfState != pvp.PVP_STATE_BATTLE_ENGAGED)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+void bfCreditForDamage(obj_id attacker, int damage)
+{
+	if(!bfIsValidAndEngaged(attacker))
+	{
+		return;
+	}
+	
+	int totalDamage = utils.getIntScriptVar(attacker, "battlefield.damage");
+	
+	if(damage < 0)
+	{
+		return;
+	}
+	
+	totalDamage += damage;
+	
+	utils.setScriptVar(attacker, "battlefield.damage", totalDamage);
+}
+
+void bfCreditForHealing(obj_id healer, int healed)
+{
+	if(!bfIsValidAndEngaged(healer))
+	{
+		return;
+	}
+	
+	int totalhealed = utils.getIntScriptVar(healer, "battlefield.healing");
+	
+	if(healed < 0)
+	{
+		return;
+	}
+	
+	totalhealed += healed;
+	
+	utils.setScriptVar(healer, "battlefield.healing", totalhealed);
+}
+
+void bfCreditForKill(obj_id who)
+{
+	if(!bfIsValidAndEngaged(who))
+	{
+		return;
+	}
+	
+	int totalKills = utils.getIntScriptVar(who, "battlefield.kills");
+	
+	totalKills++;
+
+	utils.setScriptVar(who, "battlefield.kills", totalKills);
+}
+
+void bfCreditForDeath(obj_id who, obj_id killer)
+{
+	if(!bfIsValidAndEngaged(who))
+	{
+		return;
+	}
+	
+	if((factions.isRebel(who) && factions.isImperial(killer)) || (factions.isImperial(who) && factions.isRebel(killer)))
+	{
+		int totalDeaths = utils.getIntScriptVar(who, "battlefield.deaths");
+
+		totalDeaths++;
+
+		utils.setScriptVar(who, "battlefield.deaths", totalDeaths);
+	}
+
+	// Is this player running a flag?
+	if(buff.hasBuff(who, "battlefield_communication_run"))
+	{
+		obj_id controller = utils.getObjIdScriptVar(who, "battlefield.active");
+
+		// If the controller is invalid or the controller does not exist, the player is not on a battlefield.
+		if(!isIdValid(controller) || !exists(controller))
+		{
+			return;
+		}
+
+		pvp.bfClearRunner(controller);
+		
+		dictionary params = new dictionary();
+
+		params.put("gcwCredits", 100);
+		
+		// Announce the runner has been killed.
+		int faction = factions.getFactionFlag(who);
+		
+		if(faction == factions.FACTION_FLAG_REBEL)
+		{
+			pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS, "receiveBattlefieldTerminalCapture", params);
+			pvp.bfActivePlayersAnnounce(controller, new string_id("spam", "battlefield_runner_killed_rebel"));
+		}
+		else if(faction == factions.FACTION_FLAG_IMPERIAL)
+		{
+			pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_REBEL_PLAYERS, "receiveBattlefieldTerminalCapture", params);
+			pvp.bfActivePlayersAnnounce(controller, new string_id("spam", "battlefield_runner_killed_imperial"));
+		}
+	}
+}
+
+void bfCreditForAssist(obj_id who)
+{
+	if(!bfIsValidAndEngaged(who))
+	{
+		return;
+	}
+
+	int totalAssists = utils.getIntScriptVar(who, "battlefield.assists");
+	
+	totalAssists++;
+
+	utils.setScriptVar(who, "battlefield.assists", totalAssists);
+}
+
+void bfCreditForCapture(obj_id who, int captureValue)
+{
+	if(!bfIsValidAndEngaged(who))
+	{
+		return;
+	}
+	
+	int totalCaptures = utils.getIntScriptVar(who, "battlefield.captures");
+	
+	if(captureValue < 0)
+	{
+		return;
+	}
+	
+	totalCaptures += captureValue;
+
+	utils.setScriptVar(who, "battlefield.captures", totalCaptures);
+}
+
+boolean bfTerminalIsRegistered(obj_id controller, obj_id terminal)
+{
+	if(!isIdValid(controller) || !exists(controller) || !isIdValid(terminal) || !exists(terminal))
+	{
+		return false;
+	}
+
+	resizeable obj_id[] terminals = new obj_id[0];
+
+	if(utils.hasResizeableObjIdBatchScriptVar(controller, "battlefield.terminals"))
+	{
+		terminals = utils.getResizeableObjIdBatchScriptVar(controller, "battlefield.terminals");
+	}
+	
+	if(terminals == null || terminals.length < 1)
+	{
+		return false;
+	}
+	
+	for(int i = 0, j = terminals.length; i < j; i++)
+	{
+		if(!isIdValid(terminals[i]) || !exists(terminals[i]))
+		{
+			continue;
+		}
+
+		if(terminals[i] == terminal)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void bfTerminalRegister(obj_id controller, obj_id terminal)
+{
+	if(!isIdValid(controller))
+	{
+		return;
+	}
+
+	if(!exists(controller))
+	{
+		if(isIdValid(terminal) && exists(terminal))
+		{
+			messageTo(terminal, "registerTerminal", null, 1.0f, false);
+		}
+
+		return;
+	}
+
+	if(!isIdValid(terminal) || !exists(terminal))
+	{
+		return;
+	}
+
+	resizeable obj_id[] terminals = new obj_id[0];
+
+	if(utils.hasResizeableObjIdBatchScriptVar(controller, "battlefield.terminals"))
+	{
+		terminals = utils.getResizeableObjIdBatchScriptVar(controller, "battlefield.terminals");
+	}
+	
+	if(terminals == null || terminals.length < 1)
+	{
+		utils.addElement(terminals, terminal);
+
+		utils.setBatchScriptVar(controller, "battlefield.terminals", terminals);
+
+		return;
+	}
+	
+	for(int i = 0, j = terminals.length; i < j; i++)
+	{
+		if(!isIdValid(terminals[i]) || !exists(terminals[i]))
+		{
+			continue;
+		}
+
+		if(terminals[i] == terminal)
+		{
+			return;
+		}
+	}
+
+	utils.addElement(terminals, terminal);
+	
+	utils.setBatchScriptVar(controller, "battlefield.terminals", terminals);
+}
+
+resizeable obj_id[] bfTerminalsGetRegistered(obj_id controller)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return null;
+	}
+
+	resizeable obj_id[] terminals = new obj_id[0];
+
+	if(utils.hasResizeableObjIdBatchScriptVar(controller, "battlefield.terminals"))
+	{
+		terminals = utils.getResizeableObjIdBatchScriptVar(controller, "battlefield.terminals");
+	}
+
+	return terminals;
+}
+
+boolean bfTerminalsReset(obj_id controller)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return false;
+	}
+
+	resizeable obj_id[] terminals = new obj_id[0];
+
+	if(utils.hasResizeableObjIdBatchScriptVar(controller, "battlefield.terminals"))
+	{
+		terminals = utils.getResizeableObjIdBatchScriptVar(controller, "battlefield.terminals");
+	}
+	
+	if(terminals == null || terminals.length < 1)
+	{
+		return false;
+	}
+	
+	int terminalCount = getIntObjVar(controller, "battlefield.terminalCount");
+	
+	if(terminalCount != terminals.length)
+	{
+		return false;
+	}
+
+	for(int i = 0, j = terminals.length; i < j; i++)
+	{
+		if(!isIdValid(terminals[i]) || !exists(terminals[i]))
+		{
+			continue;
+		}
+		
+		utils.removeScriptVar(terminals[i], "battlefield.captured");
+		
+		messageTo(terminals[i], "receiveBattlefieldReset", null, 1.0f, false);
+	}
+	
+	return true;
+}
+
+int bfGetBattlefieldType(obj_id controller)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return BATTLEFIELD_TYPE_NONE;
+	}
+
+	return utils.getIntScriptVar(controller, "battlefieldType");
+}
+
+obj_id bfGetRunner(obj_id controller)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return null;
+	}
+
+	return utils.getObjIdScriptVar(controller, "battlefield.runner");
+}
+
+void bfSetRunner(obj_id controller, obj_id runner)
+{
+	if(!isIdValid(controller) || !exists(controller) || !isIdValid(runner) || !exists(runner))
+	{
+		return;
+	}
+
+	utils.setScriptVar(controller, "battlefield.runner", runner);
+}
+
+void bfClearRunner(obj_id controller)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return;
+	}
+
+	obj_id runner = utils.getObjIdScriptVar(controller, "battlefield.runner");
+	
+	if(isIdValid(runner) && exists(runner))
+	{
+		buff.removeBuff(runner, "battlefield_communication_run");
+	}
+		
+	obj_id terminal = utils.getObjIdScriptVar(controller, "battlefield.runnerTerminal");
+
+	if(!isIdValid(terminal) || !exists(terminal))
+	{
+		return;
+	}
+
+	dictionary dict = new dictionary();
+
+	dict.put("terminal_location", getWorldLocation(terminal));
+	dict.put("terminal", terminal);
+
+	pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_REBEL_PLAYERS, "destroyBattlefieldWaypoint", dict);
+	pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS, "destroyBattlefieldWaypoint", dict);
+
+	utils.removeScriptVar(controller, "battlefield.runner");
+	utils.removeScriptVar(controller, "battlefield.runnerTerminal");
+}
+
+boolean bfHasRunner(obj_id controller)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return false;
+	}
+
+	obj_id runner = utils.getObjIdScriptVar(controller, "battlefield.runner");
+
+	if(isIdValid(runner) && exists(runner))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+void bfActiveWarpPlayerToStart(obj_id controller, obj_id player)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return;
+	}
+
+	int battlefieldState = utils.getIntScriptVar(controller, "battlefield.state");
+	location loc = null;
+	
+	if(factions.isRebel(player))
+	{
+		loc = utils.getLocationScriptVar(controller, "battlefieldRebelSpawn");
+	}
+	else
+	{
+		if(factions.isImperial(player))
+		{
+			loc = utils.getLocationScriptVar(controller, "battlefieldImperialSpawn");
+		}
+		else
+		{
+			return;
+		}
+	}
+
+	dictionary params = new dictionary();
+
+	params.put("bfState", battlefieldState);
+	params.put("controller", controller);
+
+	if(loc != null)
+	{
+		params.put("warpLocation", loc);
+		messageTo(player, "receiveBattlefieldWarpLocation", params, 1.0f, false);
+	}
+}
+
+void bfLog(obj_id controller, string text)
+{
+	if(!isIdValid(controller))
+	{
+		return;
+	}
+
+	string battlefieldName = "error";
+
+	if(exists(controller))
+	{
+		battlefieldName = getStringObjVar(controller, "battlefieldName");
+	}
+
+	if(battlefieldName == null || battlefieldName.length() < 1)
+	{
+		battlefieldName = "error";
+	}
+
+	CustomerServiceLog("battlefield_" + battlefieldName, text);
+}

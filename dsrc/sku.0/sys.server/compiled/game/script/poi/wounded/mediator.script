@@ -1,0 +1,321 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        mediator.script
+ * Description:  mediator object script: POI = assault
+ * @author       $Author: rpalacio $
+ * @version      $Revision: #1 $
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.npc;
+include library.scenario;
+include library.poi;
+include library.ai_lib;
+include library.utils;
+include library.money;
+include ai.ai_combat;
+
+/***** INHERITS ********************************************************/
+
+inherits poi.base.scenario_actor;
+
+/***** CONSTANTS *******************************************************/
+
+const string SCRIPT_CONVERSE					= "npc.converse.npc_converse_menu";
+
+//PROGRESS CONSTANTS
+const int PROGRESS_NONE							= 0;
+
+const int ANSWERED_YES							= 1;
+const int ANSWERED_NO							= 2;
+const int ANSWERED_NO_AGAIN						= 3;
+
+const int PROVIDED_MEDICINE						= 4;
+
+const int COMPLETED								= 5;
+
+/***** TRIGGERS *******************************************************/
+
+trigger OnAttach()
+{
+	attachScript(self, SCRIPT_CONVERSE);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	attachScript(self, SCRIPT_CONVERSE);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated(obj_id killer)
+{
+	messageTo(self, scenario.HANDLER_INCAPACITATION, null, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	messageTo(self, scenario.HANDLER_INCAPACITATION, null, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	obj_id poiMaster = poi.getBaseObject(self);
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		LOG("poiWounded", "OnStartNpcConversation: unable to locate base object");
+		npcEndConversation (speaker);
+		return SCRIPT_CONTINUE;
+	}
+
+	string convo = getStringObjVar(poiMaster, scenario.VAR_SCENARIO_CONVO);
+	if ( convo.equals("") )
+	{
+		LOG("poiWounded", "OnStartNpcConversation: unable to determine conversation file");
+		npcEndConversation (speaker);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( ai_lib.isInCombat(self) )
+	{
+		scenario.say(self, convo, "m_combat_" + rand(1,5));
+		npcEndConversation (speaker);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id leader = poi.findObject(scenario.MEDIATOR + "_0");
+	if ( (leader == null) || (leader == obj_id.NULL_ID) )
+	{
+		LOG("poiWounded", "OnStartNpcConversation: unable to locate MEDIATOR_0");
+		return SCRIPT_CONTINUE;
+	}
+
+	int progress = scenario.getPlayerProgress(speaker);
+
+	resizeable string_id[] responses = new string_id[0];
+
+	LOG("poiWounded", "speaker current progress = " + progress);
+
+	if ( self == leader )
+	{
+		if ( poi.isComplete(poiMaster) )
+		{
+			scenario.say(self, convo, "m_completed");
+			npcEndConversation (speaker);
+			return SCRIPT_CONTINUE;
+		}
+
+		string msg_id = "m_greet";
+		responses = utils.addElement(responses, new string_id(convo, "response_yes"));
+
+		switch (progress)
+		{
+			case PROGRESS_NONE:
+				responses = utils.addElement(responses, new string_id(convo, "response_no"));
+				break;
+
+			case ANSWERED_YES:
+				scenario.say(self, convo, "m_willing");
+				openInventories(speaker, self);
+				npcEndConversation (speaker);
+				return SCRIPT_CONTINUE;
+
+			case ANSWERED_NO:
+				msg_id = "m_rejected";
+				responses = utils.addElement(responses, new string_id(convo, "response_no_again"));
+				break;
+
+			case ANSWERED_NO_AGAIN:
+				scenario.say(self, convo, "m_enraged");
+				npcEndConversation (speaker);
+				return SCRIPT_CONTINUE;
+
+			case PROVIDED_MEDICINE:
+				scenario.say(self, convo, "m_medicine");
+				npcEndConversation (speaker);
+				return SCRIPT_CONTINUE;
+
+			default:
+				break;
+		}
+
+		string_id msg = new string_id(convo, msg_id);
+		npcStartConversation(speaker, self, convo, msg, responses);
+	}
+	else
+	{
+		//say something completel random!
+		int idx = rand(1,5);
+		scenario.say(self, convo, "m_" + idx);
+		npcEndConversation (speaker);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnNpcConversationResponse (string convoName, obj_id speaker, string_id response)
+{
+	if ( ai_lib.isInCombat(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	LOG("poiWounded", "response = " + response.toString());
+
+	obj_id poiMaster = poi.getBaseObject(self);
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		LOG("poiWounded", "I have no idea what object I belong to!");
+		npcEndConversation (speaker);
+		return SCRIPT_CONTINUE;
+	}
+
+	string convo = getStringObjVar(poiMaster, scenario.VAR_SCENARIO_CONVO);
+	if ( convo.equals("") )
+	{
+		LOG("poiWounded", "I have no idea what I am supposed to say");
+		npcEndConversation (speaker);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !convoName.equals(convo) )
+	{
+		LOG("poiWounded", "convo files do not match!!");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id leader = poi.findObject(scenario.MEDIATOR + "_0");
+	if ( (leader == null) || (leader == obj_id.NULL_ID) )
+	{
+		LOG("poiWounded", "OnStartNpcConversation: unable to locate MEDIATOR_0");
+		return SCRIPT_CONTINUE;
+	}
+
+
+	if ( self != leader )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int progress = scenario.getPlayerProgress(speaker);
+
+	string aId = response.getAsciiId();
+
+	string_id msg = new string_id();
+	if (( aId.equals("response_yes"))) //  yes, i will help you!
+	{
+		scenario.say(self, convo, "m_yes");
+		openInventories(speaker, self);
+		npcEndConversation (speaker);
+		scenario.setPlayerProgress(speaker, ANSWERED_YES);
+	}
+	else if (( aId.equals("response_no"))) //  no, I wont help you
+	{
+		scenario.say(self, convo, "m_no");
+		npcEndConversation (speaker);
+		scenario.setPlayerProgress(speaker, ANSWERED_NO);
+	}
+	else if (( aId.equals("response_no_again"))) //  no, I wont help you (AGAIN)
+	{
+		scenario.say(self, convo, "m_enraged");
+		npcEndConversation (speaker);
+		scenario.setPlayerProgress(speaker, ANSWERED_NO_AGAIN);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+boolean openInventories(obj_id player, obj_id target)
+{
+	if ( (player == null) || (target == null) )
+	{
+		return false;
+	}
+
+	obj_id pInv = utils.getInventoryContainer(player);
+	if ( (pInv == null) || (pInv == obj_id.NULL_ID) )
+	{
+		return false;
+	}
+
+	obj_id tInv = utils.getInventoryContainer(target);
+	if ( (tInv == null) || (tInv == obj_id.NULL_ID) )
+	{
+		return false;
+	}
+
+	if ( utils.requestContainerOpen(player, pInv) && utils.requestContainerOpen(player, tInv) )
+	{
+		return true;
+	}
+
+	return false;
+}
+
+/***** MESSAGEHANDLER *******************************************************/
+messageHandler handleIncapacitation()
+{
+	scenario.actorIncapacitated(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler giveReward()
+{
+	int amt = params.getInt("amt");
+	LOG("poiWounded", "transfering bank credits from named account. amt = " + amt);
+	transferBankCreditsFromNamedAccount(money.ACCT_NPC_LOOT, self, amt, "fromAccountPass", "xferFail", params);
+	utils.moneyInMetric(self, money.ACCT_NPC_LOOT, amt);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler xferFail()
+{
+	LOG("poiWounded", "money transaction failed.");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler xferPass()
+{
+	LOG("poiWounded", "money transaction complete.");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler fromAccountPass()
+{
+	int amt = params.getInt("amt");
+	if ( amt > 0 )
+	{
+		LOG("poiWounded", "withdrawing cash");
+		withdrawCashFromBank(self, amt, "withdrawPass", "xferFail", params);
+	}
+	else
+	{
+		LOG("poiWounded", "fromAccountPass: invalid amount = " + amt);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler withdrawPass()
+{
+	int amt = params.getInt("amt");
+	if ( amt > 0 )
+	{
+		obj_id target = params.getObjId("target");
+		if ( (target == null) || (target == obj_id.NULL_ID) )
+		{
+			LOG("poiWounded", "invalid cash transfer target!");
+		}
+		else
+		{
+			LOG("poiWounded", "transfering cash");
+			transferCashTo(self, target, amt, "xferPass", "xferFail", params);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,270 @@
+//------------------------------------------------
+// space_mining_destroy.script
+// Will Wallace
+//
+// Kill <n> of <asteroid type>.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_quest;
+include library.space_utils;
+include library.space_transition;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_REMAINDER_UPDATE		= new string_id( "space/quest", "mining_remainder_update" );
+const string_id SID_ABANDONED_DESTROY		= new string_id( "space/quest", "mining_abandoned" );
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the types of asteroids to mine.
+	string asteroids = questInfo.getString( "asteroidType" );
+
+	// Determine the number of ships we have to destroy, modified by a variance.
+	int mineCount = questInfo.getInt( "mineCount" );
+
+	setObjVar( self, "mineCount", mineCount );
+	setObjVar( self, "asteroidType", asteroids);
+	setObjVar( self, "currentCount", 0);
+
+	// Add quest journal objectives.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 0, player );
+	}
+
+	questSetQuestTaskCounter(player, "spacequest/"+questType+"/"+questName, 1, "quest/groundquests:mine_counter", 0, mineCount);
+
+	// Notify the player of the first objective (if we are already in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	setObjVar( self, "msgCount", 3);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set us up if we are in the appropriate zone.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+
+			space_quest.showQuestUpdate( self, SID_ABANDONED_DESTROY );
+			space_quest.setQuestFailed( player, self, false );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id questManager = getNamedObject( space_quest.QUEST_MANAGER );
+	if ( questManager == null )
+		return SCRIPT_CONTINUE;
+
+	// Update the quest journal.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 1, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+//------------------------------------------------
+// asteroidMined --- see how many resources were mined, and up the count!
+//------------------------------------------------
+
+
+messageHandler asteroidMined()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Does the type of resource mined match the type we're after?
+	obj_id player = params.getObjId( "player" );
+	string typeMined = params.getString( "resourceType" );
+	//sendSystemMessageTestingOnly(player, "typeMined = " + typeMined);
+	string typeDesired = getStringObjVar( self, "asteroidType" );
+	//sendSystemMessageTestingOnly(player, "typeMined = " + typeDesired);
+	int mineCount = getIntObjVar( self, "mineCount" );
+	//sendSystemMessageTestingOnly(player, "mineCount = " + mineCount);
+	int currentCount = getIntObjVar( self, "currentCount" );
+	//sendSystemMessageTestingOnly(player, "currentCount = " + currentCount);
+
+	if ( typeMined.equals( typeDesired ))
+	{
+		int amt = params.getInt( "resourceAmt" );
+		//sendSystemMessageTestingOnly(player, "amt = " + amt);
+		currentCount = currentCount + amt;
+		setObjVar(self, "currentCount", currentCount);
+		if ( currentCount >= mineCount )
+		{
+			questCompleted( self );
+		}
+
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		questSetQuestTaskCounter(player, "spacequest/"+questType+"/"+questName, 1, "quest/groundquests:mine_counter", currentCount, mineCount);
+
+		int msgCount = getIntObjVar( self, "msgCount" );
+
+		if ( currentCount > (.50 * mineCount ) && currentCount  < (.75 * mineCount) && msgCount == 1)
+		{
+			setObjVar(self, "msgCount", 0);
+			space_quest.showQuestUpdate( self, SID_REMAINDER_UPDATE, mineCount-currentCount );
+		}
+		else if ( currentCount > (.25 * mineCount ) && currentCount  < (.50 * mineCount) && msgCount == 2)
+		{
+			setObjVar(self, "msgCount", 1);
+			space_quest.showQuestUpdate( self, SID_REMAINDER_UPDATE, mineCount-currentCount );
+		}
+		else if ( currentCount > (0) && currentCount  < (.25 * mineCount) && msgCount == 3)
+		{
+			setObjVar(self, "msgCount", 2);
+			space_quest.showQuestUpdate( self, SID_REMAINDER_UPDATE, mineCount-currentCount );
+		}
+ 	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// questCompleted
+//------------------------------------------------
+
+void questCompleted( obj_id self )
+{
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( questIsTaskActive( questid, 1, player ) )
+			questCompleteTask( questid, 1, player );
+	}
+
+	// We finished the quest!
+	space_quest.setQuestWon( player, self );
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+
+
+		obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+		space_quest.setQuestFailed( player, self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	if ( hasObjVar( self, "noAbort" ) )
+		return SCRIPT_CONTINUE;
+
+	// We aborted the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestAborted( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// removeQuest
+//------------------------------------------------
+
+messageHandler removeQuest()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+
+	// Flag the main quest journal entry as finished.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( (questid != 0) && questIsQuestActive( questid, player ) )
+		questCompleteQuest( questid, player );
+
+	space_quest._removeQuest( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+

@@ -1,0 +1,233 @@
+include library.utils;
+include library.chat;
+include library.ai_lib;
+include library.create;
+include library.factions;
+include library.gcw;
+include library.locations;
+
+string CONVO = "npc_reaction/imperial_crackdown_cantina";
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	obj_id foyer = getCellId( self, "foyer1" );
+	attachScript( foyer, "city.imperial_crackdown.door_check" );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	messageTo( self, "resetCrackDown", null, 1, false );
+
+	if ( !hasScript( self, "systems.gcw.gcw_data_updater" ) )
+		attachScript( self, "systems.gcw.gcw_data_updater" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// resetCrackDown
+//------------------------------------------------
+
+messageHandler resetCrackDown()
+{
+	if ( hasObjVar( self, "crackdownHappened" ) )
+		removeObjVar( self, "crackdownHappened" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// doTroubleCheck
+//
+// Called by the door_check function.
+// This means someone came in and we want to see if we should cause trouble with them.
+//------------------------------------------------
+
+messageHandler doTroubleCheck()
+{
+	removeObjVar( self, "crackdownHappened" );
+
+	obj_id player = params.getObjId( "player" );
+	if ( hasObjVar( self, "crackdownHappened" ) )
+	{
+		if ( hasObjVar( self, "checkingForTrouble" ) )
+			removeObjVar( self, "checkingForTrouble" );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar( self, "crackdownTest" ) )
+	{
+		messageTo( self, "createTrouble", null, 15, false );
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		// Read our chance of something happening.
+		string trouble = getConfigSetting( "Imperial Crackdown", "troubleChance" );
+		int chanceOfTrouble = utils.stringToInt( trouble );
+		if ( chanceOfTrouble == 0 || chanceOfTrouble == -1 )
+			chanceOfTrouble = 20;
+
+		int rollForTrouble = rand( 1,100 );
+		if ( rollForTrouble < chanceOfTrouble )
+		{
+			messageTo( self, "createTrouble", null, 15, false );
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			if ( hasObjVar (self, "checkingForTrouble") )
+				removeObjVar( self, "checkingForTrouble" );
+
+			return SCRIPT_CONTINUE;
+		}
+	}
+}
+
+//------------------------------------------------
+// createTrouble
+//
+// We want to spawn a guy to cause trouble.
+// This used to be a stormtrooper. Now it's faction dependent.
+//------------------------------------------------
+
+messageHandler createTrouble()
+{
+	// Flag us so we don't spawn another guy right away.
+	setObjVar( self, "crackdownHappened", 1 );
+	if ( hasObjVar( self, "checkingForTrouble" ) )
+		removeObjVar( self, "checkingForTrouble" );
+	
+	// Get trouble location.
+	obj_id foyer = getCellId( self, "foyer1" );
+	location here = getLocation( self );
+	string planet = here.area;
+	string city = locations.getCityName( here );
+
+	// Determine our trouble maker type.
+	float imp_r = gcw.getImperialRatio( self );
+	float reb_r = gcw.getRebelRatio( self );
+
+	// Force type in some cities...	
+	if ( city != null )
+	{
+			if ( (city == "bestine") || (city == "bela_vistal") || (city == "deeja_peak") )
+			{
+				imp_r = 1.f;
+				reb_r = 0.f;
+			}
+			else if ( (city == "anchorhead") || (city == "vreni_island") || (city == "moenia") )
+			{
+				imp_r = 0.f;
+				reb_r = 1.f;
+			}
+	}
+
+	string troublemaker = null;
+	string faction = null;
+	if ( imp_r >= reb_r )
+	{
+		troublemaker = "crackdown_stormtrooper";
+		faction = "imperial";
+	}
+	else
+	{
+		troublemaker = "crackdown_rebel_command_security_guard";
+		faction = "rebel";
+	}
+
+	// Spawn our trouble maker.
+	location impLoc = new location( 48.13f, .1f, 2.47f, planet, foyer );
+	obj_id trooper = create.object( troublemaker, impLoc );
+	setObjVar( trooper, "string_faction", faction );
+
+	// Announce our presence.
+	string_id call = new string_id( CONVO, "call_in_"+faction );
+	chat.chat( trooper, call );
+
+	// Set us up to crack down.
+	setObjVar( trooper, "crackdown.cantina", self );
+	attachScript( trooper, "city.imperial_crackdown.imperial_trouble" );
+	messageTo( trooper, "startMoving", null, 1, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// createfight
+//------------------------------------------------
+
+messageHandler createFight()
+{
+	obj_id foyer = getCellId( self, "foyer1" );
+	obj_id cantina = getCellId( self, "cantina" );
+	location impLoc = new location( 48.13f, .1f, 2.47f, "naboo", foyer );
+	location fight = new location( 22.37f, -0.89f, 0.98f, "naboo", cantina );
+	obj_id trooper = create.object( "crackdown_stormtrooper", impLoc );
+	string_id call = new string_id( CONVO, "call_in" );
+	chat.chat( trooper, call );
+	pathTo( trooper, fight );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// sendBackup
+//------------------------------------------------
+
+messageHandler sendBackup()
+{
+	obj_id foyer = getCellId( self, "foyer1" );
+	obj_id mainroom = getCellId( self, "cantina" );
+	obj_id foyer2 = getCellId( self, "back_hallway" );
+	obj_id attacker = params.getObjId( "attacker" );
+	location where = params.getLocation( "locale" );
+
+	if ( attacker == null || where == null )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id victim = params.getObjId( "me" );
+	string faction = getStringObjVar( victim, "string_faction" );
+	string troublemaker = null;
+	if ( faction == "rebel" )
+		troublemaker = "crackdown_rebel_command_security_guard";
+	else
+		troublemaker = "crackdown_stormtrooper";
+
+	string planet = where.area;
+	location impLoc = new location( 48.13f, .1f, 2.47f, planet, foyer );
+	location impLoc2 = new location( -14.38f, 0, 14.29f, planet, mainroom );
+	location impLoc3 = new location( -17.8f, 0, -11.53f, planet, foyer2 );
+
+	obj_id backupOne = create.object( troublemaker, impLoc );
+	attachScript( backupOne, "city.imperial_crackdown.imperial_backup" );
+	setObjVar( backupOne, "whereToFight", where );
+	setObjVar( backupOne, "whoToFight", attacker );
+	setObjVar( backupOne, "string_faction", faction );
+
+	obj_id backupTwo = create.object( troublemaker, impLoc2 );
+	attachScript( backupTwo, "city.imperial_crackdown.imperial_backup" );
+	setObjVar( backupTwo, "whereToFight", where );
+	setObjVar( backupTwo, "whoToFight", attacker );
+	setObjVar( backupTwo, "string_faction", faction );
+
+	obj_id backupThree = create.object( troublemaker, impLoc3 );
+	attachScript( backupThree, "city.imperial_crackdown.imperial_backup" );
+	setObjVar( backupThree, "whereToFight", where );
+	setObjVar( backupThree, "whoToFight", attacker );
+	setObjVar( backupThree, "string_faction", faction );
+
+	return SCRIPT_CONTINUE;
+}
+
+

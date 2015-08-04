@@ -1,0 +1,1205 @@
+//------------------------------------------------
+// harass
+//
+// 02/07/2005 - Changed to be conducted by neutral NPCs who serve the current ruling faction.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.utils;
+include library.chat;
+include library.gcw;
+include library.ai_lib;
+include ai.ai_combat;
+include library.attrib;
+include library.factions;
+include library.faction_perk;
+include library.anims;
+include library.sui;
+include library.money;
+include library.prose;
+include library.group;
+include library.regions;
+include library.jedi;
+include library.create;
+include library.space_utils;
+include library.stealth;
+
+//------------------------------------------------
+// Consts
+//------------------------------------------------
+
+const string SCRIPTVAR_FINE			= "harass.fine";
+const string SCRIPTVAR_HARASS_BASE	= "harass";
+const string SCRIPTVAR_TARGET		= "harass.target";
+const string SCRIPTVAR_STATUS		= "harass.status";
+const string SCRIPTVAR_RATING		= "harass.rating";
+
+const string VOL_CHECKPOINT			= "volCheckPoint";
+const float VOL_CHECKPOINT_RANGE	= 64f;
+const string VOL_CITY_CHECKPOINT	= "volCityCheckPoint";
+const float VOL_CITY_CHECKPOINT_RANGE	= 25f;
+
+const string VOL_DETAIN				= "volDetain";
+const float VOL_DETAIN_RANGE		= 10f;
+
+const string STF 					= "imperial_presence/contraband_search";
+const string TBL_RANK				= "datatables/faction/rank.iff";
+const string_id IMP_FINE_TITLE		= new string_id(STF, "imp_fine_title");
+const string_id IMP_FINE_TEXT		= new string_id(STF, "imp_fine_text");
+const string_id IMP_FINE_TEXT2			= new string_id(STF, "imp_fine_text2_imperial");
+const string_id IMP_FINE_TEXT2_REB		= new string_id(STF, "imp_fine_text2_rebel");
+const string_id SORRY_SIR_NAME		= new string_id(STF, "sorry_sir_name");
+const string_id SORRY_SIR			= new string_id(STF, "sorry_sir");
+const string_id REBEL_OFFICER		= new string_id(STF, "rebel_discovered_officer");
+
+const string_id IMPERIAL_FINE		= new string_id(STF, "imperial_fine");
+
+const string COL_INDEX				= "INDEX";
+const int MT_TOTAL                  = 2;
+
+//------------------------------------------------
+// getFactionName
+// Util that returns the name of the faction we serve.
+//------------------------------------------------
+
+string getFactionName( obj_id self )
+{
+	string tFac = factions.getFaction( self );
+	if ( tFac.equals( factions.FACTION_IMPERIAL ) )
+		return "imperial";
+	else if ( tFac.equals( factions.FACTION_REBEL ) )
+		return "rebel";
+	else
+	{
+		// We are neutral, so we serve whoever owns the planet.
+		float imp_r = gcw.getImperialRatio( self );
+		float reb_r = gcw.getRebelRatio( self );
+
+		if ( imp_r >= reb_r )
+			return "imperial";
+		else
+			return "rebel";
+	}
+}
+
+boolean isInFriendlyFaction( obj_id self, obj_id who )
+{
+	string tFac = factions.getFaction( who );
+	string sFac = getFactionName( self );
+	if ( tFac == null )
+		return false;
+	else if ( tFac == "Rebel" && sFac == "rebel" )
+		return true;
+	else if ( tFac == "Imperial" && sFac == "imperial" )
+		return true;
+	else
+		return false;
+}
+
+boolean isOnLeaveFromFriendlyFaction( obj_id self, obj_id who )
+{
+	if ( factions.isOnLeave( who ) && isInFriendlyFaction( self, who ) )
+		return true;
+	else
+		return false;
+}
+
+boolean isInEnemyFaction( obj_id self, obj_id target )
+{
+	string tFac = factions.getFaction( target );
+	string sFac = getFactionName( self );
+	if ( tFac == null )
+		return false;
+	else if ( tFac == "Imperial" && sFac == "rebel" )
+		return true;
+	else if ( tFac == "Rebel" && sFac == "imperial" )
+		return true;
+	else
+		return false;
+}
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	location here = getLocation(self);
+	region[] rgnTest = getRegionsWithBuildableAtPoint( here, regions.BUILD_FALSE );
+		if ( rgnTest != null )
+			{
+				detachScript(self, "ai.soldier");
+				removeTriggerVolume(ai_lib.ALERT_VOLUME_NAME);
+				removeTriggerVolume(ai_lib.AGGRO_VOLUME_NAME);
+				createTriggerVolume(VOL_CITY_CHECKPOINT, VOL_CITY_CHECKPOINT_RANGE, true);
+				setAttributeInterested(self, attrib.ALL);
+			}
+		else
+			{
+				createTriggerVolume(VOL_CHECKPOINT, VOL_CHECKPOINT_RANGE, true);
+				setAttributeInterested(self, attrib.ALL);
+			}
+
+	setWantSawAttackTriggers(self, false);
+
+	// Register stuff we want to look for.
+	if ( !utils.hasScriptVar(self, gcw.SCRIPTVAR_SCAN_INTEREST) )
+		gcw.assignScanInterests(self);
+
+	if ( !hasScript( self, "systems.gcw.gcw_data_updater" ) )
+		attachScript( self, "systems.gcw.gcw_data_updater" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnTriggerVolumeEntered
+//------------------------------------------------
+
+trigger OnTriggerVolumeEntered(string volName, obj_id who)
+{
+	if (isDead (self))
+		return SCRIPT_CONTINUE;
+
+	if (!isIdValid (who))
+		return SCRIPT_CONTINUE;
+
+	if ( !hasObjVar( self, "Imperial.controlScore" ) )
+		return SCRIPT_CONTINUE;
+
+	if ( who == self || !isPlayer(who) )
+		return SCRIPT_CONTINUE;
+
+	if(stealth.hasServerCoverState(who))
+	{
+		return SCRIPT_CONTINUE;
+	}	
+	
+	if (utils.hasScriptVar (who, "scan_successful_2"))
+		return SCRIPT_CONTINUE;
+
+	location here = getLocation(who);
+	if ( here == null )
+		return SCRIPT_CONTINUE;
+
+	if ( isIdValid(here.cell) )
+		return SCRIPT_CONTINUE;
+
+	// They entered our check point (outside a city).
+	if (volName.equals(VOL_CHECKPOINT) && (!utils.hasScriptVar(self, SCRIPTVAR_TARGET)))
+		{
+			if (!utils.hasScriptVar(who, "being_scanned"))
+			{
+				if ( ai_lib.isInCombat(self) )
+				{
+					messageTo(self, "handleHarassTarget", null, 10f, false);
+					return SCRIPT_CONTINUE;
+				}
+				
+				utils.setScriptVar(self, SCRIPTVAR_TARGET, who);
+				enterHarassMode(self, who);
+				return SCRIPT_CONTINUE;
+			}
+			return SCRIPT_CONTINUE;
+
+		}
+
+	// They entered our check point (inside a city).
+	if (volName.equals(VOL_CITY_CHECKPOINT) && (!utils.hasScriptVar(self, SCRIPTVAR_TARGET)))
+		{
+			if ( rand(0,10) <= 6 )
+			{
+				if (!utils.hasScriptVar(who, "being_scanned"))
+				{
+					if ( ai_lib.isInCombat(self) )
+					{
+						messageTo(self, "handleHarassTarget", null, 10f, false);
+						return SCRIPT_CONTINUE;
+					}
+					
+					utils.setScriptVar(self, SCRIPTVAR_TARGET, who);
+					enterHarassMode(self, who);
+					return SCRIPT_CONTINUE;
+				}
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+	/*if ( volName.equals(VOL_DETAIN) )
+		{
+			if (!utils.hasScriptVar(self, SCRIPTVAR_TARGET))
+			{
+				debugSpeakMsg(self, "target " + who + " has entered " + volName);
+				ai_lib.follow(self, who);
+				setMovementRun(self);
+				volDetainBreach(self, who);
+				return SCRIPT_CONTINUE;
+			}
+		}*/
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnTriggerVolumeExited
+//------------------------------------------------
+
+trigger OnTriggerVolumeExited(string volName, obj_id who)
+{
+	if (!isIdValid(who))
+		return SCRIPT_CONTINUE;
+
+	if ( who == self || !isPlayer(who) )
+		return SCRIPT_CONTINUE;
+
+	int status = utils.getIntScriptVar(self, SCRIPTVAR_STATUS);
+	if ( volName.equals(VOL_DETAIN) )
+	{
+		switch ( status )
+		{
+			case 1:
+				// Order the person to return.
+				chat.publicChat( self, who, new string_id(STF, "return_request_"+getFactionName(self)) );
+				utils.setScriptVar(self, SCRIPTVAR_STATUS, 2);
+				dictionary d = new dictionary();
+				d.put("target", who);
+				messageTo(self, "handleReturnRequest", d, 10f, false);
+				break;
+
+			case 3:
+				// Tell 'em that it's a crime!
+				chat.publicChat(self, who, new string_id( STF, "return_false_"+getFactionName(self) ) );
+				utils.setScriptVar(self, SCRIPTVAR_STATUS, 2);
+				dictionary d3 = new dictionary ();
+				d3.put("target", who);
+				messageTo(self, "handleReturnRequest", d3, 10f, false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnFollowWaiting
+//
+// The person we were following has stopped?
+//------------------------------------------------
+
+trigger OnFollowWaiting(obj_id target)
+{
+	obj_id harassTarget = utils.getObjIdScriptVar(self, SCRIPTVAR_TARGET);
+	if ( !isIdValid(harassTarget) || harassTarget != target || !isPlayer(target) )
+	{
+		enterCheckpointMode(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Set up a detain volume and scan the player (or harass if he tries to leave).
+	createTriggerVolume(VOL_DETAIN, VOL_DETAIN_RANGE, false);
+	addTriggerVolumeEventSource(VOL_DETAIN, target);
+	obj_id[] contents = getTriggerVolumeContents(self, VOL_DETAIN);
+	if ( contents != null && contents.length > 0 )
+	{
+		if ( utils.getElementPositionInArray(contents, target) > -1 )
+			volDetainBreach(self, target);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnFollowTargetLost
+//------------------------------------------------
+
+trigger OnFollowTargetLost(obj_id oldTarget)
+{
+	enterCheckpointMode(self);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnIncapacitated
+//------------------------------------------------
+
+trigger OnIncapacitated(obj_id killer)
+{
+	cleanupHarassment(self);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnEnteredCombat
+//------------------------------------------------
+
+trigger OnEnteredCombat()
+{
+	cleanupHarassment(self);
+	return SCRIPT_CONTINUE;
+}
+/*
+trigger OnHearSpeech(obj_id speaker, string text)
+{
+	if (isPlayer(speaker))
+	{
+		if (text.equals("testHarass"))
+		{
+			utils.setScriptVar(self, SCRIPTVAR_TARGET, speaker);
+			enterHarassMode(self, speaker);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+*/
+//------------------------------------------------
+// handleHarassTarget
+//------------------------------------------------
+
+messageHandler handleHarassTarget()
+{
+	obj_id target = utils.getObjIdScriptVar(self, SCRIPTVAR_TARGET);
+
+	if (!isIdValid(target))
+		return SCRIPT_CONTINUE;
+
+	if (ai_lib.isInCombat(self) )
+		{
+			messageTo(self, "handleHarassTarget", null, 10f, false);
+			return SCRIPT_CONTINUE;
+		}
+
+	if (isIdValid(target) && target.isLoaded() && !isIncapacitated(target))
+		{
+			enterHarassMode(self, params);
+			return SCRIPT_CONTINUE;
+		}
+	else
+		{
+			enterCheckpointMode(self);
+			return SCRIPT_CONTINUE;
+		}
+}
+
+//------------------------------------------------
+// handleNewHarassTarget
+//------------------------------------------------
+
+messageHandler handleNewHarassTarget()
+{
+	obj_id target = params.getObjId("harassTarget");
+	if ( ai_lib.isInCombat(self) )
+		{
+			dictionary d6 = new dictionary();
+			d6.put("harassTarget", target);
+			messageTo(self, "handleNewHarassTarget", d6, 10f, false);
+			return SCRIPT_CONTINUE;
+		}
+	enterHarassMode( self, params );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleCheckpointMode
+//------------------------------------------------
+
+messageHandler handleCheckpointMode()
+{
+	obj_id harassTarget = utils.getObjIdScriptVar(self, SCRIPTVAR_TARGET);
+	if (harassTarget == null)
+		return SCRIPT_CONTINUE;
+
+	if (utils.hasScriptVar (harassTarget, "breach_protect"))
+		utils.removeScriptVar (harassTarget, "breach_protect");
+	enterCheckpointMode( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// enterHarassMode
+//------------------------------------------------
+
+boolean enterHarassMode(obj_id self, dictionary params)
+{
+	obj_id target = params.getObjId("harassTarget");
+	if (target == null)
+	{
+		enterCheckpointMode(self);
+		return false;
+	}
+	utils.setScriptVar(self, SCRIPTVAR_TARGET, target);
+	return enterHarassMode(self, target);
+}
+
+boolean enterHarassMode(obj_id self, obj_id target)
+{
+	if (utils.hasScriptVar(target, "being_scanned"))
+		{
+			enterCheckpointMode(self);
+			return false;
+		}
+
+	if ( isIdValid(target) && target.isLoaded() )
+	{
+		// Scan 'em.
+		utils.setScriptVar(target, "being_scanned", 1);
+
+		// Pull the player off their mount.
+		obj_id playerCurrentMount = getMountId (target);
+		if ( isIdValid( playerCurrentMount ) && playerCurrentMount !=null)
+			{
+				obj_id mountId = getMountId(target);
+				if (isIdValid(mountId))
+				{
+					string_id msgString = new string_id(STF,"dismount_"+getFactionName(self));
+					sendSystemMessage(target, msgString);
+					space_utils.tauntPlayer(target, self, msgString);
+					sendSystemMessage(target, new string_id(STF,"dismount"));
+					utils.dismountRiderJetpackCheck(target);
+				}
+			}
+
+		// Follow this person (harassment starts when they stop).
+		messageTo(self, "followHarass", null, 1f, false);
+		return true;
+	}
+
+	return false;
+}
+
+//------------------------------------------------
+// followHarass
+//------------------------------------------------
+
+messageHandler followHarass()
+{
+	obj_id target = utils.getObjIdScriptVar(self, SCRIPTVAR_TARGET);
+	ai_lib.aiFollow(self, target);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// enterCheckpointMode
+//------------------------------------------------
+
+void enterCheckpointMode(obj_id self)
+{
+	cleanupHarassment(self);
+	setMovementWalk(self);
+	ai_lib.wander(self);
+}
+
+//------------------------------------------------
+// cleanupHarassment
+//------------------------------------------------
+
+void cleanupHarassment(obj_id self)
+{
+	obj_id target = utils.getObjIdScriptVar(self, SCRIPTVAR_TARGET);
+	if ( isIdValid(target) )
+	{
+		if ( utils.hasScriptVar (target, "being_scanned") )
+		{
+			utils.removeScriptVar (target, "being_scanned");
+			messageTo(target, "handleCleanupHarassment", null, 1, false);
+		}
+	}
+	
+	removeTriggerVolume(VOL_DETAIN);
+	utils.removeScriptVarTree(self, SCRIPTVAR_HARASS_BASE);
+}
+
+//------------------------------------------------
+// volDetainBreach
+//------------------------------------------------
+
+void volDetainBreach( obj_id self, obj_id who )
+{
+	if ( !isPlayer( who ) )
+		return;
+
+	if ( utils.hasScriptVar( who, "breach_protect" ) )
+	{
+		messageTo( self,"handleCheckpointMode", null, 3f, false );
+		return;
+	}
+
+	int rank = pvpGetCurrentGcwRank( who );
+	int myFac = pvpGetAlignedFaction( self );
+	string faction = factions.getFaction(who);
+	int tFac = pvpGetAlignedFaction( who );
+	if ( pvpGetType(who) == PVPTYPE_NEUTRAL )
+		tFac = 0;
+
+	if ( isInFriendlyFaction( self, who ) && !isOnLeaveFromFriendlyFaction( self, who ) )
+	{
+		// If they are a high ranking officer, or of our faction & declared, ignore them.
+		if ( rank > 8 )
+		{
+			// This is a high ranking officer of our faction.
+			doAnimationAction( self, anims.PLAYER_SALUTE2 );
+			string playerName = getName( who );
+			prose_package officer = new prose_package();
+			java.util.StringTokenizer st = new java.util.StringTokenizer( playerName, " " );
+			if ( st.countTokens() == 2 )
+			{
+				string firstName = st.nextToken();
+				string lastName = st.nextToken();
+				officer = prose.getPackage( SORRY_SIR_NAME, factions.getRankNameStringId(rank, faction), lastName );
+			}
+			else
+			{
+				officer = prose.getPackage( SORRY_SIR, factions.getRankNameStringId(rank, faction) );
+			}
+
+			chat.publicChat( self, null, null, null, officer );
+			utils.setScriptVar( who, "scan_successful", 1 );
+			utils.setScriptVar( who, "scan_successful_2", 1 );
+			utils.setScriptVar( who, "breach_protect", 1 );
+			messageTo( self, "handleCheckpointMode", null, 3f, false );
+			return;
+		}
+		else if ( rand(1,2) == 2 )// They are in our faction. Chance they dodge the scan.
+		{
+			chat.publicChat( self, who, new string_id(STF, "business_"+getFactionName(self)) );
+			utils.setScriptVar( who, "scan_successful", 1 );
+			utils.setScriptVar( who, "scan_successful_2", 1 );
+			utils.setScriptVar( who, "breach_protect", 1 );
+			messageTo( self, "handleCheckpointMode", null, 3f, false );
+			return;
+		}
+	}
+
+	int status = utils.getIntScriptVar( self, SCRIPTVAR_STATUS );
+	switch ( status )
+	{
+		case 0:
+			// Tell the player they are being detained for a scan.
+			chat.publicChat( self, who, new string_id(STF, "scan_greeting_"+getFactionName(self)) );
+			utils.setScriptVar( self, SCRIPTVAR_STATUS, 1 );
+
+			// Determine the level of contraband that player has.
+			float rating = gcw.getContrabandRating( who );
+			utils.setScriptVar( self, SCRIPTVAR_RATING, rating );
+
+			sendSystemMessage( who, new string_id(STF, "contraband_scan_"+getFactionName(self)) );
+
+			// Handle the scan results.
+			dictionary d1 = new dictionary();
+			d1.put("status", 1);
+			d1.put("target", who);
+			messageTo(self, "handleScanComplete", d1, 15f, false);
+			break;
+
+		case 2:
+			// The player has come back after they ran initially.
+			chat.publicChat( self, who, new string_id(STF, "return_thank_"+getFactionName(self)) );
+			utils.setScriptVar( self, SCRIPTVAR_STATUS, 3 );
+
+			sendSystemMessage( who, new string_id(STF, "contraband_scan_"+getFactionName(self)) );
+
+			dictionary d2 = new dictionary();
+			d2.put("status", 3);
+			d2.put("target", who);
+			messageTo(self, "handleScanComplete", d2, 15f, false);
+			break;
+	}
+}
+
+//------------------------------------------------
+// handleScanComplete
+//------------------------------------------------
+
+messageHandler handleScanComplete()
+{
+	obj_id target = params.getObjId("target");
+
+	if (!isIdValid(target))
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat(target) )
+		{
+			messageTo(self, "handleScanComplete", params, 5f, false);
+			return SCRIPT_CONTINUE;
+		}
+
+	if (isDead (self) || isIncapacitated(self))
+		return SCRIPT_CONTINUE;
+
+	if ( !isIdValid(target) || !target.isLoaded() )
+		return SCRIPT_CONTINUE;
+
+	if (isIncapacitated(target) || isDead(target))
+		{
+			messageTo(self, "handleCheckpointMode", null, 3f, false);
+			return SCRIPT_CONTINUE;
+		}
+
+	if (utils.hasScriptVar (target, "breach_protect"))
+			utils.removeScriptVar (target, "breach_protect");
+	utils.removeScriptVar (target, "being_scanned");
+
+	utils.setScriptVar (target, "scan_successful", 1);
+	utils.setScriptVar (target, "scan_successful_2", 1);
+
+	int oldStatus = params.getInt("status");
+	int curStatus = utils.getIntScriptVar(self, SCRIPTVAR_STATUS);
+	if ( oldStatus != curStatus )
+		return SCRIPT_CONTINUE;
+
+	// Handle if the player is a Jedi. (Mindtrick check)
+	if(ai_lib.checkForJedi(target))
+		{
+			if(!isIdValid(self))
+				return SCRIPT_CONTINUE;
+
+		if ( isJediState( target, JEDI_STATE_FORCE_RANKED_LIGHT ) )
+			{
+				chat.publicChat(target, self, new string_id(STF, "jedi_mind_trick"));
+				doAnimationAction(target, anims.PLAYER_FORCE_PERSUASION);
+				chat.think(self, new string_id(STF, "not_search_you"));
+				dictionary jedi = new dictionary();
+				jedi.put("target", target);
+				messageTo(self, "handleJediMindTrick", jedi, 5f, false);
+				return SCRIPT_CONTINUE;
+			}
+		else if ( isJediState( target, JEDI_STATE_FORCE_RANKED_DARK ) )
+			{
+				chat.publicChat(target, self, new string_id(STF, "jedi_mind_trick_dark"));
+				doAnimationAction(target, anims.PLAYER_FORCE_PERSUASION);
+				chat.think(self, new string_id(STF, "not_search_you_dark"));
+				dictionary jedi = new dictionary();
+				jedi.put("target", target);
+				messageTo(self, "handleJediMindTrickDark", jedi, 5f, false);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				chat.publicChat(target, self, new string_id(STF, "jedi_mind_trick_novice"));
+				doAnimationAction(target, anims.PLAYER_FORCE_PERSUASION);
+				chat.think(self, new string_id(STF, "not_search_you_novice"));
+				doAnimationAction(self, anims.PLAYER_SCRATCH_HEAD);
+				dictionary jedi = new dictionary();
+				jedi.put("target", target);
+				messageTo(self, "handleJediMindTrickNovice", jedi, 5f, false);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+	// If that person is grouped, look for a smuggler to help out.
+	if(group.isGrouped(target))
+	{
+		resizeable obj_id[] members = group.getPCMembersInRange(target, 35f);
+		if ( members != null && members.length > 0 )
+		{
+			int numInGroup = members.length;
+			if (numInGroup < 1)
+				return SCRIPT_CONTINUE;
+
+			for (int i = 0; i < numInGroup; i++)
+			{
+			 obj_id thisMember = members[i];
+			 if ( hasSkill( thisMember, "class_smuggler_phase1_novice" ) && thisMember != (target))
+				{
+					// If we find a smuggler who passes the search check, let 'em go.
+					if ( ai_lib.checkForSmuggler(thisMember) )
+					{
+						chat.publicChat(self, target, new string_id(STF, "clean_target_"+getFactionName(self)));
+						if (getGender(self) == GENDER_MALE)
+						{
+							playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+						}
+						removeTriggerVolume(VOL_DETAIN);
+						enterCheckpointMode(self);
+						return SCRIPT_CONTINUE;
+					}
+				}
+			}
+		}
+	}
+
+	// Smuggler check, not grouped.
+	if(ai_lib.checkForSmuggler(target))
+	{
+		chat.publicChat(self, target, new string_id(STF, "clean_target_"+getFactionName(self)));
+		if (getGender(self) == GENDER_MALE)
+		{
+			playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+		}
+		removeTriggerVolume(VOL_DETAIN);
+		enterCheckpointMode(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Punish violations.
+	int interests = utils.getIntScriptVar(self, gcw.SCRIPTVAR_SCAN_INTEREST);
+	if ( isEnemyJedi( self, target ) && rand(1,5) == 1 )
+	{
+		// We found a jedi of the opposite faction!
+		sendSystemMessage( target, new string_id(STF, "discovered_"+getFactionName(self)) );
+		chat.publicChat( self, target, new string_id(STF, "discovered_jedi_"+getFactionName(self)) );
+		attackFactionViolator( self, target, true );
+		}
+	else if ( utils.checkBit(interests, gcw.INTEREST_FACTION) && isInEnemyFaction( self, target ) &&
+	     rand(1,2) == 1 )
+		{
+		// We found a person of the opposite faction.
+		sendSystemMessage( target, new string_id(STF, "discovered_"+getFactionName(self)) );
+		chat.publicChat( self, target, new string_id(STF, "discovered_chat_"+getFactionName(self)) );
+		attackFactionViolator( self, target, false );
+	}
+	else
+	{
+		float rating = utils.getFloatScriptVar(self, SCRIPTVAR_RATING);
+		if ( rating > rand(10f, 15f) ) // Busted!
+		{
+			// This person is in violation of the law.
+			invokePenaltyAction(self, target);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			// They can go.
+			chat.publicChat( self, target, new string_id(STF, "clean_target_"+getFactionName(self)) );
+			if (getGender(self) == GENDER_MALE)
+			{
+				playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+			}
+		}
+	}
+
+	// All done. Go back to search mode.
+	removeTriggerVolume(VOL_DETAIN);
+	enterCheckpointMode(self);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// isEnemyJedi
+//------------------------------------------------
+
+boolean isEnemyJedi( obj_id self, obj_id target )
+{
+	if ( !isJedi( target ) )
+		return false;
+
+	if ( "imperial" == getFactionName( self ) ) // Empire hates all Jedi.
+		return true;
+	else if ( isJediState( target, JEDI_STATE_FORCE_RANKED_DARK ) ) // Rebels hate dark Jedi.
+		return true;
+
+	return false;
+}
+
+//------------------------------------------------
+// handleReturnRequest
+//------------------------------------------------
+
+messageHandler handleReturnRequest()
+{
+	int status = utils.getIntScriptVar(self, SCRIPTVAR_STATUS);
+	obj_id target = params.getObjId("target");
+
+	if (!isIdValid (target))
+			return SCRIPT_CONTINUE;
+
+	if (!isIdValid (self))
+		return SCRIPT_CONTINUE;
+
+	if (isDead (self) || isIncapacitated(self))
+		return SCRIPT_CONTINUE;
+
+	if ( status == 2 && isIdValid(target) )
+	{
+		string tFac = factions.getFaction(target);
+		if ( isInEnemyFaction( self, target ) )
+			{
+				penaltyAction(self, target, 50f);
+			sendSystemMessage( target, new string_id(STF, "discovered_"+getFactionName(self)) );
+			attackFactionViolator( self, target, false );
+				removeTriggerVolume(VOL_DETAIN);
+				enterCheckpointMode(self);
+				return SCRIPT_CONTINUE;
+			}
+		else
+			{
+			sendSystemMessage(target, new string_id(STF, "ran_away_"+getFactionName(self)));
+				penaltyAction(self, target, 50f);
+			CustomerServiceLog("CONTRABAND_SCANNING: ", "("+ target + ")"+ getFirstName(target) + " lost 50 faction by running from a scan");
+				removeTriggerVolume(VOL_DETAIN);
+				enterCheckpointMode(self);
+				return SCRIPT_CONTINUE;
+			}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// attackFactionViolator
+//------------------------------------------------
+
+void attackFactionViolator( obj_id self, obj_id target, boolean antiJedi )
+			{
+	// Grant a TEF or make them PvE.
+	if ( isJedi( target ) )
+				{
+		jedi.doJediTEF( target );
+				}
+	else if ( factions.isOnLeave( target ) )
+				{
+		pvpMakeCovert( target ); // Flag for PvE
+		CustomerServiceLog( "CONTRABAND_SCANNING: ", "("+ target + ")"+ getFirstName(target) + " made GCW PVP by Crackdown Scan" );
+				}
+
+	// Call for backup!
+	string backupClass = null;
+	if ( getFactionName( self ) == "imperial" )
+	{
+		if ( antiJedi && isEnemyJedi( self, target ) )
+			backupClass = "crackdown_elite_dark_trooper_hard";
+		else
+			backupClass = "crackdown_storm_commando";
+			}
+		else
+			{
+		if ( antiJedi && isEnemyJedi( self, target ) )
+			backupClass = "crackdown_rebel_elite_heavy_trooper_hard";
+		else
+			backupClass = "crackdown_rebel_commando";
+	}
+	obj_id spawnSource = getObjIdObjVar( self, "mom" );
+	if ( isIdValid( spawnSource ) )
+	{
+		for ( int i=0; i<3; i++ )
+		{
+			obj_id backup = create.object( backupClass, getLocation( spawnSource ) );
+			LOG( "spawn_backup", "Spawning backup: " + backup + " I am: " + self );
+			attachScript( backup, "ai.imperial_presence.harass_backup" );
+			setObjVar( backup, "whereToFight", getLocation( self ) );
+			setObjVar( backup, "whoToFight", target );
+			setObjVar( backup, "home", getLocation( spawnSource ) );
+			if ( i == 0 )
+			{
+				setObjVar( backup, "leader", 1 );
+				setObjVar( backup, "faction", getFactionName( self ) );
+				if ( antiJedi && isEnemyJedi( self, target ) )
+					setObjVar( backup, "jedi", 1 );
+	}
+		}
+	}
+
+	startCombat( self, target );
+}
+
+//------------------------------------------------
+// invokePenaltyAction
+//------------------------------------------------
+
+void invokePenaltyAction( obj_id self, obj_id target )
+{
+	if ( !isIdValid(self) || !isIdValid(target) )
+		return;
+
+	obj_id harassTarget = utils.getObjIdScriptVar( self, SCRIPTVAR_TARGET );
+	if ( !isIdValid(harassTarget) || harassTarget != target )
+		return;
+
+	float rating = utils.getFloatScriptVar( self, SCRIPTVAR_RATING );
+	invokePenaltyAction( self, target, rating );
+}
+
+void invokePenaltyAction(obj_id self, obj_id target, float rating)
+{
+	if ( !isIdValid(self) || !isIdValid(target) || !target.isLoaded() || rating <= 0f )
+	{
+		enterCheckpointMode(self);
+		return;
+	}
+
+	float amt = rating*20;
+	int FINE = (int) amt;
+	string tFac = factions.getFaction(target);
+			int rank = pvpGetCurrentGcwRank( target );
+	if ( isInEnemyFaction( self, target ) && (rank > 6) )
+				{
+					string playerName = getName(target);
+					prose_package reboff = new prose_package();
+
+					java.util.StringTokenizer st = new java.util.StringTokenizer(playerName, " ");
+		reboff = prose.getPackage(new string_id(STF, "discovered_officer_"+getFactionName(self)), factions.getRankNameStringId(rank, tFac), playerName);
+
+					//say something nasty
+		sendSystemMessage(target, new string_id(STF, "discovered_"+getFactionName(self)));
+					chat.publicChat(self, null, null, null, reboff);
+		attackFactionViolator( self, target, false );
+		messageTo(self, "handleCheckpointMode", null, 5f, false);
+					}
+	else if ( isInFriendlyFaction( self, target ) )
+					{
+		chat.publicChat(self, target, new string_id(STF, "pay_fine_"+getFactionName(self)));
+		dictionary params = new dictionary ();
+		params.put("target", target);
+		params.put("rating", rating);
+		messageTo(self, "fineImperial", params, 5f, false);
+					return;
+				}
+	else
+	{
+			if (money.hasFunds(target, MT_TOTAL, FINE))
+				{
+			chat.publicChat(self, target, new string_id(STF, "fined_"+getFactionName(self)));
+					money.requestPayment(target, self, FINE, "fine", null);
+					CustomerServiceLog("CONTRABAND_SCANNING: ", "(" + target + ")"+ getFirstName(target) + " was fined " + FINE + " credits");
+					utils.moneyOutMetric(self, money.ACCT_FINES, FINE);
+					if (getGender(self) == GENDER_MALE)
+					{
+						playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+					}
+					messageTo(self, "handleCheckpointMode", null, 5f, false);
+					return;
+				}
+			else
+				{
+			chat.publicChat(self, target, new string_id(STF, "failure_to_pay_"+getFactionName(self)));
+					penaltyAction(self, target, rating*2);
+					CustomerServiceLog("CONTRABAND_SCANNING: ", "(" + target + ")"+ getFirstName(target) + " was fined " + rating*2 + " Imperial Faction Points");
+					if (getGender(self) == GENDER_MALE)
+					{
+						playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+					}
+					messageTo(self, "handleCheckpointMode", null, 5f, false);
+					return;
+				}
+		}
+
+			messageTo(self, "handleCheckpointMode", null, 30f, false);
+		}
+
+//------------------------------------------------
+// penaltyAction
+//------------------------------------------------
+
+void penaltyAction(obj_id self, obj_id target, float lostFaction)
+{
+	if ( !isIdValid(self) || !isIdValid(target) || !target.isLoaded() || lostFaction <= 0f )
+		return;
+
+	string testFaction = null;
+	if ( getFactionName( self ) == "imperial" )
+		testFaction = "Imperial";
+	else
+		testFaction = "Rebel";
+
+	float curStanding = factions.getFactionStanding(target, testFaction);
+	float newStanding = curStanding - lostFaction;
+
+	string tFac = factions.getFaction(target);
+
+	if ( tFac == null)
+	{
+		factions.addFactionStanding(target, testFaction, -lostFaction);
+		return;
+	}
+
+	if ( isInFriendlyFaction( self, target ) )
+	{
+		if ( newStanding < factions.FACTION_RATING_DECLARABLE_MIN )
+		{
+			float delta = curStanding - factions.FACTION_RATING_DECLARABLE_MIN;
+			factions.addFactionStanding(target, testFaction, -delta);
+
+		}
+	}
+	else
+	{
+		if ( newStanding < factions.FACTION_RATING_MIN )
+		{
+			float delta = curStanding - factions.FACTION_RATING_MIN;
+			factions.addFactionStanding(target, testFaction, -delta);
+			chat.publicChat(self, target, new string_id(STF, "neutral_turn_over_"+getFactionName( self )));
+			return;
+				}
+				}
+
+	factions.addFactionStanding(target, testFaction, -lostFaction);
+			}
+
+//------------------------------------------------
+// fineImperial
+//------------------------------------------------
+
+messageHandler fineImperial()
+{
+	obj_id target = params.getObjId("target");
+	float rating = params.getFloat("rating");
+
+	showFineSui(target, self, rating);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// showFineSui
+//------------------------------------------------
+
+void showFineSui (obj_id self, obj_id target, float rating)
+{
+	if(!isIdValid(self) || !isIdValid(target))
+		return;
+
+	float amt = rating*20;
+	int FINE = (int) amt;
+	if (money.hasFunds(self, MT_TOTAL, FINE))
+	{
+		int pid = sui.createSUIPage(sui.SUI_MSGBOX, target, self, "handleFineSui");
+			setSUIProperty(pid, "", "Size", "350,275");
+			setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, localize(IMP_FINE_TITLE) );
+		if ( getFactionName( self ) == "imperial" )
+			setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, localize( IMP_FINE_TEXT ) + FINE + localize( IMP_FINE_TEXT2 ) );
+		else
+			setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, localize( IMP_FINE_TEXT ) + FINE + localize( IMP_FINE_TEXT2_REB ) );
+			sui.msgboxButtonSetup(pid, sui.YES_NO);
+			sui.showSUIPage(pid);
+			utils.setScriptVar(target, SCRIPTVAR_FINE, pid);
+			return;
+	}
+	else
+	{
+		chat.publicChat(target, self, new string_id(STF, "failure_to_pay_"+getFactionName(self)));
+		penaltyAction(target, self, rating*2);
+		messageTo(target, "handleCheckpointMode", null, 5f, false);
+		return;
+	}
+}
+
+//------------------------------------------------
+// handleFineSui
+//------------------------------------------------
+
+messageHandler handleFineSui ()
+{
+	obj_id target = sui.getPlayerId(params);
+
+	if(!isIdValid(target))
+		return SCRIPT_CONTINUE;
+
+	float rating = utils.getFloatScriptVar(self, SCRIPTVAR_RATING);
+	float amt = rating*20;
+	int FINE = (int) amt;
+
+	int bp = sui.getIntButtonPressed(params);
+
+	if(bp == sui.BP_OK)
+	{
+		chat.publicChat(self, target, new string_id(STF, "warning_"+getFactionName(self)));
+		money.requestPayment(target, self, FINE, "fine", null);
+		CustomerServiceLog("CONTRABAND_SCANNING: ", "(" + target + ")"+ getFirstName(target) + " was fined " + FINE + " credits");
+		utils.moneyOutMetric(self, money.ACCT_FINES, FINE);
+		if (getGender(self) == GENDER_MALE)
+		{
+			playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+		}
+		int pidClose = utils.getIntScriptVar(target, SCRIPTVAR_FINE);
+		cleanupImperialFine(target);
+		sui.closeSUI(target, pidClose);
+		messageTo(self, "handleCheckpointMode", null, 5f, false);
+		return SCRIPT_CONTINUE;
+	}
+	if(bp == sui.BP_CANCEL)
+	{
+		chat.publicChat(self, target, new string_id(STF, "punish_"+getFactionName(self)));
+		penaltyAction(self, target, rating*2);
+		CustomerServiceLog("CONTRABAND_SCANNING: ", "(" + target + ")"+ getFirstName(target) + " was fined " + rating*2 + " Imperial Faction Points");
+		if (getGender(self) == GENDER_MALE)
+		{
+			playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+		}
+		int pidClose = utils.getIntScriptVar(target, SCRIPTVAR_FINE);
+		cleanupImperialFine(target);
+		sui.closeSUI(target, pidClose);
+		messageTo(self, "handleCheckpointMode", null, 5f, false);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		chat.publicChat(self, target, new string_id(STF, "punish_+"+getFactionName(self)));
+		penaltyAction(self, target, rating*2);
+		CustomerServiceLog("CONTRABAND_SCANNING: ", "(" + target + ")"+ getFirstName(target) + " was fined " + rating*2 + " Imperial Faction Points");
+		if (getGender(self) == GENDER_MALE)
+		{
+			playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 0f);
+		}
+		int pidClose = utils.getIntScriptVar(target, SCRIPTVAR_FINE);
+		cleanupImperialFine(target);
+		sui.closeSUI(target, pidClose);
+		messageTo(self, "handleCheckpointMode", null, 5f, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleJediMindTrick
+//------------------------------------------------
+
+messageHandler handleJediMindTrick ()
+{
+	obj_id target = params.getObjId("target");
+
+	doAnimationAction(self, anims.PLAYER_WAVE_ON_DIRECTING);
+	chat.publicChat(self, target, new string_id(STF, "dont_search"));
+	if (getGender(self) == GENDER_MALE)
+	{
+		playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 2f);
+	}
+	removeTriggerVolume(VOL_DETAIN);
+	enterCheckpointMode(self);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleJediMindTrickDark
+//------------------------------------------------
+
+messageHandler handleJediMindTrickDark ()
+{
+	obj_id target = params.getObjId("target");
+
+	doAnimationAction(self, anims.PLAYER_STANDING_PLACATE);
+	chat.publicChat(self, target, new string_id(STF, "dont_search_dark"));
+	if (getGender(self) == GENDER_MALE)
+	{
+		playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 2f);
+	}
+	removeTriggerVolume(VOL_DETAIN);
+	enterCheckpointMode(self);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleJediMindTrickNovice
+//------------------------------------------------
+
+messageHandler handleJediMindTrickNovice ()
+{
+	obj_id target = params.getObjId("target");
+
+	chat.publicChat(self, target, new string_id(STF, "dont_search_novice"));
+	if (getGender(self) == GENDER_MALE)
+	{
+		playClientEffectLoc(target, "clienteffect/stormtrp_movealng.cef", getLocation(self), 2f);
+	}
+	removeTriggerVolume(VOL_DETAIN);
+	enterCheckpointMode(self);
+	return SCRIPT_CONTINUE;
+}
+//------------------------------------------------
+// cleanupImperialFine
+//------------------------------------------------
+
+void cleanupImperialFine( obj_id target )
+{
+	utils.removeScriptVar( target, SCRIPTVAR_FINE );
+}

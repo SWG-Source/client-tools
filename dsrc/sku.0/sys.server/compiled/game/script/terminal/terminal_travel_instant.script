@@ -1,0 +1,686 @@
+/**********************************************************************
+ * Copyright (c)2000-2005 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        terminal_travel_instant.script
+ * Description:  script that attaches to the instant travel terminal (looks like a ship)
+ * @author       $Author:RcT$
+ * @version      $Revision:1.0 (10/13/2005)$
+ **********************************************************************/
+
+// ********************************************************************
+//					INCLUDES
+// ********************************************************************
+
+include library.buff;
+include library.city;
+include library.combat;
+include library.create;
+include library.locations;
+include library.pet_lib;
+include library.player_structure;
+include library.regions;
+include library.space_dungeon;
+include library.structure;
+include library.sui;
+include library.travel;
+include library.utils;
+
+// ********************************************************************
+//					CONSTS
+// ********************************************************************
+
+const string_id SID_TIMEOUT					= new string_id("travel", "pickup_timeout");
+const string_id SID_LEFT_ME					= new string_id("travel", "left_pickup_zone");
+const string_id SID_NOT_YOUR_SHIP				= new string_id("travel", "not_your_ship");
+const string TRIGGER_VOLUME_PICKUP_SHIP				= "travel_instant_pickup_interest_range";
+const float PICKUP_INTEREST_RADIUS				= 64f;
+
+const boolean CONST_FLAG_DO_LOGGING				= false;
+const string ITV_PICKUP_BUFF 					= "call_for_pickup";
+const string PID_VAR 						= "home_itv_pid";
+const string[] LOC_ITV_MANAGE_OPTIONS 				={
+								"Set Location 1", 
+								"Set Location 2", 
+								"Set Location 3", 
+								};
+// ********************************************************************
+//					TRIGGERS
+// ********************************************************************
+
+trigger OnInitialize ()
+{
+	debugLogging("//***// OnInitialize: ", "////>>>> ENTERED. ");
+	messageTo(self, "timeOutSelfExpire", null, 59, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id owner = (playerCheck(self, "OnObjectMenuRequest - "));
+	if(owner != player)
+	{
+		sendSystemMessage(player, SID_NOT_YOUR_SHIP);	 // This is not your ship to use. You'll need to call yours if you want to travel somewhere.
+		return SCRIPT_CONTINUE;
+	}
+
+	menu_info_data data = mi.getMenuItemByType (menu_info_types.ITEM_USE);
+
+	if(data != null)
+		data.setServerNotify (true);
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	obj_id owner = (playerCheck(self, "OnObjectMenuSelect - "));
+	if(owner != player)
+		return SCRIPT_CONTINUE;
+		
+	if(getState(player, STATE_RIDING_MOUNT) == 1)
+		pet_lib.doDismountNow(player, true);
+
+	//we need to differentiate between TCG and Normal ITVs.  
+	if(item == menu_info_types.ITEM_USE && hasObjVar(self, "tcg_itv_home"))
+	{
+		if(city.isAMayor(player))
+		{
+			//Get the City Hall - This is where we will send him.
+			int city_id = getCitizenOfCityId(player);
+			if(cityExists(city_id))
+			{
+				obj_id city_hall = cityGetCityHall(city_id);
+				if(isIdValid(city_hall))
+				{
+					//Message to the City Hall
+					dictionary dict = new dictionary();
+					dict.put("requestingObject", self);
+					dict.put("homeOwner", player);
+					messageTo(city_hall, "retrieveHouseCoords", dict, 0.0f, false);	
+				}
+				else
+				{
+					sendSystemMessage(player, new string_id("tcg", "no_residence_home_itv"));
+				}
+			}
+			return SCRIPT_CONTINUE;
+		}
+		else if(hasObjVar(player, "residenceHouseId"))
+		{
+			obj_id home = getObjIdObjVar(player, "residenceHouseId");
+			if(isIdValid(home))
+			{
+				//message the house to get the location
+				dictionary dict = new dictionary();
+				dict.put("requestingObject", self);
+				dict.put("homeOwner", player);
+				messageTo(home, "retrieveHouseCoords", dict, 0, false);
+			}
+			else
+			{
+				//System Message - Player does not have a Residence
+				sendSystemMessage(player, new string_id("tcg", "no_residence_home_itv"));
+			}
+		}
+		else
+		{
+			//Tell the player he must declare residence in order to use it to go home.
+			sendSystemMessage(player, new string_id("tcg", "no_residence_home_itv"));		
+		}
+		return SCRIPT_CONTINUE;
+	}
+	//pick your location TCG ITV
+	if(item == menu_info_types.ITEM_USE && hasObjVar(self, "tcg_itv_location"))
+	{    
+		//handle Location ITV options
+		LocationItvOptions(self, player);
+		return SCRIPT_CONTINUE;
+	}
+	//Normal ITVs go here
+	if(item == menu_info_types.ITEM_USE)
+	{
+		string planet = getCurrentSceneName();
+		string travel_point = "Starfighter";
+
+		int cityId = getCityAtLocation(getLocation(player), 1000);
+		debugLogging("//***// OnObjectMenuSelect: ", "////>>>> cityId at player's location is: "+cityId);
+		if(cityId != 0)
+		{
+			travel_point = cityGetName(cityId);
+			debugLogging("//***// OnObjectMenuSelect: ", "////>>>> city name at player's location is: "+travel_point);
+		}
+
+		LOG("LOG_CHANNEL", "player ->" + player + " planet ->" + planet + " travel_point ->" + travel_point);
+
+		// Check to see if travel has been disabled.
+		string config = getConfigSetting("GameServer", "disableTravelSystem");
+		if(config != null)
+		{
+			if(config.equals("on"))
+				return SCRIPT_CONTINUE;
+		}
+
+		utils.setScriptVar(player, travel.SCRIPT_VAR_TERMINAL, self); 
+		utils.setScriptVar(player, "instantTravel", true);
+		boolean success = enterClientTicketPurchaseMode(player, planet, travel_point, true);
+		if(success)
+		{
+			//used to avoid giving the player a confusing message
+			utils.setScriptVar(self, "transport", 1);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id breacher)
+{
+	obj_id player = (playerCheck(self, "OnTriggerVolumeEntered - "));
+	debugLogging("//***// OnTriggerVolumeExited: ", "////>>>> player is leaving the instant travel terminal behind (the ship). Destroying self");
+	sendSystemMessage(player, SID_LEFT_ME);	 // 'Hey player! You left the immediate area. I am leaving!'
+	messageTo(self, "cleanupShip", null, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+// ********************************************************************
+//					FUNCTIONS
+// ********************************************************************
+
+void debugLogging(string section, string message)
+{
+	if(CONST_FLAG_DO_LOGGING)
+		LOG("debug/terminal_travel_instant/"+section, message);
+}
+
+
+//----------------------------------------------------------------------
+
+void pickupObjectTriggerVolumeInitializer(obj_id self)
+{
+	obj_id player = (playerCheck(self, "pickupObjectTriggerVolumeInitializer"));
+
+	if(!hasTriggerVolume(self, TRIGGER_VOLUME_PICKUP_SHIP))
+	{
+
+		debugLogging("//***// pickupObjectTriggerVolumeInitializer: ", "////>>>> created new trigger volume TRIGGER_VOLUME_PICKUP_SHIP");
+		createTriggerVolume(TRIGGER_VOLUME_PICKUP_SHIP, PICKUP_INTEREST_RADIUS, false);
+		addTriggerVolumeEventSource(TRIGGER_VOLUME_PICKUP_SHIP, player);
+	}
+}
+
+//----------------------------------------------------------------------
+
+obj_id playerCheck(obj_id self, string section)
+{
+	if(utils.hasScriptVar(self,"playerOwner"))
+	{
+		obj_id player = utils.getObjIdScriptVar(self, "playerOwner");
+		if(isIdValid(player))
+			return player;
+		else
+			debugLogging(section, "////>>>> the player owner scriptvar isn't valid, so destroying self");
+	}
+	else
+		debugLogging(section, "////>>>> we don't have a player owner scriptvar, so no way to know what to track. Destroying self");
+
+	messageTo(self, "cleanupShip", null, 0, false);
+	return null;
+}
+
+void LocationItvOptions(obj_id ship, obj_id player)
+{
+	if(!isIdValid(ship) || !isIdValid(player))
+		return;
+		
+	if(sui.hasPid(player, PID_VAR))
+	{
+		int pid = sui.getPid(player, PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	string[] main_options = new string[4];
+	
+	//Option 0 is always 'Manage Locations'
+	main_options[0] = "Manage Locations";
+	
+	//The following options will show default until the player has marked his locations.  After that, they 
+	//will show what the player named them himself.
+	if(hasObjVar(player, "travel_tcg.itv.name.1"))
+		main_options[1] = getStringObjVar(player, "travel_tcg.itv.name.1");
+	else
+		main_options[1] = "Travel Location 1";
+
+	if(hasObjVar(player, "travel_tcg.itv.name.2"))
+		main_options[2] = getStringObjVar(player, "travel_tcg.itv.name.2");
+	else
+		main_options[2] = "Travel Location 2";
+
+	if(hasObjVar(player, "travel_tcg.itv.name.3"))
+		main_options[3] = getStringObjVar(player, "travel_tcg.itv.name.3");
+	else
+		main_options[3] = "Travel Location 3";				
+	
+	//Show the listbox.
+	int pid = sui.listbox(ship, player, "@tcg:location_itv_d", sui.OK_CANCEL, "@tcg:location_itv_t", main_options, "handleLocationItvOptions", true, true);
+	sui.setPid(player, pid, PID_VAR);
+	
+	return;
+}
+//TODO: tcg:[prompt_itv_location_set]
+void sendPlayerToLocation(obj_id player, int idx)
+{
+	if(!isIdValid(player))
+	{
+		return;
+	}
+	obj_id self = getSelf();
+	
+	if(hasObjVar(player, ("travel_tcg.itv.location." + idx)) && hasObjVar(player, ("travel_tcg.itv.scene." + idx)))
+	{
+		location travelLoc = getLocationObjVar(player, ("travel_tcg.itv.location." + idx));
+		string destPlanet = getStringObjVar(player, ("travel_tcg.itv.scene." + idx));
+		warpPlayer(player, destPlanet, travelLoc.x, travelLoc.y, travelLoc.z, null, 0, 0, 0, "", false);
+		
+		messageTo(self, "cleanupShip", null, 0.0f, false);	
+	}
+	else
+	{
+		sendSystemMessage(player, new string_id("tcg", "corrupt_itv_location_data"));
+	}
+}
+
+boolean canMarkAtLocation(obj_id player)
+{
+	obj_id playerCurrentMount = getMountId(player);
+	if(isIdValid(playerCurrentMount))
+		return false;
+
+	if(isIdValid(structure.getContainingBuilding(player)))
+		return false;
+
+	if(isSpaceScene())
+		return false;
+
+	if(space_dungeon.verifyPlayerSession(player))
+		return false;
+
+	location here = getLocation(player);
+	if(locations.isInCity(here))
+		return false;
+	
+	region geoCities[] = getRegionsWithGeographicalAtPoint(here, regions.GEO_CITY);
+	if(geoCities != null && geoCities.length > 0)
+		return false;
+	
+	region[] regionList = getRegionsWithPvPAtPoint(here, regions.PVP_REGION_TYPE_ADVANCED);
+	if(regionList != null && regionList.length > 0)
+		return false;
+
+	string planet = getCurrentSceneName();
+	if(planet.startsWith("kashyyyk") || planet.equals("adventure1") || planet.equals("adventure2"))
+		return false;
+
+	if(combat.isInCombat(player))
+		return false;
+
+	return true;
+}
+
+// ********************************************************************
+//					MESSAGE HANDLERS
+// ********************************************************************
+
+//This message to only delivers the system message to the player when the timer on the BUFF is about to run out. 
+messageHandler timeOutSelfExpire()
+{
+	if(!utils.hasScriptVar(self, "playerOwner"))
+		return SCRIPT_CONTINUE;
+ 		
+	obj_id player = utils.getObjIdScriptVar(self, "playerOwner");
+	if(isIdValid(player))
+		sendSystemMessage(player, SID_TIMEOUT);	 // 'Hey player! I'm leaving! You took too long to board!'
+
+	return SCRIPT_CONTINUE;
+}
+
+// entry from player_travel
+messageHandler initializeInstaTravelShip()
+{
+	debugLogging("//***// OnInitialize: ", "////>>>> ENTERED. ");
+
+	pickupObjectTriggerVolumeInitializer(self);
+
+	if(utils.hasScriptVar(self,"playerOwner"))
+	{
+		obj_id player = utils.getObjIdScriptVar(self,"playerOwner");
+		if(!isIdValid(player))
+		{
+			debugLogging("//// OnInitialize: ", "////>>>> we don't have a valid scriptvar pointing to our owning player, so destroy self.");
+			messageTo(self, "cleanupShip", null, 0, false);
+		}
+	}
+	else
+	{
+		debugLogging("//// OnInitialize: ", "////>>>> apparently we don't have a playerOwner scriptvar, so destroy self.");
+		messageTo(self, "cleanupShip", null, 0, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+ 
+messageHandler cleanupShip()
+{
+	obj_id player = utils.getObjIdScriptVar(self,"playerOwner");
+	if(isIdValid(player))
+		buff.removeBuff(player, ITV_PICKUP_BUFF);
+	
+	if(sui.hasPid(player, PID_VAR))
+	{
+		int pid = sui.getPid(player, PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	destroyObject(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler ownerResidenceLocationResponse()
+{
+	if(params == null || params.isEmpty())
+	{
+		messageTo(self, "cleanupShip", null, 0, false);	
+		return SCRIPT_CONTINUE;
+	}
+		
+	obj_id player = params.getObjId("homeOwner");
+	location homeLocation = params.getLocation("residenceLocation");	
+	string homePlanet = params.getString("homePlanet");
+	
+	if(sui.hasPid(player, PID_VAR))
+	{
+		int pid = sui.getPid(player, PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	if(!isIdValid(player) || homeLocation == null || homePlanet == null || homePlanet == "")
+	{
+		//a fatal error occurred - tell the player and bail.
+		sendSystemMessage(player, new string_id("tcg", "invalid_home_itv_location"));
+		messageTo(self, "cleanupShip", null, 0, false);	
+	}
+	else
+	{
+		//show the confirm SUI before sending players on their way.
+		utils.setScriptVar(self, "homeLoc", homeLocation); 
+		utils.setScriptVar(self, "destPlanet", homePlanet);		
+		int pid = sui.msgbox(self, player, "@tcg:home_itv_d", sui.OK_CANCEL, "@tcg:home_itv_t", sui.MSG_QUESTION, "sendPlayerToHomeLocation");
+		sui.setPid(player, pid, PID_VAR);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler sendPlayerToHomeLocation()
+{
+	if(params == null || params.isEmpty())
+	{
+		messageTo(self, "cleanupShip", null, 0, false);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+	if(sui.hasPid(player, PID_VAR))
+	{
+		int pid = sui.getPid(player, PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	int btn = sui.getIntButtonPressed(params);
+	if(btn == sui.BP_CANCEL)
+	{
+		utils.removeScriptVar(self, "homeLoc");
+		utils.removeScriptVar(self, "destPlanet");
+		messageTo(self, "cleanupShip", null, 0, false);	
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		location destLoc = utils.getLocationScriptVar(self, "homeLoc");
+		string destPlanet = utils.getStringScriptVar(self, "destPlanet");
+//TODO: Track floating issues.  Decreasing the Y is putting them on the ground in some cases.
+		//make sure they are not floating in the air.
+		//destLoc.y = destLoc.y - 20.0f;
+		warpPlayer(player, destPlanet, destLoc.x, destLoc.y, destLoc.z, null, 0, 0, 0, "", false);
+		//remove the ship
+		messageTo(self, "cleanupShip", null, 0, false);	
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLocationItvOptions()
+{
+	obj_id player = sui.getPlayerId(params);
+	
+	if(sui.hasPid(player, PID_VAR))
+	{
+		int pid = sui.getPid(player, PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	if(!isIdValid(player))
+	{
+		messageTo(self, "cleanupShip", null, 0, false);
+		if(sui.hasPid(player, PID_VAR))
+		{
+			int pid = sui.getPid(player, PID_VAR);
+			forceCloseSUIPage(pid);
+		}		
+		return SCRIPT_CONTINUE;
+	}
+	int idx = sui.getListboxSelectedRow(params);
+	int bp = sui.getIntButtonPressed(params);	
+
+	if(bp == sui.BP_CANCEL)
+	{
+		messageTo(self, "cleanupShip", null, 0, false);
+		if(sui.hasPid(player, PID_VAR))
+		{
+			int pid = sui.getPid(player, PID_VAR);
+			forceCloseSUIPage(pid);
+		}		
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(idx < 0)
+	{
+		messageTo(self, "cleanupShip", null, 0, false);
+		if(sui.hasPid(player, PID_VAR))
+		{
+			int pid = sui.getPid(player, PID_VAR);
+			forceCloseSUIPage(pid);
+		}		
+		return SCRIPT_CONTINUE;
+	}
+		
+	switch(idx)
+	{
+
+		case 0: //manage locations
+		
+			if(hasObjVar(player, "travel_tcg.itv.name.1"))
+				LOC_ITV_MANAGE_OPTIONS[0] = "Overwrite: " + getStringObjVar(player, "travel_tcg.itv.name.1");
+
+			if(hasObjVar(player, "travel_tcg.itv.name.2"))
+				LOC_ITV_MANAGE_OPTIONS[1] = "Overwrite: " + getStringObjVar(player, "travel_tcg.itv.name.2");
+
+			if(hasObjVar(player, "travel_tcg.itv.name.3"))
+				LOC_ITV_MANAGE_OPTIONS[2] = "Overwrite: " + getStringObjVar(player, "travel_tcg.itv.name.3");
+
+			int pid = sui.listbox(self, player, "@tcg:location_itv_manage_d", sui.OK_CANCEL, "@tcg:location_itv_manage_t", LOC_ITV_MANAGE_OPTIONS, "handleManageLocationItvOptions", true, true);
+			sui.setPid(player, pid, PID_VAR);
+			break;
+		case 1:	//travel location #1  
+			sendPlayerToLocation(player, idx);
+			break;
+		case 2: //travel location #2
+			sendPlayerToLocation(player, idx);
+			break;
+		case 3: //travel location #3
+			sendPlayerToLocation(player, idx);
+			break;
+		default:
+			messageTo(self, "cleanupShip", null, 0, false);
+			break;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//Handles the Setting of Location ITV locations
+messageHandler handleManageLocationItvOptions()
+{
+	obj_id player = sui.getPlayerId(params);
+	if(!isIdValid(player))
+	{
+		messageTo(self, "cleanupShip", null, 0, false);
+		if(sui.hasPid(player, PID_VAR))
+		{
+			int pid = sui.getPid(player, PID_VAR);
+			forceCloseSUIPage(pid);
+		}		
+		return SCRIPT_CONTINUE;
+	}
+	int idx = sui.getListboxSelectedRow(params);
+	int bp = sui.getIntButtonPressed(params);	
+
+	if(bp == sui.BP_CANCEL)
+	{
+		messageTo(self, "cleanupShip", null, 0, false);
+		if(sui.hasPid(player, PID_VAR))
+		{
+			int pid = sui.getPid(player, PID_VAR);
+			forceCloseSUIPage(pid);
+		}		
+		return SCRIPT_CONTINUE;
+	}
+	if(idx < 0)
+	{
+		messageTo(self, "cleanupShip", null, 0, false);
+		if(sui.hasPid(player, PID_VAR))
+		{
+			int pid = sui.getPid(player, PID_VAR);
+			forceCloseSUIPage(pid);
+		}		
+		return SCRIPT_CONTINUE;
+	}	
+	switch(idx)
+	{
+		case 0:
+			if(canMarkAtLocation(player))
+			{
+				int pid = sui.filteredInputbox(self, player, "@tcg:prompt_itv_location_set", "@tcg:title_itv_location_set", "handleSetItvLocation", "");
+				sui.setPid(player, pid, PID_VAR);
+				utils.setScriptVar(player, "travel.itv.number", 1);	//Location #1			
+			}
+			else
+				sendSystemMessage(player, new string_id("tcg", "invalid_location_for_location_itv"));
+			break;
+		case 1:
+			if(canMarkAtLocation(player))
+			{
+				int pid = sui.filteredInputbox(self, player, "@tcg:prompt_itv_location_set", "@tcg:title_itv_location_set", "handleSetItvLocation", "");
+				sui.setPid(player, pid, PID_VAR);
+				utils.setScriptVar(player, "travel.itv.number", 2);	//Location #2			
+			}
+			else
+				sendSystemMessage(player, new string_id("tcg", "invalid_location_for_location_itv"));
+			break;
+		case 2: 
+			if(canMarkAtLocation(player))
+			{
+				int pid = sui.filteredInputbox(self, player, "@tcg:prompt_itv_location_set", "@tcg:title_itv_location_set", "handleSetItvLocation", "");
+				sui.setPid(player, pid, PID_VAR);
+				utils.setScriptVar(player, "travel.itv.number", 3);	//Location #3			
+			}
+			else
+				sendSystemMessage(player, new string_id("tcg", "invalid_location_for_location_itv"));
+			break;
+		default:
+			messageTo(self, "cleanupShip", null, 0, false);
+			if(sui.hasPid(player, PID_VAR))
+			{
+				int pid = sui.getPid(player, PID_VAR);
+				forceCloseSUIPage(pid);
+			}			
+			break;
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSetItvLocation()
+{
+	if(params == null || params.isEmpty())
+	{
+		messageTo(self, "cleanupShip", null, 0, false);
+		return SCRIPT_CONTINUE;
+	}
+		
+	obj_id player = sui.getPlayerId(params);
+	if(!isIdValid(player))
+	{
+		utils.removeScriptVar(player, "travel.itv.number");
+		return SCRIPT_CONTINUE;
+	}
+	
+	int bp = sui.getIntButtonPressed(params);
+	if(bp == sui.BP_CANCEL)
+	{
+		utils.removeScriptVar(player, "travel.itv.number");
+		messageTo(self, "cleanupShip", null, 0, false);
+		return SCRIPT_CONTINUE;
+	}	
+	
+	string markName = sui.getInputBoxText(params);
+	if(markName == null || markName.length() == 0)
+	{
+		sendSystemMessage(self, new string_id("tcg", "not_valid_location_name")); 
+		utils.removeScriptVar(player, "travel.itv.number");
+		messageTo(self, "cleanupShip", null, 0, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!utils.hasScriptVar(player, "travel.itv.number"))
+	{
+		utils.removeScriptVar(player, "travel.itv.number");
+		messageTo(self, "cleanupShip", null, 0, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int n = utils.getIntScriptVar(player, "travel.itv.number");
+	utils.removeScriptVar(player, "travel.itv.number");
+	
+	//The player has pressed "OK" - Let's make sure we can mark here to be certain.
+	if(canMarkAtLocation(player))
+	{
+		location markLocation = getLocation(player);
+		string markScene = getCurrentSceneName();
+		if(canMarkAtLocation(player) && markLocation != null && markScene != null)
+		{
+			setObjVar(player, "travel_tcg.itv.location." + n, markLocation);
+			setObjVar(player, "travel_tcg.itv.scene." + n, markScene);
+			setObjVar(player, "travel_tcg.itv.name." + n, markName);
+
+			sendSystemMessage(self, new string_id("tcg", "valid_location_set")); 
+		}
+	}
+	else
+		sendSystemMessage(player, new string_id("tcg", "invalid_location_for_location_itv"));
+		
+	return SCRIPT_CONTINUE;
+}
+

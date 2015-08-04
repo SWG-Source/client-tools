@@ -1,0 +1,761 @@
+// ALL SERVING DROID SCRIPTS
+// structure/serving_droid_control.script
+// creature/serving_droid.script
+// item/droid/serving_droid_terminal.script
+
+include library.ai_lib;
+include library.hue;
+include library.sui;
+include library.utils;
+include library.player_structure;
+
+const int MAX_WAYPOINTS	= 20;
+
+//variable constants
+const string OBJVAR_DROID_PATROL_POINTS 	= "droid.patrolPoints";
+const string OBJVAR_DROID_PATROL_LOOP 		= "droid.patrol_loop";
+const string OBJVAR_DROID_PATROL_ONCE 		= "droid.patrol_once";
+const string DROID_MOVING 			= "droid.moving";
+const string DROID_SETTING_PATROL		= "droid.settingPatrol";
+const string SCRIPTVAR_DROID_HELP_MENU		= "droid.helpmenu";
+const string TERMINAL_DROID_ID 			= "droid.id";
+
+//Pet Menu Strings
+const string MENU_FILE 				= "pet/pet_menu";
+const string_id SYS_PATROL_ADDED 		= new string_id(MENU_FILE,"patrol_added");
+const string_id SYS_PATROL_REMOVED 		= new string_id(MENU_FILE,"patrol_removed");
+const string_id SETPATROLPOINT 			= new string_id(MENU_FILE,"menu_set_patrol_point");
+const string_id CLEARPOINTS 			= new string_id(MENU_FILE,"menu_clear_patrol_points");
+const string_id CLEAR_LAST 			= new string_id(MENU_FILE,"patrol_clear_last");
+const string_id PROGRAM 			= new string_id(MENU_FILE,"droid_options");
+const string_id HELP 				= new string_id(MENU_FILE,"serving_droid_menu_help");
+const string_id PATROL_OPTIONS 			= new string_id(MENU_FILE, "patrol_setting");
+const string_id PATROL 				= new string_id(MENU_FILE,"menu_patrol");
+const string_id ONCE 				= new string_id(MENU_FILE,"patrol_once");
+const string_id LOOP 				= new string_id(MENU_FILE,"patrol_loop");
+const string_id PCOLOR 				= new string_id("sui", "set_primary_color");
+const string_id SCOLOR 				= new string_id("sui", "set_secondary_color");
+const string_id ASTROMECH_NOT_OWNER		= new string_id(MENU_FILE,"serving_droid_not_owner");
+const string_id ASTROMECH_NO_WAYPOINTS		= new string_id(MENU_FILE,"serving_droid_no_waypoints");
+const string_id ASTROMECH_MAX_WAYPOINTS		= new string_id(MENU_FILE,"serving_droid_max_waypoints");
+const string_id ASTROMECH_NOT_IN_HOUSE		= new string_id(MENU_FILE,"serving_droid_not_in_house");
+const string_id ASTROMECH_WAYPOINTS_NOT_CLEAR	= new string_id(MENU_FILE,"serving_droid_waypoints_not_cleared");
+
+//HELP UI/DIALOG
+const string INFO_UI_TITLE = localize(new string_id( "sui", "serving_droid_sui_title"));
+const string INFO_UI_TEXT = localize(new string_id( "sui", "serving_droid_sui_text")); 
+const string TEST_PATROL = localize(new string_id( "sui", "serving_droid_sui_test_button"));  
+const string CLOSE = localize(new string_id( "sui", "close"));
+
+//------------------------------------------------
+//triggers
+//------------------------------------------------
+trigger OnDestroy()
+{
+	obj_id droid = self;
+	if (!isValidId(droid))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(self, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;	
+
+	obj_id house = getObjIdObjVar(droid, "house");
+	if(isValidId(house) && exists(house))
+	{
+		removeObjVar(house, "serving_droid.droid");
+		if(hasScript(house, "structure.serving_droid_control"))
+			detachScript(house, "structure.serving_droid_control");		
+	}
+	removeObjVar(terminal, TERMINAL_DROID_ID);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathComplete()
+{
+	obj_id droid = self;
+	if (!isValidId(droid))
+		return SCRIPT_CONTINUE;
+	utils.removeScriptVar(droid, DROID_MOVING);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMoveMoving()
+{
+	obj_id droid = self;
+	if (!isValidId(droid))
+		return SCRIPT_CONTINUE;
+	utils.setScriptVar(droid, DROID_MOVING, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{		
+	obj_id droid = self;
+	if (!isValidId(droid))
+		return SCRIPT_CONTINUE;
+	messageTo(droid, "initializeDroidVariables", null, 1, false);		
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id droid = self;
+	if(!isIdValid(droid))
+		return SCRIPT_CONTINUE;
+	
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal) || !exists(terminal))
+	{
+		destroyObject(droid);
+	}	
+	if(utils.isNestedWithinAPlayer(droid))
+	{			
+		messageTo(terminal, "destroyDroid", null, 1, false);		
+		return SCRIPT_CONTINUE;
+	}
+	mi.addRootMenu(menu_info_types.ITEM_ACTIVATE, PATROL);
+	mi.addRootMenu(menu_info_types.SERVER_MENU1, HELP);
+
+	int mnuColor = mi.addRootMenu(menu_info_types.SERVER_MENU2, PROGRAM);
+		mi.addSubMenu(mnuColor, menu_info_types.SERVER_MENU3, PCOLOR);
+		mi.addSubMenu(mnuColor, menu_info_types.SERVER_MENU4, SCOLOR);		
+
+	int mnuProgram = mi.addRootMenu(menu_info_types.SERVER_MENU5, PATROL_OPTIONS);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU6, SETPATROLPOINT);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU7, CLEARPOINTS);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU10, CLEAR_LAST);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU8, ONCE);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU9, LOOP);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	obj_id droid = self;
+	if(!isValidId(droid))
+		return SCRIPT_CONTINUE;
+	
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;	
+
+	if(utils.isNestedWithinAPlayer(droid))
+	{		
+		messageTo(terminal, "destroyDroid", null, 1, false);
+		return SCRIPT_CONTINUE;
+	}
+	//Make sure this is the owner
+	if(player != getObjIdObjVar(terminal, "biolink.id"))
+	{
+		//convert this to string id
+		sendSystemMessage(player, ASTROMECH_NOT_OWNER);	
+		return SCRIPT_CONTINUE;		
+	}
+	
+	sendDirtyObjectMenuNotification(droid);
+
+	if (item == menu_info_types.SERVER_MENU1)			
+	{
+		createHelpDialog(droid, player);
+	}	
+	if (item == menu_info_types.SERVER_MENU3)			
+	{
+		sui.colorize(droid, player, droid, hue.INDEX_1, "handlePrimaryColorize");
+	}	
+	if (item == menu_info_types.SERVER_MENU4)			
+	{
+		sui.colorize(droid, player, droid, hue.INDEX_2, "handleSecondaryColorize");
+	}
+	if (item == menu_info_types.SERVER_MENU5)			
+	{
+		//nothing
+	}
+	if (item == menu_info_types.SERVER_MENU6)			
+	{
+		doSetPatrolPoint(droid, player);
+	} 
+	if (item == menu_info_types.SERVER_MENU7)			
+	{
+		doClearPatrolPoints(droid, player);
+	}
+	if (item == menu_info_types.SERVER_MENU8)			
+	{
+		setPatrolOnce(droid, player, terminal);
+	} 
+	if (item == menu_info_types.SERVER_MENU9)			
+	{
+		setPatrolLoop(droid, player, terminal);
+	}
+	if (item == menu_info_types.SERVER_MENU10)			
+	{
+		removeLastPatrolPoint(droid, player);
+	}	
+	if (item == menu_info_types.ITEM_ACTIVATE)
+	{
+		if(utils.hasScriptVar(droid, DROID_MOVING) && !utils.hasScriptVar(droid, DROID_SETTING_PATROL))
+		{
+			stop(droid);
+			utils.removeScriptVar(droid, DROID_MOVING);
+		}
+		else
+		{
+			doPatrol(droid, player);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//messageHandlers
+//------------------------------------------------
+
+//This handle Primary Color
+messageHandler handlePrimaryColorize()
+{
+	obj_id droid = self;
+	if (!isValidId(droid))
+		return SCRIPT_CONTINUE;
+
+	//get this objvar to save the primary color on the terminal
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;	
+		
+	int idx = sui.getColorPickerIndex(params);
+	int bp = sui.getIntButtonPressed(params);
+	obj_id player = sui.getPlayerId(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if ( idx > -1 )
+	{
+		//debugSpeakMsg(droid, "idx:"+idx);	
+		colorPrimary(droid, terminal, idx);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//This handle Secondary Color
+messageHandler handleSecondaryColorize()
+{
+	obj_id droid = self;
+	if (!isValidId(droid))
+		return SCRIPT_CONTINUE;
+
+	//get this objvar to save the secondary color on the terminal
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;		
+	
+	int idx = sui.getColorPickerIndex(params);
+	int bp = sui.getIntButtonPressed(params);
+	obj_id player = sui.getPlayerId(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if ( idx > -1 )
+	{
+		//debugSpeakMsg(droid, "idx:"+idx);	
+		colorSecondary(droid, terminal, idx);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//This is called on init to get the terminal user's OID
+messageHandler getUserOidSetFirstPoint()
+{
+	obj_id droid = self;
+	if (!isValidId(droid))
+		return SCRIPT_CONTINUE;
+		
+	obj_id player = getObjIdObjVar(droid, "user");
+	if (!isValidId(player))
+		return SCRIPT_CONTINUE;
+		
+	doSetPatrolPoint(droid, player);
+	return SCRIPT_CONTINUE;
+}
+
+//forget the patrol points, go to start
+//this isn't used becuase the droid can get stuck
+messageHandler pathDirectlyToStart()
+{	
+	obj_id droid = self;
+	if(!isValidId(droid))
+		return SCRIPT_CONTINUE;
+
+
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;	
+		
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_DROID_PATROL_POINTS);
+	if (patrolLoc != null)
+	{
+		stop(droid);
+		pathTo(droid, patrolLoc[0]);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//This makes the droid retrace it's patrol path
+messageHandler fromLastPointGoBackToStart()
+{	
+	obj_id droid = self;
+	if(!isValidId(droid))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;	
+
+	//move to terminal
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_DROID_PATROL_POINTS);
+	if (patrolLoc != null)
+	{
+		int patrolLength = patrolLoc.length;		
+		location[] temp = new location[patrolLength];
+		for(int i = 0; i < patrolLength; ++i)
+		{
+			temp[i] = patrolLoc[(patrolLength-1)-i];
+		}
+		//retrace steps without ruining original patrol 		
+		patrolOnce(droid, temp);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleActivateDroid()
+{
+	obj_id droid = self;
+	if(!isValidId(droid))
+		return SCRIPT_CONTINUE;
+		
+	obj_id player = getObjIdObjVar(droid, "user");
+	doPatrol(droid);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDeactivateDroid()
+{
+	obj_id droid = self;
+	if(!isValidId(droid))
+		return SCRIPT_CONTINUE;
+
+	obj_id player = getObjIdObjVar(droid, "user");
+	//keep this comment in case we can get the droid to retrace steps
+	//messageTo(droid, "pathDirectlyToStart", null, 1, false);
+	stop(droid);
+	if(utils.hasScriptVar(droid, DROID_MOVING))
+		utils.removeScriptVar(droid, DROID_MOVING);	
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler reColorDroid()
+{
+	obj_id droid = self;
+	if(!isValidId(droid))
+		return SCRIPT_CONTINUE;
+	
+	//debugSpeakMsg(droid, "I am here:");
+	
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;	
+	
+	if(!hasObjVar(terminal, "color.primary") && !hasObjVar(terminal, "color.secondary"))
+	{
+		setObjVar(terminal, "color.primary", 0);
+		setObjVar(terminal, "color.secondary",22);	
+	}
+	
+	int primary = getIntObjVar(terminal, "color.primary");
+	int secondary = getIntObjVar(terminal, "color.secondary");
+	
+	if(primary < 0 || secondary < 0)
+		return SCRIPT_CONTINUE;
+
+	//debugSpeakMsg(droid, "pri/sec"+primary+" "+secondary);
+	
+	hue.setColor(droid, "/private/index_color_1", primary);
+	hue.setColor(droid, "/private/index_color_2", secondary);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler initializeDroidVariables()
+{
+	obj_id droid = self;
+	obj_id house = getTopMostContainer(self);
+	
+	if(!isIdValid(droid))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;
+
+	if(!isIdValid(house) || !player_structure.isBuilding(house) || utils.isNestedWithinAPlayer(droid))
+	{			
+		messageTo(terminal, "destroyDroid", null, 1, false);		
+		return SCRIPT_CONTINUE;		
+	}
+	setObjVar(droid, "house", house);
+	
+	//dont overwrite the location list if one already exists
+	if(!hasObjVar(terminal, OBJVAR_DROID_PATROL_POINTS))
+		messageTo(droid, "getUserOidSetFirstPoint", null, 1, false);
+
+	//Attach the listener to the house here
+	if(!hasScript(house, "structure.serving_droid_control"))
+	{
+		attachScript(house, "structure.serving_droid_control");
+	}
+	//The house needs to know who the droid is
+	if(!hasObjVar(house, "serving_droid.droid"))
+		setObjVar(house, "serving_droid.droid", droid);
+
+	if(hasObjVar(terminal, "color.primary"))
+	{
+		messageTo(droid, "reColorDroid", null, 0, false);
+	}
+	
+	listenToMessage(house, "handleActivateDroid");
+	listenToMessage(house, "handleDeactivateDroid");
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleDialogInput
+// This function handles the player's selection on the SUI message box
+// If the player selects Test Patrol the doPatrol function is called
+// If the player selects CLOSE or X the UI is closed
+//------------------------------------------------
+messageHandler handleDialogInput()
+{
+	obj_id droid = self;
+	if(!isValidId(droid))
+	{
+		if(utils.hasScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU))
+			utils.removeScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU);			
+		return SCRIPT_CONTINUE;
+	}
+	// Determine which button was pressed.
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+	{
+		if(utils.hasScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU))
+			utils.removeScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU);			
+		return SCRIPT_CONTINUE;
+	}
+	int bp = sui.getIntButtonPressed(params);
+	switch (bp)
+	{
+		case sui.BP_OK:		// "Test"		
+			doPatrol(droid, player);
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_CANCEL: 	// "Close"
+			if(utils.hasScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU))
+				utils.removeScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU);			
+		
+			return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//Functions
+//------------------------------------------------
+
+boolean colorPrimary(obj_id droid, obj_id terminal, int idx)
+{
+	setObjVar(terminal, "color.primary", idx);
+	hue.setColor(droid, "/private/index_color_1", idx);
+	return true;	
+}
+
+boolean colorSecondary(obj_id droid, obj_id terminal, int idx)
+{
+	setObjVar(terminal, "color.secondary", idx);
+	hue.setColor(droid, "/private/index_color_2", idx);
+	return true;
+}
+
+//Kicks off the patrol if droid was asleep
+boolean doPatrol(obj_id droid)
+{
+	if(!isValidId(droid))
+		return false;
+
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return false;	
+		
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_DROID_PATROL_POINTS);
+	if (patrolLoc == null)
+		return false;
+	
+	if (hasObjVar(terminal, OBJVAR_DROID_PATROL_LOOP))
+	{
+		ai_lib.setPatrolPath(droid, patrolLoc);
+		return true;
+	}
+	else
+	{
+		patrolOnce(droid, patrolLoc);
+		messageTo(droid, "fromLastPointGoBackToStart", null, 120, false);
+		return true;
+	}
+}
+
+//Overloaded function used when player interacting with UI or Droid
+boolean doPatrol(obj_id droid, obj_id player)
+{
+	if(!isValidId(droid) || !isValidId(player))
+		return false;
+
+	if(utils.hasScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU))
+		utils.removeScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU);
+
+	if(utils.hasScriptVar(droid, DROID_SETTING_PATROL))
+	{
+		utils.removeScriptVar(droid, DROID_SETTING_PATROL);
+	}
+	
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return false;	
+
+	if (!hasObjVar(terminal, OBJVAR_DROID_PATROL_POINTS))
+	{
+		sendSystemMessage(player, ASTROMECH_NO_WAYPOINTS);
+		return false;
+	}		
+
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_DROID_PATROL_POINTS);
+	if (patrolLoc == null)
+		return false;
+	
+	if (hasObjVar(terminal, OBJVAR_DROID_PATROL_LOOP))
+	{
+		ai_lib.setPatrolPath(droid, patrolLoc);
+		return true;
+	}
+	else
+	{
+		patrolOnce(droid, patrolLoc);
+		messageTo(droid, "fromLastPointGoBackToStart", null, 120, false);
+		return true;
+	}
+}
+
+void doSetPatrolPoint(obj_id droid, obj_id player)
+{	
+	if(!isValidId(droid) || !isValidId(player))
+		return;
+
+	if(utils.hasScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU))
+		utils.removeScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU);
+	
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return;	
+
+	if(!utils.hasScriptVar(droid, DROID_SETTING_PATROL))
+	{
+		utils.setScriptVar(droid, DROID_SETTING_PATROL, true);
+	}
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_DROID_PATROL_POINTS);
+	if ( patrolLoc == null )
+	{
+		patrolLoc = new location[1];
+	}
+	else if (patrolLoc.length < MAX_WAYPOINTS)
+	{
+		location[] temp = new location[patrolLoc.length + 1];
+		for (int i = 0; i < patrolLoc.length; ++i)
+			temp[i] = patrolLoc[i];
+		patrolLoc = temp;
+	}
+	else
+	{
+		sendSystemMessage(player, ASTROMECH_MAX_WAYPOINTS);
+		return;
+	}
+	
+	location playerLoc = getLocation(player);
+	if(!isValidId(playerLoc.cell))
+	{
+		sendSystemMessage(player, ASTROMECH_NOT_IN_HOUSE);
+		return;
+	}	
+	patrolLoc[patrolLoc.length - 1] = playerLoc;
+	//SET THE LOCATION ARRAY ON THE TERMINAL	
+	setObjVar(terminal, OBJVAR_DROID_PATROL_POINTS, patrolLoc);
+	
+	sendSystemMessage(player, SYS_PATROL_ADDED);
+	sendConsoleMessage(player, "Patrol points left: "+(MAX_WAYPOINTS - patrolLoc.length));
+	
+	//Move the droid to the player as a courtesy so they can make it patrol all over.
+	pathTo(droid, playerLoc);
+}
+
+void doClearPatrolPoints(obj_id droid, obj_id player)
+{
+	if(!isValidId(droid) || !isValidId(player))
+		return;
+
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return;	
+
+	if (hasObjVar(terminal, OBJVAR_DROID_PATROL_POINTS))
+	{
+		removeObjVar(terminal, OBJVAR_DROID_PATROL_POINTS);
+		sendSystemMessage(player, SYS_PATROL_REMOVED);
+
+		ai_lib.clearPatrolPath(droid);
+		stop(droid);
+		messageTo( droid, "resumeDefaultCalmBehavior", null, 1, false );
+	}
+	else
+	{
+		sendSystemMessage(player, ASTROMECH_WAYPOINTS_NOT_CLEAR);
+	}
+}
+
+void removeLastPatrolPoint(obj_id droid, obj_id player)
+{
+	if(!isValidId(droid) || !isValidId(player))
+		return;
+
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return;	
+
+	if (hasObjVar(terminal, OBJVAR_DROID_PATROL_POINTS))
+	{		
+		location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_DROID_PATROL_POINTS);
+		if ( patrolLoc == null )
+		{
+			sendSystemMessage(player, ASTROMECH_WAYPOINTS_NOT_CLEAR);
+		}
+		else if (patrolLoc.length > 0)
+		{
+			location[] temp = new location[patrolLoc.length-1];
+			for (int i = 0; i < patrolLoc.length-1; ++i)
+				temp[i] = patrolLoc[i];
+			patrolLoc = temp;
+			setObjVar(terminal, OBJVAR_DROID_PATROL_POINTS, patrolLoc);
+			sendSystemMessage(player, SYS_PATROL_ADDED);
+			sendConsoleMessage(player, "Patrol points left: "+(MAX_WAYPOINTS - patrolLoc.length));			
+		}
+
+		location playerLoc = getLocation(player);
+		//Move the droid to the player as a courtesy so they can make it patrol all over.
+		if(isValidId(playerLoc.cell))
+		{
+			pathTo(droid, playerLoc);
+			return;
+		}
+	}
+}
+
+boolean setPatrolLoop(obj_id droid, obj_id player, obj_id terminal)
+{
+	if(!isValidId(droid) || !isValidId(player))
+		return false;
+
+	if(!isValidId(terminal) || !isValidId(terminal))
+		return false;
+
+	if (!hasObjVar(terminal, OBJVAR_DROID_PATROL_LOOP))
+	{
+		setObjVar(terminal, OBJVAR_DROID_PATROL_LOOP, true);
+		if (hasObjVar(terminal, OBJVAR_DROID_PATROL_ONCE))	
+			removeObjVar(terminal, OBJVAR_DROID_PATROL_ONCE);
+		sendConsoleMessage(player, "Patrol loop setting applied.");
+		if(utils.hasScriptVar(droid, DROID_MOVING))
+		{
+			stop(droid);
+			doPatrol(droid, player);
+		}
+		
+		return true;
+	}
+	return false;
+}
+
+boolean setPatrolOnce(obj_id droid, obj_id player, obj_id terminal)
+{
+	if (!hasObjVar(terminal, OBJVAR_DROID_PATROL_ONCE))
+	{
+		setObjVar(terminal, OBJVAR_DROID_PATROL_ONCE, true);
+		if (hasObjVar(terminal, OBJVAR_DROID_PATROL_LOOP))
+			removeObjVar(terminal, OBJVAR_DROID_PATROL_LOOP);
+		sendConsoleMessage(player, "Patrol once only setting applied.");
+		if(utils.hasScriptVar(droid, DROID_MOVING))
+		{
+			stop(droid);
+			doPatrol(droid, player);
+		}
+		return true;
+	}
+	return false;
+}
+
+//------------------------------------------------
+// createDialog
+// This fucntion creates the SUI message box with the basic instructions.  
+// It also has a button for the user to test their points.
+//------------------------------------------------
+int createHelpDialog(obj_id droid, obj_id player)
+{
+	if(utils.hasScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU))
+		return -1;
+		
+	if (!isIdValid(player))
+	{
+		return -1;
+	}
+	if (!isIdValid(droid))
+	{
+		return -1;
+	}
+	
+	// Create the dialog page.
+	int pid = sui.createSUIPage( sui.SUI_MSGBOX, droid, player, "handleDialogInput" );
+	// Add elements text.
+	sui.setSUIProperty( pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, INFO_UI_TEXT );
+	sui.setSUIProperty (pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, INFO_UI_TITLE );
+	// Add buttons.
+	sui.msgboxButtonSetup( pid, sui.OK_CANCEL );
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, CLOSE);
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, TEST_PATROL);
+	// Show dialog.
+	sui.showSUIPage(pid);
+	utils.setScriptVar(droid, SCRIPTVAR_DROID_HELP_MENU, true);
+	return pid;
+}
+
+messageHandler OnPack()
+{
+	obj_id droid = self;
+	if(!isValidId(droid))
+		return SCRIPT_CONTINUE;
+	
+	obj_id terminal = getObjIdObjVar(droid, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;	
+
+	messageTo(terminal, "destroyDroid", null, 1, false);
+	
+	return SCRIPT_CONTINUE;
+}

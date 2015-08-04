@@ -1,0 +1,695 @@
+/**
+ * Copyright (c) ©2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        systems.crafting.base_tool.script
+ * Description:
+ * @author       Steve Jakab
+ * @version      $Revision: 0$
+ */
+
+include library.ai_lib;
+include library.buff;
+include library.craftinglib;
+include library.groundquests;
+include library.jedi_trials;
+include library.pet_lib;
+include library.loot;
+include library.prose;
+include library.scheduled_drop;
+include library.session;
+include library.temp_schematic;
+include library.utils;
+
+const string PROTOTYPE_SLOT                 = "anythingNoMod2";
+
+const string OBJVAR_CRAFTING_FAKE_PROTOTYPE = "crafting.isFakePrototype";
+
+const string_id INVENTORY_FULL		= new string_id("spam", "inv_full");
+const string_id NO_SCHEMATICS		= new string_id("system_msg", "no_valid_schematics");
+
+// complexity limits for the crafting levels
+const float[] COMPLEXITY_LIMIT = {
+	15,
+	20,
+	25
+	// final crafting level is unlimited complexity
+};
+
+const string[] STATION_BUFFS =
+{
+	"food_station",
+	"armor_station",
+	"structure_station",
+	"weapon_station",
+	"space_station"
+};
+
+/**
+ *
+ **/
+trigger OnAttach()
+{
+	// make sure we have the prototype time objvar
+ 	setObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME, 0.0f);
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ *
+ **/
+trigger OnInitialize()
+{
+ 	// clear the crafter obj var, unless we are creating a prototype
+	float time = getFloatObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME);
+	if ( time == 0.0f )
+		removeObjVar(self, craftinglib.OBJVAR_CRAFTER);
+
+	// Check if this is a weapon tool and update it's data
+	string template = getTemplateName(self);
+
+	if (template != null && template.indexOf("weapon_tool.iff") >= 0)
+	{
+		int craftingType = getIntObjVar(self, craftinglib.OBJVAR_CRAFTING_TYPE);
+
+		craftingType &= ~CT_genericItem;	// Clear CT_genericItem bit
+		craftingType |= CT_misc;			// Set CT_misc bit
+
+		setObjVar(self, craftinglib.OBJVAR_CRAFTING_TYPE, craftingType);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Determines a player's current crafting level, based on their crafting tool and proximity to a crafting station.
+ *
+ * @param tool		the crafting tool the player is using
+ * @param player	the player crafting
+ *
+ * @return the player's crafting level, or -1 on error
+ */
+int determineCraftingLevel(obj_id tool, obj_id player)
+{
+	// determine our crafting level, and what crafting station we are using, if any
+	int craftingLevel = 0;
+	obj_id stationId = obj_id.NULL_ID;
+	boolean hasBuff = false;
+	debugServerConsoleMsg(tool, "OnObjectMenuRequest initial crafting level 0");
+
+	// determine what kind of crafting tool we are
+	int toolType = getIntObjVar(tool, craftinglib.OBJVAR_CRAFTING_TYPE);
+
+	if(toolType == 0)
+	{
+		LOG("crafting", "No crafting type defined for object " + tool);
+		return -1;
+	}
+
+	//check for presence of crafting buff
+	string stationBuff = craftinglib.getCraftingStationBuffName(toolType);
+
+	//can only have this buff legitmately if you are in a cell
+	if(isInWorldCell(player) && stationBuff != null && buff.hasBuff(player, stationBuff))
+	{
+		int[] stationBuffs = buff.getAllBuffsByEffect(player, "station_buff");
+
+		if(stationBuffs != null || stationBuffs.length > 0)
+		{
+			for(int i = 0; i < stationBuffs.length; ++i)
+			{
+				buff.removeBuff(player, stationBuffs[i]);
+			}
+		}
+	}
+
+	//if you have the buff, we will us it to determine what station
+	//you are crafting at.
+	if(stationBuff != null && buff.hasBuff(player, stationBuff))
+	{
+		stationId = buff.getBuffCaster(player, stationBuff);
+
+		if(isIdValid(stationId) && exists(stationId))
+		{
+			hasBuff = true;
+		}
+
+		if((ai_lib.aiGetNiche(stationId) == NICHE_DROID || ai_lib.aiGetNiche(stationId) == NICHE_ANDROID) && pet_lib.isLowOnPower(stationId))
+		{
+			hasBuff = false;
+			stationId = null;
+		}
+		else if(toolType != CT_genericItem)
+		{
+			++craftingLevel;
+			int stationType = getIntObjVar(stationId, craftinglib.OBJVAR_CRAFTING_TYPE);
+
+			if((stationType & toolType) != 0)
+			{
+				++craftingLevel;
+				int privateStation = getIntObjVar(stationId, craftinglib.OBJVAR_PRIVATE_STATION);
+
+				if(privateStation == 1 && (ai_lib.aiGetNiche(stationId) != NICHE_DROID || ai_lib.aiGetNiche(stationId) != NICHE_ANDROID))
+				{
+					++craftingLevel;
+					debugServerConsoleMsg(tool, "OnObjectMenuRequest crafting level 3");
+				}
+				else if(privateStation == 2 && (ai_lib.aiGetNiche(stationId) == NICHE_DROID || ai_lib.aiGetNiche(stationId) == NICHE_ANDROID))
+				{
+					craftingLevel = craftingLevel + 2;
+					debugServerConsoleMsg(tool, "OnObjectMenuRequest crafting level 4");
+				}
+			}
+		}
+	}
+
+	if(!hasBuff)
+	{
+		if(toolType != CT_genericItem)
+		{
+			++craftingLevel;
+
+			debugServerConsoleMsg(tool, "OnObjectMenuRequest crafting level 1");
+
+			// see if we are near to a station
+			location myPos = getLocation(player);
+
+			debugServerConsoleMsg(tool, "Looking for a crafting station, I think I'm at location " + myPos);
+
+			obj_id[] testIds = getObjectsInRange(myPos, craftinglib.STATION_AREA);
+
+			if(testIds != null)
+			{
+				float closestLength = craftinglib.STATION_AREA + 100.0f;
+
+				for(int i = 0; i < testIds.length; i++)
+				{
+					if(isIdValid(testIds[i]) && hasObjVar(testIds[i], craftinglib.OBJVAR_STATION))
+					{
+						debugServerConsoleMsg(tool, "Testing crafting station " + testIds[i] + " at " + getLocation(testIds[i]));
+						float dist = getDistance(testIds[i], myPos);
+						debugServerConsoleMsg(tool, "\tstation distance = " + dist);
+
+						if(dist >= 0 && dist < closestLength)
+						{
+							if((ai_lib.aiGetNiche(stationId) == NICHE_DROID || ai_lib.aiGetNiche(stationId) == NICHE_ANDROID) && pet_lib.isLowOnPower(stationId))
+							{
+								continue;
+							}
+
+							closestLength = dist;
+							stationId = testIds[i];
+						}
+					}
+				}
+
+				if(isIdValid(stationId) &&
+					((ai_lib.getNiche(stationId) != NICHE_DROID && ai_lib.getNiche(stationId) != NICHE_ANDROID) ||
+					pet_lib.isMyPet(stationId, player)))
+				{
+					debugServerConsoleMsg(tool, "Found crafting station " + stationId + " at " + getLocation(stationId));
+
+					int stationType = getIntObjVar(stationId, craftinglib.OBJVAR_CRAFTING_TYPE);
+
+					if((stationType & toolType) != 0 )
+					{
+						debugServerConsoleMsg(tool, "OnObjectMenuRequest crafting level 2");
+
+						// see if the station is private
+						int privateStation = getIntObjVar(stationId, craftinglib.OBJVAR_PRIVATE_STATION);
+
+						if(privateStation == 1 && (ai_lib.aiGetNiche(stationId) != NICHE_DROID || ai_lib.aiGetNiche(stationId) != NICHE_ANDROID))
+						{
+							craftingLevel += 2;
+							debugServerConsoleMsg(tool, "OnObjectMenuRequest crafting level 3");
+						}
+						else if(privateStation == 2 && (ai_lib.aiGetNiche(stationId) == NICHE_DROID || ai_lib.aiGetNiche(stationId) == NICHE_ANDROID))
+						{
+							if(!pet_lib.isLowOnPower(stationId))
+							{
+								craftingLevel += 3;
+								debugServerConsoleMsg(tool, "OnObjectMenuRequest crafting level 4");
+							}
+						}
+						else
+						{
+							craftingLevel++;
+						}
+					}
+					else
+						debugServerConsoleMsg(tool, "OnObjectMenuRequest station is wrong type " + stationType);
+				}
+				else
+					debugServerConsoleMsg(tool, "OnObjectMenuRequest no station objvar");
+			}
+		}
+	}
+
+	// Check if this station is a weapon station and update it's data
+	string template = getTemplateName(stationId);
+
+	if(template != null && template.indexOf("weapon_station.iff") >= 0)
+	{
+		int craftingType = getIntObjVar(stationId, craftinglib.OBJVAR_CRAFTING_TYPE);
+
+		craftingType &= ~CT_genericItem;			// Clear CT_genericItem bit
+		craftingType |= CT_misc | CT_lightsaber;	// Set CT_misc & CT_lightsaber bit
+
+		setObjVar(stationId, craftinglib.OBJVAR_CRAFTING_TYPE, craftingType);
+	}
+
+	if(!setCraftingLevelAndStation(player, craftingLevel, stationId))
+	{
+		debugServerConsoleMsg(tool, "OnObjectMenuRequest failed to set crafting level on player");
+		craftingLevel = -1;
+	}
+	return craftingLevel;
+}
+
+/**
+ *
+ **/
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	// determine our crafting level, and what crafting station we are using, if any
+	int craftingLevel = determineCraftingLevel(self, player);
+	if ( craftingLevel == -1 )
+		return SCRIPT_OVERRIDE;
+
+	menu_info_data craft_menu = mi.getMenuItemByType (menu_info_types.CRAFT_START);
+	if (craft_menu != null)
+	{
+		// if we have a prototype and it is done, allow access to it
+		float time = getFloatObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME);
+		if ( time == 0.0f && isIdValid(getObjectInSlot(self, PROTOTYPE_SLOT)) )
+		{
+			mi.addSubMenu (craft_menu.getId(), menu_info_types.CRAFT_HOPPER_OUTPUT,  null);
+		}
+
+		//added radial menu to crafting stations so tool is no longer required to open
+		/*
+		if ( craftingLevel == 3 )
+		{
+			mi.addSubMenu (craft_menu.getId(), menu_info_types.CRAFT_HOPPER_INPUT,  null);
+		}
+		*/
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	if(hasObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME))
+	{
+		if(getFloatObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME) > 0.0f)
+			return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Called at the start of a crafting session. This trigger should determine if a
+ * player is allowed to craft at this station, and what schematics he can use.
+ * The trigger should call sendUseableDraftSchematics if the player can use this
+ * station.
+ *
+ * @param self			a crafting station
+ * @param player		the player trying to use the station
+ * @param schematics	list of schematic template names the player has; these have already been filtered for station type
+ * @param complexities	list of schematic base complexities for filtering purposes
+ *
+ * @return SCRIPT_CONTINUE if the player is allowed to craft, SCRIPT_OVERRIDE if the player may not use this station
+ **/
+trigger OnRequestDraftSchematics(obj_id player, int[] schematics, float[] complexities)
+{
+	//if the player has no free inventory, bail out!
+	obj_id pInv = utils.getInventoryContainer(player);
+	if (getVolumeFree(pInv) <= 0)
+	{
+		sendSystemMessage(player, INVENTORY_FULL);
+		return SCRIPT_OVERRIDE;
+	}
+
+	debugServerConsoleMsg(self, "OnRequestDraftSchematics enter, num schematics = " + schematics.length);
+
+	if ( schematics.length > 0 && schematics.length == complexities.length)
+	{
+		int craftingLevel = determineCraftingLevel(self, player);
+		if ( craftingLevel == -1 )
+			return SCRIPT_OVERRIDE;
+
+		debugServerConsoleMsg(self, "OnRequestDraftSchematics crafting level = " + craftingLevel);
+
+		int[] allowedSchematics;
+		if ( craftingLevel < 3)
+		{
+			allowedSchematics = new int[schematics.length];
+			for ( int i = 0; i < schematics.length; ++i )
+			{
+				if ( complexities[i] <= COMPLEXITY_LIMIT[craftingLevel] )
+					allowedSchematics[i] = schematics[i];
+				else
+					allowedSchematics[i] = 0;
+			}
+		}
+		else
+			allowedSchematics = schematics;
+
+		if (sendUseableDraftSchematics(player, allowedSchematics))
+			return SCRIPT_CONTINUE;
+	}
+
+	sendSystemMessage(player, NO_SCHEMATICS);
+
+	debugServerConsoleMsg(self, "OnRequestDraftSchematics exit - override");
+	return SCRIPT_OVERRIDE;
+}
+
+/**
+ * Prevents a player from putting an object in the station's output hopper or any other slot.
+ *
+ * @param self				the container about to gain the item
+ * @param srcContainer		the container about to lose the item
+ * @param transferer		the thing transferring the object
+ * @param item				the object being transfered
+ *
+ * @return  SCRIPT_CONTINUE to allow the transfer, SCRIPT_OVERRIDE to stop it
+ **/
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if ( transferer == obj_id.NULL_ID || transferer == srcContainer)
+	 	return SCRIPT_CONTINUE;
+
+	return SCRIPT_OVERRIDE;
+}
+
+/**
+ * Prevents a player from taking an object from the station's output hopper until
+ * the prototype time is 0.
+ *
+ * @param self				the container about to lose the item
+ * @param destContainer		the container about to gain the item
+ * @param transferer		the thing transferring the object
+ * @param item				the object being transfered
+ *
+ * @return  SCRIPT_CONTINUE to allow the transfer, SCRIPT_OVERRIDE to stop it
+ **/
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	debugServerConsoleMsg(self, "Crafting station OnAboutToLoseItem enter");
+	float time = getFloatObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME);
+	if ( time != 0.0f )
+	{
+		debugServerConsoleMsg(self, "Crafting station OnAboutToLoseItem preventing prototype from being removed");
+		return SCRIPT_OVERRIDE;
+	}
+	debugServerConsoleMsg(self, "Crafting station OnAboutToLoseItem allowing prototype to be removed");
+ 	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Prevents a player from opening the output hopper while a prototype is being crafted.
+ **/
+trigger OnAboutToOpenContainer(obj_id whoOpenedMe)
+{
+	debugServerConsoleMsg(self, "Crafting station OnAboutToOpenContainer enter");
+	float time = getFloatObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME);
+	if ( time != 0.0f )
+	{
+//		debugServerConsoleMsg(self, "Crafting station OnAboutToOpenContainer preventing prototype from being removed");
+		sendSystemMessage (whoOpenedMe, new string_id("system_msg", "cant_open_output_hopper"));
+		return SCRIPT_OVERRIDE;
+	}
+//	debugServerConsoleMsg(self, "Crafting station OnAboutToOpenContainer allowing prototype to be removed");
+ 	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Called when a player tries to add a resource to a slot during crafting. The trigger must determine if the player can place that
+ * resource and how much of the resource is required. The resource will have already been checked to make sure it is a valid
+ * type for the slot.
+ *
+ * @param player				the player crafting
+ * @param resource				the resource the player is trying to add
+ * @param ingredientSlot		info about the slot, including any resources that might already be in it
+ * @param resourceAmount		the current number of resources for each resource. This will be filled with the current
+ *                              amounts of each resource, plus an additinal entry for the new resource. The script
+ *                              must set the new values of each resource. Note that you can only reduce the amount for
+ *                              currently existing resources, increasing them will result as if SCRIPT_OVERRIDE was returned
+ *
+ * @return SCRIPT_CONTINUE if the resource can be added and resourceAmount has been set correctly, SCRIPT_OVERRIDE if the
+ * resource can't be added
+ */
+trigger OnCraftingAddResource(obj_id player, obj_id resource, draft_schematic.slot ingredientSlot, modifiable_int[] resourceAmount)
+{
+	int numResources = resourceAmount.length;
+	int totalResources = ingredientSlot.amountRequired;
+
+	int resourcesPer = totalResources / numResources;
+	if ( totalResources % numResources != 0)
+		++resourcesPer;
+
+	for ( int i = 0; i < numResources; ++i )
+		resourceAmount[i].set(resourcesPer);
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Called at the end of a crafting session.
+ *
+ * @param self 				crafting tool being used
+ * @param player			player crafting
+ * @param schematicName		the name of the draft schematic that was being used
+ * @param craftingStage		the stage that the crafting session was in when it ended (see group craftingStages in base_class.java)
+ * @param normalExit		flag that the crafting session ended normally or not
+ *
+ * @return ignored
+ **/
+trigger OnCraftingDone(obj_id player, string schematicName, int craftingStage, boolean normalExit)
+{
+	session.logActivity(player, session.ACTIVITY_CRAFTING);
+	if ( craftingStage != CS_selectDraftSchematic && craftingStage != CS_assembly &&
+		schematicName != null && schematicName.length() > 0)
+	{
+		temp_schematic.decrement(player, getObjectTemplateCrc(schematicName));
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if (hasObjVar(self, "quality"))
+	{
+		names[idx] = "quality";
+		float attrib = getFloatObjVar(self, "quality");
+		attribs[idx] = " " + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	int critAssembly = getIntObjVar(self, craftinglib.OBJVAR_FORCE_CRITICAL_ASSEMBLY);
+	if ( critAssembly > 0 )
+	{
+		names[idx] = "@crafting:crit_assembly";
+		attribs[idx] = "" + critAssembly;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	int critExperiment = getIntObjVar(self, craftinglib.OBJVAR_FORCE_CRITICAL_EXPERIMENT);
+	if ( critExperiment > 0 )
+	{
+		names[idx] = "@crafting:crit_experiment";
+		attribs[idx] = "" + critExperiment;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/**
+ * Callback for when a crafted prototype should be made available to the crafter.
+ */
+messageHandler prototypeDone()
+{
+	obj_id prototype = params.getObjId("prototype");
+	obj_id crafter = params.getObjId("crafter");
+
+	debugServerConsoleMsg(self, "prototypeDone enter, crafter = " + crafter + ", prototype = " + prototype);
+
+	debugSpeakMsg(self, "PING! The prototype is done now.");
+	setObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME, 0.0f);
+	removeObjVar(self, craftinglib.OBJVAR_CRAFTER);
+	removeObjVar(self, craftinglib.OBJVAR_PROTOTYPE_START);
+	removeObjVar(self, craftinglib.OBJVAR_CRAFTING_PROTOTYPE_OBJECT);
+	removeObjVar(self, craftinglib.OBJVAR_CRAFTING_PROTOTYPE_CRAFTER);
+
+	if ( hasScript(crafter, "theme_park.new_player.new_player") || hasScript(crafter, jedi_trials.PADAWAN_TRIALS_SCRIPT) )
+	{
+		if( isIdValid(prototype) )
+		{
+			string templateName = getTemplateName(prototype);
+
+			if( templateName != null && !templateName.equals("") )
+			{
+				dictionary webster = new dictionary();
+				webster.put("prototype", prototype);
+				webster.put("prototypeTemplate", templateName);
+				messageTo(crafter, "handleQuestCraftingAction", webster, 1, false);
+			}
+			else
+			{
+				LOG("new_player", "New player " + crafter + " successfully made prototype item " + prototype + " but its template name is null, so the new player crafting action failed!");
+			}
+		}
+	}
+
+	endCraftingSession(crafter, self, params.getObjId("prototype"));
+
+	getPrototype(self, params);
+
+	// Log prototype information.
+	logBalance( "crafting;"+getGameTime()+";"+crafter+";"+prototype+";"+getTemplateName(prototype) );
+
+	if(!isIdValid(crafter))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Chronicles Crafting Relic Drops
+	obj_id relic = loot.chroniclesCraftingLootDrop(crafter);
+
+	// TCG Object Generation
+	obj_id inv = utils.getInventoryContainer(crafter);
+	boolean canDrop = scheduled_drop.canDropCard(scheduled_drop.SYSTEM_CRAFTER);
+	boolean hasDelay = scheduled_drop.hasCardDelay(crafter, scheduled_drop.SYSTEM_CRAFTER);
+
+	if(isGod(crafter) && hasObjVar(crafter, "qa_tcg_always_drop"))
+	{
+		canDrop = true;
+		hasDelay = false;
+	}
+
+	if(isIdValid(inv) && canDrop && !hasDelay && isPlayerActive(crafter))
+	{
+		obj_id card = scheduled_drop.dropCard(scheduled_drop.SYSTEM_CRAFTER, inv);
+
+		if(isIdValid(card))
+		{
+			string [] cardNameList = split(getName(card), ':');
+
+			if(cardNameList != null && cardNameList.length > 1)
+			{
+				string_id cardName = new string_id(cardNameList[0], cardNameList[1]);
+				string name = getString(cardName);
+
+				prose_package pp = new prose_package();
+				pp = prose.setStringId(pp, new string_id("spam", "tcg_space_loot"));
+				pp = prose.setTU(pp, name);
+				sendSystemMessageProse(crafter, pp);
+			}
+		}
+		else
+		{
+			if(isGod(crafter) && hasObjVar(crafter, "qa_tcg"))
+			{
+				sendSystemMessageTestingOnly(crafter, "QA TCG CRAFTING NOT DROPPED.  Card is null. Random chance passed? " + canDrop + " Has Card Delay? " + hasDelay);
+			}
+		}
+	}
+	else
+	{
+		if(isGod(crafter) && hasObjVar(crafter, "qa_tcg"))
+		{
+			sendSystemMessageTestingOnly(crafter, "QA TCG CRAFTING NOT DROPPED.  Random chance passed? " + canDrop + " Has Card Delay? " + hasDelay);
+		}
+	}
+
+	utils.setScriptVar(crafter, scheduled_drop.PLAYER_SCRIPTVAR_DROP_TIME, getGameTime());
+
+	return SCRIPT_CONTINUE;
+}
+
+obj_id getFirstParentInWorldOrPlayer(obj_id obj)
+{
+	obj_id firstParent = getFirstParentInWorld(obj);
+	while (obj != firstParent && !isPlayer(obj))
+		obj = getContainedBy(obj);
+	return obj;
+}
+
+/**
+ * Tries to transfer the object in the crafting tool's prototype slot to the crafter's inventory.
+ */
+messageHandler getPrototype()
+{
+	obj_id crafter = params.getObjId("crafter");
+	obj_id owner = getFirstParentInWorldOrPlayer(self);
+
+	// make sure the prototype is available
+	float time = getFloatObjVar(self, craftinglib.OBJVAR_PROTOTYPE_TIME);
+	if ( time != 0.0f && isIdValid(owner) )
+	{
+		sendSystemMessage (owner, new string_id("system_msg", "cant_open_output_hopper"));
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( isIdValid(owner) )
+	{
+		obj_id inventory = getObjectInSlot(owner, utils.SLOT_INVENTORY);
+		if ( isIdValid(inventory) )
+		{
+			obj_id prototype = params.getObjId("prototype");
+			if ( !isIdValid(prototype) )
+			{
+				// get the prototype from our slot
+				obj_id mightBePrototype = getObjectInSlot(self, PROTOTYPE_SLOT);
+				if ( !isIdValid(mightBePrototype) )
+				{
+					return SCRIPT_CONTINUE;
+				}
+				prototype = mightBePrototype;
+			}
+
+			if ( hasObjVar(prototype, OBJVAR_CRAFTING_FAKE_PROTOTYPE) )
+			{
+				destroyObject(prototype);
+			}
+			else
+			{
+				// try and transfer the prototype to the owner's inventory
+				if (putInOverloaded(prototype, inventory))
+				{
+					sendSystemMessage (owner, new string_id("system_msg", "prototype_transferred"));
+				}
+				else
+				{
+					sendSystemMessage (owner, new string_id("system_msg", "prototype_not_transferred"));
+				}
+			}
+		}
+		else
+		{
+			// something is bad, just tell the owner the prototype is done
+			sendSystemMessage (owner, new string_id("system_msg", "prototype_done"));
+		}
+	}
+	else if (isIdValid(crafter))
+	{
+		// something is really bad, tell the crafter the prototype is done
+		sendSystemMessage (crafter, new string_id("system_msg", "prototype_done"));
+	}
+	setCount(self, 0);
+	return SCRIPT_CONTINUE;
+}

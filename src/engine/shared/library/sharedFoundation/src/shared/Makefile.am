@@ -1,0 +1,107 @@
+AUTOMAKE_OPTIONS=foreign
+SUBDIRS=dynamicVariable
+noinst_LTLIBRARIES=libsharedFoundationshared.la
+libsharedFoundationshared_la_CXXFLAGS=-I$(srcdir)/../../include/public \
+	-I$(engine_dir)/shared/library/sharedCompression/include/public \
+	-I$(engine_dir)/shared/library/sharedDebug/include/public \
+	-I$(engine_dir)/shared/library/sharedFile/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundation/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundationTypes/include/public \
+	-I$(engine_dir)/shared/library/sharedLog/include/public \
+	-I$(engine_dir)/shared/library/sharedMath/include/public \
+	-I$(engine_dir)/shared/library/sharedMemoryManager/include/public \
+	-I$(engine_dir)/shared/library/sharedSynchronization/include/public \
+	-I$(engine_dir)/shared/library/sharedThread/include/public \
+	 \
+	-I$(archive_dir)/include \
+	-I$(fileInterface_dir)/include/public \
+	-I$(unicode_dir)/include \
+	-Wno-ctor-dtor-privacy
+libsharedFoundationshared_la_SOURCES=ApplicationVersion.cpp \
+	ApplicationVersion.h \
+	ArrayList.h \
+	AutoDeltaNetworkIdPackedMap.cpp \
+	AutoDeltaNetworkIdPackedMap.h \
+	Binary.h \
+	BitArray.cpp \
+	BitArray.h \
+	Branch.cpp \
+	Branch.h \
+	CalendarTime.cpp \
+	CalendarTime.h \
+	CallbackEntryBase.h \
+	Clock.cpp \
+	Clock.h \
+	CommandLine.cpp \
+	CommandLine.h \
+	ConfigFile.cpp \
+	ConfigFile.h \
+	ConstCharCrcLowerString.cpp \
+	ConstCharCrcLowerString.h \
+	ConstCharCrcString.cpp \
+	ConstCharCrcString.h \
+	CrashReportInformation.cpp \
+	CrashReportInformation.h \
+	Crc.cpp \
+	Crc.h \
+	CrcLowerString.cpp \
+	CrcLowerString.h \
+	CrcString.cpp \
+	CrcString.h \
+	CrcStringTable.cpp \
+	CrcStringTable.h \
+	DataResource.cpp \
+	DataResource.h \
+	DataResourceList.h \
+	DebugInfoManager.cpp \
+	DebugInfoManager.h \
+	ExitChain.cpp \
+	ExitChain.h \
+	Fatal.cpp \
+	Fatal.h \
+	FirstSharedFoundation.h \
+	FloatMath.h \
+	FormattedString.h \
+	GameControllerMessage.h \
+	LabelHash.cpp \
+	LabelHash.h \
+	LessPointerComparator.h \
+	MacroFoundation.h \
+	Md5.cpp \
+	Md5.h \
+	MemoryBlockManager.cpp \
+	MemoryBlockManager.h \
+	MemoryBlockManagerMacros.h \
+	MessageQueue.cpp \
+	MessageQueueDataTemplate.cpp \
+	MessageQueueDataTemplate.h \
+	MessageQueue.h \
+	Misc.h \
+	NetworkIdArchive.cpp \
+	NetworkIdArchive.h \
+	NetworkId.cpp \
+	NetworkId.h \
+	PersistentCrcString.cpp \
+	PersistentCrcString.h \
+	PointerDeleter.h \
+	Production.h \
+	SafeCast.h \
+	Scheduler.cpp \
+	Scheduler.h \
+	StaticCallbackEntry.cpp \
+	StaticCallbackEntry.h \
+	StationId.h \
+	StlForwardDeclaration.h \
+	StringCompare.h \
+	Tag.h \
+	TemporaryCrcString.cpp \
+	TemporaryCrcString.h \
+	Timer.cpp \
+	Timer.h \
+	VoidBindSecond.h \
+	VoidMemberFunction.h \
+	Watcher.cpp \
+	Watcher.h
+
+
+include $(engine_dir)/../make_include/engine.include

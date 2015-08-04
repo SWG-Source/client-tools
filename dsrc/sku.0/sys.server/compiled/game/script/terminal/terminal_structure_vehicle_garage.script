@@ -1,0 +1,899 @@
+//libraries
+include library.hue;
+include library.pet_lib;
+include library.player_structure;
+include library.prose;
+include library.space_transition;
+include library.sui;
+include library.utils;
+include library.vehicle;
+
+//constants
+
+const string PID_NAME							= "garage";
+const string SCRIPT_VAR_VCD_LIST				= "garage.vcds";
+const string SCRIPT_VAR_RESTORING_VEHICLE		= "garage.restoring";
+const string SCRIPT_VAR_DECORATING_VEHICLE		= "garage.decorating";
+const string TERMINAL_OBJVAR_DISPLAY_LIST		= "garage.decoratedVehicles";
+const string VEHICLE_OBJVAR_DISPLAYED_VEHICLE	= "garage.decoratedVehicle";
+const string CUSTOMER_SERVICE_LOG				= "garage";
+
+const int MESSAGE_DELAY					= 5;
+const int MAX_ITERATIONS				= 5;
+const int MAX_STORED_VEHICLES			= 10;
+
+const string_id SID_WHILE_DEAD					= new string_id("player_structure", "while_dead" );
+const string_id SID_HANGAR_COULD_NOT_INTIALIZE	 = new string_id("player_structure", "hangar_could_not_intialize");
+const string_id SID_INTIALIZING_HANGAR	 		= new string_id("player_structure", "intializing_hangar");
+
+const string_id SID_TOO_FAR	 		= new string_id("player_structure", "not_in_same_cell");
+
+const string_id SID_TERMINAL_MANAGEMENT 		= new string_id("player_structure", "garage_management");
+const string_id SID_HANGAR_STORE_VEHICLES 		= new string_id("player_structure", "garage_store_vehicles");
+const string_id SID_HANGAR_RESTORE_VEHICLES	 	= new string_id("player_structure", "garage_restore_vehicles");
+const string_id SID_NO_VEHICLES		 			= new string_id("player_structure", "no_vehicles");
+const string_id SID_VEHICLE_LIST_STORE_PROMPT 	= new string_id("player_structure", "garage_vehicle_list_store_prompt");
+const string_id SID_VEHICLE_LIST_RESTORE_PROMPT = new string_id("player_structure", "garage_vehicle_list_restore_prompt");
+const string_id SID_LIST_TITLE		 			= new string_id("player_structure", "garage_list_title");
+const string_id SID_VEHICLE_MOVE_STORE_PROMPT	= new string_id("player_structure", "garage_move_store_prompt");
+const string_id SID_VEHICLE_MOVE_RESTORE_PROMPT	= new string_id("player_structure", "garage_move_restore_prompt");
+const string_id SID_VEHICLE_MOVE_TITLE			= new string_id("player_structure", "garage_vehicle_move_title");
+const string_id SID_VEHICLE_WAS_STORED	 		= new string_id("player_structure", "garage_vehicle_was_stored");
+const string_id SID_VEHICLE_WAS_RESTORED 		= new string_id("player_structure", "garage_vehicle_was_restored");
+const string_id SID_TRANSFER_FAILED_GENERIC	 	= new string_id("player_structure", "garage_transfer_failed_generic");
+const string_id SID_MAX_VEHICLES_STORED		 	= new string_id("player_structure", "garage_max_vehicles_stored");
+const string_id SID_PLACE_VEHICLE_DECORATION	 		= new string_id("player_structure", "garage_place_display_vehicle_title");
+const string_id SID_PLACE_VEHICLE_DECORATION_PROMPT		= new string_id("player_structure", "garage_place_display_vehicle_prompt");
+const string_id SID_PLACE_VEHICLE_DECORATION_SUCCESS	= new string_id("player_structure", "garage_place_display_vehicle_success");
+const string_id SID_REMOVE_VEHICLE_DECORATION_SUCCESS	= new string_id("player_structure", "garage_remove_display_vehicle_success");
+
+const string GARAGE_DISPLAY_VEHICLES_TABLE			= "datatables/vehicle/vehicle_template.iff";
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id structure = self;
+
+	//not while dead or incapped
+	if ( isDead(player) || isIncapacitated(player) )
+	{
+		sendSystemMessage( player, SID_WHILE_DEAD );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( player_structure.isStructureCondemned(self) && player_structure.isOwner(structure, player) )
+	{
+		player_structure.doCondemnedSui(self, player);
+		return SCRIPT_OVERRIDE;
+	}
+
+	//only the owner can use the terminal
+	if ( player_structure.isOwner(structure, player) )
+	{
+		boolean canStoreVehicles = false;
+		boolean canRecallVehicles = false;
+		//get all the vcds in the players datapad
+		obj_id[] datapadVehicleControlDevices = vehicle.findVehicleControlDevicesForPlayer(player);
+
+		if ( datapadVehicleControlDevices != null && datapadVehicleControlDevices.length > 0 )
+		{
+			canStoreVehicles = true;
+		}
+
+		obj_id playerHangar = utils.getPlayerHangar(player);
+		// There is no need to display the ship restore and ship decoration menu items if there are no ships in the hangar.		
+		if ( isIdValid(playerHangar) && hasObjVar(player, player_structure.OBJVAR_HANGAR_CREATED) )
+		{
+			obj_id[] hangarVehicleControlDevices = vehicle.findVehicleControlDevicesInHangarSlot(player);
+			if ( hangarVehicleControlDevices != null && hangarVehicleControlDevices.length > 0 )
+			{
+				canRecallVehicles = true;
+			}
+		}
+
+		if ( canStoreVehicles || canRecallVehicles )
+		{
+			int management_root = mi.addRootMenu(menu_info_types.SERVER_TERMINAL_MANAGEMENT, SID_TERMINAL_MANAGEMENT);
+
+			if ( canStoreVehicles )
+			{
+				mi.addSubMenu(management_root, menu_info_types.SERVER_MENU1, SID_HANGAR_STORE_VEHICLES);
+			}
+			
+			if ( canRecallVehicles )
+			{
+				mi.addSubMenu(management_root, menu_info_types.SERVER_MENU2, SID_HANGAR_RESTORE_VEHICLES);
+				mi.addSubMenu(management_root, menu_info_types.SERVER_MENU3, SID_PLACE_VEHICLE_DECORATION);
+			}
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+
+	obj_id structure = self;
+
+	//find the hangar on the player
+	obj_id playerHangar = utils.getPlayerHangar(player);
+
+	//validate the hangar
+	//if it doesnt exist we need to create it
+	if ( !isIdValid(playerHangar) && !hasObjVar(player, player_structure.OBJVAR_HANGAR_CREATED) )
+	{
+		playerHangar = createObject("object/tangible/datapad/character_hangar_datapad.iff", player, "hangar");
+
+		//verify that a hangar object was created properly
+		if ( !isIdValid(playerHangar) )
+		{
+			CustomerServiceLog(CUSTOMER_SERVICE_LOG, "Player " + getPlayerName(player) + "("+player+") tried to create a hangar in their 'hangar' slot, and failed. Usually this means there is already a hangar in that slot, or for some reason the player is missing that slot.");
+			sendSystemMessage(player, SID_HANGAR_COULD_NOT_INTIALIZE);
+			return SCRIPT_CONTINUE;
+		}
+
+		//objvar is stamped on player with the OID of the hangar when it is created and attached properly
+		setObjVar(player, player_structure.OBJVAR_HANGAR_CREATED, playerHangar);
+
+		//we need to persist this object
+		persistObject(playerHangar);
+
+		//tell the player we are initializing the hangar
+		sendSystemMessage(player, SID_INTIALIZING_HANGAR);
+		dictionary dict = new dictionary();
+		dict.put("player", player);
+		dict.put("iteration", 1);
+		dict.put("storing", true);
+
+		//wait 5 seconds to make sure the hangar object persists and attaches
+		messageTo(self, "handleHangarInitialize", dict, MESSAGE_DELAY, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	//we have an objvar saying we have a hangar, yet returned null when we tried to get its id
+	if ( !isIdValid(playerHangar) && hasObjVar(player, player_structure.OBJVAR_HANGAR_CREATED) )
+	{
+		obj_id storeHangerId = getObjIdObjVar(player, player_structure.OBJVAR_HANGAR_CREATED);
+		CustomerServiceLog(CUSTOMER_SERVICE_LOG, "Player " + getPlayerName(player) + "("+player+") returned an invalid id for their hangar slot, but had the objar stating they have a hangar. Hangar objvar Id is " + storeHangerId);
+		sendSystemMessage(player, SID_TRANSFER_FAILED_GENERIC);
+		return SCRIPT_CONTINUE;
+	}
+
+	//make sure they dont already have a UI up
+	if ( sui.hasPid(player, PID_NAME) )
+	{
+		int pid = sui.getPid(player, PID_NAME);
+		forceCloseSUIPage(pid);
+	}
+
+	//store vehicles
+	if ( item == menu_info_types.SERVER_MENU1  && player_structure.isOwner(structure, player) )
+	{
+		//function used to list all the vehicles the player can store
+		callSuiOfVehiclesToStore(player, self, playerHangar);
+	}
+	//recall vehicles
+	else if ( item == menu_info_types.SERVER_MENU2  && player_structure.isOwner(structure, player) )
+	{
+		//function used to list all the vehicles the player can restore
+		callSuiOfStoredVehicles(player, self, playerHangar);
+	}
+	// Place a ship decoration
+	else if ( item == menu_info_types.SERVER_MENU3 && player_structure.isOwner(structure, player) )
+	{
+		placeDisplayVehicle(player, self, playerHangar);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if ( idx == -1 )
+		return SCRIPT_CONTINUE;
+
+	if ( !exists(self) )
+		return SCRIPT_CONTINUE;
+
+	if (!player_structure.isOwner(self, player))
+		return SCRIPT_CONTINUE;
+
+	obj_id playerHangar = utils.getPlayerHangar(player);
+
+	if ( !isIdValid(playerHangar) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] storedVehicles = vehicle.findVehicleControlDevicesInHangarSlot(player);
+
+	if( storedVehicles == null || storedVehicles.length <= 0 )
+	{
+		names[idx] = "vehicle_in_garage";
+		attribs[idx] = "none";
+		idx++;
+	}
+	else
+	{
+		string[] storedVehicleNames = new string[storedVehicles.length];
+		for ( int i = 0; i < storedVehicles.length; ++i )
+		{
+			obj_id storedVehicle = storedVehicles[i];
+			storedVehicleNames[i] = getEncodedName(storedVehicle);
+		}
+
+		if ( storedVehicleNames == null || storedVehicleNames.length <= 0 )
+		{
+			names[idx] = "vehicle_in_garage";
+			attribs[idx] = "none";
+			idx++;
+		}
+		else
+		{
+			names[idx] = "vehicles_in_garage_amount";
+			attribs[idx] = ""+storedVehicles.length;
+			idx++;
+			
+			for (int j = 0; j < storedVehicleNames.length; ++j)
+			{
+				names[idx] = "vehicle_in_garage";
+				attribs[idx] = storedVehicleNames[j];
+				idx++;
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+/*
+*
+*	GENERAL FUNCTIONS
+*
+*/
+
+void placeDisplayVehicle(obj_id player, obj_id garageControls, obj_id playerHangarSlot)
+{
+	if ( !isIdValid(player) || !exists(player) )
+	{
+		return;
+	}
+	if ( !isIdValid(garageControls) || !exists(garageControls) )
+	{
+		return;
+	}
+	if ( !isIdValid(playerHangarSlot) || !exists(playerHangarSlot) )
+	{
+		return;
+	}
+
+	//get all the vcds in the players hangar
+	obj_id[] vehiclesInHangarSlot = vehicle.findVehicleControlDevicesInHangarSlot(player);
+	if( vehiclesInHangarSlot == null || vehiclesInHangarSlot.length <= 0 )
+	{
+		sendSystemMessage(player, SID_NO_VEHICLES);
+		return;
+	}
+
+	//track the unlocalized version
+	utils.setScriptVar(garageControls, SCRIPT_VAR_VCD_LIST, vehiclesInHangarSlot);
+
+	//have to localize it for the player
+	string[] localizedList = new string[vehiclesInHangarSlot.length];
+
+	for ( int i = 0; i < localizedList.length; ++i )
+	{
+		localizedList[i] = getEncodedName(vehiclesInHangarSlot[i]);
+		if(hasObjVar(vehiclesInHangarSlot[i], VEHICLE_OBJVAR_DISPLAYED_VEHICLE))
+		{
+			localizedList[i] += " (Placed)";
+		}
+	}
+
+	//display list to player
+	utils.setScriptVar(garageControls, SCRIPT_VAR_DECORATING_VEHICLE, true);
+	
+	int pid = sui.listbox(garageControls, player, "@" + SID_PLACE_VEHICLE_DECORATION_PROMPT, sui.OK_CANCEL, "@" + SID_LIST_TITLE, localizedList, "onDisplayVehicleResponse", true, false);
+
+	sui.setPid(player, pid, PID_NAME);
+}
+
+//creates a sui list box of all vehicles in players datapad
+boolean callSuiOfVehiclesToStore(obj_id player, obj_id terminal, obj_id hangar)
+{
+	if ( !isIdValid(player) || !exists(player) )
+		return false;
+
+	if ( !isIdValid(terminal) || !exists(terminal) )
+		return false;
+
+	if ( !isIdValid(hangar) || !exists(hangar) )
+		return false;
+
+	//there is a cap on the number of vehicles you can have in your garage	
+	obj_id[] vehiclesInHangarSlot = vehicle.findVehicleControlDevicesInHangarSlot(player);	
+	if ( vehiclesInHangarSlot != null && vehiclesInHangarSlot.length >= MAX_STORED_VEHICLES  )
+	{
+		sendSystemMessage(player, SID_MAX_VEHICLES_STORED);
+		return false;
+	}
+
+	//get all the vcds in the players datapad
+	obj_id[] vehicleControlDevices = vehicle.findVehicleControlDevicesForPlayer(player);
+	if(vehicleControlDevices == null || vehicleControlDevices.length <= 0)
+	{
+		sendSystemMessage(player, SID_NO_VEHICLES);
+		return false;
+	}
+
+
+	//track the unlocalized version
+	utils.setScriptVar(terminal, SCRIPT_VAR_VCD_LIST, vehicleControlDevices);
+
+	//have to localize it for the player
+	string[] localizedList = new string[vehicleControlDevices.length];
+
+	for(int i = 0; i < localizedList.length; ++i)
+	{
+		localizedList[i] = getEncodedName(vehicleControlDevices[i]);
+	}
+
+	//display list to player
+	int pid = sui.listbox(terminal, player, "@" + SID_VEHICLE_LIST_STORE_PROMPT, sui.OK_CANCEL, "@" + SID_LIST_TITLE, localizedList, "onVehicleListResponse", true, false);
+	sui.setPid(player, pid, PID_NAME);
+
+	return true;
+}
+
+//creates a sui list box of all ships in players hangar slot
+boolean callSuiOfStoredVehicles(obj_id player, obj_id terminal, obj_id hangar)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	if(!isIdValid(terminal) || !exists(terminal))
+		return false;
+
+	if(!isIdValid(hangar) || !exists(hangar))
+		return false;
+
+	//get all the vcds in the players garage
+	obj_id[] vehiclesInHangarSlot = vehicle.findVehicleControlDevicesInHangarSlot(player);	
+	if( vehiclesInHangarSlot == null || vehiclesInHangarSlot.length <= 0 )
+	{
+		sendSystemMessage(player, SID_NO_VEHICLES);
+		return false;
+	}
+
+	//track the unlocalized version
+	utils.setScriptVar(terminal, SCRIPT_VAR_VCD_LIST, vehiclesInHangarSlot);
+
+	//have to localize it for the player
+	string[] localizedList = new string[vehiclesInHangarSlot.length];
+
+	for(int i = 0; i < localizedList.length; ++i)
+	{
+		localizedList[i] = getEncodedName(vehiclesInHangarSlot[i]);
+	}
+
+	//display list to player
+	utils.setScriptVar(terminal, SCRIPT_VAR_RESTORING_VEHICLE, true);
+	int pid = sui.listbox(terminal, player, "@" + SID_VEHICLE_LIST_RESTORE_PROMPT, sui.OK_CANCEL, "@" + SID_LIST_TITLE, localizedList, "onVehicleListResponse", true, false);
+	sui.setPid(player, pid, PID_NAME);
+
+	return true;
+}
+
+
+/*
+*
+*	MESSAGE HANDLERS
+*
+*/
+messageHandler handleHangarInitialize()
+{
+	//perform validation
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId("player");
+
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	//keeps track of how many times we have tried to find the hangar slot
+	int iteration = params.getInt("iteration");
+
+	//hangar is a slot on the player
+	obj_id playerHangar = utils.getPlayerHangar(player);
+
+	//if we cannot find it, we need to message again and try then
+	if(!isIdValid(playerHangar))
+	{
+		if(iteration > MAX_ITERATIONS)
+		{
+			sendSystemMessage(player, SID_HANGAR_COULD_NOT_INTIALIZE);
+			obj_id storeHangarId = getObjIdObjVar(player, player_structure.OBJVAR_HANGAR_CREATED);
+			CustomerServiceLog(CUSTOMER_SERVICE_LOG, "Player " + getPlayerName(player) + "("+player+")'s Hangar could not be found after 5 5 second messageTos. Hangar Id should be "+storeHangarId+", we know this from the objvar set on the player when the hangar is first created.");
+			return SCRIPT_CONTINUE;
+		}
+		params.put("iteration", ++iteration);
+		sendSystemMessage(player, SID_INTIALIZING_HANGAR);
+		messageTo(self, "handleHangarInitialize", params, MESSAGE_DELAY, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	//tracks whether we are going to store the ship or not
+	boolean storing = params.getBoolean("storing");
+
+	//one SUI for storing one for recalling
+	if( storing )
+		callSuiOfVehiclesToStore(player, self, playerHangar);
+	else
+		callSuiOfStoredVehicles(player, self, playerHangar);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler onDisplayVehicleResponse()
+{
+	obj_id player = params.getObjId("player");
+	obj_id playerHangar = utils.getPlayerHangar(player);
+
+	// debugSpeakMsg(player, "onDisplayVehicleResponse");
+
+	if ( !isIdValid(player) || !exists(player) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if ( !isIdValid(self) || !exists(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if ( !isIdValid(playerHangar) || !exists(playerHangar) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !utils.hasScriptVar(self, SCRIPT_VAR_VCD_LIST) )
+	{
+		// debugSpeakMsg(player, "!utils.hasScriptVar(self, SCRIPT_VAR_VCD_LIST)");
+		utils.removeScriptVar(self, SCRIPT_VAR_DECORATING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL || idx == -1 )
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_DECORATING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	int pageId = params.getInt("pageId");
+	//double check that this is the only SUI window open
+	if ( !sui.hasPid(player, PID_NAME) )
+	{
+		// debugSpeakMsg(player, "!sui.hasPid(player, PID_NAME)");
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_DECORATING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	int pid = sui.getPid(player, PID_NAME);
+	//verify that this UI matches the pid stored on player
+	if ( pageId != pid )
+	{
+		// debugSpeakMsg(player, "pageId != pid");
+		forceCloseSUIPage(pageId);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_DECORATING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//check to make sure player is still the owner
+	if ( !player_structure.isOwner(self, player) )
+	{
+		// debugSpeakMsg(player, "!player_structure.isOwner(self, player)");
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_DECORATING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//get the list of vehicles off terminal
+	obj_id[] vehicleList = utils.getObjIdArrayScriptVar(self, SCRIPT_VAR_VCD_LIST);
+	if ( vehicleList == null || vehicleList.length <= 0 )
+	{
+		// debugSpeakMsg(player, "vehicleList == null || vehicleList.length <= 0");
+		utils.removeScriptVar(self, SCRIPT_VAR_DECORATING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//dont need the whole list anymore
+	utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+
+	//get vehicle selected
+	obj_id vehicleSelected = vehicleList[idx];
+	if ( !isIdValid(vehicleSelected) || !exists(vehicleSelected) )
+	{
+		// debugSpeakMsg(player, "!isIdValid(vehicleSelected) || !exists(vehicleSelected)");
+		utils.removeScriptVar(self, SCRIPT_VAR_DECORATING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	// If this vehicle is already in the house, then destroy its model.
+	if ( hasObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE) )
+	{
+		// debugSpeakMsg(player, "hasObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE)");
+
+		obj_id displayVehicle = getObjIdObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE);
+		
+		if ( !isIdValid(displayVehicle) || !exists(displayVehicle) )
+		{
+			removeObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE);
+
+			return SCRIPT_CONTINUE;
+		}
+		
+		destroyObject(displayVehicle);
+		
+		removeObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE);
+		
+		sendSystemMessage(player, SID_REMOVE_VEHICLE_DECORATION_SUCCESS);
+	}
+	// If this vehicle is not in the house, then place a model at the player.
+	else
+	{
+		string vehicleReference = vehicle.getVehicleReference(vehicleSelected);
+		
+		dictionary vehicleTemplateData = dataTableGetRow(GARAGE_DISPLAY_VEHICLES_TABLE, vehicleReference);
+		if ( vehicleTemplateData == null )
+		{
+			// debugSpeakMsg(player, "vehicleTemplateData == null");
+			return SCRIPT_CONTINUE;
+		}
+		
+		string template = vehicleTemplateData.getString("GARAGE_DISPLAY_TEMPLATE");
+		if ( template == null || template.length() <= 0 )
+		{
+			// debugSpeakMsg(player, "template == null || template.length() <= 0");
+			return SCRIPT_CONTINUE;
+		}
+		
+		location here = getLocation(self);
+		here.x = -2.0f;
+		here.y = 0.5f;
+		here.z = 0.0f;
+		
+		obj_id house = getTopMostContainer(player);
+		
+		if ( !isIdValid(house) || !exists(house) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+		
+		if ( !player_structure.isOwner(house, player) )
+		{
+			// debugSpeakMsg(player, "!player_structure.isOwner(house, player)");
+			return SCRIPT_CONTINUE;
+		}
+		
+		string houseTemplate = getTemplateName(house);
+		if ( !houseTemplate.equals("object/building/player/player_house_tcg_vehicle_garage.iff") )
+		{
+			// debugSpeakMsg(player, "!houseTemplate.equals(object/building/player/player_house_tcg_vehicle_garage.iff)");
+			return SCRIPT_CONTINUE;
+		}
+		
+		obj_id toyVehicle = createObject(template, here);
+		if ( isIdValid(toyVehicle) )
+		{
+			persistObject(toyVehicle);
+			setYaw(toyVehicle, -90);
+
+			string houseName = getName(house); // Unlocalized
+			
+			houseName = localize(new string_id(houseName.substring(0, houseName.indexOf(":")), houseName.substring(houseName.indexOf(":") + 1, houseName.length())));
+
+			setObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE, toyVehicle);
+			setObjVar(toyVehicle, "validHouse", "object/building/player/player_house_tcg_vehicle_garage.iff");
+			setObjVar(toyVehicle, "validHouseName", houseName);
+			attachScript(toyVehicle, "item.special.nomove_furniture_house_only");
+
+			vehicle.restoreCustomization(toyVehicle, vehicleSelected);
+
+			sendSystemMessage(player, SID_PLACE_VEHICLE_DECORATION_SUCCESS);
+
+			// debugSpeakMsg(player, "toyVehicle: " + toyVehicle + " template: " + template + " intColor0: " + intColor0 + " intColor1: " + intColor1 + " intTextureIndex: " + intTextureIndex);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//handler for the list of vehicles to choose from
+messageHandler onVehicleListResponse()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	if (!isIdValid(player) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+	
+	location garageTerminalLoc = getLocation(self);
+	location playerLoc = getLocation(player);
+	if ( garageTerminalLoc.cell != playerLoc.cell )
+	{
+		sendSystemMessage(player, SID_TOO_FAR);
+		return SCRIPT_CONTINUE;
+	}
+
+	//we need the list or we cannot continue
+	if ( !utils.hasScriptVar(self, SCRIPT_VAR_VCD_LIST) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL || idx == -1)
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int pageId = params.getInt("pageId");
+	//double check that this is the only SUI window open
+	if ( !sui.hasPid(player, PID_NAME) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	int pid = sui.getPid(player, PID_NAME);
+	//verify that this UI matches the pid stored on player
+	if ( pageId != pid )
+	{
+		forceCloseSUIPage(pageId);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//check to make sure player is still the owner
+	if ( !player_structure.isOwner(self, player) )
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		CustomerServiceLog(CUSTOMER_SERVICE_LOG, "Player " + getPlayerName(player) + "("+player+") did NOT transfer a vehicle because they are no longer the owner of the structure.");
+		return SCRIPT_CONTINUE;
+	}
+
+	//get the list of vehicles off terminal
+	obj_id[] vehicleList = utils.getObjIdArrayScriptVar(self, SCRIPT_VAR_VCD_LIST);
+	if ( vehicleList == null || vehicleList.length <= 0 )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//dont need the whole list anymore
+	utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+
+	//get vehicle selected
+	obj_id vehicleSelected = vehicleList[idx];
+	if ( !isIdValid(vehicleSelected) || !exists(vehicleSelected) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//set the ID of the vcd chosen on object
+	utils.setScriptVar(self, SCRIPT_VAR_VCD_LIST, vehicleSelected);
+	CustomerServiceLog(CUSTOMER_SERVICE_LOG, "Player " + getPlayerName(player) + "("+player+") chose VCD " + getEncodedName(vehicleSelected) + "("+vehicleSelected+") as the vehicle to move.");
+
+	//confirm that they want to move this ship
+	//different prompt depending on if they are storing or restoring
+	string prompt = "@" + SID_VEHICLE_MOVE_RESTORE_PROMPT;
+	if(!utils.hasScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE))
+		prompt = "@" + SID_VEHICLE_MOVE_STORE_PROMPT;
+
+	int newPid = sui.msgbox(self, player, prompt, sui.YES_NO, "@" + SID_VEHICLE_MOVE_TITLE, "handlerConfirmVehicleMove");
+	sui.setPid(player, newPid, PID_NAME);
+
+	return SCRIPT_CONTINUE;
+
+}
+
+//handler for confirmation
+messageHandler handlerConfirmVehicleMove()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	if( !isIdValid(player) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+	
+	location garageTerminalLoc = getLocation(self);
+	location playerLoc = getLocation(player);
+	if ( garageTerminalLoc.cell != playerLoc.cell )
+	{
+		sendSystemMessage(player, SID_TOO_FAR);
+		return SCRIPT_CONTINUE;
+	}
+
+	//without the Id of VCD we cannot do anything
+	if ( !utils.hasScriptVar(self, SCRIPT_VAR_VCD_LIST) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int pageId = params.getInt("pageId");
+	//double check that this is the only SUI window open
+	if ( !sui.hasPid(player, PID_NAME) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	int pid = sui.getPid(player, PID_NAME);
+	//verify this handler is being fired for the pid stored on player
+	if ( pageId != pid )
+	{
+		forceCloseSUIPage(pageId);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//make sure the player is still the owner
+	if ( !player_structure.isOwner(self, player) )
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		CustomerServiceLog(CUSTOMER_SERVICE_LOG, "Player " + getPlayerName(player) + "("+player+") did not transfer a vehicle because they are no longer the owner of the structure.");
+		return SCRIPT_CONTINUE;
+	}
+
+	//get the name of the  to remove
+	obj_id vehicleSelected = utils.getObjIdScriptVar(self, SCRIPT_VAR_VCD_LIST);
+	if ( !isIdValid(vehicleSelected) || !exists(vehicleSelected) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//dont need to store the name anymore
+	utils.removeScriptVar(self, SCRIPT_VAR_VCD_LIST);
+
+	obj_id playerHangar = utils.getPlayerHangar(player);
+	obj_id datapad = utils.getPlayerDatapad(player);
+
+	if ( !isIdValid(playerHangar) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isIdValid(datapad) )
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+		return SCRIPT_CONTINUE;
+	}
+
+	//if we are not storing a vehicle, then we are restoring a vehicle
+	if ( !utils.hasScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE) )
+	{
+		
+		vehicle.storeVehicle(vehicleSelected, player);
+		
+		//when storing a vehicle, we hide it in the players hangar slot.
+		//hangar slot is like the datapad, only it is invisible to the player
+		if ( putIn(vehicleSelected, playerHangar, player) )
+		{
+			CustomerServiceLog(CUSTOMER_SERVICE_LOG, "VCD "+getEncodedName(vehicleSelected)+" ("+vehicleSelected+") was transferred to Player " + getPlayerName(player) + "("+player+")'s hangar slot ("+playerHangar+"), using the vehicle garage terminal.");
+
+			//tell the player the transfer was a success
+			prose_package pp = new prose_package();
+			prose.setStringId(pp, SID_VEHICLE_WAS_STORED);
+			prose.setTT(pp, getEncodedName(vehicleSelected));
+			sendSystemMessageProse(player, pp);
+		}
+		else
+		{
+			sendSystemMessage(player, SID_TRANSFER_FAILED_GENERIC);
+			CustomerServiceLog(CUSTOMER_SERVICE_LOG, "VCD "+getEncodedName(vehicleSelected)+" ("+vehicleSelected+") was NOT transferred to Player " + getPlayerName(player) + "("+player+")'s hangar slot ("+playerHangar+"), the putIn command failed.");
+
+		}
+	}
+	//we are restoring the vehicle from the players hangar slot to their datapad
+	else
+	{
+		//stored vehicles are in the players hangar slot, and need to be moved back to their datapad
+		if ( putIn(vehicleSelected, datapad, player) )
+		{
+			obj_id displayVehicle = getObjIdObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE);
+			if ( !isIdValid(displayVehicle) || !exists(displayVehicle) )
+			{
+				removeObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE);
+			}
+			else
+			{
+				destroyObject(displayVehicle);
+				removeObjVar(vehicleSelected, VEHICLE_OBJVAR_DISPLAYED_VEHICLE);
+			}
+
+			CustomerServiceLog(CUSTOMER_SERVICE_LOG, "VCD "+getEncodedName(vehicleSelected)+" ("+vehicleSelected+") was transferred back to Player " + getPlayerName(player) + "("+player+")'s datapad ("+datapad+"), using the vehicle garage terminal..");
+
+			//tell the player what lockout was reset
+			prose_package pp = new prose_package();
+			prose.setStringId(pp, SID_VEHICLE_WAS_RESTORED);
+			prose.setTT(pp, getEncodedName(vehicleSelected));
+			sendSystemMessageProse(player, pp);
+		}
+		else
+		{
+			sendSystemMessage(player, SID_TRANSFER_FAILED_GENERIC);
+			CustomerServiceLog(CUSTOMER_SERVICE_LOG, "VCD "+getEncodedName(vehicleSelected)+" ("+vehicleSelected+") was NOT transferred to Player " + getPlayerName(player) + "("+player+")'s datapad ("+datapad+"), the putIn command failed.");
+
+		}
+
+		utils.removeScriptVar(self, SCRIPT_VAR_RESTORING_VEHICLE);
+	}
+
+	return SCRIPT_CONTINUE;
+
+}

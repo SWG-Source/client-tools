@@ -1,0 +1,216 @@
+include library.ai_lib;
+include library.callable;
+include library.pet_lib;
+include library.utils;
+include library.chat;
+include library.create;
+
+const string VEHICLE_VENDOR_CONVO = "beta/vehicle_vendor";
+
+const int EXPIRATION_TIME = 60 * 60 * 24 * 16; // 16 days
+const int VEHICLE_EXPIRATION_TIME = 60 * 60 * 24 * 16; // 16 days
+
+trigger OnAttach()
+{
+	setInvulnerable(self, true);
+	persistObject(self);
+	setCondition(self, CONDITION_CONVERSABLE);
+	ai_lib.setDefaultCalmBehavior(self, ai_lib.BEHAVIOR_SENTINEL);
+	setObjVar(self, "ai.diction", "townperson");
+	setObjVar(self, "vehicle_vendor.create", (getGameTime() + EXPIRATION_TIME));
+	setName(self, "Travelling Vehicle Merchant");
+	messageTo (self, "expireAndCleanup", null, EXPIRATION_TIME, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	int expirationTime = getIntObjVar(self, "vehicle_vendor.create");
+
+	if(getGameTime() > expirationTime)
+		messageTo(self, "expireAndCleanup", null, 0, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler expireAndCleanup()
+{
+	destroyObject(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int mnu = mi.addRootMenu (menu_info_types.CONVERSE_START, null);
+	menu_info_data mdata = mi.getMenuItemById(mnu);
+	mdata.setServerNotify(false);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	chat.setGoodMood(self);
+
+	faceToBehavior(self, speaker);
+	string_id greeting = new string_id (VEHICLE_VENDOR_CONVO, "start");//Wanna buy a mount?
+	string_id response[] = new string_id [2];
+	response[0] = new string_id (VEHICLE_VENDOR_CONVO, "yes");//yes
+	response[1] = new string_id (VEHICLE_VENDOR_CONVO, "no");//no
+
+	npcStartConversation (speaker, self, VEHICLE_VENDOR_CONVO, greeting, response);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnNpcConversationResponse(string convo, obj_id player, string_id response)
+{
+	if(!convo.equals(VEHICLE_VENDOR_CONVO))
+		return SCRIPT_CONTINUE;
+
+	npcRemoveConversationResponse(player, response);
+
+	if(response.getAsciiId().equals("yes"))//yes
+	{
+		if(getBooleanObjVar(player, "hasTestVehicle") == true)
+		{
+			string_id message = new string_id (VEHICLE_VENDOR_CONVO, "toomany");//you have too many
+			npcSpeak(player, message);
+			npcEndConversation(player);
+		}
+
+
+		npcRemoveConversationResponse(player, new string_id(VEHICLE_VENDOR_CONVO, "no"));
+
+		string_id message = new string_id (VEHICLE_VENDOR_CONVO, "choose");//pick a vehicle
+		npcSpeak(player, message);
+		string_id[] responses = new string_id[3];
+		responses[0] = new string_id(VEHICLE_VENDOR_CONVO, "x34");
+		responses[1] = new string_id(VEHICLE_VENDOR_CONVO, "bike");
+		responses[2] = new string_id(VEHICLE_VENDOR_CONVO, "swoop");
+		npcSetConversationResponses(player, responses);
+		return SCRIPT_CONTINUE;
+	}
+	else if(response.getAsciiId().equals("no"))//no
+	{
+		npcRemoveConversationResponse(player, new string_id(VEHICLE_VENDOR_CONVO, "yes"));
+
+		string_id message = new string_id (VEHICLE_VENDOR_CONVO, "goodbye");//goodbye
+		npcSpeak(player, message);
+		npcEndConversation(player);
+		return SCRIPT_CONTINUE;
+	}
+
+	string mountType = response.getAsciiId();
+
+	string diction = "";
+
+	if(mountType.equals("x34"))
+		mountType = "landspeeder_x34";
+	else if(mountType.equals("bike"))
+		mountType = "speederbike";
+	else if(mountType.equals("swoop"))
+		mountType = "speederbike_swoop";
+	else
+		return SCRIPT_CONTINUE;
+
+	obj_id mount = createCraftedCreatureDevice(player, mountType);
+
+	if(isIdValid(mount))
+	{
+		setObjVar(player, "hasTestVehicle", true);
+	}
+
+	string_id message = new string_id (VEHICLE_VENDOR_CONVO, "goodbye2");//goodbye
+	npcSpeak(player, message);
+	npcEndConversation(player);
+	return SCRIPT_CONTINUE;
+}
+
+obj_id createCraftedCreatureDevice(obj_id player, string vehicle)
+{
+
+	debugServerConsoleMsg(player, "+++ VEHICLE_DEED . createCraftedCreatureDevice +++ Entered PCD/Pet creation function.");
+
+	// Create a new control device
+	obj_id datapad = utils.getPlayerDatapad(player);
+
+	debugServerConsoleMsg(player, "+++ VEHICLE_DEED . createCraftedCreatureDevice +++ player datapad objide detected as: #" + datapad);
+
+	if(!isIdValid(datapad))
+	{
+		return null;
+	}
+
+	string controlTemplate = "object/intangible/vehicle/" + vehicle + "_pcd.iff";
+	obj_id petControlDevice = createObject(controlTemplate, datapad, "");
+	attachScript(petControlDevice, "beta.free_vehicle");
+	setObjVar(petControlDevice, "hasOwner", player);
+	
+	if(vehicle == "landspeeder_x34")
+	{
+		setObjVar(petControlDevice, "vehicle_attribs.object_ref", "x34");
+	}
+	
+	if(vehicle == "speederbike")
+	{
+		setObjVar(petControlDevice, "vehicle_attribs.object_ref", "spdrbike");
+	}
+	
+	if(vehicle == "speederbike_swoop")
+	{
+		setObjVar(petControlDevice, "vehicle_attribs.object_ref", "swoop");
+	}
+	
+	if(!isIdValid(petControlDevice))
+	{
+		sendSystemMessageTestingOnly(player, "Failed to create pet control device for vehicle");
+		return null;
+	}
+	else
+	{
+		setObjVar(petControlDevice, "pet.crafted", true);
+		setObjVar(petControlDevice, "vehicle.template", vehicle);
+		setObjVar(petControlDevice, "vehicle_vendor.create", (getGameTime() + VEHICLE_EXPIRATION_TIME));
+		messageTo (petControlDevice, "expireAndCleanup", null, VEHICLE_EXPIRATION_TIME, true);
+		attachScript(petControlDevice, "systems.vehicle_system.vehicle_control_device");
+		debugServerConsoleMsg(player, "+++ VEHICLE_DEED . createCraftedCreatureDevice +++ successfully created PCD object for vehicular prototype. Obj_id is #" + petControlDevice);
+	}
+
+	// Create the new pet
+	obj_id pet = create.object("object/mobile/vehicle/" + vehicle + ".iff", getLocation(player));
+	
+	if(!isIdValid(pet))
+	{
+		debugServerConsoleMsg(player, "+++ VEHICLE_DEED . createCraftedCreatureDevice +++ OBJ_ID Validity check on Vehicular_Prototype pet object came back as NOT VALID");
+		return petControlDevice;
+	}
+
+	debugServerConsoleMsg(player, "+++ VEHICLE_DEED . createCraftedCreatureDevice +++ SUCCESSFULLY created the vehicular_prototype pet object. Prepping to attach objvars to it");
+
+	// Attach it to the control device
+	setObjVar(pet, "vehicularTestBed", 1);
+
+	callable.setCallableLinks(player, petControlDevice, pet);
+
+	//make vehicle mountable
+	if(couldPetBeMadeMountable(pet) != 0)
+	{
+		debugServerConsoleMsg(null, "+++ VEHICLE . onAttach +++ couldPetBeMadeMountable(pet) returned FALSE.");
+		return pet;
+	}
+
+	if(!makePetMountable(pet))
+	{
+		debugServerConsoleMsg(null, "+++ VEHICLE . onAttach +++ makePetMountable(pet) returned FALSE.");
+		return pet;
+	}
+	else
+	{
+		setObjVar(petControlDevice, "ai.pet.trainedMount", 1);
+	}
+
+	return petControlDevice;
+}

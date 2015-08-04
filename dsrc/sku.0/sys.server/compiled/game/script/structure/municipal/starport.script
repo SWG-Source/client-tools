@@ -1,0 +1,175 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        starport.script
+ * Description:  handles the travel location functionality on starports
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.travel;
+include library.player_structure;
+
+/***** CONSTANTS *******************************************************/
+
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	LOG("LOG_CHANNEL", "starport::OnAttach -- " + self);
+
+	if ( player_structure.isCivic( self ) )
+		return SCRIPT_CONTINUE;
+
+	doInitializeStarport(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	travel.destroyBaseObjects(self);
+	travel.removeTravelPoint(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	LOG("LOG_CHANNEL", "starport::OnIntialize -- " + self);
+
+	// Ignore this for the case of civic starports.
+	if ( player_structure.isCivic( self ) )
+		return SCRIPT_CONTINUE;
+
+	doInitializeStarport(self);
+	
+	// check again in 1 minute and try again if for some reason we didn't get initialized
+	int numberOfRetry = 0;
+	dictionary params = new dictionary();
+	params.put("number_of_retry", numberOfRetry);
+	messageTo(self, "retryInitializeStarport", params, 60.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnUnloadedFromMemory()
+{
+	LOG("LOG_CHANNEL", "starport::OnUnloadedFromMemory -- " + self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	LOG("LOG_CHANNEL", "starport::OnDestroy -- " + self);
+
+	// Remove the travel point
+	boolean success = travel.removeTravelPoint(self);
+	if (!success)
+		LOG("LOG_CHANNEL", "Unable to remove travel point for " + self);
+
+	// Clean up travel base objects
+	travel.destroyBaseObjects(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgArrivalLocation()
+{
+	LOG("LOG_CHANNEL", "starport::msgArrivalLocation -- " + self + "  " + params);
+
+	location loc = travel.getArrivalLocation(self);
+	obj_id player = params.getObjId("player");
+
+	LOG("LOG_CHANNEL", "starport::msgArrivalLocation --  loc ->" + loc);
+
+	params.put("location", loc);
+	messageTo(player, "msgTravelToStarport", params, 0.0f, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgRestartShuttle()
+{
+	LOG("LOG_CHANNEL", "starport::msgRestartShuttle -- " + self);
+
+	obj_id shuttle = params.getObjId("shuttle");
+	if (shuttle == null || shuttle == obj_id.NULL_ID)
+	{
+		LOG("LOG_CHANNEL", "starport::msgRestartShuttle -- shuttle is null for " + self);
+		return SCRIPT_CONTINUE;
+	}
+
+	setPosture(shuttle, POSTURE_UPRIGHT);
+	queueCommand(shuttle, ##"stand", self, "", COMMAND_PRIORITY_FRONT);
+	setObjVar(self, travel.VAR_SHUTTLE_AVAILABLE, 1);
+	setObjVar(self, travel.VAR_SHUTTLE_TIMESTAMP, getGameTime());
+
+	params.put("starport", self);
+	int ground_time = travel.getGroundTime(self);
+	messageTo(shuttle, "msgRestartShuttle", params, 1.0f, false);
+	LOG("LOG_CHANNEL", "starport::msgRestartShuttle -- sending message to " + shuttle);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler retryInitializeStarport()
+{
+	// nothing to do if already initialized
+	string planet = getCurrentSceneName();
+	string travel_point = travel.getTravelPointName(self);
+	if ((planet != null) && (travel_point != null))
+	{
+		location loc = getPlanetTravelPointLocation(planet, travel_point);
+		if (loc != null)
+			return SCRIPT_CONTINUE;
+	}
+
+	// stop after 5 retry
+	int numberOfRetry = params.getInt("number_of_retry");
+	if (numberOfRetry >= 5)
+		return SCRIPT_CONTINUE;
+
+	// try again		
+	doInitializeStarport(self);
+	
+	// check again in 1 minute and try again if for some reason we didn't get initialized
+	++numberOfRetry;
+	if (numberOfRetry < 5)
+	{
+		params.put("number_of_retry", numberOfRetry);
+		messageTo(self, "retryInitializeStarport", params, 60.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+
+void doInitializeStarport(obj_id self)
+{
+	// Ignore this for the case of civic starports.
+	if ( player_structure.isCivic( self ) )
+		return;
+
+	// Add the structure's travel point.
+	string travel_point = travel.getTravelPointName(self);
+	int travel_cost = travel.getTravelCost(self);
+
+	if (travel_point == null || travel_cost == -1)
+	{
+		LOG("LOG_CHANNEL", "starport::doInitializeStarport -- Unable to obtain valid travel_point information for " + self);
+		return;
+	}
+
+	travel.initializeStarport(self, travel_point, travel_cost,false);	
+}

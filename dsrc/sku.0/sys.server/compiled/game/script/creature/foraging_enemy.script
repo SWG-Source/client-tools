@@ -1,0 +1,243 @@
+/**
+ * Copyright (c) ©2008 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        foraging_enemy.script
+ * Description:  The player foraged and spawned an enemy.  This is the script attached to the enemy.
+ * @author       $Author:$ Jeff Haskell
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.ai_lib;
+include library.anims;
+include library.chat;
+include library.create;
+include library.group;
+include library.groundquests;
+include library.prose;
+include library.utils;
+include ai.ai_combat;
+
+//------------------------------------------------
+// CONSTANTS
+//------------------------------------------------
+
+const string STRING_PREFIX = "foraging/forage_enemy";
+const string_id SID_STEAL_SLOT = new string_id(STRING_PREFIX,"slot_removed");
+const string FORAGING_ENEMY_TABLE = "datatables/foraging/forage_enemy.iff";
+const string FORAGING_COLLECTION = "kill_forage_worm";
+//------------------------------------------------
+// TRIGGERS
+//------------------------------------------------
+trigger OnAttach()
+{
+	// Set a destroy callback to 1000 seconds.
+	messageTo(self, "cleanUpGuard", null, 400, true);
+
+	// Attack!
+	messageTo(self, "attackForager", null, 1, false);
+	messageTo(self, "barkAttack", null, 1, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitateTarget(obj_id victim)
+{
+	obj_id player = getObjIdObjVar(self, "player");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	
+	//we avoid other players getting slot stolen
+	if(player != victim)
+		return SCRIPT_CONTINUE;
+
+ 	messageTo(self, "expression", null, 7, true);
+	
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnLoiterMoving()
+{		
+ 	messageTo(self, "cleanUpGuard", null, 6, true);
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// MESSAGE HANDLERS
+//------------------------------------------------
+
+messageHandler cleanUpGuard()
+{
+	// Clean us up.
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler expression()
+{
+	obj_id player = getObjIdObjVar(self, "player");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+ 	faceTo(self, player);
+ 	messageTo(self, "barkDefeat", null, 1, false);
+ 	
+ 	location body = getLocation(player); 
+ 	pathTo(self, body);
+ 	
+	messageTo(self, "runAwayThenCleanUpGuard", null, 4, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler runAwayThenCleanUpGuard()
+{ 	
+	location l = groundquests.getRandom2DLocationAroundPlayer(self, 20, 50);
+	pathTo(self, l);
+	messageTo( self, "cleanUpGuard", null, 12, true );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler attackForager()
+{
+	// Get player ref.
+	obj_id player = getObjIdObjVar(self, "player");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+	startCombat(self, player);
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+//------------------------------------------------
+// FUNCTIONS
+//------------------------------------------------
+
+boolean isThief(obj_id mob)
+{
+	if(!isValidId(mob))
+		return false;
+		
+	string mobName = getStringObjVar(mob, "creature_type");
+
+	if ((mobName == null) || (mobName.equals("")))
+		return false;
+	
+	int index = mobName.indexOf("forage_");
+	if (index == 0)
+		return true;
+
+	return false;
+}
+
+boolean removeFirstSlotFound(obj_id player)
+{
+	if(!isValidId(player))
+		return false;
+		
+	if(hasCompletedCollection(player, FORAGING_COLLECTION))
+		return false;
+	
+	string[] slotsInCollection = getAllCollectionSlotsInCollection(FORAGING_COLLECTION);
+	// loop through and clear each slot 
+	for(int i = 0; i < slotsInCollection.length; i++)
+	{
+		// get the collectionSlotValue and multiply by -1 
+		long collectionSlotValue = getCollectionSlotValue(player, slotsInCollection[i]);
+		if(collectionSlotValue > 0)
+		{
+			// apply the collectionSlotValue to each slot - this should clear the slot.
+			modifyCollectionSlotValue(player, slotsInCollection[i], (collectionSlotValue * -1));
+
+			prose_package pp = new prose_package();
+			prose.setStringId(pp, SID_STEAL_SLOT);
+			prose.setTT(pp, new string_id("collection_n", slotsInCollection[i]));
+			sendSystemMessageProse(player, pp);			
+			
+			break;
+		}
+	}	
+
+	return true;
+}
+
+//------------------------------------------------
+// barkAttack
+//------------------------------------------------
+
+messageHandler barkAttack()
+{
+	obj_id guard = self;
+	if ( params == null )
+		return SCRIPT_CONTINUE;		
+
+	//we only want mobs that are prefixed with forage_
+	//snakes do not steal or say anything
+	boolean isThief = isThief(guard);
+	if(!isThief)
+		return SCRIPT_CONTINUE;
+	
+	string mob = getStringObjVar(guard, "creature_type");
+	if ((mob == null) || (mob.equals("")))
+		return SCRIPT_OVERRIDE;
+
+	int row = dataTableSearchColumnForString(mob, "enemy", FORAGING_ENEMY_TABLE);
+	string type = dataTableGetString(FORAGING_ENEMY_TABLE, row, "bark_attack");
+	if ((type == null) || (type.equals("")))
+		return SCRIPT_OVERRIDE;
+
+	chat.chat(self, chat.CHAT_SHOUT, chat.MOOD_ANGRY, new string_id("foraging/forage_enemy", "bark_"+type));
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler barkDefeat()
+{
+	obj_id guard = self;
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+	
+	//we only want mobs that are prefixed with forage_
+	//snakes do not steal or say anything
+	boolean isThief = isThief(guard);
+	if(!isThief)
+		return SCRIPT_CONTINUE;
+		
+	string mob = getStringObjVar(guard, "creature_type");
+	if ((mob == null) || (mob.equals("")))
+		return SCRIPT_OVERRIDE;
+
+	int row = dataTableSearchColumnForString(mob, "enemy", FORAGING_ENEMY_TABLE);
+	string type = dataTableGetString(FORAGING_ENEMY_TABLE, row, "bark_defeat");
+	if ((type == null) || (type.equals("")))
+		return SCRIPT_OVERRIDE;
+
+	chat.chat(self, chat.CHAT_SHOUT, chat.MOOD_ANGRY, new string_id("foraging/forage_enemy", "bark_"+type));
+	messageTo( self, "removeASlot", null, 4, true );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeASlot()
+{
+	obj_id guard = self;
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = getObjIdObjVar(self, "player");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+	boolean success = removeFirstSlotFound(player);
+	if(success)
+		doAnimationAction(self, anims.PLAYER_FLEX_BICEPS);
+
+	return SCRIPT_CONTINUE;
+}

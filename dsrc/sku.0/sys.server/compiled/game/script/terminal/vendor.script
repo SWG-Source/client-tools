@@ -1,0 +1,1217 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        bank.script
+ * Description:  script for bank menu options; to be attached to bank terminals
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.sui;
+include library.utils;
+include library.money;
+include library.player_structure;
+include library.chat;
+include library.ai_lib;
+include library.prose;
+include library.vendor_lib;
+include library.xp;
+include library.turnstile;
+include library.session;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits terminal.base.base_terminal;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_GIVE_VENDOR_MAINTENANCE         			= new string_id("player_structure", "give_maintenance");
+const string_id SID_TAKE_VENDOR_MAINTENANCE         			= new string_id("player_structure", "take_maintenance");
+const string_id SID_REGISTER_VENDOR					= new string_id("player_structure", "register_vendor");
+const string_id SID_UNREGISTER_VENDOR					= new string_id("player_structure", "unregister_vendor");
+const string_id SID_CHANGE_NAME						= new string_id("player_structure", "change_name");
+const string_id SID_REMOVE_VENDOR					= new string_id("player_structure", "remove_vendor");
+const string_id SID_ITEM_DESTROY                   			= new string_id("ui_radial", "item_destroy");
+const string_id SID_VENDOR_RENAME					= new string_id("player_structure", "vendor_rename");
+const string_id SID_VENDOR_RENAME_UNREG					= new string_id("player_structure", "vendor_rename_unreg");
+const string_id SID_REGISTER_VENDOR_NOT					= new string_id("player_structure", "register_vendor_not");
+const string_id SID_UNREGISTER_VENDOR_NOT				= new string_id("player_structure", "unregister_vendor_not");
+const string_id SID_VENDOR_CONTROL					= new string_id("player_structure", "vendor_control");
+const string_id SID_VENDOR_AREABARKS_ON					= new string_id("player_structure", "vendor_areabarks_on");
+const string_id SID_VENDOR_AREABARKS_OFF				= new string_id("player_structure", "vendor_areabarks_off");
+const string_id SID_VENDOR_MAINT_INVALID				= new string_id("player_structure", "vendor_maint_invalid" );
+const string_id SID_VENDOR_MAINT_DENIED					= new string_id("player_structure", "vendor_maint_denied" );
+const string_id SID_VENDOR_STATUS					= new string_id("player_structure", "vendor_status" );
+const string_id SID_VENDOR_INIT						= new string_id("player_structure", "vendor_init" );
+const string_id SID_INITIALIZING_VENDOR					= new string_id("player_structure", "vendor_initializing" );
+const string_id SID_INITIALIZED_VENDOR					= new string_id("player_structure", "vendor_initialized" );
+const string_id SID_OBSCENE						= new string_id("player_structure", "obscene");
+const string_id SID_CANT_MOVE						= new string_id("player_structure", "cant_move");
+const string_id SID_CUSTOMIZE_VENDOR					= new string_id("player_structure", "customize_vendor");
+const string_id SID_ONLY_NPC_VENDORS					= new string_id("player_structure", "only_npc_vendors");
+const string_id SID_INSUFFICIENT_FUNDS					= new string_id("player_structure", "insufficient_funds");
+const string_id SID_VENDOR_WITHDRAW					= new string_id("player_structure", "vendor_withdraw");
+const string_id SID_VENDOR_WITHDRAW_FAIL				= new string_id("player_structure", "vendor_withdraw_fail");
+const string_id SID_VENDOR_NOT_IN_SHIP 					= new string_id("player_structure", "vendor_not_in_ship");
+const string_id SID_VENDOR_PUBLIC_ONLY 					= new string_id("player_structure", "vendor_public_only");
+const string_id SID_VENDOR_ALREADY_INITIALIZED  			= new string_id("player_structure", "vendor_already_initialized");
+const string_id SID_VENDOR_NOT_IN_SAME_BUILDING 			= new string_id("player_structure", "vendor_not_in_same_building");
+const string_id SID_ENABLE_VENDOR_SEARCH 				= new string_id("player_structure", "enable_vendor_search");
+const string_id SID_DISABLE_VENDOR_SEARCH 				= new string_id("player_structure", "disable_vendor_search");
+const string_id SID_PACK_VENDOR						= new string_id("player_structure", "vendor_pack");
+const string_id SID_TCG_VENDOR_CTS_WARNING				= new string_id("player_vendor", "packup_vendor_cts_warning");
+
+const string TBL_VENDOR_SUBCATEGORIES					= "datatables/vendor/vendor_map_subcategories.iff";
+const string DESTROY_PID						= "player_vendor.destroyVendor.pid";
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Restart the maintanence loop. Send the first message immediately.
+	int time_stamp = getIntObjVar( self, vendor_lib.VAR_LAST_MAINTANENCE );
+	if ( time_stamp < 1 )
+	{
+		time_stamp = getGameTime();
+		setObjVar( self, vendor_lib.VAR_LAST_MAINTANENCE, time_stamp );
+	}
+
+	dictionary params = new dictionary();
+	params.put( "timestamp", time_stamp );
+	messageTo( self, "OnMaintenanceLoop", params, 30.0f, false );
+
+	// Make us invulnerable.
+	setInvulnerable( self, true );
+
+	// Re-register us with the planetary map.
+	registerVendorOnMap(self);
+
+	// Update our access fee.
+	updateAccessFee( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnDestroy
+//------------------------------------------------
+
+trigger OnDestroy()
+{
+	if(hasObjVar(self, "vendor.map_registered"))
+	{
+		removeObjVar(self, "vendor.map_registered");
+	  	removePlanetaryMapLocation(self);
+  	}
+
+	obj_id owner = getObjIdObjVar( self, "vendor_owner" );
+	if(!isValidId(owner))
+		return SCRIPT_CONTINUE;
+
+
+	dictionary playerMessage = new dictionary();
+	playerMessage.put("vendor", self);
+
+	if(vendor_lib.isSpecialVendor(self))
+	{
+		playerMessage.put("isSpecialVendor", true);
+		string skillMod = getStringObjVar(self, "vendor.special_vendor_skillmod");
+		playerMessage.put("skillMod", skillMod);
+		int skillModCurrentAmount = getSkillStatMod(owner, skillMod);
+		playerMessage.put("skillModCurrentAmount", skillModCurrentAmount);
+	}
+	else
+	{
+		playerMessage.put("isSpecialVendor", false);
+	}
+
+
+	//Check for the proper ObjVars -
+	//special_decrement_skillmod means the skillmod can be decremented
+	//special_vendor_skillmod - means it is a special vendor skill mod
+	if(hasObjVar(self, "vendor.special_decrement_skillmod") || hasObjVar(self, "vendor.special_vendor_skillmod"))
+	{
+		playerMessage.put("canBeIncremented", true);
+	}
+	else
+	{
+		playerMessage.put("canBeIncremented", false);
+	}
+
+
+
+	playerMessage.put("vendorTemplate", getTemplateName(self));
+	playerMessage.put("destroyLocation", getLocation(self));
+
+	obj_id topContainer = getTopMostContainer(self);
+	playerMessage.put("topContainer", topContainer);
+	playerMessage.put("topContainerLocation", getLocation(topContainer));
+
+	messageTo(owner, "handleVendorDestroy", playerMessage, 0.f, true); // Handled in player_utility, PERSISTS UNTIL PLAYER LOGS IN
+	return SCRIPT_CONTINUE;
+}
+
+void registerVendorOnMap(obj_id self)
+{
+	requestVendorItemCount(self);
+}
+
+void destroyVendor(obj_id self)
+{
+	// Can't destroy an initialized vendor if the commodities server is not available
+	if ( hasObjVar(self, "vendor_initialized") && !isCommoditiesServerAvailable() )
+		return;
+
+	CustomerServiceLog( "vendor", "Vendor destroyed by owner. Vendor: " + self + " Location: " + getLocation(self) );
+	destroyObject( self );
+}
+
+void doMapRegistration(obj_id self)
+{
+	if ( hasObjVar( self, "vendor.map_registered" ) && hasObjVar( self, "vendor.map_subcat" ) )
+	{
+		// Remove "Vendor" from display name.
+		string displayName = getName( self );
+		displayName = displayName.substring( 8 );
+
+		// Add the vendor to the global map.
+		string subcat = getStringObjVar( self, "vendor.map_subcat" );
+		obj_id structure = player_structure.getStructure( self );
+		location myloc = getLocation( structure );
+		addPlanetaryMapLocation( self, displayName, (int) myloc.x, (int) myloc.z, "vendor", subcat, MLT_DYNAMIC, 0 );
+	}
+}
+
+messageHandler vendorItemRetry()
+{
+	registerVendorOnMap(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnVendorItemCountReply(int count, int search_enabled)
+{
+	if ( hasObjVar( self, "vendor.getItemCountDisplay"))
+	{
+		removeObjVar( self, "vendor.getItemCountDisplay" );
+		obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+		displayStatus( self, ownerId, count, search_enabled);
+	}
+	else if ( hasObjVar( self, "vendor.map_registered" ) && hasObjVar( self, "vendor.map_subcat" ) )
+	{
+		if (count > 0)
+		{
+			doMapRegistration(self);
+		}
+		else if (count < 0)
+		{
+			//This is an error condition meaning the CM is not available.  Retry later.
+			messageTo( self, "vendorItemRetry", null, 51800 + rand(1,600), false);
+		}
+		else
+		{
+	  		removePlanetaryMapLocation( self );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnVendorStatusChange(int newStatus)
+{
+	const int VENDOR_EMPTY = 20;
+	const int VENDOR_NORMAL = 21;
+	const int VENDOR_UNACCESSED = 22;
+	const int VENDOR_ENDANGERED = 23;
+	const int VENDOR_REMOVED = 24;
+
+	string_id sub = new string_id("auction", "vendor_status_subject");
+	string_id body = null;
+	switch (newStatus)
+	{
+		case VENDOR_EMPTY:
+			removePlanetaryMapLocation( self );
+			body = new string_id("auction", "vendor_status_empty");
+			break;
+		case VENDOR_NORMAL:
+			doMapRegistration(self);
+			body = new string_id("auction", "vendor_status_normal");
+			break;
+		case VENDOR_UNACCESSED:
+			registerVendorOnMap(self);
+			body = new string_id("auction", "vendor_status_unaccessed");
+			break;
+		case VENDOR_ENDANGERED:
+			registerVendorOnMap(self);
+			body = new string_id("auction", "vendor_status_endangered");
+			break;
+		case VENDOR_REMOVED:
+			body = new string_id("auction", "vendor_status_deleted");
+		default:
+			break;
+	}
+	prose_package pp = new prose_package ();
+	pp.stringId = body;
+	pp.other.set (getName(self));
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if (isIdValid(ownerId))
+	{
+		if (getName(ownerId) != null)
+		{
+			utils.sendMail(sub, pp, ownerId, "System");
+		}
+	}
+
+	if (newStatus == VENDOR_REMOVED)
+		destroyVendor(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest( obj_id player, menu_info mi )
+{
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( (player == ownerId) || isGod( player ) )
+	{
+		// Only show these options if the vendor is placed.
+		obj_id inventory = getObjectInSlot( player, "inventory" );
+		if ( contains( inventory, self ) )
+			return SCRIPT_CONTINUE;
+
+		int menu = mi.addRootMenu( menu_info_types.SERVER_MENU1, SID_VENDOR_CONTROL );
+
+		if ( !hasObjVar( self, "vendor_initialized" ) )
+		{
+			// Add initialize option if the vendor is not initialized.
+			mi.addSubMenu( menu, menu_info_types.SERVER_MENU7, SID_VENDOR_INIT );
+		}
+		else
+		{
+			//get some basic feedback from the vendor type
+			boolean isSpecialVendor = vendor_lib.isSpecialVendor(self);
+			//init a defaults that maybe over written
+			boolean speacialVendorCanBeDressed = false;
+			int speacialVendorCanSpeakBasic = 0;
+
+			// Add the other options.
+			mi.addSubMenu( menu, menu_info_types.SERVER_MENU5, SID_VENDOR_STATUS );
+			mi.addSubMenu( menu, menu_info_types.SERVER_GIVE_VENDOR_MAINTENANCE, SID_GIVE_VENDOR_MAINTENANCE );
+			mi.addSubMenu( menu, menu_info_types.SERVER_MENU2, SID_TAKE_VENDOR_MAINTENANCE );
+
+			if(isSpecialVendor)
+				speacialVendorCanSpeakBasic = getIntObjVar(self, "vendor.special_vendor_basic");
+
+			if(!isSpecialVendor || (isSpecialVendor && speacialVendorCanSpeakBasic > 0))
+			{
+				// Get advertising skill for the next options.
+				// Check to see if we have enough skill to set up barks.
+				if ( utils.isProfession(player, utils.TRADER) && hasObjVar( self, "vendor.NPC" ) )
+				{
+					if ( !hasObjVar( self, "vendor.areaBarks" ) )
+						mi.addSubMenu( menu, menu_info_types.SERVER_MENU4, SID_VENDOR_AREABARKS_ON );
+					else
+						mi.addSubMenu( menu, menu_info_types.SERVER_MENU4, SID_VENDOR_AREABARKS_OFF );
+				}
+			}
+
+			// Check to see if we can register on the planetary map.
+			int hiringSkillMod = getSkillStatisticModifier(player, "hiring");
+			int vendorRegSkillMod = getSkillStatisticModifier(player, "private_vendor_register");
+			if (vendorRegSkillMod >= 1)
+			{
+				if ( !hasObjVar( self, "vendor.map_registered" ) )
+					mi.addSubMenu( menu, menu_info_types.SERVER_MENU3, SID_REGISTER_VENDOR );
+				else
+					mi.addSubMenu( menu, menu_info_types.SERVER_MENU3, SID_UNREGISTER_VENDOR );
+			}
+
+			mi.addSubMenu( menu, menu_info_types.SERVER_TERMINAL_PERMISSIONS_ENTER, SID_ENABLE_VENDOR_SEARCH );
+			mi.addSubMenu( menu, menu_info_types.SERVER_TERMINAL_PERMISSIONS_BANNED, SID_DISABLE_VENDOR_SEARCH );
+
+			if(isSpecialVendor)
+			{
+				speacialVendorCanBeDressed = getBooleanObjVar(self, "vendor.special_vendor_clothing");
+			}
+
+			//only show server_menu8 if not a special vendor or if a special vendor can be dressed
+			if(!isSpecialVendor || (isSpecialVendor && speacialVendorCanBeDressed))
+			{
+				// Check to see if the player can customize us.
+				if (hiringSkillMod >= 90 )
+					mi.addSubMenu( menu, menu_info_types.SERVER_MENU8, SID_CUSTOMIZE_VENDOR );
+			}
+		}
+
+		if (vendor_lib.isVendorPackUpEnabled())
+			mi.addSubMenu( menu, menu_info_types.SERVER_MENU10, SID_PACK_VENDOR );
+
+		mi.addSubMenu( menu, menu_info_types.SERVER_MENU6, SID_REMOVE_VENDOR );
+	}
+	else
+	{
+		obj_id inventory = getObjectInSlot( player, "inventory" );
+		if ( contains( inventory, self ) && !isGod( player ) )
+		{
+			// A person who is NOT our owner and is NOT a god has us in their inventory.  BAD!
+			// Destroy us.
+			destroyObject( self );
+
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect( obj_id player, int item )
+{
+	// Have to be the owner.
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( (player != ownerId) && !isGod( player ) )
+	{
+		session.logActivity(player, session.ACTIVITY_OTHER_ACCESS_VENDOR);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	session.logActivity(player, session.ACTIVITY_OWNER_ACCESS_VENDOR);
+	int hiringSkillMod = getSkillStatisticModifier(player, "hiring");
+	int vendorRegSkillMod = getSkillStatisticModifier(player, "private_vendor_register");
+
+	if ( item == menu_info_types.SERVER_MENU3 )
+	{
+		if ( !hasObjVar( self, "vendor.map_registered" ) && vendorRegSkillMod >=1)
+		{
+			// Player wants to register the vendor with the global map.
+			if ( hasObjVar( self, "vendor.map_registered" ) )
+				return SCRIPT_CONTINUE;
+			if ( utils.hasScriptVar( self, "vendor.registering" ) )
+				return SCRIPT_CONTINUE;
+			utils.setScriptVar( self, "vendor.registering", 1 );
+
+			// Query subcategory.
+			string[] rawSubcategories = dataTableGetStringColumn( TBL_VENDOR_SUBCATEGORIES, 0 );
+			string[] subcategories = new string[rawSubcategories.length];
+			for ( int i=0; i<rawSubcategories.length; i++ )
+			{
+				subcategories[i] = "@player_structure:subcat_"+rawSubcategories[i];
+			}
+			sui.listbox( self, player, "@player_structure:vendor_mapcat_d", sui.OK_CANCEL, "@player_structure:vendor_mapcat_t", subcategories, "handleMapCatSelect", true );
+		}
+		else
+		{
+			// Remove the vendor from the global map.
+			removeObjVar( self, "vendor.map_registered" );
+		  	removePlanetaryMapLocation(self );
+		  	sendSystemMessage( player, SID_UNREGISTER_VENDOR_NOT );
+		}
+
+		// Refresh menu.
+		sendDirtyObjectMenuNotification( self );
+	}
+	else if ( item == menu_info_types.SERVER_MENU2 )
+	{
+		// Player wants to withdraw maintenance.
+		sui.inputbox( self, player, "@player_structure:withdraw_vendor_d", sui.OK_CANCEL, "@player_structure:withdraw_vendor_t", sui.INPUT_NORMAL, null, "msgTakeMaintenanceFromVendor", null );
+	}
+	else if ( item == menu_info_types.SERVER_MENU5 )
+	{
+		// Display status.
+		setObjVar( self, "vendor.getItemCountDisplay", 1 );
+		requestVendorItemCount(self);
+	}
+	else if ( item == menu_info_types.SERVER_MENU6 )
+	{
+		//you can only have one Destroy SUI open
+		if(sui.hasPid(self, DESTROY_PID))
+			forceCloseSUIPage(sui.getPid(self, DESTROY_PID));
+
+		if(hasObjVar(self, "vendor_initialized") && !isCommoditiesServerAvailable() )
+		{
+			// Can't destroy an initialized vendor if the commodities server is not available
+			int destroyPid = sui.msgbox( self, player, "@player_structure:destroy_vendor_cs_unavailable_d", sui.OK_ONLY, "@player_structure:destroy_vendor_cs_unavailable_t", "noHandler" );
+			if(destroyPid > -1)
+				sui.setPid(self, destroyPid, DESTROY_PID);		
+		}
+		else
+		{
+			// Make sure they really want to destroy the vendor.
+			int destroyPid = sui.msgbox( self, player, "@player_structure:destroy_vendor_d", sui.YES_NO, "@player_structure:destroy_vendor_t", "handleDestroyVendor" );
+			if(destroyPid > -1)
+				sui.setPid(self, destroyPid, DESTROY_PID);
+		}
+
+	}
+	else if ( item == menu_info_types.SERVER_MENU7 )
+	{
+		// Check to make sure the vendor has not already been initialized
+		if ( !hasObjVar( self, "vendor_initialized" ) )
+		{
+			// Make sure the player and vendor are in the same building
+			if ( getTopMostContainer(player) == getTopMostContainer(self) )
+			{
+				obj_id structure = player_structure.getStructure( self );
+				int fee = 0;
+				if ( turnstile.hasTurnstile( structure ) )
+					fee = turnstile.getFee( structure );
+
+				// Initialize the vendor.
+				obj_id owner = getObjIdObjVar( self, "vendor_owner" );
+				createVendorMarket( owner, self, fee );
+				// Update our sales tax.
+				updateSalesTax( self );
+				// Refresh menu.
+				sendDirtyObjectMenuNotification( self );
+				CustomerServiceLog( "vendor", "Vendor initialized.  Owner: " + owner + " Vendor: " + self + " Location: " + getLocation(self) );
+			}
+			else
+			{
+				// Notify the player that they must be in the same building as the vendor
+				sendSystemMessage( player, SID_VENDOR_NOT_IN_SAME_BUILDING );
+			}
+		}
+		else
+		{
+			// Notify the player that the vendor is already initialized
+			sendSystemMessage( player, SID_VENDOR_ALREADY_INITIALIZED );
+		}
+	}
+	else if ( item == menu_info_types.SERVER_GIVE_VENDOR_MAINTENANCE )
+	{
+		// Player wants to pay maintenance.
+		sui.inputbox( self, player, "@player_structure:pay_vendor_d", sui.OK_CANCEL, "@player_structure:pay_vendor_t", sui.INPUT_NORMAL, null, "msgGiveMaintenanceToVendor", null );
+	}
+	else if ( (item == menu_info_types.SERVER_MENU8) && hiringSkillMod >=90 )
+	{
+		// Notify the player on how to customize.
+		sendSystemMessage( player, SID_ONLY_NPC_VENDORS );
+
+		return SCRIPT_OVERRIDE;
+	}
+	else if ( item == menu_info_types.SERVER_TERMINAL_PERMISSIONS_ENTER )
+	{
+		updateVendorSearchOption(self, true);
+	}
+	else if ( item == menu_info_types.SERVER_TERMINAL_PERMISSIONS_BANNED )
+	{
+		updateVendorSearchOption(self, false);
+	}
+	else if ( item == menu_info_types.SERVER_MENU10 )
+	{
+		if (vendor_lib.isVendorPackUpEnabled())
+		{
+			sendSystemMessage(player, SID_TCG_VENDOR_CTS_WARNING);
+
+			utils.setScriptVar(player, "packup.vendor", self);
+			if(utils.hasScriptVar(player, "packup.vendor.suiconfirm"))
+			{
+				sui.closeSUI(player, utils.getIntScriptVar(player, "packup.vendor.suiconfirm"));
+			}
+
+			utils.setScriptVar(player, "packup.vendor.suiconfirm", sui.msgbox(player, player, utils.packStringId(new string_id("sui", "confirm_vendor_packup")), sui.YES_NO, "msgConfirmVendorPackup"));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/*
+DESTROYING VENDORS
+*/
+messageHandler handleDestroyVendor()
+{
+	if(sui.hasPid(self, DESTROY_PID))
+		forceCloseSUIPage(sui.getPid(self, DESTROY_PID));
+
+	int bp = sui.getIntButtonPressed(params);
+	obj_id player = sui.getPlayerId(params);
+	
+	if(bp == sui.BP_CANCEL)
+	{
+		clearVendorDestroyData(self);
+		return SCRIPT_CONTINUE;
+	}	
+	int key = rand(100000, 999999);
+	utils.setScriptVar(self, "player_vendor.destroyVendor.key", key);
+	
+	int pid = sui.inputbox(self, player, "@player_structure:delete_vendor_confirm_prompt" + "\n\nCode: " + key, "@player_structure:delete_vendor_confirm_title", "handleDeleteVendorConfirmed", 6, false, "");
+	if(pid > -1)
+		sui.setPid(self, pid, DESTROY_PID);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDeleteVendorConfirmed()
+{
+	if(sui.hasPid(self, DESTROY_PID))
+		forceCloseSUIPage(sui.getPid(self, DESTROY_PID));
+		
+	int bp = sui.getIntButtonPressed(params);
+	string text = sui.getInputBoxText(params);
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+	{
+		clearVendorDestroyData(self);
+		return SCRIPT_CONTINUE;	
+	}
+	if(bp == sui.BP_CANCEL || text == null || text.equals(""))
+	{
+		clearVendorDestroyData(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int key = utils.getIntScriptVar(self, "player_vendor.destroyVendor.key");
+	string skey = Integer.toString(key);
+
+	if(text.equals(skey))
+	{
+		destroyVendor(self);
+	}
+	else
+	{
+		sui.msgbox(player, "@player_structure:incorrect_destroy_all_items_code");
+		clearVendorDestroyData(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void clearVendorDestroyData(obj_id vendor)
+{
+	if(!isIdValid(vendor))
+		return;
+	
+	//remove destroy pids on exit.
+	sui.removePid(vendor, DESTROY_PID);
+	//remove destroy scriptVars
+	utils.removeScriptVarTree(vendor, "player_vendor.destroyVendor");
+}
+
+/*
+END DESTROYING VENDORS
+*/
+
+messageHandler msgVendorWithdrawSuccess()
+{
+	if ( params != null )
+	{
+		int amt = params.getInt( "amount" );
+		obj_id player = params.getObjId( "player" );
+		if ( amt > 0 )
+		{
+			prose_package pp = prose.getPackage( SID_VENDOR_WITHDRAW, amt );
+			sendSystemMessageProse( player, pp );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgVendorWithdrawFail()
+{
+	if ( params != null )
+	{
+		int amt = params.getInt( "amount" );
+		obj_id player = params.getObjId( "player" );
+		if ( amt > 0 )
+		{
+			prose_package pp = prose.getPackage( SID_VENDOR_WITHDRAW_FAIL, amt );
+			sendSystemMessageProse( player, pp );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleSetVendorName
+//------------------------------------------------
+
+messageHandler handleSetVendorName()
+{
+	// Store the vendor name.
+	obj_id player = sui.getPlayerId(params);
+	string vendorName = sui.getInputBoxText( params );
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// No zero length or obscene names.
+	if ( (vendorName == "") || isNameReserved( vendorName ) )
+	{
+		// Ask them about the name.
+		sendSystemMessage( player, SID_OBSCENE );
+		sui.inputbox( self, player, "@player_structure:name_d", sui.OK_CANCEL, "@player_structure:name_t", sui.INPUT_NORMAL, null, "handleSetVendorName", null );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( vendorName.length() > 40 )
+		vendorName = vendorName.substring( 0, 39 );
+
+	setName( self, "Vendor: " + vendorName );
+
+	// Check to see if we are registered and unreg us.
+	if ( hasObjVar( self, "vendor.map_registered" ) )
+	{
+		removeObjVar( self, "vendor.map_registered" );
+	  	removePlanetaryMapLocation(self );
+	  	sendSystemMessage( player, SID_VENDOR_RENAME_UNREG );
+	}
+	else
+	{
+	  	sendSystemMessage( player, SID_VENDOR_RENAME );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleMapCatSelect
+//------------------------------------------------
+
+messageHandler handleMapCatSelect()
+{
+	// Params.
+	utils.removeScriptVar( self, "vendor.registering" );
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow( params );
+	if ( idx < 0 ) idx = 0;
+	int btn = sui.getIntButtonPressed(params);
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Get categories.
+	string[] rawSubcategories = dataTableGetStringColumn( TBL_VENDOR_SUBCATEGORIES, 0 );
+	string[] subcategories = new string[rawSubcategories.length];
+	for ( int i=0; i<rawSubcategories.length; i++ )
+	{
+		subcategories[i] = "vendor_"+rawSubcategories[i];
+	}
+
+	// Remove "Vendor" from display name.
+
+	// Add the vendor to the global map.
+	setObjVar( self, "vendor.map_registered", 1 );
+	setObjVar( self, "vendor.map_subcat", subcategories[idx] );
+	registerVendorOnMap(self);
+
+	// Send a message to the player that it is done.
+	sendSystemMessage( player, SID_REGISTER_VENDOR_NOT );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnAboutToBeTransferred
+//------------------------------------------------
+
+trigger OnAboutToBeTransferred( obj_id dest, obj_id transferer )
+{
+	// If going into the vendor control object or coming out of
+	// vendor control object then nothing matters
+	obj_id from = getContainedBy( self );
+	if ( isGameObjectTypeOf(dest, GOT_data_vendor_control_device) ||
+	     ( !isIdNull(from) &&
+	       isGameObjectTypeOf(from, GOT_data_vendor_control_device) ) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar( self, "vendor_initialized" ) )
+	{
+		sendSystemMessage( transferer, SID_CANT_MOVE );
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( isGod(transferer) )
+		return SCRIPT_CONTINUE;
+
+	obj_id owner = getObjIdObjVar( self, "vendor_owner" );
+	if ( !isIdValid(owner) )
+		return SCRIPT_CONTINUE;
+
+	// Can transfer into the inventory of the player.
+	obj_id inv = utils.getInventoryContainer(owner);
+	if ( dest == owner || dest == inv )
+		return SCRIPT_CONTINUE;
+
+	// Can transfer into the container the owner is in (structure).
+	if ( getContainedBy(transferer) == dest )
+	{
+		// Check to see if the destination structure is private.
+		obj_id structure = getTopMostContainer( dest );
+		int got = getGameObjectType(structure);
+
+		if (isGameObjectTypeOf(got, GOT_ship))
+		{
+			sendSystemMessage(transferer, SID_VENDOR_NOT_IN_SHIP);
+			return SCRIPT_OVERRIDE;
+		}
+
+		if (isGameObjectTypeOf(got, GOT_building))
+		{
+			if (!permissionsIsPublic(structure))
+			{
+				sendSystemMessage(transferer, SID_VENDOR_PUBLIC_ONLY);
+				return SCRIPT_OVERRIDE;
+			}
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	string msg = " Vendors may only reside in the owner's inventory or in structures the owner has vendor permissions in.";
+	string title = "WARNING";
+	sui.msgbox( transferer, transferer, msg, sui.OK_ONLY, title, "noHandler" );
+
+ 	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// msgGiveMaintenanceToVendor
+//------------------------------------------------
+
+messageHandler msgGiveMaintenanceToVendor()
+{
+	// Get amount to pay.
+	obj_id player = sui.getPlayerId(params);
+	string amount_str = sui.getInputBoxText( params );
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+	{
+		utils.setScriptVar( player, "vendor.creatingVendor", 0 );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Have to be the owner.
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( player != ownerId )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Tell them if the amount is too low.
+	int amt = utils.stringToInt(amount_str);
+	if (amt > getTotalMoney(player))
+	{
+		sendSystemMessage(player, SID_INSUFFICIENT_FUNDS);
+		return SCRIPT_CONTINUE;
+	}
+	if ( amt < 1 || amt > 100000 )
+	{
+		// Amount must be between 1 and 100000.
+		sendSystemMessage( player, SID_VENDOR_MAINT_INVALID );
+		return SCRIPT_CONTINUE;
+	}
+
+	vendor_lib.payMaintenance( player, self, amt );
+	/*
+	if (  )
+	{
+		// Success.
+		int pool_remaining = vendor_lib.getMaintenancePool( self ) + amt;
+		prose_package pp = prose.getPackage( SID_VENDOR_MAINT_ACCEPTED, pool_remaining );
+		sendSystemMessageProse( player, pp );
+	}
+	else
+	{
+		// Fail.
+		sendSystemMessage( player, SID_VENDOR_MAINT_DENIED );
+	}
+	*/
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// msgTakeMaintenanceFromVendor
+//------------------------------------------------
+
+messageHandler msgTakeMaintenanceFromVendor()
+{
+	// Get amount to pay.
+	obj_id player = sui.getPlayerId(params);
+	string amount_str = sui.getInputBoxText( params );
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+	{
+		utils.setScriptVar( player, "vendor.creatingVendor", 0 );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Have to be the owner.
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( player != ownerId )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Tell them if the amount is too low.
+	int amt = utils.stringToInt(amount_str);
+	if ( amt < 1 || amt > 100000 )
+	{
+		// Amount must be between 1 and 100000.
+		sendSystemMessage( player, SID_VENDOR_MAINT_INVALID );
+		return SCRIPT_CONTINUE;
+	}
+
+	CustomerServiceLog( "vendor", "Vendor maintenance WITHDRAW (attempt).  Player: " + player + " Vendor " + self + " Amount: " + amt );
+	vendor_lib.withdrawMaintenance( player, self, amt );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// updateSalesTax
+//------------------------------------------------
+
+void updateSalesTax( obj_id self )
+{
+	obj_id structure = getTopMostContainer( self );
+	int city_id = getCityAtLocation( getLocation( structure ), 0 );
+	if ( cityExists( city_id ) )
+	{
+		obj_id inv = utils.getInventoryContainer( self );
+		if ( inv == null )
+			inv = self;
+		obj_id city_hall = cityGetCityHall( city_id );
+		int sales_tax = cityGetSalesTax( city_id );
+		CustomerServiceLog( "vendor", "Vendor sales tax update.  Vendor " + self + " Amount: " + sales_tax );
+		setSalesTax( sales_tax * 100, city_hall, inv );
+	}
+	else
+	{
+		obj_id inv = utils.getInventoryContainer( self );
+		if ( inv == null )
+			inv = self;
+		setSalesTax( 0, null, inv );
+	}
+}
+
+//------------------------------------------------
+// OnMaintenanceLoop
+//------------------------------------------------
+
+messageHandler OnMaintenanceLoop()
+{
+	// Update our sales tax.
+	updateSalesTax( self );
+
+	// Grab our timestamp.
+	int time_stamp = params.getInt( "timestamp" );
+	int current_time = getGameTime();
+
+	// Figure out how many loops should have gone off by now.
+	obj_id owner = getObjIdObjVar( self, "vendor_owner" );
+	int loops = (current_time - time_stamp) / vendor_lib.MAINTENANCE_HEARTBEAT;
+	CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", loops: " + loops + ", determined by formula (current_time("+current_time+") - time_stamp("+time_stamp+")) / vendor_lib.MAINTENANCE_HEARTBEAT("+vendor_lib.MAINTENANCE_HEARTBEAT+")");
+	int cost = 15 * loops;
+	CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", cost: " + cost + ". Determined by formula: cost = 15 * loops("+loops+")" );
+	int hiringSkillMod = getSkillStatisticModifier(owner, "hiring");
+	CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", hiring skill mod on owner("+owner+"): " + hiringSkillMod);
+	if ( hiringSkillMod >= 100 )
+	{
+		cost *= 0.6;
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", hiring skill mod was greater than or equal to 100 so cost is only 60% (cost * .6). cost is now " + cost);
+	}
+	else if ( utils.isProfession(owner, utils.TRADER) )
+	{
+		cost *= 0.8;
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", hiring skill mod was NOT great than or equal to 100, but they are a trader, so cost is only 80% (cost * .8). cost is now " + cost);
+	}
+	if ( hasObjVar( self, "vendor.map_registered" ) )
+	{
+		if ( utils.isProfession(owner, utils.TRADER) )
+		{
+			cost *= 1.2;
+			CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", vendor is registered. Because the owner is a trader this increases the maintenance fees by 20% (cost * 1.2). cost is now " + cost);
+		}
+		else
+		{
+			cost *= 1.4;
+			CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", vendor is registered. Because the owner is NOT a trader this increases the maintenance fees by 40% (cost * 1.4). cost is now " + cost);
+		}
+	}
+
+	int expertiseMaintenanceDecrease = (int)getSkillStatisticModifier(owner, "expertise_vendor_cost_decrease");
+
+	if(expertiseMaintenanceDecrease > 0)
+	{
+		cost -= expertiseMaintenanceDecrease;
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", expertiseMaintenanceDecrease is "+ expertiseMaintenanceDecrease +" so cost is decreased by this amount. cost is now " + cost);
+	}
+
+	if ( cost < 0 )
+		cost = 0;
+
+	int pool_remaining;
+	if ( cost > 0 )
+	{
+		pool_remaining = vendor_lib.decrementMaintenancePool( self, cost );
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", calling vendor_lib.decrementMaintenancePool with a cost of " + cost);
+	}
+	else
+	{
+		dictionary new_params = new dictionary();
+		setObjVar( self, vendor_lib.VAR_LAST_MAINTANENCE, current_time );
+		new_params.put( "timestamp", current_time );
+		messageTo( self, "OnMaintenanceLoop", new_params, vendor_lib.MAINTENANCE_HEARTBEAT, false );
+		LOG( "LOG_CHANNEL", "New Maintenance Loop set. -----" + vendor_lib.MAINTENANCE_HEARTBEAT );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( pool_remaining == -1 )
+	{
+		LOG("LOG_CHANNEL", "permanent_structure::OnMaintenanceLoop -- unable to decrement maintenance pool.");
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", after calling vendor_lib.decrementMaintenancePool. pool_remaining was returned as -1, this means we were unable to decrement pool.");
+	}
+	else if ( pool_remaining == -2 )
+	{
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", after calling vendor_lib.decrementMaintenancePool. pool_remaining was returned as -2, this means insufficient funds, we are now going to decay the vendor.");
+		LOG("LOG_CHANNEL", "permanent_structure::OnMaintenanceLoop -- insufficient funds. Applying damage instead.");
+
+		// Do the decay rate in damage for each loop.
+		int damage = vendor_lib.getDecayRate(self) * loops;
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", damage was "+ damage +". Calculated by vendor_lib.getDecayRate(self){"+vendor_lib.getDecayRate(self)+"} * loops("+loops+")");
+		int condition = vendor_lib.damageVendor(self, damage);
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", condition is now "+condition+".");
+
+		LOG("LOG_CHANNEL", "damage ->" + damage + " condition ->" + condition);
+
+		// If vendor is at zero condition, we need a penalty?
+		if ( condition == 0 )
+		{
+			dictionary new_params = new dictionary();
+			setObjVar( self, vendor_lib.VAR_LAST_MAINTANENCE, current_time );
+			new_params.put( "timestamp", current_time );
+			messageTo( self, "OnMaintenanceLoop", new_params, vendor_lib.MAINTENANCE_HEARTBEAT, false );
+			LOG( "LOG_CHANNEL", "New Maintenance Loop set. -----" + vendor_lib.MAINTENANCE_HEARTBEAT );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	//else
+	//{
+	//	// Grant some merchant xp for having a fully paid employee!
+	//	if ( isIdValid( owner ) )
+	//		xp.grant( owner, "merchant", 100*loops, false );
+	//}
+	//xp.grant( owner, "merchant", 50*loops, false );
+
+	// Check to see if repairs need to be made.
+	int condition = vendor_lib.getVendorCondition(self);
+	int max_condition = vendor_lib.getMaxCondition(self);
+	if ( condition != max_condition )
+	{
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", was damaged. We are now calculating the fees for fixing him.");
+		int damage  = max_condition - condition;
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", amount damaged: "+damage+".");
+		int maint_pool = vendor_lib.getBankBalance(self);
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", maint_pool: "+maint_pool+".");
+
+		// Repairs cost the maintenance rate per point.
+		int per_point_cost = vendor_lib.getMaintenanceRate(self);
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", per_point_cost: "+per_point_cost+".");
+		int repair_cost = damage * per_point_cost;
+		CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", repair_cost: "+repair_cost+". determined by damage("+damage+") * per_point_cost("+per_point_cost+")");
+		int amt_paid = 0;
+		int amt_repaired = 0;
+
+		if ( maint_pool >= per_point_cost )
+		{
+			CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", maint_pool("+maint_pool+") is greater than or equal to per_point_cost("+per_point_cost+")");
+			LOG("LOG_CHANNEL", "permanent_structure::OnMaintenanceLoop -- initiating repairs.");
+			LOG("LOG_CHANNEL", "cond ->" + condition);
+			if ( maint_pool < repair_cost )
+			{
+				CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", maint_pool("+maint_pool+") is less than repair_cost("+repair_cost+"). Using the whole pool method for cost");
+				// Use the whole pool for repairs.
+				amt_repaired = maint_pool / per_point_cost;
+				amt_paid = amt_repaired * per_point_cost;
+				CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", amt_paid: "+ amt_paid+". determined by amt_repaired("+amt_repaired+") * per_point_cost("+per_point_cost+")");
+			}
+			else
+			{
+				CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", maint_pool("+maint_pool+") is greater than repair_cost("+repair_cost+"). repairing entire amount");
+				// Repair all of the damage.
+				amt_paid = damage * per_point_cost;
+				amt_repaired = damage;
+				CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", amt_paid: "+ amt_paid+". determined by damage("+damage+") * per_point_cost("+per_point_cost+")");
+			}
+
+			CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", calling decrementMaintenancePool with amt_paid: "+ amt_paid+".");
+			int result = vendor_lib.decrementMaintenancePool( self, amt_paid );
+			if ( result > -1 )
+			{
+				LOG("LOG_CHANNEL", "amt_paid ->" + amt_paid + " amt_repaired ->" + amt_repaired);
+				condition = vendor_lib.repairVendor( self, amt_repaired );
+				LOG("LOG_CHANNEL", "2cond ->" + condition);
+				CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", was repaired by amt_repaired("+amt_repaired+"). this makes the condition " + condition);
+
+			}
+			else
+			{
+				CustomerServiceLog( "vendor", "Vendor calculating maintenance fees.  Vendor " + self + ", payment failed, unable to repair the costs.");
+				LOG("LOG_CHANNEL", "permanent_structure::OnMaintenanceLoop -- unable to pay repair costs.");
+			}
+		}
+	}
+
+	dictionary new_params = new dictionary();
+	setObjVar( self, vendor_lib.VAR_LAST_MAINTANENCE, current_time );
+	new_params.put( "timestamp", current_time );
+	messageTo( self, "OnMaintenanceLoop", new_params, vendor_lib.MAINTENANCE_HEARTBEAT, false );
+	LOG( "LOG_CHANNEL", "New Maintenance Loop set. -----" + vendor_lib.MAINTENANCE_HEARTBEAT );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// displayStatus
+//------------------------------------------------
+
+void displayStatus( obj_id self, obj_id player, int itemCount, int search_enabled )
+{
+	// Have to be the owner.
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( (player != ownerId) && !isGod( player ) )
+		return;
+
+	// Get structure condition
+	string dsrc[] = new string[6];
+	int condition = vendor_lib.getVendorCondition( self );
+	int max_condition = vendor_lib.getMaxCondition( self );
+	int perc_condition = condition * 100 / max_condition;
+
+	if ( perc_condition == 100 )
+		dsrc[0] = "Condition: " + perc_condition + "%";
+	else
+	{
+		int maint_rate = 15;
+		int total_cost = (max_condition - condition) * maint_rate;
+		dsrc[0] = "Condition: " + perc_condition + "%" + "   (" + total_cost + " credits to repair.)";
+	}
+
+	// Get maintenance pool and rate.
+	updateVendorValue( self );
+	int cost = 15;
+	int hiringSkillMod = getSkillStatisticModifier(ownerId, "hiring");
+	if ( hiringSkillMod >= 100 )
+		cost *= 0.6;
+	else if ( utils.isProfession(ownerId, utils.TRADER) )
+		cost *= 0.8;
+	if ( hasObjVar( self, "vendor.map_registered" ) )
+	{
+		if ( utils.isProfession(ownerId, utils.TRADER) )
+			cost *= 1.2;
+		else
+			cost *= 1.4;
+	}
+
+	int expertiseMaintenanceDecrease = (int)getSkillStatisticModifier(player, "expertise_vendor_cost_decrease");
+
+	if(expertiseMaintenanceDecrease > 0)
+	{
+		cost -= expertiseMaintenanceDecrease;
+	}
+
+	if ( cost < 0 )
+		cost = 0;
+	dsrc[1] = "Maintenance Rate: " + cost;
+	int m_pool = vendor_lib.getMaintenancePool( self );
+	int time_remaining = -1;
+	if ( cost > 0 )
+		time_remaining = m_pool * vendor_lib.MAINTENANCE_HEARTBEAT / cost;
+	if ( m_pool > 0 && cost > 0 )
+	{
+		// Express time in days/hours/minutes/seconds
+		int[] convert_time = player_structure.convertSecondsTime(time_remaining);
+		string time_str = player_structure.assembleTimeRemaining(convert_time);
+		dsrc[2] = "Maintenance Pool: " + m_pool + "   (" + time_str + ")";
+	}
+	else
+		dsrc[2] = "Maintenance Pool: " + m_pool;
+
+	dsrc[3] = "Number of Items For Sale: " + itemCount;
+	if (search_enabled == 1)
+		dsrc[4] = "Vendor Search: Enabled";
+	else if (search_enabled == 0)
+		dsrc[4] = "Vendor Search: Disabled";
+	else
+		dsrc[4] = "Vendor Search: Unknown";
+
+	obj_id inv = utils.getInventoryContainer( self );
+	if ( inv == null )
+		inv = self;
+	if ( hasObjVar( self, "vendor_deactivated" ) )
+		dsrc[5] = "\\#FF0000Vendor Deactivated - Please Pay Maintenance!\\#";
+	else
+		dsrc[5] = "\\#00FF00Vendor Operating Normally\\#";
+
+	// Draw the list box with all of the info.
+	sui.listbox( player, "Vendor Status", "Vendor Status", sui.OK_CANCEL, dsrc );
+
+	return;
+}
+
+//------------------------------------------------
+// OnAboutToReceiveItem
+//------------------------------------------------
+
+trigger OnAboutToReceiveItem( obj_id srcContainer, obj_id transferer, obj_id item )
+{
+	if ( transferer == null || transferer == obj_id.NULL_ID || isGod(transferer) )
+		return SCRIPT_CONTINUE;
+ 	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// OnAboutToLoseItem
+//------------------------------------------------
+
+trigger OnAboutToLoseItem( obj_id destContainer, obj_id transferer, obj_id item )
+{
+	if ( transferer == null || transferer == obj_id.NULL_ID || isGod(transferer) )
+		return SCRIPT_CONTINUE;
+ 	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// OnAboutToOpenContainer
+//------------------------------------------------
+
+trigger OnAboutToOpenContainer( obj_id whoIsOpeningMe )
+{
+	if ( isGod( whoIsOpeningMe ) )
+		return SCRIPT_CONTINUE;
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// updateAccessFee
+//------------------------------------------------
+
+void updateAccessFee( obj_id self )
+{
+	// Update our entry fee indicator.
+	obj_id structure = player_structure.getStructure( self );
+	if ( turnstile.hasTurnstile( structure ) )
+		setEntranceCharge( self, turnstile.getFee( structure ) );
+	else
+		setEntranceCharge( self, 0 );
+}

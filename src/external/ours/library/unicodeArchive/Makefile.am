@@ -1,0 +1,6 @@
+AUTOMAKE_OPTIONS=foreign
+SUBDIRS=src .
+lib_LTLIBRARIES=libunicodeArchive.la
+libunicodeArchive_la_LIBADD=src/shared/libunicodeArchiveshared.la
+libunicodeArchive_la_SOURCES=src/shared/FirstUnicode.h
+libunicodeArchive_la_LDFLAGS=-avoid-version

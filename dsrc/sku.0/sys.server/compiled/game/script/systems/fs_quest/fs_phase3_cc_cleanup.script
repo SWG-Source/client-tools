@@ -1,0 +1,176 @@
+/**
+ * Copyright (C)2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        systems.fs_quest.fs_phase3_cc_cleanup.script
+ * Description:  Ends the phase 3 community crafting quest at the beginning of phase 4 for the force-sensitive village.
+ * @author       $Author: Steve Jakab $
+ * @version      $Revision: #1 $
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.community_crafting;
+include library.fs_dyn_village;
+include library.fs_quests;
+include library.quests;
+include library.utils;
+
+
+/***** CONSTANTS *******************************************************/
+
+const string OBJVAR_LAST_PHASE            = community_crafting.OBJVAR_COMMUNITY_CRAFTING_BASE + ".lastPhase";
+
+const string SCRIPTVAR_CRAFTING_TRACKER   = fs_dyn_village.OBJVAR_MY_MASTER_OBJECT;
+const string SCRIPTVAR_VILLAGE_PHASE      = "community_crafting.village_phase";
+
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnAttach ()
+{
+	startPhase3Cleanup(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize ()
+{
+	startPhase3Cleanup(self);
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** FUNCTIONS *******************************************************/
+
+messageHandler handleGetVillageManager()
+{
+	boolean rslt = false;
+	string key = "";
+	if (params.containsKey("key"))
+	{
+		key = params.getString("key");
+	}
+
+	if (params.containsKey("success"))
+	{
+		rslt = params.getBoolean("success");
+	}
+
+	if (rslt && key != null && key.length() > 0)
+	{
+		obj_id id = null;
+		if (params.containsKey(key))
+		{
+			id = params.getObjId(key);
+			if (isIdValid(id))
+			{
+				utils.setScriptVar(self, SCRIPTVAR_CRAFTING_TRACKER, id);
+				debugServerConsoleMsg(self, "Object key '" + key + "' was registered as " + id);
+				cleanupCraftingQuest(self);
+				return SCRIPT_CONTINUE;
+			}
+		}
+	}
+	debugServerConsoleMsg(self, "Failed to find obj id '" + key + "' cluster wide data. Id might not have been registered yet.");
+	messageTo(self, "handleRetryGetVillageManager", null, 30, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRetryGetVillageManager()
+{
+	requestVillageMaster(self);
+	return SCRIPT_CONTINUE;
+}
+
+void startPhase3Cleanup (obj_id self)
+{
+	// see if we know about the master village object, and ask for it if we don't
+	if (!utils.hasScriptVar(self, SCRIPTVAR_CRAFTING_TRACKER))
+	{
+		debugServerConsoleMsg(self, "startPhase3Cleanup asking for village manager");
+		requestVillageMaster(self);
+	}
+	else
+	{
+		debugServerConsoleMsg(self, "startPhase3Cleanup found village manager");
+		cleanupCraftingQuest(self);
+	}
+}
+
+void requestVillageMaster(obj_id self)
+{
+	if (!utils.hasScriptVar(self, SCRIPTVAR_CRAFTING_TRACKER))
+	{
+		debugServerConsoleMsg(self, "requestVillageMaster asking for village manager");
+		messageTo(self, "handleRetryGetVillageManager", null, 60.0f, false);
+		fs_dyn_village.getRegisteredObjIdFromClusterWideData(
+			fs_dyn_village.CLUSTER_OBJID_KEY_MASTER, "handleGetVillageManager", self);
+	}
+}
+
+boolean isCommunityCraftingEnabled (obj_id npc)
+{
+	if (utils.getIntScriptVar(npc, SCRIPTVAR_VILLAGE_PHASE) != 4)
+		return false;
+
+	obj_id craftingTracker = utils.getObjIdScriptVar(npc, SCRIPTVAR_CRAFTING_TRACKER);
+	if (isIdValid(craftingTracker))
+	{
+		return community_crafting.isSessionActive(craftingTracker);
+	}
+	return false;
+}
+
+void cleanupCraftingQuest(obj_id self)
+{
+	if (!utils.hasScriptVar(self, SCRIPTVAR_CRAFTING_TRACKER))
+	{
+		debugServerConsoleMsg(null, "WARNING: cleanupCraftingQuest no crafting tracker");
+		return;
+	}
+	obj_id villageId = utils.getObjIdScriptVar(self, SCRIPTVAR_CRAFTING_TRACKER);
+	if (!isIdValid(villageId))
+	{
+		debugServerConsoleMsg(null, "WARNING: cleanupCraftingQuest no village");
+		return;
+	}
+	if (!villageId.isInitialized())
+	{
+		messageTo(self, "handleReinitialize", null, 5, false);
+		return;
+	}
+
+	int currentPhase = getIntObjVar(villageId, fs_dyn_village.OBJVAR_CURRENT_PHASE);
+	int lastPhase = getIntObjVar(villageId, OBJVAR_LAST_PHASE);
+	utils.setScriptVar(self, SCRIPTVAR_VILLAGE_PHASE, currentPhase);
+	debugServerConsoleMsg(null, "Quharek current phase = " + currentPhase + ", last phase = " + lastPhase);
+	if ( currentPhase == 4 && (currentPhase != lastPhase || isCommunityCraftingEnabled(self)) )
+	{
+		// we are just starting phase 4, clean up phase 3 crafting
+
+		// grab the attributes for the village shields and store them
+		// on the master village object
+		community_crafting.finalizeItem(villageId, true);
+		Vector shieldNames = new Vector();
+		Vector shieldValues = new Vector();
+		if (community_crafting.getProjectAttributes(villageId, shieldNames, shieldValues))
+		{
+			for (int i = 0; i < shieldNames.size(); ++i)
+			{
+				setObjVar(villageId, fs_dyn_village.OBJVAR_VILLAGE_SHIELDS + "." +
+					((string_id)(shieldNames.get(i))).getAsciiId(),
+					((Float)(shieldValues.get(i))).floatValue());
+			}
+		}
+		else
+		{
+			CustomerServiceLog("fs_village", "WARNING: unable to get final "+
+				"attributes for the phase 3 community crafting quest");
+		}
+
+		// cleanup the previous quest
+		community_crafting.cleanup(villageId);
+		setObjVar(villageId, OBJVAR_LAST_PHASE, currentPhase);
+	}
+}
+

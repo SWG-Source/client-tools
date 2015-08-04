@@ -1,0 +1,343 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        mediator.script
+ * Description:  mediator object script: POI = rabidbeast
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+//------------------------
+//  Includes
+//------------------------
+
+include library.npc;
+include library.ai_lib;
+include library.poi;
+include library.scenario;
+include library.group;
+include library.badge;
+include library.utils;
+include library.chat;
+include ai.ai_combat;
+
+//-----------------------
+//  Inherits
+//-----------------------
+
+inherits poi.base.scenario_actor;
+
+//------------------------
+//  Constants
+//------------------------
+
+const string SCRIPT_CONVERSE				= "npc.converse.npc_converse_menu";
+const string LOG_NAME						= "poiRabidBeast Mediator";
+
+// Conversation states.
+const int	CONV_GREET						= 0;	// Player hasn't spoken to anyone and needs a greeting.
+const int	CONV_SAVED						= 1;	// Player killed the beast.
+const int	CONV_HELP						= 2;	// Player is helping the NPC.
+const int	CONV_NOHELP						= 3;	// Player is not helping the NPC.
+
+const string agitateEmotes[] = { "scratch", "yawn", "fidget", "cough" };
+
+//------------------------
+//  Methods
+//------------------------
+
+//------------------------
+//  OnAttach
+//------------------------
+
+trigger OnAttach()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	// Set an agitation timer.
+	messageTo( self, "doAgitation", null, rand(40,60), true );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------
+//  OnInitialize
+//------------------------
+
+trigger OnInitialize()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------
+//  OnStartNpcConversation
+//------------------------
+
+trigger OnStartNpcConversation( obj_id speaker )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	// Get base object reference.
+	obj_id poiMaster = poi.getBaseObject(self);
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	//------------------------------------------------
+	// Mediator chatter.
+	//------------------------------------------------
+
+	// Msg/response vars.
+	string_id msg = new string_id( convo, "a_greet" );
+	resizeable string_id[] responses = new string_id[0];
+
+	// Is the scenario finished?
+	if ( scenario.isComplete() )
+	{
+		int idx = rand( 1, 4 );
+		poi.quickSay( self, "m_chatter_" + idx );
+
+		// Cut off the convo (no responses).
+		npcEndConversation( speaker );
+
+		return SCRIPT_CONTINUE;
+	}
+	// Just yelp if we are attacked.
+	else if ( hasObjVar( self, "attacked" ) )
+	{
+		int idx = rand( 1, 2 );
+		poi.quickSay( self, "m_help_" + idx );
+
+		// Cut off the convo (no responses).
+		npcEndConversation( speaker );
+
+		return SCRIPT_CONTINUE;
+	}
+	else if ( hasObjVar( self, "rescued" ) )
+	{
+		// Does this person have credit?
+		if ( scenario.hasKillCredit( poiMaster, "antagonist", speaker ) )
+		{
+			// This guy saved us!
+			removeObjVar( self, "rescued" );
+
+			msg = new string_id( convo, "m_thanks" );
+			npcStartConversation( speaker, self, convo, msg, responses );
+
+			// Finished.
+			scenario.complete();
+
+			// Reward his group.
+			if ( group.isGroupObject(speaker) )
+			{
+				obj_id[] members = getGroupMemberIds( speaker );
+				if ( (members == null) || (members.length == 0) )
+				{
+				}
+				else
+				{
+					for ( int n = 0; n < members.length; n++ )
+					{
+						if ( scenario.hasKillCredit( poiMaster, "antagonist", members[n] ) )
+						{
+							if ( !badge.hasBadge( members[n], "poi_rabidbeast" ) )
+								badge.grantBadge( members[n], "poi_rabidbeast" );
+							else
+								badge.notifyHasBadge( members[n], "poi_rabidbeast" );
+						}
+					}
+				}
+			}
+			else
+			{
+				if ( !badge.hasBadge( speaker, "poi_rabidbeast" ) )
+					badge.grantBadge( speaker, "poi_rabidbeast" );
+				else
+					badge.notifyHasBadge( speaker, "poi_rabidbeast" );
+			}
+
+			return SCRIPT_CONTINUE;
+		}
+		else if ( scenario.hasKillCredit( poiMaster, "antagonists", self ) )
+		{
+			// We did all the work!
+			removeObjVar( self, "rescued" );
+
+			msg = new string_id( convo, "m_ididallthework" );
+			npcStartConversation( speaker, self, convo, msg, responses );
+
+			// Finished.
+			scenario.complete( poi.getBaseObject(self) );
+
+			return SCRIPT_CONTINUE;
+		}
+
+		int idx = rand( 1, 4 );
+		poi.quickSay( self, "m_chatter_" + idx );
+
+		// Cut off the convo (no responses).
+		npcEndConversation( speaker );
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Say our usual stuff.
+	msg = new string_id( convo, "m_greet" );
+	responses = utils.addElement( responses, new string_id(convo, "r_m_greet") );
+	npcStartConversation( speaker, self, convo, msg, responses );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnNpcConversationResponse
+//------------------------------------------------
+
+trigger OnNpcConversationResponse( string convoName, obj_id speaker, string_id response )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get reference to conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Validate our conversation.
+	if ( !convoName.equals(convo) )
+		return SCRIPT_CONTINUE;
+
+	// Respond to the player's comment.
+	string aId = response.getAsciiId();
+	resizeable string_id[] responses = new string_id[0];
+
+	// Zero out responses.
+	npcSetConversationResponses( speaker, responses );
+
+	// Why? What's wrong?
+	if ( ( aId.equals("r_m_greet") ) )
+	{
+		// Tell our story.
+		npcSpeak( speaker, new string_id( convo, "m_studying" ) );
+
+		// Set player responses.
+		responses = utils.addElement( responses, new string_id(convo, "r_m_studying") );
+		npcSetConversationResponses( speaker, responses );
+	}
+
+	// Why panicking?
+	else if ( ( aId.equals("r_m_studying") ) )
+	{
+		// Tell our story.
+		npcSpeak( speaker, new string_id( convo, "m_thebeast" ) );
+
+		// Set player responses.
+		responses = utils.addElement( responses, new string_id(convo, "r_m_thebeast_help") );
+		responses = utils.addElement( responses, new string_id(convo, "r_m_thebeast_nohelp") );
+		npcSetConversationResponses( speaker, responses );
+	}
+
+	// I'll help.
+	else if ( ( aId.equals("r_m_thebeast_help") ) )
+	{
+		// Here it comes.
+		npcEndConversation( speaker );
+		poi.quickSay( self, "m_hereitcomes_help" );
+
+		// We've been spoken to already.
+		setObjVar( self, "attacked", true );
+
+		// Start the attack.
+		dictionary params = new dictionary();
+		params.put( "target", speaker );
+		messageTo( poiMaster, "startAttack", params, 2, true );
+	}
+
+	// I won't help.
+	else if ( ( aId.equals("r_m_thebeast_nohelp") ) )
+	{
+		// Here it comes.
+		npcEndConversation( speaker );
+		poi.quickSay( self, "m_hereitcomes_nohelp" );
+
+		// We've been spoken to already.
+		setObjVar( self, "attacked", true );
+
+		// Start the attack.
+		dictionary params = new dictionary();
+		params.put( "target", speaker );
+		messageTo( poiMaster, "startAttack", params, 2, true );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// doAgitation
+//------------------------------------------------
+
+messageHandler doAgitation()
+{
+	// Chance we might emote.
+	if ( rand(1,5) == 3 )
+	{
+		int whichsocial = rand( 0, 3 );
+		queueCommand( self, ##"social", null, agitateEmotes[whichsocial], COMMAND_PRIORITY_DEFAULT );
+	}
+
+	// Set new agitation timer.
+	messageTo( self, "doAgitation", null, rand(40,60), true );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// allDead
+//
+// Called from master when all the antagonists are dead.
+//------------------------------------------------
+
+messageHandler allDead()
+{
+	// Celebrate!
+	stop( self );
+	queueCommand( self, ##"social", null, "peptalk", COMMAND_PRIORITY_DEFAULT );
+	messageTo( self, "resumeDefaultCalmBehavior", null, 3, false );
+
+	poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_EXUBERANT, "m_wesurvived" );
+
+	// Set state.
+	removeObjVar( self, "attacked" );
+	setObjVar( self, "rescued", true );
+
+	return SCRIPT_CONTINUE;
+}

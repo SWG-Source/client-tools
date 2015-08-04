@@ -1,0 +1,199 @@
+include ai.ai_combat;
+include library.ai_lib;
+
+inherits theme_park.poi.base;
+
+const int LAIR_RANGE = 200;
+const int LAIR_LIMIT = 2;
+
+
+/* -----------------7/9/2002 2:47PM------------------
+ * recreate the trigger volume:
+ * --------------------------------------------------*/
+trigger OnInitialize()
+{
+ 	createTriggerVolume( "lairBreached", 30.0f, true );
+	return SCRIPT_CONTINUE;
+}
+
+/* -----------------7/9/2002 3:20PM------------------
+ * Spawn all the creatures, setup the trigger volume
+ * and flag the lair as Persistent:
+ * --------------------------------------------------*/
+trigger OnAttach()
+{
+	spawnAllCreatures(self);
+	createTriggerVolume( "lairBreached", 30.0f, true);
+	setObjVar( self, "intPersistent", true );
+	messageTo( self, "expireLair", null, 604800, true );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDisabled (obj_id killer)
+{
+	location death = getLocation (self);
+	playClientEffectLoc(killer, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+	spawnBossMob( self, killer );
+	destroyObject (self);
+	return SCRIPT_CONTINUE;
+}
+
+
+/* -----------------7/9/2002 3:18PM------------------
+ * Spawn all the critters and make them persistent:
+ * --------------------------------------------------*/
+void spawnAllCreatures(obj_id lair)
+{
+  setObjVar (lair, POI_BASE_OBJECT, lair);
+  //string creatureToSpawn;
+
+  //creatureToSpawn = getCreatureName(lair);
+  int numToSpawn = getIntObjVar (lair, "numToSpawn");
+
+  //int delay = getIntObjVar (lair, "timeToRespawn");
+
+  //obj_id creature = poiCreateObject ( creatureToSpawn, rand( -5, +6 ), rand( -5, +6 ) );
+  //poiSetDestroyMessage( creature, "respawnCreature", delay );
+  //setObjVar( creature, "intPersistent", true );
+
+  int intI = 0;
+  while(intI<=numToSpawn)
+  {
+  	messageTo ( lair, "respawnCreature", null, 1+intI, true );
+  	intI = intI+1;
+  }
+
+  return;
+}
+
+/* -----------------7/9/2002 2:47PM------------------
+ * Receive this message when a creature is destroyed:
+ * Send a call-back with a delay dependig on the difficulty
+ * of the POI
+ * --------------------------------------------------*/
+
+/* -----------------7/9/2002 2:48PM------------------
+ * Respawn a dead creature:
+ * --------------------------------------------------*/
+messageHandler respawnCreature()
+{
+	if ( hasObjVar( self, "lair.deadLair" ))
+		return SCRIPT_CONTINUE;
+
+	int numToSpawn = getIntObjVar (self, "numToSpawn");
+	int maxToSpawn = numToSpawn * 10;
+	int numSpawned = getIntObjVar( self, "lair.numSpawned" );
+	if ( numSpawned >= maxToSpawn )
+	{
+		setObjVar( self, "lair.deadLair", true );
+		return SCRIPT_CONTINUE;
+	}
+
+
+	string respawningCreature = getCreatureName(self);
+	string type = getStringObjVar ( self, "lairType" );
+	if (type == "npc")
+	{
+		//debugSpeakMsg (self, "I'm an npc lair, see if I work.");
+		location here = getLocation (self);
+		obj_id spawnNpc = poiCreateNpc ( respawningCreature, rand ( -5, +6), rand ( -5, +6 ) );
+		int delay = getIntObjVar (self, "timeToRespawn");
+		poiSetDestroyMessage( 	spawnNpc, "respawnCreature", delay );
+		setObjVar( spawnNpc, "intPersistent", true );
+		setObjVar( spawnNpc, "lairSpawn", true );
+		return SCRIPT_CONTINUE;
+	}
+
+	//debugSpeakMsg (self, "I'm not an NPC lair so things should work normally.");
+	obj_id creature = poiCreateObject ( respawningCreature, rand( -5, +6 ), rand( -5, +6 ) );
+	int delay = getIntObjVar (self, "timeToRespawn");
+	poiSetDestroyMessage( creature, "respawnCreature", delay );
+	setObjVar( creature, "intPersistent", true );
+	setObjVar( creature, "lairSpawn", true );
+	if ( rand(1,20)==1 && ai_lib.isMonster( creature ) )
+	{
+		attachScript( creature, "ai.pet_advance" );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+	int curHP = getHitpoints (self);
+	int smolder = 2000;
+	int fire = 1000;
+
+	if (!hasObjVar (self, "playingEffect"))
+	{
+		if (curHP < smolder)
+		{
+			if (curHP < fire)
+			{
+				location death = getLocation (self);
+				playClientEffectLoc(attacker, "clienteffect/lair_hvy_damage_fire.cef" , death, 0);
+				setObjVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+				spawnWave( self, 1 );
+			}
+			else
+			{
+				location death = getLocation (self);
+				playClientEffectLoc(attacker, "clienteffect/lair_med_damage_smoke.cef" , death, 0);
+				setObjVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+				spawnWave( self, 2 );
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/*This message handler is just the delay for the client effects.  It makes
+sure that multiple effects aren't playing at the same time and eating up
+the frame rate. */
+messageHandler effectManager ()
+{
+	removeObjVar (self, "playingEffect");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnRemovingFromWorld()
+{
+	if ( hasObjVar( self, "lair.deadLair" ))
+		destroyObject( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler expireLair()
+{
+	destroyObject( self );
+	return SCRIPT_CONTINUE;
+}
+
+void spawnWave( obj_id lair, int wave )
+{
+	int lastSpawn = getIntObjVar( lair, "lair.waveSpawned" );
+
+	if ( lastSpawn >= wave )
+		return;
+
+	setObjVar( lair, "lair.waveSpawned", wave );
+	spawnAllCreatures( lair );
+}
+
+void spawnBossMob( obj_id lair, obj_id killer )
+{
+	if ( !hasObjVar( lair, "lair.bossTemplate" ) )
+		return;
+
+	playMusic (killer, "sound/music_event_danger.snd");
+	string bossTemplate = getStringObjVar( lair, "lair.bossTemplate" ) + ".iff";
+	obj_id spawnNpc = poiCreateObject( bossTemplate, 0, 0 );
+	setObjVar( spawnNpc, "intPersistent", true );
+	setObjVar( spawnNpc, "lairSpawn", true );
+	startCombat( spawnNpc, killer );
+}
+

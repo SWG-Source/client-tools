@@ -1,0 +1,173 @@
+/**********************************************************************
+ * Copyright (c)2005 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        systems\tcg\tcg_stuffed_wampa.script
+ * Description:  SWG TCG ITEM - SERIES 4 - Squeezing the Stuffed Wampa's Hand will make a sound.
+ * @author       $Author: James Michener$
+ * @version      $Revision: 1.0.0 $
+ **********************************************************************/
+include library.money;
+include library.prose;
+include library.sui;
+include library.utils;
+
+const string_id COLLECT_MONEY			= new string_id("spam", "collect_money");
+const string_id COIN_BOX_TITLE			= new string_id("spam", "coin_box_title");
+const string_id COIN_BOX_PROMPT			= new string_id("spam", "coin_box_prompt");
+const string SOUND_01 				= new string("sound/tcg_tauntaun_carnival_ride.snd");
+const string ANIMATION_ACTIVE_RIDE		= "trick_2";
+const string LOCKOUT				= "tauntaun_lockout"; 
+const string MONEY_TOTAL			= "money_total"; 
+const int RIDE_COST				= 25;
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+			
+	if(player == getOwner(self))
+	{
+		//add a menu to retrieve money
+		int menu = mi.addRootMenu(menu_info_types.SERVER_MENU1, COLLECT_MONEY);	
+	}
+	if(!utils.isNestedWithinAPlayer(self))
+	{
+		menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+
+		mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("spam", "insert_credits"));
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+	
+	if(item == menu_info_types.ITEM_USE)
+	{
+		//The owner should not have to pay in order to start the ride.
+		if(player == getOwner(self))
+		{
+			activateTauntaunRide(player, self);
+		}
+		else
+		{
+			if(utils.hasScriptVar(self, LOCKOUT))
+			{
+				sendSystemMessage(player, new string_id("spam", "tauntaun_ride_already_active"));
+				return SCRIPT_CONTINUE;
+			}
+			if(money.hasFunds(player, money.MT_TOTAL, RIDE_COST))
+			{
+				//Confirm Box: take RIDE_COST Credits from the player
+				sui.msgbox(self, player, "@spam:tauntaun_ride_pay", sui.OK_CANCEL, "@spam:tauntaun_ride_pay_title", sui.MSG_QUESTION, "handlePayForTauntaunRide" );
+			}
+			else
+			{
+				//you are too poor to ride
+				sendSystemMessage(player, new string_id("spam", "not_enough_credits"));	
+			}
+		}
+	}
+	if(item == menu_info_types.SERVER_MENU1)
+	{
+		if(hasObjVar(self, MONEY_TOTAL))
+		{
+			int money = getIntObjVar(self, MONEY_TOTAL);
+			int pid = sui.transfer(self, player,  getString(COIN_BOX_PROMPT), getString(COIN_BOX_TITLE), "Available", money, "Amount", 0, "transferTauntaunEarnings");
+			sui.showSUIPage(pid);	
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//use this if we need to stop the animation.
+messageHandler TauntaunAnimationLockout()
+{
+	if(utils.hasScriptVar(self, LOCKOUT))
+	{
+		utils.removeScriptVar(self, LOCKOUT);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//allows the owner to retrieve funds from the Tauntaun Ride.
+messageHandler transferTauntaunEarnings()
+{
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int collectionAmount = sui.getTransferInputTo(params);
+
+	//only the owner can collect the money.
+	if(player != getOwner(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (btn == sui.BP_CANCEL)
+	{
+		return SCRIPT_CONTINUE;
+	}								
+	else
+	{				
+		if(collectionAmount > 0)
+		{
+			int objvarAmount = getIntObjVar(self, MONEY_TOTAL); 
+			if(collectionAmount > objvarAmount)
+			{
+				//someone is hacking
+				sendSystemMessage(player, new string_id("spam", "credit_problem"));
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				//message the player 
+				prose_package pp = new prose_package();
+				pp = prose.setStringId(pp, new string_id("spam", "success_tauntaun_collect"));
+				pp = prose.setDI(pp, collectionAmount);
+				sendSystemMessageProse(player, pp);
+				//remove money from the Tauntaun Ride and Transfer to Player
+				money.pay(self, player, collectionAmount, "", null, false);
+				objvarAmount -= collectionAmount;
+				setObjVar(self, MONEY_TOTAL, objvarAmount);
+			}			
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+void activateTauntaunRide(obj_id player, obj_id ride)
+{
+	//play animation
+	doAnimationAction(ride, ANIMATION_ACTIVE_RIDE);
+	//play sound - loops 4 times for ~1 minute of fun!
+	playClientEffectObj(player, "clienteffect/tcg_tauntaun_carnival_ride.cef", ride, "");
+	//play2dNonLoopingMusic(player, SOUND_01);
+	utils.setScriptVar(ride, LOCKOUT, 1);
+	messageTo(ride, "TauntaunAnimationLockout", null, 60.0f, false);
+}
+
+messageHandler handlePayForTauntaunRide()
+{
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	if(btn == sui.BP_CANCEL)
+		return SCRIPT_CONTINUE;
+
+	money.pay(player, self, RIDE_COST, "", null, true);
+	if(hasObjVar(self, MONEY_TOTAL))
+	{
+		int moneyTotal = getIntObjVar(self, MONEY_TOTAL);
+		moneyTotal += RIDE_COST;
+		setObjVar(self, MONEY_TOTAL, moneyTotal);
+	}
+	else
+	{
+		setObjVar(self, MONEY_TOTAL, RIDE_COST);
+	}
+	
+	activateTauntaunRide(player, self);
+	
+	return SCRIPT_CONTINUE;
+}

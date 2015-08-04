@@ -1,0 +1,248 @@
+include library.ai_lib;
+include library.create;
+include library.utils;
+
+const string SPAWNED_LIST			= "spawned";
+const string SPAWNED				= SPAWNED_LIST + ".spawnNumber_";
+const string VAR_BASE_MASTER		= "gcw.static_base.master";
+const string VAR_BASE_STATUS		= "gcw.static_base.base_status";
+
+const int NO_CONTROL				= 0;
+const int IMPERIAL_CONTROL			= 1;
+const int REBEL_CONTROL				= 2;
+
+trigger OnAttach()
+{
+	//if(!canSpawnByConfigSetting())
+	//	return SCRIPT_CONTINUE;
+
+	messageTo(self, "handleBeginSpawnRequest", null, 20f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	//if(!canSpawnByConfigSetting())
+	//	return SCRIPT_CONTINUE;
+
+	messageTo ( self, "handleBeginSpawnRequest", null, 20f, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBeginSpawnRequest()
+{
+	location loc = getLocation(self);
+	string datatable = "datatables/gcw/static_base/base_spawn_" + loc.area + ".iff";
+
+	int numObjects = dataTableGetNumRows(datatable);
+	int x = utils.getIntScriptVar(self, "spawnCounter");
+
+	while (x < numObjects)
+	{
+		if(hasObjVar(self, SPAWNED + x))
+		{
+			obj_id check = getObjIdObjVar(self, SPAWNED + x);
+			if(!check.isLoaded())
+				spawn(x, datatable, self);
+		}
+		else
+			spawn(x, datatable, self);
+
+		x++;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBaseCleanupRequest()
+{
+	obj_var_list ovl = getObjVarList(self, SPAWNED_LIST);
+	obj_id[] objects = null;
+
+	if((ovl != null) && (ovl.getNumItems() > 0))
+	{
+		int numItems = ovl.getNumItems();
+		objects = new obj_id[numItems];
+
+		for(int i = 0; i < numItems; i++)
+		{
+			objects[i] = getObjIdObjVar(self, SPAWNED+i);
+			removeObjVar(self, SPAWNED+i);
+		}
+	}
+
+	if (objects == null || objects.length == 0)
+		return SCRIPT_CONTINUE;
+
+	for(int i = 0; i < objects.length; i++)
+	{
+		if(!isIdValid(objects[i]))
+			continue;
+
+		if(objects[i].isLoaded())
+			destroyObject(objects[i]);
+		else
+			messageTo(objects[i], "handleDestroyRequest", null, 0.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleNpcDeath()
+{
+	int spawn_num = params.getInt("spawnNumber");
+	int obj_status = params.getInt("status");
+	obj_id spawn_obj = params.getObjId("spawnObj");
+
+	if(!hasObjVar(self, VAR_BASE_STATUS))
+		return SCRIPT_CONTINUE;
+
+	int status = getIntObjVar(self, VAR_BASE_STATUS);
+
+	if(status == 0 || status != obj_status)
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, SPAWNED + spawn_num) && (spawn_obj == getObjIdObjVar(self, SPAWNED + spawn_num)))
+	{
+		location loc = getLocation(self);
+		string datatable = "datatables/gcw/static_base/base_spawn_" + loc.area + ".iff";
+
+		spawn(spawn_num, datatable, self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void spawn(int x, string datatable, obj_id self)
+{
+	if(!hasObjVar(self, VAR_BASE_STATUS))
+		return;
+
+	int status = getIntObjVar(self, VAR_BASE_STATUS);
+
+	if(status == NO_CONTROL)
+		return;
+
+	string spawnCol = "rebel";
+	if(status == IMPERIAL_CONTROL)
+		spawnCol = "imperial";
+
+	string spawn = dataTableGetString(datatable, x, spawnCol);
+
+	float xCoord = dataTableGetFloat(datatable, x, "loc_x");
+	float yCoord = dataTableGetFloat(datatable, x, "loc_y");
+	float zCoord = dataTableGetFloat(datatable, x, "loc_z");
+
+	location myself = getLocation(self);
+
+	string planet = myself.area;
+	string spawnRoom = dataTableGetString(datatable, x, "room");
+	obj_id room = null;
+
+	if(!spawnRoom.equals("world"))
+		room = getCellId(self, spawnRoom);
+
+	if(!isIdValid(room) && !spawnRoom.equals("world"))
+	{
+		removeObjVar(self, SPAWNED + x);
+		return;
+	}
+
+	location spawnPoint = new location(xCoord, yCoord, zCoord, planet, room);
+
+	obj_id spawnedObject = create.object(spawn, spawnPoint);
+	if(!isIdValid(spawnedObject))
+	{
+		removeObjVar(self, SPAWNED + x);
+		return;
+	}
+
+	setObjVar(self, SPAWNED + x, spawnedObject);
+	setObjVar(spawnedObject, "spawn_number", x);
+	setObjVar(spawnedObject, "master", self);
+	setObjVar(spawnedObject, "status", status);
+
+	attachScript(spawnedObject, "systems.gcw.static_base.spawned_object");
+
+	if(dataTableHasColumn(datatable, "script"))
+	{
+		string scriptList = dataTableGetString(datatable, x, "script");
+
+		if(scriptList != null && !scriptList.equals(""))
+		{
+			string[] scriptArray = split(scriptList, ',');
+
+			for(int i = 0; i < scriptArray.length; i++)
+				attachScript(spawnedObject, scriptArray[i]);
+		}
+	}
+
+	if(dataTableHasColumn (datatable, "yaw"))
+	{
+		float spawnYaw = dataTableGetFloat(datatable, x, "yaw");
+		if (spawnYaw != 0)
+			setYaw(spawnedObject, spawnYaw);
+	}
+
+	if(dataTableHasColumn(datatable, "objvar"))
+	{
+		string objVarList = dataTableGetString(datatable, x, "objvar");
+		if(objVarList != null && objVarList != "")
+		{
+			setObjectObjVars(spawnedObject, objVarList);
+		}
+	}
+
+	if(isMob(spawnedObject))
+	{
+		int behavior = ai_lib.BEHAVIOR_SENTINEL;
+
+		if(dataTableHasColumn(datatable, "behavior"))
+			behavior = dataTableGetInt(datatable, x, "behavior");
+
+		ai_lib.setDefaultCalmBehavior(spawnedObject, behavior);
+	}
+
+}
+
+void setObjectObjVars(obj_id obj, string objVarList)
+{
+	if(objVarList == null || objVarList == "")
+		return;
+
+	string[] pairs = split(objVarList, ',');
+	for( int i = 0; i < pairs.length; i++)
+	{
+		string[] objVarToSet = split(pairs[i], '=' );
+		string objVarValue = objVarToSet[1];
+
+		string[] objVarNameAndType = split(objVarToSet[0], ':');
+		string objVarType = objVarNameAndType[0];
+		string objVarName = objVarNameAndType[1];
+
+		if(objVarType == "string")
+			setObjVar(obj, objVarName, objVarValue);
+		else if(objVarType == "int")
+			setObjVar(obj, objVarName, utils.stringToInt(objVarValue));
+		else if(objVarType == "float")
+			setObjVar(obj, objVarName, utils.stringToFloat(objVarValue));
+		else if(objVarType == "boolean" || objVarType == "bool")
+			setObjVar(obj, objVarName, utils.stringToInt(objVarValue));
+		else
+			setObjVar(obj, objVarName, objVarValue);
+	}
+}
+
+boolean canSpawnByConfigSetting()
+{
+	string disableSpawners = getConfigSetting("GameServer", "disableGenericSpawner");
+	if (disableSpawners == null)
+		return true;
+
+	if (disableSpawners.equals("true") || disableSpawners.equals("1"))
+		return false;
+
+	return true;
+}

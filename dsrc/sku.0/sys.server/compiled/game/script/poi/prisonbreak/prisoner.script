@@ -1,0 +1,404 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        prisoner.script
+ * Description:  script for prisoners: POI = prisonbreak
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.factions;
+include library.poi;
+include library.combat;
+include library.chat;
+include library.ai_lib;
+include library.scenario;
+include library.group;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string LOG_NAME						= "poiPrisonBreak Prisoner";
+
+const string frustrationEmotes[] = { "scratch", "yawn", "tantrum", "cough", "curse", "steam" };
+const int BOMB_ARM_TIME 					= 20;
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	LOG( LOG_NAME, "Prisoner script attached" );
+
+	// We ignore combat while in prison.
+	//ai_lib.setIgnoreCombat( self, true );
+
+	// We cannot be attacked while in prison.
+	string oldFaction = factions.getFaction( self );
+	setObjVar( self, "oldFaction", oldFaction );
+	factions.setFaction( self, "Unattackable" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnLoiterWaiting
+//
+// Prisoners emote every once in a while.
+//------------------------------------------------
+
+trigger OnLoiterWaiting( modifiable_float time )
+{
+	stop( self );
+
+	messageTo( self, "emoteFrustration", null, 4, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// emoteFrustration
+//------------------------------------------------
+
+messageHandler emoteFrustration()
+{
+	// There is a chance we'll do a social.
+	int dosocial = rand( 1, 4 );
+	if ( dosocial == 1 )
+	{
+		// Perform a social.
+		int whichsocial = rand( 0, 5 );
+		queueCommand( self, ##"social", null, frustrationEmotes[whichsocial], COMMAND_PRIORITY_DEFAULT );
+	}
+
+	messageTo( self, "resumeDefaultCalmBehavior", null, 3, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnMovePathComplete
+//
+// The first time, if we are the bomber, we crouch and set the bomb.
+// The second time, if we are the bomber, we report the status of the bomb.
+//------------------------------------------------
+
+trigger OnMovePathComplete()
+{
+	LOG( LOG_NAME, "Prisoner reached path destination" );
+
+	// Handle this if we are going to set a bomb.
+	if ( hasObjVar( self, "bomber" ) )
+	{
+		//LOG( "poiPrisonBreak Prisoner", "Arrived at bomb location." );
+
+		removeObjVar( self, "bomber" );
+
+		// Stop us from moving.
+		stop( self );
+
+		// Send a message to crouch.
+		messageTo( self, "squatDown", null, 2, false );
+	}
+	else if ( hasObjVar( self, "returning" ) )
+	{
+		//LOG( "poiPrisonBreak Prisoner", "Arrived at return location." );
+
+		removeObjVar( self, "returning" );
+
+		// Stop us from moving.
+		stop( self );
+
+		// Turn toward our leader.
+		obj_id a = poi.findObject( "antagonist_0" );
+		if ( (a == null) || (a == obj_id.NULL_ID) )
+			return SCRIPT_CONTINUE;
+		faceTo( self, a );
+
+		// Report our victory.
+		messageTo( self, "reportBombSet1", null, 2, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// squatDown
+//
+// We've arrived at the bomb point, so we sit down and set the bomb.
+//------------------------------------------------
+
+messageHandler squatDown()
+{
+	//LOG( "poiPrisonBreak Prisoner", "Squatting down." );
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Kneel down.
+	queueCommand( self, ##"kneel", self, "No params.", COMMAND_PRIORITY_FRONT );
+	setPosture( self, POSTURE_CROUCHED );
+	removeObjVar( self, "ai.combat.moveMode" );
+
+	// Say what we are doing.
+	poi.quickSay( self, chat.CHAT_BOAST, chat.MOOD_DEVIOUS, "a_minion_setbomb" );
+
+	// Enable bombed wall messages.
+	messageTo( poiMaster, "enableBombedWall", null, 0, false );
+
+	// Set timer for getting back up.
+	messageTo( self, "bombSet", null, BOMB_ARM_TIME, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// bombSet
+//
+// The bomb is set, so we stand up.
+//------------------------------------------------
+
+messageHandler bombSet()
+{
+	//LOG( "poiPrisonBreak Prisoner", "Bomb is set." );
+
+	// Ignore this message if we dropped the bomb.
+	if ( hasObjVar( self, "dropbomb" ) )
+		return SCRIPT_CONTINUE;
+
+	// Stand up.
+	queueCommand( self, ##"stand", self, "No params.", COMMAND_PRIORITY_FRONT );
+	setPosture( self, POSTURE_UPRIGHT );
+
+	// Remove bomb drop flag.
+	removeObjVar( self, "POIbomber" );
+
+	// Set timer for moving to safe location.
+	messageTo( self, "moveBack", null, 2, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// moveBack
+//
+// We stood up, so go report the bomb status.
+//------------------------------------------------
+
+messageHandler moveBack()
+{
+	//LOG( "poiPrisonBreak Prisoner", "Moving back." );
+
+	// Find the leader.
+	obj_id a = poi.findObject( "antagonist_0" );
+	if ( (a == null) || (a == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Mark us as returning.
+	setObjVar( self, "returning", true );
+
+	// Find our move location.
+	location bossloc = new location( getLocation( a ) );
+	bossloc.x -= 1;
+
+	// Move to him.
+	ai_lib.aiPathTo( self, bossloc );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// reportBombSet1
+//
+// Salute the commanding officer.
+//------------------------------------------------
+
+messageHandler reportBombSet1()
+{
+	//LOG( "poiPrisonBreak Prisoner", "Reporting bomb set 1." );
+
+	// Salute.
+	queueCommand( self, ##"social", null, "salute", COMMAND_PRIORITY_DEFAULT );
+
+	// Phase 2.
+	messageTo( self, "reportBombSet2", null, 1, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// reportBombSet2
+//
+// Report the status of the bomb and set a timer to blow the wall.
+//------------------------------------------------
+
+messageHandler reportBombSet2()
+{
+	//LOG( "poiPrisonBreak Prisoner", "Reporting bomb set 2." );
+
+	// Report bomb status.
+	poi.quickSay( self, "a_minion_reportbomb" );
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Restore faction.
+	messageTo( self, "restoreFaction", null, 4, false );
+
+	// Blow the bomb in a few seconds.
+	messageTo( poiMaster, "blowBomb", null, 5, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// wallDamaged
+//
+// When the wall is damaged, we might drop the bomb.
+//------------------------------------------------
+
+messageHandler wallDamaged()
+{
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Check to see if we are the bomber.
+	if ( !hasObjVar( self, "POIbomber" ) )
+		return SCRIPT_CONTINUE;
+	if ( hasObjVar( self, "barkAttacked" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "barkAttacked", true );
+
+	// We are being attacked while setting the bomb.
+	poi.quickSay( self, chat.CHAT_SWEAR, chat.MOOD_NERVOUS, "a_minion_attackedwhilebombing" );
+
+	// Have the leader comment also.
+	obj_id found = poi.findObject( "antagonist_0" );
+	if ( (found == null) || (found == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+	poi.quickSay( found, chat.CHAT_SHOUT, chat.MOOD_ENCOURAGING, "a_keepitup" );
+
+	// Drop the bomb in a little bit (we won't stand up since dropbomb is set).
+	setObjVar( self, "dropbomb", true );
+	messageTo( self, "dropBomb", params, 5, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// restoreFaction
+//------------------------------------------------
+
+messageHandler restoreFaction()
+{
+	//LOG( "poiPrisonBreak Prisoner", "Restoring faction." );
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Make all of the antagonists normal faction.
+	obj_id antagonists[] = scenario.getTeamMembers( poiMaster, "antagonist" );
+	for ( int i=0; i<antagonists.length; i++ )
+	{
+		// Find this guy.
+		obj_id found = antagonists[i];
+		if ( (found == null) || (found == obj_id.NULL_ID) )
+			continue;
+
+		//LOG( "poiPrisonBreak Prisoner", "Restoring faction on " + getName(found) );
+
+		// Reset the faction on the others.
+		string oldFaction = getStringObjVar( found, "oldFaction" );
+		factions.setFaction( found, oldFaction );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// dropBomb
+//------------------------------------------------
+
+messageHandler dropBomb()
+{
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Check to see if we are the bomber.
+	if ( !hasObjVar( self, "POIbomber" ) )
+		return SCRIPT_CONTINUE;
+
+	// Get attacker reference.
+	obj_id attacker = params.getObjId( "attacker" );
+	if ( (attacker == null) || (attacker == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Grant credit to the saboteurs.
+	if ( group.isGroupObject(attacker) )
+	{
+		obj_id[] members = getGroupMemberIds( attacker );
+		if ( (members == null) || (members.length == 0) )
+		{
+
+		}
+		else
+		{
+			scenario.grantKillCredit( poiMaster, "antagonist", members );
+		}
+	}
+	else
+	{
+		obj_id[] attackers = new obj_id[1];
+		attackers[0] = attacker;
+		scenario.grantKillCredit( poiMaster, "antagonist", attackers );
+	}
+
+	// We were hit while setting the bomb!  Tragedy!
+	poi.quickSay( self, chat.CHAT_SCREAM, chat.MOOD_PANICKED, "a_minion_dropbomb" );
+
+	// Go prone.
+	queueCommand( self, ##"prone", self, "No params.", COMMAND_PRIORITY_FRONT );
+	setPosture( self, POSTURE_PRONE );
+
+	// Prepare to die.
+	messageTo( poiMaster, "blowDroppedBomb", null, 5, false );
+
+	// Make all of the other antagonists normal faction.
+	obj_id antagonists[] = scenario.getTeamMembers( poiMaster, "antagonist" );
+	for ( int i=0; i<antagonists.length; i++ )
+	{
+		// Find this guy.
+		obj_id found = antagonists[i];
+		if ( (found == null) || (found == obj_id.NULL_ID) )
+			continue;
+
+		// Reset the faction on the others.
+		string oldFaction = getStringObjVar( found, "oldFaction" );
+		factions.setFaction( found, oldFaction );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+

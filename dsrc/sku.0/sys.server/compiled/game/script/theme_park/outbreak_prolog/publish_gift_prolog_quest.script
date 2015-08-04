@@ -1,0 +1,199 @@
+
+/*************************************************************/
+
+include library.factions;
+include library.groundquests;
+include library.sui;
+include library.utils;
+
+/************************************************************/
+
+const string_id	CALL_JABBA  			= new string_id ("quest/ground/util/quest_giver_object", "call_jabba");
+const string_id OFFER_QUEST_MSG			= new string_id	("quest/ground/util/quest_giver_object", "offer_quest_comlink");
+const string_id SUI_TITLE			= new string_id ("quest/ground/util/quest_giver_object", "sui_title");
+const string_id BUTTON_DECLINE  		= new string_id ("quest/ground/util/quest_giver_object", "button_decline");
+const string_id BUTTON_ACCEPT			= new string_id ("quest/ground/util/quest_giver_object", "button_accept");
+const string_id DECLINED_QUEST			= new string_id ("quest/ground/util/quest_giver_object", "declined_quest");
+const string_id NOT_WHILE_INCAPPED		= new string_id ("quest/ground/util/quest_giver_object", "not_while_incapped");
+const string_id SID_NOT_WHILE_IN_COMBAT		= new string_id("base_player", "not_while_in_combat");
+
+const string PID_NAME 				= "prologPid";
+
+const string QUEST_NAME_NEG_FACTION		= "quest_01_comlink_call_to_adventure_neg_faction";
+const string QUEST_NAME_NEUT_FACTION		= "quest_01_comlink_call_to_adventure_neut_faction";
+const string QUEST_NAME_POS_FACTION		= "quest_01_comlink_call_to_adventure_pos_faction";
+
+
+/*************************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	if(isFreeTrialAccount(player))
+		return SCRIPT_CONTINUE;
+	if(isInTutorialArea(player))
+		return SCRIPT_CONTINUE;
+	int menuOption = mi.addRootMenu (menu_info_types.ITEM_USE, CALL_JABBA);
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	if(isFreeTrialAccount(player))
+		return SCRIPT_CONTINUE;
+	if(isInTutorialArea(player))
+		return SCRIPT_CONTINUE;
+		
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+
+	// checks for combat
+	if(getState(player, STATE_COMBAT) > 0)
+	{
+		sendSystemMessage(player, SID_NOT_WHILE_IN_COMBAT);
+		return SCRIPT_CONTINUE;
+	}
+	else if(isDead(player) || isIncapacitated(player))
+	{
+		sendSystemMessage(player, NOT_WHILE_INCAPPED);
+		return SCRIPT_CONTINUE;
+	}
+
+	if((groundquests.isQuestActiveOrComplete(player, QUEST_NAME_POS_FACTION))
+	|| (groundquests.isQuestActiveOrComplete(player, QUEST_NAME_NEG_FACTION))
+	|| (groundquests.isQuestActiveOrComplete(player, QUEST_NAME_NEUT_FACTION)))
+	{
+		CustomerServiceLog("outbreak_themepark", "publish_gift_prolog_quest: Deleting Object: "+self+" because player has Deathtrooper Quest active or complete already.");	
+		destroySelf(self);	
+		return SCRIPT_CONTINUE;
+	}
+
+	// Construct Quest Offer sui
+	if ( utils.hasScriptVar(player, "questGiver.openSui") )
+	{
+		int oldSui = utils.getIntScriptVar(player, "questGiver.openSui");
+		utils.removeScriptVar(player, "questGiver.openSui");
+		if ( oldSui > -1 )
+		{
+			forceCloseSUIPage(oldSui);
+		}
+	}
+
+	string_id sid_offerText = SUI_TITLE;
+
+	// To use non-default text for offering the quest, use the "quest_offer_text" column
+	// in the datatable of an entry in quest/ground/util/quest_giver_object.stf
+
+	string title = utils.packStringId(sid_offerText);
+	string testMsg = utils.packStringId(OFFER_QUEST_MSG);
+	string ok_button = utils.packStringId(BUTTON_ACCEPT);
+	string cancel_button = utils.packStringId(BUTTON_DECLINE);
+
+	// Create the dialog page.
+	int pid = sui.createSUIPage( sui.SUI_MSGBOX, self, player, "handleQuestOfferResponse");
+
+	// Add elements text.
+	setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title);
+	setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, testMsg);
+
+	// Add buttons.
+	sui.msgboxButtonSetup(pid, sui.YES_NO);
+	setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, ok_button);
+	setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, cancel_button);
+
+	// Show dialog.
+	utils.setScriptVar(player, "questGiver.openSui", pid);
+	sui.showSUIPage( pid );
+	// End sui construction
+
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+messageHandler handleQuestOfferResponse()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+	if((groundquests.isQuestActiveOrComplete(player, QUEST_NAME_POS_FACTION))
+	|| (groundquests.isQuestActiveOrComplete(player, QUEST_NAME_NEG_FACTION))
+	|| (groundquests.isQuestActiveOrComplete(player, QUEST_NAME_NEUT_FACTION)))
+	{
+		CustomerServiceLog("outbreak_themepark", "publish_gift_prolog_quest: Deleting Object: "+self+" because player has Deathtrooper Quest active or complete already.");		
+		destroySelf(self);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	int bp = sui.getIntButtonPressed(params);	
+	switch ( bp )
+	{
+		case sui.BP_OK:	// "Accept"
+			grantTheCorrectQuest(self, player);
+			break;
+
+		case sui.BP_CANCEL: // "Decline"
+			sendSystemMessage(player, DECLINED_QUEST);
+			break;
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+// Check to see if the quest object should be destroyed or not.
+void destroySelf(obj_id self)
+{
+	detachScript(self,"item.special.nodestroy");
+	destroyObject(self);
+}
+
+boolean grantTheCorrectQuest(obj_id comlink, obj_id player)
+{
+	if(!isIdValid(comlink) || !exists(comlink))
+		return false;
+
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	//if the player has the jabba palace badge, just give the player the 
+	//positive faction quest
+	
+	if(hasCompletedCollectionSlot(player, "bdg_thm_park_jabba_badge"))
+	{
+		groundquests.grantQuest(player, QUEST_NAME_POS_FACTION);	
+	}
+	//if the player has NOT completed the jabba theme park we revert to faction scores
+	else
+	{
+		float factionAmount = factions.getFactionStanding(player, "jabba");
+		if(factionAmount < -2000)
+		{
+			groundquests.grantQuest(player, QUEST_NAME_NEG_FACTION);
+		}
+		else if(factionAmount >= 100)
+		{
+			groundquests.grantQuest(player, QUEST_NAME_POS_FACTION);	
+		}
+		else
+		{
+			groundquests.grantQuest(player, QUEST_NAME_NEUT_FACTION);	
+		}
+	}
+	destroySelf(comlink);
+	return true;
+}

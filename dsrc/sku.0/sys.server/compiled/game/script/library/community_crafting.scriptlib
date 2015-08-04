@@ -1,0 +1,2331 @@
+/**
+ * Copyright (C)2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        community_crafting.scriptlib
+ * Description:  Utility functions for the community crafting system
+ * @author       $Author: Steve Jakab $
+ * @version      $Revision: #1 $
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.objvar_mangle;
+include library.utils;
+include java.util.Arrays;
+include java.util.HashSet;
+include java.util.List;
+
+
+/***** CONSTANTS *******************************************************/
+
+//!!! Do not increase this number unless the code is changed to support larger objvar arrays !!!
+const int MAX_PLAYERS_PER_PROJECT = 200;
+
+// note that this number needs to be on a (0->1)^2 scale
+const float NONCRAFTED_COMPONENT_QUALITY = 0.25f * 0.25f;
+
+const string OBJVAR_COMMUNITY_CRAFTING_BASE                   = "community_crafting";
+const string OBJVAR_COMMUNITY_CRAFTING_TRACKER                = OBJVAR_COMMUNITY_CRAFTING_BASE + ".craftingTracker";
+const string OBJVAR_COMMUNITY_CRAFTING_SCHEMATIC              = OBJVAR_COMMUNITY_CRAFTING_BASE + ".schematic";
+const string OBJVAR_COMMUNITY_CRAFTING_SCHEMATICS             = OBJVAR_COMMUNITY_CRAFTING_BASE + ".schematics";
+const string OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY         = OBJVAR_COMMUNITY_CRAFTING_BASE + ".trackQuantity";
+const string OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY          = OBJVAR_COMMUNITY_CRAFTING_BASE + ".trackQuality";
+const string OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS            = OBJVAR_COMMUNITY_CRAFTING_BASE + ".trackSlots";
+const string OBJVAR_COMMUNITY_CRAFTING_PRIZES                 = OBJVAR_COMMUNITY_CRAFTING_BASE + ".prizeTable";
+const string OBJVAR_COMMUNITY_CRAFTING_MIN_QUALITY            = OBJVAR_COMMUNITY_CRAFTING_BASE + ".minQuality";
+const string OBJVAR_COMMUNITY_CRAFTING_MIN_QUANTITY           = OBJVAR_COMMUNITY_CRAFTING_BASE + ".minQuantity";
+const string OBJVAR_COMMUNITY_CRAFTING_PLAYER_SCHEMATICS      = OBJVAR_COMMUNITY_CRAFTING_BASE + ".schematics";
+const string OBJVAR_COMMUNITY_CRAFTING_PLAYERS                = OBJVAR_COMMUNITY_CRAFTING_BASE + ".players";
+const string OBJVAR_COMMUNITY_CRAFTING_ATTRIBUTES             = OBJVAR_COMMUNITY_CRAFTING_BASE + ".attribs";
+const string OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUALITY_TOTAL   = OBJVAR_COMMUNITY_CRAFTING_BASE + ".playerQuality";
+const string OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL  = OBJVAR_COMMUNITY_CRAFTING_BASE + ".playerQuantity";
+const string OBJVAR_COMMUNITY_CRAFTING_SLOTS                  = OBJVAR_COMMUNITY_CRAFTING_BASE + ".slots";
+const string OBJVAR_COMMUNITY_CRAFTING_ACTIVE                 = OBJVAR_COMMUNITY_CRAFTING_BASE + ".active";
+const string OBJVAR_COMMUNITY_CRAFTING_QUALITY_SUFFIX         = ".quality";
+const string OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX        = ".quantity";
+
+const string MSG_HANDLER_END_CRAFTING     = "handleCleanupCommunityCrafting";
+const string MSG_HANDLER_MIN_QUANTITY_MET = "handleCommunityCraftingMinimumQuantityMet";
+const string MSG_HANDLER_PRIZE_WON        = "handleCommunityCraftingReward";
+
+const string PRIZE_DATATABLE_COLUMN_REWARD = "reward";
+const string PRIZE_DATATABLE_COLUMN_SLOT   = "slot";
+const string PRIZE_DATATABLE_COLUMN_TYPE   = "type";
+const string PRIZE_DATATABLE_COLUMN_SCRIPT = "script";
+
+const int QUANTITY_PRIZE_DATATABLE_ENUM = 0;
+const int QUALITY_PRIZE_DATATABLE_ENUM  = 1;
+
+const string REWARD_PRIZE        = "cc_prize";
+const string REWARD_PRIZE_SLOT   = "cc_slot";
+const string REWARD_PRIZE_TYPE   = "cc_type";
+const string REWARD_PRIZE_SCRIPT = "cc_script";
+
+const string_id SID_RESULTS_FROM    = new string_id("crafting", "community_crafting_from");
+const string_id SID_RESULTS_SUBJECT = new string_id("crafting", "community_crafting_results");
+const string_id SID_RESULTS_BODY_1  = new string_id("crafting", "community_crafting_body_1");
+const string_id SID_RESULTS_BODY_2  = new string_id("crafting", "community_crafting_body_2");
+const string_id SID_NOT_CRAFTER     = new string_id("crafting", "cc_not_item_crafter");
+const string_id SID_NOT_MIN_QUALITY = new string_id("crafting", "cc_not_min_quality");
+const string_id SID_NOT_VALID_ITEM  = new string_id("crafting", "cc_not_valid_item");
+
+const string SCRIPT_COMMUNITY_CRAFTING_PLAYER = "player.player_community_crafting";
+
+
+/***** FUNCTIONS *******************************************************/
+
+/**
+ * Tells the system what item is being crafted. Must be called before any of the other community crafting functions.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param schematic        the schematic that the players will be crafting from
+ * @param trackQuantity    flag to keep track of how many ingredients the players are supplying
+ * @param trackQuality     flag to keep track of the quality of the ingredients the players are supplying
+ * @param trackSlots       flag to keep track of quantity/quality on a slot-by-slot basis, as well as for the final item
+ * @param prizeTable       datatable that we will grant prizes from (may be null)
+ *
+ * @return true on success, false on error
+ */
+boolean setMasterSchematic(obj_id craftingTracker, string schematic, boolean trackQuantity,
+	boolean trackQuality, boolean trackSlots, string prizeTable)
+{
+	// check the parameters
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMasterSchematic called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if ( !craftingTracker.isAuthoritative() )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMasterSchematic called "+
+			"with non-authoritative craftingTracker " + craftingTracker);
+		return false;
+	}
+	if (isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMasterSchematic called "+
+			"with craftingTracker " + craftingTracker + " that is already running a project");
+		return false;
+	}
+	if ( schematic == null || schematic.length() == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMasterSchematic called "+
+			"with invalid schematic");
+		return false;
+	}
+
+	// get the list of schematics from the base schematic
+	Vector schematics = new Vector();
+	if ( !getSchematics(schematics, schematic) )
+		return false;
+
+	// convert the schematic strings to crcs
+	int[] schematicsCrcs = new int[schematics.size()];
+	for ( int i = 0; i < schematicsCrcs.length; ++i )
+	{
+		schematicsCrcs[i] = getStringCrc((String)schematics.get(i));
+	}
+
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATICS, schematicsCrcs);
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY, trackQuantity);
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY, trackQuality);
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS, trackSlots);
+
+	if ( prizeTable == null )
+		prizeTable = "";
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PRIZES, prizeTable);
+
+	// set up an initial dummy player 0
+	int[] quantities = new int[1];
+	float[] qualities = new float[1];
+	obj_id[] players = new obj_id[1];
+	players[0] = obj_id.NULL_ID;
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS, players);
+	if ( trackQuality )
+	{
+		setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUALITY_TOTAL, qualities);
+	}
+	if ( trackQuantity || trackQuality )
+	{
+		setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL, quantities);
+	}
+
+	// set up our objvars for the main schematic
+	draft_schematic schematicData = getSchematicData(schematic);
+	draft_schematic.attribute[] attribs = schematicData.getAttribs();
+	if ( attribs == null || attribs.length == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematics could "+
+			"not find attribute info for schematic " + schematic);
+		return false;
+	}
+	float[] attribValues = new float[attribs.length];
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ATTRIBUTES, attribValues);
+	if ( trackSlots )
+	{
+		string slotdot = OBJVAR_COMMUNITY_CRAFTING_SLOTS + ".";
+		draft_schematic.slot[] slots = schematicData.getSlots();
+		for ( int i = 0; i < slots.length; ++i )
+		{
+			string slotdotindex = slotdot + i;
+			if ( trackQuantity || trackQuality )
+			{
+				setObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX, quantities);
+			}
+			if ( trackQuality )
+			{
+				setObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUALITY_SUFFIX, qualities);
+			}
+		}
+	}
+
+	// attach the scripts from the draft schematic to the crafting tracker
+	// we need to do this to get the resource->attrib map
+	string[] scripts = schematicData.getScripts();
+	if ( scripts != null )
+	{
+		for ( int i = 0; i < scripts.length; ++i )
+		{
+			if ( scripts[i] != null )
+				attachScript(craftingTracker, scripts[i]);
+		}
+	}
+
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ACTIVE, true);
+
+	return true;
+}
+
+/**
+ * Sets the minimum standards for the project. If this is not called, the minimum quantity is 1.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param minQuantity      the minimum amount of ingredients that a player must supply to be flagged as contributing to the project
+ *
+ * @return true on success, false on error
+ */
+boolean setMinimumQuantity(obj_id craftingTracker, int minQuantity)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMinimumQuantity called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMinimumQuantity called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( minQuantity < 1 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMinimumQuantity called "+
+			"with min quantity " + minQuantity + ", setting to 1");
+		minQuantity = 1;
+	}
+
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUANTITY, minQuantity);
+	utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUANTITY, minQuantity);
+	return true;
+}
+
+/**
+ * Sets the minimum standards for the project. If this is not called, the minimum quality is 0.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param minQuality       the minimum quality (0->1) for an ingredient to be accepted
+ *
+ * @return true on success, false on error
+ */
+boolean setMinimumQuality(obj_id craftingTracker, float minQuality)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMinimumQuality called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMinimumQuality called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( minQuality < 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: setMinimumQuality called "+
+			"with min quality " + minQuality + ", setting to 0");
+		minQuality = 0;
+	}
+
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUALITY, minQuality);
+	utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUALITY, minQuality);
+	return true;
+}
+
+/**
+ * Gives all the schematics needed for the current project to a player. When the project is done
+ * (via calling cleanup() below), any schematic granted by this function will be removed from the player.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player to give the schematic to
+ *
+ * @return true on success, false on error
+ */
+boolean grantSchematicToPlayer(obj_id craftingTracker, obj_id player)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer called "+
+			"with invalid player");
+		return false;
+	}
+	if (!isSessionActive(craftingTracker))
+	{
+		return false;
+	}
+
+	int[] schematics = getIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATICS);
+	if ( schematics == null || schematics.length == 0)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer craftingTracker " +
+			craftingTracker + "has bad a schematics objvar");
+		return false;
+	}
+
+	for ( int i = 0; i < schematics.length; ++i )
+	{
+		if (!grantSchematicToPlayer(craftingTracker, player, schematics[i]))
+			return false;
+	}
+
+	return true;
+}
+
+/**
+ * Gives a schematic to a player, for the purposes of community crafting. When the project is done
+ * (via calling cleanup() below), any schematic granted by this function will be removed from the player.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player to give the schematic to
+ * @param schematic        the template of the schematic to give
+ *
+ * @return true on success, false on error
+ */
+boolean grantSchematicToPlayer(obj_id craftingTracker, obj_id player, string schematic)
+{
+	return grantSchematicToPlayer(craftingTracker, player, getStringCrc(schematic));
+}
+
+/**
+ * Gives a schematic to a player, for the purposes of community crafting. When the project is done
+ * (via calling cleanup() below), any schematic granted by this function will be removed from the player.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player to give the schematic to
+ * @param schematicCrc     the template crc of the schematic to give
+ *
+ * @return true on success, false on error
+ */
+boolean grantSchematicToPlayer(obj_id craftingTracker, obj_id player, int schematicCrc)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer(crc) called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer(crc) called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer(crc) called "+
+			"with invalid player");
+		return false;
+	}
+	if ( schematicCrc == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer(crc) called "+
+			"with invalid schematic");
+		return false;
+	}
+	if (!isSessionActive(craftingTracker))
+	{
+		return false;
+	}
+
+	// see if we're attaching the project schematic
+	Vector playerSchematics = null;
+	int baseSchematic = getSchematic(craftingTracker);
+	if ( schematicCrc == baseSchematic )
+	{
+		if ( isPlayerCrafting(craftingTracker, player) )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer(crc) called "+
+				"with player %TU who is already crafting", player);
+			return false;
+		}
+
+		// register the player with the system
+		if (!addPlayerToSystem(craftingTracker, player))
+			return false;
+
+		playerSchematics = new Vector();
+	}
+	else
+	{
+		// make sure the player has the main schematic
+		if ( !isPlayerCrafting(craftingTracker, player) )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer(crc) called "+
+				"with player %TU who is not crafting", player);
+			return false;
+		}
+
+		playerSchematics = getResizeableIntArrayObjVar(player, OBJVAR_COMMUNITY_CRAFTING_PLAYER_SCHEMATICS);
+	}
+	if (!grantSchematic(player, schematicCrc))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: grantSchematicToPlayer(crc) failed "+
+			"to add schematic " + schematicCrc + " to player %TU", player );
+		return false;
+	}
+	playerSchematics.add(new Integer(schematicCrc));
+	setObjVar(player, OBJVAR_COMMUNITY_CRAFTING_PLAYER_SCHEMATICS, playerSchematics);
+
+	return true;
+}
+
+/**
+ * Called when a player contributes an ingredient to the project. If the ingredient is accepted, its stats
+ * will be added to the project's total, and the ingredient will be destroyed.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player who is adding the ingredient
+ * @param ingredient       the ingredient being added
+ *
+ * @return true on success, false on error
+ */
+boolean addIngredient(obj_id craftingTracker, obj_id player, obj_id ingredient)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient called "+
+			"with invalid player");
+		return false;
+	}
+	if ( !isPlayerCrafting(craftingTracker, player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient called "+
+			"for craftingTracker " + craftingTracker + ", player %TU who is not crafting", player);
+		return false;
+	}
+	if ( !isIdValid(ingredient) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient called "+
+			"with invalid ingredient");
+		return false;
+	}
+	if (!isSessionActive(craftingTracker))
+	{
+		return false;
+	}
+
+	int playerIndex = getCraftingPlayerIndex(craftingTracker, player);
+	if ( playerIndex < 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient could not "+
+			"get player index for player %TU on craftingTracker " + craftingTracker, player);
+		return false;
+	}
+
+	float[] objectAttributes = getFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ATTRIBUTES);
+	if ( objectAttributes == null || objectAttributes.length == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient could not "+
+			"get object attributes objvar on craftingTracker " + craftingTracker);
+		return false;
+	}
+
+	// find the slot that the ingredient goes in - we are assuming that each slot takes a unique ingredient
+	int matchSlot = -1;
+	float ingredientQuality = 0;
+	draft_schematic schematicData = getSchematicData(getSchematic(craftingTracker));
+	if ( schematicData == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient error "+
+			"getting schematic from craftingTracker " + craftingTracker);
+		return false;
+	}
+	draft_schematic.slot[] slots = schematicData.getSlots();
+	if ( slots == null || slots.length == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient error "+
+			"getting schematic slots from schemtic " + getSchematic(craftingTracker) + " on craftingTracker " +
+			craftingTracker);
+		return false;
+	}
+	int ingredientMultiplier = 1;
+	if ( isResourceContainer(ingredient) )
+	{
+		boolean isRealResource = true;
+		resource_attribute[] resourceAttribs = null;
+		if ( getGameObjectType(ingredient) != GOT_resource_container_pseudo )
+		{
+			// find the slot that takes the resource
+			obj_id resourceType = getResourceContainerResourceType(ingredient);
+			if ( !isIdValid(resourceType) )
+			{
+				CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient error "+
+					"getting resource type from container " + ingredient + " given by player %TU ", player);
+				return false;
+			}
+			resourceAttribs = getResourceAttributes(resourceType);
+			if ( resourceAttribs == null )
+			{
+				CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient "+
+					"could not get attributes from resource type " + resourceType);
+				return false;
+			}
+			for ( int i = 0; i < slots.length; ++i )
+			{
+				switch ( slots[i].ingredientType )
+				{
+					case draft_schematic.IT_resourceType:
+						if ( resourceType == getResourceTypeByName(slots[i].ingredientName) )
+						{
+							matchSlot = i;
+							i = slots.length;
+						}
+						break;
+					case draft_schematic.IT_resourceClass:
+						if ( isResourceDerivedFrom(resourceType, slots[i].ingredientName) )
+						{
+							matchSlot = i;
+							i = slots.length;
+						}
+						break;
+					default:
+						break;
+				}
+			}
+		}
+		else
+		{
+			// this is a pseudo-resource
+			isRealResource = false;
+			int ingredientTemplateCrc = getStringCrc(getTemplateName(ingredient));
+			if ( ingredientTemplateCrc == 0 )
+			{
+				CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient cannot "+
+					"get template crc for ingredient " + ingredient + " by player %TU", player);
+				return false;
+			}
+
+			// if the component is crafted, make sure the player is the crafter
+			obj_id crafter = getCrafter(ingredient);
+			if ( isIdValid(crafter) )
+			{
+				if ( crafter != player )
+				{
+					CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient player %TU "+
+						"adding crafted resource " + ingredient + " crafted by player %TT", player, crafter);
+					sendSystemMessage(player, SID_NOT_CRAFTER);
+					return false;
+				}
+			}
+
+			resourceAttribs = new resource_attribute[craftinglib.NUM_RESOURCE_ATTRIBS];
+			for ( int i = 0; i < craftinglib.NUM_RESOURCE_ATTRIBS; ++i )
+			{
+				string ovname = craftinglib.COMPONENT_ATTRIBUTE_OBJVAR_NAME + "." + craftinglib.RESOURCE_OBJVAR_NAMES[i];
+				obj_var attribVar = getObjVar(ingredient, ovname);
+				if ( attribVar != null )
+				{
+					int value;
+					if ( attribVar.getData() instanceof Integer )
+						value = attribVar.getIntData();
+					else
+						value = (int)(attribVar.getFloatData() + 0.5f);
+					resourceAttribs[i] = new resource_attribute(craftinglib.RESOURCE_OBJVAR_NAMES[i], value);
+				}
+				else
+					resourceAttribs[i] = null;
+			}
+			for ( int i = 0; i < slots.length; ++i )
+			{
+				switch ( slots[i].ingredientType )
+				{
+					case draft_schematic.IT_template:
+					case draft_schematic.IT_templateGeneric:
+						if ( getStringCrc(slots[i].ingredientName) == ingredientTemplateCrc )
+						{
+							matchSlot = i;
+							i = slots.length;
+						}
+						break;
+					case draft_schematic.IT_schematic:
+					case draft_schematic.IT_schematicGeneric:
+						int createdIngredientTemplate = getTemplateCrcCreatedFromSchematic(slots[i].ingredientName);
+						if ( createdIngredientTemplate == ingredientTemplateCrc )
+						{
+							matchSlot = i;
+							i = slots.length;
+						}
+						break;
+					default:
+						break;
+				}
+			}
+		}
+		if ( matchSlot < 0 )
+		{
+			sendSystemMessage(player, SID_NOT_VALID_ITEM);
+			return false;
+		}
+
+		// make sure there are enough ingredients in the resource crate
+		int crateCount;
+		if ( isRealResource )
+			crateCount = getResourceContainerQuantity(ingredient);
+		else
+			crateCount = 1;
+		int required = slots[matchSlot].amountRequired;
+		if ( required <= 0 )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient slot " +
+				matchSlot + " of schematic " + getSchematic(craftingTracker) + " has invalid ingredient count");
+			return false;
+		}
+		if ( crateCount < required )
+		{
+			return false;
+		}
+		ingredientMultiplier = crateCount / required;
+
+		// determine the ingredient quality
+		resource_weight[] weights = getResourceWeightsFromScripts(craftingTracker);
+		ingredientQuality = computeResourceAttributeQuality(resourceAttribs, schematicData, weights, objectAttributes);
+		if ( ingredientQuality < 0 )
+		{
+			sendSystemMessage(player, SID_NOT_MIN_QUALITY);
+			return false;
+		}
+	}
+	else
+	{
+		// the ingredient is a component
+
+		// if the component is crafted, make sure the player is the crafter
+		obj_id crafter = getCrafter(ingredient);
+		if ( isIdValid(crafter) )
+		{
+			if ( crafter != player )
+			{
+				CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient player %TU "+
+					"adding crafted ingredient " + ingredient + " crafted by player %TT", player, crafter);
+				sendSystemMessage(player, SID_NOT_CRAFTER);
+				return false;
+			}
+		}
+
+		// find the slot that takes the component
+		int ingredientTemplateCrc = getStringCrc(getTemplateName(ingredient));
+		if ( ingredientTemplateCrc == 0 )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addIngredient cannot "+
+				"get template crc for ingredient " + ingredient + " by player %TU", player);
+			return false;
+		}
+		for ( int i = 0; i < slots.length; ++i )
+		{
+			switch ( slots[i].ingredientType )
+			{
+				case draft_schematic.IT_template:
+				case draft_schematic.IT_templateGeneric:
+					if ( getStringCrc(slots[i].ingredientName) == ingredientTemplateCrc )
+					{
+						matchSlot = i;
+						i = slots.length;
+					}
+					break;
+				case draft_schematic.IT_schematic:
+				case draft_schematic.IT_schematicGeneric:
+					int createdIngredientTemplate = getTemplateCrcCreatedFromSchematic(slots[i].ingredientName);
+					if ( createdIngredientTemplate == ingredientTemplateCrc )
+					{
+						matchSlot = i;
+						i = slots.length;
+					}
+					break;
+				default:
+					break;
+			}
+		}
+		if ( matchSlot < 0 )
+		{
+			sendSystemMessage(player, SID_NOT_VALID_ITEM);
+			return false;
+		}
+
+		// determine the ingredient quality
+		ingredientQuality = computeComponentAttributeQuality(ingredient, schematicData, objectAttributes);
+		if ( ingredientQuality < 0 )
+		{
+			sendSystemMessage(player, SID_NOT_MIN_QUALITY);
+			return false;
+		}
+	}
+	if ( matchSlot < 0 )
+	{
+		sendSystemMessage(player, SID_NOT_VALID_ITEM);
+		return false;
+	}
+
+	// make sure the ingredient quality meets the minimum requirements
+	if ( ingredientQuality < getMinimumQuality(craftingTracker) )
+	{
+		sendSystemMessage(player, SID_NOT_MIN_QUALITY);
+		return false;
+	}
+
+	CustomerServiceLog("community_crafting", "community_crafting.scriptlib: player %TU added ingredient " +
+		ingredient + " to community crafting project " + craftingTracker, player);
+
+	// update the final item's attributes
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ATTRIBUTES, objectAttributes);
+
+	// update our tracking data for the player
+	boolean trackQuantity = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY);
+	boolean trackQuality = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY);
+	boolean trackSlots = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS);
+
+	if ( trackQuality )
+	{
+		float[] qualities = objvar_mangle.getMangledFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUALITY_TOTAL);
+		qualities[playerIndex] += ingredientQuality * ingredientMultiplier;
+		objvar_mangle.setMangledFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUALITY_TOTAL, qualities);
+	}
+	if ( trackQuantity || trackQuality )
+	{
+		int[] quantities = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL);
+		if ( trackQuantity )
+		{
+			// see if the player met the minumum quantity requirement
+			int minQuantity = getMinimumQuantity(craftingTracker);
+			if ( quantities[playerIndex] < minQuantity && quantities[playerIndex] + ingredientMultiplier >= minQuantity )
+			{
+				messageTo(player, MSG_HANDLER_MIN_QUANTITY_MET, null, 0.1f, true);
+			}
+		}
+		quantities[playerIndex] += ingredientMultiplier;
+		objvar_mangle.setMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL, quantities);
+	}
+	if ( trackSlots )
+	{
+		string slotdot = OBJVAR_COMMUNITY_CRAFTING_SLOTS + ".";
+		string slotdotindex = slotdot + matchSlot;
+		if ( trackQuantity || trackQuality )
+		{
+			int[] quantities = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX);
+			++quantities[playerIndex];
+			objvar_mangle.setMangledIntArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX, quantities);
+		}
+		if ( trackQuality )
+		{
+			float[] qualities = objvar_mangle.getMangledFloatArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUALITY_SUFFIX);
+			qualities[playerIndex] += ingredientQuality;
+			objvar_mangle.setMangledFloatArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUALITY_SUFFIX, qualities);
+		}
+	}
+
+	return true;
+}
+
+/**
+ * Ends the community crafting project for the current item. The item's final stats will be stored on the
+ * craftingTracker, and the players will be given any prizes they've won.
+ *
+ * @param craftingTracker   the master object that will keep track of the community crafting process
+ * @param informAllPlayers  flag to send mail to any players crafting that the item is done
+ *
+ * @return true on success, false on error
+ */
+boolean finalizeItem(obj_id craftingTracker, boolean informAllPlayers)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: finalizeItem called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: finalizeItem called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+
+	int schematicCrc = getSchematic(craftingTracker);
+	draft_schematic schematicData = getSchematicData(schematicCrc);
+	if ( schematicData == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: finalizeItem error "+
+			"getting schematic from craftingTracker " + craftingTracker);
+		return false;
+	}
+
+	obj_id[] players = objvar_mangle.getMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS);
+	if ( informAllPlayers && players != null )
+	{
+		// create a message giving the final stats for the item
+		draft_schematic.attribute[] schematicAttribs = schematicData.getAttribs();
+		if ( schematicAttribs == null || schematicAttribs.length == 0 )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: finalizeItem could "+
+				"not find attribute info for schematic " + schematicCrc);
+			return false;
+		}
+		float[] objectAttributes = getFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ATTRIBUTES);
+		if ( objectAttributes == null || objectAttributes.length == 0 )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: finalizeItem could not "+
+				"get object attributes objvar on craftingTracker " + craftingTracker);
+			return false;
+		}
+
+		String emailBody = "@" + SID_RESULTS_BODY_1 + "\0@" + getNameFromTemplate(schematicData.getObjectTemplateCreated()) +
+			"\0@" + SID_RESULTS_BODY_2;
+		for ( int i = 0; i < objectAttributes.length; ++i )
+		{
+			emailBody += "\0@" + schematicAttribs[i].name + "\0\\>200" + (int)objectAttributes[i] + "\\>000\n";
+		}
+
+		// send mail out to all the players
+		for ( int i = 0; i < players.length; ++i )
+		{
+			if ( isIdValid(players[i]) )
+			{
+				chatSendPersistentMessage("@"+SID_RESULTS_FROM, getPlayerName(players[i]), "@"+SID_RESULTS_SUBJECT, emailBody, null);
+			}
+		}
+	}
+
+	boolean trackQuantity = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY);
+	boolean trackQuality = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY);
+	boolean trackSlots = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS);
+	HashSet goodPlayers = null;
+	if ( players != null && trackQuantity )
+	{
+		// set up a list of players that have met the minimum quantity requirements
+		int minQuantity = getMinimumQuantity(craftingTracker);
+		if ( minQuantity >= 1 )
+		{
+			int[] quantities = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL);
+			if ( quantities != null && quantities.length == players.length )
+			{
+				goodPlayers = new HashSet(players.length);
+				for ( int i = 0; i < players.length; ++i )
+				{
+					if ( quantities[i] >= minQuantity )
+						goodPlayers.add(players[i]);
+				}
+			}
+		}
+	}
+
+	// determine which players have gotten a prize
+	string prizeTable = getStringObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PRIZES);
+	if ( players != null && prizeTable != null && dataTableOpen(prizeTable) )
+	{
+		int[] prizes     = dataTableGetIntColumn(prizeTable, PRIZE_DATATABLE_COLUMN_REWARD);
+		int[] prizeSlots = dataTableGetIntColumn(prizeTable, PRIZE_DATATABLE_COLUMN_SLOT);
+		int[] prizeTypes = dataTableGetIntColumn(prizeTable, PRIZE_DATATABLE_COLUMN_TYPE);
+		string[] prizeScripts = dataTableGetStringColumn(prizeTable, PRIZE_DATATABLE_COLUMN_SCRIPT);
+		if ( prizes != null && prizeSlots != null && prizeTypes != null && prizeTypes.length == prizeSlots.length &&
+			prizes.length == prizeTypes.length )
+		{
+			draft_schematic.slot[] slots = schematicData.getSlots();
+			if ( slots != null && slots.length > 0 )
+			{
+				HashSet winners = new HashSet();
+				Vector playerIds = new Vector();
+				Vector playerNames = new Vector();
+				Vector values = new Vector();
+				// iterate through the main item and the slots, and see if there is a prize for it
+				for ( int i = 0; i <= slots.length; ++i )
+				{
+					if ( i > 0 && !trackSlots )
+						break;
+
+					int qualityPrize = -1;
+					int quantityPrize = -1;
+					for ( int j = 0; j < prizeSlots.length; ++j )
+					{
+						if ( prizeSlots[j] == i )
+						{
+							if ( prizeTypes[j] == QUALITY_PRIZE_DATATABLE_ENUM )
+								qualityPrize = j;
+							else if ( prizeTypes[j] == QUANTITY_PRIZE_DATATABLE_ENUM )
+								quantityPrize = j;
+						}
+					}
+					if ( qualityPrize >= 0 && trackQuality )
+					{
+						if ( getPlayerRanking(craftingTracker, playerIds, playerNames, values, false, i) )
+						{
+							if ( playerIds.get(0) != null && isIdValid((obj_id)(playerIds.get(0))) )
+							{
+								obj_id winner = (obj_id)(playerIds.get(0));
+								if ( !winners.contains(winner) && (goodPlayers == null || goodPlayers.contains(winner)) )
+								{
+									winners.add(winner);
+									dictionary params = new dictionary();
+									params.addInt(REWARD_PRIZE, prizes[qualityPrize]);
+									params.addInt(REWARD_PRIZE_SLOT, prizeSlots[qualityPrize]);
+									params.addInt(REWARD_PRIZE_TYPE, prizeTypes[qualityPrize]);
+									if ( prizeScripts != null && prizeScripts.length - 1 >= qualityPrize )
+										params.put(REWARD_PRIZE_SCRIPT, prizeScripts[qualityPrize]);
+
+									messageTo(winner, MSG_HANDLER_PRIZE_WON, params, 0.1f, true);
+								}
+							}
+						}
+					}
+					if ( quantityPrize >= 0 && trackQuantity )
+					{
+						if ( getPlayerRanking(craftingTracker, playerIds, playerNames, values, true, i) )
+						{
+							if ( playerIds.get(0) != null && isIdValid((obj_id)(playerIds.get(0))) )
+							{
+								obj_id winner = (obj_id)(playerIds.get(0));
+								if ( !winners.contains(winner) && (goodPlayers == null || goodPlayers.contains(winner)) )
+								{
+									winners.add(winner);
+									dictionary params = new dictionary();
+									params.addInt(REWARD_PRIZE, prizes[quantityPrize]);
+									params.addInt(REWARD_PRIZE_SLOT, prizeSlots[quantityPrize]);
+									params.addInt(REWARD_PRIZE_TYPE, prizeTypes[quantityPrize]);
+									if ( prizeScripts != null && prizeScripts.length - 1 >= quantityPrize )
+										params.put(REWARD_PRIZE_SCRIPT, prizeScripts[quantityPrize]);
+									messageTo(winner, MSG_HANDLER_PRIZE_WON, params, 0.1f, true);
+								}
+							}
+						}
+					}
+				}
+			}
+			else
+			{
+				CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: finalizeItem error "+
+					"getting schematic slots from schemtic " + schematicCrc + " on craftingTracker " +
+					craftingTracker);
+			}
+		}
+		else
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: finalizeItem prize table " +
+				prizeTable + " contains bad data");
+		}
+	}
+
+	if ( players != null )
+	{
+		for ( int i = 0; i < players.length; ++i )
+		{
+			if ( isIdValid(players[i]) )
+			{
+				messageTo(players[i], MSG_HANDLER_END_CRAFTING, null, 1.0f, true);
+			}
+		}
+	}
+
+	setObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ACTIVE, false);
+	return true;
+}
+
+/**
+ * Creates the item that was being crafted by the community, after finalizeItem() has been called.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param pos              where to create the item
+ *
+ * @return true on success, false on error
+ */
+boolean createItem(obj_id craftingTracker, location pos)
+{
+	//@todo: implement me
+	return false;
+}
+
+/**
+ * Cleans up any data stored on the craftingTracker and the players that were participating.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return true on success, false on error
+ */
+boolean cleanup(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: cleanup called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+
+	// make sure we've finalized the session
+	if ( getBooleanObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ACTIVE) )
+	{
+		finalizeItem(craftingTracker, false);
+	}
+
+	// remove any scripts we attached
+	draft_schematic schematicData = getSchematicData(getSchematic(craftingTracker));
+	if ( schematicData != null)
+	{
+		string[] scripts = schematicData.getScripts();
+		if ( scripts != null )
+		{
+			for ( int i = 0; i < scripts.length; ++i )
+			{
+				if ( scripts[i] != null )
+					detachScript(craftingTracker, scripts[i]);
+			}
+		}
+	}
+
+	// remove objvars and scriptvars
+	utils.removeScriptVarTree(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_BASE);
+	removeObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_BASE);
+	return true;
+}
+
+/**
+ * Tests if a community crafting session is active. Players cannot join or add ingredients to an inactive session.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return true if the session is active, false if not
+ */
+boolean isSessionActive(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematic called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		return false;
+	}
+
+	return getBooleanObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ACTIVE);
+}
+
+/**
+ * Returns the schematic that is being community crafted.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return the schematic being crafted, or 0 if we're not crafting
+ */
+int getSchematic(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematic called "+
+			"with invalid craftingTracker");
+		return 0;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematic called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return 0;
+	}
+	if ( !utils.hasScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATIC) )
+		return 0;
+
+	return utils.getIntScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATIC);
+}
+
+string[] getSchematicScripts(obj_id craftingTracker)
+{
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematicScripts called "+
+			"with invalid craftingTracker");
+		return null;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematicScripts called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return null;
+	}
+
+	draft_schematic schematicData = getSchematicData(getSchematic(craftingTracker));
+	if ( schematicData != null)
+		return schematicData.getScripts();
+	return null;
+}
+
+/**
+ * Tests is a player is participating in any community crafting project.
+ *
+ * @param player           the player to test
+ *
+ * @return true if the player is crafting, false if not
+ */
+boolean isPlayerCrafting(obj_id player)
+{
+	// verify our params
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with invalid player");
+		return false;
+	}
+
+	return hasObjVar(player, OBJVAR_COMMUNITY_CRAFTING_BASE);
+}
+
+/**
+ * Tests is a player is participating in the current crafting project.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player to test
+ *
+ * @return true if the player is crafting, false if not
+ */
+boolean isPlayerCrafting(obj_id craftingTracker, obj_id player)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with invalid player");
+		return false;
+	}
+
+	obj_id[] players = objvar_mangle.getMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS);
+	if ( players == null)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting "+
+			"cannot find players list for craftingTracker " + craftingTracker);
+		return false;
+	}
+
+	// start at index 1 since 1st player is a dummy
+	for ( int i = 1; i < players.length; ++i )
+	{
+		if ( player == players[i] )
+			return true;
+	}
+	return false;
+}
+
+/**
+ * Returns the number of players participating in the current crafting project.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return the number of players crafting
+ */
+int getNumPlayersCrafting(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with invalid craftingTracker");
+		return 0;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return 0;
+	}
+
+	obj_id[] players = objvar_mangle.getMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS);
+	if ( players == null)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting "+
+			"cannot find players list for craftingTracker " + craftingTracker);
+		return 0;
+	}
+	// 1st player is a dummy
+	return players.length - 1;
+}
+
+/**
+ * Returns the max number of players that can participate in the current crafting project.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return the max number of players
+ */
+int getMaxPlayersPerProject()
+{
+	int playerLimit = utils.getIntConfigSetting("Quest", "CommunityCraftingLimit");
+	if ( playerLimit == 0)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getMaxPlayersPerProject failed "+
+			"to get [Quest] CommunityCraftingLimit, using limit of " + MAX_PLAYERS_PER_PROJECT);
+		playerLimit = MAX_PLAYERS_PER_PROJECT;
+	}
+	return playerLimit;
+}
+
+/**
+ * Returns the number of ingredients needed by a player to meet the minimum requirements.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player to test
+ *
+ * @return the number of ingredients needed, or -1 on error
+ */
+int getNumIngredientsNeededByPlayer(obj_id craftingTracker, obj_id player)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getNumIngredientsNeededByPlayer called "+
+			"with invalid craftingTracker");
+		return -1;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getNumIngredientsNeededByPlayer called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return -1;
+	}
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getNumIngredientsNeededByPlayer called "+
+			"with invalid player");
+		return -1;
+	}
+
+	if ( !isPlayerCrafting(craftingTracker, player) )
+		return -1;
+
+	if ( !getIsTrackingQuantity(craftingTracker) )
+		return 0;
+
+	int minQuantity = getMinimumQuantity(craftingTracker);
+	if ( minQuantity <= 0)
+		return 0;
+
+	obj_id[] players = objvar_mangle.getMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS);
+	int[] quantities = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL);
+	if ( players == null || quantities == null || players.length != quantities.length )
+	{
+		return -1;
+	}
+
+	for ( int i = 0; i < players.length; ++i )
+	{
+		if ( player == players[i] )
+		{
+			int needed = minQuantity - quantities[i];
+			if ( needed < 0 )
+				needed = 0;
+			return needed;
+		}
+	}
+	return -1;
+}
+
+/**
+ * Returns if we're tracking the project's quality.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return true if we're tracking quality, false if not
+ */
+boolean getIsTrackingQuality(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+		return false;
+	if (!isInitializedForCC(craftingTracker))
+		return false;
+	return utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY);
+}
+
+/**
+ * Returns if we're tracking the project's quantity.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return true if we're tracking quantity, false if not
+ */
+boolean getIsTrackingQuantity(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+		return false;
+	if (!isInitializedForCC(craftingTracker))
+		return false;
+	return utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY);
+}
+
+/**
+ * Returns if we're tracking the project's slot stats.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return true if we're tracking slots, false if not
+ */
+boolean getIsTrackingSlots(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+		return false;
+	if (!isInitializedForCC(craftingTracker))
+		return false;
+	return utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS);
+}
+
+/**
+ * Returns the number of slots in the project.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return the number of slots
+ */
+int getNumSlots(obj_id craftingTracker)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+		return 0;
+	if (!isInitializedForCC(craftingTracker))
+		return 0;
+
+	draft_schematic schematicData = getSchematicData(getSchematic(craftingTracker));
+	if ( schematicData == null )
+		return 0;
+	draft_schematic.slot[] slots = schematicData.getSlots();
+	if ( slots == null )
+		return 0;
+	return slots.length;
+}
+
+/**
+ * Returns the project's attributes.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param names            list to be filled in with the attribute names (string_id)
+ * @param values           list to be filled in with the attribute values (float)
+ *
+ * @return true on success, false on error
+ */
+boolean getProjectAttributes(obj_id craftingTracker, Vector names, Vector values)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( names == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes called "+
+			"with invalid names");
+		return false;
+	}
+	if ( values == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes called "+
+			"with invalid values");
+		return false;
+	}
+
+	int schematicCrc = getSchematic(craftingTracker);
+	draft_schematic schematicData = getSchematicData(schematicCrc);
+	if ( schematicData == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes error "+
+			"getting schematic from craftingTracker " + craftingTracker);
+		return false;
+	}
+
+	draft_schematic.attribute[] schematicAttribs = schematicData.getAttribs();
+	if ( schematicAttribs == null || schematicAttribs.length == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes could "+
+			"not find attribute info for schematic " + schematicCrc);
+		return false;
+	}
+	float[] objectAttributes = getFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_ATTRIBUTES);
+	if ( objectAttributes == null || objectAttributes.length == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes could not "+
+			"get object attributes objvar on craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( schematicAttribs.length != objectAttributes.length )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getProjectAttributes got "+
+			"attribute names and values with different lengths (" + schematicAttribs.length + ", " +
+			objectAttributes.length + ") on craftingTracker " + craftingTracker);
+		return false;
+	}
+
+	names.clear();
+	values.clear();
+
+	for ( int i = 0; i < schematicAttribs.length; ++i )
+	{
+		names.add(schematicAttribs[i].name);
+		values.add(new Float(objectAttributes[i]));
+	}
+	return true	;
+}
+
+/**
+ * Ranks the players according to how well they're contributing to the project.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param playerIds        ids of the players crafting, sorted by rank
+ * @param playerNames      names of the players crafting, sorted by rank
+ * @param values           the players' ranks (ints if ranking quantity, floats if ranking quality)
+ * @param quantity         flag to rank by quantity; if false, rank by quality
+ * @param slot             which slot (1-10) to rank; if <= 0, rank the final item
+ *
+ * @return true if the player vectors have been filled in, false on error
+ */
+boolean getPlayerRanking(obj_id craftingTracker, Vector playerIds, Vector playerNames, Vector values, boolean quantity, int slot)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getPlayerRanking called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getPlayerRanking called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( playerIds == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getPlayerRanking called "+
+			"with null playerIds");
+		return false;
+	}
+	if ( playerNames == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getPlayerRanking called "+
+			"with null playerNames");
+		return false;
+	}
+	if ( values == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getPlayerRanking called "+
+			"with null values");
+		return false;
+	}
+
+	draft_schematic schematicData = getSchematicData(getSchematic(craftingTracker));
+	if ( schematicData == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getPlayerRanking could "+
+			"not find data for schematic " + getSchematic(craftingTracker));
+		return false;
+	}
+	draft_schematic.slot[] slots = schematicData.getSlots();
+	if ( slots == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematics could "+
+			"not find slot info for schematic " + getSchematic(craftingTracker));
+		return false;
+	}
+
+	playerIds.clear();
+	playerNames.clear();
+	values.clear();
+
+	obj_id[] players = objvar_mangle.getMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS);
+	if ( quantity )
+	{
+		int[] rankings;
+		if ( slot >= 1 && slot <= slots.length )
+		{
+			// rank the slot
+			string slotdot = OBJVAR_COMMUNITY_CRAFTING_SLOTS + "." + (slot-1);
+			rankings = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, slotdot + OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX);
+		}
+		else
+		{
+			// rank the final item
+			rankings = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL);
+		}
+		if ( players == null || rankings == null || players.length != rankings.length )
+			return false;
+
+		PROFILER_START("SORT_FS_VILLAGE_CRAFTERS_QUANTITY");
+		doubleSort(rankings, players);
+		for ( int i = 0; i < rankings.length; ++i )
+		{
+			playerIds.add(players[i]);
+			values.add(new Integer(rankings[i]));
+		}
+		PROFILER_STOP("SORT_FS_VILLAGE_CRAFTERS_QUANTITY");
+	}
+	else
+	{
+		// quality
+		float[] rankings;
+		int[] amounts;
+		if ( slot >= 1 && slot <= slots.length )
+		{
+			// rank the slot
+			string slotdot = OBJVAR_COMMUNITY_CRAFTING_SLOTS + "." + (slot-1);
+			rankings = objvar_mangle.getMangledFloatArrayObjVar(craftingTracker, slotdot + OBJVAR_COMMUNITY_CRAFTING_QUALITY_SUFFIX);
+			amounts = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, slotdot + OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX);
+		}
+		else
+		{
+			// rank the final item
+			rankings = objvar_mangle.getMangledFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUALITY_TOTAL);
+			amounts = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL);
+		}
+		if ( players == null || rankings == null || amounts == null || players.length != rankings.length ||
+			rankings.length != amounts.length )
+		{
+			return false;
+		}
+
+		PROFILER_START("SORT_FS_VILLAGE_CRAFTERS_QUALITY");
+		// get the average quality for each player
+		for ( int i = 0; i < rankings.length; ++i )
+		{
+			if ( amounts[i] > 0 )
+				rankings[i] /= amounts[i];
+			else
+				rankings[i] = 0;
+		}
+		doubleSort(rankings, players);
+		for ( int i = 0; i < rankings.length; ++i )
+		{
+			playerIds.add(players[i]);
+			values.add(new Float(rankings[i] * 100.0f));
+		}
+		PROFILER_STOP("SORT_FS_VILLAGE_CRAFTERS_QUALITY");
+	}
+
+	return true;
+}
+
+
+/***** INTERNAL FUNCTIONS **********************************************/
+
+/**
+ * Tests is a master crafting tracker object has been initialized for a project.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ *
+ * @return true if the tracker is tracking a project, false if not
+ */
+boolean isInitializedForCC(obj_id craftingTracker)
+{
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isInitializedForCC called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+
+	if (!hasObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATICS))
+		return false;
+
+	// see if we've transferred our objvars to scripvars for faster access
+	if ( !utils.hasScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATIC) )
+	{
+		int[] schematicsCrcs = getIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATICS);
+		utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_SCHEMATIC, schematicsCrcs[0]);
+
+		boolean flag = getBooleanObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY);
+		utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY, flag);
+		flag = getBooleanObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY);
+		utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY, flag);
+		flag = getBooleanObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS);
+		utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS, flag);
+
+		float minimumQuality = getFloatObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUALITY);
+		if ( minimumQuality < 0 )
+			minimumQuality = 0;
+		utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUALITY, minimumQuality);
+		int minimumQuantity = getIntObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUANTITY);
+		if ( minimumQuantity < 1 )
+			minimumQuantity = 1;
+		utils.setScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUANTITY, minimumQuantity);
+	}
+
+	return true;
+}
+
+/**
+ * Tries to determine any schematics used by a base schematic.
+ *
+ * @param schematics  list to be filled in with schematics used
+ * @param schematic   the base schematic to look at
+ *
+ * @return true on success, false on error (bad schematic name)
+ */
+boolean getSchematics(Vector schematics, string schematic)
+{
+	// verify that the schematic is a real schematic
+	draft_schematic schematicData = getSchematicData(schematic);
+	if ( schematicData == null)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematics could "+
+			"not find data for schematic " + schematic);
+		return false;
+	}
+	schematics.add(schematic);
+
+	// get the list of schematics from the base schematic
+	draft_schematic.slot[] slots = schematicData.getSlots();
+	if ( slots == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: getSchematics could "+
+			"not find slot info for schematic " + schematic);
+		return false;
+	}
+	for ( int i = 0; i < slots.length; ++i )
+	{
+		if ( (slots[i].ingredientType == draft_schematic.IT_schematic ||
+			slots[i].ingredientType == draft_schematic.IT_schematicGeneric) &&
+			slots[i].ingredientName != null &&
+			!schematics.contains(slots[i].ingredientName) )
+		{
+			if (!getSchematics(schematics, slots[i].ingredientName))
+				return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * Returns the minimum quality setting for the crafting project.
+ *
+ * @return the minimum quality
+ */
+float getMinimumQuality(obj_id craftingTracker)
+{
+	if ( !isIdValid(craftingTracker) )
+		return 0;
+	if (!isInitializedForCC(craftingTracker))
+		return 0;
+	return utils.getFloatScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUALITY);
+}
+
+/**
+ * Returns the minimum quantity setting for the crafting project.
+ *
+ * @return the minimum quantity
+ */
+int getMinimumQuantity(obj_id craftingTracker)
+{
+	if ( !isIdValid(craftingTracker) )
+		return 1;
+	if (!isInitializedForCC(craftingTracker))
+		return 1;
+	return utils.getIntScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_MIN_QUANTITY);
+}
+
+/**
+ * Sets up data on the master crafting tracker object to register a player as crafting for the project.
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player to add
+ *
+ * @return true on success, false on error
+ */
+boolean addPlayerToSystem(obj_id craftingTracker, obj_id player)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addPlayerToSystem called "+
+			"with invalid craftingTracker");
+		return false;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addPlayerToSystem called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return false;
+	}
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addPlayerToSystem called " +
+			"with invalid player");
+		return false;
+	}
+
+	int playerLimit = getMaxPlayersPerProject();
+
+	boolean trackQuantity = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUANTITY);
+	boolean trackQuality = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_QUALITY);
+	boolean trackSlots = utils.getBooleanScriptVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_TRACK_SLOTS);
+
+	List constListPlayers = Arrays.asList(objvar_mangle.getMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS));
+	if ( constListPlayers.size() > playerLimit )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: addPlayerToSystem called "+
+			"for full project with player %TU", player);
+		return false;
+	}
+	Vector players = new Vector(constListPlayers);
+	players.add(player);
+	obj_id[] tempPlayers = new obj_id[players.size()];
+	players.toArray(tempPlayers);
+	objvar_mangle.setMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS, tempPlayers);
+	tempPlayers = null;
+	if ( trackQuantity || trackQuality )
+	{
+		int[] quantities = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL);
+		int[] newQuantities = new int[quantities.length + 1];
+		for ( int i = 0; i < quantities.length; ++i )
+			newQuantities[i] = quantities[i];
+		newQuantities[quantities.length] = 0;
+		objvar_mangle.setMangledIntArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUANTITY_TOTAL, newQuantities);
+	}
+	if ( trackQuality )
+	{
+		float[] qualities = objvar_mangle.getMangledFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUALITY_TOTAL);
+		float[] newQualities = new float[qualities.length + 1];
+		for ( int i = 0; i < qualities.length; ++i )
+			newQualities[i] = qualities[i];
+		newQualities[qualities.length] = 0;
+		objvar_mangle.setMangledFloatArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYER_QUALITY_TOTAL, newQualities);
+	}
+
+	// set up our objvars for the main schematic
+	draft_schematic schematicData = getSchematicData(getSchematic(craftingTracker));
+	if ( trackSlots )
+	{
+		string slotdot = OBJVAR_COMMUNITY_CRAFTING_SLOTS + ".";
+		draft_schematic.slot[] slots = schematicData.getSlots();
+		for ( int i = 0; i < slots.length; ++i )
+		{
+			string slotdotindex = slotdot + i;
+			if ( trackQuantity || trackQuality )
+			{
+				int[] quantities = objvar_mangle.getMangledIntArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX);
+				int[] newQuantities = new int[quantities.length + 1];
+				for ( int j = 0; j < quantities.length; ++j )
+					newQuantities[j] = quantities[j];
+				newQuantities[quantities.length] = 0;
+				objvar_mangle.setMangledIntArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUANTITY_SUFFIX, newQuantities);
+			}
+			if ( trackQuality )
+			{
+				float[] qualities = objvar_mangle.getMangledFloatArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUALITY_SUFFIX);
+				float[] newQualities = new float[qualities.length + 1];
+				for ( int j = 0; j < qualities.length; ++j )
+					newQualities[j] = qualities[j];
+				newQualities[qualities.length] = 0;
+				objvar_mangle.setMangledFloatArrayObjVar(craftingTracker, slotdotindex + OBJVAR_COMMUNITY_CRAFTING_QUALITY_SUFFIX, newQualities);
+			}
+		}
+	}
+
+	attachScript(player, SCRIPT_COMMUNITY_CRAFTING_PLAYER);
+
+	CustomerServiceLog("community_crafting", "community_crafting.scriptlib: added player %TU to community crafting project " +
+		craftingTracker, player);
+	CustomerServiceLog("community_crafting", "community_crafting.scriptlib: total players = " + players.size());
+
+	return true;
+}
+
+/**
+ * Gets the objvar array index of a player that is community crafting
+ *
+ * @param craftingTracker  the master object that will keep track of the community crafting process
+ * @param player           the player to test
+ *
+ * @return the index for the player, or -1 on error
+ */
+int getCraftingPlayerIndex(obj_id craftingTracker, obj_id player)
+{
+	// verify our params
+	if ( !isIdValid(craftingTracker) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with invalid craftingTracker");
+		return -1;
+	}
+	if (!isInitializedForCC(craftingTracker))
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with uninitialized craftingTracker " + craftingTracker);
+		return -1;
+	}
+	if ( !isIdValid(player) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting called "+
+			"with invalid player");
+		return -1;
+	}
+
+	obj_id[] players = objvar_mangle.getMangledObjIdArrayObjVar(craftingTracker, OBJVAR_COMMUNITY_CRAFTING_PLAYERS);
+	if ( players == null)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: isPlayerCrafting "+
+			"cannot find players list for craftingTracker " + craftingTracker);
+		return -1;
+	}
+
+	// start at index 1 since 1st player is a dummy
+	for ( int i = 1; i < players.length; ++i )
+	{
+		if ( player == players[i] )
+			return i;
+	}
+	return -1;
+}
+
+/**
+ * Computes the crafting quality and attributes of a resource being added to the project.
+ *
+ * @param resourceAttribs   the attributes of the resource being added
+ * @param schematicData     the schematic data for the project's schematic
+ * @param resourceWeights   resource attribute mapping to use
+ * @param objectAttributes  object attribute array that will be updated by the resource's attributes
+ *
+ * @return the crafting quality (0->1) of the resource, or -1 on error
+ */
+float computeResourceAttributeQuality(resource_attribute[] resourceAttribs, draft_schematic schematicData,
+	resource_weight[] resourceWeights, float[] objectAttributes)
+{
+	// verify our params
+	if ( resourceAttribs == null )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeResourceAttributeQuality "+
+			"called with invalid resource attribs");
+		return -1;
+	}
+	if ( schematicData == null)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeResourceAttributeQuality "+
+			"called with null schematic data");
+		return -1;
+	}
+	if ( objectAttributes == null || objectAttributes.length == 0)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeResourceAttributeQuality "+
+			"called with invalid objectAttributes");
+		return -1;
+	}
+
+	draft_schematic.attribute[] attribs = schematicData.getAttribs();
+	if ( attribs == null || attribs.length == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeResourceAttributeQuality "+
+			"got bad attributes from schematic data");
+		return -1;
+	}
+	if ( attribs.length != objectAttributes.length )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeResourceAttributeQuality "+
+			"mismatched attributes lengths (" + attribs.length + ", " + objectAttributes.length + ")");
+		return -1;
+	}
+
+	// iterate through the schematic attributes, and see if we have a resource mapping for it
+	float totalQuality = 0;
+	int attribsFound = 0;
+	for ( int i = 0; i < attribs.length; ++i )
+	{
+		// make sure the attribute has a valid range
+		if ( attribs[i].maxValue <= attribs[i].minValue )
+			continue;
+
+		String attribName = attribs[i].name.getAsciiId();
+		for ( int j = 0; j < resourceWeights.length; ++j )
+		{
+			if ( attribName.equals(resourceWeights[j].attribName) )
+			{
+				// get the resource attribs for the object attrib
+				float totalWeight = 0;
+				int weightCount = 0;
+				resource_weight.weight[] weights = resourceWeights[j].weights;
+				for ( int k = 0; k < weights.length; ++k )
+				{
+					for ( int m = 0; m < resourceAttribs.length; ++m )
+					{
+						if ( resourceAttribs[m] != null &&
+							resourceAttribs[m].getName().equals(craftinglib.RESOURCE_OBJVAR_NAMES[weights[k].resource]) )
+						{
+							totalWeight += resourceAttribs[m].getValue() * weights[k].weight;
+							weightCount += weights[k].weight;
+						}
+					}
+				}
+				if ( weightCount > 0)
+				{
+					totalWeight /= weightCount;
+					// scale the value to 0->1
+					totalWeight /= 1000.0f;
+					// the quality is the value squared
+					totalWeight = totalWeight * totalWeight;
+					// update our totals
+					objectAttributes[i] += totalWeight;
+					totalQuality += totalWeight;
+					++attribsFound;
+				}
+			}
+		}
+	}
+
+	if ( attribsFound > 0)
+		return totalQuality / attribsFound;
+	return -1;
+}
+
+/**
+ * Computes the crafting quality and attributes of a component being added to the project.
+ *
+ * @param component         the component being added
+ * @param schematicData     the schematic data for the project's schematic
+ * @param objectAttributes  object attribute array that will be updated by the component's attributes
+ *
+ * @return the crafting quality (0->1) of the component, or -1 on error
+ */
+float computeComponentAttributeQuality(obj_id component, draft_schematic schematicData, float[] objectAttributes)
+{
+	// verify our params
+	if ( !isIdValid(component) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+			"called with invalid component");
+		return -1;
+	}
+	if ( schematicData == null)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+			"called with null schematic data");
+		return -1;
+	}
+	if ( objectAttributes == null || objectAttributes.length == 0)
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+			"called with invalid objectAttributes");
+		return -1;
+	}
+
+	// see if the component is crafted or not
+	draft_schematic.attribute[] componentSchematicAttribs = null;
+	int componentSchematic = getSourceDraftSchematic(component);
+	if ( componentSchematic != 0 )
+	{
+		draft_schematic componentSchematicData = getSchematicData(componentSchematic);
+		if ( componentSchematicData == null )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+				"could not get schematic data from schematic " + componentSchematic + " for component " + component);
+			return -1;
+		}
+		componentSchematicAttribs = componentSchematicData.getAttribs();
+		if ( componentSchematicAttribs == null || componentSchematicAttribs.length == 0 )
+		{
+			CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+				"could not get attributes from schematic " + componentSchematic + " for component " + component);
+			return -1;
+		}
+	}
+
+	draft_schematic.attribute[] attribs = schematicData.getAttribs();
+	if ( attribs == null || attribs.length == 0 )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+			"got bad attributes from schematic data");
+		return -1;
+	}
+	if ( attribs.length != objectAttributes.length )
+	{
+		CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+			"mismatched attributes lengths (" + attribs.length + ", " + objectAttributes.length + ")");
+		return -1;
+	}
+
+	// iterate through the schematic attributes, and see if the component has a matching objvar under "crafting_components"
+	float totalQuality = 0;
+	int attribsFound = 0;
+	for ( int i = 0; i < attribs.length; ++i )
+	{
+		string attribObjVarName = craftinglib.COMPONENT_ATTRIBUTE_OBJVAR_NAME + "." + attribs[i].name.getAsciiId();
+		if ( hasObjVar(component, attribObjVarName) )
+		{
+			float value = getFloatObjVar(component, attribObjVarName);
+			float minValue = 0;
+			float maxValue = 1000.0f;
+			if ( componentSchematicAttribs != null )
+			{
+				// find the attribute of the component that matches our schematic attribute
+				for ( int j = 0; j < componentSchematicAttribs.length; ++j )
+				{
+					if ( attribs[i].name.getAsciiId().equals(componentSchematicAttribs[j].name.getAsciiId()) )
+					{
+						if ( componentSchematicAttribs[j].maxValue > componentSchematicAttribs[j].minValue )
+						{
+							minValue = componentSchematicAttribs[j].minValue;
+							maxValue = componentSchematicAttribs[j].maxValue;
+						}
+					}
+				}
+			}
+			if ( value >= minValue && value <= maxValue  )
+			{
+				// scale the value to 0->1
+				value = (value - minValue) / (maxValue - minValue);
+				// the quality is the value squared
+				value = value * value;
+				// update our totals
+				objectAttributes[i] += value;
+				totalQuality += value;
+				++attribsFound;
+			}
+			else
+			{
+				CustomerServiceLog("community_crafting", "WARNING community_crafting.scriptlib: computeComponentAttributeQuality "+
+					"has invalid value " + value + ", range = " + minValue + "-" + maxValue);
+			}
+		}
+	}
+
+	if ( attribsFound > 0)
+		return totalQuality / attribsFound;
+	return -1;
+}
+
+/**
+ * Will call the script function "getAssemblyResourceWeights" on an object, and return the resource attrib mapping.
+ *
+ * @param object  the object that has a script with the "getAssemblyResourceWeights" function
+ *
+ * @return the resource weights, or null on error
+ */
+resource_weight[] getResourceWeightsFromScripts(obj_id object)
+{
+const string FUNCTION_NAME = "getAssemblyResourceWeights";
+
+	if ( !isIdValid(object) )
+		return null;
+
+	String[] scripts = object.getScripts();
+	if ( scripts == null )
+		return null;
+
+	try
+	{
+		for (int i = 0; i < scripts.length; ++i)
+		{
+			script_class_loader loader = script_class_loader.getClassLoader(scripts[i]);
+			if (loader == null)
+				return null;
+			Class cls = loader.getMyClass();
+			if (cls == null)
+				return null;
+			Object obj = loader.getMyObject();
+			if (obj == null)
+				return null;
+			Hashtable methods = loader.getMyMethods();
+			if (methods == null)
+				return null;
+			java.lang.reflect.Method method = (java.lang.reflect.Method)methods.get(FUNCTION_NAME);
+			if (method == null)
+			{
+				try
+				{
+					method = cls.getDeclaredMethod(FUNCTION_NAME, null);
+					if (method != null)
+					{
+						if (method.isAccessible() == false)
+							method.setAccessible(true);
+					}
+				}
+				catch (NoSuchMethodException err)
+				{
+					method = script_class_loader.NO_METHOD;
+				}
+				if (method != null && methods != null)
+					methods.put(method, method);
+			}
+			if (method != null && method != script_class_loader.NO_METHOD)
+			{
+				Object[] args = new Object[0];
+				Object result = method.invoke(obj, args);
+				if ( result != null && result instanceof resource_weight[] )
+					return (resource_weight[])result;
+			}
+		}
+	}
+	catch ( Exception err )
+	{
+
+	}
+	return null;
+}
+
+/**
+ * Sorts an array of ints from highest to lowest, and reorders a parallel array of obj_ids to match the values.
+ * Sorting algorithm from http://www.cs.ubc.ca/spider/harrison/Java/FastQSortAlgorithm.java.html
+ *
+ * @param values  the ints to sort
+ * @param ids     the ids that match the values
+ */
+void doubleSort(int[] values, obj_id[] ids)
+{
+	quickSort(values, ids, 0, values.length - 1);
+	insertionSort(values, ids, 0, values.length-1);
+}
+
+/**
+ * Sorts an array of floats from highest to lowest, and reorders a parallel array of obj_ids to match the values.
+ * Sorting algorithm from http://www.cs.ubc.ca/spider/harrison/Java/FastQSortAlgorithm.java.html
+ *
+ * @param values  the floats to sort
+ * @param ids     the ids that match the values
+ */
+void doubleSort(float[] values, obj_id[] ids)
+{
+	quickSort(values, ids, 0, values.length - 1);
+	insertionSort(values, ids, 0, values.length-1);
+}
+
+/**
+ * Quicksort function.
+ * Sorting algorithm from http://www.cs.ubc.ca/spider/harrison/Java/FastQSortAlgorithm.java.html
+ *
+ * @param values  the ints to sort
+ * @param ids     the ids that match the values
+ * @param lo      the low boundry of the array
+ * @param hi      the high boundry of the array
+ */
+void quickSort(int[] values, obj_id[] ids, int lo, int hi)
+{
+	const int M = 4;
+	if ( hi - lo > M )
+	{
+		int i = (hi + lo) / 2;
+		if ( values[lo] < values[i] )
+			swap(values, ids, lo ,i); // Tri-Median Method!
+		if ( values[lo] < values[hi] )
+			swap(values, ids, lo, hi);
+		if ( values[i] < values[hi] )
+			swap(values, ids, i, hi);
+		int j = hi - 1;
+		swap(values, ids, i, j);
+		i = lo;
+		int v = values[j];
+		for (;;)
+		{
+			while( values[++i] > v )
+				;
+			while( values[--j] < v)
+				;
+			if ( j < i )
+				break;
+			swap(values, ids, i, j);
+		}
+		swap(values, ids, i, hi-1);
+		quickSort(values, ids, lo, j);
+		quickSort(values, ids, i+1, hi);
+	}
+}
+
+/**
+ * Insertionsort function.
+ * Sorting algorithm from http://www.cs.ubc.ca/spider/harrison/Java/FastQSortAlgorithm.java.html
+ *
+ * @param values  the ints to sort
+ * @param ids     the ids that match the values
+ * @param lo      the low boundry of the array
+ * @param hi      the high boundry of the array
+ */
+void insertionSort(int[] values, obj_id[] ids, int lo, int hi)
+{
+	for ( int i = lo + 1; i <= hi; i++ )
+	{
+		int v = values[i];
+		obj_id w = ids[i];
+		int j = i;
+		while ( (j > lo) && (values[j-1] < v) )
+		{
+			values[j] = values[j-1];
+			ids[j] = ids[j-1];
+			j--;
+		}
+		values[j] = v;
+		ids[j] = w;
+	}
+}
+
+/**
+ * Swap two ints and two obj_ids.
+ */
+void swap(int[] values, obj_id[] ids, int i, int j)
+{
+	int T = values[i];
+	values[i] = values[j];
+	values[j] = T;
+
+	obj_id t = ids[i];
+	ids[i] = ids[j];
+	ids[j] = t;
+}
+
+/**
+ * Quicksort function.
+ * Sorting algorithm from http://www.cs.ubc.ca/spider/harrison/Java/FastQSortAlgorithm.java.html
+ *
+ * @param values  the floats to sort
+ * @param ids     the ids that match the values
+ * @param lo      the low boundry of the array
+ * @param hi      the high boundry of the array
+ */
+void quickSort(float[] values, obj_id[] ids, int lo, int hi)
+{
+	const int M = 4;
+	if ( hi - lo > M )
+	{
+		int i = (hi + lo) / 2;
+		if ( values[lo] < values[i] )
+			swap(values, ids, lo ,i); // Tri-Median Method!
+		if ( values[lo] < values[hi] )
+			swap(values, ids, lo, hi);
+		if ( values[i] < values[hi] )
+			swap(values, ids, i, hi);
+		int j = hi - 1;
+		swap(values, ids, i, j);
+		i = lo;
+		float v = values[j];
+		for (;;)
+		{
+			while( values[++i] > v )
+				;
+			while( values[--j] < v)
+				;
+			if ( j < i )
+				break;
+			swap(values, ids, i, j);
+		}
+		swap(values, ids, i, hi-1);
+		quickSort(values, ids, lo, j);
+		quickSort(values, ids, i+1, hi);
+	}
+}
+
+/**
+ * Insertionsort function.
+ * Sorting algorithm from http://www.cs.ubc.ca/spider/harrison/Java/FastQSortAlgorithm.java.html
+ *
+ * @param values  the floats to sort
+ * @param ids     the ids that match the values
+ * @param lo      the low boundry of the array
+ * @param hi      the high boundry of the array
+ */
+void insertionSort(float[] values, obj_id[] ids, int lo, int hi)
+{
+	for ( int i = lo + 1; i <= hi; i++ )
+	{
+		float v = values[i];
+		obj_id w = ids[i];
+		int j = i;
+		while ( (j > lo) && (values[j-1] < v) )
+		{
+			values[j] = values[j-1];
+			ids[j] = ids[j-1];
+			j--;
+		}
+		values[j] = v;
+		ids[j] = w;
+	}
+}
+
+/**
+ * Swap two ints and two obj_ids.
+ */
+void swap(float[] values, obj_id[] ids, int i, int j)
+{
+	float T = values[i];
+	values[i] = values[j];
+	values[j] = T;
+
+	obj_id t = ids[i];
+	ids[i] = ids[j];
+	ids[j] = t;
+}
+
+

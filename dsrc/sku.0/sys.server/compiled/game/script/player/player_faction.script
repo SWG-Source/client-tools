@@ -1,0 +1,749 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.colors_hex;
+include library.factions;
+include library.gcw;
+include library.instance;
+include library.prose;
+include library.pvp;
+include library.regions;
+include library.sui;
+include library.utils;
+include library.ai_lib;
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_ABORT_RESIGNATION		= new string_id("faction_recruiter", "abort_resignation");
+const string_id SID_SUI_RESIG_COMPLETE_IN_5	= new string_id("faction_recruiter", "sui_resig_complete_in_5");
+
+const string_id SID_NOT_ALIGNED				= new string_id("faction_recruiter", "not_aligned");
+const string_id SID_PVP_STATUS_CHANGING		= new string_id("faction_recruiter", "pvp_status_changing");
+const string_id SID_ON_LEAVE_TO_COVERT		= new string_id("faction_recruiter", "on_leave_to_covert");
+const string_id SID_COVERT_TO_OVERT			= new string_id("faction_recruiter", "covert_to_overt");
+const string_id SID_OVERT_TO_COVERT			= new string_id("faction_recruiter", "overt_to_covert");
+const string_id SID_DUNGEON_NOCHANGE		= new string_id("faction_recruiter", "dungeon_nochange");
+
+
+const string COLOR_REBELS					= "\\" + colors_hex.COLOR_REBELS;
+const string COLOR_IMPERIALS					= "\\" + colors_hex.COLOR_IMPERIALS;
+
+/***** COMMANDS ********************************************************/
+
+commandHandler cmdPVP()
+{
+	if (factions.isInAdhocPvpArea(self))
+	{
+		pvpMakeDeclared(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	string recruiter = "";
+
+	string planet = getCurrentSceneName();
+
+	if ( (planet == null) || (planet.equals("")) )
+		return SCRIPT_OVERRIDE;
+	else if (planet == "dungeon1")
+	{
+		sendSystemMessage(self, SID_DUNGEON_NOCHANGE);
+		return SCRIPT_OVERRIDE;
+	}
+
+	if(factions.isRebel(self))
+	{
+		recruiter = "object/mobile/dressed_rebel_major_human_male_01.iff";
+	}
+	else if(factions.isImperial(self))
+	{
+		recruiter = "object/mobile/dressed_imperial_officer_m.iff";
+	}
+	else
+	{
+		sendSystemMessage(self, SID_NOT_ALIGNED);
+		return SCRIPT_OVERRIDE;
+	}
+
+	if(factions.isPVPStatusChanging(self))
+	{
+		sendSystemMessage(self, SID_PVP_STATUS_CHANGING);
+		return SCRIPT_OVERRIDE;
+	}
+
+	prose_package pp = new prose_package();
+
+	// if player is currently on leave then go to active duty (covert)
+	if(factions.isOnLeave(self))
+	{
+		pp = prose.setStringId(pp, SID_ON_LEAVE_TO_COVERT);
+		commPlayer(self, self, pp, recruiter);
+
+		factions.goCovertWithDelay(self, 1f);
+		return SCRIPT_CONTINUE;
+	}
+
+	// if player is currently in special forces (overt), then go back to regular duty (covert)
+	if(pvpGetType(self) == PVPTYPE_DECLARED)
+	{
+		pp = prose.setStringId(pp, SID_OVERT_TO_COVERT);
+		commPlayer(self, self, pp, recruiter);
+
+		factions.goCovertWithDelay(self, 300f);
+		return SCRIPT_CONTINUE;
+	}
+
+	// if player is currently on active duty (covert), then assign them to special forces (overt)
+	if(pvpGetType(self) == PVPTYPE_COVERT)
+	{
+		pp = prose.setStringId(pp, SID_COVERT_TO_OVERT);
+		commPlayer(self, self, pp, recruiter);
+
+		factions.goOvertWithDelay(self, 30f);
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnPvpTypeChanged(int oldType, int newType)
+{
+	// if the player is going overt, set the "newly declared" timer
+	if (newType == PVPTYPE_DECLARED)
+	{
+		utils.setScriptVar(self, factions.VAR_NEWLY_DECLARED, getGameTime());
+		messageTo(self, "msgNewlyDeclared", null, factions.NEWLY_DECLARED_INTERVAL, false);
+	}
+
+	//debugSpeakMsg(self, "PVP TYPE: old="+oldType+" new="+newType);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnPvpFactionChanged(int oldFaction, int newFaction)
+{
+	//debugSpeakMsg(self, "PVP FACTION: old="+oldFaction+" new="+newFaction);
+	return SCRIPT_CONTINUE;
+}
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnEnterRegion(string planet, string name)
+{
+	if(name.startsWith("gcw_") && name.endsWith("_start"))
+	{
+		location baseLoc = new location();
+		baseLoc.area = planet;
+
+		string waypointName = "";
+
+		if(hasObjVar(self, "gcw.static_base.waypoint." + planet))
+		{
+			obj_id waypoint = getObjIdObjVar(self, "gcw.static_base.waypoint." + planet);
+
+			if(exists(waypoint))
+				return SCRIPT_CONTINUE;
+		}
+
+		if(planet.equals("talus"))
+		{
+			baseLoc.x = -4938f;
+			baseLoc.y = 0f;
+			baseLoc.z = -3107f;
+			waypointName = "Weapons Depot";
+		}
+		else if(planet.equals("corellia"))
+		{
+			baseLoc.x = 4772f;
+			baseLoc.y = 0f;
+			baseLoc.z = -5233f;
+			waypointName = "Tactical Training Facility";
+		}
+		else if(planet.equals("naboo"))
+		{
+			baseLoc.x = 1019f;
+			baseLoc.y = 0f;
+			baseLoc.z = -1508f;
+			waypointName = "Weapons Development Facility";
+		}
+		else
+			return SCRIPT_CONTINUE;
+
+		obj_id waypoint = createWaypointInDatapad(self, baseLoc);
+
+		if(isIdValid(waypoint))
+		{
+			setWaypointName(waypoint, waypointName);
+			setWaypointColor(waypoint, "white");
+			setWaypointActive(waypoint, true);
+			setWaypointVisible(waypoint, true);
+
+			setObjVar(self, "gcw.static_base.waypoint." + planet, waypoint);
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	region enteredRegion = getRegion(planet, name);
+	if(enteredRegion != null && enteredRegion.getPvPType() == regions.PVP_REGION_TYPE_ADVANCED)
+	{
+		if(hasObjVar(self, "gcw.static_base.waypoint." + planet))
+		{
+			obj_id waypoint = getObjIdObjVar(self, "gcw.static_base.waypoint." + planet);
+			destroyWaypointInDatapad(waypoint, self);
+
+			removeObjVar(self, "gcw.static_base.waypoint." + planet);
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	pvp.validatePlayerDamageTracking(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id wpn, int[] damage)
+{
+	pvp.updatePlayerDamageTracking(self, attacker, wpn, damage);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCloneRespawn()
+{
+	if (utils.hasScriptVar(self, factions.IN_ADHOC_PVP_AREA) && !getLocation(self).area.equals("adventure2"))
+		utils.removeScriptVar(self, factions.IN_ADHOC_PVP_AREA);
+
+	if ( !hasScript (self, "theme_park.dungeon.corvette.timer") && !instance.isInInstanceArea(self) )
+	{
+		if((pvpGetType(self)==PVPTYPE_DECLARED)||(pvpGetType(self)==PVPTYPE_COVERT))
+		{
+			factions.goOnLeaveWithDelay(self, 0f);
+		}
+	}
+	pvp.clearPlayerDamageTracking(self);
+	return SCRIPT_CONTINUE;
+}
+
+
+
+// don't use consts in different files for string id's. It's fucking lame, and makes you an asshole.
+// if you do, someone who tries to change them can't find the fucking entries.Fuckers.
+
+
+messageHandler msgResignFromFaction()
+{
+	if (hasSkill(self, "force_rank_light_novice") || hasSkill(self, "force_rank_dark_novice"))
+	{
+		sendSystemMessage(self, new string_id("faction_recruiter", "jedi_cant_resign"));
+		return SCRIPT_CONTINUE;
+	}
+	factions.resignFromFaction(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgGoCovert()
+{
+	obj_id top = getTopMostContainer (self);
+	if(isIdValid(top))
+	{
+		string bldgName = getTemplateName (top);
+		if (bldgName == "object/building/general/space_dungeon_corellian_corvette.iff" || bldgName == "object/building/general/space_dungeon_corellian_corvette_imperial.iff" || bldgName == "object/building/general/space_dungeon_corellian_corvette_rebel.iff")
+		{
+			setObjVar (self, "corl_corvette.made_overt", 1);
+			removeObjVar(self, "intChangingFactionStatus");
+
+			return SCRIPT_CONTINUE;
+		}
+	}
+	if (hasScript(self, "force_rank_light_novice") || hasScript(self, "force_rank_dark_novice"))
+	{
+		sendSystemMessage(self, new string_id("faction_recruiter", "jedi_cant_go_covert"));
+		removeObjVar(self, "intChangingFactionStatus");
+
+		return SCRIPT_CONTINUE;
+	}
+
+	region[] pvpRegions = getRegionsWithPvPAtPoint(getLocation(self), regions.PVP_REGION_TYPE_ADVANCED);
+
+	if(pvpRegions != null && pvpRegions.length > 0)
+	{
+		removeObjVar(self, "intChangingFactionStatus");
+
+		sendSystemMessage(self, new string_id("gcw", "pvp_advanced_region_cannot_go_covert"));
+		return SCRIPT_CONTINUE;
+	}
+
+	// make the player covert
+	factions.goCovert(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgGoOnLeave()
+{
+	if (hasScript(self, "force_rank_light_novice") || hasScript(self, "force_rank_dark_novice"))
+	{
+		sendSystemMessage(self, new string_id("faction_recruiter", "jedi_cant_go_covert"));
+		return SCRIPT_CONTINUE;
+	}
+
+	factions.goOnLeave(self);
+	return SCRIPT_CONTINUE;
+
+
+}
+
+messageHandler msgGoOvert()
+{
+	if (hasScript(self, "force_rank_light_novice") || hasScript(self, "force_rank_dark_novice"))
+	{
+		sendSystemMessage(self, new string_id("faction_recruiter", "jedi_cant_go_covert"));
+		return SCRIPT_CONTINUE;
+	}
+
+// No neutral special forces folks
+	int intFaction = pvpGetAlignedFaction(self);
+	if(intFaction==0)
+	{
+		sendSystemMessage(self, new string_id("spam", "no_spec_force_neutral") );
+		removeObjVar(self, "intChangingFactionStatus");
+		return SCRIPT_CONTINUE;
+	}
+
+	factions.goOvert(self);
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** COMMANDHANDLERS *************************************************/
+commandHandler gcwStatus()
+{
+
+	string_id strSpam = new string_id("gcw", "gcw_status_info");
+	sendSystemMessage(self, strSpam);
+	return SCRIPT_CONTINUE;
+
+}
+
+commandHandler cmdDelegateFactionPoints()
+{
+	//debugSpeakMsg(self, "cmdDelegateFactionPoints entered...");
+	factions.delegateFactionPoints(self, target, params);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDelegateSui()
+{
+	obj_id target = utils.getObjIdScriptVar(self, "delegate.target");
+	utils.removeScriptVarTree(self, "delegate");
+	if ( !isIdValid(target) )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	int amt = sui.getTransferInputTo(params);
+	if ( amt < 1 )
+		return SCRIPT_CONTINUE;
+
+	queueCommand(self, ##"delegateFactionPoints", target, Integer.toString(amt), COMMAND_PRIORITY_DEFAULT);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLeaveFactionSui()
+{
+	LOG("gcw", "got mst");
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	string txt = sui.getInputBoxText(params);
+	if ( bp == sui.BP_CANCEL || txt == null || !toLower(txt).equals("yes") )
+	{
+		removeObjVar(player, factions.VAR_RESIGNING);
+		sendSystemMessage(player, SID_ABORT_RESIGNATION);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (hasSkill(player, "force_rank_light_novice") || hasSkill(player, "force_rank_dark_novice"))
+	{
+		sendSystemMessage(player, new string_id("faction_recruiter", "jedi_cant_resign"));
+		return SCRIPT_CONTINUE;
+	}
+
+	sui.msgbox(player, utils.packStringId(SID_SUI_RESIG_COMPLETE_IN_5));
+	setObjVar(self, "intChangingFactionStatus", 1);
+
+
+	params.put("faction_id", pvpGetAlignedFaction(self));
+	messageTo(player, "msgResignFromFaction", params, factions.RESIGN_TIME, true);
+	CustomerServiceLog( "player_faction", "PLAYER-FACTION ALTERED|TIME:"+getGameTime()+"|PLAYER:"+player+"|PLAYER NAME:"+getName(player)+"|ZONE:"+getCurrentSceneName()+"|PLAYER CONFIRMED DESIRE TO LEAVE THEIR FACTION VIA RECRUITER. TOLD PLAYER OBJECT TO RESIGN FROM FACTION" );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleGoCovert()
+{
+
+	if(hasObjVar(self, "intChangingFactionStatus"))
+	{
+		LOG("gcw", "objvar");
+		return SCRIPT_CONTINUE;
+	}
+	// you can't go covert using the sui if you're declared
+	if(pvpGetType(self)==PVPTYPE_DECLARED)
+	{
+		string_id strSpam = new string_id("gcw", "cannot_change_from_combatant_in_field");
+		sendSystemMessage(self, strSpam);
+		return SCRIPT_CONTINUE;
+	}
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	string txt = sui.getInputBoxText(params);
+	if ( bp == sui.BP_CANCEL || txt == null || !toLower(txt).equals("yes") )
+	{
+		string_id strSpam = new string_id("gcw", "abort_field_change");
+		sendSystemMessage(self, strSpam);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (hasSkill(player, "force_rank_light_novice") || hasSkill(player, "force_rank_dark_novice"))
+	{
+		sendSystemMessage(player, new string_id("faction_recruiter", "jedi_cant_go_covert"));
+		return SCRIPT_CONTINUE;
+	}
+	string_id strSpam = new string_id("gcw", "handle_go_covert");
+	CustomerServiceLog( "player_faction", "PLAYER-FACTION ALTERED|TIME:"+getGameTime()+"|PLAYER:"+self+"|PLAYER NAME:"+getName(self)+"|ZONE:"+getCurrentSceneName()+"|Player confirmed desire to change in-field faction status to covert. This will apply in 30 seconds");
+	sui.msgbox(player, utils.packStringId(strSpam));
+	setObjVar(self, "intChangingFactionStatus", 1);
+	factions.goCovertWithDelay(self, 30);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleGoOvert()
+{
+
+	if(hasObjVar(self, "intChangingFactionStatus"))
+	{
+		LOG("gcw", "objvar");
+		return SCRIPT_CONTINUE;
+	}
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	string txt = sui.getInputBoxText(params);
+	if ( bp == sui.BP_CANCEL || txt == null || !toLower(txt).equals("yes") )
+	{
+		string_id strSpam = new string_id("gcw", "abort_field_change");
+		sendSystemMessage(self, strSpam);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (hasSkill(player, "force_rank_light_novice") || hasSkill(player, "force_rank_dark_novice"))
+	{
+		sendSystemMessage(player, new string_id("faction_recruiter", "jedi_cant_go_covert"));
+		return SCRIPT_CONTINUE;
+	}
+	string_id strSpam = new string_id("gcw", "handle_go_covert");
+	CustomerServiceLog( "player_faction", "PLAYER-FACTION ALTERED|TIME:"+getGameTime()+"|PLAYER:"+self+"|PLAYER NAME:"+getName(self)+"|ZONE:"+getCurrentSceneName()+"|Player confirmed desire to change in-field faction status to overt. This will apply in 300 seconds.");
+	sui.msgbox(player, utils.packStringId(strSpam));
+	setObjVar(self, "intChangingFactionStatus", 1);
+	factions.goOvertWithDelay(self, 300);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler recievePvpRegionBonus()
+{
+	if (!utils.hasScriptVar(self, gcw.PVP_REGION_ACTIVITY_PERFORMED))
+		return SCRIPT_CONTINUE;
+	else
+		utils.removeScriptVar(self, gcw.PVP_REGION_ACTIVITY_PERFORMED);
+
+	int points = params.getInt("points");
+	string information = params.getString("info");
+	gcw.grantModifiedGcwPoints(self, points, gcw.GCW_POINT_TYPE_GROUND_PVP_REGION, information);
+	//LOG("doLogging", "Recieved "+points+" from PvP region controller");
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler cmdFactionalHelper()
+{
+	factions.neutralMercenaryStatusMenu(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleFactionalHelperChoice()
+{
+	if (!utils.hasScriptVar(self, factions.SCRIPTVAR_FACTIONAL_HELPER_SUI_ID))
+		return SCRIPT_CONTINUE;
+
+	int pid = utils.getIntScriptVar(self, factions.SCRIPTVAR_FACTIONAL_HELPER_SUI_ID);
+	utils.removeScriptVar(self, factions.SCRIPTVAR_FACTIONAL_HELPER_SUI_ID);
+
+	if (!utils.hasScriptVar(self, factions.SCRIPTVAR_FACTIONAL_HELPER_SUI_CHOICES))
+		return SCRIPT_CONTINUE;
+
+	string[] choices = utils.getStringArrayScriptVar(self, factions.SCRIPTVAR_FACTIONAL_HELPER_SUI_CHOICES);
+	utils.removeScriptVar(self, factions.SCRIPTVAR_FACTIONAL_HELPER_SUI_CHOICES);
+
+	if (choices == null)
+		return SCRIPT_CONTINUE;
+
+	if (pid != params.getInt("pageId"))
+		return SCRIPT_CONTINUE;
+
+	// must be neutral to be mercenary
+	if (0 != pvpGetAlignedFaction(self))
+	{
+		sendSystemMessage(self, "You must be a Civilian to be a factional helper.", "");
+		return SCRIPT_CONTINUE;
+	}
+
+	// cannot be in combat
+	if (ai_lib.isInCombat(self))
+	{
+		sendSystemMessage(self, "You cannot change your factional helper status while in combat.", "");
+		return SCRIPT_CONTINUE;
+	}
+
+	int bp = sui.getIntButtonPressed(params);
+	if (bp == sui.BP_OK)
+	{
+		int rowSelected = sui.getListboxSelectedRow(params);
+		if ((rowSelected >= 0) && (rowSelected < choices.length))
+		{
+			if (choices[rowSelected].equals(factions.MERC_END_COVERT_IMPERIAL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_IMPERIAL_COMBATANT_END);					
+			}
+			else if (choices[rowSelected].equals(factions.MERC_END_OVERT_IMPERIAL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_IMPERIAL_SF_END);					
+			}
+			else if (choices[rowSelected].equals(factions.MERC_END_COVERT_REBEL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_REBEL_COMBATANT_END);					
+			}
+			else if (choices[rowSelected].equals(factions.MERC_END_OVERT_REBEL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_REBEL_SF_END);
+			}
+			else if (choices[rowSelected].equals(factions.MERC_BEGIN_COVERT_IMPERIAL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_IMPERIAL_COMBATANT_BEGIN);				
+			}
+			else if (choices[rowSelected].equals(factions.MERC_BEGIN_OVERT_IMPERIAL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_IMPERIAL_SF_BEGIN);				
+			}
+			else if (choices[rowSelected].equals(factions.MERC_BEGIN_COVERT_REBEL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_REBEL_COMBATANT_BEGIN);								
+			}
+			else if (choices[rowSelected].equals(factions.MERC_BEGIN_OVERT_REBEL))
+			{
+				sendSystemMessage(self, factions.SID_MERC_REBEL_SF_BEGIN);
+			}
+			else
+			{
+				return SCRIPT_CONTINUE;
+			}
+
+			dictionary messageToParams = new dictionary();
+			messageToParams.put("mercenary_type", choices[rowSelected]);
+			
+			if (isGod(self))
+			{
+				sendSystemMessage(self, "Reducing wait to 5 seconds ***BECAUSE YOU ARE IN GOD MODE***.", "");
+				messageTo(self, "executeFactionalHelperChoice", messageToParams, 5.0f, false);
+			}
+			else
+			{
+				messageTo(self, "executeFactionalHelperChoice", messageToParams, 60.0f, false);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler executeFactionalHelperChoice()
+{
+	// must be neutral to be mercenary
+	if (0 != pvpGetAlignedFaction(self))
+	{
+		sendSystemMessage(self, "You must be a Civilian to be a factional helper.", "");
+		return SCRIPT_CONTINUE;
+	}
+
+	// cannot be in combat
+	if (ai_lib.isInCombat(self))
+	{
+		sendSystemMessage(self, "You cannot change your factional helper status while in combat.", "");
+		return SCRIPT_CONTINUE;
+	}
+
+	string mercenary_type = params.getString("mercenary_type");
+	if (mercenary_type == null)
+		return SCRIPT_CONTINUE;
+
+	if (mercenary_type.equals(factions.MERC_END_COVERT_IMPERIAL))
+	{
+		pvpNeutralSetMercenaryFaction(self, 0, false);
+		sendSystemMessage(self, factions.SID_MERC_IMPERIAL_COMBATANT_TERMINATED);
+	}
+	else if (mercenary_type.equals(factions.MERC_END_OVERT_IMPERIAL))
+	{
+		pvpNeutralSetMercenaryFaction(self, 0, false);
+		sendSystemMessage(self, factions.SID_MERC_IMPERIAL_SF_TERMINATED);
+	}
+	else if (mercenary_type.equals(factions.MERC_END_COVERT_REBEL))
+	{
+		pvpNeutralSetMercenaryFaction(self, 0, false);
+		sendSystemMessage(self, factions.SID_MERC_REBEL_COMBATANT_TERMINATED);		
+	}
+	else if (mercenary_type.equals(factions.MERC_END_OVERT_REBEL))
+	{
+		pvpNeutralSetMercenaryFaction(self, 0, false);
+		sendSystemMessage(self, factions.SID_MERC_REBEL_SF_TERMINATED);		
+	}
+	else if (mercenary_type.equals(factions.MERC_BEGIN_COVERT_IMPERIAL))
+	{
+		pvpNeutralSetMercenaryFaction(self, ##"imperial", false);
+		sendSystemMessage(self, factions.SID_MERC_IMPERIAL_COMBATANT_GRANTED);		
+	}
+	else if (mercenary_type.equals(factions.MERC_BEGIN_OVERT_IMPERIAL))
+	{
+		pvpNeutralSetMercenaryFaction(self, ##"imperial", true);
+		sendSystemMessage(self, factions.SID_MERC_IMPERIAL_SF_GRANTED);		
+	}
+	else if (mercenary_type.equals(factions.MERC_BEGIN_COVERT_REBEL))
+	{
+		pvpNeutralSetMercenaryFaction(self, ##"rebel", false);
+		sendSystemMessage(self, factions.SID_MERC_REBEL_COMBATANT_GRANTED);		
+	}
+	else if (mercenary_type.equals(factions.MERC_BEGIN_OVERT_REBEL))
+	{
+		pvpNeutralSetMercenaryFaction(self, ##"rebel", true);
+		sendSystemMessage(self, factions.SID_MERC_REBEL_SF_GRANTED);		
+	}
+	else
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// Command handler for the /battlefield command to show the battlefield sui.
+commandHandler cmdGcwScore()
+{
+	showGcwScoreboard(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler cmdGcwSkirmishCityHelp()
+{
+	gcw.gcwCityHelpText(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler displayGcwScoreSui()
+{
+	showGcwScoreboard(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+// Shows the scoreboard for the battle that is currently raging.
+void showGcwScoreboard(obj_id self)
+{
+	if(!isIdValid(self) || !exists(self))
+	{
+		return;
+	}
+
+	if(utils.hasScriptVar(self, "gcw.score.pid"))
+	{
+		int pid = utils.getIntScriptVar(self, "gcw.score.pid");
+
+		utils.removeScriptVar(self, "gcw.score.pid");
+
+		forceCloseSUIPage(pid);
+	}
+
+	string[][] scoreData = gcw_score.getAllGcwData();
+
+	if(scoreData == null || scoreData.length <= 0)
+	{
+		sendSystemMessage(self, new string_id("spam", "gcw_score_empty"));
+		return;
+	}
+
+	string [] table_titles = { "@guild:table_title_name", "@spam:table_title_faction", "@spam:table_title_profession", "@spam:table_title_level", 
+					"@spam:table_title_gcw", "@spam:table_title_pvp_kills", "@spam:table_title_kills",
+					"@spam:table_title_assists", "@spam:table_title_crafted", "@spam:table_title_destroyed" };
+					
+	string [] table_types = { "text", "text", "text", "integer", "integer", "integer", "integer", "integer", "integer", "integer" };
+
+	string statisticsTitle = "Invasion Statistics";
+
+	int phase = gcw_score.getGcwPhase();
+	int winner = gcw_score.getGcwWinner();
+	
+	string invasionPhase = "";
+	string invasionWinner = "";
+	
+	switch(phase)
+	{
+		case gcw.GCW_CITY_PHASE_UNKNOWN:
+			invasionPhase = "Invasion Over";
+			
+			if(winner == factions.FACTION_FLAG_REBEL)
+			{
+				invasionWinner = COLOR_REBELS + " Rebels won!";
+			}
+			else if(winner == factions.FACTION_FLAG_IMPERIAL)
+			{
+				invasionWinner = COLOR_IMPERIALS + " Imperials won!";
+			}
+			break;
+		case gcw.GCW_CITY_PHASE_CONSTRUCTION:
+			invasionPhase = "Construction Underway";
+			break;
+		case gcw.GCW_CITY_PHASE_COMBAT:
+			invasionPhase = "Invasion Underway";
+			break;
+		default:
+			invasionPhase = "Unknown";
+			break;
+	}
+
+	obj_id gcwObject = gcw.getInvasionSequencerNearby(self);
+
+	if(!isIdValid(gcwObject) || !exists(gcwObject))
+	{
+		return;
+	}
+
+	string phaseTime = "Time left: " + gcw.getFormattedInvasionTime(gcwObject, phase);
+
+	string statisticsInfoStr = "Invasion phase: " + invasionPhase + "\n" + phaseTime + "\n" + invasionWinner;
+
+	int pid = sui.tableRowMajor(self, self, sui.OK_CANCEL, statisticsTitle, "onGcwScore", statisticsInfoStr, table_titles, table_types, scoreData, true);
+
+	utils.setScriptVar(self, "gcw.score.pid", pid);
+}

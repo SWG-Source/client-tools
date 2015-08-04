@@ -1,0 +1,318 @@
+
+include library.callable;
+include library.create;
+include library.utils;
+
+//constants
+const string_id SID_DANCE			= new string_id("pet/pet_menu", "dance");
+const string TRIG_VOLUME			= "droid_trig_volume";
+const int TRIG_RADIUS				= 20;
+const boolean PROMISCUOUS			= true;
+
+trigger OnObjectMenuRequest(obj_id player, menu_info item)
+{
+	if(getMaster(self) != player)
+		return SCRIPT_CONTINUE;
+	
+	//verify that the droid is not still playing music and dancing
+	if(!utils.hasScriptVar(self, "music.stillPlaying"))
+		item.addRootMenu(menu_info_types.SERVER_MENU1, SID_DANCE);
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(getMaster(self) != player)
+		return SCRIPT_CONTINUE;
+
+	if(item == menu_info_types.SERVER_MENU1 && !utils.hasScriptVar(self, "music.stillPlaying"))
+	{
+		//get current location
+		location startLocation = getLocation(self);
+		
+		//get the pcd
+		obj_id pcd = callable.getCallableCD(self);
+		
+		//start music
+		obj_id soundObject = createObject("object/soundobject/soundobject_figrin_dan_band_droid.iff", startLocation);
+		
+		//make holo pets
+		string template = getTemplateName(self);
+		string droidName = getName(self);
+		
+		//determine if we are going to use the default name or the name the player has given his droid
+		string[] splitName = split(droidName, '/');
+		if(splitName.length > 1)
+			droidName = "@" + droidName;
+		
+		//use current location as default
+		location holoOneLocation = startLocation;
+		boolean goodLocation = false;
+		
+		//loop 10 times looking for a good location in a circle around the droid
+		for(int i = 0; i < 10; ++i)
+		{
+			holoOneLocation = utils.getRandomLocationInRing(startLocation, 1.0f, 2.0f);
+			//if we are in an interior we want to verify we dont go out of bounds
+			if(isIdValid(holoOneLocation.cell))
+			{
+				if(isValidInteriorLocation(holoOneLocation))
+				{
+					goodLocation = true;
+					break;
+				}
+			}
+			else
+			{
+				goodLocation = true;
+				break;
+			}
+		}
+		
+		//create hologram 1
+		obj_id holo_01 = create.object(template, holoOneLocation, false);
+		//attach dancing droid script
+		attachScript(holo_01, "ai.dancing_droid");
+		//make invulnerable
+		setInvulnerable(holo_01, true);
+		//make it a hologram
+		setHologramType(holo_01, HOLOGRAM_TYPE1_QUALITY3);
+		//set the name
+		setName(holo_01, droidName);
+		
+		//start finding location for hologram 2
+		location holoTwoLocation = startLocation;
+		goodLocation = false;
+		
+		//loop 10 times looking for a suitable location
+		for(int i = 0; i < 10; ++i)
+		{
+			holoTwoLocation = utils.getRandomLocationInRing(startLocation, 1.0f, 2.0f);
+			//if we are inside we want to make sure we dont go thru a wall and we are not on top of the other hologram
+			if(isIdValid(holoTwoLocation.cell))
+			{
+				if(isValidInteriorLocation(holoTwoLocation) && holoTwoLocation != holoOneLocation)
+				{
+					goodLocation = true;
+					break;
+				}
+			}
+			else if(holoTwoLocation != holoOneLocation)
+			{
+				goodLocation = true;
+				break;
+			}
+		}
+		
+		//create hologram 2
+		obj_id holo_02 = create.object(template, holoTwoLocation, false);
+		//attach dancing droid script
+		attachScript(holo_02, "ai.dancing_droid");
+		//make invulnerable
+		setInvulnerable(holo_02, true);
+		//make into hologram
+		setHologramType(holo_02, HOLOGRAM_TYPE1_QUALITY3);
+		//set the name
+		setName(holo_02, droidName);
+		
+		
+		//set still playing scriptvars on dancers
+		utils.setScriptVar(self, "music.stillPlaying", 1);
+		utils.setScriptVar(holo_01, "music.stillPlaying", 1);
+		utils.setScriptVar(holo_02, "music.stillPlaying", 1);
+		
+		//set starting locations on dancers
+		utils.setScriptVar(self, "dancingDroid.startLocation", startLocation);
+		utils.setScriptVar(holo_01, "dancingDroid.startLocation", holoOneLocation);
+		utils.setScriptVar(holo_02, "dancingDroid.startLocation", holoTwoLocation);
+		
+		//set the obj_ids of the dancers on the pcd
+		setObjVar(pcd, "dancingDroid.soundObject", soundObject);
+		setObjVar(pcd, "dancingDroid.holo_02", holo_02);
+		setObjVar(pcd, "dancingDroid.holo_01", holo_01);
+		
+		//create our out-of-bounds trigger volume
+		createTriggerVolume(TRIG_VOLUME, TRIG_RADIUS, PROMISCUOUS);
+		
+		//send our ending messageTo, arrives around the time of the end of the song
+		messageTo(self, "clearDancingDroidScriptVar", null, 165, false);
+		
+		//tell our dancers to start dancing
+		messageTo(self, "moveDancingDroidNewLocation", null, 1, false);
+		messageTo(holo_01, "moveDancingDroidNewLocation", null, 2, false);
+		messageTo(holo_02, "moveDancingDroidNewLocation", null, 3, false);
+		
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id breacher)
+{
+	return SCRIPT_CONTINUE;
+}
+trigger OnDestroy()
+{
+	//make sure sound object is removed from world
+	obj_id petControlDevice = callable.getCallableCD(self);
+	if(isIdValid(petControlDevice))
+	{
+		if(hasObjVar(petControlDevice, "dancingDroid.soundObject"))
+		{
+			obj_id soundObject = getObjIdObjVar(petControlDevice, "dancingDroid.soundObject");
+			dictionary dict = new dictionary();
+			dict.put("pcd", petControlDevice);
+			messageTo(soundObject, "destroyDancingDroidSoundObject", dict, 0, true);
+		}
+		obj_id pcd = callable.getCallableCD(self);
+		obj_id holo_01 = getObjIdObjVar(pcd, "dancingDroid.holo_01");
+		obj_id holo_02 = getObjIdObjVar(pcd, "dancingDroid.holo_02");
+		
+		utils.removeScriptVar(self, "music.stillPlaying");
+		removeObjVar(pcd, "dancingDroid.holo_01");
+		removeObjVar(pcd, "dancingDroid.holo_02");
+		
+		destroyObject(holo_01);
+		destroyObject(holo_02);
+		removeTriggerVolume(TRIG_VOLUME);
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id breacher)
+{
+	//if it is our out-of-bounds trigger volume, we want to clean up the sounds and holograms
+	if(volumeName.equals(TRIG_VOLUME))
+	{
+		if(isPlayer(breacher) && getMaster(self) == breacher)
+		{
+			obj_id pcd = callable.getCallableCD(self);
+			obj_id soundObject = getObjIdObjVar(pcd, "dancingDroid.soundObject");
+			obj_id holo_01 = getObjIdObjVar(pcd, "dancingDroid.holo_01");
+			obj_id holo_02 = getObjIdObjVar(pcd, "dancingDroid.holo_02");
+			
+			utils.removeScriptVar(self, "music.stillPlaying");
+			removeObjVar(pcd, "dancingDroid.soundObject");
+			removeObjVar(pcd, "dancingDroid.holo_01");
+			removeObjVar(pcd, "dancingDroid.holo_02");
+			
+			destroyObject(soundObject);
+			destroyObject(holo_01);
+			destroyObject(holo_02);
+			
+			removeTriggerVolume(TRIG_VOLUME);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler clearDancingDroidScriptVar()
+{
+	//song should be over, time to clear up dancers
+	if(utils.hasScriptVar(self, "music.stillPlaying"))
+	{
+		obj_id pcd = callable.getCallableCD(self);
+		obj_id soundObject = getObjIdObjVar(pcd, "dancingDroid.soundObject");
+		obj_id holo_01 = getObjIdObjVar(pcd, "dancingDroid.holo_01");
+		obj_id holo_02 = getObjIdObjVar(pcd, "dancingDroid.holo_02");
+		
+		utils.removeScriptVar(self, "music.stillPlaying");
+		removeObjVar(pcd, "dancingDroid.holo_01");
+		removeObjVar(pcd, "dancingDroid.holo_02");
+		removeObjVar(pcd, "dancingDroid.soundObject");
+		
+		destroyObject(soundObject);
+		destroyObject(holo_01);
+		destroyObject(holo_02);
+		removeTriggerVolume(TRIG_VOLUME);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+//moves our dancers back to their original location
+messageHandler moveDancingDroidStartLocation()
+{
+	location startLocation = getLocation(self);
+	
+	//try to get the scriptvar with our starting location
+	if(utils.hasScriptVar(self, "dancingDroid.startLocation"))
+	{
+		startLocation = utils.getLocationScriptVar(self, "dancingDroid.startLocation");
+	}
+	
+	//move to our start location
+	pathTo(self, startLocation);
+	
+	//if we still are playing music and dancing, we need to message to our next location
+	//otherwise we need to clear ourselves of junk scriptvars
+	if(utils.hasScriptVar(self, "music.stillPlaying"))
+	{
+		messageTo(self, "moveDancingDroidNewLocation", null, 3, false);
+	}
+	else
+		utils.removeScriptVar(self, "dancingDroid.startLocation");
+	
+	return SCRIPT_CONTINUE;
+}
+		
+//moves our dancers to our new location
+messageHandler moveDancingDroidNewLocation()
+{
+	//use our start location is our temp location
+	location startLocation = getLocation(self);
+	
+	if(utils.hasScriptVar(self, "dancingDroid.startLocation"))
+	{
+		startLocation = utils.getLocationScriptVar(self, "dancingDroid.startLocation");
+	}
+	
+	//if music is still playing then we can move
+	if(utils.hasScriptVar(self, "music.stillPlaying"))
+	{
+		
+		location moveToLoc = startLocation;
+		boolean goodLocation = false;
+		for(int i = 0; i < 10; ++i)
+		{
+			moveToLoc = utils.getRandomLocationInRing(startLocation, 1.0f, 2.0f);
+			if(isIdValid(moveToLoc.cell))
+			{
+				if(isValidInteriorLocation(moveToLoc))
+				{
+					goodLocation = true;
+					break;
+				}
+			}
+			else
+			{
+				goodLocation = true;
+				break;
+			}
+		}
+		pathTo(self, moveToLoc);
+		//make them wiggle
+	}
+	
+	messageTo(self, "moveDancingDroidStartLocation", null, 2, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+//to be used when the object might persist and needs to be removed.
+messageHandler destroyDancingDroidSoundObject()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+	
+	obj_id pcd = params.getObjId("pcd");
+	if(destroyObject(self))
+		messageTo(pcd, "dancingDroidSoundObjectDestroyed", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+

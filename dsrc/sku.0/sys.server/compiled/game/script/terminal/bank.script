@@ -1,0 +1,301 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        bank.script
+ * Description:  script for bank menu options; to be attached to bank terminals
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.city;
+include library.utils;
+include library.money;
+include library.sui;
+
+/***** INHERITS ********************************************************/
+
+inherits terminal.base.base_terminal;
+
+/***** CONSTANTS *******************************************************/
+
+const string SCRIPTVAR_BANK						= "bank";
+
+const string_id SID_BANK_OPTIONS             	= new string_id("sui", "mnu_bank");
+
+const string_id SID_BANK_CREDITS             	= new string_id("sui", "bank_credits");		//sub1
+const string_id SID_BANK_ITEMS             		= new string_id("sui", "bank_items");		//sub2
+const string_id SID_BANK_DEPOSITALL        		= new string_id("sui", "bank_depositall");	//sub3
+const string_id SID_BANK_WITHDRAWALL       		= new string_id("sui", "bank_withdrawall");	//sub4
+const string_id SID_BANK_JOIN                   = new string_id("sui", "bank_join");		//sub5
+const string_id SID_BANK_QUIT                   = new string_id("sui", "bank_quit");		//sub6
+
+const string_id SID_CITY_BANK_BANNED			= new string_id("city/city","bank_banned");
+
+const string_id SID_ON_MOUNT					= new string_id("error_message","survey_on_mount");
+
+const string_id SID_BANK_MENU_OPEN              = new string_id("error_message", "bank_menu_open");
+
+const string_id SID_GALACTIC_RESERVE            = new string_id("sui", "bank_galactic_reserve");
+const string_id SID_GALACTIC_RESERVE_DEPOSIT    = new string_id("sui", "bank_galactic_reserve_deposit");
+const string_id SID_GALACTIC_RESERVE_WITHDRAW   = new string_id("sui", "bank_galactic_reserve_withdraw");
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnInitialize()
+{
+	setObjVar(self, "banking_bankid", getCurrentSceneName());
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	setObjVar(player, "banking_bankid", getCurrentSceneName());
+
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	if ( mid == null )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int mnu = mid.getId();
+	int subBankCredits = mi.addSubMenu (mnu, menu_info_types.SERVER_MENU1, SID_BANK_CREDITS);
+
+	obj_id bankTerminal = self;
+
+	int subBankItems = mi.addSubMenu (mnu, menu_info_types.SERVER_MENU2, SID_BANK_ITEMS);
+
+	int cash = getCashBalance(player);
+	if ( cash > 0 )
+	{
+		int subBankDepositAll = mi.addSubMenu (mnu, menu_info_types.SERVER_MENU3, SID_BANK_DEPOSITALL);
+	}
+
+	int bank = getBankBalance(player);
+	if ( bank > 0 )
+	{
+		int subBankWithdrawAll = mi.addSubMenu (mnu, menu_info_types.SERVER_MENU4, SID_BANK_WITHDRAWALL);
+	}
+
+	// must be at a bank terminal in Mos Eisley, Theed, or Coronet to access the Galactic Reserve
+	if (canAccessGalacticReserve(player))
+	{
+		int galactic_reserve = mi.addRootMenu (menu_info_types.SERVER_MENU50, SID_GALACTIC_RESERVE);
+		mi.addSubMenu(galactic_reserve, menu_info_types.SERVER_MENU49, SID_GALACTIC_RESERVE_DEPOSIT);
+		mi.addSubMenu(galactic_reserve, menu_info_types.SERVER_MENU48, SID_GALACTIC_RESERVE_WITHDRAW);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	setObjVar(player, "banking_bankid", getCurrentSceneName());
+
+	obj_id bankTerminal = self;
+	int city_id = getCityAtLocation( getLocation(self), 0 );
+	if ( (city_id>0) && city.isCityBanned( player, city_id ) )
+	{
+		sendSystemMessage( player, SID_CITY_BANK_BANNED );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( item == menu_info_types.ITEM_USE )
+	{
+			openBankMenu(player);
+	}
+	else if ( item == menu_info_types.SERVER_MENU1 )
+	{
+		openBankMenu(player);
+	}
+	else if ( item == menu_info_types.SERVER_MENU2 )
+	{
+		openBankContainer(bankTerminal, player);
+		obj_id inv = utils.getInventoryContainer(player);
+		if ( isIdValid(inv) )
+		{
+			utils.requestContainerOpen(player, inv);
+		}
+	}
+	else if ( item == menu_info_types.SERVER_MENU3 )
+	{
+		int amt = getCashBalance(player);
+		if ( amt == 0 )
+		{
+			money.nullTransactionError(player);
+		}
+
+		if ( !money.deposit(player, amt) )
+		{
+			debugSpeakMsg(player, "transaction request aborted by system...");
+		}
+		else
+		{
+			closeBankTransferSui(self, player);
+		}
+	}
+	else if ( item == menu_info_types.SERVER_MENU4 )
+	{
+		int amt = getBankBalance(player);
+		if ( amt == 0 )
+		{
+			money.nullTransactionError(player);
+		}
+
+		if ( !money.withdraw(player, amt) )
+		{
+			debugSpeakMsg(player, "transaction request aborted by system...");
+		}
+		else
+		{
+			closeBankTransferSui(self, player);
+		}
+	}
+	else if ( item == menu_info_types.SERVER_MENU49 )
+	{
+		depositToGalacticReserve(player);
+	}
+	else if ( item == menu_info_types.SERVER_MENU48 )
+	{
+		withdrawFromGalacticReserve(player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+boolean openBankMenu(obj_id player)
+{
+	obj_id self = getSelf();
+
+	if ( !isIdValid(player) )
+	{
+		return false;
+	}
+
+	string scriptvar = SCRIPTVAR_BANK + "." + player;
+	if ( utils.hasScriptVar(self, scriptvar) )
+	{
+		int oldPid = utils.getIntScriptVar(self, scriptvar);
+		sui.closeSUI(player, oldPid);
+
+		utils.removeScriptVar(self, scriptvar);
+	}
+	else
+	{
+		if ( utils.hasScriptVar(player, SCRIPTVAR_BANK + ".terminal") )
+		{
+			obj_id other = utils.getObjIdScriptVar(player, SCRIPTVAR_BANK + ".terminal");
+			if ( isIdValid(other) && (other != self) )
+			{
+				dictionary closer = new dictionary();
+				closer.put("player", player);
+				messageTo(other, "forceCloseBankSui", closer, 0f, false);
+			}
+		}
+	}
+
+	int pid = sui.bank(player);
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(player, SCRIPTVAR_BANK + ".terminal", self);
+
+		utils.setScriptVar(self, scriptvar, pid);
+
+		dictionary d = new dictionary();
+		d.put("player" , player);
+		messageTo(self, "forceCloseBankSui", d, 30f, false);
+		return true;
+	}
+	return false;
+}
+
+messageHandler forceCloseBankSui()
+{
+	obj_id player = params.getObjId("player");
+	if ( isIdValid(player) )
+	{
+		closeBankTransferSui(self, player);
+
+		obj_id current = utils.getObjIdScriptVar(player, SCRIPTVAR_BANK + ".terminal");
+		if ( isIdValid(current) && (current == self) )
+			utils.removeScriptVar(player, SCRIPTVAR_BANK + ".terminal");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void closeBankTransferSui(obj_id self, obj_id player)
+{
+	string scriptvar = SCRIPTVAR_BANK + "." + player;
+	if ( utils.hasScriptVar(self, scriptvar) )
+	{
+		int pid = utils.getIntScriptVar(self, scriptvar);
+		sui.closeSUI(player, pid);
+
+		utils.removeScriptVar(self, scriptvar);
+	}
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler handleBankSuccess()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( isIdValid(player) )
+	{
+		utils.removeScriptVar(self, SCRIPTVAR_BANK + "." + player);
+		messageTo(player, money.HANDLER_BANK_SUCCESS, params, 0, true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBankUnknownError()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( isIdValid(player) )
+	{
+		utils.removeScriptVar(self, SCRIPTVAR_BANK + "." + player);
+		messageTo(player, money.HANDLER_BANK_UNKNOWN_ERROR, params, 0, true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBankDepositError()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( isIdValid(player) )
+	{
+		utils.removeScriptVar(self, SCRIPTVAR_BANK + "." + player);
+		messageTo(player, money.HANDLER_BANK_DEPOSIT_ERROR, params, 0, true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBankWithdrawError()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( isIdValid(player) )
+	{
+		utils.removeScriptVar(self, SCRIPTVAR_BANK + "." + player);
+		messageTo(player, money.HANDLER_BANK_WITHDRAW_ERROR, params, 0, true);
+	}
+
+	return SCRIPT_CONTINUE;
+}

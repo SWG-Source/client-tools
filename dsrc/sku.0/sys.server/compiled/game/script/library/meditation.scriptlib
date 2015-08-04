@@ -1,0 +1,418 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        meditation.scriptlib
+ * Description:  scriptlib for meditation related functions
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.dot;
+include library.chat;
+include library.utils;
+include library.consumable;
+include library.trial;
+
+/***** CONSTANTS *******************************************************/
+
+const float TIME_TICK						= 5.0f;
+const float DELAY_MIN						= 3f;
+const float DELAY_MAX						= 7f;
+
+const float RAND_MODIFIER					= 0.33f;
+
+const float POWERBOOST_RAMP					= 60f;
+
+const string MOD_MEDITATE					= "meditate";
+
+const string VAR_MEDITATION_BASE			= "meditation";
+
+const string VAR_POWERBOOST_ACTIVE			= "meditation.powerBoost";
+
+const string VAR_FORCE_OF_WILL_ACTIVE		= "meditation.forceOfWill";
+
+const string SCRIPT_MEDITATE				= "player.skill.meditate";
+
+const string HANDLER_MEDITATION_TICK		= "handleMeditationTick";
+
+const string HANDLER_POWERBOOST_WANE		= "handlePowerBoostWane";	//in player.skill.cleanup
+const string HANDLER_POWERBOOST_END			= "handlePowerBoostEnd";	//in player.skill.cleanup
+
+const string STF_TERASKASI					= "teraskasi";
+
+const string_id SID_MED_BEGIN				= new string_id(STF_TERASKASI, "med_begin");
+const string_id SID_MED_END					= new string_id(STF_TERASKASI, "med_end");
+const string_id SID_MED_FAIL				= new string_id(STF_TERASKASI, "med_fail");
+
+const string_id SID_POWERBOOST_BEGIN		= new string_id(STF_TERASKASI, "powerboost_begin");
+const string_id SID_POWERBOOST_WANE			= new string_id(STF_TERASKASI, "powerboost_wane");
+const string_id SID_POWERBOOST_END			= new string_id(STF_TERASKASI, "powerboost_end");
+const string_id SID_POWERBOOST_FAIL			= new string_id(STF_TERASKASI, "powerboost_fail");
+const string_id SID_POWERBOOST_ACTIVE		= new string_id(STF_TERASKASI, "powerboost_active");
+const string_id SID_POWERBOOST_MIND			= new string_id(STF_TERASKASI, "powerboost_mind");
+
+const string_id SID_FORCEOFWILL				= new string_id(STF_TERASKASI, "forceofwill");
+const string_id SID_FORCEOFWILL_UNSUCCESSFUL= new string_id(STF_TERASKASI, "forceofwill_unsuccessful");
+const string_id SID_FORCEOFWILL_FAIL		= new string_id(STF_TERASKASI, "forceofwill_fail");
+const string_id SID_FORCEOFWILL_LOST		= new string_id(STF_TERASKASI, "forceofwill_lost");
+const string_id SID_FORCEOFWILL_UNAVAILABLE	= new string_id(STF_TERASKASI, "forceofwill_unavailable");
+
+const string_id SID_MUST_BE_MEDITATING		= new string_id(STF_TERASKASI, "must_be_meditating");
+const string_id SID_STATE_PREVENTS_POWERBOOST = new string_id(STF_TERASKASI, "state_prevent_powerboost");
+const string_id SID_MIND_POOL_TOO_LOW		 = new string_id(STF_TERASKASI, "mind_pool_too_low");
+
+const string_id PROSE_CUREWOUND				= new string_id(STF_TERASKASI, "prose_curewound");
+
+//meditate buffs
+const string[] MEDITATE_BUFFS 	= {
+	"fs_meditate_1",
+	"fs_meditate_2",
+	"fs_meditate_3"
+};
+
+
+/***** FUNCTIONS ********************************************************/
+int getMeditationSkillMod(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return -1;
+
+	int meditate = getEnhancedSkillStatisticModifierUncapped(player, MOD_MEDITATE);
+	return meditate;
+}
+
+/************************************************************************
+ * @brief 	begings meditation
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean startMeditation(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return false;
+
+	setState(player, STATE_MEDITATE, true);
+	chat.setTempAnimationMood(player, "meditating");
+	messageTo(player, HANDLER_MEDITATION_TICK, trial.getSessionDict(player, meditation.HANDLER_MEDITATION_TICK), TIME_TICK, false);
+
+	sendSystemMessage(player, SID_MED_BEGIN);
+		
+	return true;
+}
+
+/************************************************************************
+ * @brief 	terminates meditation
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	void
+ ***********************************************************************/
+void endMeditation(obj_id player, boolean verbose)
+{
+	if ( !isIdValid(player) )
+		return;
+		
+	setState(player, STATE_MEDITATE, false);
+	chat.resetTempAnimationMood(player);
+	utils.removeScriptVar(player, VAR_MEDITATION_BASE);
+	//fingerprinted messageto loop, we need to kill it
+	trial.bumpSession(player, meditation.HANDLER_MEDITATION_TICK);
+	
+	if ( verbose )
+		sendSystemMessage(player, SID_MED_END);
+}
+
+void endMeditation(obj_id player)
+{
+	endMeditation(player, true);
+}
+
+/************************************************************************
+ * @brief 	determines if a player is meditating
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isMeditating(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return false;
+
+	if (getState(player, STATE_MEDITATE) == 1)
+		return true;
+		
+	return false;	
+}
+
+
+/************************************************************************
+ * @brief 	handle what occurs during a meditation tick
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+float trance(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return -1f;
+
+	int modval = getMeditationSkillMod(player);
+	if ( (modval < 1) || !isMeditating(player) )
+		return -1f;
+
+	float delay = 0f;
+
+	LOG("meditate","trance: slotDot -> DOT_BLEEDING");
+	delay = slowDOT(player, modval, dot.DOT_BLEEDING);
+
+	if ( modval > 20 && delay == 0f )
+	{
+		LOG("meditate","trance: slotDot -> DOT_POISON");
+		delay = slowDOT(player, modval, dot.DOT_POISON);
+	}
+
+	if ( modval > 40 && delay == 0f )
+	{
+		LOG("meditate","trance: slotDot -> DOT_DISEASE");
+		delay = slowDOT(player, modval, dot.DOT_DISEASE);
+	}
+
+	if ( modval > 60 && delay == 0f )
+	{
+		LOG("meditate","trance: cureWounds...");
+		delay = cureWounds(player, modval);
+	}
+
+	LOG("meditate","trance: pre-ret delay = " + delay);
+
+	if ( delay > 0f )
+	{
+		if ( delay < DELAY_MIN )
+			delay = DELAY_MIN;
+
+		if ( delay > DELAY_MAX )
+			delay = DELAY_MAX;
+	}
+
+	return delay;
+}
+
+/************************************************************************
+ * @brief 	handle what occurs during a meditation tick
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	float
+ ***********************************************************************/
+float slowDOT(obj_id player, int modval, string dotType)
+{
+	if ( !isIdValid(player) )
+		return 0f;
+
+	int totalCured = 0;
+	int toCure = getDOTReductionAmount(player);
+	if ( toCure > 0 )
+	{
+		totalCured = dot.reduceDotTypeStrength(player, dotType, toCure);
+	}
+
+	if ( totalCured < 0f )
+		return 0f;
+
+	//return (float)(totalCured);
+	return 5f;
+}
+
+/************************************************************************
+ * @brief 	handle what occurs during a meditation tick
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	int
+ ***********************************************************************/
+int getDOTReductionAmount(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return -1;
+
+	int dotMod = getSkillStatMod(player, "private_med_dot");
+
+	float ret = (float)dotMod * (1f + rand(-RAND_MODIFIER, RAND_MODIFIER));
+	return Math.round(ret);
+}
+
+/************************************************************************
+ * @brief 	handle what occurs during a meditation tick
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	int
+ ***********************************************************************/
+int getWoundReductionAmount(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return -1;
+
+	int dotMod = getSkillStatMod(player, "private_med_wound");
+
+	float ret = (float)dotMod * (1f + rand(-RAND_MODIFIER, RAND_MODIFIER));
+	return Math.round(ret);
+}
+
+/************************************************************************
+ * @brief 	handle what occurs during a meditation tick
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+float cureWounds(obj_id player, int modval)
+{
+	if ( !isIdValid(player) )
+		return 0f;
+
+	dictionary toHeal = new dictionary();
+	if ( (toHeal == null) || (toHeal.isEmpty()) )
+	{
+		LOG("meditate","cureWounds: no wounds...");
+		return 0f;
+	}
+
+	//return (float)(totalCured);
+	return 5f;
+}
+
+/************************************************************************
+ * @brief 	attempts to bring the player back from incapacitation
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean forceOfWill(obj_id player, int delta)
+{
+	if ( !isIdValid(player) )
+		return false;
+
+	if ( delta < 0 )
+		delta = 0;
+
+	int modval = getMeditationSkillMod(player);
+	if ( (modval < 1) || getPosture(player) != POSTURE_INCAPACITATED )
+		return false;
+
+	if ( delta < 10 )
+	{
+		addShockWound(player, 100);
+		sendSystemMessage(player, new string_id(STF_TERASKASI, "forceofwill_crit_fail"));
+	}
+	else if ( delta < 40 )
+	{
+		for ( int i = 0; i < 3; i++ )
+			addAttribModifier(player, i*3, -200, 300, 0f, 0f);
+
+		addShockWound(player, 100);
+		sendSystemMessage(player, new string_id(STF_TERASKASI, "forceofwill_marginal"));
+	}
+	else if ( delta < 70 )
+	{
+		for ( int i = 0; i < 3; i++ )
+			addAttribModifier(player, i*3, -100, 300, 0f, 0f);
+
+		sendSystemMessage(player, new string_id(STF_TERASKASI, "forceofwill_normal"));
+	}
+	else
+	{
+		sendSystemMessage(player, new string_id(STF_TERASKASI, "forceofwill_exceptional"));
+	}
+
+	innate.equalizeEffect(player);
+	return true;
+}
+
+boolean forceOfWill(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return false;
+
+	return forceOfWill(player, rand(1,getMeditationSkillMod(player)));
+}
+
+/************************************************************************
+ * @brief 	attempts to bring the player back from incapacitation
+ *
+ * @param 	obj_id	player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean powerBoost(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return false;
+
+	int modval = getMeditationSkillMod(player);
+	if ( (modval < 1) )
+		return false;
+
+	if ( !isMeditating(player) )
+	{
+		sendSystemMessage(player, SID_MUST_BE_MEDITATING);
+		return false;
+	}
+
+	if ( hasObjVar(player, VAR_POWERBOOST_ACTIVE) )
+	{
+		sendSystemMessage(player, SID_POWERBOOST_ACTIVE);
+		return false;
+	}
+
+	int now = getGameTime();
+	float duration = 300f + (float)(modval) * 3 * rand(0.95f,1.05f);
+
+	//int maxMind = getWoundedMaxAttrib(player, MIND);
+	int maxMind = utils.getUnbuffedWoundedMaxAttrib(player, MIND);
+	if ( maxMind < 10 )
+	{
+		sendSystemMessage(player, SID_STATE_PREVENTS_POWERBOOST);
+		return false;
+	}
+
+	int boost = maxMind/2;
+
+	if ( getAttrib(player, MIND) <= boost )
+	{
+		sendSystemMessage(player, SID_MIND_POOL_TOO_LOW);
+		return false;
+	}
+
+	addAttribModifier(player, MIND, -boost, POWERBOOST_RAMP, 0f, 0f);
+
+	addAttribModifier(player, "meditation.powerboost.mind", MIND, boost, duration, POWERBOOST_RAMP, POWERBOOST_RAMP, false, false, true);
+	addAttribModifier(player, "meditation.powerboost.health", HEALTH, boost, duration, POWERBOOST_RAMP, POWERBOOST_RAMP, false, false, false);
+	addAttribModifier(player, "meditation.powerboost.action", ACTION, boost, duration, POWERBOOST_RAMP, POWERBOOST_RAMP, false, false, false);
+
+	int wane_time = (int)(duration + POWERBOOST_RAMP);
+	int expire_time = wane_time + (int)POWERBOOST_RAMP;
+
+	int expiration = now + expire_time;
+	setObjVar(player, VAR_POWERBOOST_ACTIVE, expiration);
+
+	dictionary d = new dictionary();
+	d.put("expiration", expiration);
+
+	messageTo(player, HANDLER_POWERBOOST_WANE, d, wane_time, false);
+	messageTo(player, HANDLER_POWERBOOST_END, d, expire_time, true);
+
+	// Log buff info
+	messageTo(player, "handlePowerBoostLog", null, POWERBOOST_RAMP*2, false);
+
+	sendSystemMessage(player, SID_POWERBOOST_BEGIN);
+	return true;
+}

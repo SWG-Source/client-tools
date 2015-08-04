@@ -1,0 +1,1405 @@
+include library.bounty_hunter;
+include library.buff;
+include library.performance;
+include library.pet_lib;
+include library.static_item;
+include library.trace;
+include library.xp;
+
+/**********************************************************************
+ * Copyright (c)2005 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        respec.scriptlib
+ * Description:  defines related to respec process
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+const string EXPERTISE_VERSION_TABLE		= "datatables/expertise/respec_version.iff";
+const string EXPERTISE_VERSION_OBJVAR		= "professionExpertiseVersion";
+
+
+// NOTE: objvars mirrored in serverGame/CreatureObject.cpp, and in Client.cpp
+const int RESPEC_PRICE_MULTIPLIER = 10000;
+const int[] RESPEC_COST = new int[]{
+									0,
+									100000,
+									150000,
+									250000,
+									500000,
+									1000000,
+									6000000,
+									7000000,
+									8000000,
+									9000000,
+									10000000,
+									25000000
+								};
+
+const string OBJVAR_RESPEC_TOKEN = "respecToken.token";
+const string OBJVAR_RESPEC_TOKEN_USED = "respecToken.tokenUsed";
+
+const string OBJVAR_RESPEC_ROOT = "respec";
+
+// This objvar is set if the player is authorized to respec.  Note that this is not an authoritative
+// check; that also relies on RESPEC_COUNT and TIMESTAMP
+const string OBJVAR_RESPEC = "respec.authorized";
+
+// Setting this objvar to any value will cause the grant_respec_on_login script (which should be
+// attached to every respec-capable player) to remove all respec authorizations and data from this
+// player the next time the OnLogout trigger is called
+const string OBJVAR_REMOVE_ON_LOGOUT = "respec.removeonlogout";
+
+// This objvar (which as of this writing 6/6/05 is out of date) controls access to the respec by limiting
+// the number of times the player is allowed to respec.  Specifically this objvar should contain, at all
+// times, the number of times this player has respec'd within this round of respec authorization.
+const string OBJVAR_RESPEC_COUNT = "respec.count";
+
+// This objvar is used to control access to the respec system by limiting authorization to a certain
+// quantity of time.  Specifically this objvar contains the timestamp, as recorded by getGameTime(),
+// when the authorization objvar was initially set to on.
+const string OBJVAR_TIMESTAMP = "respec.timestamp";
+
+// This obvar is used to control access to the respec system by limiting authorization to a certain
+// frequency (i.e. only once for every N seconds).  Specifically it contains the timestamp, as recorded
+// by getGameTime(), when the last authorized respec was performed
+const string OBJVAR_LAST_TIMESTAMP = "respec.lastTimestamp";
+
+// This script is the main script attached to players which are authorized to respec.  Attaching this
+// script to a player begins the respec process when next they log in.
+const string SCRIPT_GRANT_ON_LOGIN = "systems.respec.grant_respec_on_login";
+
+// This script is similar to grant_respec_on_login, and in fact uses and leaves that script attached.
+// However it also sets REMOVE_ON_LOGOUT, causing the system to immediately revoke access on next log out.
+// Thus it provides a "one shot" respec authorization.
+const string SCRIPT_GRANT_SINGLE_ON_LOGIN = "systems.respec.grant_single_respec_on_login";
+
+// This auxiliary script contains the UI dialog boxes used by respec.
+const string SCRIPT_CHECK_INFORM = "systems.respec.check_inform_respec";
+
+// A message sent to the player by the OnInitialized trigger to pop up the dialog box
+const string MESSAGE_ON_GRANT = "onRespecGrant";
+
+// Similar to the above, but displays a different message and does not provide the "Later" button
+const string MESSAGE_ON_EXPIRE = "onRespecExpire";
+
+const string MESSAGE_HAS_TOKEN = "onRespecHasToken";
+
+const string PROF_LEVEL_ARRAY = "playerRespec.levelArrayComEntCra";
+const string OBJVAR_RESPEC_DECAY_TIME = "playerRespec.decayTime";
+
+const string_id RESPEC_DECAY_MESSAGE = new string_id("spam", "respec_decay_message");
+
+const int PROF_LEVEL_COMBAT	= 0;
+const int PROF_LEVEL_ENT	= 1;
+const int PROF_LEVEL_TRADER	= 2;
+
+void startClickRespec(obj_id player)
+{
+	// Remove old respec objvars
+	if (hasObjVar(player, "respecToken"))
+		removeObjVar(player, "respecToken");
+	if (hasObjVar(player, "respec"))
+		removeObjVar(player, "respec");
+
+	// Fun clean-up stuff
+	int level = getIntObjVar(player, "clickRespec.combatLevel");
+	if (level > 0 && !hasObjVar(player, "combatLevel"))
+	{
+		setObjVar(player, "combatLevel", level);
+	}
+
+	if (level > 0 && !hasCommand(player, "veteranPlayerBuff"))
+	{
+		grantCommand(player, "veteranPlayerBuff");
+	}
+
+	if (hasScript(player, "systems.respec.click_combat_respec"))
+	{
+		playUiEffect(player, "showMediator=ws_professiontemplateselect");
+	}
+	else
+	{
+		attachScript(player, "systems.respec.click_combat_respec");
+	}
+}
+
+void startNpcRespec(obj_id player, obj_id npcGrantingRespec)
+{
+	startNpcRespec(player, npcGrantingRespec, false);
+}
+
+void startNpcRespec(obj_id player, obj_id npcGrantingRespec, boolean isFree)
+{
+	if(hasObjVar(player, "clickRespec.tokenId"))
+	{
+		sendSystemMessage(player, new string_id("spam", "cant_use_respec_npc"));
+		return;
+	}
+
+	setObjVar(player, "npcRespec.inProgress", 1);
+	setObjVar(player, "npcRespec.tokenId", npcGrantingRespec);
+	setObjVar(player, "npcRespec.oldTemplate", getSkillTemplate(player));
+	setObjVar(player, "npcRespec.isFree", isFree);
+
+	//this scriptVar is used to decrease the number of times we hit the datatables
+	//We have to remove the scriptvar when we respec, since the player may no longer
+	//be allowed to use the weapon they have equipped
+	if(utils.hasScriptVar(player, "combat.weaponCertified"))
+	{
+		utils.removeScriptVar(player, "combat.weaponCertified");
+	}
+
+	if(hasScript(player, "systems.respec.click_combat_respec"))
+	{
+		playUiEffect(player, "showMediator=ws_professiontemplateselect");
+	}
+	else
+	{
+		attachScript(player, "systems.respec.click_combat_respec");
+	}
+
+	return;
+}
+
+// THIS FUNCTION IS CALLED AFTER PLAYER RESPONSE FROM THE PROFESSION SELECT WINDOW PRESENTED BY THE RESPEC NPC
+void handleNpcRespec(obj_id player, string skillTemplateName)
+{
+	string oldTemplate = getStringObjVar(player, "npcRespec.oldTemplate");
+	// Quit out if the template has not changed
+	if(oldTemplate == null || oldTemplate.length() < 1 || oldTemplate.equals(getSkillTemplate(player)))
+	{
+		removeObjVar(player, "npcRespec");
+		detachScript(player, "systems.respec.click_combat_respec");
+		return;
+	}
+
+	boolean isFree = getBooleanObjVar(player, "npcRespec.isFree");
+	int cost = isFree ? 0 : getRespecCost(player);
+	int balance = getTotalMoney(player);
+
+	if(cost > balance)
+	{
+		setSkillTemplate(player, oldTemplate);
+		prose_package pp = new prose_package ();
+		pp.stringId = new string_id("spam", "not_enough_cash_4_respec");
+		pp.digitInteger = cost;
+		sendSystemMessageProse(player, pp);
+		return;
+	}
+
+	string msg = "NPC_RESPEC: %TU has initiated a respec via NPC for " + cost + " credits.  Current combat level is " + getLevel(player) + "; current skill template is " + oldTemplate;
+	trace.log("respec", msg, player, trace.TL_CS_LOG);
+
+	// We're definately respeccing now so destroy officer pets.
+	pet_lib.destroyOfficerPets(player);
+
+	if(cost > 0)
+	{
+		money.requestPayment(player, money.ACCT_SKILL_TRAINING, cost, "none", null, false);
+	}
+
+	//First, we store the level of the profession we are exiting from.
+	if (!oldTemplate.startsWith("entertainer") && !oldTemplate.startsWith("trader"))
+		setProfessionLevel(player, PROF_LEVEL_COMBAT, getLevel(player));
+
+	if (oldTemplate.startsWith("entertainer"))
+		setProfessionLevel(player, PROF_LEVEL_ENT, getLevel(player));
+
+	if (oldTemplate.startsWith("trader"))
+		setProfessionLevel(player, PROF_LEVEL_TRADER, getLevel(player));
+
+
+	//Next, we determine if we have pre-existing levels in the new profession.
+	int targetLevel = -1;
+
+	//If we are not entertainer or trader,then we are combat
+	if (!skillTemplateName.startsWith("entertainer") && !skillTemplateName.startsWith("trader"))
+	{
+			targetLevel = getCombatLevel(player);
+			if (targetLevel == -1)
+			{
+				targetLevel = hasObjVar(player, "combatLevel") ? getIntObjVar(player, "combatLevel") : 5;
+				setProfessionLevel(player, PROF_LEVEL_COMBAT, targetLevel);
+			}
+	}
+
+	//Fail cases for ent and trader are handled in earnProfessionSkillsViaNpc
+	if (skillTemplateName.startsWith("entertainer"))
+		targetLevel = getEntertainerLevel(player);
+
+	if (skillTemplateName.startsWith("trader"))
+		targetLevel = getTraderLevel(player);
+
+	obj_id respecHandler = getObjIdObjVar(player, "npcRespec.tokenId");
+
+	if (!isMob(respecHandler))
+	{
+		int count = getCount(respecHandler);
+		int newCount = count - 1;
+
+		boolean adjustedCount = newCount > 0 ? setCount(respecHandler, newCount) : destroyObject(respecHandler);
+	}
+
+	earnProfessionSkillsViaNpc(player, skillTemplateName, true, targetLevel);
+	int numBought = 0;
+
+	if(hasObjVar(player, "respecsBought"))
+	{
+		numBought = getIntObjVar(player, "respecsBought");
+	}
+
+	if (!isFree)
+		setObjVar(player, "respecsBought", ++numBought);
+	//if player has this scriptVar - then he has holos and needs cleaned up
+	if (utils.hasScriptVar(player, "holoId1"))
+	{
+		performance.holographicCleanup(player);
+	}
+
+	playUiEffect(player, "showMediator=ws_roadmap");
+
+	msg = "NPC_RESPEC: %TU has completed a respec via NPC for " + cost + " credits.  New combat level is " + getLevel(player) + "; New skill template is " + getSkillTemplate(player);
+	trace.log("respec", msg, player, trace.TL_CS_LOG);
+
+	if(utils.isProfession(player, utils.SMUGGLER))
+	{
+		messageTo(player, "applySmugglingBonuses", null, 1.0f, false);
+	}
+	else
+	{
+		messageTo(player, "removeSmugglingBonuses", null, 1.0f, false);
+	}
+
+	return;
+}
+
+void earnProfessionSkillsViaNpc(obj_id player, string skillTemplateName, boolean withItems, int level)
+{
+	setObjVar(player, "npcRespec.granting", 1);
+
+	// Store the pets - Familiar buff gets removed below - should be able to safely store the pets here
+	callable.storeCallables(player);
+
+	revokeAllSkillsAndExperience(player);
+	buff.removeAllBuffs(player, true, true);
+
+	if(level> 0)
+	{
+		autoLevelPlayer(player, level, true);
+	}
+	else// We did not have the new respec data, check for older data.
+	{
+		if (skillTemplateName.startsWith("trader") && hasObjVar(player, "traderPct"))
+		{
+			// If we are specing to trader, get the highest percentage completion and set ourselves to that.
+			// (It will always give you at least the first skill, even if we default to 0%
+			float oldPct = 0.0f;
+			if(hasObjVar(player, "traderPct"))
+				oldPct = getFloatObjVar(player, "traderPct");
+
+			if(hasObjVar(player, "clickRespec.npeRespec"))
+			{
+				oldPct = ((float)level / 80.0f);
+
+				if(oldPct < 0.1f) oldPct = 0.10f;
+				if(oldPct > 1.0f) oldPct = 1.0f;
+			}
+
+			setPercentageCompletion(player, skillTemplateName, oldPct, withItems);
+
+		}
+		else if(skillTemplateName.startsWith("entertainer") && hasObjVar(player, "entWorkingSkill"))
+		{
+			// If we are specing to entertainer, get our highest working skill, and set ourselves back to that
+			// (We will default to Phase 1 - 02 which will give us at least the first skill
+			string workingSkill = "class_entertainer_phase1_02";
+			if(hasObjVar(player, "entWorkingSkill"))
+				workingSkill = getStringObjVar(player, "entWorkingSkill");
+
+			if(hasObjVar(player, "clickRespec.npeRespec"))
+			{
+				float pct = ((float)level / 80.0f);
+
+				if(pct < 0.1f) pct = 0.1f;
+				if(pct > 1.0f) pct = 1.0f;
+
+				setPercentageCompletion(player, skillTemplateName, pct, withItems);
+			}
+			else
+				grantProfessionSkills(player, skillTemplateName, workingSkill, withItems);
+		}
+
+	}
+
+	//give all traders the 'class_trader' skill on respec, this is not granted until onInitialize otherwise.
+	if (utils.isProfession(player, utils.TRADER)) // trader is #8
+	{
+		grantSkill(player, "class_trader");
+	}
+
+	//You have never been that class before, you are now level 5. Lucky you.
+	if (getLevel(player) < 5)
+		autoLevelPlayer(player, 5, true);
+
+
+	skill.recalcPlayerPools(player, true);
+	skill.setPlayerStatsForLevel(player, getLevel(player));
+
+	removeObjVar(player, "npcRespec");
+
+	if(hasObjVar(player, "clickRespec.npeRespec"))
+		removeObjVar(player, "clickRespec.npeRespec");
+
+	if ((skillTemplateName.startsWith("force_sensitive"))||(skillTemplateName.startsWith("bounty_hunter")))
+		grantSkill(player, "expertise");
+
+	if(hasScript(player, "systems.respec.click_combat_respec"))
+	{
+		detachScript(player, "systems.respec.click_combat_respec");
+	}
+
+	utils.setScriptVar(player, "respec.conceal", 1);
+}
+
+int getRespecCost(obj_id player)
+{
+	int numBought = 0;
+	if(hasObjVar(player, "respecsBought"))
+	{
+		numBought = getIntObjVar(player, "respecsBought");
+	}
+
+	int respecMod = 1;
+	if (hasObjVar(player, "respec_voucher"))
+	{
+		respecMod = 2;
+	}
+
+	if(numBought < RESPEC_COST.length)
+	{
+		return (RESPEC_COST[numBought] / respecMod);
+	}
+
+	return ((RESPEC_COST[RESPEC_COST.length-1]) / respecMod);
+}
+
+int[] getProfessionLevelArray(obj_id player)
+{
+	if (!hasObjVar(player, PROF_LEVEL_ARRAY))
+	{
+		int[] newArray = {-1,-1,-1};
+		return newArray;
+	}
+	return getIntArrayObjVar(player, PROF_LEVEL_ARRAY);
+}
+
+int getCombatLevel(obj_id player)
+{
+	if (!hasObjVar(player, PROF_LEVEL_ARRAY))
+		return -1;
+
+	int[] profLevels = getProfessionLevelArray(player);
+
+	return profLevels[PROF_LEVEL_COMBAT];
+}
+
+int getEntertainerLevel(obj_id player)
+{
+	if (!hasObjVar(player, PROF_LEVEL_ARRAY))
+		return -1;
+
+	int[] profLevels = getProfessionLevelArray(player);
+
+	return profLevels[PROF_LEVEL_ENT];
+}
+
+int getTraderLevel(obj_id player)
+{
+	if (!hasObjVar(player, PROF_LEVEL_ARRAY))
+		return -1;
+
+	int[] profLevels = getProfessionLevelArray(player);
+
+	return profLevels[PROF_LEVEL_TRADER];
+}
+
+void setProfessionLevel(obj_id player, int profType, int level)
+{
+	int[] profLevelArray = getProfessionLevelArray(player);
+
+	//if the current level the player is respecing away from
+	//for that profType is lower than what we have stored
+	//we dont want to override it.
+	int storedLevel = profLevelArray[profType];
+
+	if(level >= storedLevel)
+		profLevelArray[profType] = level;
+
+	setObjVar(player, PROF_LEVEL_ARRAY, profLevelArray);
+}
+
+void setProfessionLevelArray(obj_id player, int[] profLevelArray)
+{
+	setObjVar(player, PROF_LEVEL_ARRAY, profLevelArray);
+}
+
+
+void handleNpcRealloc(obj_id player)
+{
+	int cost = getReallocationCost(player);
+	int balance = getTotalMoney(player);
+
+	if(cost > balance)
+	{
+		prose_package pp = new prose_package ();
+		pp.stringId = new string_id("spam", "not_enough_cash_4_respec");
+		pp.digitInteger = cost;
+		sendSystemMessageProse(player, pp);
+		return;
+	}
+	string msg = "NPC_REALLOC: %TU has initiated a realloc via NPC for " + cost + " credits.";
+	trace.log("respec", msg, player, trace.TL_CS_LOG);
+
+	if(cost > 0)
+	{
+		money.requestPayment(player, money.ACCT_SKILL_TRAINING, cost, "none", null, false);
+	}
+
+	utils.fullExpertiseReset(player, true);
+
+	// Destroy officer class pets.
+	pet_lib.destroyOfficerPets(player);
+
+	int numBought = 0;
+	if(hasObjVar(player, "expertise_reset"))
+	{
+		numBought = getIntObjVar(player, "expertise_reset");
+	}
+
+	setObjVar(player, "expertise_reset", ++numBought);
+
+	if ( !hasSkill(player, "expertise") )
+	{
+		grantSkill(player, "expertise");
+	}
+
+	msg = "NPC_REALLOC: %TU has completed a realloc via NPC for " + cost + " credits.";
+	trace.log("respec", msg, player, trace.TL_CS_LOG);
+
+	if(utils.isProfession(player, utils.SMUGGLER))
+	{
+		messageTo(player, "applySmugglingBonuses", null, 1.0f, false);
+	}
+	else
+	{
+		messageTo(player, "removeSmugglingBonuses", null, 1.0f, false);
+	}
+
+	return;
+}
+
+int getReallocationCost(obj_id player)
+{
+	if ( !hasFreeReallocation(player) )
+	{
+		int numBought = ( numFreeAllocations(player) * -1 );
+		return ( numBought * 500 );
+	}
+	return 0;
+}
+
+boolean hasFreeReallocation(obj_id player)
+{
+	int numFreeRemain = numFreeAllocations(player);
+	if ( 0 > numFreeRemain )
+	{
+		return false;
+	}
+	return true;
+}
+
+int numFreeAllocations(obj_id player)
+{
+	int numBought = 0;
+		if(hasObjVar(player, "expertise_reset"))
+		{
+			numBought = getIntObjVar(player, "expertise_reset");
+		}
+	return ( 5 - numBought );
+
+}
+int getOldCombatLevel(obj_id player)
+{
+	logCharacterSkills(player);
+
+	string[] xpTypes = dataTableGetStringColumn("datatables/player/old_player_level.iff", "xp_type");
+	int[] xpMults = dataTableGetIntColumn("datatables/player/old_player_level.iff", "xp_multiplier");
+
+	string[] skillList = getSkillListingForPlayer(player);
+	int totalXp = 0;
+	int level = 0;
+
+	if ((skillList != null) && (skillList.length != 0))
+	{
+		for (int i = 0; i < skillList.length; i++)
+		{
+			dictionary xpReqs = getSkillPrerequisiteExperience(skillList[i]);
+			if ( (xpReqs == null) || (xpReqs.isEmpty()) )
+				continue;
+
+			java.util.Enumeration e = xpReqs.keys();
+			string xpType = (string)(e.nextElement());
+			int xpCost = xpReqs.getInt(xpType);
+
+			int idx = utils.getElementPositionInArray(xpTypes, xpType);
+			if (idx > -1)
+			{
+				totalXp += (xpCost * xpMults[idx]);
+			}
+		}
+	}
+
+	int[] levelList = dataTableGetIntColumn("datatables/player/old_player_level.iff", "xp_required");
+	if ((levelList != null) && (levelList.length != 0))
+	{
+		for (int i = 0; i < levelList.length; i++)
+		{
+			if (levelList[i] <= totalXp)
+			{
+				level++;
+			}
+			else
+			{
+				break;
+			}
+		}
+	}
+
+	if (level < 1) level = 1;
+
+	CustomerServiceLog("click_respec", "Player %TU :: *** Combat Level = "+level+" ***", player);
+	return level;
+}
+
+void logCharacterSkills(obj_id player)
+{
+	CustomerServiceLog("click_respec", "Player %TU :: *** Skill List ***", player);
+
+	string[] skillList = getSkillListingForPlayer(player);
+	for (int i = 0; i < skillList.length; i++)
+	{
+		CustomerServiceLog("click_respec", "Player %TU :: "+skillList[i], player);
+	}
+
+	CustomerServiceLog("click_respec", "Player %TU :: *** Experience List ***", player);
+
+	dictionary xpList = getExperiencePoints(player);
+	java.util.Enumeration e = xpList.keys();
+	while ( e.hasMoreElements() )
+	{
+		string xpType = (string)(e.nextElement());
+		int xpCost = xpList.getInt(xpType);
+		CustomerServiceLog("click_respec", "Player %TU :: "+xpType+" = "+xpCost, player);
+	}
+}
+
+
+boolean autoLevelPlayer(obj_id player, int level, boolean withItems)
+{
+	int oldXpAmount = getCurrentXpTotal(player);
+	int newXpAmount = dataTableGetInt("datatables/player/player_level.iff", level-1, "xp_required");
+
+	string template = getSkillTemplate(player);
+
+	if(template == null || template.equals(""))
+		return false;
+
+	string templateSkills = dataTableGetString(skill_template.TEMPLATE_TABLE, template, "template");
+	string[] skillList = split(templateSkills, ',');
+
+	string xp_type = "combat_general";
+
+	if(template.startsWith("entertainer"))
+		xp_type = "entertainer";
+	else if(template.startsWith("trader"))
+		xp_type = "crafting";
+
+	if (newXpAmount > oldXpAmount)
+	{
+		setWorkingSkill(player, skillList[0]);
+
+		for (int i = 0; i < skillList.length; i++)
+		{
+			int skillCost = getSkillXpCost(player, skillList[i]);
+
+			if (skillCost <= newXpAmount)
+			{
+				newXpAmount -= skillCost;
+
+				if (!hasSkill(player, skillList[i]))
+				{
+					grantSkill(player, skillList[i]);
+
+					if (withItems)
+						skill_template.grantRoadmapItem(player);
+
+				}
+
+				setWorkingSkill(player, skill_template.getNextWorkingSkill(player));
+			}
+			else
+			{
+				break;
+			}
+		}
+
+
+
+		int curXp = getExperiencePoints(player, xp_type);
+		curXp = newXpAmount - curXp;
+		grantExperiencePoints(player, xp_type, curXp);
+	}
+	else if (newXpAmount < oldXpAmount)
+	{
+		int curXp = getExperiencePoints(player, xp_type);
+		grantExperiencePoints(player, xp_type, -curXp);
+
+		int xpDiff = oldXpAmount - newXpAmount - curXp;
+
+		for (int i = skillList.length-1; i >= 0 ; i--)
+		{
+			if (!hasSkill(player, skillList[i]))
+				continue;
+
+			if (xpDiff > 0)
+			{
+				int skillCost = getSkillXpCost(player, skillList[i]);
+
+				xpDiff -= skillCost;
+				revokeSkillSilent(player, skillList[i]);
+			}
+			else
+			{
+				grantExperiencePoints(player, xp_type, -xpDiff);
+				setWorkingSkill(player, skillList[i+1]);
+				break;
+			}
+		}
+	}
+	return true;
+}
+
+int getSkillXpCost(obj_id player, string skillName)
+{
+	if (!isIdValid(player) || !isPlayer(player) || skillName == null || skillName.equals(""))
+	{
+		return 0;
+	}
+
+	dictionary xpReqs = getSkillPrerequisiteExperience(skillName);
+	if ( (xpReqs == null) || (xpReqs.isEmpty()) )
+	{
+		return 0;
+	}
+
+	java.util.Enumeration e = xpReqs.keys();
+	string xpType = (string)(e.nextElement());
+	int xpCost = xpReqs.getInt(xpType);
+
+	return xpCost;
+}
+
+int getCurrentXpTotal(obj_id player)
+{
+	int totalXp = 0;
+
+	string template = getSkillTemplate(player);
+
+	if(template == null || template.equals(""))
+		return 0;
+
+	string templateSkills = dataTableGetString(skill_template.TEMPLATE_TABLE, template, "template");
+	string[] skillList = split(templateSkills, ',');
+
+	string xp_type = "combat_general";
+
+	if(template.startsWith("entertainer"))
+		xp_type = "entertainer";
+	else if(template.startsWith("trader"))
+		xp_type = "crafting";
+
+	string workingSkill = skillList[skillList.length-1];
+	for (int i = 0; i < skillList.length; i++)
+	{
+		if (hasSkill(player, skillList[i]))
+			totalXp += getSkillXpCost(player, skillList[i]);
+	}
+
+	totalXp += getExperiencePoints(player, xp_type);
+
+	return totalXp;
+}
+
+// THIS FUNCTION IS CALLED AFTER PLAYER RESPONSE FROM THE PROFESSION SELECT WINDOW PRESENTED BY A RESPEC TOKEN
+void earnProfessionSkills(obj_id player, string skillTemplateName, boolean withItems)
+{
+	setObjVar(player, "clickRespec.granting", 1);
+	pet_lib.destroyOfficerPets(player);
+	revokeAllSkillsAndExperience(player);
+	buff.removeAllBuffs(player, true, true);
+
+	int combatLevel = 0;
+	if (hasObjVar(player, "clickRespec.combatLevel"))
+	{
+		combatLevel = getIntObjVar(player, "clickRespec.combatLevel");
+	}
+
+	if (combatLevel > 0)
+	{
+		if(skillTemplateName.startsWith("trader"))
+		{
+			// If we are specing to trader, get the highest percentage completion and set ourselves to that.
+			// (It will always give you at least the first skill, even if we default to 0%
+			float oldPct = 0.0f;
+			if(hasObjVar(player, "traderPct"))
+				oldPct = getFloatObjVar(player, "traderPct");
+
+			if(hasObjVar(player, "clickRespec.npeRespec"))
+			{
+				oldPct = ((float)combatLevel / 80.0f);
+
+				if(oldPct < 0.0f) oldPct = 0.0f;
+				if(oldPct > 1.0f) oldPct = 1.0f;
+			}
+
+			setPercentageCompletion(player, skillTemplateName, oldPct, withItems);
+		}
+		else if(skillTemplateName.startsWith("entertainer"))
+		{
+			// If we are specing to entertainer, get our highest working skill, and set ourselves back to that
+			// (We will default to Phase 1 - 02 which will give us at least the first skill
+			string workingSkill = "class_entertainer_phase1_02";
+			if(hasObjVar(player, "entWorkingSkill"))
+				workingSkill = getStringObjVar(player, "entWorkingSkill");
+
+			if(hasObjVar(player, "clickRespec.npeRespec"))
+			{
+				float pct = ((float)combatLevel / 80.0f);
+
+				if(pct < 0.0f) pct = 0.0f;
+				if(pct > 1.0f) pct = 1.0f;
+
+				setPercentageCompletion(player, skillTemplateName, pct, withItems);
+			}
+			else
+				grantProfessionSkills(player, skillTemplateName, workingSkill, withItems);
+
+		}
+		else
+		{
+			// If we are anything else, we must be a combat class, so just level us up
+			respec.autoLevelPlayer(player, combatLevel, withItems);
+		}
+
+		if (combatLevel < 11)
+		{
+			contentPathHandoff (player);	// If the player re-spec's and they are level 10 or less, get them on the content-path.
+		}
+	}
+
+	skill.recalcPlayerPools(player, true);
+
+	removeObjVar(player, "clickRespec");
+	if ( hasScript(player, "systems.respec.click_combat_respec"))
+		detachScript(player, "systems.respec.click_combat_respec");
+
+	utils.setScriptVar(player, "respec.conceal", 1);
+
+	if ((skillTemplateName.startsWith("force_sensitive"))||(skillTemplateName.startsWith("bounty_hunter")))
+		grantSkill(player, "expertise");
+
+	if(utils.isProfession(player, utils.SMUGGLER))
+	{
+		messageTo(player, "applySmugglingBonuses", null, 1.0f, false);
+	}
+	else
+	{
+		messageTo(player, "removeSmugglingBonuses", null, 1.0f, false);
+	}
+
+	string msg = "OBJECT_RESPEC: %TU has completed a respec via respec object. New combat level is " + getLevel(player) + "; new skill template is " + getSkillTemplate(player);
+	trace.log("respec", msg, player, trace.TL_CS_LOG);
+
+}
+
+void grantProfessionSkills(obj_id player, string skillTemplateName, string workingSkill, boolean withItems)
+{
+	if(workingSkill != null && workingSkill.equals("master"))
+		workingSkill = null;
+
+	string templateSkills = dataTableGetString(skill_template.TEMPLATE_TABLE, skillTemplateName, "template");
+	string[] skillList = split(templateSkills, ',');
+
+	setWorkingSkill(player, skillList[0]);
+
+	for (int i = 0; i < skillList.length; i++)
+	{
+		// if a specific working skill was passed in, stop granting skills if we've reached it
+		if (workingSkill != null && skillList[i] == workingSkill)
+		{
+			break;
+		}
+
+		grantSkill(player, skillList[i]);
+		if (withItems)
+		{
+			skill_template.grantRoadmapItem(player);
+		}
+
+		setWorkingSkill(player, skill_template.getNextWorkingSkill(player));
+	}
+}
+
+void revokeAllSkillsAndExperience(obj_id player)
+{
+	int curXp = 0;
+
+	// Reset all old experience
+	string[] xpTypes = {
+						xp.COMBAT_GENERAL,
+						xp.COMBAT_MELEESPECIALIZE_UNARMED,
+						xp.COMBAT_MELEESPECIALIZE_ONEHAND,
+						xp.COMBAT_MELEESPECIALIZE_TWOHAND,
+						xp.COMBAT_MELEESPECIALIZE_POLEARM,
+						xp.COMBAT_RANGEDSPECIALIZE_RIFLE,
+						xp.COMBAT_RANGEDSPECIALIZE_PISTOL,
+						xp.COMBAT_RANGEDSPECIALIZE_CARBINE,
+						xp.COMBAT_RANGEDSPECIALIZE_HEAVY,
+						xp.COMBAT_THROWN,
+						xp.COMBAT_GRENADE,
+						xp.JEDI_GENERAL,
+						xp.COMBAT_JEDI_ONEHANDLIGHTSABER,
+						xp.COMBAT_JEDI_TWOHANDLIGHTSABER,
+						xp.COMBAT_JEDI_POLEARMLIGHTSABER,
+						xp.COMBAT_JEDI_FORCE_POWER,
+						xp.SCOUT,
+						xp.TRAPPING,
+						xp.BOUNTYHUNTER,
+						xp.SMUGGLER,
+						xp.SQUADLEADER,
+						xp.CREATUREHANDLER,
+						xp.SLICING,
+						xp.MEDICAL,
+						xp.COMBATMEDIC,
+						xp.BIO_ENGINEER,
+						xp.BIO_ENGINEER_DNA_HARVESTING,
+						xp.MERCHANT,
+						xp.CRAFTING_GENERAL,
+						xp.CRAFTING_FOOD_GENERAL,
+						xp.CRAFTING_MEDICINE_GENERAL,
+						xp.CRAFTING_CLOTHING_ARMOR,
+						xp.CRAFTING_CLOTHING_GENERAL,
+						xp.CRAFTING_WEAPONS_GENERAL,
+						xp.CRAFTING_WEAPONS_MELEE,
+						xp.CRAFTING_WEAPONS_RANGED,
+						xp.CRAFTING_WEAPONS_MUNITION,
+						xp.CRAFTING_STRUCTURE_GENERAL,
+						xp.CRAFTING_DROID_GENERAL,
+						xp.ENTERTAINER,
+						xp.MUSIC,
+						xp.DANCE,
+						xp.IMAGEDESIGNER,
+						force_rank.FRS_XP,
+						"fs_combat",
+						"fs_reflex",
+						"fs_crafting",
+						"fs_senses",
+						"entertainer",
+						"crafting"
+					};
+
+	for (int i = 0; i < xpTypes.length; i++)
+	{
+		curXp = getExperiencePoints(player, xpTypes[i]);
+		grantExperiencePoints(player, xpTypes[i], -curXp);
+	}
+
+	// Grant existing Jedi a badge and clear Jedi data
+	if (isJedi(player))
+	{
+		setJediState(player, JEDI_STATE_NONE);
+		badge.grantBadge(player, "bdg_jedi_elder");
+		grantCommand(player, "blueGlowie");
+		groundquests.grantQuestNoAcceptUI(player, "jedi_gifts_1", false);
+	}
+
+	// Revoke all old Skills
+	string[] skillList = getSkillListingForPlayer(player);
+	int attempts = skillList.length;
+
+	if ((skillList != null) && (skillList.length != 0))
+	{
+		while (skillList.length > 0 && attempts > 0)
+		{
+			for (int i = 0; i < skillList.length; i++)
+			{
+				string skillName = skillList[i];
+				if ( !skillName.startsWith("costume") && // don't revoke costumes
+					!skillName.startsWith("class_chronicles") && // don't revoke chronicle skills
+					!skillName.startsWith("species_") &&  //don't revoke species skills
+					!skillName.startsWith("social_language_") &&
+					!skillName.startsWith("social_politician_") &&
+					!skillName.startsWith("pilot_") &&
+					!skillName.startsWith("swg_") &&
+					!skillName.startsWith("utility_") &&
+					!skillName.startsWith("common_") &&
+					!skillName.startsWith("pvp_") &&
+					!skillName.startsWith("internal_expertise_") &&
+					!skillName.equals("expertise") )
+				{
+					skill.revokeSkillSilent(player, skillName);
+				}
+			}
+
+			// The new skill list is the remaining skills.
+			skillList = getSkillListingForPlayer(player);
+
+			// Prevent data from creating an infinite loop.
+			--attempts;
+		}
+	}
+
+	// Remove bounty hunter missions
+	obj_id mission = bounty_hunter.getBountyMission(player);
+
+	if(isIdValid(mission))
+		messageTo(mission, "abortMission", null, 0, false);
+}
+
+
+
+
+
+/* ----------------------------------------------------------------------------------
+	Content Path Handoff for low-level pre-existing players
+	   (duplicated from base_player OnInitialize trigger)
+---------------------------------------------------------------------------------- */
+void contentPathHandoff (obj_id self)
+{
+	location origin = getLocation (self);
+	location fighting = new location (3521f, 0.0f, -4821f, origin.area);
+	location crafty = new location (3309.0f, 6.0f, -4785.0f, origin.area);
+
+	string profession = getSkillTemplate (self);
+	obj_id objInv = utils.getInventoryContainer(self);
+
+	//define quests
+	string questNewbieStart = "quest/speeder_quest";
+	string questNewbieStartBH = "quest/speeder_quest";
+	string questCrafterEntertainer = "quest/tatooine_eisley_noncombat";
+
+
+	int crafter = profession.indexOf ("trader");
+	int entertainer = profession.indexOf ("entertainer");
+	int bountyhunter = profession.indexOf ("bounty_hunter");
+	if (crafter > -1 || entertainer > -1)
+	{
+		if (!groundquests.isQuestActiveOrComplete(self, questCrafterEntertainer))
+		{
+			createClientPath( self, origin, crafty );
+			groundquests.grantQuest(self, questCrafterEntertainer);
+	    }
+	}
+	else if (bountyhunter > -1)
+	{
+		if (groundquests.hasCompletedQuest (self, questNewbieStartBH) || groundquests.isQuestActive (self, questNewbieStartBH))
+		{
+			detachScript (self, "npe.handoff_to_tatooine");
+	    }
+		else
+		{
+			groundquests.requestGrantQuest (self, questNewbieStartBH);
+		}
+
+	}
+	else
+	{
+		if (groundquests.hasCompletedQuest (self, questNewbieStart) || groundquests.isQuestActive (self, questNewbieStart))
+		{
+			detachScript (self, "npe.handoff_to_tatooine");
+		}
+		else
+		{
+			groundquests.requestGrantQuest (self, questNewbieStart);
+		}
+
+	}
+
+	if (crafter > -1)
+	{
+		messageTo(self, "handleSurveyToolbarSetup", null, 5, false);
+	}
+
+	//Give everyone the uniform crate
+	static_item.createNewItemFunction("item_npe_uniform_crate_01_01", objInv);
+
+	//11/9: wwallace: changed this to use the library function
+	npe.giveProfessionWeapon(self);
+}
+
+float getPercentageCompletion(obj_id self, string template)
+{
+	if(template == null || template.equals(""))
+		return 0.0f;
+
+	float oldSkillPct = 0.0f;
+
+	if(template.startsWith("trader") || template.startsWith("entertainer"))
+	{
+		string oldSkills = dataTableGetString(skill_template.TEMPLATE_TABLE, template, "template");
+		string[] oldSkillList = split(oldSkills, ',');
+
+		if(oldSkillList == null || oldSkillList.length == 0)
+			return 0.0f;
+
+		int oldSkillCount = 0;
+
+		for(int i = 0; i < oldSkillList.length; i++)
+		{
+			if(hasSkill(self, oldSkillList[i]))
+				oldSkillCount++;
+		}
+
+		oldSkillPct = (float)oldSkillCount / (float)oldSkillList.length;
+	}
+	else
+	{
+		float level = (float)getLevel(self);
+		oldSkillPct = level / 90.0f;
+	}
+
+	if(oldSkillPct > 1.0f)
+		oldSkillPct = 1.0f;
+
+	return oldSkillPct;
+}
+
+boolean setPercentageCompletion(obj_id self, string skillTemplateName, float pct, boolean withItems)
+{
+	string newSkills = dataTableGetString(skill_template.TEMPLATE_TABLE, skillTemplateName, "template");
+	string[] newSkillList = split(newSkills, ',');
+
+	int newSkillCount = (int)Math.floor(pct * (float)newSkillList.length);
+
+	if(newSkillCount < 1)
+		newSkillCount = 1;
+
+	for(int i = 0; i < newSkillCount; i++)
+	{
+		grantSkill(self, newSkillList[i]);
+
+		setWorkingSkill(self, newSkillList[i]);
+
+		if(withItems)
+			skill_template.grantRoadmapItem(self);
+	}
+
+	if(newSkillCount == newSkillList.length)
+		setWorkingSkill(self, null);
+
+	return true;
+}
+
+boolean isHigherWorkingSkill(string newSkill, string oldSkill, string skillTemplate)
+{
+	if(newSkill == null || newSkill.equals(""))
+		return false;
+
+	if(oldSkill == null || oldSkill.equals(""))
+		return true;
+
+	if(skillTemplate == null || skillTemplate.equals(""))
+		return false;
+
+	string skills = dataTableGetString(skill_template.TEMPLATE_TABLE, skillTemplate, "template");
+	string[] skillList = split(skills, ',');
+
+	int newIdx = -1;
+	int oldIdx = -1;
+
+	for(int i = 0; i < skillList.length; i++)
+	{
+		if(newSkill.equals(skillList[i]))
+			newIdx = i;
+
+		if(oldSkill.equals(skillList[i]))
+			oldIdx = i;
+	}
+
+	return (newIdx > oldIdx);
+}
+
+string getHigherWorkingSkill(string newSkill, string oldSkill, string skillTemplate)
+{
+	if(newSkill == null || newSkill.equals(""))
+		return oldSkill;
+
+	if(oldSkill == null || oldSkill.equals(""))
+		return newSkill;
+
+	if(oldSkill.equals("master"))
+		return oldSkill;
+
+	if(skillTemplate == null || skillTemplate.equals(""))
+		return oldSkill;
+
+	string skills = dataTableGetString(skill_template.TEMPLATE_TABLE, skillTemplate, "template");
+	string[] skillList = split(skills, ',');
+
+	int newIdx = -1;
+	int oldIdx = -1;
+
+	for(int i = 0; i < skillList.length; i++)
+	{
+		if(newSkill.equals(skillList[i]))
+			newIdx = i;
+
+		if(oldSkill.equals(skillList[i]))
+			oldIdx = i;
+	}
+
+	if(newIdx >= oldIdx)
+		return newSkill;
+
+	return oldSkill;
+}
+
+
+boolean setRespecVersion(obj_id player)
+{
+	//set the version of expertise on the player
+	string skillTemplate = getSkillTemplate(player);
+	string profession = skill.getProfessionName(skillTemplate);
+
+	if(profession == null || skillTemplate == null)
+		return false;
+
+	if(profession.equals("") || skillTemplate.equals(""))
+		return false;
+
+
+	//if you are a trader, we need to determine what kind
+	if(profession.equals("trader"))
+	{
+		//domestics
+		if(skillTemplate.equals("trader_0a"))
+			profession = "trader_dom";
+
+		//structure
+		if(skillTemplate.equals("trader_0b"))
+			profession = "trader_struct";
+
+		//munitions
+		if(skillTemplate.equals("trader_0c"))
+			profession = "trader_mun";
+
+		//engineering
+		if(skillTemplate.equals("trader_0d"))
+			profession = "trader_eng";
+
+	}
+	//get the row
+	int row = dataTableSearchColumnForString(profession, "profession", EXPERTISE_VERSION_TABLE);
+
+	int version = 0;
+
+	//if the row is less than 0, that means this profession hasnt been added to the table yet
+	if(row >= 0)
+		version = dataTableGetInt(EXPERTISE_VERSION_TABLE, row, "version");
+
+	setObjVar(player, EXPERTISE_VERSION_OBJVAR, version);
+
+	return true;
+}
+
+//used to get the respec version for that profession
+int getRespecVersion(obj_id player)
+{
+	//set the version of expertise on the player
+	string skillTemplate = getSkillTemplate(player);
+	string profession = skill.getProfessionName(skillTemplate);
+
+	if(profession == null || skillTemplate == null)
+		return -1;
+	if(profession.equals("") || skillTemplate.equals(""))
+		return -1;
+
+	//if you are a trader, we need to determine what kind
+	if(profession.equals("trader"))
+	{
+		//domestics
+		if(skillTemplate.equals("trader_0a"))
+			profession = "trader_dom";
+
+		//structure
+		if(skillTemplate.equals("trader_0b"))
+			profession = "trader_struct";
+
+		//munitions
+		if(skillTemplate.equals("trader_0c"))
+			profession = "trader_mun";
+
+		//engineering
+		if(skillTemplate.equals("trader_0d"))
+			profession = "trader_eng";
+
+	}
+
+	//get the row
+	int row = dataTableSearchColumnForString(profession, "profession", EXPERTISE_VERSION_TABLE);
+
+	//if the row is less than 0, that means this profession hasnt been added to the table yet
+	if(row < 0)
+		return 0;
+
+	//get the version from the table, default is 0
+	int version = dataTableGetInt(EXPERTISE_VERSION_TABLE, row, "version");
+
+	//return that version
+	return version;
+}
+
+//checks to see if your respec counter can decay by one yet
+//you get one decay per month
+boolean checkRespecDecay(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	//if you havent bought a respec yet, we just need to set the timer on you
+	if(!hasObjVar(player, "respecsBought"))
+	{
+		//customer service log
+		CustomerServiceLog("respec_decay", "Player %TU :: had no respec count objvar. We set the decay timer on them to expire on the first of the month.", player);
+		setRespecDecayObjVar(player);
+		return true;
+	}
+
+	prose_package pp = new prose_package();
+	prose.setStringId(pp, RESPEC_DECAY_MESSAGE);
+
+	//if you havent gotten the timer yet, but have respec'd before
+	//we need to decrement your respec count and set the timer
+	if(!hasObjVar(player, OBJVAR_RESPEC_DECAY_TIME))
+	{
+		//get current respec count
+		int currentRespecsBought = getIntObjVar(player, "respecsBought");
+
+		//decrement count
+		currentRespecsBought -= 1;
+
+		//if decremented count is less than or equal to 0
+		//remove the objvar
+		if(currentRespecsBought <= 0)
+		{
+			//message to the player
+			prose.setDI(pp, 0);
+			sui.msgbox(player, pp);
+			removeObjVar(player, "respecsBought");
+			//customer service log
+			CustomerServiceLog("respec_decay", "Player %TU :: had their respec counter decay to 0. This means the objvar was removed. They had no reset timer, so we set the decay timer on them to expire on the first next month.", player);
+		}
+		else
+		{
+			//message to the player
+			prose.setDI(pp, currentRespecsBought);
+			sui.msgbox(player, pp);
+			setObjVar(player, "respecsBought", currentRespecsBought);
+			//customer service log
+			CustomerServiceLog("respec_decay", "Player %TU :: had their respec counter decay to "+currentRespecsBought+". They had no reset timer, so we set the decay timer on them to expire on the first next month.", player);
+		}
+		setRespecDecayObjVar(player);
+		return true;
+	}
+	//if you have respec'd and have the timer
+	//we need to see if it has been long enough yet
+	//to issue your decay
+	else
+	{
+		//get the time till next decay
+		int timeTillNextDecayOnPlayer = getIntObjVar(player, OBJVAR_RESPEC_DECAY_TIME);
+		//get current calander time
+		int now = getCalendarTime();
+		//if time to next decay is less than current time
+		//you get the respec count decay
+		if(timeTillNextDecayOnPlayer <= now)
+		{
+			//get the current count
+			int currentRespecsBought = getIntObjVar(player, "respecsBought");
+
+			//decrement it by one
+			currentRespecsBought -= 1;
+
+			//if after decrement we are less than or equal to 0
+			//we need to just remove the objvar
+			if(currentRespecsBought <= 0)
+			{
+				//message to the player
+				prose.setDI(pp, 0);
+				sui.msgbox(player, pp);
+				removeObjVar(player, "respecsBought");
+				//customer service log
+				CustomerServiceLog("respec_decay", "Player %TU :: had their respec counter decay to 0. This means the objvar was removed. We reset the decay timer on them to expire on the first next month.", player);
+			}
+			//otherwise reset it to the new amount
+			else
+			{
+				//message to the player
+				prose.setDI(pp, currentRespecsBought);
+				sui.msgbox(player, pp);
+				setObjVar(player, "respecsBought", currentRespecsBought);
+				//customer service log
+				CustomerServiceLog("respec_decay", "Player %TU :: had their respec counter decay to "+currentRespecsBought+". We reset the decay timer on them to expire on the first next month.", player);
+			}
+			//set the next time
+			setRespecDecayObjVar(player);
+			return true;
+		}
+		return false;
+	}
+}
+
+
+//function to set respec decay time
+boolean setRespecDecayObjVar(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	//initialize
+	int timeTillNextDecayOnPlayer = 0;
+
+	//if you have the objvar set the variable to its amount
+	if(hasObjVar(player, OBJVAR_RESPEC_DECAY_TIME))
+		timeTillNextDecayOnPlayer = getIntObjVar(player, OBJVAR_RESPEC_DECAY_TIME);
+
+	//intialize
+	int timeTillNextDecay = 0;
+
+	//get current time
+	int now = getCalendarTime();
+	//get time until 10am of the first day of next month (GMT)
+	int secondsUntil = secondsUntilNextMonthlyTime(1, 10, 0, 0);
+
+	//add those seconds to current time
+	//this gets the time it will be when you can decrement count again
+	timeTillNextDecay = now + secondsUntil;
+
+	//set the time
+	setObjVar(player, OBJVAR_RESPEC_DECAY_TIME, timeTillNextDecay);
+
+	return true;
+
+}

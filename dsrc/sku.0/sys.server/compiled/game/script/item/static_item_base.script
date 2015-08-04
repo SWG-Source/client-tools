@@ -1,0 +1,419 @@
+include library.static_item;
+include library.utils;
+include library.beast_lib;
+include library.buff;
+include library.armor;
+include library.proc;
+
+
+const string_id SID_ITEM_LEVEL_TOO_LOW		= new string_id("base_player", "level_too_low");
+const string_id SID_ITEM_NOT_ENOUGH_SKILL	= new string_id("base_player", "not_correct_skill");
+const string_id SID_ITEM_MUST_NOT_BE_EQUIP	= new string_id("base_player", "not_while_equipped");
+const string_id SID_ITEM_NO_UNIQUE_TRANSFER	= new string_id("base_player", "unique_no_transfer");
+
+trigger OnInitialize()
+{
+	dictionary itemData = static_item.getMasterItemDictionary(self);
+	if ( itemData == null || itemData == "" )
+		return SCRIPT_CONTINUE;
+
+	int masterVersion = itemData.getInt("version");
+	int currentVersion = getStaticItemVersion(self);
+
+	//check our version if we do not match
+	if(currentVersion != masterVersion)
+	{
+		//Has to be done as a messageTo, otherwise scripts/objvars wont clean up properly
+		//needs to happen one frame after initialize
+		messageTo(self, "handlerVersionUpdate", itemData, 0.1f, true);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		static_item.initializeObject(self, itemData);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	boolean canTransfer = true;
+		
+	if (isPlayer(destContainer) || isAPlayerAppearanceInventoryContainer(destContainer))
+	{
+		dictionary itemData = static_item.getMasterItemDictionary(self);
+
+		// if transferer is invalid, it must be CTS trying to equip the item
+		// so just assume the transferer is the owner (if owner is the player).
+		if (!isIdValid(transferer))
+		{
+			obj_id owner = getOwner(self);
+			if (destContainer == owner)
+			{
+				transferer = owner;
+			}
+			else if (isAPlayerAppearanceInventoryContainer(destContainer))
+			{
+				transferer = getContainedBy(destContainer);
+			}
+		}
+
+		int requiredLevel = itemData.getInt("required_level");
+		string requiredSkill = itemData.getString("required_skill");
+
+		if(!static_item.validateLevelRequired(transferer,requiredLevel))
+		{
+			sendSystemMessage(transferer, SID_ITEM_LEVEL_TOO_LOW);
+			canTransfer = false;
+		}
+		if ( requiredSkill != null && requiredSkill != "" )
+		{
+			string classTemplate = getSkillTemplate(transferer);
+			if ( classTemplate != null && classTemplate != "" )
+			{
+				if (!classTemplate.startsWith(requiredSkill))
+				{
+					sendSystemMessage(transferer, SID_ITEM_NOT_ENOUGH_SKILL);
+					canTransfer = false;
+				}
+			}
+		}
+
+		//If we're fake armor that looks like the real thing, require wear armor skill.
+		if(hasObjVar(self, "armor.fake_armor"))
+		{
+			int ohMyGOT = getGameObjectType(self);
+
+			if(!hasCommand(transferer, "wear_all_armor") && isGameObjectTypeOf(ohMyGOT, GOT_armor) )
+			{
+				sendSystemMessage(transferer, SID_ITEM_NOT_ENOUGH_SKILL);
+				canTransfer = false;
+			}
+		}
+	}
+	else
+	{
+		//unique static items can be equipped, or placed in the bank.You can not put them in sub containers or houses.
+		if (static_item.isUniqueStaticItem(self))
+		{
+			obj_id owner = getOwner(self);
+			obj_id inv = utils.getInventoryContainer(owner);
+			obj_id bank = utils.getPlayerBank(owner);
+			
+			if(!isIdValid(inv) || ((destContainer != inv) && (destContainer != bank)))
+			{
+				sendSystemMessage(transferer, SID_ITEM_NO_UNIQUE_TRANSFER);
+				canTransfer = false;
+			}
+		}
+	}
+	
+	if (static_item.isUniqueStaticItem(self))
+	{
+		obj_id[] destContents = getContents(destContainer);
+		
+		if (destContents != null && destContents.length > 0)
+		{
+			for (int i=0;i<destContents.length;i++)
+			{
+				if (static_item.isStaticItem(destContents[i]))
+				{
+					if (getStaticItemName(destContents[i]).equals(getStaticItemName(self)))
+						canTransfer = false;
+				}
+			}
+		}
+		
+	}
+	
+
+	if(!canTransfer)
+	{
+		if(isGod(transferer))
+		{
+			sendSystemMessageTestingOnly(transferer, "GOD MODE:You can Equip This due to being in GOD MODE");
+			return SCRIPT_CONTINUE;
+		}
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	if (isIdValid(destContainer) && isPlayer(destContainer))
+		proc.buildCurrentReacList(destContainer);
+	if(isIdValid(sourceContainer) && isPlayer(sourceContainer))
+		proc.buildCurrentReacList(sourceContainer);
+
+
+ 	return SCRIPT_CONTINUE;
+}
+
+
+//11-7-2005 tblair this was to prevent infinate buffs, however created to many exploits
+//11-5-2007 tblair Our vendor system is much more robust now and does not let you sell equipped items
+//being unable to sell equipped items should prevent any exploits with buffs and or credits from happening
+trigger OnDestroy()
+{
+ 	if (isPlayer(getContainedBy(self)))
+ 	{
+		//you must un-equip any static items before you destroy them
+		obj_id player = utils.getContainingPlayer(self);
+		sendSystemMessage(player, SID_ITEM_MUST_NOT_BE_EQUIP);
+		CustomerServiceLog( "static_item", "Player " + getFirstName(player) + "(" + player + ") tried to destroy item " + getStaticItemName(self) + "(" + self + "), while it was equiped. It was not destroyed.");
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+
+	int free = getFirstFreeIndex(names);
+	if (free == -1)
+	{
+		//debugSpeakMsg( player, "no free index" );
+		return SCRIPT_CONTINUE;
+	}
+	//get the stats from the Master Item table
+	dictionary itemData = static_item.getMasterItemDictionary(self);
+	if ( itemData == null )
+	return  SCRIPT_CONTINUE;//this has nothing.
+
+
+	dictionary typeData = null;
+	//get decide if we are a item, weapon, armor and get our stats
+	switch (itemData.getInt("type"))
+	{
+		case 1:
+			typeData = static_item.getStaticItemWeaponDictionary(self);
+			break;
+		case 2:
+			typeData = static_item.getStaticArmorDictionary(self);
+			break;
+		case 3:
+			typeData = static_item.getStaticItemDictionary(self);
+			break;
+	}
+
+	if ( typeData == null )
+	{
+		LOG( "static_item_base", getStaticItemName(self) + ": typeData is null. Could not find this item in its static item stats datatable." );
+		return  SCRIPT_CONTINUE;
+	}
+
+	//display required Level
+	int requiredLevelToEquip = itemData.getInt( "required_level" );
+	//LOG( "create","REQUIRED LEVEL:: " +requiredLevelToEquip);
+	if ( requiredLevelToEquip != 0 && !hasScript(self, "systems.combat.combat_weapon"))
+	{
+			names[free] = utils.packStringId( new string_id ( "proc/proc", "required_combat_level" ));
+			attribs[free++] =""  +requiredLevelToEquip;
+	}
+
+	//display required Skill
+	string requiredSkillToEquip = itemData.getString( "required_skill" );
+	//LOG( "create","REQUIRED SKILL:: " +requiredSkillToEquip);
+	if ( requiredSkillToEquip != null && requiredSkillToEquip != "" && !hasScript(self, "systems.combat.combat_weapon"))
+	{
+			names[free] = utils.packStringId( new string_id ( "proc/proc", "required_skill" ));
+			attribs[free++] = utils.packStringId( new string_id ( "ui_roadmap", requiredSkillToEquip));
+	}
+	
+	//in some cases the buff reuse time and buff name should be hidden on the object
+	int buffIdentity = typeData.getInt("hide_buff_identity");
+
+	//display reuse time
+	int reuseTime = typeData.getInt( "reuse_time" );
+	//LOG( "create","REUSE TIME:: " +reuseTime);
+	if ( reuseTime != 0 && buffIdentity == 0)
+	{
+			names[free] = utils.packStringId( new string_id ( "proc/proc", "reuse_time" ));
+			attribs[free++] = utils.assembleTimeRemainToUse(reuseTime);
+	}
+
+	//if the reuse time is long, show the player in days, minutes, hours, seconds
+	if (reuseTime > 30 && buffIdentity == 0)
+	{
+		names[free] = utils.packStringId( new string_id ( "spam", "reuse_time_counted" ));
+
+		string coolDownGroup = typeData.getString("cool_down_group");
+		string varName = "clickItem." + coolDownGroup;
+		int current_time = getGameTime();
+		int timestamp = -1;
+
+		if ( hasObjVar(player,varName) )
+		{
+			timestamp = getIntObjVar(player,varName);
+		}
+		else if ( beast_lib.hasActiveBeast(player) )
+		{
+			obj_id activeBeast = beast_lib.getBeastOnPlayer(player);
+			if ( hasObjVar(activeBeast, varName) )
+			{
+				timestamp = getIntObjVar(activeBeast,varName);
+			}
+		}
+
+		int time_remaining =  timestamp - current_time;
+
+		if (timestamp == -1 || time_remaining <= 0)
+		{
+			attribs[free] = "0";
+		}
+		else
+		{
+			//String target = new String();
+			//target = packOutOfBandProsePackage(null, utils.assembleTimeRemainToUse(time_remaining));
+			//attribs[free] = target;
+			attribs[free] = utils.assembleTimeRemainToUse(time_remaining);
+		}
+		free++;
+		if (free >= names.length)
+		return SCRIPT_CONTINUE;
+
+	}
+
+	//required level for effect
+	int requiredLevelForEffect = typeData.getInt( "required_level_for_effect" );
+	//LOG( "create","REQUIRED EFFECT LEVEL:: " +requiredLevelForEffect);
+	if ( requiredLevelForEffect != 0 )
+	{
+		names[free] = utils.packStringId( new string_id ( "proc/proc", "effect_level" ));
+		attribs[free++] =""  +requiredLevelForEffect;
+
+	}
+	
+	//display buff name
+	string buffName = typeData.getString( "buff_name" );
+	//LOG( "create","BUFF NAME:: " +buffName);
+	if (buffName != null && buffName != "" && buffIdentity == 0)
+	{
+			names[free] = utils.packStringId( new string_id ( "proc/proc", "proc_name" ));
+			attribs[free++] = utils.packStringId( new string_id ( "ui_buff", buffName));
+	}
+
+	//if we are Jedi robes lets add a name to indicate armor strength
+	if (hasObjVar(self, "armor.general_protection_clothing"))
+	{
+		int pseudoLevel = getIntObjVar(self, "armor.general_protection_clothing");
+		string forceLevel = armor.getPseudoArmorLevel(pseudoLevel);
+		names[free] = utils.packStringId( new string_id ( "obj_attr_n", "protection_level" ));
+		attribs[free++] = utils.packStringId( new string_id ( "obj_attr_n", forceLevel));
+
+	}
+
+	//if we are fake armor display armor protections and other jazz.
+	if(hasObjVar(self, "armor.fake_armor") )
+	{
+		names[free] = "armor_category";
+		attribs[free++] = utils.packStringId(new string_id("obj_attr_n", "special") );
+
+		string[][] entries = {{"kinetic", "energy"}, {"heat", "cold", "acid", "electricity"}};
+		string[] protections = {"kinetic", "energy", "heat", "cold", "acid", "electricity"};
+		string[] tooltipProtections = {"armor_eff_kinetic", "armor_eff_energy", "armor_eff_elemental_heat",
+			"armor_eff_elemental_cold", "armor_eff_elemental_acid", "armor_eff_elemental_electrical"};
+
+		for (int i = 0; i < entries.length; ++i)
+		{
+			for (int j = 0; j < entries[i].length; ++j)
+			{
+				if (free < names.length)
+				{
+					if(hasObjVar(self, "armor.fake_armor." + entries[i][j]) )
+					{
+						int displayedProtections = getIntObjVar(self, "armor.fake_armor." + entries[i][j]);
+						names[free] = (string)(armor.SPECIAL_PROTECTION_MAP.get(entries[i][j]));
+						attribs[free++] = Integer.toString(displayedProtections);
+					}
+				}
+			}
+		}
+		// Tool tip
+		for(int i = 0; i < protections.length; i++)
+		{
+			if(hasObjVar(self, "armor.fake_armor." + protections[i]) )
+			{
+				int displayedProtections = getIntObjVar(self, "armor.fake_armor." + protections[i]);
+				names[free] = "tooltip." + tooltipProtections[i];
+				attribs[free++] = Integer.toString(displayedProtections);
+			}
+		}
+		// Species
+		if(utils.hasScriptVar(self, armor.SCRIPTVAR_SPECIES_RESTRICTIONS) )
+		{
+			string speciesRequirements = utils.getStringScriptVar(self, armor.SCRIPTVAR_SPECIES_RESTRICTIONS);
+			if ( speciesRequirements != null && speciesRequirements.length() > 0 )
+			{
+				names[free] = "species_restrictions.species_name";
+				attribs[free++] = speciesRequirements;
+
+				names[free] = "tooltip.species_restrictions";
+				attribs[free++] = speciesRequirements;
+			}
+		}
+	}
+
+	// tier
+	int tier = itemData.getInt("tier");
+	names[free] = "tier";
+	attribs[free++] = "" + tier;
+	// tooltip: tier
+	names[free] = "tooltip.tier";
+	attribs[free++] = "" + tier;
+	
+	if(static_item.isUniqueStaticItem(self))
+	{
+		names[free] = "unique";
+		attribs[free++] = "1";
+	}
+
+	if(static_item.isSetBonusItem(self))
+	{
+		int setBonusIndex = static_item.getSetBonusIndex(self);	
+
+		if(setBonusIndex == -1)
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		int numTableRows = dataTableGetNumRows(static_item.SET_BONUS_TABLE);
+
+		for(int i = 0; i < numTableRows; i++)
+		{
+			int thisRowSetBonusIndex = dataTableGetInt(static_item.SET_BONUS_TABLE, i, "SETID");
+			int numberOfSetItems = dataTableGetInt(static_item.SET_BONUS_TABLE, i, "NUM_ITEMS");
+
+			if(setBonusIndex == thisRowSetBonusIndex)
+			{
+				string setBonusBuffName = dataTableGetString(static_item.SET_BONUS_TABLE, i, "EFFECT");
+				names[free] = utils.packStringId( new string_id ( "set_bonus", "piece_bonus_count_" + numberOfSetItems));
+				attribs[free++] = utils.packStringId( new string_id ( "set_bonus", setBonusBuffName));
+			}
+
+		}	
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlerVersionUpdate()
+{
+	static_item.versionUpdate(self, params);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleStaticReEquipItem()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	
+	equip(self, player);
+	return SCRIPT_CONTINUE;	
+}

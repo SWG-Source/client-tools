@@ -1,0 +1,469 @@
+include library.ai_lib;
+include ai.ai_combat;
+include library.factions;
+include library.utils;
+include library.attrib;
+
+const string SOCIAL_VOLUME = "npc_socialization";
+const float SOCIAL_RANGE = 15.0f;
+const string ACTION_ALERT = "alert";
+const string ACTION_THREATEN = "threaten";
+const string CREATURE_TABLE = "datatables/mob/creatures.iff";
+
+void initializeScript()
+{
+	obj_id self = getSelf();
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::initializeScript() self(" + self + ":" + getName(self) + ")");
+
+	createTriggerVolume(SOCIAL_VOLUME, SOCIAL_RANGE, false);
+
+	cancelFollowing(self);
+
+	setAttributeInterested(self, attrib.TUSKEN_RAIDER);
+	setAttributeInterested(self, attrib.HERBIVORE);
+	setAttributeAttained(self, attrib.TUSKEN_RAIDER);
+	setAttributeAttained(self, attrib.THUG);//so guard-types will attack them
+}
+
+/**
+ * This is called when a a script gets attached to the AI and the AI
+ * is not being restored from a persisted state. When an AI is restored
+ * from a persisted state, OnAddedToWorld() gets called.
+ */
+trigger OnAttach()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::OnAttach() self(" + self + ":" + getName(self) + ")");
+
+	initializeScript();
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * This is when an AI gets restored from a persisted state. This will
+ * not be called when an AI is first created because this script is
+ * not attached yet. When the object is first created, OnAttach() is
+ * called.
+ */
+trigger OnAddedToWorld()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::OnAddedToWorld() self(" + self + ":" + getName(self) + ")");
+
+	initializeScript();
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAiTetherStart()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::OnAiTetherStart() self(" + self + ":" + getName(self) + ")");
+
+	removeTriggerVolume(SOCIAL_VOLUME);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAiTetherComplete()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::OnAiTetherComplete() self(" + self + ":" + getName(self) + ")");
+
+	if (getConfigSetting("GameServer", "disableAITriggerVolumes") == null)
+	{
+		createTriggerVolume(SOCIAL_VOLUME, SOCIAL_RANGE, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::OnTriggerVolumeEntered() self(" + self + ":" + getName(self) + ") volumeName(" + volumeName + ") breacher(" + breacher + ":" + getName(breacher) + ")");
+
+	if (hasObjVar(breacher, "gm"))
+		return SCRIPT_CONTINUE;
+
+	if (ai_lib.isInCombat(self))
+		return SCRIPT_CONTINUE;
+
+	if ( breacher == self )
+		return SCRIPT_CONTINUE;
+
+	if ( isIncapacitated(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( getIntObjVar( self, "ai.defaultCalmBehavior" ) == ai_lib.BEHAVIOR_SENTINEL )
+		return SCRIPT_CONTINUE;
+
+	if ( volumeName == ai_lib.ALERT_VOLUME_NAME )
+	{
+		if ( hasScript( breacher, "ai.tusken_raider") )
+		{
+			if ( getIntObjVar( breacher, "ai.defaultCalmBehavior" ) == ai_lib.BEHAVIOR_SENTINEL )
+				return SCRIPT_CONTINUE;
+			addTriggerVolumeEventSource(SOCIAL_VOLUME, breacher);
+		}
+		else
+		{
+			boolean isBantha = false;
+			const string creatureName = getCreatureName(breacher);
+
+			if (creatureName != null)
+			{
+				string species = dataTableGetString( CREATURE_TABLE, creatureName, "socialGroup" );
+				if ( (species != null) && species.equals( "bantha" ) )
+					isBantha = true;
+			}
+
+			if ( isBantha )
+			{
+				takeBantha( self, breacher );
+				return SCRIPT_OVERRIDE;
+			}
+		}
+		return SCRIPT_CONTINUE;
+	}
+	else if (volumeName == SOCIAL_VOLUME)
+	{
+		if (!ai_lib.isInCombat(breacher))
+		{
+			if (getIntObjVar(breacher, "ai.defaultCalmBehavior") != ai_lib.BEHAVIOR_SENTINEL)
+			{
+				initiateDialog(self, breacher);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id breacher)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::OnTriggerVolumeExited() self(" + self + ":" + getName(self) + ") volumeName(" + volumeName + ") breacher(" + breacher + ":" + getName(breacher) + ")");
+
+	if (volumeName == ai_lib.ALERT_VOLUME_NAME)
+	{
+		if (hasScript( breacher, "ai.tusken_raider"))
+		{
+			removeTriggerVolumeEventSource(SOCIAL_VOLUME, breacher);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void initiateDialog( obj_id talker, obj_id listener )
+{
+	if ( !(isIdValid( talker ) && isIdValid( listener )) )
+		return;
+
+	//only talk to tuskens with a higher obj_id than your own:
+	if ( talker.getValue() < listener.getValue() )
+		return;
+
+	if ( utils.hasScriptVar( talker, "ai.speaking") || utils.hasScriptVar( listener, "ai.speaking" ))
+		return;
+
+	if ( getBehavior( talker ) >= BEHAVIOR_THREATEN || getBehavior( listener ) >= BEHAVIOR_THREATEN )
+		return;
+
+	if ( getIntObjVar( listener, "ai.defaultCalmBehavior" ) == ai_lib.BEHAVIOR_SENTINEL ||
+		getIntObjVar( talker, "ai.defaultCalmBehavior" ) == ai_lib.BEHAVIOR_SENTINEL )
+			return;
+
+	location pathToLoc = getLocation( listener );
+	location myLoc = getLocation( talker );
+	if ( pathToLoc == null || myLoc == null )
+	{
+		string msg = "ai.tusken_raider.initiateDialog(): ";
+		string msg2 = "Null location for listener (obj_id: " + listener + " pathToLoc: " + pathToLoc + ") and/or talker (obj_id: " + talker + " myLoc: " + myLoc + ")";
+		LOG("DESIGNER_FATAL", msg + msg2);
+		return;
+	}
+	else
+	{
+		utils.setScriptVar( talker, "ai.speaking", true );
+		utils.setScriptVar( listener, "ai.speaking", true );
+		stop( talker );
+		stop( listener );
+		faceTo( listener, talker );
+		utils.setScriptVar( talker, "ai.pathingToSocialize", listener );
+		utils.setScriptVar( listener, "ai.pathingToSocialize", talker );
+		
+		if ( pathToLoc.x < myLoc.x )
+			pathToLoc.x += 1.5f;
+		else
+			pathToLoc.x -= 1.5f;
+	
+		if ( pathToLoc.z < myLoc.z )
+			pathToLoc.z += 1.5f;
+		else
+			pathToLoc.z -= 1.5f;
+		pathTo( talker, pathToLoc );
+	
+		//If in 45 seconds these objvars are still set, then we'll kill this
+		// socialization and resume default behavior:
+		messageTo( talker, "handleSocializingRecovery", null, 45, isObjectPersisted( talker) );
+		messageTo( listener, "handleSocializingRecovery", null, 45, isObjectPersisted(listener) );
+	}
+}
+
+messageHandler handleSocializingRecovery()
+{
+	if ( utils.hasScriptVar( self, "ai.pathingToSocialize" ))
+	{
+		ai_lib.setMood( self, ai_lib.MOOD_CALM );
+		utils.removeScriptVar( self, "ai.pathingToSocialize" );
+		utils.removeScriptVar( self, "ai.speaking" );
+		messageTo( self, "resumeLoitering", null, 1, false );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnMovePathComplete()
+{
+	if ( !utils.hasScriptVar( self, "ai.pathingToSocialize"))
+		return SCRIPT_CONTINUE;
+
+	obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+	faceTo( self, listener);
+	faceTo( listener, self );
+	ai_lib.doAction( self, "conversation_1" );
+	ai_lib.doAction( listener, "conversation_1" );
+	ai_lib.setMood( self, ai_lib.MOOD_CALM );
+	messageTo( self, "handleEndSocializing", null, 10, false );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleEndSocializing()
+{
+	if ( !utils.hasScriptVar( self, "ai.pathingToSocialize"))
+		return SCRIPT_CONTINUE;
+
+	obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+	endSocializing( self, listener );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathNotFound()
+{
+	if ( !utils.hasScriptVar( self, "ai.pathingToSocialize"))
+		return SCRIPT_CONTINUE;
+
+	obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+	endSocializing( self, listener );
+	return SCRIPT_CONTINUE;
+}
+
+void endSocializing( obj_id talker, obj_id listener )
+{
+	//BUG:  Currently this make humans play the flute:
+	ai_lib.setMood( talker, ai_lib.MOOD_CALM );
+	ai_lib.setMood( listener, ai_lib.MOOD_CALM );
+	messageTo( talker, "resumeLoitering", null, 1, false );
+	//messageTo( listener, "resumeLoitering", null, 3, true );
+	followTusken( listener, talker );//rather than socializing, this sandperson becomes a follower.
+	utils.removeScriptVar( talker, "ai.pathingToSocialize" );
+	utils.removeScriptVar( listener, "ai.pathingToSocialize" );
+	utils.removeScriptVar( talker, "ai.speaking" );
+	removeTriggerVolumeEventSource(SOCIAL_VOLUME, listener);
+	//removeObjVar( listener, "ai.speaking"); 	by not removing this objvar,
+	// 											the sandperson will no longer
+	// 											initiate or be invited to socialize
+}
+
+trigger OnBehaviorChange( int newBehavior, int oldBehavior, int[] changeFlags )
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "tusken_raider::OnBehaviorChange() self(" + self + ":" + getName(self) + ")");
+
+	if ( isIncapacitated(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat( self ))
+		return SCRIPT_OVERRIDE;
+
+	if ( newBehavior > oldBehavior )
+	{
+		if ( utils.hasScriptVar( self, "ai.pathingToSocialize") )
+		{
+			obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+			endSocializing( self, listener );
+		}
+		if ( newBehavior >= BEHAVIOR_ALERT && newBehavior < BEHAVIOR_ATTACK )
+		{
+			doAgitateBehavior( self, newBehavior );
+			return SCRIPT_OVERRIDE;//don't do the default AI thing
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	if ( newBehavior <= BEHAVIOR_ALERT )
+	{
+		queueCommand(self, ##"combatTarget", null, "", COMMAND_PRIORITY_FRONT);
+	}
+	*/
+
+	if ( newBehavior == BEHAVIOR_CALM )
+	{
+		//debugSpeakMsg( self, "I AM CALM AGAIN" );
+		if ( utils.hasObjVar( self, "ai.isFollowing" ))
+		{
+			//debugSpeakMsg( self, "RESUMING FOLLOWING" );
+			//just resume following the guy:
+			followTusken( self, getObjIdObjVar( self, "ai.isFollowing" ));
+			return SCRIPT_OVERRIDE;//don't do the default AI thing
+		}
+		//debugSpeakMsg( self, "I AM CALM AGAIN and I AM THE LEADER" );
+		return SCRIPT_CONTINUE;
+	}
+	//do default behavior stuff:
+	return SCRIPT_CONTINUE;
+}
+
+void doAgitateBehavior( obj_id npc, int behavior )
+{
+	if ( isInvulnerable( npc ) )
+		return;
+
+	if ( getConfigSetting("GameServer", "disableAICombat")!=null )
+		return;
+
+	//debugSpeakMsg( npc, "doing custom thing" );
+	//obj_id threat = ai_lib.getBehaviorTarget( npc, behavior );
+	//if ( threat == null )
+		return;
+	//else
+	//	setObjVar( npc, "ai.threat", threat );
+	//
+	//switch ( behavior )
+	//{
+	//	case BEHAVIOR_ALERT:
+	//		stop( npc );
+	//		ai_lib.setMood( npc, ai_lib.MOOD_NERVOUS );
+	//		break;
+	//	case BEHAVIOR_THREATEN:
+	//		faceTo( npc, threat );
+	//		doAnimationAction( npc, ACTION_THREATEN );
+	//		//queueCommand(npc, ##"combatTarget", threat, "", COMMAND_PRIORITY_FRONT);
+	//		ai_lib.setMood( npc, ai_lib.MOOD_THREATEN );
+	//		break;
+	//	case BEHAVIOR_FLEE:
+	//		//queueCommand(npc, ##"combatTarget", null, "", COMMAND_PRIORITY_FRONT);
+	//		cancelFollowing( npc );
+	//		startCombat( npc, threat );
+	//		break;
+	//	case BEHAVIOR_PANIC:
+	//		//queueCommand(npc, ##"combatTarget", null, "", COMMAND_PRIORITY_FRONT);
+	//		cancelFollowing( npc );
+	//		startCombat( npc, threat );
+	//		break;
+ 	//	default :
+	//		//debugSpeakMsg( npc,  "default: " + behavior );
+	//		break;
+	//}
+}
+
+void followTusken( obj_id npc, obj_id target )
+{
+	if ( !isIncapacitated(npc) )
+	{
+		removeTriggerVolumeEventSource(SOCIAL_VOLUME, target);
+		if ( !exists( target ) )
+		{
+			cancelFollowing( npc );
+			return;
+		}
+
+		//never follow anything with a lower obj_id that your own:
+		if ( target.getValue() < npc.getValue() )
+			return;
+
+		obj_id isFollowedBy = getObjIdObjVar( target, "ai.isFollowedBy" );
+		if ( isFollowedBy == null || isFollowedBy == npc )
+		{
+			setMovementWalk( npc );
+			follow( npc, target, 2f, 5f );
+			setObjVar( target, "ai.isFollowedBy", npc );
+			setObjVar( npc, "ai.isFollowing", target );
+		}
+		else
+		{
+			followTusken( npc, isFollowedBy );
+		}
+	}
+}
+
+messageHandler resumeLoitering()
+{
+	obj_id isFollowing = getObjIdObjVar( self, "ai.isFollowing" );
+	if ( isFollowing == null )
+	{
+		if ( getBehavior(self) == BEHAVIOR_CALM )
+			messageTo( self, "resumeDefaultCalmBehavior", null, 1, false );
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		followTusken( self, isFollowing );
+		return SCRIPT_OVERRIDE;
+	}
+}
+
+void cancelFollowing( obj_id npc )
+{
+	utils.removeScriptVar( npc, "ai.speaking" );
+	obj_id isFollowing = getObjIdObjVar( npc, "ai.isFollowing" );
+	if ( isFollowing != null )
+		messageTo( isFollowing, "stopBeingFollowed", null, 0, false );
+
+	removeObjVar( npc, "ai.isFollowing" );
+}
+
+messageHandler stopBeingFollowed()
+{
+	removeObjVar( self, "ai.isFollowedBy" );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler stopFollowing()
+{
+	removeObjVar( self, "ai.isFollowing" );
+	cancelFollowing( self );
+	messageTo( self, "resumeLoitering", null, 3, false );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowTargetLost(obj_id oldTarget)
+{
+	cancelFollowing( self );
+	messageTo( self, "resumeLoitering", null, 3, false );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowPathNotFound(obj_id target)
+{
+	cancelFollowing( self );
+	messageTo( self, "resumeLoitering", null, 3, false );
+	return SCRIPT_CONTINUE;
+}
+
+void takeBantha( obj_id tusken, obj_id bantha )
+{
+	if ( hasScript( bantha, "ai.tusken_bantha" ))
+		return;
+
+	if ( utils.hasScriptVar( tusken, "ai.bantha" ))
+		return;
+
+	utils.setScriptVar( tusken, "ai.bantha", bantha );
+	utils.setScriptVar( bantha, "ai.tusken", tusken );
+	attachScript( bantha, "ai.tusken_bantha" );
+}
+
+trigger OnIncapacitated(obj_id attacker)
+{
+	removeTriggerVolume(SOCIAL_VOLUME);
+	
+	return SCRIPT_CONTINUE;
+}

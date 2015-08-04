@@ -1,0 +1,193 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        systems.beast.beast_steroid_injector
+ * Description:  Beast XP buff
+ * @author       $Author:Jesse Benjamin$
+ * @version      $Revision:1.0$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.beast_lib;
+include library.buff;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_BEAST_HAS_BUFF			= new string_id("beast", "beast_has_buff");
+const string_id SID_BEAST_WRONG_FAMILY			= new string_id("beast", "beast_buff_wrong_type");
+const string_id SID_BEAST_NO_BEAST			= new string_id("beast", "beast_buff_no_beast");
+const string_id SID_USE_ITEM				= new string_id("beast", "beast_buff_use");
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnInitialize()
+{
+			
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if (exists(self) && hasObjVar(self, "beastSteroidBonus"))
+	{
+		names[idx] = "beastSteroidBonus";
+		int attrib = getIntObjVar(self, "beastSteroidBonus");
+		attribs[idx] = Integer.toString(attrib);
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	
+	if(exists(self) && hasObjVar(self, "beast_type"))
+	{
+		names[idx] = "beastSteroidTypes";
+		string objvarVal = getStringObjVar(self, "beast_type");
+		string[] spliVal = split(objvarVal, ',');
+		string attrib = "";
+		if(spliVal != null && spliVal.length > 0)
+		{
+			attrib = "beast_steroid_";
+			for(int i = 0; i < spliVal.length; i = i + 2)
+			{
+				attrib = attrib + spliVal[i] + "_" + spliVal[i + 1] + "_d";
+			}
+		}
+		else
+		{
+			attrib = "beast_steroid_" + objvarVal + "_d";
+		}
+		
+		string_id strIdAttrib = new string_id("item_n", attrib);
+		attribs[idx] = localize(strIdAttrib);
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	mi.addRootMenu (menu_info_types.ITEM_USE, SID_USE_ITEM);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	
+	//cant use if dead or incapped
+	if(isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	//cant use if you are feigning death
+	if(buff.hasBuff(player, "feign_death"))
+		return SCRIPT_CONTINUE;
+	
+	//get beast on player
+	obj_id beast = beast_lib.getBeastOnPlayer(player);
+	
+	if(!isIdValid(beast) || !exists(beast))
+	{
+		//we didnt find it, so we should tell the player.
+		sendSystemMessage(player, SID_BEAST_NO_BEAST);
+		return SCRIPT_CONTINUE;
+	}
+		
+	//cant use if dead or incapped
+	if(isDead(beast) || isIncapacitated(beast))
+		return SCRIPT_CONTINUE;
+
+	if ( item == menu_info_types.ITEM_USE)
+	{
+		int mark = getIntObjVar(self, beast_lib.OBJVAR_INJECTOR_MARK);
+		
+		if(mark <= 0)
+			mark = 1;
+		
+		obj_id bcd = beast_lib.getBeastBCD(beast);
+		string beastName = beast_lib.getBeastType(bcd);
+		string beastType = "";
+		
+		if(exists(self) && hasObjVar(self, "beast_type"))
+		{
+			beastType = getStringObjVar(self, "beast_type");
+		}
+
+		string[] typeArray = split(beastType, ',');
+		
+		dictionary beastDict = utils.dataTableGetRow(beast_lib.BEASTS_TABLE, beastName);
+		string specialAttackFamily = beastDict.getString("special_attack_family");
+		
+		int injectorCode = beast_lib.useBeastInjector(player, self, beast, specialAttackFamily, typeArray, mark);
+		
+		//compare player level to required level
+		//level > beast_lib.STEROID_BUFF_LEVEL_CAP
+		if(injectorCode == beast_lib.INJECTOR_RETURN_WRONG_LEVEL)
+		{
+			//sendSystemMessage(player, SID_BEAST_LEVEL_TOO_HIGH);
+			return SCRIPT_CONTINUE;
+		}
+	
+		//you have the buff, you dont need it again.
+		//buff.hasBuff(beast, "bm_beast_steroid")
+		if(injectorCode == beast_lib.INJECTOR_RETURN_HAS_BUFF)
+		{
+			sendSystemMessage(player, SID_BEAST_HAS_BUFF);
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(injectorCode == beast_lib.INJECTOR_RETURN_WRONG_FAMILY)
+		{
+			sendSystemMessage(player, SID_BEAST_WRONG_FAMILY);
+			return SCRIPT_CONTINUE;
+		}
+		if(injectorCode == beast_lib.INJECTOR_RETURN_SUCESS)
+		{
+			addXpBuff(self, beast);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+/***** MESSAGEHANDLERS *************************************************/
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+boolean addXpBuff(obj_id injector, obj_id beast)
+{
+	int buffAmount = 0;
+
+	if (exists(injector) && hasObjVar(injector, "beastSteroidBonus"))
+	{
+		buffAmount = getIntObjVar(injector, "beastSteroidBonus");
+	}
+
+	boolean worked = buff.applyBuff(beast, "bm_beast_steroid");
+	utils.setScriptVar(beast, "beastBuff.beastXpBonusPercent", buffAmount);
+	
+	decrementCount(injector);
+	int chargesLeft = getCount(injector);
+	
+	if(chargesLeft <= 0)
+	{
+		destroyObject(injector);
+	}
+	else
+		setObjVar(injector, "charges", chargesLeft);
+	
+	return true;
+}

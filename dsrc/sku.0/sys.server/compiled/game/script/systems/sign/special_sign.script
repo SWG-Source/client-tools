@@ -1,0 +1,154 @@
+/**
+ *
+ * Title:	special_sign.script
+ * Description:	This script works just like a deed but applies a skillmod on the player. The skillmod is defined on the 
+ *		deed object via the item_stats table.
+ * @author	Jeff Haskell
+ * @version	1.0
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.static_item;
+include library.utils;
+
+//-----------------LOGGING
+const boolean LOGGING_ON				= true;
+const string LOGGING_CATEGORY				= "special_sign";
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_NO_USE_WHILE_DEAD	 		= new string_id("player_structure", "while_dead");
+const string_id SKILLMOD_APPLIED			= new string_id("base_player", "skillmod_applied");
+const string_id CANT_APPLY_SKILLMOD			= new string_id("base_player", "cant_use_item");
+const string_id SID_SKILLMOD_INVOCATION_CANCELED	= new string_id("base_player", "skillmod_canceled");
+const string_id SID_OBJECT_CONSUMED	 		= new string_id("player_structure", "token_object_consumed");
+const string_id SID_CONSUME_OBJECT	 		= new string_id("player_structure", "consume_token");
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	blog("tcg_vendor_contract.OnObjectMenuRequest: Init.");
+
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	if(!utils.isNestedWithinAPlayer(self) || utils.getContainingPlayer(self) != player)
+		return SCRIPT_CONTINUE;
+		
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	if(mid != null)
+		mid.setServerNotify(true);
+	else
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_CONSUME_OBJECT);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	blog("tcg_vendor_contract.OnObjectMenuSelect: Init.");
+
+	if(!utils.isNestedWithinAPlayer(self) || utils.getContainingPlayer(self) != player)
+		return SCRIPT_CONTINUE;
+		
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	
+	blog("special_sign.OnObjectMenuSelect: sending to skillmod grant function.");
+	if(!grantSignSkillMod(self, player))
+	{
+		blog("special_sign.OnObjectMenuSelect: Skillmod Function Failed.");
+		sendSystemMessage(player, SID_SKILLMOD_INVOCATION_CANCELED);
+		CustomerServiceLog("playerStructure", "Special Sign Token Object: " + self + " failed to apply a special sign skill mod to player: " + player + ". The contract was not deleted.");
+		return SCRIPT_CONTINUE;
+	}
+	blog("special_sign.OnObjectMenuSelect: Special Sign Skill Mod Application Succeeded. Deleting Contract");
+	CustomerServiceLog("playerStructure", " Special Sign Token Object: " + self + " successfully applied a Special Sign skill mod to player: " + player + ". The contract will now be deleted.");
+	//if the skill mod is set, delete the contract
+	destroyObject(self);
+	return SCRIPT_CONTINUE;		
+}
+
+//The Special Vendors are a Skill Mod. This Function Grants the skill mod 
+//based on the master item/item stats tables.
+boolean grantSignSkillMod(obj_id self, obj_id player)
+{
+	if(!isValidId(player) || !exists(player))
+		return false;
+
+	if(isIncapacitated(player) || isDead(player))
+	{
+		sendSystemMessage(player, SID_NO_USE_WHILE_DEAD);
+		return false;
+	}
+
+	string itemName = getStaticItemName(self);
+	dictionary itemData = dataTableGetRow(static_item.ITEM_STAT_BALANCE_TABLE, itemName);
+	if(itemData == null)
+	{
+		blog(itemName + "Special Sign - Initalize could not happen because row in datatable is bad");
+		return false;
+	}	
+
+	string skillMod = itemData.getString("skill_mods");
+	string clientEffect = itemData.getString("client_effect");
+	string clientAnimation = itemData.getString("client_animation");
+	string skillModName = "";
+	int skillModValue = 0;
+
+	if(skillMod == null || skillMod.length() <= 0)
+	{
+		blog("Special Sign - This object needs a skill mod in the itemstats table to be used " +itemName);
+		return false;
+	}
+
+	dictionary dict = static_item.parseSkillModifiers(player, skillMod);
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+		while(keys.hasMoreElements())
+		{
+			skillModName = (string)keys.nextElement();
+			skillModValue = dict.getInt(skillModName);
+		}
+	}
+	if(skillModName == null || skillModName.equals(""))
+	{
+		blog("Special Sign - This object skill mod was incorrectly named in itemstats table " +itemName);
+		return false;
+	}
+	else if(skillModValue <= 0)
+	{
+		blog("Special Sign - This object skill mod had an invalid value " +itemName);
+		return false;
+	}
+
+	blog("Special Sign - Applying skillmod: "+skillModName+" with a value of: "+skillModValue);
+
+	blog("Special Sign - Entire skillmod string: "+skillMod);
+
+	if(!applySkillStatisticModifier(player, skillModName, skillModValue))
+	{
+		blog("Special Sign - Applying skillmod failed");
+
+		CustomerServiceLog("create", " Item: " + self + " had skill mod: " + skillMod + " that was added/given to the Owner: " + player + ". Skill mod incremented by 1.");
+		sendSystemMessage(player, CANT_APPLY_SKILLMOD);
+		return false;
+	}
+	blog("Special Sign - skillmod succeessfully applied.");
+	CustomerServiceLog("create", " Item: " + self + " had skill mod: " + skillMod + " that was added/given to the Owner: " + player + ". Skill mod incremented by 1.");
+
+	sendSystemMessage(player, SID_OBJECT_CONSUMED);
+
+	if(clientAnimation != null && !clientAnimation.equals(""))
+		doAnimationAction(player, clientAnimation);
+	if(clientEffect != null && !clientEffect.equals(""))
+		playClientEffectObj(player, clientEffect, player, "");
+
+	return true;
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON && msg != null && !msg.equals(""))
+		LOG(LOGGING_CATEGORY, msg);
+	return true;
+}

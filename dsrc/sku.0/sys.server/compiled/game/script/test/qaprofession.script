@@ -1,0 +1,1898 @@
+//**********************************************************
+// Copyright (c) ©2005, 2006 Sony Online Entertainment Inc.
+// All Rights Reserved
+//
+// @Title:		qaprofession.script
+// @Version:		Version 2.00
+// @author       	$Author: Jeff Haskell  
+// @version      	$All Revisions:  Jeff Haskell 
+//***********************************************************
+//
+//	Professions	
+//			
+//	Force Sensitive		
+//	Bounty Hunter	
+//	Smuggler	
+//	Commando	
+//	Officer		
+//	Spy			
+//	Medic		
+//	Entertainer	
+//	Trader		
+//	 Domestics
+//	 Structures
+//	 Munitions
+//	 Engineering
+//
+//
+// ======================================================================
+// Library Includes
+// ======================================================================
+
+include java.util.Arrays;
+include java.util.HashSet;
+include java.util.Vector;
+include library.qa;
+include library.skill
+include library.skill_template;
+include library.static_item;
+include library.sui;
+include library.utils;
+
+//FYI
+//DATATABLE AT: //depot/swg/test/dsrc/sku.0/sys.shared/compiled/game/datatables/skill_template/skill_template.tab
+
+/********* CONSTANTS *****************************************/
+
+const string SCRIPTVAR = "qaprofession";
+
+//DATA TABLES
+const string SKILL_TEMPLATE = "datatables/skill_template/skill_template.iff";
+const string SKILL_TABLE = "datatables/skill/skills.iff";
+const string COMMAND_TABLE = "datatables/command/command_table.iff";
+const string ROADMAP_TABLE = "datatables/roadmap/item_rewards.iff";
+
+//this table is the table with the actual levels and XP requirements.  Current
+//XP values are incorrect
+const string PLAYER_XP_LEVEL_TABLE = "datatables/player/player_level.iff";
+
+
+//SUI TITLES/PROMPTS
+const string PROFESSION_TOOL_TITLE = "QA PROFESSION ASSISTANT";
+const string PROFESSION_TOOL_PROMPT = "This tool allows the tester to research accurate profession data without having to create a new character or force a profession change.";
+const string PROFESSION_DETAILS_TITLE = "ABILITY DETAILS";
+const string PROFESSION_TRADER_SELECT = "Select Specific Trader Type\n\n*This is hard coded trader profession data.  Contact the tool team if it is incorrect*";
+const string ABILITY_TOOL_TITLE = "QA ABILITY TO PROFESSION CROSS-REFERENCE";
+const string ABILITY_TOOL_PROMPT = "This tool allows the tester to find an ability (AKA command) and trace it back to it's profession.";
+
+//MENU CONSTANTS
+const string[] PROFESSION_TOOL_MENU = 
+{ 
+	"Abilities Alphabetically", 
+	"Profession Details", 
+	"Export Profession Details" 
+};
+
+const string[] TRADER_TOOL_MENU = 
+{ 
+	"Domestics ( trader_1a )", 
+	"Structures ( trader_1b )", 
+	"Munitions ( trader_1c )", 
+	"Engineer ( trader_1d )" 
+};
+
+const string[] PROFESSION_DETAILS_MENU = 
+{ 
+	"Master this Profession", 
+	"Export this data" 
+};
+
+const string[] ABILITY_TO_SKILL_FORMULA =
+{
+	"_phase1_novice",
+	"_phase1_02",
+	"_phase1_03",
+	"_phase1_04",
+	"_phase1_05",
+	"_phase1_master",	
+	"_phase2_novice",
+	"_phase2_02",
+	"_phase2_03",
+	"_phase2_04",
+	"_phase2_05",
+	"_phase2_master",	
+	"_phase3_novice",	
+	"_phase3_02",
+	"_phase3_03",
+	"_phase3_04",
+	"_phase3_05",
+	"_phase3_master",
+	"_phase4_novice",
+	"_phase4_02",
+	"_phase4_03",
+	"_phase4_04",
+	"_phase4_05",
+	"_phase4_master"
+};
+
+const int[] HARD_CODED_LEVELS =
+{
+	1,
+	4,
+	7,
+	10,
+	14,
+	18,
+	22,
+	26,
+	30,
+	34,
+	38,
+	42,
+	46,
+	50,
+	54,
+	58,
+	62,
+	66,
+	70,
+	74,
+	78,
+	82,
+	86,
+	90
+};
+
+//temporary menu data.  Ideally, this would be taken from the datatable itself
+//this data is used to look up the skill lists
+const string[] PROFESSION_NAME_LIST = 
+{ 
+	"smuggler_1a", 
+	"bounty_hunter_1a", 
+	"officer_1a", 
+	"commando_1a", 
+	"force_sensitive_1a", 
+	"medic_1a", 
+	"spy_1a", 
+	"entertainer_2a", 
+	"trader_1a", 
+	"trader_1b", 
+	"trader_1c", 
+	"trader_1d" 
+};
+
+const int SEARCH_ALL_ABILITIES = 0;
+const int REVIEW_SPECIFIC_PROFESSION = 1;
+const int EXPORT_ENTIRE_PROFESSION = 2;
+
+const int TRADER_DOMESTICS = 0;
+const int TRADER_STRUCTURES = 1;
+const int TRADER_MUNITIONS = 2;
+const int TRADER_ENGINEERING = 3;
+
+const int MASTER_PROFESSION = 0;
+const int EXPORT_DATA = 1;
+
+//MISC CONSTANTS
+const string NONE_STRING = "None";
+const string FILEEXTENSION = "txt";
+
+
+/***** TRIGGERS *******************************************************/
+trigger OnAttach()
+{
+	if (isGod(self))
+	{	
+		if(getGodLevel(self) < 10)
+		{
+			detachScript(self, "test.qaprofession");	
+			sendSystemMessage(self, "You do not have the appropriate access level to use this script.", null);
+		}
+	}
+	else if (!isGod(self))
+	{
+		detachScript(self, "test.qaprofession");
+	}
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnSpeaking(string text)
+{
+	if (isGod(self))
+	{
+		if (toLower(text).equals(SCRIPTVAR))
+		{
+			//FUNCTION TO SHOW THE MAIN MENU OF THE TOOL
+			toolMainMenu(self);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/******** Message Handlers *************************************/
+
+//THIS HANDLER TAKES CARE OF MAIN MENU RECEIPTION
+messageHandler handleMainMenuOptions()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar(self, SCRIPTVAR + ".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleMainMenuOptions");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer(self, "");
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				//BACK BUTTON PRESSED: BUILD THE MAIN MENU QATOOL
+				string[] tool_options = dataTableGetStringColumn("datatables/test/qa_tool_menu.iff", "main_tool");
+				qa.refreshMenu( self, "Choose the tool you want to use", "QA Tools", tool_options, "toolMainMenu", true, "qatool.pid");
+				//removePlayer(self, "");
+				return SCRIPT_CONTINUE;
+
+			}			
+			//BUILD THE NEXT SUI
+			else
+			{
+				//THIS LIB FUNCTION RETURNS AN ARRAY of ALL Profession code strings AND LEAVES OUT ANY BLANKS ("").  You only get one of each profession
+				string[] professionMenuCodeStrings = qa.populateArray (self, "startingTemplateName", SKILL_TEMPLATE, "");
+				//STORE THE CODE STRINGS FOR USE LATER
+				utils.setScriptVar( self, SCRIPTVAR+".professionMenuCodeStrings", professionMenuCodeStrings );
+				//GET A LIST OF THE PROFESSION TEMPLATE NAMES BASED OFF OF THE PROFESSION STARTING TEMPLATE NAMES
+				//USED FOR REVOKING PROFESSIONS LATER				
+				string[] professionTemplateNames = getProfessionTemplateNames( self, professionMenuCodeStrings);
+				//STORE THE DATA
+				utils.setScriptVar( self, SCRIPTVAR+".professionTemplateNames", professionTemplateNames );
+				//THIS FUNCTION WILL RETURN AN ARRAY OF PROFESSION MENU STRINGS FOR THE USER
+				string[] professionMenu = getProfessionMenuStrings( self, professionMenuCodeStrings );					
+
+				switch (idx)
+				{
+					case SEARCH_ALL_ABILITIES: 
+						//GET ALL THE PROFESSION ABILITY CODE STRINGS
+						string[] allAbilityCodeStrings = getAllAbilityCodeStrings( self, professionMenuCodeStrings);
+						//GET ALL THE PROFESSION ABILITY MENU STRINGS
+						string[] allAbilityStrings = getAbilityStrings( self, allAbilityCodeStrings );
+						//COMBINE BOTH ARRAYS FOR THE MENU
+						string[] abilityMenu = combineAndSortAbilities( self, allAbilityStrings, allAbilityCodeStrings );
+						//CREATE THE SUI					
+						qa.refreshMenu ( self, ABILITY_TOOL_PROMPT, ABILITY_TOOL_TITLE, abilityMenu, "handleAbilitySelection", SCRIPTVAR+".pid", SCRIPTVAR+".abilitySelected", sui.OK_CANCEL_REFRESH);
+						break;	
+					case REVIEW_SPECIFIC_PROFESSION: 
+						if (professionMenu.length > 0)
+						{
+							qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, professionMenu, "handleProfessionOptions", SCRIPTVAR+".pid", SCRIPTVAR+".professionMenu", sui.OK_CANCEL_REFRESH);
+						}
+						else
+						{
+							removePlayer( self, "Tool failed to get a menu. Exiting." );
+						}
+						break;											
+					case EXPORT_ENTIRE_PROFESSION: 
+						//THE MENU IS CREATED WITH THE PROFESSIONS STRINGS, NOT THE CODE STRINGS
+						qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, professionMenu, "handleExportProfession", SCRIPTVAR+".pid", SCRIPTVAR+".exportMenu", sui.OK_CANCEL_REFRESH);
+						break;											
+					default:
+						removePlayer( self, "" );
+						return SCRIPT_CONTINUE;	
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//HANDLER TAKES CARE OF ALL EXPORT MENU SELECTIONS
+messageHandler handleExportProfession()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer( self, "" );
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );				
+				return SCRIPT_CONTINUE;
+
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY			
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar( self, SCRIPTVAR+".exportMenu" );
+			//professionStringSelected is used to create the SUI Prompt later
+			string professionStringSelection = previousMainMenuArray[idx];
+			
+			if (professionStringSelection != "")
+			{
+				//THE PROFESSION CODE STRINGS ARE RETRIEVED
+				string[] professionMenuCodeStrings = utils.getStringArrayScriptVar( self, SCRIPTVAR+".professionMenuCodeStrings" );
+				//THE PREVIOUS MENU SELECTION IS PUT IN A VARIABLE
+				string professionCodeSelection = professionMenuCodeStrings[idx];
+				//THE PROFESSION CODE STRING IS PLACED IN A SCRIPT VAR
+				utils.setScriptVar( self, SCRIPTVAR+".professionCodeSelection", professionCodeSelection );
+				//create a scriptVar with the profession chosen -- used later to provide details in the SUI prompt
+				utils.setScriptVar( self, SCRIPTVAR+".professionStringSelection", professionStringSelection );				
+
+				if (professionCodeSelection.equals("trader"))
+				{
+					//Trader Selection					
+					//TRADER IS GIVEN IT'S OWN SPECIAL SUB MENU SINCE THERE ARE 4 TRADER VERSIONS
+					qa.refreshMenu ( self, PROFESSION_TRADER_SELECT, PROFESSION_TOOL_TITLE, TRADER_TOOL_MENU, "handleExportTrader", SCRIPTVAR+".pid", SCRIPTVAR+".traderCode", sui.OK_CANCEL_REFRESH);
+				}
+				else
+				{
+					//IF THIS ISN'T A TRADER PROFESSION EXPORT, GO AHEAD AND EXPORT THE DATA IMMEDIATELY
+					string dataReadyForExport = prepareDataForExport( self, professionCodeSelection );
+					//CALL SPECIAL EXPORT FUNCTION - PASS THE CODE STRING SELECTION AS THE FILE NAME
+					saveDataToClient( self, professionCodeSelection, dataReadyForExport, FILEEXTENSION );
+					//DESTROY THE CURRENT WINDOW, SHOW THE MAIN MENU - INSTEAD OF CLOSING THE TOOL COMPLETELY
+					toolMainMenu ( self );					
+				}
+				
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//THIS HANDLER TAKES CARE OF THE 4 TRADER OPTIONS FOR TEXT FILE EXPORT
+messageHandler handleExportTrader()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleExportTrader");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer( self, "" );
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );				
+				return SCRIPT_CONTINUE;
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			//JUST CHECKING TO MAKE SURE THE PREVIOUS DATA IS BEING PASSED CORRECTLY
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar( self, SCRIPTVAR+".traderCode" );
+			string professionStringSelection = previousMainMenuArray[idx];
+
+			if ( previousMainMenuArray.length < 0 )
+			{
+				removePlayer(self, "There was an error in the tool.  Exiting.");
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{				
+
+				switch (idx)
+				{
+					case TRADER_DOMESTICS: 
+						// THE CASE FUNCTIONS COLLECT A HUGE AMOUNT OF DATA AND COMPILE IT ALL INTO ONE STRING THAT IS PASSED TO THE EXPORT FUNCTION
+						string trader_1aDataReadyForExport = prepareDataForExport( self, "trader_1a" );
+						//THIS FUNCTION TAKES THE STRING AND PUTS IT INTO A FILE.  THE FILE NAME IS HARDCODED IN EACH CASE FOR EASE
+						saveDataToClient( self, "trader_1a", trader_1aDataReadyForExport, FILEEXTENSION );	
+						//AFTER THE FILE IS CREATED THE TESTER IS GIVEN THE ORIGINAL MENU SUI (INSTEAD OF CLOSING THE TOOL)
+						toolMainMenu ( self );				
+						break;	
+					case TRADER_STRUCTURES: 
+						string trader_1bDataReadyForExport = prepareDataForExport( self, "trader_1b" );
+						saveDataToClient( self, "trader_1b", trader_1bDataReadyForExport, FILEEXTENSION );
+						toolMainMenu ( self );				
+						break;											
+					case TRADER_MUNITIONS: 
+						string trader_1cDataReadyForExport = prepareDataForExport( self, "trader_1c" );
+						saveDataToClient( self, "trader_1c", trader_1cDataReadyForExport, FILEEXTENSION );
+						toolMainMenu ( self );				
+						break;											
+					case TRADER_ENGINEERING: 
+						string trader_1dDataReadyForExport = prepareDataForExport( self, "trader_1d" );
+						saveDataToClient( self, "trader_1d", trader_1dDataReadyForExport, FILEEXTENSION );
+						toolMainMenu ( self );				
+						break;											
+					default:
+						removePlayer( self, "" );
+						return SCRIPT_CONTINUE;	
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//THIS HANDLES THE SELECTION OF ANY ONE ABILITY/COMMAND
+messageHandler handleAbilitySelection()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleAbilitySelection");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer( self, "" );
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );				
+				return SCRIPT_CONTINUE;
+
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY			
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar( self, SCRIPTVAR+".abilitySelected" );
+			//professionStringSelected is used to create the SUI Prompt later
+			string professionStringSelection = previousMainMenuArray[idx];
+			
+			if (professionStringSelection != "")
+			{				
+			
+				//SEARCH FOR THE ABILITY AND LINK IT TO THE PROFESSION
+				string skillSelectionCode = getSkillWithAbility( self, professionStringSelection );
+				
+				int skillLevel = -1;
+				for (int i = 0; i < ABILITY_TO_SKILL_FORMULA.length; i++)
+				{
+					if (skillSelectionCode.indexOf(ABILITY_TO_SKILL_FORMULA[i]) > -1)
+						skillLevel = HARD_CODED_LEVELS[i];
+
+				}
+				
+				if (skillSelectionCode != "")
+				{
+					//SEARCH FOR THE PROFESSION USING THE SKILL CODE RETURNED
+					string professionCodeSelection = getProfessionWithSkill( self, skillSelectionCode );
+
+					if (professionCodeSelection != "")
+					{
+						//LOCALIZE THE PROFESSION CODE STRING
+						string professionStrSelection = localize(new string_id( "ui_prof", professionCodeSelection+"_bdesc"));				
+
+						if (professionStrSelection != "")
+						{
+							//LOCALIZE SKILL CODE STRING
+							string skillSelectionString = localize(new string_id( "skl_n", skillSelectionCode));
+
+							if (skillSelectionString != "")
+							{
+								//GET AN ARRAY OF ALL THE SKILLS BASED ON THE PROFESSION
+								string[] professionSkillCodes = getProfessionSkillCodes( self, professionCodeSelection );
+								
+								if (professionSkillCodes != "")
+								{
+									//sendSystemMessageTestingOnly(self, "professionSkillCodes == something");
+																		
+									//STORE THE PROFESSION CODE STRING AND LOCALIZED STRING VALUES FOR LATER USE IN THE PROMPT		
+									utils.setScriptVar(self, SCRIPTVAR+".professionCodeSelection", professionCodeSelection);
+									utils.setScriptVar(self, SCRIPTVAR+".professionStringSelection", professionStringSelection);
+									//STORE THE ARRAY OF SKILLS SO THEY CAN BE GRANTED IF THAT OPTION IS SELECTED BY THE TESTER
+									utils.setScriptVar(self, SCRIPTVAR+".professionSkillCodes", professionSkillCodes);
+
+									//get the entire row of the data table based on skillSelectionCode
+									dictionary skillRow = getEntireSkillRow(self, skillSelectionCode);
+									
+									if (skillRow != null)
+									{
+										//GET ALL THE ABILITY CODE STRINGS (SOMETIMES THERE IS MORE THAN ONE IN A SKILL
+										string[] abilityCodes = getAbilityCodes(self, skillRow);
+										if (abilityCodes[0] != "")
+										{
+											//GET THE ACTUAL STRINGS FOR THE ABILITIES
+											string[] abilityStrings = getAbilityStrings(self, abilityCodes);
+											
+											if (abilityStrings[0] != "")
+											{
+												//GET THE Code Strings for SKILL XP COST, THE SKILL XP CAP, THE SKILL XP TYPE, THE  SKILL MODS AND THE SKILLS REQUIRED FOR THIS SKILL
+												//raw data, there is no display strings for this internal data
+												string skillXPCodeData = "";
+
+												if (skillLevel > -1)
+												{
+													skillXPCodeData = getSkillXPCodeData(self, skillRow, skillLevel);
+												}
+												else
+												{
+													skillXPCodeData = getSkillXPCodeData(self, skillRow);				
+												}
+
+												//GET THE SKILL MODS
+												string[] skillMods = getSkillMods( self, skillRow );
+
+												//GET THE ROADMAP STRING
+												string roadMapString = getRoadMapString( self, skillSelectionCode );
+
+												//GET THE ROADMAP ITEMS
+												string roadMapSpawnStrings = getRoadMapSpawnStrings( self, skillSelectionCode );
+
+													//CREATE THE PROMPT FOR THE SUI			
+													string suiPrompt = createAPrompt( self, true, professionStrSelection, professionCodeSelection, skillSelectionString, skillSelectionCode, skillXPCodeData, skillMods, roadMapString, roadMapSpawnStrings, abilityStrings, abilityCodes );
+												if (suiPrompt != "")
+												{
+													//THE FOLLOWING IS USED BY THE EXPORT FUNCTION TO CREATE A TEXT FILE
+													utils.setScriptVar( self, SCRIPTVAR+".suiPrompt", suiPrompt );
+
+													//THE FOLLOWING IS USED BY THE EXPORT FUNCTION TO CREATE A TEXT FILE TITLE
+													string fileTitle = professionCodeSelection+skillSelectionCode;
+													utils.setScriptVar( self, SCRIPTVAR+".fileTitle", fileTitle );
+
+													//THE MENU IS CREATED WITH THE SKILL STRINGS, NOT THE CODE STRINGS
+													qa.refreshMenu ( self, suiPrompt, PROFESSION_DETAILS_TITLE, PROFESSION_DETAILS_MENU, "handleProfessionDetails", SCRIPTVAR+".pid", SCRIPTVAR+".theDataOptions", sui.OK_CANCEL_REFRESH);
+												}
+												else
+												{
+													removePlayer(self, "Prompt text error. Exiting.");
+												}
+											}
+											else
+											{
+												removePlayer(self, "Skill ability strings were not received. Exiting.");
+											}
+										}
+										else
+										{
+											removePlayer(self, "There were no skill abilities codes received and this caused the application to malfunction. Exiting.");
+										}
+									}
+									else
+									{
+										removePlayer(self, "Skill row data not attained. Exiting.");
+									}
+								}
+								else
+								{
+									removePlayer(self, "A Profession Skill could not be found. Exiting.");
+								}							
+							}
+							else
+							{
+								removePlayer(self, "A Profession Skill could not be found. Exiting.");
+							}
+						}
+						else
+						{
+							removePlayer(self, "A Profession Localized String could not be found. Exiting.");
+						}
+
+					}
+					else
+					{
+						removePlayer(self, "A Profession Code String could not be found. Exiting.");
+					}
+
+				}
+				else
+				{
+					removePlayer(self, "A Profession Ability could not be found.  Inform the tool team. Exiting.");
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//THIS HANDLES THE TESTER SELECTION OF A SPECIFIC PROFESSION (TO INCLUDE TRADER)
+messageHandler handleProfessionOptions()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleProfessionOptions");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer( self, "" );
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );				
+				return SCRIPT_CONTINUE;
+
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY			
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar( self, SCRIPTVAR+".professionMenu" );
+			//professionStringSelected is used to create the SUI Prompt later
+			string professionStringSelection = previousMainMenuArray[idx];
+			
+			if (professionStringSelection != "")
+			{
+				//THE PROFESSION CODE STRINGS ARE RETRIEVED
+				string[] professionMenuCodeStrings = utils.getStringArrayScriptVar( self, SCRIPTVAR+".professionMenuCodeStrings" );
+				string professionCodeSelection = professionMenuCodeStrings[idx];
+				utils.setScriptVar( self, SCRIPTVAR+".professionCodeSelection", professionCodeSelection );
+				//create a scriptVar with the profession chosen -- used later to provide details in the SUI prompt
+				utils.setScriptVar( self, SCRIPTVAR+".professionStringSelection", professionStringSelection );				
+
+				//IF TRADER GIVE TRADER TYPE OPTIONS AND FORWARD TO ANOTHER HANDLER
+				if (professionCodeSelection.equals("trader"))
+				{
+					//Trader Selection
+					qa.refreshMenu ( self, PROFESSION_TRADER_SELECT, PROFESSION_TOOL_TITLE, TRADER_TOOL_MENU, "handleTraderSelection", SCRIPTVAR+".pid", SCRIPTVAR+".traderCode", sui.OK_CANCEL_REFRESH);
+					
+				}
+				//IF NOT TRADER, BUILD A LONG LIST OF ALL THE PROFESSION SKILLS AND PRESENT THE LIST IN SUI
+				else
+				{
+					//BUILD THE PROFESSION SKILL MENU (ONE SMALL REUSABLE FUNCTION)
+					string[] theProfessionSkillMenu = buildProfessionSkillMenu(self, professionCodeSelection);
+					
+					//THE MENU IS CREATED WITH THE PROFESSIONS STRINGS, NOT THE CODE STRINGS
+					resizeable string[] professionCombatLevelMenuResized = new string[0];
+
+					if (theProfessionSkillMenu.length == HARD_CODED_LEVELS.length)
+					{
+						for (int i = 0; i < HARD_CODED_LEVELS.length; i++)
+						{
+							if (professionCodeSelection.startsWith("entertainer"))
+							{
+								utils.addElement(professionCombatLevelMenuResized, theProfessionSkillMenu[i] + " - Level " + HARD_CODED_LEVELS[i]);							
+							}
+							else
+							{
+								utils.addElement(professionCombatLevelMenuResized, theProfessionSkillMenu[i] + " - Combat Level " + HARD_CODED_LEVELS[i]);
+							}
+						}
+					}
+					else
+					{					
+						for (int i = 0; i < HARD_CODED_LEVELS.length; i++)
+						{
+							utils.addElement(professionCombatLevelMenuResized, theProfessionSkillMenu[i]);
+						}				
+					}
+
+					string[] professionCombatLevelMenu = new string[professionCombatLevelMenuResized.length];
+					professionCombatLevelMenuResized.toArray(professionCombatLevelMenu);
+					
+					//THE MENU IS CREATED WITH THE SKILL STRINGS, NOT THE CODE STRINGS
+					utils.setScriptVar(self, SCRIPTVAR+".theProfessionSkillStrings", theProfessionSkillMenu);
+					
+					qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, professionCombatLevelMenu, "handleProfessionSkillNameList", SCRIPTVAR+".pid", SCRIPTVAR+".professionSkillCombatLevel", sui.OK_CANCEL_REFRESH);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//HANDLES THE PROFESSION SKILL SELECTION
+messageHandler handleProfessionSkillNameList()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleProfessionSkillNameList");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer( self, "" );
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );				
+				return SCRIPT_CONTINUE;
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			//JUST CHECKING TO MAKE SURE THE PREVIOUS DATA IS BEING PASSED CORRECTLY--THIS ISNT ACTUALLY USED ANYMORE
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar( self, SCRIPTVAR+".theProfessionSkillStrings" );
+			//skillSelectionString is used to create a SUI Prompt
+			string skillSelectionString = previousMainMenuArray[idx];
+
+			if ( previousMainMenuArray.length < 0 )
+			{
+				//JUST IN CASE THE PREVIOUS MENU WAS BLANK OR DATA WASNT PASSED
+				removePlayer( self, "There was an error in the tool.  Exiting." );
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{				
+				//CREATE ONE REALLY LONG STRING OF THE PROFESSION, SKILL AND ABILITY DATA AND PLACE IT 
+				//IN THE SUI PROMPT SO THE TESTER CAN REVIEW.  CREATE SUI MENU ITEMS TO MASTER THE SPECIFIED 
+				//PROFESSION AND EXPORT DATA IN PROMPT
+								
+				//GET THE CODE STRINGS FROM THE SCRIPTVAR SO I CAN LOOK UP ALL THE ABILITY CODE STRINGS IN OTHER DATA TABLES
+				string[] professionSkillCodeStrings = utils.getStringArrayScriptVar( self, SCRIPTVAR+".professionSkillCodes" );
+				if (professionSkillCodeStrings[0] != "")
+				{
+					string skillSelectionCode = professionSkillCodeStrings[idx];
+					int skillLevel = -1;
+
+					//IF NOT TRADER, GRAB THE LEVEL FOR THE SKILL
+					if (professionSkillCodeStrings.length == HARD_CODED_LEVELS.length)
+					{
+						skillLevel = HARD_CODED_LEVELS[idx];
+					}
+					else
+					{
+						sendSystemMessageTestingOnly(self, "professionSkillCodeStrings not same lenght as HARD_CODED_LEVELS");
+					}
+
+
+					//retrive scriptvars stored by previous handlers so they can be used in the SUI Prompt
+					string professionStringSelection = utils.getStringScriptVar( self, SCRIPTVAR+".professionStringSelection" );
+					string professionCodeSelection = utils.getStringScriptVar( self, SCRIPTVAR+".professionCodeSelection" );
+
+					//get the entire row of the data table based on skillSelectionCode
+					dictionary skillRow = getEntireSkillRow( self, skillSelectionCode );
+					
+					if (skillRow != null)
+					{
+						//GET ALL THE ABILITY CODE STRINGS (SOMETIMES THERE IS MORE THAN ONE IN A SKILL
+						string[] abilityCodes = getAbilityCodes( self, skillRow );
+						if (abilityCodes[0] != "")
+						{
+							//GET THE ACTUAL STRINGS FOR THE ABILITIES
+							string[] abilityStrings = getAbilityStrings( self, abilityCodes );
+							if (abilityStrings[0] != "")
+							{
+								//GET THE Code Strings for SKILL XP COST, THE SKILL XP CAP, THE SKILL XP TYPE, THE  SKILL MODS AND THE SKILLS REQUIRED FOR THIS SKILL
+								//raw data, there is no display strings for this internal data
+								string skillXPCodeData = "";
+
+								if (skillLevel > -1)
+								{
+									skillXPCodeData = getSkillXPCodeData(self, skillRow, skillLevel);
+								}
+								else
+								{
+									skillXPCodeData = getSkillXPCodeData(self, skillRow);				
+								}
+
+								//GET THE SKILL MODS
+								string[] skillMods = getSkillMods( self, skillRow );
+
+								//GET THE ROADMAP STRING
+								string roadMapString = getRoadMapString( self, skillSelectionCode );
+
+								//GET THE ROADMAP ITEMS
+								string roadMapSpawnStrings = getRoadMapSpawnStrings( self, skillSelectionCode );
+
+								//CREATE THE PROMPT FOR THE SUI			
+								string suiPrompt = createAPrompt( self, true, professionStringSelection, professionCodeSelection, skillSelectionString, skillSelectionCode, skillXPCodeData, skillMods, roadMapString, roadMapSpawnStrings, abilityStrings, abilityCodes );
+
+								//THE FOLLOWING IS USED BY THE EXPORT FUNCTION TO CREATE A TEXT FILE
+								utils.setScriptVar( self, SCRIPTVAR+".suiPrompt", suiPrompt );
+
+								//THE FOLLOWING IS USED BY THE EXPORT FUNCTION TO CREATE A TEXT FILE TITLE
+								string fileTitle = professionCodeSelection+skillSelectionCode;
+								utils.setScriptVar( self, SCRIPTVAR+".fileTitle", fileTitle );
+
+								suiPrompt = suiPrompt+"\r\n\r\n\r\n* Unlocalized Data will not export correctly";
+
+								//THE MENU IS CREATED WITH THE SKILL STRINGS, NOT THE CODE STRINGS
+								qa.refreshMenu ( self, suiPrompt, PROFESSION_DETAILS_TITLE, PROFESSION_DETAILS_MENU, "handleProfessionDetails", SCRIPTVAR+".pid", SCRIPTVAR+".theDataOptions", sui.OK_CANCEL_REFRESH);
+							}	
+							else
+							{
+								removePlayer(self, "A Profession ability string could not be attained Inform the tool team. Exiting.");
+							}
+						}	
+						else
+						{
+							removePlayer(self, "A Profession ability code string could not be attained Inform the tool team. Exiting.");
+						}				
+					}
+					else
+					{
+						removePlayer(self, "A Profession skill code string could not be attained Inform the tool team. Exiting.");
+					}
+				}
+				else
+				{
+					removePlayer(self, "A Profession skill code string could not be attained Inform the tool team. Exiting.");
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//THIS HANDLES THE MENU OPTIONS FOUND IN THE PROFESSION_DETAILS_MENU ARRAY CONSTANT: EITHER MASTER THE PROFESSION OR EXPORT THE DATA
+messageHandler handleProfessionDetails()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleProfessionDetails");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer( self, "" );
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );				
+				return SCRIPT_CONTINUE;
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			//JUST CHECKING TO MAKE SURE THE PREVIOUS DATA IS BEING PASSED CORRECTLY--THIS ISNT ACTUALLY USED ANYMORE
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar( self, SCRIPTVAR+".theDataOptions" );
+			string previousSelection = previousMainMenuArray[idx];
+
+			if ( previousMainMenuArray.length < 0 )
+			{
+				removePlayer( self, "There was an error in the tool.  Exiting." );
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{				
+
+				//GRAB THE SCRIPTAVARS FOR THE FILE TITLE AND PROMPT
+				string fileTitle = utils.getStringScriptVar( self, SCRIPTVAR+".fileTitle" );
+				string suiPrompt = utils.getStringScriptVar( self, SCRIPTVAR+".suiPrompt" );				
+
+				switch (idx)
+				{
+					case MASTER_PROFESSION:
+						//sendSystemMessageTestingOnly(self, "option 1");
+						string professionCodeSelection = utils.getStringScriptVar( self, SCRIPTVAR+".professionCodeSelection" );
+						string[] professionSkillCodes = utils.getStringArrayScriptVar( self, SCRIPTVAR+".professionSkillCodes" );
+						string[] professionTemplateNames = utils.getStringArrayScriptVar( self, SCRIPTVAR+".professionTemplateNames" );
+						
+						int arrayLength = professionSkillCodes.length;
+						
+						string templateName = getTemplateCodeString( self, professionCodeSelection, professionSkillCodes, professionTemplateNames );
+						
+						//LOOP THROUGH AND GRANT ALL THE PROFESSION SKILLS OF THE SPECIFIED PROFESSION
+						if ( templateName != "" )
+						{
+							qa.revokeAllSkills(self);
+							setSkillTemplate(self, templateName);
+							
+							for (int i = 0; i < arrayLength; i++)
+							{
+								skill.grantSkillToPlayer(self, professionSkillCodes[i]);
+							}
+							setWorkingSkill(self, professionSkillCodes[arrayLength-1]);
+							CustomerServiceLog("qaTool","User: (" + self + ") " + getName(self) + " has attained a Master Profession (" + templateName + ") using the QA Profession Tool.");				
+						}
+						
+						//DISPLAY THE SAME EXACT SUI...DONT CLOSE IT
+						qa.refreshMenu ( self, suiPrompt, PROFESSION_DETAILS_TITLE, PROFESSION_DETAILS_MENU, "handleProfessionDetails", SCRIPTVAR+".pid", SCRIPTVAR+".theDataOptions", sui.OK_CANCEL_REFRESH);
+						
+						break;	
+					case EXPORT_DATA: 
+						//sendSystemMessageTestingOnly(self, "option 2");						
+
+						//PASS THE SCRIPTVAR DATA TO A FUNCTION THAT CREATES A FILE ON THE CLIENT
+						saveDataToClient( self, fileTitle, suiPrompt, FILEEXTENSION );
+						
+						//DISPLAY THE SAME EXACT SUI...DONT CLOSE IT
+						qa.refreshMenu ( self, suiPrompt, PROFESSION_DETAILS_TITLE, PROFESSION_DETAILS_MENU, "handleProfessionDetails", SCRIPTVAR+".pid", SCRIPTVAR+".theDataOptions", sui.OK_CANCEL_REFRESH);						
+						break;											
+					default:
+						removePlayer( self, "Default Option on Switch" );
+						return SCRIPT_CONTINUE;	
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//THIS HANDLER IS USED WHEN THE TESTER SELECTS TRADER FROM THE PROFESSION DETAILS MENU OPTION
+//TRADER TYPES ARE MOSTLY HARD CODED DUE TO EASE
+messageHandler handleTraderSelection()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleTraderSelection");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer( self, "" );
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );				
+				return SCRIPT_CONTINUE;
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			//JUST CHECKING TO MAKE SURE THE PREVIOUS DATA IS BEING PASSED CORRECTLY
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar( self, SCRIPTVAR+".traderCode" );
+			string previousSelection = previousMainMenuArray[idx];
+
+			if ( previousMainMenuArray.length < 0 )
+			{
+				removePlayer(self, "There was an error in the tool.  Exiting.");
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{				
+				switch (idx)
+				{
+					case TRADER_DOMESTICS:
+						utils.setScriptVar( self, SCRIPTVAR+".traderTemplate", "trader_1a" );						
+						string[] traderMenu_1a = buildProfessionSkillMenu( self, "trader_1a" );
+						qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, traderMenu_1a, "handleProfessionSkillNameList", SCRIPTVAR+".pid", SCRIPTVAR+".theProfessionSkillStrings", sui.OK_CANCEL_REFRESH);						
+						break;	
+					case TRADER_STRUCTURES:
+						utils.setScriptVar( self, SCRIPTVAR+".traderTemplate", "trader_1b" );						
+						string[] traderMenu_1b = buildProfessionSkillMenu( self, "trader_1b" );						
+						qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, traderMenu_1b, "handleProfessionSkillNameList", SCRIPTVAR+".pid", SCRIPTVAR+".theProfessionSkillStrings", sui.OK_CANCEL_REFRESH);
+						break;											
+					case TRADER_MUNITIONS:
+						utils.setScriptVar( self, SCRIPTVAR+".traderTemplate", "trader_1c" );						
+						string[] traderMenu_1c = buildProfessionSkillMenu( self, "trader_1c" );
+						qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, traderMenu_1c, "handleProfessionSkillNameList", SCRIPTVAR+".pid", SCRIPTVAR+".theProfessionSkillStrings", sui.OK_CANCEL_REFRESH);
+						break;											
+					case TRADER_ENGINEERING:
+						utils.setScriptVar( self, SCRIPTVAR+".traderTemplate", "trader_1d" );						
+						string[] traderMenu_1d = buildProfessionSkillMenu( self, "trader_1d" );
+						qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, traderMenu_1d, "handleProfessionSkillNameList", SCRIPTVAR+".pid", SCRIPTVAR+".theProfessionSkillStrings", sui.OK_CANCEL_REFRESH);
+						break;											
+					default:
+						removePlayer( self, "" );
+						return SCRIPT_CONTINUE;	
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/*------------- ALL FUNCTIONS ----------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+
+//BUILDS THE MAIN TOOL MENU
+void toolMainMenu ( obj_id self )
+{
+	qa.refreshMenu ( self, PROFESSION_TOOL_PROMPT, PROFESSION_TOOL_TITLE, PROFESSION_TOOL_MENU, "handleMainMenuOptions", SCRIPTVAR+".pid", SCRIPTVAR+".mainMenu", sui.OK_CANCEL_REFRESH);
+}
+
+//THIS FUNCTION IS A GENERIC SCRIPT REMOVAL FUNCTION
+void removePlayer(obj_id self, string err)
+{
+	sendSystemMessageTestingOnly(self, err);
+	qa.removeScriptVars(self, SCRIPTVAR);
+	utils.removeScriptVarTree(self, SCRIPTVAR);
+}
+
+//THIS IS A FUNCITON THAT REFERS TO OTHER FUNCITONS -- IT WAS CREATED BECAUSE TRADER NEEDED TO USE AN ADDITIONAL HANDLER
+//2 HANDLERS USE THIS SAME FUNCTION
+string[] buildProfessionSkillMenu( obj_id self, string professionCodeSelection )
+{
+	//THE PROFESSION SKILLS ARE RETURNED HERE IN CODE STRING
+	string[] professionSkillCodes = getProfessionSkillCodes( self, professionCodeSelection );
+	utils.setScriptVar( self, SCRIPTVAR+".professionSkillCodes", professionSkillCodes );
+
+	//THE PROFESSION STRINGS ARE RETURNED HERE, BASED OFF THE CODE STRINGS
+	string[] professionSkillMenu = getProfessionSkillMenu( self, professionSkillCodes );
+
+	return professionSkillMenu;
+}
+
+//THIS FUNCTION GETS THE PROFESSIONS CODE STRING FROM A ROW IN THE SKILL DATATABLE.
+string[] getProfessionSkillCodes( obj_id self, string strTemplate )
+{
+	//debug
+	//sendSystemMessageTestingOnly(self, "You selected: "+strTemplate);
+	if ( !strTemplate.startsWith("trader") )
+	{
+		int rowNum = dataTableSearchColumnForString( strTemplate, "startingTemplateName", SKILL_TEMPLATE );
+		dictionary dictionaryRow = dataTableGetRow ( SKILL_TEMPLATE, rowNum );	
+		if( dictionaryRow != null )
+		{
+			//THIS FUNCTION SPLITS THE 'TEMPLATE' COL WHERE THERE IS A COMMA		
+			string arrayOfSkills[] = split( dictionaryRow.getString( "template" ), ',' );
+			return arrayOfSkills;
+		}
+		else
+		{
+			removePlayer(self, "The Program failed to return Profession Code String data.  Inform the tool team.");
+			return null;
+		}
+	}
+	else
+	//TRADER WAS SELECTED
+	{		
+		int rowNum = dataTableSearchColumnForString( strTemplate, "templateName", SKILL_TEMPLATE );
+		dictionary dictionaryRow = dataTableGetRow ( SKILL_TEMPLATE, rowNum );	
+		if( dictionaryRow != null )
+		{
+			//THIS FUNCTION SPLITS THE 'TEMPLATE' COL WHERE THERE IS A COMMA		
+			string arrayOfSkills[] = split( dictionaryRow.getString( "template" ), ',' );
+			
+			return arrayOfSkills;
+		}
+		else
+		{
+			removePlayer(self, "The Program failed to return Profession Code String data.  Inform the tool team.");
+			return null;
+		}		
+	}
+}
+
+//THIS FUNCTION GETS THE STRING NAME FROM THE STRING FILE.
+string[] getProfessionSkillMenu( obj_id self, string[] arrayOfSkills )
+{	
+	int arrayLength = arrayOfSkills.length;
+	string arrayOfSkillNames[] = new string[arrayLength];
+	if( arrayLength > 0 )
+	{
+		for (int i = 0; i < arrayLength; i++)
+		{
+			arrayOfSkillNames[i] = localize(new string_id( "skl_n", arrayOfSkills[i]));
+		}
+		return arrayOfSkillNames;
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to return Profession Skill String data.  Inform the tool team.");
+		return null;
+	}
+}
+
+//THIS FUNCITON RETURNS AN ARRAY OF PROFESSION MENU STRINGS
+string[] getProfessionMenuStrings( obj_id self, string[] professionCodes )
+{
+	int arrayLength = professionCodes.length;
+	string arrayOfProfessionNames[] = new string[arrayLength];
+	//string fakeArray[] = new string[arrayLength];
+	if( arrayLength > 0 )
+	{
+		for (int i = 0; i < arrayLength; i++)
+		{			
+			//add naming convention for profession string file 
+			string roadmapProfession = professionCodes[i]+"_bdesc";
+			
+			//reference a non-client string file			
+			arrayOfProfessionNames[i] = localize(new string_id( "ui_prof", roadmapProfession));
+		}
+		
+		return arrayOfProfessionNames;
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to return Profession Menu String data.  Inform the tool team.");
+		return null;
+	}	
+}
+
+//THIS FUNCTION GETS THE ABILITY STRING FROM AN ARRAY PASSED
+string[] getAbilityStrings( obj_id self, string[] abilityCodes )
+{
+	// FIND THE LENGTH OF THE ARRAY THEN LOOP THROUGH
+	int arrayLength = abilityCodes.length;
+	string arrayOfAbilityNames[] = new string[arrayLength];
+	if( arrayLength > 0 )
+	{
+		for (int i = 0; i < arrayLength; i++)
+		{
+			//FILTER OUT PESKY ENTERTAINER ABILITIES THAT BEGIN WITH 'PRIVATE_'
+			if (!abilityCodes[i].startsWith("private_") && abilityCodes[i] != NONE_STRING && abilityCodes[i].indexOf("_") > -1)
+			{
+				arrayOfAbilityNames[i] = localize(new string_id( "cmd_n", abilityCodes[i]));
+			}
+			else if (abilityCodes[i] == NONE_STRING)
+			{
+				arrayOfAbilityNames[i] = NONE_STRING;
+
+			}
+			else
+			{
+				//IF IT IS SOME WEIRD ABILITY CODE, JUST DISPLAY THE ABILITY CODE...DONT TRY TO FIND A STRING FOR IT
+				arrayOfAbilityNames[i] = abilityCodes[i];
+			}
+		}
+		
+		//RETURN THE LIST
+		return arrayOfAbilityNames;
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to return Ability String data.  Inform the tool team.");
+		return null;
+	}	
+}
+
+//FOR TRADER, GET THE XP TYPE
+string getSkillXPCodeData( obj_id self, dictionary skillRow )
+{
+	
+	//THE SKILL XP TYPE
+	string xpType = skillRow.getString( "XP_TYPE" );	
+	
+	if( xpType != "" )
+	{
+		//THIS FUNCTION SPLITS THE COL WHERE THERE IS A COMMA		
+		return "XP Type:\t"+xpType;
+	}	
+	else
+	{
+		removePlayer(self, "The Program failed to return Skill XP Data.  Inform the tool team.");
+		return null;
+	}
+}
+
+//FOR ALL OTHER PROFESSIONS BESIDES TRADER, REPORT THE LEVEL, XP REQUIREMENT AND XP TYPE
+string getSkillXPCodeData( obj_id self, dictionary skillRow, int skillLevel )
+{
+	
+	int experienceRow = dataTableSearchColumnForInt(skillLevel, "level", PLAYER_XP_LEVEL_TABLE);
+	int experienceAmount = dataTableGetInt(PLAYER_XP_LEVEL_TABLE, experienceRow, "xp_required");
+	
+	//THE SKILL XP TYPE
+	string xpType = skillRow.getString( "XP_TYPE" );	
+	
+	if( xpType != "" && experienceAmount > -1)
+	{
+		//THIS FUNCTION SPLITS THE COL WHERE THERE IS A COMMA		
+		return "Level:\t" + skillLevel + "\r\n\t\tXP Required:\t" + experienceAmount + "\r\n\t\tXP Type:\t"+xpType;
+	}	
+	else
+	{
+		removePlayer(self, "The Program failed to return Skill XP Data.  Inform the tool team.");
+		return null;
+	}
+}
+
+//THIS FUNCTION GRABS THE SKILL MOD.  IT DOESNT BOTHER LOCALIZING THE ARRAY OF STRINGS
+string[] getSkillMods( obj_id self, dictionary skillRow )
+{
+	//THE SKILL SKILL MODS
+	string skillModString = skillRow.getString( "SKILL_MODS" );
+	//sendSystemMessageTestingOnly(self, "stf: "+skillModString);
+	
+	if ( skillModString != "")
+	{
+		//sendSystemMessageTestingOnly(self, "string: '"+skillRow.getString( "SKILL_MODS" )+"'" );
+		string[] skillMods = split( skillRow.getString( "SKILL_MODS" ), ',' );
+		if( skillMods.length > 0 )
+		{
+			//sendSystemMessageTestingOnly(self, "Skill Mod greater than 0");
+			//THIS FUNCTION SPLITS THE COL WHERE THERE IS A COMMA		
+			return skillMods;
+		}
+		else
+		{
+			removePlayer(self, "The Program failed to return Skill Mod data.  Inform the tool team.");
+			return null;
+		}
+	}
+	else
+	{
+		string[] noneArray = new string[1];
+		noneArray[0] = NONE_STRING;
+		return noneArray;
+	}
+}
+
+//THIS IS THE PROMPT FUNCTION.  MOST PARTS OF THE PROMPT ARE PASSED TO THIS FUNCTION AND ARE FORMATTED CORRECTLY WITHIN WITH THE EXCEPTION OF ABILITIES
+//THE ABILITIES ARE EXTRACTED DYNAMICALLY IN THIS FUNCTION SO THEY CAN BE DISPLAYED PROPERLY, ONE AFTER ANOTHER UNDER THE SKILL
+string createAPrompt( obj_id self, boolean clientLocalized, string professionStringSelection, string professionCodeSelection, string skillSelectionString, string skillSelectionCode, string skillXPCodeData, string[] skillMods, string roadMapString, string roadMapSpawnStrings, string[] abilityString, string[] abilityCodes )
+{
+	string prompt = "";
+	
+	//DEBUG
+	//sendSystemMessageTestingOnly(self, "Test");
+	
+	if (clientLocalized == true)
+	{
+		//CREATE A PROMPT THAT HAS THE Profession - PROFESSION NAME
+		prompt = "@ui:button_bar_skills - "+ professionStringSelection;
+	}
+	else
+	{
+		//CREATE A PROMPT THAT HAS THE PROFESSION NAME
+		prompt = professionStringSelection;
+	}
+	
+	//CREATE A PROMPT THAT HAS THE PROFESSION CODE STRING, SKILL STRING, SKILL CODE STRING	
+	prompt = prompt +"\t ( "+professionCodeSelection+" )\r\n\t"+skillSelectionString+" \t ( "+skillSelectionCode+" )\r\n\t\t"+skillXPCodeData;
+	
+	//ADD THE SKILL MODS, 1 BY 1 TO THE PROMPT
+	for (int x = 0; x < skillMods.length; x++)
+	{
+		prompt = prompt + "\r\n\t\tSkill Mod:\t"+ skillMods[x];
+	}	
+	
+	//ADD ROADMAP STRING -- force evaluation of this string?
+	prompt = prompt + "\r\n\r\n\t\tRoad Map Item:\t\t"+roadMapString;
+	
+	//ADD ROADMAP SPAWN STRING(S)
+	prompt = prompt + roadMapSpawnStrings;
+		
+	//ADD ABILITIES, ABILITY SLASH COMMANDS AND MITIGATION DATA IN THIS SECTION
+	if (abilityString.length > 0)
+	{
+		//DEBUG
+		//sendSystemMessageTestingOnly(self, "abilityString Length is bigger than 0");
+		
+		if (abilityString.length == abilityCodes.length)
+		{
+			prompt = prompt + "\r\n\r\n\t\tAbilites Awarded:";
+			
+			for (int i = 0; i < abilityString.length; i++)
+			{				
+				prompt = prompt +"\r\n\t\t\t"+ abilityString[i] +"\t ( "+ abilityCodes[i] +" )";
+								
+				//LOOK FOR STRING 'MITIGATION' AND IF IT ISNT THERE SEARCH THE COMMAND TABLE
+				if ( abilityString[i].indexOf("Mitigation") == -1 && !professionCodeSelection == "entertainer" && !professionCodeSelection.startsWith("trader") )
+				{					
+					//THIS IS AN ABILITY WITH STATS...CALL A FUNCITON THAT COLLECTS THE ABILITY DATA
+					string abilityData = getAbilityData( self, abilityCodes[i] );
+										
+					if (abilityData != "")
+					{
+						prompt = prompt + abilityData;
+					}
+				}
+			}
+		}
+		else 
+		{
+			removePlayer(self, "The Program failed to detail the Skill Ability Data.  Inform the tool team.");
+		}
+	}
+	else
+	{
+		prompt = prompt + "\r\n\r\n\t\tAbilites Awarded:\r\n\t\t\t"+ abilityString[0] +"\t\tSlash Command: "+ abilityCodes[0];
+	}	
+	
+	//return something, even if partial failure
+	return prompt;
+}
+
+//THIS FUNCTION RETRIEVES THE ROAD MAP ITEMS AWARDED BASED ON THE SKILL THE PLAYER/TESTER RECEIVES
+string getRoadMapString( obj_id self, string skillSelection )
+{
+	string stringId = "";	
+	int rowNum = dataTableSearchColumnForString( skillSelection, "roadmapSkillName", ROADMAP_TABLE );
+	
+	if ( rowNum > -1 )
+	{
+		dictionary dictionaryRow = dataTableGetRow ( ROADMAP_TABLE, rowNum );	
+		if( dictionaryRow != null )
+		{		
+			//THE String ID
+			stringId = dictionaryRow.getString( "stringId" );
+			if ( stringId != "" )
+			{
+				if (stringId.startsWith("@obj_n"))
+				{			
+					int obj_nStringIndex = stringId.indexOf(":");
+					string obj_nSubStringString = stringId.substring( obj_nStringIndex+1 );
+					stringId = ""+localize(new string_id( "obj_n", obj_nSubStringString));
+				}
+				if (stringId.startsWith("@ui_roadmap"))
+				{
+					stringId = " "+stringId+" <-- UNLOCALIZED DATA";
+				}
+			}
+			else
+			{
+				//both strings were null, return a (none)
+				stringId = NONE_STRING;
+				return stringId;
+			}
+		}
+	}
+	else
+	{
+		stringId = skillSelection+" ( *No Roadmap Name Found* )";
+	}
+	return stringId;
+}
+
+
+
+//THIS FUNCTION RETRIEVES THE ROAD MAP ITEMS AWARDED BASED ON THE SKILL THE PLAYER/TESTER RECEIVES
+string getRoadMapSpawnStrings( obj_id self, string skillSelection )
+{
+	string roadmapData = "";
+	
+	//skillSelection = name col in datatable
+	int rowNum = dataTableSearchColumnForString( skillSelection, "roadmapSkillName", ROADMAP_TABLE );
+	if ( rowNum > -1)
+	{
+		dictionary dictionaryRow = dataTableGetRow ( ROADMAP_TABLE, rowNum );	
+		if( dictionaryRow != null )
+		{		
+			string itemDefault = dictionaryRow.getString( "itemDefault" );
+
+			if ( itemDefault != "" )
+			{		
+				if (itemDefault.indexOf(",") > -1)
+				{
+					string arrayOfCodes[] = split( dictionaryRow.getString( "itemDefault" ), ',' );
+
+					for (int i = 0; i < arrayOfCodes.length; i++)
+					{
+						roadmapData = roadmapData +"\r\n\t\tSpawn String:\t\t"+ arrayOfCodes[i];
+					}
+					return roadmapData;
+				}
+				else
+				{
+					//return the new line;
+					roadmapData = "\r\n\t\tSpawn String:\t\t"+ itemDefault;
+					return roadmapData;
+				}
+			}
+			else
+			{
+				//both strings were null, return a (none)
+				roadmapData = "\r\n\t\tSpawn String:\t\t"+ NONE_STRING;
+				return roadmapData;
+			}
+		}
+		else
+		{
+			removePlayer(self, "The Program failed to return the Roadmap Item Row.  Inform the tool team.");
+			return null;
+		}
+	}
+	else
+	{
+				//There is no spawn string at all
+				roadmapData = "\r\n\t\tSpawn String:\t\t"+ NONE_STRING;
+				return roadmapData;
+	}
+}
+
+//THIS FUNCITON RETRIEVES AND FORMATS THE ABILITY DATA INTO ONE STRING
+string getAbilityData( obj_id self, string abilityCode )
+{
+	string abilityData = "";
+	int rowNum = dataTableSearchColumnForString( abilityCode, "commandName", COMMAND_TABLE );
+	
+	if ( rowNum > -1 )
+	{
+		dictionary commandRow = dataTableGetRow ( COMMAND_TABLE, rowNum );
+
+		//THE COMMAND WARM UP TIME  
+		float warmupTime = commandRow.getFloat( "warmupTime" );
+
+		//THE COMMAND EXECUTE TIME
+		float executeTime = commandRow.getFloat( "executeTime" );
+
+		//THE COMMAND COOLDOWN TIME
+		float cooldownTime = commandRow.getFloat( "cooldownTime" );
+
+		//THE SKILL cooldownGroup
+		string cooldownGroup = commandRow.getString( "cooldownGroup" );	
+
+		//THE SKILL cooldownGroup2
+		string cooldownGroup2 = commandRow.getString( "cooldownGroup2" );	
+
+		//THE COMMAND cooldownTime2
+		float cooldownTime2 = commandRow.getFloat( "cooldownTime2" );
+
+		if (cooldownTime2 > 0)
+		//there is a secondary cooldown that needs to be added to the ability data
+		{
+			abilityData = "\r\n\t\t\t\tWarm Up Time:\t\t"+ warmupTime +"\r\n\t\t\t\tExecute Time:\t\t"+ executeTime +"\r\n\t\t\t\tCool Down Time:\t\t"+ cooldownTime +"\r\n\t\t\t\tCool Down Group:\t"+ cooldownGroup+"\r\n\t\t\t\tSecond Cool Down Group:\t"+ cooldownGroup2 +"\r\n\t\t\t\tSecond Cool Down Time:\t"+ cooldownTime2;
+		}
+		else
+		//no secondary cooldown to worry about
+		{
+			abilityData = "\r\n\t\t\t\tWarm Up Time:\t\t"+ warmupTime +"\r\n\t\t\t\tExecute Time:\t\t"+ executeTime +"\r\n\t\t\t\tCool Down Time:\t\t"+ cooldownTime +"\r\n\t\t\t\tCool Down Group:\t"+ cooldownGroup;
+
+		}
+	}
+	else
+	{
+		abilityData = "\r\n\t\t\t\tAbility Data:\t\t *This ability is not in the command table*";
+	
+	}
+	return abilityData;
+}
+
+void saveDataToClient( obj_id self, string fileTitle, string stringData, string fileExtension )
+{
+	//FIND AND REMOVE UNLOCALIZED DATA AT THE VERY BEGINNING OF THE STRING
+	int parseUnlocalized = stringData.indexOf("@ui:button_bar_skills -");
+	if (parseUnlocalized == 0)
+	{
+		string unlocalizedSubStringString = stringData.substring( 24 );
+		stringData = unlocalizedSubStringString;
+	}
+	saveTextOnClient( self, fileTitle +"."+ fileExtension, stringData );
+	//sendSystemMessageTestingOnly(self, "hello: ");
+}
+
+//RETURN AN ARRAY OF ALL ABILITY CODE STRINGS FROM EACH PROFESSION IF THE LITERAL STRING FOUND CAN BE LOCATED IN COMMAND TABLE
+string[] getAllAbilityCodeStrings( obj_id self, string[] professionMenuCodeStrings)
+{
+	//GET THE LENGTH OF THE PROFESSION LIST PASSED
+	int professionMenuLength = professionMenuCodeStrings.length;						
+	
+	//DOUBLE CHECK THAT AN ARRAY WAS SENT, IF NOT THROW AN ERROR AND REMOVE SCRIPTVARS
+	if (professionMenuLength > 0)
+	{
+		//CREATE 3 VECTORS THAT WILL BE USED TO PRODUCE THE FINISHED LIST
+		Vector allSkills = new Vector();
+		Vector allAbilities = new Vector();
+		Vector filteredAbilities = new Vector();
+		
+		//LOOP THROUGH THE ARRAY OF PROFESSIONS, GRAB ALL THE ROWS OF SKILLS FROM THE SKILL TEMPLATE TABLE
+		for (int i = 0; i < professionMenuLength; i++)
+		{
+			int rowNum = dataTableSearchColumnForString( professionMenuCodeStrings[i], "startingTemplateName", SKILL_TEMPLATE );
+			dictionary dictionaryRow = dataTableGetRow ( SKILL_TEMPLATE, rowNum );
+
+			if( dictionaryRow != null )
+			{
+				//THIS FUNCTION SPLITS THE 'TEMPLATE' COL WHERE THERE IS A COMMA AND THROWS ALL THE SKILLS INTO AN ARRAY		
+				string arrayOfSkills[] = split( dictionaryRow.getString( "template" ), ',' );
+				int arrayLength = arrayOfSkills.length;
+				
+				//SINCE WE HAVE ALL THE PROFESSIONS AND NOT JUST ONE PROFESSION, ALL THE SKILLS ARE LUMPED TOGETHER INTO A VECTOR
+				for (int x = 0; x < arrayLength; x++)
+				{
+					allSkills.add(arrayOfSkills[x]);
+				}							
+			}
+		}
+		//GET THE SIZE OF THE VECTOR CREATED
+		int skillListSize = allSkills.size();
+		
+		//CREATE AN ARRAY OUT OF THE LIST OF ALL SKILLS
+		string[] allSkillCodeStrings = new string[skillListSize];
+		allSkills.toArray(allSkillCodeStrings);
+	
+		//LOOP THROUGH THE SKILLS AND GET THE ENTIRE ROW OF EVERY SINGLE ABILITY USING THE SKILLS TABLE
+		for (int y = 0; y < skillListSize; y++)
+		{
+			dictionary eachSkillRow = getEntireSkillRow( self, allSkillCodeStrings[y] );
+			string[] arrayOfAbilities = getAbilityCodes( self, eachSkillRow );
+			int abilityArrayLength = arrayOfAbilities.length;
+			
+			for (int z = 0; z < abilityArrayLength; z++)
+			{
+				//WE HAVE MORE THAN ONE SKILL SO CREATE A VECTOR
+				if (arrayOfAbilities[z] != "None")
+				{
+					allAbilities.add(arrayOfAbilities[z]);
+				}
+			}							
+		}
+		//GET THE SIZE OF THE VECTOR CREATED		
+		int abilityListSize = allAbilities.size();
+		
+		//DEBUG
+		//sendSystemMessageTestingOnly(self, "listSize: "+abilityListSize);
+
+		//MAKE AN ARRAY OUT OF THE VECTOR
+		string[] allAbilityCodeStrings = new string[abilityListSize];
+		allAbilities.toArray(allAbilityCodeStrings);
+
+		//WE NEED TO MAKE SURE THAT THE ABILITIES ARE ACTUALLY COMMANDS AND NOT HACK DATA
+		//CREATE AN ARRAY OF ALL THE ABILITIES THAT CAN BE FOUND IN THE COMMAND TABLE BASED ON THE ABILITES FOUND IN THIS FUNCTION
+		for (int a = 0; a < abilityListSize; a++)
+		{
+			if ( dataTableSearchColumnForString( allAbilityCodeStrings[a], "commandName", COMMAND_TABLE ) > -1)
+			{
+				filteredAbilities.add(allAbilityCodeStrings[a]);
+			}
+		}
+		//GET THE SIZE OF THE VECTOR CREATED		
+		int filteredListSize = filteredAbilities.size();
+		
+		//DEBUG
+		//sendSystemMessageTestingOnly(self, "listSize: "+filteredListSize);
+
+		string[] allCodeStrings = new string[filteredListSize];
+		filteredAbilities.toArray(allCodeStrings);
+		
+		return allCodeStrings;
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to return a list of Abilites.  Inform the tool team.");
+		return null;
+	}
+}
+
+//THIS FUNCTION GRABS THE ENTIRE ROW OUT OF THE SKILLS.TAB  
+dictionary getEntireSkillRow(obj_id self, string skillSelection)
+{
+	//DEBUG
+	//sendSystemMessageTestingOnly(self, "skillSelection: "+skillSelection);
+	
+	//skillSelection = name col in datatable
+	int rowNum = dataTableSearchColumnForString( skillSelection, "NAME", SKILL_TABLE );
+	dictionary dictionaryRow = dataTableGetRow ( SKILL_TABLE, rowNum );	
+	if( dictionaryRow != null )
+	{		
+		return dictionaryRow;
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to return the Data Source Row.  Inform the tool team.");
+		return null;
+	}
+}
+
+//THIS FUNCTION GETS THE ABILITY CODE STRINGS FROM A DICTIONARY PASSED
+string[] getAbilityCodes( obj_id self, dictionary skillRow )
+{
+	//THIS FUNCTION SPLITS THE COL WHERE THERE IS A COMMA
+	string arrayOfAbilities[] = split( skillRow.getString( "COMMANDS" ), ',' );
+	int abilityArrayLength = arrayOfAbilities.length;
+
+	//set the first var to string
+	string firstVar = arrayOfAbilities[0];
+	if( abilityArrayLength > 0 )
+	{
+		if (firstVar != "")
+		{
+			//RETURN WHAT WAS COLLECTED IF NOT NULL	
+			return arrayOfAbilities;
+		}
+		else
+		{
+			//return a (none)
+			string[] tempArray = new string[1];
+			tempArray[0] = NONE_STRING;
+			return tempArray;
+		}
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to return Ability Code String data.  Inform the tool team.");
+		return null;
+	}
+}
+
+//THIS FUNCTION TAKES THE ABILITY CODE STRING LIST AND ABILITY MENU STRING LIST, COMBINES THEM THEN SORTS THEM ALPHABETICALLY
+string[] combineAndSortAbilities( obj_id self, string[] allAbilityStrings, string[] allAbilityCodeStrings )
+{
+	int stringListLength = allAbilityStrings.length;
+	int codeListLength = allAbilityCodeStrings.length;
+	
+	if ( stringListLength == codeListLength )
+	{
+		string[] combinedArray = new string[codeListLength];
+		
+		for (int i = 0; i < codeListLength; i++)
+		{
+			combinedArray[i] = allAbilityStrings[i] +" ( "+ allAbilityCodeStrings[i] +" )";		
+		}
+		
+		Arrays.sort(combinedArray);
+
+		return combinedArray;
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to return the sorted and combined ability data.  Inform the tool team.");
+		return null;	
+	}
+}
+
+//THIS FUNCTION RETRIEVES THE SKILL USING THE ABILITY CODE STRING SO THAT THE ABILITY CAN EVENTUALLY RETRIEVE THE RIGHT PROFESSION DATA
+string getSkillWithAbility( obj_id self, string abilitySelection )
+{
+	int firstChar = abilitySelection.indexOf("( ");
+	int lastChar = abilitySelection.indexOf(" )");	
+	
+	if (firstChar > 0 )
+	{
+		string abilityCode = abilitySelection.substring( firstChar+2, lastChar );
+
+		int rowNum = -1;
+		string[] entireCommandCol = dataTableGetStringColumn( SKILL_TABLE, "COMMANDS");
+		int commandColLength = entireCommandCol.length;
+		
+		//THERE IS A COMMA IN THE COMMAND COL THAT REQUIRES A LOOP THROUGH OF EACH STRING
+		//LOOP THROUG AND GET THE CORRECT ROW NUMBER IN THE SKILLS TABLE FOR THE ABILITY
+		for (int i = 0; i < commandColLength; i++)
+		{
+			string arrayOfCommands[] = split( entireCommandCol[i], ',' );
+			int commandArrayLength = arrayOfCommands.length;
+			
+			for (int x = 0; x < commandArrayLength; x++)
+			{
+				//DOES THE STRING EQUAL THE ABILITY?
+				if ( arrayOfCommands[x] == abilityCode )
+				{
+					//HERE IS THE ROW NUMBER
+					rowNum = i;
+					break;
+				}
+			}
+			
+			if (rowNum != -1)
+			{
+				break;
+			}
+		}
+		if (rowNum != -1)
+		{
+			//USE THE ROW NUMBER TO GRAB THE CORRECT SKILL
+			string skillCode = dataTableGetString( SKILL_TABLE, rowNum, "NAME" );
+			return skillCode;
+		}
+	}
+
+	removePlayer(self, "The Program failed to receive a valid string from another part of the application.  Inform the tool team.");
+	return null;	
+}
+
+//THIS FUNCTION RETRIEVES THE CORRECT PROFESSION DATA BASED ON THE SKILL
+string getProfessionWithSkill( obj_id self, string skillCode )
+{
+	if ( skillCode != "" )
+	{
+		int rowNum = -1;
+		string[] entireSkillCol = dataTableGetStringColumn( SKILL_TEMPLATE, "template");
+		int skillColLength = entireSkillCol.length;
+
+		//THERE IS A COMMA IN THE SKILL COL THAT REQUIRES A LOOP THROUGH OF EACH STRING
+		//LOOP THROUG AND GET THE CORRECT ROW NUMBER IN THE SKILL TEMPLATE TABLE FOR THE ABILITY
+		for (int i = 0; i < skillColLength; i++)
+		{
+			string arrayOfSkills[] = split( entireSkillCol[i], ',' );
+			int skillArrayLength = arrayOfSkills.length;
+
+			for (int x = 0; x < skillArrayLength; x++)
+			{
+				//DOES THE STRING EQUAL THE SKILL?
+				if ( arrayOfSkills[x] == skillCode )
+				{
+					//HERE IS THE ROW NUMBER
+					rowNum = i;
+					break;
+				}
+			}
+			
+			if (rowNum != -1)
+			{
+				break;
+			}
+		}
+		
+		if (rowNum != -1)
+		{
+			//USE THE ROW NUMBER TO GRAB THE CORRECT SKILL
+			string professionCode = dataTableGetString( SKILL_TEMPLATE, rowNum, "startingTemplateName" );
+
+			if (professionCode != "")
+			{
+				return professionCode;		
+			}
+		}
+
+		removePlayer(self, "The Program failed to receive a valid profession string.  Inform the tool team.");
+		return null;	
+	}
+
+	removePlayer(self, "The Program failed to receive a valid string from another part of the application.  Inform the tool team.");
+	return null;	
+}
+
+//THIS FUNCTION RETRIEVES THE PROFESSION CODE STRINGS AND PLACES THEM IN A LIST
+string[] getProfessionTemplateNames( obj_id self, string[] professionMenuCodeStrings )
+{
+	int professionMenuLength = professionMenuCodeStrings.length;
+	if ( professionMenuLength > 0 )
+	{
+		Vector allTemplates = new Vector();
+		string professionTemplateName = "";
+		
+		for (int i = 0; i < professionMenuLength; i++)
+		{
+			int rowNum = dataTableSearchColumnForString( professionMenuCodeStrings[i], "startingTemplateName", SKILL_TEMPLATE );
+			professionTemplateName = dataTableGetString( SKILL_TEMPLATE, rowNum, "templateName" );
+			allTemplates.add(professionTemplateName);
+		}
+		int vectorSize = allTemplates.size();
+		
+		if ( vectorSize != professionMenuLength )
+		{
+			removePlayer(self, "The Program failed to receive an accurate list of profession template strings.  Inform the tool team.");
+			return null;	
+		}
+		else
+		{
+			string[] allProfessionTemplates = new string[vectorSize];
+			allTemplates.toArray(allProfessionTemplates);
+			return allProfessionTemplates;
+		}
+	}
+	else
+	{
+		removePlayer(self, "The Program failed to receive a list of profession template strings.  Inform the tool team.");
+		return null;	
+	}
+}
+
+//THIS FUNCTION RETRIEVES ONE SPECIFIC PROFESSION CODE STRING
+string getTemplateCodeString( obj_id self, string professionCodeSelection, string[] professionSkillCodes, string[] professionTemplateNames )
+{
+
+	int arrayLength = professionSkillCodes.length;
+	int professionListLength = professionTemplateNames.length;
+	string templateName = "";
+
+	if ( professionCodeSelection == "trader" )
+	{
+		string traderTemplate = utils.getStringScriptVar( self, SCRIPTVAR+".traderTemplate" );
+		templateName = traderTemplate;
+	}
+	else
+	{						
+		for (int i = 0; i < professionListLength; i++)
+		{
+			if ( professionTemplateNames[i].startsWith(professionCodeSelection) )
+			{
+				templateName = professionTemplateNames[i];
+				break;
+			}
+		}
+	}
+	return templateName;
+}
+
+//THIS FUNCITON IS A REUSABLE CODE BLOCK THAT ASSISTS IN COLLECTING DATA FOR THE SUI PROMPT 
+//THE PROMPT WILL DISPLAY PROFESSION, SKILL AND ABILITY DATA
+string buildPrompt(obj_id self, string skillSelectionCode, string skillSelectionString, int skillLevel)
+{
+	if (skillSelectionCode != "")
+	{
+		//retrive scriptvars stored by previous handlers so they can be used in the SUI Prompt
+		string professionStringSelection = utils.getStringScriptVar( self, SCRIPTVAR+".professionStringSelection" );
+		string professionCodeSelection = utils.getStringScriptVar( self, SCRIPTVAR+".professionCodeSelection" );
+
+		//get the entire row of the data table based on skillSelectionCode
+		dictionary skillRow = getEntireSkillRow( self, skillSelectionCode );
+
+		//GET ALL THE ABILITY CODE STRINGS (SOMETIMES THERE IS MORE THAN ONE IN A SKILL
+		string[] abilityCodes = getAbilityCodes( self, skillRow );
+		if (abilityCodes[0] != "")
+		{
+			//GET THE ACTUAL STRINGS FOR THE ABILITIES
+			string[] abilityStrings = getAbilityStrings( self, abilityCodes );
+
+			if (abilityStrings[0] != "")
+			{
+				//GET THE Code Strings for SKILL XP COST, THE SKILL XP CAP, THE SKILL XP TYPE, THE  SKILL MODS AND THE SKILLS REQUIRED FOR THIS SKILL
+				//raw data, there is no display strings for this internal data
+				string skillXPCodeData = "";
+
+				if (skillLevel > -1)
+				{
+					skillXPCodeData = getSkillXPCodeData(self, skillRow, skillLevel);
+				}
+				else
+				{
+					skillXPCodeData = getSkillXPCodeData(self, skillRow);				
+				}
+
+				//GET THE SKILL MODS
+				string[] skillMods = getSkillMods(self, skillRow);
+
+				//GET THE ROADMAP STRING
+				string roadMapString = getRoadMapString(self, skillSelectionCode);
+
+				//GET THE ROADMAP ITEMS
+				string roadMapSpawnStrings = getRoadMapSpawnStrings(self, skillSelectionCode);
+
+				//CREATE THE PROMPT FOR THE SUI			
+				string suiPrompt = createAPrompt( self, false, professionStringSelection, professionCodeSelection, skillSelectionString, skillSelectionCode, skillXPCodeData, skillMods, roadMapString, roadMapSpawnStrings, abilityStrings, abilityCodes );
+
+				suiPrompt = suiPrompt +"\r\n\r\n";
+
+				return suiPrompt;
+			}
+		}
+	}
+	return "Error in buildPrompt funciton!";
+}
+
+//THIS IS A FUNCITON THAT LOOPS THROUGH EVERY SKILL OF A PROFESSION AND TACKS EVERY SKILL/ABILITY ONTO THE END OF A STRING
+//IT RETURNS A VERY LARGE STRING THAT IS EXPORTED AS A FLAT FILE IN THE CLIENT ROOT DIRECTORY
+string prepareDataForExport( obj_id self, string professionCodeSelection )
+{
+	//BUILD THE PROFESSION SKILL MENU (ONE SMALL REUSABLE FUNCTION)
+	string[] theProfessionSkillList = getProfessionSkillCodes(self, professionCodeSelection);
+	string[] theProfessionSkillMenu = buildProfessionSkillMenu( self, professionCodeSelection );
+
+	
+	if (theProfessionSkillList.length == theProfessionSkillMenu.length)
+	{
+		int skillLength = theProfessionSkillList.length;
+		string fileData = "";
+		
+		//if this is entertainer or any other profession, give the level
+		if (skillLength == HARD_CODED_LEVELS.length)
+		{
+			for (int i = 0; i < skillLength; i++)
+			{
+				fileData = fileData+buildPrompt(self, theProfessionSkillList[i], theProfessionSkillMenu[i], HARD_CODED_LEVELS[i]);
+			}
+		}
+		else
+		{
+		//this is for trader professions
+			for (int i = 0; i < skillLength; i++)
+			{
+				fileData = fileData+buildPrompt(self, theProfessionSkillList[i], theProfessionSkillMenu[i], -1);
+
+			}
+		}
+		return fileData;
+	}
+	else
+	{
+		removePlayer(self, "The export program failed to receive data correctly.");
+	}
+	return null;
+}

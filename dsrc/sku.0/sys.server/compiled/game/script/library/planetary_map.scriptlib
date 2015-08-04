@@ -1,0 +1,714 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        magic_item.scriptlib
+ * Description:  magic item reference
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+include library.locations;
+include library.city;
+include library.player_structure;
+include library.structure;
+include library.factions;
+include library.regions;
+include library.hq;
+include library.instance;
+include library.utils;
+include library.sui;
+include java.util.Arrays;
+include java.util.Vector;
+
+/***** CONSTANTS *******************************************************/
+
+const byte NO_FLAG					= 0;
+
+const float MAX_CLUMP_DISTANCE 		= 32f;
+
+const string TBL					= "datatables/planet_map/map_locations.iff";
+
+const string COL_TEMPLATE			= "TEMPLATE";
+const string COL_NAME				= "PM_NAME";
+const string COL_CATEGORY			= "PM_CATEGORY";
+const string COL_SUBCATEGORY		= "PM_SUBCATEGORY";
+const string COL_TYPE				= "PM_TYPE";
+const string COL_FLAGS				= "PM_FLAG";
+
+const string TEMPLATE_LOCATION_BASE	= "object/tangible/planet_map_location/map_location_base.iff";
+const string TEMPLATE_LOCATION_CITY	= "object/tangible/planet_map_location/city.iff";
+
+const string CITY					= "city";
+const string CITY_LOCATION_CATEGORY	= "city";
+
+const string VAR_PM_BASE			= "planetMap";
+const string VAR_PM_NAME			= VAR_PM_BASE + ".name";
+const string VAR_PM_CATEGORY		= VAR_PM_BASE + ".category";
+const string VAR_PM_SUBCATEGORY		= VAR_PM_BASE + ".subcategory";
+const string VAR_PM_TYPE			= VAR_PM_BASE + ".type";
+const string VAR_PM_FLAGS			= VAR_PM_BASE + ".flags";
+
+const string STF_NAME				= "map_loc_n";
+
+const string CAT_TRAINER			= "trainer";
+const string CAT_VENDOR				= "vendor";
+const string SUB_VENDOR_JUNK		= "vendor_junk";
+
+const string STF_MAP_LOC			= "map_loc";
+
+const string CAT_TERMINAL			= "terminal";
+
+
+//FIND CONSTANTS
+
+const string SCRIPTVAR_FIND_SUI				= "find.sui";
+const string SCRIPTVAR_FIND_PARAMS			= "find.params";
+
+const string_id SID_NO_REGISTERED_LOCS		= new string_id("find_display", "no_registered_locs");
+
+const string_id SID_FIND_TITLE				= new string_id("base_player", "find_title");
+const string_id SID_FIND_PROMPT				= new string_id("base_player", "find_prompt");
+
+
+/***** FUNCTIONS **************************************************/
+/***** GENERAL FUNCTION ************************************/
+/************************************************************
+ * @brief attempts to register a planetary map location
+ *
+ * @param obj_id	self
+ *
+ * @return boolean; false on error
+ ************************************************************/
+boolean addMapLocation(obj_id self)
+{
+	if ( !isIdValid(self) )
+		return false;
+
+	if(instance.isInInstanceArea(self))
+	{
+		removePlanetaryMapLocation(self);
+		return false;
+	}
+	
+	int got = getGameObjectType(self);
+	if ( isGameObjectTypeOf(got, GOT_creature) )
+	{
+		return addCreatureLocation(self);
+	}
+	else if ( isGameObjectTypeOf(got, GOT_terminal) )
+	{
+		return addTerminalLocation(self);
+	}
+
+	//LOG("planetaryMapLocation","******************** ADD LOCATION **********************");
+
+	string locType = "map";
+
+	string planet = getCurrentSceneName();
+	if ( (planet == null) || (planet.equals("")) )
+	{
+		LOG("planetaryMapLocation", "planet scene name = " + planet);
+		return false;
+	}
+
+	string template = getTemplateName(self);
+	if ( (template == null) || (template.equals("")) )
+		return false;
+
+	//LOG("planetaryMapLocation","*** TEMPLATE: " + template);
+	location here = getLocation(self);
+	if ( isGameObjectTypeOf(got, GOT_building) )
+	{
+		location ejection = getBuildingEjectLocation(self);
+		if ( ejection != null )
+			here = ejection;
+	}
+
+	if ( here == null )
+		return false;
+
+	string locationName = "";
+	string category = "";
+	string subCategory = "";
+	int type = 0;
+	int flags = 0;
+
+	//LOG("planetaryMapLocation","loading info from datatable...");
+	if ( template.equals(TEMPLATE_LOCATION_CITY) )
+	{
+
+		category = CITY;
+
+		//get subCategory name (from region?)
+		locationName = getCityRegionName(here);
+		locType = "CITY";
+
+	}
+	else
+	{
+		dictionary row = new dictionary();
+		row = dataTableGetRow(TBL, template);
+		if ( (row == null) || (row.isEmpty()) )
+		{
+			string msg = "WARNING: map_location -> obj_id " + self + " unable to locate template (" + template + ") in datatable!";
+			debugServerConsoleMsg(self, msg);
+			//return false;
+		}
+		else
+		{
+			//LOG("planetaryMapLocation","row data = " + row.toString());
+			locationName = row.getString(COL_NAME);
+			category = row.getString(COL_CATEGORY);
+			subCategory = row.getString(COL_SUBCATEGORY);
+			type = row.getInt(COL_TYPE);
+			flags = row.getInt(COL_FLAGS);
+		}
+	}
+
+	if ( hasObjVar(self, VAR_PM_BASE) )
+	{
+		//LOG("planetaryMapLocation","overriding info from OBJVAR...");
+		if ( hasObjVar(self, VAR_PM_CATEGORY) )
+		{
+			category = getStringObjVar(self, VAR_PM_CATEGORY);
+		}
+
+		if ( hasObjVar(self, VAR_PM_SUBCATEGORY) )
+		{
+			subCategory = getStringObjVar(self, VAR_PM_SUBCATEGORY);
+		}
+
+		if ( hasObjVar(self, VAR_PM_NAME) )
+		{
+			locationName = getStringObjVar(self, VAR_PM_NAME);
+		}
+
+		if ( hasObjVar(self, VAR_PM_TYPE) )
+		{
+			type = getIntObjVar(self, VAR_PM_TYPE);
+		}
+
+		if ( hasObjVar(self, VAR_PM_FLAGS) )
+		{
+			flags = getIntObjVar(self, VAR_PM_FLAGS);
+		}
+	}
+
+	if ( player_structure.isCivic( self ) )
+	{
+		// Append city name.
+		int city_id = getCityAtLocation( getLocation( self ), 0 );
+		locationName = cityGetName( city_id );
+		flags = MLF_INACTIVE;
+	}
+	else if ( player_structure.isCommercial( self ) )
+	{
+		if ( hasObjVar( self, player_structure.VAR_SIGN_NAME ) )
+			locationName = getStringObjVar( self, player_structure.VAR_SIGN_NAME );
+		else
+		{
+			int city_id = getCityAtLocation( getLocation( self ), 0 );
+			if ( city_id > 0 )
+				locationName = cityGetName( city_id );
+		}
+		flags = MLF_INACTIVE;
+	}
+	if(hasObjVar(self, "healing.canhealwound")||(hasObjVar(self, "healing.canhealshock")))
+	{
+		flags = MLF_INACTIVE; // these can be activated/registered with
+	}
+
+	if ( category == null || category.equals("") || category.equals("unknown") )
+	{
+		string myFac = factions.getFaction(self);
+		if ( myFac != null )
+		{
+			if ( myFac.equals(factions.FACTION_IMPERIAL) || myFac.equals(factions.FACTION_REBEL) )
+				category = toLower(myFac);
+		}
+	}
+
+	if ( category != null && !category.equals("") && !category.equals("unknown") )
+	{
+		/*if ( category.indexOf(":") == -1 )
+		{*/
+			category = toLower(category);
+		/*}*/
+
+		if ( (locationName == null) || (locationName.equals("")) )
+		{
+			locationName = getCityRegionName(here);
+			if ( (locationName == null) || (locationName.equals("")) )
+			{
+				locationName = getEncodedName(self);
+			}
+		}
+
+		if ( subCategory == null )
+		{
+			subCategory = "";
+		}
+
+		//LOG("planetaryMapLocation","attempting to add " + locType + " location for: planet = " + planet + " obj_id = " + self);
+		//LOG("planetaryMapLocation","locationName = " + locationName + " here = " + here.toString());
+		//LOG("planetaryMapLocation","category = " + category + " subCategory = " + subCategory);
+		//LOG("planetaryMapLocation","flags (int) = " + flags + " (byte) = " + (byte)flags );
+		return addPlanetaryMapLocation(self, locationName, (int)here.x, (int)here.z, category, subCategory, type, (byte)flags);
+	}
+
+	//LOG("planetaryMapLocation", "WARNING: unable to add self (" + self + ") as planetary map location!");
+	//LOG("planetaryMapLocation", "template = " + template);
+	//LOG("planetaryMapLocation", "here = " + here.toString());
+	return false;
+}
+
+/************************************************************
+ * @brief attempts to determine local city region name
+ *
+ * @param location	here
+ *
+ * @return string; null on error
+ ************************************************************/
+string getCityRegionName(location here)
+{
+	if ( here == null )
+		return null;
+
+	region[] r = getRegionsWithGeographicalAtPoint(here, regions.GEO_CITY);
+	if ( (r == null) || (r.length == 0) )
+	{
+		//LOG("planetaryMapLocation","ERROR: aborting add attempt due to invalid placement!");
+		//LOG("planetaryMapLocation","ERROR: city locations must exist within GEO_CITY regions, but none were found.");
+		return null;
+	}
+
+	if ( r.length > 1 )
+	{
+		//LOG("planetaryMapLocation","WARNING: multiple GEO_CITY regions at point - assuming first");
+		for ( int i = 0; i < r.length; i++ )
+		{
+			//LOG("planetaryMapLocation","	region[" + i + "] = " + r[i].getName());
+		}
+	}
+
+	region city = r[0];
+	//LOG("planetaryMapLocation","getCityRegionName: Primary city region = " + city.getName());
+	return city.getName();
+}
+
+/************************************************************
+ * @brief attempts to remove a map location
+ *
+ * @param obj_id	self
+ *
+ * @return void
+ ************************************************************/
+void removeMapLocation(obj_id self)
+{
+	if ( !isIdValid(self) )
+		return;
+
+	//LOG("planetaryMapLocation","******************** REMOVE LOCATION **********************");
+	//LOG("planetaryMapLocation", "attempting to remove self (" + self + ") from planetary map location list...");
+
+	string template = getTemplateName(self);
+	if ( template != null )
+	{
+		//LOG("planetaryMapLocation", "template = " + template);
+	}
+
+	location here = getLocation(self);
+	if ( here != null )
+	{
+		//LOG("planetaryMapLocation", "here = " + here.toString());
+	}
+
+	string planet = getCurrentSceneName();
+	removePlanetaryMapLocation(self);
+}
+
+
+/************************************************************
+ * @brief attempts to register a CREATURE as a planetary map location
+ *
+ * @param obj_id	self
+ *
+ * @return boolean; false on error
+ ************************************************************/
+boolean addCreatureLocation(obj_id self)
+{
+	if ( !isIdValid(self) )
+		return false;
+
+	//LOG("planetaryMapLocation","******************** ADD CREATURE LOCATION **********************");
+
+	string locType = "map";
+
+	string planet = getCurrentSceneName();
+	if ( (planet == null) || (planet.equals("")) )
+		return false;
+
+	location here = getWorldLocation(self);
+	if ( here == null )
+		return false;
+
+	int got = getGameObjectType(self);
+	if ( isGameObjectTypeOf(got, GOT_creature) || (got == GOT_vendor) )
+	{
+		//LOG("planetaryMapLocation","self got = " + got + " is creature type!");
+		if ( !isPlayer(self) )
+		{
+			const string cType = getCreatureName(self);
+			if ( (cType == null) || (cType.equals("")) )
+			{
+				//LOG("planetaryMapLocation","creature has unknown creatureName!");
+				return false;
+			}
+
+			if ( cType.equals("junk_dealer") )
+			{
+				string myName = getEncodedName(self);
+				return addPlanetaryMapLocation(self, myName, (int)here.x, (int)here.z, CAT_VENDOR, SUB_VENDOR_JUNK, MLT_STATIC, NO_FLAG);
+			}
+			else if ( cType.startsWith("trainer_") )
+			{
+				string myName = getEncodedName(self);
+				string subCat = cType;
+
+				//LOG("planetaryMapLocation","attempting to add " + toUpper(cType) + ": planet = " + planet + " obj_id = " + self);
+				//LOG("planetaryMapLocation","locationName = " + myName + " here = " + here.toString());
+				//LOG("planetaryMapLocation","category = trainer subCategory = " + subCat);
+				return addPlanetaryMapLocation(self, myName, (int)here.x, (int)here.z, CAT_TRAINER, subCat, MLT_STATIC, NO_FLAG);
+			}
+		}
+	}
+
+	return false;
+}
+
+/************************************************************
+ * @brief attempts to register a CREATURE as a planetary map location
+ *
+ * @param obj_id	self
+ *
+ * @return boolean; false on error
+ ************************************************************/
+   boolean addTerminalLocation(obj_id self)
+   {
+   	if ( !isIdValid(self) )
+   		return false;
+
+   	//LOG("planetaryMapLocation","******************** ADD TERMINAL LOCATION **********************");
+
+   	string planet = getCurrentSceneName();
+   	if ( (planet == null) || (planet.equals("")) )
+   	{
+		LOG("planetaryMapLocation","(" + self + ") has unknown scene??");
+   		return false;
+   	}
+
+   	location here = getWorldLocation(self);
+   	if ( here == null )
+   	{
+		LOG("planetaryMapLocation","(" + self + ") has null location??");
+   		return false;
+   	}
+
+   	obj_id topMost = getTopMostContainer(self);
+   	if ( isIdValid(topMost) )
+   	{
+   		if ( isGameObjectTypeOf(getGameObjectType(topMost), GOT_building) )
+   		{
+   			if ( hasObjVar(topMost, hq.VAR_HQ_BASE) )
+   				return false;
+   		}
+   	}
+
+   	int got = getGameObjectType(self);
+   	if ( isGameObjectTypeOf(got, GOT_terminal) )
+   	{
+   		//LOG("planetaryMapLocation","self is a terminal...");
+   		string_id sid_name = getNameStringId(self);
+   		//LOG("planetaryMapLocation","sid_name = " + sid_name.toString());
+   		if ( sid_name != null && sid_name != "")
+   		{
+   			string subCat = sid_name.getAsciiId();
+ 			if ( dataTableSearchColumnForString(subCat, "name", "datatables/player/planet_map_cat.iff") < 0 )
+ 			{
+ 				LOG("planetaryMapLocation","(" + self + ") unable to locate subCat '" + subCat + "' in the planet_map_cat.iff");
+ 				return false;
+ 			}
+
+			/*
+   			map_location closest = findClosestLocation(here, CAT_TERMINAL, subCat);
+   			if ( closest != null )
+   			{
+   				//LOG("planetaryMapLocation","closest = " + closest.getLocationId() + " @ " + closest.getX() + "," + closest.getY());
+   				location there = here;
+   				there.x = closest.getX();
+   				there.z = closest.getY();
+
+   				if ( getDistance(here, there) <= MAX_CLUMP_DISTANCE )
+   				{
+					LOG("planetaryMapLocation","(" + self + ") skipping registration due to proximity of other terminals");
+ 					return true;
+ 				}
+ 			}
+ 			*/
+
+ 			string cityName = getCityRegionName(here);
+ 			if ( cityName != null )
+ 			{
+ 				map_location[] mapLocs = getPlanetaryMapLocations(CITY, null);
+ 				if ( mapLocs != null && mapLocs.length > 0 )
+   				{
+ 					for ( int i = 0; i < mapLocs.length; i++ )
+ 					{
+ 						if ( mapLocs[i].getLocationName().equals(cityName) )
+ 						{
+ 							string_id sid_cityName = utils.unpackString(cityName);
+
+ 							location cityLoc = new location(mapLocs[i].getX(), 0, mapLocs[i].getY());
+ 							string cardinalString = utils.getStringCardinalDirection(cityLoc, here, true);
+
+ 							if ( cardinalString != null && !cardinalString.equals("") )
+ 							{
+								string locName = getString(sid_cityName) + " (" + cardinalString + ")";
+								return addPlanetaryMapLocation(self, locName, (int)here.x, (int)here.z, CAT_TERMINAL, subCat, MLT_STATIC, NO_FLAG);
+							}
+							else
+							{
+								break;
+							}
+ 						}
+ 					}
+   				}
+   			}
+
+ 			return addPlanetaryMapLocation(self, getEncodedName(self), (int)here.x, (int)here.z, CAT_TERMINAL, subCat, MLT_STATIC, NO_FLAG);
+   		}
+   		//LOG("planetaryMapLocation","sid_name was null or empty");
+   	}
+	LOG("planetaryMapLocation","(" + self + ") has failed to register for an unknown reason!");
+   	return false;
+   }
+
+/************************************************************
+ * @brief attempts to locate the closest location from the map_locs
+ *
+ * @param obj_id	target
+ * @param map_location[]	map_locs
+ *
+ * @return map_location; null on error
+ ************************************************************/
+map_location findClosestLocation(obj_id target, map_location[] map_locs)
+{
+	if ( !isIdValid(target) || (map_locs == null) || (map_locs.length == 0) )
+	{
+		return null;
+	}
+
+	return findClosestLocation(getWorldLocation(target), map_locs);
+}
+
+map_location findClosestLocation(location here, map_location[] map_locs)
+{
+	if ( (map_locs == null) || (map_locs.length == 0) )
+	{
+		return null;
+	}
+
+	float min = Float.POSITIVE_INFINITY;
+	int locIdx = -1;
+
+	float x = 0f;
+	float z = 0f;
+	location there = new location();
+
+	for ( int n = 0; n < map_locs.length; n++ )
+	{
+		x = (float)(map_locs[n].getX());
+		z = (float)(map_locs[n].getY());
+
+		there = new location(x, 0, z);
+
+		float dist = utils.getDistance2D(here, there);
+		if ( dist < min )
+		{
+			min = dist;
+			locIdx = n;
+		}
+	}
+
+	if ( locIdx > -1 )
+	{
+		return map_locs[locIdx];
+	}
+
+	return null;
+}
+
+map_location findClosestLocation(obj_id target, string category, string subcategory)
+{
+	if ( !isIdValid(target) )
+		return null;
+
+	return findClosestLocation(getWorldLocation(target), category, subcategory);
+}
+
+map_location findClosestLocation(location here, string category, string subcategory)
+{
+	if ( (category == null) || (category.equals("")) )
+		return null;
+	if ( subcategory == null )
+		subcategory = "";
+
+	map_location[] map_locs = getPlanetaryMapLocations(category, subcategory);
+	if ( (map_locs == null) || (map_locs.length == 0) )
+	{
+		return null;
+	}
+
+	return findClosestLocation(here, map_locs);
+}
+
+/************************************************************
+ * @brief attempts to show the find sui
+ *
+ * @return int; -1 on error
+ ************************************************************/
+int showFindSui()
+{
+	obj_id self = getSelf();
+
+	if ( !isIdValid(self) )
+		return -1;
+
+	closeFindSui();
+
+	string[] cats = getUniquePlanetaryMapCategories(null);
+	if ( (cats == null) || (cats.length == 0) )
+	{
+		sendSystemMessage(self, SID_NO_REGISTERED_LOCS);
+		return -1;
+	}
+
+	resizeable string[] entries = new string[0];
+	resizeable string[] params = new string[0];
+	//LOG("find","showFindSui: category count = " + cats.length);
+	for ( int i = 0; i < cats.length; i++ )
+	{
+		string cat = cats[i];
+		
+		string[] subs = getUniquePlanetaryMapCategories(cat);
+		if ( (subs != null) && (subs.length > 0) )
+		{
+			LOG("find","showFindSui: cat = " + cat + " sub count = " + subs.length);
+			string_id sid_cat = new string_id("map_loc_cat_n",cat);
+
+			for ( int n = 0; n < subs.length; n++ )
+			{
+				string_id sid_sub = new string_id("map_loc_cat_n",subs[n]);
+
+				entries = utils.addElement(entries, getString(sid_cat) + ": " + getString(sid_sub));
+				params = utils.addElement(params, subs[n]);
+			}
+		}
+		else
+		{
+			entries = utils.addElement(entries, "@map_loc_cat_n:" + cat);
+			params = utils.addElement(params, cat);
+		}
+	}
+
+	if ( (entries != null) && (entries.length > 0) )
+	{
+		/*entries = utils.alphabetizeStringArray(entries);
+		if ( (entries == null) || (entries.length == 0) )
+			return -1;*/
+
+		string title = utils.packStringId(SID_FIND_TITLE);
+		string prompt = utils.packStringId(SID_FIND_PROMPT);
+		int pid = sui.listbox(self, self, prompt, sui.OK_CANCEL, title, entries, "handleFindSui");
+		if ( pid > -1 )
+		{
+			//track sui and data here
+			utils.setScriptVar(self, SCRIPTVAR_FIND_SUI, pid);
+			utils.setBatchScriptVar(self, SCRIPTVAR_FIND_PARAMS, params);
+			return pid;
+		}
+	}
+
+	return -1;
+}
+
+void closeFindSui()	//must be called by target
+{
+	obj_id self = getSelf();
+
+	if ( utils.hasScriptVar(self, SCRIPTVAR_FIND_SUI) )
+	{
+		int pid = utils.getIntScriptVar(self, SCRIPTVAR_FIND_SUI);
+		forceCloseSUIPage(pid);
+
+		cleanupFindSui();
+	}
+}
+
+void cleanupFindSui()
+{
+	obj_id self = getSelf();
+	utils.removeScriptVar(self, SCRIPTVAR_FIND_SUI);
+	utils.removeBatchScriptVar(self, SCRIPTVAR_FIND_PARAMS);
+}
+
+string[] getUniquePlanetaryMapCategories(string category)
+{
+	string[] cats = getPlanetaryMapCategories(category);
+	if ( (cats == null) || (cats.length == 0) )
+		return null;
+
+	resizeable string[] unique = new string[0];
+	for ( int i = 0; i < cats.length; i++ )
+	{
+		if ( utils.getElementPositionInArray(unique, cats[i]) == -1 )
+			unique = utils.addElement(unique, cats[i]);
+	}
+
+	if ( (unique == null) || (unique.length == 0) )
+		return null;
+
+	return unique;
+}
+
+boolean updateFacilityActive(obj_id facility, boolean isActive)
+{
+	if ( !isIdValid(facility) )
+		return false;
+
+	map_location maploc = getPlanetaryMapLocation(facility);
+	if ( maploc == null )
+		return false;
+
+	if ( !maploc.isActive() && !maploc.isInactive() )
+		return false;
+
+	if ( maploc.isActive() && maploc.isInactive() )
+		return false;
+
+	byte flags = maploc.getFlags();
+	if ( isActive )
+		flags = MLF_ACTIVE;
+	else
+		flags = MLF_INACTIVE;
+
+	removePlanetaryMapLocation(facility);
+	return addPlanetaryMapLocation(facility, maploc.getLocationName(),
+									(int)maploc.getX(), (int)maploc.getY(),
+									maploc.getCategory(), maploc.getSubCategory(),
+									MLT_STATIC, flags);
+}
+

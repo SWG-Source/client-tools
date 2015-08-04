@@ -1,0 +1,287 @@
+
+/*************************************************************/
+
+include library.city;
+include library.collection;
+include library.locations;
+include library.groundquests;
+include library.sui;
+include library.utils;
+include library.instance;
+
+/************************************************************/
+
+const string_id	RADIAL_INSPECT  		= new string_id ("quest/ground/util/quest_giver_object", "radial_inspect");
+const string_id OFFER_QUEST_MSG			= new string_id	("quest/ground/util/quest_giver_object", "offer_quest_teleport");
+const string_id SUI_TITLE			= new string_id ("quest/ground/util/quest_giver_object", "sui_title");
+const string_id BUTTON_DECLINE  		= new string_id ("quest/ground/util/quest_giver_object", "button_decline");
+const string_id BUTTON_ACCEPT			= new string_id ("quest/ground/util/quest_giver_object", "button_accept");
+const string_id DECLINED_QUEST			= new string_id ("quest/ground/util/quest_giver_object", "declined_quest");
+const string_id MUST_DISMOUNT			= new string_id ("quest/ground/util/quest_giver_object", "must_dismount");
+const string_id PLAYER_IN_CELL			= new string_id ("quest/ground/util/quest_giver_object", "player_in_cell");
+const string_id NOT_WHILE_INCAPPED		= new string_id ("quest/ground/util/quest_giver_object", "not_while_incapped");
+const string_id SID_ELIGIBLE_FOR_GIFT_TITLE	= new string_id ("quest/ground/util/quest_giver_object", "eligible_for_gift_title");
+const string_id SID_ELIGIBLE_FOR_GIFT_PROMPT	= new string_id ("quest/ground/util/quest_giver_object", "eligible_for_gift_prompt");
+const string_id SID_NOT_WHILE_IN_COMBAT		= new string_id("base_player", "not_while_in_combat");
+
+const string PID_NAME 				= "getCollectionGiftsHasCompletedQuests";
+const string QUEST_NAME				= "chapter7_publish_gift_activation";
+
+/*************************************************************/
+
+//object/tangible/quest/quest_start/chapter7_publish_gift_collection_token.iff	
+//chapter7_publish_gift_activation
+
+
+//checks to make sure the template of the object is in the datatable and checks the validity of the quest before changing USE to Inspect
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{	
+	int menuOption = mi.addRootMenu (menu_info_types.ITEM_USE, RADIAL_INSPECT);
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+	if ( item == menu_info_types.ITEM_USE)
+	{
+		//check the location before doing anything
+		//the player must not be indoors, or in a city
+		if(!wildLocation(player))
+		{
+			return SCRIPT_CONTINUE;
+		}
+		// checks for combat
+		if(getState(player, STATE_COMBAT) > 0)
+		{
+			sendSystemMessage(player, SID_NOT_WHILE_IN_COMBAT);
+			return SCRIPT_CONTINUE;
+		}
+		if(getState(player, STATE_RIDING_MOUNT) == 1)
+		{
+			sendSystemMessage(player, MUST_DISMOUNT);
+			return SCRIPT_CONTINUE;
+		}
+		if(isDead(player) || isIncapacitated(player))
+		{
+			sendSystemMessage(player, NOT_WHILE_INCAPPED);
+			return SCRIPT_CONTINUE;
+		}
+		//or in a cell
+		if (getTopMostContainer(player) != player)
+		{
+			sendSystemMessage(player, PLAYER_IN_CELL);
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(groundquests.hasCompletedQuest(player, QUEST_NAME) || groundquests.isQuestActive(player, QUEST_NAME))
+		{
+			return SCRIPT_CONTINUE;
+		}
+			
+		// Construct Quest Offer sui
+		if ( utils.hasScriptVar(player, "questGiver.openSui") )
+		{
+			int oldSui = utils.getIntScriptVar(player, "questGiver.openSui");
+			utils.removeScriptVar(player, "questGiver.openSui");
+			if ( oldSui > -1 )
+			{
+				forceCloseSUIPage(oldSui);
+			}
+		}
+
+		if(groundquests.isQuestActiveOrComplete(player, "chapter7_beginning_click_collection") ||
+		groundquests.isQuestActiveOrComplete(player, "chapter7_beginning_counter_collection") ||
+		groundquests.isQuestActiveOrComplete(player, "chapter7_beginning_inventory_collection_01") ||
+		groundquests.isQuestActiveOrComplete(player, "chapter7_beginning_inventory_collection_02") ||
+		groundquests.isQuestActiveOrComplete(player, "chapter7_beginning_inventory_collection_03") ||
+		groundquests.isQuestActiveOrComplete(player, "chapter7_beginning_inventory_collection_04"))
+		{
+			//player started the collection intro quests before 10 days old...
+			//we need to give him the publish gifts now.
+			//first - give him a different SUI stating that he has completed the quests
+			//and is eligible for the rewards. **click "ok" to accept the rewards**
+			string title = utils.packStringId(SID_ELIGIBLE_FOR_GIFT_TITLE);
+			string prompt = utils.packStringId(SID_ELIGIBLE_FOR_GIFT_PROMPT);
+			
+			int pid = sui.msgbox(self, player, prompt, sui.YES_NO, title, "handleGrantPublishGiftFromComlink");
+			sui.setPid(player, pid, PID_NAME);
+		}
+		else
+		{
+			string_id sid_offerText = SUI_TITLE;
+
+			// To use non-default text for offering the quest, use the "quest_offer_text" column
+			// in the datatable of an entry in quest/ground/util/quest_giver_object.stf
+
+			string title = utils.packStringId(sid_offerText);
+			string testMsg = utils.packStringId(OFFER_QUEST_MSG);
+			string ok_button = utils.packStringId(BUTTON_ACCEPT);
+			string cancel_button = utils.packStringId(BUTTON_DECLINE);
+
+			// Create the dialog page.
+			int pid = sui.createSUIPage( sui.SUI_MSGBOX, self, player, "handleQuestOfferResponse");
+
+			// Add elements text.
+			setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title);
+			setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, testMsg);
+
+			// Add buttons.
+			sui.msgboxButtonSetup(pid, sui.YES_NO);
+			setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, ok_button);
+			setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, cancel_button);
+
+			// Show dialog.
+			utils.setScriptVar(player, "questGiver.openSui", pid);
+			sui.showSUIPage( pid );
+			// End sui construction
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+messageHandler handleGrantPublishGiftFromComlink() 
+{
+	int btn = sui.getIntButtonPressed(params);
+	
+	obj_id player = sui.getPlayerId(params);
+	if(btn == sui.BP_CANCEL)
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+	if(!sui.hasPid(player, PID_NAME))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if(btn == sui.BP_OK)
+	{
+		groundquests.grantQuest(player, "chapter7_give_comlink_reward");
+		groundquests.grantQuest(player, "chapter7_give_datapad_reward");
+		destroySelf(self);
+		sui.removePid(player, PID_NAME);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleQuestOfferResponse()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+	if(!wildLocation(player))
+		return SCRIPT_CONTINUE;
+
+	if (groundquests.hasCompletedQuest(player, QUEST_NAME) || groundquests.isQuestActive(player, QUEST_NAME))		
+		return SCRIPT_CONTINUE;
+	
+	int bp = sui.getIntButtonPressed(params);	
+	switch ( bp )
+	{
+		case sui.BP_OK:	// "Accept"
+			callShuttle(self, player);
+			break;
+
+		case sui.BP_CANCEL: // "Decline"
+			sendSystemMessage(player, DECLINED_QUEST);
+			break;
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+// Check to see if the quest object should be destroyed or not.
+void destroySelf(obj_id self)
+{
+	detachScript(self,"item.special.nodestroy");
+	destroyObject(self);
+}
+
+//------------------------------------------------------------
+boolean wildLocation(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+		
+	location loc = getLocation(player);
+
+	if(isIdValid(loc.cell))
+	{
+		sendSystemMessage(player, new string_id("combat_effects", "not_indoors"));
+		return false;
+	}
+
+	if(locations.isInMissionCity(loc))
+	{
+		sendSystemMessage(player, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+
+	if(city.isInCity(loc))
+	{
+		sendSystemMessage(player, new string_id("combat_effects", "not_in_city"));
+		return false;
+	}
+
+	if( instance.isInInstanceArea(player) )
+	{
+		sendSystemMessage(player, new string_id("combat_effects", "not_in_instance"));
+		return false;
+	}
+	
+	return true;
+}
+
+boolean callShuttle(obj_id self, obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+	if(!wildLocation(player))
+		return false;
+	
+	//get the player location and then offset that location a ways so the 
+	//shuttle doesn't land on the player.
+	location loc = getLocation(player);
+	float treasureXdelta = rand(15f, 18f);
+	float treasureZdelta = rand(15f, 18f);
+
+	location landingLoc = loc;
+	landingLoc.x += treasureXdelta;
+	landingLoc.z += treasureZdelta;	
+
+	landingLoc.y = getHeightAtLocation(landingLoc.x, landingLoc.z);
+	
+	obj_id shuttle = createObject("object/creature/npc/theme_park/event_transport.iff", landingLoc);
+
+	if(!isIdValid(shuttle))
+		return false;
+		
+	groundquests.grantQuest(player, QUEST_NAME);
+	modifyCollectionSlotValue(player, "publish_chapter7_click_activation_01", 1);
+	setObjVar(player,"publish_chapter7_click_activated", true);
+
+	dictionary d = new dictionary();
+	d.put("owner", player);
+
+	attachScript(shuttle, "systems.collections.publish_gift.publish_gift_shuttle");
+
+	messageTo(shuttle, "startLandingSequence", d, 0.0f, false);
+	destroySelf(self);
+	return true;
+}
+

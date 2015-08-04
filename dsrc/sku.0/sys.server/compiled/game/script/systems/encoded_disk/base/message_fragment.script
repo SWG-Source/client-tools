@@ -1,0 +1,352 @@
+/**
+ * Copyright (c) ©2000-2003 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        message_fragment.script
+ * Description:  message_fragment base logic
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.sui;
+include library.locations;
+include library.utils;
+include library.scenario;
+include library.create;
+include library.ai_lib;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_SYS_MESSAGE_ASSEMBLED = new string_id("encoded_disk/message_fragment", "sys_message_assembled");
+const string_id SID_SYS_NOT_ALL_PARTS	= new string_id("encoded_disk/message_fragment", "sys_not_all_parts");
+const string_id SID_SYS_NOT_IN_INV		= new string_id("encoded_disk/message_fragment", "sys_not_in_inv");
+const string_id SID_SYS_INVENTROY_FULL	= new string_id("treasure_map/treasure_map", "sys_inventory_full");
+const string_id SID_USE					= new string_id("treasure_map/treasure_map", "use");
+const string    SID_COMBINE				= "@encoded_disk/message_fragment:combine";
+const string    SID_CLOSE				= "@treasure_map/treasure_map:close";
+const string	MESSAGE_TABLE			= "datatables/encoded_disk/message_fragment.iff";
+const string	VAR_INDEX				= "messageTableIndex";
+const string	VAR_PART_NUMBER			= "partNumber";
+const string	ASSEMBLED_MESSAGE		= "object/tangible/encoded_disk/message_assembled_base.iff";
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Open the treasure table and get an entry.
+	int[] weights = dataTableGetIntColumn( MESSAGE_TABLE, "PARTS" );
+	int[] enabled = dataTableGetIntColumn( MESSAGE_TABLE, "ENABLED" );
+	int totalWeight = 0;
+	for ( int i=0; i<weights.length; i++ )
+	{
+		if ( enabled[i] == 1 )
+			totalWeight += weights[i];
+	}
+	int choice = rand( 1, totalWeight );
+	totalWeight = 0;
+	dictionary messageEntry = null;
+	for ( int i=0; i<weights.length; i++ )
+	{
+		if ( enabled[i] == 0 )
+			continue;
+
+		totalWeight += weights[i];
+		if ( choice <= totalWeight )
+		{
+			messageEntry = dataTableGetRow( MESSAGE_TABLE, i );
+			messageEntry.put( scenario.DICT_IDX, i );
+			break;
+		}
+	}
+
+	if ( (messageEntry == null) || (messageEntry.isEmpty()) )
+		return SCRIPT_CONTINUE;
+	int idx = messageEntry.getInt( scenario.DICT_IDX );
+	setObjVar( self, VAR_INDEX, idx );
+
+	// Determine our part number.
+	int parts = messageEntry.getInt( "PARTS" );
+	int partNumber = rand( 1, parts );
+	setObjVar( self, VAR_PART_NUMBER, partNumber );
+
+	// Set our title.
+	string scenarioName = messageEntry.getString( "SCENARIO_NAME" );
+	string_id nameID = new string_id( "encoded_disk/message_fragment", "name_" + scenarioName );
+	string name = localize( nameID ) + " [" + partNumber + "/" + parts + "]";
+	setName( self, name );
+
+	// Set our faction reward.
+	int factionReward = messageEntry.getInt( "FACTION_REWARD" );
+	if ( factionReward > 0 )
+		setObjVar( self, "factionReward", factionReward );
+
+	// Set our badge index.
+	int badgeIndex = messageEntry.getInt( "BADGE_INDEX" );
+	if ( badgeIndex > 0 )
+		setObjVar( self, "badgeIndex", badgeIndex );
+
+	// Set our special string.
+	int specString = messageEntry.getInt( "SPECIAL_STRING" );
+	if ( specString == 1 )
+		setObjVar( self, "specString", specString );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Get our data.
+	if ( !dataTableOpen( MESSAGE_TABLE ) )
+		return SCRIPT_CONTINUE;
+	int index = getIntObjVar( self, VAR_INDEX );
+	dictionary messageEntry = dataTableGetRow( MESSAGE_TABLE, index );
+
+	// Determine our part number.
+	int parts = messageEntry.getInt( "PARTS" );
+	int partNumber = getIntObjVar( self, VAR_PART_NUMBER );
+
+	// Set our title.
+	string scenarioName = messageEntry.getString( "SCENARIO_NAME" );
+	string_id nameID = new string_id( "encoded_disk/message_fragment", "name_" + scenarioName );
+	string name = localize( nameID ) + " [" + partNumber + "/" + parts + "]";
+	setName( self, name );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest( obj_id player, menu_info mi )
+{
+	// Add option to read the message.
+	mi.addRootMenu( menu_info_types.SERVER_MENU1, SID_USE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect( obj_id player, int item )
+{
+	// Display info dialog.
+	if ( item == menu_info_types.SERVER_MENU1 )
+		displayDialog( self, player );
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// displayDialog
+//------------------------------------------------
+
+void displayDialog( obj_id self, obj_id player )
+{
+	// Make sure we are in the player's inventory.
+	obj_id inventory = getObjectInSlot( player, "inventory" );
+	if ( !contains( inventory, self ) )
+	{
+		sendSystemMessage( player, SID_SYS_NOT_IN_INV );
+		return;
+	}
+
+	// Get our localization file.
+	if ( !dataTableOpen( MESSAGE_TABLE ) )
+		return;
+	dictionary messageEntry = dataTableGetRow( MESSAGE_TABLE, getIntObjVar( self, VAR_INDEX ) );
+	string entryName = messageEntry.getString( "SCENARIO_NAME" );
+	int parts = messageEntry.getInt( "PARTS" );
+	int partNumber = getIntObjVar( self, VAR_PART_NUMBER );
+
+	// Get string ids.
+	string_id textID = new string_id( "encoded_disk/message_fragment", "text_" + entryName );
+	string text = localize( textID );
+	string_id titleID = new string_id( "encoded_disk/message_fragment", "name_" + entryName );
+	string title = localize( titleID ) + " [" + partNumber + "/" + parts + "]";
+
+/*
+	// Check for a readable fragment.
+	int readableFragment = messageEntry.getInt( "SPECIAL_STRING" );
+	if ( readableFragment == 1 )
+	{
+		string_id fragID = new string_id( "encoded_disk/message_fragment", "frag_" + entryName + "_" + partNumber );
+		string frag = localize( fragID );
+		text += "\n" + frag;
+	}
+	*/
+
+	// Display the dialog.
+	createDialog( self, player, text, title );
+}
+
+//------------------------------------------------
+// createDialog
+//------------------------------------------------
+
+int createDialog( obj_id self, obj_id player, string text, string title )
+{
+	if ( player == null )
+		return -1;
+
+	// Create the dialog page.
+	int pid = sui.createSUIPage( sui.SUI_MSGBOX, self, player, "handleDialogInput" );
+
+	// Add elements text.
+	sui.setSUIProperty( pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, text );
+	sui.setSUIProperty (pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title );
+
+	// Add buttons.
+	sui.msgboxButtonSetup( pid, sui.OK_CANCEL );
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, SID_COMBINE );
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, SID_CLOSE );
+
+	// Show dialog.
+	sui.showSUIPage( pid );
+
+	return pid;
+}
+
+//------------------------------------------------
+// handleDialogInput
+//------------------------------------------------
+
+messageHandler handleDialogInput()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine which button was pressed.
+	obj_id player = sui.getPlayerId( params );
+	int bp = sui.getIntButtonPressed( params );
+	switch ( bp )
+	{
+		case sui.BP_CANCEL: // "Assemble"
+			assembleMessage( self, player );
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_OK:		// "Close"
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// assembleMessage
+//------------------------------------------------
+
+void assembleMessage( obj_id self, obj_id player )
+{
+	// Make sure we are in the player's inventory.
+	obj_id inventory = getObjectInSlot( player, "inventory" );
+	if ( !contains( inventory, self ) )
+	{
+		sendSystemMessage( player, SID_SYS_NOT_IN_INV );
+		return;
+	}
+
+	// Get our localization file.
+	if ( !dataTableOpen( MESSAGE_TABLE ) )
+		return;
+	int index = getIntObjVar( self, VAR_INDEX );
+	dictionary messageEntry = dataTableGetRow( MESSAGE_TABLE, index );
+	string entryName = messageEntry.getString( "SCENARIO_NAME" );
+	int parts = messageEntry.getInt( "PARTS" );
+	int partNumber = getIntObjVar( self, VAR_PART_NUMBER );
+
+	// Cycle through the inventory looking for all the parts. (recursive, searches all containers)
+	obj_id[] contents = utils.getContents( inventory, true );
+	if ( contents == null )
+		return;
+	obj_id foundparts[] = {null,null,null,null,null,null};
+	foundparts[partNumber-1] = self;
+	for ( int i=0; i<contents.length; i++ )
+	{
+		if ( hasObjVar( contents[i], VAR_INDEX ) )
+		{
+			// This is a message.
+			int idx = getIntObjVar( contents[i], VAR_INDEX );
+			if ( idx == index )
+			{
+				// This matches our message.
+				int partNum = getIntObjVar( contents[i], VAR_PART_NUMBER );
+				if ( foundparts[partNum-1] == null )
+					foundparts[partNum-1] = contents[i];
+			}
+		}
+	}
+
+	// Look at the parts we found to see if we have enough.
+	for ( int i=0; i<parts; i++ )
+	{
+		if ( foundparts[i] == null )
+		{
+			// We didn't find enough parts.
+			sendSystemMessage( player, SID_SYS_NOT_ALL_PARTS );
+			return;
+		}
+	}
+
+	// We assembled a complete message!
+
+	// Create the assembled message.
+	obj_id assembled = createObject( ASSEMBLED_MESSAGE, inventory, "" );
+	if (isIdValid(assembled))
+	{
+		sendSystemMessage( player, SID_SYS_MESSAGE_ASSEMBLED );
+	}
+	else
+	{
+		sendSystemMessage( player, SID_SYS_INVENTROY_FULL );
+		return;
+	}
+
+	string_id nameId = new string_id( "encoded_disk/message_fragment", "name_" + entryName );
+	setName( assembled, nameId );
+	setObjVar( assembled, "scenarioName", entryName );
+	string faction = messageEntry.getString( "FACTION" );
+	setObjVar( assembled, "faction", faction );
+
+	// Set our special string.
+	if ( hasObjVar( self, "specString" ) )
+	{
+		// Set a random value, 1 to 20, for the Project Dead Eye event.
+		setObjVar( assembled, "specString", rand(1,20) );
+	}
+
+	// Set our faction reward.
+	if ( hasObjVar( self, "factionReward" ) )
+		setObjVar( assembled, "factionReward", getIntObjVar( self, "factionReward" ) );
+
+	// Set our badge index.
+	if ( hasObjVar( self, "badgeIndex" ) )
+		setObjVar( assembled, "badgeIndex", getIntObjVar( self, "badgeIndex" ) );
+
+	// Destroy the old parts.
+	for ( int i=0; i<parts; i++ )
+	{
+		if ( foundparts[i] != null )
+			destroyObject( foundparts[i] );
+	}
+}

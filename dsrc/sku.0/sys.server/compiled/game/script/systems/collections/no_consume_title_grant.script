@@ -1,0 +1,248 @@
+/*
+systems.collections.no_consume_title_grant.script
+Used to trigger a collection update when double clicked
+Authors: Jesse Benjamin
+*/
+
+//libraries
+include library.collection;
+include library.prose;
+include library.sui;
+include library.utils;
+
+//constants
+
+const string PID_NAME					= "collectionConsume";
+const string SCRIPT_VAR_NUM_ALT_TITLE			= "collection.numAltTitle";
+const string OBJVAR_TITLE_GRANTED			= "titleGrantedTo";
+
+const string_id SID_CONSUME_PROMPT			= new string_id("collection", "non_consume_title_prompt");
+const string_id SID_CONSUME_TITLE			= new string_id("collection", "non_consume_title_title");
+const string_id SID_CONSUME_ITEM			= new string_id("collection", "non_consume_title_use");
+const string_id SID_REPORT_CONSUME_ITEM_FAIL		= new string_id("collection", "report_consume_item_fail");
+const string_id SID_ALREADY_HAVE_SLOT			= new string_id("collection", "already_have_slot");
+
+const string_id COLLECTION_TITLE_GRANTED		= new string_id("collection", "collection_title_granted");
+
+
+//triggers
+trigger OnAttach()
+{
+	messageTo(self, "checkAltTitleCount", null, 3, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnInitialize()
+{
+	if(!utils.hasScriptVar(self, SCRIPT_VAR_NUM_ALT_TITLE))
+		messageTo(self, "checkAltTitleCount", null, 3, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//set collectionItem to self
+	obj_id collectionItem = self;
+
+	//can only consume if you have it picked up
+	if(utils.isNestedWithinAPlayer(collectionItem))
+	{
+		string slotName = getStringObjVar(self, collection.OBJVAR_SLOT_NAME);
+
+		if(!hasCompletedCollectionSlot(player, slotName) && !hasObjVar(collectionItem, OBJVAR_TITLE_GRANTED))
+			mi.addRootMenu (menu_info_types.SERVER_MENU3, SID_CONSUME_ITEM);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+	//set collectionItem to self
+	obj_id collectionItem = self;
+
+	if (item == menu_info_types.SERVER_MENU3  && utils.isNestedWithinAPlayer(collectionItem))
+	{
+		if(sui.hasPid(player, PID_NAME))
+		{
+			int pid = sui.getPid(player, PID_NAME);
+			forceCloseSUIPage(pid);
+		}
+
+		string slotName = getStringObjVar(self, collection.OBJVAR_SLOT_NAME);
+
+		if(!hasCompletedCollectionSlot(player, slotName) && !hasObjVar(collectionItem, OBJVAR_TITLE_GRANTED))
+		{
+			int pid = sui.msgbox(self, player, "@" + SID_CONSUME_PROMPT, sui.YES_NO, "@" + SID_CONSUME_TITLE, "handlerSuiAddTitle");
+			sui.setPid(player, pid, PID_NAME);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if(!exists(self))
+		return SCRIPT_CONTINUE;
+
+	if(!hasObjVar(self, collection.OBJVAR_SLOT_NAME))
+		return SCRIPT_CONTINUE;
+
+	string slotName = getStringObjVar(self, collection.OBJVAR_SLOT_NAME);
+	names[idx] = "title_granted";
+	attribs[idx] = "@collection_title:"+slotName;
+	idx++;
+
+	//we can grant up to 5 alternate titles
+	//lets check to see if we have any others
+	//designer should indicate in the categories how many alt titles we have
+	int numAltTitles = utils.getIntScriptVar(self, SCRIPT_VAR_NUM_ALT_TITLE);
+
+	for(int i = 1; i < (numAltTitles + 1); ++i)
+	{
+		names[idx] = "title_granted";
+		attribs[idx] = "@collection_title:"+ slotName + "_alt_"+i;
+		idx++;
+	}
+
+	if(hasObjVar(self, OBJVAR_TITLE_GRANTED))
+	{
+		names[idx] = "player_title_granted";
+		attribs[idx] = getPlayerName(getObjIdObjVar(self, OBJVAR_TITLE_GRANTED));
+		idx++;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+//messageHandlers
+
+
+messageHandler checkAltTitleCount()
+{
+	if(!hasObjVar(self, collection.OBJVAR_SLOT_NAME))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(utils.hasScriptVar(self, SCRIPT_VAR_NUM_ALT_TITLE))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string slotName = getStringObjVar(self, collection.OBJVAR_SLOT_NAME);
+
+	string[] catagories = getCollectionSlotCategoryInfo(slotName);
+
+	//validate
+	if(catagories != null && catagories.length > 0)
+	{
+		//loop thru them all
+		for(int i = 0; i < catagories.length; ++i)
+		{
+			//check to see if this is a reward on update
+			if(catagories[i].indexOf(collection.CATEGORY_NUM_ALT_TITLES) > -1)
+			{
+
+				string[] splitAltTitles = split(catagories[i], ':');
+
+				if(splitAltTitles == null || splitAltTitles.length != 2)
+					continue;
+
+				int numAltTitles = utils.stringToInt(splitAltTitles[1]);
+
+				utils.setScriptVar(self, SCRIPT_VAR_NUM_ALT_TITLE, numAltTitles);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+messageHandler handlerSuiAddTitle()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	//set collectionItem to self
+	obj_id collectionItem = self;
+
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	//double check that this is the only SUI window open
+	if(!sui.hasPid(player, PID_NAME))
+		return SCRIPT_CONTINUE;
+
+	if(!utils.isNestedWithin(self, player))
+	{
+		sui.removePid(player, PID_NAME);
+		CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + "). Player attempted to collect an item that was not in their inventory.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string slotName = getStringObjVar(collectionItem, collection.OBJVAR_SLOT_NAME);
+
+	//check to see if they already have this slot completed
+	if(!hasCompletedCollectionSlot(player, slotName) && !slotName.equals(""))
+	{
+		//Update the player with the slot
+		if(modifyCollectionSlotValue(player, slotName, 1))
+		{
+
+			setObjVar(collectionItem, OBJVAR_TITLE_GRANTED, player);
+			CustomerServiceLog("CollectionConsume: ", "titleGrantItem (" + collectionItem + ")"+ " was used to grant a title, for player " + getFirstName(player) + "(" + player + "). Item now has the objvar " + OBJVAR_TITLE_GRANTED + " with the value of the player's ID.");
+
+			prose_package pp = new prose_package();
+			prose.setStringId(pp, COLLECTION_TITLE_GRANTED);
+			prose.setTU(pp, "@collection_title:"+slotName);
+			sendSystemMessageProse(player, pp);
+
+			int numAltTitles = utils.getIntScriptVar(self, SCRIPT_VAR_NUM_ALT_TITLE);
+
+			for(int i = 1; i < (numAltTitles + 1); ++i)
+			{
+				prose.setTU(pp, utils.unpackString("@collection_title:"+ slotName + "_alt_"+i));
+				sendSystemMessageProse(player, pp);
+			}
+		}
+		else
+		{
+			//tell cs we failed
+			CustomerServiceLog("CollectionConsume: ", "titleGrantItem (" + collectionItem + ")"+ " was NOT used to grant a title, for player " + getFirstName(player) + "(" + player + ").");
+			//tell the player we failed
+			sendSystemMessage(player, SID_REPORT_CONSUME_ITEM_FAIL);
+		}
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		//tell the player They have already finished the collection
+		sendSystemMessage(player, SID_ALREADY_HAVE_SLOT);
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+}

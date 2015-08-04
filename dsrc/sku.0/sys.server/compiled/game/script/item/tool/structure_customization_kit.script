@@ -1,0 +1,293 @@
+include library.hue;
+include library.player_structure;
+include library.sui;
+include library.static_item;
+include library.utils;
+
+const boolean BLOGGING_ON				= true;
+const string BLOGGING_CATEGORY				= "structure_recolor";
+
+const int OBJECT_COLOR_MAX				= 4;
+
+const string VAR_PREFIX					= "structure_colorize"; 
+const string PID_NAME					= VAR_PREFIX + ".pid";
+const string PLAYER_ID					= VAR_PREFIX + ".player_oid";
+const string TOOL_ID					= VAR_PREFIX + ".tool_oid";
+
+const string CUSTOMER_SVC_CATEGORY			= "playerStructure";
+const string_id SID_MUST_BE_INSIDE_STRUCTURE 		= new string_id("tool/customizer", "inside_structure_that_you_own");
+const string_id SID_MUST_BE_INSIDE_INVENTORY 		= new string_id("tool/customizer", "must_be_in_inventory");
+const string_id SID_STRUCTURE_PAINTING_FAILED		= new string_id("tool/customizer", "there_was_a_problem_with_structure_kit");
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if (exists(self) && hasObjVar(self, "crafting_components.charges"))
+	{
+		names[idx] = "count";
+		int attrib = getIntObjVar(self, "crafting_components.charges");
+		attribs[idx] = Integer.toString(attrib);
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	blog("OnObjectMenuRequest - functions");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	if(!utils.isNestedWithin(self, player))
+	{
+		sendSystemMessage(player, SID_MUST_BE_INSIDE_INVENTORY);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	menu_info_data mid = mi.getMenuItemByType (menu_info_types.ITEM_USE);
+	if (mid != null)
+		mid.setServerNotify (true);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	blog("OnObjectMenuSelect - functions too");
+
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+		
+	if(!utils.isNestedWithin(self, player))
+	{
+		sendSystemMessage(player, SID_MUST_BE_INSIDE_INVENTORY);	
+		return SCRIPT_CONTINUE;
+	}
+
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	
+	CustomerServiceLog(CUSTOMER_SVC_CATEGORY, "A player " + player + " is using crafted structure customization kit "+self+". [ OnObjectMenuSelect() ]");
+	blog("OnObjectMenuSelect - player attempting to use kit not in inventory");
+	if(!validateStructureOrCell(player))
+	{
+		//You must be in a hueable structure that you own before using this tool
+		sendSystemMessage(player, SID_MUST_BE_INSIDE_STRUCTURE);
+		return SCRIPT_CONTINUE;			
+	}
+	if(!beginStructureColorization(self, player))
+	{
+		sendSystemMessage(player, SID_STRUCTURE_PAINTING_FAILED);
+		CustomerServiceLog(CUSTOMER_SVC_CATEGORY, "A player " + player + " used the crafted structure customization kit "+self+" and it failed to color or find a building. [ OnObjectMenuSelect() ]");
+		blog("OnObjectMenuSelect - player failed trying to use beginStructureColorization");
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+boolean validateStructureOrCell(obj_id player)
+{
+	blog("validateStructureOrCell - init");
+	if(!isValidId(player) || !exists(player))
+		return false;
+
+	blog("validateStructureOrCell - initial validation done");
+	
+	if(isInWorldCell(player))
+		return false;
+	
+	//top object is a building
+	obj_id house = getTopMostContainer(player);
+	if(!isIdValid(house) || !player_structure.isBuilding(house))
+		return false;
+	
+	if(!player_structure.isOwner(house, player))
+		return false;
+
+	blog("validateStructureOrCell - looks good, returning");
+
+	return true;
+}
+
+boolean beginStructureColorization(obj_id tool, obj_id player)
+{
+	blog("beginStructureColorization - init");
+	if(!isValidId(tool) || !exists(tool))
+		return false;
+	if(!isValidId(player) || !exists(player))
+		return false;
+
+	blog("beginStructureColorization - validation completed");
+
+	if(!utils.isNestedWithin(tool, player))
+	{
+		sendSystemMessage(player, SID_MUST_BE_INSIDE_INVENTORY);	
+		return false;
+	}
+
+	blog("beginStructureColorization - about to validate structure.");
+
+	//check again just to make sure
+	if(!validateStructureOrCell(player))
+	{	
+		//You must be in a hueable structure that you own before using this tool
+		CustomerServiceLog(CUSTOMER_SVC_CATEGORY, "ERROR: Player somehow got outside or in some invalid building while using the structure customization kit: "+tool+". [ beginStructureColorization() ]");	
+		sendSystemMessage(player, SID_MUST_BE_INSIDE_STRUCTURE);	
+		return false;
+	}
+
+	closeOldWindow(player);
+	blog("beginStructureColorization: validateStructureOrCell was ok");
+
+	//Get the structure
+	obj_id house = getTopMostContainer(player);
+	if(!isIdValid(house) || !player_structure.isBuilding(house))
+	{	
+		//You must be in a hueable structure that you own before using this tool
+		CustomerServiceLog(CUSTOMER_SVC_CATEGORY, "ERROR: Structure Customization Tool failed to find a valid structure to color. Kit: "+tool+". [ beginStructureColorization() ]");	
+		sendSystemMessage(player, SID_MUST_BE_INSIDE_STRUCTURE);
+		blog("beginStructureColorization: not in house");		
+		return false;
+	}
+
+	string houseTemplate = getTemplateName(house);
+	if(houseTemplate == null || houseTemplate.equals(""))
+	{
+		//You must be in a hueable structure that you own before using this tool
+		CustomerServiceLog(CUSTOMER_SVC_CATEGORY, "ERROR: Structure Customization Tool failed because kit could not get the structure template. Kit: "+tool+". [ beginStructureColorization() ]");	
+		blog("beginStructureColorization: no house template");				
+		return false;	
+	}
+
+	blog("beginStructureColorization - getting house pallete");	
+	ranged_int_custom_var[] palColors = hue.getPalcolorVars(house);
+	if((palColors == null) || (palColors.length == 0))
+		return false;
+
+	blog("beginStructureColorization - palColors.length: "+palColors.length);
+
+	//set an int to the length
+	int palColorsLength = palColors.length;
+	blog("beginStructureColorization - palColors.length: "+palColorsLength);
+
+	string[] indexName = new string[OBJECT_COLOR_MAX];//create an array of strings with 4 objects. The UI cannot handle more yet.
+	
+	blog("beginStructureColorization - indexName: "+indexName.length);
+	
+	//set the loop int to default at max color
+	int loop = OBJECT_COLOR_MAX;
+	if(palColorsLength < OBJECT_COLOR_MAX)//if we have an armor piece that has less than 4 colors we need to init the array
+	{
+		for(int i = 0; i < OBJECT_COLOR_MAX; i++)
+			indexName[i] = ""; //first init to nothing in case the object only has 1 or 2 colors
+
+		//modify the loop int to be the same as the armor piece color length
+		loop = palColorsLength;
+	}
+
+	for(int i = 0; i < loop; i++) //loop through using the loop int that may have been modified
+	{	
+		ranged_int_custom_var ri = palColors[i];
+		if(ri != null) //make sure we don't have a null
+		{
+			blog("beginStructureColorization - indexName["+i+"]: "+indexName[i]);
+			string customizationVar = ri.getVarName();
+			if(customizationVar.startsWith("/"))
+				customizationVar = customizationVar.substring(1);
+			indexName[i] = customizationVar; //overwrite the null in the array
+		}
+	}
+	if(indexName[0].equals(""))
+	{
+		CustomerServiceLog(CUSTOMER_SVC_CATEGORY, "Coloring Instantiating Color Customization UI on Object: "+ house +" for player " +player+ " has failed because the 1st color was null. Kit OID: "+tool+". [ beginStructureColorization() ]");	
+		return false;
+	}
+	CustomerServiceLog(CUSTOMER_SVC_CATEGORY, "Coloring Instantiating Color Customization UI on Object: "+ house +" for player " +player+ " using colorization using crafted armor customization kit "+tool+". [ beginStructureColorization() ]");	
+	blog("beginStructureColorization - Armor Piece getting color UI: "+ house);
+
+	utils.setScriptVar(player, TOOL_ID, tool);
+	utils.setScriptVar(tool, PLAYER_ID, player);
+	openCustomizationWindow(player, house, indexName[0], -1, -1, indexName[1], -1, -1, indexName[2], -1, -1, indexName[3], -1, -1);
+
+	return true;
+}
+
+//this messageHandler is called from base_player because the 
+//openCustomizationWindow trigger is fired on the caller of the UI
+messageHandler decrementTool()
+{
+	blog("decrementTool - init");
+
+	obj_id player = utils.getObjIdScriptVar(self, PLAYER_ID);
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;	
+
+	blog("decrementTool - validation completed");
+
+	static_item.decrementStaticItem(self);
+	int count = getIntObjVar(self, "crafting_components.charges");
+	
+	if(!exists(self))
+		return SCRIPT_CONTINUE;	
+		
+	count--;
+	if(count > 0)
+		setObjVar(self, "crafting_components.charges", count);
+	else
+		destroyObject(self);
+		
+	removePlayerVars(player);
+	return SCRIPT_CONTINUE;	
+}
+
+messageHandler cancelTool()
+{
+	obj_id player = utils.getObjIdScriptVar(self, PLAYER_ID);
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;	
+		
+	removePlayerVars(player);
+	return SCRIPT_CONTINUE;	
+}
+
+void closeOldWindow(obj_id player)
+{
+	blog("closeOldWindow - init");
+
+	int pid = sui.getPid(player, PID_NAME);
+	blog("closeOldWindow - pid: "+pid);
+	if(pid > -1)
+	{
+		blog("closeOldWindow - force closing: "+pid);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+	}
+}
+
+void removePlayerVars(obj_id player)
+{
+	obj_id self = getSelf();
+	if(!isValidId(self) || !exists(self) || !isValidId(player) || !exists(player) )
+		return;
+
+	utils.removeScriptVarTree(player, VAR_PREFIX);
+	utils.removeScriptVarTree(self, VAR_PREFIX);
+	utils.removeObjVar(player, VAR_PREFIX);
+}
+
+boolean blog(string msg)
+{	
+	if(!BLOGGING_ON)
+		return false;	
+	else if(msg == null || msg.equals(""))
+		return false;
+
+	LOG(BLOGGING_CATEGORY, msg);
+
+	return true;
+}

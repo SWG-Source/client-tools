@@ -1,0 +1,427 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        master.script
+ * Description:  master poi object script: POI = rabidbeast
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.poi;
+include library.scenario;
+include library.ai_lib;
+include library.group;
+include library.combat;
+include ai.ai_combat;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits theme_park.poi.base;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string SCENARIO_NAME				= "rabidbeast";
+const string LOG_NAME					= "poiRabidBeast Master";
+const string BASE_PATH					= "poi." + SCENARIO_NAME;
+const string MEDIATOR_TYPE				= "MEDIATOR_TYPE";
+const string SCRIPT_ANTAGONIST				= BASE_PATH + ".antagonist";
+const string SCRIPT_MEDIATOR				= BASE_PATH + ".mediator";
+const string CREATURE_TABLE 				= "datatables/mob/creatures.iff";
+const int    MAX_ITERATIONS 				= 30;
+const string CREATURE_WHERE				= "where";
+const string CREATURE_LEVEL				= "level";
+const string CREATURE_NAME				= "creatureName";
+const string CREATURE_TAME				= "canTame";
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Get our planet.
+	string planet = getCurrentSceneName();
+
+	// Initialize.
+	if ( !scenario.initScenario( self, "datatables/poi/" + SCENARIO_NAME + "/" + planet + "_setup.iff" ) )
+		scenario.cleanup( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnUnloadedFromMemory
+//------------------------------------------------
+
+trigger OnUnloadedFromMemory()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanupScenario
+//------------------------------------------------
+
+messageHandler cleanupScenario()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// destroySelf
+//------------------------------------------------
+
+messageHandler destroySelf()
+{
+	destroyObject( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initScenario
+//
+// Called by message from OnAttach.
+// This calls all methods necessary to set up the POI.
+//------------------------------------------------
+
+messageHandler initScenario()
+{
+	// Validate parameters.
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		scenario.cleanup(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Environment Setup
+	*/
+
+	// Get our planet.
+	string planet = getCurrentSceneName();
+
+	// Get scenario theater.
+	string theater = params.getString( "THEATER_TEMPLATE" );
+	setObjVar( self, "theaterTemplate", theater );
+
+	// Get our mediator type.
+	string mtype = params.getString( "MEDIATOR_TEMPLATE" );
+	setObjVar( self, MEDIATOR_TYPE, mtype );
+
+	// Get our creature type.
+	dataTableOpen( CREATURE_TABLE );
+	string creature_where[] = dataTableGetStringColumn( CREATURE_TABLE, CREATURE_WHERE );
+	string creature_name[]  = dataTableGetStringColumn( CREATURE_TABLE, CREATURE_NAME );
+	int creature_level[]    = dataTableGetIntColumn( CREATURE_TABLE, CREATURE_LEVEL );
+	float creature_tamable[]  = dataTableGetFloatColumn( CREATURE_TABLE, CREATURE_TAME );
+
+	// Count number of planet specific entries.
+	int planet_entries = 0;
+	for ( int i=0; i<creature_name.length; i++ )
+	{
+		if ( creature_where[i].equals( planet ) )
+		{
+			planet_entries++;
+		}
+	}
+
+	// Find an index to start at.
+	int indexstart = rand( 0, planet_entries-1 );
+	planet_entries = 0;
+	for ( int i=0; i<creature_name.length; i++ )
+	{
+		if ( creature_where[i].equals( planet ) )
+		{
+			if ( planet_entries == indexstart )
+			{
+				indexstart = i;
+				break;
+			}
+			planet_entries++;
+		}
+	}
+
+	// Get our difficulty level.
+	int difficultyLevel = getIntObjVar( self, "spawning.intDifficultyLevel" );
+	if ( difficultyLevel == 0 )
+		difficultyLevel = 5;
+	int minDifficultyLevel = difficultyLevel - 30;
+
+	// Find a creature to work with.
+	int i = indexstart+1;
+	while ( i != indexstart )
+	{
+		if ( creature_where[i].equals( planet ) && (creature_level[i] <= difficultyLevel) &&
+		     (creature_level[i] >= minDifficultyLevel) && (creature_tamable[i] >= .25f) )
+		{
+			setObjVar( self, "creatureName", creature_name[i] );
+			setObjVar( self, "creatureLevel", creature_level[i] );
+			break;
+		}
+
+		i++;
+		if ( i == creature_name.length )
+			i = 0;
+	}
+
+	// Abort if we have no creature type.
+	if ( !hasObjVar( self, "creatureName" ) )
+	{
+		messageTo( self, scenario.HANDLER_DESTROY_SELF, null, 3, true );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Create teams.
+	scenario.createTeam( self, "antagonist", self.toString() + "_antagonist" );
+	scenario.createTeam( self, "mediator", self.toString() + "_mediator" );
+
+	/*
+	Spawn Theaters
+	*/
+
+	if ( !createTheaters( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//  createTheaters
+//
+//  Spawns the theaters for the scenario.
+//------------------------------------------------
+
+boolean createTheaters( obj_id self )
+{
+	// Create the camp theater.
+	obj_id theater = poi.createObject( getStringObjVar( self, "theaterTemplate" ), 0, 0 );
+
+	// Store theater reference.
+	setObjVar( self, "theater", theater );
+
+	return true;
+}
+
+//------------------------------------------------
+// handleTheaterComplete
+//
+// Called when the theaters load.
+//------------------------------------------------
+
+messageHandler handleTheaterComplete()
+{
+	/*
+	Spawn Mediators
+	*/
+
+	if ( !createMediator( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+//------------------------------------------------
+// spawnNpcMobiles
+//
+// Create a series of mobs for the POI.
+//------------------------------------------------
+
+void spawnNpcMobiles( obj_id self )
+{
+	int difficultyLevel = getIntObjVar( self, "spawning.intDifficultyLevel" );
+	if ( difficultyLevel == 0 )
+		difficultyLevel = 5;
+	int spawnedLevels = 0;
+	int creatureLevel = getIntObjVar( self, "creatureLevel" );
+	int mobileNumber = 0;
+	int iterations = 0;
+	string creature = getStringObjVar( self, "creatureName" );
+	while ( (difficultyLevel >= spawnedLevels) && (iterations < MAX_ITERATIONS ) )
+	{
+		iterations++;
+
+		obj_id mobile = spawnMobile( self, mobileNumber, creature );
+		if ( mobile != null )
+		{
+			setObjVar( self, "npc_lair.mobile."+mobileNumber, creature );
+			mobileNumber++;
+			spawnedLevels += creatureLevel;
+
+			// Make these guys ignore combat.
+			ai_lib.setIgnoreCombat( mobile, true );
+		}
+	}
+}
+
+//------------------------------------------------
+// spawnMobile
+//
+// Spawn the mob.
+//------------------------------------------------
+
+obj_id spawnMobile( obj_id self, int index, string name )
+{
+	location loiterloc = new location( getLocation( self ) );
+	loiterloc.x += rand( -20f, 20f );
+	loiterloc.z += rand( -20f, 20f );
+	obj_id mobile = scenario.createTeamNpc( self, "antagonist", name, "antagonist_" + index, loiterloc );
+	if ( mobile != null )
+	{
+		poi.setDestroyMessage( mobile, "handleCreatureDeath", 1 );
+
+		// Attach script.
+		attachScript( mobile, SCRIPT_ANTAGONIST );
+
+		return mobile;
+	}
+	return null;
+}
+
+//------------------------------------------------
+// createMediator
+//
+// Creates the mediator.
+//------------------------------------------------
+
+boolean createMediator( obj_id self )
+{
+	// Spawn the scenario mediator (prisoner leader).
+	string type = getStringObjVar( self, MEDIATOR_TYPE );
+	string ident = "mediator_0";
+	location loc = getLocation( self );
+	loc.x += 4;
+	obj_id mediator = scenario.createTeamNpc( self, "mediator", type, ident, loc );
+	if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+		return false;
+
+	// Assign initial behavior to the mediator.
+	attachScript( mediator, SCRIPT_MEDIATOR );
+	ai_lib.setDefaultCalmBehavior( mediator, ai_lib.BEHAVIOR_SENTINEL );
+
+	return true;
+}
+
+//------------------------------------------------
+// startAttack
+//------------------------------------------------
+
+messageHandler startAttack()
+{
+	// Get mediator.
+	obj_id mediator = poi.findObject( "mediator_0" );
+	if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Get target ref.
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+	obj_id target = params.getObjId( "target" );
+
+	// Spawn the antagonist.
+	spawnNpcMobiles( self );
+
+	// Get antagonists.
+	obj_id[] antagonists = scenario.getTeamMembers( self, "antagonist" );
+	if ( antagonists == null )
+		return SCRIPT_CONTINUE;
+
+	// Tell the antagonists to attack!
+	for ( int i=0; i<antagonists.length; i++ )
+	{
+		// Find this mob.
+		obj_id a = antagonists[i];
+		if ( (a == null) || (a == obj_id.NULL_ID) )
+			continue;
+
+		// Find a player to attack.
+		if ( group.isGroupObject( target ) )
+		{
+			obj_id[] members = getGroupMemberIds( target );
+			if ( (members == null) || (members.length == 0) )
+			{
+			}
+			else
+			{
+				// Attack a random member of the group.
+				int j = rand( 0, members.length-1 );
+				startCombat( a, members[j] );
+			}
+		}
+		else // Attack the player.
+			startCombat( a, target );
+
+		if ( i == 0 )
+		{
+			// Have the mediator attack one of the creatures.
+			startCombat( mediator, a );
+		}
+
+		// Set the mediator to hate the creatures.
+//		ai_lib.addToMentalStateToward( mediator, a, FEAR, 50f );
+//		ai_lib.addToMentalStateToward( mediator, a, ANGER, 100f );
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleActorDeath
+//
+// Called by the antagonist script.
+// Used to track antagonist deaths.
+//------------------------------------------------
+
+messageHandler handleActorDeath()
+{
+	// Get mediators.
+	obj_id mediator = poi.findObject( "mediator_0" );
+	if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+	if ( isIncapacitated( mediator ) || isDead( mediator ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id[] antagonists = scenario.getTeamMembers( "antagonist" );
+	if ( antagonists == null )
+		return SCRIPT_CONTINUE;
+	int deadcount = scenario.getDeadTeamMemberCount( self, "antagonist" );
+	if ( (deadcount+1) == antagonists.length )
+	{
+		// Everyone is dead.
+		messageTo( mediator, "allDead", null, 2, true );
+	}
+
+	return SCRIPT_CONTINUE;
+}

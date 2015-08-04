@@ -1,0 +1,431 @@
+include library.ai_lib;
+include library.beast_lib;
+include library.chat;
+include library.utils;
+include library.trial;
+include library.create;
+include library.restuss_event;
+
+
+const boolean LOGGING					= true;
+
+
+trigger OnAttach()
+{
+	if (getIntObjVar(self, restuss_event.PATROL_TYPE) > 0)
+	{
+		findWayPoints(self);
+		messageTo (self, "pathToNextPoint", null, 2, false);
+	}
+	else
+		ai_lib.setDefaultCalmBehavior(self, ai_lib.BEHAVIOR_SENTINEL);
+	
+	trial.setInterest(self);
+	messageTo(self, "spawnSquad", null, 2, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroySelf()
+{
+	trial.cleanupObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnSquad()
+{
+	obj_id[] children = trial.getChildrenInRange(self, self, 200.0f);
+	
+	if (children != null && children.length > 0)
+		trial.cleanupObject(children);
+		
+	int squadSize = 4;
+	if (hasObjVar(self, "squad_size"))
+		squadSize = getIntObjVar(self, "squad_size");
+		
+	int formation = ai_lib.FORMATION_WEDGE;
+	if (hasObjVar(self, "squad_formation"))
+		formation = getIntObjVar(self, "squad_formation");
+		
+	obj_id[] squad = new obj_id[squadSize];
+	location baseLoc = getLocation(self);
+	
+	string squadMember = "none";
+	if (hasObjVar(self, "squad_member"))
+		squadMember = getStringObjVar(self, "squad_member");
+		
+	if (squadMember.equals("none"))
+		return SCRIPT_CONTINUE;
+		
+	if (dataTableGetString("datatables/mob/creatures.iff", squadMember, "creatureName") == null)
+	{
+		doLogging("spawnSquad", "Creature("+squadMember+") was not in the creatures datatable");
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] allies = new obj_id[squadSize+1];
+	allies[0] = self;
+	
+	for (int i=0;i<squad.length;i++)
+	{
+		location spawnLoc = new location(baseLoc.x-5, baseLoc.y, baseLoc.z-5, baseLoc.area, baseLoc.cell);
+		squad[i] = create.object(squadMember, spawnLoc);
+		
+		if (isIdValid(squad[i]))
+		{
+			attachScript(squad[i], "theme_park.restuss_event.ai_controller");
+			setMaster(squad[i], self);
+			trial.setParent(self, squad[i], false);
+			
+			//ai_lib.followInFormation(squad[i], self, ai_lib.FORMATION_WEDGE, i);
+			
+			follow(squad[i], self, 4.0f, 4.0f);
+			
+			if (utils.hasScriptVar(self, restuss_event.PATROL_POINTS))
+				utils.setScriptVar(squad[i], restuss_event.PATROL_POINTS, utils.getLocationArrayScriptVar(self, restuss_event.PATROL_POINTS));
+			
+			trial.markAsTempObject(squad[i], true);
+			allies[i+1] = squad[i];
+		}
+	}
+	
+	ai_lib.establishAgroLink(self, allies);
+	return SCRIPT_CONTINUE;
+
+}
+
+
+void findWayPoints(obj_id self)
+{
+	resizeable obj_id[] wayPoints = utils.getResizeableObjIdArrayScriptVar(self, restuss_event.MASTER_PATROL_ARRAY);
+	if (wayPoints == null || wayPoints.length == 0)
+	{
+		doLogging("findWayPoints", "Waypoint list was empty, exiting");
+		trial.cleanupObject(self);
+		return;
+	}
+	
+	int pathNum = 0;
+	
+	if (hasObjVar(self, "path"))
+	{		
+		pathNum = getIntObjVar(self, "path");
+	}
+	else
+	{
+		doLogging("findWayPoints", "I did not have the path ObjVar");
+		trial.cleanupObject(self);
+		return;
+	}
+	
+	string myDataTable = getDataTable(self);
+	if (!dataTableOpen(myDataTable))
+		return;
+		
+	string path = dataTableGetString(getDataTable(self), pathNum, "path");
+	string[] pathList = split(path, ';');
+	
+	if (pathList == null || pathList.length == 0)
+	{
+		doLogging("findWayPoints", "Path list was empty, exiting");
+		trial.cleanupObject(self);
+		return;
+	}
+	resizeable location[] myPath = new location[0];
+
+	for (int i=0;i<pathList.length;i++)
+	{
+		for (int k=0;k<wayPoints.length;k++)
+		{
+			if (hasObjVar(wayPoints[k], "wp_name"))
+			{
+				if (pathList[i].equals(getStringObjVar(wayPoints[k], "wp_name")))
+				{
+					utils.addElement(myPath, getLocation(wayPoints[k]));
+				}
+			}
+		}
+	}
+	
+	
+	if (myPath == null || myPath.length == 0)
+	{
+		doLogging("findWayPoints", "No waypoints were found, exiting");
+		trial.cleanupObject(self);
+		return;
+	}
+	
+	location[] patrolPoints = myPath;
+	if (patrolPoints.length == 0)
+	{
+		doLogging("findWayPoints", "Patrol Point list was empty, exiting");
+		trial.cleanupObject(self);
+		return;
+	}
+	
+	utils.setScriptVar(self, restuss_event.PATROL_POINTS, patrolPoints);
+	
+}
+
+messageHandler pathToNextPoint()
+{
+	location[] patrolPoints = utils.getLocationArrayScriptVar(self, restuss_event.PATROL_POINTS);
+	int patrolType = getIntObjVar(self, restuss_event.PATROL_TYPE);
+	
+	switch (patrolType)
+	{
+		case restuss_event.PATROL:
+			ai_lib.setPatrolPath(self, patrolPoints);
+			break;
+			
+		case restuss_event.PATROL_ONCE:
+			ai_lib.setPatrolOncePath(self, patrolPoints);
+			break;
+			
+		case restuss_event.PATROL_FLIP:
+			ai_lib.setPatrolFlipPath(self, patrolPoints);
+			break;
+			
+		case restuss_event.PATROL_FLIP_ONCE:
+			ai_lib.setPatrolFlipOncePath(self, patrolPoints);
+			break;
+			
+		case restuss_event.PATROL_RANDOM:
+			ai_lib.setPatrolRandomPath(self, patrolPoints);
+			break;
+			
+		case restuss_event.PATROL_RANDOM_ONCE:
+			ai_lib.setPatrolRandomOncePath(self, patrolPoints);
+			break;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+string getDataTable(obj_id self)
+{
+	return hasObjVar(self, "wave_spawner.data_table") ? getStringObjVar(self, "wave_spawner.data_table") : "noTable";
+}
+
+
+messageHandler wsDoAnimation()
+{
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler wsPlayEmote()
+{
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler wsSignalMaster()
+{
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler wsDespawn()
+{
+	messageTo(self, "destroySelf", null, 5.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler wsToggleInvulnerability()
+{
+	//Custom Signal Here
+	boolean toggleVulnerable = !isInvulnerable(self);
+	setInvulnerable(self, toggleVulnerable);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler customSignal()
+{
+	LOG("doLogging", "in custom signal");
+	string signalName = params.getString("triggerName");
+	
+	if (signalName == null)
+		return SCRIPT_CONTINUE;
+		
+	if (utils.hasScriptVar(self, restuss_event.TRIG_CUSTOMSIGNAL))
+	{
+		resizeable string[] customTrigger = utils.getResizeableStringArrayScriptVar(self, restuss_event.TRIG_CUSTOMSIGNAL);
+		
+		if (customTrigger != null && customTrigger.length > 0)
+		{
+			for (int i=0;i<customTrigger.length; i++)
+			{
+				if (customTrigger[i].startsWith(signalName))
+					executeTriggerData(self, customTrigger[i].substring(signalName.length() + 1, customTrigger[i].length()));				
+			}
+		}
+ 	}
+ 	
+ 	return SCRIPT_CONTINUE;
+ }
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	if (utils.hasScriptVar(self, restuss_event.TRIG_ONDEATH))
+	{
+		resizeable string[] deathTriggers = utils.getResizeableStringArrayScriptVar(self, restuss_event.TRIG_ONDEATH);
+		
+		if (deathTriggers != null && deathTriggers.length > 0)
+		{
+			for (int i=0;i<deathTriggers.length; i++)
+			{
+				executeTriggerData(self, deathTriggers[i].concat(":"+killer));				
+			}
+		}
+ 	}
+ 	
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+
+	if (utils.hasScriptVar(self, restuss_event.TRIG_ENTERCOMBAT))
+	{
+		resizeable string[] combatTriggers = utils.getResizeableStringArrayScriptVar(self, restuss_event.TRIG_ENTERCOMBAT);
+		
+		if (combatTriggers != null && combatTriggers.length > 0)
+		{
+			for (int i=0;i<combatTriggers.length; i++)
+			{
+				executeTriggerData(self, combatTriggers[i]);				
+			}
+		}
+ 	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnExitedCombat()
+{
+	if (ai_lib.isDead(self))
+		return SCRIPT_CONTINUE;
+
+
+	if (utils.hasScriptVar(self, restuss_event.TRIG_EXITCOMBAT))
+	{
+		resizeable string[] combatTriggers = utils.getResizeableStringArrayScriptVar(self, restuss_event.TRIG_EXITCOMBAT);
+		
+		if (combatTriggers != null && combatTriggers.length > 0)
+		{
+			for (int i=0;i<combatTriggers.length; i++)
+			{
+				executeTriggerData(self, combatTriggers[i]);				
+			}
+		}
+ 	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathComplete()
+{
+
+	if (utils.hasScriptVar(self, restuss_event.TRIG_ARRIVELOCATION))
+	{
+		resizeable string[] moveTriggers = utils.getResizeableStringArrayScriptVar(self, restuss_event.TRIG_ARRIVELOCATION);
+		
+		if (moveTriggers != null && moveTriggers.length > 0)
+		{
+			for (int i=0;i<moveTriggers.length; i++)
+			{
+				executeTriggerData(self, moveTriggers[i]);				
+			}
+		}
+ 	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void executeTriggerData(obj_id self, string triggerData)
+{
+	string[] parse = split(triggerData, ':');
+	
+	if (triggerData.startsWith("playEmote"))
+	{
+		string chatType = parse[1];
+		string chatMessage = parse[2];
+		
+		chat.chat(self, chatType, new string_id("spam", chatMessage));
+	}
+	
+	if (triggerData.startsWith("signalMaster"))
+	{
+		string handlerName = parse[1];
+		dictionary dict = trial.getSessionDict(trial.getParent(self));
+		
+		if (!parse[2].equals("none"))
+		{
+			string[] valueSplit = split(parse[2], '=');
+			
+			if (valueSplit[0] == "int")
+				dict.put(parse[1], utils.stringToInt(valueSplit[1]));
+			if (valueSplit[0] == "float")
+				dict.put(parse[1], utils.stringToFloat(valueSplit[1]));
+			else
+				dict.put(parse[1], valueSplit[1]);
+		}
+		
+		messageTo(trial.getParent(self), handlerName, dict, 0.0f, false);			
+	}
+	
+	if (triggerData.startsWith("signalKiller"))
+	{
+	
+	}
+	
+	if (triggerData.startsWith("doAnimationAction"))
+	{
+	
+	}
+	
+	if (triggerData.startsWith("toggleInvulnerable"))
+	{
+		messageTo(self, "wsToggleInvulnerability", null, 0.0f, false);
+	}
+	
+	if (triggerData.startsWith("broadcastMessage"))
+	{
+		
+	}
+	
+	if (triggerData.startsWith("messageSelf"))
+	{
+		string handlerName = parse[1];
+		dictionary dict = new dictionary();
+		
+		if (!parse[2].equals("none"))
+		{
+			string[] valueSplit = split(parse[3], '=');
+			
+			if (valueSplit[0] == "int")
+				dict.put(parse[2], utils.stringToInt(valueSplit[1]));
+			if (valueSplit[0] == "float")
+				dict.put(parse[2], utils.stringToFloat(valueSplit[1]));
+			else
+				dict.put(parse[2], valueSplit[1]);
+		}
+		
+		messageTo(self, handlerName, dict, 5.0f, false);			
+	}
+	
+	if (triggerData.startsWith("triggerId"))
+	{	
+		dictionary dict = trial.getSessionDict(trial.getParent(self));
+		dict.put("triggerName", parse[1]);
+		dict.put("triggerType", "triggerId");
+		
+		messageTo(trial.getParent(self), "triggerFired", dict, 0.0f, false);
+
+	}
+	
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING)
+		LOG("doLogging/ai_controller/"+section, message);	
+}

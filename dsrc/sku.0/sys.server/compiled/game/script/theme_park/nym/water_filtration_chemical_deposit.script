@@ -1,0 +1,194 @@
+/***** INCLUDES ********************************************************/
+include library.buff;
+include library.collection;
+include library.create;
+include library.factions;
+include library.groundquests;
+include library.holiday;
+include library.pclib;
+include library.pet_lib;
+include library.static_item;
+include library.stealth;
+include library.sui;
+include library.trial;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+
+const string THEMEPARK				= "theme_park_nym/messages";
+
+const string_id SID_NOT_WHILE_MOUNTED		= new string_id(THEMEPARK, "deposit_not_while_mounted");
+const string_id SID_ZIP_BAR			= new string_id(THEMEPARK, "deposit_zip_bar");
+const string_id SID_MNU_USE			= new string_id(THEMEPARK, "deposit_gather_menu");
+const string_id SID_NOT_SURE_HOW_DESTROY	= new string_id(THEMEPARK, "deposit_not_sure_what_to_do");
+const string_id SID_ALRDY_COMPLETED_QUEST	= new string_id(THEMEPARK, "deposit_already_completed_quest");
+
+const int COUNTDOWN_TIMER			= 3;
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	int mnu2 = mi.addRootMenu (menu_info_types.ITEM_USE, SID_MNU_USE);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{	
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+
+	if(isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if(pet_lib.isMounted(player))
+	{
+		sendSystemMessage(player, SID_NOT_WHILE_MOUNTED);
+		return SCRIPT_CONTINUE;
+	}
+	
+	string quest = getStringObjVar(self, "strQuest");
+	if(quest == null || quest.length() <= 0)
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.OnObjectMenuSelect() Could not find the parent spawner quest for participating in the canister quest for canister: ("+self+"). The operation was aborted for Player: "+player);	
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!groundquests.isQuestActive(player, quest))
+	{
+		sendSystemMessage(player, SID_NOT_SURE_HOW_DESTROY);	
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.OnObjectMenuSelect() Player: "+player+" did not have the quest "+quest+" needed for this collection. canister: ("+self);	
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!groundquests.isTaskActive(player, quest, "needsToGatherChemical"))
+	{
+		sendSystemMessage(player, SID_NOT_SURE_HOW_DESTROY);	
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.OnObjectMenuSelect() Player: "+player+" did not have the quest "+quest+" needed for this collection. canister: ("+self);	
+		return SCRIPT_CONTINUE;
+	}
+
+	string questSignal = getStringObjVar(self, "strSignal");
+	if(questSignal == null || questSignal.length() <= 0)
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.OnObjectMenuSelect() Could not find the parent spawner quest SIGNAL for participating in the canister quest for canister: ("+self+"). The operation was aborted for Player: "+player);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	
+	int startTime = 0;
+	int range = 3;
+	int flags = 0;
+
+	flags |= sui.CD_EVENT_INCAPACITATE;
+	flags |= sui.CD_EVENT_DAMAGED;
+
+	stealth.testInvisNonCombatAction(player, self);
+	int countdownSui = sui.smartCountdownTimerSUI(self, player, "quest_countdown_timer", SID_ZIP_BAR, startTime, COUNTDOWN_TIMER, "handleObjectSwapTimer", range, flags);
+	CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.OnObjectMenuSelect() Player: "+player+" is destroying blackwing canister: "+self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGE HANDLERS ************************************************/
+
+//Handling the count down timer for dressing a tree and stomping presents.
+messageHandler handleObjectSwapTimer()
+{
+	if(params == null || params.equals(""))
+		return SCRIPT_CONTINUE;
+	
+ 	int pid = params.getInt("id");
+	obj_id player = params.getObjId("player");
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+
+	// Cancel button is sent when player manually closes the countdown window,
+	// or when he/she moves out of range.
+	if(bp == sui.BP_CANCEL)
+	{
+		detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.handleObjectSwapTimer() cancelled");
+
+		return SCRIPT_CONTINUE;
+	}
+	
+	else if(bp == sui.BP_REVERT)
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.handleObjectSwapTimer() Player: "+player+" failed to destroy the canister because the player moved or was disrupted. Deposit: "+self);
+
+		// Gets the reason why the timer was aborted
+		int event = params.getInt("event");
+
+		// You can handle the situation differently depending on the reason
+		if(event == sui.CD_EVENT_LOCOMOTION)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_locomotion"));
+		}
+		else if(event == sui.CD_EVENT_INCAPACITATE)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_incapacitated"));
+		}
+		else if(event == sui.CD_EVENT_DAMAGED)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_damaged"));
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR))
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.handleObjectSwapTimer() no countdowntimer");
+		return SCRIPT_CONTINUE;
+	}
+	
+	int test_pid = getIntObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR);
+
+	if(pid != test_pid)
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.handleObjectSwapTimer() pid != test_pid");
+		return SCRIPT_CONTINUE;
+	}
+
+	forceCloseSUIPage(pid);
+	detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+	
+	string quest = getStringObjVar(self, "strQuest");
+	if(quest == null || quest.length() <= 0)
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.handleObjectSwapTimer() Could not find the parent spawner quest for participating in the canister quest for canister: ("+self+"). The operation was aborted for Player: "+player);	
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!groundquests.isTaskActive(player, quest, "needsToGatherChemical"))
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.handleObjectSwapTimer() Player: "+player+" did not have the quest "+quest+" needed for this collection. canister: ("+self);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	string questSignal = getStringObjVar(self, "strSignal");
+	if(questSignal == null || questSignal.length() <= 0)
+	{
+		CustomerServiceLog("nyms_themepark", "water_filtration_chemical_deposit.handleObjectSwapTimer() Could not find the parent spawner quest SIGNAL for participating in the canister quest for canister: ("+self+"). The operation was aborted for Player: "+player);	
+		return SCRIPT_CONTINUE;
+	}
+
+	groundquests.sendSignal(player, questSignal); 
+
+	messageTo(self, "destroySelf", null, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+//Destroying dressed tree or stomped presents.
+messageHandler destroySelf()
+{
+	destroyObject(self);
+	//CUSTOMER SERVICE LOG
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,975 @@
+include library.ai_lib;
+include library.callable;
+include library.pet_lib;
+include library.player_structure;
+include library.prose;
+include library.sui;
+include library.utils;
+include library.money;
+
+
+const string	STF_FILE						= "pet/droid_modules";
+
+const string_id	SID_ROOT_MAINT					= new string_id(STF_FILE, "struct_maint_root");
+const string_id	SID_STRUCT_MAINT				= new string_id(STF_FILE, "struct_maint_perform");
+const string_id	SID_EDIT_MAINT					= new string_id(STF_FILE, "struct_maint_edit");
+const string_id SID_NO_POWER					= new string_id(STF_FILE, "not_enough_power");
+
+const string_id SID_DROID_MAINT_LIST_TITLE			= new string_id(STF_FILE, "droid_maint_list_title");
+const string_id SID_DROID_MAINT_LIST_PROMPT			= new string_id(STF_FILE, "droid_maint_list_prompt");
+const string_id SID_DROID_MAINT_LIST_HEADER			= new string_id(STF_FILE, "droid_maint_list_header");
+const string_id SID_MAINT_AMOUNT_TITLE				= new string_id(STF_FILE, "droid_maint_amount_title");
+const string_id SID_MAINT_AMOUNT_PROMPT				= new string_id(STF_FILE, "droid_maint_amount_prompt");
+const string_id SID_DROID_EDIT_MAINT_LIST_TITLE		= new string_id(STF_FILE, "droid_maint_edit_title");
+const string_id SID_DROID_EDIT_MAINT_LIST_PROMPT	= new string_id(STF_FILE, "droid_maint_edit_prompt");
+
+const string_id SID_EMPTY_LIST				= new string_id(STF_FILE, "droid_maint_empty_list");
+const string_id SID_NO_STRUCT				= new string_id(STF_FILE, "droid_maint_no_valid_struct");
+const string_id SID_EMPTY_MAINT_RUN			= new string_id(STF_FILE, "droid_maint_empty_maint_run");
+const string_id SID_SELECT_STRUCT			= new string_id(STF_FILE, "droid_maint_select_struct");
+const string_id SID_DATA_ERROR				= new string_id(STF_FILE, "droid_maint_data_error");
+const string_id SID_INVALID_AMOUNT			= new string_id(STF_FILE, "droid_maint_invalid_amount");
+const string_id SID_NOT_ENOUGH_MONEY		= new string_id(STF_FILE, "droid_maint_not_enough_cash");
+const string_id SID_CANT_TRAVEL				= new string_id(STF_FILE, "droid_maint_cant_travel");
+const string_id SID_DIFF_PLANET_PREFIX		= new string_id(STF_FILE, "droid_maint_diff_planet_prefix");
+const string_id SID_DIFF_PLANET_SUFFIX		= new string_id(STF_FILE, "droid_maint_diff_planet_suffix");
+
+const string_id SID_SUI_MAINT_AMOUNT_POOL	= new string_id(STF_FILE, "sui_maint_amount_pool");
+const string_id SID_SUI_MAINT_POOL_UNKNOWN	= new string_id(STF_FILE, "sui_maint_pool_unknown");
+const string_id SID_SUI_TOTAL_FUNDS_TITLE	= new string_id(STF_FILE, "sui_total_funds_title");
+const string_id SID_SUI_TOTAL_FUNDS_HEADER	= new string_id(STF_FILE, "sui_total_funds_header");
+
+const string_id SID_WILL_COMPLETE_MAINT_RUN	= new string_id(STF_FILE, "will_complete_maint_run");
+
+
+const int droidTravelCost	= 300;
+const string[] planetList	= {   "corellia",	"dantooine","dathomir",	"endor",	"lok",		"naboo",	"rori",		"talus",	"tatooine",	"yavin4" };
+const string[][] travelMap	= {
+				/* corellia	*/	{ "corellia",	"dantooine","dathomir",	"endor",	"naboo",	"naboo",	"naboo",	"talus",	"tatooine",	"yavin4" },
+				/* dantooine*/	{ "corellia",	"dantooine","corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia" },
+				/* dathomir	*/	{ "corellia",	"corellia",	"dathomir",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia" },
+				/* endor	*/	{ "corellia",	"corellia",	"corellia",	"endor",	"naboo",	"naboo",	"naboo",	"corellia",	"naboo",	"corellia" },
+				/* lok		*/	{ "naboo",		"naboo",	"naboo",	"naboo",	"lok",		"naboo",	"naboo",	"naboo",	"tatooine",	"naboo" },
+				/* naboo	*/	{ "corellia",	"corellia",	"corellia",	"endor",	"lok",		"naboo",	"rori",		"corellia",	"tatooine",	"corellia" },
+				/* rori		*/	{ "naboo",		"naboo",	"naboo",	"naboo",	"naboo",	"naboo",	"rori",		"naboo",	"naboo",	"naboo" },
+				/* talus	*/	{ "corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"talus",	"corellia",	"corellia" },
+				/* tatooine	*/	{ "corellia",	"corellia",	"corellia",	"naboo",	"lok",		"naboo",	"naboo",	"corellia",	"tatooine",	"corellia" },
+				/* yavin4	*/	{ "corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corellia",	"corella",	"yavin4" }
+							};
+
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (isDead(self) || ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster(self);
+	if (!isIdValid(master))
+		return SCRIPT_CONTINUE;
+
+	if (player == master)
+	{
+		int menu = mi.addRootMenu (menu_info_types.SERVER_HARVESTER_MANAGE, SID_ROOT_MAINT);
+
+		mi.addSubMenu(menu, menu_info_types.SERVER_MENU8, SID_STRUCT_MAINT );
+		mi.addSubMenu(menu, menu_info_types.SERVER_MENU9, SID_EDIT_MAINT );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (isDead(self) || ai_lib.aiIsDead(player))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	if (pet_lib.isLowOnPower(self))
+	{
+		sendSystemMessage(player, SID_NO_POWER);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (item == menu_info_types.SERVER_MENU8)
+	{
+		clearMaintenanceList();
+		requestStructData();
+		utils.setScriptVar(self, "player", player);
+		utils.setScriptVar(self, "command", "display");
+	}
+	if (item == menu_info_types.SERVER_MENU9)
+	{
+		requestStructData();
+		utils.setScriptVar(self, "player", player);
+		utils.setScriptVar(self, "command", "edit");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void clearMaintenanceList()
+{
+	obj_id self = getSelf();
+
+	utils.removeScriptVarTree(self, "maintList");
+	utils.removeScriptVar(self, "totalMaintCost");
+	utils.removeScriptVar(self, "totalTravelCost");
+	utils.removeScriptVar(self, "fullNameList");
+	utils.removeScriptVar(self, "idList");
+	utils.removeScriptVar(self, "locList");
+	utils.removeScriptVar(self, "nameList");
+	utils.removeScriptVar(self, "bankList");
+	utils.removeScriptVar(self, "msgCount");
+}
+
+void requestStructData()
+{
+	obj_id self = getSelf();
+	obj_id player = utils.getObjIdScriptVar(self, "player");
+
+	obj_id[] struct_list = getObjIdArrayObjVar(self, "module_data.maint_list.ids");
+
+	if (struct_list == null || struct_list.length == 0)
+	{
+		sendSystemMessage(player, SID_EMPTY_LIST);
+		//sendSystemMessageTestingOnly(player, "The maintenance list for this droid is empty.  Go to one of your structures and assign this droid to maintain it.");
+		return;
+	}
+
+	string[] name_list = new string[struct_list.length];
+	int[] bank_list = new int[struct_list.length];
+
+	int msgCount = 0;
+	//sendSystemMessageTestingOnly(player, "Requesting structure data...");
+
+	dictionary param = new dictionary();
+	param.put("requestingObj", self);
+
+	for (int i = 0; i < struct_list.length; i++)
+	{
+		name_list[i] = "";
+		bank_list[i] = -1;
+
+		if (!isIdValid(struct_list[i]))
+			continue;
+
+		messageTo(struct_list[i], "requestName", param, 0, false);
+		msgCount++;
+
+		messageTo(struct_list[i], "requestBankBalance", param, 0, false);
+		msgCount++;
+	}
+
+	if (bank_list.length > 0)
+		utils.setScriptVar(self, "bankList", bank_list);
+
+	if (name_list.length > 0)
+		utils.setScriptVar(self, "fullNameList", name_list);
+
+	if (msgCount > 0)
+		utils.setScriptVar(self, "msgCount", msgCount);
+	else
+	{
+		sendSystemMessage(player, SID_EMPTY_LIST);
+		//sendSystemMessageTestingOnly(player, "The maintenance list for this droid is empty.  Go to one of your structures and assign this droid to maintain it.");
+		return;
+	}
+}
+
+void displayMaintenanceList()
+{
+	obj_id self = getSelf();
+	obj_id player = utils.getObjIdScriptVar(self, "player");
+
+	int maint_level = getIntObjVar(self, "module_data.struct_maint");
+	boolean canChangePlanet = (maint_level > 10);
+
+	obj_id[] struct_list = getObjIdArrayObjVar(self, "module_data.maint_list.ids");
+
+	if (struct_list == null || struct_list.length == 0)
+	{
+		sendSystemMessage(player, SID_EMPTY_LIST);
+		//sendSystemMessageTestingOnly(player, "The maintenance list for this droid is empty.  Go to one of your structures and assign this droid to maintain it.");
+		return;
+	}
+
+	location[] loc_list = getLocationData();
+	string[]  fullNameList = utils.getStringArrayScriptVar(self, "fullNameList");
+
+	resizeable string[] nameList = new string[0];
+	resizeable obj_id[] idList = new obj_id[0];
+	resizeable location[] locList = new location[0];
+
+	for (int i = 0; i < struct_list.length; i++)
+	{
+		if (!isIdValid(struct_list[i]))
+			break;
+
+		if (!canChangePlanet && !isSamePlanet(player, loc_list[i].area))
+			continue;
+
+		if (fullNameList[i] != null && !fullNameList[i].equals(""))
+		{
+			if (!isInMaintList(struct_list[i]))
+			{
+				string name = fullNameList[i];
+
+				name += " \\#.\\>250";
+
+				location structLoc = loc_list[i];
+				name += structLoc.area;
+				name += " ("+(int)structLoc.x;
+				name += ","+(int)structLoc.z+")";
+
+				nameList = utils.addElement(nameList, name);
+				idList = utils.addElement(idList, struct_list[i]);
+				locList = utils.addElement(locList, loc_list[i]);
+			}
+		}
+	}
+
+	if ((nameList == null || nameList.size() == 0) && currentMaintListCount() == 0)
+	{
+		sendSystemMessage(player, SID_NO_STRUCT);
+		//sendSystemMessageTestingOnly(player, "There are no structure on the planet that this droid can maintain.  You must first travel to the planet the structure is on before performing a maintenance run.");
+		return;
+	}
+
+	utils.setScriptVar(self, "idList", idList);
+	utils.setScriptVar(self, "locList", locList);
+	utils.setScriptVar(self, "nameList", nameList);
+
+	string maintList = getCurrentMaintList();
+
+	string title  = utils.packStringId (SID_DROID_MAINT_LIST_TITLE);
+	string prompt = maintList+utils.packStringId (SID_DROID_MAINT_LIST_PROMPT);
+
+	int pid = createSUIPage(sui.SUI_LISTBOX, self, player, "handleMaintenanceListDialog");
+
+	setSUIProperty(pid, "", "Size", "650,375");
+	setSUIProperty(pid, sui.LISTBOX_TITLE, sui.PROP_TEXT, title);
+	setSUIProperty(pid, sui.LISTBOX_PROMPT, sui.PROP_TEXT, prompt);
+
+	// Add buttons.
+	
+	if(nameList != null && nameList.length > 0)
+	{
+		sui.listboxButtonSetup(pid, sui.OK_CANCEL_ALL);
+		setSUIProperty(pid, sui.LISTBOX_BTN_OTHER, sui.PROP_TEXT, "@add");
+	}
+	else
+	{
+		sui.listboxButtonSetup(pid, sui.OK_CANCEL);
+	}
+
+	setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, "@go");
+	setSUIProperty(pid, sui.LISTBOX_BTN_CANCEL, sui.PROP_TEXT, "@cancel");
+
+	clearSUIDataSource(pid, sui.LISTBOX_DATASOURCE);
+
+	int ubound = nameList.size();
+	for ( int i = 0; i < ubound; i++ )
+	{
+		addSUIDataItem(pid, sui.LISTBOX_DATASOURCE, "" + i);
+		setSUIProperty(pid, sui.LISTBOX_DATASOURCE + "." + i, sui.PROP_TEXT, nameList[i]);
+	}
+
+	subscribeToSUIProperty(pid, sui.LISTBOX_LIST, sui.PROP_SELECTEDROW);
+	subscribeToSUIProperty(pid, sui.LISTBOX_TITLE, sui.PROP_TEXT);
+
+	showSUIPage(pid);
+}
+
+string getCurrentMaintList()
+{
+	obj_id self = getSelf();
+
+	resizeable string[] maintListNames = utils.getResizeableStringArrayScriptVar(self, "maintList.name");
+	resizeable obj_id[] maintListIds = utils.getResizeableObjIdArrayScriptVar(self, "maintList.id");
+	resizeable location[] maintListLocs = utils.getResizeableLocationArrayScriptVar(self, "maintList.loc");
+	resizeable int[] maintListAmounts = utils.getResizeableIntArrayScriptVar(self, "maintList.amount");
+
+	string maintList = "";
+	if (maintListNames != null && maintListNames.size() > 0)
+	{
+		for (int i = 0; i < maintListNames.size(); i++)
+		{
+			string listEntry = "";
+
+			listEntry += maintListNames[i];
+
+			listEntry += " \\#.\\>450";
+
+			listEntry += "+"+maintListAmounts[i];
+			listEntry += "\\>000\n";
+
+			maintList += listEntry;
+		}
+		maintList += "\n";
+	}
+
+	if (!maintList.equals(""))
+		maintList = utils.packStringId (SID_DROID_MAINT_LIST_HEADER) +"\n"+maintList;
+
+	return maintList;
+}
+
+int currentMaintListCount()
+{
+	obj_id self = getSelf();
+
+	resizeable string[] maintListNames = utils.getResizeableStringArrayScriptVar(self, "maintList.name");
+
+	if (maintListNames == null)
+		return 0;
+
+	return (maintListNames.size());
+}
+
+boolean isInMaintList(obj_id structure)
+{
+	obj_id self = getSelf();
+
+	resizeable obj_id[] maintListIds = utils.getResizeableObjIdArrayScriptVar(self, "maintList.id");
+
+	if (maintListIds == null || maintListIds.size() == 0)
+		return false;
+
+	for (int i = 0; i < maintListIds.size(); i++)
+	{
+		if (maintListIds[i] == structure)
+			return true;
+	}
+
+	return false;
+}
+
+messageHandler handleMaintenanceListDialog()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int bp = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+	switch (bp)
+	{
+		case sui.BP_CANCEL:
+			clearMaintenanceList();
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_OK:
+			startMaintenanceRun(self, player);
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_REVERT:
+			addStructureForMaintenance(self, player, idx);
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void addStructureForMaintenance(obj_id self, obj_id player, int idx)
+{
+	if (idx < 0)
+	{
+		sendSystemMessage(player, SID_SELECT_STRUCT);
+		displayMaintenanceList();
+		//sendSystemMessageTestingOnly(player, "You must first select a structure to add to the list for the maintenance run.");
+		return;
+	}
+
+	resizeable obj_id[] idList = utils.getResizeableObjIdArrayScriptVar(self, "idList");
+	resizeable string[] nameList = utils.getResizeableStringArrayScriptVar(self, "nameList");
+	resizeable location[] locList = utils.getResizeableLocationArrayScriptVar(self, "locList");
+
+	if (idx >= idList.size())
+	{
+		sendSystemMessage(player, SID_DATA_ERROR);
+		displayMaintenanceList();
+		//sendSystemMessageTestingOnly(player, "Error retrieving structure data for maintenance run.");
+		return;
+	}
+
+	// Save selected structure info
+	resizeable string[] maintListNames = utils.getResizeableStringArrayScriptVar(self, "maintList.name");
+	resizeable obj_id[] maintListIds = utils.getResizeableObjIdArrayScriptVar(self, "maintList.id");
+	resizeable location[] maintListLocs = utils.getResizeableLocationArrayScriptVar(self, "maintList.loc");
+	resizeable int[] maintListAmounts = utils.getResizeableIntArrayScriptVar(self, "maintList.amount");
+
+	if (maintListNames == null)
+	{
+		maintListNames = new Vector();
+		maintListIds = new Vector();
+		maintListLocs = new Vector();
+		maintListAmounts = new Vector();
+	}
+
+	maintListNames = utils.addElement(maintListNames, nameList[idx]);
+	maintListIds = utils.addElement(maintListIds, idList[idx]);
+	maintListLocs = utils.addElement(maintListLocs, locList[idx]);
+	maintListAmounts = utils.addElement(maintListAmounts, -1);
+
+	utils.setScriptVar(self, "maintList.name", maintListNames);
+	utils.setScriptVar(self, "maintList.id", maintListIds);
+	utils.setScriptVar(self, "maintList.loc", maintListLocs);
+	utils.setScriptVar(self, "maintList.amount", maintListAmounts);
+
+	int total = getTotalMoney(player);
+	int curMaintCost = utils.getIntScriptVar(self, "totalMaintCost");
+	total -= curMaintCost;
+	if ( total > 0 )
+	{
+		string title  = utils.packStringId(SID_MAINT_AMOUNT_TITLE);
+		string prompt = utils.packStringId(SID_MAINT_AMOUNT_PROMPT);
+
+		int maint_pool = getStoredBankBalance(idList[idx]);
+		if (maint_pool >= 0)
+		{
+			prose_package ppMaintPool = prose.getPackage(SID_SUI_MAINT_AMOUNT_POOL);
+			prose.setDI(ppMaintPool, maint_pool);
+			prompt += "\n\n \0" + packOutOfBandProsePackage(null, ppMaintPool);
+		}
+		else
+			prompt += "\n\n" + utils.packStringId(SID_SUI_MAINT_POOL_UNKNOWN);
+
+		if (!isSamePlanet(player, locList[idx].area))
+		{
+			int travelCost = getTravelCost(player, locList[idx].area);
+			total -= travelCost;
+
+			if (total < 0)
+			{
+				sendSystemMessage(player, SID_CANT_TRAVEL);
+				//sendSystemMessageTestingOnly(player, "You don't have enough money to pay the travel costs to maintain that structure.");
+
+				removeLastStruct();
+				displayMaintenanceList();
+
+				return;
+			}
+
+			prompt += "\n\n"+utils.packStringId(SID_DIFF_PLANET_PREFIX)+travelCost+utils.packStringId(SID_DIFF_PLANET_SUFFIX);
+			utils.setScriptVar(self, "curTravelCost", travelCost);
+		}
+
+		int pid = sui.transfer(self, player, prompt, title, utils.packStringId(SID_SUI_TOTAL_FUNDS_TITLE), total, utils.packStringId(SID_SUI_TOTAL_FUNDS_HEADER), 0, "handleMaintenanceAmountDialog");
+		if ( pid > -1 )
+		{
+			utils.setScriptVar(self, "payMaintenance.pid", pid);
+			utils.setScriptVar(self, "payMaintenance.target", idList[idx]);
+		}
+	}
+	else
+	{
+		sendSystemMessage(player, SID_NOT_ENOUGH_MONEY);
+
+		removeLastStruct();
+		displayMaintenanceList();
+	}
+}
+
+messageHandler handleMaintenanceAmountDialog()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int bp = sui.getIntButtonPressed(params);
+	switch (bp)
+	{
+		case sui.BP_CANCEL:
+			removeLastStruct();
+			displayMaintenanceList();
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_OK:
+			int amount = sui.getTransferInputTo(params);
+
+			if (amount <= 0)
+			{
+				sendSystemMessage(player, SID_INVALID_AMOUNT);
+				//sendSystemMessageTestingOnly(player, "Invalid maintenance amount given, aborting maintenance run.");
+				return SCRIPT_CONTINUE;
+			}
+
+			resizeable int[] maintListAmounts = utils.getResizeableIntArrayScriptVar(self, "maintList.amount");
+			maintListAmounts[maintListAmounts.size()-1] = amount;
+			utils.setScriptVar(self, "maintList.amount", maintListAmounts);
+
+			if (!validateMaintenanceCost(player, amount))
+				removeLastStruct();
+
+			displayMaintenanceList();
+
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+boolean validateMaintenanceCost(obj_id player, int amount)
+{
+	obj_id self = getSelf();
+
+	int travelCost = 0;
+	if (utils.hasScriptVar(self, "curTravelCost"))
+	{
+		travelCost = utils.getIntScriptVar(self, "curTravelCost");
+		utils.removeScriptVar(self, "curTravelCost");
+	}
+
+	int totalMoney = getTotalMoney(player);
+	int totalMaintCost = utils.getIntScriptVar(self, "totalMaintCost");
+	totalMaintCost += amount + travelCost;
+
+	if (totalMoney < totalMaintCost)
+	{
+		sendSystemMessage(player, SID_NOT_ENOUGH_MONEY);
+		//sendSystemMessageTestingOnly(player, "You do not have enough money to perform that maintenance.");
+
+		return false;
+	}
+
+	utils.setScriptVar(self, "totalMaintCost", totalMaintCost);
+
+	// Cumulate total travel costs
+	int totalTravelCost = utils.getIntScriptVar(self, "totalTravelCost");
+	totalTravelCost += travelCost;
+	utils.setScriptVar(self, "totalTravelCost", totalTravelCost);
+
+	return true;
+}
+
+int getStoredBankBalance(obj_id structure)
+{
+	obj_id self = getSelf();
+
+	obj_id[] struct_list = getObjIdArrayObjVar(self, "module_data.maint_list.ids");
+	int [] bank_list = utils.getIntArrayScriptVar(self, "bankList");
+
+	if (struct_list == null || struct_list.length == 0)
+		return -1;
+	if (bank_list == null || bank_list.length == 0)
+		return -1;
+
+	int balance = -1;
+
+	for (int i = 0; i < struct_list.length; i++)
+	{
+		if (structure == struct_list[i])
+		{
+			balance = bank_list[i];
+			break;
+		}
+	}
+
+	return balance;
+}
+
+location[] getLocationData()
+{
+	obj_id self = getSelf();
+
+	obj_id[] struct_list = getObjIdArrayObjVar(self, "module_data.maint_list.ids");
+	location[] loc_list = new location[struct_list.length];
+
+	for (int i = 0; i < struct_list.length; i++)
+	{
+		if (!isIdValid(struct_list[i]))
+			break;
+
+		loc_list[i] = getLocationObjVar(self, "module_data.maint_list.loc_"+i);
+	}
+
+	return loc_list;
+}
+
+int getTravelCost(obj_id player, string structPlanet)
+{
+	string startPlanet = getLocation(player).area;
+	string destPlanet = structPlanet;
+
+	int travelCost = getPlanetTravelCost(startPlanet, destPlanet);
+
+	if (travelCost == 0)
+	{
+		string midPlanet1 = startPlanet;
+		string midPlanet2 = travelMap[getPlanetIdx(startPlanet)][getPlanetIdx(destPlanet)];
+
+		while (!midPlanet2.equals(destPlanet))
+		{
+			travelCost += getPlanetTravelCost(midPlanet1, midPlanet2);
+
+			midPlanet1 = midPlanet2;
+			midPlanet2 = travelMap[getPlanetIdx(midPlanet1)][getPlanetIdx(destPlanet)];
+		}
+	}
+
+	int returnCost = getPlanetTravelCost(destPlanet, startPlanet);
+
+	if (returnCost == 0)
+	{
+		string midPlanet1 = startPlanet;
+		string midPlanet2 = travelMap[getPlanetIdx(startPlanet)][getPlanetIdx(destPlanet)];
+
+		while (!midPlanet2.equals(destPlanet))
+		{
+			returnCost += getPlanetTravelCost(midPlanet1, midPlanet2);
+
+			midPlanet1 = midPlanet2;
+			midPlanet2 = travelMap[getPlanetIdx(midPlanet1)][getPlanetIdx(destPlanet)];
+		}
+	}
+
+	return travelCost + returnCost + droidTravelCost;
+}
+
+int getPlanetIdx(string planet)
+{
+	for (int i= 0; i < planetList.length; i++)
+	{
+		if (planet.equals(planetList[i]))
+			return i;
+	}
+
+	return -1;
+}
+
+void removeLastStruct()
+{
+	obj_id self = getSelf();
+
+	resizeable string[] maintListNames = utils.getResizeableStringArrayScriptVar(self, "maintList.name");
+	resizeable obj_id[] maintListIds = utils.getResizeableObjIdArrayScriptVar(self, "maintList.id");
+	resizeable location[] maintListLocs = utils.getResizeableLocationArrayScriptVar(self, "maintList.loc");
+	resizeable int[] maintListAmounts = utils.getResizeableIntArrayScriptVar(self, "maintList.amount");
+
+	if (maintListNames == null || maintListNames.size() == 0)
+		return;
+
+	maintListNames = utils.removeElementAt(maintListNames, maintListNames.size()-1);
+	maintListIds = utils.removeElementAt(maintListIds, maintListIds.size()-1);
+	maintListLocs = utils.removeElementAt(maintListLocs, maintListLocs.size()-1);
+	maintListAmounts = utils.removeElementAt(maintListAmounts, maintListAmounts.size()-1);
+
+	if (maintListNames.size() == 0)
+	{
+		utils.removeScriptVar(self, "maintList.name");
+		utils.removeScriptVar(self, "maintList.id");
+		utils.removeScriptVar(self, "maintList.loc");
+		utils.removeScriptVar(self, "maintList.amount");
+	}
+	else
+	{
+		utils.setScriptVar(self, "maintList.name", maintListNames);
+		utils.setScriptVar(self, "maintList.id", maintListIds);
+		utils.setScriptVar(self, "maintList.loc", maintListLocs);
+		utils.setScriptVar(self, "maintList.amount", maintListAmounts);
+	}
+}
+
+void startMaintenanceRun(obj_id self, obj_id player)
+{
+	// Get the maintenance run list
+	resizeable obj_id[] maintListIds = utils.getResizeableObjIdArrayScriptVar(self, "maintList.id");
+	resizeable location[] maintListLocs = utils.getResizeableLocationArrayScriptVar(self, "maintList.loc");
+	resizeable int[] maintListAmounts = utils.getResizeableIntArrayScriptVar(self, "maintList.amount");
+
+	if (maintListIds == null || maintListIds.size() == 0)
+	{
+		sendSystemMessage(player, SID_EMPTY_MAINT_RUN);
+		//sendSystemMessageTestingOnly(player, "You must first add structures to be maintained before you can start a maintenance run.");
+		return;
+	}
+
+	// Calculate maintenance run time
+	int runTime = 0;
+	for (int i = 0; i < maintListIds.size(); i++)
+	{
+		runTime += getMaintRunTime(player, maintListIds[i], maintListLocs[i]);
+		money.pay(player, maintListIds[i], maintListAmounts[i], "handlePayment", null);
+	}
+
+	// Pay final travel costs.
+	int travelCost = utils.getIntScriptVar(self, "totalTravelCost");
+	money.pay(player, money.ACCT_TRAVEL, travelCost, "handlePayment", null, false);
+
+	string strRunTime = player_structure.assembleTimeRemaining(player_structure.convertSecondsTime(runTime));
+	prose_package ppMaintRun = prose.getPackage(SID_WILL_COMPLETE_MAINT_RUN);
+	prose.setTT(ppMaintRun, strRunTime);
+	sendSystemMessageProse(player, ppMaintRun);
+
+	// Save run time info on PCD
+	obj_id pcd = callable.getCallableCD(self);
+	setObjVar(pcd, "module_data.maint_run_time", getGameTime()+runTime);
+
+	// Consume all power
+	setObjVar(pcd, "ai.pet.powerLevel", (pet_lib.OUT_OF_POWER + 1));
+
+	// store droid
+	pet_lib.storePet(self);
+}
+
+int getMaintRunTime(obj_id player, obj_id structure, location structLoc)
+{
+	float distance = 0;
+	int planetHops = 0;
+	
+	if(!isSamePlanet(player, structLoc.area))
+	{
+		distance = 10000; // default distance cost if on seperate planets.
+		planetHops = countPlanetHops(player, structLoc.area);
+	}
+	else
+	{
+		distance = utils.getDistance2D(player, structure);
+		
+		if (distance <= 0)
+		{
+			distance = 6000; // default distance cost on same planet (in case it's not proxied)
+		}
+	}
+
+	int planetRunTime = planetHops * (60 * 30); // 30 min per planet hop
+	int distanceRunTime = (int)(distance / 3) + (60 * 15); // 15 min - 65 min depending on distance
+
+	return planetRunTime + distanceRunTime;
+}
+
+int countPlanetHops(obj_id player, string structPlanet)
+{
+	string startPlanet = getLocation(player).area;
+	string destPlanet = structPlanet;
+	string midPlanet = travelMap[getPlanetIdx(startPlanet)][getPlanetIdx(destPlanet)];
+
+	int planetHops = 1;
+	while (!midPlanet.equals(destPlanet))
+	{
+		planetHops++;
+		midPlanet = travelMap[getPlanetIdx(midPlanet)][getPlanetIdx(destPlanet)];
+	}
+
+	return planetHops;
+}
+
+void editMaintenanceList()
+{
+	obj_id self = getSelf();
+	obj_id player = utils.getObjIdScriptVar(self, "player");
+
+	obj_id[] struct_list = getObjIdArrayObjVar(self, "module_data.maint_list.ids");
+
+	if (struct_list == null || struct_list.length == 0)
+	{
+		sendSystemMessage(player, SID_EMPTY_LIST);
+		//sendSystemMessageTestingOnly(player, "The maintenance list for this droid is empty.  Go to one of your structures and assign this droid to maintain it.");
+		return;
+	}
+
+	location[] loc_list = getLocationData();
+	string[]  fullNameList = utils.getStringArrayScriptVar(self, "fullNameList");
+
+	resizeable string[] nameList = new string[0];
+
+	for (int i = 0; i < struct_list.length; i++)
+	{
+		if (!isIdValid(struct_list[i]))
+			break;
+
+		string name = fullNameList[i];
+
+		name += " \\#.\\>250";
+
+		location structLoc = loc_list[i];
+		name += structLoc.area;
+		name += " ("+(int)structLoc.x;
+		name += ","+(int)structLoc.z+")";
+
+		nameList = utils.addElement(nameList, name);
+	}
+
+	string title  = utils.packStringId (SID_DROID_EDIT_MAINT_LIST_TITLE);
+	string prompt = utils.packStringId (SID_DROID_EDIT_MAINT_LIST_PROMPT);
+
+	int pid = createSUIPage(sui.SUI_LISTBOX, self, player, "handleEditMaintListDialog");
+
+	setSUIProperty(pid, "", "Size", "650,375");
+	setSUIProperty(pid, sui.LISTBOX_TITLE, sui.PROP_TEXT, title);
+	setSUIProperty(pid, sui.LISTBOX_PROMPT, sui.PROP_TEXT, prompt);
+
+	// Add buttons.
+	sui.listboxButtonSetup(pid, sui.OK_CANCEL_ALL);
+	setSUIProperty(pid, sui.LISTBOX_BTN_OTHER, sui.PROP_TEXT, "@delete");
+	setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, "@ok");
+	setSUIProperty(pid, sui.LISTBOX_BTN_CANCEL, sui.PROP_TEXT, "@cancel");
+
+	clearSUIDataSource(pid, sui.LISTBOX_DATASOURCE);
+
+	int ubound = nameList.size();
+	for ( int i = 0; i < ubound; i++ )
+	{
+		addSUIDataItem(pid, sui.LISTBOX_DATASOURCE, "" + i);
+		setSUIProperty(pid, sui.LISTBOX_DATASOURCE + "." + i, sui.PROP_TEXT, nameList[i]);
+	}
+
+	subscribeToSUIProperty(pid, sui.LISTBOX_LIST, sui.PROP_SELECTEDROW);
+	subscribeToSUIProperty(pid, sui.LISTBOX_TITLE, sui.PROP_TEXT);
+
+	showSUIPage(pid);
+}
+
+messageHandler handleEditMaintListDialog()
+{
+	if(params == null || params.isEmpty())
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id pcd = callable.getCallableCD(self);
+	obj_id player = sui.getPlayerId(params);
+	int bp = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+	
+	switch (bp)
+	{
+		case sui.BP_CANCEL:
+		case sui.BP_OK:
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_REVERT:
+			if (idx == -1)
+			{
+				editMaintenanceList();
+				return SCRIPT_CONTINUE;
+			}
+
+			player_structure.removeStructureFromMaintenance(self, pcd, idx);
+
+			editMaintenanceList();
+
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean isSamePlanet(obj_id player, string structPlanet)
+{
+	location playerLoc = getLocation(player);
+
+	return (playerLoc.area.equals(structPlanet));
+}
+
+messageHandler returnRequestedBankBalance()
+{
+	int balance = params.getInt("balance");
+	obj_id structure = params.getObjId("structure");
+
+	obj_id[] struct_list = getObjIdArrayObjVar(self, "module_data.maint_list.ids");
+	int [] bank_list = utils.getIntArrayScriptVar(self, "bankList");
+
+	if (struct_list == null || struct_list.length == 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (bank_list == null || bank_list.length == 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	for (int i = 0; i < struct_list.length; i++)
+	{
+		if (structure == struct_list[i])
+		{
+			bank_list[i] = balance;
+			break;
+		}
+	}
+
+	utils.setScriptVar(self, "bankList", bank_list);
+
+	int msgCount = utils.getIntScriptVar(self, "msgCount");
+	msgCount--;
+
+	if (msgCount == 0)
+	{
+		utils.removeScriptVar(self, "msgCount");
+		executeMaintenanceCommand();
+	}
+	else
+	{
+		utils.setScriptVar(self, "msgCount", msgCount);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler returnRequestedName()
+{
+	string name = params.getString("name");
+	obj_id structure = params.getObjId("structure");
+
+	obj_id[] struct_list = getObjIdArrayObjVar(self, "module_data.maint_list.ids");
+	string [] name_list = utils.getStringArrayScriptVar(self, "fullNameList");
+
+	if (struct_list == null || struct_list.length == 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (name_list == null || name_list.length == 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	for (int i = 0; i < struct_list.length; i++)
+	{
+		if (structure == struct_list[i])
+		{
+			name_list[i] = name;
+			break;
+		}
+	}
+
+	utils.setScriptVar(self, "fullNameList", name_list);
+
+	int msgCount = utils.getIntScriptVar(self, "msgCount");
+	msgCount--;
+
+	if (msgCount == 0)
+	{
+		utils.removeScriptVar(self, "msgCount");
+		executeMaintenanceCommand();
+	}
+	else
+	{
+		utils.setScriptVar(self, "msgCount", msgCount);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void executeMaintenanceCommand()
+{
+	obj_id self = getSelf();
+	string command = utils.getStringScriptVar(self, "command");
+
+	if (command.equals("display"))
+		displayMaintenanceList();
+	else if (command.equals("edit"))
+		editMaintenanceList();
+
+}

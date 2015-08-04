@@ -1,0 +1,357 @@
+include library.prose;
+include library.sui;
+include library.temp_schematic;
+include library.utils;
+include library.xp;
+
+const string_id SID_MENU_LEARN						= new string_id("item/xp_purchase", "menu_learn");
+const string_id SID_MSG_NO_MIN_SKILL				= new string_id("item/xp_purchase", "msg_no_min_skill");
+const string_id SID_MSG_NO_XP						= new string_id("item/xp_purchase", "msg_no_xp");
+const string_id SID_MSG_NOT_ENOUGH_XP				= new string_id("item/xp_purchase", "msg_not_enough_xp");
+const string_id SID_MSG_ALREADY_HAVE_SCHEMATIC		= new string_id("item/xp_purchase", "msg_already_have_schematic");
+const string_id SID_MSG_ALREADY_HAVE_COMMAND		= new string_id("item/xp_purchase", "msg_already_have_command");
+const string_id SID_MSG_LEARNED_SCHEMATIC			= new string_id("item/xp_purchase", "msg_learned_schematic");
+const string_id SID_MSG_LEARNED_COMMAND				= new string_id("item/xp_purchase", "msg_learned_command");
+
+const string_id SUI_PROMPT1							= new string_id("item/xp_purchase", "sui_prompt1");
+const string_id SUI_PROMPT2							= new string_id("item/xp_purchase", "sui_prompt2");
+
+const string SUI_TITLE								= "@item/xp_purchase:sui_title";
+
+const int MENU_TYPE									= menu_info_types.SERVER_MENU10;
+
+/***********************************************************************************************
+
+XP PURCHASE SCRIPT
+------------------
+
+This script is intended to be attached to items that will grant a command or schematic
+to a player at the cost of some experience. In order to set up an item that can be used
+with this script the following objvars are required on the item:
+
+xp_type			(string) The type of experience needed for purchase
+xp_amt			(int) The amount of experience needed for purchase
+grant_type		(string) Specifies what is being granted. Must be one of the following:
+						"command"
+						"schematic"
+					The script can be modified to grant other types in the future if necessary,
+					just be sure to add them to this list so people will know.
+grant_name		(string) The name of the command, template of the schematic, etc. being granted.
+
+The following objvars are optional on the item:
+
+min_skill		(string) Minimum skill necessary to use the item. If the player does not have
+					this skill, he or she will not be able to learn.
+uses			(int) Including this objvar on an item that grants a schematic will cause the
+					item to grant a temporary schematic with the number of uses specified. This
+					objvar means nothing on an item that grants a command.
+no_destroy		(int) Including this objvar on an item will keep the item from being destroyed
+					after the item has been successfully used. This is useful if you want to
+					do other special stuff after learning something new and destroy it later,
+					or if you want to be able to use the item multiple times or something.
+
+On successfuly use of an XP purchase item, the item will send a message back to itself named
+"handleLearnSuccess". Other scripts attached to this item can listen for that message if they
+need to wait for the player to learn before doing something special. The params of the message
+will have the obj_id of the player under the key, "player".
+
+***********************************************************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi) {
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if(isItemConfigured(self))
+		mi.addRootMenu(MENU_TYPE, SID_MENU_LEARN);
+	else
+		CustomerServiceLog("item", "XP Purchase Item, " + getName(self) + " (" + self + "), is not configured correctly upon use by %TU", player);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect (obj_id player, int item) {
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if(item == MENU_TYPE)
+		learn(self, player);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs) {
+
+	if(!isItemConfigured(self))
+		return SCRIPT_CONTINUE;
+
+	int idx = utils.getValidAttributeIndex(names);
+
+	if(idx == -1)
+		return SCRIPT_CONTINUE;
+
+	names[idx] = "experience_required";
+	attribs[idx] = " " + getXpAmount(self) + " " + localize(new string_id("exp_n", getXpType(self)));
+	idx++;
+
+	if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+	if(hasMinSkill(self)) {
+
+		names[idx] = "skill_required";
+		attribs[idx] = " " + localize(new string_id("skl_n", getMinSkillName(self)));
+		idx++;
+
+		if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean isItemConfigured(obj_id item) {
+
+	boolean configured = true;
+
+	configured &= hasObjVar(item, "xp_type");
+	configured &= hasObjVar(item, "xp_amt");
+	configured &= hasObjVar(item, "grant_type");
+	configured &= hasObjVar(item, "grant_name");
+
+	return configured;
+}
+
+string getXpType(obj_id item) {
+
+	if(hasObjVar(item, "xp_type"))
+		return getStringObjVar(item, "xp_type");
+	else
+		return null;
+}
+
+int getXpAmount(obj_id item) {
+
+	if(hasObjVar(item, "xp_amt"))
+		return getIntObjVar(item, "xp_amt");
+	else
+		return -1;
+}
+
+string getGrantType(obj_id item) {
+
+	if(hasObjVar(item, "grant_type"))
+		return getStringObjVar(item, "grant_type");
+	else
+		return null;
+}
+
+string getGrantName(obj_id item) {
+
+	if(hasObjVar(item, "grant_name"))
+		return getStringObjVar(item, "grant_name");
+	else
+		return null;
+}
+
+boolean hasMinSkill(obj_id item) {
+
+	return hasObjVar(item, "min_skill");
+}
+
+string getMinSkillName(obj_id item) {
+
+	if(hasObjVar(item, "min_skill"))
+		return getStringObjVar(item, "min_skill");
+	else
+		return null;
+}
+
+boolean canLearn(obj_id self, obj_id player, string type, string name) {
+
+	if(type.equals("schematic")) {
+
+		if(hasObjVar(self, "uses"))
+			return true;
+
+		if(hasSchematic(player, name))
+			return false;
+
+	} else if(type.equals("command")) {
+
+		if(hasCommand(player, name))
+			return false;
+	}
+
+	return true;
+}
+
+void learn(obj_id self, obj_id player) {
+
+	if(hasMinSkill(self)) {
+
+		string minSkill = getMinSkillName(self);
+
+		if(minSkill == null || minSkill.equals(""))
+			return;
+
+		if(!hasSkill(player, minSkill)) {
+
+			prose_package pp = prose.getPackage(SID_MSG_NO_MIN_SKILL, localize(new string_id("skl_n", minSkill)));
+			sendSystemMessageProse(player, pp);
+			return;
+		}
+	}
+
+	string xpType = getXpType(self);
+	int xpAmt = getXpAmount(self);
+
+	int currentXp = getExperiencePoints(player, xpType);
+
+	if(currentXp == 0) {
+
+		prose_package pp = prose.getPackage(SID_MSG_NO_XP, localize(new string_id("exp_n", xpType)));
+		sendSystemMessageProse(player, pp);
+		return;
+	}
+
+	if(currentXp < xpAmt) {
+
+		prose_package pp = prose.getPackage(SID_MSG_NOT_ENOUGH_XP, localize(new string_id("exp_n", xpType)), xpAmt);
+		sendSystemMessageProse(player, pp);
+		return;
+	}
+
+	string type = getGrantType(self);
+	string name = getGrantName(self);
+
+	if(!canLearn(self, player, type, name)) {
+
+		if(type.equals("schematic"))
+			sendSystemMessage(player, SID_MSG_ALREADY_HAVE_SCHEMATIC);
+		else if(type.equals("command"))
+			sendSystemMessage(player, SID_MSG_ALREADY_HAVE_COMMAND);
+
+		return;
+	}
+
+	int pid = -1;
+
+	if(utils.hasScriptVar(player, "xp_purchase_sui")) {
+
+		pid = utils.getIntScriptVar(player, "xp_purchase_sui");
+		forceCloseSUIPage(pid);
+	}
+
+	string prompt = localize(SUI_PROMPT1) + xpAmt + " " + localize(new string_id("exp_n", xpType)) + localize(SUI_PROMPT2);
+
+	pid = sui.msgbox(self, player, prompt, sui.YES_NO, SUI_TITLE, "handleLearn");
+
+	if(pid > -1) {
+
+		utils.setScriptVar(player, "xp_purchase_sui", pid);
+	}
+}
+
+messageHandler handleLearn() {
+
+	int bp = sui.getIntButtonPressed(params);
+	obj_id player = sui.getPlayerId(params);
+
+	if(utils.hasScriptVar(player, "xp_purchase_sui"))
+		utils.removeScriptVar(player, "xp_purchase_sui");
+
+	if(bp == sui.BP_CANCEL)
+		return SCRIPT_CONTINUE;
+
+	string type = getGrantType(self);
+	string name = getGrantName(self);
+	string xpType = getXpType(self);
+	int xpAmt = getXpAmount(self);
+
+	if(hasMinSkill(self)) {
+
+		string minSkill = getMinSkillName(self);
+
+		if(minSkill == null || minSkill.equals(""))
+			return SCRIPT_CONTINUE;
+
+		if(!hasSkill(player, minSkill)) {
+
+			prose_package pp = prose.getPackage(SID_MSG_NO_MIN_SKILL, minSkill);
+			sendSystemMessageProse(player, pp);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	int currentXp = getExperiencePoints(player, xpType);
+
+	if(currentXp == 0) {
+
+		prose_package pp = prose.getPackage(SID_MSG_NO_XP, xpType);
+		sendSystemMessageProse(player, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(currentXp < xpAmt) {
+
+		prose_package pp = prose.getPackage(SID_MSG_NOT_ENOUGH_XP, xpType, xpAmt);
+		sendSystemMessageProse(player, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!canLearn(self, player, type, name)) {
+
+		if(type.equals("schematic"))
+			sendSystemMessage(player, SID_MSG_ALREADY_HAVE_SCHEMATIC);
+		else if(type.equals("command"))
+			sendSystemMessage(player, SID_MSG_ALREADY_HAVE_COMMAND);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	xpAmt *= -1;
+
+	if(xp.grantUnmodifiedExperience(player, xpType, xpAmt)) {
+
+		if(type.equals("schematic")) {
+
+			if(hasObjVar(self, "uses")) {
+
+				int uses = getIntObjVar(self, "uses");
+				temp_schematic.grant(player, name, uses);
+
+				sendSystemMessage(player, SID_MSG_LEARNED_SCHEMATIC);
+
+			} else {
+
+				grantSchematic(player, name);
+
+				sendSystemMessage(player, SID_MSG_LEARNED_SCHEMATIC);
+			}
+
+		} else if(type.equals("command")) {
+
+			grantCommand(player, name);
+
+			sendSystemMessage(player, SID_MSG_LEARNED_COMMAND);
+		}
+
+		dictionary d = new dictionary();
+		d.put("player", player);
+
+		messageTo(self, "handleLearnSuccess", d, 0.0f, false);
+
+		if(!hasObjVar(self, "no_destroy"))
+			destroyObject(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}

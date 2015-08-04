@@ -1,0 +1,285 @@
+include library.groundquests;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits base.remote_object_requester;
+
+// ---------------------------------------------------------------------
+
+const String taskType = "base_task";
+
+const String dataTableColumnQuestOnComplete = "GRANT_QUEST_ON_COMPLETE";
+const String dataTableColumnQuestOnFail     = "GRANT_QUEST_ON_FAIL";
+const String dataTableColumnMusicOnActivate = "MUSIC_ON_ACTIVATE";
+const String dataTableColumnMusicOnComplete = "MUSIC_ON_COMPLETE";
+const String dataTableColumnMusicOnFail     = "MUSIC_ON_FAIL";
+const String dataTableColumnQuestOnCompleteShowSystemMessage = "GRANT_QUEST_ON_COMPLETE_SHOW_SYSTEM_MESSAGE";
+const String dataTableColumnQuestOnFailShowSystemMessage     = "GRANT_QUEST_ON_FAIL_SHOW_SYSTEM_MESSAGE";
+const String dataTableColumnTimerAmount                      = "TIMER_AMOUNT";
+const String dataTableColumnVisible                          = "IS_VISIBLE";
+const String dataTableColumnSignalsOnComplete                = "SIGNALS_ON_COMPLETE";
+const String dataTableColumnSignalsOnFail                    = "SIGNALS_ON_FAIL";
+
+const string MUSIC_TASK_COMPLETED = "sound/music_themequest_victory_rebel.snd";
+const string MUSIC_TASK_FAILED    = "sound/music_themequest_fail_criminal.snd";
+
+const String dot = ".";
+const String objvarWaypoint         = "waypoint";
+const String objvarEntranceWaypoint = "entranceWaypoint";
+
+// ---------------------------------------------------------------------
+
+// fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	int isVisible          = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnVisible);
+	
+	groundquests.createQuestWaypoints(questCrc, taskId, self);
+	
+	//only tell player things if task is visible
+	if(groundquests.isTaskVisible(questCrc, taskId))
+	{
+		//maybe play music
+		String musicOnActivate = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnMusicOnActivate);
+		if(musicOnActivate != null && musicOnActivate.length() > 0)
+		{
+			play2dNonLoopingMusic(self, musicOnActivate);
+		}
+	}
+
+	//set the optional timer value
+	int timerLength = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnTimerAmount);
+	if(timerLength > 0)
+	{
+		groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "Setting timer for " + timerLength + " seconds.");
+
+		const float playerPlayedTimeWhenTimerEnds = (float)getPlayerPlayedTime(self) + (float)timerLength;
+		const String objVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId) + dot + groundquests.timeObjVar;
+		setObjVar(self, objVar, playerPlayedTimeWhenTimerEnds);
+
+		dictionary params = new dictionary();
+		params.put("questcrc", questCrc);
+		params.put("taskid", taskId);
+
+		// we want the *EXACT* objvar value as it is stored in C++ to cover any sort
+		// of float rounding/truncation when the Java float is saved as a float objvar
+		params.put("endTime", (int)getFloatObjVar(self, objVar));
+
+		messageTo(self, "QuestBaseTaskTimerTaskCompleted", params, timerLength, true);
+
+		//only set a timer on the client for visible timers
+		if(isVisible != 0)
+			questSetQuestTaskTimer(self, questGetQuestName(questCrc), taskId, "quest/groundquests:timer_timertext", (int)playerPlayedTimeWhenTimerEnds);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler QuestBaseTaskTimerTaskCompleted()
+{
+	const int questCrc = params.getInt("questcrc");
+	const int taskId   = params.getInt("taskid");
+
+	if(questIsTaskActive(questCrc, taskId, self))
+	{
+		const String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+		const float playerPlayedTimeWhenTimerEnds = getFloatObjVar(self, baseObjVar + dot + groundquests.timeObjVar);
+
+		// ignore message if not for the current quest, like it could be a
+		// leftover message from a previously cancelled or completed quest;
+		// legacy persisted messages may not have this value in the payload
+		if (params.containsKey("endTime"))
+		{
+			const int endTime = params.getInt("endTime");
+			if (endTime != (int)playerPlayedTimeWhenTimerEnds)
+				return SCRIPT_CONTINUE;
+		}
+
+		const float timeLeft = playerPlayedTimeWhenTimerEnds - (float)getPlayerPlayedTime(self);
+		//dealing with client/server lag and messageto processing, end at 1 second
+
+		if(timeLeft <= 0)
+		{
+			questFailTask(questCrc, taskId, self);
+		}
+		else
+		{
+			dictionary newParams = new dictionary();
+			newParams.put("questcrc", questCrc);
+			newParams.put("taskid", taskId);
+			newParams.put("endTime", (int)playerPlayedTimeWhenTimerEnds);
+
+			messageTo(self, "QuestBaseTaskTimerTaskCompleted", newParams, timeLeft, true);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+// fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	//grant any new quests on task completion
+	String questOnComplete = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnQuestOnComplete);
+	if(questOnComplete != null && questOnComplete.length() > 0)
+	{
+		boolean showSystemMessage = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableColumnQuestOnCompleteShowSystemMessage, true);
+		groundquests.grantQuestNoAcceptUI(self, questOnComplete, showSystemMessage);
+	}
+
+	//only tell player things if task is visible
+	if(groundquests.isTaskVisible(questCrc, taskId))
+	{
+		//maybe show system message
+		groundquests.sendTaskCompletedSystemMessage(questCrc, taskId, self);
+
+		//maybe play music
+		String musicOnComplete = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnMusicOnComplete);
+		if(musicOnComplete != null && musicOnComplete.length() > 0)
+		{
+			play2dNonLoopingMusic(self, musicOnComplete);
+		}
+	}
+
+	sendTaskSignals(self, questCrc, taskId, dataTableColumnSignalsOnComplete);
+
+	baseCleanup(self, questCrc, taskId);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+// fires when the task is completed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	//grant any new quests on task failure
+	String questOnFail = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnQuestOnFail);
+	if(questOnFail != null && questOnFail.length() > 0)
+	{
+		boolean showSystemMessage = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableColumnQuestOnFailShowSystemMessage, true);
+		groundquests.grantQuest(self, questOnFail, showSystemMessage);
+	}
+
+	//only tell player things if task is visible
+	if(groundquests.isTaskVisible(questCrc, taskId))
+	{
+		//maybe show system message
+		groundquests.sendTaskFailedSystemMessage(questCrc, taskId, self);
+
+		//maybe play music
+		String musicOnFail = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnMusicOnFail);
+		if(musicOnFail != null && musicOnFail.length() > 0)
+		{
+			play2dNonLoopingMusic(self, musicOnFail);
+		}
+	}
+
+	sendTaskSignals(self, questCrc, taskId, dataTableColumnSignalsOnFail);
+
+	baseCleanup(self, questCrc, taskId);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+// fires when the task is cleared (i.e. canceled)
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	baseCleanup(self, questCrc, taskId);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+// cleanup code specific to this task
+void baseCleanup(obj_id player, int questCrc, int taskId)
+{
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+	obj_id waypoint = getObjIdObjVar(player, baseObjVar + dot + objvarWaypoint);
+
+	if (isIdValid(waypoint))
+	{
+		groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "baseCleanup",
+			taskType + " destroying waypoint: " + waypoint);
+
+		destroyWaypointInDatapad(waypoint, player);
+	}
+
+	obj_id entranceWaypoint = getObjIdObjVar(player, baseObjVar + dot + objvarEntranceWaypoint);
+
+	if (isIdValid(entranceWaypoint))
+	{
+		groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "baseCleanup",
+			taskType + " destroying entranceWaypoint: " + entranceWaypoint);
+
+		destroyWaypointInDatapad(entranceWaypoint, player);
+	}	
+	
+	// remove entire objvar list
+	removeObjVar(player, baseObjVar);
+
+}
+
+// ---------------------------------------------------------------------
+
+void sendTaskSignals(obj_id player, int questCrc, int taskId, string dataTableColumnName)
+{
+	string signals = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnName);
+
+	if (signals != null && signals.length() > 0)
+	{
+		groundquests.sendSignals(player, split(signals, ','));
+	}
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnLogin()
+{
+	dictionary tasks = groundquests.getActiveTasksForTaskType(self, taskType);
+	if ( (tasks != null) && !tasks.isEmpty() )
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for(int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+				String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+				if ( hasObjVar(self, baseObjVar + dot + groundquests.objvarWaypointInActive) )
+				{
+					if ( hasObjVar(self, baseObjVar + dot + groundquests.objvarEntranceWaypoint) )
+					{
+						obj_id entranceWaypoint = getObjIdObjVar(self, baseObjVar + dot + groundquests.objvarEntranceWaypoint);
+						if ( isIdValid(entranceWaypoint) )
+						{
+							groundquests.setQuestWaypointActive(entranceWaypoint, self, baseObjVar);
+						}
+					}
+					
+					if ( hasObjVar(self, baseObjVar + dot + groundquests.objvarWaypoint) )
+					{
+						obj_id waypoint = getObjIdObjVar(self, baseObjVar + dot + groundquests.objvarWaypoint);
+						if ( isIdValid(waypoint) )
+						{
+							groundquests.setQuestWaypointActive(waypoint, self, baseObjVar);
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------

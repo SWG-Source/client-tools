@@ -1,0 +1,1450 @@
+// utils library for space
+include script_entry;
+include library.space_content;
+
+include library.prose;
+include library.space_combat;
+include library.space_transition;
+include java.lang.Math;
+
+include java.util.Arrays;
+include java.util.Vector;
+
+const int POB_LOOT_BOX_CAPACITY = 75;
+
+const string_id SID_NO_SHIP_CERTIFICATION = new string_id("space/space_interaction", "no_ship_certification");
+const string_id SID_NO_WORKING_SHIP = new string_id("space/space_interaction", "no_working_ship");
+const string_id SID_NO_SHIP = new string_id("space/space_interaction", "no_ship");
+const string_id SID_NO_CAN_CONTROL_SHIP_SLOT = new string_id("space/space_interaction", "no_can_control_ship_slot");
+
+const string[] SHIP_GUNNER_SLOT_NAMES =
+{
+	"ship_gunner0",
+	"ship_gunner1",
+	"ship_gunner2",
+	"ship_gunner3",
+	"ship_gunner4",
+	"ship_gunner5",
+	"ship_gunner6",
+	"ship_gunner7"
+};
+
+const string[] POB_SHIP_GUNNER_SLOT_NAMES =
+{
+	"ship_gunner0_pob",
+	"ship_gunner1_pob",
+	"ship_gunner2_pob",
+	"ship_gunner3_pob",
+	"ship_gunner4_pob",
+	"ship_gunner5_pob",
+	"ship_gunner6_pob",
+	"ship_gunner7_pob"
+};
+
+// the function below calls a messageto directly. No overhead this time.
+
+
+void notifyObject(obj_id objTarget, string strNotificationName, dictionary dctParams)
+{
+	if(!isIdValid(objTarget))
+	{
+		debugServerConsoleMsg(null, "Null object id passed into notifyObject, exceptioning");
+		Thread.dumpStack();
+		throw new InterruptedException();
+
+	}
+	
+	if(!objTarget.isLoaded() || !objTarget.isAuthoritative())
+	{
+		return;
+	}
+
+	if(strNotificationName == null || strNotificationName == "")
+	{
+		debugServerConsoleMsg(null, "null or empty notification name passed into notifyObject, exceptioning");
+		Thread.dumpStack();
+		throw new InterruptedException();
+
+	}
+
+	try
+	{
+		int intReturn = script_entry.callMessageHandlers(strNotificationName, objTarget, dctParams);
+		return;
+
+	}
+	catch(Throwable err)
+	{
+		debugServerConsoleMsg(null, "Unable to call into callMessageHandlers ");
+		Thread.dumpStack();
+		throw new InterruptedException();
+	}
+}
+
+void callTrigger(string strTrigger, Object[] params)
+{
+	try
+	{
+		script_entry.runScripts(strTrigger, params);
+		return;
+
+	}
+	catch (Throwable err)
+	{
+		debugServerConsoleMsg(null, "Unable to call into callMessageHandlers ");
+		Thread.dumpStack();
+		throw new InterruptedException();
+	}
+
+}
+
+boolean isPlayerControlledShip(obj_id objShip)
+{
+	if ( objShip == null )
+		return false;
+
+	// hack function to be replaced later.
+	string strTemplate = getTemplateName(objShip);
+	if ( strTemplate == null )
+		return false;
+	int intIndex = strTemplate.indexOf("object/ship/player/");
+	if(intIndex>-1)
+	{
+		return true;
+	}
+	return false;
+}
+
+void sendDebugSpam(obj_id objTarget, string strSpam)
+{
+	if((hasScript(objTarget, "space.content_tools.content_generation"))||(isGod(objTarget)))
+	{
+		sendSystemMessageTestingOnly(objTarget, strSpam);
+	}
+	return;
+
+}
+
+boolean hasShip(obj_id player)
+{
+	obj_id[] shipControlDevices = space_transition.findShipControlDevicesForPlayer(player);
+	if (shipControlDevices != null && shipControlDevices.length > 0)
+		return true;
+	return false;
+}
+
+boolean isShipUsable(obj_id ship, obj_id player)
+{
+	string_id failReason = null;
+	if (isShipFlyable(ship))
+	{
+		if (hasCertificationsForItem(player, ship))
+			return true;
+		if (isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "** Passing certification test due to god mode. **");
+			return true;
+		}
+		failReason = SID_NO_SHIP_CERTIFICATION;
+	}
+	else if (failReason == null)
+		failReason = SID_NO_WORKING_SHIP;
+
+	if (failReason == null)
+		sendSystemMessage(player, SID_NO_SHIP);
+	else
+		sendSystemMessage(player, failReason);
+	return false;
+
+}
+
+obj_id hasUsableShip(obj_id player)
+{
+	string_id failReason = null;
+
+	obj_id[] shipControlDevices = space_transition.findShipControlDevicesForPlayer(player);
+	if (shipControlDevices != null && shipControlDevices.length > 0)
+	{
+		for (int i = 0; i < shipControlDevices.length; ++i)
+		{
+			obj_id ship = space_transition.getShipFromShipControlDevice(shipControlDevices[i]);
+			if (isIdValid(ship))
+			{
+				if (isShipFlyable(ship))
+				{
+					if (hasCertificationsForItem(player, ship))
+						return shipControlDevices[i];
+					if (isGod(player))
+					{
+						sendSystemMessageTestingOnly(player, "** Passing certification test due to god mode. **");
+						return shipControlDevices[i];
+					}
+					failReason = SID_NO_SHIP_CERTIFICATION;
+				}
+				else if (failReason == null)
+					failReason = SID_NO_WORKING_SHIP;
+			}
+		}
+	}
+
+	if (failReason == null)
+		sendSystemMessage(player, SID_NO_SHIP);
+	else
+		sendSystemMessage(player, failReason);
+
+	return null;
+}
+
+boolean hasShipControlDeviceCertification(obj_id player, obj_id shipControlDevice)
+{
+	if (isIdValid(shipControlDevice))
+	{
+		obj_id ship = space_transition.getShipFromShipControlDevice(shipControlDevice);
+		if (hasCertificationsForItem(player, ship))
+			return true;
+	}
+
+	return false;
+}
+
+boolean isShipFlyable(obj_id objShip)
+{
+	int[] REQUIRED_COMPONENTS = {
+					ship_component_type.SCT_reactor,
+					ship_component_type.SCT_engine
+					};
+
+	if(!isIdValid(objShip))
+	{
+		return false;
+	}
+	for(int intI = 0; intI< REQUIRED_COMPONENTS.length; intI++)
+	{
+		if(isShipSlotInstalled(objShip, REQUIRED_COMPONENTS[intI]))
+		{
+			if(isShipComponentDisabled(objShip, REQUIRED_COMPONENTS[intI]))
+			{
+				return false;
+			}
+		}
+		else
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+boolean isShipPaintable(obj_id objShip)
+{
+	string chassis = getShipChassisType(objShip);
+
+	if (chassis.equals("player_basic_tiefighter") ||
+		chassis.equals("player_decimator") ||
+		chassis.equals("player_tieadvanced") ||
+		chassis.equals("player_tieaggressor") ||
+		chassis.equals("player_tiebomber") ||
+		chassis.equals("player_tiefighter") ||
+		chassis.equals("player_tie_in") ||
+		chassis.equals("player_tieinterceptor") ||
+		chassis.equals("player_tie_light_duty") ||
+		chassis.equals("player_tieoppressor") ||
+		chassis.equals("player_gunship_imperial") ||
+		chassis.equals("player_gunship_rebel") ||
+		chassis.equals("player_gunship_neutral") ||
+		chassis.equals("player_vwing") ||				
+		chassis.equals("player_naboo_n1") )
+		// yt2400 is paintable.
+	{
+		return false;
+	}
+
+	return true;
+}
+
+boolean isShipTextureable(obj_id objShip)
+{
+	string chassis = getShipChassisType(objShip);
+
+	if (chassis.equals("player_basic_tiefighter") ||
+		chassis.equals("player_decimator") ||
+		chassis.equals("player_tieadvanced") ||
+		chassis.equals("player_tieaggressor") ||
+		chassis.equals("player_tiebomber") ||
+		chassis.equals("player_tiefighter") ||
+		chassis.equals("player_tie_in") ||
+		chassis.equals("player_tieinterceptor") ||
+		chassis.equals("player_tie_light_duty") ||
+		chassis.equals("player_tieoppressor") ||
+		chassis.equals("player_gunship_imperial") ||
+		chassis.equals("player_gunship_rebel") ||
+		chassis.equals("player_gunship_neutral") ||
+		chassis.equals("player_vwing") ||		
+		chassis.equals("player_naboo_n1") )
+	{
+		return false;
+	}
+
+	return true;
+}
+
+void sendDelayedSystemMessage(obj_id objPlayer, string_id strSpam, float fltDelay)
+{
+	dictionary dctParams = new dictionary();
+	dctParams.put("strSpam", strSpam);
+	messageTo(objPlayer, "doDelayedSystemMessage", dctParams, fltDelay, false);
+	return;
+}
+
+transform getRandomPositionInSphere(transform trStartPosition, float fltMinRadius, float fltMaxRadius, boolean boolRandomizeOrientation) // it's not always a sphere, sometimes it could be a shell if the min radius is >0.
+{
+// make up a new term for the shell thing. maybe 3d-donut.
+	float fltDistance = rand(fltMinRadius, fltMaxRadius);
+	//LOG("space", "distance is "+fltDistance+" min is "+fltMinRadius+" max is "+fltMaxRadius);
+	vector vctOffset= vector.randomUnit().multiply(fltDistance);
+	transform transform_w = trStartPosition;
+	transform_w = transform_w.move_p(vctOffset);
+	if(boolRandomizeOrientation)
+	{
+		//-- random orientation
+		float randomYaw = rand(0f, (float)Math.PI * 2);
+		float randomPitch = rand(0f, (float)Math.PI * 2);
+		float randomRoll = rand(0f, (float)Math.PI * 2);
+		transform_w = transform_w.yaw_l(randomYaw);
+		transform_w = transform_w.pitch_l(randomPitch);
+		transform_w = transform_w.roll_l(randomRoll);
+	}
+	return transform_w;
+
+
+}
+
+location getLocationFromTransform(transform trTest)
+{
+	vector vctPoint = trTest.getPosition_p();
+	location locTest = new location();
+	locTest.x =  vctPoint.x;
+	locTest.y = vctPoint.y;
+	locTest.z = vctPoint.z;
+	return locTest;
+
+}
+
+transform faceTransformToVector(transform trStart, vector vctPoint)
+{
+	vector vctNewPoint = trStart.rotateTranslate_p2l(vctPoint);
+	transform trNewTransform = trStart.yaw_l(vctNewPoint.theta()).pitch_l(vctNewPoint.phi());
+	return trNewTransform;
+
+}
+
+vector getVector(obj_id objTest)
+{
+	return getTransform_o2p(objTest).getPosition_p();
+}
+
+string getCellName(obj_id objBuilding, obj_id objCell)
+{
+	string[] strCells = getCellNames(objBuilding);
+	for(int intI = 0; intI< strCells.length; intI++)
+	{
+		obj_id objTest = getCellId(objBuilding, strCells[intI]);
+		if(objTest==objCell)
+		{
+			return strCells[intI];
+		}
+	}
+	return null;
+
+}
+
+resizeable obj_id[] getPlayersInShip(obj_id objObject) // HACK HACK HACK
+{
+
+	return space_transition.getContainedPlayers(objObject, null);
+
+}
+
+void sendSystemMessageShip(obj_id objShip, string_id strSpam, boolean boolSendToPilot, boolean boolSendToPassengers, boolean boolSendToGunners, boolean boolSendToOperations)
+{
+	if(boolSendToPilot)
+	{
+		sendSystemMessageToPilot(objShip, strSpam);
+	}
+	if(boolSendToPassengers)
+	{
+		sendSystemMessageToPassengers(objShip, strSpam);
+
+	}
+	if(boolSendToGunners)
+	{
+		sendSystemMessageToGunners(objShip, strSpam);
+	}
+	if(boolSendToOperations)
+	{
+		sendSystemMessageToOperations(objShip, strSpam);
+	}
+	return;
+}
+
+void tauntShip(obj_id objShip, obj_id objSender,  prose_package pp, boolean boolSendToPilot, boolean boolSendToPassengers, boolean boolSendToGunners, boolean boolSendToOperations)
+{
+	if(boolSendToPilot)
+	{
+		tauntPilot(objShip, objSender, pp);
+	}
+	if(boolSendToPassengers)
+	{
+		tauntPassengers(objShip, objSender, pp);
+	}
+	if(boolSendToGunners)
+	{
+		tauntGunners(objShip, objSender, pp);
+	}
+	if(boolSendToOperations)
+	{
+		tauntOperations(objShip, objSender, pp);
+	}
+	return;
+}
+
+void tauntShip(obj_id objShip, obj_id objSender,  string_id strSpam, boolean boolSendToPilot, boolean boolSendToPassengers, boolean boolSendToGunners, boolean boolSendToOperations)
+{
+
+	if(boolSendToPilot)
+	{
+		tauntPilot(objShip, objSender, strSpam);
+	}
+	if(boolSendToPassengers)
+	{
+		tauntPassengers(objShip, objSender, strSpam);
+	}
+	if(boolSendToGunners)
+	{
+		tauntGunners(objShip, objSender, strSpam);
+	}
+	if(boolSendToOperations)
+	{
+		tauntOperations(objShip, objSender, strSpam);
+	}
+	return;
+
+
+}
+
+void tauntPlayer(obj_id objPlayer, obj_id objSender, string_id strSpam)
+{
+	prose_package proseTest = prose.getPackage(strSpam);
+	string strAppearance = "";
+	if(hasObjVar(objSender, "convo.appearance"))
+	{
+		strAppearance = getStringObjVar(objSender, "convo.appearance");
+	}
+	if(strAppearance!="")
+	{
+		commPlayers(objSender, strAppearance, null, 6.0f, objPlayer, proseTest);
+	}
+	else
+	{
+		commPlayers(objSender, null, null, 6.0f, objPlayer, proseTest);
+	}
+	space_combat.playCombatTauntSound(objPlayer);
+}
+
+//new tauntplayer function that overrides the crackling sound played over comms.  allows you to pick your own sound
+//format for the sound template string is "sound/filename.snd"
+void tauntPlayerWithSound(obj_id objPlayer, obj_id objSender, string_id strSpam, string soundEffect)
+{
+	prose_package proseTest = prose.getPackage(strSpam);
+	string strAppearance = "";
+	if(hasObjVar(objSender, "convo.appearance"))
+	{
+		strAppearance = getStringObjVar(objSender, "convo.appearance");
+	}
+	if(strAppearance!="")
+	{
+		commPlayers(objSender, strAppearance, null, 6.0f, objPlayer, proseTest);
+	}
+	else
+	{
+		commPlayers(objSender, null, null, 6.0f, objPlayer, proseTest);
+	}
+	playMusic(objPlayer, soundEffect);
+}
+
+void tauntPlayer(obj_id objPlayer, obj_id objSender, prose_package pp)
+{
+
+	string strAppearance = "";
+	if(hasObjVar(objSender, "convo.appearance"))
+	{
+		strAppearance = getStringObjVar(objSender, "convo.appearance");
+	}
+	if(strAppearance!="")
+	{
+		commPlayers(objSender, strAppearance, null, 6.0f, objPlayer, pp);
+	}
+	else
+	{
+		commPlayers(objSender, null, null, 6.0f, objPlayer, pp);
+	}
+	space_combat.playCombatTauntSound(objPlayer);
+}
+
+void tauntPilot(obj_id objShip,obj_id objSender,  string_id strSpam)
+{
+	if(!isIdValid(objShip))
+	{
+		return;
+	}
+	obj_id objPilot = getPilotId(objShip);
+	if(isIdValid(objPilot))
+	{
+		prose_package proseTest = prose.getPackage(strSpam);
+		string strAppearance = "";
+		if(hasObjVar(objSender, "convo.appearance"))
+		{
+			strAppearance = getStringObjVar(objSender, "convo.appearance");
+		}
+		LOG("space", "appearance is "+strAppearance);
+		if(strAppearance!="")
+		{
+			commPlayers(objSender, strAppearance, null, 6.0f, objPilot, proseTest);
+		}
+		else
+		{
+			commPlayers(objSender, null, null, 6.0f, objPilot, proseTest);
+		}
+		LOG("space", "playing sound for "+objPilot);
+		space_combat.playCombatTauntSound(objPilot);
+	}
+
+}
+
+void tauntPilot(obj_id objShip,obj_id objSender,   prose_package pp)
+{
+	obj_id objPilot = getPilotId(objShip);
+	if(isIdValid(objPilot))
+	{
+		string strAppearance = "";
+		if(hasObjVar(objSender, "convo.appearance"))
+		{
+			strAppearance = getStringObjVar(objSender, "convo.appearance");
+		}
+		if(strAppearance!="")
+		{
+			commPlayers(objSender, strAppearance, null, 6.0f, objPilot, pp);
+		}
+		else
+		{
+			commPlayers(objSender, null, null, 6.0f, objPilot, pp);
+		}
+		LOG("space", "playing sound for "+objPilot);
+		space_combat.playCombatTauntSound(objPilot);
+
+	}
+}
+
+void tauntGunners(obj_id objShip, obj_id objSender, prose_package pp)
+{
+	resizeable obj_id[] objGunners = getGunnersInShip(objShip);
+	if((objGunners==null)||(objGunners.length<1))
+	{
+		return;
+	}
+	tauntArray(objSender, objGunners, pp);
+	return;
+}
+
+void tauntGunners(obj_id objShip, obj_id objSender, string_id strSpam)
+{
+	resizeable obj_id[] objGunners = getGunnersInShip(objShip);
+	if((objGunners==null)||(objGunners.length<1))
+	{
+		return;
+	}
+	tauntArray(objSender, objGunners, strSpam);
+}
+
+void tauntOperations(obj_id objShip,obj_id objSender, prose_package pp)
+{
+	obj_id objOfficer = getOperationsOfficer(objShip);
+	if(isIdValid(objOfficer))
+	{
+		string strAppearance = "";
+		if(hasObjVar(objSender, "convo.appearance"))
+		{
+			strAppearance = getStringObjVar(objSender, "convo.appearance");
+		}
+		if(strAppearance!="")
+		{
+			commPlayers(objSender, strAppearance, null, 6.0f, objOfficer, pp);
+		}
+		else
+		{
+			commPlayers(objSender, null, null, 6.0f, objOfficer, pp);
+		}
+		space_combat.playCombatTauntSound(objOfficer);
+	}
+}
+
+void tauntOperations(obj_id objShip,obj_id objSender, string_id strSpam)
+{
+	obj_id objOfficer = getOperationsOfficer(objShip);
+	if(isIdValid(objOfficer))
+	{
+		prose_package proseTest = prose.getPackage(strSpam);
+		string strAppearance = "";
+		if(hasObjVar(objSender, "convo.appearance"))
+		{
+			strAppearance = getStringObjVar(objSender, "convo.appearance");
+		}
+		if(strAppearance!="")
+		{
+			commPlayers(objSender, strAppearance, null, 6.0f, objOfficer, proseTest);
+		}
+		else
+		{
+			commPlayers(objSender, null, null, 6.0f, objOfficer, proseTest);
+		}
+		space_combat.playCombatTauntSound(objOfficer);
+	}
+}
+
+void tauntPassengers(obj_id objShip,obj_id objSender, prose_package pp)
+{
+	resizeable obj_id[] objPlayers = getPassengers(objShip);
+	tauntArray(objSender, objPlayers, pp);
+}
+
+void tauntPassengers(obj_id objShip, obj_id objSender, string_id strSpam)
+{
+	resizeable obj_id[] objPlayers = getPassengers(objShip);
+	tauntArray(objSender, objPlayers, strSpam);
+}
+
+void sendSystemMessageShip(obj_id objShip, prose_package pp, boolean boolSendToPilot, boolean boolSendToPassengers, boolean boolSendToGunners, boolean boolSendToOperations)
+{
+	if(boolSendToPilot)
+	{
+		sendSystemMessageToPilot(objShip, pp);
+	}
+	if(boolSendToPassengers)
+	{
+		sendSystemMessageToPassengers(objShip, pp);
+
+	}
+	if(boolSendToGunners)
+	{
+		sendSystemMessageToGunners(objShip, pp);
+	}
+	if(boolSendToOperations)
+	{
+		sendSystemMessageToOperations(objShip, pp);
+	}
+
+	return;
+}
+
+void sendSystemMessageToPilot(obj_id objShip, prose_package pp)
+{
+	obj_id objPilot = getPilotId(objShip);
+	if(isIdValid(objPilot))
+	{
+		sendSystemMessageProse(objPilot, pp);
+	}
+	return;
+}
+
+void sendSystemMessageToPilot(obj_id objShip, string_id strSpam)
+{
+	obj_id objPilot = getPilotId(objShip);
+	if(isIdValid(objPilot))
+	{
+		sendSystemMessage(objPilot, strSpam);
+	}
+	return;
+}
+
+void sendSystemMessageToGunners(obj_id objShip, string_id strSpam)
+{
+	resizeable obj_id[] objGunners = getGunnersInShip(objShip);
+	sendSystemMessageToArray(objGunners, strSpam);
+	return;
+}
+
+void sendSystemMessageToGunners(obj_id objShip, prose_package pp)
+{
+	resizeable obj_id[] objGunners = getGunnersInShip(objShip);
+	sendSystemMessageToArray(objGunners, pp);
+	return;
+}
+
+void sendSystemMessageToArray(resizeable obj_id[] objArray, string_id strSpam)
+{
+	if((objArray!=null)&&(objArray.length>0))
+	{
+		for(int intI = 0; intI< objArray.length; intI++)
+		{
+			sendSystemMessage(objArray[intI], strSpam);
+		}
+	}
+}
+
+void sendSystemMessageToArray(resizeable obj_id[] objArray, prose_package pp)
+{
+	if((objArray!=null)&&(objArray.length>0))
+	{
+		for(int intI = 0; intI< objArray.length; intI++)
+		{
+			sendSystemMessageProse(objArray[intI], pp);
+		}
+	}
+}
+
+void tauntArray(obj_id objSender, resizeable obj_id[] objArray, prose_package pp)
+{
+	if((objArray!=null)&&(objArray.length>0))
+	{
+		string strAppearance = "";
+		if(hasObjVar(objSender, "convo.appearance"))
+		{
+			strAppearance = getStringObjVar(objSender, "convo.appearance");
+		}
+		if(strAppearance!="")
+		{
+			obj_id[] temp = new obj_id[objArray.length];
+			objArray.toArray(temp);
+			dogfightTauntPlayers(objSender, temp, pp, strAppearance);
+		}
+		else
+		{
+			obj_id[] temp = new obj_id[objArray.length];
+			objArray.toArray(temp);
+			dogfightTauntPlayers(objSender, temp, pp);
+		}
+
+	}
+}
+
+void tauntArray(obj_id objSender, resizeable obj_id[] objArray, string_id strSpam)
+{
+
+	if((objArray!=null)&&(objArray.length>0))
+	{
+		string strAppearance = "";
+		if(hasObjVar(objSender, "convo.appearance"))
+		{
+			strAppearance = getStringObjVar(objSender, "convo.appearance");
+		}
+		prose_package pp = prose.getPackage(strSpam);
+
+		if(strAppearance!="")
+		{
+			obj_id[] temp = new obj_id[objArray.length];
+			objArray.toArray(temp);
+			dogfightTauntPlayers(objSender, temp, pp, strAppearance);
+		}
+		else
+		{
+			obj_id[] temp = new obj_id[objArray.length];
+			objArray.toArray(temp);
+			dogfightTauntPlayers(objSender, temp, pp);
+		}
+	}
+}
+
+void sendSystemMessageToPassengers(obj_id objShip, string_id strSpam)
+{
+
+	resizeable obj_id[] objPlayers = getPassengers(objShip);
+	sendSystemMessageToArray(objPlayers, strSpam);
+}
+
+void sendSystemMessageToPassengers(obj_id objShip, prose_package pp)
+{
+	resizeable obj_id[] objPlayers = getPassengers(objShip);
+	sendSystemMessageToArray(objPlayers, pp);
+}
+
+void sendSystemMessageToOperations(obj_id objShip, string_id strSpam)
+{
+	obj_id objOfficer = getOperationsOfficer(objShip);
+	if(isIdValid(objOfficer))
+	{
+		sendSystemMessage(objOfficer, strSpam);
+	}
+	return;
+}
+
+void sendSystemMessageToOperations(obj_id objShip, prose_package pp)
+{
+	obj_id objOfficer = getOperationsOfficer(objShip);
+	if(isIdValid(objOfficer))
+	{
+		sendSystemMessageProse(objOfficer, pp);
+	}
+	return;
+}
+
+resizeable obj_id[] getGunnersInShip(obj_id objShip)
+{
+	resizeable obj_id[] gunners = new obj_id[0];
+
+	// gunner slots are on objects which are immediate contents of cells of the ship
+	obj_id[] shipContents = getContents(objShip);
+	if (shipContents != null && shipContents.length > 0)
+	{
+		// if the ship doesn't contain cells, gunners are in slots of the ship
+		if (!getTemplateName(shipContents[0]).startsWith("object/cell/"))
+		{
+			for (int i = 0; i < POB_SHIP_GUNNER_SLOT_NAMES.length; ++i)
+			{
+				obj_id gunner = getObjectInSlot(objShip, SHIP_GUNNER_SLOT_NAMES[i]);
+				if (isIdValid(gunner))
+					gunners = utils.addElement(gunners, gunner);
+			}
+			return gunners;
+		}
+
+		for (int i = 0; i < shipContents.length; ++i)
+		{
+			obj_id[] cellContents = getContents(shipContents[i]);
+			if (cellContents != null)
+			{
+				for (int j = 0; j < cellContents.length; ++j)
+				{
+					obj_id cellContent = cellContents[j];
+					if (isIdValid(cellContent))
+					{
+						for (int k = 0; k < POB_SHIP_GUNNER_SLOT_NAMES.length; ++k)
+						{
+							obj_id gunner = getObjectInSlot(cellContent, POB_SHIP_GUNNER_SLOT_NAMES[k]);
+							if (isIdValid(gunner))
+								gunners = utils.addElement(gunners, gunner);
+						}
+					}
+				}
+			}
+		}
+	}
+	return gunners;
+}
+
+transform randomizeTransformOrientation(transform trTest)
+{
+	transform tr = trTest.yaw_l(rand(-(float)Math.PI, (float)Math.PI)).pitch_l(rand(-(float)Math.PI, (float)Math.PI)).roll_l(rand(-(float)Math.PI, (float)Math.PI));
+	return tr;
+}
+
+boolean isShipWithInterior(obj_id objShip)
+{
+
+	string[] strCells = getCellNames(objShip);
+	if((strCells==null)||(strCells.length==0))
+	{
+		return false;
+	}
+	else
+	{
+		return true;
+	}
+}
+
+obj_id[] getAllPlayersInShip(obj_id ship)
+{
+	
+	resizeable obj_id[] crew = getGunnersInShip(ship);
+	
+	obj_id pilot = getPilotId(ship);
+	if(isIdValid(pilot))
+	{
+		if (utils.getElementPositionInArray(crew, pilot) == -1)
+			utils.addElement(crew, pilot);
+	}
+	
+	obj_id opps = getOperationsOfficer(ship);
+	if (isIdValid(opps))
+	{
+		if (utils.getElementPositionInArray(crew, opps) == -1)
+			utils.addElement(crew, opps);
+	}
+	
+	resizeable obj_id[] passengers = getPassengers(ship);
+	if (passengers != null && passengers.length > 0)
+	{
+		for (int i=0;i<passengers.length;i++)
+		{
+			if (utils.getElementPositionInArray(crew, passengers[i]) == -1)
+			{
+				utils.addElement(crew, passengers[i]);
+			}
+		}
+	}
+	return crew;
+}
+
+resizeable obj_id[] getPassengers(obj_id objShip)
+{
+	obj_id[] objContents = getContents(objShip);
+	if((objContents!=null)&&(objContents.length>0))
+	{
+		resizeable obj_id[] objPassengers = new obj_id[0];
+		for(int intI = 0; intI< objContents.length; intI++)
+		{
+			obj_id[] objInteriorContents = getContents(objContents[intI]);
+			if((objInteriorContents!=null)&&(objInteriorContents.length>0))
+			{
+				for(int intJ = 0; intJ<objInteriorContents.length; intJ++)
+				{
+					if(isPlayer(objInteriorContents[intJ]))
+					{
+						objPassengers = utils.addElement(objPassengers, objInteriorContents[intJ]);
+					}
+				}
+			}
+		}
+		if(objPassengers.length>0)
+		{
+			return objPassengers;
+		}
+		else
+		{
+			return null;
+		}
+	}
+	else
+	{
+		return null;
+	}
+}
+
+float  getRandomValueWithDeadZone(float fltStart, float fltMin, float fltMax)
+{
+	// if start is 100
+	// and min is 25, max is 50
+	// we get
+	// values of
+	// 50-75
+	// and
+	// 125-150
+
+	int intRoll = rand(1,2);
+	if(intRoll==1)
+	{
+		// greater
+		float fltValue = rand(fltMin, fltMax);
+		float fltReturn = fltStart - fltValue;
+		return fltReturn;
+	}
+	else
+	{
+		// less than
+		float fltValue = rand(fltMin, fltMax);
+		float fltReturn = fltStart + fltValue;
+		return fltReturn;
+	}
+}
+
+location getRandomLocationInSphere(location locStart, float fltMin, float fltMax)
+{
+	locStart.x = getRandomValueWithDeadZone (locStart.x, fltMin, fltMax);
+	locStart.y = getRandomValueWithDeadZone (locStart.y, fltMin, fltMax);
+	locStart.z = getRandomValueWithDeadZone (locStart.z, fltMin, fltMax);
+	return locStart;
+}
+
+resizeable obj_id[] getShipOfficers(obj_id objShip)
+{
+	if(space_utils.isShipWithInterior(objShip))
+	{
+		resizeable obj_id[] objOfficers = getGunnersInShip(objShip);
+		obj_id objOfficer = getPilotId(objShip);
+		if(isIdValid(objOfficer))
+		{
+			objOfficers = utils.addElement(objOfficers, objOfficer);
+		}
+		objOfficer = getOperationsOfficer(objShip);
+		if(isIdValid(objOfficer))
+		{
+			objOfficers = utils.addElement(objOfficers, objOfficer);
+		}
+		return objOfficers;
+	}
+	else
+	{
+		resizeable obj_id[] objTest = new obj_id[0];
+		objTest = utils.addElement(objTest, getPilotId(objShip));
+		return objTest;
+	}
+}
+
+obj_id getCommandExecutor(obj_id objShip)
+{
+
+	if(isShipWithInterior(objShip))
+	{
+		return getOperationsOfficer(objShip);
+
+	}
+	else
+	{
+		return getPilotId(objShip);
+	}
+
+}
+
+obj_id getOperationsOfficer(obj_id objShip)
+{
+	obj_id objChair = utils.getObjIdScriptVar(objShip, "objOperationsChair");
+	if (isIdValid(objChair))
+		return getObjectInSlot(objChair, "ship_operations_pob");
+	else
+		return getObjectInSlot(objShip, "ship_operations");
+}
+
+void destroyShipControlDevices(obj_id player, boolean verbose)
+{
+	obj_id[] shipControlDevices = space_transition.findShipControlDevicesForPlayer(player);
+	if (shipControlDevices != null)
+	{
+		for (int i = 0; i < shipControlDevices.length; ++i)
+		{
+			if (isIdValid(shipControlDevices[i]))
+			{
+				if (verbose)
+				{
+					obj_id ship = space_transition.getShipFromShipControlDevice(shipControlDevices[i]);
+					sendSystemMessageTestingOnly(player, "Destroyed ship, scd=" + shipControlDevices[i] + ", ship=" + ship);
+				}
+				destroyObject(shipControlDevices[i]);
+			}
+		}
+	}
+}
+
+obj_id createShipControlDevice(obj_id player, string shipName, boolean verbose)
+{
+	obj_id shipControlDevice = null;
+	obj_id ship = null;
+	string scdTemplate = "object/intangible/ship/"+shipName+"_pcd.iff";
+	string shipTemplate = "object/ship/player/player_"+shipName+".iff";
+
+	obj_id datapad = utils.getDatapad(player);
+	if (isIdValid(datapad))
+	{
+		shipControlDevice = createObjectOverloaded(scdTemplate, datapad);
+		if (!isIdValid(shipControlDevice))
+		{
+			shipControlDevice = createObjectOverloaded("object/intangible/ship/xwing_pcd.iff", datapad);
+			scdTemplate = "DEFAULT - object/intangible/ship/xwing_pcd.iff";
+		}
+
+		if (isIdValid(shipControlDevice))
+		{
+			ship = createObject(shipTemplate, shipControlDevice, "");
+			if (isIdValid(ship))
+			{
+				setOwner(ship, player);
+				if (isSpaceScene())
+				{
+					setObjVar(player, "space.launch.ship", ship);
+					space_transition.handlePotentialSceneChange(player);
+				}
+			}
+		}
+	}
+
+	if (verbose)
+	{
+		if (isIdValid(ship))
+			sendSystemMessageTestingOnly(player, "Created ship ("+shipTemplate+") with scd ("+scdTemplate+")");
+		else if (isIdValid(shipControlDevice))
+		{
+			destroyObject(shipControlDevice);
+			shipControlDevice = null;
+			sendSystemMessageTestingOnly(player, "Failed to create ship ("+shipTemplate+")");
+		}
+	}
+	return shipControlDevice;
+}
+
+string getParkingLocation(obj_id objControlDevice)
+{
+	if(hasObjVar(objControlDevice, "strParkingLocation"))
+	{
+		return getStringObjVar(objControlDevice, "strParkingLocation");
+	}
+	return "";
+
+}
+
+string getProperParkingLocation(obj_id objControlDevice)
+{
+	string strPort = getParkingLocation(objControlDevice);
+	if (strPort != null)
+	{
+		string strPlanet = space_content.getPlanetForLaunchLocation(strPort);
+		if (strPlanet != null)
+		{
+			if (strPlanet.length()<2)
+			{
+				strPlanet = strPlanet.toUpperCase();
+			}
+			else
+			{
+				string strFirstLetter = strPlanet.substring(0, 1);
+				strFirstLetter = strFirstLetter.toUpperCase();
+				string strFinalName = strPlanet.substring(1);
+				strPlanet = strFirstLetter + strFinalName;
+			}
+			strPort = strPort + ", "+ strPlanet;
+			return strPort;
+		}
+	}
+	return "";
+}
+
+void setLandingLocation(obj_id objControlDevice, string strLocation)
+{
+	setObjVar(objControlDevice, "strParkingLocation", strLocation);
+	return;
+}
+
+obj_id createObjectTrackItemCount(string strItem, obj_id objContainer)
+{
+	if(!isIdValid(objContainer))
+		return null;
+	
+	if(strItem.equals(""))
+		return null;
+	
+	obj_id objTopMostContainer = getTopMostContainer(objContainer);
+	
+	if(hasObjVar(objTopMostContainer, "player_structure"))
+	{
+		int intCount = player_structure.getStructureNumItems(objContainer);
+		if(intCount>=POB_LOOT_BOX_CAPACITY)
+		{
+			//POB LOOT BOX FULL
+			return null;
+		}
+		
+		if(!static_item.isStaticItem(strItem))
+		{
+			return createObject(strItem, objContainer, "");
+		}
+		else
+		{		
+			return static_item.createNewItemFunction(strItem, objContainer);
+		}		
+	}
+
+	if(!static_item.isStaticItem(strItem))
+	{
+		return createObject(strItem, objContainer, "");
+	}
+	
+	if(getVolumeFree(objContainer) > 0)
+	{
+		return static_item.createNewItemFunction(strItem, objContainer);
+	}	
+	//if all else fails, return nothing
+	return null;
+}
+
+boolean hasWaypointInDatapad(obj_id player, obj_id waypoint)
+{
+	obj_id[] waypoints = getWaypointsInDatapad(player);
+	if((waypoints!=null)&&(waypoints.length>0))
+	{
+		for(int intI = 0; intI < waypoints.length; intI++)
+		{
+			if(waypoints[intI]==waypoint)
+			{
+				return true;
+			}
+
+		}
+		return false;
+	}
+	else
+	{
+		return false;
+	}
+
+}
+
+boolean isInStation(obj_id objPlayer)
+{
+	int intState = 0;
+	intState += getState(objPlayer, STATE_SHIP_GUNNER);
+	intState += getState(objPlayer, STATE_SHIP_OPERATIONS);
+	intState += getState(objPlayer, STATE_PILOTING_POB_SHIP);
+
+	if(intState>0)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+boolean isShip(obj_id objShip)
+{
+	if(!isIdValid(objShip))
+	{
+		return false;
+	}
+
+	int intGOT = getGameObjectType(objShip);
+
+	if(isGameObjectTypeOf(intGOT, GOT_ship))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+void openCommChannelAfterLoad(obj_id objShip, obj_id objTarget)
+{
+	obj_id objPilot = getPilotId(objShip);
+	if(isIdValid(objPilot))
+	{
+		utils.setScriptVar(objPilot, "objCommTarget", objTarget);
+		newbieTutorialRequest(objPilot, "clientReady");
+	}
+	return;
+}
+
+boolean isBasicShip(obj_id objShip)
+{
+
+	// check distance
+	string strChassisName = getShipChassisType(objShip);
+	int intIndex = strChassisName.indexOf("_basic");
+	if(intIndex>-1)
+	{
+		return true;
+	}
+	return false;
+}
+
+boolean isPrototypeShip(obj_id objShip)
+{
+
+	// check distance
+	string strChassisName = getShipChassisType(objShip);
+	int intIndex = strChassisName.indexOf("_prototype");
+	if(intIndex>-1)
+	{
+		return true;
+	}
+	return false;
+}
+
+obj_id[] getSpaceGroupMemberIds( obj_id group )
+{
+	return utils.getLocalGroupMemberIds (group);
+}
+
+// ======================================================================
+
+boolean playerCanControlShipSlot(obj_id ship, obj_id player, boolean sendSystemMessage)
+{
+	boolean result = true;
+
+	obj_id owner = getOwner(ship);
+
+	if (owner != player)
+	{
+		result = group.inSameGroup(owner, player);
+	}
+
+	if ((sendSystemMessage) && (!result))
+	{
+		prose_package pp = prose.getPackage(SID_NO_CAN_CONTROL_SHIP_SLOT);
+		sendSystemMessageProse(player, pp);
+	}
+
+	return result;
+}
+
+boolean isPobType(string strType)
+{
+	string[] TYPES =
+			{
+				"ykl37r",
+				"yt1300",
+				"yt2400",
+				"y8_mining_ship",
+				"decimator",
+				"sorosuub_space_yacht",
+				"gunship_rebel",
+				"gunship_imperial",
+				"gunship_neutral"
+			};
+	for(int intI = 0; intI < TYPES.length; intI++)
+	{
+		int intIndex = strType.indexOf(TYPES[intI]);
+		if(intIndex>-1)
+		{
+			return true;
+		}
+
+	}
+	return false;
+}
+
+boolean isPobType(obj_id ship)
+{
+	if(!isIdValid(ship))
+	{
+		return false;
+	}
+
+	return isPobType(getTemplateName(ship));
+}
+
+boolean isInPobShip(obj_id player)
+{
+	return isPobType(getContainedBy(player));
+}
+
+boolean isNestedWithinPobShip(obj_id item)
+{
+	if(!isIdValid(item))
+		return false;
+
+	//the containedBy should be a cell
+	obj_id containedBy = getContainedBy(item);
+	if(!isIdValid(containedBy))
+		return false;
+
+	return isInPobShip(containedBy);
+}
+
+
+/***********************************************************
+* Sets the NPC's Engines to a % of the players unmodified engine speed.
+* Value doubles if this is a mission, remove this consideration if the reduction is
+* ever pulled from code.
+* NPC Engine Values are capped at 65 for quests
+*
+* obj_id player		- The Player to match
+* obj_id npc 		- The NPC
+* float speedPercent	- The % of the players speed to set the NPC to
+* boolean isMission	- Double the speed % if true.
+*
+***********************************************************/
+
+void setNpcToPlayerSpeed(obj_id player, obj_id npc, float speedPercent)
+{
+	matchEngineSpeed(player, npc, speedPercent, false);
+}
+
+void matchEngineSpeed(obj_id player, obj_id npc, float speedPercent, boolean isMission)
+{
+	obj_id playerShip = space_transition.getContainingShip(player);
+	if (isMission)
+		speedPercent *= 2;
+		
+	float modifiedSpeed = (getShipEngineSpeedMaximum(playerShip)* speedPercent);
+	
+	if (isMission && modifiedSpeed > 100.0f)
+		modifiedSpeed = 100.0f;
+	
+	setShipEngineSpeedMaximum(npc, modifiedSpeed);
+}
+
+boolean isPlayerShipAttackable(obj_id player)
+{
+	obj_id containing_ship = space_transition.getContainingShip(player);
+
+	if (isIdValid(containing_ship))
+	{
+		string strChassisType = getShipChassisType(containing_ship);
+
+		if (strChassisType != null && strChassisType.equals("player_sorosuub_space_yacht"))
+			return false;
+	}
+
+	return true;
+}
+
+boolean isHyperspacing(obj_id player)
+{
+	obj_id objShip = space_transition.getContainingShip(player);
+
+	return isIdValid(objShip) ? utils.hasScriptVar(objShip, "intHyperspacing") : false;
+}
+
+boolean isHyperspaceBlocked(obj_id player)
+{
+	if (!utils.hasScriptVar(player, "hyperspaceBlock"))
+		return false;
+
+	int hyperspaceBlock = utils.getIntScriptVar(player, "hyperspaceBlock");
+	int playerPlayedTime = getPlayerPlayedTime(player);
+	int timeRemaining = hyperspaceBlock - playerPlayedTime;
+
+	if (timeRemaining > 0)
+	{
+		prose_package pp = prose.getPackage(new string_id("space/space_interaction", "hyperspace_not_ready"));
+		prose.setDI(pp, timeRemaining);
+		sendSystemMessageProse(player, pp);
+
+		return true;
+	}
+
+	return false;
+}
+
+void setHyperspaceBlock(obj_id player, int durationInSeconds, boolean abortActiveHyperspace)
+{
+	if (abortActiveHyperspace && isHyperspacing(player))
+		queueCommand(player, ##"abortHyperspace", null, "", COMMAND_PRIORITY_DEFAULT);
+
+	if (durationInSeconds > 0)
+		utils.setScriptVar(player, "hyperspaceBlock", getPlayerPlayedTime(player) + durationInSeconds);
+}
+
+void clearHyperspaceBlock(obj_id player)
+{
+	if (utils.hasScriptVar(player, "hyperspaceBlock"))
+		utils.removeScriptVar(player, "hyperspaceBlock");
+}
+
+void setComponentDisabled(obj_id ship, int slotId, boolean disabled)
+{
+	setShipComponentDisabled(ship, slotId, disabled);
+
+	// When the droid interface is disabled, clear its buffs/debuffs to all modified components
+	if(disabled && slotId == ship_chassis_slot_type.SCST_droid_interface)
+	{
+		space_combat.normalizeAllComponents(ship);
+	}
+}
+
+
+obj_id getPilotForRealsies(obj_id ship)
+{
+	obj_id pilot = getPilotId(ship);
+	
+	if (isIdValid(pilot))
+		return pilot;
+		
+	obj_id[] players = space_utils.getAllPlayersInShip(ship);
+	
+	if (players == null || players.length == 0)
+		return null;
+		
+	for (int i=0;i<players.length;i++)
+	{
+		if (getOwner(ship) == players[i])
+			return players[i];
+	}
+	
+	return null;
+}

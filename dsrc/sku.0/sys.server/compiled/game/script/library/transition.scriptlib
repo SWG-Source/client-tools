@@ -1,0 +1,316 @@
+/**********************************************************************
+ * Copyright (c)2000-2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        space_dungeon
+ * Description:  Handles functionality/travel for space dungeons
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.callable;
+include library.space_dungeon;
+include library.sui;
+include library.utils;
+include library.groundquests;
+include library.space_quest;
+include library.pclib;
+include library.pet_lib;
+
+
+/***** CONSTANTS *******************************************************/
+const float distanceMax							= 6.0f;
+const string dataTable							= "datatables/travel/zone_transition.iff";
+const string STF							= "travel/zone_transition";
+
+const string_id bad_zone_data						= new string_id (STF, "bad_zone_data");
+const string_id invalid_travel						= new string_id (STF, "invalid_travel");
+
+const boolean doLogging							= false;
+
+/***** TRIGGERS ********************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+
+string_id getZoneTransitionString(obj_id gate)
+{
+	if (!hasObjVar(gate, "zoneLine"))
+		return bad_zone_data;
+	
+	string zoneLine = getStringObjVar(gate, "zoneLine");
+	string_id zoneString = new string_id(STF, zoneLine);
+	return zoneString;
+}
+
+void zonePlayer(obj_id gate, obj_id player)
+{
+	if (!hasObjVar(gate, "zoneLine"))
+	{
+		sendSystemMessage(player, invalid_travel);
+		return;
+	}
+	
+	string transit = getStringObjVar(gate, "zoneLine");
+	if (!hasPermissionForZone(player, transit, "initialRequiredFlag"))
+	{
+		notifyPlayerOfInvalidPermission(player, transit);
+		return;
+	}
+	
+	string destination = dataTableGetString(dataTable, transit, "destination");
+	string[] parse = split(destination, ':');
+
+	callable.storeCallables(player);
+	
+	string script = dataTableGetString(dataTable, transit, "script");
+	if (!script.equals("none"))
+		attachScript(player, script);
+		
+	if (parse.length == 4)
+		doZoneToWorld(player, parse);
+	
+	if (parse[0].equals("instance"))
+		doPublicInstanceZone(player, parse[1]);
+	
+}
+
+void zonePlayerNoGate(string transit, obj_id player, boolean forceLoadScreen)
+{
+	
+	if (!hasPermissionForZone(player, transit, "initialRequiredFlag"))
+	{
+		notifyPlayerOfInvalidPermission(player, transit);
+		return;
+	}
+	
+	string destination = dataTableGetString(dataTable, transit, "destination");
+	string[] parse = split(destination, ':');
+
+	callable.storeCallables(player);
+	
+	string script = dataTableGetString(dataTable, transit, "script");
+	if (!script.equals("none"))
+		attachScript(player, script);
+		
+	if (parse.length == 4)
+		doZoneToWorldForceLoadScreen(player, parse, forceLoadScreen);
+	
+	if (parse[0].equals("instance"))
+		doPublicInstanceZone(player, parse[1]);
+	
+}
+
+
+void doZoneToWorld(obj_id player, string[] locationParse)
+{
+	float locX = utils.stringToFloat(locationParse[1]);
+	float locY = utils.stringToFloat(locationParse[2]);
+	float locZ = utils.stringToFloat(locationParse[3]);
+
+	if (!locationParse[0].equals("offset"))
+	{
+		string world = locationParse[0];
+		cleanupTempAccessFlag(player);
+		utils.dismountRiderJetpackCheck(player);
+		warpPlayer(player, world, locX, locY, locZ, null, locX, locY, locZ);
+	}
+	else
+	{
+		location portal = getLocation(getSelf());
+		string world = portal.area;
+		locX = portal.x + locX;
+		locY = portal.y + locY;
+		locZ = portal.z + locZ;
+		
+		cleanupTempAccessFlag(player);
+		LOG("debug", "warping player to location:");
+		LOG("debug", player+", "+world+", "+locX+", "+locY+", "+locZ);
+
+		utils.dismountRiderJetpackCheck(player);
+		callable.storeCallables(player);
+
+		warpPlayer(player, world, locX, locY, locZ, null, locX, locY, locZ);
+	}
+}
+
+void doZoneToWorldForceLoadScreen(obj_id player, string[] locationParse, boolean loadScreen)
+{
+	float locX = utils.stringToFloat(locationParse[1]);
+	float locY = utils.stringToFloat(locationParse[2]);
+	float locZ = utils.stringToFloat(locationParse[3]);
+
+	if (!locationParse[0].equals("offset"))
+	{
+		string world = locationParse[0];
+		cleanupTempAccessFlag(player);
+		utils.dismountRiderJetpackCheck(player);
+		warpPlayer(player, world, locX, locY, locZ, null, locX, locY, locZ);
+	}
+	else
+	{
+		location portal = getLocation(getSelf());
+		string world = portal.area;
+		locX = portal.x + locX;
+		locY = portal.y + locY;
+		locZ = portal.z + locZ;
+		
+		cleanupTempAccessFlag(player);
+		LOG("debug", "warping player to location:");
+		LOG("debug", player+", "+world+", "+locX+", "+locY+", "+locZ);
+
+		utils.dismountRiderJetpackCheck(player);
+		callable.storeCallables(player);
+
+		warpPlayer(player, world, locX, locY, locZ, obj_id.NULL_ID, locX, locY, locZ, "noCallBack", loadScreen);
+	}
+}
+
+
+void doPublicInstanceZone(obj_id player, string instance)
+{
+	getClusterWideData("public_instances", instance+"*", true, getSelf());
+	doLogging("doPublicInstanceZone", "Requested clusterwide data for "+instance+"*");
+	utils.setScriptVar(getSelf(), "playerId", player);
+	//warpPlayer(player, world, worldX, worldY, worldZ, cell, cellX, cellY, cellZ);
+}
+
+boolean hasPermissionForZone(obj_id player, string zone, string flagType)
+{
+	string requiredFlag = dataTableGetString(dataTable, zone, flagType);
+	
+	if (requiredFlag == null || requiredFlag.equals(""))
+		return true;
+		
+	string[] parse = split(requiredFlag, ':');
+
+	if (parse.length == 1) // None, object or script variable.
+	{
+		if (parse[0].equals("none"))
+		{
+			if (flagType.equals("initialRequiredFlag"))
+				return hasPermissionForZone(player, zone, "finalRequiredFlag");
+			else
+				return true;
+		}	
+		if (hasObjVar(player, parse[0]))
+			return true;
+
+		if (utils.hasScriptVar(player, parse[0]))
+		{
+			utils.setScriptVar(player, "tempFlag", parse[0]);
+			return true;
+		}
+		
+		if(parse[0].equals("level"))
+		{
+			int level = getLevel(player);
+			if(level >= utils.stringToInt(parse[1]))
+				return true;
+		}
+	}
+		
+	if (parse.length == 2) //ground quest or simple item check
+	{
+		if (parse[0].equals("won"))
+		{
+			if (groundquests.hasCompletedQuest(player, parse[1]))
+				return true;
+		}
+
+		if (parse[0].equals("has"))
+		{
+			if (groundquests.isQuestActive(player, parse[1]))
+				return true;
+		}
+		
+		if (parse[0].equals("item"))
+		{
+			if (utils.playerHasItemByTemplateInInventoryOrEquipped(player, parse[1]))
+				return true;
+				
+			if (utils.playerHasItemWithObjVarInInventoryOrEquipped(player, parse[1]))
+				return true;
+		}
+		if(parse[0].equals("level"))
+		{
+			int level = getLevel(player);
+			if(level >= utils.stringToInt(parse[1]))
+				return true;
+		}
+	
+	}
+	if (parse.length == 3) // space quest, task or compound item search
+	{
+		if (parse[0].equals("won"))
+		{
+			if (space_quest.hasWonQuest(player, parse[1], parse[2]))
+				return true;
+		}
+
+		if (parse[0].equals("has"))
+		{
+			if (space_quest.hasQuest(player, parse[1], parse[2]))
+				return true;
+		}
+		
+		if (parse[0].equals("task")) 
+		{
+			if (groundquests.isTaskActive(player, parse[2], parse[3]))
+				return true;
+		}
+		
+		if (parse[0].equals("item"))
+		{
+			if (utils.playerHasItemByTemplateWithObjVarInInventoryOrEquipped(player, parse[1], parse[2]))
+				return true;
+		}
+		
+		if(parse[0].equals("level"))
+		{
+			int level = getLevel(player);
+			if(level >= utils.stringToInt(parse[1]))
+				return true;
+		}
+	}
+	
+	
+	if (isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "You are passing the permissions check because you are in god mode");
+		return true;
+	}
+
+	if (flagType.equals("initialRequiredFlag"))
+		return hasPermissionForZone(player, zone, "finalRequiredFlag");
+	else
+		return false;
+}
+
+void notifyPlayerOfInvalidPermission(obj_id player, string zone)
+{
+	string deniedMessage = dataTableGetString(dataTable, zone, "customAccessString");
+	sendSystemMessage(player, new string_id (STF, deniedMessage));
+}
+
+
+
+void cleanupTempAccessFlag(obj_id player)
+{
+	if (utils.hasScriptVar(player, "tempFlag"))
+		utils.removeScriptVar(player, utils.getStringScriptVar(player, "tempFlag"));
+}
+
+void doLogging(string section, string message)
+{
+	if (doLogging)
+		LOG("debug/transition.scriptlib/"+section, message);
+}
+
+
+/***** MESSAGEHANDLERS *************************************************/
+
+
+

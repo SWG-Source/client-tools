@@ -1,0 +1,1660 @@
+/** Ship Ai
+ */
+//INCLUDES
+include library.utils;
+include java.util.Random;
+include java.util.Vector;
+include transform;
+include vector;
+
+//CONSTS
+const float	DEFAULT_FOLLOW_DISTANCE	=	20.0f;
+
+const int BEHAVIOR_IDLE = 0;
+const int BEHAVIOR_TRACK = 1;
+const int BEHAVIOR_MOVETO = 2;
+const int BEHAVIOR_PATROL = 3;
+const int BEHAVIOR_FOLLOW = 4;
+
+const int ATTACK_ORDERS_HOLD_FIRE = 0;
+const int ATTACK_ORDERS_RETURN_FIRE = 1;
+const int ATTACK_ORDERS_ATTACK_FREELY = 2;
+
+const int FORMATION_INVALID = 0;
+const int FORMATION_CLAW = 1;
+const int FORMATION_WALL = 2;
+const int FORMATION_SPHERE = 3;
+const int FORMATION_DELTA = 4;
+const int FORMATION_BROAD = 5;
+const int FORMATION_X = 6;
+
+/** unitGetBehavior(obj_id unit)
+ *
+ * returns - the behavior of the unit
+ */
+int unitGetBehavior(obj_id unit)
+{
+	return _spaceUnitGetBehavior(unit);
+}
+
+/** unitIdle(obj_id unit)
+ *
+ * Puts the unit in the idle behavior. This means the unit stops all behavior movement
+ * where it is currently located. If the unit needs to attack an enemy, it will go
+ * attack, but when finished, return to the position it was at when set to the idle
+ * behavior.
+ *
+ * returns - nothing
+ */
+void unitIdle(obj_id unit)
+{
+	_spaceUnitIdle(unit);
+}
+
+/** squadIdle(int squadId)
+ *
+ * Puts the squad in the idle behavior. This means the squad stops all behavior movement
+ * where it is currently located, in formation. If the squad needs to attack an enemy,
+ * they go attack, but when finished, return to the position they were at when set to
+ * the idle behavior.
+ *
+ * returns - nothing
+ */
+void squadIdle(int squadId)
+{
+	_spaceSquadIdle(squadId);
+}
+
+/** unitTrack(obj_id unit, obj_id target)
+ *
+ * The unit is idle and tracks (faces) the target.
+ *
+ * returns - nothing
+ */
+void unitTrack(obj_id unit, obj_id target)
+{
+	_spaceUnitTrack(unit, target);
+}
+
+/** squadTrack(int squadId, obj_id target)
+ *
+ * The squad is idle and tracks (faces) the target.
+ *
+ * returns - nothing
+ */
+void squadTrack(int squadId, obj_id target)
+{
+	_spaceSquadTrack(squadId, target);
+}
+
+/** unitMoveTo(obj_id unit, transform[] path)
+ *
+ * Moves the unit along the specified path. When the unit gets to the final position,
+ * it emits the trigger OnSpaceUnitMoveToComplete.
+ *
+ * returns - nothing
+ */
+void unitMoveTo(obj_id unit, transform[] path)
+{
+	_spaceUnitMoveTo(unit, path);
+}
+
+/** squadMoveTo(int squadId, transform[] path)
+ *
+ * Moves the squad along the specified path. When the squad gets to the final position,
+ * the leader emits the trigger OnSpaceUnitMoveToComplete.
+ *
+ * returns - nothing
+ */
+void squadMoveTo(int squadId, transform[] path)
+{
+	_spaceSquadMoveTo(squadId, path);
+}
+
+/** unitMoveTo(obj_id unit, transform position)
+ *
+ * Moves the unit to the specified position. When the unit gets to the position, it
+ * emits the trigger OnSpaceUnitMoveToComplete.
+ *
+ * returns - nothing
+ */
+void unitMoveTo(obj_id unit, transform position)
+{
+	transform path[] = new transform[1];
+	path[0] = position;
+	_spaceUnitMoveTo(unit, path);
+}
+
+/** squadMoveTo(int squadId, transform position)
+ *
+ * Moves the squad to the specified position. When the squad gets to the position, the
+ * leader emits the trigger OnSpaceUnitMoveToComplete.
+ *
+ * returns - nothing
+ */
+void squadMoveTo(int squadId, transform position)
+{
+	transform path[] = new transform[1];
+	path[0] = position;
+	_spaceSquadMoveTo(squadId, path);
+}
+
+/** unitAddPatrolPath(obj_id unit, transform[] path)
+ *
+ * Appends the world space transforms to the patrol path for the unit. When the unit
+ * gets to the end of the patrol path. it goes back to the starting transform and
+ * continues along the path.
+ *
+ * returns - nothing
+ */
+void unitAddPatrolPath(obj_id unit, transform[] path)
+{
+	_spaceUnitAddPatrolPath(unit, path);
+}
+
+/** squadAddPatrolPath(int squadId, transform[] path)
+ *
+ * Appends the world space transforms to the patrol path to an entire squad.
+ * The squad moves in formation along the path. When the squad gets to
+ * the end of the patrol path. it goes back to the starting transform and
+ * continues along the path.
+ *
+ * returns - nothing
+ */
+void squadAddPatrolPath(int squadId, transform[] path)
+{
+	_spaceSquadAddPatrolPath(squadId, path);
+}
+
+/** unitPatrol(obj_id unit, transform[] path)
+ *
+ * Sets the world space transforms to the patrol path for the unit. When the unit
+ * gets to the end of the patrol path. it goes back to the starting transform and
+ * continues along the path.
+ *
+ * returns - nothing
+ */
+void unitPatrol(obj_id unit, transform[] path)
+{
+	unitClearPatrolPath(unit);
+	unitAddPatrolPath(unit, path);
+}
+
+/** squadPatrol(int squadId, transform[] path)
+ *
+ * Sets the world space transforms to the patrol path to an entire squad.
+ * The squad moves in formation along the path. When the squad gets to
+ * the end of the patrol path. it goes back to the starting transform and
+ * continues along the path.
+ *
+ * returns - nothing
+ */
+void squadPatrol(int squadId, transform[] path)
+{
+	squadClearPatrolPath(squadId);
+	squadAddPatrolPath(squadId, path);
+}
+
+/** createPatrolPathCircle(vector position_w, float radius)
+ *
+ * Makes the patrol circle path aligned on the XZ world plane.
+ *
+ * position_w - The center of the patrol circle.
+ * radius - The radius of the patrol circle.
+ *
+ * returns - the patrol path
+ */
+transform[] createPatrolPathCircle(vector position_w, float radius)
+{
+	const int points = 20;
+	transform path[] = new transform[points];
+
+	for (int i = 0; i < points; ++i)
+	{
+		const float radian = (float)Math.PI * 2.0f * ((float)i / (float)points);
+		const float x = position_w.x + (float)Math.sin(radian) * radius;
+		const float y = position_w.y;
+		const float z = position_w.z + (float)Math.cos(radian) * radius;
+		path[i] = transform.identity.setPosition_p(x, y, z);
+	}
+
+	return path;
+}
+
+/** createPatrolPathLoiter(transform transform_w, float minDist, float maxDist)
+ *
+ * Makes the patrol path that wanders randomly around a sphere.
+ *
+ * transform_w - The world position of the center of the sphere
+ * minDist - The minimum distance from the center a random point is selected.
+ * maxDist - The maxnimum distance from the center a random point is selected.
+ *
+ * returns - the patrol path
+ */
+transform[] createPatrolPathLoiter(transform transform_w, float minDist, float maxDist)
+{
+	const int points = 20;
+	transform path[] = new transform[points];
+	for (int i = 0; i < points; ++i)
+	{
+		const vector direction = vector.randomUnit();
+		vector position = transform_w.getPosition_p().add(direction.multiply(minDist + (float)Math.random() * (maxDist - minDist)));
+		path[i] = transform.identity.setPosition_p(position);
+	}
+
+	return path;
+}
+
+/** unitLoiter(obj_id unit, transform transform_w, float minDist, float maxDist)
+ *
+ * Makes the unit wander randomly around a sphere.
+ *
+ * transform_w - The world position of the center of the sphere
+ * minDist - The minimum distance from the center a random point is selected.
+ * maxDist - The maxnimum distance from the center a random point is selected.
+ *
+ * returns - nothing
+ */
+void unitLoiter(obj_id unit, transform transform_w, float minDist, float maxDist)
+{
+	unitPatrol(unit, createPatrolPathLoiter(transform_w, minDist, maxDist));
+}
+
+/** squadLoiter(int squadId, transform transform_w, float minDist, float maxDist)
+ *
+ * Makes all units of the squad wander randomly around a sphere.
+ *
+ * transform_w - The world position of the center of the sphere
+ * minDist - The minimum distance from the center a random point is selected.
+ * maxDist - The maxnimum distance from the center a random point is selected.
+ *
+ * returns - nothing
+ */
+void squadLoiter(int squadId, transform transform_w, float minDist, float maxDist)
+{
+	squadPatrol(squadId, createPatrolPathLoiter(transform_w, minDist, maxDist));
+}
+
+/** unitClearPatrolPath(obj_id unit)
+ *
+ * Removes the entire patrol path from the unit
+ *
+ * returns - nothing
+ */
+void unitClearPatrolPath(obj_id unit)
+{
+	_spaceUnitClearPatrolPath(unit);
+}
+
+/** squadClearPatrolPath(obj_id unit)
+ *
+ * Removes the entire patrol path from all the units of a squad
+ *
+ * returns - nothing
+ */
+void squadClearPatrolPath(int squadId)
+{
+	obj_id[] unitList = squadGetUnitList(squadId);
+
+	for (int i = 0; i < unitList.length; ++i)
+	{
+		_spaceUnitClearPatrolPath(unitList[i]);
+	}
+}
+
+/** unitFollow(obj_id unit, obj_id followedUnit, vector direction_o, float offset)
+ *
+ * Makes a unit follow another unit
+ *
+ * unit - the following unit
+ * followedUnit - the unit being followed
+ * direction_o - the offset direction for the following unit
+ * offset - the distance the unit is following beyond the bounding box of the followed unit
+ *
+ * returns - nothing
+ */
+void unitFollow(obj_id unit, obj_id followedUnit, vector direction_o, float distance)
+{
+	_spaceUnitFollow(unit, followedUnit, direction_o, distance);
+}
+
+/** squadFollow(int squadId, obj_id followedUnit, vector direction_o, float offset)
+ *
+ * Makes a squad follow another unit
+ *
+ * squad - the following squad
+ * followedUnit - the unit being followed
+ * direction_o - the offset direction for the following unit
+ * offset - the distance the unit is following beyond the bounding box of the followed unit
+ *
+ * returns - nothing
+ */
+void squadFollow(int squadId, obj_id followedUnit, vector direction_o, float distance)
+{
+	_spaceSquadFollow(squadId, followedUnit, direction_o, distance);
+}
+
+/** unitAddDamageTaken(obj_id unit, obj_id targetUnit, float damage)
+ *
+ * Increases the aggression of a unit towards the targetUnit by the damage amount
+ *
+ * unit - the unit doing the damage
+ * targetUnit - the unit taking the damage
+ * damage - the amount of damage to increase aggression by
+ *
+ * returns - nothing
+ */
+void unitAddDamageTaken(obj_id unit, obj_id targetUnit, float damage)
+{
+	_spaceUnitAddDamageTaken(unit, targetUnit, damage);
+}
+
+/** unitSetAttackOrders(obj_id unit, int attackOrders)
+ *
+ * Sets when the unit engages enemies by the internal Ai using one of the following
+ * constants:
+ *
+ * ATTACK_ORDERS_HOLD_FIRE - never attacks
+ * ATTACK_ORDERS_RETURN_FIRE - only attacks after being hit
+ * ATTACK_ORDERS_ATTACK_FREELY - attacks all enemies (default)
+ *
+ * returns - nothing
+ */
+void unitSetAttackOrders(obj_id unit, int attackOrders)
+{
+	_spaceUnitSetAttackOrders(unit, attackOrders);
+}
+
+/** squadSetAttackOrders(int squadId, int attackOrders)
+ *
+ * Sets when the squad engages enemies by the internal Ai using one of the following
+ * constants:
+ *
+ * ATTACK_ORDERS_HOLD_FIRE - never attacks
+ * ATTACK_ORDERS_RETURN_FIRE - only attacks after being hit
+ * ATTACK_ORDERS_ATTACK_FREELY - attacks all enemies (default)
+ *
+ * returns - nothing
+ */
+void squadSetAttackOrders(int squadId, int attackOrders)
+{
+	obj_id[] unitList = squadGetUnitList(squadId);
+
+	for (int i = 0; i < unitList.length; ++i)
+	{
+		unitSetAttackOrders(unitList[i], attackOrders);
+	}
+}
+
+/** unitSetLeashDistance(obj_id unit, float distance)
+ *
+ * Sets the distance at which the unit stops attacking
+ * an enemy.
+ *
+ * returns - nothing
+ */
+void unitSetLeashDistance(obj_id unit, float distance)
+{
+	_spaceUnitSetLeashDistance(unit, distance);
+}
+
+/** squadSetLeashDistance(int squadId, float distance)
+ *
+ * Sets the distance at which the squad stops attacking
+ * an enemy.
+ *
+ * returns - nothing
+ */
+void squadSetLeashDistance(int squadId, float distance)
+{
+	obj_id[] unitList = squadGetUnitList(squadId);
+
+	for (int i = 0; i < unitList.length; ++i)
+	{
+		unitSetLeashDistance(unitList[i], distance);
+	}
+}
+
+/** unitSetPilotType(obj_id unit, String pilotType)
+ *
+ * Sets when the pilot type of a unit which changes the skill level of the unit. The
+ * possible values are defined in "pilottype.tab".
+ *
+ * returns - nothing
+ */
+void unitSetPilotType(obj_id unit, String pilotType)
+{
+	_spaceUnitSetPilotType(unit, pilotType);
+}
+
+/** unitSetPilotType(obj_id unit, String pilotType)
+ *
+ * returns - the pilot type of the unit, an empty string means error
+ */
+String unitGetPilotType(obj_id unit)
+{
+	return _spaceUnitGetPilotType(unit);
+}
+
+/** unitGetPrimaryAttackTarget(obj_id unit)
+ *
+ * returns - the unit's primary attack target
+ */
+obj_id unitGetPrimaryAttackTarget(obj_id unit)
+{
+	return _spaceUnitGetPrimaryAttackTarget(unit);
+}
+
+/** unitGetAttackTargetList(obj_id unit)
+ *
+ * returns - the unit's target list in priority order. The first item is the primary
+ * target and the last item is the least important
+ */
+obj_id[] unitGetAttackTargetList(obj_id unit)
+{
+	return _spaceUnitGetAttackTargetList(unit);
+}
+
+/** unitGetWhoIsTargetingMe(obj_id unit)
+ *
+ * returns - the list of units which contain the specified unit in their targeting list
+ */
+obj_id[] unitGetWhoIsTargetingMe(obj_id unit)
+{
+	return _spaceUnitGetWhoIsTargetingMe(unit);
+}
+
+/** unitIsAttacking(obj_id unit)
+ *
+ * returns - whether a unit is engaged in combat
+ */
+boolean unitIsAttacking(obj_id unit)
+{
+	return _spaceUnitIsAttacking(unit);
+}
+
+/** unitIncreaseHate( obj_id unit, obj_id unitToHate, float amountToHate, float hateDelay, int maxRecursions )
+ *
+ * Adds amountToHate to unit toward unitToHate and sets up a callback loop which will
+ * increase the hate by X amount.  See the messageHandler in space.ai.space_ai
+ *
+ * returns - nothing
+ */
+void unitIncreaseHate( obj_id unit, obj_id unitToHate, float amountToHate, float hateDelay, int maxRecursions )
+{
+	if ( (!isIdValid(unit)) || isPlayer(unit) || !isIdValid(unitToHate) )
+		return;//bad parameters, ho
+
+	if ( !exists(unitToHate) || !unitToHate.isLoaded() )
+		return;//bad parameters, ho
+
+	--maxRecursions;
+	if ( maxRecursions < 1 )
+		return;//we're done!
+	else if ( maxRecursions > 20 )
+		maxRecursions = 20;//never more than 20
+
+	if ( hateDelay < 10.0f )
+		hateDelay = 10.0f;//never more often than 1 per 10 secs
+
+	//only increment the hate if these are not already the most hated thing:
+	if ( unitGetPrimaryAttackTarget(unit) != unitToHate )
+		unitAddDamageTaken(unit, unitToHate, amountToHate);
+
+	dictionary parms = new dictionary();
+	parms.put( "unitToHate", unitToHate );
+	parms.put( "amountToHate", amountToHate );
+	parms.put( "hateDelay", hateDelay );
+	parms.put( "maxRecursions", maxRecursions );
+	messageTo( unit, "handleUnitIncreaseHate", parms, hateDelay, false );
+}
+
+/** unitRemoveAttackTarget(obj_id unit, obj_id unitToRemove)
+ *
+ * Removes an attack target from the unit's internal target list. This makes other
+ * units higher priority. If the removed unit keeps damaging the unit again, it
+ * will be back on the unit's target list.
+ *
+ * returns - nothing
+ */
+void unitRemoveAttackTarget(obj_id unit, obj_id unitToRemove)
+{
+	_spaceUnitRemoveAttackTarget(unit, unitToRemove);
+}
+
+/** unitRemoveFromAllAttackTargetLists(obj_id unit)
+ *
+ * Removes the specified unit from all other unit's attack target lists
+ *
+ * returns - nothing
+ */
+void unitRemoveFromAllAttackTargetLists(obj_id unit)
+{
+	obj_id[] whoIsTargetingMeList = unitGetWhoIsTargetingMe(unit);
+
+	for(int index = 0; index < whoIsTargetingMeList.length; ++index)
+	{
+		if(exists(whoIsTargetingMeList[index]) && (whoIsTargetingMeList[index].isLoaded()))
+		{
+			if(!space_utils.isPlayerControlledShip(whoIsTargetingMeList[index]))
+			{
+				unitRemoveAttackTarget(whoIsTargetingMeList[index], unit);
+			}
+			else
+			{
+				LOG("space", whoIsTargetingMeList[index] + " was passed into getWhoistargetingme but it's a PLAYER");
+			}
+		}
+		else
+		{
+			LOG("space", whoIsTargetingMeList[index] + " was passed into unitGetWhoIsTargetingMe but doesn't exist on the server");
+
+		}
+	}
+}
+
+/** unitSetPrimaryTarget(obj_id unit, obj_id targetUnit)
+ *
+ * Sets the units primary target.
+ *
+ * returns - nothing
+ */
+void unitSetPrimaryTarget(obj_id unit, obj_id targetUnit)
+{
+	unitAddDamageTaken(unit, targetUnit, 100000.0f);
+}
+
+/** unitAddTarget(obj_id unit, obj_id targetUnit)
+ *
+ * Adds a target to a unit's target list
+ *
+ * returns - nothing
+ */
+void unitAddTarget(obj_id unit, obj_id targetUnit)
+{
+	unitAddDamageTaken(unit, targetUnit, 100.0f);
+}
+
+/** squadSetPrimaryTarget(int squadId, obj_id targetUnit)
+ *
+ * Adds the target to all the units in the squad. The target
+ * is the primary target for every unit in the squad.
+ *
+ * returns - nothing
+ */
+void squadSetPrimaryTarget(int squadId, obj_id targetUnit)
+{
+	obj_id[] unitList = squadGetUnitList(squadId);
+
+	for (int i = 0; i < unitList.length; ++i)
+	{
+		unitAddDamageTaken(unitList[i], targetUnit, 100000.0f);
+	}
+}
+
+/** squadAddTargtTarget(int squadId, obj_id targetUnit)
+ *
+ * Adds the target to all the units in the squad.
+  *
+ * returns - nothing
+ */
+void squadAddTarget(int squadId, obj_id targetUnit)
+{
+	obj_id[] unitList = squadGetUnitList(squadId);
+
+	for (int i = 0; i < unitList.length; ++i)
+	{
+		unitAddDamageTaken(unitList[i], targetUnit, 100.0f);
+	}
+}
+
+/** squadSetPrimaryTarget(int squadId, int targetSquadId)
+ *
+ * Adds an entire squad to the target list of another squad.
+ *
+ * returns - nothing
+ */
+void squadSetPrimaryTarget(int squadId, int targetSquadId)
+{
+	obj_id[] unitList = squadGetUnitList(squadId);
+	obj_id[] targetUnitList = squadGetUnitList(targetSquadId);
+
+	for (int i = 0; i < unitList.length; ++i)
+	{
+		for (int j = 0; j < targetUnitList.length; ++j)
+		{
+			unitAddDamageTaken(unitList[i], targetUnitList[j], (float)Math.random() * 100000.0f + 100000.0f);
+		}
+	}
+}
+
+/** squadAddTarget(int squadId, int targetSquadId)
+ *
+ * Adds an entire squad to the target list of another squad.
+ *
+ * returns - nothing
+ */
+void squadAddTarget(int squadId, int targetSquadId)
+{
+	obj_id[] unitList = squadGetUnitList(squadId);
+	obj_id[] targetUnitList = squadGetUnitList(targetSquadId);
+
+	for (int i = 0; i < unitList.length; ++i)
+	{
+		for (int j = 0; j < targetUnitList.length; ++j)
+		{
+			unitAddDamageTaken(unitList[i], targetUnitList[j], (float)Math.random() * 100.0f + 100.0f);
+		}
+	}
+}
+
+/** unitSetSquadId(obj_id unit, int squadId)
+ *
+ * Assigns the unit to a new squad and removes it from its previous squad.
+ *
+ * returns - nothing
+ */
+void unitSetSquadId(obj_id unit, int squadId)
+{
+	if ( unitGetSquadId(unit) != squadId )
+		_spaceUnitSetSquadId(unit, squadId);
+}
+
+/** unitGetSquadId(obj_id unit)
+ *
+ * returns - the squad id of the unit
+ */
+int unitGetSquadId(obj_id unit)
+{
+	return _spaceUnitGetSquadId(unit);
+}
+
+/** squadCreateSquadId()
+ *
+ * returns - a new unique squad id for creating a new squad
+ */
+int squadCreateSquadId()
+{
+	return _spaceSquadCreateSquadId();
+}
+
+/** squadRemoveUnit(obj_id unit)
+ *
+ * Removes a unit from its current squad
+ *
+ * returns - the new squad id assigned to the unit
+ */
+int squadRemoveUnit(obj_id unit)
+{
+	return _spaceSquadRemoveUnit(unit);
+}
+
+/** squadCombine(int squadId1, int squadId2)
+ *
+ * Combines two squads into a new single squad.
+ *
+ * returns - the new squad id
+ */
+int squadCombine(int squadId1, int squadId2)
+{
+	return _spaceSquadCombine(squadId1, squadId2);
+}
+
+/** squadGetSize(int squadId)
+ *
+ * returns - the size of the squad
+ */
+int squadGetSize(int squadId)
+{
+	return _spaceSquadGetSize(squadId);
+}
+
+/** squadGetUnitList(int squadId)
+ *
+ * returns - all the units in a squad
+ */
+obj_id[] squadGetUnitList(int squadId)
+{
+	return _spaceSquadGetUnitList(squadId);
+}
+
+/** squadSetFormation(int squadId, int formation)
+ *
+ * Sets the formation of the squad
+ *
+ * returns - nothing
+ */
+void squadSetFormation(int squadId, int formation)
+{
+	_spaceSquadSetFormation(squadId, formation);
+}
+
+/** squadSetFormationRandom(int squadId)
+ *
+ * Sets a random formation for the squad
+ *
+ * returns - nothing
+ */
+void squadSetFormationRandom(int squadId)
+{
+	Random random = new Random();
+	const int value = Math.abs(random.nextInt()) % 6;
+	int formation = FORMATION_INVALID;
+
+	switch (value)
+	{
+		case 0: { formation = FORMATION_CLAW; } break;
+		case 1: { formation = FORMATION_WALL; } break;
+		case 2: { formation = FORMATION_SPHERE; } break;
+		case 3: { formation = FORMATION_DELTA; } break;
+		case 4: { formation = FORMATION_BROAD; } break;
+		case 5: { formation = FORMATION_X; } break;
+	}
+
+	_spaceSquadSetFormation(squadId, formation);
+}
+
+/** squadSetFormationSpacing(int squadId, float scale)
+ *
+ * Sets the spacing of the squad's formation. A value of 2.0f doubles
+ * the spacing. The valid range for values is [1...n].
+ *
+ * returns - nothing
+ */
+void squadSetFormationSpacing(int squadId, float scale)
+{
+	_spaceSquadSetFormationSpacing(squadId, scale);
+}
+
+/** squadGetFormation(int squadId)
+ *
+ * returns - the formation of the squad
+ */
+int squadGetFormation(int squadId)
+{
+	return _spaceSquadGetFormation(squadId);
+}
+
+/** squadSetLeader(int squadId, obj_id unit)
+ *
+ * Sets the leader of the squad. All units create a formation around the leader.
+ * The leader serves no purpose other than being the center of the formation.
+ *
+ * returns - nothing
+ */
+void squadSetLeader(int squadId, obj_id unit)
+{
+	_spaceSquadSetLeader(squadId, unit);
+}
+
+/** squadGetLeader(int squadId)
+ *
+ * returns - the leader of the squad, there is always one leader
+ */
+obj_id squadGetLeader(int squadId)
+{
+	return _spaceSquadGetLeader(squadId);
+}
+
+/** squadSetGuardTarget(int squad, int targetSquad)
+ *
+ * Sets the targetSquad for a squad to guard.
+ *
+ * returns - nothing
+ */
+void squadSetGuardTarget(int squad, int targetSquad)
+{
+	_spaceSquadSetGuardTarget(squad, targetSquad);
+}
+
+/** squadIsGuarding(int squad)
+ *
+ * returns - whether the squad is guarding another squad
+ */
+boolean squadIsGuarding(int squad)
+{
+	return (squadGetGuardTarget(squad) == 0);
+}
+
+/** squadGetGuardTarget(int squad)
+ *
+ * returns - the squad being guarded by the specified squad
+ */
+int squadGetGuardTarget(int squad)
+{
+	return _spaceSquadGetGuardTarget(squad);
+}
+
+/** squadSetGuardTarget(int squad, int targetSquad)
+ *
+ * Removes the guard target from the squad.
+ *
+ * returns - nothing
+ */
+void squadRemoveGuardTarget(int squad)
+{
+	_spaceSquadRemoveGuardTarget(squad);
+}
+
+/** unitDock(obj_id unit, obj_id dockTarget, float timeAtDock)
+ *
+ * Docks the unit with the dockTarget for the specified timeAtDock.
+ *
+ * returns - nothing
+ */
+void unitDock(obj_id unit, obj_id dockTarget, float timeAtDock)
+{
+	_spaceUnitDock(unit, dockTarget, timeAtDock);
+}
+
+/** unitDock(obj_id unit, obj_id dockTarget)
+ *
+ * Docks the unit with the dockTarget for in infinite amount of time. Use
+ * unitUnDock() to undock the unit at a later time.
+ *
+ * returns - nothing
+ */
+void unitDock(obj_id unit, obj_id dockTarget)
+{
+	unitDock(unit, dockTarget, -1.0f);
+}
+
+/** unitUnDock(obj_id unit)
+ *
+ * UnDocks the unit with the dockTarget.
+ *
+ * returns - nothing
+ */
+void unitUnDock(obj_id unit)
+{
+	_spaceUnitUnDock(unit);
+}
+
+/** unitIsDocked(obj_id unit)
+ *
+ * returns - whether the unit is currently fully docked
+ */
+boolean unitIsDocked(obj_id unit)
+{
+	return _spaceUnitIsDocked(unit);
+}
+
+/** unitIsDocking(obj_id unit)
+ *
+ * returns - whether the unit is currently in the process of docking
+ */
+boolean unitIsDocking(obj_id unit)
+{
+	return _spaceUnitIsDocking(unit);
+}
+
+/** unitSetAutoAggroImmuneTime(obj_id unit, float time)
+ *
+ * Sets a timer on any NPC or Player that causes the AI not to auto-aggro it.
+ *
+ * returns - nothing
+ */
+void unitSetAutoAggroImmuneTime(obj_id unit, float time)
+{
+	_spaceUnitSetAutoAggroImmuneTime(unit, time);
+}
+
+/** unitSetAutoAggroImmune(obj_id unit, boolean aggroImmune)
+ *
+ * By default, ships are NOT aggro immune. So if you just need to set a temporary immune time, just call unitSetAutoAggroImmuneTime().
+ * Specifies whether a unit is PERMANENTLY auto aggro immune. Setting aggroImmune to true will make all AI ships not aggro this ship.
+ *
+ * returns - nothing
+ */
+void unitSetAutoAggroImmune(obj_id unit, boolean enabled)
+{
+	_spaceUnitSetAutoAggroImmuneTime(unit, enabled ? -1.0f : 0.0f);
+}
+
+/** unitIsAutoAggroImmune(obj_id unit)
+ *
+ * returns - whether the ship is currently aggro immune
+ */
+boolean unitIsAutoAggroImmune(obj_id unit)
+{
+	return _spaceUnitIsAutoAggroImmune(unit);
+}
+
+/** unitSetDamageAggroImmune(obj_id unit, boolean enabled)
+ *
+ * This function was added for CSR commands. It allows you to attack an AI without it aggroing towards
+ * you for doing damage to it.
+ *
+ * returns - nothing
+ */
+void unitSetDamageAggroImmune(obj_id unit, boolean enabled)
+{
+	_spaceUnitSetDamageAggroImmune(unit, enabled);
+}
+
+/** unitGetDockTransform(obj_id dockTarget, obj_id dockingUnit)
+ *
+ * returns - the docking transform for the dockTarget, while taking into account the size of the dockintUnit.
+ */
+transform unitGetDockTransform(obj_id dockTarget, obj_id dockingUnit)
+{
+	return _spaceUnitGetDockTransform(dockTarget, dockingUnit);
+}
+
+/** unitAddExclusiveAggro(obj_id unit, obj_id pilot)
+ *
+ * Makes a unit only auto-aggro the specified pilot(player) and any of his groups members.
+ *
+ * returns - nothing
+ */
+void unitAddExclusiveAggro(obj_id unit, obj_id pilot)
+{
+	_spaceUnitAddExclusiveAggro(unit, pilot);
+}
+
+/** unitRemoveExclusiveAggro(obj_id unit, obj_id pilot)
+ *
+ * Removes the specified pilot(player) from the unit's exclusive auto-aggro list.
+ *
+ * returns - nothing
+ */
+void unitRemoveExclusiveAggro(obj_id unit, obj_id pilot)
+{
+	_spaceUnitRemoveExclusiveAggro(unit, pilot);
+}
+
+/** boolean isSquadIdValid(int squadId)
+ *
+ * Checks whether the specified squad still exists
+ *
+ * returns - true if the squad is still valid
+ */
+boolean isSquadIdValid(int squadId)
+{
+	return _spaceSquadIsSquadIdValid(squadId);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// HELPER SCRIPT FUNCTIONS THAT ARE USED IN THIS FILE ONLY
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** isShipDead( obj_id ship )
+ *
+ * This function returns TRUE if the ship is dead,
+ * otherwise returns false
+ *
+ * ship		-	the ship you want to know isShipDead
+ *
+ * returns TRUE for dead and null ships, FALSE for healthy ships
+ *
+ */
+boolean isShipDead( obj_id ship )
+{
+	if ( !isIdValid( ship ) )
+		return true;//must be dead
+
+	if ( !ship.isLoaded() )
+		return true;//might as well be dead
+
+	//temp for player ships, look for an objvar, Dan will make not-hacky someday ( he says - 12/15/2003 ).
+	return ( hasObjVar( ship, "ship.isDead" ) );
+}
+
+/** isPlayerShip( obj_id ship )
+ *
+ * ship		-	the ship you want to know about
+ *
+ * returns TRUE if a player is flying SHIP, else it returns FALSE
+ */
+boolean isPlayerShip( obj_id ship )
+{
+	obj_id pilot = getPilotId( ship );
+	if ( isIdValid( pilot ) )
+		return ( isPlayer( pilot ) );
+	else
+		return false;
+}
+
+/** isShipAggro( obj_id ship )
+ *
+ * ship		-	the AI-controlled ship you want to check
+ *
+ * returns TRUE if the ship is Aggressive, else False
+ */
+boolean isShipAggro( obj_id ship )
+{
+	if ( isPlayerShip(ship) )
+		return false;//players aren't considered Aggro
+
+	if (!hasObjVar( ship, "ship.shipName" ) )
+		return true;//this is really an error, but needs to return true for BS-spawned things
+
+	string shipName = getStringObjVar( ship, "ship.shipName" );
+	return ( dataTableGetInt( "datatables/space_mobile/space_mobile.iff", shipName, "isAggro" ) == 1 );
+}
+
+/** isShipAggroToward( obj_id ship )
+ *
+ * ship		-	the AI-controlled ship you want to check
+ * target	-	the target you want to see if ship is aggro toward
+ *
+ * returns TRUE if the ship is Aggressive, else False
+ */
+boolean isShipAggroToward( obj_id ship, obj_id target )
+{
+	string shipFaction = getShipFaction( ship );
+	string targetFaction = getShipFaction( target );
+	if ( shipFaction == null || targetFaction == null )
+		return false;
+
+	if ( shipFaction == targetFaction )
+		return false;//ships of the same faction are not aggro
+
+	if (!hasObjVar( ship, "ship.shipName" ) )
+		return false;//no idea what this is
+
+	string shipName = getStringObjVar( ship, "ship.shipName" );
+	string enemyFactionList = dataTableGetString( "datatables/space_mobile/space_mobile.iff", shipName, "enemyFactions" );
+	if ( enemyFactionList == null )
+		return false;//this ship has no enemies
+
+	string[] enemiesList = split( enemyFactionList, ',' );
+	for ( int i = 0; i < enemiesList.length; i++ )
+	{
+		if ( enemiesList[i].equals( targetFaction ) )
+			return true;//target's faction is an enemy of ship according to the space_mobile table
+	}
+
+	return false;//I have some enemies, but you're not one of them
+}
+
+/** return true if ship is social and allied with target **/
+boolean isShipAlliedWith( obj_id ship, obj_id target )
+{
+	if (!isShipSocial( ship ))
+		return false;//ship isn't social, so not worth looking at
+
+	string shipFaction = getShipFaction( ship );
+	string targetFaction = getShipFaction( target );
+	if ( shipFaction == null || targetFaction == null )
+		return false;
+
+	if ( shipFaction == targetFaction )
+		return true;//ships of the same faction are allies
+
+	if (!hasObjVar( ship, "ship.shipName" ) )
+		return false;//no idea what this is
+
+	string shipName = getStringObjVar( ship, "ship.shipName" );
+	string allyFactionList = dataTableGetString( "datatables/space_mobile/space_mobile.iff", shipName, "alliedFactions" );
+	if ( allyFactionList == null )
+		return false;//this ship has no allies
+
+	string[] allyList = split( allyFactionList, ',' );
+	for ( int i = 0; i < allyList.length; i++ )
+	{
+		if ( allyList[i].equals( targetFaction ) )
+			return true;//target's faction is an ally of ship according to the space_mobile table
+	}
+
+	return false;//I have some allies, but you're not one of them
+}
+
+/** isShipSocial( obj_id ship )
+ *
+ * ship		-	the AI-controlled ship you want to check
+ *
+ * returns TRUE if the ship is Social, else False
+ */
+boolean isShipSocial( obj_id ship )
+{
+	if (!hasObjVar( ship, "ship.shipName" ) )
+		return true;//this is really an error, but needs to return true for BS-spawned things
+
+	string shipName = getStringObjVar( ship, "ship.shipName" );
+
+	//this is just a temporary thing, 'til this gets migrated to code:
+	string enemyFactionList = dataTableGetString( "datatables/space_mobile/space_mobile.iff", shipName, "enemyFactions" );
+	string allyFactionList = dataTableGetString( "datatables/space_mobile/space_mobile.iff", shipName, "alliedFactions" );
+	if ( enemyFactionList == null || allyFactionList == null )
+		return false;
+
+	if ( enemyFactionList == "" || allyFactionList == "" )
+		return false;
+
+	//you must have enemies or allies, so we'll assume you are teh social
+	return true;
+}
+
+///** getShipFaction( obj_id ship )
+//*
+// * obj_id ship	-	the ship whose faction you want to get
+// *
+// * returns the string space_faction name of the ship
+// */
+//string getShipFaction( obj_id ship )
+//{
+//	if (!hasObjVar( ship, "ship.shipName" ) )
+//		return null;//no idea what this is
+//
+//	if ( hasObjVar( ship, "ship_faction" ) )
+//		return getStringObjVar( ship, "ship_faction" );
+//
+//	string shipName = getStringObjVar( ship, "ship.shipName" );
+//	return dataTableGetString( "datatables/space_mobile/space_mobile.iff", shipName, "space_faction" );
+//}
+
+/** Return true if ship and target are of the same faction **/
+boolean isSameFaction( obj_id ship, obj_id target )
+{
+	string shipFaction = getShipFaction( ship );
+	string targetFaction = getShipFaction( target );
+	if ( shipFaction == null || targetFaction == null )
+		return false;//one or both of these don't have a faction
+
+	return ( shipFaction == targetFaction );
+}
+
+/** get a list of grouped players ships, return the primaryTarget as the
+ * first element in the list, so that spaceAttack will aggress this
+ * target first!
+ **/
+obj_id[] getGroupShips( obj_id group, obj_id primaryTarget )
+{
+	obj_id[] groupMembers = getGroupMemberIds( group );
+	Vector groupShips = new Vector();
+	groupShips.add( primaryTarget );//put this in first
+	for ( int i = 0; i < groupMembers.length; i++ )
+	{
+		//don't add this if the group member isn't accessible:
+		if ( groupMembers[i].isLoaded() )
+		{
+			obj_id ship = getPilotedShip( groupMembers[i] );
+			//don't add this if the ship isn't valid, is the primaryTarget, or if it is too far away:
+			if ( isIdValid(ship) && ship != primaryTarget && getDistance( ship, primaryTarget ) < 120.0f )
+				groupShips.add( ship );//otherwise, add it!
+		}
+	}
+
+	//convert to a static array to return it:
+	obj_id[] returnArray = new obj_id[groupShips.size()];
+	groupShips.toArray( returnArray );
+	return returnArray;
+}
+
+String unitGetBehaviorString(int behavior)
+{
+	String result;
+
+	switch (behavior)
+	{
+		default: { result = "invalid"; } break;
+		case BEHAVIOR_IDLE: { result = "BEHAVIOR_IDLE"; } break;
+		case BEHAVIOR_MOVETO: { result = "BEHAVIOR_MOVETO"; } break;
+		case BEHAVIOR_PATROL: { result = "BEHAVIOR_PATROL"; } break;
+		case BEHAVIOR_FOLLOW: { result = "BEHAVIOR_FOLLOW"; } break;
+		case BEHAVIOR_TRACK: { result = "BEHAVIOR_TRACK"; } break;
+	}
+
+	return result;
+}
+
+String unitGetAttackOrdersString(int attackOrders)
+{
+	String result;
+
+	switch (attackOrders)
+	{
+		default: { result = "invalid"; } break;
+		case ATTACK_ORDERS_HOLD_FIRE: { result = "ATTACK_ORDERS_HOLD_FIRE"; } break;
+		case ATTACK_ORDERS_RETURN_FIRE: { result = "ATTACK_ORDERS_DEFEND"; } break;
+		case ATTACK_ORDERS_ATTACK_FREELY: { result = "ATTACK_ORDERS_ATTACK_FREELY"; } break;
+	}
+
+	return result;
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT CALLS BELOW - PLEASE DO NOT USE ANYMORE - USE ABOVE METHODS
+//
+/////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT CALLS BELOW - PLEASE DO NOT USE ANYMORE - USE ABOVE METHODS
+//
+/////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT CALLS BELOW - PLEASE DO NOT USE ANYMORE - USE ABOVE METHODS
+//
+/////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT CALLS BELOW - PLEASE DO NOT USE ANYMORE - USE ABOVE METHODS
+//
+/////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT CALLS BELOW - PLEASE DO NOT USE ANYMORE - USE ABOVE METHODS
+//
+/////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT CALLS BELOW - PLEASE DO NOT USE ANYMORE - USE ABOVE METHODS
+//
+/////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceAttack( obj_id ship, obj_id target )
+ *
+ * Forces SHIP to attack TARGET
+ *
+ * ship		-	the ship whose targetlist you want to add to
+ * target	-	the target to add to that list
+ *
+ * returns	nothing
+ */
+void spaceAttack( obj_id ship, obj_id target )
+{
+	unitAddDamageTaken(ship, target, 100000.0f);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceAttack( obj_id ship, obj_id targets[] )
+ *
+ * Forces SHIP to attack all of these TARGETS
+ *
+ * ship		-	the ship whose targetlist you want to add to
+ * target	-	the targets to add to that list
+ *
+ * returns	nothing
+ */
+void spaceAttack( obj_id ship, obj_id[] targets )
+{
+	// Add all these targets to the list
+
+	for ( int i = 0; i < targets.length; i++ )
+	{
+		unitAddDamageTaken(ship, targets[i], 100000.0f);
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceGetPrimaryTarget( obj_id ship )
+ *
+ * gets the main/primary target that ship is fighting Right Now
+ *
+ * ship		-	the ship you want to get the target of
+ *
+ * returns	-	the thing this guy is currently fighting/fleeing
+ */
+obj_id spaceGetPrimaryTarget( obj_id ship )
+{
+	return unitGetPrimaryAttackTarget(ship);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceIsInCombat( obj_id ship )
+ *
+ * returns true or false depending on whether this ship is currently
+ * fighting or not
+ */
+boolean spaceIsInCombat( obj_id ship )
+{
+	return unitIsAttacking(ship);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceStopAttack( obj_id ship )
+ *
+ * Forces SHIP to stop attacking (everything)
+ *
+ * ship		-	the ship you want to stop fighting / exit combat
+ *
+ * returns	nothing
+ */
+void spaceStopAttack( obj_id ship )
+{
+	unitSetAttackOrders(ship, ATTACK_ORDERS_HOLD_FIRE);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceStopAttack( obj_id ship, obj_id target )
+ *
+ * Forces SHIP to stop attacking TARGET,
+ * 	ship will continue to fight other targets on its list, if any
+ *
+ * ship		-	the ship you want to stop fighting / exit combat
+ * target	-	the target you want the ship to stop fighting
+ *
+ * returns	nothing
+ */
+void spaceStopAttack( obj_id ship, obj_id target )
+{
+	unitRemoveAttackTarget(ship, target);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceGuard( obj_id ship, obj_id target )
+ *
+ * commands SHIP to monitor attacks vs. TARGET and attack anything that attacks it
+ *
+ * ship		-	the ship you want to defend the target
+ * target	-	the target you want the ship to defend
+ */
+void spaceGuard( obj_id ship, obj_id target )
+{
+	debugServerConsoleMsg( ship, "Guarding is not supported ATM");
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceGuard( obj_id ship, obj_id targets[] )
+ *
+ * commands SHIP to monitor attacks vs. TARGETS and attack anything that attacks Them
+ *
+ * ship		-	the ship you want to defend the target
+ * target	-	the targets you want the ship to defend
+ */
+void spaceGuard( obj_id ship, obj_id[] targets )
+{
+	debugServerConsoleMsg( ship, "Guarding is not supported ATM");
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceGetGuardList( obj_id ship )
+ *
+ * get a list of ships that this ship is guarding
+ *
+ * ship		-	the obj_id of the ship whose guardList you want
+ *
+ * returns an array of obj_id's - the things being guarded by this ship
+ */
+Vector spaceGetGuardList( obj_id ship )
+{
+	debugServerConsoleMsg( ship, "Guarding is not supported ATM");
+	return null;
+}
+
+/** spaceIsGuarding( obj_id ship, obj_id target )
+ *
+ * see if target is one of the things that ship is guarding
+ *
+ * ship		-	the ship that might be guarding target
+ * target	-	the target that ship might be guarding
+ *
+ * returns true if ship is guarding target, false if it is not
+ */
+boolean spaceIsGuarding( obj_id ship, obj_id target )
+{
+	debugServerConsoleMsg( ship, "Guarding is not supported ATM");
+	return false;
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceStopGuarding( obj_id ship, obj_id target )
+ *
+ * tells ship to stop protecting target
+ *
+ * ship		-	the ship that might be guarding target
+ * target	-	the target that ship might be guarding, which it should stop
+ *
+ * returns nothing
+ */
+void spaceStopGuarding( obj_id ship, obj_id target )
+{
+	debugServerConsoleMsg( ship, "Guarding is not supported ATM");
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceMoveTo( obj_id ship, location loc )
+ *
+ * Commands the ship to move from its current location to loc
+ *
+ * ship		-	the ship you want to move
+ * loc		-	the location you want it to move to
+ *
+ */
+void spaceMoveTo( obj_id ship, transform position )
+{
+	unitMoveTo(ship, position);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceMoveTo( obj_id ship, location loc[] )
+ *
+ * Commands the ship to move from its current location to loc,
+ * 	then when it arrives there to move from there to the next loc
+ * 	until it has moved to every loc[] in the list
+ *
+ * ship		-	the ship you want to move
+ * loc		-	the location you want it to move to
+ *
+ */
+void spaceMoveTo( obj_id ship, transform[] path )
+{
+	unitMoveTo(ship, path);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spacePatrol( obj_id ship, location loc[] )
+ *
+ * Commands the ship to move from its current location to loc,
+ * 	then when it arrives there to move from there to the next loc
+ * 	until it has moved to every loc[] in the list, and then start
+ *  over back with the first loc in the list
+ *
+ * ship		-	the ship you want to move
+ * loc		-	the location you want it to move to
+ *
+ */
+void spacePatrol( obj_id ship, transform[] transforms )
+{
+	unitAddPatrolPath(ship, transforms);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceStop( obj_id ship, location loc[] )
+ *
+ * Commands the ship to stop moving and forget its list
+ * 	of move targets, if any, so it stop Patrolling, too
+ *
+ * Also stops following
+ *
+ * Doesn't stop guarding, though.
+ *
+ * ship		-	the ship you want to move
+  *
+ */
+void spaceStop( obj_id ship )
+{
+	unitIdle(ship);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceLoiter( obj_id ship, location loc, float minDist, float maxDist )
+ *
+ * This command tells the ship to pick a random loc within min-to-max distance of loc
+ * fly to it, and then pick another loc within that radius when it gets there and
+ * fly to it, and to keep doing that forever
+ *
+ * ship		-	the ship you want to fly around
+ * loc		-	the location you want it to fly around
+ * minDist	-	the minimum distance from the location for it to fly to
+ * maxDist	-	the maximum distnce from the location for it to fly to
+ */
+void spaceLoiter( obj_id ship, transform transform_w, float minDist, float maxDist )
+{
+	unitLoiter(ship, transform_w, minDist, maxDist);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceFollow( obj_id ship, obj_id target, float dist )
+ *
+ * This tells SHIP to follow TARGET at dist distance
+ *
+ * ship		-	the ship you're telling to follow
+ * target	-	the object you're telling the ship to follow
+ * dist		-	the distance at which you want the ship to follow
+ */
+void spaceFollow( obj_id ship, obj_id target, float dist )
+{
+	unitFollow(ship, target, new vector(0.0f, 0.0f, 1.0f), dist);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceFollow( obj_id ship, obj_id target )
+ *
+ * This tells SHIP to follow TARGET at the default follow range
+ *
+ * ship		-	the ship you want to follow TARGET
+ * target	-	the object you want the ship to follow
+ */
+void spaceFollow( obj_id ship, obj_id target )
+{
+	spaceFollow( ship, target, DEFAULT_FOLLOW_DISTANCE );
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceFollowInFormation( obj_id ship, obj_id target, int formationType )
+ *
+ * This function orders ship to follow target in the formationType specified
+ *
+ * ship				-	the ship you want to get into formation
+ * target			-	the leader of the formation
+ * formationType	-	corresponds with the const FORMATION_ which defines
+ * 						which type of formation to get into
+ */
+void spaceFollowInFormation( obj_id ship, obj_id target, int formationType )
+{
+	spaceFollow( ship, target, DEFAULT_FOLLOW_DISTANCE );
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+/** spaceGetShipBehavior( obj_id ship )
+ *
+ * This function returns an INT which corresponds with the BEHAVIOR_ const
+ * for following, patrolling, loitering, moving, etc.
+ *
+ * Don't Use this to determine if the ship is in combat or guarding - use
+ * spaceIsInCombat and/or spaceIsInGuardList for those
+ *
+ * ship		-	the ship whose behavior you want
+ */
+int spaceGetShipBehavior( obj_id ship )
+{
+	return unitGetBehavior(ship);
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// DEPRECATED SCRIPT PLEASE DO NOT USE ANYMORE - USE METHODS AT THE TOP OF THE FILE
+//
+/////////////////////////////////////////////////////////////////////////
+
+obj_id[] getWhoIsTargetingShip(obj_id ship)
+{
+	return unitGetWhoIsTargetingMe(ship);
+}

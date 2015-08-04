@@ -1,0 +1,487 @@
+// Handles spawning guards throughout player cities.
+// Draws spawn info from the "guardTable" below.
+// Dan's code?
+
+include library.ai_lib;
+include library.create;
+include library.utils;
+include library.locations;
+include library.gcw;
+
+const string guardTable = "datatables/npc/guard_spawner/guard.iff";
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	messageTo( self, "checkForStart", null, 3, false );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// If in Bestine, set up to follow the results of the politician event.
+
+	location here = getLocation( self );
+	string city = locations.getCityName( here );
+	if ( city != null )
+	{
+		if ( city.equals("bestine") )
+		{
+			if ( !hasScript( self, "city.bestine.politician_event_npc" ) )
+				attachScript( self, "city.bestine.politician_event_npc" );
+		}
+		else if (city.equals("theed"))
+		{
+			string empiredayRunning = getConfigSetting("GameServer", "empireday_ceremony");
+			if(empiredayRunning != null && (empiredayRunning.equals("true") || empiredayRunning.equals("1")))
+			{
+				utils.setScriptVar(self, "OFF", "DUE TO EMPIRE DAY");
+				//Just avoid spawning if the ceremony is going on
+				return SCRIPT_CONTINUE;
+
+			}
+		}
+
+	}
+
+	if ( hasObjVar (self, "current") )
+	{
+		killAll( self );
+		messageTo( self, "checkForStart", null, 30, false );
+	}
+	else
+	{
+		messageTo( self, "checkForStart", null, 30, false );
+	}
+
+	if ( !hasScript( self, "systems.gcw.gcw_data_updater" ) )
+		attachScript( self, "systems.gcw.gcw_data_updater" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnHearSpeech
+// Handles god mode commands spoke nearby.
+//------------------------------------------------
+
+trigger OnHearSpeech( obj_id speaker, string text )
+{
+	if ( !hasObjVar (speaker, "gm") )
+		return SCRIPT_OVERRIDE;
+	int stringCheck = text.indexOf("max");
+	string population = text.substring( text.indexOf(" ")+1, text.length() );
+	int maxPop = utils.stringToInt( population );
+	if ( stringCheck > -1 )
+		setObjVar (self, "pop", maxPop);
+	if ( text == "killall" )
+		killAll( self );
+	else if ( text == "restart" )
+		messageTo( self, "startSpawning", null, 1, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// checkForStart
+//------------------------------------------------
+
+messageHandler checkForStart()
+{
+	if ( hasObjVar (self, "pop") )
+	{
+		messageTo( self, "startSpawning", null, 10, false );
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		setObjVar( self, "pop", 5 );
+		messageTo( self, "checkForStart", null, 3, false );
+		return SCRIPT_CONTINUE;
+	}
+}
+
+//------------------------------------------------
+// startSpawning
+//------------------------------------------------
+
+messageHandler startSpawning()
+{
+	// Determine if we should spawn factional guards or police.
+	if ( !utils.hasScriptVar( self, "police" ) )
+	{
+		if ( rand() < 0.25f )
+			utils.setScriptVar( self, "police", 1 );
+		else
+			utils.setScriptVar( self, "police", 0 );
+	}
+
+	int maxPop = getIntObjVar( self, "pop" );
+
+	// Increasing the guard spawn in Bestine based on politician event
+	if ( maxPop <= 5 )
+	{
+		location here = getLocation( self );
+		string city = locations.getCityName( here );
+		if ( city != null )
+		{
+			if ( city.equals("bestine") &&  hasObjVar(self, "bestine.electionWinner") )
+			{
+				string electionWinner = getStringObjVar( self, "bestine.electionWinner" );
+				if ( electionWinner.equals("victor") || electionWinner.equals("Victor") )
+				{
+					maxPop = (int)(maxPop*2.5);
+				}
+				else
+				{
+					maxPop = (int)(maxPop*1.5);
+				}
+			}
+		}
+	}
+
+	if ( !hasObjVar (self, "current") )
+	{
+		setObjVar( self, "current", 0 );
+		doSpawn( self, false );
+	}
+	else
+	{
+		int currentPop = getIntObjVar( self, "current" );
+		if ( currentPop < maxPop )
+			doSpawn( self, false );
+		else
+		{
+			utils.removeScriptVar( self, "police" );
+			return SCRIPT_OVERRIDE;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// guardSpawnerRespawnNpc
+//------------------------------------------------
+
+messageHandler guardSpawnerRespawnNpc()
+{
+	doSpawn( self, true );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// doSpawn
+//------------------------------------------------
+
+void doSpawn( obj_id self, boolean onlySpawnOne )
+{
+	string type = getGuardArea( self );
+
+	location me = getLocation(self);
+	location here = locations.getGoodLocationAroundLocation(me, 1f, 1f, 1.5f, 1.5f);
+	if (here == null)
+	{
+		debugServerConsoleMsg (self, "guard_spawner couldn't find a good location");
+		return;
+	}
+
+	string spawn = npcToSpawn( type );
+	obj_id npc = create.object( spawn, here );
+	if ( !isIdValid(npc) )
+	{
+		logScriptDataError("unable to spawn " + spawn + " + at loc " + here );
+		return;
+	}
+	attachScript (npc, "city.guard_wander");
+	attachScript (npc, "city.city_mob_death_msg");
+
+	//setInvulnerable(npc, true); If they are invulnerable, then they won't fight stuff.
+	setObjVar(npc, "cityMobSpawner", self);
+
+	if (!hasObjVar (self, "myCreations"))
+	{
+		resizeable obj_id[] myCreations = new obj_id[0];
+		utils.addElement (myCreations, npc);
+		setObjVar (self, "myCreations", myCreations);
+	}
+	else
+	{
+		resizeable obj_id[] theList = getResizeableObjIdArrayObjVar (self, "myCreations");
+		int maxPop = getIntObjVar (self, "pop");
+
+		if (theList.length >= maxPop)
+		{
+			CustomerServiceLog ("SPAWNER_OVERLOAD", "Tried to spawn something even though the list was full.");
+			return;
+		}
+		else
+		{
+			theList.add (npc);
+			setObjVar (self, "myCreations", theList);
+		}
+	}
+
+	int currentPop = getIntObjVar (self, "current");
+	currentPop = currentPop + 1;
+
+	if (currentPop == 1)
+	{
+		setObjVar (self, "leader", npc);
+	}
+	else
+	{
+		obj_id leader = getObjIdObjVar (self, "leader");
+		ai_lib.followInFormation( npc, leader , ai_lib.FORMATION_COLUMN, currentPop-1);
+		debugSpeakMsg (self, "Formation # " + (currentPop-1));
+	}
+
+	setObjVar (self, "current", currentPop);
+
+	if (!onlySpawnOne)
+	{
+		messageTo (self, "startSpawning", null, 10, false);
+	}
+
+	return;
+}
+
+//------------------------------------------------
+// npcToSpawn
+//------------------------------------------------
+
+string npcToSpawn( string type )
+{
+	string[] guardList = dataTableGetStringColumnNoDefaults( guardTable, type );
+	int guardNum = rand( 0, guardList.length -1 );
+	string guard = guardList[ guardNum];
+	return guard;
+}
+
+//------------------------------------------------
+// cityMobKilled
+//------------------------------------------------
+
+// respawn once the entire patrol has gone down
+messageHandler cityMobKilled()
+{
+	obj_id deadNpc = params.getObjId ("deadNpc");
+
+	if (!hasObjVar (self, "myCreations"))
+	{
+		CustomerServiceLog ("SPAWNER_OVERLOAD", "Spawner " + self + " tried to spawn a replacement for " + deadNpc + " but I don't have a list!");
+		return SCRIPT_CONTINUE;
+	}
+
+	resizeable obj_id[] spawnedList = getResizeableObjIdArrayObjVar (self, "myCreations");
+
+	if(spawnedList.contains(deadNpc))
+	{
+		int currentPop = getIntObjVar (self, "current");
+		currentPop = currentPop - 1;
+
+		if (currentPop < 0)
+		{
+			currentPop = 0;
+			CustomerServiceLog ("SPAWNER_OVERLOAD", "Count went below 0 on " + self + " in Guard_spawner script.");
+		}
+
+		setObjVar(self, "current", currentPop);
+
+		spawnedList.remove(deadNpc);
+
+		if (spawnedList.length > 0)
+		{
+			setObjVar (self, "myCreations", spawnedList);
+		}
+		else
+		{
+			removeObjVar (self, "myCreations");
+		}
+
+		messageTo (self, "guardSpawnerRespawnNpc", null, 10, false);
+	}
+	else
+	{
+		CustomerServiceLog ("SPAWNER_OVERLOAD", "Spawner " + self + " tried to spawn a replacement for " + deadNpc + " but he's not on my list!");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// killAll
+//------------------------------------------------
+
+void killAll( obj_id self )
+{
+	// cleanup, not used anymore
+	if ( hasObjVar (self, "spawn") )
+	{
+		int increment = 1;
+		int totalBodies = getIntObjVar (self, "pop");
+
+		while (increment <= totalBodies)
+		{
+			obj_id npcToKill = getObjIdObjVar( self, "spawn." + increment);
+
+			if ( npcToKill != null )
+			{
+				destroyObject (npcToKill);
+				removeObjVar (self, "spawn." + increment);
+			}
+			increment = increment + 1;
+		}
+
+		removeObjVar( self, "spawn" );
+	}
+
+	if ( hasObjVar (self, "myCreations") )
+	{
+		resizeable obj_id[] theList = getResizeableObjIdArrayObjVar (self, "myCreations");
+
+		for ( int i = 0; i < theList.length; ++i )
+		{
+			destroyObject( theList[i] );
+		}
+
+		removeObjVar( self, "myCreations" );
+	}
+
+	removeObjVar( self, "current" );
+	return;
+}
+
+//------------------------------------------------
+// getGuardArea
+//
+// Determines the region we are in.
+// Modified 02/03/05 to return factional lists if we are in a faction controlled planet.
+//------------------------------------------------
+
+string getGuardArea( obj_id self )
+{
+	string guardAreaName = "tatooine";
+
+	location here = getLocation( getSelf() );
+	string planet = here.area;
+	string city = locations.getCityName( here );
+
+	// if getCityName returns null, check for city geoType region without a set city name.
+	if ( city == null )
+		city = locations.getGuardSpawnerRegionName( here );
+
+
+	// Determine if we are on a GCW contested planet.
+	if ( (city != null) && (planet.equals("tatooine") || planet.equals("naboo") || planet.equals("corellia")) )
+	{
+		string test_city = city;
+
+		if(planet.equals("naboo") || planet.equals("corellia"))
+		{
+			string empiredayRunning = getConfigSetting("GameServer", "empireday_ceremony");
+			if ( empiredayRunning != null )
+			{
+				if ( empiredayRunning.equals("true") || empiredayRunning.equals("1") )
+				{
+					if ( city.equals("coronet") )
+					{
+						return test_city + "_rebel_hard";
+					}
+					else if ( city.equals("theed") )
+					{
+						return test_city + "_imperial_hard";
+					}
+				}
+			}
+		}
+		// Determine the faction to spawn.
+		// If either side has more than twice as many bases as the other, spawn the hard guards.
+		float imp_r = gcw.getImperialPercentileByRegion(self);
+		float reb_r = gcw.getRebelPercentileByRegion(self);
+
+		// A rare chance of spawning guards of the OPPOSITE faction (to create battles).
+		/*
+		if ( rand() < 0.05 )
+		{
+			// Swap 'em to spawn opposites!
+			float old_imp_r = imp_r;
+			imp_r = reb_r;
+			reb_r = old_imp_r;
+		}
+		*/
+
+		if ( imp_r >= reb_r )
+		{
+			float delta = imp_r - reb_r;
+			if ( delta > 2.f )
+			{
+				test_city = test_city + "_imperial_hard";
+			}
+			else
+			{
+				test_city = test_city + "_imperial";
+			}
+		}
+		else
+		{
+			float delta = reb_r - imp_r;
+			if ( delta > 2.f )
+			{
+				test_city = test_city + "_rebel_hard";
+			}
+			else
+			{
+				test_city = test_city + "_rebel";
+			}
+		}
+
+
+		// Some of the time, we want to just spawn from the city's police table.
+		if ( utils.getIntScriptVar( self, "police" ) == 1 )
+		{
+			LOG( "spawn_guard", "Trying police! " + city);
+			if ( dataTableHasColumn( guardTable, city + "_police" ) )
+				test_city = city + "_police";
+		}
+
+		// Check quickly to see if the faction list exists.
+		if ( dataTableHasColumn( guardTable, test_city ) )
+			city = test_city;
+
+		LOG( "spawn_guard", "Spawning a guard from table " + city + " (tried " + test_city + ")");
+	}
+
+	// If city string is still null, guardAreaName is the planet.
+	// Checking for null before calling dataTableHasColumn because supposedly
+	// that function will have trouble with a null string.
+	if ( city == null )
+	{
+		guardAreaName = planet;
+	}
+	else
+	{
+		// if city string isn't null, checking to see if it is a colummn in the guard datatable
+		// If it is, guardAreaName is the city.
+		// If it isn't, guardAreaName is the planet.
+		if (  dataTableHasColumn(guardTable, city) )
+		{
+			guardAreaName = city;
+		}
+		else
+		{
+			guardAreaName = planet;
+		}
+	}
+
+	setObjVar( getSelf(), "guardArea", guardAreaName );
+	return guardAreaName;
+}
+

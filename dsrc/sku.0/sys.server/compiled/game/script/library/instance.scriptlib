@@ -1,0 +1,1155 @@
+include library.locations;
+include library.prose;
+include library.space_transition;
+include library.space_utils;
+include library.utils;
+
+const string INSTANCE_DATATABLE			= "datatables/instance/instance_datatable.iff";
+
+const string REQUEST_TYPE			= "instance.request_name";
+const string REQUEST_TEAM			= "instance.request_team";
+const string REQUEST_TRIGGER			= "instance.request_trigger";
+
+const string INSTANCE_OWNER			= "instance_data.instance_owner";
+const string INSTANCE_START_TIME		= "instance_data.start_time";
+const string PLAYER_LIST			= "instance_data.player_list";
+const string PLAYER_ID_LIST			= "instance_data.player_obj_id_list";
+const string INSTANCE_TEAM			= "instance_data.team";
+const string MIN_PLAYERS	 		= "instance_data.min_players";
+
+const string PLAYER_INSTANCE			= "instance_player_data";
+const string PLAYER_INSTANCE_PROTECTED		= "instance_player_protected_data";
+
+const string REQUEST_BUFF			= "instance_request_pending";
+
+const string INSTANCE_DEBUG_LOG			= "instance-debug";
+
+const int REQUEST_INVALID			= -1;
+const int REQUEST_MOVETO			= 0;
+const int REQUEST_CLOSE				= 1;
+
+const int RESET_NONE				= 0;
+const int RESET_DAILY				= 1;
+
+const int FAIL_INSTANCE_FULL			= 0;
+const int FAIL_NOT_MEMBER			= 1;
+const int INSTANCE_TIMEOUT			= 2;
+const int FAIL_INVALID_LOCKOUT			= 3;
+const int FAIL_INSTANCE_CLOSED			= 4;
+const int FAIL_INSTANCE_FEW_PLAYERS		= 5;
+const int FAIL_WARN_TOO_FEW			= 6;
+
+const string_id SID_UNDER_FIVE_MINUTE_WARNING	= new string_id("instance", "five_minute_warning");
+
+
+void registerInstance(obj_id instance_id)
+{
+	registerInstance(instance_id, getInstanceName(instance_id));
+}
+
+void registerInstance(obj_id instance_id, string instanceName)
+{
+	getClusterWideData("instance_manager-"+instanceName, instanceName+"_"+instance_id, true, instance_id);
+}
+
+boolean isInstanceActive(obj_id instance_id)
+{
+	return false;
+}
+
+boolean isInInstanceArea(obj_id subject)
+{
+	string area_name = locations.getBuildoutAreaName(subject);
+	int area_row = locations.getBuildoutAreaRow(subject);
+
+	obj_id planet = getPlanetByName(getLocation(subject).area);
+	string instance_controller = ""+area_name+"_"+area_row;
+
+	obj_id areaInstanceController = utils.hasScriptVar(planet, instance_controller) ? utils.getObjIdScriptVar(planet, instance_controller) : null;
+
+	if (!isIdValid(areaInstanceController))
+	{
+		validateInstanceScriptsOnPlayer(subject);
+		return false;
+	}
+
+	return true;
+}
+
+string getInstanceName(obj_id instance_id)
+{
+	return getStringObjVar(instance_id, "instance_name");
+}
+
+int getInstancePlayerCap(obj_id instance_id)
+{
+	return getInstancePlayerCap(getInstanceName(instance_id));
+}
+
+int getInstancePlayerCap(string instance_name)
+{
+	return dataTableGetInt(INSTANCE_DATATABLE, instance_name, "max_players");
+}
+
+int getMinPlayers(obj_id instance_id)
+{
+	return getMinPlayers(getInstanceName(instance_id));
+}
+
+int getMinPlayers(string instance_name)
+{
+	return dataTableGetInt(INSTANCE_DATATABLE, instance_name, "min_players");
+}
+
+obj_id getInstanceOwner(obj_id instance_id)
+{
+	return utils.hasScriptVar(instance_id, INSTANCE_OWNER) ? utils.getObjIdScriptVar(instance_id, INSTANCE_OWNER) : instance_id;
+}
+
+string getPlayerList(obj_id instance_id)
+{
+	return getPlayerList(instance_id, 1);
+}
+
+string getPlayerList(obj_id instance_id, int groupNumber)
+{
+	return utils.hasScriptVar(instance_id, PLAYER_LIST+"_"+groupNumber) ? utils.getStringScriptVar(instance_id, PLAYER_LIST+"_"+groupNumber) : "none";
+}
+
+int getInstanceCloseTime(obj_id instance_id)
+{
+	return getInstanceStartTime(instance_id) + getInstanceDuration(instance_id);
+}
+
+int getInstanceStartTime(obj_id instance_id)
+{
+	return utils.hasScriptVar(instance_id, INSTANCE_START_TIME) ? utils.getIntScriptVar(instance_id, INSTANCE_START_TIME) : -1;
+}
+
+int getInstanceTeam(obj_id instance_id)
+{
+	return utils.hasScriptVar(instance_id, INSTANCE_TEAM) ? utils.getIntScriptVar(instance_id, INSTANCE_TEAM) : -1;
+}
+
+int getCurrentPopulation(obj_id instance_id)
+{
+	obj_id[] players = utils.getPlayersInBuildoutRow(getLocation(instance_id).area, locations.getBuildoutAreaRow(instance_id));
+
+	if (players == null || players.length == 0)
+		return 0;
+
+	return players.length;
+}
+
+obj_id[] getPlayersInInstanceArea(obj_id instance_id)
+{
+	string instance_area = getLocation(instance_id).area;
+
+	if(utils.hasScriptVar(instance_id, "buildoutCoordinates"))
+	{
+		dictionary coords = utils.getDictionaryScriptVar(instance_id, "buildoutCoordinates");
+
+		if(coords == null)
+		{
+			utils.removeScriptVar(instance_id, "buildoutCoordinates");
+		}
+		else
+		{
+			return utils.getPlayersInBuildoutDimensions(instance_area, coords.getFloat("x1"), coords.getFloat("x2"), coords.getFloat("z1"), coords.getFloat("z2"));
+		}
+	}
+
+	int row = locations.getBuildoutAreaRow(instance_id);
+	dictionary coords = utils.getCoordinatesInBuildoutRow(instance_area, row);
+
+	if(coords != null)
+	{
+		utils.setScriptVar(instance_id, "buildoutCoordinates", coords);
+	}
+
+	return utils.getPlayersInBuildoutDimensions(instance_area, coords.getFloat("x1"), coords.getFloat("x2"), coords.getFloat("z1"), coords.getFloat("z2"));
+}
+
+obj_id[] getPlayersInInstanceArea(string area, int row)
+{
+	return utils.getPlayersInBuildoutRow(area, row);
+}
+
+obj_id[] getPlayersByTeamList(obj_id[] allPlayers, string groupList)
+{
+	obj_id[] listPlayers = getPlayersInPlayerList(groupList);
+
+	resizeable obj_id[] validPlayers = new obj_id[0];
+
+	for (int i=0;i<allPlayers.length;i++)
+	{
+		for (int k=0;k<listPlayers.length;k++)
+		{
+			if (allPlayers[i] == listPlayers[k])
+				utils.addElement(validPlayers, allPlayers[i]);
+		}
+
+	}
+
+	if (validPlayers == null || validPlayers.length == 0)
+		return null;
+
+	return validPlayers;
+}
+
+boolean testNextPlayerInstanceCap(obj_id instance_id)
+{
+	return testNextPlayerInstanceCap(instance_id, 1);
+}
+
+boolean testNextPlayerInstanceCap(obj_id instance_id, int team)
+{
+	string groupList = getPlayerList(instance_id, team);
+
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "testNextPlayerInstanceCap-groupList for instance_id ("+instance_id+") was "+ groupList);
+
+	obj_id[] allPlayers = getPlayersInInstanceArea(instance_id);
+
+
+	if (allPlayers == null || allPlayers.length == 0)
+	{
+		doLogging("No players currently in instance");
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "testNextPlayerInstanceCap-array allPlayers returned null or length of 0 for instance_id ("+instance_id+") this should mean we have no players in the instance. Returning false");
+		return false;
+	}
+
+	int playerLimit = getInstancePlayerCap(instance_id);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "testNextPlayerInstanceCap-playerLimit for instance for instance_id ("+instance_id+") was " + playerLimit);
+
+	int projectedPop = allPlayers.length +1;
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "testNextPlayerInstanceCap-projectedPop for instance for instance_id ("+instance_id+") was " + projectedPop);
+
+	if (projectedPop <= playerLimit)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "testNextPlayerInstanceCap-projectedPop was less than or equal to playerLimit for instance_id ("+instance_id+"), returning false");
+		return false;
+	}
+
+//	obj_id[] playersOnTeam = getPlayersByTeamList(allPlayers, groupList);
+
+//	if (playersOnTeam.length + 1 <= playerLimit)
+//		return false;
+
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "testNextPlayerInstanceCap-projectedPop was GREATUER than to playerLimit for instance_id ("+instance_id+"), returning TRUE. Which means the player will not get in.");
+
+	return true;
+}
+
+boolean isFlaggedForInstance(obj_id player, dictionary data)
+{
+	string instance_key = data.getString("key_required");
+	if (instance_key == "none")
+		return true;
+
+	return hasObjVar(player, PLAYER_INSTANCE_PROTECTED+"."+instance_key);
+}
+
+boolean isFlaggedForInstance(obj_id player, string instance_key)
+{
+	dictionary dict = dataTableGetRow("datatables/instance/instance_datatable.iff", instance_key);
+
+	//validate the dictionary
+	if(dict == null || dict.isEmpty())
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isFlaggedForInstance-player "+getFirstName(player)+"("+player+") passed in an invalid instance key ("+instance_key+"). Leaving a null dictionary. Returning false");
+		return false;
+	}
+	string key = dict.getString("key_required");
+	if(key == null || key.length() <= 0)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isFlaggedForInstance-player "+getFirstName(player)+"("+player+") got a null key_required from the datatable");
+		return false;
+	}
+	if (key.equals("none"))
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isFlaggedForInstance-player "+getFirstName(player)+"("+player+") got a 'none' key_required from the datatable");
+		return true;
+	}
+
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isFlaggedForInstance-player "+getFirstName(player)+"("+player+") passed all checks returning " +(hasObjVar(player, PLAYER_INSTANCE_PROTECTED+"."+instance_key)));
+
+	return hasObjVar(player, PLAYER_INSTANCE_PROTECTED+"."+instance_key);
+}
+
+void flagPlayerForInstance(obj_id player, string instance_key)
+{
+	setObjVar(player, PLAYER_INSTANCE_PROTECTED+"."+instance_key, 1);
+}
+
+void removePlayerFlagForInstance(obj_id player, string instance_key)
+{
+	utils.removeObjVar(player, PLAYER_INSTANCE_PROTECTED+"."+instance_key);
+}
+
+boolean requestInstanceMovement(obj_id player, string instanceName)
+{
+	return requestInstanceMovement(player, instanceName, 1, "default");
+}
+
+boolean requestInstanceMovement(obj_id player, string instanceName, string defaultTrigger)
+{
+	return requestInstanceMovement(player, instanceName, 1, defaultTrigger);
+}
+
+boolean requestInstanceMovement(obj_id player, string instanceName, int team, string defaultTrigger)
+{
+	if (!instance.isFlaggedForInstance(player, instanceName))
+	{
+		string instance = "@"+new string_id("instance", instanceName);
+		prose_package pp = new prose_package();
+		pp.other.set(instance);
+		pp.stringId = new string_id("instance", "no_key");
+		sendSystemMessageProse(player, pp);
+		return false;
+	}
+
+	if (isSpaceScene())
+	{
+		obj_id ship = trial.getTop(player);
+		obj_id pilot = space_utils.getPilotId(ship);
+
+		if (pilot == player)
+		{
+			obj_id[] crew = space_utils.getAllPlayersInShip(ship);
+
+			if (crew.length > 1)
+			{
+				sendSystemMessage(player, new string_id("instance", "nomove_ship_full"));
+				return false;
+			}
+		}
+	}
+
+	if (isRequestPending(player))
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-player "+getFirstName(player)+"("+player+") has a request pending already");
+		sendSystemMessage(player, new string_id("instance", "instance_request_pending"));
+		return false;
+	}
+	dictionary lockoutData = getLockoutData(player, instanceName);
+
+	if (lockoutData != null && !lockoutData.isEmpty())
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-LockoutData was NOT empty for player "+getFirstName(player)+"("+player+")");
+		int endTime = lockoutData.getInt("time");
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-endTime for player "+getFirstName(player)+"("+player+") is " + endTime);
+		obj_id instance_id = lockoutData.getObjId("instance_id");
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-instance_id for player "+getFirstName(player)+"("+player+") is " + instance_id);
+		obj_id owner = lockoutData.getObjId("owner");
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-owner for player "+getFirstName(player)+"("+player+") is " + owner);
+
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-Trying to bypass entry for "+getName(player)+" to "+instanceName+". Owner/Team: "+owner+"/"+team);
+
+		movePlayerToInstance(player, instance_id, instanceName, owner, false, team);
+		LOG("doLogging", "Trying to bypass entry for "+getName(player)+" to "+instanceName+". Owner/Team: "+owner+"/"+team);
+		return true;
+	}
+
+	utils.setScriptVar(player, REQUEST_TYPE, REQUEST_MOVETO);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-setting script var '"+REQUEST_TYPE+"' for player "+getFirstName(player)+"("+player+") to " + REQUEST_MOVETO);
+	utils.setScriptVar(player, REQUEST_TEAM, team);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-setting script var '"+REQUEST_TEAM+"' for player "+getFirstName(player)+"("+player+") to " + team);
+	utils.setScriptVar(player, REQUEST_TRIGGER, defaultTrigger);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-setting script var '"+REQUEST_TRIGGER+"' for player "+getFirstName(player)+"("+player+") to " + defaultTrigger);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "requestInstanceMovement-LockoutData WAS empty for player "+getFirstName(player)+"("+player+"). After setting appropriate scriptvars we are now requesting clusterWide Data");
+	getClusterWideData("instance_manager-"+instanceName, "*", true, player);
+	setRequestPending(player);
+	return true;
+}
+
+int getInstanceRequestType(obj_id player)
+{
+	return utils.hasScriptVar(player, REQUEST_TYPE) ? utils.getIntScriptVar(player, REQUEST_TYPE) : REQUEST_INVALID;
+}
+
+int getInstanceRequestTeam(obj_id player)
+{
+	return utils.hasScriptVar(player, REQUEST_TEAM) ? utils.getIntScriptVar(player, REQUEST_TEAM) : REQUEST_INVALID;
+}
+
+
+boolean isPlayerOwnerGroupList(obj_id player, obj_id owner, obj_id instance_id, string groupList, int team, int instance_team)
+{
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isPlayerOwnerGroupList-Start for player "+getFirstName(player)+"("+player+").");
+	if (team != instance_team)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isPlayerOwnerGroupList- (team != instance_team) for player "+getFirstName(player)+"("+player+"). Returning False");
+		return false;
+	}
+
+	if (!isIdValid(owner) || owner == instance_id)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isPlayerOwnerGroupList- (!isIdValid(owner) || owner == instance_id) for player "+getFirstName(player)+"("+player+"). Returning false");
+		return false;
+	}
+
+	if (player == owner)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isPlayerOwnerGroupList- (player == owner) for player "+getFirstName(player)+"("+player+"). Returning false");
+		return true;
+	}
+
+	obj_id groupId = getGroupObject(player);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isPlayerOwnerGroupList- groupId for player "+getFirstName(player)+"("+player+") is "+groupId+".");
+
+	if (isIdValid(groupId))
+	{
+		obj_id[] members = getGroupMemberIds(groupId);
+
+		for (int i=0;i<members.length;i++)
+		{
+			CustomerServiceLog(INSTANCE_DEBUG_LOG, "isPlayerOwnerGroupList-members["+i+"] for player "+getFirstName(player)+"("+player+")'s group is "+getFirstName(members[i])+"("+members[i]+").");
+			if(isIdValid(members[i]) && (members[i] == owner || isPlayerInPlayerList(members[i], groupList)))
+			{
+				CustomerServiceLog(INSTANCE_DEBUG_LOG, "isPlayerOwnerGroupList-members["+i+"] for player "+getFirstName(player)+"("+player+")'s group is valid and is either owner("+(members[i] == owner)+") or isPlayerInPlayerList("+(isPlayerInPlayerList(members[i], groupList))+"). Returning TRUE.");
+				return true;
+			}
+		}
+	}
+
+
+	return false;
+}
+
+void movePlayerToInstance(obj_id player, obj_id dungeon, string instance_name, obj_id owner, boolean startInstance)
+{
+	movePlayerToInstance(player, dungeon, instance_name, owner, startInstance, 1);
+}
+
+void movePlayerToInstance(obj_id player, obj_id instance_id, string instance_name, obj_id owner, boolean startInstance, int team)
+{
+	dictionary dict = new dictionary();
+	dict.put("player", player);
+	dict.put("team", team);
+	string defaultTrigger = utils.hasScriptVar(player, REQUEST_TRIGGER) ? utils.getStringScriptVar(player, REQUEST_TRIGGER) : "default";
+	dict.put("defaultTrigger", defaultTrigger);
+	dict.put("owner", owner);
+
+	if (!isValidatedByLockoutData(player, instance_id, owner, instance_name))
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "movePlayerToInstance-isValidatedByLockoutData returned false for player "+getFirstName(player)+"("+player+"). Sending messageTo 'instanceFailureMessage'");
+		dict.put("fail_reason", instance.FAIL_INVALID_LOCKOUT);
+
+		messageTo(player, "instanceFailureMessage", dict, 0.0f, false);
+		return;
+	}
+
+
+	if (startInstance)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "movePlayerToInstance-isValidatedByLockoutData passed for player "+getFirstName(player)+"("+player+"). Sending messageTo 'startNewInstance' to instance_id " + instance_id);
+		messageTo(instance_id, "startNewInstance", dict, 0.0f, false);
+	}
+	else
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "movePlayerToInstance-isValidatedByLockoutData passed for player "+getFirstName(player)+"("+player+"). Sending messageTo 'requestEnterPlayer' to instance_id " + instance_id);
+		messageTo(instance_id, "requestEnterPlayer", dict, 0.0f, false);
+	}
+}
+
+void addToPlayerList(obj_id instance, obj_id player)
+{
+	addToPlayerList(instance, player, 1);
+}
+
+void addToPlayerList(obj_id instance, obj_id player, int group)
+{
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "addToPlayerList-Start for player "+getFirstName(player)+"("+player+").");
+	string playerList = getPlayerList(instance, group);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "addToPlayerList-playerList for player "+getFirstName(player)+"("+player+") " + playerList);
+	if (playerList.equals("none"))
+	{
+		utils.setScriptVar(instance, PLAYER_LIST+"_"+group, ""+player);
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "addToPlayerList-playerList was 'none' for player "+getFirstName(player)+"("+player+"). setting scriptvar and bailing.");
+		return;
+	}
+
+	if (!isPlayerInPlayerList(player, playerList))
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "addToPlayerList-Player "+getFirstName(player)+"("+player+") was not in the player list. Adding them to scriptvar.");
+		utils.setScriptVar(instance, PLAYER_LIST+"_"+group, playerList.concat("_"+player));
+	}
+}
+
+void removeFromPlayerList(obj_id instance_id, obj_id player)
+{
+	removeFromPlayerList(instance_id, player, 1);
+}
+
+void removeFromPlayerList(obj_id instance_id, obj_id player, int group)
+{
+	string playerList = getPlayerList(instance_id, group);
+	if (playerList.equals("none"))
+		return;
+
+	string[] groupSplit = split(playerList, '_');
+
+	string newList = "";
+
+	for (int i=0;i<groupSplit.length;i++)
+	{
+		if (groupSplit.equals(""+player))
+			continue;
+
+		newList.concat("_"+groupSplit);
+	}
+
+	if (newList == "")
+	{
+		utils.setScriptVar(instance_id, PLAYER_LIST+"_"+group, "none");
+		return;
+	}
+
+	if (newList.startsWith("_"))
+		newList.substring(1);
+
+	utils.setScriptVar(instance_id, PLAYER_LIST+"_"+group, newList);
+}
+
+boolean isPlayerInPlayerList(obj_id player, string groupList)
+{
+	if (groupList == "none")
+		return false;
+
+	string[] groupSplit = split(groupList, '_');
+
+	for (int i=0;i<groupSplit.length;i++)
+	{
+		if (utils.stringToObjId(groupSplit[i]) == player)
+			return true;
+	}
+
+	return false;
+}
+
+obj_id[] getPlayersInPlayerList(string groupList)
+{
+	if (groupList == null || groupList == "none")
+	{
+		doLogging("groupList was invalid or none: "+groupList);
+		return null;
+	}
+	string[] parse = split(groupList, '_');
+
+	obj_id[] playerList = new obj_id[parse.length];
+
+	for (int i=0;i<parse.length;i++)
+	{
+		playerList[i] = utils.stringToObjId(parse[i]);
+	}
+
+	return playerList;
+}
+
+void sendToEnterOne(obj_id player, obj_id instanceId, location instanceLoc, dictionary data)
+{
+	playerEnterInstance(player, instanceId, instanceLoc, data, "enter_one");
+}
+
+void sendToEnterTwo(obj_id player, obj_id instanceId, location instanceLoc, dictionary data)
+{
+	playerEnterInstance(player, instanceId, instanceLoc, data, "enter_two");
+}
+
+void playerEnterInstance(obj_id player, obj_id instanceId, location instanceLoc, dictionary data, string enterString)
+{
+	if(data == null || data.isEmpty())
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "playerEnterInstance-data was null for player "+getFirstName(player)+"("+player+"), we are returning here");
+		return;
+	}
+
+	if(instanceLoc == null)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "playerEnterInstance-instanceLoc was null for player "+getFirstName(player)+"("+player+"), we are returning here");
+		return;
+	}
+
+	if(enterString == null || enterString.length() <= 0)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "playerEnterInstance-enterString was null for player "+getFirstName(player)+"("+player+"), we are returning here");
+		return;
+	}
+
+	string teleportToString = data.getString(enterString);
+
+	string[] parse = split(teleportToString, ',');
+
+	if(parse == null || parse.length < 4)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "playerEnterInstance-parsed enterString was null or length ("+parse.length+") was less than 4 for player "+getFirstName(player)+"("+player+"), we are returning here");
+		return;
+	}
+
+	float locX = utils.stringToFloat(parse[0]);
+	float locY = utils.stringToFloat(parse[1]);
+	float locZ = utils.stringToFloat(parse[2]);
+	string cellName = parse[3];
+
+	if (cellName.equals("none"))
+	{
+		vector post = new vector(instanceLoc.x + locX, instanceLoc.y + locY, instanceLoc.z + locZ);
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "playerEnterInstance-calling warpPlayer("+player+", "+instanceLoc.area+", "+post.x+", "+post.y+", "+post.z+", obj_id.NULL_ID, "+0.0f+" , "+0.0f+" , "+0.0f+" , 'noCallBack', true) for player "+getFirstName(player)+"("+player+")");
+		warpPlayer(player, instanceLoc.area, post.x, post.y, post.z, obj_id.NULL_ID,  0.0f , 0.0f , 0.0f , "noCallBack", true);
+	}
+	else
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "playerEnterInstance-calling warpPlayer("+player+", "+instanceLoc.area+", "+instanceLoc.x+", "+instanceLoc.y+", "+instanceLoc.z+", "+instanceId+", "+cellName+", "+locX+", "+locY+", "+locZ+", 'noCallBack, true) for player "+getFirstName(player)+"("+player+")");
+		warpPlayer(player, instanceLoc.area, instanceLoc.x, instanceLoc.y, instanceLoc.z, instanceId, cellName, locX, locY, locZ, "noCallBack", true);
+	}
+}
+
+void requestExitPlayer(obj_id instance, obj_id[] players, int team)
+{
+	if (players == null || players.length == 0)
+		return;
+
+	for (int i=0;i<players.length;i++)
+		requestExitPlayer(instance, players[i], team);
+
+}
+
+void requestExitPlayer(obj_id instance_id, obj_id player, int team)
+{
+	string instance_name = instance.getInstanceName(instance_id);
+
+	requestExitPlayer(instance_name, player, team);
+}
+
+void requestExitPlayer(string instance_name, obj_id player)
+{
+	requestExitPlayer(instance_name, player, 1);
+}
+
+void requestExitPlayer(string instance_name, obj_id player, int team)
+{
+	if (!isIdValid(player) || !exists(player) || !inSameInstanceType(instance_name, player))
+		return;
+
+	vehicle.checkForMountAndDismountPlayer(player);
+
+	if (!dataTableOpen(instance.INSTANCE_DATATABLE))
+	{
+		doLogging("Could not open table");
+		return;
+	}
+
+	dictionary data = dataTableGetRow(instance.INSTANCE_DATATABLE, instance_name);
+	if (data == null)
+	{
+		doLogging("null data in table");
+		return;
+	}
+
+	buff.applyBuff(player, "instance_exiting");
+	removeInstanceScriptFromPlayer(player, data);
+	if (team == 1)
+		instance.sendToExitOne(player, data);
+	if (team == 2)
+		instance.sendToExitTwo(player, data);
+}
+
+boolean inSameInstanceType(string instance_name, obj_id player)
+{
+	string test_name = locations.getBuildoutAreaName(player);
+
+	if(test_name == null || test_name == "")
+	{
+		return false;
+	}
+
+
+	return test_name.equals(instance_name);
+}
+
+void sendToExitOne(obj_id player, dictionary data)
+{
+	string exitLoc = data.getString("exit_one");
+
+	string[] parse = split(exitLoc, ',');
+
+	float locX = utils.stringToFloat(parse[0]);
+	float locY = utils.stringToFloat(parse[1]);
+	float locZ = utils.stringToFloat(parse[2]);
+
+	warpPlayer(player, parse[3],locX, locY, locZ, null,  0.0f , 0.0f , 0.0f , "noCallBack", true);
+}
+
+void sendToExitTwo(obj_id player, dictionary data)
+{
+	string exitLoc = data.getString("exit_two");
+
+	string[] parse = split(exitLoc, ',');
+
+	float locX = utils.stringToFloat(parse[0]);
+	float locY = utils.stringToFloat(parse[1]);
+	float locZ = utils.stringToFloat(parse[2]);
+
+	warpPlayer(player, parse[3],locX, locY, locZ, null,  0.0f , 0.0f , 0.0f , "noCallBack", true);
+}
+
+void startInstanceTimer(obj_id instance_id)
+{
+	messageTo(instance_id, "startClock", null, 0.0f, false);
+}
+
+void closeOwnedInstance(obj_id player, string instanceName)
+{
+	utils.setScriptVar(player, REQUEST_TYPE, REQUEST_CLOSE);
+	getClusterWideData("instance_manager-"+instanceName, instanceName + "*", true, player);
+}
+
+void closeInstance(obj_id owner, dictionary data)
+{
+	obj_id instance_id = data.getObjId("instance_id");
+	messageTo(instance_id, "endInstanceSession", data, 0.0f, false);
+}
+
+void closeInstance(obj_id instance_id)
+{
+	messageTo(instance_id, "endInstanceSession", null, 0.0f, false);
+}
+
+int getInstanceDuration(obj_id instance_id)
+{
+	string instance_name = getInstanceName(instance_id);
+	return getInstanceDuration(instance_name);
+}
+
+int getInstanceDuration(string instance_name)
+{
+	dictionary data = dataTableGetRow(instance.INSTANCE_DATATABLE, instance_name);
+	return data.getInt("time_limit");
+}
+
+void validateDungeonParticipants(obj_id instance_id)
+{
+	int buildout_row = locations.getBuildoutAreaRow(instance_id);
+	obj_id[] players = utils.getPlayersInBuildoutRow(getLocation(instance_id).area, buildout_row);
+
+	if (players == null || players.length == 0)
+		return;
+
+	dictionary dict = new dictionary();
+
+	for (int i=0;i<players.length;i++)
+	{
+		dict.put("player", players[i]);
+		messageTo(instance_id, "validatePlayer", dict, 0.0f, false);
+	}
+}
+
+dictionary getNextClockTic(int time)
+{
+	dictionary dict = new dictionary();
+
+	float remainder = (float)time / 300.0f;
+
+	if (remainder < 1.0f)
+	{
+		dict.put("nextTic", time);
+		dict.put("timeRemaining", 0);
+		return dict;
+	}
+
+	dict.put("nextTic", 300);
+	dict.put("timeRemaining", time - 300);
+	return dict;
+}
+
+void sendSoonToCloseWarining(obj_id instance_id, int timeLeft)
+{
+	obj_id[] players = getPlayersInInstanceArea(instance_id);//getPlayersInPlayerList(getPlayerList(instance_id));
+	sendSoonToCloseWarining(instance_id, timeLeft, players);
+}
+
+void sendSoonToCloseWarining(obj_id instance, int timeLeft, obj_id[] players)
+{
+	prose_package pp = prose.getPackage(SID_UNDER_FIVE_MINUTE_WARNING, timeLeft);
+	utils.sendSystemMessageProse(players, pp);
+}
+
+void setClock(obj_id instance_id, int seconds)
+{
+	trial.bumpSession(instance_id, "clock");
+	dictionary dict = trial.getSessionDict(instance_id, "clock");
+	dict.put("instance_time", seconds);
+	messageTo(instance_id, "handleClockTic", dict, 0.0f, false);
+}
+
+boolean isExclusiveInstance(string instance_name)
+{
+	dictionary dict = dataTableGetRow(INSTANCE_DATATABLE, instance_name);
+
+	if(dict == null || dict.isEmpty())
+	{
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "isExclusiveInstance-dictionary was null, we are returning false.");
+		return false;
+	}
+
+	return dict.getInt("lockoutTimer") != RESET_NONE;
+}
+
+void setResetDataOnPlayer(obj_id player, obj_id instance_id, obj_id owner, string instance_name, int start_time)
+{
+	dictionary dict = dataTableGetRow(INSTANCE_DATATABLE, instance_name);
+
+	if(dict == null || dict.isEmpty())
+	{
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "setResetDataOnPlayer-dictionary was null for player "+getFirstName(player)+"("+player+"), we are returning here.");
+		return;
+	}
+
+	int resetType = dict.getInt("lockoutTimer");
+
+	switch (resetType)
+	{
+		case RESET_NONE:
+				CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "setResetDataOnPlayer-resetType was RESET_NONE for player "+getFirstName(player)+"("+player+"), doing nothing.");
+				break;
+
+		case RESET_DAILY:
+				int resetAt = getCalendarTime() + secondsUntilNextDailyTime(6, 0, 0);
+				setObjVar(player, PLAYER_INSTANCE+"."+instance_name, ""+resetAt+"_"+instance_id+"_"+owner+"_"+start_time);
+				CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "setResetDataOnPlayer-resetType was RESET_DAILY, setting objvar "+PLAYER_INSTANCE+"."+instance_name+" to "+resetAt+"_"+instance_id+"_"+owner+"_"+start_time+" on player "+getFirstName(player)+"("+player+").");
+				break;
+	}
+}
+
+boolean isValidatedByLockoutData(obj_id player, obj_id instance_id, obj_id owner, string instance_name)
+{
+	if (!hasObjVar(player, PLAYER_INSTANCE+"."+instance_name))
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-player "+getFirstName(player)+"("+player+") Doesnt have objvar "+PLAYER_INSTANCE+"."+instance_name+". Returning TRUE");
+		return true;
+	}
+
+	dictionary lockoutData = getLockoutData(player, instance_name);
+
+	if (lockoutData == null)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-lockoutData returned null for player "+getFirstName(player)+"("+player+"). Returning TRUE");
+		return true;
+	}
+
+	int endTime = lockoutData.getInt("time");
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-lockoutData.endTime for player "+getFirstName(player)+"("+player+") was " + endTime);
+
+	obj_id recInstance = lockoutData.getObjId("instance_id");
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-lockoutData.recInstance for player "+getFirstName(player)+"("+player+") was " + recInstance);
+
+	obj_id recOwner = lockoutData.getObjId("owner");
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-lockoutData.recOwner for player "+getFirstName(player)+"("+player+") was " + recOwner);
+
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-player "+getFirstName(player)+"("+player+") instance_id == recInstance was " + (instance_id == recInstance));
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-player "+getFirstName(player)+"("+player+") recOwner == owner was " + (recOwner == owner));
+
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "isValidatedByLockoutData-player "+getFirstName(player)+"("+player+") calling return (" +(instance_id == recInstance)+" && " + (recOwner == owner)+")");
+	return (instance_id == recInstance && recOwner == owner);
+}
+
+dictionary getLockoutData (obj_id player, string instance_name)
+{
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-started for player "+getFirstName(player)+"("+player+"). instance_name was "+instance_name+".");
+
+	if (!hasObjVar(player, PLAYER_INSTANCE+"."+instance_name))
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-player "+getFirstName(player)+"("+player+") does not have the objvar '"+PLAYER_INSTANCE+"."+instance_name+"'. Returning null.");
+		return null;
+	}
+
+	string lockoutString = getStringObjVar(player, PLAYER_INSTANCE+"."+instance_name);
+
+	string[] parse = split(lockoutString, '_');
+
+	if (parse.length < 4)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-player "+getFirstName(player)+"("+player+") Parse length on objvar was less than 4. Returning null.");
+		return null;
+	}
+
+	int time = utils.stringToInt(parse[0]);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-player "+getFirstName(player)+"("+player+") parsed time was "+time+".");
+	obj_id instance_id = utils.stringToObjId(parse[1]);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-player "+getFirstName(player)+"("+player+") parsed instance_id was "+instance_id+".");
+	obj_id owner = utils.stringToObjId(parse[2]);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-player "+getFirstName(player)+"("+player+") parsed owner was "+owner+".");
+	int start_time = utils.stringToInt(parse[3]);
+	CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-player "+getFirstName(player)+"("+player+") parsed start_time was "+start_time+".");
+
+	if (getCalendarTime() >= time)
+	{
+		CustomerServiceLog(INSTANCE_DEBUG_LOG, "getLockoutData-player "+getFirstName(player)+"("+player+") calander time was greater than or equal to parsed time. Removing objvar and returning null.");
+		removeObjVar(player, PLAYER_INSTANCE+"."+instance_name);
+		return null;
+	}
+
+	dictionary dict = new dictionary();
+
+	dict.put("time", time);
+	dict.put("instance_id", instance_id);
+	dict.put("owner", owner);
+	dict.put("instance_name", instance_name);
+	dict.put("start_time", start_time);
+
+	return dict;
+}
+
+dictionary[] getAllLockoutData(obj_id player)
+{
+	int numRows = dataTableGetNumRows(INSTANCE_DATATABLE);
+
+	resizeable dictionary[] instanceData = new dictionary[0];
+
+	for (int i=0;i<numRows;i++)
+	{
+		string instanceName = dataTableGetString(INSTANCE_DATATABLE, i, "dungeon");
+
+		if (hasObjVar(player, PLAYER_INSTANCE+"."+instanceName))
+		{
+			dictionary data = getLockoutData(player, instanceName);
+			if (data != null)
+				utils.addElement(instanceData, data);
+		}
+	}
+
+	if (instanceData == null || instanceData.length == 0)
+		return null;
+
+	return instanceData;
+}
+void attachInstanceScriptsOnPlayer(obj_id player, dictionary data)
+{
+
+	if(data == null || data.isEmpty())
+	{
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "attachInstanceScriptsOnPlayer-data dictionary was null or empty for player "+player+"("+getPlayerName(player)+"). We are returning here.");
+		return;
+	}
+	string scriptList = data.getString("player_script");
+	if (scriptList == "none")
+	{
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "attachInstanceScriptsOnPlayer-scriptList was 'none' player "+player+"("+getPlayerName(player)+"). We are returning here.");
+		return;
+	}
+
+	string[] parse = split(scriptList, ',');
+
+	if (parse == null || parse.length == 0)
+	{
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "attachInstanceScriptsOnPlayer-script parse list was null for player "+player+"("+getPlayerName(player)+"). We are returning here.");
+		return;
+	}
+
+	for (int i=0;i<parse.length;i++)
+	{
+		if (!hasScript(player, parse[i]))
+		{
+			CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "attachInstanceScriptsOnPlayer-player "+player+"("+getPlayerName(player)+") did not have the script '"+parse[i]+"'. It is being attached now.");
+			attachScript(player, parse[i]);
+		}
+	}
+
+	CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "attachInstanceScriptsOnPlayer-all scripts have been attached for player "+player+"("+getPlayerName(player)+") returning now.");
+
+	return;
+}
+
+void removeInstanceScriptFromPlayer(obj_id player, dictionary data)
+{
+	string scriptList = data.getString("player_script");
+	if (scriptList == "none")
+		return;
+
+	string[] parse = split(scriptList, ',');
+
+	if (parse == null || parse.length == 0)
+		return;
+
+	for (int i=0;i<parse.length;i++)
+	{
+		if (hasScript(player, parse[i]))
+			detachScript(player, parse[i]);
+	}
+
+}
+
+void validateInstanceScriptsOnPlayer(obj_id player)
+{
+	string[] allScripts = dataTableGetStringColumn(INSTANCE_DATATABLE, "player_script");
+
+	for(int i=0;i<allScripts.length;i++)
+	{
+		if (allScripts[i].equals("none"))
+			continue;
+
+		string[] parse = split(allScripts[i], ',');
+
+		for (int q=0;q<parse.length;q++)
+		{
+			if (hasScript(player, parse[q]))
+				detachScript(player, parse[q]);
+		}
+	}
+}
+
+obj_id getAreaInstanceController(obj_id base_object)
+{
+	string area_name = locations.getBuildoutAreaName(base_object);
+	int area_row = locations.getBuildoutAreaRow(base_object);
+
+	obj_id planet = getPlanetByName(getLocation(base_object).area);
+	string instance_controller = ""+area_name+"_"+area_row;
+
+	obj_id areaInstanceController = utils.hasScriptVar(planet, instance_controller) ? utils.getObjIdScriptVar(planet, instance_controller) : null;
+
+	return areaInstanceController;
+}
+
+boolean[] requestInstancePobGroup(obj_id[] players, string instance_name)
+{
+	obj_id ship = space_transition.getContainingShip(players[0]);
+	obj_id pilot = space_utils.getPilotForRealsies(ship);
+
+	boolean[] results = new boolean[players.length];
+
+	int idx = 0;
+	for (int i=0;i<players.length;i++)
+	{
+		if (players[i] != pilot)
+		{
+			results[idx] = requestInstanceMovement(players[i], instance_name);
+			idx++;
+		}
+	}
+
+	dictionary dict = new dictionary();
+	dict.put("instance_name", instance_name);
+	messageTo(pilot, "delayInstanceRequest", dict, 10.0f, false);
+
+	results[idx] = true;
+
+	return results;
+}
+
+void playMusicInInstance(obj_id dungeon, string sound)
+{
+	obj_id[] players = getPlayersInInstanceArea(dungeon);
+	if (players == null || players.length == 0)
+		return;
+
+	for (int r=0;r<players.length;r++)
+	{
+		playMusic(players[r], sound);
+	}
+}
+
+void sendInstanceSystemMessage(obj_id dungeon, string_id message)
+{
+	obj_id[] players = getPlayersInInstanceArea(dungeon);
+	if (players == null || players.length == 0)
+		return;
+
+	utils.sendSystemMessage(players, message);
+}
+
+boolean vehicleAllowedInInstance(obj_id instance_id)
+{
+	return vehicleAllowedInInstance(getInstanceName(instance_id));
+}
+
+boolean vehicleAllowedInInstance(string instance_name)
+{
+	return dataTableGetInt(INSTANCE_DATATABLE, instance_name, "vehicle_allowed") == 1;
+}
+
+obj_id[] addToPlayerIdList(obj_id instance_id, obj_id player)
+{
+	resizeable obj_id[] playerList = new obj_id[0];
+
+	if (utils.hasScriptVar(instance_id, PLAYER_ID_LIST))
+			playerList = utils.getResizeableObjIdArrayScriptVar(instance_id, PLAYER_ID_LIST);
+
+	if (playerList == null || playerList.length == 0)
+	{
+		playerList.add(player);
+		utils.setScriptVar(instance_id, PLAYER_ID_LIST, playerList);
+		return playerList;
+	}
+
+	if (!playerList.contains(player))
+		playerList.add(player);
+
+	utils.setScriptVar(instance_id, PLAYER_ID_LIST, playerList);
+
+	return playerList;
+}
+
+obj_id[] removeFromPlayerIdList(obj_id instance_id, obj_id player)
+{
+	resizeable obj_id[] playerList = new obj_id[0];
+
+	if (utils.hasScriptVar(instance_id, PLAYER_ID_LIST))
+			playerList = utils.getResizeableObjIdArrayScriptVar(instance_id, PLAYER_ID_LIST);
+
+	if (playerList == null || playerList.length == 0)
+	{
+		return null;
+	}
+
+	if (playerList.contains(player))
+	{
+		playerList.remove(player);
+	}
+
+	utils.setScriptVar(instance_id, PLAYER_ID_LIST, playerList);
+	return playerList;
+}
+
+obj_id[] getPlayerIdList(obj_id instance_id)
+{
+	resizeable obj_id[] playerList = utils.hasScriptVar(instance_id, PLAYER_ID_LIST) ? utils.getResizeableObjIdArrayScriptVar(instance_id, PLAYER_ID_LIST) : null;
+	obj_id[] newList = playerList;
+	return playerList;
+}
+
+resizeable obj_id[] getResizeablePlayerIdList(obj_id instance_id)
+{
+	return 	utils.hasScriptVar(instance_id, PLAYER_ID_LIST) ? utils.getResizeableObjIdArrayScriptVar(instance_id, PLAYER_ID_LIST) : null;
+}
+
+boolean isPlayerInPlayerList(obj_id instance_id, obj_id player)
+{
+	resizeable obj_id[] playerList = getResizeablePlayerIdList(instance_id);
+	return playerList.contains(player);
+}
+
+void setRequestPending(obj_id player)
+{
+	buff.applyBuff(player, REQUEST_BUFF);
+}
+
+void setRequestResolved(obj_id player)
+{
+	buff.removeBuff(player, REQUEST_BUFF);
+}
+
+boolean isRequestPending(obj_id player)
+{
+	return buff.hasBuff(player, REQUEST_BUFF);
+}
+
+void doLogging(string message)
+{
+	LOG("doLogging/library.instance", message);
+}
+
+void doLogging(string section, string message)
+{
+	LOG("doLogging/library.instance/"+section, message);
+}

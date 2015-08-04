@@ -1,0 +1,1292 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        survey_tool_script.script
+ * Description:  script for handling survey tool use
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.ai_lib;
+include library.utils;
+include library.resource;
+include library.prose;
+include library.structure;
+include library.sui;
+include library.xp;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const int MIN_SURVEY_POINTS					= 3;
+const int MAX_SURVEY_POINTS					= 9;
+
+const int MIN_SURVEY_RANGE					= 32;
+const int MAX_SURVEY_RANGE					= 384;
+
+const int SURVEY_TOOL_DELAY					= 25;
+const int MIN_SURVEY_TOOL_DELAY					= 10;
+
+const int SURVEY_MIND_COST					= 0;
+const int SAMPLE_MIND_COST					= 0;
+const int SAMPLE_ACTION_COST					= 105;
+
+const int MIN_SURVEY_MISSION_DISTANCE	    			= 1024;
+
+const string_id SID_TOOL_OPTIONS				= new string_id("sui", "tool_options");
+
+const string_id SID_TOOL_RANGE					= new string_id("sui", "survey_range");
+const string_id SID_TOOL_RESOLUTION				= new string_id("sui", "survey_resolution");
+
+const string_id SID_NO_SURVEY_INSTANCE				= new string_id("error_message","no_survey_instance");
+const string_id SID_SURVEY_IN_STRUCTURE				= new string_id("error_message","survey_in_structure");
+const string_id SID_SURVEY_ON_TERRAIN_ONLY			= new string_id("error_message","survey_on_terrain_only");
+const string_id SID_SURVEY_ON_MOUNT				= new string_id("error_message","survey_on_mount");
+const string_id SID_SURVEY_SWIMMING				= new string_id("error_message","survey_swimming");
+const string_id SID_SURVEY_SITTING				= new string_id("error_message","survey_sitting");
+const string_id SID_SURVEY_CANT					= new string_id("error_message","survey_cant");
+const string_id SID_SURVEY_MIND					= new string_id("error_message","survey_mind");
+const string_id SID_SAMPLE_MIND					= new string_id("error_message","sample_mind");
+
+const string_id SID_START_SAMPLING				= new string_id("survey", "start_sampling");
+const string_id SID_START_SURVEY				= new string_id("survey", "start_survey");
+const string_id SID_SURVEY_SAMPLE				= new string_id("survey", "survey_sample");
+const string_id SID_SAMPLE_SELECT_TYPE				= new string_id("survey", "sample_select_type");
+const string_id SID_SAMPLE_SURVEY				= new string_id("survey", "sample_survey");
+const string_id SID_SAMPLE_RECHARGE				= new string_id("survey", "tool_recharge_time");
+const string_id SID_ALREADY_SAMPLING				= new string_id("survey", "already_sampling");
+
+const string_id SID_SAMPLE_CANCEL				= new string_id("survey", "sample_cancel");
+const string_id SID_SAMPLE_GONE					= new string_id("survey", "sample_gone");
+
+const string_id SID_NO_SURVEY_IN_SPACE = new string_id("space/space_interaction", "no_survey_in_space");
+const string_id SID_NO_SURVEY_WATER = new string_id("survey", "no_survey_in_water");
+
+const string STF 					= "survey";
+
+//dictionary resourceData = new dictionary();
+dictionary dctParams = new dictionary();
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set default range.
+	setObjVar( self, resource.VAR_SETTINGS_INDEX, 0 );
+	setObjVar( self, resource.VAR_SURVEY_RANGE_VALUE, 32 );
+	setObjVar( self, resource.VAR_SURVEY_RESOLUTION_VALUE, 3 );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnDestroy
+//------------------------------------------------
+
+trigger OnDestroy()
+{
+	// Stop sampling/surveying if we go away.
+	if ( utils.hasScriptVar( self, "surveying.player" ) )
+	{
+		obj_id player = utils.getObjIdScriptVar( self, "surveying.player" );
+		utils.removeScriptVar( player, "surveying.outstandingHarvestMessage" );
+		resource.cleanupTool( player, self );
+		sendSystemMessage( player, SID_SAMPLE_GONE );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnAboutToBeTransferred
+//------------------------------------------------
+
+trigger OnAboutToBeTransferred( obj_id destContainer, obj_id transferer )
+{
+	// Can't transfer the tool while it is in use.
+	if ( utils.hasScriptVar( self, "surveying.takingSamples" ) )
+		return SCRIPT_OVERRIDE;
+	if ( utils.hasScriptVar( self, "surveying.surveying" ) )
+		return SCRIPT_OVERRIDE;
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	string resource_class = getStringObjVar(self, resource.VAR_SURVEY_CLASS);
+	if ( resource_class.equals("") )
+	{
+		sendSystemMessageTestingOnly(player, "ERROR: survey tool broken -> no assigned resource class");
+		return SCRIPT_CONTINUE;
+	}
+
+	string baseMod = resource.getSkillModForClass(resource_class);
+	if ( baseMod.equals("") )
+	{
+		sendSystemMessageTestingOnly(player, "ERROR: survey tool broken -> unknown resource class");
+		return SCRIPT_CONTINUE;
+	}
+
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.EXAMINE);
+	if ( mid != null )
+		mid.setServerNotify( true );
+
+	// Make sure we are in the player's inventory.
+	if ( !utils.isNestedWithin( self, player ) )
+		return SCRIPT_CONTINUE;
+
+	mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	if ( mid != null )
+	{
+		mid.setServerNotify(true);
+	}
+
+	string modToUse = "surveying";
+	int modVal = getSkillStatMod(player, modToUse) / 20;
+	debugServerConsoleMsg(player, modToUse + " = " + modVal);
+
+	if ( modVal > 0 )
+	{
+		int mnuOptions = -1;
+		mid = mi.getMenuItemByType(menu_info_types.SERVER_ITEM_OPTIONS);
+		if ( mid == null )
+		{
+			mnuOptions = mi.addRootMenu(menu_info_types.SERVER_ITEM_OPTIONS, SID_TOOL_OPTIONS);
+		}
+		else
+		{
+			mnuOptions = mid.getId();
+		}
+
+		if ( mnuOptions > 0 )
+		{
+				int subRange = mi.addSubMenu(mnuOptions, menu_info_types.SERVER_SURVEY_TOOL_RANGE, SID_TOOL_RANGE);
+		}
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	// Make sure we aren't in space.
+	if (isSpaceScene())
+	{
+		sendSystemMessage(player, SID_NO_SURVEY_IN_SPACE);
+		return SCRIPT_CONTINUE;
+	}
+
+	string resource_class = getStringObjVar(self, resource.VAR_SURVEY_CLASS);
+	if ( resource_class == null || resource_class.equals("") )
+	{
+		sendSystemMessageTestingOnly(player, "ERROR: survey tool broken -> no assigned resource class");
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( item == menu_info_types.EXAMINE)
+	{
+		resource.showToolProperties(player, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Make sure we are in the player's inventory.
+	if ( !utils.isNestedWithin( self, player ) )
+		return SCRIPT_CONTINUE;
+
+	string baseMod = resource.getSkillModForClass(resource_class);
+	if ( baseMod == null || baseMod.equals("") )
+	{
+		sendSystemMessageTestingOnly(player, "ERROR: survey tool broken -> unknown resource class");
+		return SCRIPT_CONTINUE;
+	}
+
+	string modToUse = "surveying";
+	int modVal = getSkillStatMod(player, modToUse) / 20;
+
+	if ( item == menu_info_types.ITEM_USE)
+	{
+		//if ( modVal < 1 )
+		//{
+		//	prose_package pp = prose.getPackage(resource.SID_NSF_SKILL, self);
+		//	sendSystemMessageProse(player, pp);
+		//	return SCRIPT_CONTINUE;
+		//}
+		
+		location here = getLocation(player);
+		if ( isWaterInRect (here.x-1, here.z-1, here.x+1, here.z+1) )
+		{
+			sendSystemMessage(player, SID_NO_SURVEY_WATER);
+			return SCRIPT_OVERRIDE;
+		}
+		
+		if(here.area.equals("dungeon1") || here.area.equals("adventure1"))
+		{
+			sendSystemMessage(player, SID_NO_SURVEY_INSTANCE);
+			return SCRIPT_OVERRIDE;
+		}
+		
+		obj_id rangeSetter = getObjIdObjVar(self, resource.VAR_SETTINGS_PLAYER);
+		if ( isIdValid(rangeSetter) && player == rangeSetter )
+		{
+			int idx = getIntObjVar(self, resource.VAR_SETTINGS_INDEX);
+			if ( idx <= modVal )
+			{
+				obj_id containPlayer = getTopMostContainer(player);
+				if (containPlayer != player)
+				{
+					obj_id playerCurrentMount = getMountId (player);
+					if ( !isIdValid(playerCurrentMount))
+					{
+						sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+						return SCRIPT_OVERRIDE;
+					}
+					if (containPlayer != playerCurrentMount)
+					{
+						sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+						return SCRIPT_OVERRIDE;
+					}	
+				}	
+				
+				/*if ( isIdValid(getMountId(player)))
+				{
+					sendSystemMessage(player, SID_SURVEY_ON_MOUNT);
+					return SCRIPT_OVERRIDE;
+				}
+				else if ( getTopMostContainer(player) != player )
+				{
+					sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+					return SCRIPT_OVERRIDE;
+				}
+				
+				obj_id objMount = getMountId(player);
+				if ( !isIdValid(objMount))
+				{
+					if ( getTopMostContainer(player) != player )
+					{
+						sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+						return SCRIPT_OVERRIDE;
+					}
+				}
+				else if(objMount!=getTopMostContainer(player))
+				{
+					sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+					return SCRIPT_OVERRIDE;
+				}
+
+				*/
+				requestResourceListForSurvey(player, self, resource_class);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		// Reset the tool settings.
+		setObjVar( self, resource.VAR_SETTINGS_INDEX, 0 );
+		setObjVar( self, resource.VAR_SURVEY_RANGE_VALUE, 32 );
+		setObjVar( self, resource.VAR_SURVEY_RESOLUTION_VALUE, 3 );
+
+		// Request the player set the range up.
+		resource.requestSetToolRatio( player, self );
+	}
+	else if ( item == menu_info_types.SERVER_SURVEY_TOOL_RANGE || item == menu_info_types.SERVER_ITEM_OPTIONS )
+	{
+		//if ( modVal < 1 )
+		//{
+		//	prose_package pp = prose.getPackage(resource.SID_NSF_SKILL, getName(self));
+		//	sendSystemMessageProse(player, pp);
+		//	return SCRIPT_CONTINUE;
+		//}
+
+		resource.requestSetToolRatio(player, self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnRequestSurvey
+//------------------------------------------------
+
+// Player wants to survey.
+trigger OnRequestSurvey( obj_id player, string resource_type )
+{
+	obj_id containPlayer = getTopMostContainer(player);
+	if (containPlayer != player)
+	{
+		obj_id playerCurrentMount = getMountId (player);
+		if ( !isIdValid(playerCurrentMount))
+		{
+			sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+			return SCRIPT_OVERRIDE;
+		}
+		if (containPlayer != playerCurrentMount)
+		{
+			sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+			return SCRIPT_OVERRIDE;
+		}	
+	}	
+		
+	/*
+	if ( isIdValid( playerCurrentMount ) )
+	{
+		sendSystemMessage(player, SID_SURVEY_ON_MOUNT);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Can't survey inside a house.
+	obj_id containedBy = getContainedBy(player);
+	if ( structure.isInside(player) )
+	{
+		sendSystemMessage( player, SID_SURVEY_IN_STRUCTURE );
+		return SCRIPT_CONTINUE;
+	}
+	*/
+
+	/*if ( !isIdValid(playerCurrentMount))
+	{
+		if ( getTopMostContainer(player) != player )
+		{
+			sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	else if(playerCurrentMount!=getTopMostContainer(player))
+	{
+		sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+		return SCRIPT_OVERRIDE;
+	}
+	*/
+	
+	// Can't survey while swimming.
+	if ( 1 == getState( player, STATE_SWIMMING ) )
+	{
+		sendSystemMessage( player, SID_SURVEY_SWIMMING );
+		return SCRIPT_CONTINUE;
+	}
+	if ( POSTURE_SITTING == getPosture( player ) )
+	{
+		sendSystemMessage( player, SID_SURVEY_SITTING );
+		return SCRIPT_CONTINUE;
+	}
+	if ( POSTURE_SKILL_ANIMATING == getPosture( player ) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Not in combat.
+	if ( ai_lib.isInCombat( player ) )
+	{
+		sendSystemMessage( player, SID_SURVEY_CANT );
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Not standing on a bridge or tower or rooftop, etc.
+	obj_id whatAmIStandingOn = getStandingOn(player);
+	if( isIdValid(whatAmIStandingOn) )
+	{
+		sendSystemMessage(player, SID_SURVEY_ON_TERRAIN_ONLY);
+		return SCRIPT_OVERRIDE;
+	}
+	
+	// Check to see if we are already surveying.
+	boolean surveying = utils.hasScriptVar( player, "surveying.surveying" ) || utils.hasScriptVar( self, "surveying.surveying" );
+	if ( surveying )
+		return SCRIPT_CONTINUE;
+
+	// Check to see if we are sampling.
+	boolean loopRunning = utils.hasScriptVar( player, "surveying.takingSamples" ) || utils.hasScriptVar( self, "surveying.takingSamples" );
+	if ( loopRunning )
+	{
+		sendSystemMessage( player, SID_SURVEY_SAMPLE );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( resource_type.endsWith(",") )
+		resource_type = resource_type.substring( 0, resource_type.length() - 1 );
+
+	// Make sure we are in the player's inventory.
+	if ( !utils.isNestedWithin( self, player ) )
+		return SCRIPT_CONTINUE;
+
+	// Get our settings.
+	string resource_class = getStringObjVar( self, resource.VAR_SURVEY_CLASS );
+	int surveyRange = getIntObjVar( self, resource.VAR_SURVEY_RANGE_VALUE );
+	int points = getIntObjVar( self, resource.VAR_SURVEY_RESOLUTION_VALUE );
+	if ( surveyRange > MAX_SURVEY_RANGE )
+		surveyRange = MAX_SURVEY_RANGE;
+	else if ( surveyRange < MIN_SURVEY_RANGE )
+		surveyRange = MIN_SURVEY_RANGE;
+	if ( points > MAX_SURVEY_POINTS )
+		points = MAX_SURVEY_POINTS;
+	else if ( points < MIN_SURVEY_POINTS )
+		points = MIN_SURVEY_POINTS;
+
+	utils.setScriptVar( player, "surveying.surveying", 1 );
+	utils.setScriptVar( self, "surveying.surveying", 1 );
+	utils.setScriptVar( self, "surveying.player", player );
+
+	// Play survey effects.
+	string resType = getStringObjVar( self, "survey.resource_class" );
+	if ( resType == "gas" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_gas.cef", getLocation(player), 0f );
+	else if ( resType == "chemical" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_moisture.cef", getLocation(player), 0f );
+	else if ( resType == "flora_resources" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_lumber.cef", getLocation(player), 0f );
+	else if ( resType == "mineral" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_mineral.cef", getLocation(player), 0f );
+	else if ( resType == "water" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_liquid.cef", getLocation(player), 0f );
+	else if ( resType == "energy_renewable_unlimited_wind" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_gas.cef", getLocation(player), 0f );
+	else if ( resType == "energy_renewable_unlimited_solar" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_moisture.cef", getLocation(player), 0f );
+	else if ( resType == "energy_renewable_site_limited_geothermal" )
+		playClientEffectLoc( player, "clienteffect/survey_tool_liquid.cef", getLocation(player), 0f );
+
+	// Tell the player we started.
+	prose_package pp = prose.getPackage( SID_START_SURVEY, resource_type );
+	sendSystemMessageProse( player, pp );
+
+	// Display results after time.
+	dictionary outparams = new dictionary();
+	outparams.put( "player", player );
+	outparams.put( "resource_class", resource_class );
+	outparams.put( "resource_type", resource_type );
+	outparams.put( "surveyRange", surveyRange );
+	outparams.put( "points", points );
+	messageTo( self, "finalizeSurvey", outparams, 4.f, false );
+
+	// Grant some xp.
+	xp.grantCraftingXpChance( self, player, 30 );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// finalizeSurvey
+//------------------------------------------------
+
+// Display results of survey.
+messageHandler finalizeSurvey()
+{
+	obj_id player = params.getObjId( "player" );
+	string resource_class = params.getString( "resource_class" );
+	string resource_type = params.getString( "resource_type" );
+	int surveyRange = params.getInt( "surveyRange" );
+	int points = params.getInt( "points" );
+
+	if ( requestSurvey( player, resource_class, resource_type, surveyRange, points ) )
+	{
+		if ( hasObjVar( player, "newbie_handoff.mission.survey" ) )
+		{
+			checkNewbieHandoffSurveyMission( player, resource_type );
+		}
+
+		// new player quest
+		if ( hasScript(player, "theme_park.new_player.new_player") )
+		{
+			dictionary webster = new dictionary();
+			webster.put("resource_class", resource_class);
+			messageTo(player, "handleNewPlayerArtisanAction", webster, 1, false);
+		}
+
+		// messageTo the player with the survey result
+		obj_id resource = getResourceTypeByName(resource_type);
+		if (resource != null)
+		{
+			float efficiency = getResourceEfficiency(resource, getLocation(player));
+			dictionary surveyCompleteMessageParameters = new dictionary();
+			surveyCompleteMessageParameters.put("resource_type", resource_type);
+			surveyCompleteMessageParameters.put("resource_class", resource_class);
+			surveyCompleteMessageParameters.put("efficiency", efficiency);
+			surveyCompleteMessageParameters.put("resource_type_object", resource);
+			messageTo(player, "surveyComplete", surveyCompleteMessageParameters, 0.0f, false);
+		}
+
+
+		// Survey mission success check.
+		obj_id[] objMissionArray = getMissionObjects( player );
+
+		if ( objMissionArray != null ) // MISSIONS! WOOH
+		{
+			for ( int intI=0; intI<objMissionArray.length; intI++ )
+			{
+				obj_id objMissionData = objMissionArray[intI] ;
+				string strMissionType = getMissionType( objMissionData );
+				location locSurveyLocation = getLocation( player );	// ONLY WORKS ON PLAYER LOCATION
+				if ( strMissionType == "survey" )
+				{
+					obj_id objResource = getResourceTypeByName( resource_type );
+					//LOG("survey_mission", "locSurveyLocation is "+locSurveyLocation);
+					string strResource = getStringObjVar( objMissionData, "strResource" );
+					//LOG("survey_mission", "strResource si "+strResource);
+					//LOG("survey_mission", "resource type is "+resource_type);
+
+					if (objResource != null)
+					{
+						if ( isResourceDerivedFrom( objResource, strResource ) && isResourceDerivedFrom ( objResource, resource_class) )
+						{
+							int intEffeciency = getIntObjVar( objMissionData, "intEffeciency" );
+							float fltEffeciency = getResourceEfficiency( objResource, locSurveyLocation );
+							fltEffeciency *= 100.0f;
+							//LOG( "survey_mission", "fltEffeciency is "+fltEffeciency+" and my checked effeciency is "+intEffeciency );
+							if ( fltEffeciency >= (float)intEffeciency )
+							{
+								// set up the distance so that we'll succeed if something goes wrong
+								float testDistance = 10000.0f;
+								location locStartLocation = getLocationObjVar(objMissionData, "locStartLocation");
+								if ( locStartLocation == null )
+								{
+									CustomerServiceLog("survey_mission", "getLocationObjVar for mission data " + objMissionData + " returned null");
+								}
+								else
+								{
+									string strStartPlanet = locStartLocation.area;
+									string strCurrentPlanet = locSurveyLocation.area;
+									if (strStartPlanet == strCurrentPlanet)
+									{
+										float realDistance = getDistance(locStartLocation, locSurveyLocation);
+										if ( realDistance < 0)
+										{
+											CustomerServiceLog("survey_mission", "Could not get a valid distance between " +
+												locStartLocation + " and " + locSurveyLocation);
+										}
+										else
+											testDistance = realDistance;
+									}
+								}
+
+								if (testDistance > MIN_SURVEY_MISSION_DISTANCE)
+								{
+									//LOG( "survey_mission", "SUCCESSFUL MISSION!" );
+									messageTo( objMissionArray[intI], "surveySuccess", null, 0, false );
+									// WINNER, but don't kick out since we want to play our animation.
+								}
+								else
+								{
+	//								string_id strSpam = new string_id("mission/mission_generic", "survey_too_close");
+	//								sendSystemMessage(player, strSpam);
+									prose_package pp = new prose_package();
+									pp.stringId = new string_id("mission/mission_generic", "survey_too_close");
+									pp.digitInteger = MIN_SURVEY_MISSION_DISTANCE;
+									pp.digitFloat = testDistance;
+									sendSystemMessageProse (player, pp);
+								}
+							}
+						}
+						else
+						{
+							//LOG( "survey_mission", "not derived, object was "+objResource+" type was "+strResource );
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			LOG("survey_mission", "NULL MISSION ARRAY");
+		}
+	}
+	else
+		sendSystemMessage( player, resource.SID_SURVEY_ERROR );
+	resource.cleanupTool( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// checkNewbieHandoffSurveyMission
+//------------------------------------------------
+
+void checkNewbieHandoffSurveyMission( obj_id player, string resource_type )
+{
+	// Survey mission success check.
+
+	location surveyLoc = getLocation( player );
+	LOG("newbie_survey_mission", "Survey Location is "+surveyLoc);
+
+	obj_id surveyResource = getResourceTypeByName( resource_type );
+	obj_id missionResource = getObjIdObjVar( player, "newbie_handoff.mission.survey.resource" );
+	LOG("newbie_survey_mission", "Survey Resource is "+surveyResource);
+	LOG("newbie_survey_mission", "Mission Resource is "+missionResource);
+
+	if ( surveyResource == missionResource )
+	{
+		float goalEffeciency = getFloatObjVar( player, "newbie_handoff.mission.survey.efficiency" );
+		float curEffeciency = getResourceEfficiency( surveyResource, surveyLoc );
+		LOG( "newbiesurvey_mission", "Current Efficiency is "+curEffeciency+" and my desired effeciency is "+goalEffeciency );
+
+		if ( curEffeciency >= goalEffeciency )
+		{
+			LOG( "newbie_survey_mission", "SUCCESSFUL MISSION!" );
+			messageTo( player, "missionSurveyComplete", null, 0, true );
+		}
+		else
+		{
+			LOG( "newbie_survey_mission", "Not effecient enough " );
+		}
+	}
+	else
+	{
+		LOG( "newbie_survey_mission", "Not surveying for correct resource" );
+	}
+}
+
+//------------------------------------------------
+// OnRequestCoreSample
+//------------------------------------------------
+
+// Player wants to dig up a sample.
+trigger OnRequestCoreSample( obj_id player, string resource_type )
+{
+	//New Code for force sensitive survey/sampling quests
+	if (hasScript (player, "quest.force_sensitive.fs_survey_player"))
+	{
+		if (hasObjVar (player, "quest.survey.specialResource"))
+		{
+			int winner = rand (1,3);
+			if (winner == 3)
+			{
+				string type = getStringObjVar (player, "quest.oldresource.type");
+				if (type != null && type != "")
+				{
+					string special = pickSpecialResourceToGive(player, resource_type);
+					obj_id backpack = utils.getInventoryContainer (player);
+					obj_id madeObject = createObject (special, backpack, null);
+					float efficiency = getFloatObjVar (player, "quest.survey.efficency");
+					setSpecialResourceObjVars (special, madeObject, efficiency);
+					removeObjVar (player, "quest.survey.specialResource");
+				}
+			}
+			else
+			{
+				removeObjVar (player, "quest.survey.specialResource");
+				sendSystemMessage (player, "", null);
+			}
+		}
+	}
+	if ( hasObjVar(player, "surveying.sampleCrateGenFailed" ) )
+	{
+		// Clean up after failure.
+		removeObjVar( player, "surveying.sampleCrateGenFailed" );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar(self, "energy_survey_tool" ) )
+	{
+		// You can't sample energy resources...
+		sendSystemMessage (player, getString(new string_id(STF, "must_have_harvester")), null); // You are unable to gather energy resources with a survey tool, and will need to place a generator here to take advantage of any available at this location.
+		return SCRIPT_CONTINUE;
+	}
+
+	boolean surveying = utils.hasScriptVar( player, "surveying.surveying" ) || utils.hasScriptVar( self, "surveying.surveying" );
+	if ( surveying )
+	{
+		// We are surveying.
+		sendSystemMessage( player, SID_SAMPLE_SURVEY );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( utils.hasScriptVar( player, "surveying.takingSamples" ) || utils.hasScriptVar( self, "surveying.takingSamples" ) )
+	{
+		// Already sampling?
+		sendSystemMessage( player, SID_ALREADY_SAMPLING );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( utils.hasScriptVar( player, "surveying.outstandingHarvestMessage" ) )
+	{
+		// We can't survey again because a harvest message hasn't been processed.
+		int curTime = getGameTime();
+		int diffTime = utils.getIntScriptVar( player, "surveying.outstandingHarvestMessage" ) - curTime;
+		if ( diffTime >= 0 )
+		{
+			prose_package pp = prose.getPackage( SID_SAMPLE_RECHARGE, diffTime );
+			sendSystemMessageProse( player, pp );
+			return SCRIPT_CONTINUE;
+		}
+		
+		if ( diffTime < 0  || diffTime >= 45)
+		{
+			// Negative time! or a really giant number 
+			//This only happens if the last survey tool wasn't cleaned up properly.
+			utils.removeScriptVar( player, "surveying.outstandingHarvestMessage" );
+		}
+	}
+	obj_id playerCurrentMount = getMountId(player);
+	if ( !isIdValid(playerCurrentMount))
+	{
+		if ( getTopMostContainer(player) != player )
+		{
+			sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	else if(playerCurrentMount!=getTopMostContainer(player))
+	{
+		sendSystemMessage(player, SID_SURVEY_IN_STRUCTURE);
+		return SCRIPT_OVERRIDE;
+	}
+
+
+	// Can't survey while swimming.
+	if ( 1 == getState( player, STATE_SWIMMING ) )
+	{
+		sendSystemMessage(player, SID_SURVEY_SWIMMING);
+		return SCRIPT_CONTINUE;
+	}
+	if ( POSTURE_SITTING == getPosture( player ) )
+	{
+		sendSystemMessage( player, SID_SURVEY_SITTING );
+		return SCRIPT_CONTINUE;
+	}
+	if ( POSTURE_SKILL_ANIMATING == getPosture( player ) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Not in combat.
+	if ( ai_lib.isInCombat( player ) )
+	{
+		sendSystemMessage( player, SID_SURVEY_CANT );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( resource_type.endsWith(",") )
+		resource_type = resource_type.substring(0, resource_type.length() - 1);
+
+	// Make sure we are in the player's inventory.
+	if ( !utils.isNestedWithin( self, player ) )
+		return SCRIPT_CONTINUE;
+
+	string resource_class = getStringObjVar( self, resource.VAR_SURVEY_CLASS );
+	obj_id typeId = getResourceTypeByName( resource_type );
+	if ( (typeId == null) || (typeId == obj_id.NULL_ID) )
+	{
+		// Can't get resource type.
+		sendSystemMessage( player, resource.SID_SURVEY_ERROR );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isResourceDerivedFrom(typeId, resource_class) )
+	{
+		// Weird problem where the tool doesn't match the requested resource type.
+		sendSystemMessage( player, SID_SAMPLE_SELECT_TYPE );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( isResourceDerivedFrom(typeId, "radioactive") )
+	{
+		boolean isConfirmed = false;
+		if ( utils.hasScriptVar(player, "surveying.radioactive.id") )
+		{
+			obj_id rType = utils.getObjIdScriptVar(player, "surveying.radioactive.id");
+			if ( isIdValid(rType) && rType == typeId && !utils.hasScriptVar(player, "surveying.radioactive.pid") )
+				isConfirmed = true;
+		}
+
+		if ( !isConfirmed )
+		{
+			if ( utils.hasScriptVar(player, "surveying.radioactive.pid") )
+			{
+				int oldpid = utils.getIntScriptVar(player, "surveying.radioactive.pid");
+				if ( oldpid > -1 )
+					sui.closeSUI(player, oldpid);
+
+				utils.removeScriptVar(player, "surveying.radioactive.pid");
+			}
+
+			string ctitle = getString(new string_id(STF, "radioactive_sample_t")); // Confirm Radioactive Sample
+			string cprompt = getString(new string_id(STF, "radioactive_sample_d")); // Sampling a radioactive mineral will result in harmful effects. Are you sure you wish to continue?
+			int pid = sui.msgbox(self, player, cprompt, sui.YES_NO, ctitle, "handleRadioactiveConfirm");
+			if ( pid > -1 )
+			{
+				utils.setScriptVar(player, "surveying.radioactive.pid", pid);
+				utils.setScriptVar(player, "surveying.radioactive.id", typeId);
+				utils.setScriptVar(player, "surveying.radioactive.name", resource_type);
+			}
+
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		if ( utils.hasScriptVar(player, "surveying.radioactive.pid") )
+		{
+			int oldpid = utils.getIntScriptVar(player, "surveying.radioactive.pid");
+			if ( oldpid > -1 )
+				sui.closeSUI(player, oldpid);
+
+			utils.removeScriptVar(player, "surveying.radioactive.pid");
+		}
+
+		if ( utils.hasScriptVar(player, "surveying.radioactive.id") )
+			utils.removeScriptVarTree(player, "surveying.radioactive");
+	}
+
+	// Store ref to us.
+	utils.setScriptVar( self, "surveying.player", player );
+	utils.setScriptVar( player, "surveying.tool", self );
+
+	// Start sampling.
+	utils.setScriptVar( player, "surveying.takingSamples", 1 );
+	utils.setScriptVar( self, "surveying.takingSamples", 1 );
+	utils.setScriptVar( player, "surveying.resource", resource_type );
+
+	// Kneel.
+	queueCommand( player, ##"kneel", self, "No params.", COMMAND_PRIORITY_FRONT );
+
+	//lets set the script var that says we are harvesting
+	utils.setScriptVar( player, "surveying.outstandingHarvestMessage", getGameTime() + getSurveyToolDelay(player) + 5 );
+	
+	// Queue sampling command.
+	dictionary outparams = new dictionary();
+	outparams.put( "player", player );
+	messageTo( self, "sampleLoop", outparams, 1.f, false );
+
+	// Queue effect.
+	messageTo( self, "samplingEffect", outparams, 1.f, false );
+
+	// Tell them. 
+	prose_package pp = prose.getPackage( SID_START_SAMPLING, resource_type );
+	sendSystemMessageProse( player, pp );
+
+	// Grant some xp.
+	xp.grantCraftingXpChance( self, player, 30 );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// sampleLoop
+//------------------------------------------------
+
+messageHandler sampleLoop()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId( "player" );
+	if ( player == null )
+		return SCRIPT_CONTINUE;
+
+	boolean loopRunning = utils.hasScriptVar( player, "surveying.takingSamples" ) || utils.hasScriptVar( self, "surveying.takingSamples" );
+	if ( !loopRunning )
+		return SCRIPT_CONTINUE;
+
+	// Check to see if we are surveying, this probably won't ever happen.
+	boolean surveying = utils.hasScriptVar( player, "surveying.surveying" ) || utils.hasScriptVar( self, "surveying.surveying" );
+	if ( surveying )
+	{
+		// We are surveying.
+		resource.cleanupTool( player, self );
+		sendSystemMessage( player, SID_SAMPLE_SURVEY );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Make sure we are in the player's inventory.
+	if ( !utils.isNestedWithin( self, player ) )
+	{
+		// Break the loop and remove loop running var.
+		resource.cleanupTool( player, self );
+		sendSystemMessage( player, SID_SAMPLE_GONE );
+		return SCRIPT_CONTINUE;
+	}
+
+	utils.setScriptVar( player, "surveying.takingSamples", 1 );
+	utils.setScriptVar( self, "surveying.takingSamples", 1 );
+
+	// Get location.
+ 	location playerCurrent = getLocation( player );
+ 	location sampleLocation = getLocationObjVar( player, "surveying.sampleLocation" );
+
+	// Try to sample.
+	string resource_type = utils.getStringScriptVar( player, "surveying.resource" );
+
+	// Check to see if we moved!
+	float dist = 0.f;
+	if ( sampleLocation != null )
+		dist = utils.getDistance( playerCurrent, sampleLocation );
+	if ( (sampleLocation != null) && (dist > 1.f) )
+	{
+		// We moved, so cancel.
+		sendSystemMessage( player, SID_SAMPLE_CANCEL );
+		resource.cleanupTool( player, self );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Take sample cost.
+	int action = getAttrib( player, ACTION );
+	int actioncost = SAMPLE_ACTION_COST * (getLevel(player) / 2);
+	if ( !drainAttributes( player, actioncost, 0 ) )
+	{
+		// We don't have the pool to do this.
+		sendSystemMessage( player, SID_SAMPLE_MIND );
+		resource.cleanupTool( player, self );
+
+		// Stand us back up.
+		queueCommand( player, ##"stand", player, "No params.", COMMAND_PRIORITY_FRONT );
+		return SCRIPT_OVERRIDE;
+	}
+
+	// Try to take a sample.
+	setObjVar( player, "surveying.sampleLocation", playerCurrent );
+	int sampleRes = resource.getSample( player, self, resource_type );
+	if ( sampleRes == resource.SAMPLE_STOP_LOOP )
+	{
+		// Failed to get a sample.
+		resource.cleanupTool( player, self );
+
+		// Check for create fail.
+		if ( hasObjVar(player, "surveying.sampleCrateGenFailed" ) )
+			removeObjVar( player, "surveying.sampleCrateGenFailed" );
+
+		// Stand us back up.
+		queueCommand( player, ##"stand", player, "No params.", COMMAND_PRIORITY_FRONT );
+	}
+	else if ( sampleRes == resource.SAMPLE_PAUSE_LOOP_EVENT )
+	{
+		// Player got a special event with a menu.
+//		resource.cleanupTool( self, player );
+	}
+	else
+	{
+		// Queue effect for next search.
+		messageTo( self, "samplingEffect", params, getSurveyToolDelay(player), false );
+
+		// Harvest the resources.
+		messageTo( self, "resourceHarvest", params, getSurveyToolDelay(player) + 2, false );
+		
+		//the second or more time through the loop we need to add this scriptvar
+		if(!utils.hasScriptVar(player, "surveying.outstandingHarvestMessage"))
+			utils.setScriptVar( player, "surveying.outstandingHarvestMessage", getGameTime() + getSurveyToolDelay(player) + 4 );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRadioactiveConfirm()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		utils.removeScriptVarTree(player, "surveying.radioactive");
+		return SCRIPT_CONTINUE;
+	}
+
+	utils.removeScriptVar(player, "surveying.radioactive.pid");
+	//queueCommand(player, ##"sample", null,"", COMMAND_PRIORITY_DEFAULT);
+
+	string resource_type = utils.getStringScriptVar(player, "surveying.radioactive.name");
+	if ( resource_type != null && !resource_type.equals("") )
+	{
+		sendSystemMessageTestingOnly(player, getString(new string_id(STF, "radioactive_sample_known")) + resource_type + "."); // You have chosen to override safety measures and may now sample
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, getString(new string_id(STF, "radioactive_sample_unknown"))); // You have chosen to override safety measures and may now sample the chosen radioactive.
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// samplingEffect
+//------------------------------------------------
+
+messageHandler samplingEffect()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+	obj_id player = params.getObjId( "player" );
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	if ( !utils.hasScriptVar( player, "surveying.takingSamples" ) )
+		return SCRIPT_CONTINUE;
+	if ( !utils.hasScriptVar( self, "surveying.takingSamples" ) )
+		return SCRIPT_CONTINUE;
+
+	// Play effect.
+	string resType = getStringObjVar( self, "survey.resource_class" );
+	if ( resType == "gas" )
+		playClientEffectLoc( player, "clienteffect/survey_sample_gas.cef", getLocation(player), 0f );
+	else if ( resType == "chemical" )
+		playClientEffectLoc( player, "clienteffect/survey_sample_moisture.cef", getLocation(player), 0f );
+	else if ( resType == "flora_resources" )
+		playClientEffectLoc( player, "clienteffect/survey_sample_lumber.cef", getLocation(player), 0f );
+	else if ( resType == "mineral" )
+		playClientEffectLoc( player, "clienteffect/survey_sample_mineral.cef", getLocation(player), 0f );
+	else if ( resType == "water" )
+		playClientEffectLoc( player, "clienteffect/survey_sample_liquid.cef", getLocation(player), 0f );
+	else if ( resType == "energy_renewable_site_limited_geothermal" )
+		playClientEffectLoc( player, "clienteffect/survey_sample_liquid.cef", getLocation(player), 0f );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// resourceHarvest
+//------------------------------------------------
+
+messageHandler resourceHarvest()
+{
+	obj_id player = params.getObjId("player");
+
+	if ( player.isAuthoritative() == false )
+	{
+		debugServerConsoleMsg( player, "player has gone offline or something. BAD! Not authoritative" );
+		return SCRIPT_CONTINUE;
+	}
+
+	utils.removeScriptVar( player, "surveying.outstandingHarvestMessage" );
+	if ( !utils.hasScriptVar( player, "surveying.takingSamples" ) )
+		return SCRIPT_CONTINUE;
+	if ( !utils.hasScriptVar( self, "surveying.takingSamples" ) )
+		return SCRIPT_CONTINUE;
+
+	messageTo( self, "sampleLoop", params, 1.f, false );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleSetRange
+//------------------------------------------------
+
+messageHandler handleSetRange()
+{
+	if ( params == null )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx < 0 )
+		idx = 0;
+
+	obj_id user = getObjIdObjVar(self, resource.VAR_SETTINGS_PLAYER);
+	if ( !isIdValid(user) )
+		return SCRIPT_CONTINUE;
+
+	if ( player != user )
+	{
+		//resource.requestSetToolRatio(player, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int[] ranges = getIntArrayObjVar(self, resource.VAR_SETTINGS_RANGES);
+	int[] resolutions = getIntArrayObjVar(self, resource.VAR_SETTINGS_RESOLUTIONS);
+
+	if ( (ranges == null) || (ranges.length == 0) || (resolutions == null) || (resolutions.length == 0) )
+	{
+		int max_range = getIntObjVar(self, resource.VAR_SURVEY_RANGE_MAX);
+		if ( (max_range < resource.SURVEY_RANGE_MIN) || (max_range > resource.SURVEY_RANGE_MAX) )
+		{
+			setObjVar(self, resource.VAR_SURVEY_RANGE_VALUE, resource.SURVEY_RANGE_MAX);
+		}
+		else
+		{
+			setObjVar(self, resource.VAR_SURVEY_RANGE_VALUE, max_range);
+		}
+
+		int min_res = getIntObjVar(self, resource.VAR_SURVEY_RESOLUTION_MIN);
+		if ( (min_res < resource.SURVEY_RESOLUTION_MIN) || (min_res > resource.SURVEY_RESOLUTION_MAX) )
+		{
+			setObjVar(self, resource.VAR_SURVEY_RESOLUTION_VALUE, resource.SURVEY_RESOLUTION_MIN);
+		}
+		else
+		{
+			setObjVar(self, resource.VAR_SURVEY_RESOLUTION_VALUE, min_res);
+		}
+	}
+	else
+	{
+		if ( idx > ranges.length - 1 )
+		{
+			//idx is out of bounds!
+			return SCRIPT_CONTINUE;
+		}
+		setObjVar(self, resource.VAR_SETTINGS_INDEX, idx);
+		setObjVar(self, resource.VAR_SURVEY_RANGE_VALUE, ranges[idx]);
+		setObjVar(self, resource.VAR_SURVEY_RESOLUTION_VALUE, resolutions[idx]);
+
+		removeObjVar(self, resource.VAR_SETTINGS_RANGES);
+		removeObjVar(self, resource.VAR_SETTINGS_RESOLUTIONS);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// continueSampleLoop
+//
+// Restart sampling after the player chose to ignore an event.
+//------------------------------------------------
+
+messageHandler continueSampleLoop()
+{
+	// Get player ref.
+	obj_id player = params.getObjId( "player" );
+
+	// Queue effect for next search.
+	messageTo( self, "samplingEffect", params, getSurveyToolDelay(player), false );
+
+	// Harvest the resources.
+	messageTo( self, "resourceHarvest", params, getSurveyToolDelay(player) + 2, false );
+	utils.setScriptVar( player, "surveying.outstandingHarvestMessage", getGameTime() + getSurveyToolDelay(player) + 4 );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// stopSampleEvent
+//------------------------------------------------
+
+messageHandler stopSampleEvent()
+{
+	// Get player ref.
+	obj_id player = params.getObjId( "player" );
+
+	// Clean up tool.
+	resource.cleanupTool( player, self );
+
+	// Stand us back up.
+	queueCommand( player, ##"stand", player, "No params.", COMMAND_PRIORITY_FRONT );
+
+	return SCRIPT_CONTINUE;
+}
+
+//Function used by the Force sensitive Quest.
+string pickSpecialResourceToGive(obj_id player, string resource)
+{
+	string special = "";
+	obj_id resourceType = getResourceTypeByName (resource);
+	boolean energy = isResourceDerivedFrom (resourceType, "energy");
+	boolean gas = isResourceDerivedFrom (resourceType, "gas");
+
+	if (gas == true || energy == true)
+	{
+		int energySwitch = rand (1,2);
+		if (energySwitch == 1)
+		{
+			special = "object/tangible/loot/quest/ardanium_ii.iff";
+		}
+		else
+		{
+			special = "object/tangible/loot/quest/wind_crystal.iff";
+		}
+	}
+	else
+	{
+		int mineralSwitch = rand (1,3);
+		if (mineralSwitch == 1)
+		{
+			special = "object/tangible/loot/quest/ostrine.iff";
+		}
+		else if (mineralSwitch == 2)
+		{
+			special = "object/tangible/loot/quest/endrine.iff";
+		}
+		else
+		{
+			special = "object/tangible/loot/quest/rudic.iff";
+		}
+	}
+	return special;
+}
+
+void setSpecialResourceObjVars (string special, obj_id resource, float efficiency)
+{
+	if (!isIdValid(resource) || special == null || special == "")
+	{
+		return;
+	}
+
+	int average = (int)(efficiency * 10.0f);
+
+	if (special == "object/tangible/loot/quest/ardanium_ii.iff")
+	{
+		setObjVar (resource, "crafting_components.res_potential_energy", getResourceValue(average));
+		setObjVar (resource, "crafting_components.res_quality", getResourceValue(average));
+
+	}
+	else if (special == "object/tangible/loot/quest/wind_crystal.iff")
+	{
+		setObjVar (resource, "crafting_components.res_potential_energy", getResourceValue(average));
+	}
+	else if (special == "object/tangible/loot/quest/ostrine.iff")
+	{
+		setObjVar (resource, "crafting_components.res_malleability", getResourceValue(average));
+		setObjVar (resource, "crafting_components.res_quality", getResourceValue(average));
+	}
+	else if (special == "object/tangible/loot/quest/endrine.iff")
+	{
+		setObjVar (resource, "crafting_components.res_malleability", getResourceValue(average));
+		setObjVar (resource, "crafting_components.res_quality", getResourceValue(average));
+		setObjVar (resource, "crafting_components.res_toughness", getResourceValue(average));
+	}
+	else if (special == "object/tangible/loot/quest/rudic.iff")
+	{
+		setObjVar (resource, "crafting_components.res_conductivity", getResourceValue(average));
+		setObjVar (resource, "crafting_components.res_decay_resist", getResourceValue(average));
+		setObjVar (resource, "crafting_components.res_quality", getResourceValue(average));
+		setObjVar (resource, "crafting_components.res_shock_resistance", getResourceValue(average));
+	}
+}
+
+int getResourceValue(int average)
+{
+	float value = gaussRand(average, 50.0f);
+	if ( value > Math.min(average + 150, 1000) )
+	{
+		value = Math.min(average + 150, 1000);
+	}
+	else if ( value < Math.max(average - 150, 150) )
+	{
+		value = Math.max(average - 150, 150);
+	}
+	return (int)(value);
+}
+
+int getSurveyToolDelay(obj_id player)
+{
+	if(!isIdValid(player))
+	{
+		return SURVEY_TOOL_DELAY;
+	}
+	
+	int delay = SURVEY_TOOL_DELAY - (int)getSkillStatisticModifier(player, "expertise_resource_sampling_time_decrease");
+
+	if(delay <= MIN_SURVEY_TOOL_DELAY)
+	{
+		delay = MIN_SURVEY_TOOL_DELAY;
+	}
+
+	return delay;
+}

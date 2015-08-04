@@ -1,0 +1,246 @@
+include library.quests;
+include library.groundquests;
+include library.prose;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const String dataTableColumnServerTemplate = "SERVER_TEMPLATE";
+const String dataTableColumnNumRequired    = "NUM_REQUIRED";
+const String dataTableColumnDropPercent    = "DROP_PERCENT";
+const String dataTableColumnItemName       = "ITEM_NAME";
+
+const String objvarCount  = "count";
+const String objvarRetrieved = "retrieved_items";
+
+const String taskType = "retrieve_item";
+const String dot = ".";
+
+const String RETRIEVE_ITEM_MUSIC = "sound/ui_received_quest_item.snd";
+
+// ---------------------------------------------------------------------
+
+//fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+		
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+
+	setObjVar(self, baseObjVar + dot + objvarCount, 0);
+	
+	groundquests.setGuaranteedSuccessTarget(self, questCrc, taskId, baseObjVar);
+	
+	int count = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnNumRequired);
+	questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:retrieve_item_counter", 0, count);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler questRetrieveItemObjectFound()
+{
+	obj_id source = params.getObjId("source");
+
+	//don't let player retrieve > 1 time from the same item
+	if(!groundquests.playerNeedsToRetrieveThisItem(self, source))
+	{
+		groundquests.questOutputDebugInfo(self, taskType, "questRetrieveItemObjectFound", "Player [" + self + "] Retrieved item [" + source + "] that we've already retrieved, this shouldn't happen.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	String sourceTemplateName = getTemplateName(source);
+	
+	//iterate over each quest/task item that is a retrieve_item
+	dictionary tasks = groundquests.getActiveTasksForTaskType(self, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for(int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+				String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+				String retrieveTemplateName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnServerTemplate);
+				//if it's the right item for this task
+				if(sourceTemplateName == retrieveTemplateName)
+				{
+					//add the item to our "already attempted" list
+					resizeable obj_id[] retrievedItemsResizable = new obj_id[0];
+					String objvarRetrievedFull = baseObjVar + dot + objvarRetrieved;
+					if (hasObjVar(self, objvarRetrievedFull))
+					{
+						obj_id[] itemsAlreadyRetrieved = getObjIdArrayObjVar(self, objvarRetrievedFull);
+						for (int k = 0; k < itemsAlreadyRetrieved.length; ++k)
+						{
+							utils.addElement(retrievedItemsResizable, itemsAlreadyRetrieved[k]);
+						}
+					}	
+					utils.addElement(retrievedItemsResizable, source);
+					setObjVar(self, objvarRetrievedFull, retrievedItemsResizable);
+					
+					int dropPercent = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnDropPercent);
+					int roll = rand (1, 100);
+
+					boolean guaranteedSuccess = groundquests.checkForGuaranteedSuccess(self, baseObjVar);
+					
+					//if we make the random roll or are given a guaranteed success
+					if(roll <= dropPercent || guaranteedSuccess )
+					{
+						String objvarNameCount = baseObjVar + dot + objvarCount;
+						if(hasObjVar(self, objvarNameCount))
+						{
+							int lootedCount = getIntObjVar(self, objvarNameCount);
+							++lootedCount;
+							int itemsTotal = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnNumRequired);
+							if(lootedCount > itemsTotal)
+								lootedCount = itemsTotal;
+
+							//only tell player things if task is visible
+							if(groundquests.isTaskVisible(questCrc, taskId))
+							{
+								String itemName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnItemName);
+								string_id message = new string_id ("quest/groundquests", "retrieve_item_success");
+								prose_package pp = prose.getPackage(message, self, self);
+								
+								// if itemName is valid, use the string that gives the item's name given in the quest data
+								if ( itemName != null && itemName.length() > 0  )
+								{
+									message = new string_id ("quest/groundquests", "retrieve_item_success_named");
+									pp = prose.getPackage(message, self, self);
+									prose.setTO(pp, itemName);
+								}
+
+								//send system message
+								prose.setDI(pp, itemsTotal - lootedCount);
+								sendSystemMessageProse(self, pp);
+								
+								play2dNonLoopingSound(self, RETRIEVE_ITEM_MUSIC);
+								
+							}
+
+							if(lootedCount == itemsTotal)
+							{
+								questCompleteTask(questCrc, taskId, self);
+							}
+							else
+							{
+								questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:retrieve_item_counter", lootedCount, itemsTotal);
+								play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_INCREMENT_COUNTER);
+								setObjVar(self, objvarNameCount, lootedCount);
+								
+								groundquests.setGuaranteedSuccessTarget(self, questCrc, taskId, baseObjVar);
+								
+								groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "questRetrieveItemObjectFound", "Retrieved " + lootedCount + "/" + itemsTotal);
+							}
+						}	
+					}
+					else
+					{
+						groundquests.questOutputDebugInfo(self, taskType, "questRetrieveItemObjectFound", "Didn't find one.");
+						
+						//only tell player things if task is visible
+						if(groundquests.isTaskVisible(questCrc, taskId))
+						{
+							String itemName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnItemName);
+							string_id message = new string_id ("quest/groundquests", "retrieve_item_fail");
+							prose_package pp = prose.getPackage(message, self, self);
+
+							sendSystemMessageProse(self, pp);
+						}
+					}
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + " task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is failed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+commandHandler handleClientLogin()
+{
+	dictionary tasks = groundquests.getActiveTasksForTaskType(self, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for(int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+
+				String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+				String objvarNameCount = baseObjVar + dot + objvarCount;
+				if(hasObjVar(self, objvarNameCount))
+				{
+					int lootedCount = getIntObjVar(self, objvarNameCount);
+					int itemsTotal = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnNumRequired);
+					questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:retrieve_item_counter", lootedCount, itemsTotal);
+				}
+			}	
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------

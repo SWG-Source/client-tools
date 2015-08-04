@@ -1,0 +1,578 @@
+
+/***** INCLUDES ********************************************************/
+include library.sui;
+include library.utils;
+include library.prose;
+include library.money;
+include library.colors;
+include library.gambling;
+
+/***** INHERITS ********************************************************/
+inherits gambling.base.default_interface;
+
+/***** CONSTANTS *******************************************************/
+
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	int slotBalance = getBankBalance(self);
+	
+	if (slotBalance > 0 )
+		transferBankCreditsToNamedAccount(self, money.ACCT_SLOT_STANDARD, slotBalance, "noHandler", "noHandler", new dictionary());
+	
+	removeObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	removeObjVar(self, gambling.VAR_GAME_BASE);
+	
+	resizeable int[] reelOdds = gambling.calculateReelOdds(self);
+	if ( reelOdds != null && reelOdds.length > 0 )
+		utils.setBatchScriptVar(self, gambling.VAR_REEL_ODDS, reelOdds);
+		
+	return SCRIPT_CONTINUE;
+}
+
+/***** HANDLERS ********************************************************/
+messageHandler handlePlayerAdded()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	showPayoutSchedule(self, player);
+	
+	startSlotGame(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePlayerRemoved()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	string ovpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if ( utils.hasScriptVar(self, ovpath) )
+	{
+		int pid = utils.getIntScriptVar(self, ovpath);
+		sui.closeSUI(player, pid);
+	}
+	
+	removeObjVar(self, gambling.VAR_GAME_BASE);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetPlaced()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	obj_id nplayer = getObjIdObjVar(self, gambling.VAR_GAME_TURN_PLAYER);
+	if ( !isIdValid(nplayer) )
+		return SCRIPT_CONTINUE;
+
+	if ( player == nplayer )
+		removeObjVar(self, gambling.VAR_GAME_TURN_BASE);
+
+	int ret = params.getInt(money.DICT_CODE);
+	int amt = params.getInt(money.DICT_AMOUNT);
+	if ( ret == money.RET_FAIL || amt < 1 )
+	{
+		dictionary d = new dictionary();
+		d.put("player", player);
+		messageTo(self, "handleBetFailed", d, 0, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	string pidpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if ( utils.hasScriptVar(self, pidpath) )
+	{
+		int oldpid = utils.getIntScriptVar(self, pidpath);
+		utils.removeScriptVar(self, pidpath);
+		
+		sui.closeSUI(player, oldpid);
+	}
+	
+	CustomerServiceLog("gambling", getGameTime() + ": (" + player + ") " + getName(player) + " bets " + amt + "cr to (" + self + ") " + utils.getStringName(self));
+
+	int balance = getBankBalance(self);
+	int max = getIntObjVar(self, gambling.VAR_TABLE_BET_MAX);
+	if ( balance < max )
+	{
+		showSlotUi(self, player);
+	}
+	else
+	{
+		spinReels(self, player, amt);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetFailed()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	sendSystemMessage(player, gambling.SID_BET_FAILED);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetTimer()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	obj_id nplayer = getObjIdObjVar(self, gambling.VAR_GAME_TURN_PLAYER);
+	if ( !isIdValid(nplayer) )
+		return SCRIPT_CONTINUE;
+	
+	if ( player != nplayer )
+		return SCRIPT_CONTINUE;
+	
+	int pstamp = params.getInt("stamp");
+	int nstamp = getIntObjVar(self, gambling.VAR_GAME_TURN_STAMP);
+	if ( nstamp != pstamp )
+		return SCRIPT_CONTINUE;
+	
+	int balance = getBankBalance(self);
+	if ( balance > 0 )
+	{
+		spinReels(self, player, balance);
+	}
+	else
+	{
+		string svpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+		int oldpid = utils.getIntScriptVar(self, svpath);
+		sui.closeSUI(player, oldpid);
+		utils.removeScriptVar(self, svpath);
+
+		gambling.removeTablePlayer(self, player, null);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSlotUi()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int balance = getBankBalance(self);
+	int bp = sui.getIntButtonPressed(params);
+	
+	int max = getIntObjVar(self, gambling.VAR_TABLE_BET_MAX);
+	
+	switch ( bp )
+	{
+		case sui.BP_OK:			//max bet
+			if ( max > 0 )
+				money.requestPayment(player, self, max-balance, "handleBetPlaced", null);
+			else
+				money.requestPayment(player, self, getTotalMoney(player), "handleBetPlaced", null);
+			break;
+			
+		case sui.BP_CANCEL:		//quit or spin
+			if ( balance == 0 )
+				gambling.removeTablePlayer(self, player, "");
+			else
+				spinReels(self, player, balance);
+			break;
+		
+		case sui.BP_REVERT:		//bet one
+			money.requestPayment(player, self, 1, "handleBetPlaced", null);
+			break;
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleReelsSpinning()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int[] results = params.getIntArray("results");
+	if ( results == null || results.length == 0 )
+		return SCRIPT_CONTINUE;
+
+	int idx = params.getInt("idx");
+	if ( idx < 0 || idx >= results.length )
+		return SCRIPT_CONTINUE;
+
+	/*
+	string[] reel = params.getStringArray("reel");
+	if ( reel == null || reel.length == 0 )
+		return SCRIPT_CONTINUE;
+	*/
+	
+	if ( !hasObjVar(self, "alwaysWinner") )
+	{
+		switch ( rand(0,1) )
+		{
+			case 0:
+				results[idx] = 0;
+				break;
+
+			case 1:
+				resizeable int[] reelOdds = utils.getResizeableIntBatchScriptVar(self, gambling.VAR_REEL_ODDS);
+				if ( reelOdds == null || reelOdds.length == 0 )
+				{
+					reelOdds = gambling.calculateReelOdds(self);
+					utils.setBatchScriptVar(self, gambling.VAR_REEL_ODDS, reelOdds);
+				}
+
+				int tmpIdx = rand(0,reelOdds.length-1);
+				results[idx] = ((Integer)(reelOdds.elementAt(tmpIdx))).intValue();
+				break;
+		}
+	}
+	else
+	{
+		resizeable int[] reelOdds = utils.getResizeableIntBatchScriptVar(self, gambling.VAR_REEL_ODDS);
+		if ( reelOdds == null || reelOdds.length == 0 )
+		{
+			results[idx] = 0;
+		}
+		else
+		{
+			if ( idx == 0 )
+			{
+				int tmpIdx = rand(0,reelOdds.length-1);
+				results[0] = ((Integer)(reelOdds.elementAt(tmpIdx))).intValue();
+			}
+			else
+			{
+				results[idx] = results[0];
+			}
+		}
+	}
+	
+	idx++;
+	params.put("results", results);
+	params.put("idx", idx);
+	
+	string msg = "Slot Machine Pay Line\n";
+	msg += "-- ";
+	
+	for ( int i = 0; i < idx; i++ )
+	{
+		msg += "|";
+		
+		/*
+		if ( results[i] == 0 )
+		{
+			msg += getString(gambling.SID_BLANK);
+		}
+		else
+		{
+			msg += getString(utils.unpackString(reel[results[i]-1]));
+		}
+		*/
+		
+		//for debug
+		msg += " " + results[i] + " ";
+		
+		msg += "| ";
+	}
+	
+	for ( int i = idx; i < results.length; i++ )
+	{
+		msg += "|";
+		msg += getString(gambling.SID_ROLLING);
+		msg += "| ";
+	}
+	
+	msg += "--";
+	
+	sendSystemMessageTestingOnly(player, msg);
+	
+	if ( idx >= results.length )
+	{
+		//do results!
+		//LOG("gambling", "calling handleParseResults!");
+		messageTo(self, "handleParseResults", params, 1f, false);
+	}
+	else
+	{
+		//recycle message
+		//LOG("gambling", "recycling handleReelsSpinning!");
+		messageTo(self, "handleReelsSpinning", params, 3f, false);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleParseResults()
+{
+	//LOG("gambling", "attempting to parse slot results!");
+	
+	//clear machine bank account
+	int slotBalance = getBankBalance(self);
+	transferBankCreditsToNamedAccount(self, money.ACCT_SLOT_STANDARD, slotBalance, "noHandler", "noHandler", new dictionary());
+		
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int[] results = params.getIntArray("results");
+	if ( results == null || results.length == 0 )
+		return SCRIPT_CONTINUE;
+
+	int amt = params.getInt("amt");
+	if ( amt < 1 )
+		return SCRIPT_CONTINUE;
+		
+	string gameType = getStringObjVar(self, gambling.VAR_TABLE_TYPE);
+	if ( gameType == null || gameType.equals("") )
+		return SCRIPT_CONTINUE;
+	
+	string tbl = "datatables/gambling/slot/" + gameType + ".iff";
+
+	int payout = gambling.parsePaySchedule(self, player, results, amt, tbl);
+	if ( payout > 0 )
+	{
+		CustomerServiceLog("gambling", getGameTime() + ": (" + player + ") " + getName(player) + " won: attempting to payout " + amt + "cr");
+
+		dictionary d = new dictionary();
+		d.put("player", player);
+		d.put("payout", payout);
+		transferBankCreditsFromNamedAccount(money.ACCT_SLOT_STANDARD, player, payout, "handleGamblingPayout", "noHandler", d);
+	}
+	else
+	{
+		CustomerServiceLog("gambling", getGameTime() + ": (" + player + ") " + getName(player) + " lost");
+		sendSystemMessageTestingOnly(player, "Sorry, you did not win this round. Please try again.");
+		messageTo(self, "handleDelayedRestart", params, 3f, false);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleGamblingPayout()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int payout = params.getInt("payout");
+	
+	//sendSystemMessageTestingOnly(player, "You receive a payout of " + payout + " bank credits");
+	prose_package ppPayout = prose.getPackage(gambling.PROSE_PAYOUT, payout);
+	sendSystemMessageProse(player, ppPayout);
+	
+	CustomerServiceLog("gambling", getGameTime() + ": (" + player + ") " + getName(player) + " receives " + payout + "cr payout from (" + self + ") " + utils.getStringName(self));
+
+	showFlyText(self, gambling.FLY_WINNER, 2f, colors.RED);
+	
+	messageTo(self, "handleDelayedRestart", params, 3f, false);
+	
+	//debug for testing
+	//messageTo(player, "handleTrackWins", params, 1f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDelayedRestart()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	if ( utils.getElementPositionInArray(players, player) > -1 )
+		startSlotGame(self, player);
+		
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS ********************************************************/
+void startSlotGame(obj_id self, obj_id player)
+{
+	if ( !isIdValid(self) || !isIdValid(player) )
+		return;
+	
+	int totalMoney = getTotalMoney(player);
+	if ( totalMoney < 1 )
+	{
+		sendSystemMessage(player, gambling.SID_PLAYER_BROKE);
+		return;
+	}
+
+	showSlotUi(self, player);
+}
+
+void showSlotUi(obj_id self, obj_id player)
+{
+	if ( !isIdValid(self) || !isIdValid(player) )
+		return;
+	
+	string gameType = getStringObjVar(self, gambling.VAR_TABLE_TYPE);
+	if ( gameType == null || gameType.equals("") )
+		return;
+	
+	utils.setScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT, getGameTime());
+	
+	string title = "@gambling/game_n:" + gameType;
+	string prompt = "Press the button corresponding to the desired action.";
+	
+	resizeable string[] entries = new string[0];
+	
+	int slotBalance = getBankBalance(self);
+	
+	int playerCash	= getCashBalance(player);
+	int playerBank  = getBankBalance(player);
+	int playerTotal = getTotalMoney(player);
+	
+	entries = utils.addElement(entries, "Current Bet: " + slotBalance);
+	
+	int max = getIntObjVar(self, gambling.VAR_TABLE_BET_MAX);
+	if ( max < 1 )
+	{
+		entries = utils.addElement(entries, "Max Bet:      " + playerTotal);
+	}
+	else
+	{
+		entries = utils.addElement(entries, "Max Bet:      " + max);
+	}
+	
+	entries = utils.addElement(entries, "Cash Balance: " + playerCash);
+	entries = utils.addElement(entries, "Bank Balance: " + playerBank);
+	entries = utils.addElement(entries, "Total Money : " + playerTotal);
+	
+	int pid = -1;
+	if ( slotBalance > 0 )
+	{
+		pid = sui.listbox(self, player, prompt, sui.BET_MAX_BET_ONE_SPIN, title, entries, "handleSlotUi");
+	}
+	else
+	{
+		pid = sui.listbox(self, player, prompt, sui.BET_MAX_BET_ONE_QUIT, title, entries, "handleSlotUi");
+	}
+	
+	if ( pid == -1 )
+	{
+		sendSystemMessageTestingOnly(player, "The slot machine was unable to create an interface for you.");
+		return;
+	}
+
+	utils.setScriptVar(self, gambling.VAR_GAME_PLAYERS + "." + player + ".pid", pid);
+
+	int now = getGameTime();
+	setObjVar(self, gambling.VAR_GAME_TURN_PLAYER, player);
+	setObjVar(self, gambling.VAR_GAME_TURN_STAMP, now);
+
+	dictionary d = new dictionary();
+	d.put("player", player);
+	d.put("stamp", now);
+	messageTo(self, "handleBetTimer", d, 60f, false);
+	
+	//debug for testing
+	/*
+	dictionary test = new dictionary();
+	test.put("table", self);
+	messageTo(player, "handleBetRequest", test, 1f, false);
+	*/
+}
+
+void spinReels(obj_id self, obj_id player, int amt)
+{
+	if ( !isIdValid(self) || !isIdValid(player) || amt < 1 )
+		return;
+
+	string gameType = getStringObjVar(self, gambling.VAR_TABLE_TYPE);
+	if ( gameType == null || gameType.equals("") )
+		return;
+	
+	string tbl = "datatables/gambling/slot/" + gameType + ".iff";
+	string[] reel = dataTableGetStringColumnNoDefaults(tbl, "REEL");
+	if ( reel == null || reel.length == 0 )
+	{
+		sendSystemMessageTestingOnly(player, "This machine appears to be broken. Please try again later.");
+		return;
+	}
+	
+	utils.removeScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+
+	dictionary d = new dictionary();
+	d.put("player", player);
+	d.put("amt", amt);
+	d.put("results", new int[3]);
+	d.put("idx", 0);
+	d.put("reel", reel);
+	
+	sendSystemMessageTestingOnly(player, "You activate the machine and the reels start spinning...");
+	
+	messageTo(self, "handleReelsSpinning", d, 5f, false);
+}
+
+void showPayoutSchedule(obj_id self, obj_id player)
+{
+	string gameType = getStringObjVar(self, gambling.VAR_TABLE_TYPE);
+	if ( gameType == null || gameType.equals("") )
+		return;
+	
+	string tbl = "datatables/gambling/slot/" + gameType + ".iff";
+	string[] schedule = dataTableGetStringColumnNoDefaults(tbl, "SCHEDULE");
+	if ( schedule == null || schedule.length == 0 )
+		return;
+		
+	int[] payout_base = dataTableGetIntColumnNoDefaults(tbl, "PAYOUT_BASE");
+	if ( payout_base == null || payout_base.length == 0 )
+		return;
+		
+	int[] payout_max = dataTableGetIntColumnNoDefaults(tbl, "PAYOUT_MAX");
+	if ( payout_max == null || payout_max.length == 0 )
+		return;
+	
+	if ( schedule.length != payout_base.length || schedule.length != payout_max.length )
+		return;
+	
+	resizeable string[] entries = new string[0];
+	for ( int i = 0; i < schedule.length; i++ )
+		entries = utils.addElement(entries, schedule[i] + " -> base:" + payout_base[i] + " max:" + payout_max[i]);
+	
+	if ( entries == null || entries.length == 0 )
+		return;
+	
+	string title = "Payout Schedule";
+	string prompt = "The following is the payout schedule for this slot machine.\n\n";
+	prompt += "Legend:\n";
+	prompt += "XXX: denotes any 3 of the same number\n";
+	prompt += "*X|Y|Z: denotes any combination of the 3 numbers\n";
+	
+	sui.listbox(self, player, prompt, sui.OK_ONLY, title, entries, "noHandler");
+}

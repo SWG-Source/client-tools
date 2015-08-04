@@ -1,0 +1,1272 @@
+//**********************************************************
+// Copyright (c) ©2005, 2006 Sony Online Entertainment Inc.
+// All Rights Reserved
+//
+// Title:		qaitem.script
+// Version:		Version 2.00
+// Description:  	QA Equipment Tool (Master Item Tool)
+//			- filters equipment based onspawns
+//		 	- lists all weapons the test character is currently certified to use 
+//			- filters all weapons for best tier
+//		 	- lists all armor the test character is currently certified to use 
+//			- filters all armor for best tier
+//
+// Version Changes:	- Added new script tool options
+//
+// @author       	$Author: Jeff Haskell  
+// @version      	$All Revisions:  Jeff Haskell && James Michener
+//***********************************************************
+//
+//			Profession		Armor Type
+//			
+//			Force Sensitive		None
+//			Bounty Hunter		Assault
+//			Smuggler		Recon
+//			Commando		Assault
+//			Officer			Battle
+//			Spy			Battle
+//			Medic			Recon
+//			Entertainer		None
+//			Trader			None
+//
+//
+// ======================================================================
+// Library Includes
+// ======================================================================
+include library.utils;
+include library.qa;
+include library.sui;
+include java.util.Arrays;
+include java.util.HashSet;
+include java.util.Vector;
+include library.static_item;
+include library.skill_template;
+/********* CONSTANTS *****************************************/
+const string SCRIPTVAR = "qaitem";
+
+const string EQUIPMENT_TOOL_TITLE = "QA MASTER ITEM TOOL";
+const string EQUIPMENT_TOOL_PROMPT = "This tool allows the tester to find items such as reward armor and weapons.";
+const string ROADMAP_TOOL_TITLE = "QA ROADMAP ITEM TOOL";
+const string ROADMAP_TOOL_PROMPT = "This tool allows the tester to spawn all profession roadmap items regardless of what their current test character profession is.";
+const string CATEGORY_TOOL_TITLE = "QA ITEM CATEGORIES";
+const string CATEGORY_TOOL_PROMPT = "This tool allows the tester to browse the master item table dynamically, based on item categories specified in the template name of the item.  To use this tool you may need to know what category the item belongs to.  For instance, a ranged weapon belongs to the weapon category.";
+
+const string[] EQUIPMENT_TOOL_MENU = 
+{
+"Armor", 
+"Best Weapons",  
+"Get all Certified Weapons", 
+"Get Roadmap Items",
+"List Every Item by Category"
+};
+
+const string[] LENGTHY_CATEGORY_LIST =
+{
+"armor",
+"loot",
+"weapon",
+"wearables",
+"ranged"
+};
+
+const string[] ERROR_MESSAGE_IN_ARRAY = {"The list came back blank.  Please inform the tool team."};
+/****************************REVAMPED ARMOR TOOL CONSTANTS****************************/
+const string[] ARMOR_CLASSES = 
+{
+	"Assault",
+	"Battle",
+	"Recon",
+	"Robe",
+	"Mandalorian (Restuss)",
+	"Clothing"
+};
+
+const int ASSAULT = 0;
+const int BATTLE = 1;
+const int RECON = 2;
+const int ROBE = 3;
+const int MANDALORIAN = 4;
+const int CLOTHING = 5;
+
+const string[] MAND_COLORS = 
+{
+	"Black",
+	"Blue",
+	"Green",
+	"Red",
+	"White"
+};
+
+const int BLACK = 0;
+const int BLUE = 1;
+const int GREEN = 2;
+const int RED = 3;
+const int WHITE = 4;
+const int NO_COLOR = 5;
+
+const string STAT_EXPLANATION = "If Applicable:\n'con' = constitution\n'sta' = stamina\n'stat' = multiple stats\n'pre' = precision\n'agi' = agility\n'lck' = luck";
+/****************************END REVAMPED ARMOR TOOL CONSTANTS****************************/
+
+/********* DATA SOURCES *****************************************/
+const string STATIC_LOOT_TABLE	= "datatables/item/master_item/master_item.iff";
+const string ITEM_REWARD_TABLE	= "datatables/roadmap/item_rewards.iff";
+/***** TRIGGER *******************************************************/
+trigger OnAttach()
+{
+	if (isGod(self))
+	{	
+		if(getGodLevel(self) < 10)
+		{
+			detachScript(self, "test.qaitem");	
+			sendSystemMessage(self, "You do not have the appropriate access level to use this script.", null);
+		}
+	}
+	else if (!isGod(self))
+	{
+		detachScript(self, "test.qaitem");
+	}
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnSpeaking(string text)
+{
+	if(isGod(self))
+	{
+		if(toLower(text).equals(SCRIPTVAR))
+		{
+			//FUNCTION TO SHOW THE MAIN MENU OF THE TOOL
+			toolMainMenu(self);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+/******** Message Handlers *************************************/
+messageHandler handleMainMenuOptions()
+{
+	if(isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if(utils.hasScriptVar(self, SCRIPTVAR+".pid"))
+		{	
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				qa.removePlayer(player, SCRIPTVAR, "");
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				qa.qaToolMainMenu(player);
+				utils.removeScriptVarTree(player, SCRIPTVAR);
+				return SCRIPT_CONTINUE;
+
+			}			
+			//BUILD THE NEXT SUI
+			else
+			{
+				
+				switch (idx)
+				{				
+					case 0: //Armor
+						toolArmorMainMenu(self);
+						break;	
+					case 1: //Best Weapons
+						getEquipment(self, 5);
+						break;											
+					case 2: //Weapons						
+						getEquipment(self, 1);
+						break;
+					case 3: //Roadmap Items						
+						string[] professionList = getProfessionList(self);
+						qa.refreshMenu(self, ROADMAP_TOOL_PROMPT, ROADMAP_TOOL_TITLE, professionList, "handleProfessionOptions", SCRIPTVAR+".pid", SCRIPTVAR+".professions", sui.OK_CANCEL_REFRESH);			
+						break;
+					case 4: //All Categories
+						string[] staticItemCategoryList = getAllStaticItemCategories(self);
+						qa.refreshMenu(self, CATEGORY_TOOL_PROMPT, CATEGORY_TOOL_TITLE, staticItemCategoryList, "handleCategorySelection", SCRIPTVAR+".pid", SCRIPTVAR+".categories", sui.OK_CANCEL_REFRESH);			
+						break;												
+					default:
+						qa.removePlayer(player, SCRIPTVAR, "Default Option on Switch");
+						return SCRIPT_CONTINUE;	
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleProfessionOptions()
+{
+	if(isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar(self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleProfessionOptions");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				qa.removePlayer(player, SCRIPTVAR, "");
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu(self);				
+				return SCRIPT_CONTINUE;
+
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar(self, SCRIPTVAR+".professions");
+			string previousSelection = previousMainMenuArray[idx];
+
+			//sendSystemMessageTestingOnly(self, "handleProfessionOptions: "+previousSelection);
+			if (previousSelection != "")
+			{
+				getRoadmapItems(self, previousSelection);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleEquipementOptions()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if(utils.hasScriptVar(self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleEquipementOptions");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if(btn == sui.BP_CANCEL)
+			{
+				qa.removePlayer(player, SCRIPTVAR, "");
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu(self);				
+				return SCRIPT_CONTINUE;
+
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar(self, SCRIPTVAR+".foundComboStrings");
+			string codeStringArray[] = utils.getStringArrayScriptVar(self, SCRIPTVAR+".foundStrings");
+
+			string previousSelection = previousMainMenuArray[idx];
+			string theSpawnCode = codeStringArray[idx];
+
+			if(previousMainMenuArray.length < 0)
+			{
+				qa.removePlayer(player, SCRIPTVAR, "There was an error in the tool.  Exiting.");
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{				
+				qa.spawnStaticItemInInventory(self, theSpawnCode, previousSelection);
+				rebuildTheSUI(self, previousMainMenuArray, codeStringArray);
+				return SCRIPT_CONTINUE;	
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCategorySelection()
+{
+	if(isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if(utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if(btn == sui.BP_CANCEL)
+			{
+				qa.removePlayer(player, SCRIPTVAR, "");
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu(self);				
+				return SCRIPT_CONTINUE;
+
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar(self, SCRIPTVAR+".categories");
+			string previousSelection = previousMainMenuArray[idx];
+
+			//sendSystemMessageTestingOnly(self, "handleProfessionOptions: "+previousSelection);
+			if(previousSelection != "")
+			{
+				boolean filterSelectionFurther = false;
+				string selection = "/" + previousSelection + "/";
+
+				//Loop used each time the handler is called.  Helps break up the items lists
+				for(int i = 0; i < LENGTHY_CATEGORY_LIST.length; i++)
+				{	
+					if (previousSelection == LENGTHY_CATEGORY_LIST[i])
+					{
+						//filterSelection(self, selection);
+						filterSelectionFurther = true;
+						break;
+					}
+				}
+				
+				if(!filterSelectionFurther)
+				{
+					string[] allSelected = getSelectedCategory(self, selection);
+					qa.refreshMenu ( self, "List of all Static Items labeled " + previousSelection, CATEGORY_TOOL_TITLE, allSelected, "handleStaticItemSpawn", SCRIPTVAR+".pid", SCRIPTVAR+".selectedList", sui.OK_CANCEL_REFRESH );			
+				}
+				else
+				{
+					filterSelection(self, selection);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleStaticItemSpawn()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{	
+			//sendSystemMessageTestingOnly(self, "handleStaticItemSpawn");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+					
+			//CHECK FOR CANCEL BUTTON
+			if(btn == sui.BP_CANCEL)
+			{
+				qa.removePlayer(player, SCRIPTVAR, "");
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu(self);				
+				return SCRIPT_CONTINUE;
+			}
+			//ATTAINING THE PREVIOUS MENU AND PLACING IT INTO AN ARRAY
+			string previousMainMenuArray[] = utils.getStringArrayScriptVar(self, SCRIPTVAR+".selectedList");
+			string previousSelection = previousMainMenuArray[idx];
+
+			if(previousSelection != "")
+			{
+				int staticCodeIdx = previousSelection.indexOf("{")+2;
+				int staticCodeEnd = previousSelection.length()-2;
+				string staticCode = previousSelection.substring(staticCodeIdx, staticCodeEnd);
+				string staticString = previousSelection.substring(0, (staticCodeIdx - 3));				
+
+				qa.spawnStaticItemInInventory (self, staticCode, staticString);
+				qa.refreshMenu ( self, "List of all Static Items labeled " + previousSelection, CATEGORY_TOOL_TITLE, previousMainMenuArray, "handleStaticItemSpawn", SCRIPTVAR+".pid", SCRIPTVAR+".selectedList", sui.OK_CANCEL_REFRESH );			
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/****************************BEGIN REVAMPED ARMOR TOOL MESSAGEHANDLERS****************************/
+//Handle Armor Type Options
+messageHandler handleArmorOptions()
+{
+	if(isGod(self))
+	{	
+		obj_id player = sui.getPlayerId(params);
+		int btn = sui.getIntButtonPressed(params);
+		int idx = sui.getListboxSelectedRow(params);
+		if(btn == sui.BP_CANCEL)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "");
+			return SCRIPT_CONTINUE;	
+		}
+		if(btn == sui.BP_REVERT)
+		{
+			toolMainMenu(self);
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(idx < 0)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "");
+			return SCRIPT_CONTINUE;	
+		}
+		switch(idx)
+		{
+			case ASSAULT:
+				utils.setScriptVar(player, SCRIPTVAR+".armorChoice", "armor_assault");
+				getLevelsToDisplay(player, "armor_assault");
+				break;
+			case BATTLE:
+				utils.setScriptVar(player, SCRIPTVAR+".armorChoice", "armor_battle");
+				getLevelsToDisplay(player, "armor_battle");
+				break;
+			case RECON:
+				utils.setScriptVar(player, SCRIPTVAR+".armorChoice", "armor_recon");
+				getLevelsToDisplay(player, "armor_recon");
+				break;
+			case ROBE:
+				utils.setScriptVar(player, SCRIPTVAR+".armorChoice", "item_jedi_robe"); 
+				getLevelsToDisplay(player, "item_jedi_robe");
+				break;
+			case MANDALORIAN:
+				utils.setScriptVar(player, SCRIPTVAR+".armorChoice", "armor_mandalorian"); 
+				getLevelsToDisplay(player, "armor_mandalorian");
+				break;
+			case CLOTHING:
+				utils.setScriptVar(player, SCRIPTVAR+".armorChoice", "item_clothing");
+				getLevelsToDisplay(player, "item_clothing");
+				break;
+			default:
+				sendSystemMessageTestingOnly(player, "That Armor is not currently available.");
+				toolArmorMainMenu(player);
+				return SCRIPT_CONTINUE;			
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+//Handle Level Options
+messageHandler handleLevelOptions()
+{
+	if(isGod(self))
+	{	
+		obj_id player = sui.getPlayerId(params);
+		int btn = sui.getIntButtonPressed(params);
+		if(btn == sui.BP_CANCEL)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "");
+			return SCRIPT_CONTINUE;	
+		}
+
+		if(btn == sui.BP_REVERT)
+		{
+			toolArmorMainMenu(player);
+			return SCRIPT_CONTINUE;
+		}
+
+		int idx = sui.getListboxSelectedRow(params);
+		if(idx < 0)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "Index less than zero");
+			return SCRIPT_CONTINUE;	
+		}
+		
+		if(utils.hasScriptVar(player, SCRIPTVAR+".armorChoice"))
+		{	
+			string[] levelList = utils.getStringArrayScriptVar(player, SCRIPTVAR+".levelList");
+			int idxValue = utils.stringToInt(levelList[idx]);
+			getArmorList(player, idxValue);		
+		}
+		else
+		{
+			qa.removePlayer(player, SCRIPTVAR, "There was an error with the previous selection - please try again");
+			toolArmorMainMenu(player);
+		}
+	}		
+	return SCRIPT_CONTINUE;
+}
+//Handle Spawn Options
+messageHandler handleSpawnOptions()
+{
+	if(isGod(self))
+	{	
+		obj_id player = sui.getPlayerId(params);
+		int btn = sui.getIntButtonPressed(params);
+		if(btn == sui.BP_CANCEL)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "");
+			return SCRIPT_CONTINUE;	
+		}
+
+		if(btn == sui.BP_REVERT)
+		{
+			toolArmorMainMenu(player);
+			return SCRIPT_CONTINUE;
+		}
+
+		int idx = sui.getListboxSelectedRow(params);
+		if(idx < 0)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "Index less than zero");
+			return SCRIPT_CONTINUE;	
+		}
+		
+		if(utils.hasScriptVar(player, SCRIPTVAR+".armorChoice"))
+		{
+			//get scriptVar value
+			string armorChoice = utils.getStringScriptVar(player, SCRIPTVAR+".armorChoice");
+			if(armorChoice == "armor_mandalorian")
+			{
+				string[] faction = utils.getStringArrayScriptVar(player, SCRIPTVAR+".statArray");
+				string factionString = faction[idx];
+				utils.setScriptVar(player, SCRIPTVAR+".armorChoice", armorChoice + "_" + factionString);
+				mandalorianColor(player);
+			}
+			else
+			{
+				string[] armorModSet = utils.getStringArrayScriptVar(player, SCRIPTVAR+".statArray");
+				string idxString = armorModSet[idx];
+				spawnItems(player, idxString);
+				//combine scripvars to get the spawn string.
+			}
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(player, "There was an error with the previous selection - please try again");
+			qa.refreshMenu(player, "Select an Armor Class", "Armor Tool", ARMOR_CLASSES, "handleArmorOptions",  SCRIPTVAR+".armorType.pid", SCRIPTVAR+".armorTypeMenu", sui.OK_CANCEL_REFRESH);
+
+		}
+	}
+	return SCRIPT_CONTINUE;							
+}
+//Handle Mandalorian Colors
+messageHandler handleMandalorianColorOptions()
+{
+	if(isGod(self))
+	{	
+		obj_id player = sui.getPlayerId(params);
+		int btn = sui.getIntButtonPressed(params);
+		if (btn == sui.BP_CANCEL)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "");
+			return SCRIPT_CONTINUE;	
+		}
+
+		if(btn == sui.BP_REVERT)
+		{
+			toolArmorMainMenu(player);
+			return SCRIPT_CONTINUE;
+		}
+
+		int idx = sui.getListboxSelectedRow(params);
+		if (idx < 0)
+		{
+			qa.removePlayer(player, SCRIPTVAR, "Index less than zero");
+			return SCRIPT_CONTINUE;	
+		}
+		string myColor = "";
+		switch (idx)
+		{
+			case BLACK:
+				myColor = "black";
+				spawnItems(player, myColor);
+				break;
+			case BLUE:
+				myColor = "blue";
+				spawnItems(player, myColor);
+				break;
+			case GREEN:
+				myColor = "green";
+				spawnItems(player, myColor);
+				break;
+			case RED:
+				myColor = "red";
+				spawnItems(player, myColor);
+				break;
+			case WHITE:
+				myColor = "white";
+				spawnItems(player, myColor);
+				break;
+			default:
+				sendSystemMessageTestingOnly(player, "This Armor is not currently available.");
+				qa.refreshMenu(player, "Select an Armor Class", "Armor Tool", ARMOR_CLASSES, "handleArmorOptions",  SCRIPTVAR+".armorType.pid", SCRIPTVAR+".armorTypeMenu", sui.OK_CANCEL_REFRESH);
+				//qa.removePlayer(player, SCRIPTVAR, "");
+				return SCRIPT_CONTINUE;	
+		}
+	}	
+	return SCRIPT_CONTINUE;							
+}
+
+/****************************END REVAMPED ARMOR TOOL MESSAGEHANDLERS****************************/
+
+/*------------- ALL FUNCTIONS ----------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+
+//BUILDS THE MAIN TOOL MENU
+void toolMainMenu(obj_id player)
+{
+	qa.refreshMenu(player, EQUIPMENT_TOOL_PROMPT, EQUIPMENT_TOOL_TITLE, EQUIPMENT_TOOL_MENU, "handleMainMenuOptions", SCRIPTVAR+".pid", SCRIPTVAR+".mainMenu", sui.OK_CANCEL_REFRESH);
+}
+
+void getRoadmapItems(obj_id self, string previousSelection)
+{
+	Vector foundRows = new Vector();	
+	string[] datatableProfessionNames = dataTableGetStringColumn(ITEM_REWARD_TABLE, "roadmapTemplateName");
+	
+	for(int i = 0; i < datatableProfessionNames.length; i++)
+	{
+		if(datatableProfessionNames[i] == previousSelection)
+		{
+			//String dataTableGetString(String table, int row, String column);
+			foundRows.add(dataTableGetString(ITEM_REWARD_TABLE, i, "itemDefault"));
+		}
+	}
+
+	string[] allRoadmapItems = new string[foundRows.size()];
+	foundRows.toArray(allRoadmapItems);
+	
+	for(int a = 0; a < allRoadmapItems.length; a++)
+	{
+		if(allRoadmapItems[a] != "")
+			qa.spawnStaticItemInInventory(self, allRoadmapItems[a], "none");
+	}	
+}
+
+//This function builds the SUI menu by retrieving the datatable column and returning one of each profession name 
+string[] getProfessionList(obj_id self)
+{
+	HashSet professionNames = new HashSet();
+	
+	string[] datatableProfessionNames = dataTableGetStringColumn(ITEM_REWARD_TABLE, "roadmapTemplateName");
+	
+	for(int i = 0; i < datatableProfessionNames.length; i++)
+	{
+		professionNames.add(datatableProfessionNames[i]);
+	}
+	string[] oneOfEachProfession = new string[professionNames.size()];
+	professionNames.toArray(oneOfEachProfession);
+	Arrays.sort(oneOfEachProfession);
+	
+	return oneOfEachProfession;
+}
+
+void getEquipment(obj_id self, int searchInt)
+{		
+	//COMBAT LEVEL FOR FILTERING
+	int combatLevel = getLevel(self);
+
+	//PROFESSION TYPE FOR FILTERING
+	string classTemplate = getSkillTemplate(self);
+
+	//CREATE A DICTIONARY BASED ON A FUNCTION THAT WILL RETURN A DICTIONARY OF ALL ROWS BASED ON THE SEARCH (EQUIPMENT TYPE)
+	dictionary[] allRowsOfEquipment = getAllEquipmentOfType(self, searchInt);
+	
+	//MAKE SURE THE DICTIONARY HAS SOMETHING IN IT
+	if(allRowsOfEquipment.length > -1)
+	{
+		//sendSystemMessageTestingOnly(self, "The list is "+allRowsOfEquipment.length);
+		//CREATE A DICTIONARY BASED ON A FUNCTION THAT WILL RETURN A DICTIONARY OF ALL ROWS BASED ON THE COMBAT LEVEL OF TEST CHARACTER
+		dictionary[] allEquipmentOfLevel = getAllEquipmentOfCombatLevelOrBelow(self, allRowsOfEquipment, combatLevel);
+
+		//MAKE SURE THE DICTIONARY HAS SOMETHING IN IT
+		if(allEquipmentOfLevel.length > -1)
+		{
+			//sendSystemMessageTestingOnly(self, "The list is "+allEquipmentOfLevel.length);
+			//CREATE A DICTIONARY BASED ON A FUNCTION THAT WILL RETURN A DICTIONARY OF ALL ROWS BASED ON THE PROFESSION OF TEST CHARACTER
+			dictionary[] allEquipmentOfProfession = getAllEquipmentOfProfession(self, allEquipmentOfLevel, classTemplate);
+
+			//MAKE SURE THE DICTIONARY HAS SOMETHING IN IT		
+			if(allEquipmentOfProfession.length > -1)
+			{
+//FOR WEAPONS------------------>
+				if(searchInt == 1)
+				{
+//FOR ALL CERTIFIED weapons------------>
+					buildTheSUI(self, allEquipmentOfProfession);
+				}
+				else if(searchInt == 5)
+				{
+					dictionary[] allTheBestItems = getHighestTierItems(self, allEquipmentOfProfession);
+					if(allTheBestItems.length > -1)
+					{
+//FOR BEST CERTIFIED weapons----------->					
+						buildTheSUI(self, allTheBestItems);
+					} 						
+				}
+					
+			}
+			else
+			{
+				qa.removePlayer(self, SCRIPTVAR, "error");
+			}
+		}
+		else	
+		{
+			qa.removePlayer(self, SCRIPTVAR, "error");
+		}
+	}
+	else
+	{
+		qa.removePlayer(self, SCRIPTVAR, "error");
+	}
+	
+}
+//BUILDS 2 ARRAYS OUT OF THE DICTIONARY AND PASSES ONE AS A SCRIPTVAR, THE OTHER AS THE SUI MENU
+void rebuildTheSUI(obj_id self, string[] comboArray, string[] codeStrings)
+{
+	if(comboArray.length > -1 && codeStrings.length > -1)
+	{
+		//CODE STRINGS ARE FOR THE ACTUAL SPAWNING OF THE OBJECT IN TESTER INVENTORY
+		utils.setScriptVar(self, SCRIPTVAR+".foundStrings", codeStrings);
+		//ARRAY IS THE LOCALIZED STRING + THE CODE STRING FOR DISPLAY PURPOSES 
+		qa.refreshMenu (self, EQUIPMENT_TOOL_PROMPT+"\n\nRECORDS RETURNED: "+comboArray.length, EQUIPMENT_TOOL_TITLE, comboArray, "handleEquipementOptions", SCRIPTVAR+".pid", SCRIPTVAR+".foundComboStrings", sui.OK_CANCEL_REFRESH);			
+	}
+	else
+	{
+		qa.removePlayer(self, SCRIPTVAR, "There was a tool failure.");
+	}
+	
+}
+
+//BUILDS 2 ARRAYS OUT OF THE DICTIONARY AND PASSES ONE AS A SCRIPTVAR, THE OTHER AS THE SUI MENU
+void buildTheSUI(obj_id self, dictionary[] allRows)
+{
+	Vector codeStrings = new Vector();
+	Vector comboStrings = new Vector();
+		
+	for(int a = 0; a < allRows.length; a++)
+	{
+		codeStrings.add(allRows[a].getString("name"));		
+	}
+
+	string[] allCodeStrings = new string[codeStrings.size()];
+	codeStrings.toArray(allCodeStrings);
+
+	string[] arrayOfAllItemStringNames = new string[codeStrings.size()];
+	
+	for(int i = 0; i < allCodeStrings.length; i++)
+	{
+
+		arrayOfAllItemStringNames[i] = localize(new string_id("static_item_n", allCodeStrings[i]));	
+	}
+	
+	string[] suiArray = new string[codeStrings.size()];
+	for (int z = 0; z < allCodeStrings.length; z++)
+	{
+		suiArray[z] = arrayOfAllItemStringNames[z]+"\t ( "+allCodeStrings[z]+" )";
+	
+	}
+	
+	if (suiArray.length > -1)
+	{
+		//CODE STRINGS ARE FOR THE ACTUAL SPAWNING OF THE OBJECT IN TESTER INVENTORY
+		utils.setScriptVar(self, SCRIPTVAR+".foundStrings", allCodeStrings);
+		//ARRAY IS THE LOCALIZED STRING + THE CODE STRING FOR DISPLAY PURPOSES 
+		qa.refreshMenu (self, EQUIPMENT_TOOL_PROMPT+"\n\nRECORDS RETURNED: "+suiArray.length, EQUIPMENT_TOOL_TITLE, suiArray, "handleEquipementOptions", SCRIPTVAR+".pid", SCRIPTVAR+".foundComboStrings", sui.OK_CANCEL_REFRESH);			
+	}
+	else
+	{
+		qa.removePlayer(self, SCRIPTVAR, "There was a tool failure.");
+	}
+	
+}
+
+//BUILDS ARRAY OF DICTIONARY OBJECTS BY SEARCHING FOR SPECIES TYPE IN ARMOR CODESTRINGS
+dictionary[] searchForSpeciesArmor (obj_id self, dictionary[] allRows, string speciesSearch)
+{
+	Vector foundRows = new Vector();	
+	string armorCodeString = "";
+	
+	//sendSystemMessageTestingOnly(self, speciesSearch);
+	//sendSystemMessageTestingOnly(self, ""+allRows.length);
+	
+	for(int i = 0; i < allRows.length; i++)
+	{
+		armorCodeString = allRows[i].getString("name");
+
+		if(armorCodeString.indexOf(speciesSearch) > -1)
+		{
+			armorCodeString = allRows[i].getString("loops");
+			foundRows.add(""+i);
+		}
+	}
+
+	string[] allArmorOfSpecies = new string[foundRows.size()];
+	foundRows.toArray(allArmorOfSpecies);
+	
+	//sendSystemMessageTestingOnly(self, "Array "+allArmorOfSpecies.length);
+	
+	dictionary[] armorBasedOnSpecies = new dictionary[allArmorOfSpecies.length];
+	for (int i = 0; i < allArmorOfSpecies.length; i++)
+	{
+		armorBasedOnSpecies[i] = allRows[utils.stringToInt(allArmorOfSpecies[i])];
+	}
+	
+	//sendSystemMessageTestingOnly(self, "First Row: "+armorBasedOnSpecies[0]);
+	return armorBasedOnSpecies;
+}
+
+//BUILDS ARRAY OF DICTIONARY OBJECTS BY SEARCHING FOR PROFESSION TYPE IN ARMOR CODESTRINGS
+dictionary[] searchForProfessionArmorType(obj_id self, dictionary[] allRows, string armorType)
+{
+	Vector foundRows = new Vector();	
+	string armorCodeString = "";
+	
+	for(int i = 0; i < allRows.length; i++)
+	{
+		armorCodeString = allRows[i].getString("name");
+		
+		if(armorCodeString.indexOf(armorType) > -1)
+		{
+			foundRows.add(""+i);
+		}
+	}
+
+	string[] allArmorOfType = new string[foundRows.size()];
+	foundRows.toArray(allArmorOfType);
+	
+	dictionary[] armorBasedOnType = new dictionary[allArmorOfType.length];
+	for (int i = 0; i < allArmorOfType.length; i++)
+	{
+		armorBasedOnType[i] = allRows[utils.stringToInt(allArmorOfType[i])];
+	}
+	
+	//sendSystemMessageTestingOnly(self, "First Row of armor type: "+armorBasedOnType[0]);
+	return armorBasedOnType;
+}
+
+//RETURNS SPECIES TYPE BASED ON OBJ ID OF TEST CHARACTER
+string getSpeciesSearchString(obj_id self)
+{
+	//INIT SPECIES VAR
+	string speciesSearchString = "";
+	//FIND OUT IF SPECIAL SPECIES
+	if(getSpecies(self) == SPECIES_ITHORIAN)
+	{
+		speciesSearchString = "ithor";
+	}
+	else if (getSpecies(self) == SPECIES_WOOKIEE)
+	{
+		speciesSearchString ="wook";	
+	}
+	return speciesSearchString;
+}
+
+//RETURNS ARRAY OF DICTIONARY OBJECTS OF ALL ITEMS THE CHARACTER PROFESSION CAN USE
+dictionary[] getAllEquipmentOfProfession(obj_id self, dictionary[] allRows, string classTemplate)
+{
+	Vector foundRows = new Vector();	
+	string reqProfession = "";
+	
+	for(int i = 0; i < allRows.length; i++)
+	{
+		reqProfession = allRows[i].getString("required_skill");
+		
+		if (reqProfession == "" || classTemplate.startsWith(reqProfession))
+		{
+			foundRows.add(""+i);
+		}
+	}
+
+	string[] allEquipOfProfession = new string[foundRows.size()];
+	foundRows.toArray(allEquipOfProfession);
+	
+	dictionary[] equipmentBasedOnProfession = new dictionary[allEquipOfProfession.length];
+	for(int i = 0; i < allEquipOfProfession.length; i++)
+	{
+		equipmentBasedOnProfession[i] = allRows[utils.stringToInt(allEquipOfProfession[i])];
+	}
+	
+	//sendSystemMessageTestingOnly(self, "First Row: "+equipmentBasedOnProfession[0]);
+	return equipmentBasedOnProfession;
+}
+
+//RETURNS ARRAY OF DICTIONARY OBJECTS OF A SPECIFIC TYPE OF ITEM (EX. WEAPON)
+dictionary[] getAllEquipmentOfType(obj_id self, int searchInt)
+{
+	if(searchInt == 4)
+	{
+		searchInt = 2;
+	}
+	else if(searchInt == 5)
+	{
+		searchInt = 1;
+	}
+	
+	Vector foundItemRowNumbers = new Vector();
+
+	int[] allTypesInDatatable = dataTableGetIntColumn(STATIC_LOOT_TABLE, "type");
+	for(int a = 0; a < allTypesInDatatable.length; a++)
+	{
+		if(allTypesInDatatable[a] == searchInt)
+			foundItemRowNumbers.add(""+a);
+	}
+
+	string[] allEquipRow = new string[foundItemRowNumbers.size()];
+	foundItemRowNumbers.toArray(allEquipRow);
+	
+	dictionary[] equipmentRows = new dictionary[allEquipRow.length];
+	for(int i = 0; i < allEquipRow.length; i++)
+	{
+		equipmentRows[i] = dataTableGetRow(STATIC_LOOT_TABLE, utils.stringToInt(allEquipRow[i]));
+	}
+
+	return equipmentRows;
+}
+
+//RETURNS ARRAY OF DICTIONARY OBJECTS OF ALL ITEMS THE CHARACTER COMBAT LEVEL CAN USE
+dictionary[] getAllEquipmentOfCombatLevelOrBelow (obj_id self, dictionary[] allRows, int combatLevel)
+{
+
+	Vector foundRows = new Vector();	
+	int reqLevel = 0;
+	
+	for(int i = 0; i < allRows.length; i++)
+	{
+		reqLevel = allRows[i].getInt("required_level");
+		
+		if(reqLevel == 0 || reqLevel <= combatLevel)
+		{
+			foundRows.add(""+i);
+		}
+	}
+
+	string[] allEquipOfCombatLvl = new string[foundRows.size()];
+	foundRows.toArray(allEquipOfCombatLvl);
+	
+	dictionary[] equipmentPerCombatLevel = new dictionary[allEquipOfCombatLvl.length];
+	for(int i = 0; i < allEquipOfCombatLvl.length; i++)
+	{
+		equipmentPerCombatLevel[i] = allRows[utils.stringToInt(allEquipOfCombatLvl[i])];
+	}
+	
+	return equipmentPerCombatLevel;
+}
+
+//RETURNS ARRAY OF DICTIONARY OBJECTS OF THE HIGHEST TIER ITEMS THAT THE CHARACTER CAN USE
+dictionary[] getHighestTierItems (obj_id self, dictionary[] listOfItems)
+{
+	Vector foundRows = new Vector();
+	int getHighest = 0;
+	int tempTier = 0;
+	
+	if(listOfItems.length > -1)
+	{
+		for(int i = 0; i < listOfItems.length; i++)
+		{
+			if(listOfItems[i].getInt("tier") > getHighest)
+			{
+				getHighest = listOfItems[i].getInt("tier");
+			}
+		}
+	}
+	
+	if(getHighest > 0)
+	{
+		//sendSystemMessageTestingOnly(self, "hIGHEST tIER: "+getHighest);	
+		for(int a = 0; a < listOfItems.length; a++)
+		{
+			if(listOfItems[a].getInt("tier") == getHighest)
+			{
+				foundRows.add(""+a);
+			}
+		}
+	}
+
+	string[] foundHighestTier = new string[foundRows.size()];
+	foundRows.toArray(foundHighestTier);
+	
+	dictionary[] returnedHighestTier = new dictionary[foundHighestTier.length];
+	for(int b = 0; b < foundHighestTier.length; b++)
+	{
+		returnedHighestTier[b] = listOfItems[utils.stringToInt(foundHighestTier[b])];
+	}
+	
+	return returnedHighestTier;
+}
+
+//Creates an array of static item categories based on template strings as well as hard coded search strings
+string[] getAllStaticItemCategories(obj_id self)
+{
+	HashSet allCategories = new HashSet();
+	
+	string[] entireTemplateColumn = dataTableGetStringColumn(STATIC_LOOT_TABLE, "template_name");
+	utils.setScriptVar(self, SCRIPTVAR+".template_name", entireTemplateColumn);
+
+	for(int i = 0; i < entireTemplateColumn.length; i++)
+	{		 
+		string armorSearch = "object/tangible/wearables/armor/";
+		string tangibleSearch = "object/tangible/";
+		string objectString = "object/";
+		
+		int stringLength = entireTemplateColumn[i].length();
+
+		//Armor is buried under wearables. Make it easier to find with armor category.
+		//make sure it actually exists then create a generic armor menu listing
+		if(entireTemplateColumn[i].indexOf(armorSearch) == 0)
+		{
+			allCategories.add("armor");	
+		}
+		else if(entireTemplateColumn[i].indexOf(tangibleSearch) == 0)
+		{
+			//all templates that start with tangible/ need tangible removed.
+			int tangibleSearchLength = tangibleSearch.length();
+			string preParsedCategory = entireTemplateColumn[i].substring(tangibleSearchLength, stringLength);
+			//int preParsedStringLength = preParsedCategory.length();
+			//string tangibleParsedCategory = preParsedCategory.substring(9, preParsedStringLength);
+			int nextSlash = preParsedCategory.indexOf("/");	
+
+			allCategories.add(preParsedCategory.substring(0, nextSlash));
+		}
+		else
+		{
+			int objectStringLength = objectString.length();
+			string preParsedCategory = entireTemplateColumn[i].substring(objectStringLength, stringLength);
+			int nextSlash = preParsedCategory.indexOf("/");				
+
+			allCategories.add(preParsedCategory.substring(0, nextSlash));
+		}
+	}
+	if (allCategories.size() > 0)
+	{
+		string[] suiMenuCategories = new string[allCategories.size()];
+		allCategories.toArray(suiMenuCategories);
+		Arrays.sort(suiMenuCategories);
+		return suiMenuCategories;
+	}
+	return ERROR_MESSAGE_IN_ARRAY;
+}
+
+//Grabs the selected static items of a given category defined by tester in the previous SUI menu selection
+string[] getSelectedCategory(obj_id self, string searchString)
+{
+	HashSet staticNameList = new HashSet();
+	HashSet staticStringList = new HashSet();
+	
+	string[] arrayOfTemplates = utils.getStringArrayScriptVar( self, SCRIPTVAR+".template_name" );
+	string[] entireStaticNameColumn = dataTableGetStringColumn(STATIC_LOOT_TABLE, "name");
+	
+	if(arrayOfTemplates.length == entireStaticNameColumn.length)
+	{
+		for(int i = 0; i < arrayOfTemplates.length; i++)
+		{		 
+			if(arrayOfTemplates[i].indexOf(searchString) > -1)
+			{
+				staticNameList.add(localize(new string_id("static_item_n", entireStaticNameColumn[i])) + "  { " + entireStaticNameColumn[i] + " }");				
+			}
+		}	
+		if(staticNameList.size() > 0)
+		{
+			string[] spawnMenu = new string[staticNameList.size()];
+			staticNameList.toArray(spawnMenu);
+
+			return spawnMenu;
+		}
+		else
+		{
+			qa.removePlayer(self, SCRIPTVAR, "The tool failed to list your selection. Notify the tool team.");
+		}
+	}
+	else
+	{
+		qa.removePlayer(self, SCRIPTVAR, "The tool failed to list your selection. Notify the tool team.");
+
+	}
+	return ERROR_MESSAGE_IN_ARRAY;
+}
+
+//Function used to add an additional SUI with additional selection options so that the list of items isn't too long
+void filterSelection(obj_id self, string searchString)
+{
+	HashSet templatesFound = new HashSet();
+	HashSet staticStringList = new HashSet();
+	
+	int searchStringLength = searchString.length();
+	
+	string[] arrayOfTemplates = utils.getStringArrayScriptVar( self, SCRIPTVAR+".template_name" );
+	
+	if(arrayOfTemplates.length > 0)
+	{
+		for(int i = 0; i < arrayOfTemplates.length; i++)
+		{	
+			int indexNumber = arrayOfTemplates[i].indexOf(searchString);
+			if(indexNumber > -1)
+			{
+				//sendSystemMessageTestingOnly(self, "item: " + arrayOfTemplates[i]);
+				int stringLength = arrayOfTemplates[i].length();
+				int subStringStart = indexNumber + searchStringLength;
+				string preParsedCategory = arrayOfTemplates[i].substring(subStringStart, stringLength);
+				int newCategoryEnd = preParsedCategory.indexOf("/");
+				if(newCategoryEnd > -1)
+				{
+					string newCategory = preParsedCategory.substring(0, newCategoryEnd);
+				
+					//sendSystemMessageTestingOnly(self, "new category: *"+newCategory+"*");	
+					templatesFound.add(newCategory);
+				}
+			}
+		}	
+		if(templatesFound.size() > 0)
+		{
+			//sendSystemMessageTestingOnly(self, "new category list size: " + templatesFound.size());	
+			
+			string[] subMenu = new string[templatesFound.size()];
+			templatesFound.toArray(subMenu);
+			Arrays.sort(subMenu);
+			
+			//Reuse the previous/caller handler
+			qa.refreshMenu(self, CATEGORY_TOOL_PROMPT, CATEGORY_TOOL_TITLE, subMenu, "handleCategorySelection", SCRIPTVAR+".pid", SCRIPTVAR+".categories", sui.OK_CANCEL_REFRESH);			
+		}
+		else
+		{
+			qa.removePlayer(self, SCRIPTVAR, "The tool failed to list your selection. Notify the tool team.");
+		}
+	}
+	else
+	{
+		qa.removePlayer(self, SCRIPTVAR, "The tool failed to list your selection. Notify the tool team.");
+	}
+}
+
+/****************************BEGIN REVAMPED ARMOR TOOL FUNCTIONS****************************/
+//BUILDS ARMOR TOOL MENU
+void toolArmorMainMenu(obj_id player)
+{
+	utils.setScriptVar(player, SCRIPTVAR+".armorChoice", "main"); 
+	qa.refreshMenu(player, "Select an Armor Class", "Armor Tool", ARMOR_CLASSES, "handleArmorOptions",  SCRIPTVAR+".armorType.pid", SCRIPTVAR+".armorTypeMenu", sui.OK_CANCEL_REFRESH);
+}  
+
+void armorLevelMenu(obj_id player, string[] displayArray)
+{	
+	qa.refreshMenu(player, "Select what level Armor you want.", "Armor Tool", displayArray, "handleLevelOptions",  SCRIPTVAR+".armorLevel.pid", SCRIPTVAR+".armorLevelMenu", sui.OK_CANCEL_REFRESH);
+}
+
+void listArmorChoiceStats(obj_id player, string[] displayArray)
+{
+	qa.refreshMenu(player, STAT_EXPLANATION, "Armor Tool", displayArray, "handleSpawnOptions",  SCRIPTVAR+".armorMod.pid", SCRIPTVAR+".armorModMenu", sui.OK_CANCEL_REFRESH);
+}
+
+void mandalorianColor(obj_id player)
+{
+	qa.refreshMenu(player, "Mandalorian Color makes you look pretty", "Armor Tool", MAND_COLORS, "handleMandalorianColorOptions",  SCRIPTVAR+".mandMenu.pid", SCRIPTVAR+".mandMenu", sui.OK_CANCEL_REFRESH);
+}
+
+void getArmorList(obj_id player, int level)
+{
+	//create vector to hold armor types
+	Vector Armor = new Vector();
+	//get datatable column "name" and "required_level" of armor
+	string[] ArmorNameDataColumn = dataTableGetStringColumn(STATIC_LOOT_TABLE, "name");
+	int[] ArmorLevelDataColumn = dataTableGetIntColumn(STATIC_LOOT_TABLE, "required_level");
+	string armorType = utils.getStringScriptVar(player, SCRIPTVAR+".armorChoice");
+	//search for armorType and add it to the Vector
+	for(int i = 0; i < ArmorNameDataColumn.length; i++)
+	{
+		if(ArmorNameDataColumn[i].startsWith(armorType) && ArmorLevelDataColumn[i] == level)
+		{
+			Armor.add(ArmorNameDataColumn[i]);
+		}
+	}
+	//check to see if there are valid armor sets
+	if(Armor.size() >= 1)
+	{
+		string[] ArmorArray = new string[Armor.size()];
+		Armor.toArray(ArmorArray);
+		//set scriptvar - valid spawn string names
+		utils.setScriptVar(player, SCRIPTVAR+".nameArray", ArmorArray);
+		listSelectedArmor(player, ArmorArray, armorType);             
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "No Armor is available for this Class/Level Combination");
+		toolArmorMainMenu(player);
+	}
+}
+
+/**/
+void listSelectedArmor(obj_id player, string[] ArmorArray, string armorType)
+{
+	//make string arrays same length as dictionary
+	string[] idxName = new string[ArmorArray.length];
+	int count = armorType.length() + 1;
+	for(int q = 0; q < ArmorArray.length; q++)
+	{//get armor name -- index of to get str, con, etc.
+		if(ArmorArray[q].indexOf(armorType) == 0)
+		{
+			string itemName = ArmorArray[q].substring(count);
+			int idx = itemName.indexOf("_");
+			idxName[q] = itemName.substring(0, idx);
+		}
+	}
+	//Prevent idxName duplicates
+	HashSet armorSets = new HashSet();
+	for(int a = 0; a < idxName.length; a++)
+	{
+		armorSets.add(idxName[a]);
+	}
+	//convert hashset to stringArray for display
+	string[] displayArray = new string[armorSets.size()];
+	armorSets.toArray(displayArray);
+	//set scriptvar for spawning use
+	utils.setScriptVar(player, SCRIPTVAR+".statArray", displayArray);
+	//call - list armor choice for player
+	listArmorChoiceStats(player, displayArray);
+}
+
+void spawnItems(obj_id player, string idxString)
+{
+	
+	//get scriptVar values
+	string armorChoice = utils.getStringScriptVar(player, SCRIPTVAR+".armorChoice");
+	string[] ArmorNameArray = utils.getStringArrayScriptVar(player, SCRIPTVAR+".nameArray"); 
+	
+	//combine scripvars to get the spawn string.
+	string spawnString = armorChoice + "_" + idxString;
+	
+	//get a QABAG to avoid overfilling the inventory
+	obj_id inventory = utils.getInventoryContainer(player);
+	qa.findOrCreateAndEquipQABag(player, inventory, true);
+	
+	for(int i = 0; i < ArmorNameArray.length; i++)
+	{
+		//if(ArmorNameDataColumn[i].startsWith(armorType) && ArmorLevelDataColumn[i] == level)
+		if(ArmorNameArray[i].startsWith(spawnString))
+		{
+			qa.spawnStaticItemInInventory(player, ArmorNameArray[i], "Your selection");	
+		}
+	}
+	qa.removePlayer(player, SCRIPTVAR, "");
+}
+
+void getLevelsToDisplay(obj_id player, string armorChoice)
+{
+	//dataTable Name Column
+	string[] namesFromTable = dataTableGetStringColumn(STATIC_LOOT_TABLE, "name");
+	//HashSet to hold armorChoice values
+	HashSet ChoiceRows = new HashSet();
+	for(int i = 0; i < namesFromTable.length; i++)
+	{
+		if(namesFromTable[i].startsWith(armorChoice))
+		{
+			ChoiceRows.add(""+dataTableGetIntColumn(STATIC_LOOT_TABLE, "required_level")[i]);
+			//ChoiceRows.add(namesFromTable[i]);
+		}
+	}
+	//Convert the HashSet to a string[] and sort
+	string[] stringLevelDisplayArray = new string[ChoiceRows.size()];
+	ChoiceRows.toArray(stringLevelDisplayArray);
+	Arrays.sort(stringLevelDisplayArray);
+	//attach scriptVar for level list.
+	utils.setScriptVar(player, SCRIPTVAR+".levelList", stringLevelDisplayArray);
+	
+	armorLevelMenu(player, stringLevelDisplayArray);
+}
+/****************************END REVAMPED ARMOR TOOL FUNCTIONS****************************/

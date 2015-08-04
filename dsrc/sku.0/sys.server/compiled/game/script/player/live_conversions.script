@@ -1,0 +1,1258 @@
+
+include library.badge;
+include library.buff;
+include library.craftinglib;
+include library.dot;
+include library.factions;
+include library.groundquests;
+include library.guild;
+include library.pclib;
+include library.player_structure;
+include library.respec;
+include library.skill;
+include library.skill_template;
+include library.space_flags;
+include library.static_item;
+include library.sui;
+include library.utils;
+include library.weapons;
+
+
+const int FLAG_ARRAY_SIZE		 	= 2;	//number of 32-bit ints in the array
+const int FLAG_MAX_BITS			 	= FLAG_ARRAY_SIZE * 32;
+
+
+const int FEMALE_PILOT_MEDAL_FLAG		= 0;
+const int NOT_USED				= 1;
+const int UNARMED_DAMAGE_SET			= 2;
+const int POLITICIAN_CONVERSION			= 3;
+const int ELDER_BUFF_GRANT			= 4;
+const int SKILL_VALIDATION			= 5;
+const int MASTER_BADGE_CORRECTIONS		= 6;
+const int ENT_TRADER_FREE_SKILL_FLAG		= 7;
+const int SKILL_VALIDATION_2			= 8;
+
+const int FORCED_RESPEC_VERSION			= 2;
+
+
+const string VAR_FLAGS			 	= "live_conversions";
+const string_id	EXPERTISE_RESET_FROM_CHANGES	= new string_id("spam","expertise_reset_from_changes");
+const string_id	JABBAS_COMLINK			= new string_id("spam","jabbas_comlink_system_message");
+
+//Collection Update Constants
+const string UPDATE_COLLECTION_DATATABLE = "datatables/collection/collection_live_conversion.iff";
+const string UPDATE_COLLECTION_NAME_COLUMN = "completed_collections";
+const string UPDATE_COLLECTION_SLOT_TO_GRANT = "slot_to_grant";
+const string UPDATE_COLLECTION_INCREMENT_AMOUNT = "increment_amount";
+
+const string FORCE_RESPEC_OBJVAR	= "configEnforcedRespecVersion";
+
+//this will run the first time the player gets this script attached:
+// // don't put your stuff here, put it in runOncePerSession or runOncePerTravel
+trigger OnAttach()
+{
+	runOncePerSessionConversions( self );
+	runOncePerTravelConversions( self );
+	return SCRIPT_CONTINUE;
+}
+
+//this will run every OTHER time the player connects to a game
+// don't put your stuff here, put it in runOncePerSession
+trigger OnInitialize()
+{
+	runOncePerSessionConversions( self );
+	return SCRIPT_CONTINUE;
+}
+
+//this will run when a player logs in OR changes game servers:
+// don't put your stuff here, put it in runOncePerTravel
+trigger OnLogin()
+{
+	runOncePerTravelConversions( self );
+	return SCRIPT_CONTINUE;
+}
+
+//this will run when the player's client has sent the ready message
+trigger OnNewbieTutorialResponse(string action)
+{
+    if (action.equals("clientReady"))
+    {
+	    updateBountyHunterMissions(self);
+	    updateChangedQuests(self);
+	    updateCollectionSlots(self);
+    }
+    return SCRIPT_CONTINUE;
+}
+
+void runOncePerSessionConversions( obj_id player )
+{
+	grantFemaleMasterPilotMedals( player );
+	clearDotEffectObjvars( player );
+	fixConsentList( player );
+	setUnarmedDamageRanges( player );
+	doPoliticianSkillConversion( player );
+	grantElderBuff( player );
+	validateSkills( player );
+	correctMasterBadges(player);
+	correctEv9D9Quest(player);
+	correctNabooKickQuests(player);
+	correctSyrenQuests(player);
+	checkForContentPathContinuation(player);
+	updateResidencyLinks(player);
+	updateLotOverLimitStructureLocation(player);
+	updateGuildTerminals(player);
+	validateExpertises(player);
+	expertiseRespecCheck(player);
+	updatePermanentSchematics(player);
+	updateHothFlawless(player);
+	utils.updateCTSObjVars(player);
+	respec.checkRespecDecay(player);
+	updateRenameCharacterComplete(player);
+	forceRespecBasedOnConfig(player);
+	givePlayersDeathTroopersOutbreakQuest(player);
+	givePlayersDeathTroopersPrologQuestComlink(player);
+	removeDeprecatedQuests(player);	
+	/** Depricated Conversions
+
+	//Shutting this down 3/19/07, anyone affected by the experience issue should have logged in since then.
+	//grantNextTraderAndEntertainerSkill(player);
+
+	**/
+
+	addPlayerScripts(player);
+}
+
+void runOncePerTravelConversions( obj_id player )
+{
+	if (buff.hasBuff(player, "crystal_buff"))
+		buff.removeBuff(player, "crystal_buff");
+}
+
+/**
+ *
+ *  The has, set and clear functions are wrapped like this so that
+ * we can stop setting objvars willy nilly every time something breaks
+ *
+ * */
+void setConversionFlag( obj_id player, int flag )
+{
+	if ( (!isIdValid(player)) || (flag < 0) || (flag > FLAG_MAX_BITS) )
+		return;
+
+	if( hasConversionFlag(player, flag))
+		return;
+
+	int arrayIdx = flag / 32;
+	int bitIdx = flag % 32;
+
+	int[] flags = getFlags( player );
+	if ( flags == null )
+		flags = new int[FLAG_ARRAY_SIZE];
+
+	if(!utils.checkBit(flags[arrayIdx], bitIdx))
+	{
+		flags[arrayIdx] = utils.setBit(flags[arrayIdx], bitIdx);
+		setFlags(player, flags);
+	}
+}
+
+boolean hasConversionFlag( obj_id player, int flag )
+{
+	if ( !isIdValid(player) )
+		return false;
+
+	int[] flags = getFlags( player );
+	if ( flags == null )
+		return false;
+
+	int arrayIdx = flag / 32;
+	int bitIdx = flag % 32;
+
+	return utils.checkBit(flags[arrayIdx], bitIdx);
+}
+
+void clearConversionFlag(obj_id player, int flag )
+{
+	if ( (!isIdValid(player)) || (flag < 0) || (flag > FLAG_MAX_BITS) )
+		return;
+
+	if ( !hasObjVar(player, VAR_FLAGS) )
+		return;
+
+	int arrayIdx = flag / 32;
+	int bitIdx = flag % 32;
+
+	int[] flags = getFlags( player );
+	if ( flags == null )
+		return;
+
+	if (utils.checkBit(flags[arrayIdx], bitIdx))
+	{
+		flags[arrayIdx] = utils.clearBit(flags[arrayIdx], bitIdx);
+		setFlags(player, flags);
+	}
+}
+
+int[] getFlags( obj_id player )
+{
+	int[] flags = getIntArrayObjVar(player, VAR_FLAGS);
+	if ( flags == null || flags.length == 0 )
+		return null;
+
+	if ( flags.length < FLAG_ARRAY_SIZE )
+	{
+		//the stupid copyArray function would ERASE ALL DATA in the event the new array is smaller than the old array!
+		int[] updatedFlagArray = new int[FLAG_ARRAY_SIZE];
+		flags = utils.copyArray( flags, updatedFlagArray );
+		setFlags(player, flags);
+	}
+
+	return flags;
+}
+
+void setFlags( obj_id player, int[] flags )
+{
+	setObjVar(player, VAR_FLAGS, flags);
+}
+
+
+/**
+ *
+ *  Actual Conversion Functions Go Down here, not up there!
+ *
+ * */
+
+
+/* -----------------8/19/2005 2:07PM-----------------
+ * BEGIN FEMALE MASTER PILOT FIX
+ * --------------------------------------------------*/
+const int NEUTRAL	= 0;
+const int REBEL		= 1;
+const int IMPERIAL	= 2;
+void grantFemaleMasterPilotMedals( obj_id player )
+{
+	if ( hasConversionFlag( player, FEMALE_PILOT_MEDAL_FLAG ))
+		return;//already did this once.
+
+	//female non-ithorian pilots did not receive their medals!
+	if ( getGender(player) != GENDER_MALE && getSpecies(player) != SPECIES_ITHORIAN )
+	{
+		//grant one for each of their master pilot badges:
+		if (badge.hasBadge( player, "pilot_rebel_navy_naboo"))
+			createFemaleMasterMedal( player, REBEL );
+
+		if (badge.hasBadge( player, "pilot_rebel_navy_corellia"))
+			createFemaleMasterMedal( player, REBEL );
+
+		if (badge.hasBadge( player, "pilot_rebel_navy_tatooine"))
+			createFemaleMasterMedal( player, REBEL );
+
+		if (badge.hasBadge( player, "pilot_imperial_navy_naboo"))
+			createFemaleMasterMedal( player, IMPERIAL );
+
+		if (badge.hasBadge( player, "pilot_imperial_navy_corellia"))
+			createFemaleMasterMedal( player, IMPERIAL );
+
+		if (badge.hasBadge( player, "pilot_imperial_navy_tatooine"))
+			createFemaleMasterMedal( player, IMPERIAL );
+
+		if (badge.hasBadge( player, "pilot_neutral_naboo"))
+			createFemaleMasterMedal( player, NEUTRAL );
+
+		if (badge.hasBadge( player, "pilot_neutral_corellia"))
+			createFemaleMasterMedal( player, NEUTRAL );
+
+		if (badge.hasBadge( player, "pilot_neutral_tatooine"))
+			createFemaleMasterMedal( player, NEUTRAL );
+
+		if ( hasSkill( player, "pilot_imperial_navy_master" ) || hasSkill( player, "pilot_neutral_master" ) || hasSkill( player, "pilot_rebel_navy_master" ) )
+			space_flags.setSpaceFlag(player, "master_pilot_medal_recieved", true);
+
+	}
+
+	//set the flag so we know it's been run:
+	setConversionFlag( player, FEMALE_PILOT_MEDAL_FLAG );
+}
+
+void createFemaleMasterMedal( obj_id player, int type )
+{
+	switch ( type )
+	{
+		case NEUTRAL :
+			createObjectInInventoryAllowOverload("object/tangible/wearables/necklace/necklace_ace_pilot_neutral.iff", player);
+			break;
+		case IMPERIAL :
+			createObjectInInventoryAllowOverload("object/tangible/wearables/necklace/necklace_ace_pilot_empire.iff", player);
+			break;
+		case REBEL :
+			createObjectInInventoryAllowOverload("object/tangible/wearables/necklace/necklace_ace_pilot_rebel.iff", player);
+			break;
+	}
+}
+/* -----------------8/19/2005 2:07PM-----------------
+ * END FEMALE MASTER PILOT FIX
+ * --------------------------------------------------*/
+
+
+/* -----------------9/28/2005 4:00PM-----------------
+ * BEGIN DOT EFFECT OBJVAR FIX
+ *
+ * The DOT effect library used to use objvars with
+ * objvar names that had object IDs in the name.
+ * This was a problem since it created MILLIONS of
+ * unique objvar names and caused our database server
+ * to run out of memory.  The objvars have now been
+ * changed to scriptvars and we need to remove the
+ * old objvars that may still exist.
+ *
+ * --------------------------------------------------*/
+void clearDotEffectObjvars( obj_id player )
+{
+	removeObjVar( player, dot.VAR_DOT_ROOT );
+	removeObjVar( player, "slowDotTime");
+}
+
+/* -----------------9/28/2005 4:00PM-----------------
+ * END DOT EFFECT OBJVAR FIX
+ * --------------------------------------------------*/
+
+/* -----------------10/02/2005 2:00PM-----------------
+ * BEGIN CONSENT LIST FIX
+ *
+ * The player used to have lists of names that were supposed to
+ * stay in sync with lists of IDs but that wasn't happening.
+ * Now we only keep lists of player IDs.  So if they have a name
+ * list, remove it and make sure the ID list only has players on it.
+ *
+ * --------------------------------------------------*/
+void fixConsentList( obj_id player )
+{
+	// Fix the "consent to" list
+	if ( hasObjVar(player, pclib.VAR_CONSENT_TO_NAME) )
+	{
+		obj_id[] consentTo = getObjIdArrayObjVar(player, pclib.VAR_CONSENT_TO_ID);
+		if ( consentTo != null )
+		{
+			resizeable obj_id[] newConsentTo = new obj_id[0];
+			for ( int i = 0; i < consentTo.length; ++i )
+			{
+				if ( isPlayer(consentTo[i]) )
+				{
+					newConsentTo = utils.addElement(newConsentTo, consentTo[i]);
+				}
+			}
+
+			if ( newConsentTo.length > 0 )
+			{
+				setObjVar(player, pclib.VAR_CONSENT_TO_ID, newConsentTo);
+			}
+			else
+			{
+				removeObjVar(player, pclib.VAR_CONSENT_TO_ID);
+			}
+		}
+
+		removeObjVar(player, pclib.VAR_CONSENT_TO_NAME);
+	}
+
+	// Fix the "consent from" list
+	if ( hasObjVar(player, pclib.VAR_CONSENT_FROM_NAME) )
+	{
+		obj_id[] consentFrom = getObjIdArrayObjVar(player, pclib.VAR_CONSENT_FROM_ID);
+		if ( consentFrom != null )
+		{
+			resizeable obj_id[] newConsentFrom = new obj_id[0];
+			for ( int i = 0; i < consentFrom.length; ++i )
+			{
+				if ( isPlayer(consentFrom[i]) )
+				{
+					newConsentFrom = utils.addElement(newConsentFrom, consentFrom[i]);
+				}
+			}
+
+			if ( newConsentFrom.length > 0 )
+			{
+				setObjVar(player, pclib.VAR_CONSENT_FROM_ID, newConsentFrom);
+			}
+			else
+			{
+				removeObjVar(player, pclib.VAR_CONSENT_FROM_ID);
+			}
+		}
+
+		removeObjVar(player, pclib.VAR_CONSENT_FROM_NAME);
+	}
+}
+
+/* -----------------10/02/2005 2:00PM-----------------
+ * END CONSENT LIST FIX
+ * --------------------------------------------------*/
+
+/* -----------------10/21/5---------------------------
+ * BEGIN FIX UNARMED DAMAGE RANGES
+ * --------------------------------------------------*/
+ void setUnarmedDamageRanges( obj_id player )
+ {
+	if ( hasConversionFlag( player, UNARMED_DAMAGE_SET ))
+		return;//already did this once.
+
+	obj_id weapon = getDefaultWeapon(player);
+	if (!isIdValid(weapon))
+		return;//unable to convert that
+
+	int weaponType = getWeaponType(weapon);
+	if (weaponType != WEAPON_TYPE_UNARMED)
+		return;//don't convert that
+
+	int minDmg = getWeaponMinDamage(weapon);
+	int maxDmg = getWeaponMaxDamage(weapon);
+
+	setWeaponMinDamage( weapon, 5 );
+	setWeaponMaxDamage( weapon, 10 );
+	weapons.setWeaponData(weapon);
+
+	setConversionFlag( player, UNARMED_DAMAGE_SET );
+}
+/* -----------------10/21/5---------------------------
+ * END FIX UNARMED DAMAGE RANGES
+ * --------------------------------------------------*/
+
+/* -----------------10/21/5---------------------------
+ * BEGIN POLITICAN SKILL CONVERSION
+ * --------------------------------------------------*/
+ void doPoliticianSkillConversion( obj_id player )
+ {
+	if ( hasConversionFlag( player, POLITICIAN_CONVERSION ))
+		return;//already did this once.
+
+	obj_id residence = player_structure.getResidence( player );
+	if ( isIdValid(residence) )
+		skill.grantAllPoliticianSkills( player );
+
+	setConversionFlag( player, POLITICIAN_CONVERSION );
+}
+/* -----------------10/21/5---------------------------
+ * END POLITICAN SKILL CONVERSION
+ * --------------------------------------------------*/
+
+
+/* -----------------11/21/5---------------------------
+ * BEGIN ELDER BUFF GRANT
+ * --------------------------------------------------*/
+const int NPE_BIRTH_DATE = 1777;	//11/12/5
+
+void grantElderBuff( obj_id player )
+{
+	if ( hasConversionFlag( player, ELDER_BUFF_GRANT ))
+		return;//already did this once.
+
+	int myBirthDate = getPlayerBirthDate(player);
+	if ( myBirthDate == -1 )
+	{
+		messageTo( player, "handleBirthDateCallBack", null, 10, false );
+		return;
+	}
+	else	if ( myBirthDate <= NPE_BIRTH_DATE )
+	{
+		if (!hasCommand(player, "veteranPlayerBuff"))
+		{
+			grantCommand(player, "veteranPlayerBuff");
+		}
+	}
+	setConversionFlag( player, ELDER_BUFF_GRANT );
+}
+
+messageHandler handleBirthDateCallBack()
+{
+	obj_id player = self;
+	int myBirthDate = getPlayerBirthDate(player);
+	if ( myBirthDate == -1 )
+	{
+		messageTo( self, "handleBirthDateCallBack", null, 10, false );
+		return SCRIPT_CONTINUE;
+	}
+	else	if ( myBirthDate <= NPE_BIRTH_DATE )
+	{
+		if (!hasCommand(player, "veteranPlayerBuff"))
+		{
+			grantCommand(player, "veteranPlayerBuff");
+		}
+	}
+	setConversionFlag( player, ELDER_BUFF_GRANT );
+	return SCRIPT_CONTINUE;
+}
+/* -----------------11/21/5---------------------------
+ * END ELDER BUFF GRANT
+ * --------------------------------------------------*/
+
+/* ----------------- 1/5/6 --------------------------
+ * BEGIN VALIDATE SKILLS
+ * --------------------------------------------------*/
+void validateSkills( obj_id player )
+{
+
+	if (hasConversionFlag( player, SKILL_VALIDATION) && hasConversionFlag( player, SKILL_VALIDATION_2))
+	{
+		//clearConversionFlag(player, SKILL_VALIDATION );
+		//clearConversionFlag(player, SKILL_VALIDATION_2 );
+		return;//already did this once.
+	}
+
+	string skillTemplate = getSkillTemplate(player);
+	string workingSkill = getWorkingSkill(player);
+
+	if (skillTemplate == null || skillTemplate == "" || skillTemplate == "a")
+	{
+		CustomerServiceLog("validateSkillCheck:", " NullTemplate: player " + getFirstName(player) + "(" + player + ")'s skill template is either null or 'a'");
+		CustomerServiceLog("validateSkillCheck:", " NullTemplate: player " + getFirstName(player) + "(" + player + ") skillTemplate is " + skillTemplate);
+		CustomerServiceLog("validateSkillCheck:", " NullTemplate: player " + getFirstName(player) + "(" + player + ") workingSkill is " + workingSkill);
+		//setConversionFlag( player, SKILL_VALIDATION );
+		return; //(do nothing)
+	}
+
+	//validate working skill
+	if (workingSkill == null || workingSkill == "")
+	{
+		CustomerServiceLog("validateSkillCheck:", " NullWorkingSkill: player " + getFirstName(player) + "(" + player + ")'s skill workingSkill that is null");
+		//setConversionFlag( player, SKILL_VALIDATION );
+		return; //(do nothing)
+	}
+
+	int skillCount = 0;
+	if (hasSkill( player, "class_forcesensitive_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_bountyhunter_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_smuggler_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_officer_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_spy_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_medic_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_entertainer_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_domestics_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_structures_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_munitions_phase1_novice"))
+		++skillCount;
+
+	if (hasSkill( player, "class_engineering_phase1_novice"))
+		++skillCount;
+
+	if ( skillCount > 1 )
+	{
+		CustomerServiceLog("validateSkillCheck:", " player " + getFirstName(player) + "(" + player + ") has a skillTemplate of " + skillTemplate);
+		CustomerServiceLog("validateSkillCheck:", " player " + getFirstName(player) + "(" + player + ") has a workingSkill of " + workingSkill);
+		CustomerServiceLog("validateSkillCheck:", " player " + getFirstName(player) + "(" + player + ") has a skillCount of " + skillCount);
+		int combatLevel = getLevel( player );
+		setObjVar( player, "clickRespec.combatLevel", combatLevel );
+		//respec.earnProfessionSkills(player, skillTemplate, true);
+	}
+
+	setConversionFlag(player, SKILL_VALIDATION);
+	setConversionFlag(player, SKILL_VALIDATION_2);
+	return;
+}
+
+/* ----------------- 1/5/6 --------------------------
+ * END VALIDATE SKILLS
+ * --------------------------------------------------*/
+
+
+/* -----------------1/24/6---------------------------
+ * BEGIN MASTER BADGE CORRECTION
+ * --------------------------------------------------*/
+
+void correctMasterBadges(obj_id player)
+{
+	if (hasConversionFlag(player, MASTER_BADGE_CORRECTIONS))
+		return;//already did this once.
+
+	// Make sure Player has badges for skills they have earned
+	string[] allSkills = getSkillListingForPlayer(player);
+	if ( allSkills != null && allSkills.length > 0 )
+	{
+		for ( int i = 0; i < allSkills.length; i++ )
+		{
+			if (allSkills[i].endsWith("_master"))
+			{
+				badge.grantMasterSkillBadge(player, allSkills[i] );
+			}
+		}
+	}
+
+	// Correct badge count badges too
+	badge.checkBadgeCount(player);
+
+	setConversionFlag(player, MASTER_BADGE_CORRECTIONS);
+}
+
+/* -----------------1/24/6---------------------------
+ * END MASTER BADGE CORRECTION
+ * --------------------------------------------------*/
+
+/* ------------------02/21/06------------------------
+ * BEGIN EV-9D9 QUEST COMPLETTION CORRECTION
+ * -------------------------------------------------*/
+
+ void correctEv9D9Quest(obj_id player)
+ {
+	 if(groundquests.isTaskActive(player, "legacy_head_runaway", "locationOfCache"))
+	 {
+		 if(groundquests.hasCompletedTask(player, "legacy_head_runaway", "legacy_head_runaway_e91"))
+		 {
+			 groundquests.sendSignal(player, "droidsAllDead");
+		 }
+	 }
+ }
+ /* -----------------02/21/06---------------------------
+  * END EV-9D9 QUEST COMPLETTION CORRECTION
+  * --------------------------------------------------*/
+
+/* ------------------03/02/06------------------------
+ * BEGIN SYREN QUEST COMPLETTION CORRECTION
+ * -------------------------------------------------*/
+
+void correctSyrenQuests(obj_id player)
+{
+	if(groundquests.isQuestActive(player, "c_story1_2_imp") && groundquests.isQuestActiveOrComplete(player, "c_story1_3_imp"))
+		groundquests.completeQuest(player, "c_story1_2_imp");
+	if(groundquests.isQuestActive(player, "c_story1_2_reb") && groundquests.isQuestActiveOrComplete(player, "c_story1_3_reb"))
+		groundquests.completeQuest(player, "c_story1_2_reb");
+	if(groundquests.isQuestActive(player, "c_story1_2_neu") && groundquests.isQuestActiveOrComplete(player, "c_story1_3_neu"))
+		groundquests.completeQuest(player, "c_story1_2_neu");
+}
+ /* -----------------03/02/06---------------------------
+  * END SYREN QUEST COMPLETTION CORRECTION
+  * --------------------------------------------------*/
+
+// -----------------------------------------------------
+
+ /* -----------------04/12/06---------------------------
+  * CONTENT PATH CONTINUATION
+  * --------------------------------------------------*/
+
+void checkForContentPathContinuation(obj_id player)
+{
+  	string prerequisiteQuest = "talus_nashal_goto_mother";
+  	string pointerQuest01 = "talus_dearic_goto_dathnaeya";
+  	string pointerQuest02 = "";
+  	string nextContentPathQuest = "talus_dearic_crisis_of_allegiance";
+
+  	if ( groundquests.hasCompletedQuest(player, prerequisiteQuest) &&
+  	!groundquests.isQuestActive(player, pointerQuest01) &&
+  	//!groundquests.isQuestActive(player, pointerQuest02) &&
+  	!groundquests.isQuestActiveOrComplete(player, nextContentPathQuest) )
+  	{
+  		dictionary webster = new dictionary();
+  		webster.put("player", player);
+  		webster.put("questToGrant", pointerQuest01);
+  		messageTo(player, "handleContentPathContinuation", webster, 5, false);
+  	}
+
+  	return;
+}
+
+messageHandler handleContentPathContinuation()
+{
+	if ( params != null && !params.isEmpty() )
+	{
+		obj_id player = params.getObjId("player");
+		if ( isIdValid(player) )
+		{
+			string newQuestPointer = params.getString("questToGrant");
+			groundquests.grantQuest(player, newQuestPointer);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// -----------------------------------------------------
+
+
+void updateBountyHunterMissions(obj_id player)
+{
+	messageTo(player, "informantComm", null, 10.0f, false);
+	return;
+}
+
+// -----------------------------------------------------
+
+ /* -----------------07/17/06---------------------------
+  * Quest Updating
+  *
+  * When an existing quest undergoes a major change, such as
+  * adding or re-ordering tasks, the old and new versions are
+  * not compatibile with one another. Players who have the old
+  * version of the quest will be unable to continue. In order
+  * to fix that problem, the old version of the quest must be
+  * replaced with the new version. This function handles that.
+  * --------------------------------------------------*/
+
+void updateChangedQuests(obj_id player)
+{
+	if ( utils.hasScriptVar(player, "alreadyCheckedUpdatedQuests") )
+	{
+		// only check once per session, but after the client is ready.
+		return;
+	}
+
+	utils.setScriptVar(player, "alreadyCheckedUpdatedQuests", true);
+
+	string datatable = "datatables/quest/ground/updated_quests.iff";
+	string oldQuestColumn = "old_version_quest_name";
+	string newQuestColumn = "new_version_quest_name";
+
+	string[] oldQuests = dataTableGetStringColumn(datatable, oldQuestColumn);
+
+	string updatedQuestsMessage = utils.packStringId(new string_id ("quest/groundquests", "quest_updated_msg")) + " \n";
+	boolean updatedQuestsFound = false;
+
+	if ( oldQuests != null && oldQuests.length > 0 )
+	{
+		for ( int i = 0; i < oldQuests.length; i++ )
+		{
+			string oldQuestName = oldQuests[i];
+			if ( groundquests.isQuestActive(player, oldQuestName) )
+			{
+				string newQuestName = dataTableGetString(datatable, oldQuestName, newQuestColumn);
+
+				groundquests.clearQuest(player, oldQuestName);
+
+				if ( !newQuestName.equals("delete") )
+				{
+					updatedQuestsFound = true;
+					groundquests.grantQuestNoAcceptUI(player, newQuestName, false);
+
+					// list of updated quests
+					string questlistDatatable = "questlist";
+					int newQuestId = groundquests.getQuestIdFromString(newQuestName);
+					string column = groundquests.datatableColumnjournalEntryTitle;
+
+					string taskTitle = groundquests.getStringDataEntry(questlistDatatable, newQuestId, 0, column);
+					updatedQuestsMessage = updatedQuestsMessage + "\n \\#pcontrast1 " + taskTitle + " \\#. ";
+				}
+			}
+		}
+	}
+
+	if ( updatedQuestsFound )
+	{
+		int pid = sui.createSUIPage( sui.SUI_MSGBOX, player, player, "noHandlerNeeded" );
+
+		string title = utils.packStringId(new string_id ("quest/groundquests", "quest_updated_title"));
+		string OK_BUTTON = utils.packStringId(new string_id ("new_player", "okay_button"));
+
+		sui.setSizeProperty(pid, 400, 200);
+		setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title );
+		setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, updatedQuestsMessage);
+		sui.msgboxButtonSetup(pid, sui.OK_ONLY);
+		setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, OK_BUTTON);
+		sui.showSUIPage( pid );
+	}
+
+	return;
+}
+
+ /* -----------------07/17/06---------------------------
+  * End
+  * --------------------------------------------------*/
+
+// -----------------------------------------------------
+
+// -----------------------------------------------------
+
+ /* -----------------07/19/06---------------------------
+  * correctNabooKickQuests
+  *
+  * This is to fix players who have the kick to Naboo quest still active
+  * and have already started/completed the Naboo quests
+  * the player got into this state by not taking the quest from Watto the
+  * first time. Then getting it later, after having already started the Naboo
+  * quests.
+  * --------------------------------------------------*/
+void correctNabooKickQuests(obj_id player)
+{
+	if(isIdValid(player))
+	{
+		if(isPlayer(player))
+		{
+			 if(groundquests.isQuestActiveOrComplete(player, "naboo_kadaraa_tipping_the_balance_1"))
+			 {
+				 if(groundquests.isQuestActive(player, "legacy_naboo_kick_imp"))
+				 	groundquests.completeQuest(player, "legacy_naboo_kick_imp");
+				 if(groundquests.isQuestActive(player, "legacy_naboo_kick_reb"))
+				 	groundquests.completeQuest(player, "legacy_naboo_kick_reb");
+			 }
+		 }
+	 }
+ }
+  /* -----------------07/19/06---------------------------
+   * End
+   * --------------------------------------------------*/
+
+ // -----------------------------------------------------
+
+
+/*------------------------2/28/07----------------------------
+* grantNextTraderAndEntertainerSkill
+*
+* Players will be losing all of their modified XP due to the removal of the xp modifier in C
+* This will grant them their next working skill and zero out their leftover experience.
+*----------------------------------------------------------*/
+void grantNextTraderAndEntertainerSkill(obj_id player)
+{
+
+
+	if ( hasConversionFlag( player, ENT_TRADER_FREE_SKILL_FLAG ))
+		return;
+
+	string template = getSkillTemplate(player);
+	if (template == "" || template == null)
+	{
+		setConversionFlag( player, ENT_TRADER_FREE_SKILL_FLAG );
+		return;
+	}
+
+	if (!template.startsWith("trader") && !template.startsWith("entertainer"))
+	{
+		//You are not currently a trader or entertainer, thus this issue does not affect you.
+		setConversionFlag( player, ENT_TRADER_FREE_SKILL_FLAG );
+		return;
+	}
+
+	if (getLevel(player) < 6)
+	{
+		setConversionFlag( player, ENT_TRADER_FREE_SKILL_FLAG );
+		return;
+	}
+
+	string templateSkills = dataTableGetString(skill_template.TEMPLATE_TABLE, template, "template");
+	string[] skillList = split(templateSkills, ',');
+
+	string workingSkill = getWorkingSkill(player);
+	skill_template.grantRoadmapItem(player);
+
+	grantSkill(player, workingSkill);
+	setWorkingSkill(player, skill_template.getNextWorkingSkill(player));
+
+
+	int xpTotal = respec.getCurrentXpTotal(player);
+	int currentLevel = getLevel(player);
+	int xpForLevel = dataTableGetInt("datatables/player/player_level.iff", currentLevel -1 , "xp_required");
+
+	int xpDifference = xpTotal - xpForLevel;
+	xpDifference *= -1;
+
+	string xpType = "";
+	if (template.startsWith("trader"))
+		xpType = "crafting";
+
+	if (template.startsWith("entertainer"))
+		xpType = "entertainer";
+	grantExperiencePoints(player, xpType, xpDifference );
+
+	setConversionFlag(player, ENT_TRADER_FREE_SKILL_FLAG);
+}
+
+void addPlayerScripts(obj_id player)
+{
+	if(!hasScript(player, "systems.storyteller.storyteller_commands"))
+	{
+		attachScript(player, "systems.storyteller.storyteller_commands");
+	}
+
+	if(!hasScript(player, "systems.gcw.player_pvp"))
+	{
+		attachScript(player, "systems.gcw.player_pvp");
+	}
+
+	if(!hasScript(player, "space.combat.combat_ship_player"))
+	{
+		attachScript(player, "space.combat.combat_ship_player");
+	}
+
+	if(!hasScript(player, "player.player_chat"))
+	{
+		attachScript(player, "player.player_chat");
+	}
+
+	if(!hasScript(player, "player.veteran_rewards"))
+	{
+		attachScript(player, "player.veteran_rewards");
+	}
+
+	if (!hasScript(player, "player.player_beastmaster"))
+	{
+		attachScript(player, "player.player_beastmaster");
+	}
+	if(!hasScript(player, "player.player_guild"))
+	{
+		attachScript(player, "player.player_guild");
+	}
+	if(!hasScript(player, "player.player_collection"))
+	{
+		attachScript(player, "player.player_collection");
+	}
+	if(!hasScript(player, "player.player_instance"))
+	{
+		attachScript(player, "player.player_instance");
+	}
+	if(!hasScript(player, "player.player_saga_quest"))
+	{
+		attachScript(player, "player.player_saga_quest");
+	}
+}
+
+void updateResidencyLinks(obj_id player)
+{
+	obj_id structure = getHouseId(player);
+	if(!isIdValid(structure))
+		return;
+
+	// mayor cannot have declared residence, so check to see
+	// if player is mayor, and if yes, remove residence
+	int currentCity = getCitizenOfCityId(player);
+	obj_id currentCityMayor = cityGetLeader(currentCity);
+	if (player == currentCityMayor)
+	{
+		setHouseId(player, obj_id.NULL_ID);
+		messageTo(structure, "removeResidentVar", null, 0.f, true);
+	}
+	else
+	{
+		dictionary dict = new dictionary();
+		dict.put("player", player);
+
+		string playerName = getName(player);
+		if ((playerName != null) && (playerName.length() > 0))
+			dict.put("playerName", playerName);
+
+		messageTo(structure, "checkResidenceLinks", dict, 1, false, player, "residentLinkFalse");
+	}
+}
+
+void updateLotOverLimitStructureLocation(obj_id player)
+{
+	if (getAccountNumLots(getPlayerObject(player)) <= player_structure.MAX_LOTS)
+	{
+		removeObjVar(player, "lotOverlimit");
+	}
+	else
+	{
+		obj_id lotOverlimitStructure = getObjIdObjVar(player, "lotOverlimit.structure_id");
+		if (isIdValid(lotOverlimitStructure))
+		{
+			if (exists(lotOverlimitStructure) && !isInWorldCell(lotOverlimitStructure))
+				setObjVar(player, "lotOverlimit.structure_location", "Datapad");
+
+			if (!hasObjVar(player, "lotOverlimit.violation_time"))
+				setObjVar(player, "lotOverlimit.violation_time", getCalendarTime());
+		}
+	}
+}
+
+void updateGuildTerminals(obj_id player)
+{
+	int guildId = getGuildId(player);
+	obj_id pDataPad = utils.getPlayerDatapad(player);
+	boolean hasTerminal = utils.playerHasItemByTemplateInDataPad(player, guild.STR_GUILD_REMOTE_DEVICE);
+
+	if(hasTerminal)
+		return;
+
+	messageTo(player, "onGuildCreateTerminalDataObject", null, 0, false);
+}
+
+//function to make sure a player doesnt have expertises from another profession
+void validateExpertises(obj_id player)
+{
+	skill.validateExpertise(player);
+	return;
+}
+
+//check to see if the players expertise needs to be reset
+boolean expertiseRespecCheck (obj_id player)
+{
+	//get the current version from the table
+	int version = respec.getRespecVersion(player);
+
+	if(version == -1)
+	{
+		//this is most likely a new toon. We dont do anything but stamp the current version
+		messageTo(player, "setRespecVersion", null, 2, false);
+		return false;
+	}
+
+	//get the players version
+	//this should be stamped on the player each time the respec
+	int playerVersion = 0;
+
+	if(hasObjVar(player, respec.EXPERTISE_VERSION_OBJVAR))
+		playerVersion = getIntObjVar(player, respec.EXPERTISE_VERSION_OBJVAR);
+
+	//if they dont match, we need to force a respec
+	if(version != playerVersion)
+	{
+		//reset the expertise
+		messageTo(player, "fullExpertiseReset", null, 2, false);
+		//lets tell them why we did this
+		sui.msgbox(player, EXPERTISE_RESET_FROM_CHANGES);
+		CustomerServiceLog("professionExpertiseReset:", " player " + getFirstName(player) + "(" + player + ") has had their expertise reset due to profession updates.");
+		return true;
+	}
+
+	return false;
+}
+
+//in GU5 We changed the way weapon crafting was handled
+//this function updates all permanent loot schematics so they point to the appearance schematics
+boolean updatePermanentSchematics(obj_id player)
+{
+	return craftinglib.updatePermanentSchematics(player);
+}
+
+messageHandler fullExpertiseReset()
+{
+	utils.fullExpertiseReset(self, false);
+	return SCRIPT_CONTINUE;
+}
+
+void updateCollectionSlots(obj_id player)
+{
+	if(!isIdValid(player) && !exists(player))
+		return;
+
+	//Retrieves a list of all collections that need to retro-actively grant updates.
+	string[] collectionList = dataTableGetStringColumn(UPDATE_COLLECTION_DATATABLE, UPDATE_COLLECTION_NAME_COLUMN);
+	//loop through each collection
+	if(collectionList != null && collectionList.length > 0)
+	{
+		for(int i = 0; i < collectionList.length; i++)
+		{
+			//Player must complete the collection to retro-actively update the corresponding slot.
+			if(hasCompletedCollection(player, collectionList[i]))
+			{
+				//get the slot so we can grant it to them.
+				string slotToGrant = dataTableGetString(UPDATE_COLLECTION_DATATABLE, collectionList[i], UPDATE_COLLECTION_SLOT_TO_GRANT);
+				//there may be more than one slot to grant - let's split and find out.
+				string[] slotList = split(slotToGrant, ',');
+
+				if(slotList != null & slotList.length > 0)
+				{
+					//for each slot in the list -
+					for(int j = 0; j < slotList.length; j++)
+					{
+						//validation - make sure the slot isn't complete before attempting to update it.
+						if(!hasCompletedCollectionSlot(player, slotList[j]))
+						{
+							//find out how much to increment by
+							int incrementAmount = dataTableGetInt(UPDATE_COLLECTION_DATATABLE, collectionList[i], UPDATE_COLLECTION_INCREMENT_AMOUNT);
+							//Updated the slot for the player
+							modifyCollectionSlotValue(player, slotList[j], incrementAmount);
+							//TODO: CS Logging for updated slots!
+							CustomerServiceLog("Collection:", " onInitialize Collection Update: player " + getFirstName(player) + "(" + player +
+							") received a Collection Slot Update on Login for Collection" + collectionList[i] + " : Slot(s) Name: " + slotToGrant + "." );
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+/*
+IN chapter 11 we launched a Hoth Instance
+This instance originally gave you a badge for a flawless victory
+LEC wanted us to retroactively and going forward to give a painting
+This function will grant all players who completed a flawless
+Hoth instance the painting. The objvar is used to track whether they have gotten it or not
+*/
+void updateHothFlawless(obj_id player)
+{
+	if(!isIdValid(player) && !exists(player))
+		return;
+	if(hasObjVar(player, "hoth.flawless_reward"))
+		return;
+
+	if(badge.hasBadge(player, "champion_of_hoth"))
+	{
+		obj_id[] rewards = new obj_id[1];
+		obj_id inventory = utils.getInventoryContainer(player);
+
+		rewards[0] = static_item.createNewItemFunction("item_hoth_flawless_painting", inventory);
+		showLootBox(player, rewards);
+		setObjVar(player, "hoth.flawless_reward", 1);
+	}
+}
+
+void updateRenameCharacterComplete(obj_id player)
+{
+	if (!isIdValid(player) || !exists(player))
+		return;
+
+	if (!hasObjVar(player, "renameCharacterRequest.requestNewName"))
+		return;
+
+	const string previousRenameName = getStringObjVar(player, "renameCharacterRequest.requestNewName");
+	const string currentName = getName(player);
+
+	// rename has been completed, remove the objvar so the system won't think there's a pending rename request
+	if ((currentName != null) && (previousRenameName != null) && previousRenameName.equals(currentName))
+		removeObjVar(player, "renameCharacterRequest.requestNewName");
+}
+
+
+void forceRespecBasedOnConfig(obj_id player)
+{
+	if(getConfigSetting("GameServer", "forceProfessionRespec") == null)
+		return;
+
+	if(!hasObjVar(player, "character_builder"))
+		return;
+
+	if(hasObjVar(player, FORCE_RESPEC_OBJVAR))
+	{
+		int version = getIntObjVar(player, FORCE_RESPEC_OBJVAR);
+		if(version != FORCED_RESPEC_VERSION)
+		{
+			utils.fullExpertiseReset(player, false);
+			respec.revokeAllSkillsAndExperience(player);
+			//respec.startNpcRespec(player, player, false);
+			respec.autoLevelPlayer(player, 90, false);
+			setObjVar(player, FORCE_RESPEC_OBJVAR, FORCED_RESPEC_VERSION);
+		}
+	}
+	else
+	{
+		utils.fullExpertiseReset(player, false);
+		respec.revokeAllSkillsAndExperience(player);
+		//respec.startNpcRespec(player, player, false);
+		respec.autoLevelPlayer(player, 90, false);
+		setObjVar(player, FORCE_RESPEC_OBJVAR, FORCED_RESPEC_VERSION);
+	}
+}
+
+/*
+If the player has previously completed the last quest of the Deathtroopers prolog
+Quest we grant them the next quest that guides them to their factional mentor.
+*/
+boolean givePlayersDeathTroopersOutbreakQuest(obj_id player)
+{
+	CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: Player: "+player+" is being checked for old prolog quest line.");	
+
+	if(!groundquests.isQuestActiveOrComplete(player, "quest_08_dathomir_outpost"))
+		return false;
+
+	CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: The Player: "+player+" has quest quest_08_dathomir_outpost active or completed.");	
+
+	if(groundquests.isQuestActiveOrComplete(player, "outbreak_live_conversion_rebel") 
+	|| groundquests.isQuestActiveOrComplete(player, "outbreak_live_conversion_imperial")
+	|| groundquests.isQuestActiveOrComplete(player, "outbreak_live_conversion_neutral")
+	|| groundquests.isQuestActiveOrComplete(player, "outbreak_switch_to_neutral")
+	|| groundquests.isQuestActiveOrComplete(player, "outbreak_switch_to_rebel")
+	|| groundquests.isQuestActiveOrComplete(player, "outbreak_switch_to_imperial"))
+		return false;
+
+	CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: The Player: "+player+" does not have quest outbreak_live_conversion_rebel, imperial or neutral active or completed.");	
+
+	if(groundquests.isQuestActive(player, "quest_08_dathomir_outpost"))
+	{
+		CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: The Player: "+player+" has quest quest_08_dathomir_outpost currently active!");	
+	
+		if(groundquests.isTaskActive(player, "quest_08_dathomir_outpost", "travelDathomir"))
+		{
+			CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: The Player: "+player+" has quest quest_08_dathomir_outpost with task travelDathomir currently active! We need to complete this quest immediatly so this player is not gated!");	
+			//If the player has yet to travel to dathomir, just complete the quest and give 
+			//them the reward
+			int questid = questGetQuestId("quest/quest_08_dathomir_outpost");
+			CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: The Player: "+player+" has quest quest_08_dathomir_outpost and that quest ID is: "+questid);	
+
+			if(questid != 0)
+			{
+				CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: The Player: "+player+" is having quest quest_08_dathomir_outpost completed to avoid a gate!");	
+				questCompleteQuest(questid, player);
+			}
+		}
+		else
+		{
+			CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: The Player: "+player+" does not have the quest quest_08_dathomir_outpost task travelDathomir currently so we are not completing the quest prematurely.");	
+
+			//if the player has already completed the quest and hasn't visited the 
+			//slicer, leave it alone. Player should complete the quest and get the new
+			//Outbreak quest upon completion of prolog.
+			return false;
+		}
+	}
+
+	if(factions.isRebel(player))
+	{
+		CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: Granting Player: "+player+" the outbreak_live_conversion_rebel quest because they are currently of rebel faction.");	
+
+		groundquests.grantQuest(player, "outbreak_live_conversion_rebel");
+		return true;
+	}
+	else if(factions.isImperial(player))
+	{
+		CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: Granting Player: "+player+" the outbreak_live_conversion_rebel quest because they are currently of imp faction.");	
+
+		groundquests.grantQuest(player, "outbreak_live_conversion_imperial");
+		return true;		
+	}
+	CustomerServiceLog("outbreak_themepark", "givePlayersDeathTroopersOutbreakQuest: Granting Player: "+player+" the outbreak_live_conversion_rebel quest because they are currently of neutral faction.");	
+
+	groundquests.grantQuest(player, "outbreak_live_conversion_neutral");
+	return true;
+}
+
+boolean givePlayersDeathTroopersPrologQuestComlink(obj_id player)
+{
+	if(isFreeTrialAccount(player))
+		return false;
+	if(isInTutorialArea(player))
+		return false;
+	if(hasObjVar(player, "prologComlink"))
+		return false;		
+
+	if(!groundquests.isQuestActiveOrComplete(player, "quest_01_comlink_call_to_adventure_neg_faction")
+	&& !groundquests.isQuestActiveOrComplete(player, "quest_01_comlink_call_to_adventure_neut_faction")
+	&& !groundquests.isQuestActiveOrComplete(player, "quest_01_comlink_call_to_adventure_pos_faction"))
+	{
+		obj_id[] rewards = new obj_id[1];
+		obj_id inventory = utils.getInventoryContainer(player);
+		if(!isValidId(inventory))
+			return false;
+		
+		rewards[0] = static_item.createNewItemFunction("item_publish_gift_update_14_comlink", inventory);
+		if(!isValidId(rewards[0]))
+			return false;
+		
+		showLootBox(player, rewards);
+	}
+	sendSystemMessage(player, JABBAS_COMLINK);
+	setObjVar(player, "prologComlink", true);
+	return true;
+}
+
+boolean removeDeprecatedQuests(obj_id player)
+{
+	if(groundquests.isQuestActive(player, "u16_nym_themepark_weed_pulling"))
+	{
+		groundquests.clearQuest(player, "u16_nym_themepark_weed_pulling");
+	}
+
+	return true;
+}

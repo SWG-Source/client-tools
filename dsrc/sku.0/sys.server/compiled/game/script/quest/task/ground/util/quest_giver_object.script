@@ -1,0 +1,299 @@
+
+/*************************************************************/
+
+include library.groundquests;
+include library.sui;
+include library.utils;
+
+/************************************************************/
+
+const string_id	RADIAL_INSPECT  = new string_id ("quest/ground/util/quest_giver_object", "radial_inspect");
+const string_id OFFER_QUEST_MSG	= new string_id	("quest/ground/util/quest_giver_object", "offer_quest");
+const string_id SUI_TITLE		= new string_id ("quest/ground/util/quest_giver_object", "sui_title");
+const string_id BUTTON_DECLINE  = new string_id ("quest/ground/util/quest_giver_object", "button_decline");
+const string_id BUTTON_ACCEPT	= new string_id ("quest/ground/util/quest_giver_object", "button_accept");
+
+const string_id ALREADY_COMPLETED_QUEST	= new string_id ("quest/ground/util/quest_giver_object", "already_completed_quest");
+const string_id ALREADY_HAS_QUEST		= new string_id ("quest/ground/util/quest_giver_object", "already_has_quest");
+const string_id DECLINED_QUEST			= new string_id ("quest/ground/util/quest_giver_object", "declined_quest");
+const string_id OBJECT_UPLOADED			= new string_id ("quest/ground/util/quest_giver_object", "object_uploaded");
+
+const string_id IMPERIAL_FACTION_REQ	= new string_id ("quest/ground/util/quest_giver_object", "imperial_faction_required");
+const string_id REBEL_FACTION_REQ		= new string_id ("quest/ground/util/quest_giver_object", "rebel_faction_required");
+
+const string_id NO_FURTHER_INTEREST		= new string_id("quest/groundquests", "retrieve_item_already_used");
+
+const string DATATABLE				= "datatables/quest/ground/quest_giver_object.iff";
+const string QUEST_NAME				= "quest_name";
+const string PRE_QUEST_NAME			= "pre_quest_name";
+const string QUEST_OFFER_TEXT		= "quest_offer_text";
+const string QUEST_IS_REPEATABLE	= "quest_is_repeatable";
+const string DO_NOT_DESTROY			= "do_not_destroy";
+const string IMPERIAL_ONLY			= "imperial_only";
+const string REBEL_ONLY				= "rebel_only";
+const string[] TRADER_PROFESSION_QUEST_STARTERS = 
+{
+	"object/tangible/quest/quest_start/profession_trader_10.iff",
+	"object/tangible/quest/quest_start/profession_trader_20.iff",
+	"object/tangible/quest/quest_start/profession_trader_30.iff"
+};
+const string[] ENT_PROFESSION_QUEST_STARTERS = 
+{
+	"object/tangible/quest/quest_start/profession_entertainer_10.iff",
+	"object/tangible/quest/quest_start/profession_entertainer_20.iff",
+	"object/tangible/quest/quest_start/profession_entertainer_30.iff"
+};
+
+	
+
+/*************************************************************/
+
+trigger OnInitialize ()
+{
+	string template = getTemplateName(self);
+	if(template.endsWith("_30.iff"))
+	{
+		utils.replaceSnowflakeItem(self, template);
+		return SCRIPT_CONTINUE;
+	}
+	
+	for(int i =0; i < TRADER_PROFESSION_QUEST_STARTERS.length; ++i)
+	{
+		if(template.equals(TRADER_PROFESSION_QUEST_STARTERS[i]))
+		{
+			utils.replaceSnowflakeItem(self, template);
+			return SCRIPT_CONTINUE;
+		}
+		if(template.equals(ENT_PROFESSION_QUEST_STARTERS[i]))
+		{
+			utils.replaceSnowflakeItem(self, template);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{	
+	string myTemplate = getTemplateName(self);
+	dictionary objectQuestData = dataTableGetRow(DATATABLE, myTemplate);
+	if ( objectQuestData != null )
+	{
+		string questName = objectQuestData.getString(QUEST_NAME);
+		if ( questName != null && questName.length() > 0 )
+		{
+			if ( groundquests.isValidQuestName(questName) )
+			{
+				int menuOption = mi.addRootMenu ( menu_info_types.ITEM_USE, RADIAL_INSPECT);
+			}
+			else 
+			{
+				if ( isGod(player) )
+				{
+					string errorMsg = "GODMODE MSG: questName provided for " + getTemplateName(self) + " in " + DATATABLE + " is invalid.";
+					sendSystemMessageTestingOnly(player, errorMsg);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.ITEM_USE)
+	{
+		string myTemplate = getTemplateName(self);
+		dictionary objectQuestData = dataTableGetRow(DATATABLE, myTemplate);
+		if ( objectQuestData != null )
+		{
+			string questName = objectQuestData.getString(QUEST_NAME);
+			if ( questName == null || questName.length() <= 0  || !groundquests.isValidQuestName(questName) )
+			{
+				if ( isGod(player) )
+				{
+					string errorMsg = "GODMODE MSG: questName provided for " + getTemplateName(self) + " in " + DATATABLE + " is invalid.";
+					sendSystemMessage(player, errorMsg, "");
+				}
+				return SCRIPT_CONTINUE;
+			}
+			
+			// If you've already completed the quest or already have it,
+			// and the quest is not repeatable, then there is no need to offer the quest
+			int questIsRepeatable = objectQuestData.getInt(QUEST_IS_REPEATABLE);
+			if ( groundquests.isQuestActiveOrComplete(player, questName) && questIsRepeatable <= 0)
+			{
+				sendSystemMessage(player, NO_FURTHER_INTEREST);
+				return SCRIPT_CONTINUE;
+			}
+
+			// Construct Quest Offer sui
+			if ( utils.hasScriptVar(player, "questGiver.openSui") )
+			{
+				int oldSui = utils.getIntScriptVar(player, "questGiver.openSui");
+				utils.removeScriptVar(player, "questGiver.openSui");
+				if ( oldSui > -1 )
+				{
+					forceCloseSUIPage(oldSui);
+				}
+			}
+
+			string_id sid_offerText = OFFER_QUEST_MSG;
+
+			// To use non-default text for offering the quest, use the "quest_offer_text" column
+			// in the datatable of an entry in quest/ground/util/quest_giver_object.stf
+			string newOfferText = objectQuestData.getString(QUEST_OFFER_TEXT);
+			if ( newOfferText != null && newOfferText.length() > 0 )
+			{
+				sid_offerText = new string_id ("quest/ground/util/quest_giver_object", newOfferText);
+			}
+
+			string title = utils.packStringId(SUI_TITLE);
+			string testMsg = utils.packStringId(sid_offerText);
+			string ok_button = utils.packStringId(BUTTON_ACCEPT);
+			string cancel_button = utils.packStringId(BUTTON_DECLINE);
+
+			// Create the dialog page.
+			int pid = sui.createSUIPage( sui.SUI_MSGBOX, self, player, "handleQuestOfferResponse");
+
+			// Add elements text.
+			setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, title);
+			setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, testMsg);
+
+			// Add buttons.
+			sui.msgboxButtonSetup(pid, sui.YES_NO);
+			setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, ok_button);
+			setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, cancel_button);
+
+			// Show dialog.
+			utils.setScriptVar(player, "questGiver.openSui", pid);
+			sui.showSUIPage( pid );
+			// End sui construction
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+messageHandler handleQuestOfferResponse()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId( params );
+	
+	if ( utils.hasScriptVar(player, "questGiver.openSui") )
+	{
+		utils.removeScriptVar(player, "questGiver.openSui");
+	}
+	
+	string myTemplate = getTemplateName(self);
+	dictionary objectQuestData = dataTableGetRow(DATATABLE, myTemplate);
+	if ( objectQuestData != null )
+	{
+		string questName = objectQuestData.getString(QUEST_NAME);		
+		if ( questName != null && questName.length() > 0 )
+		{
+			int bp = sui.getIntButtonPressed( params );
+
+			// Check for Imperial only or Rebel only settings
+			int imperialOnly = objectQuestData.getInt(IMPERIAL_ONLY);
+			int rebelOnly = objectQuestData.getInt(REBEL_ONLY);
+			
+			int playerFaction = pvpGetAlignedFaction(player);
+			
+			if ( imperialOnly > 0 )
+			{
+				if ( playerFaction != ##"imperial" )
+				{
+					sendSystemMessage(player, IMPERIAL_FACTION_REQ);
+					return SCRIPT_CONTINUE;
+				}
+			}
+			else if ( rebelOnly > 0 )
+			{
+				if ( playerFaction != ##"rebel" )
+				{
+					sendSystemMessage(player, REBEL_FACTION_REQ);
+					return SCRIPT_CONTINUE;
+				}
+			}
+
+			// Check to see if the quest is set as repeatable.
+			int questIsRepeatable = objectQuestData.getInt(QUEST_IS_REPEATABLE);
+			if ( !groundquests.hasCompletedQuest(player, questName) || questIsRepeatable > 0 )
+			{
+				if ( !groundquests.isQuestActive(player, questName) )
+				{
+					switch ( bp )
+					{
+						case sui.BP_OK:	// "Accept"
+							
+							string preQuestName = objectQuestData.getString(PRE_QUEST_NAME);
+							// Using a pre-quest allows:
+							// the first time a quest object is inspected, the "pre-quest" is given. 
+							// After the pre-quest is complete, the quest object gives the normal quest.
+							if ( preQuestName != null && preQuestName.length() > 0 )
+							{
+								if ( !groundquests.hasCompletedQuest(player, preQuestName) )
+								{
+									if ( !groundquests.isQuestActive(player, preQuestName) )
+									{
+										groundquests.grantQuest(player, preQuestName);
+										checkForDestroy(self, player, objectQuestData);
+										break;
+									}
+									else
+									{
+										sendSystemMessage(player, ALREADY_HAS_QUEST);
+										break;
+									}
+								}
+							}
+
+							groundquests.grantQuest(player, questName);
+							checkForDestroy(self, player, objectQuestData);
+							break;
+						case sui.BP_CANCEL: // "Decline"
+							sendSystemMessage(player, DECLINED_QUEST);
+							break;
+					}
+				}
+				else
+				{
+					sendSystemMessage(player, ALREADY_HAS_QUEST);
+				}
+			}
+			else
+			{
+				sendSystemMessage(player, ALREADY_COMPLETED_QUEST);
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+/************************************************************/
+
+// Check to see if the quest object should be destroyed or not.
+void checkForDestroy(obj_id self, obj_id player, dictionary objectQuestData)
+{
+	int doNotDestroy = objectQuestData.getInt(DO_NOT_DESTROY);
+	if ( doNotDestroy < 1 )
+	{
+		sendSystemMessage(player, OBJECT_UPLOADED);
+		destroyObject(self);
+	}	
+	
+	return;
+}
+
+//------------------------------------------------------------
+
+

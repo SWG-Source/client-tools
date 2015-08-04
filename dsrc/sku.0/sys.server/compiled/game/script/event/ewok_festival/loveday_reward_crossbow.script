@@ -1,0 +1,160 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.utils;
+include library.prose;
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_ITEM_NOT_IN_INVENTORY		= new string_id("base_player", "not_in_your_inventory");
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{	
+	if (canManipulate(player, self, true, true, 15, true))
+	{
+		if (utils.isNestedWithinAPlayer(self))
+		{
+			mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("base_player", "loveday_crossbow_use"));
+			
+			string_id equipUnequip = new string_id("ui_radial", "item_equip");
+			if ( utils.isEquipped(self) )
+			{
+				equipUnequip = new string_id("ui_radial", "item_unequip");
+			}
+			mi.addRootMenu(menu_info_types.SERVER_MENU11, equipUnequip);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(utils.getContainingPlayer(self) != player )
+		return SCRIPT_CONTINUE;
+	
+	if( item == menu_info_types.ITEM_USE)
+	{
+		if(isIncapacitated(player) || isDead(player))
+		{
+			sendSystemMessage(player, new string_id("player_structure", "while_dead"));
+			return SCRIPT_CONTINUE;
+		}
+
+		string coolDownGroup = "loveday_crossbow";
+		string clientEffect = "appearance/pt_efol_hearts.prt";
+		string clientAnimation = "";
+		int reuseTime = 120; // 2 minutes
+
+		string varName = "clickItem." + coolDownGroup;
+		//this should return 0 if they don't have the Objvar at all
+		int buffTime = getIntObjVar(player, varName);
+
+		if(getGameTime() > buffTime || getGameTime() < buffTime && isGod(player))
+		{
+			//allert the god mode tester only if the timer is involved.
+			if(getGameTime() < buffTime && isGod(player))
+				sendSystemMessage(player, "The item was used because you were in god mode.", null);
+				
+			if ( reduceHateOnTarget(player, clientEffect) )
+			{
+				//we store the objvar on the player, and clean them up in base player oninitialize
+				setObjVar(player, varName, (getGameTime() + (reuseTime)));
+				//applies the psuedo item timer, make sure object template is in cooldown group in client /datatables/timer/template_command_mapping.tab 
+
+				sendCooldownGroupTimingOnly(player, getStringCrc(coolDownGroup.toLowerCase()), reuseTime);
+				sendSystemMessage(player, new string_id("base_player", "loveday_crossbow_hate_reduced"));
+
+				//play an animation and effect
+				if ( clientAnimation.length() > 0 )
+					doAnimationAction(player, clientAnimation);
+			}
+			else
+			{
+				sendSystemMessage(player, new string_id("base_player", "loveday_crossbow_no_hate"));
+			}
+		}
+		else
+		{
+			//send them a message on how long before they can use again
+			int timeDiff = buffTime - getGameTime();
+			prose_package pp = prose.getPackage(new string_id("base_player", "not_yet"), timeDiff);
+			sendSystemMessageProse( player, pp );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else if( item == menu_info_types.SERVER_MENU11)
+	{
+		if ( utils.isEquipped(self) )
+		{
+			obj_id inventory = getObjectInSlot(player, "inventory");
+			putInOverloaded(self, inventory);
+		}
+		else
+		{
+			equip(self, player);
+		}
+		
+		sendDirtyObjectMenuNotification(self);
+	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+boolean reduceHateOnTarget(obj_id player, string clientEffect)
+{
+	obj_id target = getLookAtTarget(player);
+	if ( !isIdValid(target) )
+	{
+		target = getIntendedTarget(player);
+	}
+
+	if ( isIdValid(target) )
+	{
+		obj_id[] thoseWhoHateMe = getHateList(player);
+		int playerLevel = getLevel(player);
+
+		if(thoseWhoHateMe.length != 0 && thoseWhoHateMe != null)
+		{
+			for(int i = 0; i < thoseWhoHateMe.length; i++)
+			{
+				obj_id hater = thoseWhoHateMe[i];
+				if ( hater == target )
+				{
+					int haterLevel = getLevel(thoseWhoHateMe[i]);
+					int levelSpread = playerLevel - haterLevel;
+
+					float hateReduction = 0.90f; // 10% base
+
+					int difficultyClass = getIntObjVar(thoseWhoHateMe[i], "difficultyClass");
+					if(difficultyClass > 1)
+						hateReduction = 0.92f; // 8% if an elite or boss target
+
+					if(levelSpread < -24)
+						hateReduction = 0.96f; // 4% if you are 25 or more levels below your target
+
+					float hate = getHate(thoseWhoHateMe[i], player);
+					float oldHate = hate;
+
+					hate *= hateReduction;
+
+					//sendSystemMessage(player, "oldHate: " + oldHate + " new hate: " + hate, "");
+
+					setHate(thoseWhoHateMe[i], player, hate);
+					
+					if ( clientEffect.length() > 0 )
+					{
+						playClientEffectObj(player, clientEffect, target, "head");
+					}
+					
+					return true;
+				}
+			}
+		}
+	}
+	else
+	{
+		sendSystemMessage(player, new string_id("base_player", "loveday_crossbow_no_target"));
+	}
+
+	return false;
+}

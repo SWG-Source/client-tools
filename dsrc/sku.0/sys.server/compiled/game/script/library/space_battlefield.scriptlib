@@ -1,0 +1,602 @@
+include library.hue;
+include library.ship_ai;
+include library.sui;
+include java.lang.Math;
+include library.prose;
+
+const float RESET_TIME = 90;
+const int STATE_IMPERIAL = 1;
+const int STATE_REBEL = 0;
+
+
+const int PHASE_ESCORT = 0; // escorty
+const int PHASE_CONTROL = 1; // zones of control
+const int PHASE_DESTROY = 2; // star destroyer
+
+const int[] PHASE_DURATIONS = 
+				{
+				9600,
+				9600,
+				-1
+				};
+			
+
+
+const int POINTS_PER_TRANSPORT = 100;
+const int POINTS_PER_KILL = 1;
+const int POINTS_FOR_STARDESTROYER = 100000;// ???
+
+				
+// functions we need
+// transition 
+// validation
+// cleanup
+
+void battlefieldCompleted(obj_id objManager, int intCompletionId)
+{
+	CustomerServiceLog("battlefield", "Battlefield Completed and resetting with id "+intCompletionId);
+	//obj_id objKesselObject = getPlanetByName("space_light1");
+	//obj_id objKesselManager = utils.getObjIdScriptVar(objKesselObject, "objKesselManager");
+	//LOG("space", "sending to "+ objKesselManager);
+	//dictionary dctParams = new dictionary();
+	//dctParams.put("intCompletionId", intCompletionId);	
+	//messageTo(objKesselManager, "changeSpawnerPhase", dctParams, 0, true);
+	// start the cleanup
+	obj_id[] objShips = getObjectsInRange(getLocation(objManager), 320000);
+	for(int intI = 0; intI< objShips.length; intI++)
+	{
+		if(!space_utils.isPlayerControlledShip(objShips[intI]))
+		{
+			if(hasObjVar(objShips[intI], "ship.shipName"))
+			{
+				if(!hasObjVar(objShips[intI], "intNoCleanup"))
+				{			
+					float fltTime = rand(1,120);
+					messageTo(objShips[intI], "destroySelf", null, fltTime, false);	
+				}
+			}
+		}
+		else
+		{			
+			//string_id strSpam = new string_id("this_is_bad_spam", "space_battlefield_resetting");		
+			//space_utils.sendSystemMessageShip(objShips[intI], strSpam, true, true, true, true);		
+		}
+	}
+		
+	return;
+}
+void resetSpaceBattlefield(obj_id objManager)
+{
+	// move everyone out of the zone
+	// destroy  all ships
+	// reset phase back to 0
+	// restart the spawners
+	// replace the space stations if needed
+	// reset damage for the space sations
+	
+	// destroy space station (only way to be sure)
+	LOG("space", "RESETTING");
+	
+	utils.removeScriptVar(objManager, "intResetting");
+	obj_id objSpaceStations[] = getAllObjectsWithScript(getLocation(objManager), 320000, "space.battlefields.battlefield_station");
+	
+	if(objSpaceStations!=null)
+	{
+		for(int intI = 0; intI<objSpaceStations.length; intI++)
+		{			
+			
+			setObjVar(objSpaceStations[intI], "intCleaningUp", 1);
+			detachScript(objSpaceStations[intI], "space.battlefields.battlefield_spawner");			
+			detachScript(objSpaceStations[intI], "space.content_tools.spawner");			
+			destroyObject(objSpaceStations[intI]);
+		}
+	
+	}	
+	// destroy Star destroyer!
+	obj_id objDestroyers[] = getAllObjectsWithScript(getLocation(objManager), 320000, "space.battlefields.battlefield_star_destroyer");
+	if(objDestroyers!=null)
+	{
+		for(int intI = 0; intI<objDestroyers.length; intI++)
+		{			
+			setObjVar(objDestroyers[intI], "intCleaningUp", 1);		
+			destroyObject(objDestroyers[intI]);
+		}
+	
+	}
+	
+	obj_id objStationEggs[] = getAllObjectsWithObjVar(getLocation(objManager), 320000, "intStationRespawner");
+	
+	
+	if(objStationEggs!=null)
+	{
+		for(int intI = 0; intI<objStationEggs.length; intI++)
+		{			
+			string strObjVars= utils.getStringLocalVar(objStationEggs[intI], "strObjVars");
+			string strScripts= utils.getStringLocalVar(objStationEggs[intI], "strScripts");
+			string strTemplate = utils.getStringLocalVar(objStationEggs[intI], "strTemplate");
+			LOG("space", "making "+strTemplate+" from object "+objStationEggs[intI]);
+			transform trTest = getTransform_o2p(objStationEggs[intI]);						
+			
+			obj_id objStation = createObject(strTemplate, trTest, null);			
+			LOG("space", "MADE STATION "+objStation);
+			setPackedObjvars(objStation, strObjVars);					
+			space_create.setupShipFromObjVars(objStation);			
+			if (hasObjVar(objStation, "intCleaningUp"))
+				removeObjVar(objStation, "intCleaningUp");
+
+			if(strScripts!="")
+			{
+				string[] strScriptArray = split(strScripts, ',');
+				for(int intJ = 0; intJ<strScriptArray.length; intJ++)
+				{
+					string script = strScriptArray[intJ];
+					if ( script.indexOf( "script." ) > -1 )
+					{
+						script = script.substring( 7 );
+					}
+					if(script!="")
+					{
+						if ( !hasScript( objStation, script ) )
+							attachScript( objStation, script );
+					}
+					
+					setObjVar(objStation, "intNoCleanup",1);
+				}
+			}				
+			destroyObject(objStationEggs[intI]);
+			
+		}
+		
+	
+	} 
+	else
+	{
+		LOG("space", "NO EGGS");
+	}
+	
+	// remade teh stations
+	setObjVar(objManager, "intPhase", -1);
+	//obj_id[] objShips = getAllObjectsWithScript(getLocation(objManager), 320000, "space.combat.combat_ship");		
+	dictionary dctParams = new dictionary();
+	LOG("space", "RESETTING on "+objManager);	
+	messageTo(objManager, "nextPhase", dctParams, 1, false);
+	resetCounters();
+	return;
+
+}
+
+
+void doBattleFieldTransition(obj_id objShip, obj_id objStation)
+{
+	LOG("space", "Transition 1");
+	string strName = getStringObjVar(objStation, "strName");
+	doBattleFieldTransition(objShip, objStation, strName);
+
+}
+void doBattleFieldTransition(obj_id objShip, obj_id objStation, string strOverloadName)
+{
+	LOG("space", "Transition 2");
+	if(canTransitionToBattlefield(objShip, objStation))
+	{
+		LOG("space", "Transition 3");	
+		
+		string strRealName = getStringObjVar(objStation, "strName"); // sometimes the name is overloaded.
+		
+		dictionary dctStationInfo = dataTableGetRow("datatables/space_content/battlefields/entry_stations.iff", strRealName);		
+		int intPointCost = dctStationInfo.getInt("intPointCost");
+		string strType = dctStationInfo.getString("strPrestigeType");	
+		int intTotalCost= getPrestigeCostForTransition(objShip, objStation, intPointCost);
+
+		// setup the team
+
+		if(!strOverloadName.equals(strRealName))
+		{
+			dctStationInfo = dataTableGetRow("datatables/space_content/battlefields/entry_stations.iff", strOverloadName);		
+		}
+		string strArea = dctStationInfo.getString("strArea");
+		LOG("testing", "area is "+strArea);
+		float fltX = dctStationInfo.getFloat("fltX");
+		float fltY = dctStationInfo.getFloat("fltY");
+		float fltZ = dctStationInfo.getFloat("fltZ");
+		transform trTest = space_combat.getClosestStationRespawnLocation(objShip);
+		location locTest = new location();
+		if(trTest!=null)
+		{
+			locTest = space_utils.getLocationFromTransform(trTest);
+			setObjVar(objShip, "battlefield.locRespawnLocation", locTest);	
+		}
+		else
+		{
+			setObjVar(objShip, "battlefield.locRespawnLocation", getLocation(objShip));	
+		}
+		
+		setObjVar(objShip, "battlefield.locEntryLocation", getLocation(objShip));
+		
+		
+		// randomize
+		locTest = new location();		
+		locTest.x = fltX;
+		locTest.y = fltY;
+		locTest.z = fltZ;
+		
+		locTest.x = locTest.x + rand(-200, 200);
+		locTest.y = locTest.y + rand(-200, 200);
+		locTest.z = locTest.z +rand(-200, 200);
+		
+		locTest.area = strArea;
+		LOG("testing", "setting location to "+locTest);		
+		CustomerServiceLog("battlefield", "%TU "+objShip+" is Entering the Deep Space zone from station at "+getLocation(objStation), getOwner(objShip));
+		warpPlayer(getPilotId(objShip), strArea, locTest.x, locTest.y, locTest.z, null, locTest.x, locTest.y, locTest.z);
+	
+	}
+	else
+	{
+		LOG("space", "Can't transition");
+	}
+	
+	return;
+	
+
+}
+void doKesselTransition(obj_id objShip, obj_id objStation)
+{
+
+	if(space_utils.isBasicShip(objShip))
+	{
+		string_id strSpam = new string_id("space/space_interaction", "no_basics");
+		space_utils.sendSystemMessageShip(objShip, strSpam,  true, false, false, false);
+		return;
+	}
+	LOG("space", "GOING TO KESSEL");
+	string strName = getStringObjVar(objStation, "strName");
+	dictionary dctStationInfo = dataTableGetRow("datatables/space_content/battlefields/entry_stations.iff", strName);
+	
+	float fltKesselX= dctStationInfo.getFloat("fltKesselX");
+	float fltKesselY= dctStationInfo.getFloat("fltKesselY");
+	float fltKesselZ= dctStationInfo.getFloat("fltKesselZ");
+	
+	transform trTest = space_combat.getClosestStationRespawnLocation(objShip);
+	location locTest = space_utils.getLocationFromTransform(trTest);
+	
+	
+	setObjVar(objShip, "battlefield.locEntryLocation", getLocation(objShip));
+	setObjVar(objShip, "battlefield.locRespawnLocation", locTest);	
+	CustomerServiceLog("battlefield", objShip+" is Entering the Kessel space zone from station at "+getLocation(objStation));
+	locTest.x = fltKesselX;
+	locTest.y = fltKesselY;
+	locTest.z = fltKesselZ;
+	locTest.x = locTest.x + rand(-200, 200);
+	locTest.y = locTest.y + rand(-200, 200);
+	locTest.z = locTest.z +rand(-200, 200);	
+	locTest.area = "space_light1";
+	warpPlayer(getPilotId(objShip), locTest.area, locTest.x, locTest.y, locTest.z, null, locTest.x, locTest.y, locTest.z);
+	return;
+
+
+}
+
+void doBattleFieldCommandTransition(obj_id objShip, obj_id player, string zone, string factionEntry)
+{
+	string strX = "fltX";
+	string strY = "fltY";
+	string strZ = "fltZ";
+	
+	//Going to Kessel
+	if(zone.equals("light1"))
+	{
+
+
+		strX = "fltKesselX";
+		strY = "fltKesselY";
+		strZ = "fltKesselZ";		
+		
+	}
+	
+	dictionary dctStationInfo = dataTableGetRow("datatables/space_content/battlefields/entry_stations.iff", factionEntry);	
+	
+	float fltX = dctStationInfo.getFloat(strX);
+	float fltY = dctStationInfo.getFloat(strY);
+	float fltZ = dctStationInfo.getFloat(strZ);
+	
+	
+	transform trTest = space_combat.getClosestStationRespawnLocation(objShip);
+	location locTest = new location();
+	if(trTest!=null)
+	{
+		locTest = space_utils.getLocationFromTransform(trTest);
+		setObjVar(objShip, "battlefield.locRespawnLocation", locTest);	
+	}
+	else
+	{
+		setObjVar(objShip, "battlefield.locRespawnLocation", getLocation(objShip));	
+	}
+
+	setObjVar(objShip, "battlefield.locEntryLocation", getLocation(objShip));
+
+
+	// randomize
+	locTest = new location();		
+	locTest.x = fltX;
+	locTest.y = fltY;
+	locTest.z = fltZ;
+
+	locTest.x = locTest.x + rand(-200, 200);
+	locTest.y = locTest.y + rand(-200, 200);
+	locTest.z = locTest.z +rand(-200, 200);
+
+	locTest.area = zone;
+	warpPlayer(getPilotId(objShip), zone, locTest.x, locTest.y, locTest.z, null, locTest.x, locTest.y, locTest.z);
+
+	return;
+	
+
+}
+
+boolean isInBattlefield(obj_id objShip)
+{	
+	return isSpaceBattlefieldZone();
+}
+
+void cleanupBattlefieldMember(obj_id objShip)
+{
+	// we take them home
+	// we remove all variables
+	setObjVar(objShip, "locEntryLocation", getLocation(objShip));	
+	location locEntryLocation = getLocationObjVar(objShip, "locEntryLocation");
+	removeObjVar(objShip, "locEntryLocation");
+	setLocation(objShip, locEntryLocation);
+	return;
+
+}
+
+boolean canTransitionToBattlefield(obj_id objShip, obj_id objStation)
+{	
+
+
+
+	if(space_utils.isBasicShip(objShip))
+	{
+		string_id strSpam = new string_id("space/space_interaction", "no_basics");
+		space_utils.sendSystemMessageShip(objShip, strSpam,  true, false, false, false);
+		return false;
+	}
+	
+	float fltDistance = getDistance(objShip, objStation);
+	if(fltDistance>300)
+	{
+		string_id strSpam = new string_id("space/space_interaction", "too_far");
+		space_utils.sendSystemMessageShip(objShip, strSpam,  true, false, false, false);
+		return false;	
+	}
+	if(isCorrectFactionForStation(objShip, objStation))
+	{
+		return true;
+	}
+	else
+	{
+		LOG("testing", "badFaction");
+		resizeable obj_id[] objPlayers = space_transition.getContainedPlayers(objShip, null);		
+		if(objPlayers.length>1)
+		{
+			string_id strSpam = new string_id("space/space_battlefields", "not_correct_faction_group");
+			space_utils.sendSystemMessageShip(objShip, strSpam, true, false, false, false);				
+		}
+		else
+		{
+			string_id strSpam = new string_id("space/space_battlefields", "not_correct_faction_single");
+			space_utils.sendSystemMessageShip(objShip, strSpam, true, false, false, false);			
+		}	
+	}	
+	return false;
+}
+
+
+boolean isCorrectFactionForStation(obj_id objShip, obj_id objStation)
+{
+	return true;
+}
+
+
+int canAffordPrestigePointCost(obj_id objShip, obj_id objStation, string strType) 
+{
+
+	string strName = getStringObjVar(objStation, "strName");
+	dictionary dctStationInfo = dataTableGetRow("datatables/space_content/battlefields/entry_stations.iff", strName);
+	int intPointCost = dctStationInfo.getInt("intPointCost");	
+	
+
+	obj_id objPilot = getPilotId(objShip);
+	int intCurrentXp = getExperiencePoints(objPilot, strType);
+	int intTotalCost = getPrestigeCostForTransition(objShip, objStation, intPointCost);
+	
+	if(intCurrentXp>=Math.abs(intTotalCost))
+	{
+		return  intTotalCost * -1;	
+	}
+	else
+	{
+		return 0;		
+	}	
+}
+
+int canAffordPrestigePointCost(obj_id objShip, obj_id objStation) 
+{
+
+	string strName = getStringObjVar(objStation, "strName");
+	dictionary dctStationInfo = dataTableGetRow("datatables/space_content/battlefields/entry_stations.iff", strName);	
+	string strType = dctStationInfo.getString("strPrestigeType");
+	return canAffordPrestigePointCost(objShip, objStation, strType);
+}
+
+
+int getPrestigeCostForTransition(obj_id objPlayer, obj_id objStation)
+{
+	obj_id objShip = getPilotedShip(objPlayer);
+	string strName = getStringObjVar(objStation, "strName");
+	dictionary dctStationInfo = dataTableGetRow("datatables/space_content/battlefields/entry_stations.iff", strName);
+	int intPointCost = dctStationInfo.getInt("intPointCost");
+	return intPointCost;
+	
+
+}
+int getPrestigeCostForTransition(obj_id objShip, obj_id objStation, int intPointCost)
+{
+	return intPointCost;
+	
+}
+
+boolean isInRebelShip(obj_id objPlayer)
+{
+	
+	obj_id objShip = space_transition.getContainingShip(objPlayer);
+	if(!isIdValid(objShip))
+	{
+		return false;
+	
+	}
+	int intTest = shipGetSpaceFaction(objShip);	
+	
+	if(intTest==##"rebel")
+	{
+		return true;	
+	}
+	return false;
+}
+
+boolean isInNeutralShip(obj_id objPlayer)
+{
+	if(!isInImperialShip(objPlayer)&&(!isInRebelShip(objPlayer)))
+	{		
+		return true;
+	}
+	return false;
+}
+boolean isInImperialShip(obj_id objPlayer)
+{
+	obj_id objShip = space_transition.getContainingShip(objPlayer);
+	if(!isIdValid(objShip))
+	{
+		return false;
+	
+	}
+	int intTest = shipGetSpaceFaction(objShip);		
+	if(intTest==##"imperial")
+	{
+		LOG("testing", intTest +" vs "+ ##"imperial");
+		return true;	
+	}
+	LOG("testing", "Returning ");
+	return false;
+}
+
+obj_id getManagerObject()
+{
+	
+	return getNamedObject("content_manager");
+}
+
+
+
+
+
+
+
+void sendNextPhaseNotification(obj_id self)
+{
+	
+	int intPhase = getIntObjVar(self, "intPhase");
+	int intPhaseStart = getIntObjVar(self, "intPhaseStart");
+	
+	int intDuration = PHASE_DURATIONS[intPhase];
+	LOG("space", "phase is "+intPhase);
+	LOG("space", "start is "+intPhaseStart);
+	if(intPhaseStart==0)
+	{
+		intPhaseStart = getGameTime();
+	}
+	LOG("space", "Duration is "+intDuration);
+	if(intDuration>0)
+	{
+		int intCurrentTime = getGameTime();		
+		int intDifference = intCurrentTime - intPhaseStart;
+		LOG("space", "difference is"+intDifference);
+		if(intDifference>intDuration)
+		{
+			// next phase
+			dictionary dctParams = new dictionary();
+			space_utils.notifyObject(self, "nextPhase", dctParams);
+			LOG("space", "Notifying of nerxtphase");
+			return;
+		}
+		else
+		{
+			dictionary dctParams = new dictionary();
+			LOG("space", "notifying of next phase with delay "+(intDuration - intDifference) );
+			messageTo(self, "nextPhase", dctParams, intDuration - intDifference, false);		
+		}
+	}
+	
+	return;
+}
+
+
+
+void doDestroyerPhase(obj_id objManager)
+{
+	
+	obj_id[] objStations = getAllObjectsWithScript(getLocation(objManager), 320000, "space.battlefields.battlefield_station");
+	if(objStations!=null)
+	{
+			
+		removeObjVar(objStations[0], "intInvincible");// make vulnerable		
+		//int intCount = getIntObjVar(objManager, "intRebelEscortsCompleted");
+		//if(intCount<10)
+		//{
+		//	intCount = 10;
+		//}
+		//setObjVar(objStations[0], "intSpawnsAllowed", intCount*10);	
+		int intCount = 1000;
+		setShipMaximumChassisHitPoints(objStations[0], intCount * 1000);
+		setShipCurrentChassisHitPoints(objStations[0], intCount * 1000);		
+		attachScript(objStations[0], "space.battlefields.battlefield_spawner");
+		attachScript(objStations[0], "space.content_tools.spawner");
+		messageTo(objStations[0], "startSpawning", null, 4, false);
+		
+	}
+	obj_id[] objDestroyerEgg= getAllObjectsWithObjVar(getLocation(objManager), 320000, "strStarDestroyerAttackStation");
+	if(objDestroyerEgg==null)
+	{
+		LOG("space", "NO STAR DESTROYER EGG");
+		return ;
+	
+	}
+	transform trDestroyerLocation = getTransform_o2p(objDestroyerEgg[0]);
+	LOG("space", "Egg is at "+getLocation(objDestroyerEgg[0]));
+	LOG("space", "Creating stardestroyer at "+trDestroyerLocation);
+	//obj_id objStarDestroyer = space_create.createShipHyperspace("star_destroyer", trDestroyerLocation);
+	obj_id objStarDestroyer = space_create.createShip("star_destroyer", trDestroyerLocation);
+	LOG("space", "+objStarDestroyer is at "+getLocation(objStarDestroyer));
+	
+	attachScript(objStarDestroyer, "space.battlefields.battlefield_star_destroyer");				
+	//setObjVar(objStarDestroyer, "objAttackTarget", objStations[0]);	
+	space_combat.setupCapitalShipFromTurretDefinition(objStarDestroyer, "star_destroyer");
+	setObjVar(objStarDestroyer, "intNoCleanup",1);
+	//setObjVar(objStations[0], "objAttackTarget", objStarDestroyer);	
+	//space_utils.notifyObject(objStarDestroyer, "attackStation", null);
+	CustomerServiceLog("battlefield", objStarDestroyer+" :Star Destroyer Spawned!");
+	return;
+	
+
+}
+
+
+
+void resetCounters()
+{
+	obj_id objContentManager = space_battlefield.getManagerObject();
+	removeObjVar(objContentManager, "intImperialEscortsCompleted");
+	removeObjVar(objContentManager, "intRebelEscortsCompleted");
+	removeObjVar(objContentManager, "intImperialShipCount");
+	return;
+
+}

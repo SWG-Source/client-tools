@@ -1,0 +1,444 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        turnstile.scriptlib
+ * Description:  scriptlib for handling turnstiles in player buildings
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+
+/***********************************************************************
+ * TO DO LIST:
+ *
+ *
+ *
+ ***********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+
+include library.player_structure;
+include library.utils;
+include library.xp;
+
+/***** CONSTANTS *******************************************************/
+
+const int TURNSTILE_DEFAULT_FEE                        = 5;
+const int TURNSTILE_DEFAULT_TIME                       = 0;   //seconds
+const int TURNSTILE_DEFAULT_GRACE                      = 30;  //seconds
+
+const int TURNSTILE_CLEANUP_HEARTBEAT                  = 21600; //seconds
+
+const string TURNSTILE_GREETING_SHORT_DEFAULT          = "Pay cover charge for <venue name here>?";
+const string TURNSTILE_GREETING_LONG_DEFAULT           = "Establishment Description Here.";
+
+const string VAR_TURNSTILE_BASE                        = "turnstile";
+
+const string VAR_TURNSTILE_FEE                         = "turnstile.fee";
+const string VAR_TURNSTILE_TIME                        = "turnstile.time";
+
+const string VAR_TURNSTILE_PATRON_BASE                 = "turnstile.patrons";
+const string VAR_TURNSTILE_PATRON_IDS                  = "turnstile.patrons.ids";
+const string VAR_TURNSTILE_PATRON_STAMPS               = "turnstile.patrons.entry_times";
+
+const string VAR_TURNSTILE_GREETING_SHORT              = "turnstile.greeting.short";
+const string VAR_TURNSTILE_GREETING_LONG               = "turnstile.greeting.long";
+
+const string SCRIPT_TURNSTILE_CLEANUP                  = "turnstile.turnstile_cleanup";
+
+const string_id SID_WAIT_TURNSTILE					   = new string_id("player_structure", "turnstile_wait" );
+
+/***** FUNCTIONS *******************************************************/
+
+/***********************************************************************
+ * @brief	sets up turnstile on the building object
+ *
+ * @param	obj_id building
+ *
+ * @return 	boolean; false on error
+ ***********************************************************************/
+boolean addTurnstile(obj_id building, int fee, int time)
+{
+	if ( building == null )
+		return false;
+
+	if ( hasTurnstile(building) )
+		return false;
+
+	setObjVar(building, VAR_TURNSTILE_FEE, fee);
+	setObjVar(building, VAR_TURNSTILE_TIME, time);
+	setObjVar(building, VAR_TURNSTILE_GREETING_SHORT, TURNSTILE_GREETING_SHORT_DEFAULT);
+	setObjVar(building, VAR_TURNSTILE_GREETING_LONG, TURNSTILE_GREETING_LONG_DEFAULT);
+
+	////////////////////////////////////////////////////
+	// Setting zero-length arrays as objvars is bad juju
+	// The Vector wrapper functions in utils will automatically handle cases where these objvars are not initially set
+	//
+	// setObjVar(building, VAR_TURNSTILE_PATRON_IDS, new obj_id[0]);
+	// setObjVar(building, VAR_TURNSTILE_PATRON_STAMPS, new int[0]);
+
+	if ( !hasScript( building, SCRIPT_TURNSTILE_CLEANUP ) )
+		attachScript(building, SCRIPT_TURNSTILE_CLEANUP);
+
+	// Update vendors inside us with useful information for the commodities market.
+	obj_id[] contents = player_structure.getObjectsInBuilding(building);
+	if ( contents != null )
+	{
+		for ( int i=0; i<contents.length; i++ )
+		{
+			if ( hasScript( contents[i], "terminal.vendor" ) )
+				setEntranceCharge( contents[i], fee );
+		}
+	}
+
+	return true;
+}
+
+boolean canAddTurnstile( obj_id player, obj_id building )
+{
+	// Check to see if we can set a turnstile.
+	if ( utils.hasScriptVar( building, "turnstile_delay.time" ) )
+	{
+		// We recently set a turnstile.
+		int removeTime = utils.getIntScriptVar( building, "turnstile_delay.time" );
+		int curTime = getGameTime();
+		if ( curTime - removeTime > 900 )
+		{
+			utils.removeObjVar( building, "turnstile_delay.time" );
+		}
+		else
+		{
+			// Have to wait a bit before we can set a new turnstile.
+			prose_package pp = prose.getPackage( SID_WAIT_TURNSTILE, (int) (((removeTime+900-curTime)/60)+1) );
+			sendSystemMessageProse( player, pp );
+			return false;
+		}
+	}
+
+	return true;
+}
+
+int getFee( obj_id building )
+{
+	if ( building == null )
+		return 0;
+
+	if ( !hasTurnstile( building ) )
+		return 0;
+
+	return getIntObjVar( building, VAR_TURNSTILE_FEE );
+}
+
+int getTime( obj_id building )
+{
+	if ( building == null )
+		return 0;
+
+	if ( !hasTurnstile( building ) )
+		return 0;
+
+	return getIntObjVar( building, VAR_TURNSTILE_TIME );
+}
+
+/***********************************************************************
+ * @brief	determines if a building has turnstile objvars
+ *
+ * @param	obj_id building
+ *
+ * @return 	boolean; false on error
+ ***********************************************************************/
+boolean hasTurnstile(obj_id building)
+{
+	if ( building == null )
+		return false;
+
+	return hasObjVar(building, VAR_TURNSTILE_BASE);
+}
+
+/***********************************************************************
+ * @brief	removes a turnstile from a building
+ *
+ * @param	obj_id building
+ *
+ * @return 	boolean; false on error
+ ***********************************************************************/
+boolean removeTurnstile(obj_id building)
+{
+	if ( building == null )
+		return false;
+
+	if ( !hasTurnstile(building) )
+		return false;
+
+	removeObjVar(building, VAR_TURNSTILE_BASE);
+
+	// Mark when the turnstile was removed.
+	utils.setScriptVar( building, "turnstile_delay.time", getGameTime() );
+
+	// Update vendors inside us with useful information for the commodities market.
+	obj_id[] contents = player_structure.getObjectsInBuilding(building);
+	if ( contents != null )
+	{
+		for ( int i=0; i<contents.length; i++ )
+		{
+			if ( hasScript( contents[i], "terminal.vendor" ) )
+				setEntranceCharge( contents[i], 0 );
+		}
+	}
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	adds a player to patrons list
+ *
+ * @param	obj_id building
+ * @param	obj_id player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean addPatron(obj_id building, obj_id player)
+{
+	if ( ( building == null ) || ( player == null ) )
+		return false;
+
+	if ( !hasTurnstile(building) )
+		return false;
+
+	debugServerConsoleMsg(building, "turnstile.addPatron: getting objvars");
+	resizeable obj_id[] patrons = getResizeableObjIdArrayObjVar(building, VAR_TURNSTILE_PATRON_IDS);
+	resizeable int[] timestamps = getResizeableIntArrayObjVar(building, VAR_TURNSTILE_PATRON_STAMPS);
+
+	if ( (patrons != null) && (timestamps != null) )
+	{
+		debugServerConsoleMsg(building, "turnstile.addPatron: checking player position");
+		if ( utils.getElementPositionInArray(patrons, player) > -1 )
+		{
+			debugServerConsoleMsg(building, "turnstile.addPatron: player is already a patron");
+			return false;
+		}
+	}
+
+	debugServerConsoleMsg(building, "turnstile.addPatron: adding player to new patron list");
+	patrons = utils.addElement(patrons, player);
+
+	debugServerConsoleMsg(building, "turnstile.addPatron: adding timestamp for new patron");
+	int timedelta = TURNSTILE_DEFAULT_GRACE + getIntObjVar(building, VAR_TURNSTILE_TIME);
+	int endTime = getGameTime() + timedelta;
+	debugServerConsoleMsg(building, "turnstile.addPatron: end time = " + endTime);
+	timestamps = utils.addElement(timestamps, endTime);
+
+	// Send a message to the player.
+	dictionary params = new dictionary();
+	params.put( "building", building );
+	messageTo( player, "turnstileExpire", params, timedelta, false );
+
+	debugServerConsoleMsg(building, "turnstile.addPatron: resetting objvars");
+	if(patrons.length > 0 && timestamps.length > 0) {		// Zero length array check
+
+		setObjVar(building, VAR_TURNSTILE_PATRON_IDS, patrons);
+		setObjVar(building, VAR_TURNSTILE_PATRON_STAMPS, timestamps);
+	}
+
+	// Grant the owner some XP.
+	//obj_id owner = player_structure.getStructureOwnerObjId( building );
+	//if ( isIdValid( owner ) )
+	//	xp.grant( owner, "merchant", 50, false );
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	removes a player from patrons list
+ *
+ * @param	obj_id building
+ * @param	obj_id player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean removePatron(obj_id building, obj_id player)
+{
+	if ( ( building == null ) || ( player == null ) )
+		return false;
+
+	if ( !hasTurnstile(building) )
+		return false;
+
+	resizeable obj_id[] patrons = getResizeableObjIdArrayObjVar(building, VAR_TURNSTILE_PATRON_IDS);
+	resizeable int[] timestamps = getResizeableIntArrayObjVar(building, VAR_TURNSTILE_PATRON_STAMPS);
+
+	int arrayPosition = utils.getElementPositionInArray(patrons, player);
+
+	if ( arrayPosition == -1 )
+	{
+		//player is not a patron...
+		return false;
+	}
+
+	patrons = utils.removeElementAt(patrons, arrayPosition);
+	timestamps = utils.removeElementAt(timestamps, arrayPosition);
+
+	if ( patrons == null || patrons.length == 0 )
+		removeObjVar( building, VAR_TURNSTILE_PATRON_IDS );
+	else
+		setObjVar(building, VAR_TURNSTILE_PATRON_IDS, patrons);
+	if ( timestamps == null || timestamps.length == 0 )
+		removeObjVar( building, VAR_TURNSTILE_PATRON_STAMPS );
+	else
+		setObjVar(building, VAR_TURNSTILE_PATRON_STAMPS, timestamps);
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	determines if a player is a current patron to the building
+ *
+ * @param	obj_id building
+ * @param	obj_id player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isPatron( obj_id building, obj_id player )
+{
+	if ( ( building == null ) || ( player == null ) )
+		return false;
+
+	if ( !hasTurnstile(building) )
+		return false;
+
+	obj_id[] patrons = getObjIdArrayObjVar(building, VAR_TURNSTILE_PATRON_IDS);
+
+	int arrayPosition = utils.getElementPositionInArray(patrons, player);
+
+	if ( arrayPosition == -1 )
+		return false;
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	checks to see if a players pass time has expired
+ *
+ * @param	obj_id building
+ * @param	obj_id player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean hasExpired(obj_id building, obj_id player)
+{
+	if ( ( building == null ) || ( player == null ) )
+		return false;
+
+	if ( !hasTurnstile(building) )
+		return false;
+
+	obj_id[] patrons = getObjIdArrayObjVar(building, VAR_TURNSTILE_PATRON_IDS);
+	int[] timestamps = getIntArrayObjVar(building, VAR_TURNSTILE_PATRON_STAMPS);
+
+	int arrayPosition = utils.getElementPositionInArray(patrons, player);
+
+	if ( arrayPosition == -1 )
+	{
+		//player is not a patron...
+		return false;
+	}
+
+	if ( timestamps[arrayPosition] < getGameTime() )
+	{
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
+
+/***********************************************************************
+ * @brief	cleans up expired patrons
+ *
+ * @param	obj_id building
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean cleanupExpiredPatrons(obj_id building)
+{
+	if ( building == null )
+		return false;
+
+	if ( !hasTurnstile(building) )
+		return false;
+
+	obj_id[] patrons = getObjIdArrayObjVar(building, VAR_TURNSTILE_PATRON_IDS);
+	int[] timestamps = getIntArrayObjVar(building, VAR_TURNSTILE_PATRON_STAMPS);
+
+	resizeable obj_id[] expired = new obj_id[0];
+
+	if (timestamps == null || patrons == null)
+		return false;
+
+	int arrayLength = timestamps.length;
+
+	if(arrayLength > patrons.length) {
+
+		arrayLength = patrons.length;
+	}
+
+	for ( int i=0; i < arrayLength; i++ )
+	{
+		if ( timestamps[i] < getGameTime() )
+		{
+			expired = utils.addElement( expired, patrons[i] );
+		}
+	}
+
+	for ( int i = 0; i < expired.length; i++ )
+	{
+		removePatron( building, expired[i] );
+	}
+
+	return true;
+}
+
+
+/***********************************************************************
+ * @brief	intentionally expires a patron (test function)
+ *
+ * @param	obj_id building
+ * @param	obj_id player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean expirePatron(obj_id building, obj_id player)
+{
+	if ( ( building == null ) || ( player == null ) )
+		return false;
+
+	if ( !hasTurnstile(building) )
+		return false;
+
+	if ( isPatron(building, player) )
+	{
+		removePatron(building, player);
+	}
+	else
+	{
+		return false; // not a patron
+	}
+
+	resizeable obj_id[] patrons = getResizeableObjIdArrayObjVar(building, VAR_TURNSTILE_PATRON_IDS);
+	resizeable int[] timestamps = getResizeableIntArrayObjVar(building, VAR_TURNSTILE_PATRON_STAMPS);
+
+	patrons = utils.addElement(patrons, player);
+	timestamps = utils.addElement(timestamps, getGameTime() - 60);
+
+	if(patrons.length > 0 && timestamps.length > 0) {
+
+		setObjVar(building, VAR_TURNSTILE_PATRON_IDS, patrons);
+		setObjVar(building, VAR_TURNSTILE_PATRON_STAMPS, timestamps);
+	}
+
+	return true;
+}
+

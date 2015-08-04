@@ -1,0 +1,215 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.hq;
+include library.xp;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.ai_lib;
+include library.slicing;
+
+inherits faction_perk.hq.objective_object;
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_SLICE					= new string_id("slicing/slicing", "slice");
+const string_id SID_FAIL_SLICE				= new string_id("slicing/slicing", "hq_security_fail");
+const string_id SID_SUCCESS_SLICE			= new string_id("slicing/slicing", "hq_security_success");
+const string_id SID_NOT_AGAIN				= new string_id("slicing/slicing", "not_again");
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int mnu = mi.addRootMenu(menu_info_types.SERVER_MENU1, SID_SLICE);
+	return SCRIPT_CONTINUE;
+}
+trigger OnInitialize()
+{
+	removeObjVar( self, "slice_start" );
+	removeObjVar( self, "sliced_by" );
+	setObjVar(self, "type", "terminal");
+	setObjVar(self, "intTerminal", 1);
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( pvpGetType(player) != PVPTYPE_DECLARED )
+	{
+		sendSystemMessageTestingOnly(player, "Only declared factional personnel may access this terminal!");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id structure = getObjIdObjVar(self, "objParent");
+	if ( !isIdValid(structure) )
+		return SCRIPT_CONTINUE;
+
+	int sFac = pvpGetAlignedFaction(structure);
+	int pFac = pvpGetAlignedFaction(player);
+	if ( !pvpAreFactionsOpposed(sFac, pFac) )
+	{
+		sendSystemMessageTestingOnly(player, "You are not an enemy of this structure. Why would you want to tamper?");
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar(self, hq.VAR_IS_DISABLED) )
+	{
+		sendSystemMessageTestingOnly(player, "The security terminal has already been sliced!");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id nextObjective = hq.getNextObjective(structure);
+	if ( nextObjective != self )
+	{
+		obj_id priorObjective = hq.getPriorObjective(structure, self);
+		if ( isIdValid(priorObjective) )
+		{
+			prose_package ppDisableOther = prose.getPackage(hq.PROSE_DISABLE_OTHER, priorObjective, self);
+			sendSystemMessageProse(player, ppDisableOther);
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(player, "Other objectives must be disabled prior to gaining access to this one.");
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( item == menu_info_types.SERVER_MENU1 )
+	{
+/*   		if ( !hasSkill(player, "class_smuggler_phase1_novice") )
+   		{
+   			sendSystemMessageTestingOnly(player, "Only an experienced smuggler could expect to slice this security terminal!");
+   			return SCRIPT_CONTINUE;
+   		}
+*/
+   		if ( hasObjVar(self, "slicing.failed") )
+   		{
+ 			if ( utils.hasScriptVar(self, "repairing") )
+ 			{
+ 				obj_id repairer = utils.getObjIdScriptVar(self, "repairing");
+ 				if ( isIdValid(repairer) )
+ 				{
+ 					if ( player == repairer )
+ 					{
+ 						sendSystemMessageTestingOnly(player, "You are already repairing a prior slice attempt's damage...");
+ 						return SCRIPT_CONTINUE;
+ 					}
+ 					else
+ 					{
+ 						if ( repairer.isLoaded() )
+ 						{
+ 							sendSystemMessageTestingOnly(player, getName(repairer) + " is already repairing a prior slice attempt's damage...");
+ 							return SCRIPT_CONTINUE;
+ 						}
+ 					}
+ 				}
+ 			}
+
+   			sendSystemMessageTestingOnly(player, "You begin repairing the damage done by a prior slicing attempt...");
+   			dictionary d = new dictionary();
+   			d.put("player", player);
+   			d.put("cnt", 10);
+
+ 			messageTo(self, "handleSlicingRepair", d, 5f, false);
+ 			utils.setScriptVar(self, "repairing", player);
+
+   			return SCRIPT_CONTINUE;
+   		}
+
+   		// Begin the slicing game.
+   		slicing.startSlicing( player, self, "finishSlicing", "hq_security" );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+messageHandler handleObjectiveDisabled()
+{
+	//play effects here
+
+	//spawn commanding officer & entourage
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler finishSlicing()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	int success = params.getInt( "success" );
+	obj_id player = params.getObjId( "player" );
+	if ( success == 1 )
+	{
+		// Successful terminal hack.
+		sendSystemMessage( player, SID_SUCCESS_SLICE );
+
+		obj_id structure = getObjIdObjVar(self, "objParent");
+		if ( isIdValid(structure) )
+			hq.disableObjective(structure, self);
+
+		// Grant xp.
+//		xp.grant( player, xp.SLICING, 1000 );
+	}
+	else
+	{
+		// Failed terminal hack.
+		sendSystemMessage( player, SID_FAIL_SLICE );
+
+		// Mark us as having failed at this terminal.
+		setObjVar( self, "slicing.failed", player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSlicingRepair()
+{
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	if ( !hasObjVar(self, "slicing.failed") )
+	{
+		sendSystemMessageTestingOnly(player, "It appears that the terminal has been repaired. You may begin slicing again.");
+		return SCRIPT_CONTINUE;
+	}
+
+	int cnt = params.getInt("cnt");
+
+	int max = 1;
+/*	if ( hasSkill(player, "class_smuggler_phase1_novice") )
+	{
+		max = 4;
+	}
+	if ( hasSkill(player, "class_smuggler_phase1_03") )
+	{
+		max = 3;
+	}
+	if ( hasSkill(player, "class_smuggler_phase1_02") )
+	{
+		max = 2;
+	}
+*/
+	cnt -= rand(1, max);
+
+	if ( cnt < 0 )
+	{
+		sendSystemMessageTestingOnly(player, "It appears that the terminal has been repaired. You may begin slicing again.");
+		removeObjVar(self, "slicing.failed");
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "Security terminal repairs continue...");
+
+		params.put("cnt", cnt);
+		messageTo(self, "handleSlicingRepair", params, 5f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}

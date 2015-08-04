@@ -1,0 +1,431 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.hq;
+include library.xp;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.ai_lib;
+
+inherits faction_perk.hq.objective_object;
+
+/***** CONSTANTS *******************************************************/
+
+const string_id MNU_JAM					= new string_id("hq", "mnu_jam");
+
+const string VAR_FREQ					= "hq.objective.freq";
+
+const int STAGE_NONE					= 0;
+const int STAGE_BAND					= 1;
+const int STAGE_FREQ					= 2;
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int mnu = mi.addRootMenu(menu_info_types.SERVER_MENU1, MNU_JAM);
+	return SCRIPT_CONTINUE;
+}
+trigger OnInitialize()
+{
+	setObjVar(self, "type", "terminal");
+	setObjVar(self, "intTerminal", 1);
+	setObjVar(self, VAR_FREQ, rand(1,99));
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( pvpGetType(player) != PVPTYPE_DECLARED )
+	{
+		sendSystemMessageTestingOnly(player, "Only declared factional personnel may access this terminal!");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id structure = getObjIdObjVar(self, "objParent");
+
+
+	if ( !isIdValid(structure) )
+		return SCRIPT_CONTINUE;
+
+	int sFac = pvpGetAlignedFaction(structure);
+	int pFac = pvpGetAlignedFaction(player);
+	//LOG("gcw", "Sfac is "+sFac+" and pFac is "+pFac);
+
+	if ( !pvpAreFactionsOpposed(sFac, pFac) )
+	{
+		sendSystemMessageTestingOnly(player, "You are not an enemy of this structure. Why would you want to tamper?");
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar(self, hq.VAR_IS_DISABLED) )
+	{
+		sendSystemMessageTestingOnly(player, "It's no use! The uplink has been jammed.");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id nextObjective = hq.getNextObjective(structure);
+	if ( nextObjective != self )
+	{
+		obj_id priorObjective = hq.getPriorObjective(structure, self);
+		if ( isIdValid(priorObjective) )
+		{
+			prose_package ppDisableOther = prose.getPackage(hq.PROSE_DISABLE_OTHER, priorObjective, self);
+			sendSystemMessageProse(player, ppDisableOther);
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(player, "Other objectives must be disabled prior to gaining access to this one.");
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( item == menu_info_types.SERVER_MENU1 )
+	{
+		/*//LOG("gcw", "Correct thing");
+		hq.disableObjective(self);
+		string strText = "Uplink Terminal has been jammed";
+		sendSystemMessageTestingOnly(player, strText);
+		*/
+
+/*		if ( !hasSkill(player, "class_bountyhunter_phase2_novice") )
+		{
+			sendSystemMessageTestingOnly(player, "Only an experienced bounty hunter could expect to jam this uplink!");
+			return SCRIPT_CONTINUE;
+		}
+*/
+		string scriptvar_stage = "jamming." + player + ".stage";
+		if ( utils.hasScriptVar(self, scriptvar_stage) )
+		{
+			sendSystemMessageTestingOnly(player, "You resume scanning for baseline carrier signals...");
+			playJammingGame(self, player);
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(player, "You begin scanning for baseline carrier signals...");
+
+			dictionary d = new dictionary();
+			d.put("player", player);
+			messageTo(self, "handleStartDelay", d, 3f, false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+void playJammingGame(obj_id self, obj_id player)
+{
+	//LOG("gcw", "game starting");
+	obj_id objParent = getObjIdObjVar(self, "objParent");
+	//hq.disableObjective(objParent, self); // HACK
+
+
+	if ( ai_lib.isInCombat(player) )
+	{
+		sendSystemMessageTestingOnly(player, "You cannot jam this uplink while you are in combat!");
+		return;
+	}
+
+	location here = getLocation(self);
+	location there = getLocation(player);
+
+	if ( here.cell != there.cell )
+	{
+		sendSystemMessageTestingOnly(player, "You cannot jam the uplink if you are not even in the same room!");
+		return;
+	}
+
+	if ( getDistance(here, there) > 15f )
+	{
+		sendSystemMessageTestingOnly(player, "You are too far away from the uplink to continue jamming!");
+		return;
+	}
+
+	string scriptvar = "jamming." + player;
+	string scriptvar_pid = scriptvar + ".pid";
+	string scriptvar_opt = scriptvar + ".opt";
+	string scriptvar_stage = scriptvar + ".stage";
+
+	if ( utils.hasScriptVar(self, scriptvar_pid) )
+	{
+		int oldpid = utils.getIntScriptVar(self, scriptvar_pid);
+		if ( oldpid > -1 )
+			sui.closeSUI(player, oldpid);
+
+		utils.removeScriptVar(self, scriptvar_pid);
+	}
+
+	int stage = utils.getIntScriptVar(self, scriptvar_stage);
+
+	resizeable int[] opt = utils.getResizeableIntArrayScriptVar(self, scriptvar_opt);
+	if ( stage == STAGE_NONE || opt == null || opt.length == 0 )
+	{
+		stage = STAGE_BAND;
+		opt = opt = utils.concatArrays(null, getFreshArray());
+
+		//sendSystemMessageTestingOnly(player, "You begin scanning for signals...");
+	}
+	else
+	{
+		//sendSystemMessageTestingOnly(player, "You resume scanning for signals...");
+	}
+
+	string title = "JAMMING...";
+	string prompt = "Select the ";
+	switch ( stage )
+	{
+		case STAGE_FREQ:
+			prompt += "channel ";
+			break;
+
+		case STAGE_BAND:
+		default:
+			prompt += "band ";
+			break;
+	}
+	prompt += " that you wish to search.";
+
+	resizeable string[] entries = new string[0];
+	for ( int i = 0; i < opt.length; i++ )
+	{
+		string entry = "";
+		switch ( stage )
+		{
+			case STAGE_FREQ:
+				entry = "Channel #";
+				break;
+
+			case STAGE_BAND:
+			default:
+				entry = "Band #";
+				break;
+		}
+
+		entry += Integer.toString(opt[i] + 1);
+
+		entries = utils.addElement(entries, entry);
+	}
+	//LOG("gcw", "Making sui listbox");
+	int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, entries, "handleJammingGame");
+	//LOG("gcw", "pid is "+pid);
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(self, scriptvar_pid, pid);
+		utils.setScriptVar(self, scriptvar_opt, opt);
+		utils.setScriptVar(self, scriptvar_stage, stage);
+	}
+}
+
+int[] getFreshArray()
+{
+ 	//LOG("hqObjective", "retrieving new opt array...");
+
+ 	int[] ret = new int[10];
+   	for ( int i = 0; i < ret.length; i++ )
+ 		ret[i] = i;
+
+   	return ret;
+}
+
+messageHandler handleJammingGame()
+{
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx < 0 )
+		return SCRIPT_CONTINUE;
+
+	string scriptvar = "jamming." + player;
+	string scriptvar_pid = scriptvar + ".pid";
+	string scriptvar_opt = scriptvar + ".opt";
+	string scriptvar_stage = scriptvar + ".stage";
+
+	utils.removeScriptVar(self, scriptvar_pid);
+
+	int stage = utils.getIntScriptVar(self, scriptvar_stage);
+	resizeable int[] opt = utils.getResizeableIntArrayScriptVar(self, scriptvar_opt);
+	if ( stage == STAGE_NONE || opt == null || opt.length == 0 )
+		return SCRIPT_CONTINUE;
+
+	int freq = getIntObjVar(self, VAR_FREQ);
+	int correct = -1;
+	switch ( stage )
+	{
+		case STAGE_FREQ:
+			correct = freq % 10;
+			break;
+
+		case STAGE_BAND:
+		default:
+			correct = freq / 10;
+			break;
+	}
+
+	float delay = 5f;
+	string text = null;
+	if ( correct == opt[idx] )
+	{
+		delay = 1f;
+
+		switch ( stage )
+		{
+			case STAGE_FREQ:
+				sendSystemMessageTestingOnly(player, "You isolate the carrier signal to Channel #" + Integer.toString(correct+1));
+				sendSystemMessageTestingOnly(player, "Initializing jamming sequence...");
+
+				dictionary d = new dictionary();
+				d.put("player", player);
+
+				int cyclemod = getSkillStatMod(player, "droid_find_chance");
+				cyclemod *= rand(0.67f, 1.33f);
+				float cyclemultiplier = (100f - cyclemod)/100f;
+				int cycleCount = Math.round(10f * cyclemultiplier);
+				if ( cycleCount < 0 )
+					cycleCount = 0;
+
+				d.put("cnt", cycleCount);
+
+				messageTo(self, "handleJammingInProgress", d, 3f, false);
+				return SCRIPT_CONTINUE;
+
+			case STAGE_BAND:
+			default:
+				opt = utils.concatArrays(null, getFreshArray());
+				stage = STAGE_FREQ;
+
+				sendSystemMessageTestingOnly(player, "You narrow the carrier signal down to Band #" + Integer.toString(correct+1));
+				break;
+		}
+	}
+	else
+	{
+		int findmod = getSkillStatMod(player, "droid_find_chance");
+		int roll = rand(1,150);
+		if ( roll > 145 )
+		{
+			text = "You lose concentration and become lost in a sea of white noise...";
+		}
+		else
+		{
+			if ( findmod > roll )	//accurate...
+			{
+				if ( correct > opt[idx] )
+				{
+					text = "You feel like you need to search higher...";
+				}
+				else
+				{
+					text = "You feel like you need to search lower...";
+				}
+			}
+			else
+			{
+				if ( correct > opt[idx] )
+				{
+					text = "You feel like you need to search lower...";
+				}
+				else
+				{
+					text = "You feel like you need to search higher...";
+				}
+			}
+
+			int speedmod = getSkillStatMod(player, "droid_find_speed");
+			float multiplier = (100 - speedmod)/100f;
+			delay *= multiplier;
+		}
+
+		utils.removeElementAt(opt, idx);
+	}
+
+	utils.setScriptVar(self, scriptvar_opt, opt);
+	utils.setScriptVar(self, scriptvar_stage, stage);
+
+	if ( delay < 1f )
+		delay = 1f;
+
+	dictionary d = new dictionary();
+	d.put("player", player);
+
+ 	if ( text != null && !text.equals("") )
+ 		d.put("text", text);
+
+	messageTo(self, "handleJammingGameDelay", d, delay, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleJammingGameDelay()
+{
+	obj_id player = params.getObjId("player");
+	if ( isIdValid(player) )
+	{
+		string text = params.getString("text");
+ 		if ( text != null && !text.equals("") )
+ 			sendSystemMessageTestingOnly(player, text);
+
+		playJammingGame(self, player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleObjectiveDisabled()
+{
+
+	//play effects here
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleStartDelay()
+{
+	//LOG("gcw", "got message");
+	obj_id player = params.getObjId("player");
+	//LOG("gcw", "player is "+player);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	playJammingGame(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleJammingInProgress()
+{
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	if ( hasObjVar(self, hq.VAR_IS_DISABLED) )
+	{
+		sendSystemMessageTestingOnly(player, "Jamming complete! Someone else has disable the uplink...");
+		return SCRIPT_CONTINUE;
+	}
+
+	int cnt = params.getInt("cnt");
+	cnt--;
+
+	if ( cnt < 0 )
+	{
+		sendSystemMessageTestingOnly(player, "Jamming complete! You disable the uplink...");
+		hq.disableObjective(self);
+
+		xp.grant( player, xp.BOUNTYHUNTER, 1000 );
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "Jamming in progress...");
+
+		params.put("cnt", cnt);
+
+		float delay = 3f * rand(-2f, 2f);
+
+		messageTo(self, "handleJammingInProgress", params, delay, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}

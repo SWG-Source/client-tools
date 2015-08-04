@@ -1,0 +1,254 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        missions.scriptlib
+ * Description:  missions script library
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+
+const int STATE_DYNAMIC_PICKUP   	= 1;
+const int STATE_DYNAMIC_DROPOFF  	= 2; // these are used to parse our mission state.
+const int STATE_DYNAMIC_START    	= 3;
+const int STATE_DELIVER_PICKUP   	= 4; // delivery mission states
+const int STATE_DELIVER_DROPOFF  	= 5;
+const int STATE_DEAD             	= 6; // for tracking NPC status
+const int STATE_MISSION_COMPLETE 	= 7; // completion state to disable respawn stuff
+
+
+const int BH_STAT_MIN 			= -1;
+const int WINS 				= 0;
+const int LOSSES 			= 1;
+const int ABORTS 			= 2;
+const int TIMEOUTS 			= 3;
+const int BH_STAT_MAX 			= 4;
+
+
+const int BOUNTY_FLAG_NONE 		= 0;
+const int BOUNTY_FLAG_SMUGGLER		= 1;
+
+const int DAILY_MISSION_XP_REWARD	= 10;
+const int DAILY_MISSION_CASH_REWARD	= 15;
+const int DAILY_MISSION_XP_SANITY	= 5;
+const int DAILY_MISSION_XP_LOW		= 9;
+const int DAILY_MISSION_XP_MEDIUM	= 14;
+const int DAILY_MISSION_XP_HIGH		= 19;
+const string DAILY_MISSION_OBJVAR	="missions.daily";
+const string DAILY_MISSION_CLOCK_OBJVAR	="missions.dailyClock";
+
+const string_id DAILY_REWARD_XP		= new string_id("base_player","prose_mission_xp_amount");
+
+
+/***** FUNCTIONS *******************************************************/
+
+void sendBountyFail(obj_id hunter, obj_id target)
+{
+	dictionary params = new dictionary();
+	params.put("target", target);
+
+	setObjVar(hunter, "intState", STATE_MISSION_COMPLETE);
+	messageTo(hunter, "bountyFailure", params, 0, true);  // spawner timer has started
+}
+
+// success wrapper function
+void sendBountySuccess(obj_id hunter, obj_id target)
+{
+	dictionary params = new dictionary();
+	params.put("target", target);
+
+	setObjVar(hunter, "intState", STATE_MISSION_COMPLETE);
+	messageTo(hunter, "bountySuccess", params, 0, true);  // spawner timer has started
+}
+
+// incomplete wrapper function
+void sendBountyIncomplete(obj_id hunter, obj_id target)
+{
+	dictionary params = new dictionary();
+	params.put("target", target);
+
+	setObjVar(hunter, "intState", STATE_MISSION_COMPLETE);
+	messageTo(hunter, "bountyIncomplete", params, 0, true);  // spawner timer has started
+}
+
+
+void increaseBountyJediKillTracking(obj_id objPlayer, int stat)
+{
+	// validate stat is a valid index
+	if(stat <= missions.BH_STAT_MIN || stat >= missions.BH_STAT_MAX)
+	{
+		return;
+	}
+		//killdata[0] = wins
+		//killdata[1] = losses
+		//killdata[2] = aborts
+		//killdata[3] = timeouts
+		int [] killData = new int[missions.BH_STAT_MAX];
+		//if we have never done a bounty before
+		if (!hasObjVar(objPlayer, "bounty_hunter.jedi_kill_tracker"))
+			setObjVar(objPlayer, "bounty_hunter.jedi_kill_tracker", killData);
+
+
+		killData = getIntArrayObjVar(objPlayer, "bounty_hunter.jedi_kill_tracker");
+		//validate
+		if (killData.length != missions.BH_STAT_MAX)
+			return;
+		//increase counter by 1
+		killData[stat]++;
+		setObjVar(objPlayer, "bounty_hunter.jedi_kill_tracker", killData);
+}
+
+int getPlayerDailyCount(obj_id player)
+{
+	if(!isIdValid(player))
+		return 0;
+
+	if(!hasObjVar(player, DAILY_MISSION_OBJVAR))
+		return 0;
+
+	return getIntObjVar(player, DAILY_MISSION_OBJVAR);
+}
+
+void incrementDaily(obj_id player)
+{
+	int missionData = getPlayerDailyCount(player);
+
+	if (!hasObjVar(player, DAILY_MISSION_CLOCK_OBJVAR))
+	{
+		//use 8 as the hour paramater as this is 7pm GMT or 12 noon PDT
+		int currentTime = getCalendarTime();
+		int alarmTime = createDailyAlarmClock(player, "handleDailyMissionReset", null, 19, 0, 0);
+
+		int alarmTimeObjVar = currentTime + alarmTime;
+
+		setObjVar(player, DAILY_MISSION_CLOCK_OBJVAR, alarmTimeObjVar);
+	}
+
+	missionData ++;
+
+	setObjVar(player, DAILY_MISSION_OBJVAR, missionData);
+}
+
+boolean canEarnDailyMissionXp(obj_id player)
+{
+	if(!isIdValid(player))
+		return false;
+
+	int dailyData = getPlayerDailyCount(player);
+
+	//garbage number, you Fail
+	if(dailyData < 0)
+		return false;
+
+	//no xp for ents or traders from missions
+	if(utils.isProfession(player, utils.TRADER) || utils.isProfession(player, utils.ENTERTAINER))
+		return false;
+
+	//less than constant, can earn xp
+	if(dailyData < DAILY_MISSION_XP_REWARD)
+		return true;
+
+	return false;
+}
+
+//higher the divisor the less the mission pays
+float alterMissionPayoutDivisor(obj_id player, float divisor, int missionLevel)
+{
+	int playerLevel = getLevel(player);
+	//deltas should be positive
+	int levelDelta = Math.abs(missionLevel - playerLevel);
+
+	divisor = alterMissionPayoutDivisorDaily(player, divisor);
+
+	if(utils.isProfession(player, utils.ENTERTAINER))
+		divisor += 10.0f;
+
+	if(utils.isProfession(player, utils.TRADER))
+		divisor += 20.0f;
+
+	if(levelDelta >= 10)
+		divisor += (float)levelDelta / 2;
+
+	//LOG("NewMission", "alterMissionPayoutDivisor: " + divisor );
+	return divisor;
+}
+
+//increases payout divisor based on completion of a certian number of daily missions
+float alterMissionPayoutDivisorDaily(obj_id player, float divisor)
+{
+	int missionsCompleted = getPlayerDailyCount(player);
+
+	if(missionsCompleted > DAILY_MISSION_CASH_REWARD)
+		divisor += (float)missionsCompleted;
+
+	return divisor;
+}
+
+float alterMissionPayoutDivisorDaily(obj_id player)
+{
+	return alterMissionPayoutDivisorDaily(player, 1.0f);
+}
+
+
+void initializeDailyOnLogin(obj_id player)
+{
+	if (hasObjVar(player, DAILY_MISSION_CLOCK_OBJVAR))
+	{
+		//use 8 as the hour paramater as this is 8pm GMT or 12 noon CST
+		int currentTime = getCalendarTime();
+		int alarmTimeObjVar = getIntObjVar(player, missions.DAILY_MISSION_CLOCK_OBJVAR);
+
+		if(currentTime >= alarmTimeObjVar)
+		{
+			clearDailyObjVars(player);
+		}
+		else
+		{
+			int secondsUntil = alarmTimeObjVar - currentTime;
+			messageTo(player, "handleDailyMissionReset",null, secondsUntil , false);
+		}
+	}
+	else if(hasObjVar(player, DAILY_MISSION_OBJVAR))
+	{
+		//this is for messed up characters who somehow didn't have a clock objvar
+		int countObjVar = getIntObjVar(player, missions.DAILY_MISSION_OBJVAR);
+
+		if(countObjVar >0)
+		{
+			//use 8 as the hour paramater as this is 7pm GMT or 12 noon PDT
+			int currentTime = getCalendarTime();
+			int alarmTime = createDailyAlarmClock(player, "handleDailyMissionReset", null, 19, 0, 0);
+
+			int alarmTimeObjVar = currentTime + alarmTime;
+
+			setObjVar(player, DAILY_MISSION_CLOCK_OBJVAR, alarmTimeObjVar);
+		}
+	}
+}
+
+
+void clearDailyObjVars(obj_id player)
+{
+	setObjVar(player, DAILY_MISSION_OBJVAR, 0);
+	removeObjVar(player, DAILY_MISSION_CLOCK_OBJVAR);
+}
+
+
+boolean isDestroyMission(obj_id objMissionData)
+{
+	if(!isIdValid(objMissionData))
+		return false;
+
+	string strTest = getMissionType(objMissionData);
+
+	if(strTest == "destroy")
+		return true;
+
+	return false;
+}

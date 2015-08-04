@@ -1,0 +1,219 @@
+//----------------------------------------------------------
+//libraries
+include library.collection;
+include library.groundquests;
+include library.pgc_quests;
+include library.static_item;
+include library.storyteller;
+include library.sui;
+include library.utils;
+
+//----------------------------------------------------------
+//constants
+
+const string PID_NAME			= "chronicleBoosterPack";
+
+//----------------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//can only consume if you have it picked up
+	string_id openMenu = new string_id("saga_system", "booster_pack_open");
+	if ( hasObjVar(self, "chronicles.isStarterPack") )
+	{
+		openMenu = new string_id("saga_system", "booster_pack_starter_kit_menu");
+	}
+	
+	if( utils.isNestedWithinAPlayer(self) )
+	{
+		mi.addRootMenu (menu_info_types.SERVER_MENU11, openMenu);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+	if (  utils.isNestedWithinAPlayer(self) )
+	{
+		if ( item == menu_info_types.SERVER_MENU11 )
+		{
+			string openBoosterConfirm_prompt = "booster_pack_open_prompt";
+			string openBoosterConfirm_title = "booster_pack_open_title";
+			if ( hasObjVar(self, "chronicles.isStarterPack") )
+			{
+				openBoosterConfirm_prompt = "booster_pack_starter_kit_use_prompt";
+				openBoosterConfirm_title = "booster_pack_starter_kit_use_title";
+			}
+			getUiConsumeMessageBox(self, player, openBoosterConfirm_prompt, openBoosterConfirm_title, "handlerSuiBoosterPackOpen");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+	
+	if( exists(self) )
+	{
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean getUiConsumeMessageBox(obj_id self, obj_id player, string prompt, string title, string handler)
+{
+	if( !isValidId(self) || !isValidId(player) )
+	{
+		return false;
+	}
+	
+	string_id prompt_sid = new string_id("saga_system", prompt);
+	string_id title_sid = new string_id("saga_system", title);
+	int pid = sui.msgbox(self, player, "@" + prompt_sid, sui.YES_NO, "@" + title_sid, handler);
+	sui.setPid(player, pid, PID_NAME);
+
+	return true;
+}
+
+messageHandler handlerSuiBoosterPackOpen()
+{
+	//check params
+	if( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	
+	if( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	if( !sui.hasPid(player, PID_NAME) )
+		return SCRIPT_CONTINUE;
+
+	if( !utils.isNestedWithin(self, player) )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+	
+	boolean isStarterKit = false;
+	if ( hasObjVar(self, "chronicles.isStarterPack") )
+	{
+		isStarterKit = true;
+	}
+	
+	string professionTemplate = getSkillTemplate(player);
+	obj_id playerInventory = utils.getInventoryContainer(player);
+	int relicQualitySkillmod = getEnhancedSkillStatisticModifierUncapped(player, pgc_quests.PGC_SKILLMOD_RELIC_QUALITY);
+	
+	resizeable string[] relicReferences = new string[0];
+	resizeable string[] filteredRelicReferences = new string[0];
+	
+	string relicFilter = "";
+	int filterChance = 49;
+	if ( hasObjVar(self, "chronicles.boosterPackCategory") )
+	{
+		relicFilter = getStringObjVar(self, "chronicles.boosterPackCategory");
+		filterChance = 99;
+	}
+	else if( professionTemplate.startsWith("trader") )
+	{
+		relicFilter = "crafting";
+	}
+	else if( professionTemplate.startsWith("entertainer") )
+	{
+		//relicFilter = "perform";
+	}
+		
+	int num_items = dataTableGetNumRows(storyteller.STORYTELLER_DATATABLE);
+	for (int i = 0; i < num_items; i++)
+	{
+		dictionary row = dataTableGetRow(storyteller.STORYTELLER_DATATABLE, i);
+		if ( row != null && !row.isEmpty() )
+		{
+			int relic_tier = row.getInt("relic_tier");
+			if ( relic_tier > 0 && relicQualitySkillmod >= relic_tier )
+			{
+				string row_lootCategory = row.getString("relicLootCatergory");
+				if ( row_lootCategory.indexOf("no_loot") < 0 )
+				{		
+					string token_reference = row.getString("name");
+					relicReferences = utils.addElement(relicReferences, token_reference);
+
+					if ( relicFilter.length() > 0 )
+					{
+						string[] relicLootCategories = split(row_lootCategory, ',');
+						boolean no_loot = false;
+						for ( int k = 0; k < relicLootCategories.length; k++ )
+						{
+							string relicCategory = relicLootCategories[k];
+							if ( relicCategory.equals(relicFilter) )
+							{				
+								filteredRelicReferences = utils.addElement(filteredRelicReferences, token_reference);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	int numRelics = pgc_quests.BOOSTER_PACK_SIZE;
+	if ( isStarterKit )
+	{
+		numRelics = pgc_quests.STARTER_PACK_SIZE;
+	}
+	
+	for ( int j = 0; j < numRelics; j++ )
+	{
+		string relicName = "";
+		int choice = rand(0,99);
+		if ( choice <= filterChance && filteredRelicReferences.length > 0 )
+		{
+			relicName = filteredRelicReferences[rand(0, filteredRelicReferences.length-1)];
+		}
+		else
+		{
+			relicName = relicReferences[rand(0, relicReferences.length-1)];
+		}
+		
+		int relicCount = rand(3,6);
+		if ( relicName.startsWith("saga_relic_comm") || relicName.startsWith("saga_relic_goto") )
+		{
+			relicCount = rand(5,10);
+		}
+		obj_id relic = static_item.createNewItemFunction(relicName, playerInventory, relicCount);
+		if ( isStarterKit )
+		{
+			pgc_quests.addRelicToQuestBuilder(player, relic, true);
+		}
+		else
+		{
+			pgc_quests.sendPlacedInInventorySystemMessage(player, relic);
+		}
+		
+		// CS Log
+		pgc_quests.logRelic(player, obj_id.NULL_ID, "Player opened a chronicles booster pack and received "+relicCount+" x "+relicName+"("+relic+")");
+	}
+	
+	decrementCount(self);
+	
+	sui.removePid(player, PID_NAME);
+	return SCRIPT_CONTINUE;
+}
+

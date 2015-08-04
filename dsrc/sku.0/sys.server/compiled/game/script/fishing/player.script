@@ -1,0 +1,604 @@
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+include library.sui;
+include library.utils;
+include library.prose;
+include library.minigame;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string  STF_FISH						= "fishing";
+
+//------------------------------------------------
+// Triggers
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	minigame.stopFishing(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	minigame.cleanupFishing(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	minigame.stopFishing(self, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnterSwimming()
+{
+	minigame.stopFishing(self, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnChangedPosture(int before, int after)
+{
+	switch ( after )
+	{
+		case POSTURE_UPRIGHT:
+			break;
+		
+		default:
+			minigame.stopFishing(self, false);
+			return SCRIPT_CONTINUE;
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if ( minigame.isFishing(self) )
+	{
+		obj_id pole = getObjectInSlot(self, "hold_r");
+		if ( !isIdValid(pole) || !minigame.isFishingPole(pole) || (item == pole) )
+		{
+			minigame.stopFishing(self, false);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+ 	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// Handlers
+//------------------------------------------------
+
+messageHandler handleFishingSui()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	if ( !minigame.isFishing(self) )
+		return SCRIPT_CONTINUE;
+	
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx < 0 )
+	{
+		minigame.showFishingSui(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int action = idx + 1;
+	if ( action == minigame.FA_STOP_FISHING )
+	{
+		minigame.stopFishing(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( !utils.hasScriptVar(self, minigame.SCRIPTVAR_CAUGHT) )
+	{
+		utils.setScriptVar(self, minigame.SCRIPTVAR_ACTION, action);
+		minigame.showFishingSui(self);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleFishingTick()
+{
+	LOG("fishing","** handleFishingTick: entered @ " + getGameTime() + " **");
+
+	int action = utils.getIntScriptVar(self, minigame.SCRIPTVAR_ACTION);
+	utils.removeScriptVar(self, minigame.SCRIPTVAR_ACTION);
+
+	LOG("fishing","handleFishingTick: action = " + action);
+	if ( action == minigame.FA_STOP_FISHING )
+	{
+		minigame.stopFishing(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	boolean hasBait = true;
+	int baitStatus = minigame.getBaitStatus(self);
+	if ( baitStatus == minigame.BS_NONE )
+	{
+		hasBait = false;
+	}
+
+	LOG("fishing","handleFishingTick: hasBait = " + hasBait);
+	
+	location here = getLocation(self);
+	obj_id marker = utils.getObjIdScriptVar(self, minigame.SCRIPTVAR_MARKER);
+	if ( !isIdValid(marker) )
+	{
+		minigame.stopFishing(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	location there = getLocation(marker);
+	
+	float dist = getDistance(here, there);
+	if ( dist < 2f )
+	{
+		sendSystemMessage(self, new string_id(STF_FISH, "close_reel_in")); // Since your line is so close, you reel it in...
+		minigame.stopFishing(self);
+		return SCRIPT_CONTINUE;
+	}
+	else if(dist > 45)
+	{
+		sendSystemMessage(self, new string_id(STF_FISH, "far_reel_in")); // Since your line is so close, you reel it in...
+		minigame.stopFishing(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int status = utils.getIntScriptVar(self, minigame.SCRIPTVAR_STATUS);
+	LOG("fishing","handleFishingTick: status = " + status);
+	switch ( status )
+	{
+		case minigame.FS_CAST:
+			minigame.setFishingState(self, minigame.FS_WAIT);
+			break;
+
+		case minigame.FS_WAIT:
+			minigame.defaultFishingUpdate(self, action);
+			
+			if ( action != minigame.FA_SMALL_REEL && hasBait)
+				minigame.checkForNibble(self);
+				
+			break;
+
+		case minigame.FS_NIBBLE:
+			int[] biteActions = minigame.getGoodActions();
+			if ( (biteActions == null) || (biteActions.length == 0) )
+				break;
+			
+			if ( utils.getElementPositionInArray(biteActions, action) > -1 )
+			{
+				if ( minigame.checkForBite(self, 0.1f) )
+					break;
+			}
+			else
+			{
+				if ( rand(0,100) < 10 )
+				{
+					sendSystemMessage(self, new string_id(STF_FISH, "strong_nibble")); // A strong nibble leaves you without a baited line...
+					if(!isGod(self))
+					{
+						minigame.lostBait(self);
+					}
+					else
+					{
+						debugSpeakMsg(self, "bypassing -minigame.lostBait- due to God Mode!");
+						break;
+					}
+					return SCRIPT_CONTINUE;
+				}
+			}
+
+			minigame.defaultFishingUpdate(self, action);
+			break;
+
+		case minigame.FS_BITE:
+			int[] catchActions = minigame.getGoodActions();
+			if ( (catchActions == null) || (catchActions.length == 0) )
+				break;
+			
+			if ( utils.getElementPositionInArray(catchActions, action) > -1 )
+			{
+				if ( minigame.checkForCatch(self) )
+					break;
+			}
+			else
+			{
+				if ( rand(0,100) < 10 )
+				{
+					sendSystemMessage(self, new string_id(STF_FISH, "tore_bait")); // Something just tore the bait right off the end of your line...
+					if(!isGod(self))
+					{
+						minigame.lostBait(self);
+					}
+					else
+					{
+						debugSpeakMsg(self, "bypassing -minigame.lostBait- due to God Mode!");
+						break;
+					}
+					return SCRIPT_CONTINUE;
+				}
+			}
+
+			minigame.defaultFishingUpdate(self, action);
+			break;
+
+		case minigame.FS_SNAG:		//snag on vegetation
+			
+			float snagFactor = utils.getFloatScriptVar(self, minigame.SCRIPTVAR_BONUS);
+			
+			float minFree = 0f;
+			switch ( action )
+			{
+				case minigame.FA_TUG_UP:
+				case minigame.FA_TUG_RIGHT:
+				case minigame.FA_TUG_LEFT:
+					minFree = 0.2f;
+					break;
+					
+				case minigame.FA_SMALL_REEL:
+					minFree = 0.4f;
+					break;
+			}
+			
+			float freeRoll = rand(minFree, 1f);
+			float delta = freeRoll - snagFactor;
+			if ( delta > 0 )
+			{
+				//FREE!!
+				minigame.freeSnaggedLine(self);
+			}
+			else
+			{
+				float snapRoll = rand(0f, 1f);
+				if ( snapRoll < minFree )
+				{
+					minigame.snapFishingLine(self);
+					return SCRIPT_CONTINUE;
+				}
+				
+				if ( snapRoll > 0.95f )
+				{
+					minigame.caughtLoot(self);
+				}
+			}
+			
+			break;
+
+		case minigame.FS_NONE:
+		default:
+			return SCRIPT_CONTINUE;
+
+		case minigame.FS_CAUGHT:	//caught a fish - no need to do anything right now!
+		case minigame.FS_LOOT:		//caught misc loot item  - no need to do anything right now!
+			LOG("fishing","handleFishingTick: caught something -> status = " + status);
+			location castLoc = params.getLocation("castLoc");
+			if ( castLoc != null )
+			{
+				LOG("fishing","handleFishingTick: castLoc = " + castLoc.toString());
+			}
+			else
+			{
+				LOG("fishing","handleFishingTick: unable to retrieve castLoc from params...");
+				castLoc = utils.getLocationScriptVar(self, minigame.SCRIPTVAR_LOCATION);
+			}
+			
+			if ( castLoc == null )
+			{
+				minigame.loseCatch(self);
+				return SCRIPT_CONTINUE;
+			}
+			
+			minigame.confirmReelIn(self, castLoc);
+			minigame.closeFishingSui(self);
+			return SCRIPT_CONTINUE;
+	}
+	
+	LOG("fishing","handleFishingTick: updating bait status...");
+	minigame.updateBaitStatus(self);
+	
+	LOG("fishing","handleFishingTick: showing fishing sui...");
+	minigame.showFishingSui(self);	
+
+	LOG("fishing","handleFishingTick: remessaging HANDLER_FISHING_TICK...");
+	messageTo(self, minigame.HANDLER_FISHING_TICK, params, minigame.FISHING_TICK, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePlayCastSplash()
+{
+	minigame.playCastSplash(self, params);
+	messageTo(self, minigame.HANDLER_FISHING_TICK, params, minigame.FISHING_TICK, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleReelIn()
+{
+	LOG("fishing","** handleReelIn: entered @ " + getGameTime() + " **");
+	if ( !minigame.isFishing(self) )
+		return SCRIPT_CONTINUE;
+		
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		minigame.loseCatch(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id marker = utils.getObjIdScriptVar(self, minigame.SCRIPTVAR_MARKER);
+	if ( !isIdValid(marker) )
+	{
+		minigame.loseCatch(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	location loc = getLocation(marker);
+	if ( loc == null )
+	{
+		minigame.loseCatch(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	float delay = rand(3f, 10f);
+	
+	location here = getLocation(self);
+	float dist = getDistance(here, loc);
+	LOG("fishing","handleReelIn: dist = " + dist);
+	if ( dist < 2f )
+	{
+		//consider this caught...
+		LOG("fishing","handleReelIn: messaging HANDLER_CAUGHT_SOMETHING");
+		messageTo(self, minigame.HANDLER_CAUGHT_SOMETHING, params, delay, false);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		if ( rand(0,100) > 95 )
+		{
+			LOG("fishing","handleReelIn: lost catch on rand 5% chance..");
+			if(!isGod(self))
+			{
+				minigame.loseCatch(self);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				debugSpeakMsg(self, "Bypassing -minigame.loseCatch- due to God Mode!");
+			}
+		}
+		
+		int status = utils.getIntScriptVar(self, minigame.SCRIPTVAR_STATUS);
+		if ( status == minigame.FS_CAUGHT )
+		{
+			/*obj_id marker = utils.getObjIdScriptVar(self, minigame.SCRIPTVAR_MARKER);
+			if ( !isIdValid(marker) )
+			{
+				location spawn = loc;
+				spawn.y = getWaterTableHeight(spawn);
+				
+				marker = createObject(minigame.TEMPLATE_MARKER, spawn);
+				if ( isIdValid(marker) )
+				{
+					utils.setScriptVar(self, minigame.SCRIPTVAR_MARKER, marker);
+					faceTo(marker, self);
+				}
+				else
+				{
+					minigame.loseCatch(self);
+					return SCRIPT_CONTINUE;
+				}
+			}*/
+			
+			float theta = getYaw(marker);
+
+			float dTheta = rand(-45f, 45f);
+			if ( rand(0,9) > 7 )
+			{
+				switch (rand(1,3))
+				{
+					case 1:
+						doAnimationAction(self, "fishing_tug_back");
+						break;
+
+					case 2:
+						doAnimationAction(self, "fishing_tug_right");
+						break;
+
+					case 3:
+						doAnimationAction(self, "fishing_tug_left");
+						break;
+				}
+				dTheta += 180f;
+			}
+			else
+			{
+				doAnimationAction(self, "fishing_reel");
+			}
+
+			LOG("fishing","handleReelIn: theta = " + theta + " dTheta = " + dTheta);
+
+			float moveDist = rand (0f, 2f);
+			LOG("fishing","handleReelIn: moveDist = " + moveDist);
+
+			float uTheta = theta + dTheta;
+			LOG("fishing","handleReelIn: uTheta = " + uTheta);
+			
+			if ( uTheta < -180f )
+				uTheta += 360f;
+
+			if ( uTheta > 180f )
+				uTheta -= 360f;
+
+			location updatedLoc = utils.rotatePointXZ(loc, moveDist, uTheta);
+			LOG("fishing","handleReelIn: updatedLoc = " + updatedLoc.toString());
+			if ( updatedLoc == null )
+			{
+				sendSystemMessage(self, minigame.SID_LOST_CATCH);
+				return SCRIPT_CONTINUE;
+			}
+			
+			if ( !minigame.isLocationFishable(updatedLoc) )
+			{
+				updatedLoc = loc;
+			}
+
+			/*LOG("fishing","handleReelIn: setting location scriptvar to " + updatedLoc.toString());
+			utils.setScriptVar(self, minigame.SCRIPTVAR_LOCATION, updatedLoc);*/
+
+			location markerLoc = updatedLoc;
+			markerLoc.y = getWaterTableHeight(markerLoc);
+			
+			setLocation(marker, markerLoc);
+			faceTo(marker, self);
+			
+			/*obj_id updatedMarker = createObject(minigame.TEMPLATE_MARKER, markerLoc);
+			if ( isIdValid(updatedMarker) )
+			{
+				utils.setScriptVar(self, minigame.SCRIPTVAR_MARKER, updatedMarker);
+				faceTo(updatedMarker, self);
+				
+				//debugSpeakMsg(updatedMarker, "heading to target = " + theta);
+				//debugSpeakMsg(updatedMarker, "move heading = " + uTheta);
+			}*/
+
+			float updatedRange = getDistance(here, updatedLoc);
+			LOG("fishing","handleReelIn: updatedRange = " + updatedRange);
+			if ( updatedRange > minigame.SPOOL_RANGE )
+			{
+				LOG("fishing","handleReelIn: line spooled...");
+				minigame.spoolFishingLine(self);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				if ( Math.abs(dTheta) > 90f )	//fish moved away
+				{
+					if ( moveDist < 0.25f )
+					{
+						sendSystemMessage(self, minigame.SID_FISH_FIGHT_HARD);
+					}
+					else if ( moveDist > 1f )
+					{
+						sendSystemMessage(self, minigame.SID_FISH_RUN);
+					}
+					else
+					{
+						sendSystemMessage(self, minigame.SID_FISH_FIGHT_AWAY);
+					}
+				}
+				else						//same range or closer
+				{
+					if ( moveDist < 0.25f )
+					{
+						sendSystemMessage(self, minigame.SID_FISH_FIGHT_EASY);
+					}
+					else if ( moveDist > 1f )
+					{
+						sendSystemMessage(self, minigame.SID_FISH_CHARGE);
+					}
+					else
+					{
+						sendSystemMessage(self, minigame.SID_FISH_FIGHT_CLOSER);
+					}
+				}
+			}
+		}
+		else if ( status == minigame.FS_LOOT )
+		{
+			location updatedLoc = getLocationBetweenLocs(here, loc);
+			if ( updatedLoc == null )
+			{
+				sendSystemMessage(self, minigame.SID_LOST_CATCH);
+				return SCRIPT_CONTINUE;
+			}
+			else if ( !minigame.isLocationFishable(updatedLoc) )
+			{
+				sendSystemMessage(self, minigame.SID_LOOT_BEACHED);
+				messageTo(self, minigame.HANDLER_CAUGHT_SOMETHING, params, 1f, false);
+				return SCRIPT_CONTINUE;
+			}
+
+			updatedLoc.y = getWaterTableHeight(updatedLoc);
+
+			//utils.setScriptVar(self, minigame.SCRIPTVAR_LOCATION, updatedLoc);
+			setLocation(marker, updatedLoc);
+			faceTo(marker, self);
+			
+			doAnimationAction(self, "fishing_reel");
+			sendSystemMessage(self, minigame.SID_REEL_LOOT);
+		}
+		else
+		{
+			//wtf?!
+		}
+	}
+	
+	LOG("fishing","handleReelIn: messaging HANDLER_REEL_IN again in " + delay + " seconds");
+	messageTo(self, minigame.HANDLER_REEL_IN, params, delay, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCaughtSomething()
+{
+	LOG("fishing","** handleCaughtSomething: entered...");
+	if ( !minigame.isFishing(self) )
+		return SCRIPT_CONTINUE;
+		
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		minigame.loseCatch(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int status = utils.getIntScriptVar(self, minigame.SCRIPTVAR_STATUS);
+	if ( status != minigame.FS_CAUGHT && status != minigame.FS_LOOT )
+	{
+		minigame.loseCatch(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	location castLoc = params.getLocation("castLoc");
+	if ( castLoc == null )
+	{
+		minigame.loseCatch(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id myCatch = null;
+	if ( status == minigame.FS_CAUGHT )		//its a fish
+	{
+		myCatch = minigame.spawnFishingFish(self, castLoc);
+	}
+	else if ( status == minigame.FS_LOOT )
+	{
+		obj_id[] loot = minigame.spawnFishingLoot(self, castLoc);
+		if ( loot != null && loot.length > 0 )
+			myCatch = loot[0];
+	}
+
+	if ( isIdValid(myCatch) )
+	{
+		prose_package ppCatch = prose.getPackage(minigame.PROSE_NOTIFY_CATCH, myCatch);
+		sendSystemMessageProse(self, ppCatch);
+
+		//queueCommand(self, ##"examine", myCatch, "", COMMAND_PRIORITY_DEFAULT);
+	}
+	
+	minigame.stopFishing(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCleanupSplash()
+{
+	obj_id splash = params.getObjId("id");
+	if ( isIdValid(splash) )
+		destroyObject(splash);
+	
+	return SCRIPT_CONTINUE;
+}	

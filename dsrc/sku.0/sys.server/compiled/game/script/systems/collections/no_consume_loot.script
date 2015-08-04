@@ -1,0 +1,397 @@
+/*
+systems.collections.no_consume_loot.script
+Used to trigger a collection update when double clicked but does not consume the item
+Can only be used to update the collection once
+*/
+
+//libraries
+include library.collection;
+include library.sui;
+include library.utils;
+
+//constants
+
+const string PID_NAME					= "collectionConsume";
+const string SCRIPTVAR_LIST				= "collections.availableCollections";
+
+const string OBJVAR_SLOT_GRANTED			= "collectionSlotGrantedTo";
+
+const string_id SID_NO_CONSUME_PROMPT			= new string_id("collection", "no_consume_item_prompt");
+const string_id SID_CONSUME_TITLE			= new string_id("collection", "consume_item_title");
+const string_id SID_CONSUME_ITEM			= new string_id("collection", "consume_item");
+const string_id SID_REPORT_CONSUME_ITEM_FAIL		= new string_id("collection", "report_consume_item_fail");
+const string_id SID_ALREADY_HAVE_SLOT			= new string_id("collection", "already_have_slot");
+const string_id SID_ALREADY_FINISHED_COLLECTION		= new string_id("collection", "already_finished_collection");
+const string_id STR_COLLECTION_LIST_PROMPT		= new string_id("collection", "collection_list_prompt");
+const string_id STR_COLLECTION_LIST_TITLE		= new string_id("collection", "collection_list_title");
+
+const string_id SID_ALREADY_BEEN_USED			= new string_id("collection", "already_been_used");
+
+
+//triggers
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//set collectionItem to self
+	obj_id collectionItem = self;
+	
+	//can only consume if you have it picked up
+	if ( utils.isNestedWithinAPlayer(collectionItem) && !hasObjVar(collectionItem, OBJVAR_SLOT_GRANTED) )
+	{
+		mi.addRootMenu (menu_info_types.SERVER_MENU3, SID_CONSUME_ITEM);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+	//set collectionItem to self
+	obj_id collectionItem = self;
+	
+	if ( item == menu_info_types.SERVER_MENU3  && utils.isNestedWithinAPlayer(collectionItem) )
+	{
+		if ( sui.hasPid(player, PID_NAME) )
+		{
+			int pid = sui.getPid(player, PID_NAME);
+			forceCloseSUIPage(pid);
+		}
+		
+		if ( hasObjVar(collectionItem, OBJVAR_SLOT_GRANTED) )
+		{
+			sendSystemMessage(player, SID_ALREADY_BEEN_USED);
+			return SCRIPT_CONTINUE;
+		}
+		
+		string[] availableCollections = collection.getAllAvailableCollectionsForItem(player, self);
+		if ( availableCollections.length >= 1 )
+		{
+			boolean success = getUiConsumeMessageBox(self, player);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//you need to activate this collection
+			sendSystemMessage(player, collection.SID_NEED_TO_ACTIVATE_COLLECTION);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	if ( !exists(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+		
+	if ( hasObjVar(self, OBJVAR_SLOT_GRANTED) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if( exists(self) && !hasObjVar(self, "relic.doNotShowAsCollectionItem") )
+	{
+		string[] collectionsForItem = collection.getAllCollectionsForItem(self);
+		string[] slotsForItem = collection.getAllSlotsForItem(self);
+		
+		if(collectionsForItem != null && collectionsForItem.length > 0)
+		{
+			for(int i = 0; i < collectionsForItem.length; ++i)
+			{
+				names[idx] = "collection_name";
+				if(!hasCompletedCollection(player,collectionsForItem[i]))
+				{
+					if(!hasCompletedCollectionSlot(player, slotsForItem[i]))
+					{
+						attribs[idx] = "@collection_n:"+collectionsForItem[i] + "_unfinished";
+					}
+					else
+					{
+						attribs[idx] = "@collection_n:"+collectionsForItem[i] + "_finished";
+					}
+				}
+				else
+				{
+					attribs[idx] = "@collection_n:"+collectionsForItem[i] + "_finished";
+				}
+				idx++;
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+//messageHandlers
+
+
+messageHandler handlerSuiAddToCollection ()
+{
+	
+	//set collectionItem to self
+	obj_id collectionItem = self;
+	
+	//check params
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+	
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!sui.hasPid(player, PID_NAME))
+		return SCRIPT_CONTINUE;
+
+	if(!utils.isNestedWithin(self, player))
+	{
+		sui.removePid(player, PID_NAME);	
+		CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + "). Player attempted to collect an item that was not in their inventory.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string[] availableCollections = collection.getAllAvailableCollectionsForItem(player, self);
+	string[] availableSlots	= collection.getAllAvailableSlotsForItem(player, self);
+	
+	string slotName = "";
+	string collectionName = "";
+	
+	//check to see if they have completed the prereqs for the collection
+	if(availableCollections.length < 1)
+	{
+		CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + "). Player did not have the collection activated.");
+		sui.removePid(player, PID_NAME);	
+		//you need to activate this collection
+		sendSystemMessage(player, collection.SID_NEED_TO_ACTIVATE_COLLECTION);
+		return SCRIPT_CONTINUE;
+	}
+	
+	//check to see if we have multiple collections this guy can add to
+	if(availableCollections != null && availableCollections.length > 1)
+	{
+		//save a cloned copy of the array, so we can use it later
+		string[] dataStored = (string[])availableCollections.clone();
+		utils.setScriptVar(player, SCRIPTVAR_LIST, dataStored);
+		
+		//loop thru the original array and make it point to localized names of the collections
+		for(int i = 0; i < availableCollections.length; ++i)
+			availableCollections[i] = utils.packStringId(new string_id("collection", availableCollections[i]));
+		
+		//build a SUI listbox of all the possible collections
+		int pid = sui.listbox(self, player, "@" + STR_COLLECTION_LIST_PROMPT, sui.OK_CANCEL, "@" + STR_COLLECTION_LIST_TITLE, availableCollections, "onCollectionListResponse", true, false);
+		sui.setPid(player, pid, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+	//if we only have one possible collection, lets just attempt to add it
+	else if(availableCollections != null && availableCollections.length > 0)
+	{
+		slotName = availableSlots[0];
+		collectionName = availableCollections[0];
+	}
+	
+	//Check to make sure they havent completed the collection yet.
+	if(!hasCompletedCollection(player, collectionName))
+	{		
+		//check to see if they already have this slot completed
+		if(!hasCompletedCollectionSlot(player, slotName) && !slotName.equals(""))
+		{
+			//Update the player with the slot
+			if(modifyCollectionSlotValue(player, slotName, 1))
+			{
+				CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + ") will now be destroyed.");
+				setObjVar(collectionItem, OBJVAR_SLOT_GRANTED, player);
+			}
+			else
+			{
+				//tell cs we failed
+				CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + ") will NOT be destroyed.");
+				//tell the player we failed
+				sendSystemMessage(player, SID_REPORT_CONSUME_ITEM_FAIL);
+			}
+			sui.removePid(player, PID_NAME);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//tell the player They have already finished all collections for this item
+			sendSystemMessage(player, SID_ALREADY_HAVE_SLOT);
+			sui.removePid(player, PID_NAME);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		//tell the player They have already finished the collection
+		sendSystemMessage(player, SID_ALREADY_FINISHED_COLLECTION);
+	}
+	sui.removePid(player, PID_NAME);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler onCollectionListResponse()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+		
+	//set collectionItem to self
+	obj_id collectionItem = self;
+	
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(idx < 0)
+	{
+		//no row selected
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	//double check that this is the only SUI window open
+	if(!sui.hasPid(player, PID_NAME))
+		return SCRIPT_CONTINUE;
+
+	if(!utils.isNestedWithin(self, player))
+	{
+		sui.removePid(player, PID_NAME);
+		CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + "). Player attempted to collect an item that was not in their inventory.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string[] availableCollections = utils.getStringArrayScriptVar(player, SCRIPTVAR_LIST);
+	string[] baseSlotNames = split(getStringObjVar(collectionItem, collection.OBJVAR_SLOT_NAME), '|');
+	
+	utils.removeScriptVarTree(player, "collections");
+	
+	string slotName = "";
+	string collectionName = availableCollections[idx];
+	
+	//loop thru base string array, spliting the collection name from the slotName
+	for(int i = 0; i < baseSlotNames.length; ++i)
+	{
+		boolean found = false;
+		//split the entry by : to seperate the collection name from the slot name
+		string[] splitSlotNames = split(baseSlotNames[i], ':');
+
+		//loop thru the seperated collection names to find out if we have finished
+		//the collection or have already unlocked this slot
+		for(int j = 0; j < splitSlotNames.length; j += 2)
+		{
+			if(collectionName.equals(splitSlotNames[j]))
+			{
+				//check to see if we have finished this collection
+				if(!hasCompletedCollection(player, collectionName))
+				{
+					//check to see if they already have this slot completed
+					if(!hasCompletedCollectionSlot(player, splitSlotNames[j + 1]))
+					{
+						//add the collection
+						slotName = splitSlotNames[j + 1];
+						found = true;
+						break;
+					}
+				}
+			}
+		}
+		if(found)
+			break;
+	}
+
+	
+	//Check to make sure they havent completed the collection yet.
+	if(!hasCompletedCollection(player, collectionName))
+	{
+
+		//check to see if they already have this slot completed
+		if(!hasCompletedCollectionSlot(player, slotName) && !slotName.equals(""))
+		{
+			//Update the player with the slot
+			if(modifyCollectionSlotValue(player, slotName, 1))
+			{
+				CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + ") will now be destroyed.");
+				setObjVar(collectionItem, OBJVAR_SLOT_GRANTED, player);
+			}
+			else
+			{
+				//tell cs we failed
+				CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + "). collectionItem(" + collectionItem + ") will NOT be destroyed.");
+				//tell the player we failed
+				sendSystemMessage(player, SID_REPORT_CONSUME_ITEM_FAIL);
+			}
+			sui.removePid(player, PID_NAME);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//tell the player They have already finished the collection
+			sendSystemMessage(player, SID_ALREADY_HAVE_SLOT);
+			sui.removePid(player, PID_NAME);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		//tell the player They have already finished the collection
+		sendSystemMessage(player, SID_ALREADY_FINISHED_COLLECTION);
+	}
+	sui.removePid(player, PID_NAME);
+	return SCRIPT_CONTINUE;
+}
+
+//functions
+
+
+//getUiConsumeMessageBox looks at the consumable/collectible and sees if there
+//is a questName objVar on the collectible.  If there is a quest name, the objvar is used to 
+//get the string associated with that object (from the collection.stf file) and puts it in a popup.
+//if no questName is found it gives the generic consume warning popup.
+boolean getUiConsumeMessageBox(obj_id self, obj_id player)
+{
+	if(!isValidId(self) || !isValidId(player))
+		return false;
+	
+	string questName = getStringObjVar(self, "collection.questName");
+	if(questName == null || questName.equals(""))
+	{	
+		int pid = sui.msgbox(self, player, "@" + SID_NO_CONSUME_PROMPT, sui.YES_NO, "@" + SID_CONSUME_TITLE, "handlerSuiAddToCollection");
+		sui.setPid(player, pid, PID_NAME);
+		return true;
+	}
+	string_id questCollectionString = new string_id("collection", questName);
+
+	int pid = sui.msgbox(self, player, "@" + questCollectionString + "_d", sui.YES_NO, "@" + questCollectionString + "_n", "handlerSuiAddToCollection");
+	sui.setPid(player, pid, PID_NAME);
+	return true;
+
+}

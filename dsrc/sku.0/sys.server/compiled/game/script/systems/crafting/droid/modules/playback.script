@@ -1,0 +1,609 @@
+include library.callable;
+include library.sui;
+include library.performance;
+include library.utils;
+include library.pet_lib;
+include library.ai_lib;
+
+//////////////////////////
+//
+//  CONSTANTS
+//
+//////////////////////////
+
+const string MODULE_OBJVAR							= "module_data.playback";
+const string SCRIPT_NAME							= "systems.crafting.droid.modules.playback";
+const string STF	 								= "pet/droid_modules";
+const string PERFORMANCE_DATATABLE					= "datatables/performance/performance.iff";
+const string INSTRUMENT_DATATABLE					= "datatables/tangible/instrument_datatable.iff";
+
+const string LIST_TITLE								= "@" + STF + ":playback_list_title";
+const string LIST_PROMPT							= "@" + STF + ":playback_list_prompt";
+const string LIST_TRACK								= "@" + STF + ":playback_track";
+const string LIST_BLANK_TRACK						= "@" + STF + ":playback_blank_track";
+const string DELETE_TITLE							= "@" + STF + ":playback_delete_title";
+const string DELETE_PROMPT							= "@" + STF + ":playback_delete_prompt";
+const string BTN_PLAY_RECORD						= "@" + STF + ":playback_btn_play_record";
+const string BTN_DELETE								= "@" + STF + ":playback_btn_delete";
+
+const string_id SID_MENU_PLAYBACK					= new string_id(STF, "playback_menu_playback");
+const string_id SID_MENU_STOP_PLAYBACK				= new string_id(STF, "playback_menu_stop_playback");
+const string_id SID_MSG_REC_START					= new string_id(STF, "playback_msg_rec_start");
+const string_id SID_MSG_REC_TIMEOUT					= new string_id(STF, "playback_msg_rec_timeout");
+const string_id SID_MSG_REC_BEGUN					= new string_id(STF, "playback_msg_rec_begun");
+const string_id SID_MSG_REC_FAIL_TRACK_FULL			= new string_id(STF, "playback_msg_rec_fail_track_full");
+const string_id SID_MSG_REC_FAIL_ALREADY_PLAYING	= new string_id(STF, "playback_msg_rec_fail_already_playing");
+const string_id SID_MSG_REC_FAIL_NOT_FINISHED		= new string_id(STF, "playback_msg_rec_fail_not_finished");
+const string_id SID_MSG_REC_FAIL_CORRUPTED			= new string_id(STF, "playback_msg_rec_fail_corrupted");
+const string_id SID_MSG_REC_COMPLETE				= new string_id(STF, "playback_msg_rec_complete");
+const string_id SID_MSG_DEL_TRACK_ALREADY_EMPTY		= new string_id(STF, "playback_msg_del_track_already_empty");
+const string_id SID_MSG_DEL_TRACK_DELETED			= new string_id(STF, "playback_msg_del_track_deleted");
+const string_id SID_MSG_PLAY_OUT_OF_POWER			= new string_id(STF, "playback_msg_play_out_of_power");
+
+const int MENU_TYPE									= menu_info_types.SERVER_MENU10;
+const int RECORD_TIMEOUT							= 30;
+const int RECORD_TIME								= 30;
+
+//////////////////////////
+//
+//  TRIGGERS
+//
+//////////////////////////
+
+trigger OnAttach()
+{
+	int modules = getIntObjVar(self, MODULE_OBJVAR + ".modules");
+
+	if(modules <= 0)
+	{
+		detachScript(self, SCRIPT_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id pcd = callable.getCallableCD(self);
+
+	if(isIdValid(pcd) && hasObjVar(pcd, MODULE_OBJVAR + ".tracks"))
+	{
+		int[] tracks = getIntArrayObjVar(pcd, MODULE_OBJVAR + ".tracks");
+
+		if(tracks != null && tracks.length > 0)
+		{
+			setObjVar(self, MODULE_OBJVAR + ".tracks", tracks);
+		}
+	}
+	else
+	{
+		int[] tracks = new int[modules];
+
+		for(int i = 0; i < modules; i++)
+		{
+			tracks[i] = 0;
+		}
+
+		if(tracks.length > 0)
+		{
+			setObjVar(self, MODULE_OBJVAR + ".tracks", tracks);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi) {
+
+	if (isDead(self) || ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster(self);
+
+	if(player != master) {
+
+		return SCRIPT_CONTINUE;
+	}
+
+	if(hasSkill(player, "class_entertainer_phase1_novice")) {
+
+		int modules = getIntObjVar(self, MODULE_OBJVAR + ".modules");
+
+		if(modules < 1) {
+
+			return SCRIPT_CONTINUE;
+		}
+
+		if(getPerformanceType(self) == 0)
+			mi.addRootMenu(MENU_TYPE, SID_MENU_PLAYBACK);
+		else
+			mi.addRootMenu(MENU_TYPE, SID_MENU_STOP_PLAYBACK);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect (obj_id player, int item) {
+
+	if (isDead(self) || ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if(item == MENU_TYPE) {
+
+		if(getPerformanceType(self) == 0)
+			accessPlaybackModule(self, player);
+		else
+			performance.stopMusicNow(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs) {
+
+	int idx = utils.getValidAttributeIndex(names);
+
+	if(idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, MODULE_OBJVAR + ".modules")) {
+
+		names[idx] = "playback_modules";
+
+		int numModules = getIntObjVar(self, MODULE_OBJVAR + ".modules");
+
+		attribs[idx] = " " + numModules;
+		idx++;
+
+		if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//////////////////////////
+//
+//  MESSAGE HANDLERS
+//
+//////////////////////////
+
+messageHandler handleModuleAccess() {
+
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	int idx = sui.getListboxSelectedRow(params);
+	int bp = sui.getIntButtonPressed(params);
+
+	// CANCEL BUTTON
+	if(bp == sui.BP_CANCEL) {
+
+		return SCRIPT_CONTINUE;
+
+	// DELETE BUTTON
+	} else if(bp == sui.BP_REVERT) {
+
+		if(idx < 0)
+			return SCRIPT_CONTINUE;
+
+		confirmDeleteTrack(self, player, idx);
+
+	// PLAY/RECORD BUTTON
+	} else {
+
+		if(idx < 0)
+			return SCRIPT_CONTINUE;
+
+		if(pet_lib.isLowOnPower(self)) {
+
+			sendSystemMessage(player, SID_MSG_PLAY_OUT_OF_POWER);
+			return SCRIPT_CONTINUE;
+		}
+
+		int[] tracks = getIntArrayObjVar(self, MODULE_OBJVAR + ".tracks");
+
+		if(tracks == null || tracks.length == 0)
+			return SCRIPT_CONTINUE;
+
+		if(idx >= tracks.length)
+			return SCRIPT_CONTINUE;
+
+		if(tracks[idx] == 0) {
+
+			startRecording(self, player, idx);
+
+		} else {
+
+			playTrack(self, player, tracks[idx]);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRecordTimeout() {
+
+	int recStatus = -1;
+
+	if(hasObjVar(self, MODULE_OBJVAR + ".recordStatus")) {
+
+		recStatus = getIntObjVar(self, MODULE_OBJVAR + ".recordStatus");
+	}
+
+	int session_id = params.getInt("session");
+	int current_session = utils.getIntScriptVar(self, MODULE_OBJVAR + ".sessionID");
+
+	if(current_session == 0)
+		return SCRIPT_CONTINUE;
+
+	if(session_id != current_session)
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId("player");
+
+	if(recStatus == 0) {
+
+		sendSystemMessage(player, SID_MSG_REC_TIMEOUT);
+		stopRecording(self);
+
+		stopListeningToMessage(player, "handlePerformerStartPerforming");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePerformerStartPerforming() {
+
+	obj_id master = getMaster(self);
+	obj_id player = params.getObjId("performer");
+
+	if(master != player)
+		return SCRIPT_CONTINUE;
+
+	int type = getPerformanceType(player);
+
+	if(type == 0)
+		return SCRIPT_CONTINUE;
+
+	sendSystemMessage(player, SID_MSG_REC_BEGUN);
+
+	setObjVar(self, MODULE_OBJVAR + ".recordStatus", type);
+
+	stopListeningToMessage(player, "handlePerformerStartPerforming");
+	listenToMessage(player, "handlePerformerStopPerforming");
+
+	dictionary newParams = new dictionary();
+	newParams.put("player", player);
+
+	messageTo(self, "handleRecordFinished", newParams, RECORD_TIME, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePerformerStopPerforming() {
+
+	obj_id master = getMaster(self);
+	obj_id player = params.getObjId("performer");
+
+	if(master != player)
+		return SCRIPT_CONTINUE;
+
+	if(!hasObjVar(self, MODULE_OBJVAR + ".recording")) {
+
+		stopListeningToMessage(player, "handlePerformerStopPerforming");
+		return SCRIPT_CONTINUE;
+	}
+
+	sendSystemMessage(player, SID_MSG_REC_FAIL_NOT_FINISHED);
+	stopRecording(self);
+
+	stopListeningToMessage(player, "handlePerformerStopPerforming");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRecordFinished() {
+
+	obj_id player = params.getObjId("player");
+
+	if(!hasObjVar(self, MODULE_OBJVAR + ".recording")) {
+
+		stopListeningToMessage(player, "handlePerformerStopPerforming");
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = getIntObjVar(self, MODULE_OBJVAR + ".recording");
+	int recType = getIntObjVar(self, MODULE_OBJVAR + ".recordStatus");
+	int[] tracks = getIntArrayObjVar(self, MODULE_OBJVAR + ".tracks");
+
+	int playType = getPerformanceType(player);
+
+	if(recType < 1)
+	{
+		sendSystemMessage(player, SID_MSG_REC_FAIL_CORRUPTED);
+	}
+	else if(recType != playType)
+	{
+		sendSystemMessage(player, SID_MSG_REC_FAIL_CORRUPTED);
+	}
+	else if(idx >= tracks.length)
+	{
+		sendSystemMessage(player, SID_MSG_REC_FAIL_CORRUPTED);
+	}
+	else
+	{
+		tracks[idx] = recType;
+
+		obj_id pcd = callable.getCallableCD(self);
+
+		if(tracks.length > 0)
+		{
+			setObjVar(pcd, MODULE_OBJVAR + ".tracks", tracks);
+			setObjVar(self, MODULE_OBJVAR + ".tracks", tracks);
+		}
+
+		sendSystemMessage(player, SID_MSG_REC_COMPLETE);
+	}
+
+	stopRecording(self);
+	stopListeningToMessage(player, "handlePerformerStopPerforming");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDeleteConfirm()
+{
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int bp = sui.getIntButtonPressed(params);
+
+	if(bp == sui.BP_CANCEL)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = utils.getIntScriptVar(self, MODULE_OBJVAR + ".delete_track");
+	int[] tracks = getIntArrayObjVar(self, MODULE_OBJVAR + ".tracks");
+
+	if(tracks == null || tracks.length == 0)
+		return SCRIPT_CONTINUE;
+
+	tracks[idx] = 0;
+
+	sendSystemMessage(player, SID_MSG_DEL_TRACK_DELETED);
+
+	obj_id pcd = callable.getCallableCD(self);
+
+	if(tracks.length > 0)
+	{
+		setObjVar(pcd, MODULE_OBJVAR + ".tracks", tracks);
+		setObjVar(self, MODULE_OBJVAR + ".tracks", tracks);
+	}
+
+	utils.removeScriptVar(self, MODULE_OBJVAR + ".delete_track");
+
+	return SCRIPT_CONTINUE;
+}
+
+//////////////////////////
+//
+//  CUSTOM FUNCTIONS
+//
+//////////////////////////
+
+void accessPlaybackModule(obj_id self, obj_id player) {
+
+	int modules = getIntObjVar(self, MODULE_OBJVAR + ".modules");
+	int[] tracks = getIntArrayObjVar(self, MODULE_OBJVAR + ".tracks");
+
+	if(tracks == null || tracks.length == 0)
+		return;
+
+	string[] trackNames = new string[tracks.length];
+
+	for(int i = 0; i < tracks.length; i++) {
+
+		if(tracks[i] == 0) {
+
+			trackNames[i] = LIST_TRACK;
+			trackNames[i] += " " + (i+1) + ": ";
+			trackNames[i] += LIST_BLANK_TRACK;
+
+		} else {
+
+			trackNames[i] = LIST_TRACK;
+			trackNames[i] += " " + (i+1) + ": ";
+			trackNames[i] += parseTrackName(tracks[i]);
+		}
+	}
+
+	int pid = sui.listbox(self, player, LIST_PROMPT, sui.OK_CANCEL_ALL, LIST_TITLE, trackNames, "handleModuleAccess", false, false);
+
+	if(pid > -1) {
+
+		setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, BTN_PLAY_RECORD);
+		setSUIProperty(pid, sui.LISTBOX_BTN_OTHER, sui.PROP_TEXT, BTN_DELETE);
+		showSUIPage(pid);
+	}
+}
+
+void startRecording(obj_id self, obj_id player, int idx) {
+
+	int[] tracks = getIntArrayObjVar(self, MODULE_OBJVAR + ".tracks");
+
+	if(tracks[idx] != 0) {
+
+		sendSystemMessage(player, SID_MSG_REC_FAIL_TRACK_FULL);
+		return;
+	}
+
+	if(getPerformanceType(player) != 0) {
+
+		sendSystemMessage(player, SID_MSG_REC_FAIL_ALREADY_PLAYING);
+		return;
+	}
+
+	int session_id = rand(10000, 99999);
+
+	setObjVar(self, MODULE_OBJVAR + ".recording", idx);
+	setObjVar(self, MODULE_OBJVAR + ".recordStatus", 0);
+
+	utils.setScriptVar(self, MODULE_OBJVAR + ".sessionID", session_id);
+
+	sendSystemMessage(player, SID_MSG_REC_START);
+
+	dictionary params = new dictionary();
+	params.put("player", player);
+	params.put("session", session_id);
+
+	messageTo(self, "handleRecordTimeout", params, RECORD_TIMEOUT, false);
+
+	listenToMessage(player, "handlePerformerStartPerforming");
+}
+
+void stopRecording(obj_id self) {
+
+	removeObjVar(self, MODULE_OBJVAR + ".recording");
+	removeObjVar(self, MODULE_OBJVAR + ".recordStatus");
+
+	utils.removeScriptVar(self, MODULE_OBJVAR + ".sessionID");
+}
+
+void confirmDeleteTrack(obj_id self, obj_id player, int idx) {
+
+	int[] tracks = getIntArrayObjVar(self, MODULE_OBJVAR + ".tracks");
+
+	if(tracks[idx] == 0) {
+
+		sendSystemMessage(player, SID_MSG_DEL_TRACK_ALREADY_EMPTY);
+		return;
+	}
+
+	string prompt = DELETE_PROMPT;
+	prompt += "\n\n";
+	prompt += parseTrackName(tracks[idx]);
+
+	int pid = sui.msgbox(self, player, prompt, sui.YES_NO, DELETE_TITLE, "handleDeleteConfirm");
+
+	if(pid > -1) {
+
+		utils.setScriptVar(self, MODULE_OBJVAR + ".delete_track", idx);
+	}
+}
+
+void playTrack(obj_id self, obj_id player, int idx) {
+
+	if(idx == 0)
+		return;
+
+	obj_id master = getMaster(self);
+
+	if(master != player)
+		return;
+
+	dictionary data = getPerformanceData(idx);
+
+	string song = data.getString("song");
+	int instrument = data.getInt("instrument");
+
+	performance.startMusic(self, song, instrument);
+	setPerformanceListenTarget(player, self);
+}
+
+dictionary getPerformanceData(int index) {
+
+	index--;
+
+	if(index > dataTableGetNumRows(PERFORMANCE_DATATABLE))
+		return null;
+
+	dictionary row = dataTableGetRow(PERFORMANCE_DATATABLE, index);
+
+	string songName = row.getString("performanceName");
+	int instrument = row.getInt("instrumentAudioId");
+
+	if(songName == null || songName.equals("") || instrument == 0)
+		return null;
+
+	dictionary ret = new dictionary();
+
+	ret.put("song", songName);
+	ret.put("instrument", instrument);
+
+	return ret;
+}
+
+string parseTrackName(int index) {
+
+	dictionary data = getPerformanceData(index);
+
+	string song = data.getString("song");
+	int instrument = data.getInt("instrument");
+
+	int numRows = dataTableGetNumRows(INSTRUMENT_DATATABLE);
+
+	string instrumentName = "";
+
+	for(int i = 0; i < numRows; i++) {
+
+		int audioId = dataTableGetInt(INSTRUMENT_DATATABLE, i, "instrumentAudioId");
+
+		if(audioId == instrument) {
+
+			instrumentName = dataTableGetString(INSTRUMENT_DATATABLE, i, "serverTemplateName");
+			break;
+		}
+	}
+
+	if(instrumentName.equals(""))
+		return null;
+
+	instrumentName = localize(getNameFromTemplate(instrumentName));
+	java.util.StringTokenizer st = new java.util.StringTokenizer(instrumentName);
+
+	if(st.countTokens() > 1) {
+
+		string indefiniteArticle = st.nextToken();
+		int articleLength = indefiniteArticle.length();
+
+		if(articleLength < 3)
+			instrumentName = "";
+		else
+			instrumentName = indefiniteArticle + " ";
+
+		while(st.hasMoreTokens()) {
+
+			instrumentName += st.nextToken() + " ";
+		}
+
+	} else {
+
+		instrumentName += " ";
+	}
+
+	if(Character.isDigit(song.charAt(song.length() - 1)))
+		song = song.substring(0, (song.length() - 1)) + " " + song.substring(song.length() - 1);
+
+	song = song.substring(0,1).toUpperCase() + song.substring(1).toLowerCase();
+	instrumentName = instrumentName.substring(0,1).toUpperCase() + instrumentName.substring(1).toLowerCase();
+
+	string ret = instrumentName + "- " + song;
+
+	return ret;
+}

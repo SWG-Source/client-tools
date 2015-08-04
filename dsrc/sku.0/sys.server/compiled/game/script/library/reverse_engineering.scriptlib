@@ -1,0 +1,410 @@
+/***** INCLUDES ********************************************************/
+include library.utils;
+include library.buff;
+include library.static_item;
+
+/***** CONSTANTS *******************************************************/
+
+const string[] POWERUP_TYPES =	{	"armor",
+					"clothing",
+					"weapon"
+				};
+
+const string[] POWERUP_SLOTS = {	"chest2",
+					"chest1",
+					"hold_r"
+				};
+
+const string[] POWERUP_ITEMS = {	"item_reverse_engineering_powerup_armor_02_01",
+					"item_reverse_engineering_powerup_clothing_02_01",
+					"item_reverse_engineering_powerup_weapon_02_01"
+				};
+
+const string POWERUP_WEAPON = 		"powerup_weapon";
+const string POWERUP_CHEST = 		"powerup_chest_armor";
+const string POWERUP_SHIRT = 		"powerup_shirt";
+const string POWERUP_SCRIPT = 		"item.tool.reverse_engineering_poweredup_item";
+
+const string ENGINEERING_MODIFIER = 	"reverse_engineering.reverse_engineering_modifier";
+const string ENGINEERING_RATIO = 	"reverse_engineering.reverse_engineering_ratio";
+const string ENGINEERING_POWER = 	"reverse_engineering.reverse_engineering_power";
+const string ENGINEERING_TIMESTAMP = 	"reverse_engineering.reverse_engineering_timestamp";
+const string POWERUP_PID_NAME = 	"powerUp";
+const string SPECIAL_MOD_TABLE = 	"datatables/crafting/reverse_engineering_special_mods.iff";
+
+const string MODS_TABLE = 		"datatables/crafting/reverse_engineering_mods.iff";
+const string STATIC_ITEM_TABLE = 	"datatables/item/master_item/master_item.iff";
+const string JUNK_TABLE = 		"datatables/crafting/reverse_engineering_junk.iff";
+
+
+const string_id POWERUP_PID_TITLE = 	new string_id("spam", "powerup_override_title");
+const string_id POWERUP_PID_PROMPT = 	new string_id("spam", "powerup_override");
+
+
+const float EXPIRATION_TIME = 1800.0f;
+
+/***** FUNCTIONS *******************************************************/
+
+//we use this after you are cloned to possibly reapply buffs
+void checkPowerUpReApply(obj_id player)
+{
+	if(isIdValid(player))
+	{
+		string[] possiblePowerUps = POWERUP_SLOTS;
+
+		for(int i = 0; i < possiblePowerUps.length; i++)
+		{
+			obj_id thingInPlayersSlot = getObjectInSlot(player, possiblePowerUps[i]);
+
+			if(isPoweredUpItem(thingInPlayersSlot))
+			{
+				applyPowerupItemEquipped(player, thingInPlayersSlot);
+			}
+		}
+	}
+}
+
+//use this when applying a powerup the first time to an object
+void applyPowerupItem(obj_id player, obj_id powerup, int powerupType)
+{
+	if(powerupType < 0)
+	{
+		sendSystemMessage(player, new string_id("spam", "powerup_must_equip_item"));
+		return;
+	}
+
+	obj_id item = getObjectInSlot(player, POWERUP_SLOTS[powerupType]);
+
+	if(isIdValid(item) && exists(item) && !isIdNull(item))
+	{
+		if(isPoweredUpItem(item))
+		{
+			string title = utils.packStringId(POWERUP_PID_TITLE);
+			string prompt = utils.packStringId(POWERUP_PID_PROMPT);
+			utils.setScriptVar(item, POWERUP_PID_NAME, powerup);
+
+			int pid = sui.msgbox(item, player, prompt, sui.OK_CANCEL, title, "handleOverrideExistingPowerUp");
+			sui.setPid(player, pid, POWERUP_PID_NAME);
+			return;
+		}
+
+		addModsAndScript(player, powerup, item);
+	}
+	else
+	{
+		sendSystemMessage(player, new string_id("spam", "powerup_must_equip_item"));
+	}
+
+	return;
+}
+
+//use this when re applying a powerup on an object already equipped
+void applyPowerupItemEquipped(obj_id player, obj_id itemWithPowerUp)
+{
+	float dieTime = getDieTime(EXPIRATION_TIME, itemWithPowerUp);
+
+	if(dieTime < 1)
+	{
+		dieTime = 1.0f;
+	}
+
+	trial.bumpSession(itemWithPowerUp, "cleanUp");
+	messageTo(itemWithPowerUp, "cleanUp", trial.getSessionDict(itemWithPowerUp, "cleanUp") , dieTime, false);
+
+	string slotName = getMyEquippedSlot(itemWithPowerUp);
+
+	if(slotName.equals("none"))
+		return;
+
+	int power = getIntObjVar(itemWithPowerUp, ENGINEERING_POWER);
+	string mod = getStringObjVar(itemWithPowerUp, ENGINEERING_MODIFIER);
+	int ratio = getIntObjVar(itemWithPowerUp, ENGINEERING_RATIO);
+	int finalPower = power/ratio;
+
+	if(finalPower < 1)
+		finalPower = 1;
+
+	addSkillModModifier(player, slotName + "_powerup", mod, (int)finalPower, -1, false, false);
+	applyBuffIcon(player, itemWithPowerUp);
+	recalcPoolsIfNeeded(player, mod);
+
+	return;
+}
+
+
+//check to see if I am a powered up item
+boolean isPoweredUpItem(obj_id item)
+{
+	return hasScript(item, POWERUP_SCRIPT);
+}
+
+//get the powerup type
+int getPowerupType(obj_id item)
+{
+	int powerupType = -1;
+
+	for(int i = 0; i < POWERUP_ITEMS.length; i++)
+	{
+		string staticName = getStaticItemName(item);
+
+		if(staticName.equals(POWERUP_ITEMS[i]))
+		{
+			powerupType = i;
+		}
+	}
+
+	return powerupType;
+}
+
+//check to see how long a powerup has left
+float getDieTime(float lifeSpan, obj_id tempObject)
+{
+	float timeStamp = getFloatObjVar(tempObject, ENGINEERING_TIMESTAMP);
+	float deathStamp = timeStamp + reverse_engineering.EXPIRATION_TIME;
+	float rightNow = getGameTime();
+	float dieTime = deathStamp - rightNow;
+
+	return dieTime;
+}
+
+string getMyEquippedSlot(obj_id itemWithPowerUp)
+{
+	string slotName = "none";
+
+	obj_id containingMe = utils.getContainingPlayer(itemWithPowerUp);
+
+	if(isIdValid(containingMe))
+	{
+		string[] possibleSlots = POWERUP_SLOTS;
+
+		for(int i = 0; i < possibleSlots.length; i++)
+		{
+			obj_id thingInPlayersSlot = getObjectInSlot(containingMe, possibleSlots[i]);
+			if(thingInPlayersSlot == itemWithPowerUp)
+			{
+				return possibleSlots[i];
+			}
+		}
+	}
+	return slotName;
+}
+
+//Provides mapping for slot to Buff if you have base Power Up object still
+string getMyBuffIconInt(obj_id powerUp)
+{
+	int powerupType = getPowerupType(powerUp);
+	string buffName = "";
+
+	switch(powerupType)
+	{
+		case 0:
+			buffName = POWERUP_CHEST;
+			break;
+		case 1:
+			buffName = POWERUP_SHIRT;
+			break;
+		case 2:
+			buffName = POWERUP_WEAPON;
+			break;
+		default:
+			return null;
+	}
+
+	return buffName;
+}
+
+//Provides mapping for slot to Buff if you only have the Powered Up Object
+string getMyBuffIconString(obj_id itemWithPowerUp)
+{
+	string buffName = "";
+	string slotName = getMyEquippedSlot(itemWithPowerUp);
+
+	if(slotName.equals("chest2"))
+		buffName = POWERUP_CHEST;
+	if(slotName.equals("chest1"))
+		buffName = POWERUP_SHIRT;
+	if(slotName.equals("hold_r"))
+		buffName = POWERUP_WEAPON;
+
+	return buffName;
+}
+
+void applyBuffIcon(obj_id player, obj_id itemWithPowerUp)
+{
+	applyBuffIcon(player, obj_id.NULL_ID, itemWithPowerUp);
+}
+
+//Apply proper buff based on powerup slot
+void applyBuffIcon(obj_id player, obj_id powerUp, obj_id itemWithPowerUp)
+{
+	string buffName = "";
+	float expiration = 0f;
+	if(!isIdValid(powerUp))
+	{
+		buffName = getMyBuffIconString(itemWithPowerUp);
+	}
+	else
+	{
+		buffName = getMyBuffIconInt(powerUp);
+	}
+
+	expiration = getDieTime(reverse_engineering.EXPIRATION_TIME, itemWithPowerUp);
+	if(expiration < 0)
+		return;
+
+	if(buffName != null && buffName != "")
+		buff.applyBuff(player, buffName, expiration);
+	//TODO: We need a method from programing to apply a decayed buff that will reflect in the whirlygig timer
+	//the correct duration left
+	return;
+}
+
+//Remove buff based on powerup slot
+void removeBuffIcon(obj_id player, obj_id itemWithPowerUp)
+{
+	string buffName = getMyBuffIconString(itemWithPowerUp);
+
+	if(buffName != null && buffName != "")
+		buff.removeBuff(player, buffName);
+	return;
+}
+
+//check for stat changes
+void recalcPoolsIfNeeded(obj_id player, string mod)
+{
+	if((mod.startsWith("constitution"))||(mod.startsWith("stamina")))
+	{
+		messageTo(player, "recalcPools", null, .25f, false);
+	}
+
+	combat.cacheCombatData(player);
+
+	trial.bumpSession(player, "displayDefensiveMods");
+	messageTo(player, "setDisplayOnlyDefensiveMods", trial.getSessionDict(player, "displayDefensiveMods") , 5, false);
+	return;
+}
+
+//overload!
+void addModsAndScript(obj_id player, obj_id powerUp, obj_id itemToPowerUp)
+{
+	addModsAndScript(player, powerUp, itemToPowerUp, 0f);
+}
+
+//apply stats from powerup
+//remainingTime is a key value for if the powerup is a new application or transfering the stats from an old object to a new
+void addModsAndScript(obj_id player, obj_id powerUp, obj_id itemToPowerUp, float remainingTime)
+{
+	string mod = getStringObjVar(powerUp, ENGINEERING_MODIFIER);
+	int ratio = getIntObjVar(powerUp, ENGINEERING_RATIO);
+	int power = getIntObjVar(powerUp, ENGINEERING_POWER);
+	float timeStamp = getGameTime();
+
+	//if we pass in a time use it, if not use 30 minutes
+	if(remainingTime > 0f)
+		timeStamp = remainingTime;
+
+	setObjVar(itemToPowerUp, ENGINEERING_MODIFIER, mod);
+	setObjVar(itemToPowerUp, ENGINEERING_RATIO, ratio);
+	setObjVar(itemToPowerUp, ENGINEERING_POWER, power);
+	setObjVar(itemToPowerUp, ENGINEERING_TIMESTAMP, timeStamp);
+
+	if(!isPoweredUpItem(itemToPowerUp))
+		attachScript(itemToPowerUp, POWERUP_SCRIPT);
+
+	powerUpAttached(player,itemToPowerUp);
+	applyBuffIcon(player, powerUp, itemToPowerUp);
+	static_item.decrementStaticItem(powerUp);
+
+}
+
+//completely cleans the object and removes the buff icon from the player
+void removeModsAndScript(obj_id player, obj_id itemWithPowerUp)
+{
+	removeObjVar(itemWithPowerUp, ENGINEERING_POWER);
+	removeObjVar(itemWithPowerUp, ENGINEERING_RATIO);
+	removeObjVar(itemWithPowerUp, ENGINEERING_TIMESTAMP);
+	removeObjVar(itemWithPowerUp, ENGINEERING_MODIFIER);
+	detachScript(itemWithPowerUp, POWERUP_SCRIPT);
+
+	if(utils.isEquipped(itemWithPowerUp))
+		removeBuffIcon(player, itemWithPowerUp);
+
+	trial.bumpSession(itemWithPowerUp, "displayDefensiveMods");
+	messageTo(itemWithPowerUp, "setDisplayOnlyDefensiveMods", trial.getSessionDict(itemWithPowerUp, "displayDefensiveMods") , 5, false);
+
+	return;
+}
+//strips the mod from player with the keyname as the slot where the powerup was
+void removePlayerPowerUpMods(obj_id player, obj_id itemWithPowerUp)
+{
+	string slotName = getMyEquippedSlot(itemWithPowerUp);
+	string mod = getStringObjVar(itemWithPowerUp, ENGINEERING_MODIFIER);
+
+	removeAttribOrSkillModModifier(player, slotName + "_powerup");
+	recalcPoolsIfNeeded(player, mod);
+
+	return;
+}
+
+//this applies the powerup stats to the player
+void powerUpAttached(obj_id player, obj_id itemWithPowerUp)
+
+{
+	float dieTime = getDieTime(reverse_engineering.EXPIRATION_TIME, itemWithPowerUp);
+
+	if(dieTime < 1)
+		dieTime = 1.0f;
+
+	trial.bumpSession(itemWithPowerUp, "cleanUp");
+	messageTo(itemWithPowerUp, "cleanUp", trial.getSessionDict(itemWithPowerUp, "cleanUp") , dieTime, false);
+
+	string slotName = reverse_engineering.getMyEquippedSlot(itemWithPowerUp);
+
+	if(slotName.equals("none"))
+		return;
+
+	int power = getIntObjVar(itemWithPowerUp, ENGINEERING_POWER);
+	string mod = getStringObjVar(itemWithPowerUp, ENGINEERING_MODIFIER);
+	int ratio = getIntObjVar(itemWithPowerUp, ENGINEERING_RATIO);
+	int finalPower = power/ratio;
+
+	if(finalPower < 1)
+		finalPower = 1;
+
+	addSkillModModifier(player, slotName + "_powerup", mod, (int)finalPower, -1, false, false);
+	recalcPoolsIfNeeded(player, mod);
+	return;
+}
+
+boolean canMakePowerUp(string mod)
+{
+	if(dataTableGetInt(SPECIAL_MOD_TABLE, mod, "no_pup") > 0)
+	{
+		return false;
+	}
+	return true;
+}
+
+boolean canStaticItemBeReversedEngineered(obj_id item)
+{
+
+	if(!exists(item) || !isIdValid(item))
+		return false;
+
+	if(!static_item.isStaticItem(item))
+		return false;
+
+	string staticItemName = getStaticItemName(item);
+
+	if(staticItemName == null || staticItemName.equals(""))
+		return false;
+
+	int row = dataTableSearchColumnForString(staticItemName, "name", static_item.MASTER_ITEM_TABLE);
+
+	if(row < 0)
+		return false;
+
+	int canRe = dataTableGetInt(static_item.MASTER_ITEM_TABLE, row, static_item.COLUMN_CAN_RE);
+
+	return canRe == 1;
+}

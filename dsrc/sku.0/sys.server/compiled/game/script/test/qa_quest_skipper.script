@@ -1,0 +1,712 @@
+// ======================================================================
+//
+// qa_quest_skipper.script
+// Copyright 2006, Sony Online Entertainment
+// All Rights Reserved.
+// 
+// VERSION 6.00
+//
+// Jeff W Haskell
+//
+// QA Quest Tool 
+// ======================================================================
+
+// ======================================================================
+// Library Includes
+// ======================================================================
+
+include library.groundquests;
+include library.qa;
+include library.space_quest;
+include library.sui;
+include library.utils;
+
+/********* CONSTANTS *****************************************/
+const string QUEST_TOOL_TITLE = "QA Quest Tool";
+const string QUEST_TOOL_PROMPT = "Select a Quest or menu item.\n\n(A) Active Quest\n(C) Completed Quest";
+const string QUEST_TOOL_SUBPROMPT = "Be sure to select the correct option. The quest will be modified per your selection without any additional verification.";
+const string MANUAL_ADD_GROUND_PROMPT = "Add Ground Quest Manually: Type the quest string in the area provided.  When you select OK the quest will be added like you just received the quest.";
+const string MANUAL_ADD_GROUND_TITLE = "Add Ground Manually";
+const string MANUAL_ADD_SPACE_PROMPT = "Add Space Quest Manually: Type the quest string in the area provided.  When you select OK the quest will be added like you just received the quest.";
+const string MANUAL_ADD_SPACE_TITLE = "Add Space Manually";
+
+const string[] QUEST_TOOL_MENU = 
+{
+	"Add a ground quest manually",
+	"Add a space quest manually",
+	"Attain test quests",	
+	"Bulk Grant/Complete Tool",
+	"Bulk Grant Tool"
+};
+
+const string[] QUEST_MAIN_MENU = 
+{
+	"Complete this quest",
+	"Remove this quest"
+};
+
+const string[] QUEST_ALT_MENU = 
+{
+	"Remove this quest"
+};
+
+const string[] QUEST_DEMO_QUESTS = 
+{
+	"quest/event_cantina_bossk_1", 
+	"quest/borvos_guard_dagorel", 
+	"quest/borvo_acklay_find_armorer ", 
+	"quest/build_speeder_quest", 
+	"quest/tatooine_eisley_gototrehla", 
+	"quest/ep3_stren_dorn_bounty_belga",
+	"quest/c_newbie_start",
+	"quest/build_speeder",
+	"spacequest/destroy_surpriseattack/corellia_imperial_1"	
+};
+
+const string[] SPACE_QUEST_TYPES =
+{
+	"assassinate",
+	"delivery",
+	"delivery_no_pickup",
+	"destroy",
+	"destroy_duty",
+	"destroy_surpriseattack",
+	"escort",
+	"escort_duty",
+	"inspect",
+	"patrol",
+	"recovery",
+	"recovery_duty",
+	"rescue",
+	"rescue_duty",
+	"space_battle",
+	"survival"
+};
+
+/***** TRIGGERS *******************************************************/
+
+trigger OnAttach()
+{
+	if (isGod(self))
+	{	
+		if(getGodLevel(self) < 10)
+		{
+			detachScript(self, "test.qa_quest_skipper");	
+			sendSystemMessage(self, "You do not have the appropriate access level to use this script.", null);
+		}
+	}
+	else if (!isGod(self))
+	{
+		detachScript(self, "test.qa_quest_skipper");	
+	}
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnSpeaking(string text)
+{
+	if(isGod(self))
+	{
+		if (toLower(text).equals("qaquest"))
+		{
+			//Function to show the main menu of the tool
+			showToolMainMenu(self);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/******** Message Handlers *************************************/
+
+messageHandler handleMainMenuOptions()
+{
+	if (isGod(self))
+	{
+		//static script var
+		if (utils.hasScriptVar(self, "qaquest.pid"))
+		{	
+			qa.checkParams(params, "qaquest");
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+			
+			//check for cancel button
+			if (btn == sui.BP_CANCEL)
+			{
+				cleanAllScriptVars(self);				
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				string[] tool_options = dataTableGetStringColumn("datatables/test/qa_tool_menu.iff", "main_tool");
+				qa.refreshMenu( self, "Choose the tool you want to use", "QA Tools", tool_options, "toolMainMenu", true, "qatool.pid");
+				utils.removeScriptVarTree(self,"qaquest");
+				return SCRIPT_CONTINUE;
+			}			
+			//build the next sui
+			else
+			{
+				//Place the previous scriptvar array into a usable array 
+				string[] previousMainMenuArray = utils.getStringArrayScriptVar( self, "qaquest.qaquestMenu" );
+				//Find the selection made from the array above
+				string previousSelection = previousMainMenuArray[idx];			
+			
+				if (previousSelection == QUEST_TOOL_MENU[0])
+				{
+					qa.createInputBox (self, MANUAL_ADD_GROUND_PROMPT, MANUAL_ADD_GROUND_TITLE, "handleAddGroundQuestManually", "qaquest.pid");
+				}
+				else if (previousSelection == QUEST_TOOL_MENU[1])
+				{
+					qa.createInputBox (self, MANUAL_ADD_SPACE_PROMPT, MANUAL_ADD_SPACE_TITLE, "handleAddSpaceQuestManually", "qaquest.pid");
+				}
+				else if (previousSelection == QUEST_TOOL_MENU[2])
+				{
+					boolean receivedTestQuests = getTestQuests(self);
+					if (receivedTestQuests)
+					{
+						sendSystemMessageTestingOnly(self, "Test quests received.");
+					}
+					else
+					{
+						sendSystemMessageTestingOnly(self, "There was a problem giving the test character test quests.");
+					}
+					showToolMainMenu(self);					
+				}
+				else if (previousSelection == QUEST_TOOL_MENU[3])
+				{
+					sendSystemMessageTestingOnly(self, "Type or paste quests into the window separated with a semicolon (;).");
+					if (!utils.hasScriptVar(self, "qaquest.textData"))
+					{
+						bulkGrantAndCompleteQuestUi(self, "");
+					}
+					else
+					{
+						string textData = utils.getStringScriptVar(self, "qaquest.textData");
+						bulkGrantAndCompleteQuestUi(self, textData);
+					}
+				}				
+				else if (previousSelection == QUEST_TOOL_MENU[4])
+				{
+					sendSystemMessageTestingOnly(self, "Type or paste quests into the window separated with a semicolon (;).");
+					if (!utils.hasScriptVar(self, "qaquest.textData"))
+					{
+						bulkGrantQuestUi(self, "");
+					}
+					else
+					{
+						string textData = utils.getStringScriptVar(self, "qaquest.textData");
+						bulkGrantQuestUi(self, textData);
+					}
+				}				
+				else
+				{	
+					utils.setScriptVar(self, "qaquest.questString", previousSelection);
+					string[] subMenu = getCorrectMenu(self, previousSelection);
+					
+					utils.setScriptVar(self, "qaquest.menu", subMenu);
+
+					qa.refreshMenu(self, QUEST_TOOL_SUBPROMPT, QUEST_TOOL_TITLE, subMenu, "handleQuestOptions", true, "qaquest.pid", "qaquest.qaquestSubMenu");			
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleQuestOptions()
+{
+	if (isGod(self))
+	{
+		//static script var
+		if (utils.hasScriptVar(self, "qaquest.pid"))
+		{	
+			qa.checkParams(params, "qaquest");
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+			
+			//check for cancel button
+			if (btn == sui.BP_CANCEL)
+			{
+				cleanAllScriptVars(self);
+				showToolMainMenu(self);				
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				showToolMainMenu(self);
+				return SCRIPT_CONTINUE;
+			}			
+			//build the next sui
+			else
+			{
+				//Place the previous scriptvar array into a usable array 
+				string[] previousMainMenuArray = utils.getStringArrayScriptVar( self, "qaquest.qaquestSubMenu" );
+				//Find the selection made from the array above
+				string previousSelection = previousMainMenuArray[idx];			
+				
+				if (previousSelection == "Complete this quest")
+				{
+					string questString = getQuestString(self);
+					if (questString != "")
+					{
+						boolean completeCorrectly = qa.completeActiveQuest(self, questString);
+						if (!completeCorrectly)
+						{
+							sendSystemMessageTestingOnly(self, "Something went wrong when completing the quest.");			
+						}
+						showToolMainMenu(self);					
+					}
+				}
+				else if (previousSelection == "Remove this quest")
+				{
+					string questString = getQuestString(self);
+					if (questString != "" && questString != "Error")
+					{
+						boolean clearCorrectly = qa.clearQuest(self, questString);
+						if (!clearCorrectly)
+						{
+							sendSystemMessageTestingOnly(self, "Something went wrong when attempting to clear the quest.");			
+						}
+						showToolMainMenu(self);												
+					}
+				}
+				else
+				{	
+					sendSystemMessageTestingOnly(self, "There was an error with the tool.");
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAddGroundQuestManually()
+{
+	if (isGod(self))
+	{
+		//static script var
+		if (utils.hasScriptVar(self, "qaquest.pid"))
+		{
+			qa.checkParams(params, "qaquest");
+			string stringEntry = sui.getInputBoxText(params);
+			int btn = sui.getIntButtonPressed( params );
+
+			if ( btn == sui.BP_CANCEL )
+			{
+				cleanAllScriptVars(self);
+				showToolMainMenu ( self );				
+				return SCRIPT_OVERRIDE;
+			}
+			
+			if ( stringEntry == "" || stringEntry == null )
+			{
+				qa.createInputBox (self, MANUAL_ADD_GROUND_PROMPT, MANUAL_ADD_GROUND_TITLE, "handleAddQuestManually", "qaquest.pid");
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				qa.grantGroundQuest(self, stringEntry);			
+				sendSystemMessageTestingOnly(self, "If the Quest wasn't added, check the spelling of the quest string");		
+				showToolMainMenu(self);
+			}
+		}
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAddSpaceQuestManually()
+{
+	if (isGod(self))
+	{		
+		//static script var
+		if (utils.hasScriptVar(self, "qaquest.pid"))
+		{
+			qa.checkParams(params, "qaquest");
+			string stringEntry = sui.getInputBoxText(params);
+			int btn = sui.getIntButtonPressed( params );
+
+			if ( btn == sui.BP_CANCEL )
+			{
+				cleanAllScriptVars(self);
+				showToolMainMenu (self);				
+				return SCRIPT_OVERRIDE;
+			}
+						
+			if ( stringEntry == "" || stringEntry == null )
+			{
+				qa.createInputBox (self, MANUAL_ADD_SPACE_PROMPT, MANUAL_ADD_SPACE_TITLE, "handleAddQuestManually", "qaquest.pid");
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				string questType = qa.getSpaceQuestType(self, stringEntry);
+				if (questType != "Error")
+				{
+					sendSystemMessageTestingOnly(self, "questType: " + questType);		
+					string questName = qa.getSpaceQuestName(self, stringEntry);
+					if (questName != "Error")
+					{	
+						sendSystemMessageTestingOnly(self, "questType: " + questName);		
+						qa.grantSpaceQuest(self, questType, questName);				
+						sendSystemMessageTestingOnly(self, "If the Quest wasn't added, check the spelling of the quest string");		
+					}
+					else
+					{
+						sendSystemMessageTestingOnly(self, "The space quest string usually starts with spacequest/<questType>/");
+					}
+				}
+				else
+				{
+					sendSystemMessageTestingOnly(self, "The space quest string usually starts with spacequest/");
+				}
+				showToolMainMenu(self);
+			}
+		}
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler revokeQuestHandler()
+{
+	string textData = params.getString("Prompt.lblPrompt.LocalText");
+	sendSystemMessageTestingOnly(self, ""+params);	
+	forceCloseSUIPage(params.getInt("pageId"));
+	
+	if (textData != "")
+	{
+		textData = textData.trim();
+		utils.setScriptVar(self,"qaquest.textData", textData);
+		string[] allData = split(textData, ';');
+		for (int i = 0; i < allData.length; i++)
+		{
+			allData[i] = allData[i].trim();
+		}		
+		if (allData.length > 0)
+		{
+			iterateClearQuestStrings(self, allData);
+			showToolMainMenu(self);
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(self, "No arguments received. Cancelling macro.");
+			showToolMainMenu(self);
+		}
+	}	
+	//sendSystemMessageTestingOnly(self, textData);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler grantQuestHandler()
+{
+	string widgetName = params.getString("eventWidgetName");
+	string textData = params.getString("Prompt.lblPrompt.LocalText");
+	if(widgetName.equalsIgnoreCase("%button0%"))
+	{
+		showToolMainMenu(self);
+	}
+	else if(widgetName.equalsIgnoreCase("%button1%"))
+	{
+		textData = textData.trim();
+		utils.setScriptVar(self,"qaquest.textData", textData);
+		string[] allData = split(textData, ';');
+		for (int i = 0; i < allData.length; i++)
+		{
+			allData[i] = allData[i].trim();
+		}		
+		if (allData.length > 0)
+		{
+			iterateGrantQuestStrings(self, allData, false);
+			showToolMainMenu(self);
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(self, "No arguments received. Cancelling macro.");
+			showToolMainMenu(self);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler grantAndCompleteQuestHandler()
+{
+	string widgetName = params.getString("eventWidgetName");
+	string textData = params.getString("Prompt.lblPrompt.LocalText");
+	if(widgetName.equalsIgnoreCase("%button0%"))
+	{
+		showToolMainMenu(self);
+	}
+	else if(widgetName.equalsIgnoreCase("%button1%"))
+	{
+		textData = textData.trim();
+		utils.setScriptVar(self,"qaquest.textData", textData);
+		string[] allData = split(textData, ';');
+		for (int i = 0; i < allData.length; i++)
+		{
+			allData[i] = allData[i].trim();
+		}		
+		if (allData.length > 0)
+		{
+			iterateGrantQuestStrings(self, allData, true);
+			showToolMainMenu(self);
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(self, "No arguments received. Cancelling macro.");
+			showToolMainMenu(self);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler delay()
+{
+	//sendSystemMessageTestingOnly(self, "delay 1 second.");
+	return SCRIPT_CONTINUE;
+}
+
+/******** All Functions ********************************************/
+
+//This Function builds the main tool menu. It sniffs out all completed and/or active quests
+//that are then displayed to the tester.  If no quests are found, the tester is provided a 
+//base menu called the QUEST_TOOL_MENU
+void showToolMainMenu(obj_id self)
+{
+	try 
+	{
+		string[] allQuests = qa.getAllQuests(self);
+		string[] combinedMenu = new string[allQuests.length + QUEST_TOOL_MENU.length];
+		System.arraycopy(allQuests, 0, combinedMenu, 0, allQuests.length);
+		System.arraycopy(QUEST_TOOL_MENU, 0, combinedMenu, allQuests.length, QUEST_TOOL_MENU.length);
+
+		qa.refreshMenu(self, QUEST_TOOL_PROMPT, QUEST_TOOL_TITLE, combinedMenu, "handleMainMenuOptions", true, "qaquest.pid", "qaquest.qaquestMenu");
+	}
+	catch (Exception e)
+	{	
+		qa.refreshMenu(self, QUEST_TOOL_PROMPT + "\n\nNo quests found on character", QUEST_TOOL_TITLE, QUEST_TOOL_MENU, "handleMainMenuOptions", true, "qaquest.pid", "qaquest.qaquestMenu");
+	}
+}
+
+//This function is called when the tool is canceled or exited so all script variables are removed
+void cleanAllScriptVars(obj_id self)
+{
+	utils.removeScriptVarTree(self,"qaquest");
+}
+
+//This function cycles through a list of predefined quests for testing various things
+boolean getTestQuests(obj_id self)
+{
+	for (int i = 0; i < QUEST_DEMO_QUESTS.length; i++)
+	{
+		if (QUEST_DEMO_QUESTS[i].indexOf("spacequest/") == 0)
+		{	
+			boolean successGrant = qa.evalSpaceQuestThenGrant(self, QUEST_DEMO_QUESTS[i]);
+		}
+		else
+		{
+			qa.grantGroundQuest(self, QUEST_DEMO_QUESTS[i]);
+		}		
+	}
+	return true;
+}
+
+//This function parses the quest string and quest string name to extract just the code string for the quest
+string getQuestString(obj_id self)
+{	
+	if (utils.hasScriptVar(self, "qaquest.questString"))
+	{
+		string questStringAndName = utils.getStringScriptVar(self, "qaquest.questString");
+		if (questStringAndName != "")
+		{
+			//This function returns only the quest string, everything before and after is stripped.
+			int whiteSpaceIndex = questStringAndName.indexOf(" -");
+			string questCodeString = questStringAndName.substring(4,whiteSpaceIndex);
+			return questCodeString;	
+		}
+	}
+	return "Error";
+}
+
+//This function switches the sub menu based on the completed or active status of the quest selected.
+string[] getCorrectMenu(obj_id self, string questStringAndName)
+{
+	if (questStringAndName != "")
+	{
+		if (questStringAndName.indexOf("(C") == 0)
+		{
+			return QUEST_ALT_MENU;
+		}
+		else
+		{
+			return QUEST_MAIN_MENU;
+		}
+	}
+	return QUEST_MAIN_MENU;
+}
+
+void bulkGrantAndCompleteQuestUi(obj_id self, string textData)
+{
+	string uiTitle = "Quest Macro";
+	int page = createSUIPage("/Script.messageBox", self, self);
+	
+	if (textData != "")
+	{
+		setSUIProperty(page, "Prompt.lblPrompt", "LocalText", textData);
+	}
+	else
+	{
+		setSUIProperty(page, "Prompt.lblPrompt", "LocalText", "");
+	}
+	setSUIProperty(page, "bg.caption.lblTitle", "Text", uiTitle);
+	setSUIProperty(page, "Prompt.lblPrompt", "Editable", "true");
+	setSUIProperty(page, "Prompt.lblPrompt", "GetsInput", "true");
+	setSUIProperty(page, "Prompt.lblPrompt", "Paste", "true");
+	setSUIProperty(page, "btnCancel", "Visible", "true");
+	setSUIProperty(page, "btnRevert", "Visible", "true");
+	setSUIProperty(page, "btnRevert", sui.PROP_TEXT, "Bulk Clear");
+	setSUIProperty(page, "btnOk", sui.PROP_TEXT, "Bulk Complete");
+	
+	subscribeToSUIPropertyForEvent(page, sui_event_type.SET_onClosedOk, "%button1%", "Prompt.lblPrompt", "LocalText");
+	subscribeToSUIPropertyForEvent(page, sui_event_type.SET_onButton, "btnRevert", "Prompt.lblPrompt", "LocalText");
+	
+	subscribeToSUIEvent(page, sui_event_type.SET_onClosedOk, "%button1%", "grantAndCompleteQuestHandler");
+	subscribeToSUIEvent(page, sui_event_type.SET_onButton, "btnRevert", "revokeQuestHandler");
+	subscribeToSUIEvent(page, sui_event_type.SET_onClosedCancel, "%button0%", "grantAndCompleteQuestHandler");
+
+	showSUIPage(page);
+	flushSUIPage(page);
+}
+
+void bulkGrantQuestUi(obj_id self, string textData)
+{
+	string uiTitle = "Quest Macro";
+	int page = createSUIPage("/Script.messageBox", self, self);
+	
+	if (textData != "")
+	{
+		setSUIProperty(page, "Prompt.lblPrompt", "LocalText", textData);
+	}
+	else
+	{
+		setSUIProperty(page, "Prompt.lblPrompt", "LocalText", "");
+	}
+	setSUIProperty(page, "bg.caption.lblTitle", "Text", uiTitle);
+	setSUIProperty(page, "Prompt.lblPrompt", "Editable", "true");
+	setSUIProperty(page, "Prompt.lblPrompt", "GetsInput", "true");
+	setSUIProperty(page, "Prompt.lblPrompt", "Paste", "true");
+	setSUIProperty(page, "btnCancel", "Visible", "true");
+	setSUIProperty(page, "btnRevert", "Visible", "true");
+	setSUIProperty(page, "btnRevert", sui.PROP_TEXT, "Bulk Clear");
+	setSUIProperty(page, "btnOk", sui.PROP_TEXT, "Bulk Grant");
+	
+	subscribeToSUIPropertyForEvent(page, sui_event_type.SET_onClosedOk, "%button1%", "Prompt.lblPrompt", "LocalText");
+	subscribeToSUIPropertyForEvent(page, sui_event_type.SET_onButton, "btnRevert", "Prompt.lblPrompt", "LocalText");
+	
+	subscribeToSUIEvent(page, sui_event_type.SET_onClosedOk, "%button1%", "grantQuestHandler");
+	subscribeToSUIEvent(page, sui_event_type.SET_onButton, "btnRevert", "revokeQuestHandler");
+	subscribeToSUIEvent(page, sui_event_type.SET_onClosedCancel, "%button0%", "grantQuestHandler");
+
+	showSUIPage(page);
+	flushSUIPage(page);
+}
+
+void iterateGrantQuestStrings(obj_id self, string[] allData, boolean completeFlag)
+{
+	if (allData.length > 0)
+	{
+		for (int i = 0; i < allData.length; i++)
+		{
+			if (allData[i] != "")
+			{		
+				if (allData[i].indexOf("spacequest/") == 0)
+				{	
+					boolean questAttained = qa.evalSpaceQuestThenGrant(self, allData[i]);
+					if (!questAttained)
+					{
+						sendSystemMessageTestingOnly(self, "Quest " + allData[i] + " could not be granted.");
+						//break;
+					}
+					if (completeFlag)
+					{
+						messageTo(self, "delay", null, 1, false);
+						boolean completed = qa.completeActiveQuest(self, allData[i]);
+						if (!completed)
+						{
+							sendSystemMessageTestingOnly(self, "Quest " + allData[i] + " could not be completed.");
+							//break;
+						}
+					}
+				}
+				else if (allData[i].indexOf("quest/") == 0)
+				{				
+					qa.grantGroundQuest(self, allData[i]);
+					if (completeFlag)
+					{
+						messageTo(self, "delay", null, 1, false);
+						boolean completed = qa.completeActiveQuest(self, allData[i]);
+						if (!completed)
+						{
+							sendSystemMessageTestingOnly(self, "Quest " + allData[i] + " could not be granted.");
+							//break;
+						}
+					}
+				}
+				else
+				{
+					sendSystemMessageTestingOnly(self, "Unknown quest string: " + allData[i]);
+				}
+			}
+		}
+	}
+}
+
+void iterateClearQuestStrings(obj_id self, string[] allData)
+{
+	if (allData.length > 0)
+	{
+		for (int i = 0; i < allData.length; i++)
+		{
+			if (allData[i] != "")
+			{		
+				if (allData[i].indexOf("spacequest/") == 0)
+				{	
+					string questName = qa.getSpaceQuestName(self, allData[i]);
+					if (questName != "")
+					{	
+						string questType = qa.getSpaceQuestType(self, allData[i]);
+						if (questType != "")
+						{	
+							boolean completed = qa.clearQuest(self, allData[i]);
+							messageTo(self, "delay", null, 1, false);
+							if (!completed)
+							{
+								sendSystemMessageTestingOnly(self, "Quest " + allData[i] + " could not be cleared.");
+								//break;
+							}						
+						}
+						else
+						{
+							sendSystemMessageTestingOnly(self, "Unknown quest string: " + allData[i]);
+						}					
+					}
+					else
+					{
+						sendSystemMessageTestingOnly(self, "Unknown quest string: " + allData[i]);
+					}				
+				}
+				else if (allData[i].indexOf("quest/") == 0)
+				{				
+					boolean completed = qa.clearQuest(self, allData[i]);
+					messageTo(self, "delay", null, 1, false);
+					if (!completed)
+					{
+						sendSystemMessageTestingOnly(self, "Quest " + allData[i] + " could not be cleared.");
+						//break;
+					}
+				}
+				else
+				{
+					sendSystemMessageTestingOnly(self, "Unknown quest string: " + allData[i]);
+				}
+			}
+		}
+	}
+}

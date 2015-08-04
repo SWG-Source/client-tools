@@ -1,0 +1,523 @@
+include library.chat;
+include library.utils;
+include library.ai_lib;
+include library.locations;
+include library.money;
+include library.quests;
+
+trigger OnAttach()
+{
+	attachScript (self, "npc.converse.npc_converse_menu");
+	setInvulnerable (self, true);
+	ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	string datatable = getStringObjVar (self, "quest_table");
+	datatable = "datatables/npc/random_quest/" + datatable + ".iff";
+	
+	int maxGating = dataTableGetNumRows(datatable);
+	int questNum = 1;
+	
+	if (!hasObjVar (speaker, "questNum"))
+	{
+		questNum = rand (1, maxGating-1);
+		setObjVar (speaker, "questNum", questNum);
+	}
+	else
+	{
+		questNum = getIntObjVar (speaker, "questNum");
+		if (questNum > maxGating)
+		{
+			questNum = rand (1, maxGating-1);
+			setObjVar (speaker, "questNum", questNum);
+		}			
+	}		
+	
+	string CONVO = dataTableGetString (datatable, questNum, "convo");
+	string questID = dataTableGetString (datatable, questNum, "temp_objvar");
+	string type = dataTableGetString (datatable, questNum, "quest_type");
+
+	if (ai_lib.isInCombat(self) || ai_lib.isInCombat(speaker))
+		return SCRIPT_OVERRIDE;
+	
+	else if (hasObjVar (speaker, questID + ".done"))
+	{
+		if (type == "fetch" || type == "retrieve")
+		{
+			obj_id playerInv = utils.getInventoryContainer(speaker);
+			if (checkForFetchItem(playerInv, speaker, questNum) == true)
+			{
+				string_id reward = new string_id(CONVO, "npc_reward_" + questNum);
+				chat.chat (self, reward);
+				giveReward(self, speaker, questNum);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				string npcGreet = "gotowork";
+				string response1 = "player_reset";
+				string response2 = "player_sorry";
+
+				string_id greeting = new string_id (CONVO,npcGreet);
+
+				string_id response[] = new string_id [2];
+				response[0] = new string_id (CONVO, response1);
+				response[1] = new string_id (CONVO, response2);
+
+				npcStartConversation (speaker, self, "questConvo", greeting, response);
+
+				return SCRIPT_CONTINUE;				
+			}  
+		}			
+		else
+		{
+				string_id reward = new string_id(CONVO, "npc_reward_" + questNum);
+				chat.chat (self, reward);
+				giveReward(self, speaker, questNum);
+				return SCRIPT_CONTINUE;
+		
+		}
+	}		
+	
+	else if (isOnQuest(speaker))
+	{
+		// Whenever an NPC gives a player a quest he puts his datatable on the PC until it's done
+		// so that other NPC's can see it (like a brand) and say, "Hey you're busy."
+		string player_quest_table = getStringObjVar (speaker, "quest_table");
+
+		// This inidcates an issue, but is here for safety valve purposes
+		if (player_quest_table == null)
+		{
+			player_quest_table = "empty";
+		}
+
+		// If the players table matches the NPC's table, then he's on a mission for this NPC, but doesn't
+		// have any objvars.  This indicates that he's in the middle of a quest and the NPC gives him the 
+		// option to quit out of the quest or continue on.
+		if (player_quest_table == datatable)
+		{
+			string npcGreet = "gotowork";
+			string response1 = "player_reset";
+			string response2 = "player_sorry";
+
+			string_id greeting = new string_id (CONVO,npcGreet);
+
+			string_id response[] = new string_id [2];
+			response[0] = new string_id (CONVO, response1);
+			response[1] = new string_id (CONVO, response2);
+
+			npcStartConversation (speaker, self, "questConvo", greeting, response);
+		}
+		// Otherwise the player may want to quit out of somebody else's quests to take this guy's quest
+		else
+		{
+			string npcGreet = "quit_quest";
+			string response1 = "player_quit";
+			string response2 = "player_continue";
+
+			string_id greeting = new string_id ("static_npc/default_dialog",npcGreet);
+
+			string_id response[] = new string_id [2];
+			response[0] = new string_id ("static_npc/default_dialog", response1);
+			response[1] = new string_id ("static_npc/default_dialog", response2);
+
+			npcStartConversation (speaker, self, "questConvo", greeting, response);
+		}
+
+		return SCRIPT_CONTINUE;
+		
+	}
+	else
+	{
+		string npcGreet = "npc_1_" + questNum;
+		string response1 = "player_1_" + questNum;
+		string response2 = "player_2_" + questNum;
+		string response3 = "player_3_" + questNum;
+		
+		string_id greeting = new string_id (CONVO,npcGreet);
+	
+		string_id response[] = new string_id [3];
+		response[0] = new string_id (CONVO, response1);
+		response[1] = new string_id (CONVO, response2);
+		response[2] = new string_id (CONVO, response3);
+			
+		npcStartConversation (speaker, self, "questConvo", greeting, response);
+	}		
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnNpcConversationResponse (string convo, obj_id player, string_id response)
+{
+	string datatable = getStringObjVar (self, "quest_table");
+	datatable = "datatables/npc/random_quest/" + datatable + ".iff";
+	string gatingString = dataTableGetString (datatable, 1, "overall_objvar");
+
+	int gating = getIntObjVar (player, "questNum");
+	int questNum = gating;
+	string type = dataTableGetString (datatable, questNum, "quest_type");
+	string CONVO = dataTableGetString (datatable, questNum, "convo");
+	string questID = dataTableGetString (datatable, questNum, "temp_objvar");
+	location home = new location();
+	obj_id npcOrBldg = getTopMostContainer (self);
+	if (npcOrBldg == self)
+	{
+		home = getLocation(self);
+	}
+	else 
+	{
+		home = getLocation (npcOrBldg);
+	}		
+	
+	string response1 = "player_1_" + questNum;
+	string response2 = "player_2_" + questNum;
+	string response3 = "player_3_" + questNum;
+	string response4 = "player_sorry";
+	string response5 = "player_reset";
+	string response6 = "player_quit";
+	string response7 = "player_continue";
+	
+	string playerScript = dataTableGetString (datatable, questNum, "player_script");
+	
+	if ( response.getAsciiId().equals(response1)) // 
+ 	{
+ 	
+ 		location target = quests.getThemeParkLocation (self);
+		if (target == null)
+		{
+			string noLoc = "npc_noloc_" + questNum;
+			string_id message = new string_id (CONVO, noLoc);
+			chat.chat (self, message);
+			npcEndConversation(player);
+			return SCRIPT_OVERRIDE;
+		}
+		else 
+		{
+		
+			string npcAnswer1 = "npc_2_" + questNum;
+			string_id message = new string_id (CONVO, npcAnswer1);
+			npcSpeak(player, message);
+			npcEndConversation (player);
+			if (questID != null && questID != "")
+			{
+				setObjVar (player, questID + ".questLoc", target);
+				setObjVar(player, questID + ".questNum", questNum);
+				setObjVar(player, questID + ".home", home);
+				setObjVar (player, "quest_table", datatable);
+				setObjVar (player, "boss", self);
+				attachScript(player, playerScript);
+			}
+			else
+			{
+				debugSpeakMsg (self, "I'm sorry, I don't really have anything for you right now...");
+				return SCRIPT_OVERRIDE;
+			}				
+			if (type == "smuggle" || type == "deliver")
+			{
+				obj_id playerInv = utils.getInventoryContainer(player);
+				string cargo = dataTableGetString (datatable, questNum, "deliver_object");
+				createObject (cargo, playerInv, "");
+			}			
+		}
+		return SCRIPT_CONTINUE;
+ 	}
+
+ 	if ( response.getAsciiId().equals(response2) ) //
+ 	{
+ 		string npcAnswer2 = "npc_3_" + questNum;
+ 		string_id message = new string_id (CONVO, npcAnswer2);// 
+ 		npcSpeak(player, message);
+		npcEndConversation (player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( response.getAsciiId().equals(response3) )
+	{
+		//npcAddConversationResponse ( player, new string_id (CONVO, response1)); // 
+		//npcAddConversationResponse ( player, new string_id (CONVO, response2)); // 
+		npcRemoveConversationResponse ( player, new string_id (CONVO, response3)); // 
+		string npcAnswer3 = "npc_4_" + questNum;
+		string_id message = new string_id (CONVO, npcAnswer3);// 
+		npcSpeak (player, message);
+		return SCRIPT_CONTINUE;
+	}
+
+ 	if ( response.getAsciiId().equals(response4) ) //
+ 	{
+ 		string npcAnswer4 = "npc_backtowork";
+ 		string_id message = new string_id (CONVO, npcAnswer4);// 
+ 		npcSpeak(player, message);
+		npcEndConversation (player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( response.getAsciiId().equals(response5) ) //
+	{
+		string npcAnswer5 = "npc_reset";
+		string_id message = new string_id (CONVO, npcAnswer5);// 
+		npcSpeak(player, message);
+		resetPlayer(self, player, questNum);
+		npcEndConversation (player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( response.getAsciiId().equals(response6) ) //
+	{
+		string npcAnswer6 = "npc_quit";
+		string_id message = new string_id ("static_npc/default_dialog", npcAnswer6);//
+		npcSpeak(player, message);
+		resetOtherQuest(self, player);
+		npcEndConversation (player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( response.getAsciiId().equals(response7) ) //
+	{
+		string npcAnswer7 = "npc_continue";
+		string_id message = new string_id ("static_npc/default_dialog", npcAnswer7);//
+		npcSpeak(player, message);
+		npcEndConversation (player);
+		return SCRIPT_CONTINUE;
+	}	
+
+	
+
+	return SCRIPT_CONTINUE;
+
+}
+
+void giveReward (obj_id self, obj_id player, int questNum)
+{
+	string datatable = getStringObjVar (self, "quest_table");
+	datatable = "datatables/npc/random_quest/" + datatable + ".iff";
+	string questID = dataTableGetString (datatable, questNum, "temp_objvar");
+	string gatingString = dataTableGetString (datatable, questNum, "overall_objvar");
+	string playerScript = dataTableGetString (datatable, questNum, "player_script");
+	
+	string type = dataTableGetString (datatable, questNum, "quest_type");
+	if (type == "rescue" || type == "escort" || type == "arrest")
+	{
+		obj_id vip = getObjIdObjVar (player, questID + ".vip");
+		messageTo (vip, "stopFollowing", null, 2, true);
+	}		
+	
+	obj_id playerInv = utils.getInventoryContainer(player);
+	string reward = dataTableGetString (datatable, questNum, "reward");
+	
+	if (reward == null)
+	{
+		reward = "none";
+	}		
+	
+	int credits = dataTableGetInt (datatable, questNum, "credits");
+	
+	if (credits != 0)
+	{
+		money.bankTo(money.ACCT_JABBA, player, 25);		
+		sendSystemMessage (player, "25 credits have been deposited in your bank account.", null);
+	}		
+	
+	if (reward != "none")
+	{
+		createObject (reward, playerInv, "");
+		sendSystemMessage (player, "A gift has been placed in your inventory for completing this task.", null);
+	}		
+
+	obj_id waypoint = getObjIdObjVar (player, questID + ".waypointhome");
+	if (waypoint != null)
+	{
+		destroyWaypointInDatapad(waypoint, self);
+	}
+		
+	removeObjVar (player, questID);
+	removeObjVar (player, "quest_table");
+	removeObjVar (player, "questNum");
+	removeObjVar (player, "boss");
+		
+	if (hasScript (player, playerScript))
+	{
+		detachScript (player, playerScript);
+	}		
+	return;
+}	
+
+void resetPlayer (obj_id self, obj_id player, int questNum)
+{
+	string datatable = getStringObjVar (self, "quest_table");
+	datatable = "datatables/npc/random_quest/" + datatable + ".iff";
+	string questID = dataTableGetString (datatable, questNum, "temp_objvar");
+	string gatingString = dataTableGetString (datatable, questNum, "overall_objvar");
+	string playerScript = dataTableGetString (datatable, questNum, "player_script");
+	
+	string type = dataTableGetString (datatable, questNum, "quest_type");
+	if (type == null)
+	{
+		return;
+	}
+	
+	if (type == "rescue" || type == "escort" || type == "arrest")
+	{
+		obj_id vip = getObjIdObjVar (player, questID + ".vip");
+		messageTo (vip, "stopFollowing", null, 2, true);
+	}		
+	
+	removeObjVar (player, questID);
+	removeObjVar (player, "quest_table");
+	removeObjVar (player, "questNum");
+	removeObjVar (player, "boss");
+	
+	if (hasScript (player, playerScript))
+	{
+		detachScript (player, playerScript);
+	}		
+
+	return;
+}	
+
+boolean checkForItem (obj_id inv, obj_id player, int questNum)
+{
+	string datatable = getStringObjVar (player, "quest_table");
+	string giveMe = dataTableGetString (datatable, questNum, "deliver_object");
+	boolean hadIt = false;
+
+	obj_id[] contents = getContents(inv);
+	for ( int i = 0; i < contents.length; i++ )
+	{
+		string itemInInventory = getTemplateName (contents[i]);
+		if (itemInInventory == giveMe)
+		{
+			destroyObject (contents[i]);
+			hadIt = true;
+		}			
+	}
+	return hadIt;
+}	
+
+boolean checkForFetchItem (obj_id inv, obj_id player, int questNum)
+{
+	string datatable = getStringObjVar (player, "quest_table");
+	string giveMe = dataTableGetString (datatable, questNum, "retrieve_object");
+	boolean hadIt = false;
+
+	obj_id[] contents = getContents(inv);
+	for ( int i = 0; i < contents.length; i++ )
+	{
+		string itemInInventory = getTemplateName (contents[i]);
+		if (itemInInventory == giveMe)
+		{
+			destroyObject (contents[i]);
+			hadIt = true;
+		}			
+	}
+	return hadIt;
+}	
+
+boolean isOnQuest (obj_id player)
+{
+	if (hasScript (player, "npc.static_quest.quest_player"))
+	{
+		return true;
+	}
+	
+	if (hasScript (player, "npc.random_quest.quest_player"))
+	{
+		return true;
+	}
+	
+	if (hasScript (player, "theme_park.imperial.quest_player"))
+	{
+		return true;
+	}
+	
+	if (hasScript (player, "theme_park.rebel.quest_player"))
+	{
+		return true;
+	}
+	
+	if (hasScript (player, "theme_park.jabba.quest_player"))
+	{
+		return true;
+	}
+	
+	if (hasScript (player, "theme_park.jabba.quest_bldg"))
+	{
+		return true;
+	}	
+
+	if (hasScript (player, "theme_park.jabba.quest_rantok"))
+	{
+		return true;
+	}
+	
+	if (hasScript (player, "theme_park.rebel.quest_bldg"))
+	{
+		return true;
+	}
+	
+	if (hasScript (player, "theme_park.imperial.quest_bldg"))	
+	{
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
+
+void resetOtherQuest (obj_id self, obj_id player)
+{
+	string datatable = "datatables/npc/static_quest/all_quest_names.iff";
+	string[] questIDs = dataTableGetStringColumnNoDefaults (datatable, "quest_ids");
+	
+	if (questIDs == null)
+	{
+		return;
+	}	
+	
+	for ( int i = 0; i < questIDs.length; ++i )
+	{
+		if ( hasObjVar (player, questIDs[i] + ".waypoint"))
+		{
+			obj_id waypoint = getObjIdObjVar (player, questIDs[i] + ".waypoint");
+			
+			if (waypoint != null)
+			{
+				destroyWaypointInDatapad(waypoint, player);
+			}
+		}
+		
+		if (hasObjVar (player, questIDs[i] + ".escort"))
+		{
+			obj_id vip = getObjIdObjVar (player, questIDs[i] + ".escort");
+			messageTo (vip, "stopFollowing", null, 2, true);
+		}			
+		
+		if (hasObjVar (player, questIDs[i]))
+		{
+			removeObjVar (player, questIDs[i]);
+		}
+	}		
+	
+	string[] questScripts = dataTableGetStringColumnNoDefaults (datatable, "quest_scripts");
+	
+	if (questScripts == null)
+	{
+		return;
+	}				
+	
+	for (int x = 0; x < questScripts.length; ++x )
+	{
+		if (hasScript (player, questScripts[x]))
+		{
+			detachScript (player, questScripts[x]);
+		}
+	}
+	
+	removeObjVar (player, "quest_table");
+	removeObjVar (player, "questNum");
+	return;
+}

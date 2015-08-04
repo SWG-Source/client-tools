@@ -1,0 +1,259 @@
+include library.ai_lib;
+include library.beast_lib;
+include library.pclib;
+include library.pet_lib;
+include library.trial;
+include library.utils;
+include library.vehicle;
+
+trigger OnAttach()
+{
+	detachScript(self, "ai.creature_combat");
+	detachScript(self, "systems.vehicle_system.vehicle_ping");
+	detachScript(self, "systems.vehicle_system.vehicle_base");
+	
+	removeTriggerVolume(ai_lib.ALERT_VOLUME_NAME);
+	removeTriggerVolume(ai_lib.AGGRO_VOLUME_NAME);
+	setRegenRate(self, HEALTH, 0);
+	
+	trial.setHp(self, rand(400000, 500000));
+	
+	messageTo(self, "findTarget", null, rand(10.0f, 20.0f), false);
+	messageTo(self, "snowspeederHeight", null, rand(5.0f, 8.0f), false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitateTarget(obj_id target)
+{
+	if(!isIdValid(target))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!isPlayer(target) && !pet_lib.isPet(target) && !beast_lib.isBeast(target))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(aiIsKiller(self))
+	{
+		if(pet_lib.isPet(target))
+		{
+			pet_lib.killPet(target);
+		}
+		else if(beast_lib.isBeast(target))
+		{
+			beast_lib.killBeast(target, self);
+		}
+		else
+		{
+			pclib.coupDeGrace(target, self);
+		}
+	}
+
+	trial.bumpSession(self, "target");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler findTarget()
+{
+	if(!exists(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] allTar = getObjectsInCone(self, utils.findLocInFrontOfTarget(self, 96.0f), 96.0f, 30.0f);
+
+	resizeable obj_id[] validTargets = new obj_id[0];
+
+	if(allTar == null || allTar.length <= 0)
+	{
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	for(int i=0;i<allTar.length;i++)
+	{
+
+		if(allTar[i] == self)
+			continue;
+		if(!pvpCanAttack(self, allTar[i]))
+			continue;
+		if(isDead(allTar[i]))
+			continue; 
+			
+		validTargets.add(allTar[i]);
+	}
+
+	if(validTargets == null || validTargets.length == 0)
+	{
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id target = validTargets[rand(0, validTargets.length - 1)];
+	//get social group - this is to avoid shooting tauntaun
+	string social = ai_lib.getSocialGroup(target);
+	if(social == null)
+	{
+		LOG("logMillbarge", "Creature's Social Group was Null - Bailing");
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	if(!exists(target))
+	{
+		LOG("logMillbarge", "Target does not exist!");
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	if(isIdNull(target))
+	{
+		LOG("logMillbarge", "Target ID is NULL!");
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	if(!isIdValid(target))
+	{
+		LOG("logMillbarge", "Object ID is INVALID!!!");
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	if(isDead(target))
+	{
+		LOG("logMillbarge", "TARGET is DEAD!!!!");
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	if(social.equals("tauntaun"))
+	{
+		LOG("logMillbarge", "IT IS A TAUNTAUN!");
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	if(!canSee(self, target))
+	{
+		LOG("logMillbarge", "Can not see TARGET! - Re-Rolling");
+		messageTo(self, "findTarget", null, 1.0f, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	location loc = getLocation(self);
+	obj_id player = getClosestPlayer(loc);
+
+	if(!isIdValid(player))
+	{
+		player = self;
+	}
+
+	createClientProjectileObjectToObject(player, "object/weapon/ranged/turret/shared_turret_energy.iff", self, "muzzle", target, "root", 125.0f, 3.0f, false, 0, 0, 0, 0);
+	createClientProjectileObjectToObject(player, "object/weapon/ranged/turret/shared_turret_energy.iff", self, "muzzle2", target, "root", 125.0f, 3.0f, false, 0, 0, 0, 0);
+	queueCommand(self, ##"hoth_ai_speeder_shoot", target, "", COMMAND_PRIORITY_DEFAULT);
+	messageTo(self, "findTarget", null, 1.0f, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler snowspeederHeight()
+{
+	if(!exists(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(isDisabled(self))
+	{
+		vehicle.setHoverHeight(self, 1.0f);
+		destroySnowSpeeder(self);
+		return SCRIPT_CONTINUE;
+	}
+	if(hasObjVar(self, "speederHeight"))
+	{
+		monitorAtatProgress(self);
+
+		float newHeight = rand(8.0f, 16.0f);
+		vehicle.setHoverHeight(self, newHeight);
+
+		//debugging objvar set
+		setObjVar(self, "speederHeight", newHeight);
+
+		//continue sending messageTo(s) to keep them actively changing height
+		messageTo(self, "snowspeederHeight", null, rand(5.0f, 8.0f), false);			
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDisabled (obj_id killer)
+{
+	//make sure this is a speeder
+	if(hasObjVar(self, "speederHeight"))
+	{
+		//set the HoverHeight to the ground.
+		vehicle.setHoverHeight(self, 0.2f);
+
+		destroySnowSpeeder(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+void destroySnowSpeeder(obj_id disabledSnowspeeder)
+{
+	//set invulnerable so players
+	setInvulnerable(disabledSnowspeeder, true);
+	
+	//find a player to play the clientEffect for
+	location loc = getLocation(disabledSnowspeeder);
+	obj_id player = getClosestPlayer(loc);
+	
+	playClientEffectObj(player, "appearance/pt_aerialstrike_explosion.prt", disabledSnowspeeder, "root");
+	//player particle effect
+	dictionary disabledAiSpeeder = new dictionary();
+	disabledAiSpeeder.put("disabledHothSpeeder", disabledSnowspeeder);
+	messageTo(disabledSnowspeeder, "deleteDisabledSnowspeeder", disabledAiSpeeder, 1.0f, false);
+}
+
+messageHandler deleteDisabledSnowspeeder()
+{
+	obj_id disabledHothSpeeder = params.getObjId("disabledHothSpeeder");
+	destroyObject(disabledHothSpeeder);
+	
+	return SCRIPT_CONTINUE;
+}
+
+void monitorAtatProgress(obj_id snowspeeder)
+{
+	if(!isIdValid(snowspeeder) || !exists(snowspeeder))
+	{
+		return;
+	}
+	
+	obj_id[] atats = trial.getObjectsInInstanceByObjVar(snowspeeder, "isAtat");
+
+	if(atats == null || atats.length == 0)
+	{
+		return;
+	}
+
+	for(int i = 0; i < atats.length; i++)
+	{
+		if(isInvulnerable(atats[i]))
+		{
+			//the ATAT has destroyed the generator - stop respawning.
+			setObjVar(snowspeeder, "respawn", -1);
+		}
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+

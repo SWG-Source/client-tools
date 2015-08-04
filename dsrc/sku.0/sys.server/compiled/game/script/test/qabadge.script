@@ -1,0 +1,354 @@
+/* Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        qabadge.script
+ * Description:  QA script used to grant and revoke specific badges via SUI element
+ * @author       $Author: Jesse Benjamin $
+ * @version      $Revision: #3 $
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.badge;
+include library.sui;
+include library.utils;
+include java.util.HashSet;
+include library.qa;
+
+/***** TRIGGERS & FUNCTIONS *******************************************************/
+trigger OnAttach()
+{
+	if (isGod(self))
+	{	
+		if(getGodLevel(self) < 10)
+		{
+			detachScript(self, "test.qabadge");	
+			sendSystemMessage(self, "You do not have the appropriate access level to use this script.", null);
+		}
+	}
+	else if (!isGod(self))
+	{
+		detachScript(self, "test.qabadge");	
+	}
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnSpeaking(string text)
+{
+	obj_id player = self;
+	if(isGod(player))
+	{
+		if (toLower(text).equals("qabadges") )
+		{
+			// Create a String array that has all badge types in it, with no duplications
+			Vector vectorMenuArray = new Vector();
+			vectorMenuArray.addElement("*Add All Badges*");
+			vectorMenuArray.addElement("*Remove All Badges*");
+
+			string[] badgePages = getAllCollectionPagesInBook("badge_book");
+			if ((badgePages != null) && (badgePages.length > 0))
+			{
+				for (int i = 0; i < badgePages.length; ++i)
+				{
+					if (!badgePages[i].equals("bdg_accumulation"))
+						vectorMenuArray.addElement(badgePages[i]);
+				}
+			}
+			
+			String[] mainMenuArray = new String[vectorMenuArray.size()];
+			vectorMenuArray.toArray(mainMenuArray);
+			
+			utils.setScriptVar( self, "qabadge.mainMenu", mainMenuArray );
+			if (mainMenuArray.length < 1)
+				sendSystemMessageTestingOnly(player, "Badge UI creation failed.");
+			else
+			{
+				//save off array options so we can search later
+				utils.setScriptVar( player, "qabadge.mainMenu", mainMenuArray );
+				//create SUI with the options you added to the array
+				qa.refreshMenu(player, "Choose the Badge", "Badge Granter", mainMenuArray, "mainMenuOptions", true, "qabadge.pid");
+			}
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/***** Message Handlers *******************************************************/
+
+//*****************************************************************************
+//
+//Main Menu, this is populated Dynamically from the datatable
+//
+//
+//
+//******************************************************************************
+messageHandler mainMenuOptions()
+{
+	if(isGod(self))
+	{
+		if ( utils.hasScriptVar( self, "qabadge.pid"))
+		{
+			//get previous menu array
+			string previousBadgeArray[] = utils.getStringArrayScriptVar( self, "qabadge.mainMenu" );
+			obj_id player = sui.getPlayerId(params);
+
+			if ( (params == null) || (params.isEmpty()) )
+			{
+				sendSystemMessageTestingOnly(player,"Failing, params empty");
+				utils.removeScriptVarTree(player,"qabadge");
+				utils.removeScriptVarTree(player,"qatool");
+				return SCRIPT_CONTINUE;
+			}
+
+			int btn = sui.getIntButtonPressed(params);
+			int idx = sui.getListboxSelectedRow(params);
+
+			//used this to add some extra functionality to buttons
+			if (btn == sui.BP_CANCEL)
+			{
+				//this means we are done, and we need to clean the scriptvars
+				utils.removeScriptVarTree(player,"qabadge");
+				utils.removeScriptVarTree(player,"qatool");
+				return SCRIPT_CONTINUE;
+			}
+
+			if(btn == sui.BP_REVERT)
+			{
+				//Go back to tool Mainmenu
+				string[] options = utils.getStringArrayScriptVar(player, "qatool.toolMainMenu");
+				string mainTitle = utils.getStringScriptVar(player, "qatool.title");
+				string mainPrompt = utils.getStringScriptVar(player, "qatool.prompt");
+				if(options == null)
+				{
+					sendSystemMessageTestingOnly(player, "You didn't start from the main tool menu");
+					String[] mainMenuArray = utils.getStringArrayScriptVar(player, "qabadge.mainMenu");
+					qa.refreshMenu(player, "Choose the Badge", "Badge Granter", mainMenuArray, "mainMenuOptions", true, "qabadge.pid");
+					return SCRIPT_CONTINUE;
+				}
+				else
+				{
+					qa.refreshMenu( self, mainPrompt, mainTitle, options, "toolMainMenu", true, "qatool.pid");
+					utils.removeScriptVarTree(player,"qabadge");
+					return SCRIPT_CONTINUE;
+				}
+			}
+
+			if (idx < 0 ) //this means you didnt have anything selected and the window disappeared
+			{
+				//cleanScriptVars(player);
+				utils.removeScriptVarTree(player,"qabadge");
+				utils.removeScriptVarTree(player,"qatool");
+				sendSystemMessageTestingOnly(player, "You didnt have anything selected");
+				return SCRIPT_CONTINUE;
+			}
+
+			//get the previous badge choice
+			string badgeChoice = previousBadgeArray[idx];
+
+			//Determine if add all or remove all were selected
+			if(badgeChoice == "*Add All Badges*")
+			{
+				string[] allBadges = getAllCollectionSlotsInBook("badge_book");
+				if ((allBadges != null) && (allBadges.length > 0))
+				{
+					for(int i =0; i < allBadges.length; i++)
+						badge.grantBadge(player, allBadges[i]);
+				}
+
+				String[] mainMenuArray = utils.getStringArrayScriptVar(player, "qabadge.mainMenu");
+				CustomerServiceLog("qaTool","User: (" + self + ") " + getName(self) + " has added all in game badges from their current character using the QA Badge Tool.");								
+				qa.refreshMenu(player, "Choose the Badge", "Badge Granter", mainMenuArray, "mainMenuOptions", "qabadge.pid", sui.OK_CANCEL_REFRESH);
+				return SCRIPT_CONTINUE;
+			}
+
+			if(badgeChoice == "*Remove All Badges*")
+			{					
+				string[] allBadges = getAllCollectionSlotsInBook("badge_book");
+				if ((allBadges != null) && (allBadges.length > 0))
+				{
+					for(int i =0; i < allBadges.length; i++)
+						badge.revokeBadge(player, allBadges[i], true);
+				}
+					
+				String[] mainMenuArray = utils.getStringArrayScriptVar( player, "qabadge.mainMenu");
+				CustomerServiceLog("qaTool","User: (" + self + ") " + getName(self) + " has removed all their badges from their current character using the QA Badge Tool.");				
+				qa.refreshMenu(player, "Choose the Badge", "Badge Granter", mainMenuArray, "mainMenuOptions", "qabadge.pid", sui.OK_CANCEL_REFRESH);
+				return SCRIPT_CONTINUE;
+			}
+
+			string[] menuArray = getAllCollectionSlotsInPage(badgeChoice);
+
+			if ((menuArray == null) || (menuArray.length < 1))
+				sendSystemMessageTestingOnly(player, "Badge UI creation failed.");
+			else
+			{
+				//setting show boolean to false so I can change the name of the cancel button
+				qa.refreshMenu(self, "Choose the Badge", "Badge Granter", menuArray, "assignMenuOptions", "qabadge.pid", sui.OK_CANCEL_REFRESH);
+
+				//setting scriptvars needed to go back to main menu and to refresh the current menu
+				utils.setScriptVar( self, "qabadge.Menu", menuArray );
+				utils.setScriptVar( self, "qabadge.Main_choice", badgeChoice);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler assignMenuOptions()
+{
+	if(isGod(self))
+	{
+		if ( utils.hasScriptVar( self, "qabadge.pid"))
+		{
+			//get scriptvar array needed to know what the persons choice was
+			string previousBadgeArray[] = utils.getStringArrayScriptVar( self, "qabadge.Menu" );
+			obj_id player = sui.getPlayerId(params);
+			if ( (params == null) || (params.isEmpty()) )
+			{
+				sendSystemMessageTestingOnly(player,"Failing, params empty");
+				utils.removeScriptVarTree(player,"qabadge");
+				utils.removeScriptVarTree(player,"qatool");
+				return SCRIPT_CONTINUE;
+			}
+
+			int btn = sui.getIntButtonPressed(params);
+
+			//adding additional functionality to ok and cancel buttons
+			if(btn == sui.BP_CANCEL)
+			{
+				//this means we are done, and we need to clean the scriptvars
+				utils.removeScriptVarTree(player,"qabadge");
+				utils.removeScriptVarTree(player,"qatool");
+				return SCRIPT_CONTINUE;
+			}
+				//in this case cancel means back, so I redraw the main menu
+			if(btn == sui.BP_REVERT)
+			{
+				String[] mainMenuArray = utils.getStringArrayScriptVar( player, "qabadge.mainMenu");
+				qa.refreshMenu(player, "Choose the Badge", "Badge Granter", mainMenuArray, "mainMenuOptions", "qabadge.pid", sui.OK_CANCEL_REFRESH);
+				return SCRIPT_CONTINUE;
+			}
+
+			int idx = sui.getListboxSelectedRow(params);
+
+			//here we have picked a badge and are going to assign it
+			if (idx < 0 ) //this means you didnt have anything selected and the window disappeared
+			{
+				utils.removeScriptVarTree(player,"qabadge");
+				utils.removeScriptVarTree(player,"qatool");
+				sendSystemMessageTestingOnly(player, "You didnt have anything selected");
+				return SCRIPT_CONTINUE;
+			}
+			//get the choice made
+			string badgeChoice = previousBadgeArray[idx];
+
+			//assign the badge chosen
+			badgeAssign(player, badgeChoice);
+
+			//need to know what the chcice from the main menu was so we can redraw the current menu
+			string refreshBadge = utils.getStringScriptVar(player, "qabadge.Main_choice");
+
+			//redrawing current menu
+			string[] menuArray = getAllCollectionSlotsInPage(refreshBadge);
+
+			qa.refreshMenu(player, "Choose the Badge", "Badge Granter", menuArray, "assignMenuOptions", "qabadge.pid", sui.OK_CANCEL_REFRESH);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+
+}
+
+
+
+
+//******** Misc Functions *************************************************************
+//*************************************************************************************
+
+//********* Badge Assign **************************************************************
+// checks to see if you have badge yet, if so, it is revoked if not, granted
+//
+//
+//*************************************************************************************
+
+void badgeAssign(obj_id player, string badgeName)
+{
+	if(isGod(player))
+	{
+		//does the player have the badge already?
+		boolean hasBadge = badge.hasBadge(player,badgeName);
+		//if not, give it to them
+		if (hasBadge != true)
+		{
+			badge.grantBadge(player, badgeName);
+			sendSystemMessageTestingOnly(player, "Badge granted");
+			badge.checkBadgeCount(player);
+			CustomerServiceLog("qaTool","User: (" + player + ") " + getName(player) + " has added a badge to their current character using the QA Badge Tool.");										
+			explorerBadge(player);
+		}
+		//if so, take it away
+		else
+		{
+			badge.revokeBadge(player, badgeName, true);
+			sendSystemMessageTestingOnly(player, "Badge revoked");
+			badge.checkBadgeCount(player);
+			CustomerServiceLog("qaTool","User: (" + player + ") " + getName(player) + " has removed a badge to their current character using the QA Badge Tool.");													
+			explorerBadge(player);
+		}
+	}
+}
+
+void explorerBadge(obj_id self)
+{
+	if(isGod(self))
+	{
+		int[] intExplorerBadges = dataTableGetIntColumn("datatables/badge/exploration_badges.iff", "intIndex");
+		int intExplBadgeCount = 0;
+
+		for(int intI = 0; intI<intExplorerBadges.length; intI++)
+		{
+			string badgeName = getCollectionSlotName(intExplorerBadges[intI]);
+			if((badgeName != null) && (badgeName.length() > 0) && badge.hasBadge(self, badgeName))
+				intExplBadgeCount = intExplBadgeCount + 1;
+		}
+		if(intExplBadgeCount>=10)
+			if(!badge.hasBadge(self, "bdg_exp_10_badges"))
+			{
+				// you get the 10 badge
+				badge.grantBadge(self, "bdg_exp_10_badges");
+				return;
+			}
+		if(intExplBadgeCount>=20)
+			if(!badge.hasBadge(self, "bdg_exp_20_badges"))
+			{
+				// you get the 20 badge
+				badge.grantBadge(self, "bdg_exp_20_badges");
+				return;
+			}
+		if(intExplBadgeCount>=30)
+			if(!badge.hasBadge(self, "bdg_exp_30_badges"))
+			{
+				// you get a badge
+				badge.grantBadge(self, "bdg_exp_30_badges");
+				return;
+			}
+		if (intExplBadgeCount>=40)
+			if(!badge.hasBadge(self, "bdg_exp_40_badges"))
+			{
+				// you get a badge
+				badge.grantBadge(self, "bdg_exp_40_badges");
+				return;
+			}
+		if(intExplBadgeCount>=45)
+			if(!badge.hasBadge(self, "bdg_exp_45_badges"))
+			{
+				// you get a badge
+				badge.grantBadge(self, "bdg_exp_45_badges");
+				return;
+			}
+	}
+
+}
+

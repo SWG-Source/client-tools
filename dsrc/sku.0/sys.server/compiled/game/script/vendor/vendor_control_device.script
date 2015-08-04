@@ -1,0 +1,240 @@
+include library.utils;
+include library.sui;
+include library.player_structure;
+include library.trace;
+include library.turnstile;
+include library.vendor_lib;
+include location;
+
+const string_id UNPACK_VENDOR					= new string_id("sui", "unpack_vendor");
+const string_id SID_ONLY_IN_HOUSES				= new string_id("sui", "only_in_houses");
+const string_id SID_VENDOR_PUBLIC_ONLY				= new string_id("player_structure", "vendor_public_only");
+const string_id SID_VENDOR_NOT_IN_SHIP				= new string_id("player_structure", "vendor_not_in_ship");
+
+
+trigger OnAttach()
+{
+	setObjVar(self, "noTrade", 1);	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	setObjVar(self, "noTrade", 1);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	obj_id[] contents = getContents(self);
+
+	if (contents == null || contents.length == 0)
+		return SCRIPT_CONTINUE;
+
+	obj_id vendor = contents[0];
+	obj_id player = utils.getContainingPlayer(self);
+
+	if (hasObjVar(vendor, "vendor_initialized") && !isCommoditiesServerAvailable())
+	{
+		// Can't destroy an initialized vendor if the commodities server is not available
+		sui.msgbox(vendor, player, "@player_structure:destroy_vendor_cs_unavailable_d",
+			sui.OK_ONLY, "@player_structure:destroy_vendor_cs_unavailable_t", "noHandler");
+	}
+	else
+	{
+		CustomerServiceLog("vendor", "Vendor destroyed by owner via vendor control device. Vendor: " + vendor + " Location: " + getLocation(vendor));
+		destroyObject(vendor);
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnLostItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	destroyObject(self);
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes( obj_id objPlayer, string[] strNames, string[] strAttribs)
+{
+
+	int intIndex= utils.getValidAttributeIndex(strNames);
+	if (intIndex==-1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(!utils.isNestedWithin(self, player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isDead(player) || isIncapacitated(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	location loc = getLocation(player);
+	if ( isIdValid(loc.cell)) // world
+	{
+		// Check to see if the destination structure is private.
+		obj_id structure = getTopMostContainer( player );
+		int got = getGameObjectType(structure);
+
+		if (isGameObjectTypeOf(got, GOT_ship))
+		{
+			sendSystemMessage(player, SID_VENDOR_NOT_IN_SHIP);
+			return SCRIPT_CONTINUE;
+		}
+
+		if (isGameObjectTypeOf(got, GOT_building))
+		{
+			if (!permissionsIsPublic(structure))
+			{
+				sendSystemMessage(player, SID_VENDOR_PUBLIC_ONLY);
+				return SCRIPT_CONTINUE;
+			}
+		}
+		else
+		{
+			sendSystemMessage(player, SID_ONLY_IN_HOUSES);
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(!player_structure.isAdmin(structure,player) && getOwner(structure) != player)
+		{
+			sendSystemMessage(player, SID_ONLY_IN_HOUSES);
+			return SCRIPT_CONTINUE;
+		}
+
+		mi.addRootMenu(menu_info_types.SERVER_MENU9, UNPACK_VENDOR);
+		
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!utils.isNestedWithin(self, player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isDead(player) || isIncapacitated(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+		
+	if(item == menu_info_types.SERVER_MENU9) // Unpack Vendor
+	{	
+		// Do not allow vendor unpack if commodities server is unavailable
+		if (!isCommoditiesServerAvailable())
+			return SCRIPT_CONTINUE;
+
+		obj_id[] contents = getContents(self);
+		if(contents == null || contents.length != 1)
+		{
+			trace.log("vendorpackup", "%TU attempted to unpack a vendor, but the VCD did not contain one.", player, trace.TL_CS_LOG | trace.TL_ERROR_LOG);
+			return SCRIPT_CONTINUE;
+		}
+		obj_id vendor = contents[0];
+		obj_id cell = getContainedBy(player);
+		location loc = getLocation(player);
+		if (!isIdNull(cell))
+		{
+			
+			// Check to see if the destination structure is private.
+			obj_id structure = getTopMostContainer( player );
+			int got = getGameObjectType(structure);
+
+			if (isGameObjectTypeOf(got, GOT_ship))
+			{
+				sendSystemMessage(player, SID_VENDOR_NOT_IN_SHIP);
+				return SCRIPT_CONTINUE;
+			}
+
+			if (isGameObjectTypeOf(got, GOT_building))
+			{
+				if (!permissionsIsPublic(structure))
+				{
+					sendSystemMessage(player, SID_VENDOR_PUBLIC_ONLY);
+					return SCRIPT_CONTINUE;
+				}
+			}
+			else
+			{
+				sendSystemMessage(player, SID_ONLY_IN_HOUSES);
+				return SCRIPT_CONTINUE;
+			}
+			
+			if(!player_structure.isAdmin(structure,player) && getOwner(structure) != player)
+			{
+				sendSystemMessage(player, SID_ONLY_IN_HOUSES);
+				return SCRIPT_CONTINUE;
+			}
+
+			// check for lot over limit, and enforce restriction
+			if (getAccountNumLots(getPlayerObject(player)) > player_structure.MAX_LOTS)
+			{
+				obj_id lotOverlimitStructure = getObjIdObjVar(player, "lotOverlimit.structure_id");
+				if (isIdValid(lotOverlimitStructure) && (lotOverlimitStructure != structure))
+				{
+					string lotOverlimitStructureName = getStringObjVar(player, "lotOverlimit.structure_name");
+					if (lotOverlimitStructureName == null)
+						lotOverlimitStructureName = "";
+
+					string lotOverlimitStructureLocation = getStringObjVar(player, "lotOverlimit.structure_location");
+					if (lotOverlimitStructureLocation == null)
+						lotOverlimitStructureLocation = "";					
+
+					sendSystemMessage(player, "You are currently over the lot limit, and cannot drop any item into (or move around items within) any factory or structure, other than the " + lotOverlimitStructureName + " structure located at " + lotOverlimitStructureLocation + " that caused you to exceed the lot limit.", null);
+					return SCRIPT_CONTINUE;
+				}
+			}
+
+			if (putInPosition(vendor, cell, loc))
+			{
+				if (!hasObjVar(vendor, vendor_lib.VAR_PACKUP_VERSION))
+				{
+					// version 0 unpack support
+					setObjVar(vendor_lib.getAuctionContainer(vendor), "vendor.needs_old_reinitialize", 1);
+					reinitializeVendor(vendor, player);
+				}
+				else
+				{
+					// version 1 unpack support
+					//  -- add future version number checks as needed
+					updateVendorStatus(vendor, VENDOR_STATUS_FLAG_NONE);
+				}
+
+				trace.log("vendorpackup", "%TU unpacked their vendor (" + vendor + ") from vendor control device ( " + self + ")", player, trace.TL_CS_LOG);
+				// Refresh menu.
+				sendDirtyObjectMenuNotification( vendor );
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				sendSystemMessage(player, new string_id("player_structure", "drop_npc_vendor_perm"));
+			}
+		}
+		else
+		{
+			sendSystemMessage(player, new string_id("player_structure", "drop_npc_vendor_building"));
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	return SCRIPT_OVERRIDE;
+}
+
+

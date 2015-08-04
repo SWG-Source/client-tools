@@ -1,0 +1,249 @@
+include developer.perforce;
+include library.chat;
+include library.utils;
+include java.util.HashMap;
+include java.util.Set;
+include java.util.Iterator;
+
+trigger OnSpeaking(string text)
+{
+	if(! isGod(self))
+		return SCRIPT_CONTINUE;
+
+	java.util.StringTokenizer st = new java.util.StringTokenizer(text);
+	resizeable String[] args = new Vector();
+	while(st.hasMoreTokens())
+	{
+		args.add(st.nextToken());
+	}
+
+	if(! (args[0].equals("p4")))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(args.length > 1 && args[1].equals("login"))
+	{
+		perforce.setupPerforce();
+	}
+	else if(args.length > 1 && args[1].equals("edit"))
+	{
+		if(args.length > 2)
+		{
+			String arg2 = args[2];
+			perforce.openExistingFileForExclusiveEdit(arg2);
+		}
+	}
+	else if(args.length > 1 && args[1].equals("opened"))
+	{
+		//@todo : put this in a text box view
+		String[] results = perforce.opened();
+		if(results != null)
+		{
+			String openedFiles = new String();
+			int iter = 0;
+			for(iter = 0; iter < results.length; ++iter)
+			{
+				openedFiles += results[iter] + "\n";
+			}
+
+			int page = createSUIPage("/Script.messageBox", self, self);
+			setSUIProperty(page, "Prompt.lblPrompt", "LocalText", openedFiles);
+			setSUIProperty(page, "bg.caption.lblTitle", "Text", "Perforce Opened");
+			setSUIProperty(page, "Prompt.lblPrompt", "Editable", "false");
+			setSUIProperty(page, "Prompt.lblPrompt", "GetsInput", "true");
+			setSUIProperty(page, "btnCancel", "Visible", "false");
+			setSUIProperty(page, "btnRevert", "Visible", "false");
+			showSUIPage(page);
+			flushSUIPage(page);			
+		}
+		else
+		{
+			chat.chat(self, "there was an error retrieving the file listing");
+		}
+	}
+	else if(args.length > 1 && args[1].equals("submit"))
+	{
+		String param = null;
+		int changeList = 0;
+		if(args.length > 2)
+		{
+			param = args[2];
+		}
+		
+		if(param != null)
+		{
+			changeList = utils.stringToInt(param);
+		}
+
+		String defaultChangeText = perforce.change(changeList);
+		int page = createSUIPage("/Script.textEditor", self, self);
+		setSUIProperty(page, "pageText.text", "LocalText", defaultChangeText);
+		setSUIProperty(page, "bg.caption.text", "Text", "Perforce Submit");
+		subscribeToSUIEvent(page, sui_event_type.SET_onButton, "btnOk", "onPerforceSubmitTextEditorBtnOk");
+		subscribeToSUIPropertyForEvent(page, sui_event_type.SET_onButton, "btnOk", "pageText.text", "LocalText");
+
+		showSUIPage(page);
+		flushSUIPage(page);
+	}
+	else if(args.length > 1 && args[1].equals("diff"))
+	{
+		String param = null;
+		int changeList = 0;
+		if(args.length > 2)
+		{
+			param = args[2];
+		}
+		
+		String diff = perforce.diff(param);
+		String[] diffLines = split(diff, '\n');
+		String diffedText = new String("\\#FFFFFF");
+		int iter = 0;
+		for(iter = 0; iter < diffLines.length; ++iter)
+		{
+			if(diffLines[iter].startsWith("-"))
+			{
+				diffedText += "\\#FF0000" + diffLines[iter] + "\n" + "\\#FFFFFF";
+			}
+			else if(diffLines[iter].startsWith("+"))
+			{
+				diffedText += "\\#00FF00" + diffLines[iter] + "\n" + "\\#FFFFFF";
+			}
+			else
+			{
+				diffedText += diffLines[iter] + "\n" + "\\#FFFFFF";
+			}
+		}
+
+		int page = createSUIPage("/Script.textEditor", self, self);
+		setSUIProperty(page, "pageText.text", "LocalText", diffedText);
+		setSUIProperty(page, "bg.caption.text", "Text", "Perforce Diff");
+		setSUIProperty(page, "pageText.text", "Editable", "false");
+		setSUIProperty(page, "pageText.text", "GetsInput", "true");
+		setSUIProperty(page, "outputPage", "Visible", "false");
+		setSUIProperty(page, "btnOk", "Visible", "false");
+		setSUIProperty(page, "btnCancel", "Visible", "false");
+		showSUIPage(page);
+		flushSUIPage(page);
+	}
+	else if(args.length < 2)
+	{
+		int page = createSUIPage("/Script.perforce", self, self);
+		HashMap changes = new HashMap();
+		// get a list of opened files
+		String[] openedFiles = perforce.opened();
+		String outputText = "p4 opened\n";
+		int iter = 0;
+		for(iter = 0; iter < openedFiles.length; ++iter)
+		{
+			String[] elems = split(openedFiles[iter], ' ');
+			if(elems.length > 0)
+			{
+				String fileSpec = elems[0];
+				if(elems.length > 2)
+				{
+					String action = elems[2];
+					if(elems.length > 3)
+					{
+						String change = elems[3];
+						if(change == "change" && elems.length > 4)
+						{
+							change = elems[4];
+						}
+						
+						if(! changes.containsKey(change))
+						{
+							resizeable String[] files = new Vector();
+							files.add(fileSpec);
+							changes.put(change, files);
+						}
+						else
+						{
+							resizeable String[] files = (Vector)changes.get(change);
+							files.add(fileSpec);
+						}
+					}
+				}
+			}
+			outputText += openedFiles[iter] + "\n";
+		}
+
+		clearSUIDataSourceContainer(page, "changes.dataTree");
+		
+		Set keySet = changes.keySet();
+		Iterator changesIter = keySet.iterator();
+		while(changesIter.hasNext())
+		{
+			String key = (String)changesIter.next();
+			resizeable String[] files = (Vector)changes.get(key);
+			addSUIDataSourceContainer(page, "changes.dataTree", key);
+			setSUIProperty(page, "changes.dataTree." + key, "text", key);
+			for(iter = 0; iter < files.length; ++iter)
+			{
+				String f = files[iter];
+				addSUIDataSourceContainer(page, "changes.dataTree." + key, f);
+				setSUIProperty(page, "changes.dataTree." + key + "." + f, "text", f);
+			}
+			
+		}
+		
+		
+		setSUIProperty(page, "outputPage.text", "LocalText", outputText);
+		showSUIPage(page);
+		flushSUIPage(page);
+		return SCRIPT_OVERRIDE;
+	}
+	
+	return SCRIPT_OVERRIDE;
+}
+
+messageHandler onPerforceSetupBtnOk()
+{
+	String userId = params.getString("boxInputUserId.inputUserId.LocalText");
+	String password = params.getString("boxInputPassword.inputPassword.LocalText");
+	setObjVar(self, "P4USER", userId);
+	setObjVar(self, "P4PASSWD", password);
+	forceCloseSUIPage(params.getInt("pageId"));
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler onPerforceSubmitTextEditorBtnOk()
+{
+	int page = params.getInt("pageId");
+	if(page < 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	String submissionContents = params.getString("pageText.text.LocalText");
+	if(submissionContents == null || (submissionContents.length() < 1))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	resizeable String[] outputWindowText = new Vector();
+	boolean submitSucceeded = perforce.submit(submissionContents, outputWindowText);
+	String results = new String();
+	if(submitSucceeded)
+	{
+		setSUIProperty(page, "pageText.text", "LocalText", "");
+		setSUIProperty(page, "pageText.text", "Text", "");
+		results += "\\##00FF00";
+	}
+	else
+	{
+		results += "\\##FF0000";
+	}
+
+	int iter = 0;
+	for(iter = 0; iter < outputWindowText.length; ++iter)
+	{
+		results += outputWindowText[iter] + "\n";
+	}
+
+	
+	setSUIProperty(page, "outputPage.text", "Text", results);
+	flushSUIPage(page);
+
+	return SCRIPT_CONTINUE;
+}
+

@@ -1,0 +1,1082 @@
+include library.beast_lib;
+include library.callable;
+include library.hue;
+include library.utils;
+include library.sui;
+include library.pet_lib;
+include library.create;
+include library.chat;
+include library.ai_lib;
+include library.battlefield;
+include library.factions;
+include library.consumable;
+include library.healing;
+include library.attrib;
+include library.vehicle;
+include library.pclib;
+include library.prose;
+include library.buff;
+include library.target_dummy;
+
+/*******************************************/
+//LOGGING
+const boolean debug 			= false;
+
+
+const string CREATURE_TABLE 		= "datatables/mob/creatures.iff";
+const string VCDPING_VCD_SCRIPT_NAME 	= "systems.vehicle_system.vcd_ping_response";
+const string MESSAGE_VEHICLE_ID      	= "vehicleId";
+const string_id SID_FAILED_TO_CALL	= new string_id("pet/pet_menu", "failed_to_call_vehicle");
+
+//Constants used to update the TCG PCD on initialization
+const string[] TCG_VEHICLE_UPDATE_LIST	= 
+{
+	"object/intangible/vehicle/landspeeder_organa_pcd.iff",
+	"object/intangible/vehicle/mechno_chair_pcd.iff",
+	"object/intangible/vehicle/sith_speeder_pcd.iff"
+};
+
+const int TCG_PCD_MAX_HEALTH 		= 15000;
+const int TCG_PCD_OLD_MAX_HEALTH 	= 1500;
+const int TCG_PCD_OLD_NEW_DIFFERENCE 	= 13500;
+const string TCG_VEHICLE_PCD_UPDATED 	= "tcg.vehicle_pcd_maxhealth_update";
+
+/*******************************************/
+
+trigger OnInitialize()
+{
+	if (debug)
+		LOG("vcdping-debug", "vehicle_control_device.OnInitialize(): self=[" + self + "] entered");
+
+	//-- Ensure that the VCD has the vehicle ping response script attached.
+	if (!hasScript(self, VCDPING_VCD_SCRIPT_NAME))
+	{
+		if (debug)
+			LOG("vcdping-debug", "vehicle_control_device.OnInitialize(): attaching script [" + VCDPING_VCD_SCRIPT_NAME + "] to VCD id=[" + self + "]");
+		attachScript(self, VCDPING_VCD_SCRIPT_NAME);
+	}
+
+	if (debug)
+		LOG("vcdping-debug", "vehicle_control_device.OnInitialize(): self=[" + self + "] exited");
+
+	if(hasObjVar(self, "pet.uses_left"))
+	{
+		int uses = getIntObjVar(self, "pet.uses_left");
+
+		if(uses <= 0)
+		{
+			destroyObject(self);
+		}
+	}
+
+	// fix up 40K HAM vehicles
+	if (!hasObjVar(self, "attrib.max_hp") || !hasObjVar(self, "attrib.hit_points"))
+	{
+		// try to find the owner of the vehicle so we can include that information in the logs
+		obj_id owner = self;
+
+		do
+		{
+			owner = getContainedBy(owner);
+
+		} while (isIdValid(owner) && !isPlayer(owner));
+
+		if (isIdValid(owner))
+		{
+			CustomerServiceLog("40K_HAM_vehicle_fixup", "vehicle PCD " + getName(self)
+				+ " (" + self + ") with current hp ("
+				+ (hasObjVar(self, "attrib.hit_points") ? Integer.toString(getIntObjVar(self, "attrib.hit_points")) : "not set")
+				+ ") max hp ("
+				+ (hasObjVar(self, "attrib.max_hp") ? Integer.toString(getIntObjVar(self, "attrib.max_hp")) : "not set")
+				+ ") owned by %TU "
+				+ "fixed to current hp (500) max hp (1500)", owner);
+		}
+		else
+		{
+			CustomerServiceLog("40K_HAM_vehicle_fixup", "vehicle PCD " + getName(self)
+				+ " (" + self + ") with current hp ("
+				+ (hasObjVar(self, "attrib.hit_points") ? Integer.toString(getIntObjVar(self, "attrib.hit_points")) : "not set")
+				+ ") max hp ("
+				+ (hasObjVar(self, "attrib.max_hp") ? Integer.toString(getIntObjVar(self, "attrib.max_hp")) : "not set")
+				+ ") "
+				+ "fixed to current hp (500) max hp (1500)");
+		}
+
+		setObjVar(self, "attrib.max_hp", 1500);
+		setObjVar(self, "attrib.hit_points", 500);
+	}
+	
+	obj_id current_vehicle = callable.getCDCallable(self);
+	
+	if(!isIdValid(current_vehicle))
+	{
+		setCount(self, 0);
+	}
+	else
+	{
+		setCount(self, 1);
+	}
+
+	//-------------------------------------
+	//UPDATE THE TCG MAX HEALTH AT PCD HERE
+	//-------------------------------------
+	//set when PCD already updated
+	if(hasObjVar(self, TCG_VEHICLE_PCD_UPDATED))
+		return SCRIPT_CONTINUE;
+
+	//if not updated get the template of the pcd	
+	string templateName = getTemplateName(self);
+	if(templateName == null || templateName.equals(""))
+		return SCRIPT_CONTINUE;
+	
+	string tcgPcd = "";
+	
+	//if the pcd is one we need to update get the pcd 	
+	for(int i = 0; i < TCG_VEHICLE_UPDATE_LIST.length; i++)
+	{
+		//search for the greatest possiblity first
+		if(!TCG_VEHICLE_UPDATE_LIST[i].startsWith(templateName))
+			continue;
+
+		tcgPcd = TCG_VEHICLE_UPDATE_LIST[i];
+		break;
+	}
+	if(tcgPcd == null || tcgPcd.equals(""))
+		return SCRIPT_CONTINUE;
+
+	if(!updateTcgVehicleMaxHealth(self))
+		CustomerServiceLog("vehicle_bug", "vehicle PCD " + getName(self) + "failed TCG PCD Max Health update.");
+
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	
+	obj_id myContainer = getContainedBy( self );
+	obj_id yourPad = utils.getPlayerDatapad(player);
+	if ( myContainer != yourPad )
+	{
+		if ( hasScript( myContainer, "ai.pet_control_device" ) )
+		{
+			//I am being accessed while inside of a pcd
+			// So I will move from here to your pad:
+			putIn( self, yourPad );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.VEHICLE_GENERATE )
+	{
+		if(ai_lib.aiIsDead(player))
+		{
+			sendSystemMessage(player, vehicle.SID_NOT_WHILE_DEAD);
+			return SCRIPT_CONTINUE;
+		}
+
+		if(callable.hasCallable(player, callable.CALLABLE_TYPE_RIDEABLE) && callable.getControlDeviceType(self) == callable.CALLABLE_TYPE_RIDEABLE)
+		{
+			obj_id cd = callable.getCallableCD(callable.getCallable(player, callable.CALLABLE_TYPE_RIDEABLE));
+			
+			if(cd != self)
+			{
+				sendSystemMessage(player, pet_lib.SID_SYS_CANT_CALL_ANOTHER_RIDEABLE);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				vehicle.storeVehicle(self, player);
+				callable.restoreCallable(player);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		if(callable.hasCDCallable(self))
+		{
+			obj_id currentPet = callable.getCDCallable(self);
+			
+			if(isIdValid(currentPet))
+			{
+				dictionary dict = new dictionary();
+				dict.put("signalId", getGameTime());
+				
+				sendSystemMessage(player, SID_FAILED_TO_CALL);
+				
+				messageTo(currentPet, "destroyNow", dict, 0, false);
+				
+				callable.setCDCallable(self, null);
+				
+				sendDirtyObjectMenuNotification(self);
+				CustomerServiceLog("vehicle_bug", "VCD-OnObjectMenuSelect::Sent signal to destroy with ID: "+dict.getInt("signalId"));
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				callable.setCDCallable(self, null);
+				sendDirtyObjectMenuNotification(self);
+			}
+			
+		}
+
+		if(!vehicle.isInValidUnpackLocation(player))
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		if(callable.getControlDeviceType(self) == callable.CALLABLE_TYPE_RIDEABLE && getMovementPercent(player) == 0.0f)
+		{
+			sendSystemMessage(player, new string_id("pet/pet_menu", "cant_call_vehicle_rooted"));
+			return SCRIPT_CONTINUE;
+		}
+
+		if(ai_lib.isInCombat(player))
+		{
+			sendSystemMessage(player, vehicle.SID_NOT_WHILE_IN_COMBAT);
+			return SCRIPT_CONTINUE;
+		}
+
+		if(callable.getControlDeviceType(self) == callable.CALLABLE_TYPE_RIDEABLE && callable.hasCallable(player, callable.CALLABLE_TYPE_FAMILIAR))
+		{
+			obj_id objCallable = callable.getCallable(player, callable.CALLABLE_TYPE_FAMILIAR);
+
+			callable.storeCallable(player, objCallable);
+		}
+
+		// We do not allow pets to be out, when a vehicle or mount is called.
+		if(callable.getControlDeviceType(self) == callable.CALLABLE_TYPE_RIDEABLE && callable.hasCallable(player, callable.CALLABLE_TYPE_COMBAT_PET))
+		{
+			obj_id objCallable = callable.getCallable(player, callable.CALLABLE_TYPE_COMBAT_PET);
+		
+			if(beast_lib.isBeast(objCallable))
+			{
+				utils.setScriptVar(player, callable.SCRIPTVAR_RIDEABLE_PACKED_CALLABLE, callable.getCallableCD(objCallable));
+			}
+
+			callable.storeCallable(player, objCallable);
+		}
+
+		obj_id vehicle = createVehicle(player, self);
+
+		if(!isIdValid(vehicle))
+		{
+			LOG("vehicle-bug", "OnObjectMenuSelect(): failed to create vehicle");
+			return SCRIPT_CONTINUE;
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+	else if ( item == menu_info_types.VEHICLE_STORE )
+	{
+		if(callable.hasCDCallable(self))
+		{
+			obj_id currentPet = callable.getCDCallable(self);
+			
+			if ( isIdValid( currentPet ) )
+			{
+				vehicle.storeVehicle(self, player);
+				callable.restoreCallable(player);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				callable.setCDCallable(self, null);
+
+				sendDirtyObjectMenuNotification(self);
+				LOG("vehicle-bug", "OnObjectMenuSelect(): vcd id=[" + self + "] selected VEHICLE_STORE but the scriptvar on the VCD is INVALID, setting count to zero anyway.");
+			}
+		}
+		else
+		{
+			sendDirtyObjectMenuNotification(self);
+			LOG("vehicle-bug", "OnObjectMenuSelect(): vcd id=[" + self + "] selected VEHICLE_STORE but the VCD has no scriptvar, setting count to zero anyway.");
+		}
+
+
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		LOG("", "Radial menu selection not in available list: " + item);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/*******************************************/
+
+void destroyCurrentPet( obj_id petControlDevice )
+{
+	if(callable.hasCDCallable(petControlDevice))
+	{
+		obj_id currentVehicle = callable.getCDCallable(petControlDevice);
+		
+		if(isIdValid(currentVehicle))
+		{
+			//obj_id master = getMaster( currentVehicle );
+			// THE ABOVE LINE COULD BE BAD IF CURRENTVEHICLE IS ALREADY DESTROYED!!!! INSTEAD, GETMASTER USING THE LINE BELOW...
+			obj_id datapad = getContainedBy(petControlDevice);
+			
+			if(!isIdValid(datapad))
+			{
+				return;
+			}
+			
+			obj_id master = getContainedBy( datapad );
+			
+			if(!isIdValid(master))
+			{
+				return;
+			}
+
+			callable.setCallable(master, null, callable.CALLABLE_TYPE_RIDEABLE);
+
+			//save commands:
+			//pet_lib.savePetInfo( currentVehicle, petControlDevice );  ORIGINAL FUNCTION
+			vehicle.saveVehicleInfo(petControlDevice, currentVehicle);
+			messageTo(currentVehicle, "handlePackRequest", null, 1, false);
+		}
+	}
+	
+	callable.setCDCallable(petControlDevice, null);
+}
+
+/*******************************************/
+
+messageHandler handleStorePetRequest()
+{
+	obj_id currentPet = callable.getCDCallable(self);
+	
+	if(!isIdValid(currentPet) || !exists(currentPet))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = params.getObjId("master");
+
+	if(ai_lib.isInCombat(currentPet) || pet_lib.wasInCombatRecently(currentPet, player, true))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	vehicle.setTimeStored(self);
+	destroyCurrentPet(self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if ( hasScript( item, "ai.pet_control_device" ))
+		return SCRIPT_OVERRIDE;//You cannot put a PCD inside of another PCD, dammit!
+
+	if ( !isIdValid(transferer))
+	{
+		debugServerConsoleMsg(null, "**********  ONABOUTTORECIEVEITEM triggered on the pcd script. We're allowing it, as it appears to come from something that !isIdValid.");
+		return SCRIPT_CONTINUE;
+	}
+
+	debugServerConsoleMsg(null, "**********  ONABOUTTORECIEVEITEM triggered on the pcd script. We're NOT allowing it, as it appears to come from something that isIdValid.");
+   	return SCRIPT_OVERRIDE;
+}
+
+/*******************************************/
+
+trigger OnDestroy()
+{
+	if ( !hasObjVar( self, "pet.releasingPet" ) )
+		destroyCurrentPet( self );
+
+	obj_id datapad = getContainedBy( self );
+	if ( !isIdValid( datapad ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getContainedBy( datapad );
+	if ( !isIdValid( master ) )
+		return SCRIPT_CONTINUE;
+
+	if (!hasObjVar( self, "pet.isDead" ))
+	{
+		int petType = getIntObjVar( self, "ai.pet.type" );
+		if ( petType == pet_lib.PET_TYPE_NON_AGGRO || petType == pet_lib.PET_TYPE_AGGRO )
+		{
+			//this is a TAMED pet which is being released:
+			sendSystemMessage( master, new string_id ( "pet/pet_menu", "vehicle_released" ));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	obj_id master = getContainedBy( sourceContainer );
+	if ( !isIdValid( master ) )
+		return SCRIPT_CONTINUE;
+
+	destroyCurrentPet( self );
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+trigger OnAttach()
+{
+	obj_id datapad = getContainedBy( self );
+	if ( !isIdValid( datapad ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getContainedBy( datapad );
+	if ( !isIdValid( master ) )
+		return SCRIPT_CONTINUE;
+
+	sendSystemMessage( master, new string_id( "pet/pet_menu", "device_added" ));
+
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+trigger OnGetAttributes( obj_id player, string[] names, string[] attribs )
+{
+	int idx = utils.getValidAttributeIndex(names);
+
+	if(idx == -1)
+		return SCRIPT_CONTINUE;
+		
+	// *****************
+	// Show current number of rideables out of the max
+	names[idx] = "rideables_current_of_max";
+
+	int currentRideables = callable.getNumStoredCDByType(player, callable.CALLABLE_TYPE_RIDEABLE);
+	int maxRideables = callable.getMaxAllowedStoredRideables(player);
+
+	attribs[idx] = ""+target_dummy.BLUE+currentRideables+" of "+maxRideables;
+	idx++;
+
+	if(idx >= names.length)
+		return SCRIPT_CONTINUE;
+	// *****************
+
+	if(hasObjVar(self, vehicle.VAR_PALVAR_CNT)) {
+
+		names[idx] = "customization_cnt";
+		attribs[idx] = Integer.toString(getIntObjVar(self, vehicle.VAR_PALVAR_CNT));
+		idx++;
+
+		if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	if(hasObjVar(self, "pet.uses_left")) {
+
+		names[idx] = "new_player_vehicle_uses_left";
+
+		int uses = getIntObjVar(self, "pet.uses_left");
+
+		attribs[idx] = " " + uses;
+		idx++;
+
+		if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+boolean isSameFaction( obj_id petControlDevice )
+{
+	obj_id datapad = getContainedBy( petControlDevice );
+	if ( !isIdValid( datapad ) )
+		return false;
+
+	obj_id master = getContainedBy( datapad );
+	if ( !isIdValid( master ) )
+		return false;
+
+	string creatureName = getStringObjVar( petControlDevice, "pet.creatureName" );
+	if ( creatureName == null || creatureName == "" )
+		return false;
+
+	string petFaction = utils.dataTableGetString(CREATURE_TABLE, creatureName, "pvpFaction");
+	if ( petFaction == null || petFaction == "" )
+	{
+		//debugSpeakMsg( master, "ok to call!" );
+		return true;//ok to call
+	}
+
+	if ( petFaction != "Imperial" && petFaction != "Rebel" )
+	{
+		//debugSpeakMsg( master, "ok to call!" );
+		return true;//ok to call
+	}
+
+	if ( pvpGetType( master ) != PVPTYPE_DECLARED )
+	{
+		//debugSpeakMsg( master, "you are not declared" );
+		sendSystemMessage( master, new string_id ( pet_lib.MENU_FILE, "not_declared" ));
+		return false;//you're not declared, this pet is, so you can't have it.
+	}
+	string masterFaction = factions.getFaction( master );
+	if ( masterFaction == null || masterFaction != petFaction )
+	{
+		//you're declared, but not to the same faction as the pet
+		sendSystemMessage( master, new string_id ( pet_lib.MENU_FILE, "not_declared" ));
+		return false;//so you can't have it.
+	}
+
+	//debugSpeakMsg( master, "ok to call!" );
+	return true;//ok to call!
+}
+
+/*******************************************/
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	obj_id newMaster = getContainedBy( destContainer );
+	if ( !isPlayer( newMaster ) )
+		return SCRIPT_OVERRIDE;
+
+
+	if ( isIdValid( transferer ) )
+	{
+		//if a player is xfering me from another PCD to his datapad, then allow it:
+		obj_id currentContainer = getContainedBy( self );//will return a datapad if I am in one
+		if ( isIdValid(currentContainer) )
+		{
+			obj_id currentContOwner = getContainedBy( currentContainer );//will return whose datapad I am in
+			if ( isIdValid( currentContOwner ) )
+			{
+				//if the thing's datapad I am in is a PCD:
+				if ( hasScript( currentContOwner, "ai.pet_control_device" ))
+				{
+					//allow xfers to the datapad:
+					obj_id yourPad = utils.getPlayerDatapad(transferer);
+					if ( destContainer == yourPad )
+						return SCRIPT_CONTINUE;
+				}
+			}
+		}
+	}
+
+	if ( !hasScript( newMaster, "ai.pet_master") )
+		attachScript( newMaster, "ai.pet_master" );
+
+	if ( vehicle.hasMaxStoredVehicles( newMaster ) )
+	{
+		sendSystemMessage( newMaster, vehicle.SID_SYS_HAS_MAX_VEHICLE );
+		return SCRIPT_OVERRIDE;
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+int getLevelFromPetControlDevice( obj_id petControlDevice )
+{
+	int growthStage = 10;
+	if ( hasObjVar( petControlDevice, "ai.petAdvance.growthStage" ))
+		growthStage = getIntObjVar( petControlDevice, "ai.petAdvance.growthStage" );
+
+	string creatureName = getStringObjVar( petControlDevice, "pet.creatureName" );
+	if ( creatureName == null )
+		return 0;
+
+	int maxDiff = create.calcCreatureLevel( creatureName );
+	if ( maxDiff < 1 )
+		maxDiff = 1;
+
+	if ( growthStage < 10 )
+		maxDiff = (maxDiff/10)*growthStage;
+
+	return maxDiff;
+}
+
+/*******************************************/
+
+messageHandler handlePetDeathblow()
+{
+	int vitality = getIntObjVar( self, "pet.vitality" );
+	vitality += 2;
+
+	if ( vitality > pet_lib.MAX_VITALITY_LOSS )
+		vitality = pet_lib.MAX_VITALITY_LOSS;
+
+	setObjVar( self, "pet.vitality", vitality );
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+messageHandler handleFlagDeadCreature()
+{
+	setObjVar( self, "pet.isDead", true );
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+boolean petIsDead( obj_id petControlDevice, obj_id player, int petType )
+{
+	if ( hasObjVar( petControlDevice, "pet.isDead" ))
+	{
+		if ( petType == pet_lib.PET_TYPE_NON_AGGRO || petType == pet_lib.PET_TYPE_AGGRO )
+		{
+			//this is a TAMED pet and should not be dead!
+			removeObjVar( petControlDevice, "pet.isDead" );
+			return false;
+		}
+		sendSystemMessage( player, new string_id( "pet/pet_menu", "dead_pet" ) );
+		return true;//pet is dead
+	}
+	return false;//pet is not dead
+}
+
+/*******************************************/
+
+boolean validatePetStats(obj_id pcd, obj_id player)
+{
+	// Not a crafted pet so it can't be bugged
+	if (!hasObjVar(pcd, "pet.crafted"))
+		return true;
+
+	const int	MAX_HAM_VALUE = 16000;
+	const float	MAX_ATK_VALUE = 30.0f;
+	const float	MAX_HIT_VALUE = 1.0f;
+	const int	MAX_DAM_VALUE = 1500;
+
+	boolean status = true;
+
+	if (getIntObjVar(pcd, "creature_attribs." + create.MAXATTRIBNAMES[HEALTH]) > MAX_HAM_VALUE)
+		status = false;
+
+	if (getIntObjVar(pcd, "creature_attribs." + create.MAXATTRIBNAMES[ACTION]) > MAX_HAM_VALUE)
+		status = false;
+
+	if (getIntObjVar(pcd, "creature_attribs." + create.MAXATTRIBNAMES[MIND]) > MAX_HAM_VALUE)
+		status = false;
+
+	if (getFloatObjVar(pcd, "creature_attribs.attackSpeed") > MAX_ATK_VALUE)
+		status = false;
+
+	if (getFloatObjVar(pcd, "creature_attribs.toHitChance") > MAX_HIT_VALUE)
+		status = false;
+
+	if (getIntObjVar(pcd, "creature_attribs.minDamage") > MAX_DAM_VALUE)
+		status = false;
+
+	if (getIntObjVar(pcd, "creature_attribs.maxDamage") > MAX_DAM_VALUE)
+		status = false;
+
+	if (status == false)
+		sendSystemMessage(player, pet_lib.SID_INVALID_CRAFTED_PET);
+
+	return status;
+}
+
+/*******************************************/
+
+messageHandler handleValidatePet()
+{
+	obj_id currentPet = callable.getCDCallable(self);
+
+	obj_id calledPet = params.getObjId( "calledPet" );
+
+	if ( !isIdValid( currentPet ) )
+	{
+		//no pet should be out:
+		if ( isIdValid( calledPet ) )
+		{
+			if ( calledPet.isLoaded() )
+				destroyObject( calledPet );
+			else
+				messageTo( calledPet, "handlePackRequest", null, 1, false );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isIdValid( calledPet ) )
+		return SCRIPT_CONTINUE;//nothing to worry about here.
+
+	//So there is a calledPet and a currentPet - they better be the same
+	if ( calledPet == currentPet )
+		return SCRIPT_CONTINUE;//nothing to worry about here.
+
+	//they are different, so destroy the old pet:
+	if ( isIdValid( calledPet ) )
+	{
+		if ( calledPet.isLoaded() )
+			destroyObject( calledPet );
+		else
+			messageTo( calledPet, "handlePackRequest", null, 1, false );
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+/*******************************************/
+
+messageHandler handleGrowthChoice()
+{
+	return SCRIPT_CONTINUE;
+}
+
+/*******************************************/
+
+obj_id createVehicle(obj_id player, obj_id petControlDevice)
+{
+	debugServerConsoleMsg( player, "+++ VEHICLE_CONTROL_DEVICE . createVehicle +++ Entered PCD/Pet creation function." );
+	
+	obj_id playerHangarSlot = utils.getPlayerHangar(player);
+	if ( utils.isNestedWithin(petControlDevice, playerHangarSlot) )
+	{
+		sendSystemMessage(player, "You cannot call a vehicle that has been stored in your garage.", "");
+		return null;
+	}
+
+	string objectTemplate = vehicle.getVehicleTemplate(petControlDevice);
+
+	if(callable.hasCallable(player, callable.CALLABLE_TYPE_RIDEABLE))
+	{
+		return null;
+	}
+	
+	obj_id playerCurrentMount = getMountId (player);
+	
+	// Disallow calling a vehicle when driving a battlefield vehicle.
+	if( isIdValid(playerCurrentMount) && vehicle.isBattlefieldVehicle(playerCurrentMount) )
+	{
+		string_id noBattlefieldVehicle = new string_id ("pet/pet_menu", "vehicle_battlefield_vehicle_restriction");
+		sendSystemMessage (player, noBattlefieldVehicle);
+		return null;
+	}
+	
+	// Disallow calling a vehicle while shapechanged.
+	int shapechange = buff.getBuffOnTargetFromGroup(player, "shapechange");
+	if(shapechange != 0)
+	{
+		sendSystemMessage(player, new string_id("spam","not_while_shapechanged"));
+		return null;
+	}
+	obj_id pet = createObject(objectTemplate, getLocation(player));
+
+	if(!isIdValid(pet))
+	{
+		debugServerConsoleMsg( player, "+++ VEHICLE_CONTROL_DEVICE . createVehicle +++ OBJ_ID Validity check on Vehicular_Prototype pet object came back as NOT VALID" );
+		return petControlDevice;
+	}
+
+	sendDirtyObjectMenuNotification(petControlDevice);
+
+	// Attach it to the control device
+	callable.setCallableCD(pet, petControlDevice);
+
+	setObjVar(pet, "vehicularTestBed", 1);
+	setObjVar(pet, "ai.pet.masterName", getEncodedName(player));
+
+	//debugConsoleMsg(player, "attempting to set VEHICLE attrib for target: "+pet);
+	setAttributeAttained(pet, attrib.VEHICLE);
+
+	//////////////////////  NEW COLORIZATION STUFF BELOW /////////////////
+
+	vehicle.reHueVehicle(petControlDevice, pet);
+
+	//////////////////////  NEW COLORIZATION STUFF ABOVE /////////////////
+
+	//make vehicle mountable
+	if ( !(couldPetBeMadeMountable(pet)==0 ))
+	{
+		debugServerConsoleMsg( null, "+++ VEHICLE_CONTROL_DEVICE . createVehicle +++ couldPetBeMadeMountable(pet) returned FALSE." );
+		return pet;
+	}
+
+	if ( !makePetMountable( pet ) )
+	{
+		debugServerConsoleMsg( null, "+++ VEHICLE_CONTROL_DEVICE . createVehicle +++ makePetMountable(pet) returned FALSE." );
+		return pet;
+	}
+	else
+	{
+		setObjVar( petControlDevice, "ai.pet.trainedMount", 1 );
+		setObjVar( pet, "ai.pet.trainedMount", 1 );
+	}
+
+	if ( hasObjVar( petControlDevice, "attrib.max_hp" ))
+	{
+		debugServerConsoleMsg( player, "+++ VEHICLE_CONTROL_DEVICE . createVehicle +++ " );
+		setMaxHitpoints(pet, getIntObjVar(petControlDevice, "attrib.max_hp"));
+	}
+
+	if ( hasObjVar( petControlDevice, "attrib.hit_points" ))
+		setHitpoints(pet, getIntObjVar(petControlDevice, "attrib.hit_points"));
+
+	//////////////////////  NEW COLORIZATION STUFF BELOW /////////////////
+
+	if(hasObjVar(petControlDevice, vehicle.VAR_PALVAR_BASE))
+	{
+		vehicle.restoreCustomization(pet, petControlDevice);
+
+		if(hasObjVar(petControlDevice, vehicle.VAR_PALVAR_CNT))
+		{
+			int cnt = getIntObjVar(petControlDevice, vehicle.VAR_PALVAR_CNT);
+
+			if(cnt > -1)
+			{
+				cnt--;
+				setObjVar(petControlDevice, vehicle.VAR_PALVAR_CNT, cnt);
+
+				if(cnt < 6)
+				{
+					switch(cnt)
+					{
+						case 5:
+							customizationFadeToWhite(pet, 0.15f);
+							sendSystemMessage(player, pet_lib.SID_SYS_VEH_CUST_FADING);
+							break;
+						case 4:
+							customizationFadeToWhite(pet, 0.20f);
+							sendSystemMessage(player, pet_lib.SID_SYS_VEH_CUST_FADING);
+							break;
+						case 3:
+							customizationFadeToWhite(pet, 0.25f);
+							sendSystemMessage(player, pet_lib.SID_SYS_VEH_CUST_FADING);
+							break;
+						case 2:
+							customizationFadeToWhite(pet, 0.30f);
+							sendSystemMessage(player, pet_lib.SID_SYS_VEH_CUST_FADING);
+							break;
+						case 1:
+							customizationFadeToWhite(pet, 0.35f);
+							sendSystemMessage(player, pet_lib.SID_SYS_VEH_CUST_FADING);
+							break;
+						case 0:
+							customizationFadeToWhite(pet, 0.40f);
+							sendSystemMessage(player, pet_lib.SID_SYS_VEH_CUST_GONE);
+							removeObjVar(petControlDevice, vehicle.VAR_PALVAR_CNT);
+							break;
+					}
+				}
+			}
+		}
+	}
+
+	if(hasObjVar(petControlDevice, "pet.uses_left"))
+	{
+		int uses = getIntObjVar(petControlDevice, "pet.uses_left");
+		uses--;
+
+		if(uses > 0)
+		{
+			prose_package pp = prose.getPackage(vehicle.SID_SYS_USES_LEFT, uses);
+			sendSystemMessageProse(player, pp);
+
+		}
+		else
+		{
+			sendSystemMessage(player, vehicle.SID_SYS_USES_LEFT_LAST);
+		}
+
+		setObjVar(petControlDevice, "pet.uses_left", uses);
+	}
+
+	//////////////////////  NEW COLORIZATION STUFF ABOVE /////////////////
+
+	//vehicle.decayVehicle(pet);
+	messageTo(pet, "handleVehicleDecay", null, 5f, false);
+
+	vehicle.initializeVehicle (pet, player);
+
+	dictionary web = new dictionary ();
+	web.put ("player", player);
+	messageTo(pet, "checkForJetpack", web, 1, false);
+
+	if(vehicle.isJetPackVehicle(pet))
+	{
+		vehicle.setHoverHeight(pet, 4);
+	}
+
+	callable.setCallableLinks(player, petControlDevice, pet);
+
+	return pet;
+}
+
+/*******************************************/
+
+void customizationFadeToWhite(obj_id pet, float percent) {
+
+	ranged_int_custom_var[] ricv = hue.getPalcolorVars(pet);
+
+	resizeable palcolor_custom_var[] pcv = new palcolor_custom_var[0];
+
+	if(ricv == null || ricv.length == 0)
+		return;
+
+	for(int i = 0; i < ricv.length; i++) {
+
+		if(ricv[i].isPalColor()) {
+
+			pcv = utils.addElement(pcv, (palcolor_custom_var)ricv[i]);
+		}
+	}
+
+	if(pcv == null || pcv.length == 0)
+		return;
+
+	for(int j = 0; j < pcv.length; j++) {
+
+		color old_color = pcv[j].getSelectedColor();
+
+		int old_r = old_color.getR();
+		int old_g = old_color.getG();
+		int old_b = old_color.getB();
+		int old_a = old_color.getA();
+
+		float d_r = (255 - old_r) * percent;
+		float d_g = (255 - old_g) * percent;
+		float d_b = (255 - old_b) * percent;
+		float d_a = (255 - old_a) * percent;
+
+		int new_r = old_r + (int)d_r;
+		int new_g = old_g + (int)d_g;
+		int new_b = old_b + (int)d_b;
+		int new_a = old_a + (int)d_a;
+
+		color new_color = new color(new_r, new_g, new_b, new_a);
+
+		pcv[j].setToClosestColor(new_color);
+	}
+}
+
+/*******************************************/
+
+messageHandler handleRemoveCurrentVehicle()
+{
+	//-- Retrieve the id of the vehicle that is sending the removeCurrentVehicle request.
+	obj_id sendingVehicleId = params.getObjId(MESSAGE_VEHICLE_ID);
+	
+	if (!isIdValid(sendingVehicleId))
+	{
+		if (debug)
+			LOG("vcd-debug", "vehicle_control_device.handleRemoveCurrentVehicle(): vcd id=[" + self + "]: sending vehicle's ID is invalid, ignoring");
+		return SCRIPT_CONTINUE;
+	}
+
+	debugServerConsoleMsg( null, "+++ vehicle_control_device.messageHandler handleRemoveCurrentVehicle +++ entered HANDLEREMOVECURRENTVEHICLE message handler" );
+
+	if(callable.hasCDCallable(self))
+	{
+		sendDirtyObjectMenuNotification (self);
+
+		// Verify that the controlled vehicle ID is the same as the one that is trying to remove the vehicle variable.
+		obj_id controlledVehicleId = callable.getCDCallable(self);
+		
+		if(controlledVehicleId == sendingVehicleId)
+		{
+			// We're clear to remove the variable.
+			callable.setCDCallable(self, null);
+			
+			if (debug)
+				LOG("vcd-debug", "vehicle_control_device.handleRemoveCurrentVehicle(): vcd id=[" + self + "]: removing scriptvar requested by vehicle id=[" + sendingVehicleId + "]");
+		}
+		else
+		{
+			// We're ignoring the remove variable, its for the wrong vehicle (possibly a delayed messageTo or something stale).
+			LOG("vcd", "vehicle_control_device.handleRemoveCurrentVehicle(): vcd id=[" + self + "]: ignoring request from vehicle id=[" + sendingVehicleId + "]: VCD thinks it is controlling a different vehicle, id=[" + controlledVehicleId + "]");
+		}
+	}
+	else
+	{
+		debugServerConsoleMsg( null, "+++ vehicle_control_device.messageHandler handleRemoveCurrentVehicle +++ WHOOPS! no callable.current scriptvar on VCD." );
+		debugServerConsoleMsg( null, "+++ vehicle_control_device.messageHandler handleRemoveCurrentVehicle +++ How'd that happen?." );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleStoreVehicleDamage()
+{
+	int hp = params.getInt("hp");
+	int penalty = params.getInt("penalty");
+
+	vehicle.storeDamage(self, hp, penalty);
+
+	return SCRIPT_CONTINUE;
+}
+
+//used for the TCG Vehicles that have default 1500 max hitpoints
+boolean updateTcgVehicleMaxHealth(obj_id tcgVehiclePcd)
+{
+	if(!isValidId(tcgVehiclePcd) || !exists(tcgVehiclePcd))
+		return false;
+	if(!hasObjVar(tcgVehiclePcd, "attrib.max_hp"))
+		return false;
+	
+	int currentHp = 0;
+	if(hasObjVar(tcgVehiclePcd, "attrib.hit_points"))
+	{
+		currentHp = getIntObjVar(tcgVehiclePcd, "attrib.hit_points");		
+		if(currentHp < 0)
+		{
+			currentHp = 0;
+		}
+		else if(currentHp == 0)
+		{
+			currentHp = TCG_PCD_OLD_NEW_DIFFERENCE;
+		}
+		else if(currentHp > 0 && currentHp < TCG_PCD_OLD_MAX_HEALTH)
+		{
+			int damage = TCG_PCD_OLD_MAX_HEALTH - currentHp;
+			currentHp = TCG_PCD_MAX_HEALTH - damage;
+		}
+		else
+		{
+			currentHp = TCG_PCD_MAX_HEALTH;
+		}
+	}
+	else
+	{
+		currentHp = TCG_PCD_MAX_HEALTH;
+	}
+	
+	if(currentHp < 0)
+		return false;
+
+	//set the vars
+	setObjVar(tcgVehiclePcd, "attrib.max_hp", TCG_PCD_MAX_HEALTH);
+	setObjVar(tcgVehiclePcd, "attrib.hit_points", currentHp);	
+	setObjVar(tcgVehiclePcd, TCG_VEHICLE_PCD_UPDATED, true);
+	return true;
+}
+
+
+/*******************************************/
+
+//////////////////////  NEW COLORIZATION STUFF BELOW /////////////////
+
+int modifyPaletteIndex(int idx)
+{
+	int series_idx = idx%8;
+	if ( series_idx == 0 )
+		return idx;
+
+	return idx-1;
+}
+
+/*******************************************/

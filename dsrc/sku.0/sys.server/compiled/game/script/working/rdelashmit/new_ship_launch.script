@@ -1,0 +1,203 @@
+include library.utils;
+include library.space_utils;
+include library.space_transition;
+
+trigger OnSpeaking(string text)
+{
+	if (text.equalsIgnoreCase("beginLaunch"))
+	{
+		obj_id scd = space_utils.hasUsableShip(self);
+		if (isIdValid(scd))
+		{
+			obj_id ship = space_transition.getShipFromShipControlDevice(scd);
+			if (isIdValid(ship))
+				beginLaunch(self, ship, new location(100.f, 0.f, 100.f, "space_tatooine"));
+		}
+	}
+	else if (text.equalsIgnoreCase("confirmLaunch"))
+	{
+		confirmLaunch(self);
+	}
+	else if (text.equalsIgnoreCase("finishLaunch"))
+	{
+		finishLaunch(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+void beginLaunch(obj_id player, obj_id ship, location destination)
+{
+	resizeable obj_id[] potentialPassengers = null;
+	resizeable location[] shipStartLocations = space_transition.getShipStartLocations(ship);
+	if (shipStartLocations != null && shipStartLocations.length > 0)
+	{
+		obj_id playerBuilding = getTopMostContainer(player);
+		obj_id group = getGroupObject(player);
+		if (isIdValid(group))
+		{
+			obj_id[] groupMembers = getGroupMemberIds(group);
+			for (int i = 0; i < groupMembers.length; ++i)
+			{
+				obj_id groupMember = groupMembers[i];
+				if (groupMember != player && exists(groupMember) && getTopMostContainer(groupMember) == playerBuilding)
+					potentialPassengers = utils.addElement(potentialPassengers, groupMember);
+			}
+		}
+	}
+
+	resizeable obj_id[] launchees = null;
+	launchees = utils.addElement(launchees, player);
+	utils.setScriptVar(player, "launch.launchees", launchees);
+	utils.setScriptVar(player, "launch.ship", ship);
+	utils.setScriptVar(player, "launch.destination", destination);
+
+	if (potentialPassengers != null)
+	{
+		// potentially passengers, so ask them if they want to launch with us
+		for (int i = 0; i < potentialPassengers.length; ++i)
+		{
+			dictionary params = new dictionary();
+			params.put("launcher", player);
+			messageTo(potentialPassengers[i], "inviteForPobShipLaunch", params, 0, false);
+		}
+	}
+	else
+		finishLaunch(player);
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler inviteForPobShipLaunch()
+{
+	obj_id launcher = params.getObjId("launcher");
+	prose_package pp = new prose_package();
+	pp.actor.set(getName(launcher));
+	pp.stringId = new string_id("space/space_interaction", "invite_for_launch");
+	sendSystemMessageProse(self, pp);
+	utils.setScriptVar(self, "launch.launcher", launcher);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+void confirmLaunch(obj_id player)
+{
+	obj_id launcher = utils.getObjIdScriptVar(player, "launch.launcher");
+	if (isIdValid(launcher))
+	{
+		dictionary params = new dictionary();
+		params.put("launchee", player);
+		messageTo(launcher, "confirmForPobShipLaunch", params, 0, false);
+	}
+	utils.removeScriptVar(player, "launch.launcher");
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler confirmForPobShipLaunch()
+{
+	obj_id launchee = params.getObjId("launchee");
+	resizeable obj_id[] launchees = utils.getResizeableObjIdArrayScriptVar(self, "launch.launchees");
+	if (launchees != null)
+	{
+		launchees = utils.addElement(launchees, launchee);
+		utils.setScriptVar(self, "launch.launchees", launchees);
+		prose_package pp = new prose_package();
+		pp.actor.set(getName(launchee));
+		pp.stringId = new string_id("space/space_interaction", "confirm_for_launch");
+		sendSystemMessageProse(self, pp);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+void finishLaunch(obj_id player)
+{
+	resizeable obj_id[] launchees = utils.getResizeableObjIdArrayScriptVar(player, "launch.launchees");
+	obj_id ship = utils.getObjIdScriptVar(player, "launch.ship");
+	location destination = utils.getLocationScriptVar(player, "launch.destination");
+	location groundLoc = getLocation(getTopMostContainer(player));
+	resizeable obj_id[] groupMembersToWarp = utils.addElement(null, player);
+	resizeable int[] groupMemberStartIndex = utils.addElement(null, 0);
+	resizeable location[] shipStartLocations = space_transition.getShipStartLocations(ship);
+	if (shipStartLocations != null && shipStartLocations.length > 0)
+	{
+		int startIndex = 0;
+		obj_id playerBuilding = getTopMostContainer(player);
+		obj_id group = getGroupObject(player);
+		if (isIdValid(group))
+		{
+			obj_id[] groupMembers = getGroupMemberIds(group);
+			for (int i = 1; i < launchees.length; ++i)
+			{
+				obj_id launchee = launchees[i];
+				boolean ok = false;
+				for (int j = 0; j < groupMembers.length; ++j)
+					if (groupMembers[j] == launchee && exists(launchee) && getTopMostContainer(launchee) == playerBuilding)
+						ok = true;
+				if (ok)
+				{
+					startIndex = getNextStartIndex(shipStartLocations, startIndex);
+					if (startIndex <= shipStartLocations.length)
+					{
+						groupMembersToWarp = utils.addElement(groupMembersToWarp, launchees[i]);
+						groupMemberStartIndex = utils.addElement(groupMemberStartIndex, startIndex);
+					}
+				}
+			}
+		}
+	}
+
+	launch(groupMembersToWarp, groupMemberStartIndex, ship, destination, groundLoc);
+}
+
+// ----------------------------------------------------------------------
+
+void launch(resizeable obj_id[] players, resizeable int[] playerStartIndex, obj_id ship, location destination, location groundLoc)
+{
+	for (int i = 0; i < players.length; ++i)
+		launch(players[i], playerStartIndex[i], ship, destination, groundLoc);
+}
+
+// ----------------------------------------------------------------------
+
+void launch(obj_id player, int playerStartIndex, obj_id ship, location destination, location groundLoc)
+{
+	utils.removeScriptVar(player, "launch.ship");
+	utils.removeScriptVar(player, "launch.destination");
+	utils.removeScriptVar(player, "launch.launcher");
+	utils.removeScriptVar(player, "launch.launchees");
+	space_transition.setLaunchInfo(player, ship, playerStartIndex, groundLoc);
+	warpPlayer(
+		player,
+		destination.area,
+		destination.x, destination.y, destination.z,
+		null,
+		destination.x, destination.y, destination.z);
+}
+
+// ----------------------------------------------------------------------
+
+int getNextStartIndex(resizeable location[] shipStartLocations, int lastStartIndex)
+{
+	int startIndex = lastStartIndex+1;
+
+	// If we have more players than start locations, see if we have any start
+	// locations in cells and reuse those.	We assume that all start locations
+	// not in cells come at the beginning of the list.
+
+	if (startIndex > shipStartLocations.length)
+	{
+		for (startIndex = 1; startIndex <= shipStartLocations.length; ++startIndex)
+			if (shipStartLocations[startIndex-1].cell != null)
+				break;
+	}
+
+	return startIndex;
+}
+
+// ======================================================================
+

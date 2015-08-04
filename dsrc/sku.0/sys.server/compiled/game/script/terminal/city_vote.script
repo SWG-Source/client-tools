@@ -1,0 +1,691 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        bank.script
+ * Description:  script for bank menu options; to be attached to bank terminals
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.city;
+include library.prose;
+include library.sui;
+include library.utils;
+include java.util.Vector;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits terminal.base.base_terminal;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_MAYORAL_RACE				= new string_id("city/city", "mayoral_race");
+const string_id SID_MAYORAL_STANDINGS			= new string_id("city/city", "mayoral_standings");
+const string_id SID_MAYORAL_VOTE				= new string_id("city/city", "mayoral_vote");
+const string_id SID_MAYORAL_REGISTER			= new string_id("city/city", "mayoral_register");
+const string_id SID_MAYORAL_UNREGISTER			= new string_id("city/city", "mayoral_unregister");
+
+const string_id SID_RESET_VOTING				= new string_id("city/city", "reset_voting");
+
+const string_id SID_REGISTER_INCUMBENT			= new string_id("city/city", "register_incumbent");
+const string_id SID_REGISTER_NONCITIZEN			= new string_id("city/city", "register_noncitizen");
+const string_id SID_REGISTER_NONPOLITICIAN		= new string_id("city/city", "register_nonpolitician");
+const string_id SID_REGISTER_DUPE				= new string_id("city/city", "register_dupe");
+const string_id SID_REGISTER_CONGRATS			= new string_id("city/city", "register_congrats");
+const string_id SID_REGISTER_TIMESTAMP			= new string_id("city/city", "register_timestamp");
+
+const string_id SID_REGISTRATION_LOCKED			= new string_id("city/city", "registration_locked");
+
+const string_id REGISTERED_CITIZEN_EMAIL_BODY	= new string_id("city/city", "rceb");
+const string_id REGISTERED_CITIZEN_EMAIL_SUBJECT= new string_id("city/city", "registered_citizen_email_subject");
+const string_id UNREGISTERED_CITIZEN_EMAIL_BODY	= new string_id("city/city", "unregistered_citizen_email_body");
+const string_id UNREGISTERED_CITIZEN_EMAIL_SUBJECT= new string_id("city/city", "unregistered_citizen_email_subject");
+
+const string_id SID_NOT_REGISTERED				= new string_id("city/city", "not_registered");
+const string_id SID_UNREGISTERED				= new string_id("city/city", "unregistered_race");
+
+const string_id SID_NO_CANDIDATES				= new string_id("city/city", "no_candidates");
+
+const string_id SID_VOTE_NONCITIZEN				= new string_id("city/city", "vote_noncitizen");
+const string_id SID_VOTE_PLACED					= new string_id("city/city", "vote_placed");
+const string_id SID_VOTE_ABSTAIN				= new string_id("city/city", "vote_abstain");
+
+const string_id SID_ALREADY_MAYOR				= new string_id("city/city", "already_mayor");
+
+const string  STF_FILE						= "city/city";
+
+const string_id SID_NOT_OLD_ENOUGH				= new string_id("city/city", "not_old_enough");
+
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Tell the city hall to keep track of us.
+	dictionary outparams = new dictionary();
+	outparams.put("terminal", self);
+	obj_id city_hall = getTopMostContainer(self);
+	messageTo(city_hall, "registerVoteTerminal", outparams, 0.f, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+//------------------------------------------------
+// OnGetAttributes
+//------------------------------------------------
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if(idx == -1)
+		return SCRIPT_CONTINUE;
+		
+	if(exists(self))
+	{		
+		//Get/Display Current Mayor:
+		obj_id city_hall = getTopMostContainer(self);
+		if(isValidId(city_hall) && exists(city_hall))
+		{		
+			int city_id = findCityByCityHall(city_hall);
+			if(city_id > -1)
+			{
+				names[idx] = "city_name";
+				attribs[idx] = cityGetName(city_id);
+				idx++;
+
+				obj_id mayor = cityGetLeader(city_id);
+				if(isValidId(mayor))  //do not add exists()
+				{
+					names[idx] = "current_mayor";
+					attribs[idx] = cityGetCitizenName(city_id, mayor);
+					idx++;
+				}
+				//Get Current Voting Phase
+				int currentInterval = getIntObjVar(city_hall, "cityVoteInterval");
+				if(currentInterval > -1)
+				{
+					string intervalName = convertInterval(currentInterval);
+					if(intervalName != "error")
+					{
+						names[idx] = "vote_interval";
+						attribs[idx] = intervalName;
+						idx++;	
+					}
+				}
+				//Get the count down until next interval 
+				int nextUpdate = (getIntObjVar(city_hall, "lastUpdateTime") + getIntObjVar(city_hall, "currentInterval")) - getGameTime();
+				if(nextUpdate > -1)
+				{
+					names[idx] = "next_interval";
+					attribs[idx] = utils.assembleTimeRemainToUse(nextUpdate);
+					idx++;
+				}
+				// Grab the current candidate list.
+				obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+				if(candidates != null)
+				{						
+					for(int i=0; i < candidates.length; i++)
+					{
+						if(candidates[i] == mayor)
+						{
+							names[idx] = "incumbent";
+							attribs[idx] = cityGetCitizenName(city_id, mayor);
+							idx++;
+						}
+						else
+						{
+							names[idx] = "candidate";
+							attribs[idx] = cityGetCitizenName(city_id, candidates[i]);
+							idx++;
+						}
+					}
+				}		
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id city_hall = getTopMostContainer(self);
+	int city_id = findCityByCityHall(city_hall);
+	obj_id mayor = cityGetLeader(city_id);
+
+	// Add the mayoral race menu.
+	int menu = mi.addRootMenu(menu_info_types.SERVER_MENU1, SID_MAYORAL_RACE);
+
+	// Add the mayoral options.
+	mi.addSubMenu(menu, menu_info_types.SERVER_MENU2, SID_MAYORAL_STANDINGS);
+	mi.addSubMenu(menu, menu_info_types.SERVER_MENU3, SID_MAYORAL_VOTE);
+
+	// Is this person registered?
+	if(!isRegisteredToRun(player, self))
+		mi.addSubMenu(menu, menu_info_types.SERVER_MENU4, SID_MAYORAL_REGISTER);
+	else
+		mi.addSubMenu(menu, menu_info_types.SERVER_MENU5, SID_MAYORAL_UNREGISTER);
+
+	// God option to reset voting.
+	if(isGod(player))
+		mi.addSubMenu(menu, menu_info_types.SERVER_MENU6, SID_RESET_VOTING);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(item == menu_info_types.SERVER_MENU1 || item == menu_info_types.SERVER_MENU2)
+	{
+		// Show standings.
+		showStandings(self, player);
+	}
+	else if(item == menu_info_types.SERVER_MENU3)
+	{
+		// Vote for someone.
+		placeVote(self, player);
+	}
+	else if(item == menu_info_types.SERVER_MENU4)
+	{
+		// Register to run.
+		registerToRun(self, player);
+	}
+	else if(item == menu_info_types.SERVER_MENU5)
+	{
+		// Unregister from the race.
+		unregisterFromRace(self, player);
+	}
+	else if(item == menu_info_types.SERVER_MENU6)
+	{
+		// Reset voting if we are god.
+		if(isGod(player))
+		{
+			obj_id city_hall = getTopMostContainer(self);
+			int city_id = findCityByCityHall(city_hall);
+			obj_id[] citizens = cityGetCitizenIds(city_id);
+			for(int i=0; i<citizens.length; i++)
+			{
+				city.setCitizenAllegiance(city_id, citizens[i], null);
+			}
+			removeObjVar(city_hall, "candidate_list");
+			sendSystemMessage(self, new string_id(STF_FILE, "voting_reset_request")); // City voting has been reset by request.
+			
+			CustomerServiceLog("player_city", "City voting has been reset by request. Hall: " + city_hall + " GM: " + player);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// showStandings
+//------------------------------------------------
+
+void showStandings(obj_id self, obj_id player)
+{
+	// What city are we in.
+	obj_id city_hall = getTopMostContainer(self);
+	int city_id = findCityByCityHall(city_hall);
+	obj_id mayor = cityGetLeader(city_id);
+
+	// Accumulate a list of who everyone is voting for.
+	resizeable obj_id[] vote_ids = new obj_id[0];
+	resizeable int[] vote_counts = new int[0];
+	obj_id[] citizens = cityGetCitizenIds(city_id);
+	for(int i=0; i<citizens.length; i++)
+	{
+		obj_id vote = cityGetCitizenAllegiance(city_id, citizens[i]);
+		int found = 0;
+		for(int j=0; (j<vote_ids.length) && (found==0); j++)
+		{
+			// Increment vote count for a person who has been voted for.
+			if(vote_ids[j] == vote)
+			{
+				found = 1;
+				vote_counts[j] = vote_counts[j] + 1;
+			}
+		}
+		if(found == 0)
+		{
+			// Person has not been voted for yet.
+			utils.addElement(vote_ids, vote);
+			utils.addElement(vote_counts, 1);
+		}
+	}
+
+	// Clean up the list.
+	cleanCandidates(self, player);
+
+	// Grab the current candidate list.
+	obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+	if(candidates == null)
+	{
+		sendSystemMessage(player, SID_NO_CANDIDATES);
+		return;
+	}
+
+	// Make a list of candidate name / vote pairs.
+	string[] candidate_names = new string[candidates.length];
+	for(int i=0; i<candidates.length; i++)
+	{
+		if(candidates[i] == mayor)
+			candidate_names[i] = "Incumbent: " + cityGetCitizenName(city_id, mayor) + " -- Votes: " + getNumVotes(mayor, vote_ids, vote_counts);
+		else
+			candidate_names[i] = cityGetCitizenName(city_id, candidates[i]) + " -- Votes: "  + getNumVotes(candidates[i], vote_ids, vote_counts);
+	}
+
+	// Show the results listbox.
+	sui.listbox(self, player, "@city/city:mayoral_standings_d", sui.OK_CANCEL, "@city/city:mayoral_standings_t", candidate_names, "handleNone", true);
+}
+
+//------------------------------------------------
+// placeVote
+//------------------------------------------------
+
+void placeVote(obj_id self, obj_id player)
+{
+	// What city are we in.
+	obj_id city_hall = getTopMostContainer(self);
+	int city_id = findCityByCityHall(city_hall);
+	obj_id mayor = cityGetLeader(city_id);
+
+	// Make sure this is a citizen.
+	if(!city.isCitizenOfCity(player, city_id))
+	{
+		sendSystemMessage(player, SID_VOTE_NONCITIZEN);
+		return;
+	}
+
+	// Character must be more then a day old.
+	if(!isOldEnough(player) && !isGod(player))
+	{
+		sendSystemMessage(player, SID_NOT_OLD_ENOUGH);
+		return;
+	}
+
+
+	// Clean up the list.
+	cleanCandidates(self, player);
+
+	// Grab the current candidate list.
+	obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+	if(candidates == null)
+		candidates = new obj_id[0];
+
+	// Make a list of candidate name / vote pairs.
+	string[] candidate_names = new string[candidates.length+1];
+//	candidate_names[0] = "Incumbent: " + cityGetCitizenName(city_id, mayor);
+	candidate_names[0] = "Abstain";
+	for(int i=0; i<candidates.length; i++)
+	{
+		candidate_names[i+1] = cityGetCitizenName(city_id, candidates[i]);
+	}
+
+	// Show the results listbox.
+	sui.listbox(self, player, "@city/city:mayoral_vote_d", sui.OK_CANCEL, "@city/city:mayoral_vote_t", candidate_names, "handlePlaceVote", true);
+}
+
+//------------------------------------------------
+// handlePlaceVote
+//------------------------------------------------
+
+messageHandler handlePlaceVote()
+{
+	// Params.
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow(params);
+	if(idx < 0) idx = 0;
+	int btn = sui.getIntButtonPressed(params);
+	if(btn == sui.BP_CANCEL)
+		return SCRIPT_CONTINUE;
+
+	// What city are we in.
+	obj_id city_hall = getTopMostContainer(self);
+	int city_id = findCityByCityHall(city_hall);
+	obj_id mayor = cityGetLeader(city_id);
+
+	// Make sure we are a citizen.
+	if(!city.isCitizenOfCity(player, city_id))
+		return SCRIPT_CONTINUE;
+
+	// Grab the current candidate list.
+	obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+	if(candidates == null)
+		candidates = new obj_id[0];
+
+	// Record our vote.
+	obj_id vote = null;
+	if(idx == 0)
+		vote = null;
+	else
+		vote = candidates[idx-1];
+	city.setCitizenAllegiance(city_id, player, vote);
+
+	// Notify the player.
+	prose_package pp = null;
+	if(vote != null)
+		pp = prose.getPackage(SID_VOTE_PLACED, cityGetCitizenName(city_id, vote));
+	else
+		pp = prose.getPackage(SID_VOTE_ABSTAIN);
+	sendSystemMessageProse(player, pp);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// registerToRun
+//------------------------------------------------
+
+void registerToRun(obj_id self, obj_id player)
+{
+	// What city are we in.
+	obj_id city_hall = getTopMostContainer(self);
+	int city_id = findCityByCityHall(city_hall);
+
+	// First, check to see if the mayor is trying to register.
+	obj_id mayor = cityGetLeader(city_id);
+
+	// Check to see if we are already a mayor.
+	if(city.isAMayor(player) && (player != mayor))
+	{
+		sendSystemMessage(player, SID_ALREADY_MAYOR);
+		return;
+	}
+
+	// Second, make sure this is a citizen.
+	if(!city.isCitizenOfCity(player, city_id))
+	{
+		sendSystemMessage(player, SID_REGISTER_NONCITIZEN);
+		return;
+	}
+
+	// Third, make sure they are a politican.
+	if(!hasSkill(player, "social_politician_novice"))
+	{
+		sendSystemMessage(player, SID_REGISTER_NONPOLITICIAN);
+		return;
+	}
+
+	// If we are in the 3rd week, registration is locked.
+	int cityVoteInterval = getIntObjVar(city_hall, "cityVoteInterval");
+	if(cityVoteInterval == 2)
+	{
+		sendSystemMessage(player, SID_REGISTRATION_LOCKED);
+		return;
+	}
+
+	// Check the time stamp.
+	int lastCityVoteReg = getIntObjVar(player, "lastCityVoteReg");
+	if(!isGod(player) && (getGameTime() - lastCityVoteReg < (60*60*24)))
+	{
+		sendSystemMessage(player, SID_REGISTER_TIMESTAMP);
+		return;
+	}
+
+	// Clean up the list.
+	cleanCandidates(self, player);
+
+	// Grab the current candidate list.
+	obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+	if(candidates == null)
+		candidates = new obj_id[0];
+
+	// Fourth, make sure they aren't a dupe.
+	if(isRegisteredToRun(player, self))
+	{
+		sendSystemMessage(player, SID_REGISTER_DUPE);
+		return;
+	}
+
+	// Okay, this person can register for mayor.
+	obj_id[] new_candidates = new obj_id[candidates.length+1];
+	for(int i=0; i<candidates.length; i++)
+	{
+		new_candidates[i] = candidates[i];
+	}
+	new_candidates[new_candidates.length-1] = player;
+	setObjVar(city_hall, "candidate_list", new_candidates);
+	city.setCitizenAllegiance(city_id, player, player);
+	sendSystemMessage(player, SID_REGISTER_CONGRATS);
+
+	// Set a time stamp.
+	setObjVar(player, "lastCityVoteReg", getGameTime());
+
+	// Send a message to everyone.
+	obj_id[] citizens = cityGetCitizenIds(city_id);
+	if(citizens != null)
+	{
+		string pname = cityGetCitizenName(city_id, player);
+		for(int i=0; i<citizens.length; i++)
+		{
+			string cname = cityGetCitizenName(city_id, citizens[i]);
+			prose_package bodypp = prose.getPackage(REGISTERED_CITIZEN_EMAIL_BODY, pname);
+			utils.sendMail(REGISTERED_CITIZEN_EMAIL_SUBJECT, bodypp, cname, "Planetary Civic Authority");
+		}
+	}
+}
+
+// Helper function for voting.
+boolean isRegisteredToRun(obj_id player, obj_id self)
+{
+	// Grab the current candidate list.
+	obj_id city_hall = getTopMostContainer(self);
+	obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+	if(candidates == null)
+		candidates = new obj_id[0];
+
+	// Fourth, make sure they aren't a dupe.
+	for(int i=0; i<candidates.length; i++)
+	{
+		if(candidates[i] == player)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+//------------------------------------------------
+// unregisterFromRace
+//------------------------------------------------
+
+void unregisterFromRace(obj_id self, obj_id player)
+{
+	// What city are we in.
+	obj_id city_hall = getTopMostContainer(self);
+	int city_id = findCityByCityHall(city_hall);
+
+	// Clean up the list.
+	cleanCandidates(self, player);
+
+	// Grab the current candidate list.
+	obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+	if(candidates == null)
+		candidates = new obj_id[0];
+
+	// If we are in the 3rd week, registration is locked.
+	int cityVoteInterval = getIntObjVar(city_hall, "cityVoteInterval");
+	if(cityVoteInterval == 2)
+	{
+		sendSystemMessage(player, SID_REGISTRATION_LOCKED);
+		return;
+	}
+
+	// Is the player registered to run?
+	if(!isRegisteredToRun(player, self))
+	{
+		sendSystemMessage(player, SID_NOT_REGISTERED);
+		return;
+	}
+
+	// Okay, remove them from the list.
+	if(candidates.length == 1)
+	{
+		removeObjVar(city_hall, "candidate_list");
+	}
+	else
+	{
+		int j = 0;
+		obj_id[] new_candidates = new obj_id[candidates.length-1];
+		for(int i=0; i<candidates.length; i++)
+		{
+			if(candidates[i] != player)
+				new_candidates[j++] = candidates[i];
+		}
+		setObjVar(city_hall, "candidate_list", new_candidates);
+	}
+
+	obj_id[] citizens = cityGetCitizenIds(city_id);
+	if(citizens != null)
+	{
+		string pname = cityGetCitizenName(city_id, player);
+		for(int i=0; i<citizens.length; i++)
+		{
+			// Reset their vote if its for this person.
+			obj_id vote = cityGetCitizenAllegiance(city_id, citizens[i]);
+			if(vote == player)
+				city.setCitizenAllegiance(city_id, citizens[i], null);
+
+			// Send a message to everyone.
+			string cname = cityGetCitizenName(city_id, citizens[i]);
+			prose_package bodypp = prose.getPackage(UNREGISTERED_CITIZEN_EMAIL_BODY, pname);
+			utils.sendMail(UNREGISTERED_CITIZEN_EMAIL_SUBJECT, bodypp, cname, "Planetary Civic Authority");
+		}
+	}
+
+	sendSystemMessage(player, SID_UNREGISTERED);
+}
+
+//------------------------------------------------
+// resetVoteTerminal
+//
+// Sent by the master city object by way of the city hall.
+// We are being asked to dump our registered candidate list.
+//------------------------------------------------
+
+messageHandler resetVoteTerminal()
+{
+	// Dump the registered candidate list.
+	obj_id city_hall = getTopMostContainer(self);
+	removeObjVar(city_hall, "candidate_list");
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanCandidates
+//------------------------------------------------
+
+void cleanCandidates(obj_id self, obj_id player)
+{
+	// Remove null entries from the vote list.
+	// Null entries are people who left the city.
+	obj_id city_hall = getTopMostContainer(self);
+	int city_id = findCityByCityHall(city_hall);
+
+	// Grab the current candidate list.
+	obj_id[] candidates = getObjIdArrayObjVar(city_hall, "candidate_list");
+	if(candidates == null)
+		return;
+
+	int[] bad_array = new int[candidates.length];
+	int bad_entries = 0;
+	for(int i=0; i<candidates.length; i++)
+	{
+		if(cityGetCitizenName(city_id, candidates[i]) == null)
+		{
+			bad_array[i] = 1;
+			bad_entries++;
+		}
+		else
+			bad_array[i] = 0;
+	}
+
+	if(candidates.length-bad_entries == 0)
+	{
+		removeObjVar(city_hall, "candidate_list");
+		return;
+	}
+
+	int j = 0;
+	obj_id[] new_candidates = new obj_id[candidates.length-bad_entries];
+	for(int i=0; i<candidates.length; i++)
+	{
+		if(bad_array[i] == 0)
+			new_candidates[j++] = candidates[i];
+	}
+
+	if(new_candidates.length > 0)
+	{
+		setObjVar(city_hall, "candidate_list", new_candidates);
+	}
+	else
+	{
+		if(hasObjVar(city_hall, "candidate_list"))
+			removeObjVar(city_hall, "candidate_list");
+	}
+}
+
+//------------------------------------------------
+// getNumVotes
+//------------------------------------------------
+
+string getNumVotes(obj_id candidate, Vector vote_ids, Vector vote_counts)
+{
+	for(int j=0; j<vote_ids.size(); j++)
+	{
+		if(candidate == (obj_id) vote_ids.elementAt(j))
+		{
+			Integer votes = (Integer) vote_counts.elementAt(j);
+			return "" + votes;
+		}
+	}
+	return "0";
+}
+
+boolean isOldEnough(obj_id player)
+{
+	boolean isOldEnough = false;
+
+	int timeData = getPlayerBirthDate(player);
+	int rightNow = getCurrentBirthDate();
+	int delta = rightNow - timeData;
+
+	if(delta > 7 || isGod(player))
+	{
+		isOldEnough = true;
+	}
+
+
+	return isOldEnough;
+}
+
+string convertInterval(int currentInterval)
+{
+	if(currentInterval == 0)
+		return "Voting Week 1";	
+	if(currentInterval == 1)
+		return "Voting Week 2";	
+	if(currentInterval == 2)
+		return "Election Week";	
+	return "error";
+}

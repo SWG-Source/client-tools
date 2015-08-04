@@ -1,0 +1,571 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        camp_master.script
+ * Description:  master object camping script
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+//----------------------------------------------------------------------
+// Includes
+//----------------------------------------------------------------------
+
+include library.camping;
+include library.theater;
+include library.prose;
+include library.healing;
+include library.ai_lib;
+include library.xp;
+
+
+//----------------------------------------------------------------------
+// Constants
+//----------------------------------------------------------------------
+
+const string TOTAL_XP						= "total_xp";
+
+const int CAMP_TICK_XP						= 25;
+
+const int XP_MAX []							= { 0, 350, 600, 800, 1000, 1100, 1200 };
+const float XP_MULT []						= { 0.f, 1.f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f };
+
+const string IGNORE_RESTORE_MESSAGE			= "ignoreRestoreMsg";
+
+const string VAR_CAMP_CAMPFIRE              = "campfire";
+
+const string TEMPLATE_LOGS_FRESH            = "object/static/structure/general/campfire_fresh.iff";
+const string TEMPLATE_LOGS_BURNT            = "object/static/structure/general/campfire_burnt.iff";
+const string TEMPLATE_LOGS_SMOLDERING       = "object/static/structure/general/campfire_smoldering.iff";
+const string TEMPLATE_LOGS_ASH              = "object/static/structure/general/campfire_ash.iff";
+
+const string_id SID_SYS_COMBAT_ABANDONED	= new string_id("camp", "sys_combat_abandoned");
+const string_id SID_SYS_ABANDONED_CAMP		= new string_id("camp", "sys_abandoned_camp");
+const string_id SID_SYS_CAMP_HEAL			= new string_id("camp", "sys_camp_heal");
+
+const int HEALING_PULSE_MIN					= 100;
+const int HEALING_PULSE_MAX					= 300;
+const int WOUND_HEAL						= 5;
+const int SHOCK_HEAL						= 1;
+
+//----------------------------------------------------------------------
+// OnAttach
+//----------------------------------------------------------------------
+
+trigger OnAttach()
+{
+	setObjVar( self, camping.VAR_BEEN_INITIALIZED, true );
+ 	createTriggerVolume( "camp_" + self, camping.getCampSize(self), true );
+
+ 	// Check to see if owner is near.
+	camping.setCampMasterName( self );
+ 	obj_id owner = getObjIdObjVar( self, camping.VAR_OWNER );
+ 	obj_id[] players = getPlayerCreaturesInRange( getLocation(self), camping.getCampSize(self) );
+ 	//REMOVED!  Originally this was necessary to send the message off to players in the camp when
+ 	//it instantiated because the triggerVolume enter didn't go off if you were inside the trigger
+ 	//volume when it was created.  That bug was fixed which meant this was just sending a second
+ 	//Message for no real reason.  TBailey 5/28/2004
+ 	/*if ( players != null )
+ 	{
+		for ( int i=0; i<players.length; i++ )
+		{
+			if ( players[i] != null )
+				debugSpeakMsg (self, "Came from OnAttach");
+				addCampMember( self, owner, players[i] );
+		}
+	}*/
+	setObjVar( self, camping.VAR_OWNER_NEAR, true );
+
+	// Start autoheal loop.
+	int campPower = getIntObjVar( self, camping.VAR_CAMP_POWER );
+	int campPowerBonus = campPower;
+	if ( campPowerBonus > 5 )
+		campPowerBonus = 5;
+	int min = HEALING_PULSE_MIN;
+	int max = HEALING_PULSE_MAX - (50*campPowerBonus);
+	int pulse = rand( min, max );
+	messageTo( self, "OnHealingLoop", null, pulse, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// OnDestroy
+//----------------------------------------------------------------------
+
+trigger OnDestroy()
+{
+	// Clean up the campfire.
+	obj_id item = getObjIdObjVar( self, VAR_CAMP_CAMPFIRE );
+	if ( (item == null) || (item == obj_id.NULL_ID) )
+	{
+	}
+	else
+	{
+		destroyObject(item);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// theaterFinished
+//----------------------------------------------------------------------
+
+messageHandler theaterFinished()
+{
+	notifyChildren( self, "handleCampPrep" );
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// notifyChildren
+//----------------------------------------------------------------------
+
+void notifyChildren( obj_id self, string msg )
+{
+	dictionary outparams = new dictionary();
+	outparams.put( "master", self );
+	obj_id[] children = getObjIdArrayObjVar( self, theater.VAR_CHILDREN );
+	if ( (children == null) || (children.length == 0) )
+	{
+		return;
+	}
+	else
+	{
+		int j = 0;
+		for ( int i = 0; i < children.length; i++ )
+		{
+			obj_id child = children[i];
+			if ( (child == null) || (child == obj_id.NULL_ID) )
+			{
+
+			}
+			else
+			{
+				// Send a prep message.
+				messageTo( child, msg, outparams, 0, false );
+			}
+		}
+	}
+}
+
+//----------------------------------------------------------------------
+// OnInitialize
+//----------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	if ( hasObjVar( self, camping.VAR_BEEN_INITIALIZED ) )
+		camping.nukeCamp( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// OnUnloadedFromMemory
+//----------------------------------------------------------------------
+
+trigger OnUnloadedFromMemory()
+{
+ 	camping.nukeCamp( self );
+ 	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// OnTriggerVolumeEntered
+//----------------------------------------------------------------------
+
+trigger OnTriggerVolumeEntered( string volName, obj_id who )
+{
+ 	if ( who == self )
+ 		return SCRIPT_CONTINUE;
+
+ 	if ( volName.equals("camp_" + self) )
+ 	{
+ 	 	obj_id owner = getObjIdObjVar( self, camping.VAR_OWNER );
+ 	 	if ( (owner == null) || (owner == obj_id.NULL_ID) )
+ 	 	{
+ 	 		sendSystemMessage( who, camping.SID_CAMP_ENTER );
+ 	 		sendSystemMessage( who, SID_SYS_CAMP_HEAL );
+ 	 	}
+ 	 	else
+ 	 	{
+ 	 		addCampMember( self, owner, who );
+		}
+ 	}
+ 	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// addCampMember
+//----------------------------------------------------------------------
+
+void addCampMember( obj_id self, obj_id owner, obj_id who )
+{
+	if ( who == owner )
+	{
+		setObjVar( self, camping.VAR_OWNER_NEAR, true );
+		int status = camping.getStatus( self );
+		if ( status == camping.STATUS_ABANDONED )
+		{
+			camping.setStatus( self, camping.STATUS_MAINTAIN );
+			camping.sendCampMaintenanceHeartbeat( self );
+			setObjVar( self, IGNORE_RESTORE_MESSAGE, true );
+		}
+	}
+
+	camping.setCurrentCamp( who, self );
+	prose_package pp = prose.getPackage( camping.PROSE_CAMP_ENTER, getName(self) );
+	sendSystemMessageProse( who, pp );
+ 	 sendSystemMessage( who, SID_SYS_CAMP_HEAL );
+
+	// Increment visitor count.
+	int count = getIntObjVar( self, "visitor_count" );
+	count++;
+	setObjVar( self, "visitor_count", count );
+
+	// Increment current occupancy.
+	int occ = getIntObjVar( self, "occ_count" );
+	occ++;
+	setObjVar( self, "occ_count", occ );
+}
+
+//----------------------------------------------------------------------
+// OnTriggerVolumeExited
+//----------------------------------------------------------------------
+
+trigger OnTriggerVolumeExited( string volName, obj_id who )
+{
+ 	if ( who == self )
+ 		return SCRIPT_CONTINUE;
+
+ 	if ( volName.equals("camp_" + self) )
+ 	{
+ 	 	obj_id owner = getObjIdObjVar( self, camping.VAR_OWNER );
+ 	 	if ( (owner == null) || (owner == obj_id.NULL_ID) )
+ 	 	{
+  	 		sendSystemMessage( who, camping.SID_CAMP_EXIT );
+	 	}
+ 	 	else
+ 	 	{
+			if ( who == owner )
+				setObjVar( self, camping.VAR_OWNER_NEAR, false );
+
+			camping.clearCurrentCamp( who );
+			prose_package pp = prose.getPackage( camping.PROSE_CAMP_EXIT, getName(self) );
+			sendSystemMessageProse( who, pp );
+		}
+
+		// Decrement current occupancy.
+		int occ = getIntObjVar( self, "occ_count" );
+		occ--;
+		setObjVar( self, "occ_count", occ );
+ 	}
+ 	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// OnHealingLoop
+//----------------------------------------------------------------------
+
+messageHandler OnHealingLoop()
+{
+	int campPower = getIntObjVar( self, camping.VAR_CAMP_POWER );
+	obj_id[] players = getPlayerCreaturesInRange( getLocation(self), camping.getCampSize(self) );
+	if ( players != null )
+	{
+		for ( int i = 0; i < players.length; i++ )
+		{
+			// Go through all attributes and heal wounds if the player is in the camp.
+			for ( int j = 0; j < NUM_ATTRIBUTES; j++ )
+			{
+				if ( healing.isWounded( players[i], j ) )
+				{
+					int xpAmt = getIntObjVar( self, camping.VAR_CAMP_XP );
+					int xpMax = XP_MAX[campPower];
+					if ( xpAmt < xpMax )
+					{
+						int toGrant = CAMP_TICK_XP;
+						xpAmt += toGrant;
+ 	 					setObjVar( self, camping.VAR_CAMP_XP, xpAmt );
+					}
+				}
+			}
+		}
+	}
+
+	int campPowerBonus = campPower;
+	if ( campPowerBonus > 5 )
+		campPowerBonus = 5;
+	int min = HEALING_PULSE_MIN;
+	int max = HEALING_PULSE_MAX - (25*campPowerBonus);
+	int pulse = rand( min, max );
+	messageTo( self, "OnHealingLoop", null, pulse, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// handleSetStatus
+//----------------------------------------------------------------------
+
+messageHandler handleSetStatus()
+{
+	if ( (params == null) || (params.isEmpty()) )
+		return SCRIPT_CONTINUE;
+
+	int status = params.getInt( camping.DICT_NEW_STATUS );
+	switch ( status )
+	{
+		case camping.STATUS_NEW:
+			setCampfire( self, TEMPLATE_LOGS_FRESH );
+			break;
+
+		case camping.STATUS_CREATION:
+			break;
+
+		case camping.STATUS_MAINTAIN:
+			setCampfire( self, TEMPLATE_LOGS_FRESH );
+			break;
+
+		case camping.STATUS_ABANDONED:
+		default:
+			setCampfire( self, TEMPLATE_LOGS_SMOLDERING );
+			break;
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// setCampfire
+//----------------------------------------------------------------------
+
+void setCampfire( obj_id self, string tpf )
+{
+	obj_id item = getObjIdObjVar( self, VAR_CAMP_CAMPFIRE );
+	if ( (item == null) || (item == obj_id.NULL_ID) )
+	{
+	}
+	else
+	{
+		string itemTemplate = getTemplateName( item );
+		if ( itemTemplate.equals(tpf) )
+			return;
+		destroyObject(item);
+	}
+
+	location here = getLocation( self );
+	item = createObject( tpf, here );
+	setObjVar( self, VAR_CAMP_CAMPFIRE, item );
+}
+
+//----------------------------------------------------------------------
+// handleCampCreationHeartbeat
+//----------------------------------------------------------------------
+
+messageHandler handleCampCreationHeartbeat()
+{
+	// Validate owner.
+ 	if ( !hasObjVar(self, camping.VAR_OWNER) )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	obj_id owner = getObjIdObjVar( self, camping.VAR_OWNER );
+ 	if ( (owner == null) || (owner == obj_id.NULL_ID)  )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	if (  (!exists(owner)) || (!isInWorld(owner)) || (!owner.isLoaded()) )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+
+ 	if ( camping.getStatus(self) == camping.STATUS_NEW )
+ 		camping.setStatus( self, camping.STATUS_CREATION );
+
+ 	camping.sendCampCreationComplete( self );
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// handleCampComplete
+//----------------------------------------------------------------------
+
+messageHandler handleCampComplete()
+{
+	// Validate owner.
+ 	if ( !hasObjVar( self, camping.VAR_OWNER ) )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	obj_id owner = getObjIdObjVar( self, camping.VAR_OWNER );
+ 	if ( (owner == null) || (owner == obj_id.NULL_ID)  )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	if (  (!exists(owner)) || (!isInWorld(owner)) || (!owner.isLoaded()) )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+
+ 	if ( !camping.isOwnerInVicinity(self) )
+	{
+		camping.nukeCamp(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	camping.setStatus( self, camping.STATUS_MAINTAIN );
+	camping.sendCampMaintenanceHeartbeat( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// handleCampMaintenanceHeartbeat
+//----------------------------------------------------------------------
+
+messageHandler handleCampMaintenanceHeartbeat()
+{
+	// Validate owner.
+ 	if ( !hasObjVar(self, camping.VAR_OWNER) )
+ 	{
+ 	 	setObjVar( self, camping.VAR_OWNER, obj_id.NULL_ID );
+ 	 	camping.sendCampRestoreHeartbeat( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	obj_id owner = getObjIdObjVar( self, camping.VAR_OWNER );
+ 	if ( (owner == null) || (owner == obj_id.NULL_ID)  )
+ 	{
+		camping.campAbandoned( self );
+ 	 	camping.sendCampRestoreHeartbeat( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	if ( (!exists(owner)) || (!isInWorld(owner)) || (!owner.isLoaded()) )
+ 	{
+		camping.campAbandoned( self );
+ 	 	camping.sendCampRestoreHeartbeat( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	if ( ai_lib.isInCombat( owner ) )
+ 	{
+		// Destroy due to combat.
+		sendSystemMessage( owner, SID_SYS_COMBAT_ABANDONED );
+		camping.campAbandoned( self );
+ 	 	camping.sendCampRestoreHeartbeat( self );
+ 	 	return SCRIPT_CONTINUE;
+	}
+
+	// Build up ticks and destroy us if we've been around too long.
+	int ticks = getIntObjVar( self, "camp.ticks" );
+	ticks++;
+	setObjVar( self, "camp.ticks", ticks );
+	if ( ticks > 100 )
+	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+	}
+
+	// Check if abandoned.
+ 	if ( !camping.isOwnerInVicinity(self) )
+ 	{
+ 	 	camping.setStatus( self, camping.STATUS_ABANDONED );
+ 	 	camping.sendCampRestoreHeartbeat( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+
+	// Grant XP skill check.
+	int campOcc = getIntObjVar( self, "occ_count" );
+	int roll = rand( 0, 100 );
+	roll += (campOcc-1)*5;
+	if ( campOcc > 5 )
+		campOcc = 5;
+	if ( roll > 40 )
+	{
+		int xpAmt = getIntObjVar( self, camping.VAR_CAMP_XP );
+		int campPower = getIntObjVar( self, camping.VAR_CAMP_POWER );
+		int xpMax = XP_MAX[campPower];
+		if ( xpAmt < xpMax )
+		{
+			int toGrant = (int) (CAMP_TICK_XP * campOcc * XP_MULT[campPower]);
+			xpAmt += toGrant;
+ 	 		setObjVar( self, camping.VAR_CAMP_XP, xpAmt );
+		}
+	}
+
+	// Send maint heartbeat.
+ 	camping.sendCampMaintenanceHeartbeat( self );
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// handleCampRestoreHeartbeat
+//----------------------------------------------------------------------
+
+messageHandler handleCampRestoreHeartbeat()
+{
+	// Validate owner.
+ 	if ( !hasObjVar(self, camping.VAR_OWNER) )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	if ( hasObjVar(self, IGNORE_RESTORE_MESSAGE) )
+ 	{
+ 		removeObjVar( self, IGNORE_RESTORE_MESSAGE );
+ 		return SCRIPT_CONTINUE;
+ 	}
+ 	obj_id owner = getObjIdObjVar( self, camping.VAR_OWNER );
+ 	if ( (owner == null) || (owner == obj_id.NULL_ID) )
+ 	{
+ 	 	camping.nukeCamp( self );
+ 	 	return SCRIPT_CONTINUE;
+ 	}
+ 	else
+ 	{
+		// Check if owner has entered area.
+ 	 	if ( camping.isOwnerInVicinity(self) )
+ 	 	{
+			camping.setStatus( self, camping.STATUS_MAINTAIN );
+			camping.sendCampMaintenanceHeartbeat( self );
+ 	 	 	return SCRIPT_CONTINUE;
+ 	 	}
+ 	 	else
+ 	 	{
+			// Grant XP.
+			//int xpAmt = getIntObjVar( self, camping.VAR_CAMP_XP );
+			//if ( xpAmt > 0 )
+			//	xp.grant( owner, xp.SCOUT, xpAmt );
+		 	//setObjVar( self, camping.VAR_CAMP_XP, 0 );
+		 	sendSystemMessage( owner, SID_SYS_ABANDONED_CAMP );
+
+			camping.clearCampOwner( self );
+			setObjVar( self, camping.VAR_CAMP_XP, 0 );
+ 	 	 	camping.setCampMasterName( self );
+ 	 	 	camping.sendCampRestoreHeartbeat( self );
+ 	 	 	camping.campAbandoned (self);
+ 	 	 	return SCRIPT_CONTINUE;
+ 	 	}
+ 	}
+}
+
+//----------------------------------------------------------------------
+// if camp is abandoned for 5 minutes...nuke it
+//----------------------------------------------------------------------
+
+messageHandler handleNuke()
+{
+	camping.nukeCamp( self );
+ 	 return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,560 @@
+/* -----------------4/15/2002 11:34AM----------------
+ * This script is attached to each object as it
+ * is created by the poi content script.
+ * --------------------------------------------------*/
+include library.ai_lib;
+include library.battlefield;
+include library.utils;
+include library.pet_lib;
+include library.locations;
+inherits theme_park.poi.base;
+const string POI_SCRIPT = "poi.script"; // the name of the objvar in which the content script
+								 // name is stored.
+
+//listen for the destruction message:
+trigger OnAttach()
+{
+	if ( poiGetBaseObject( self ) == self )
+	{
+		if(hasObjVar(self, "poi.instantiation"))
+		{
+			int intInstantiation = getIntObjVar(self, "poi.instantiation");
+			intInstantiation = intInstantiation +1; // yeah it's longhand;
+			setObjVar(self, "poi.instantiation", intInstantiation);
+		}
+		else
+		{
+			setObjVar( self, "poi.instantiation", 1 ); // we start at one since everyone likes 1's (incremented on unpack in trigger volum funcs)
+		}
+	}
+	else
+	{
+		int instantiation = getIntObjVar( poiGetBaseObject(self), "poi.instantiation" );
+		setObjVar( self, "poi.instantiation", instantiation );
+	}
+
+	obj_id baseObj = poiGetBaseObject( self );
+	if ( baseObj != self && isIdValid( baseObj ))
+	{
+		listenToMessage( baseObj, "cleanUpRoutine");
+	}
+	else if ( baseObj == self )
+	{
+
+		region rgnTest = battlefield.getBattlefield(getLocation(self));
+		if((locations.isInMissionCity(getLocation(self)))||(rgnTest!=null))
+		{
+			if(!poiIsCompleted())
+			{
+				poiComplete( POI_SUCCESS );
+				destroyObject(self);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				destroyObject(self);
+			}
+		}
+		else
+		{
+			setObjVar( self, "lastWokeUp", getGameTime() );
+			messageTo( self, "handlePOIExpiration", null, 36000, false );//ten hours:
+			createTriggerVolume( "playerBreachPOI", 120.0f, true );
+			if(!utils.hasScriptVar(self, "sentValidator"))
+			{
+				utils.setScriptVar(self, "sentValidator", 1);
+				// Dan Rubenfield temporary fix for cleanUpRoutine messageto issue
+				// TODO: investigate and fix this for real
+				 messageTo(self, "doTriggerValidation", null, 900, false);			
+			}
+			sendSleepModeMsg( self );
+		}
+	}
+
+
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	obj_id baseObj = poiGetBaseObject( self );
+	if ( isIdValid(baseObj) )
+		stopListeningToMessage(baseObj, "cleanUpRoutine");
+
+	return SCRIPT_CONTINUE;
+}
+
+//When the object is destroyed, a message is emited to the
+// base POI object messageHandler "objectDestroyed"
+trigger OnDestroy()
+{
+
+	//mobiles shouldn't destroy themselves if they are in combat:
+	if ( isMob( self ) )
+	{
+		if ( ai_lib.isInCombat( self ) && !ai_lib.isAiDead(self) )
+		{
+			int sequenceNumber = getIntObjVar( self, "destructionSeqNumber" );
+			sequenceNumber++;
+			if ( sequenceNumber < 10 )
+			{
+				setObjVar( self, "destructionSeqNumber", sequenceNumber );
+				dictionary parms = new dictionary();
+				parms.put( "sequenceNumber", sequenceNumber );
+				messageTo( self, "handleDelayedDestruction", parms, 120, isObjectPersisted( self ) );
+				return SCRIPT_OVERRIDE;
+			}
+		}
+	}
+
+	//if this is the base POI object, do this:
+	if ( poiGetBaseObject( self ) == self )
+		poiBaseObjectDestroyed( self );
+	else
+		poiObjectDestroyed( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanUpRoutine()
+{
+
+	if ( isMob( self ) )
+	{
+		if ( pet_lib.isPet( self ) )
+		{
+			//just detach this script
+			detachScript( self, "theme_park.poi.poi_object" );
+			return SCRIPT_CONTINUE;
+		}
+
+
+		if ( ai_lib.isAiDead( self ) )
+		{
+			//do nothing, corpse-cleanup will handle it
+			return SCRIPT_CONTINUE;
+		}
+
+		if ( ai_lib.isInCombat( self ))
+		{
+			//don't destroy yourself yet:
+			removeObjVar( self, POI_BASE_OBJECT );
+			messageTo( self, "cleanUpRoutine", params, 60, false );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	//debugSpeakMsg( self, "------------------------> cleanUp msg received!" );
+
+	//this message is sent from the POI base object.
+	// delay destroy in case noMessageOnDestroy is incoming:
+	int noMsg = params.getInt( "noMessageOnDestroy");
+	if ( noMsg == 1 )
+		setObjVar( self, POI_NO_MESSAGE_ON_DESTROY, true );
+
+	//if this cleanUp is the result of the poiBaseObject unloading,
+	// then delete no matter what:
+	int cleanUp = params.getInt( "baseObjectUnloading");
+	if ( cleanUp == 1 )
+	{
+		setObjVar( self, POI_NO_MESSAGE_ON_DESTROY, true );
+		if ( !hasScript( self, "ai.pet" ) )
+		{
+			destroyObject( self );
+		}
+		else
+		{
+			detachScript( self, "theme_park.poi_object" );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	//This cleanUp must be the result of the poiBaseObject being destroyed
+	// then don't delete persistent objects (e.g. a lair's creatures)
+	// but DO detach this script, the object is being released from its POI:
+	if (hasObjVar( self, "intPersistent" ))
+	{
+		if ( poiGetBaseObject( self ) != self )
+		{
+			detachScript( self, "theme_park.poi.poi_object" );
+		}
+	} // do not fuck up these tabs
+	else
+	{
+		if ( !hasScript( self, "ai.pet" ) )
+		{
+			destroyObject( self );
+		}
+		else
+		{
+			detachScript( self, "theme_park.poi_object" );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	//this is to ensure that the clean-up routine which should have
+	// run when the object unloaded IS definitely run before
+	// the content script re-initializes:
+
+
+
+	obj_id baseObj = poiGetBaseObject( self );
+	if ( baseObj != self && isIdValid( baseObj ))
+		listenToMessage( baseObj, "cleanUpRoutine");
+	else if ( baseObj == self )
+	{
+
+
+		region rgnTest = battlefield.getBattlefield(getLocation(self));
+		if((locations.isInMissionCity(getLocation(self)))||(rgnTest!=null))
+		{
+			if(!poiIsCompleted())
+			{
+				poiComplete( POI_SUCCESS );
+				destroyObject(self);
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				destroyObject(self);
+			}
+		}
+		else
+		{
+
+			setObjVar( self, "lastWokeUp", getGameTime() );
+			createTriggerVolume( "playerBreachPOI", 120.0f, true );
+			sendSleepModeMsg( self );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler POIdeathMsgReceived()
+{
+	//if this death message was sent from the same instantiation of this
+	// POI as the current one, then forward it to the poi content script:
+
+	string handlerName = params.getString( "destroyMsgName" );
+	if ( handlerName == null )
+		return SCRIPT_CONTINUE;
+
+	//debugSpeakMsg( self, "forwarding death message to " + handlerName );
+
+	int currentInstantiation = getIntObjVar( self, "poi.instantiation" );
+	int originalInstantiation = params.getInt( "instantiation" );
+
+	if ( currentInstantiation == originalInstantiation )
+		messageTo( self, handlerName, params, 0, isObjectPersisted( self )  );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated(obj_id objKiller)
+{
+	obj_id baseObject = poiGetBaseObject( self );
+	if ( baseObject == null )
+		return SCRIPT_CONTINUE;
+
+	if ( hasObjVar( self, POI_DESTROY_MESSAGE ) )
+	{
+		dictionary parms = new dictionary();
+	 	string name = poiFindObjectName( self );
+		if ( name != null )
+		{
+			parms.put( "name", name );
+		}
+		else
+		{
+			const string creatureName = getCreatureName(self);
+			if (creatureName != null)
+			{
+				parms.put( "creatureName", creatureName );
+			}
+		}
+
+		string messageHandlerName = getStringObjVar( self, POI_DESTROY_MESSAGE );
+		int destroyDelay = getIntObjVar( self, POI_DESTROY_MESSAGE_DELAY );
+		int instantiation = getIntObjVar( baseObject, "poi.instantiation" );
+		parms.put( "destroyMsgName", messageHandlerName );
+		parms.put( "instantiation", instantiation );
+		messageTo( baseObject, "POIdeathMsgReceived", parms, destroyDelay, isObjectPersisted( baseObject) );
+		//debugSpeakMsg( baseObject, element.toString() + " has died.  Sending callback with delay of " + destroyDelay );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDisabled (obj_id killer)
+{
+	obj_id baseObject = poiGetBaseObject( self );
+	if ( baseObject == null )
+		return SCRIPT_CONTINUE;
+
+	if ( !isMob( self) )
+	{
+		if ( hasObjVar( self, POI_DESTROY_MESSAGE ) )
+		{
+			dictionary parms = new dictionary();
+		 	string name = poiFindObjectName( self );
+			if ( name != null )
+				parms.put( "name", name );
+			const string creatureName = getCreatureName(self);
+			if (creatureName != null)
+			{
+				parms.put( "creatureName", creatureName );
+			}
+			string messageHandlerName = getStringObjVar( self, POI_DESTROY_MESSAGE );
+			int destroyDelay = getIntObjVar( self, POI_DESTROY_MESSAGE_DELAY );
+			int instantiation = getIntObjVar( baseObject, "poi.instantiation" );
+			parms.put( "destroyMsgName", messageHandlerName );
+			parms.put( "instantiation", instantiation );
+			messageTo( baseObject, "POIdeathMsgReceived", parms, destroyDelay, isObjectPersisted( baseObject) );
+			//debugSpeakMsg( baseObject, element.toString() + " has died.  Sending callback with delay of " + destroyDelay );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDelayedDestruction()
+{
+	int sequenceNumber = getIntObjVar( self, "destructionSeqNumber" );
+	if ( sequenceNumber != params.getInt( "sequenceNumber" ) )
+		return SCRIPT_CONTINUE;//ignore this message, it's not the one I expected
+
+	if ( hasScript( self, "ai.pet" ) )
+	{
+		detachScript( self, "theme_park.poi_object" );
+		return SCRIPT_CONTINUE;
+	}
+
+	destroyObject( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+void beginSleepMode( obj_id self )
+{
+	if ( poiIsCompleted( self ))
+	{
+		destroyObject( self );
+		return;
+	}
+
+
+	//packing up:  remove this objvar so we won't think the target has been
+	// destroyed by a player, and therefore that the poi is complete:
+	if ( hasObjVar( self, "npc_lair.target" ) )
+		removeObjVar( self, "npc_lair.target" );
+
+	
+	dictionary parms = new dictionary();
+	parms.put( "noMessageOnDestroy", 1 );
+	parms.put( "baseObjectUnloading", 1);//Act as though I am unloading
+	broadcastMessage("cleanUpRoutine", parms);
+	string poiScript = getStringObjVar( self, POI_SCRIPT );
+	detachScript( self, poiScript );
+	setObjVar( self, "poi.sleepMode", true );
+	utils.removeScriptVar( self, "npc_lair.numbabies" );//make sure we don't count babies already spawned
+	utils.removeScriptVar( self, "npc_lair.babeCheck" );//reset this, too
+}
+
+//only the base object gets this, only players trip it:
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	LOG("poi", "ENTERING "+volumeName);
+	LOG("poi", "breacher is "+breacher);
+	LOG("poi", "template is "+getTemplateName(breacher));
+
+	if (!volumeName.equals("playerBreachPOI") )
+		return SCRIPT_CONTINUE;
+
+	if ( poiIsCompleted( self ))
+	{
+		destroyObject( self );
+		return SCRIPT_CONTINUE;
+	}
+	if(!isPlayer(breacher))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+
+	int numPlayers = utils.getIntScriptVar( self, "poi.numPlayers" );
+	LOG("poi", "NumPlayers is "+numPlayers);
+	numPlayers++;
+	LOG("poi", "NumPlayers is "+numPlayers);
+	utils.setScriptVar( self, "poi.numPlayers", numPlayers );
+
+	//I'm not currently sleeping, do nothing:
+	if (!hasObjVar( self, "poi.sleepMode" ))
+		return SCRIPT_CONTINUE;
+
+	//I'm asleep, so wakeup:
+	removeObjVar( self, "poi.sleepMode" );
+	string poiScript = getStringObjVar( self, POI_SCRIPT );
+	if ( hasScript( self, poiScript ))
+	{
+		LOG("spawning", self+" already got one script");
+	}
+	else
+	{
+		if(hasScript(self, "systems.spawning.spawn_template"))
+		{
+			if(!utils.checkServerSpawnLimits())
+			{
+				destroyObject(self);
+				return SCRIPT_CONTINUE;
+			}
+		}
+		setObjVar( self, "lastWokeUp", getGameTime() );
+
+
+		//also, increment the instantiation-count:
+
+		if ( !hasScript( self, poiScript ))
+		{
+			int instantiation = getIntObjVar( self, "poi.instantiation" );
+			++instantiation;
+			setObjVar( self, "poi.instantiation", instantiation );
+			attachScript( self, poiScript );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler doTriggerValidation()
+{
+	
+	obj_id[] objContents = getTriggerVolumeContents(self, "playerBreachPOI");
+	int intPlayers = 0;
+	if((objContents!=null)||(objContents.length!=0))
+	{
+		for(int intI = 0; intI < objContents.length; intI++)
+		{
+			if(isPlayer(objContents[intI]))
+			{
+				intPlayers++;
+				
+			}
+		
+		}
+	}
+	if(intPlayers>0)
+	{
+		utils.setScriptVar(self, "poi.numPlayers", intPlayers);	
+	}
+	else
+	{
+		utils.removeScriptVar( self, "poi.numPlayers" );
+		sendSleepModeMsg( self );
+	}
+	messageTo(self, "doTriggerValidation", null, 900, false);		
+	return SCRIPT_CONTINUE;
+	
+}
+
+//only the base object gets this, only players trip it:
+trigger OnTriggerVolumeExited( string volumeName, obj_id breacher )
+{
+	LOG("poi", "EXITING"+volumeName);
+	if (!volumeName.equals("playerBreachPOI") )
+		return SCRIPT_CONTINUE;
+
+	if ( !isPlayer( breacher ) )
+		return SCRIPT_CONTINUE;
+
+	int numPlayers = utils.getIntScriptVar( self, "poi.numPlayers" );
+	LOG("poi", "numPlayers is "+numPlayers);
+	numPlayers--;
+	LOG("poi", "numPlayers is "+numPlayers);
+
+	if ( numPlayers < 1 )
+	{
+		sendSleepModeMsg( self );
+		utils.removeScriptVar( self, "poi.numPlayers" );
+	}
+	else
+		utils.setScriptVar( self, "poi.numPlayers", numPlayers );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePOIExpiration()
+{
+	if ( poiIsCompleted( self ))
+	{
+		destroyObject( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	int timesChecked = getIntObjVar( self, "poi.timesCheckedForExpire" );
+	timesChecked++;
+	if ( timesChecked > 20 )
+	{
+		//I've been around forever, so bye!
+		destroyObject( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	setObjVar( self, "poi.timesCheckedForExpire", timesChecked );
+
+	if (!hasObjVar( self, "poi.sleepMode" ))
+	{
+		//I'm awake, so check again 10 hours from now
+		messageTo( self, "handlePOIExpiration", null, 36000, false );//ten hours
+		return SCRIPT_CONTINUE;
+	}
+
+	int lastWakeTime = getIntObjVar( self, "lastWokeUp" );
+	int tenHoursAgo = (getGameTime() - 36000);
+	if ( lastWakeTime < tenHoursAgo )
+		destroyObject( self );
+	else
+		messageTo( self, "handlePOIExpiration", null, 36000, false );//ten hours
+
+	return SCRIPT_CONTINUE;
+}
+
+void sendSleepModeMsg( obj_id self )
+{
+
+	if (hasObjVar( self, "poi.sleepMode" ))
+		return; // already sleepin
+		
+	//if one has already been sent, then dont send another:
+	if ( !utils.hasScriptVar( self, "npc_lair.sleepModeMessageSent" ) )
+	{
+		messageTo( self, "handleBeginSleepMode", null, 60, false );
+		utils.setScriptVar( self, "npc_lair.sleepModeMessageSent", true );
+	}
+}
+
+messageHandler handleBeginSleepMode()
+{
+	//remove already-sent flag:
+	utils.removeScriptVar( self, "npc_lair.sleepModeMessageSent" );
+	
+	//if there are still no players here, then pack-up
+	int numPlayers = utils.getIntScriptVar( self, "poi.numPlayers" );
+	if ( numPlayers == 0 )
+	{
+		beginSleepMode( self );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler proximityCleanup()
+{
+	if(!poiIsCompleted())
+	{
+		poiComplete( POI_SUCCESS );
+	}
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+

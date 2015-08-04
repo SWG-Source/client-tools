@@ -1,0 +1,697 @@
+include library.ai_lib;
+include library.buff;
+include library.combat;
+include library.jedi;
+include library.proc;
+include library.prose;
+include library.static_item;
+include library.sui;
+include library.trace;
+include library.utils;
+include library.weapons;
+
+
+const java.text.NumberFormat floatFormat = new java.text.DecimalFormat("###.##");
+const java.text.NumberFormat noDecimalFormat = new java.text.DecimalFormat("###");
+const java.text.NumberFormat percentFormat = new java.text.DecimalFormat("###.#%");
+
+const string PID_NAME		= "wpConversion";
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info item)
+{
+	//if is not in player inventory
+	if(!utils.isNestedWithinAPlayer(self))
+		return SCRIPT_CONTINUE;
+
+	//cannot be equipped
+	if(utils.isEquipped(self))
+		return SCRIPT_CONTINUE;
+
+	//if is static item
+	if(static_item.isStaticItem(self) && !hasObjVar(self, "wp.canBeDisMantled"))
+		return SCRIPT_CONTINUE;
+
+	//if is static dynamic
+	if(static_item.isDynamicItem(self))
+		return SCRIPT_CONTINUE;
+
+	//is already a cored weapon
+	if(weapons.isCoredWeapon(self))
+		return SCRIPT_CONTINUE;
+
+	//no lightsabers
+	if(jedi.isLightsaber(self))
+		return SCRIPT_CONTINUE;
+
+	//if a profession wheel granted schem
+	if(weapons.isProfWheelSchemWeapon(self))
+		return SCRIPT_CONTINUE;
+
+	//if biolinked, we only want the owner to do the deconstuction
+	obj_id bioLink = getBioLink(self);
+	if(isIdValid(bioLink) && utils.stringToLong(bioLink.toString()) != 1)
+	{
+		if(bioLink != player)
+			return SCRIPT_CONTINUE;
+	}
+
+	int management_root = item.addRootMenu (menu_info_types.SERVER_MENU5, weapons.SID_WEAPON_TO_SCHEM);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (item == menu_info_types.SERVER_MENU5)
+	{
+		//if is not in player inventory
+		if(!utils.isNestedWithinAPlayer(self))
+			return SCRIPT_CONTINUE;
+
+		//cannot be equipped
+		if(utils.isEquipped(self))
+			return SCRIPT_CONTINUE;
+
+		//if is static item
+		if(static_item.isStaticItem(self) && !hasObjVar(self, "wp.canBeDisMantled"))
+			return SCRIPT_CONTINUE;
+
+		//if is static dynamic
+		if(static_item.isDynamicItem(self))
+			return SCRIPT_CONTINUE;
+
+		//is already a cored weapon
+		if(weapons.isCoredWeapon(self))
+			return SCRIPT_CONTINUE;
+
+		//no lightsabers
+		if(jedi.isLightsaber(self))
+			return SCRIPT_CONTINUE;
+
+		//if a profession wheel granted schem
+		if(weapons.isProfWheelSchemWeapon(self))
+			return SCRIPT_CONTINUE;
+
+		//if biolinked, we only want the owner to do the deconstuction
+		obj_id bioLink = getBioLink(self);
+		if(isIdValid(bioLink) && utils.stringToLong(bioLink.toString()) != 1)
+		{
+			if(bioLink != player)
+				return SCRIPT_CONTINUE;
+		}
+
+		if(sui.hasPid(player, PID_NAME))
+		{
+			int pid = sui.getPid(player, PID_NAME);
+			forceCloseSUIPage(pid);
+		}
+
+		int pid = sui.inputbox(self, player, "@" + weapons.SID_CONVERT_PROMPT, sui.OK_CANCEL, "@" + weapons.SID_CONVERT_TITLE, sui.INPUT_NORMAL, null, "handleConvertSchemSui");
+
+		sui.setPid(player, pid, PID_NAME);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+void expertiseRangeModify(obj_id self)
+{
+	if(!isIdValid(self))
+	{
+		return;
+	}
+
+	if(!hasObjVar(self, "weapon.original_max_range") )
+	{
+		float weaponRange = 0f;
+
+		if(!static_item.isStaticItem(self))
+		{
+			// Crafted weapon range conversion
+			if(!hasObjVar(self, "dynamic_item.intLevelRequired"))
+			{
+				dictionary weaponDat = weapons.getWeaponDat(self); // Gets weapon data from schematics; NOT STATIC ITEMS
+
+				if(weaponDat == null)
+				{
+					return;
+				}
+
+				weaponRange = (float)weapons.getMaxRangeDistance(weaponDat);
+			}
+			else // Static-dynamic weapon range conversion
+			{
+				weaponRange = static_item.getDynamicWeaponRange(self);
+			}
+		}
+		else
+		{
+			string staticItemName = static_item.getStaticItemName(self);
+			weaponRange = (float)dataTableGetInt("datatables/item/master_item/weapon_stats.iff", staticItemName, "max_range_distance");
+		}
+
+		if(weaponRange > 0)
+		{
+			setObjVar(self, "weapon.original_max_range", weaponRange);
+		}
+		else
+		{
+			CustomerServiceLog("weap_conversion_bad", "POSSIBLE :BROKEN WEAPON: COULD NOT GET MAX RANGE FOR " + self + " template: " + getTemplateName(self));
+			return;
+		}
+	}
+
+	obj_id holder = getContainedBy(self);
+
+	if(!isIdNull(holder) && isPlayer(holder) )
+	{
+		if(self == getObjectInSlot(holder, "hold_r") )
+		{
+			weapons.adjustWeaponRangeForExpertise(holder, self, true);
+		}
+		// If it is not equipped, it should not display a modified range.
+		else
+		{
+			weapons.adjustWeaponRangeForExpertise(holder, self, false);
+		}
+	}
+	// Undo any range modification.
+	else
+	{
+		weapons.adjustWeaponRangeForExpertise(null, self, false);
+	}
+}
+
+
+trigger OnInitialize()
+{
+	messageTo(self, "weaponConversion", null, 5, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler weaponConversion()
+{
+	//we do not want to convert weapon that belong to NPCs or Mobs, lets make sure we are not either and bail out if we are
+	obj_id owner = utils.getContainingPlayerOrCreature( self );
+	int niche = ai_lib.aiGetNiche(owner);
+
+	//valid niches are 0 - 10, players are 1
+	if( niche != 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//extra double check to make sure that we are not a creature weapon
+	if(utils.hasScriptVar(self, "isCreatureWeapon"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//lets not convert QA's test weapons
+	if(hasObjVar(self, "QAWeapon"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//do not convert static stuff
+	if(static_item.isStaticItem(self))
+	{
+		expertiseRangeModify(self);
+
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		//check the version objvars to see if we need to convert
+		int currentVersion = getConversionId(self);
+		int masterVersion = 0;
+		//GU5 introduced cored weapons, so we convert those differently
+		boolean isCoredWeapon = weapons.isCoredWeapon(self);
+
+		if(isCoredWeapon)
+		{
+			masterVersion = weapons.CORED_WEAPON_CONVERSION_VERSION;
+		}
+		else
+		{
+			masterVersion = weapons.CONVERSION_VERSION;
+		}
+
+		if(currentVersion != masterVersion)
+		{
+			if(static_item.isDynamicItem(self))
+			{
+				//static item conversion
+				weapons.staticDynamicWeaponConversion(self);
+			}
+			else if(isCoredWeapon)
+			{
+				//cored weapon conversion
+				weapons.coredWeaponConversion(self);
+			}
+			else
+			{
+				//click combat weapon coversion
+				weapons.clickCombatWeaponConversion(self);
+			}
+		}
+	}
+
+	//Lets double check the Damage Type
+	weapons.validateWeaponDamageType(self);
+	//Lets double check the Range
+	weapons.validateWeaponRange(self);
+
+	weapons.setWeaponData(self);
+
+	expertiseRangeModify(self);
+
+	if ( weapons.checkForIllegalStorytellerWeapon(owner, self) )
+	{
+		weapons.handleIllegalStorytellerWeapon(owner, self, "OnInitialize");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	if (isPlayer(destContainer) && !combat.hasCertification(destContainer, self))
+	{
+		prose_package pp = new prose_package();
+		pp = prose.setStringId(pp, new string_id("spam", "weapon_no_cert"));
+		pp = prose.setTT(pp, self);
+		sendSystemMessageProse(destContainer, pp);
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	expertiseRangeModify(self);
+
+	if (isPlayer(destContainer))
+	{
+		setDamageSkillMods( destContainer, self );
+		proc.buildCurrentProcList(destContainer);
+	}
+	else if (isPlayer(sourceContainer))
+	{
+		setDamageSkillMods( sourceContainer, null );
+		proc.buildCurrentProcList(sourceContainer);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void setDamageSkillMods( obj_id player, obj_id weapon )
+{
+	int intMultiplier = combat.PLAYER_ATTACKER_DAMAGE_LEVEL_MULTIPLIER;
+	int intBaseDamage = combat.PLAYER_COMBAT_BASE_DAMAGE;
+
+	int weaponMinDamage = 0;
+	int weaponMaxDamage = 0;
+	if ( isIdValid(weapon) )
+	{
+		weaponMinDamage = getWeaponMinDamage(weapon);
+		weaponMaxDamage = getWeaponMaxDamage(weapon);
+	}
+	int playerLevel = getLevel( player );
+
+	int minDamage = weaponMinDamage + ( playerLevel * intMultiplier );
+	int maxDamage = intBaseDamage + weaponMaxDamage + ( playerLevel * intMultiplier );
+
+	int oldMin = getSkillStatisticModifier(player, "minDamage");
+	applySkillStatisticModifier(player, "minDamage", 0-oldMin);
+	int oldMax = getSkillStatisticModifier(player, "maxDamage");
+	applySkillStatisticModifier(player, "maxDamage", 0-oldMax);
+
+
+	applySkillStatisticModifier(player, "minDamage", minDamage);
+	applySkillStatisticModifier(player, "maxDamage", maxDamage);
+}
+
+/**
+ * Called when a player requests info about an object. The trigger should fill
+ * in a localization name and attribute value for each attribute it wants
+ * the player to know about.
+ *
+ * @param self		the object being queried
+ * @param player    the player requesting the attributes
+ * @param names		localization name of the attributes
+ * @param attribs	value of the attributes
+ */
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	//data.reserve (data.size () + 12);
+
+	String at = "@obj_attr_n:";
+	boolean staticItem = static_item.isStaticItem(self);
+
+	int free = getFirstFreeIndex(names);
+	if (free == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//-- cert info
+	string template = getTemplateName(self);
+	if(template != null)
+	{
+		dictionary itemData = new dictionary();
+
+		if(staticItem)
+		{
+			itemData = static_item.getMasterItemDictionary(self);
+		}
+
+		// level requirement
+//GU5 we changed weapon crafting, we need to make sure the data we are gathering is from the correct weapon crafting version
+		int levelRequired = -1;
+		if(hasObjVar(self, weapons.OBJVAR_WP_LEVEL))
+		{
+			levelRequired = getIntObjVar(self, weapons.OBJVAR_WP_LEVEL);
+		}
+		else
+		{
+
+			levelRequired = dataTableGetInt(combat.WEAPON_LEVEL_TABLE, template, "weapon_level");
+			if(staticItem)
+				levelRequired = itemData.getInt("required_level");
+			if(static_item.isDynamicItem(self))
+			{
+				levelRequired = getIntObjVar(self, "dynamic_item.intLevelRequired");
+			}
+		}
+
+		names[free] = "healing_combat_level_required";
+		attribs[free++] = "" + levelRequired;
+
+		// tooltip: level requirement
+		names[free] = "tooltip.healing_combat_level_required";
+		attribs[free++] = "" + levelRequired;
+
+
+		// Check class requirement
+		//crafted items get requirements from weapon level table
+		string skillRequired = dataTableGetString(combat.WEAPON_LEVEL_TABLE, template, "secondary_restriction");
+		//static items get requirements from master item table
+		if(staticItem)
+			 skillRequired = itemData.getString("required_skill");
+
+		string skillRequiredAttribute;
+		if (skillRequired != null && skillRequired != "")
+		{
+			skillRequiredAttribute = "@ui_roadmap:title_" + skillRequired;
+		}
+		else
+		{
+			skillRequiredAttribute = "None";
+		}
+
+		//dynamic items have no skill requirements
+		if(static_item.isDynamicItem(self))
+			 skillRequiredAttribute = "None";
+
+		names[free] = "skillmodmin";
+		attribs[free++] = skillRequiredAttribute;
+
+		// tooltip: check skill requirement
+		names[free] = "tooltip.skillmodmin";
+		attribs[free++] = skillRequiredAttribute;
+
+		// Species requirement
+		int speciesRequired = dataTableGetInt(combat.WEAPON_LEVEL_TABLE, template, "species_restriction");
+		if(speciesRequired > 0)
+		{
+			names[free] = "race_requirement";
+			attribs[free++] = "@weapon_detail:species_" + speciesRequired;
+
+			// tooltip: species requirement
+			names[free] = "tooltip.race_requirement";
+			attribs[free++] = "@weapon_detail:species_" + speciesRequired;
+		}
+
+		if (staticItem)
+		{
+			// tier
+			int tier = itemData.getInt("tier");
+			names[free] = "tier";
+			attribs[free++] = "" + tier;
+			// tooltip: tier
+			names[free] = "tooltip.tier";
+			attribs[free++] = "" + tier;
+		}
+	}
+
+	weapon_data weaponData = getWeaponData(self);
+	if (weaponData != null)
+	{
+		//-- damage
+		{
+			String wpn_damage_type = "cat_wpn_damage.wpn_damage_type";
+			String wpn_damage_min = "cat_wpn_damage.wpn_damage_min";
+			String wpn_damage_max = "cat_wpn_damage.wpn_damage_max";
+			String wpn_damage_radius = "cat_wpn_damage.wpn_damage_radius";
+			String wpn_damage_wound = "cat_wpn_damage.wpn_wound_chance";
+			String wpn_elemental_type = "cat_wpn_damage.wpn_elemental_type";
+			String wpn_elemental_value = "cat_wpn_damage.wpn_elemental_value";
+			String wpn_category = "cat_wpn_damage.wpn_category";
+
+			const int damageType = weaponData.damageType;
+			names[free] = wpn_damage_type;
+			attribs[free++] = at + "armor_eff_" + weapons.getDamageTypeString(damageType);
+
+			// Weapon category
+			names[free] = "cat_wpn_damage.wpn_category";
+			attribs[free++] = at + "wpn_category_" + weaponData.weaponType;
+
+			// tooltip: damage type
+			names[free] = "tooltip.wpn_damage_type";
+			attribs[free++] = at + "armor_eff_" + weapons.getDamageTypeString(damageType);
+
+
+			names[free] = "cat_wpn_damage.wpn_attack_speed";
+			attribs[free++] = floatFormat.format(weaponData.attackSpeed);
+
+
+			names[free] = "cat_wpn_damage.damage";
+			string weaponDamage = Integer.toString(weaponData.minDamage) + " - " + Integer.toString(weaponData.maxDamage);
+			attribs[free++] = weaponDamage;
+
+			// tooltip: damage
+			names[free] = "tooltip.damage";
+			attribs[free++] = weaponDamage;
+
+			const int elementalType = weaponData.elementalType;
+			int elementalValue = 0;
+			if(elementalType > 0)
+			{
+				elementalValue = weaponData.elementalValue;
+				if (elementalValue > 0)
+				{
+					names[free] = wpn_elemental_type;
+					attribs[free++] = at + weapons.getDamageTypeString(elementalType);
+					names[free] = wpn_elemental_value;
+					attribs[free++] = Integer.toString(elementalValue);
+
+					// tooltip: elemental damage type
+					names[free] = "tooltip.wpn_elemental_type";
+					attribs[free++] = at + weapons.getDamageTypeString(elementalType);
+					names[free] = "tooltip.wpn_elemental_value";
+					attribs[free++] = Integer.toString(elementalValue);
+				}
+			}
+
+			names[free] = "cat_wpn_damage.weapon_dps";
+			float avg = (weaponData.minDamage + weaponData.maxDamage) / 2;
+			//we now add in elemental damage to our dps calcs
+			//we have to multiply it times 2 cause we actually do double
+			//elemental damage.
+			avg += (elementalValue  * 2);
+			attribs[free++] = "" + (int)(avg / weaponData.attackSpeed);
+
+		}
+		//-- range
+		{
+			names[free] = "cat_wpn_other.wpn_range";
+			string weaponRange = noDecimalFormat.format(weaponData.minRange) + "-" + noDecimalFormat.format(weaponData.maxRange) + "m";
+			attribs[free++] = weaponRange;
+
+			// tooltip: range
+			names[free] = "tooltip.wpn_range";
+			attribs[free++] = weaponRange;
+
+		}
+		/*
+		//-- attack cost
+		{
+			const int attackCost = weaponData.attackCost;
+			if (attackCost != 0)
+			{
+				names[free] = "cat_wpn_other.cat_wpn_attack_cost";
+				attribs[free++] = Integer.toString(attackCost);
+
+				// tooltip: attack cost
+				names[free] = "tooltip.cat_wpn_attack_cost";
+				attribs[free++] = Integer.toString(attackCost);
+
+			}
+		}
+		*/
+
+	}
+
+	//display proc name on a static item
+	if(staticItem)
+	{
+		dictionary itemData = static_item.getStaticItemWeaponDictionary(self);
+		string procEffect = itemData.getString("proc_effect");
+		if (procEffect != null && procEffect !="")
+		{
+			names[free] = utils.packStringId( new string_id ( "proc/proc", "proc_name" ));
+			attribs[free++] = utils.packStringId( new string_id ( "ui_buff", procEffect));
+		}
+	}
+	/*
+	//-- slicing nasty warning
+	if ( hasObjVar(self, "slicing.new_hacked") ||  hasObjVar(self, "slicing.hacked"))
+	{
+		names[free] = "cat_wpn_other.wpn_attr";
+		attribs[free] = "@obj_attr_n:hacked1";
+		free++;
+	}
+
+	if(staticItem)
+	{
+		names[free] = "cat_wpn_other.wpn_attr";
+		attribs[free] = "@obj_attr_n:can_not_alter_weap";
+		free++;
+	}
+	*/
+
+
+	return SCRIPT_CONTINUE;
+}
+
+obj_id getContainingMobile(obj_id item)
+{
+	obj_id containedBy = getContainedBy(item);
+
+	if(!isIdValid(containedBy))
+		return null;
+	else if(isPlayer(containedBy) || isMob(containedBy))
+		return containedBy;
+
+	return getContainingMobile(containedBy);
+}
+
+messageHandler handleConvertSchemSui()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+
+	if(bp == sui.BP_CANCEL)
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	int pageId = params.getInt("pageId");
+
+	if(!sui.hasPid(player, PID_NAME))
+	{
+		forceCloseSUIPage(pageId);
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") has somehow gotten two conversion windows while attempting to convert their old weapon("+self+") to a new cored schematic. Bailing out now");
+		return SCRIPT_CONTINUE;
+	}
+
+	int pid = sui.getPid(player, PID_NAME);
+
+	if(pageId != pid)
+	{
+		forceCloseSUIPage(pageId);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") has somehow gotten two conversion windows while attempting to convert their old weapon("+self+") to a new cored schematic. Bailing out now");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!utils.isNestedWithinAPlayer(self))
+	{
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") has moved their weapon into a container that is not a player while attempting to convert their old weapon("+self+") to a new cored schematic. Bailing out now");
+		return SCRIPT_CONTINUE;
+	}
+
+	//cannot be equipped
+	if(utils.isEquipped(self))
+	{
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") has equipped their old weapon("+self+") while attempting to convert it int a new cored schematic. Bailing out now");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id playerContained = utils.getContainingPlayer(self);
+
+	if(playerContained != player)
+	{
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") traded their old weapon("+self+") to " + getFirstName(playerContained) + "("+playerContained+") while attempting to convert it int a new cored schematic. They are prolly trying to exploit, bailing out now");
+		return SCRIPT_CONTINUE;
+	}
+
+	//if biolinked, we only want the owner to do the deconstuction
+	obj_id bioLink = getBioLink(self);
+	if(isIdValid(bioLink) && utils.stringToLong(bioLink.toString()) != 1)
+	{
+		if(bioLink != player)
+		{
+			forceCloseSUIPage(pid);
+			sui.removePid(player, PID_NAME);
+			CustomerServiceLog("armor_conversion", "Player "+getFirstName(player)+"("+player+") tried to deconstruct an old weapon("+self+") that is biolinked to " + getFirstName(bioLink) + "("+bioLink+"). They are prolly trying to exploit, bailing out now");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	string response = sui.getInputBoxText(params);
+
+	if(!response.toLowerCase().equals("deconstruct"))
+	{
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		sendSystemMessage(player, weapons.SID_CONVERT_INVALID_RESPONSE);
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") has entered '" + response + "' instead of 'deconstruct' so the weapon will not be deconstructed.");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(weapons.turnWeaponIntoSchem(player, self))
+	{
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") has decided to convert their old weapon("+self+") to a new cored schematic.");
+		sui.removePid(player, PID_NAME);
+		sendSystemMessage(player, weapons.SID_CONVERT_CONVERT_SUCCESS);
+		destroyObject(self);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		sendSystemMessage(player, weapons.SID_CONVERT_CONVERT_FAIL);
+		CustomerServiceLog("new_weapon_conversion", "Player "+getFirstName(player)+"("+player+") attempted to convert their old weapon("+self+") to a new cored schematic, and it failed.");
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+}

@@ -1,0 +1,2268 @@
+// this is the pilot command scriptlib for the space expansion
+include library.utils;
+include library.space_utils;
+include library.space_crafting;
+include library.ship_ai;
+include library.xp;
+include library.space_combat;
+include java.lang.Math;
+
+
+const int DROID_VOCALIZE_REACT_CHANCE = 2; //The lower the number, the less the chance. Valid range is 1 - 10
+const int SHIP_DAMAGED_SKILLMOD_PENALTY_TIME = 10; //The number of seconds a ship will have a skillmod localvar on it after being hit
+
+const string DROID_WELDING_EFFECT_DATATABLE = "datatables/space_command/droid_welding_effects_table.iff";
+const string ALL_REPAIRS = "ALL_REPAIRS";
+const string HEAVY_REPAIRS = "HEAVY_REPAIRS";
+const string MEDIUM_REPAIRS = "MEDIUM_REPAIRS";
+const string LIGHT_REPAIRS = "LIGHT_REPAIRS";
+
+const float MAX_EPULSE_RANGE = 300.0f;
+const float EPULSE_DAMAGE_MULTIPLIER = 3.0f;
+
+const float MAX_NPULSE_RANGE = 500.0f;
+const float NOMINAL_NPULSE_YIELD = 1000.0f;
+
+const string REPAIR_EQUIPMENT_DATATABLE = "datatables/space_command/repair_ship_assignments.iff";
+const float IN_SPACE_REPAIR_STD_REPAIR_PERCENTAGE = 0.25f;
+const float IN_SPACE_REPAIR_DECAY = 0.30f;
+const float IN_SPACE_RELOAD_DECAY = 0.80f;
+
+const int ISR_CHAFF_TO_MISSILE_MULTIPLIER = 5;
+const int ISR_COST_MULTIPLIER = 50;
+
+const string DROID_PROGRAM_SIZE_DATATABLE = "datatables/space_command/droid_program_size.iff";
+
+const string_id SID_COST_FOR_REPAIRS			 = new string_id("space/space_pilot_command", "cost_for_repairs");
+const string_id SID_REPAIR_COST					 = new string_id("space/space_pilot_command", "repair_cost");
+const string_id SID_RELOAD_AND_REPAIR_COST		 = new string_id("space/space_pilot_command", "reload_and_repair_cost");
+const string_id SID_MUNITIONS_COST				 = new string_id("space/space_pilot_command", "munitions_cost");
+const string_id SID_SPACEREPAIR_NO_STATION		 = new string_id("space/space_pilot_command", "spacerepair_no_station");
+
+
+int targetTierDetect (obj_id target)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.targetTierDetect  ***   ENTERED FUNCTION!");
+
+	int targetSquadId = ship_ai.unitGetSquadId(target);
+	obj_id[] targetSquaddyList = ship_ai.squadGetUnitList(targetSquadId);
+
+	int highestTierValue = 1;
+
+	for(int i = 0; i<targetSquaddyList.length; i++)
+	{
+		int targetTier = 0;
+		string targetName = utils.getTemplateFilenameNoPath(targetSquaddyList[i]);
+		string[] targetNameDecode = split(targetName, '_' );
+		int lastIndex = (targetNameDecode.length) - 1;
+		string tier = targetNameDecode[lastIndex];
+
+		if ( tier == "tier2.iff" )
+			targetTier = 2;
+		else if ( tier == "tier3.iff" )
+			targetTier = 3;
+		else if ( tier == "tier4.iff" )
+			targetTier = 4;
+		else if ( tier == "tier5.iff" )
+			targetTier = 5;
+		else
+			targetTier = 1;
+
+		if ( targetTier > highestTierValue )
+			highestTierValue = targetTier;
+	}
+
+	return highestTierValue;
+}
+
+
+
+
+boolean readyForEnergyPulse(obj_id ship, obj_id commander)
+{
+	debugServerConsoleMsg( null, "SPACE_COMBAT.readyForEnergyPulse");
+
+	if(utils.hasLocalVar(ship, "cmd.epulseone.execute"))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "You're already executing an e-pulse.");
+		string_id strSpam = new string_id("space/space_interaction", "epulse_already");
+		sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	if ( isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_reactor) || isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_shield_0))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Your ship's systems are currently disabled. Unable to trigger an energy pulse.");
+		string_id strSpam = new string_id("space/space_interaction", "epulse_systems_disabled");
+		sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	float capacitorCurrent = getShipCapacitorEnergyCurrent(ship);
+	float capacitorMax = getShipCapacitorEnergyMaximum(ship);
+	int percentCharged = (int) ((capacitorCurrent/capacitorMax)*100.0f);
+	if ( percentCharged < 50 )
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "The energy capacitor has not stored up enough energy yet for a significant pulse. E-PULSE ABORT!");
+		string_id strSpam = new string_id("space/space_interaction", "epulse_not_charged");
+		sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	obj_id target = getLookAtTarget (ship);
+	if ( isIdValid(target) && !pvpCanAttack(ship, target) && (getDistance(ship, target) < MAX_EPULSE_RANGE))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Non-Enemy units detected in primary effect radius. Secondary system overides engaging. E-PULSE ABORT!");
+		string_id strSpam = new string_id("space/space_interaction", "epulse_not_enemy");
+		sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	//LOCALIZE THIS
+	//sendSystemMessageTestingOnly(commander, "Standby for pulse... firing capacitor actuators.");
+	string_id strSpam = new string_id("space/space_interaction", "epulse_firing");
+	sendSystemMessage(commander, strSpam);
+	return true;
+}
+
+
+
+boolean executeEnergyPulse(obj_id commander, obj_id ship, string cmdLevel)
+{
+	space_combat.flightDroidVocalize(ship, 1);
+
+	const int CHANCE_OF_EXTRADMG_LVL3 = 100;
+	const int CHANCE_OF_EXTRADMG_LVL2 = 50;
+	const int CHANCE_OF_EXTRADMG_LVL1 = 10;
+
+	//ENERGY LEVEL INITIALIZATIONS
+	int percentCharged = 50;
+	int totalCurrentEnergy = 0;
+
+	//vital statistics for energy capacitor
+	float capacitorCurrent = getShipCapacitorEnergyCurrent(ship);
+	float capacitorMax = getShipCapacitorEnergyMaximum(ship);
+
+	//vital statistics for shields
+	float frontShieldCurrent = getShipShieldHitpointsFrontCurrent(ship);
+	float frontShieldMax = getShipShieldHitpointsFrontMaximum(ship);
+	float backShieldCurrent = getShipShieldHitpointsBackCurrent(ship);
+	float backShieldMax = getShipShieldHitpointsBackMaximum(ship);
+	float totalShieldStrengthCurrent = frontShieldCurrent + backShieldCurrent;
+	float totalShieldStrengthMax = frontShieldMax + backShieldMax;
+
+
+	//SET THE ENERGY LEVELS OF THE ATTACK
+	if ( cmdLevel == "e_pulse_three" )
+	{
+		float totalEnergyMax = capacitorMax + frontShieldMax + backShieldMax;
+		totalCurrentEnergy = (int)(capacitorCurrent + frontShieldCurrent + backShieldCurrent);
+		percentCharged = (int) ((totalCurrentEnergy/totalEnergyMax)*100.0f);
+	}
+	else
+	{
+		float totalEnergyMax = capacitorMax;
+		totalCurrentEnergy = (int)(capacitorCurrent);
+		percentCharged = (int) ((totalCurrentEnergy/totalEnergyMax)*100.0f);
+	}
+
+
+	int successLevel = 5;	//set the pre-skillcheck default successLevel result to fail
+
+	setShipCapacitorEnergyCurrent(ship,5.0f);	//We're doing the pulse, so drain the capacitor to near zero.
+
+	if ( cmdLevel == "e_pulse_one" )
+		successLevel = space_combat.doPilotCommandSkillCheck(commander, "level2command");
+	else if (cmdLevel == "e_pulse_two" )
+		successLevel = space_combat.doPilotCommandSkillCheck(commander, "level4command");
+	else if (cmdLevel == "e_pulse_three" )
+	{
+		//We did the level 3 pulse, so drain the shields as well
+		setShipShieldHitpointsFrontCurrent(ship, 5.0f);
+		setShipShieldHitpointsBackCurrent(ship, 5.0f);
+		successLevel = space_combat.doPilotCommandSkillCheck(commander, "level6command");
+	}
+
+	//DEAL WITH THE RESULTS OF A FAILURE OF THE PLAYER'S SKILL-CHECK
+	if ( successLevel > 4 )
+	{
+		string_id strSpam = new string_id("space/space_interaction", "energy_pulse_failure");
+		sendSystemMessage(commander, strSpam);
+
+		// play failure CEF here
+		//string cefPlayBackHardpoint = space_combat.targetHardpointForCefPlayback(ship);
+		playClientEffectObj(ship, "clienteffect/space_command/emergency_power_on.cef", ship, "");	//PLAY SOME COOL IFF-PULSE EFFECT HERE
+
+		if ( successLevel == 6 )	//things went horribly wrong. Damage to own shield generators, depending on amount of power involved and % charge level.
+		{
+			//play high-level damage-looking CEF
+			//cefPlayBackHardpoint = space_combat.targetHardpointForCefPlayback(ship);
+			playClientEffectObj(ship, "clienteffect/space_command/emergency_power_on.cef", ship, "");	//PLAY SOME ADDITIONAL COOL IFF-PULSE EFFECT HERE
+
+			strSpam = new string_id("space/space_interaction", "energy_pulse_big_failure");
+			sendSystemMessage(commander, strSpam);
+
+			int damageMultiplier = 1;
+			float damageAmount = 10.0f;
+			if ( cmdLevel == "e_pulse_two" )
+			{
+				damageMultiplier = 2;
+				if ( percentCharged > 75 )
+					damageAmount = 20.0f;
+				else
+					damageAmount = 10.0f;
+			}
+			else if ( cmdLevel == "e_pulse_three" )
+			{
+				damageMultiplier = 3;
+				if ( percentCharged > 75 )
+					damageAmount = 30.0f;
+				else
+					damageAmount = 20.0f;
+			}
+			int numComponentsDamaged = (int) (rand(1,3)*damageMultiplier);
+			doRandomSubSystemDamage(ship, numComponentsDamaged, damageAmount);
+		}
+		return true;	//all done - no further bennies
+	}
+
+	debugServerConsoleMsg( null, "SPACE_COMBAT.executeEnergyPulse SUCCESSLEVEL WAS "+successLevel);
+
+	//play successful CEF for player
+	//string cefPlayBackHardpoint = space_combat.targetHardpointForCefPlayback(ship);
+	playClientEffectObj(ship, "clienteffect/space_command/shp_shocked_flash_01.cef", ship, "");	//PLAY SOME COOL IFF-PULSE EFFECT HERE
+
+	//BUILD A TARGET LIST.
+	obj_id[] possibleTargetShips = getAllObjectsWithScript(getLocation(ship), MAX_EPULSE_RANGE, "space.combat.combat_ship");
+
+	resizeable obj_id[] attackable_targets = new obj_id[0];
+	for(int i = 0; i<possibleTargetShips.length; i++)
+	{
+		if ( isIdValid(possibleTargetShips[i]) && !space_utils.isPlayerControlledShip(possibleTargetShips[i]))
+		{
+			// FOLLOWING LINES COMMENTED OUT BECAUSE ATTACKING STUFF THAT'S NOT SUPPOSED TO BE ATTACKABLE IS NOT A GOOD THING.
+			//if ( cmdLevel == "e_pulse_three")	// e_pulse_three attack is indiscriminant, attacking enemies AND friendlies, alike
+			//	attackable_targets = utils.addElement(attackable_targets, possibleTargetShips[i]);
+			//else	//other two levels of e_pulse will not affect friendlies
+				if ( pvpCanAttack(ship, possibleTargetShips[i]))
+					attackable_targets = utils.addElement(attackable_targets, possibleTargetShips[i]);
+		}
+	}
+
+	//DO THE DEED. Affect all ships in the revised target listing. DON'T FORGET SPECIAL NOTIFICATION FOR ANY PLAYER VESSELS TO LET THEM KNOW WHAT OCCURRED
+	float componentDamageAmount = 10.0f;
+	int numDamagedShipComponents = 0;
+	int numStunnedShipComponents = 0;
+	for(int j = 0; j<attackable_targets.length; j++)
+	{
+		if ( attackable_targets[j] != ship )
+		{
+			if ( cmdLevel == "e_pulse_three" )	//affects friends and enemies
+			{
+				if ( percentCharged > 75 )	//greater chance of stunning components (damage is guaranteed with this command)
+				{
+					numDamagedShipComponents = (int) (2*(rand ( 0 , (4-successLevel))));
+					numStunnedShipComponents = (int)((rand ( 0 , (4-successLevel)))/2);
+				}
+				else
+					numDamagedShipComponents = (int) (2*(rand( 0,(4-successLevel))));
+			}
+			else if ( cmdLevel == "e_pulse_two" )
+				if ( rand(0, 100) > CHANCE_OF_EXTRADMG_LVL2)
+					if ( percentCharged > 75 )	//greater chance of stunning components (damage is guaranteed with this command)
+					{
+						numDamagedShipComponents = (int) (2*(rand ( 0 , (4-successLevel))));
+						numStunnedShipComponents = (int)((rand ( 0 , (4-successLevel)))/2);
+					}
+					else
+						numDamagedShipComponents = (int) (2*(rand( 0,(4-successLevel))));
+			else	// if it was an epulse level 1
+				if ( rand(0, 100) > CHANCE_OF_EXTRADMG_LVL1)
+					if ( percentCharged > 75 )	//chance for damaging components
+						numDamagedShipComponents = (int) (rand( 0,(4-successLevel)));
+
+			//play a CEF for the ship just affected in this cycle of the loop
+			//cefPlayBackHardpoint = space_combat.targetHardpointForCefPlayback(attackable_targets[j]);
+			if ( numStunnedShipComponents == 0 )
+				if(space_utils.isPlayerControlledShip(attackable_targets[j]))
+					playClientEffectObj(ship, "clienteffect/space_command/cbt_impact_emp_lght.cef", attackable_targets[j], "");	//PLAY SOME COOL IFF-PULSE EFFECT HERE
+				else
+					playClientEffectObj(ship, "clienteffect/space_command/cbt_impact_emp_lght_noshake.cef", attackable_targets[j], "");	//PLAY SOME COOL IFF-PULSE EFFECT HERE
+
+			float damageAmount = totalCurrentEnergy;
+
+			float distanceToBlast = Math.abs(getDistance(ship, attackable_targets[j]));
+			if ( distanceToBlast < space_pilot_command.MAX_EPULSE_RANGE )
+			{
+				debugServerConsoleMsg( null, "SPACE_COMBAT.readyForEnergyPulse *************** UNMODIFIED normal damage amount is: "+damageAmount);
+				debugServerConsoleMsg( null, "SPACE_COMBAT.readyForEnergyPulse *************** DISTANCE TO TARGET is: "+distanceToBlast);
+				damageAmount = totalCurrentEnergy*(((MAX_EPULSE_RANGE-distanceToBlast)/MAX_EPULSE_RANGE)*EPULSE_DAMAGE_MULTIPLIER);
+
+				debugServerConsoleMsg( null, "SPACE_COMBAT.readyForEnergyPulse *************** num of stunned components was: "+numStunnedShipComponents);
+				debugServerConsoleMsg( null, "SPACE_COMBAT.readyForEnergyPulse *************** num of damaged components was: "+numDamagedShipComponents);
+				debugServerConsoleMsg( null, "SPACE_COMBAT.readyForEnergyPulse *************** RANGE-MODIFIED damage amount is: "+damageAmount);
+
+				doRandomSubSystemDamage(attackable_targets[j], numDamagedShipComponents, componentDamageAmount);
+				if ( numStunnedShipComponents>0 )
+					doRandomSubSystemStun(attackable_targets[j], numStunnedShipComponents);
+				doNormalDamage(ship, attackable_targets[j], damageAmount);
+			}
+
+			//do this  for all ships affected that are player ships
+			dictionary outparams = new dictionary();
+			outparams.put( "attacker", commander );
+			if ( space_utils.isPlayerControlledShip(ship) )
+				space_utils.notifyObject( attackable_targets[j], "ePulseVictimized", outparams );
+		}
+	}
+	return true;
+}
+
+
+
+int randomComponentSelector(obj_id targetShip)
+{
+ 	resizeable int[] slots = space_crafting.getAllInstalledComponents(targetShip);
+	int componentToDamage = slots[rand(0, slots.length-1)];
+	return componentToDamage;
+}
+
+
+void doRandomSubSystemDamage(obj_id shipDamaged, int numComponentsDamaged, float damageAmount)
+{
+	float percentToDamageTo = 0.0f;
+
+	if ( damageAmount > 1.0f )
+		percentToDamageTo = damageAmount;
+	else
+		percentToDamageTo = 10.0f;
+
+	const string COMPONENT_DAMAGED_CEF = "";
+	obj_id pilot = getShipPilot(shipDamaged);
+
+	for ( int x = 0; x < numComponentsDamaged; x++ )
+		space_combat.emergencyCmdDamageToShipsSystems(pilot, shipDamaged, percentToDamageTo, COMPONENT_DAMAGED_CEF, randomComponentSelector(shipDamaged));
+
+	return;
+}
+
+
+void doRandomSubSystemStun(obj_id shipDamaged, int numComponentsStunned)
+{
+	resizeable int[] stunnedComponents = new int[0];
+
+	for ( int i = 0; i < numComponentsStunned; i++ )
+	{
+		int stunnedModule = randomComponentSelector(shipDamaged);
+		if (!isShipComponentDisabled(shipDamaged, stunnedModule))
+		{
+			space_utils.setComponentDisabled(shipDamaged,stunnedModule,true);
+			stunnedComponents = utils.addElement(stunnedComponents, stunnedModule);
+		}
+	}
+
+	if ( stunnedComponents.length <  1)
+		return;
+
+	dictionary outparams = new dictionary();
+	outparams.put( "stunned_components", stunnedComponents );
+	outparams.put( "stun_loops", 50 );	// default value for loop initialization
+	space_utils.notifyObject(shipDamaged, "componentsStunned", outparams );
+
+	return;
+}
+
+void doSubSystemStun(obj_id targetShip, int component, int duration)
+{
+	if(!isIdValid(targetShip) || !exists(targetShip))
+	{
+		return;
+	}
+	
+	if(duration <= 0)
+	{
+		return;
+	}
+	
+	resizeable int[] stunnedComponents = new int[0];
+	if(!isShipComponentDisabled(targetShip, component))
+	{
+		space_utils.setComponentDisabled(targetShip,component,true);
+		stunnedComponents = utils.addElement(stunnedComponents, component);
+	}
+
+	if(stunnedComponents.length <  1)
+		return;
+
+	dictionary outparams = new dictionary();
+	outparams.put("stunned_components", stunnedComponents);
+	outparams.put("stun_loops", duration);	// default value for loop initialization
+	space_utils.notifyObject(targetShip, "componentsStunned", outparams);
+
+	return;
+
+}
+
+void doNormalDamage(obj_id objAttacker, obj_id shipDamaged, float damageAmount)
+{
+	// get damage
+	// get side
+	// get weapon
+	//call
+
+	obj_id self = shipDamaged;	//initialize 'self' to be the ship that took the hit
+	int intTargetedComponent = space_combat.SHIP;	//initialize specific component target to safe default value
+	int intWeaponSlot = 50;	//initialize weapon slot to some funky value, counting on the sub-modules to detect the bad value and chunk it for a default value.
+	float fltDamage = damageAmount;	//map the command's damage value to the function's damage variable
+
+	if(hasObjVar(self, "intInvincible"))
+		return;
+
+	if(space_combat.hasDeathFlags(self))
+		return;
+
+	if(hasObjVar(self, "intNoPlayerDamage"))
+		if(space_utils.isPlayerControlledShip(objAttacker))
+			return; // no damage
+
+	if(hasScript(self, "space.combat.combat_ship_capital"))
+		return; // stop this damage trigger (since we use a different one for combat_ship_capital);
+
+	//DETERMINE WHAT SIDE WAS HIT
+	obj_id objPilot = getPilotId(objAttacker);
+	//-- Get transform of attacker
+	transform attackerTransform_w = getTransform_o2w(objAttacker);
+
+	//-- Get transform of defender
+	transform defenderTransform_w = getTransform_o2w(self);
+
+	//-- Calculate position of attacker in defender space
+	vector hitDirection_o = defenderTransform_w.rotateTranslate_p2l(attackerTransform_w.getPosition_p());
+
+	//-- Determine side, if the attacker position in defender space has a z < 0, the hit was in the back
+	int intSide = 0;
+	if (hitDirection_o.z < 0.f)
+		intSide = 1;
+
+
+	if(utils.checkConfigFlag("ScriptFlags","e3Demo"))		// e3 hack
+		if(space_utils.isPlayerControlledShip(self))
+		{
+			int intSlot = rand(1, 4);
+			int intIntensity = rand(1, 100);
+			space_combat.doInteriorDamageNotification(self, intSlot, 100, intIntensity);
+			return;
+		}
+
+
+	if(fltDamage>0.f)
+	{
+		if ( self != objAttacker )
+		{
+			notifyShipDamage(self, objAttacker, fltDamage);
+			ship_ai.unitAddDamageTaken(self, objAttacker, fltDamage);
+		}
+	}
+
+	if(space_utils.isPlayerControlledShip(self))	//If a player ship just took a hit, make sure it suffers a 10 sec pilot command skill mod, if it isn't already.
+		if(!utils.hasLocalVar(self, "cmd.wasDamagedSkillMod"))
+		{
+			int time = getGameTime();
+			utils.setLocalVar(self, "cmd.wasDamagedSkillMod", SHIP_DAMAGED_SKILLMOD_PENALTY_TIME+time);
+		}
+
+	//MAIN DAMAGE DISTRIBUTION CORE MODULE
+	float fltRemainingDamage = space_combat.doShieldDamage(objAttacker, self, intWeaponSlot, fltDamage, intSide);
+	if(fltRemainingDamage>0)
+	{
+		fltRemainingDamage = space_combat.doArmorDamage(objAttacker, self, intWeaponSlot, fltRemainingDamage, intSide);
+		if(fltRemainingDamage>0)
+		{
+
+			fltRemainingDamage = space_combat.doComponentDamage(objAttacker, self, intWeaponSlot, intTargetedComponent, fltRemainingDamage, intSide);
+			if(fltRemainingDamage>0)
+			{
+
+				if ( rand (1, 10) < DROID_VOCALIZE_REACT_CHANCE ) 	// if the random number is below the chance cut-off, then see if we can play a medium-priority droid vocalization.
+					if (space_utils.isPlayerControlledShip(self))
+						space_combat.flightDroidVocalize(self, 1);
+
+				fltRemainingDamage = space_combat.doChassisDamage(objAttacker, self, intWeaponSlot,fltRemainingDamage);
+
+				if(fltRemainingDamage>0)
+				{
+					setShipCurrentChassisHitPoints(self, 0.0f);
+
+					obj_id objDefenderPilot= getPilotId(self);
+					if(!space_utils.isPlayerControlledShip(self)) // who blew us up. was it another npc?
+					{
+						if(space_utils.isPlayerControlledShip(objAttacker))
+						{
+							space_combat.grantRewardsAndCreditForKills(self);
+
+							space_combat.targetDestroyed(self);
+							return;
+						}
+						else
+						{
+							space_combat.targetDestroyed(self);
+							return;
+						}
+					}
+					else
+					{
+
+						//resizeable obj_id[] objAttackers = ship_ai.getWhoIsTargetingShip(self);
+						//for(int intI = 0; intI< objAttackers.length; intI++)
+						//{
+						//	ship_ai.spaceStopAttack(objAttackers[intI], self);
+						//}
+
+
+						space_combat.setDeathFlags(self);
+						//LOG("space", "defender pilot is "+getPilotId(self));
+						dictionary dctParams= new dictionary();
+						dctParams.put("objAttacker", objAttacker);
+						dctParams.put("objShip", self);
+						space_utils.notifyObject(objDefenderPilot, "playerShipDestroyed", dctParams);
+
+						// Send message to client informing client to start death camera sequence
+						float fltIntensity = rand(0, 1.0f);
+						handleShipDestruction(self, fltIntensity);
+						
+						//set the PvP nodecay flag
+						utils.setScriptVar(self, "intPVPKill", 1);
+
+						// Callback to do the actual scene change in 25 seconds
+						messageTo(self, "killSpacePlayer", null, 10.0f, true);
+					}
+				}
+			}
+
+			//NOTE: I believe this is positioned to trigger AFTER any damage more severe than armor damage would have settled up. This should only happen if armor damage was as bad as it got.
+			if ( rand (1, 10) < DROID_VOCALIZE_REACT_CHANCE ) 	// if the random number is below the chance cut-off, then see if we can play a medium-priority droid vocalization.
+				if (space_utils.isPlayerControlledShip(self))
+					space_combat.flightDroidVocalize(self, 2);
+		}
+	}
+
+	return;
+}
+
+
+
+boolean readyForVampiricRepairOther(obj_id ship, obj_id commander, obj_id target)
+{
+	debugServerConsoleMsg( null, "entered readyForVampiricRepairOther");
+
+	if ( !isIdValid( ship ) )
+		return false;
+
+	if ( !isIdValid( commander ) )
+		return false;
+
+	if ( isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_reactor))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Your ship's systems are currently disabled. Unable to begin repair.");
+		string_id strSpam = new string_id("space/space_interaction", "systems_disabled_repair_abort");
+		sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	if ( !isIdValid( target ) )
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "You must have a valid look-at target to use this ability.");
+		string_id strSpam = new string_id("space/space_interaction", "vrepairo_repair_target_invalid");
+		sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	if ( !space_utils.isPlayerControlledShip(target) )
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "The pilot of your currently targeted ship cannot allow you to repair them.");
+		//sendSystemMessageTestingOnly(commander, "(Find a player-controlled ship to repair.)");
+		string_id strSpam = new string_id("space/space_interaction", "vrepairo_cant_repair_npc");
+		string_id strSpam2 = new string_id("space/space_interaction", "vrepairo_target_pc");
+		sendSystemMessage(commander, strSpam);
+		sendSystemMessage(commander, strSpam2);
+		return false;
+	}
+
+	float yourSpeed = getShipCurrentSpeed(ship);
+	float targetSpeed = getShipCurrentSpeed(target);
+
+	float rangeToTarget = getDistance(ship, target);
+	if ( yourSpeed > 5.0f || targetSpeed > 5.0f)
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Either your ship or the target ship aren't positioned close enough to the repair target to begin the procedure.");
+		string_id strSpam = new string_id("space/space_interaction", "repairo_out_of_range");
+		sendSystemMessage(commander, strSpam);
+		//sendSystemMessageTestingOnly(self, "The target ship needs to close any s-foils they might have and come to a stop before you can repair them.");
+		string_id strSpam2 = new string_id("space/space_pilot_command", "cannot_repair_other_must_shutdown");
+		sendSystemMessage(commander, strSpam2);
+		return false;
+	}
+
+	//if ( pvpIsEnemy(ship, target) && pvpCanAttack(ship, target))
+	if ( !pvpCanAttack(ship, target))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Beginning repair procedure.");
+		string_id strSpam = new string_id("space/space_interaction", "repairo_beginning");
+		sendSystemMessage(commander, strSpam);
+		return true;
+	}
+
+	//LOCALIZE THIS
+	//sendSystemMessageTestingOnly(commander, "Repair target is identified as a possible enemy. Aborting procedure.");
+	string_id strSpam = new string_id("space/space_interaction", "repairo_cant_heal_enemy");
+	sendSystemMessage(commander, strSpam);
+	return false;
+}
+
+
+
+float sumShipComponentHitpointsCurrent(obj_id shipId)
+{
+	return sumShipComponentHitpointsCurrent(shipId, 100.0f);
+}
+
+
+float sumShipComponentHitpointsCurrent(obj_id shipId, float percentage)
+{
+	//LOG("space", "library.space_pilot_command.sumShipComponentHitpointsCurrent(" + shipId + ", " + percentage + ")");
+
+	float hitpointsSum = 0.0f;
+
+	int[] installedSlots = space_crafting.getShipInstalledSlots(shipId);
+
+	for(int i = 0; i < installedSlots.length; i++)
+	{
+		int chassisSlot = installedSlots[i];
+		hitpointsSum += getShipComponentHitpointsCurrent(shipId, chassisSlot);
+	}
+
+	return hitpointsSum * (percentage / 100.0f);
+}
+
+
+float sumShipComponentHitpointsMaximum(obj_id shipId)
+{
+	//LOG("space", "library.space_pilot_command.sumShipComponentHitpointsMaximum(" + shipId + ")");
+
+	float hitpointsSum = 0.0f;
+
+	int[] installedSlots = space_crafting.getShipInstalledSlots(shipId);
+
+	for(int i = 0; i < installedSlots.length; i++)
+	{
+		int chassisSlot = installedSlots[i];
+		hitpointsSum += getShipComponentHitpointsMaximum(shipId, chassisSlot);
+	}
+
+	return hitpointsSum;
+}
+
+
+float calcShipPercentDamaged(obj_id shipId)
+{
+	//LOG("space", "library.space_pilot_command.calcShipPercentDamaged(" + shipId + ")");
+
+	float totalHitpointsMaximum = sumShipComponentHitpointsMaximum(shipId);
+	float totalHitpointsCurrent = sumShipComponentHitpointsCurrent(shipId);
+
+	if (totalHitpointsMaximum <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	return (float) Math.rint(((totalHitpointsMaximum - totalHitpointsCurrent) / totalHitpointsMaximum) * 100.0f);
+}
+
+
+float calcShipComponentPercentDamaged(obj_id shipId, int chassisSlot)
+{
+	//LOG("space", "library.space_pilot_command.calcShipComponentPercentDamaged(" + shipId + ", " + chassisSlot + ")");
+
+	float currentHitPoints = getShipComponentHitpointsCurrent(shipId, chassisSlot);
+	float maxHitPoints     = getShipComponentHitpointsMaximum(shipId, chassisSlot);
+
+	if (maxHitPoints <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	return (float) Math.rint(((maxHitPoints - currentHitPoints) / maxHitPoints) * 100.0f);
+}
+
+
+int findMostDamagedShipComponent(obj_id shipId)
+{
+	//LOG("space", "library.space_pilot_command.findMostDamagedShipComponent(" + shipId + ")");
+
+	float highestDamagePercentage  = 0.0f;
+	int   mostDamagedShipComponent = -1;
+
+	int[] installedSlots = space_crafting.getShipInstalledSlots(shipId);
+
+	for(int i = 0; i < installedSlots.length; i++)
+	{
+		int chassisSlot = installedSlots[i];
+
+		float damagePercentage = calcShipComponentPercentDamaged(shipId, chassisSlot);
+
+		if (damagePercentage >= highestDamagePercentage) 
+		{
+			highestDamagePercentage  = damagePercentage;
+			mostDamagedShipComponent = chassisSlot;
+		}
+	}
+
+	return mostDamagedShipComponent;
+}
+
+
+float damageAllShipComponents(obj_id shipId, float percentToDamage)
+{
+	//LOG("space", "library.space_pilot_command.damageAllShipComponents(" + shipId + ", " + percentToDamage + ")");
+
+	float totalDamage = 0;
+
+	int[] installedSlots = space_crafting.getShipInstalledSlots(shipId);
+
+	for(int i = 0; i < installedSlots.length; i++)
+	{
+		int chassisSlot = installedSlots[i];
+
+		float maxHP = getShipComponentHitpointsMaximum(shipId, chassisSlot);
+
+		float damage = maxHP * (percentToDamage / 100.0f);
+		totalDamage += damage;
+
+		maxHP -= damage;
+		if (maxHP < 1)
+		{
+			maxHP = 1;
+			CustomerServiceLog("space_repair", "damageAllShipComponents resulted in <1 HP on component " +
+				chassisSlot + ". Adjusted to 1. Ship=" + shipId + " Owner=%TU", getOwner(shipId));
+		}
+
+		setShipComponentHitpointsCurrent(shipId, chassisSlot, maxHP);
+	}
+
+	// Recalculate efficiency for all components.
+	allPurposeShipComponentReset(shipId);
+
+	return totalDamage;
+}
+
+
+/**
+ * repairs the MOST damaged component on recipientShip using points drained equally from ALL donorShip components.
+ */
+void vampiricOtherTypeShipsSystemsRepair(obj_id donorPilot, obj_id donorShip, obj_id recipientShip, int successLevel)
+{
+	//LOG("space", "library.space_pilot_command.vampiricOtherTypeShipsSystemsRepair(" + donorPilot + ", " + donorShip +
+	//", " + recipientShip + ", " + successLevel + ")");
+
+	obj_id recipientPilot = getPilotId(recipientShip);
+
+	int   componentToRepair               = findMostDamagedShipComponent(recipientShip);
+	float componentToRepairHP             = getShipComponentHitpointsCurrent(recipientShip, componentToRepair);
+	float componentToRepairMaxHP          = getShipComponentHitpointsMaximum(recipientShip, componentToRepair);
+	float componentToRepairPercentDamaged = calcShipComponentPercentDamaged(recipientShip, componentToRepair);
+
+	float donorPercentDamaged = calcShipPercentDamaged(donorShip);
+	float percentDamagedDelta = componentToRepairPercentDamaged - donorPercentDamaged;
+
+	// If the Donor ship is not in overall worse shape than the Recipient component, don't do the repair.
+	if (percentDamagedDelta < 5.0f)
+	{
+		string_id strSpam = new string_id("space/space_interaction", "vampiric_other_repair_useless_abort");
+		sendSystemMessage(donorPilot, strSpam);
+		return;
+	}
+
+	// MAX AMOUNT to repair == 90% of total current donor component HP
+	float maxAmountToRepair = sumShipComponentHitpointsCurrent(donorShip, 90.0f);
+
+	// ACTUAL AMOUNT to repair
+	float amountToRepair = componentToRepairMaxHP * (percentDamagedDelta / 100.0f);
+	if (amountToRepair > maxAmountToRepair)
+	{
+		amountToRepair = maxAmountToRepair;
+	}
+
+	// DO REPAIR
+	componentToRepairHP += amountToRepair;
+ 	if (componentToRepairHP > componentToRepairMaxHP)
+	{
+ 		componentToRepairHP = componentToRepairMaxHP;
+	}
+	setShipComponentHitpointsCurrent(recipientShip, componentToRepair, componentToRepairHP);
+	allPurposeShipComponentReset(recipientShip);
+
+	string_id strSpam = new string_id("space/space_interaction", "vampiric_repair_other_underway");
+	sendSystemMessage(donorPilot, strSpam);
+	string_id strSpam2 = new string_id("space/space_pilot_command", "vampiric_repair_other_underway_recipient");
+	sendSystemMessage(recipientPilot, strSpam2);
+
+	// FIRE OFF THE CEF EFFECTS Loop
+	int damageLoops = 1 + ((int) componentToRepairPercentDamaged / 20);
+	dictionary params = new dictionary();
+	params.put("damage_loops", damageLoops);
+	params.put("pilot", donorPilot);
+	messageTo(donorShip, "vRepairDamageCEFLoop", params, 3.0f, false);
+	params.put("pilot", recipientPilot);
+	messageTo(recipientShip, "vRepairDamageCEFLoop", params, 3.0f, false);
+
+	// DETERMINE REPAIR COST
+	float repairCost = amountToRepair;
+	switch(successLevel)
+	{
+		// 25% damage DISCOUNT
+		case 1:
+			strSpam = new string_id("space/space_interaction", "vampiric_great_success");
+			sendSystemMessage(donorPilot, strSpam);
+			repairCost -= repairCost * 0.25f; 
+			break;
+
+		// 15% damage DISCOUNT
+		case 2:
+			strSpam = new string_id("space/space_interaction", "vampiric_good_success");
+			sendSystemMessage(donorPilot, strSpam);
+			repairCost -= repairCost * 0.15f; 
+			break;
+
+		// 0% damage discount
+		case 3:
+			strSpam = new string_id("space/space_interaction", "vampiric_success");
+			sendSystemMessage(donorPilot, strSpam);
+			break;
+
+		// 5% damage PENALTY
+		case 4:
+			strSpam = new string_id("space/space_interaction", "vampiric_slight_fail");
+			sendSystemMessage(donorPilot, strSpam);
+			repairCost += repairCost * 0.05f; 
+			break;
+
+		// unused
+		case 5:
+			LOG("space", "vampiricOtherTypeShipsSystemsRepair(): successLevel of " + successLevel + " is UNEXPECTED");
+			break;
+
+		// 20% damage PENALTY
+		case 6:
+			strSpam = new string_id("space/space_interaction", "vampiric_big_fail");
+			sendSystemMessage(donorPilot, strSpam);
+			repairCost += repairCost * 0.20f; 
+			break;
+
+		default:
+			LOG("space", "vampiricOtherTypeShipsSystemsRepair(): successLevel of " + successLevel + " is UNKNOWN");
+			break;
+	}
+
+	// CHARGE THE REPAIR COST
+	float percentToDamage = (repairCost / sumShipComponentHitpointsMaximum(donorShip)) * 100.0f;
+	damageAllShipComponents(donorShip, percentToDamage);
+
+	return;
+}
+
+
+
+string randomWeldingCEFPicker ()
+{
+	string[] possibleEffects = dataTableGetStringColumnNoDefaults(DROID_WELDING_EFFECT_DATATABLE, ALL_REPAIRS);
+	string clientEffect = possibleEffects[(int)(rand(0,possibleEffects.length-1))];
+
+	return clientEffect;
+}
+
+
+
+boolean readyForNebulaBlast(obj_id ship, obj_id commander)
+{
+	debugServerConsoleMsg( null, "entered SPACE_COMBAT.readyForNebulaBlast");
+
+	if(utils.hasLocalVar(ship, "cmd.nblast.execute"))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "You're already executing an nblast.");
+		string_id strSpam = new string_id("space/space_interaction", "nblast_already");
+		sendSystemMessage(commander, strSpam);
+		debugServerConsoleMsg( null, "SPACE_COMBAT.readyForNebulaBlast we think we're already doing one");
+		return false;
+	}
+
+	if ( isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_reactor) || isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_shield_0))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Your ship's systems are currently disabled. Unable to trigger an n-blast.");
+		string_id strSpam = new string_id("space/space_interaction", "nblast_systems_disabled");
+		sendSystemMessage(commander, strSpam);
+		debugServerConsoleMsg( null, "SPACE_COMBAT.readyForNebulaBlast we think that systems are enabled");
+		return false;
+	}
+
+	if ( !shipIsInNebula(ship, null))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Your ship must have access to the reactive trace elements located within a nebula in order to trigger an n-blast.");
+		string_id strSpam = new string_id("space/space_interaction", "nblast_no_nebula");
+		sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	float capacitorCurrent = getShipCapacitorEnergyCurrent(ship);
+	float capacitorMax = getShipCapacitorEnergyMaximum(ship);
+	int percentCharged = (int) ((capacitorCurrent/capacitorMax)*100.0f);
+	if ( percentCharged < 50 )
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "The energy capacitor has not stored up enough energy yet for an ignition-level pulse. ABORTING N-BLAST!");
+		string_id strSpam = new string_id("space/space_interaction", "nblast_not_ready");
+		sendSystemMessage(commander, strSpam);
+		debugServerConsoleMsg( null, "SPACE_COMBAT.readyForNebulaBlast we think that there isn't enough energy in the capactor");
+		return false;
+	}
+
+	obj_id target = getLookAtTarget (ship);
+	if ( pvpCanAttack(ship, target) || !isIdValid(target) || target == ship)
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Standy... beginning ignition source procedures.");
+		string_id strSpam = new string_id("space/space_interaction", "nblast_calling");
+		sendSystemMessage(commander, strSpam);
+		return true;
+	}
+
+	//LOCALIZE THIS
+	//sendSystemMessageTestingOnly(commander, "SYSTEM FAILURE. Secondary system overides engaging. ABORTING N-BLAST!");
+	string_id strSpam = new string_id("space/space_interaction", "nblast_unknown_failure");
+	sendSystemMessage(commander, strSpam);
+	debugServerConsoleMsg( null, "SPACE_COMBAT.readyForNebulaBlast we think that we failed for unknown reasons");
+	return false;
+}
+
+
+
+void doNebulaBlast(obj_id commander, obj_id firingShip)
+{
+
+	space_combat.flightDroidVocalize(firingShip, 1);
+
+	//FIGURE OUT BASE DAMAGE
+	float nominalYieldMod = 0.0f;
+	float selfDamageRatio = 0.0f;
+	float nominalYield = NOMINAL_NPULSE_YIELD;
+
+	int successLevel = space_combat.doPilotCommandSkillCheck(commander, "level2command");
+
+	switch(successLevel)
+	{
+		case 6:	string_id strSpam = new string_id("space/space_interaction", "nblast_skill_abort_fail");
+				sendSystemMessage(commander, strSpam);
+				nominalYield = NOMINAL_NPULSE_YIELD*1.0f;
+				selfDamageRatio = 0.70f;
+				break;
+		case 5: strSpam = new string_id("space/space_interaction", "nblast_skill_abort");
+				sendSystemMessage(commander, strSpam);
+				break;
+		case 4: strSpam = new string_id("space/space_interaction", "nblast_execute");
+				sendSystemMessage(commander, strSpam);
+				nominalYield = NOMINAL_NPULSE_YIELD*1.0f;
+				selfDamageRatio = 0.50f;
+				break;
+		case 3: strSpam = new string_id("space/space_interaction", "nblast_execute");
+				sendSystemMessage(commander, strSpam);
+				nominalYield = NOMINAL_NPULSE_YIELD*1.0f;
+				selfDamageRatio = 0.30f;
+				break;
+		case 2: strSpam = new string_id("space/space_interaction", "nblast_execute");
+				sendSystemMessage(commander, strSpam);
+				nominalYield = NOMINAL_NPULSE_YIELD*1.0f;
+				selfDamageRatio = 0.20f;
+				break;
+		case 1: strSpam = new string_id("space/space_interaction", "nblast_execute");
+				sendSystemMessage(commander, strSpam);
+				nominalYield = NOMINAL_NPULSE_YIELD*1.0f;
+				selfDamageRatio = 0.05f;
+				break;
+	}
+
+	float targetDamageYield = (nominalYield-(nominalYield*selfDamageRatio));
+
+	debugServerConsoleMsg( null, "base targetDamageYield is: "+targetDamageYield);
+
+	//DAMAGE SELF
+	doNormalDamage(firingShip, firingShip, (nominalYield*selfDamageRatio));
+	debugServerConsoleMsg( null, "damage yield to self is: "+(nominalYield*selfDamageRatio));
+
+	//FIGURE OUT TARGET LIST
+	obj_id[] targetShips = getAllObjectsWithScript(getLocation(firingShip), 150.0f, "space.combat.combat_ship");
+	for(int i = 0; i<targetShips.length; i++)
+	{
+		if ( (!isIdValid(targetShips[i])) && (targetShips[i] != firingShip))
+		{
+			float distanceToBlast = Math.abs(getDistance(firingShip, targetShips[i]));
+			if ( distanceToBlast < space_pilot_command.MAX_NPULSE_RANGE )
+				space_pilot_command.nblastDamageTarget(firingShip, targetShips[i], targetDamageYield, distanceToBlast);
+		}
+	}
+}
+
+
+
+void nblastDamageTarget(obj_id firingShip, obj_id victim, float blastNominalYield, float distanceToBlast)
+{
+	if ( !isIdValid(victim) || !exists(victim))
+		return;
+
+	float damageAmount = blastNominalYield*((100.0f-(distanceToBlast/MAX_NPULSE_RANGE)*100.0f)/100.0f);
+
+	debugServerConsoleMsg( null, "**************************************************** NBLAST damage done to target:"+victim+" was: "+damageAmount);
+
+	doNormalDamage(firingShip, victim, damageAmount);
+
+	playClientEffectObj(victim, "clienteffect/space_command/shp_shocked_01_noshake.cef", victim, "");
+	if ( exists(victim) && (space_utils.isPlayerControlledShip(victim)))
+	{
+		obj_id victimPilot = getShipPilot(victim);
+		if ( distanceToBlast < (MAX_NPULSE_RANGE/2))
+			playClientEffectObj(victimPilot, "clienteffect/space_command/aftershock_medium.cef", victim, "");
+		else
+			playClientEffectObj(victimPilot, "clienteffect/space_command/aftershock_small.cef", victim, "");
+
+	}
+	return;
+}
+
+
+
+
+boolean readyForJumpStart(obj_id ship, obj_id commander, obj_id target, string commandLevel)
+{
+	debugServerConsoleMsg( null, "entered readyForJumpStart");
+
+	if ( !isIdValid( ship ) || !isIdValid( commander ))
+		return false;
+
+	if (!space_utils.isShip(target))
+	{
+		string_id strSpam = new string_id("space/space_interaction", "target_not_ship");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+
+	if(!isShipSlotInstalled(target, ship_chassis_slot_type.SCST_shield_0))	//verify that the target has shields to recharge
+	{
+		string_id strSpam = new string_id("space/space_interaction", "jstart_target_no_shield");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+
+	if ( isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_reactor) || isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_capacitor))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Your ship's systems are currently disabled. Unable to begin jumpstart program.");
+		string_id strSpam = new string_id("space/space_interaction", "jstart_systems_disabled");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+	else if ( commandLevel == "jstart2" || commandLevel == "jstart3" )	// if the command requires shields, make sure we have them on our ship
+	{
+		if(!isShipSlotInstalled(ship, ship_chassis_slot_type.SCST_shield_0))	//verify that you have shields to contribute power from
+		{
+			string_id strSpam = new string_id("space/space_interaction", "jstart_no_shield");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+			return false;
+		}
+		else if (isShipComponentDisabled(ship, ship_chassis_slot_type.SCST_shield_0))
+		{
+			//LOCALIZE THIS
+			//sendSystemMessageTestingOnly(commander, "Your ship's systems are currently disabled. Unable to begin jumpstart program.");
+			string_id strSpam = new string_id("space/space_interaction", "jstart_systems_disabled");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+			return false;
+		}
+	}
+
+	float capacitorCurrent = getShipCapacitorEnergyCurrent(ship);
+	float capacitorMax = getShipCapacitorEnergyMaximum(ship);
+	int percentCharged = (int) ((capacitorCurrent/capacitorMax)*100.0f);
+	if ( percentCharged < 50 )
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "The energy capacitor has not stored up enough energy yet for a significant pulse. JUMPSTART PROGRAM ABORT!");
+		string_id strSpam = new string_id("space/space_interaction", "jstart_not_charged");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+
+	if ( !isIdValid(target) || !exists(target) || !space_utils.isPlayerControlledShip(target))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Targeting systems unable to resolve target. ERROR! JUMPSTART PROGRAM ABORT!");
+		string_id strSpam = new string_id("space/space_interaction", "jstart_invalid_target");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+/*
+	if ( !space_utils.isPlayerControlledShip(target))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "The pilot of your currently targeted ship cannot allow you to recharge their shields.");
+		//sendSystemMessageTestingOnly(commander, "(Find a player-controlled ship to jumpstart.)");
+		string_id strSpam = new string_id("space/space_interaction", "jstart_cant_repair_npc");
+		string_id strSpam2 = new string_id("space/space_interaction", "jstart_target_pc");
+		space_utils.sendSystemMessageShip(ship, strSpam2, true, false, false, true);
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+*/
+
+	float yourSpeed = getShipCurrentSpeed(ship);
+	float targetSpeed = getShipCurrentSpeed(target);
+
+	float rangeToTarget = getDistance(ship, target);
+	//if ( yourSpeed > 5.0f || targetSpeed > 5.0f || rangeToTarget > 30.0f)
+	if (rangeToTarget > 20.0f)
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Either your ship or the target ship aren't positioned close enough to the jumpstart target to begin the procedure.");
+		string_id strSpam = new string_id("space/space_interaction", "jstart_out_of_range");
+		sendSystemMessage(commander, strSpam);
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+
+	//if ( pvpIsEnemy(ship, target) && pvpCanAttack(ship, target))
+	if ( !pvpCanAttack(ship, target))
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "Beginning jumpstart procedure.");
+		string_id strSpam = new string_id("space/space_interaction", "jstart_beginning");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return true;
+	}
+
+	//LOCALIZE THIS
+	//sendSystemMessageTestingOnly(commander, "Jumpstart target is identified as a possible enemy. Aborting procedure.");
+	string_id strSpam = new string_id("space/space_interaction", "jstart_cant_heal_enemy");
+	space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+	return false;
+}
+
+
+
+boolean executeJstart(obj_id commander, obj_id ship, obj_id target, string cmdLevel)
+{
+
+	if ( !isIdValid(ship) || !isIdValid(commander) || !isIdValid(target))
+	{
+		debugServerConsoleMsg( null, "space_pilot_command.executeJstart ***** dumping out with FALSE reading, because obj_id's passed in are invalid");
+		return false;
+	}
+
+
+	space_combat.flightDroidVocalize(ship, 1);
+
+	const int CHANCE_OF_SHORT_CIRCUIT_LVL3 = 100;
+	const int CHANCE_OF_SHORT_CIRCUIT_LVL2 = 50;
+	const int CHANCE_OF_SHORT_CIRCUIT_LVL1 = 10;
+
+	const float CMD_LEVEL_TWO_MIN_SHIELD = 0.50f;
+	const float CMD_LEVEL_THREE_MIN_SHIELD = 0.10f;
+
+	//ENERGY LEVEL INITIALIZATIONS
+	int donorPercentCharged = 50;
+	int donorTotalCurrentEnergy = 0;
+
+	//vital statistics for energy capacitor
+	// DONOR
+	float donorCapacitorCurrent = (getShipCapacitorEnergyCurrent(ship))/8;	//DIVIDE AVAILABLE CAPACITOR ENERGY BY 8, TO MAKE IT A 8 CAP-ENERGY TO SHIELD POINT RATIO
+	float donorCapacitorMax = getShipCapacitorEnergyMaximum(ship);
+	// RECIPIENT
+	float recipientCapacitorCurrent = getShipCapacitorEnergyCurrent(ship);
+	float recipientCapacitorMax = getShipCapacitorEnergyMaximum(ship);
+
+	//vital statistics for shields
+	// DONOR
+	float donorFrontShieldCurrent = getShipShieldHitpointsFrontCurrent(ship);
+	float donorFrontShieldMax = getShipShieldHitpointsFrontMaximum(ship);
+	float donorBackShieldCurrent = getShipShieldHitpointsBackCurrent(ship);
+	float donorBackShieldMax = getShipShieldHitpointsBackMaximum(ship);
+	float donorTotalShieldStrengthCurrent = donorFrontShieldCurrent + donorBackShieldCurrent;
+	float donorTotalShieldStrengthMax = donorFrontShieldMax + donorBackShieldMax;
+	// RECIPIENT
+	float recipientFrontShieldCurrent = getShipShieldHitpointsFrontCurrent(target);
+	float recipientFrontShieldMax = getShipShieldHitpointsFrontMaximum(target);
+	float recipientBackShieldCurrent = getShipShieldHitpointsBackCurrent(target);
+	float recipientBackShieldMax = getShipShieldHitpointsBackMaximum(target);
+	float recipientTotalShieldStrengthCurrent = recipientFrontShieldCurrent + recipientBackShieldCurrent;
+	float recipientTotalShieldStrengthMax = recipientFrontShieldMax + recipientBackShieldMax;
+
+	//debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    Current recipientTotalShieldStrengthMax = "+recipientTotalShieldStrengthMax);
+	//debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    Current recipientTotalShieldStrengthCurrent = "+recipientTotalShieldStrengthCurrent);
+
+	float recipientTotalEnergyNeeds = recipientTotalShieldStrengthMax - recipientTotalShieldStrengthCurrent;	//HERES WHAT THE RECIPEINT NEEDS TO REFILL SHIELDS
+
+	//debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    Current recipientTotalEnergyNeeds = "+recipientTotalEnergyNeeds);
+
+	//FIGURE OUT THE DONOR-CRAFT'S AVAILABLE POWER
+	float donorTotalAvailableEnergy = donorCapacitorCurrent;	//ADD IN THE CAPACITOR, WHICH IS USED FOR ALL THREE VERSIONS OF THE COMMAND
+	float donorAvailableFrontShieldEnergy = 0.0f;
+	float donorAvailableBackShieldEnergy = 0.0f;
+
+	if ( cmdLevel == "jstart_three" )
+	{
+		donorAvailableFrontShieldEnergy = donorFrontShieldCurrent - (donorFrontShieldMax*CMD_LEVEL_THREE_MIN_SHIELD);
+		if ( donorAvailableFrontShieldEnergy < 0.0f )
+			donorAvailableFrontShieldEnergy = 0;
+		donorAvailableBackShieldEnergy = donorBackShieldCurrent - (donorBackShieldMax*CMD_LEVEL_THREE_MIN_SHIELD);
+		if ( donorAvailableBackShieldEnergy < 0.0f )
+			donorAvailableBackShieldEnergy = 0;
+		donorTotalAvailableEnergy += donorAvailableFrontShieldEnergy + donorAvailableBackShieldEnergy;
+	}
+	else if (cmdLevel == "jstart_two")
+	{
+		donorAvailableFrontShieldEnergy = donorFrontShieldCurrent - (donorFrontShieldMax*CMD_LEVEL_TWO_MIN_SHIELD);
+		if ( donorAvailableFrontShieldEnergy < 0.0f )
+			donorAvailableFrontShieldEnergy = 0;
+		donorAvailableBackShieldEnergy = donorBackShieldCurrent - (donorBackShieldMax*CMD_LEVEL_TWO_MIN_SHIELD);
+		if ( donorAvailableBackShieldEnergy < 0.0f )
+			donorAvailableBackShieldEnergy = 0;
+		donorTotalAvailableEnergy += donorAvailableFrontShieldEnergy + donorAvailableBackShieldEnergy;
+	}
+
+	//debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    Current donorTotalAvailableEnergy = "+donorTotalAvailableEnergy);
+
+	//GO AHEAD AND SUBTRACT OUT THE ENERGY USED
+	float donorRecipientenergyDelta = donorTotalAvailableEnergy - recipientTotalEnergyNeeds;
+	if ( recipientTotalEnergyNeeds > donorTotalAvailableEnergy )
+	{
+		//debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    recognized that the recipient needs more energy than we've got to give.");
+		recipientTotalEnergyNeeds = donorTotalAvailableEnergy;
+	}
+
+	float donorEnergyUsed = recipientTotalEnergyNeeds;
+
+	//debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorEnergyUsed #10 = "+donorEnergyUsed);
+
+	float runoffEnergy = 0.0f;
+	if ( cmdLevel == "jstart_one" ) //AFFECT ONLY THE CAPACITOR FOR JSTART 1
+	{
+		if (donorCapacitorCurrent-donorEnergyUsed < 5.0f  )
+			setShipCapacitorEnergyCurrent(ship,5.0f);
+		else
+			setShipCapacitorEnergyCurrent(ship,(donorCapacitorCurrent-donorEnergyUsed)*8);
+	}
+	else if ( cmdLevel == "jstart_two" )	// AFFECT CAPACITOR AND SHIELDGEN FOR JSTART 2 & 3
+	{
+		if ( donorEnergyUsed > donorCapacitorCurrent )
+		{
+			donorEnergyUsed = (donorEnergyUsed - donorCapacitorCurrent)/2.0f;
+			setShipCapacitorEnergyCurrent(ship,5.0f);
+			if ( donorEnergyUsed > donorAvailableFrontShieldEnergy )
+			{
+				donorEnergyUsed = (donorEnergyUsed - donorAvailableFrontShieldEnergy);
+				setShipShieldHitpointsFrontCurrent(ship, (donorFrontShieldMax*CMD_LEVEL_TWO_MIN_SHIELD));
+				setShipShieldHitpointsBackCurrent(ship, (donorBackShieldCurrent-donorEnergyUsed));
+			}
+			else if ( donorEnergyUsed > donorAvailableBackShieldEnergy )
+   			{
+				donorEnergyUsed = (donorEnergyUsed - donorAvailableBackShieldEnergy);
+				setShipShieldHitpointsBackCurrent(ship, (donorBackShieldMax*CMD_LEVEL_TWO_MIN_SHIELD));
+				setShipShieldHitpointsFrontCurrent(ship, (donorFrontShieldCurrent-donorEnergyUsed));
+			}
+			else
+			{
+				setShipShieldHitpointsFrontCurrent(ship, (donorFrontShieldCurrent-donorEnergyUsed));
+				setShipShieldHitpointsBackCurrent(ship, (donorBackShieldCurrent-donorEnergyUsed));
+			}
+		}
+	}
+	else if ( cmdLevel == "jstart_three" )	// AFFECT CAPACITOR AND SHIELDGEN FOR JSTART 2 & 3
+	{
+		if ( donorEnergyUsed > donorCapacitorCurrent )
+		{
+			debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorEnergyUsed > donorCapacitorCurrent ");
+			debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorCapacitorCurrent = "+donorCapacitorCurrent);
+			donorEnergyUsed = (donorEnergyUsed - donorCapacitorCurrent)/2.0f;
+			debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorEnergyUsed #11 = "+donorEnergyUsed);
+			setShipCapacitorEnergyCurrent(ship,5.0f);
+			if ( donorEnergyUsed > donorAvailableFrontShieldEnergy )
+			{
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorEnergyUsed > donorAvailableFrontShieldEnergy ");
+				donorEnergyUsed = (donorEnergyUsed - donorAvailableFrontShieldEnergy);
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorEnergyUsed #12 = "+donorEnergyUsed);
+				setShipShieldHitpointsFrontCurrent(ship, (donorFrontShieldMax*CMD_LEVEL_THREE_MIN_SHIELD));
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    setting donor front shield to = "+(donorFrontShieldMax*CMD_LEVEL_THREE_MIN_SHIELD));
+				setShipShieldHitpointsBackCurrent(ship, (donorBackShieldCurrent-donorEnergyUsed));
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    setting donor back shield to = "+(donorBackShieldCurrent-donorEnergyUsed));
+			}
+			else if ( donorEnergyUsed > donorAvailableBackShieldEnergy )
+   			{
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorEnergyUsed > donorAvailableBackShieldEnergy ");
+				donorEnergyUsed = (donorEnergyUsed - donorAvailableBackShieldEnergy);
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    donorEnergyUsed #13 = "+donorEnergyUsed);
+				setShipShieldHitpointsBackCurrent(ship, (donorBackShieldMax*CMD_LEVEL_THREE_MIN_SHIELD));
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    setting donor back shield to = "+(donorBackShieldMax*CMD_LEVEL_THREE_MIN_SHIELD));
+				setShipShieldHitpointsFrontCurrent(ship, (donorFrontShieldCurrent-donorEnergyUsed));
+				debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    setting donor front shield to = "+(donorFrontShieldCurrent-donorEnergyUsed));
+			}
+			else
+			{
+				setShipShieldHitpointsFrontCurrent(ship, (donorFrontShieldCurrent-donorEnergyUsed));
+				setShipShieldHitpointsBackCurrent(ship, (donorBackShieldCurrent-donorEnergyUsed));
+			}
+		}
+		else
+			setShipCapacitorEnergyCurrent(ship,((donorCapacitorCurrent)-donorEnergyUsed)*8);
+	}
+	else
+	{
+		debugServerConsoleMsg( null, "crazy wack-ness! Dumping out of jumpstart activation due to unknown command level");
+		return false;
+	}
+
+
+	// DO SKILL CHECK
+	int successLevel = 5;	//set the pre-skillcheck default successLevel result to fail
+	if ( cmdLevel == "jstart_one" )
+		successLevel = space_combat.doPilotCommandSkillCheck(commander, "level2command");
+	else if (cmdLevel == "jstart_two" )
+		successLevel = space_combat.doPilotCommandSkillCheck(commander, "level4command");
+	else if (cmdLevel == "jstart_three" )
+		successLevel = space_combat.doPilotCommandSkillCheck(commander, "level6command");
+
+	debugServerConsoleMsg( null, "SPACE_COMBAT.executeJstart SUCCESSLEVEL WAS "+successLevel);
+
+	//DEAL WITH THE RESULTS OF A FAILURE OF THE PLAYER'S SKILL-CHECK
+	if ( successLevel > 4 )
+	{
+		if ( successLevel == 5 )
+		{
+			//GIVE THE PLAYER FEEDBACK ON THE FAILURE
+			string_id strSpam = new string_id("space/space_interaction", "jstart_failure");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+			playClientEffectObj(ship, "clienteffect/space_command/emergency_power_on.cef", ship, "");	//PLAY SOME COOL IFF-PULSE EFFECT HERE
+		}
+		else if ( successLevel == 6 )	//things went horribly wrong. Damage to own systems, depending on amount of power involved and % charge level.
+		{
+			//GIVE THE PLAYER FEEDBACK ON THE FAILURE
+			playClientEffectObj(ship, "clienteffect/space_command/emergency_power_on.cef", ship, "");	//PLAY SOME ADDITIONAL COOL IFF-PULSE EFFECT HERE
+			string_id strSpam = new string_id("space/space_interaction", "jstart_big_failure");
+			string_id strSpam2 = new string_id("space/space_interaction", "jstart_big_failure2");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+			space_utils.sendSystemMessageShip(ship, strSpam2, true, false, false, true);
+
+			//DAMAGE OURSELVES BECAUSE WE FAILED
+			const string COMPONENT_DAMAGED_CEF = "";
+			float	percentToDamageTo = 15.0f;
+
+			if ( cmdLevel != "jstart_one" )
+			{
+				space_combat.emergencyCmdDamageToShipsSystems(commander, ship, percentToDamageTo, COMPONENT_DAMAGED_CEF, ship_chassis_slot_type.SCST_shield_0);
+				if ( cmdLevel == "jstart_two" )
+				{
+
+				}
+				else if ( cmdLevel == "jstart_three" )
+				{
+
+				}
+			}
+			space_combat.emergencyCmdDamageToShipsSystems(commander, ship, percentToDamageTo, COMPONENT_DAMAGED_CEF, ship_chassis_slot_type.SCST_capacitor);
+		}
+		return true;	//all done - no further bennies
+	}
+
+	// SET UP THE RECIPIENT'S SHIELDS
+	debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    runoffEnergy = "+runoffEnergy);
+	float totalShieldRegenPoints = recipientTotalEnergyNeeds - runoffEnergy;
+	debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    totalShieldRegenPoints #1 = "+totalShieldRegenPoints);
+	float recipientFrontShieldDelta = recipientFrontShieldMax-recipientFrontShieldCurrent;
+	float recipientBackShieldDelta = recipientBackShieldMax-recipientBackShieldCurrent;
+	debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    Current recipientFrontShieldDelta = "+recipientFrontShieldDelta);
+	debugServerConsoleMsg( null, "space_pilot_commands.executeJstart ---------    Current recipientBackShieldDelta = "+recipientBackShieldDelta);
+
+	if ( totalShieldRegenPoints/2.0f > recipientFrontShieldDelta )
+	{
+		totalShieldRegenPoints = (totalShieldRegenPoints/2.0f) + (totalShieldRegenPoints/2.0f - recipientFrontShieldDelta);
+		setShipShieldHitpointsFrontCurrent(target, recipientFrontShieldMax);
+		if ( totalShieldRegenPoints > recipientFrontShieldDelta)
+			totalShieldRegenPoints = recipientFrontShieldDelta;
+		setShipShieldHitpointsBackCurrent(target, (donorBackShieldCurrent+totalShieldRegenPoints));
+	}
+	else if ( totalShieldRegenPoints/2.0f > recipientBackShieldDelta )
+	{
+		totalShieldRegenPoints = (totalShieldRegenPoints/2.0f) + (totalShieldRegenPoints/2.0f - recipientBackShieldDelta);
+		setShipShieldHitpointsBackCurrent(target, recipientBackShieldMax);
+		if ( totalShieldRegenPoints > recipientFrontShieldDelta)
+			totalShieldRegenPoints = recipientFrontShieldDelta;
+		setShipShieldHitpointsFrontCurrent(target, (donorFrontShieldCurrent+totalShieldRegenPoints));
+	}
+	else
+	{
+		setShipShieldHitpointsFrontCurrent(target, (recipientFrontShieldCurrent+(totalShieldRegenPoints/2.0f)));
+		setShipShieldHitpointsBackCurrent(target, (recipientBackShieldCurrent+(totalShieldRegenPoints/2.0f)));
+	}
+
+	//play successful CEF for player
+	//string cefPlayBackHardpoint = space_combat.targetHardpointForCefPlayback(ship);
+	playClientEffectObj(ship, "clienteffect/space_command/shp_shocked_flash_01.cef", ship, "");	//PLAY SOME COOL IFF-PULSE EFFECT HERE
+	playClientEffectObj(target, "clienteffect/space_command/shp_shocked_flash_01.cef", target, "");	//PLAY SOME COOL IFF-PULSE EFFECT HERE
+
+	//ALERT THE RECIEPIENT'S PILOT
+	string_id strSpam = new string_id("space/space_interaction", "jstart_recipient_alert");
+	string commanderName = getEncodedName(commander);
+	prose_package proseTest = prose.getPackage(strSpam, commanderName);
+	space_utils.sendSystemMessageShip(target, proseTest, true, false, false, true);
+
+	return true;
+}
+
+
+
+boolean prepInSpaceRepair (obj_id commander, obj_id ship, string command_type)
+{
+
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.prepInSpaceRepair  ---- Just Entered");
+
+	//get nearest station
+	obj_id closestStation = space_combat.getClosestSpaceStation(ship);
+	if ( !isIdValid(closestStation)  )
+	{
+		//LOCALIZE THIS
+		space_utils.sendSystemMessage(commander, SID_SPACEREPAIR_NO_STATION);
+		//string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_no_station");
+		//space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return false;
+	}
+
+
+	if ( space_utils.isShipWithInterior(ship) )
+	{
+	 	//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "There are no repair craft available to be dispatched in this sector.");
+		string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_no_pob");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		//sendSystemMessage(commander, strSpam);
+		return false;
+	}
+
+	//sendSystemMessageTestingOnly(self, "Calling in a repair vessel. Stand by while inquiries made on SupportNet.");
+	string_id strSpam = new string_id("space/space_interaction", "calling_repair_ship");
+	sendSystemMessage(commander, strSpam);
+
+	if ( !space_pilot_command.shipissafe(ship, commander) )
+	{
+		//sendSystemMessageTestingOnly(self, "Scans indicate you are still currently targeted by hostile craft. Unable to call in the repair vessel.");
+		//sendSystemMessageTestingOnly(self, "You are currently engaged in combat maneuvers with enemy vessels and repairship can't defend itself.");
+		strSpam = new string_id("space/space_pilot_command", "inspacerepair_ship_not_safe");
+		sendSystemMessage(commander, strSpam);
+		strSpam = new string_id("space/space_pilot_command", "inspacerepair_ship_not_safe2");
+		sendSystemMessage(commander, strSpam);
+
+		debugServerConsoleMsg( null, "we arent clear, so a repair ship cant come in!!!");
+		return false;
+	}
+	else
+	{
+		float currentSpeed = getShipCurrentSpeed(ship);
+
+		if ( currentSpeed > 1.0f )
+		{
+			//sendSystemMessageTestingOnly(self, "Unable to call in the repair vessel. You are currently moving, and you must be stopped before the repair ship can find and assist you.");
+			strSpam = new string_id("space/space_interaction", "cant_be_moving");
+			sendSystemMessage(commander, strSpam);
+			return false;
+		}
+
+		playClientEffectObj(commander, "clienteffect/space_command/sys_comm_rebel.cef", ship, "");
+
+		if (space_pilot_command.spawnrepairship(commander, ship, command_type, closestStation))
+		{
+			debugServerConsoleMsg( null, "spawnrepairship returned true.");
+			utils.setScriptVar(commander, "cmd.inSpaceRepair", 1);
+
+			space_combat.flightDroidVocalize(ship, 1);
+
+			//sendSystemMessageTestingOnly(self, "Repair vessel is on its way. Hold tight till it arrives.");
+			strSpam = new string_id("space/space_interaction", "calling_in_repair_ship");
+			sendSystemMessage(commander, strSpam);
+			strSpam = new string_id("space/space_pilot_command", "inspacerepair_service_fee");
+			sendSystemMessage(commander, strSpam);
+		}
+		else
+			debugServerConsoleMsg( null, "spawnrepairship returned false.");
+	}
+
+	return true;
+}
+
+
+
+void confirmRepairs(obj_id commander, obj_id ship, string command_type)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.confirmRepair  ---- Just Entered");
+
+	obj_id repairShip = utils.getObjIdLocalVar(commander, "cmd.repair.shipId");
+
+	//get nearest station
+	obj_id closestStation = space_combat.getClosestSpaceStation(ship);
+	if ( !isIdValid(closestStation)  )
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "There are no repair craft available to be dispatched in this sector.");
+		string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_no_station");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return;
+	}
+	if (utils.hasLocalVar(repairShip, "cmd.repair.buggingOut"))
+	{
+		debugServerConsoleMsg( null, "repair ship leaving. Do NOT tell it to do the repair/reload. Allow it to go");
+		return;
+	}
+	if (!utils.hasLocalVar(commander, "cmd.repair.shipId"))
+	{
+		debugServerConsoleMsg( null, "repair ship already otw, but not spawned yet");
+		return;
+	}
+	// THE PLAYER IS SIGNALLING THEIR APPROVAL OF THE REPAIR ESTIMATE, AND WE NEED TO TELL THE REPAIRSHIP TO GO AHEAD WITH THE RELOAD.
+	setObjVar(repairShip, "closestStation", closestStation);
+	setObjVar(repairShip, "command_type", command_type);
+
+	dictionary outparams = new dictionary();
+	outparams.put( "pilot", commander );
+	outparams.put( "ship", ship );
+	if ( command_type == "repair" )
+		space_pilot_command.doRepair(commander, ship, repairShip, closestStation);
+	else if ( command_type == "reload" )
+		space_pilot_command.doReload(commander, ship, repairShip, closestStation);
+	else if ( command_type == "repairAndReload" )
+		space_pilot_command.doRepairAndReload(commander, ship, repairShip, closestStation);
+
+	return;
+}
+
+
+
+boolean shipissafe(obj_id ship, obj_id pilot)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.shipissafe  ---- Just Entered");
+
+	//Is anyone attacking me?
+	obj_id[] myAttackers = ship_ai.unitGetWhoIsTargetingMe(ship);
+
+	if ( myAttackers.length != 0)
+	{
+		debugServerConsoleMsg( null, "SPACE_COMBAT.shipissafe: ----------------  WHOOPS! Looks like there are things targeting me!");
+		for(int i = 0; i<myAttackers.length; i++)
+			debugServerConsoleMsg( null, "SPACE_COMBAT.shipissafe: ----------------  obj_id: "+myAttackers[i]+" is targeting me! It is called: "+getName(myAttackers[i]));
+
+		return false;
+	}
+	return true;
+}
+
+
+obj_id getClosestStation( obj_id commander, obj_id ship)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getClosestStation  ---- Just Entered");
+
+	//get nearest station
+	obj_id closestStation = space_combat.getClosestSpaceStation(ship);
+	if ( !isIdValid(closestStation)  )
+	{
+		//LOCALIZE THIS
+		//sendSystemMessageTestingOnly(commander, "There are no repair craft available to be dispatched in this sector.");
+		string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_no_station");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		return null;
+	}
+	return closestStation;
+}
+
+
+boolean spawnrepairship(obj_id pilot, obj_id ship, string command_type, obj_id closestStation )		//based upon Brandon's duty mission spawn //LOGic
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.spawnrepairship  ---- Just Entered");
+
+	obj_id player = pilot;
+
+	// Repair ship arriving
+	//sendSystemMessageTestingOnly(pilot, "Repair ship now arriving from hyperspace.");
+	string_id strSpam = new string_id("space/space_interaction", "repair_arrive_hyperspace");
+	sendSystemMessage(pilot, strSpam);
+
+	transform gloc = getTransform_o2w( ship );
+
+	// Move the starting spot out in front of us.
+	float dist = rand( 600.f, 700.f );
+	vector n = gloc.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+	gloc = gloc.move_p( n );
+
+	// Flip the starting spot around so its facing us.
+	gloc = gloc.yaw_l( 3.14f );
+
+	// Find a spot on the IJ plane for deviation in a cone shape.
+	vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+	vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+	vector vd = vi.add( vj );
+	gloc = gloc.move_p( vd );
+
+	string[] possibleRepairShips = dataTableGetStringColumnNoDefaults(REPAIR_EQUIPMENT_DATATABLE, command_type);
+	string repairShipType = possibleRepairShips[(int)(rand(0,possibleRepairShips.length-1))];
+
+	//string repairShipType = "neutral_freighter";
+
+	obj_id newship = space_create.createShipHyperspace( repairShipType, gloc, null );
+	if ( !isIdValid(newship) )
+		return false;
+
+	utils.setObjVar(newship, "cmd.repair.commander", pilot);
+	utils.setLocalVar(newship, "cmd.repair.station", closestStation);
+	utils.setLocalVar(newship, "cmd.repair.command_type", command_type);
+	utils.setLocalVar(pilot, "cmd.repair.otw", true);
+	utils.setLocalVar(pilot, "cmd.repair.shipId", newship);
+
+	attachScript( newship, "space.command.player_cmd_repair_reload_ship" );
+	playClientEffectObj(pilot, "clienteffect/space_command/shp_dock_repair_loop.cef", newship, "");
+
+	//new ship's orders here.
+	int repairSquadId = ship_ai.unitGetSquadId(newship);
+	//transform targetLoc = getTransform_o2w(ship);
+	//transform[] loiterPath = ship_ai.createPatrolPathLoiter(targetLoc, 150.0f, 150.0f);	//Set up loiter area
+	//ship_ai.squadPatrol(repairSquadId, loiterPath);	//Set up loiter area
+
+	transform newLoc = space_utils.getRandomPositionInSphere(getTransform_o2p(ship), 50f, 90f, false);	//pick a random point around the playership
+	if ( space_utils.isShipWithInterior(ship) )
+	{
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.spawnrepairship ***** picking a location to move the freighter to that is a bit further out");
+		newLoc = space_utils.getRandomPositionInSphere(getTransform_o2p(ship), 150f, 180f, false);	//pick a random point around the playership
+	}
+
+	ship_ai.squadMoveTo(repairSquadId, newLoc);
+
+	return true;
+}
+
+
+
+boolean inSpaceRepairComponentsEstimate(obj_id ship, obj_id commander, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairComponentsEstimate  ---- Just Entered");
+
+	obj_id repairShip = utils.getObjIdLocalVar(commander, "cmd.repair.shipId");
+
+	//get station repair cost objvar and cost.
+	int cost = space_crafting.getStationRepairCost(commander, closestStation, IN_SPACE_REPAIR_STD_REPAIR_PERCENTAGE);
+	int bankBalance = getBankBalance(commander);
+
+	//offer repair
+	playClientEffectObj(commander, "clienteffect/space_command/sys_comm_rebel.cef", ship, "");
+	if ( (cost > 0) && (cost <= bankBalance))
+	{
+		prose_package ppCostForRepairs = prose.getPackage(SID_COST_FOR_REPAIRS);
+		prose.setDI(ppCostForRepairs, cost);
+		space_utils.sendSystemMessageProse(commander, ppCostForRepairs);
+		//string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_cost");
+		//prose_package proseTest = prose.getPackage(strSpam, cost);
+		//space_utils.sendSystemMessageShip(target, strSpam, true, false, false, true);
+
+		dictionary outparams = new dictionary();
+		outparams.put( "commander", commander );
+		outparams.put( "ship", ship );
+		messageTo( repairShip, "repairReplyTimeout", outparams, 30.0f, false );
+
+	}
+	else
+	{
+		prose_package ppRepairCost = prose.getPackage(SID_REPAIR_COST);
+		prose.setDI(ppRepairCost, cost);
+		space_utils.sendSystemMessageProse(commander, ppRepairCost);
+		if ( cost <= 0  )
+		{
+			//sendSystemMessageTestingOnly(commander, "Scans indicate that you don't appear to need repairs. Departing.");
+			string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_unnecessary");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		}
+		else if ( cost > bankBalance )
+		{
+			//sendSystemMessageTestingOnly(commander, "You don't have enough money in the bank to cover repairs. Departing.");
+			string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_not_enough_repair");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		}
+
+		if(isIdValid(repairShip))
+			repairCompleteDepart(repairShip);
+		else
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairComponentsEstimate  ---- obj_id localVar of RepairShip appears invalid. No departure function called");
+
+
+	}
+
+	return true;
+}
+
+
+
+boolean inSpaceReloadLaunchersEstimate(obj_id ship, obj_id commander, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceReloadLaunchersEstimate  ---- Just Entered");
+
+	obj_id repairShip = utils.getObjIdLocalVar(commander, "cmd.repair.shipId");
+
+	//get cost objvar
+	int cost = getStationReloadCost(ship, commander, closestStation);
+	int bankBalance = getBankBalance(commander);
+
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceReloadLaunchersEstimate  ---- cost for reload estimated at: "+cost);
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceReloadLaunchersEstimate  ---- player bank balance at: "+bankBalance);
+
+	//offer reload
+	if ( (cost > 0) && (cost <= bankBalance))
+	{
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 1");
+
+		//string_id strSpam = new string_id("space/space_pilot_command", "spacereload_cost");
+		//prose_package proseTest = prose.getPackage(strSpam, cost);
+		//space_utils.sendSystemMessageShip(target, strSpam, true, false, false, true);
+		//sendSystemMessageTestingOnly(commander, "Request reload again if you do. Otherwise, Do nothing and the rearmament ship will leave.");
+		string_id strSpam = new string_id("space/space_pilot_command", "spacereload_confirm_instructions");
+		prose_package ppReloadCost = prose.getPackage(strSpam);
+		prose.setDI(ppReloadCost, cost);
+		space_utils.sendSystemMessageProse(ship, ppReloadCost);
+
+		dictionary outparams = new dictionary();
+		outparams.put( "commander", commander );
+		outparams.put( "ship", ship );
+		messageTo( repairShip, "repairReplyTimeout", outparams, 30.0f, false );
+	}
+	else
+	{
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 2");
+
+		prose_package ppRepairCost = prose.getPackage(SID_REPAIR_COST);
+		prose.setDI(ppRepairCost, cost);
+		space_utils.sendSystemMessageProse(commander, ppRepairCost);
+		if ( cost <= 0  )
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 3");
+
+			//sendSystemMessageTestingOnly(commander, "Scans indicate that you don't appear to need munitions reloaded. Departing.");
+			string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_no_reload_needed");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+
+			dictionary outparams = new dictionary();
+			outparams.put( "commander", commander );
+			outparams.put( "ship", ship );
+			messageTo( repairShip, "repairReplyTimeout", outparams, 30.0f, false );
+		}
+		else if ( cost > bankBalance )
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 4");
+
+			//sendSystemMessageTestingOnly(commander, "You don't have enough money in the bank to cover rearmament. Departing.");
+			string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_not_enough_money_rearm");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		}
+
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 5");
+
+		if(isIdValid(repairShip))
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 6");
+			repairCompleteDepart(repairShip);
+		}
+		else
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 7");
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceReloadComponentsEstimate  ---- obj_id localVar of RepairShip appears invalid. No departure function called");
+		}
+
+	}
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 8");
+	return true;
+}
+
+
+
+boolean inSpaceRepairReloadComponentsEstimate(obj_id ship, obj_id commander, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- Just Entered");
+
+	obj_id repairShip = utils.getObjIdLocalVar(commander, "cmd.repair.shipId");
+
+	//get cost objvar
+	int costRepair = space_crafting.getStationRepairCost(commander, closestStation, IN_SPACE_REPAIR_STD_REPAIR_PERCENTAGE);
+	int costReload = getStationReloadCost(ship, commander, closestStation);
+	int costTotal = costRepair + costReload;
+	int bankBalance = getBankBalance(commander);
+
+	//offer repair
+	if ( (costTotal > 0) && (costTotal <= bankBalance))
+	{
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 1");
+
+		prose_package ppReloadRepairCost = prose.getPackage(SID_RELOAD_AND_REPAIR_COST);
+		prose.setDI(ppReloadRepairCost, costTotal);
+		space_utils.sendSystemMessageProse(commander, ppReloadRepairCost);
+		//string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_cost");
+		//prose_package proseTest = prose.getPackage(strSpam, cost);
+		//space_utils.sendSystemMessageShip(target, strSpam, true, false, false, true);
+
+		dictionary outparams = new dictionary();
+		outparams.put( "commander", commander );
+		outparams.put( "ship", ship );
+		messageTo( repairShip, "repairReplyTimeout", outparams, 30.0f, false );
+
+	}
+	else
+	{
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 2");
+
+		prose_package ppRepairCost = prose.getPackage(SID_REPAIR_COST);
+		prose.setDI(ppRepairCost, costTotal);
+		space_utils.sendSystemMessageProse(commander, ppRepairCost);
+		if ( !(costTotal > 0 ) )
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 3");
+
+			//sendSystemMessageTestingOnly(commander, "Scans indicate that you don't need repairs. Departing.");
+			string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_unnecessary");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		}
+		else if ( costTotal > bankBalance )
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 4");
+
+			//sendSystemMessageTestingOnly(commander, "You don't have enough money in the bank to cover repairs and rearmament. Departing.");
+			string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_not_enough_repair_rearm");
+			space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+		}
+
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 5");
+
+		if(isIdValid(repairShip))
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 6");
+			repairCompleteDepart(repairShip);
+		}
+		else
+		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 7");
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairAndReloadComponentsEstimate  ---- obj_id localVar of RepairShip appears invalid. No departure function called");
+		}
+	}
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.inSpaceRepairReloadComponentsEstimate  ---- SECTION 8");
+	return true;
+}
+
+
+
+int getStationReloadCost (obj_id ship, obj_id commander, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getStationReloadCost  ---- Just Entered");
+
+	int missileReloadCount = 0;
+	int countermeasureReloadCount = 0;
+
+	int[] slots = space_crafting.getShipInstalledSlots(ship);
+	for(int i = 0; i< slots.length; i++)
+	{
+		if (space_crafting.isMissileSlot(ship, slots[i]))
+		{
+			int currentShipWeaponAmmoMaximum = getShipWeaponAmmoMaximum(ship, slots[i]);
+			int currentShipWeaponAmmoCurrent = getShipWeaponAmmoCurrent(ship, slots[i]);
+			if ( currentShipWeaponAmmoCurrent <= (int)(currentShipWeaponAmmoMaximum/2) )
+				missileReloadCount += (currentShipWeaponAmmoMaximum - currentShipWeaponAmmoCurrent);
+		}
+		else if (space_crafting.isCounterMeasureSlot(ship, slots[i]))
+		{
+			int currentShipWeaponAmmoMaximum = getShipWeaponAmmoMaximum(ship, slots[i]);
+			int currentShipWeaponAmmoCurrent = getShipWeaponAmmoCurrent(ship, slots[i]);
+			if ( currentShipWeaponAmmoCurrent <= (int)(currentShipWeaponAmmoMaximum/2) )
+				countermeasureReloadCount += (currentShipWeaponAmmoMaximum - currentShipWeaponAmmoCurrent);
+		}
+	}
+
+	int cost = countermeasureReloadCount + (ISR_CHAFF_TO_MISSILE_MULTIPLIER * missileReloadCount);
+	float costPerPoint= ISR_COST_MULTIPLIER*(getFloatObjVar(closestStation, "fltCostPerDamagePoint"));	//reads the cost per point off the closest station and figures out the cost for reload
+	int totalCost = (int)(costPerPoint * cost);
+	utils.setLocalVar(ship, "cmd.repair.cost", totalCost);
+
+	return totalCost;
+}
+
+
+
+void doRepair(obj_id commander, obj_id ship, obj_id repairShip, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.doRepair  ---- Just Entered");
+
+	ship_ai.unitDock(repairShip, ship, 30.0f);
+
+	//Start loop to keep an eye on the player's ship and make sure they don't move. A movement by the player should abort the process
+	dictionary outparams = new dictionary();
+	outparams.put( "pilot", commander );
+	outparams.put( "ship", ship );
+	messageTo( repairShip, "dockTargetMovementCheck", outparams, 2.0f, false );
+
+	return;
+}
+
+
+void doReload(obj_id commander, obj_id ship, obj_id repairShip, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.doReload  ---- Just Entered");
+
+	setObjVar(repairShip, "reload", 1);
+	ship_ai.unitDock(repairShip, ship, 30.0f);
+
+	//Start loop to keep an eye on the player's ship and make sure they don't move. A movement by the player should abort the process
+	dictionary outparams = new dictionary();
+	outparams.put( "pilot", commander );
+	outparams.put( "ship", ship );
+	messageTo( repairShip, "dockTargetMovementCheck", outparams, 2.0f, false );
+
+	return;
+}
+
+
+void doRepairAndReload(obj_id commander, obj_id ship, obj_id repairShip, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.doReload  ---- Just Entered");
+
+	ship_ai.unitDock(repairShip, ship, 30.0f);
+
+	//Start loop to keep an eye on the player's ship and make sure they don't move. A movement by the player should abort the process
+	dictionary outparams = new dictionary();
+	outparams.put( "pilot", commander );
+	outparams.put( "ship", ship );
+	messageTo( repairShip, "dockTargetMovementCheck", outparams, 2.0f, false );
+
+	return;
+}
+
+
+void doStationToShipReload(obj_id commander, obj_id closestStation)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.doStationToShipReload  ---- Just Entered");
+
+	obj_id ship = space_transition.getContainingShip (commander);
+	if(!isIdValid(ship))
+		return;
+
+	int totalCost = utils.getIntLocalVar(ship, "cmd.repair.cost");
+
+	//if(getTotalMoney(objPlayer)>intTotalCost)
+	int bankBalance = getBankBalance(commander);
+	if(bankBalance>totalCost)
+	{
+		// we take cash and bank
+		dictionary dctParams = new dictionary();
+		//int intCash= getCashBalance(objPlayer);
+
+		int test = bankBalance - totalCost;
+
+		if(test<0)
+			return;
+		else
+			transferBankCreditsToNamedAccount(commander, "SPACE_STATION_REPAIR", totalCost, "repairSuccess", "repairFail", dctParams);
+
+		utils.moneyOutMetric( commander, "REPAIR_SHIP_RELOAD", totalCost);
+
+		int[] slots = space_crafting.getShipInstalledSlots(ship);
+		for(int i = 0; i< slots.length; i++)
+		{
+			if (space_crafting.isMissileSlot(ship, slots[i]))
+				weaponLauncherSpaceReload (ship, commander, slots[i]);
+			else if (space_crafting.isCounterMeasureSlot(ship, slots[i]))
+				countermeasureLauncherSpaceReload (ship, commander, slots[i]);
+		}
+	}
+	else
+	{
+		prose_package ppMunitionsCost = prose.getPackage(SID_MUNITIONS_COST);
+		prose.setDI(ppMunitionsCost, totalCost);
+		prose.setTO(ppMunitionsCost, "" + bankBalance);
+		space_utils.sendSystemMessageProse(commander, ppMunitionsCost);
+		//sendSystemMessageTestingOnly(commander, "You can't pay for this. We're departing. Good luck.");
+		string_id strSpam = new string_id("space/space_pilot_command", "spacerepair_cannot_pay");
+		space_utils.sendSystemMessageShip(ship, strSpam, true, false, false, true);
+	}
+	return;
+}
+
+
+
+boolean weaponLauncherSpaceReload (obj_id ship, obj_id commander, int currentSlot)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.weaponLauncherSpaceReload  ---- Just Entered");
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.weaponLauncherSpaceReload  ---- ship is: "+ship+" commander is: "+commander+" and currentSlot is :"+currentSlot);
+
+	//GET VALUES OF CURRENT RELOADABLE WEAPON AMMO
+	float currentShipWeaponDamageMinimum = getShipWeaponDamageMinimum(ship, currentSlot);
+	float currentShipWeaponDamageMaximum = getShipWeaponDamageMaximum(ship, currentSlot);
+	float currentShipWeaponRefireRate = getShipWeaponRefireRate(ship, currentSlot);
+	float currentShipWeaponEffectivenessShields = getShipWeaponEffectivenessShields(ship, currentSlot);
+	if ( currentShipWeaponEffectivenessShields > 1.0f )
+		currentShipWeaponEffectivenessShields = 1.0f;
+
+	float currentShipWeaponEffectivenessArmor = getShipWeaponEffectivenessArmor(ship, currentSlot);
+	if ( currentShipWeaponEffectivenessArmor > 1.0f )
+		currentShipWeaponEffectivenessArmor = 1.0f;
+
+	int currentShipWeaponAmmoMaximum = getShipWeaponAmmoMaximum(ship, currentSlot);
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.weaponLauncherSpaceReload  ---- getShipWeaponAmmoMaximum is: "+currentShipWeaponAmmoMaximum);
+	int currentShipWeaponAmmoCurrent = getShipWeaponAmmoCurrent(ship, currentSlot);
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.weaponLauncherSpaceReload  ---- getShipWeaponAmmoCurrent is: "+currentShipWeaponAmmoCurrent);
+
+	//MATH HERE TO FIGURE OUT THE QUALITY OF THE RELOAD, HOW MUCH IT COSTS, ETC.
+
+	//WRITE OUT NEW VALUES OF WEAPON AMMO, THUS 'RELOADING' IT. UP THE AMMO COUNT, AND ALTER PERFORMANCE AS DESIRED
+	setShipWeaponDamageMaximum(ship, currentSlot, currentShipWeaponDamageMaximum*IN_SPACE_RELOAD_DECAY);
+	setShipWeaponDamageMinimum(ship, currentSlot, currentShipWeaponDamageMinimum*IN_SPACE_RELOAD_DECAY);
+	setShipWeaponRefireRate(ship, currentSlot, currentShipWeaponRefireRate*IN_SPACE_RELOAD_DECAY);
+	setShipWeaponEffectivenessArmor(ship, currentSlot, currentShipWeaponEffectivenessArmor*IN_SPACE_RELOAD_DECAY);
+	setShipWeaponEffectivenessShields(ship, currentSlot, currentShipWeaponEffectivenessShields*IN_SPACE_RELOAD_DECAY);
+
+	setShipWeaponAmmoMaximum(ship, currentSlot, currentShipWeaponAmmoMaximum);
+	//setShipWeaponAmmoCurrent(ship, currentSlot, currentShipWeaponAmmoCurrent);
+	setShipWeaponAmmoCurrent(ship, currentSlot, (int)(currentShipWeaponAmmoMaximum*IN_SPACE_RELOAD_DECAY));
+
+	return true;
+}
+
+
+
+boolean countermeasureLauncherSpaceReload (obj_id ship, obj_id commander, int currentSlot)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.countermeasureLauncherSpaceReload  ---- Just Entered");
+
+	//GET VALUES OF CURRENT RELOADABLE COUNTERMEASURE AMMO
+	float currentShipWeaponDamageMinimum = getShipWeaponDamageMinimum(ship, currentSlot);
+	float currentShipWeaponDamageMaximum = getShipWeaponDamageMaximum(ship, currentSlot);
+	float currentShipWeaponRefireRate = getShipWeaponRefireRate(ship, currentSlot);
+	float currentShipWeaponEnergyPerShot = getShipWeaponEnergyPerShot(ship, currentSlot);
+
+	int currentShipWeaponAmmoMaximum = getShipWeaponAmmoMaximum(ship, currentSlot);
+	int currentShipWeaponAmmoCurrent = getShipWeaponAmmoCurrent(ship, currentSlot);
+
+	//MATH HERE TO FIGURE OUT THE QUALITY OF THE RELOAD, HOW MUCH IT COSTS, ETC.
+
+	//WRITE OUT NEW VALUES OF COUNTERMEASURE AMMO, THUS 'RELOADING' IT. UP THE AMMO COUNT, AND ALTER PERFORMANCE AS DESIRED
+	setShipWeaponDamageMaximum(ship, currentSlot, currentShipWeaponDamageMaximum*IN_SPACE_RELOAD_DECAY);
+	setShipWeaponDamageMinimum(ship, currentSlot, currentShipWeaponDamageMinimum*IN_SPACE_RELOAD_DECAY);
+	setShipWeaponRefireRate(ship, currentSlot, currentShipWeaponRefireRate*IN_SPACE_RELOAD_DECAY);
+	setShipWeaponEnergyPerShot(ship, currentSlot, currentShipWeaponEnergyPerShot*IN_SPACE_RELOAD_DECAY);
+
+	setShipWeaponAmmoMaximum(ship, currentSlot, currentShipWeaponAmmoMaximum);
+	//setShipWeaponAmmoCurrent(ship, currentSlot, currentShipWeaponAmmoCurrent);
+	setShipWeaponAmmoCurrent(ship, currentSlot, (int)(currentShipWeaponAmmoMaximum*IN_SPACE_RELOAD_DECAY));
+
+	return true;
+}
+
+
+void repairEvac(obj_id repairship)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.repairEvac - Entered repairEvac function. Ship will set buggingOut localVar, call unitUnDock, and move out.");
+
+	utils.setLocalVar(repairship, "cmd.repair.buggingOut", 1);
+
+	ship_ai.unitUnDock(repairship);
+
+	int repairSquadId = ship_ai.unitGetSquadId(repairship);
+	transform loc = space_combat.playerCommandSpawnerLocGetter(repairship, false);
+	ship_ai.squadSetAttackOrders(repairSquadId, ship_ai.ATTACK_ORDERS_HOLD_FIRE);
+	ship_ai.squadMoveTo(repairSquadId, loc);
+}
+
+
+
+void repairCompleteDepart(obj_id repairship)
+{
+	debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.repairCompleteDepart - Entered repairCompleteDepart function. Ship will set buggingOut localVar, call unitUnDock, and move out.");
+
+	utils.setLocalVar(repairship, "cmd.repair.buggingOut", 1);
+
+	//ship_ai.unitUnDock(repairship);
+
+	int repairSquadId = ship_ai.unitGetSquadId(repairship);
+	transform loc = space_combat.playerCommandSpawnerLocGetter(repairship, false);
+	ship_ai.squadSetAttackOrders(repairSquadId, ship_ai.ATTACK_ORDERS_HOLD_FIRE);
+	ship_ai.squadMoveTo(repairSquadId, loc);
+}
+
+
+
+void allPurposeShipComponentReset(obj_id ship)
+{
+ 	if ( isIdValid(ship) )
+ 	{
+ 		int[] slots = space_crafting.getShipInstalledSlots(ship);
+ 		for(int i = 0; i< slots.length; i++)
+ 		{
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.allPurposeShipComponentReset  ***  working with slots[i], which is currently: "+slots[i]);
+			if(isShipSlotInstalled(ship, slots[i]))
+			{
+	 			space_utils.setComponentDisabled(ship, slots[i], false);
+				space_combat.setEfficiencyModifier(slots[i], ship, 1.0f, 1.0f);
+	 			space_combat.recalculateEfficiency(slots[i],ship);
+				if ( slots[i] == ship_chassis_slot_type.SCST_shield_0 )
+				{
+					space_combat.simpleShieldRatioRebalance(ship);
+				}
+			}
+			else
+				debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.allPurposeShipComponentReset  ***  WTH! we just tried to work with an uninstalled slot! It was: "+slots[i]);
+ 		}
+	}
+	return;
+}
+
+
+
+int getDroidProgramSize(string programName, obj_id programObject)
+{
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getDroidProgramSize  ***   Entered Program - passed in a programName which was: "+programName+" and a program obj_id :"+programObject);
+	int droidProgramSize = 0;
+	if (isIdValid(programObject)&& (hasObjVar(programObject, "programSize" )))
+	{
+		droidProgramSize = getIntObjVar(programObject, "programSize");
+	}
+	else
+	{
+		int programSizeLookup = dataTableGetInt(DROID_PROGRAM_SIZE_DATATABLE, programName, 1);
+		if ( programSizeLookup != -1 )
+			droidProgramSize = programSizeLookup;
+		else
+			debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getDroidProgramSize  ***   WARNING - couldn't look up the program in the size datatable, returning a value of 0");
+
+	}
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getDroidProgramSize  ***   Exiting Program - returning a value of: "+droidProgramSize);
+	return droidProgramSize;
+}
+
+
+int getCurrentlyUsedProgramMemory(obj_id[] programs)
+{
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getCurrentlyUsedProgramMemory  ***   Entered Program - passed in an array of objId's 'programs' which contained: "+programs.length+" entries.");
+	int currentlyUsedProgramMemory = 0;
+	for (int i = 0; i< programs.length; i++)
+	{
+		string programName = "";
+		if ( hasObjVar(programs[i], "strDroidCommand" ))
+			programName = getStringObjVar(programs[i], "strDroidCommand");
+
+		if ( hasObjVar(programs[i], "programSize" ))
+		{
+			currentlyUsedProgramMemory += getIntObjVar(programs[i], "programSize");
+			//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getCurrentlyUsedProgramMemory  *** found programSize objvar on the data object it looks like the normal method will work. ");
+		}
+		else
+		{
+			//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getCurrentlyUsedProgramMemory  *** no programSize objvar found on entry#: "+programs[i]+" Trying lookup method");
+			if ( hasObjVar(programs[i], "strDroidCommand" ))
+			{
+				programName = getStringObjVar(programs[i], "strDroidCommand");
+				int droidProgramSize = getDroidProgramSize(programName, programs[i]);
+				currentlyUsedProgramMemory += droidProgramSize;
+			}
+		}
+		//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getCurrentlyUsedProgramMemory  *** After taking program: "+i+" into account, sum used mem is :"+currentlyUsedProgramMemory);
+	}
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.getCurrentlyUsedProgramMemory  ***   Exiting Program - returning a value of: "+currentlyUsedProgramMemory);
+	return currentlyUsedProgramMemory;
+}
+
+
+boolean hasDuplicateProgram(obj_id[] programs, string newProgramName)
+{
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.hasDuplicateProgram  ***   Entered Program - passed in an array of objId's 'programs' which contained: "+programs.length+" entries.");
+	int currentlyUsedProgramMemory = 0;
+	for (int i = 0; i< programs.length; i++)
+	{
+		string programName = "";
+		if ( hasObjVar(programs[i], "strDroidCommand" ))
+			programName = getStringObjVar(programs[i], "strDroidCommand");
+
+		if ( newProgramName.equals(programName) )
+		{
+			//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.hasDuplicateProgram  ***   Exiting Program - returning a value of TRUE");
+			return true;
+		}
+	}
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.hasDuplicateProgram  ***   Exiting Program - returning a value of FALSE");
+	return false;
+}
+
+
+void updateControlDevice(obj_id programObject, obj_id dataPad)	//updates the fakey script-side volume information for a control device that had a program pulled out of it
+{
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.updateControlDevice  ***   Entered Program - passed in a program obj_id :"+programObject);
+
+	obj_id controlDevice = getContainedBy(dataPad);
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.updateControlDevice  ***   obj_id for controlDevice via getContainedBy(dataPad) was: "+controlDevice);
+
+	int programSize = 0;
+	int usedMemory = 0;
+
+	if ( hasObjVar(controlDevice, "usedMemory" ))
+		usedMemory = getIntObjVar(controlDevice, "usedMemory");
+
+	if ( hasObjVar(programObject, "programSize" ))
+	{
+		programSize = getIntObjVar(programObject, "programSize");
+		//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.updateControlDevice  *** found programSize objvar on the data object it looks like the normal method will work. ");
+	}
+	else
+	{
+		debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.updateControlDevice  *** no programSize objvar found on object: "+programObject+" Trying lookup method");
+		if ( hasObjVar(programObject, "strDroidCommand" ))
+		{
+			string programName = getStringObjVar(programObject, "strDroidCommand");
+			programSize = getDroidProgramSize(programName, programObject);
+		}
+	}
+	//usedMemory = usedMemory - programSize;
+
+	//setObjVar(controlDevice, "usedMemory", usedMemory);
+
+	//debugServerConsoleMsg( null, "SPACE_PILOT_COMMAND.updateControlDevice  ***   Exiting Program. Wrote out new usedMemory value of: "+usedMemory);
+	return;
+}
+
+
+
+boolean isStation(obj_id station)
+{
+	if ( !isIdValid(station))
+		return false;
+
+	// hack function to be replaced later.
+	string template = getTemplateName(station);
+	if ( template == null )
+		return false;
+	int intIndex = template.indexOf("object/ship/spacestation");
+	if(intIndex>-1)
+	{
+		return true;
+	}
+	return false;
+}

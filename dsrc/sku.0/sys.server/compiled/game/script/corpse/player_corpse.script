@@ -1,0 +1,382 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        player_corpse.script
+ * Description:  player corpse
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.utils;
+include library.permissions;
+include library.corpse;
+include library.spam;
+include library.money;
+
+/***** CONSTANTS *******************************************************/
+
+
+/***** TRIGGER *********************************************************/
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.LOOT);
+	if ( mid != null )
+	{
+		mid.setServerNotify(true);
+	}
+
+	mid = mi.getMenuItemByType(menu_info_types.LOOT_ALL);
+	if ( mid != null )
+	{
+		mid.setServerNotify(true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.LOOT)
+	{
+		if ( utils.isOwner(self, player) )
+		{
+			utils.requestContainerOpen(player, self);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			sendSystemMessage(player, permissions.SID_NO_CORPSE_PERMISSION);
+		}
+	}
+	else if ( item == menu_info_types.LOOT_ALL)
+	{
+		/** NEW HOTNESS:  **/
+		if ( utils.isOwner(self, player) )
+		{
+			utils.requestContainerOpen(player, self);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			sendSystemMessage(player, permissions.SID_NO_CORPSE_PERMISSION);
+		}
+		/** OLD AND BUSTED:
+		if ( utils.isOwner(self, player) )
+		{
+			queueCommand(player, ##"lootPlayerCorpse", self, "", COMMAND_PRIORITY_DEFAULT);
+		}
+		else
+		{
+			sendSystemMessage(player, permissions.SID_NO_CORPSE_PERMISSION);
+		}*/
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	//call the clean-up function, but tell it not to send a destroy message, since this
+	// is already being destroyed:
+	corpse.cleanUpPlayerCorpse(self, false );
+
+	string corpseName = getAssignedName(self);
+	location here = getLocation(self);
+
+	CustomerServiceLog("Death", "PCorpse(" + self + " - " + corpseName + ") is being deleted at " + here.toString());
+	CustomerServiceLog("Death", "PCorpse(" + self + " - " + corpseName + ") owner = " + getOwner(self));
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if ( isPlayer(transferer) )
+	{
+		sendSystemMessage(transferer, corpse.SID_REMOVE_ONLY_CORPSE);
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if ( isPlayer(transferer) )
+	{
+		if ( !utils.isOwner(self, transferer) && !isGod(transferer) )
+		{
+			sendSystemMessage(transferer, permissions.SID_INSUFFICIENT_PERMISSIONS);
+			return SCRIPT_OVERRIDE;
+		}
+		else
+		{
+			CustomerServiceLog("Death", "(" + transferer + ") " + getName(transferer) + " is removing (" + item + ") " + getName(item) + " from (" + self + ")" + getName(self));
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLostItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if ( !isIdValid(transferer) )
+		return SCRIPT_CONTINUE;
+
+	if ( isPlayer(transferer) )
+	{
+		CustomerServiceLog("Death", "(" + transferer + ") " + getName(transferer) + " has transferred (" + item + ") " + getName(item) + " from (" + self + ")" + getName(self) + " to " + destContainer);
+		CustomerServiceLog("Loot", "(" + transferer + ") " + getName(transferer) + " has transferred (" + item + ") " + getName(item) + " from (" + self + ")" + getName(self) + " to " + destContainer);
+
+		spam.lootItem(transferer, item, self, false);
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+trigger OnOpenedContainer(obj_id whoOpenedMe)
+{
+	//debugSpeakMsg(self, "OnOpenedContainer triggered!");
+	if ( utils.isOwner(self, whoOpenedMe) )
+	{
+		if ( corpse.openPlayerCorpse(whoOpenedMe, self) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnClosedContainer(obj_id whoClosedMe)
+{
+	//debugSpeakMsg(self, "OnClosedContainer triggered!");
+	obj_id[] itemsLeft = getContents(self);
+	if ( (itemsLeft == null) || (itemsLeft.length == 0) )
+	{
+		if ( getCashBalance(self) > 0 )
+		{
+			corpse.lootCorpseCoins(whoClosedMe, self);
+		}
+		else
+		{
+			corpse.cleanUpPlayerCorpse(self);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	obj_id[] itemsLeft = getContents(self);
+	if ( (itemsLeft == null) || (itemsLeft.length == 0) )
+	{
+		if ( getTotalMoney(self) == 0 )
+		{
+			//messageTo(self, corpse.HANDLER_DESTROY_SELF, null, 0 , true);
+			destroyObject( self );
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS **************************************************/
+messageHandler handleCorpseExpire()
+{
+	if ( hasObjVar(self, corpse.VAR_TIME_CREATED) )
+	{
+		int create_time = getIntObjVar(self, corpse.VAR_TIME_CREATED);
+		int dt = getGameTime() - create_time;
+
+		if ( dt < corpse.PLAYER_CORPSE_EXPIRATION_TIME )
+		{
+			int msgTime = corpse.PLAYER_CORPSE_EXPIRATION_TIME - dt;
+			messageTo(self, corpse.HANDLER_CORPSE_EXPIRE, params, msgTime,true);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	obj_id owner = getObjIdObjVar(self, utils.VAR_OWNER);
+	if ( owner != null )
+	{
+		dictionary d = new dictionary();
+		d.put(corpse.DICT_CORPSE_ID, self);
+		messageTo(owner, corpse.HANDLER_CORPSE_EXPIRE, d, 0, true);
+	}
+
+	corpse.cleanUpPlayerCorpse(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAddConsentedUser()
+{
+	//debugSpeakMsg(self, "received handleAddConsentedUser msg");
+	if ( params != null )
+	{
+		obj_id player = params.getObjId(corpse.DICT_PLAYER_ID);
+		if ( player != null )
+		{
+			if ( permissions.addUserToPermissionsGroup(self, player, corpse.GROUP_CONSENTED) )
+			{
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				//debugSpeakMsg(self, "permissions grant failed!");
+			}
+		}
+	}
+	//message player that add consent failed
+	return SCRIPT_OVERRIDE;
+}
+
+messageHandler handleRemoveConsentedUser()
+{
+	if ( params != null )
+	{
+		obj_id player = params.getObjId(corpse.DICT_PLAYER_ID);
+		if ( player != null )
+		{
+			if ( permissions.deleteUserFromPermissionsGroup(self, player, corpse.GROUP_CONSENTED) )
+			{
+				return SCRIPT_CONTINUE;
+			}
+		}
+	}
+	//message player that remove consent failed
+	return SCRIPT_OVERRIDE;
+}
+
+/*
+messageHandler handleCorpseCoinLoot()
+{
+	if ( params == null )
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	obj_id player = params.getObjId(corpse.DICT_PLAYER_ID);
+	if ( player != null )
+	{
+		messageTo(player, corpse.HANDLER_COINS_LOOTED, params, 0, true);
+	}
+
+	obj_id[] stuff = getContents(self);
+	if ( (stuff == null) || (stuff.length == 0) && (getCashBalance(self) == 0) )
+	{
+		corpse.cleanUpPlayerCorpse(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCorpseCoinLootFailed()
+{
+	if ( params == null )
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	obj_id player = params.getObjId(corpse.DICT_PLAYER_ID);
+	if ( player != null )
+	{
+		messageTo(player, corpse.HANDLER_COINLOOT_FAILED, params, 0, true);
+	}
+	return SCRIPT_CONTINUE;
+}
+*/
+
+messageHandler handleCorpseDepositSuccess()
+{
+	if ( params == null )
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	int cash = params.getInt(corpse.DICT_COINS);
+	transferBankCreditsToNamedAccount(self, money.ACCT_CORPSE_EXPIRATION, cash, corpse.HANDLER_DESTROY_SELF, corpse.HANDLER_DESTROY_SELF, params);
+	utils.moneyOutMetric(self, money.ACCT_CORPSE_EXPIRATION, cash);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCorpseDepositFail()
+{
+	//messageTo(self, corpse.HANDLER_DESTROY_SELF, params, 0 , true);
+	destroyObject(self );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAttemptCorpseCleanup()
+{
+	obj_id[] stuff = getContents(self);
+	if ( (stuff == null) || (stuff.length == 0) && (getCashBalance(self) == 0) )
+	{
+		corpse.cleanUpPlayerCorpse(self);
+	}
+	else
+	{
+		int stamp = 0;
+		if( hasObjVar(self, "cleanupStamp") )
+		{
+			stamp = getIntObjVar(self, "cleanupStamp");
+		}
+
+		int now = getGameTime();
+
+		if( now - stamp >= 300 )
+		{
+			messageTo(self, "handleAttemptCorpseCleanup", null, 300, true);
+			setObjVar(self, "cleanupStamp", now);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDestroySelf()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRequestCorpseMove()
+{
+	obj_id sender = params.getObjId("sender");
+	if ( !isIdValid(sender) )
+		return SCRIPT_CONTINUE;
+
+	location spot = getBuildingEjectLocation(sender);
+	if ( spot == null )
+	{
+		spot = params.getLocation("senderLoc");
+
+		location locLowerLeft = spot;
+		locLowerLeft.x -= 20f;
+		locLowerLeft.z -= 20f;
+
+		location locUpperRight = spot;
+		locUpperRight.x += 20f;
+		locUpperRight.z += 20f;
+
+		spot = getGoodLocation(2f, 2f, locLowerLeft, locUpperRight, false, true);
+		if ( spot == null )
+			return SCRIPT_CONTINUE;
+
+		spot.y = getHeightAtLocation(spot.x, spot.z);
+	}
+
+	setLocation(self, spot);
+	corpse.updateCorpseOwnerWaypoint(getOwner(self), self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRequestLocation()
+{
+	corpse.updateCorpseOwnerWaypoint(getOwner(self), self);
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS ********************************************************/

@@ -1,0 +1,794 @@
+// ======================================================================
+//
+// GCW Publish Gift Terminal
+//
+// Copyright 2008 Sony Online Entertainment
+//
+// Jeff W. Haskell
+//
+// ======================================================================
+
+include library.gcw;
+include library.player_structure;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.trial;
+inherits terminal.base.base_terminal;
+
+// ======================================================================
+// Constants
+// ======================================================================
+const string VAR_TERMINAL_STATUS	= "gcw.static_base.terminal_status";
+const string VAR_BASE_STATUS		= "gcw.static_base.base_status";
+const string BASE_BEING_CAPTURED	= " TERMINAL STATUS: BEING CAPTURED\n";
+const string BASE_SECURED		= " TERMINAL STATUS: BASE SECURED\n";
+const string PID_NAME			= "gcw_terminal.pid";
+
+//These are different from the gcw library because the
+//original writer of the base_master script wrote it this way
+const int FACTION_NEUTRAL		= 0;
+const int FACTION_IMPERIAL		= 1;
+const int FACTION_REBEL			= 2;
+
+const int MINIMUM_TIME_FOR_UPDATE 	= 30;
+const string_id SID_IN_HOUSE_ONLY	= new string_id("gcw", "gcw_terminal_used_in_house_only");
+const string_id SID_IN_INVENTORY_ONLY	= new string_id("gcw", "gcw_intelpad_used_in_inventory_only");
+
+const string WAR_INTELPAD_TEMPLATE	= "object/tangible/droid/war_intel_datapad.iff";
+const string WAR_TERMINAL_TEMPLATE	= "object/tangible/terminal/terminal_gcw_publish_gift.iff";
+
+const string_id SID_MENU_WAR_TERMINAL_BATTLEFIELD = new string_id("spam", "battlefield_war_terminal_menu");
+
+const string_id SID_MENU_GCW = new string_id("gcw", "gcw_war_terminal_menu");
+
+const string_id SID_MENU_GCW_REPORT = new string_id("gcw", "gcw_report_war_terminal_menu");
+
+const string_id SID_MENU_GCW_FACTIONAL_PRESENCE = new string_id("gcw", "gcw_factional_presence_war_terminal_menu");
+
+const string_id SID_MENU_GCW_PERSONAL_CONTRIBUTION = new string_id("gcw", "gcw_personal_contribution_war_terminal_menu");
+
+const string_id SID_MENU_GCW_REGION_DEFENDER = new string_id("gcw", "gcw_region_defender_war_terminal_menu");
+
+/*
+Naboo
+Main Base: 1019 0 -1508
+Rebel Camp: 530 0 -1454
+Imperial Camp: 1510 0 -1558
+Corellia
+Main Base: 4772 0 -5233
+Rebel Camp: 5292 0 -5618
+Imperial Camp: 4252 0 -4946
+Talus
+Main Base: -4958.08, 66.0, -3124.17
+Rebel Camp: -5114 0 -3494
+Imperial Camp: -4801 0 -2693
+*/
+
+/*
+This script grabs all the data from the the planet universal object as well as the cluster wide data
+and displays it in a SUI for the player.
+*/
+
+//All planets with Static GCW bases
+const string[] STAIC_BASE_PLANETS =
+{
+	"corellia",
+	"naboo",
+	"talus"
+};
+
+//All Buildable planets that support Player Faction HQs
+const string[][] PLANETS_DATA =
+{
+	{
+		"corellia",
+		"dantooine",
+		"lok",
+		"naboo",
+		"rori",
+		"talus",
+		"tatooine"
+	}
+	,
+	{
+		"CORELLIA",
+		"DANTOOINE",
+		"LOK",
+		"NABOO",
+		"RORI",
+		"TALUS",
+		"TATOOINE"
+	}
+};
+
+// ======================================================================
+// Triggers
+// ======================================================================
+
+//On the menu request, the player gets cluster wide data.
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data data = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+
+	if(!isGod(player))
+	{
+		//if the war terminal is being used in a player inv. say no.
+		if(utils.isNestedWithinAPlayer(self) && getTemplateName(self).equals(WAR_TERMINAL_TEMPLATE))
+		{
+			sendSystemMessage(player, SID_IN_HOUSE_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+		else if(!utils.isNestedWithinAPlayer(self) && getTemplateName(self).equals(WAR_INTELPAD_TEMPLATE))
+		{
+			sendSystemMessage(player, SID_IN_INVENTORY_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	mi.addRootMenu(menu_info_types.SERVER_MENU1, SID_MENU_WAR_TERMINAL_BATTLEFIELD);
+
+	int gcwMenu = mi.addRootMenu(menu_info_types.SERVER_MENU5, SID_MENU_GCW);
+
+	mi.addSubMenu(gcwMenu, menu_info_types.SERVER_MENU6, SID_MENU_GCW_REPORT);
+	mi.addSubMenu(gcwMenu, menu_info_types.SERVER_MENU2, SID_MENU_GCW_FACTIONAL_PRESENCE);
+	mi.addSubMenu(gcwMenu, menu_info_types.SERVER_MENU3, SID_MENU_GCW_PERSONAL_CONTRIBUTION);
+	mi.addSubMenu(gcwMenu, menu_info_types.SERVER_MENU4, SID_MENU_GCW_REGION_DEFENDER);
+
+	updateGCWInfo(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+//If the player is in god mode the player can use the terminal in their
+//inventory.  If not, they must have the terminal in their house.
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	const boolean isIntelPad = getTemplateName(self).equals(WAR_INTELPAD_TEMPLATE);
+
+	if(!isGod(player))
+	{
+		//if the war terminal is being used in a player inv. say no.
+		if(utils.isNestedWithinAPlayer(self) && getTemplateName(self).equals(WAR_TERMINAL_TEMPLATE))
+		{
+			sendSystemMessage(player, SID_IN_HOUSE_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+		else if(!utils.isNestedWithinAPlayer(self) && isIntelPad)
+		{
+			sendSystemMessage(player, SID_IN_INVENTORY_ONLY);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// for the intel pad, if the action is not ITEM_USE, save action
+	// on the intel pad, so that the next time the ITEM_USE action is performed,
+	// perform that action (i.e. the most recently performed action) instead
+	if (isIntelPad)
+	{
+		if (item == menu_info_types.ITEM_USE)
+		{
+			if (hasObjVar(self, "gcwWarIntelPadMostRecentAction"))
+			{
+				const int mostRecentAction = getIntObjVar(self, "gcwWarIntelPadMostRecentAction");
+				if (mostRecentAction > 0)
+				{
+					item = mostRecentAction;
+				}
+			}
+		}
+	}
+
+	if (item == menu_info_types.ITEM_USE)
+	{
+		openSui(player);
+	}
+	else if (item == menu_info_types.SERVER_MENU6)
+	{
+		// memorize last action performed
+		if (isIntelPad)
+			setObjVar(self, "gcwWarIntelPadMostRecentAction", item);
+
+		openSui(player);
+	}
+	else if(item == menu_info_types.SERVER_MENU1)
+	{
+		// memorize last action performed
+		if (isIntelPad)
+			setObjVar(self, "gcwWarIntelPadMostRecentAction", item);
+
+		messageTo(player, "displayBattlefieldSui", null, 0.0f, false);
+	}
+	else if(item == menu_info_types.SERVER_MENU2)
+	{
+		// memorize last action performed
+		if (isIntelPad)
+			setObjVar(self, "gcwWarIntelPadMostRecentAction", item);
+
+		if (utils.hasScriptVar(player, "gcw.factionalPresenceTablePid"))
+		{
+			int existingPid = utils.getIntScriptVar(player, "gcw.factionalPresenceTablePid");
+			utils.removeScriptVar(player, "gcw.factionalPresenceTablePid");
+			forceCloseSUIPage(existingPid);
+		}
+
+		int newPid = -1;
+		dictionary dict = getGcwFactionalPresenceTableDictionary();
+		if (dict != null)
+		{
+			string[] columnHeader = dict.getStringArray("column");
+			if ((columnHeader != null) && (columnHeader.length > 0))
+			{
+				string[] columnHeaderType = dict.getStringArray("columnType");
+				if ((columnHeaderType != null) && (columnHeaderType.length > 0) && (columnHeaderType.length == columnHeader.length))
+				{
+					boolean validColumnData = true;
+					string[][] columnData = new string[columnHeader.length][0];
+					for (int i = 0; i < columnHeader.length; ++i)
+					{
+						columnData[i] = dict.getStringArray("column" + i);
+						if ((columnData[i] == null) || (columnData[i].length <= 0))
+						{
+							validColumnData = false;
+							break;
+						}
+					}
+
+					if (validColumnData)
+						newPid = sui.tableColumnMajor(player, player, sui.OK_ONLY, "@gcw:gcw_factional_presence_sui_table_title", "onGcwFactionalPresenceTableDictionaryResponse", "@gcw:gcw_factional_presence_sui_table_header", columnHeader, columnHeaderType, columnData);
+				}
+			}
+		}
+
+		if (newPid > 0)
+			utils.setScriptVar(player, "gcw.factionalPresenceTablePid", newPid);
+		else
+			sendSystemMessage(player, "There is currently no factional presence activity in any GCW region.", "");
+	}
+	else if(item == menu_info_types.SERVER_MENU3)
+	{
+		// memorize last action performed
+		if (isIntelPad)
+			setObjVar(self, "gcwWarIntelPadMostRecentAction", item);
+
+		if (utils.hasScriptVar(player, "gcw.gcwPersonalContributionTablePid"))
+		{
+			int existingPid = utils.getIntScriptVar(player, "gcw.gcwPersonalContributionTablePid");
+			utils.removeScriptVar(player, "gcw.gcwPersonalContributionTablePid");
+			forceCloseSUIPage(existingPid);
+		}
+
+		boolean usingCachedData = true;
+		string[] columnHeader = null;
+		string[] columnHeaderType = null;
+		string[][] columnData = null;
+
+		// see if there's updated info
+		const obj_id playerObject = getPlayerObject(player);
+		if (isIdValid(playerObject) && utils.hasLocalVar(playerObject, "gcwContributionTrackingLastUpdated") && hasObjVar(playerObject, "gcwContributionTrackingLastUpdated") && (utils.getIntLocalVar(playerObject, "gcwContributionTrackingLastUpdated") == getIntObjVar(playerObject, "gcwContributionTrackingLastUpdated")))
+		{
+			// no new info, use cached info
+			columnHeader = utils.getStringArrayLocalVar(playerObject, "gcwContributionTrackingColumnName");
+			if ((columnHeader != null) && (columnHeader.length > 0))
+			{
+				columnHeaderType = utils.getStringArrayLocalVar(playerObject, "gcwContributionTrackingColumnType");
+				if ((columnHeaderType != null) && (columnHeaderType.length > 0) && (columnHeaderType.length == columnHeader.length))
+				{
+					columnData = new string[columnHeader.length][0];
+					for (int i = 0; i < columnHeader.length; ++i)
+					{
+						columnData[i] = utils.getStringArrayLocalVar(playerObject, "gcwContributionTrackingColumn" + i);
+						if ((columnData[i] == null) || (columnData[i].length <= 0))
+						{
+							columnHeader = null;
+							columnHeaderType = null;
+							columnData = null;
+							break;
+						}
+					}
+				}
+				else
+				{
+					columnHeader = null;
+					columnHeaderType = null;
+					columnData = null;
+				}
+			}
+			else
+			{
+				columnHeader = null;
+				columnHeaderType = null;
+				columnData = null;
+			}
+		}
+
+		if ((columnHeader == null) || (columnHeaderType == null) || (columnData == null))
+		{
+			usingCachedData = false;
+			columnHeader = null;
+			columnHeaderType = null;
+			columnData = null;
+
+			dictionary dict = getGcwContributionTrackingTableDictionary(player);
+			if (dict != null)
+			{
+				columnHeader = dict.getStringArray("column");
+				if ((columnHeader != null) && (columnHeader.length > 0))
+				{
+					columnHeaderType = dict.getStringArray("columnType");
+					if ((columnHeaderType != null) && (columnHeaderType.length > 0) && (columnHeaderType.length == columnHeader.length))
+					{
+						columnData = new string[columnHeader.length][0];
+						for (int i = 0; i < columnHeader.length; ++i)
+						{
+							columnData[i] = dict.getStringArray("column" + i);
+							if ((columnData[i] == null) || (columnData[i].length <= 0))
+							{
+								columnHeader = null;
+								columnHeaderType = null;
+								columnData = null;
+								break;
+							}
+						}
+					}
+					else
+					{
+						columnHeader = null;
+						columnHeaderType = null;
+						columnData = null;
+					}
+				}
+				else
+				{
+					columnHeader = null;
+					columnHeaderType = null;
+					columnData = null;
+				}
+			}
+		}
+
+		int newPid = -1;
+		if ((columnHeader != null) && (columnHeaderType != null) && (columnData != null))
+		{
+			if (!usingCachedData && isIdValid(playerObject) && hasObjVar(playerObject, "gcwContributionTrackingLastUpdated"))
+			{
+				// cache the data
+				utils.setLocalVar(playerObject, "gcwContributionTrackingLastUpdated", getIntObjVar(playerObject, "gcwContributionTrackingLastUpdated"));
+				utils.setLocalVar(playerObject, "gcwContributionTrackingColumnName", columnHeader);
+				utils.setLocalVar(playerObject, "gcwContributionTrackingColumnType", columnHeaderType);	
+
+				for (int i = 0; i < columnHeader.length; ++i)
+					utils.setLocalVar(playerObject, "gcwContributionTrackingColumn" + i, columnData[i]);
+			}
+
+			newPid = sui.tableColumnMajor(player, player, sui.OK_ONLY, "@" + SID_MENU_GCW_PERSONAL_CONTRIBUTION.toString(), "onGcwPersonalContributionTableDictionaryResponse", "@gcw:gcw_personal_contribution_sui_table_header", columnHeader, columnHeaderType, columnData, true);
+		}
+
+		if (newPid > 0)
+			utils.setScriptVar(player, "gcw.gcwPersonalContributionTablePid", newPid);
+		else
+			sendSystemMessage(player, "You have not contributed to the GCW score for any GCW region/category over the past 30 days.", "");
+	}
+	else if(item == menu_info_types.SERVER_MENU4)
+	{
+		// memorize last action performed
+		if (isIntelPad)
+			setObjVar(self, "gcwWarIntelPadMostRecentAction", item);
+
+		if (utils.hasScriptVar(player, "gcw.gcwRegionDefenderTablePid"))
+		{
+			const int existingPid = utils.getIntScriptVar(player, "gcw.gcwRegionDefenderTablePid");
+			utils.removeScriptVar(player, "gcw.gcwRegionDefenderTablePid");
+			forceCloseSUIPage(existingPid);
+		}
+
+		if (utils.hasScriptVar(player, "gcw.gcwRegionDefenderDetailsTablePid"))
+		{
+			const int existingPid = utils.getIntScriptVar(player, "gcw.gcwRegionDefenderDetailsTablePid");
+			utils.removeScriptVar(player, "gcw.gcwRegionDefenderDetailsTablePid");
+			forceCloseSUIPage(existingPid);
+		}
+
+		const String[] gcwDefenderRegions = getGcwDefenderRegions();
+		const String[] gcwDefenderRegionsCitiesImperial = getGcwDefenderRegionsCitiesImperial();
+		const String[] gcwDefenderRegionsCitiesRebel = getGcwDefenderRegionsCitiesRebel();
+		const String[] gcwDefenderRegionsGuildsImperial = getGcwDefenderRegionsGuildsImperial();
+		const String[] gcwDefenderRegionsGuildsRebel = getGcwDefenderRegionsGuildsRebel();
+
+		if ((gcwDefenderRegions != null) &&
+			(gcwDefenderRegions.length > 0) &&
+			(gcwDefenderRegionsCitiesImperial != null) &&
+			(gcwDefenderRegionsCitiesImperial.length == gcwDefenderRegions.length) &&
+			(gcwDefenderRegionsCitiesRebel != null) &&
+			(gcwDefenderRegionsCitiesRebel.length == gcwDefenderRegions.length) &&
+			(gcwDefenderRegionsGuildsImperial != null) &&
+			(gcwDefenderRegionsGuildsImperial.length == gcwDefenderRegions.length) &&
+			(gcwDefenderRegionsGuildsRebel != null) &&
+			(gcwDefenderRegionsGuildsRebel.length == gcwDefenderRegions.length))
+		{
+			const string[] columnHeader =     {"GCW Region", "Rebel Cities", "Rebel Guilds", "Imperial Cities", "Imperial Guilds"};
+			const string[] columnHeaderType = {"text",       "text",         "text",         "text",            "text"};
+
+			const string[][] columnData = new string[5][0];
+			columnData[0] = gcwDefenderRegions;
+			columnData[1] = gcwDefenderRegionsCitiesRebel;
+			columnData[2] = gcwDefenderRegionsGuildsRebel;
+			columnData[3] = gcwDefenderRegionsCitiesImperial;
+			columnData[4] = gcwDefenderRegionsGuildsImperial;
+
+			const int newPid = sui.tableColumnMajor(player, player, sui.OK_CANCEL, "@" + SID_MENU_GCW_REGION_DEFENDER.toString(), "onGcwRegionDefenderTableDictionaryResponse", "@gcw:gcw_region_defender_sui_table_header", columnHeader, columnHeaderType, columnData, true);
+			if (newPid > 0)
+				utils.setScriptVar(player, "gcw.gcwRegionDefenderTablePid", newPid);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//This trigger is used for each buildable planet and retrieves each planet's planetary score
+//for either faction.
+trigger OnClusterWideDataResponse(string strCategory, string strSubCategory, int intRequestId, string[] strElementNames, dictionary[] dctData, int intLockKey)
+{
+	// category is Faction
+	// subCategory is going to be "planetName"
+
+	blog("OnClusterWideDataResponse: "+strSubCategory);
+
+	const int imperialPlanetaryScore = getGcwGroupImperialScorePercentile(strSubCategory);
+	utils.setScriptVar(self, "Imperial."+strSubCategory+".controlScore", imperialPlanetaryScore);
+	utils.setScriptVar(self, "Rebel."+strSubCategory+".controlScore", (100 - imperialPlanetaryScore));
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+// MessageHandlers
+// ----------------------------------------------------------------------
+
+//This refreshes the UI
+messageHandler refreshSuiGcwData()
+{
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	blog("player id: "+player);
+
+	if(!sui.hasPid(player, PID_NAME))
+		return SCRIPT_CONTINUE;
+
+	blog("player has a pid scriptvar");
+	int currentPid = sui.getPid(player, PID_NAME);
+	blog("currentPid: "+ currentPid);
+	int callingPid = params.getInt("callingPid");
+	blog("callingPid: "+ callingPid);
+	if(callingPid != currentPid)
+		return SCRIPT_CONTINUE;
+
+	//int pid = sui.getPid(player, PID_NAME);
+	string gcwData = getGcwData(self, player);
+
+	if(gcwData == null || gcwData.equals(""))
+		return SCRIPT_CONTINUE;
+
+	setSUIProperty(currentPid, "Prompt.lblPrompt", "LocalText", gcwData);
+	flushSUIPage(currentPid);
+	messageTo(self, "refreshSuiGcwData", params, 10, false);
+	return SCRIPT_CONTINUE;
+}
+
+//this fires off when the player hits close/done button or hits the X
+//or ESC button on their keyboard. It cleans up the code that updates the
+//war terminal.
+messageHandler closeSui()
+{
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	sui.removePid(player, PID_NAME);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+// Functions
+// ----------------------------------------------------------------------
+
+//Function called to call the cluster wide data.  This loops through and calls cluster data
+//for each buildable planet.
+boolean updateGCWInfo(obj_id self)
+{
+	blog("in updateGCWInfo");
+
+	if(!utils.hasScriptVar(self, "lastUpdate"))
+	{
+		utils.setScriptVar(self, "lastUpdate", getGameTime());
+	}
+	else
+	{
+		int lastUpdateTime = utils.getIntScriptVar(self, "lastUpdate");
+		int timePassed = getGameTime() - lastUpdateTime;
+		blog("timePassed: "+timePassed);
+
+		if(timePassed < MINIMUM_TIME_FOR_UPDATE)
+			return false;
+	}
+
+	for(int i = 0; i < PLANETS_DATA[0].length; i++)
+	{
+		blog("in loop planet: "+ PLANETS_DATA[0][i]);
+
+		string strPlanet = PLANETS_DATA[0][i];
+		int requestId = getClusterWideData("gcw", strPlanet, false, self);
+	}
+
+	return true;
+}
+
+//basic function that grabs the string data and passes it to the SUI
+void openSui(obj_id player)
+{
+	obj_id self = getSelf();
+
+	string gcwData = getGcwData(self, player);
+	if((gcwData != null) && (!gcwData.equals("")))
+		createCustomUI(self, player, gcwData);
+}
+
+//This function actually contructs one very large string based on data on the terminal
+//and on the planet object.
+string getGcwData(obj_id self, obj_id player)
+{
+	if(!isValidId(player))
+		return null;
+
+	blog("in getGcwData");
+	string gcwData = "";
+	if(getTemplateName(self).equals(WAR_INTELPAD_TEMPLATE))
+	{
+		int gcwPlanetIdx = checkScene(self, player);
+
+		if(gcwPlanetIdx < 0)
+			return sui.newLine() + "GCW Data not available on this planet. " + sui.newLine() + "Currently monitoring: Corellia, Dantooine, Lok, Naboo, Rori, Talus or Tatooine.";
+
+		string planetName = PLANETS_DATA[1][gcwPlanetIdx];
+		string planet = PLANETS_DATA[0][gcwPlanetIdx];
+		obj_id planetId = getPlanetByName(planet);
+
+		if(isGod(player))
+			planetName += " ( " + planetId + " )";
+
+		gcwData += getSpecificPlanetData(self, player, planetId, gcwData, planet, planetName);
+		int calTime = getCalendarTime();
+		string strCalTime = getCalendarTimeStringLocal(calTime);
+		gcwData += "Last Updated: "+strCalTime;
+		return gcwData;
+	}
+
+	gcwData += "Galactic Civil War Data by Planet:\n\n";
+	for(int i = 0; i < PLANETS_DATA[0].length; i++)
+	{
+		string planetName = PLANETS_DATA[1][i];
+		string planet = PLANETS_DATA[0][i];
+		obj_id planetId = getPlanetByName(planet);
+
+		if(isGod(player))
+			planetName += " ( " + planetId + " )";
+
+		gcwData = getSpecificPlanetData(self, player, planetId, gcwData, planet, planetName);
+
+	}
+	int calTime = getCalendarTime();
+	string strCalTime = getCalendarTimeStringLocal(calTime);
+	gcwData += "Last Updated: "+strCalTime;
+
+	return gcwData;
+}
+
+//Grabs any sliced terminals off of any SF HQs that are currently under attack
+string getPlayerBaseData(obj_id player, obj_id planetId, int maxBasesOnPlanet)
+{
+	if(!isValidId(planetId))
+		return null;
+
+	if(maxBasesOnPlanet <= 0)
+		return null;
+
+	string allBaseData = "";
+	string treePrefix = ".hq_";
+	dictionary baseDic = new dictionary();
+	int faction = 0;
+	string factionName = "";
+	location loc = new location();
+
+	for(int i = 1; i < maxBasesOnPlanet; i++)
+	{
+		baseDic = utils.getDictionaryScriptVar(planetId, gcw.VAR_BASE_HACK_DICTIONARY+treePrefix+i);
+		if(baseDic == null)
+		{
+			//add comment
+			continue;
+		}
+		else
+		{
+			if(isGod(player))
+				allBaseData += " BASE ID: "+ baseDic.getObjId("id") + sui.newLine();
+
+			faction =  baseDic.getInt("faction");
+			switch(faction)
+			{
+				case gcw.FACTION_REBEL:
+					factionName = "REBEL";
+					break;
+				case gcw.FACTION_IMPERIAL:
+					factionName = "IMPERIAL";
+					break;
+				default:
+					factionName = "ERROR";
+					break;
+			}
+
+			loc =  baseDic.getLocation("location");
+			int x = (int)loc.x;
+			int y = (int)loc.y;
+			int z = (int)loc.z;
+
+			allBaseData += " "+ factionName + " Player Base reports alarm at: " + x + " " + y + " " + z + sui.newLine();
+		}
+	}
+
+	return allBaseData;
+}
+
+//Informs the terminal if any STATIC Faction bases are being
+//captured
+string getTerminalData(int[] terminalArray)
+{
+	if(terminalArray == null || terminalArray.length == 0)
+		return null;
+
+	int terminal_one = terminalArray[0];
+	for(int i = 0; i < terminalArray.length; i++)
+	{
+		if(terminal_one != terminalArray[i])
+			return BASE_BEING_CAPTURED;
+	}
+
+	return BASE_SECURED;
+}
+
+//Grabs the current faction of the base
+string getStaticBaseData(int status)
+{
+	if(status < 0)
+		return null;
+
+	string prefix = " ";
+
+	switch (status)
+	{
+		case FACTION_NEUTRAL: //0
+			return prefix + "NEUTRAL\n";
+		case FACTION_REBEL: //2
+			return prefix + "REBEL\n";
+		case FACTION_IMPERIAL: //1
+			return prefix + "IMPERIAL\n";
+		default:
+			return null;
+	}
+}
+
+//Constructs the SUI with one large string
+void createCustomUI(obj_id self, obj_id player, string combinedString)
+{
+	if(!isValidId(self) || !isValidId(player))
+		return;
+
+	dictionary params = new dictionary();
+	params.put("player", player);
+
+	blog("in createCustomUI");
+	closeOldWindow(player);
+
+	string uiTitle = "GCW Report";
+	int pid = createSUIPage("/Script.messageBox", self, player);
+	setSUIAssociatedLocation(pid, self);
+	setSUIMaxRangeToObject(pid, 8);
+	params.put("callingPid", pid);
+	sui.setPid(player, pid, PID_NAME);
+
+	setSUIProperty(pid, "Prompt.lblPrompt", "LocalText", combinedString);
+	setSUIProperty(pid, "bg.caption.lblTitle", "Text", uiTitle);
+	setSUIProperty(pid, "Prompt.lblPrompt", "Editable", "false");
+	setSUIProperty(pid, "Prompt.lblPrompt", "GetsInput", "true");
+	setSUIProperty(pid, "btnCancel", "Visible", "false");
+	setSUIProperty(pid, "btnRevert", "Visible", "false");
+	setSUIProperty(pid, "btnOk", sui.PROP_TEXT, "Close");
+	//If tester hits ok button renamed to Create File, send to message handler
+	subscribeToSUIEvent(pid, sui_event_type.SET_onClosedOk, "%button0%", "closeSui");
+	subscribeToSUIEvent(pid, sui_event_type.SET_onClosedCancel, "%button0%", "closeSui");
+
+	showSUIPage(pid);
+	flushSUIPage(pid);
+
+	messageTo(self, "refreshSuiGcwData", params, 10, false);
+}
+
+void closeOldWindow(obj_id player)
+{
+	int pid = sui.getPid(player, PID_NAME);
+	if(pid > -1)
+	{
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+	}
+}
+
+int checkScene(obj_id self, obj_id player)
+{
+	if(!isValidId(self) || !isValidId(player))
+		return -1;
+
+	//validate planet
+	string scene = getCurrentSceneName();
+	int gcwPlanetIndex = -1;
+
+	for(int i = 0; i < PLANETS_DATA[0].length; i++)
+	{
+		if(PLANETS_DATA[0][i].equals(scene))
+			gcwPlanetIndex = i;
+	}
+	return gcwPlanetIndex;
+}
+
+string getSpecificPlanetData(obj_id self, obj_id player, obj_id planetId, string gcwData, string planet, string planetName)
+{
+	if(!isValidId(self) || !exists(self) || !isValidId(player) || !exists(player) || !isValidId(planetId) || !exists(planetId))
+		return null;
+	else if(planet == null || planet.equals("") || planetName == null || planetName.equals(""))
+		return null;
+	//gcwData will be null by default.
+
+	int maxPlanet = gcw.getCurrentPlanetaryFactionBaseMaxPlanet(planet);
+
+	gcwData += sui.colorGreen() + planetName + sui.colorWhite() + sui.newLine() ;
+
+	string planetScoreReb = "Unknown";
+	string planetScoreImp = "Unknown";
+
+	if(utils.hasScriptVar(self, "Rebel."+ planet +".controlScore"))
+		planetScoreReb = "" + utils.getIntScriptVar(self, "Rebel."+ planet +".controlScore");
+	if(utils.hasScriptVar(self, "Imperial."+ planet +".controlScore"))
+		planetScoreImp = "" + utils.getIntScriptVar(self, "Imperial."+ planet +".controlScore");
+
+	gcwData += sui.colorGreen() + " Planetary Score Rebel: " + sui.colorWhite() + planetScoreReb + sui.newLine();
+	gcwData += sui.colorGreen() + " Planetary Score Imperial: " + sui.colorWhite() + planetScoreImp + sui.newLine();
+
+	gcwData += sui.colorBlue() + " Total Player Bases: " + sui.colorWhite() + gcw.getCurrentPlanetaryFactionBaseCountPlanet(planet) + sui.newLine();
+	gcwData += sui.colorBlue() + " Total Player Base Max: " + sui.colorWhite() + maxPlanet + sui.newLine();
+	gcwData += sui.colorBlue() + " Total Imperial Bases: " + sui.colorWhite()  + gcw.getImperialBaseCount(planetId) + sui.newLine();
+	gcwData += sui.colorBlue() + " Total Alliance Bases: " + sui.colorWhite()  + gcw.getRebelBaseCount(planetId) + sui.newLine();
+
+	if(utils.hasScriptVarTree(planetId, gcw.VAR_BASE_HACK_DICTIONARY))
+		gcwData += sui.colorRed() + getPlayerBaseData(player, planetId, maxPlanet) + sui.colorWhite();
+
+	if(planet == "corellia" || planet == "naboo" || planet == "talus")
+	{
+		gcwData += sui.colorOrange();
+		if(utils.hasScriptVar(planetId, VAR_BASE_STATUS))
+		{
+			gcwData += "GCW BASE: " + getStaticBaseData(utils.getIntScriptVar(planetId, VAR_BASE_STATUS));
+			if(utils.hasScriptVar(planetId, VAR_TERMINAL_STATUS))
+				gcwData += getTerminalData(utils.getIntArrayScriptVar(planetId, VAR_TERMINAL_STATUS));
+		}
+		gcwData += sui.colorWhite();
+	}
+	gcwData += sui.newLine();
+
+	return gcwData;
+}
+
+boolean blog(string msg)
+{
+	//LOG("gcw_terminal",msg);
+	return true;
+}

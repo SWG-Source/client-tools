@@ -1,0 +1,274 @@
+//------------------------------------------------
+// escort_target.script
+// Brandon Reinhart
+//
+// This script resides on the ship being escorted.
+// Used for both normal escort missions & duties.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_quest;
+include library.space_utils;
+include library.space_transition;
+include library.utils;
+include library.prose;
+include library.group;
+
+//------------------------------------------------
+// objectDestroyed
+// Called from the combat system when the ship is destroyed.
+//------------------------------------------------
+
+messageHandler objectDestroyed()
+{
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	dictionary outparams = new dictionary();
+	outparams.put( "ship", self );
+	outparams.put( "reason", 1 );
+	space_utils.notifyObject( quest, "escortFailed", outparams );
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// registerDestination
+//------------------------------------------------
+
+messageHandler registerDestination()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set our final destination notification.
+	obj_id quest = params.getObjId( "quest" );
+	location loc = params.getLocation( "loc" );
+	addLocationTarget3d( "dest", loc, 300 );
+
+	// Store reference to our quest parent.
+	setObjVar( self, "quest", quest );
+
+	int noDistancePolling = getIntObjVar( quest, "noDistancePolling" );
+	if ( noDistancePolling == 1 )
+		return SCRIPT_CONTINUE;
+
+	int customMsgs = getIntObjVar( quest, "customDistanceMessages" );
+	if ( customMsgs == 1 )
+		setObjVar( self, "customMsgs", 1 );
+
+	// Begin polling the player's distance.
+	obj_id player = params.getObjId( "player" );
+	setObjVar( self, "player", player );
+	dictionary outparams = new dictionary();
+	outparams.put( "player", player );
+	messageTo( self, "checkPlayerLocation", outparams, 60.f, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnArrivedAtLocation
+//
+// We may have arrived at a key quest location.
+// Forward this message to our quest objects.
+//------------------------------------------------
+
+trigger OnArrivedAtLocation( string name )
+{
+	// Forward the notification to our quest object.
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	if ( name.equals( "dest" ) )
+	{
+		// We arrived at our warp out spot.
+		dictionary params = new dictionary();
+		params.put( "ship", self );
+		space_utils.notifyObject( quest, "escortComplete", params );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// checkPlayerLocation
+//------------------------------------------------
+
+messageHandler checkPlayerLocation()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId( "player" );
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	string questName = getStringObjVar( quest, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( quest, space_quest.QUEST_TYPE );
+
+	if ( !exists( player ) )
+	{
+		// The player no longer exists in this zone!
+		dictionary outparams = new dictionary();
+		outparams.put( "ship", self );
+		outparams.put( "reason", 0 );
+		messageTo( quest, "escortFailed", outparams, 0.f, true );
+
+		destroyObjectHyperspace( self );
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Any player in the group can be close enough to qualify.
+	boolean closeenough = false;
+	if ( group.isGrouped( player ) )
+	{
+		obj_id gid = getGroupObject( player );
+		obj_id[] members = space_utils.getSpaceGroupMemberIds( gid );
+		if ( members != null )
+		{
+			for ( int i=0; i<members.length; i++ )
+			{
+				float dist = getDistance( space_transition.getContainingShip( members[i] ), self );
+				closeenough = Math.abs( dist ) <= space_quest.ESCORT_ROAM_TOLERANCE;
+				if ( closeenough )
+					break;
+			}//endfor
+		}//endif members!=null
+	}//endif isGrouped
+	else
+	{
+		float dist = getDistance( space_transition.getContainingShip( player ), self );
+		closeenough = Math.abs( dist ) <= space_quest.ESCORT_ROAM_TOLERANCE;
+	}
+
+	if ( !closeenough )
+	{
+		space_utils.matchEngineSpeed(player, self, .2f, true);
+
+		int too_far = getIntObjVar( self, "too_far" );
+		switch ( too_far )
+		{
+			case 0:
+				// Give them a chance to tighten up.
+				string_id warning;
+				if ( hasObjVar( self, "customMsgs" ) )
+				{
+					warning = new string_id( "spacequest/"+questType+"/"+questName, "escort_too_far1" );
+				}
+				else
+				{
+					warning = new string_id( "space/quest", "escort_too_far1" );
+				}
+				prose_package pp = prose.getPackage( warning, 0 );
+				space_quest.groupTaunt( self, player, pp );
+
+				setObjVar( self, "too_far", 1 );
+				break;
+
+			case 1:
+				// Given them another chance to tighten up.
+				if ( hasObjVar( self, "customMsgs" ) )
+				{
+					warning = new string_id( "spacequest/"+questType+"/"+questName, "escort_too_far2" );
+				}
+				else
+				{
+					warning = new string_id( "space/quest", "escort_too_far2" );
+				}
+				pp = prose.getPackage( warning, 0 );
+				space_quest.groupTaunt( self, player, pp );
+
+				setObjVar( self, "too_far", 2 );
+				break;
+
+			case 2:
+				// Fail the mission, they got too far away.
+				if ( hasObjVar( self, "customMsgs" ) )
+				{
+					warning = new string_id( "spacequest/"+questType+"/"+questName, "escort_too_far3" );
+				}
+				else
+				{
+					warning = new string_id( "space/quest", "escort_too_far3" );
+				}
+				pp = prose.getPackage( warning, 0 );
+				space_quest.groupTaunt( self, player, pp );
+
+				dictionary outparams = new dictionary();
+				outparams.put( "ship", self );
+				outparams.put( "reason", 0 );
+				space_utils.notifyObject( quest, "escortFailed", outparams );
+
+				destroyObjectHyperspace( self );
+				break;
+		}
+	}
+	else
+	{
+		space_utils.matchEngineSpeed(player, self, .5f, true);
+
+		removeObjVar( self, "too_far" );
+	}
+
+	messageTo( self, "checkPlayerLocation", params, 60.f, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// missionAbort
+//------------------------------------------------
+
+messageHandler missionAbort()
+{
+	destroyObjectHyperspace( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnShieldsDepleted
+//------------------------------------------------
+
+messageHandler OnShieldsDepleted()
+{
+	// We lost our shields!
+	// See if we need to tell the player about this.
+	if ( hasObjVar( self, "shieldsComplain" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "shieldsComplain", 1 );
+
+	// Complain to our guy that we are in trouble.
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	string questName = getStringObjVar( quest, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( quest, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( quest, space_quest.QUEST_OWNER );
+	string_id warning = new string_id( "spacequest/"+questType+"/"+questName, "shields_depleted" );
+	prose_package pp = prose.getPackage( warning, 0 );
+	space_quest.groupTaunt( self, player, pp );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnHullNearlyDestroyed
+//------------------------------------------------
+
+messageHandler OnHullNearlyDestroyed()
+{
+	// Our hull is damaged!
+	// See if we need to tell the player about this.
+	if ( hasObjVar( self, "hullComplain" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "hullComplain", 1 );
+
+	// Complain to our guy that we are in trouble.
+	obj_id quest = getObjIdObjVar( self, "quest" );
+	string questName = getStringObjVar( quest, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( quest, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( quest, space_quest.QUEST_OWNER );
+	string_id warning = new string_id( "spacequest/"+questType+"/"+questName, "hull_half" );
+	prose_package pp = prose.getPackage( warning, 0 );
+	space_quest.groupTaunt( self, player, pp );
+
+	return SCRIPT_CONTINUE;
+}

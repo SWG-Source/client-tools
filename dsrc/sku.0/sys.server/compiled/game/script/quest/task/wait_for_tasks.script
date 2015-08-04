@@ -1,0 +1,274 @@
+include library.quests;
+
+trigger OnForceSensitiveQuestCompleted(String questName, boolean succeeded)
+{
+	// don't recursively call OnForceSensitiveQuestCompleted() on wait_for_tasks
+	if(quests.isMyQuest(quests.getQuestId(questName), "quest.task.wait_for_tasks"))
+	{
+			return SCRIPT_CONTINUE;
+	}
+	
+	LOG("newquests", "wait_for_tasks:OnForceSensitiveQuestCompleted(" + questName + ", " + succeeded + ")");
+
+	// the quest library has triggered OnForceSensitiveQuestCompleted
+	// retrieve a String[] objvar containing all of the
+	// "wait_for_tasks" entries that might be
+	// interested in the completed quest
+	String objvarName = "quest.wait_for_tasks";
+	if(quests.safeHasObjVar(self, objvarName))
+	{
+		resizeable String[] waiting = getResizeableStringArrayObjVar(self, objvarName);
+		if(waiting != null && waiting.length > 0)
+		{
+			int iter = 0;
+			for(iter = 0; iter < waiting.length;)
+			{
+				// iterate through all of the waiting_for_tasks
+				// tasks, searching for a task that matches
+				// the completed quest task
+				String waitingTaskName = waiting[iter];
+				if(waitingTaskName != null && waitingTaskName.length() > 0)
+				{
+					// found a candidate waiting_for_tasks entry
+					String waitingObjVarName = "quest." + waitingTaskName + ".target";
+					if(hasObjVar(self, waitingObjVarName))
+					{
+						// retrieve a String[] objvar containing a list of
+						// tasks still waiting for completion
+						resizeable String[] tasks = getResizeableStringArrayObjVar(self, waitingObjVarName);
+						if(tasks != null && tasks.length > 0)
+						{
+							if(tasks.contains(questName))
+							{
+								// the String array contains the completed
+								// questName, this waiting_for_tasks entry
+								// was waiting for the completed quest
+								tasks.removeElement(questName);
+								String waitingStatusObjVarName = "quest." + waitingTaskName + ".status";
+
+								if(tasks.length < 1)
+								{
+									// the waiting task has completed because all of
+									// the tasks have also been completed
+									removeObjVar(self, waitingObjVarName);
+
+									// retrieve the waiting_for_tasks status
+									// objvar to determine whether this waiting_for_tasks
+									// was a success or failure
+									boolean finalResult = succeeded;
+									if(hasObjVar(self, waitingStatusObjVarName))
+									{
+										if(succeeded)
+										{
+											// the status will override succeeded if it
+											// the status is fals. All tasks must succeed
+											// for waiting_for_tasks to complete successfully
+											// or it will complete with a failure
+											if(! getBooleanObjVar(self, waitingStatusObjVarName))
+											{
+												finalResult = false;
+											}
+										}
+										removeObjVar(self, waitingStatusObjVarName);
+									}
+
+									// remove the tracking objvars
+									waiting.removeElement(waitingTaskName);
+									removeObjVar(self, waitingObjVarName);
+
+									// complete the task
+									LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - completing task " + waitingTaskName);
+									quests.complete(waitingTaskName, self, finalResult);
+
+									if(waiting.length < 1)
+									{
+										// there are no more waiting_for_tasks entries,
+										// remove the objvar, detach the script and bail out
+										// now
+										safeRemoveObjVar(self, objvarName);
+										return SCRIPT_CONTINUE;
+									}
+								
+								}
+								else
+								{
+									// the task is still pending, remove the quest
+									// from the list and exit. Wait for more tasks
+									// to complete until the list is empty
+									tasks.removeElement(questName);
+									setObjVar(self, waitingObjVarName, tasks);
+									if(! succeeded)
+									{
+										// update the tracking objvar to override
+										// the final success result for the waiting task
+										setObjVar(self, waitingStatusObjVarName, succeeded);
+									}
+									
+									// increment the waiting iterator since nothing was
+									// removed
+									++iter;
+									LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - there are " + tasks.length + " tasks remaining");
+								}
+							}
+							else
+							{
+								// the task was not in the list, increment the iterator
+								// and continue processing
+								++iter;
+								LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - the task was not found in the pending list, ignoring it");
+							}
+						}
+						else
+						{
+							// something is wrong. There should be an associated
+							// task list. Clean up the tracking info.
+							quests.complete(waitingTaskName, self, false);
+							waiting.removeElement(waitingTaskName);
+							LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - ERROR: no task list is associated with " + waitingTaskName);
+						}
+					}
+					else
+					{
+						// no processing can happen for the task, it's
+						// in an undefined state, fail the task
+						quests.complete(waitingTaskName, self, false);
+						
+						// remove the element
+						waiting.removeElement(waitingTaskName);
+
+						LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - ERROR: the task is in an undefined state, missing the tracking objvar " + waitingObjVarName);
+					}
+				}
+				else
+				{
+					// there was a null waitingTaskName in the waiting String array,
+					// remove the element and don't increment the iterator.
+					waiting.removeElementAt(iter);
+					LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - ERROR: a null entry was in the task list");
+				}
+			}
+		}
+		else
+		{
+			// there are no tasks in the list!
+			// There is are no wait_for_tasks that can perform any processing.
+			// Remove the wait_for_tasks objvar and detach the script!
+			safeRemoveObjVar(self, objvarName);
+			detachScript(self, "quest.task.wait_for_tasks");
+			LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - ERROR: there are no tasks in the task list " + objvarName);
+		}
+	}
+	else
+	{
+		// it is not possible to perform any processing for wait_for_tasks because
+		// the tracking objvar is missing! detach the script from the player.
+		detachScript(self, "quest.task.wait_for_tasks");
+		LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() - ERROR: missing tracking objvar " + objvarName);
+	}
+	LOG("newquests", "wait_for_tasks: OnForceSensitiveQuestCompleted() returning");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnQuestActivated(int questRow)
+{
+	// determine if the quest being activated is a wait_for_tasks
+	if(quests.isMyQuest(questRow, "quest.task.wait_for_tasks"))
+	{
+		// get the name of the task from the quests data table
+		// via the row indicator passed to this trigger
+		String questName = quests.getDataEntry(questRow, "NAME");
+
+		String target = null;
+		String[] tasks = null;
+		String objvarName = "quest." + questName + ".target";
+		if(hasObjVar(self, objvarName))
+		{
+			// the target objvar is a String[] objvar, overriding
+			// whatever may be in the data table
+			tasks = getStringArrayObjVar(self, objvarName);
+		}
+		else
+		{
+			// there was no override present, look in the data table
+			// for the list of tasks that must complete
+			target = quests.getDataEntry(questRow, "TARGET");
+			if(target != null && target.length() > 0)
+			{
+				tasks = split(target, ';');
+			}
+		}
+		if(tasks != null && tasks.length > 0)
+		{
+			setObjVar(self, objvarName, tasks);
+			LOG("newquests", "wait_for_tasks: OnQuestActivated - set " + objvarName);
+		}
+		else
+		{
+			LOG("newquests", "wait_for_tasks: OnQuestActivated - failed to set " + objvarName);
+		}
+
+		resizeable String[] waiting = null;
+		objvarName = "quest.wait_for_tasks";
+		if(hasObjVar(self, objvarName))
+		{
+			waiting = getResizeableStringArrayObjVar(self, objvarName);
+			// quest.wait_for_tasks.* list objvar already being set by groundquests system causes null here.
+			// quest.wait_for_tasks   stringarray objvar still gets needs to be set below.
+			if (waiting == null)
+			{
+				waiting = new Vector();
+			}
+		}
+		else
+		{
+			waiting = new Vector();
+		}
+		if(!waiting.contains(questName))
+		{
+			waiting.add(questName);
+			if(waiting.length > 0)
+			{
+				setObjVar(self, objvarName, waiting);
+				LOG("newquests", "wait_for_tasks: OnQuestActivated - set " + objvarName);
+			}
+			else
+			{
+				LOG("newquests", "wait_for_tasks: OnQuestActivated - failed to set " + objvarName);
+			}
+		}
+		else
+		{
+			LOG("newquests", "wait_for_tasks: OnQuestActivated - " + objvarName + " already contains " + questName);
+		}
+
+	}
+	else
+	{
+		LOG("newquests", "wait_for_tasks: OnQuestActivated Ignoring OnQuestActivated for task that is not mine");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Removes an objvar without removing list objvars "below" it.
+ * e.g. remove quest.wait_for_tasks without removing quest.wait_for_tasks.*
+ * This is a workaround for collision with quest.task.ground.wait_for_tasks objvar use.
+ */
+void safeRemoveObjVar(obj_id self, String objvarName)
+{
+	obj_var_list ovl = getObjVarList(self, objvarName);
+	if (ovl != null)
+	{
+		if (ovl.getNumItems() > 0)
+		{
+			resizeable String[] emptyValue = new Vector();
+			setObjVar(self, objvarName, emptyValue);
+			CustomerServiceLog("fs_quests", "wait_for_tasks: safeRemoveObjvar(): setting " + objvarName
+				+ " to empty because obj_var_list of same name is in use (on %TU)", self, null);
+		}
+		else 
+		{
+			removeObjVar(self, objvarName);
+		}
+	}
+}

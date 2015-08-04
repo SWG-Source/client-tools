@@ -1,0 +1,258 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.hq;
+include library.xp;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.ai_lib;
+include library.slicing;
+include library.stealth;
+
+inherits faction_perk.hq.objective_object;
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_SLICE					= new string_id("slicing/slicing", "slice");
+const string_id SID_FAIL_SLICE				= new string_id("slicing/slicing", "hq_security_fail");
+const string_id SID_SUCCESS_SLICE			= new string_id("slicing/slicing", "hq_security_success");
+const string_id SID_NOT_AGAIN				= new string_id("slicing/slicing", "not_again");
+
+const string_id NO_TAMPER					= new string_id("faction/faction_hq/faction_hq_response", "no_tamper");
+const string_id ALREADY_SLICED				= new string_id("faction/faction_hq/faction_hq_response", "already_sliced");
+const string_id OTHER_OBJECTIVES			= new string_id("faction/faction_hq/faction_hq_response", "other_objectives");
+const string_id ONLY_A_SMUGGLER				= new string_id("faction/faction_hq/faction_hq_response", "only_a_smuggler");
+const string_id ALREADY_REPAIRING_SLICE		= new string_id("faction/faction_hq/faction_hq_response", "already_repairing_slice");
+const string_id BEGIN_REPAIRING_SLICE		= new string_id("faction/faction_hq/faction_hq_response", "begin_repairing_slice");
+const string_id NO_REPAIR_CURRENT_STATE		= new string_id("faction/faction_hq/faction_hq_response", "no_repair_current_state");
+const string_id NO_REPAIR_DISTANCE			= new string_id("faction/faction_hq/faction_hq_response", "no_repair_distance");
+const string_id TERM_REPAIRED				= new string_id("faction/faction_hq/faction_hq_response", "term_repaired");
+const string_id TERM_REPAIR_CONT			= new string_id("faction/faction_hq/faction_hq_response", "term_repair_cont");
+const string_id SID_NO_STEALTH				= new string_id("hq", "no_stealth");
+
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int intState = getState(player, STATE_FEIGN_DEATH);
+
+	if (isDead(player) || isIncapacitated(player) || intState > 0)
+		return SCRIPT_CONTINUE;
+
+	if (stealth.hasInvisibleBuff(player))
+	{
+		sendSystemMessage(player, SID_NO_STEALTH);
+		return SCRIPT_CONTINUE;
+	}
+
+	int mnu = mi.addRootMenu(menu_info_types.ITEM_USE, SID_SLICE);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+
+	if (stealth.hasInvisibleBuff(player))
+	{
+		sendSystemMessage(player, SID_NO_STEALTH);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id structure = getTopMostContainer(self);
+	if ( !isIdValid(structure) )
+		return SCRIPT_CONTINUE;
+
+	int sFac = pvpGetAlignedFaction(structure);
+	int pFac = pvpGetAlignedFaction(player);
+	if ( pvpGetType( player ) == PVPTYPE_NEUTRAL )
+		pFac = 0;
+
+	if ( !pvpAreFactionsOpposed(sFac, pFac) )
+	{
+		sendSystemMessage(player, NO_TAMPER);
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( hasObjVar(self, hq.VAR_IS_DISABLED) )
+	{
+		sendSystemMessage(player, ALREADY_SLICED);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id nextObjective = hq.getNextObjective(structure);
+	if ( nextObjective != self )
+	{
+		obj_id priorObjective = hq.getPriorObjective(structure, self);
+		if ( isIdValid(priorObjective) )
+		{
+			prose_package ppDisableOther = prose.getPackage(hq.PROSE_DISABLE_OTHER, priorObjective, self);
+			sendSystemMessageProse(player, ppDisableOther);
+		}
+		else
+		{
+			sendSystemMessage(player, OTHER_OBJECTIVES);
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( item == menu_info_types.ITEM_USE )
+	{
+		if ( !hasSkill(player, "class_smuggler_phase1_novice") )
+		{
+			sendSystemMessage(player, ONLY_A_SMUGGLER);
+			return SCRIPT_CONTINUE;
+		}
+
+		if ( hasObjVar(self, "slicing.failed") )
+		{
+			if ( utils.hasScriptVar(self, "repairing") )
+			{
+				obj_id repairer = utils.getObjIdScriptVar(self, "repairing");
+				if ( isIdValid(repairer) )
+				{
+					if ( player == repairer )
+					{
+						sendSystemMessage(player, ALREADY_REPAIRING_SLICE);
+						return SCRIPT_CONTINUE;
+					}
+					//else
+					//{
+						//if ( exists(repairer) && repairer.isLoaded() && !isIncapacitated(repairer) && !isDead(repairer) )
+						//{
+						//	sendSystemMessageTestingOnly(player, getName(repairer) + " is already repairing the damage caused by a prior slice attempt");
+						//	return SCRIPT_CONTINUE;
+						//}
+					//}
+				}
+			}
+
+			sendSystemMessage(player, BEGIN_REPAIRING_SLICE);
+			dictionary d = new dictionary();
+			d.put("player", player);
+			d.put("cnt", 10);
+
+			messageTo(self, "handleSlicingRepair", d, 5f, false);
+			utils.setScriptVar(self, "repairing", player);
+
+			return SCRIPT_CONTINUE;
+		}
+
+		// Begin the slicing game.
+		slicing.startSlicing( player, self, "finishSlicing", "hq_security" );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+messageHandler handleObjectiveDisabled()
+{
+	//play effects here
+
+	//spawn commanding officer & entourage
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler finishSlicing()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	int success = params.getInt( "success" );
+	obj_id player = params.getObjId( "player" );
+	if ( success == 1 )
+	{
+		// Successful terminal hack.
+		sendSystemMessage( player, SID_SUCCESS_SLICE );
+
+		obj_id structure = getTopMostContainer(self);
+		if ( isIdValid(structure) )
+			hq.disableObjective(structure, self);
+
+		string playerName = getName(player);
+		CustomerServiceLog( "faction_hq", playerName + "(" + player + "), " + "sliced Security Terminal at " + getGameTime() + ".");
+		// Grant xp.
+//		xp.grant( player, xp.SLICING, 1000 );
+	}
+	else
+	{
+		// Failed terminal hack.
+		sendSystemMessage( player, SID_FAIL_SLICE );
+
+		// Mark us as having failed at this terminal.
+		setObjVar( self, "slicing.failed", player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSlicingRepair()
+{
+	obj_id player = params.getObjId("player");
+
+	if (stealth.hasInvisibleBuff(player))
+	{
+		sendSystemMessage(player, SID_NO_STEALTH);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isIdValid(player) || !exists(player) || !player.isLoaded() )
+		return SCRIPT_CONTINUE;
+
+	if ( isIncapacitated(player) || isDead(player) )
+	{
+		sendSystemMessage(player, NO_REPAIR_CURRENT_STATE);
+		//utils.setScriptVar(self, "repairing", player);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( getContainedBy(self) != getContainedBy(player) || getDistance(self, player) > 50f )
+	{
+		sendSystemMessage(player, NO_REPAIR_DISTANCE);
+		//utils.setScriptVar(self, "repairing", player);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !hasObjVar(self, "slicing.failed") )
+	{
+		sendSystemMessage(player, TERM_REPAIRED);
+		return SCRIPT_CONTINUE;
+	}
+
+	int cnt = params.getInt("cnt");
+
+	int max = 1;
+	if ( hasSkill(player, "class_smuggler_phase4_novice") )
+	{
+		max = 4;
+	}
+	else if ( hasSkill(player, "class_smuggler_phase3_novice") )
+	{
+		max = 3;
+	}
+	else if ( hasSkill(player, "class_smuggler_phase2_novice") )
+	{
+		max = 2;
+	}
+
+	cnt -= rand(1, max);
+
+	if ( cnt < 0 )
+	{
+		sendSystemMessage(player, TERM_REPAIRED);
+		removeObjVar(self, "slicing.failed");
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		sendSystemMessage(player, TERM_REPAIR_CONT);
+
+		params.put("cnt", cnt);
+		messageTo(self, "handleSlicingRepair", params, 5f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}

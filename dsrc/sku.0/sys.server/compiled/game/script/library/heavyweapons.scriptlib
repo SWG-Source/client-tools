@@ -1,0 +1,486 @@
+// Heavy weapons library
+include library.utils;
+include library.trace;
+include library.combat;
+include library.vehicle;
+include library.dot;
+include library.ai_lib;
+
+const int TYPE_LAUNCHER_PISTOL		= 1;
+const int TYPE_ROCKET_LAUNCHER		= 2;
+const int TYPE_FLAME_THROWER		= 3;
+const int TYPE_HEAVY_PARTICLE_BEAM	= 4;
+const int TYPE_ACID_RIFLE		= 5;
+const int TYPE_HEAVY_ACID_BEAM		= 6;
+const int TYPE_LIGHTNING_BEAM_CANON	= 7;
+const int TYPE_PROTON_RIFLE		= 8;
+const int TYPE_HEAVY_FLAME_THROWER	= 9;
+const int TYPE_LAVA_CANNON		= 10;
+//*********************************************************************************************************
+const int TYPE_MAX					= 11; // this needs to get incremented if another weapon type is added
+//*********************************************************************************************************
+
+//  Balance Knobs
+const float LAUNCHER_PISTOL_AOE_RADIUS 			= 10.0f;
+const float HVY_ACID_BEAM_AOE_RADIUS 			= 15.0f;
+const int   HVY_ACID_BEAM_AOE_CHANCE			= 25;// %
+const float HVY_ACID_BEAM_BLIND_DURATION		= 20.0f;
+const float HVY_LIGHTNING_BEAM_AOE_RADIUS 		= 10.0f;
+const float FLAME_THROWER_CONE_ANGLE   			= 20.0f;
+const float HEAVY_FLAME_THROWER_CONE_ANGLE   		= 25.0f;
+const float LAVA_CANNON_AOE_RADIUS   			= 5.0f;
+const int   FLAME_THROWER_DOT_CHANCE			= 30;// %
+const float PARTICLE_BEAM_CONE_ANGLE   			= 1.0f;
+const int   ACID_RIFLE_PUNISHMENT_CHANCE		= 40;// %
+const float ACID_RIFLE_PUNISHMENT_DURATION		= 15.0f;
+const int   ACID_RIFLE_MID_BLIND_CHANCE			= 40;//%
+const int   ACID_RIFLE_MAX_BLIND_CHANCE			= 20;//%
+const int   LIGHTNING_BEAM_CANON_DOT_CHANCE		= 20;//%
+const int	LIGHTNING_BEAM_VEHICLE_SLOW_CHANCE	= 100;//%
+const float	LIGHTNING_BEAM_VEHICLE_SLOW_DURATION	= 20.0f; // seconds
+const float	LIGHTNING_BEAM_VEHICLE_SLOW_FACTOR  	= 0.1f; // 10% of normal speed
+const float	FOCUS_FIRE_CONE_REDUCTION		= .75f; // 75% smaller cone
+const float DEAD_BANG_RANGE_REDUCTION			= .85f; // 85% range reduction
+const float DEMOLITION_DAM_MULTIPLIER			= 1.4f;
+const float DEMOLITION_1_DAM_MULTIPLIER			= 1.6f;
+const float DEMOLITION_2_DAM_MULTIPLIER			= 1.8f;
+const string ATTACK_NAME_BASE_SINGLE 			= "co_hw_dot_";
+const string ATTACK_NAME_BASE_AREA 			= "co_ae_hw_dot_";
+
+//
+//  returns the weapon type based on @weapon's template
+//
+int getHeavyWeaponType(obj_id weapon)
+{
+	if(!hasObjVar(weapon, "intWeaponType"))
+	{
+		return -1;
+	}
+
+	int type = getIntObjVar(weapon, "intWeaponType");
+	if(type >= TYPE_MAX)
+	{
+		return -1;
+	}
+
+	return type;
+}
+
+//
+//  fills the weapon_data class with the weapon data from the weapon object so we dont need to constantly query the weapon
+//
+boolean fillHeavyWeaponData(weapon_data dat)
+{
+	int weaponType = getHeavyWeaponType(dat.id);
+	if(weaponType == -1)
+	{
+		return false;
+	}
+
+	float AOEDamagePercent = 0.0f;
+	if(hasObjVar(dat.id, "intAOEDamagePercent"))
+	{
+		AOEDamagePercent = getFloatObjVar(dat.id, "intAOEDamagePercent");
+	}
+
+	if(AOEDamagePercent > 1.0f)
+	{
+		AOEDamagePercent = 1.0f;
+	}
+	else if(AOEDamagePercent < 0.0f)
+	{
+		AOEDamagePercent = 0.0f;
+	}
+
+	dat.hvyWeaponType = weaponType;
+	dat.hvyWeaponAeDamageMod = AOEDamagePercent;
+	return true;
+}
+
+//
+//  Checks restrictions of firing heavy weapons.  Currently only checks to ensure that your posture is
+//  kneeling
+//
+boolean canFireHeavyWeapon(obj_id player, weapon_data weapon)
+{
+	if (cybernetic.hasCommandoLegs( player ))
+		return true;//with these legs, you don't have to kneel, so.
+
+	// put posture restriction here, if any	
+	return true;
+}
+
+float getDemolitionShotDamageMod(obj_id attacker, obj_id defender, string actionName)
+{
+	float mult = 1.05f;
+	
+	if(isPlayer(defender) || ai_lib.isNpc(defender) || ai_lib.isAnimal(defender))
+	{
+		return mult;
+	}
+	
+	actionName = toLower(actionName);
+	if(actionName.equals("demolitionshot_2"))
+	{
+		mult = DEMOLITION_2_DAM_MULTIPLIER;
+	}
+	else if(actionName.equals("demolitionshot"))
+	{
+		mult = DEMOLITION_DAM_MULTIPLIER;
+	}
+	else if(actionName.equals("demolitionshot_1"))
+	{
+		mult = DEMOLITION_1_DAM_MULTIPLIER;
+	}
+	
+	return mult;
+}
+
+//
+//  constructs the target list for the heavy weapon, depending on the weapon. Does not include the
+//  defender, as the defender is always an implicit target in the attack. The targeted defender needs
+//	to be in the array at the first index.
+//
+obj_id[] getAllHeavyWeaponTargets(obj_id attacker, obj_id defender, weapon_data weapon, dictionary actionData)
+{
+	float rangeModifier = 1f;
+	float areaModifier = 1f;
+	string actionName   = toLower(actionData.getString("actionName"));
+	
+	if(actionName != null && actionName.length() > 0)
+	{
+		if(actionName.startsWith("demolition") || actionName.startsWith("overkill"))
+		{
+			return new obj_id[]{defender};
+		}
+		if(actionName.startsWith("deadbang"))
+		{
+			rangeModifier = DEAD_BANG_RANGE_REDUCTION;
+		}
+		else if(actionName.startsWith("focusfire"))
+		{
+			areaModifier = FOCUS_FIRE_CONE_REDUCTION;
+		}
+	}		
+	
+	obj_id[] defenders = null;
+	switch(weapon.hvyWeaponType)
+	{
+		case TYPE_LAUNCHER_PISTOL:
+			defenders = pvpGetTargetsInRange(attacker, defender, LAUNCHER_PISTOL_AOE_RADIUS * areaModifier);
+			break;	
+		case TYPE_LAVA_CANNON:
+			defenders = pvpGetTargetsInRange(attacker, defender, LAVA_CANNON_AOE_RADIUS * areaModifier);
+			break;			
+		case TYPE_FLAME_THROWER:
+			defenders = pvpGetTargetsInCone(attacker, attacker, defender, weapon.maxRange * rangeModifier, FLAME_THROWER_CONE_ANGLE * areaModifier);
+			break;		
+		case TYPE_HEAVY_FLAME_THROWER:
+			defenders = pvpGetTargetsInCone(attacker, attacker, defender, weapon.maxRange * rangeModifier, HEAVY_FLAME_THROWER_CONE_ANGLE * areaModifier);
+			break;
+		case TYPE_HEAVY_PARTICLE_BEAM:
+			defenders = pvpGetTargetsInCone(attacker, attacker, defender, weapon.maxRange * rangeModifier, PARTICLE_BEAM_CONE_ANGLE * areaModifier);
+			// switch the first and last elements so that the animation looks right (punch-through illusion)
+			// assuming that the last element in the array is the furthest target
+			if(defenders != null && defenders.length > 1)
+			{
+				obj_id temp = defenders[0];
+				defenders[0] = defenders[defenders.length-1];
+				defenders[defenders.length-1] = temp;
+			}
+			break;
+		case TYPE_HEAVY_ACID_BEAM:
+			defenders =  pvpGetTargetsInRange(attacker, defender, HVY_ACID_BEAM_AOE_RADIUS * areaModifier);
+			break;
+		case TYPE_LIGHTNING_BEAM_CANON:
+			defenders =  pvpGetTargetsInRange(attacker, defender, HVY_LIGHTNING_BEAM_AOE_RADIUS * areaModifier);
+			break;
+		default:
+			defenders = new obj_id[]{defender};
+			break;
+	}
+
+	return defenders;
+}
+
+//
+//  This method is called by combat_heavy_weapon.script successful attack message handler as a result
+//  of a successful heavy weapon attack.  here we can perform any cleanup or perform any penalty actions
+//  if necessary
+//
+void finalizeHeavyWeaponAttack(attacker_data attacker, defender_data[] defenders, weapon_data weapon)
+{
+	effect_data dat = new effect_data();
+	defender_data defender = defenders[0];
+	switch(weapon.hvyWeaponType)
+	{
+		case TYPE_ACID_RIFLE:
+			float distance = getDistance(attacker.id, defender.id);
+			if(distance > (weapon.maxRange - weapon.minRange)/2)
+			{
+				return;
+			}
+
+			if(rand(1, 100) <= ACID_RIFLE_PUNISHMENT_CHANCE)
+			{
+				
+				sendSystemMessage(attacker.id, new string_id("cbt_spam", "acid_rifle_selfblind"));
+			}
+			break;
+	}
+	return;
+}
+
+//
+//  Gets called by the combat system after a hit @defender has been established and damage has been dealt.
+//  This method will apply any special weapon effects.
+//
+effect_data doHeavyWeaponDefenderEffect(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	effect_data rslt = new effect_data();
+	switch(weapon.hvyWeaponType)
+	{
+		case TYPE_LAUNCHER_PISTOL:
+			rslt = _doLauncherPistolAttack(attacker, defender, weapon);
+			break;
+		case TYPE_ROCKET_LAUNCHER:
+			rslt = _doRocketLauncherAttack(attacker, defender, weapon);
+			break;
+		case TYPE_FLAME_THROWER:
+		case TYPE_HEAVY_FLAME_THROWER:
+			rslt = _doFlameThrowerAttack(attacker, defender, weapon);
+			break;		
+		case TYPE_LAVA_CANNON:
+			rslt = _doLavaCannonAttack(attacker, defender, weapon);
+			break;
+		case TYPE_HEAVY_PARTICLE_BEAM:
+			rslt = _doHeavyParticleBeamAttack(attacker, defender, weapon);
+			break;
+		case TYPE_ACID_RIFLE:
+			rslt = _doAcidRifleAttack(attacker, defender, weapon);
+			break;
+		case TYPE_HEAVY_ACID_BEAM:
+			rslt = _doHeavyAcidBeamAttack(attacker, defender, weapon);
+			break;
+		case TYPE_LIGHTNING_BEAM_CANON:
+			rslt = _doLightningBeamCanonAttack(attacker, defender, weapon);
+			break;
+	}
+
+	return rslt;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////
+//  For all of the _do* below functions, we are only applying the special effects,
+//  that is, any effect that is not damage - damage will have already been applied
+//  by the time these functions get called via the combat loops
+/////////////////////////////////////////////////////////////////////////////////////
+
+
+effect_data _doLauncherPistolAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	// launcher pistol currently only does AOE damage, which is handled in the core combat loop
+	return new effect_data();
+}
+effect_data _doLavaCannonAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	// only does AOE damage, which is handled in the core combat loop
+	return new effect_data();
+}
+effect_data _doRocketLauncherAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	effect_data dat = new effect_data();
+	dat.posture = POSTURE_KNOCKED_DOWN;
+	return dat;
+}
+
+effect_data _doFlameThrowerAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	if(rand(1, 100) <= FLAME_THROWER_DOT_CHANCE)
+	{
+		_applyHealthStatFireDot(attacker, defender, weapon);
+	}
+	return new effect_data();
+}
+
+effect_data _doHeavyParticleBeamAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	return new effect_data();
+}
+
+effect_data _doAcidRifleAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	effect_data dat = new effect_data();
+	dat.states = new int[]{STATE_BLINDED};
+	dat.durations = new float[]{ACID_RIFLE_PUNISHMENT_DURATION};
+
+	float distance = getDistance(defender.id, attacker.id);
+	if(distance <= (weapon.maxRange-weapon.minRange)/2)
+	{
+		dat.stateChance = ACID_RIFLE_MID_BLIND_CHANCE;
+	}
+	else
+	{
+		dat.stateChance = ACID_RIFLE_MAX_BLIND_CHANCE;
+	}
+
+	return dat;
+}
+
+effect_data _doHeavyAcidBeamAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	effect_data dat = new effect_data();
+	dat.states = new int[]{STATE_BLINDED};
+	dat.durations = new float[]{HVY_ACID_BEAM_BLIND_DURATION};
+	dat.stateChance = HVY_ACID_BEAM_AOE_CHANCE;
+	return dat;
+}
+
+effect_data _doLightningBeamCanonAttack(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	if(rand(1, 100) <= LIGHTNING_BEAM_CANON_DOT_CHANCE)
+	{
+		_applyHealthStatFireDot(attacker, defender, weapon);
+		if(vehicle.isRidingVehicle(defender.id) && rand(1, 100) <= LIGHTNING_BEAM_VEHICLE_SLOW_CHANCE)
+		{
+			obj_id objVehicle = getMountId(defender.id);
+			vehicle.doTempMaxSpeedReduction(objVehicle, LIGHTNING_BEAM_VEHICLE_SLOW_FACTOR, LIGHTNING_BEAM_VEHICLE_SLOW_DURATION);
+			sendSystemMessage(defender.id, new string_id("cbt_spam", "vehicle_slow_lightning"));
+		}
+	}
+
+	return new effect_data();
+}
+
+void _applyHealthStatFireDot(attacker_data attacker, defender_data defender, weapon_data weapon)
+{
+	int duration = 0;
+	int potency	 = 0;
+	int strength = 0;
+	
+	switch(weapon.hvyWeaponType)
+	{
+		case TYPE_FLAME_THROWER:
+		case TYPE_LIGHTNING_BEAM_CANON:
+		{
+			duration = rand(15, 45);
+			potency = rand(125, 225);
+			strength = rand(200, 400);
+		}
+		break;
+		case TYPE_HEAVY_FLAME_THROWER:
+		{
+			duration = rand(15, 60);
+			potency	 = rand(150, 275);
+			strength = rand(300, 500);
+		}
+		break;
+	}
+	
+	dot.applyDotEffect(defender.id, attacker.id, dot.DOT_FIRE, "hvyWeaponDot_" + HEALTH + "_" + attacker.id, HEALTH, potency, strength, duration, true, null);
+}
+
+string getHeavyWeaponDotName(obj_id player, obj_id weapon, boolean singleTarget)
+{
+	int elementalDamageType = getWeaponElementalType(weapon);
+	
+	return getHeavyWeaponDotName(player, elementalDamageType, singleTarget);
+}
+
+string getHeavyWeaponDotName(obj_id player, weapon_data weaponData, boolean singleTarget)
+{
+	int elementalDamageType = weaponData.elementalType;
+
+	return getHeavyWeaponDotName(player, elementalDamageType, singleTarget);
+}
+
+string getHeavyWeaponDotName(obj_id player, int elementalDamageType, boolean singleTarget)
+{
+	int playerLevel = getLevel(player);
+
+	//bail out if there is no elemental weapon type 
+	if(elementalDamageType <= 0)
+		return null;
+	
+	string attackNameBase= "";
+	string attackNameType = "";
+	string attackNameLevel = "";
+	string finalAttackName = "";
+	
+	if (singleTarget)
+		attackNameBase = ATTACK_NAME_BASE_SINGLE;
+	else
+		attackNameBase = ATTACK_NAME_BASE_AREA;
+		
+	switch(elementalDamageType)
+	{	case DAMAGE_ENERGY:
+			attackNameType = "energy_";
+			break;
+		case DAMAGE_KINETIC:
+			attackNameType = "kinetic_";
+			break;
+		case DAMAGE_ELEMENTAL_HEAT:
+			attackNameType = "fire_";
+			break;
+		case DAMAGE_ELEMENTAL_COLD:
+			attackNameType = "cold_";
+			break;
+		case DAMAGE_ELEMENTAL_ACID:
+			attackNameType = "acid_";
+			break;
+		case DAMAGE_ELEMENTAL_ELECTRICAL:
+			attackNameType = "electrical_";
+			break;
+		default:
+			break;	
+	}
+	
+	if(playerLevel == 90)
+		attackNameLevel = "5";	
+	else if (playerLevel >= 80)
+		attackNameLevel = "4";
+	else if (playerLevel >= 70)
+		attackNameLevel = "3";
+	else if(playerLevel >= 60)
+		attackNameLevel = "2";
+	else if(playerLevel >= 50)
+		attackNameLevel = "1";	
+	//string should look like this co_hw_dot_fire_5 = level 90 fire dot
+	finalAttackName = attackNameBase + attackNameType + attackNameLevel;
+	
+	return 	finalAttackName;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

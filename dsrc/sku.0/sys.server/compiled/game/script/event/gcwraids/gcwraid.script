@@ -1,0 +1,549 @@
+include library.utils;
+include library.create;
+include library.locations;
+include library.skill;
+include library.chat;
+include library.badge;
+include java.util.StringTokenizer;
+include library.gcw;
+
+const string DATATABLE = "datatables/event/gcwraid/city_data.iff";
+
+trigger OnInitialize()
+{
+// Kill a shuttle if one exists due to server going down before it got cleaned up
+	if(hasObjVar(self, "event.gcwraids.shuttle") )
+	{
+		obj_id shuttle = getObjIdObjVar(self, "event.gcwraids.shuttle");
+		destroyObject(shuttle);
+	}
+
+	if(!hasScript(self, "event.gcwraids.cheerleader") )
+	{
+		attachScript(self, "event.gcwraids.cheerleader");
+	}
+
+	if(!hasScript(self, "systems.gcw.gcw_data_updater") )
+	{
+		attachScript(self, "systems.gcw.gcw_data_updater");
+	}
+
+
+	string setting = getConfigSetting("EventTeam", "gcwraid");
+
+	if(setting == null || setting == "" || setting != "true")
+		return SCRIPT_CONTINUE;
+
+	location here = getLocation(self);
+	string myCity = locations.getGuardSpawnerRegionName(here);
+	int numEntries = dataTableGetNumRows(DATATABLE);
+
+	if(myCity == null || myCity == "")
+		return SCRIPT_CONTINUE;
+
+// Event does not occur currently in the following ghost towns.
+	if(myCity == "@corellia_region_names:bela_vistal" || myCity == "@naboo_region_names:moenia")
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasObjVar(self, "auto_invasion.reference_number") )
+	{
+		for(int i = 0; i < numEntries; i++)
+		{
+			string thisCity = dataTableGetString(DATATABLE, i, "CITY");
+			if(thisCity.equals(myCity))
+			{
+				setObjVar(self, "auto_invasion.reference_number", i);	
+			}
+		}
+	}
+
+
+	if(!hasObjVar(self, "auto_invasion.reference_number") )
+		return SCRIPT_CONTINUE;
+
+	int referenceNumber = getIntObjVar(self, "auto_invasion.reference_number");
+	float minInvasionTime = dataTableGetFloat(DATATABLE, referenceNumber, "MINTIME");
+	float timeChunkSize = dataTableGetFloat(DATATABLE, referenceNumber, "TIMECHUNKSIZE");
+	int numTimeChunk = dataTableGetInt(DATATABLE, referenceNumber, "NUMTIMECHUNK");
+	float rightNow = getGameTime();
+
+	if(!hasObjVar(self, "auto_invasion.next_invasion_time") )
+	{
+		float nextInvasionTime = ( rand(1, numTimeChunk) * timeChunkSize ) + minInvasionTime + rightNow;
+		setObjVar(self, "auto_invasion.next_invasion_time", nextInvasionTime);
+	}
+
+	setObjVar(self, "auto_invasion.invasion_active", 0);
+	setObjVar(self, "auto_invasion.testing_multiplier", 1);
+
+	messageTo(self, "invasionTimerPing", null, 30, false);
+
+	messageTo(self, "endInvasion", null, 1, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler invasionTimerPing()
+{
+	if(!hasObjVar(self, "auto_invasion.next_invasion_time") )
+		return SCRIPT_CONTINUE;
+
+	float rightNow = getGameTime();
+	float nextInvasionTime = getFloatObjVar(self, "auto_invasion.next_invasion_time");
+	int invasionActive = getIntObjVar(self, "auto_invasion.invasion_active");
+
+	if(invasionActive == 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(rightNow > nextInvasionTime && invasionActive == 0)
+	{
+		// Raid or a cheerleader?
+		int roll = rand(0, 100);
+		if(roll < 66)
+			messageTo(self, "startCheerleaderEvent", null, 1, false);
+		else
+			messageTo(self, "startInvasion", null, 1, false);
+
+		setObjVar(self, "auto_invasion.invasion_active", 1);
+		return SCRIPT_CONTINUE;	
+	}
+
+	else
+	{
+		messageTo(self, "invasionTimerPing", null, 3600, false);	//******** SHOULD BE 1 HOUR ON FINAL
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startInvasion()
+{
+
+	if(!hasObjVar(self, "auto_invasion.reference_number") )
+		return SCRIPT_CONTINUE;
+
+	removeObjVar(self, "auto_invasion.next_invasion_time");
+
+	int referenceNumber = getIntObjVar(self, "auto_invasion.reference_number");
+
+	float imp_r = gcw.getImperialRatio(self);
+	float reb_r = gcw.getRebelRatio(self);
+	string invasionTable = dataTableGetString(DATATABLE, referenceNumber, "INV1");
+
+	if(reb_r >= imp_r)
+		invasionTable = dataTableGetString(DATATABLE, referenceNumber, "INV1");
+	else
+		invasionTable = dataTableGetString(DATATABLE, referenceNumber, "INV2");
+
+// Bestine and Anchorhead are always controlled by the same side
+
+	location here = getLocation(self);
+	string myCity = locations.getGuardSpawnerRegionName(here);
+
+	if(myCity == "@tatooine_region_names:bestine")
+		invasionTable = dataTableGetString(DATATABLE, referenceNumber, "INV2");
+
+	if(myCity == "@tatooine_region_names:anchorhead")
+		invasionTable = dataTableGetString(DATATABLE, referenceNumber, "INV1");
+
+	if(invasionTable == null || invasionTable == "")
+		return SCRIPT_CONTINUE;
+
+// Pick a random difficulty
+
+	int difficulty = rand(1, 100);
+
+	int mobMin = 0;
+	int mobMax = 18;
+
+// Noob 5%
+	if(difficulty <= 5)
+	{
+		mobMin = 0;
+		mobMax = 8;
+	}
+
+// Noob - Novice Elite 15%
+	if(difficulty >= 6 && difficulty <= 20)
+	{
+		mobMin = 8;
+		mobMax = 18;
+	}
+
+// Single Elite 25%
+	if(difficulty >= 21 && difficulty <= 45)
+	{
+		mobMin = 18;
+		mobMax = 33;
+	}
+
+// Master Elite - Dual Elite 25%
+	if(difficulty >= 46 && difficulty <= 70)
+	{
+		mobMin = 33;
+		mobMax = 45;
+	}
+
+// Dual Elite 25%
+	if(difficulty >= 71 && difficulty <= 95)
+	{
+		mobMin = 36;
+		mobMax = 46;
+	}
+
+// Completely Random 5%
+	if(difficulty >= 96 && difficulty <= 100)
+	{
+		mobMin = 0;
+		mobMax = 46;
+	}
+
+// Get spawn locs
+
+	string locTable = dataTableGetString(DATATABLE, referenceNumber, "LOCS");
+	string destTable = dataTableGetString(DATATABLE, referenceNumber, "DEST");
+	int locTableLength = dataTableGetNumRows(locTable);
+	int destTableLength = dataTableGetNumRows(destTable);
+	setObjVar(self, "auto_invasion.loc_table_length", locTableLength);
+	setObjVar(self, "auto_invasion.dest_table_length", destTableLength);
+
+	for(int i = 0; i < locTableLength; i++)
+	{
+		location loc = getLocation(self);
+		loc.x = dataTableGetFloat(locTable, i, "SPAWN_X");
+		loc.y = dataTableGetFloat(locTable, i, "SPAWN_Y");
+		loc.z = dataTableGetFloat(locTable, i, "SPAWN_Z");
+		setObjVar(self, "auto_invasion.spawn_loc_" + i, loc);
+	}
+
+// Get spawn destinations
+
+	for(int i = 0; i < destTableLength; i++)
+	{
+		location dest = getLocation(self);
+		dest.x = dataTableGetFloat(destTable, i, "DEST_X");
+		dest.y = dataTableGetFloat(destTable, i, "DEST_Y");
+		dest.z = dataTableGetFloat(destTable, i, "DEST_Z");
+		setObjVar(self, "auto_invasion.dest_off_" + i, dataTableGetFloat(destTable, i, "DEST_OFF") );
+		setObjVar(self, "auto_invasion.spawn_dest_" + i, dest);
+	}
+
+
+	int maxWaves = dataTableGetInt(invasionTable, 0, "NUMWAVES");
+	int spawnDelay = dataTableGetInt(invasionTable, 0, "SPAWNDELAY");
+	int badgeAwarded = dataTableGetInt(invasionTable, 0, "BADGE");
+
+	setObjVar(self, "auto_invasion.badge_awarded", badgeAwarded);
+	setObjVar(self, "auto_invasion.spawn_delay", spawnDelay);
+	setObjVar(self, "auto_invasion.invasion_table", invasionTable);
+	setObjVar(self, "auto_invasion.max_waves", maxWaves);
+	setObjVar(self, "auto_invasion.current_wave", 0);
+	setObjVar(self, "auto_invasion.spawn_number", 1);
+	setObjVar(self, "auto_invasion.dest_table", destTable);
+	setObjVar(self, "auto_invasion.mob_min_index", mobMin);
+	setObjVar(self, "auto_invasion.mob_max_index", mobMax);
+
+	messageTo(self, "launchWave", null, 1, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler launchWave()
+{
+	string invasionTable = getStringObjVar(self, "auto_invasion.invasion_table");
+	int currentWave = getIntObjVar(self, "auto_invasion.current_wave");
+	int maxWaves = getIntObjVar(self, "auto_invasion.max_waves");
+	int numberDead = 0;
+	string startMessage = dataTableGetString(invasionTable, 0, "SYSMESSTART");
+	string endMessage = dataTableGetString(invasionTable, 0, "SYSMESEND");
+
+	if(currentWave == maxWaves)
+	{
+		announceStatusToPlayers(self, endMessage);
+		messageTo(self, "endInvasion", null, 1, false);
+		return SCRIPT_CONTINUE;	
+	}
+
+	if(currentWave == 0)
+	{
+		announceStatusToPlayers(self, startMessage);
+	}
+
+	currentWave ++;
+	setObjVar(self, "auto_invasion.current_wave", currentWave);
+	setObjVar(self, "auto_invasion.spawn_number", 1);
+	setObjVar(self, "auto_invasion.done_spawning", 0);
+	setObjVar(self, "auto_invasion.number_dead", numberDead);
+
+	messageTo(self, "startSpawning", null, 1, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startSpawning()
+{
+	string invasionTable = getStringObjVar(self, "auto_invasion.invasion_table");
+
+	if(invasionTable == "null" || invasionTable == "")
+	{
+		messageTo(self, "endInvasion", null, 1, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	int currentWave = getIntObjVar(self, "auto_invasion.current_wave");
+	int spawnNum = getIntObjVar(self, "auto_invasion.spawn_number");	
+	int spawnDelay = dataTableGetInt(invasionTable, 0, "SPAWNDELAY");
+	int maxWaveTimeMinutes = dataTableGetInt(invasionTable, 0, "MAXWAVETIME");
+	int maxWaveTime = maxWaveTimeMinutes * 60;
+	int mobMinIndex = getIntObjVar(self, "auto_invasion.mob_min_index");
+	int mobMaxIndex = getIntObjVar(self, "auto_invasion.mob_max_index");
+	int doneSpawning = getIntObjVar(self, "auto_invasion.done_spawning");
+	string script = dataTableGetString(invasionTable, 0, "SCRIPT");
+
+	if(doneSpawning == 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+// Pick spawn point and destination
+
+	int locTableLength = getIntObjVar(self, "auto_invasion.loc_table_length") - 1;
+	int locIndex = rand(0, locTableLength);
+	location spawnLoc = getLocationObjVar(self, "auto_invasion.spawn_loc_" + locIndex);
+
+	int destTableLength = getIntObjVar(self, "auto_invasion.dest_table_length") - 1;
+	int destIndex = rand(0, destTableLength);
+	location dest = getLocationObjVar(self, "auto_invasion.spawn_dest_" + destIndex);
+	float destOff = getFloatObjVar(self, "auto_invasion.dest_off_" + destIndex);
+	
+	if(spawnLoc == null)
+		spawnLoc = getLocationObjVar(self, "auto_invasion.spawn_loc_0");
+
+	if(dest == null)
+		dest = getLocationObjVar(self, "auto_invasion.spawn_dest_0");
+
+	if(destOff == -1)
+		destOff = getFloatObjVar(self, "auto_invasion.dest_off_" + destIndex);
+
+	int mobIndex = rand(mobMinIndex, mobMaxIndex);
+
+	string spawnType = dataTableGetString(invasionTable, mobIndex, "SPAWN");
+	
+	obj_id spawn = create.object(spawnType, spawnLoc);
+	
+	if(isIdValid(spawn) )
+	{
+		setObjVar(spawn, "auto_invasion.dest_offset", destOff);
+		setObjVar(spawn, "auto_invasion.target", dest);
+		setObjVar(spawn, "auto_invasion.my_number", spawnNum);
+		setObjVar(spawn, "auto_invasion.mom", self);
+
+		attachScript(spawn, script);
+		setObjVar(self, "auto_invasion.spawn" + spawnNum, spawn);
+		spawnNum ++;
+	}
+
+	setObjVar(self, "auto_invasion.spawn_number", spawnNum);
+
+	if(spawnNum > 19)
+	{
+		params.put("currentWave", currentWave);
+		messageTo(self, "waveTimeLimitCheck", params, maxWaveTime, false);
+		setObjVar(self, "auto_invasion.done_spawning", 1);
+		
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		messageTo(self, "startSpawning", null, spawnDelay, false);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler invaderDied()
+{
+	obj_id deadGuy = params.getObjId("deadGuy");
+	int myNumber = params.getInt("myNumber");
+	removeObjVar(self, "auto_invasion.spawn" + myNumber);
+	int spawnNum = getIntObjVar(self, "auto_invasion.spawn_number");
+	int numberDead = 0;
+	int doneSpawning = getIntObjVar(self, "auto_invasion.done_spawning");
+	string invasionTable = getStringObjVar(self, "auto_invasion.invasion_table");
+	int timeBetweenWaves = dataTableGetInt(invasionTable, 0, "TIMEBETWEENWAVES");
+
+	if(doneSpawning == 1)
+	{
+		for(int i = 1; i <= spawnNum; i++)
+		{
+			obj_id possibleInvader = getObjIdObjVar(self, "auto_invasion.spawn" + i);
+	
+			if(!isIdValid(possibleInvader) )
+			{
+				numberDead++;
+				setObjVar(self, "auto_invasion.number_dead", numberDead);
+			}
+		}
+	}
+	
+	if(doneSpawning == 1 && numberDead >= spawnNum)
+	{
+		messageTo(self, "launchWave", null, timeBetweenWaves * 60, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler waveTimeLimitCheck()
+{
+	int lastWave = params.getInt("currentWave");
+	int currentWave = getIntObjVar(self, "auto_invasion.current_wave");
+	int spawnNum = getIntObjVar(self, "auto_invasion.spawn_number");
+	int invasionActive = getIntObjVar(self, "auto_invasion.invasion_active");
+
+	if(lastWave == currentWave)	//Wave didn't advance. Kill any creatures left and advance.
+	{
+		for(int i = 1; i <= spawnNum; i++)
+		{
+			obj_id spawn = getObjIdObjVar(self, "auto_invasion.spawn" + i);
+			
+			if(isIdValid(spawn) )
+			{
+				messageTo(spawn, "goDie", null, 1, false);
+			}		
+
+			removeObjVar(self, "auto_invasion.spawn" + i);
+		}
+
+		if(invasionActive == 1)
+			messageTo(self, "launchWave", null, 1, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler endInvasion()
+{
+	setObjVar(self, "auto_invasion.invasion_active", 0);
+
+// Kill off stragglers and their references
+	int spawnNum = getIntObjVar(self, "auto_invasion.spawn_num");
+
+	for(int i = 1; i <= 20; i++)
+	{
+		obj_id spawn = getObjIdObjVar(self, "auto_invasion.spawn" + i);
+		
+		if(isIdValid(spawn) )
+		{
+			messageTo(spawn, "goDie", null, 1, false);
+		}		
+
+		removeObjVar(self, "auto_invasion.spawn" + i);
+	}
+
+//Award badge if applicable
+
+	int badgeAwarded = getIntObjVar(self, "auto_invasion.badge_awarded");
+	string badgeName = getCollectionSlotName(badgeAwarded);
+	
+	if((badgeAwarded > 0) && (badgeName != null) && (badgeName.length() > 0))
+	{
+		obj_id[] objPlayers = getPlayerCreaturesInRange(self, 255);
+
+		if (objPlayers != null && objPlayers.length>0)
+		{
+			for(int i = 0; i < objPlayers.length; i++)
+			{
+				badge.grantBadge(objPlayers[i], badgeName);
+			}
+		}		
+	}
+
+
+// Killing objvars set during startInvasion and launchWave
+
+	removeObjVar(self, "auto_invasion.spawn_delay");
+	removeObjVar(self, "auto_invasion.max_waves");
+	removeObjVar(self, "auto_invasion.current_wave");
+	removeObjVar(self, "auto_invasion.spawn_number");
+	removeObjVar(self, "auto_invasion.mob_min_index");
+	removeObjVar(self, "auto_invasion.mob_max_index");
+	removeObjVar(self, "auto_invasion.done_spawning");
+	removeObjVar(self, "auto_invasion.number_dead");
+
+// Deactivating invasion and setting next invasion time
+
+	int referenceNumber = getIntObjVar(self, "auto_invasion.reference_number");
+	float minInvasionTime = dataTableGetFloat(DATATABLE, referenceNumber, "MINTIME");
+	float timeChunkSize = dataTableGetFloat(DATATABLE, referenceNumber, "TIMECHUNKSIZE");
+	int numTimeChunk = dataTableGetInt(DATATABLE, referenceNumber, "NUMTIMECHUNK");
+	float rightNow = getGameTime();
+
+	if(!hasObjVar(self, "auto_invasion.next_invasion_time") )
+	{
+		float nextInvasionTime = ( rand(1, numTimeChunk) * timeChunkSize ) + minInvasionTime + rightNow;
+		setObjVar(self, "auto_invasion.next_invasion_time", nextInvasionTime);
+	}
+
+	setObjVar(self, "auto_invasion.testing_multiplier", 1);
+	messageTo(self, "invasionTimerPing", null, 2700, false);	//********* SHOULD BE 45 MINUTES ON FINAL
+	
+	return SCRIPT_CONTINUE;
+}
+
+void announceStatusToPlayers(obj_id self, string messageId)
+{
+	obj_id[] objPlayers = getPlayerCreaturesInRange(self, 256.0f);	
+	
+	if (objPlayers != null && objPlayers.length>0)
+	{
+		for(int i = 0; i < objPlayers.length; i++)
+		{
+			sendSystemMessage(objPlayers[i], new string_id("auto_invasion", messageId));
+		}
+	}	
+
+}
+
+trigger OnHearSpeech(obj_id objSpeaker, string strText)	// Added for testing
+{
+
+	if(isGod(objSpeaker))
+	{
+		if(toLower(strText).startsWith("forcegcwraid") )
+		{
+
+			int invasionActive = getIntObjVar(self, "auto_invasion.invasion_active");
+
+			if(invasionActive == 0)
+			{
+				messageTo(self, "startInvasion", null, 1, false);
+				setObjVar(self, "auto_invasion.invasion_active", 1);
+			}
+		}
+
+//		if(toLower(strText).startsWith("endinvasionnow") )
+//		{
+//			messageTo(self, "endInvasion", null, 1, false);
+//		}
+
+		if(toLower(strText).startsWith("endcheerleaderevent") )
+		{
+			messageTo(self, "everyoneWalkBack", null, 1, false);
+		}
+
+		if(toLower(strText).startsWith("forcecheerleaderevent") )
+		{
+			messageTo(self, "startCheerleaderEvent", null, 1, false);
+			setObjVar(self, "auto_invasion.invasion_active", 1);
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}

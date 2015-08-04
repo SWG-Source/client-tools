@@ -1,0 +1,1017 @@
+//this is the cybernetics scriptlib for the ep3 expansion
+include library.armor;
+include library.buff;
+include library.hue;
+include library.money;
+include library.movement;
+include library.pclib;
+include library.sui;
+include library.utils;
+include java.util.HashSet;
+include java.util.Vector;
+/**
+*copied from base_class.java for easy reference.
+*/
+//public static final int CYBERNETICS_UI_OPENTYPE_INSTALL = 0;
+//public static final int CYBERNETICS_UI_OPENTYPE_UNINSTALL = 1;
+//public static final int CYBERNETICS_UI_OPENTYPE_REPAIR = 2;
+//public static final int CYBERNETICS_UI_OPENTYPE_VIEW = 3;
+//
+//public static final int CYBERNETICS_UI_CHANGETYPE_INSTALL = 0;
+//public static final int CYBERNETICS_UI_CHANGETYPE_UNINSTALL = 1;
+//public static final int CYBERNETICS_UI_CHANGETYPE_REPAIR = 2;
+
+const string CYBORG_TABLE 		= "datatables/cybernetic/cybernetic.iff";
+
+//generic cybernetic limbs
+const string CYBORG_LEGS 		= "object/tangible/wearables/cybernetic/s01/cybernetic_s01_legs.iff";
+const string CYBORG_LEFT_ARM		= "object/tangible/wearables/cybernetic/s01/cybernetic_s01_arm_l.iff";
+const string CYBORG_RIGHT_ARM		= "object/tangible/wearables/cybernetic/s01/cybernetic_s01_arm_r.iff";
+const string CYBORG_TORSO		= "object/tangible/wearables/cybernetic/s01/cybernetic_s01_torso.iff";
+
+const int MAX_INSTALLED = 4;
+//Constants for the new Cybernetic Point Limiting System.
+const int CYBERNETIC_TORSO_COST = 6;
+const int CYBERNETIC_LEGS_COST = 5;
+const int CYBERNETIC_FULL_ARM_COST = 3;
+const int CYBERNETIC_FOREARM_COST = 2;
+const int CYBERNETIC_HAND_COST = 1;
+
+//cybernetics UI PID
+const string PID_VAR 			= "cybernetics";
+
+void installCybernetics(obj_id player, obj_id npc)
+{
+	if(sui.hasPid(player, cybernetic.PID_VAR))
+	{
+		int pid = sui.getPid(player, PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	showCyberneticsPage(player, npc, CYBERNETICS_UI_OPENTYPE_INSTALL);
+}
+
+void installCyberneticItem(obj_id player, obj_id npc, obj_id item)
+{
+	if ( !hasScript( player, "cybernetic.cybernetic_player") )
+		attachScript( player, "cybernetic.cybernetic_player" );
+
+	if(hasObjVar(item, "biolink.id"))
+	{
+		obj_id biolink_id = getObjIdObjVar(item, "biolink.id");
+		if((player != biolink_id) && (biolink_id != utils.OBJ_ID_BIO_LINK_PENDING) && (biolink_id != null))
+		{
+			sendSystemMessage(player,  new string_id("ep3/cybernetic", "bio_link_mismatch"));
+			return;
+		}
+	}
+
+	int amt = dataTableGetInt( CYBORG_TABLE, getTemplateName( item ), "installCost" );
+
+	verifyInstallPayment( npc, player, amt, item );
+}
+
+void unInstallCybernetics(obj_id player, obj_id npc)
+{
+	if ( !hasScript( player, "cybernetic.cybernetic_player") )
+		attachScript( player, "cybernetic.cybernetic_player" );
+
+	if(sui.hasPid(player, cybernetic.PID_VAR))
+	{
+		int pid = sui.getPid(player, cybernetic.PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	showCyberneticsPage(player, npc, CYBERNETICS_UI_OPENTYPE_UNINSTALL);
+}
+
+void unInstallCyberneticItem(obj_id player, obj_id npc, obj_id item)
+{
+	int amt = dataTableGetInt( CYBORG_TABLE, getTemplateName( item ), "removeCost" );
+	verifyUnInstallPayment( npc, player, amt, item );
+}
+
+void repairCybernetics(obj_id player, obj_id npc)
+{
+	if(sui.hasPid(player, cybernetic.PID_VAR))
+	{
+		int pid = sui.getPid(player, cybernetic.PID_VAR);
+		forceCloseSUIPage(pid);
+	}
+	
+	showCyberneticsPage(player, npc, CYBERNETICS_UI_OPENTYPE_REPAIR);
+}
+
+void repairCyberneticItem(obj_id player, obj_id npc, obj_id item)
+{
+	int costPerPoint = dataTableGetInt( CYBORG_TABLE, getTemplateName( item ), "repairCost" );
+
+	//verifyRepairPayment( npc, player, amt, item );
+	int itemHps = getHitpoints( item );
+	int maxHps = getMaxHitpoints( item );
+	int amt = (maxHps - itemHps) * costPerPoint;
+	maxHps--;
+	if ( itemHps >= maxHps || maxHps == 1 || amt <= 0 )
+	{
+	 	sendSystemMessage( player, new string_id( "ep3/cybernetic", "no_repair_needed" ) );
+	}
+	else
+	{
+		verifyRepairPayment( npc, player, amt, item );
+	}
+}
+
+boolean hasMaxInstalled(obj_id player)
+{
+	// Turning this off for now unless Design decides they want to do the Psychosis game thing again.
+	/*int count = getPlayerInstalledCyberneticCount(player);
+	//Cybernetic Psychosis Resistance skillMod
+	int playerCyberCount = getEnhancedSkillStatisticModifierUncapped(player, "cybernetic_psychosis_resistance");
+
+	LOG("sissynoid", "playerCyberCount - Modifier: " + playerCyberCount);
+
+	//current count vs. skillMod
+	if(count >= playerCyberCount)
+	{
+		LOG("sissynoid", "Player has too many Cybernetics installed to have more.  SkillModCount(" + playerCyberCount + ") InstalledCount(" + count + ")");
+		return true;
+	}*/
+	return false;
+}
+
+boolean oldHasMaxInstalled( obj_id player )
+{
+	obj_id[] contents = getContents( player );
+	if ( contents == null || contents.length == 0 )
+		return false;
+
+	int count = 0;
+
+	for(int intI = 0; intI < contents.length; intI++)
+	{
+		string templateName = getTemplateName(contents[intI]);
+		if(hasScript(contents[intI], "cybernetic.cybernetic_item")  || templateName.indexOf("cybernetic") > -1)
+		{
+			++count;
+			if ( count >= MAX_INSTALLED )
+				return true;
+		}
+	}
+	return false;
+}
+
+
+int getPlayerInstalledCyberneticCount(obj_id player)
+{
+	//Get all the items worn by the player - this includes A-Tab Items.
+	obj_id[] allSlots = getAllWornItems(player, false);
+
+	//we have duplicates in allSlots because getAllWornItems returns an obj_id for each slot that
+	//is occupied - we need to get rid of these...push to vector and back is the sloppy way.
+	HashSet duplicateEater = new HashSet();
+
+	for(int i = 0; i < allSlots.length; i++)
+		duplicateEater.add(allSlots[i]);
+
+	obj_id[] contents = new obj_id[duplicateEater.size()];
+	duplicateEater.toArray(contents);
+
+	//Now - contents[] has what we are looking for -
+	int count = 0;
+
+	LOG("sissynoid", "contents length: " + contents.length);
+	for(int intI = 0; intI < contents.length; intI++)
+	{
+		LOG("sissynoid", "Contents: (" + contents[intI] + ") ::::: " + getTemplateName(contents[intI]));
+		string templateName = getTemplateName(contents[intI]);
+		//LOG("sissynoid", "CONTENTS = (" + contents[intI] + ") Template: " + getTemplateName(contents[intI]));
+		if(hasScript(contents[intI], "cybernetic.cybernetic_item")  || templateName.indexOf("cybernetic") > -1)
+		{
+			count += getCyberneticPointValue(contents[intI]);
+		}
+	}
+	LOG("sissynoid", "Cybernetic Count - " + count);
+
+	return count;
+}
+
+int getCyberneticPointValue(obj_id object)
+{
+	int value = 0;
+	int cyberneticGot = getGameObjectType(object);
+
+	if(isGameObjectTypeOf(object, GOT_cybernetic_torso))
+	{
+		value += CYBERNETIC_TORSO_COST;
+		LOG("sissynoid", "Torso Found: " + object);
+	}
+	if(isGameObjectTypeOf(object, GOT_cybernetic_legs))
+	{
+		value += CYBERNETIC_LEGS_COST;
+		LOG("sissynoid", "Legs Found: " + object);
+	}
+	if(isGameObjectTypeOf(object, GOT_cybernetic_arm))
+	{
+		value += CYBERNETIC_FULL_ARM_COST;
+		LOG("sissynoid", "Full Arm Found: " + object);
+	}
+	if(isGameObjectTypeOf(object, GOT_cybernetic_forearm))
+	{
+		value += CYBERNETIC_FOREARM_COST;
+		LOG("sissynoid", "Forearm Found: " + object);
+	}
+	if(isGameObjectTypeOf(object, GOT_cybernetic_hand))
+	{
+		value += CYBERNETIC_HAND_COST;
+		LOG("sissynoid", "Hand Found: " + object);
+	}
+
+	return value;
+}
+
+void applyDeathCybernetic( obj_id player )
+{
+	CustomerServiceLog("Death", "Player("+ player +") has entered 'applyDeathCybernetic' options.");
+	if ( rand(1,100) > 5 )
+		return;//only a 5% chance this will happen.
+	CustomerServiceLog("Death", "Player("+ player +") has passed the 'applyDeathCybernetic' random roll!");
+	//see if the player is on a hard planet:
+	location loc = getLocation(player);
+	string area = loc.area;
+	int sceneCRC = getStringCrc(area);
+	if ( area.indexOf( "space_" )!= -1 )
+		return;//don't apply death penalty cybernetics in space
+
+	//debugSpeakMsg( player, "sceneCRC is " + sceneCRC );
+	switch ( sceneCRC )
+	{
+		case ##"tatooine":
+		case ##"corellia":
+		case ##"naboo":
+		case ##"rori":
+		case ##"talus":
+				return;
+		default:
+			break;//don't do anything on planets above
+	}
+
+	if ( hasCyberneticItem( player ) )
+		return;//you already have a piece.
+
+	obj_id inv = utils.getInventoryContainer(player);
+	if ( !isIdValid(inv) )
+		return;//with no inventory, there's nothing we can do.
+
+
+	if ( rand(0,99) < 25 )
+	{
+		//legs, 25% of the time.
+		/** Verify the clothes currently equipped here can be removed: **/
+		obj_id shoes = getObjectInSlot( player, "shoes");
+		if ( isIdValid(shoes) )
+		{
+			if ( canPutIn( shoes, inv )!=0 )
+			{
+				CustomerServiceLog("Death", "Player("+ player +") was supposed to receive Cybernetics, but we were unable to unequip his Shoes("+ shoes +").");
+				return;//if we can't take these off, you can't be undressed.
+			}
+		}
+
+		obj_id pants1 = getObjectInSlot( player, "pants1");
+		if ( isIdValid(pants1) )
+		{
+			if ( canPutIn( pants1, inv )!=0 )
+			{
+				CustomerServiceLog("Death", "Player("+ player +") was supposed to receive Cybernetics, but we were unable to unequip his Pants1("+ pants1 +").");
+				return;//if we can't take these off, you can't be undressed.
+			}
+		}
+		obj_id pants2 = getObjectInSlot( player, "pants2");
+		if ( isIdValid(pants2) )
+		{
+			if ( canPutIn( pants2, inv )!=0 )
+			{
+				CustomerServiceLog("Death", "Player("+ player +") was supposed to receive Cybernetics, but we were unable to unequip his Pants2("+ pants2 +").");
+				return;//if we can't take these off, you can't be undressed.
+			}		}
+
+		/** Now remove them **/
+		if ( isIdValid(shoes) )
+		{
+			if (!putIn( shoes, inv ))
+			{
+				CustomerServiceLog("Death", "Player("+ player +") was supposed to receive Cybernetics, but we failed the second check to un-equip his Shoes("+ shoes +").");
+				return;//well this should NOT have happened. canPutIn said we COULD!
+			}
+		}
+
+		if ( isIdValid(pants1) )
+		{
+			if (!putIn( pants1, inv ))
+			{
+				CustomerServiceLog("Death", "Player("+ player +") was supposed to receive Cybernetics, but we failed the second check to un-equip his Pants1("+ pants1 +").");
+				return;//well this should NOT have happened. canPutIn said we COULD!
+			}		}
+
+		if ( isIdValid(pants2) )
+		{
+			if (!putIn( pants2, inv ))
+			{
+				CustomerServiceLog("Death", "Player("+ player +") was supposed to receive Cybernetics, but we failed the second check to un-equip his Pants2("+ pants2 +").");
+				return;//well this should NOT have happened. canPutIn said we COULD!
+			}		}
+
+		/** Now create the cyborg legs **/
+		obj_id newCybernetic = createObject(CYBORG_LEGS, player, "");//first available slot, yo.
+		CustomerServiceLog("Death", "Player("+ player +") just received Cyborg Legs("+ newCybernetic +")");
+	}
+	else
+	{
+		//an arm, 75% of the time
+
+		//pick a random arm:
+		string BracerUpperName = "bracer_upper_l";
+		string BracerLowerName = "bracer_lower_l";
+		int rightArm = rand(0,1);
+		if ( rightArm==1 )
+		{
+			BracerUpperName = "bracer_upper_r";
+			BracerLowerName = "bracer_lower_r";
+		}
+
+		/** Verify the clothes currently equipped here can be removed: **/
+		obj_id upperBracer = getObjectInSlot( player, BracerUpperName);
+		if ( isIdValid(upperBracer) )
+		{
+			if ( canPutIn( upperBracer, inv )!=0 )
+				return;//if we can't take these off, you can't be undressed.
+		}
+
+		obj_id lowerBracer = getObjectInSlot( player, BracerLowerName);
+		if ( isIdValid(lowerBracer) )
+		{
+			if ( canPutIn( lowerBracer, inv )!=0 )
+				return;//if we can't take these off, you can't be undressed.
+		}
+
+		obj_id chest2 = getObjectInSlot( player, "chest2");
+		if ( isIdValid(chest2) )
+		{
+			if ( canPutIn( chest2, inv )!=0 )
+				return;//if we can't take these off, you can't be undressed.
+		}
+
+		/** Now remove them **/
+		if ( isIdValid(upperBracer) )
+		{
+			if (!putIn( upperBracer, inv ))
+				return;//well this should NOT have happened. canPutIn said we COULD!
+		}
+
+		if ( isIdValid(lowerBracer) )
+		{
+			if (!putIn( lowerBracer, inv ))
+				return;//well this should NOT have happened. canPutIn said we COULD!
+		}
+
+		if ( isIdValid(chest2) )
+		{
+			if (!putIn( chest2, inv ))
+				return;//well this should NOT have happened. canPutIn said we COULD!
+		}
+
+		/** Now create the cyborg arm **/
+		obj_id newCybernetic = obj_id.NULL_ID;
+		if ( rightArm==1 )
+			newCybernetic = createObject(CYBORG_RIGHT_ARM, player, "");//first available slot, yo.
+		else
+			newCybernetic = createObject(CYBORG_LEFT_ARM, player, "");//first available slot, yo.
+		CustomerServiceLog("Death", "Player("+ player +") just received a Cyborg Arm("+ newCybernetic +")");
+	}
+}
+
+boolean hasCyberneticItem( obj_id player )
+{
+	//we need to search the appearance tab as well.
+	//Get all the items worn by the player - this includes A-Tab Items.
+	obj_id[] allSlots = getAllWornItems(player, false);
+
+	//we have duplicates in allSlots because getAllWornItems returns an obj_id for each slot that
+	//is occupied - we need to get rid of these...push to vector and back is the sloppy way.
+	HashSet duplicateEater = new HashSet();
+
+	for(int i = 0; i < allSlots.length; i++)
+		duplicateEater.add(allSlots[i]);
+
+	obj_id[] contents = new obj_id[duplicateEater.size()];
+	duplicateEater.toArray(contents);
+
+	for(int intI = 0; intI < contents.length; intI++)
+	{
+		string templateName = getTemplateName(contents[intI]);
+		if((hasScript(contents[intI], "cybernetic.cybernetic_item") || templateName.indexOf("cybernetic") > -1) 
+		&& (!isGameObjectTypeOf(contents[intI], GOT_cybernetic_component)))
+				return true;
+	}
+
+	return false;
+}
+
+boolean hasCyberneticItemInInventory( obj_id player )
+{
+	obj_id inv = utils.getInventoryContainer(player);
+	if ( !isIdValid(inv) )
+		return false;//with no inventory, there's nothing we can do.
+
+	obj_id[] contents = getContents( inv );
+	if ( contents == null || contents.length == 0 )
+		return false;
+
+	for(int intI = 0; intI < contents.length; intI++)
+	{
+		string templateName = getTemplateName(contents[intI]);
+		if((hasScript(contents[intI], "cybernetic.cybernetic_item") || templateName.indexOf("cybernetic") > -1) 
+		&& (!isGameObjectTypeOf(contents[intI], GOT_cybernetic_component)))
+				return true;
+	}
+	return false;
+}
+
+boolean hasCyberneticsToRepair( obj_id player )
+{
+	return ( hasCyberneticItem( player ) || hasCyberneticItemInInventory( player ) );
+}
+
+obj_id[] getInstalledCybernetics( obj_id player )
+{
+	//we need to get A-Tab Cybernetics as well.
+	//Get all the items worn by the player - this includes A-Tab Items.
+	obj_id[] allSlots = getAllWornItems(player, false);
+
+	//we have duplicates in allSlots because getAllWornItems returns an obj_id for each slot that
+	//is occupied - we need to get rid of these...push to vector and back is the sloppy way.
+	HashSet duplicateEater = new HashSet();
+
+	for(int i = 0; i < allSlots.length; i++)
+		duplicateEater.add(allSlots[i]);
+
+	obj_id[] contents = new obj_id[duplicateEater.size()];
+	duplicateEater.toArray(contents);
+
+	Vector cyberneticItems = new Vector();
+	for(int intI = 0; intI < contents.length; intI++)
+	{
+		string templateName = getTemplateName(contents[intI]);
+		if(hasScript(contents[intI], "cybernetic.cybernetic_item") || templateName.indexOf("cybernetic") > -1)
+		{
+			cyberneticItems.addElement(contents[intI]);
+		}
+	}
+	if(cyberneticItems == null || cyberneticItems.size() < 1)
+		return null;
+
+	obj_id[] ret = new obj_id[cyberneticItems.size()];
+	cyberneticItems.toArray(ret);
+	return ret;
+}
+
+void applyCyberneticMods( obj_id player, obj_id cyberneticItem )
+{
+	string templateName = getTemplateName( cyberneticItem );
+	if ( dataTableSearchColumnForString(templateName, 0, CYBORG_TABLE)==-1)
+		return;	//don't do anything, this cybernetic is just a wearable thang.
+
+	utils.setScriptVar( cyberneticItem, "isSetup", true );
+
+	if ( !utils.hasScriptVar( player, "cyberneticItems" ))
+	{
+		string[] installedCybernetics = new string[1];
+		installedCybernetics[0]=templateName;
+		utils.setScriptVar( player, "cyberneticItems", installedCybernetics );
+	}
+	else
+	{
+		string[] installedCybernetics = utils.getStringArrayScriptVar( player, "cyberneticItems" );
+		string[] newInstalledCybernetics = new string[installedCybernetics.length+1];
+		newInstalledCybernetics = utils.copyArray( installedCybernetics, newInstalledCybernetics );
+		newInstalledCybernetics[ installedCybernetics.length ] = templateName;
+		utils.setScriptVar( player, "cyberneticItems", newInstalledCybernetics );
+	}
+
+	applyRunBoostMod( player, templateName );
+	grantSpecialCommands( player, templateName );
+}
+
+void removeCyberneticMods( obj_id player, obj_id cyberneticItem )
+{
+	//debugSpeakMsg( player, "********ARGH!**********");
+	string templateName = getTemplateName( cyberneticItem );
+	if ( dataTableSearchColumnForString(templateName, 0, CYBORG_TABLE)==-1)
+		return;//don't do anything, this cybernetic is just a wearable thang.
+
+	utils.removeScriptVar( cyberneticItem, "isSetup" );
+
+	if ( !utils.hasScriptVar( player, "cyberneticItems" ))
+	{
+		//debugSpeakMsg( player, "********NEVER SETUP**********");
+		return;//oops, this item wasn't ever setup!
+	}
+
+	string[] installedCybernetics = utils.getStringArrayScriptVar( player, "cyberneticItems" );
+	if ( installedCybernetics == null || installedCybernetics.length < 1 )
+	{
+		utils.removeScriptVar( player, "cyberneticItems" );//this is bad data
+		return;
+	}
+
+	//debugSpeakMsg( player, "********MADE IT THIS FAR**********");
+
+	if ( installedCybernetics.length == 1 )
+	{
+		if ( installedCybernetics[0].equals( templateName ) )
+		{
+			utils.removeScriptVar( player, "cyberneticItems" );//this was the only thing installed
+			removeRunBoostMod( player, templateName );
+			//debugSpeakMsg( player, "******************** revoking special commands for: "+templateName);
+			revokeSpecialCommands( player, templateName );
+		}
+		return;
+	}
+
+	//more than one thing was installed, so hang onto the rest of the list:
+	Vector newInstallList = new Vector();
+	for ( int i = 0; i < installedCybernetics.length; i++ )
+	{
+		if (!installedCybernetics[i].equals( templateName ))
+		{
+			newInstallList.addElement( installedCybernetics[i] );
+		}
+	}
+	if ( newInstallList == null || newInstallList.size() < 1 )
+	{
+		utils.removeScriptVar( player, "cyberneticItems" );//this should never happen.
+	}
+	else
+	{
+		string[] ret = new string[newInstallList.size()];
+		newInstallList.toArray(ret);
+		utils.setScriptVar( player, "cyberneticItems", ret );
+	}
+
+	removeRunBoostMod( player, templateName );
+	//debugSpeakMsg( player, "********************** revoking special commands for: "+templateName);
+	revokeSpecialCommands( player, templateName );
+
+}
+
+void setupArmorValues( obj_id cyberneticItem )
+{
+	string templateName = getTemplateName( cyberneticItem );
+
+	dictionary parms = dataTableGetRow(CYBORG_TABLE, templateName );
+	if ( parms == null )
+		return;//this thing doesn't exist in the cybernetics table.
+
+	float protectionAmount = parms.getFloat( "protectionAmount" );
+	float conditionAmount = parms.getFloat( "conditionAmount" );
+	//debugSpeakMsg( cyberneticItem, "setting up armor values" );
+	armor.setArmorDataPercent(cyberneticItem, -1, -1, protectionAmount, conditionAmount);
+}
+
+void applyRunBoostMod( obj_id player, string templateName )
+{
+	string moveBuff = dataTableGetString(CYBORG_TABLE, templateName, "moveRateBuff" );
+	if ( moveBuff == null || moveBuff == "" )
+		return;//no buff here
+	buff.applyBuff(player, moveBuff);
+}
+
+void removeRunBoostMod( obj_id player, string templateName )
+{
+	string moveBuff = dataTableGetString(CYBORG_TABLE, templateName, "moveRateBuff" );
+	if ( moveBuff == null || moveBuff == "" )
+		return;//no buff here
+	buff.removeBuff(player, moveBuff);
+}
+
+void grantSpecialCommands( obj_id player, string templateName )
+{
+	string specialCommands = dataTableGetString(CYBORG_TABLE, templateName, "specialCommand" );
+	if ( specialCommands == null || specialCommands == "" )
+		return;//no buff here
+
+	if (!hasCommand(player, specialCommands))
+		grantCommand(player, specialCommands);
+}
+
+void revokeSpecialCommands( obj_id player, string templateName )
+{
+	string specialCommands = dataTableGetString(CYBORG_TABLE, templateName, "specialCommand" );
+	if ( specialCommands == null || specialCommands == "" )
+	{
+		//debugSpeakMsg( player, "********NO BUFFS ******");
+		return;//no buff here
+	}
+
+	while ( hasCommand( player, specialCommands ))
+		revokeCommand(player, specialCommands);
+}
+
+void setHueColor( obj_id cyberneticItem )
+{
+	string templateName = getTemplateName( cyberneticItem );
+	int hueColor = dataTableGetInt(CYBORG_TABLE, templateName, "hue" );
+	if(hueColor > 0)
+		hue.setColor( cyberneticItem, "/private/index_color_1", hueColor);
+}
+
+float getThrowRangeMod( obj_id player, float maxRange )
+{
+	float rangeMod = (float)getSkillStatMod(player, "cybernetic_throw_range");
+	if ( rangeMod != 0.0f )
+		return (maxRange+rangeMod);
+
+	return maxRange;
+}
+
+float getRangedRangeMod( obj_id player, float maxRange )
+{
+	float rangeMod = (float)getSkillStatMod(player, "cybernetic_ranged_range");
+	if ( rangeMod != 0.0f )
+		return (maxRange+rangeMod);
+
+	return maxRange;
+}
+
+float getCyberneticHealingMod( obj_id player, float maxHealMod )
+{
+	float healMod = (float)getSkillStatMod(player, "cybernetic_healing_mod");
+	if ( healMod != 0.0f )
+	{
+		healMod = healMod/100;//it's a percent
+		return (maxHealMod+healMod);
+	}
+	return maxHealMod;
+}
+
+float getCyberneticRangedAccuracyMod( obj_id player, float baseAccuracy )
+{
+	float accMod = (float)getSkillStatMod(player, "cybernetic_ranged_acc");
+	if ( accMod != 0.0f )
+	{
+		accMod = accMod/100;//it's a percent
+		return (baseAccuracy+accMod);
+	}
+	return baseAccuracy;
+}
+
+float getCyberneticMeleeAccuracyMod( obj_id player, float baseAccuracy )
+{
+	float accMod = (float)getSkillStatMod(player, "cybernetic_melee_acc");
+	if ( accMod != 0.0f )
+	{
+		accMod = accMod/100;//it's a percent
+		return (baseAccuracy+accMod);
+	}
+	return baseAccuracy;
+}
+
+float getCyberneticMeleeDefenseMod( obj_id player, float baseDefense )
+{
+	float defMod = (float)getSkillStatMod(player, "cybernetic_melee_def");
+	if ( defMod != 0.0f )
+	{
+		defMod = defMod/100;//it's a percent
+		return (baseDefense+defMod);
+	}
+	return baseDefense;
+}
+
+boolean hasCommandoLegs( obj_id player )
+{
+	return ( getSkillStatMod(player, "cybernetic_heavy_weapon_legs") != 0 );
+}
+
+void grantCyberneticSkillMods( obj_id player, obj_id cyberneticItem )
+{
+	string templateName = getTemplateName( cyberneticItem );
+
+	dictionary item = dataTableGetRow(CYBORG_TABLE, templateName);
+	if ( item==null )
+		return;//this item is undefined
+
+	//throw range mod:
+	int skillMod = item.getInt( "throwRangeMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_throw_range", skillMod);
+
+	//ranged range mod
+	skillMod = item.getInt( "rangedRangeMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_ranged_range", skillMod);
+
+	//healing mod
+	skillMod = item.getInt( "healingMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_healing_mod", skillMod);
+
+	//melee acc. mod
+	skillMod = item.getInt( "meleeAccuracyMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_melee_acc", skillMod);
+
+	//melee def. mod
+	skillMod = item.getInt( "meleeDefMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_melee_def", skillMod);
+
+	//ranged acc. mod
+	skillMod = item.getInt( "rangedAccuracyMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_ranged_acc", skillMod);
+
+	//move rate mod, for display only
+	string moveBuff = item.getString( "moveRateBuff" );
+	if ( moveBuff != null && moveBuff != "" )
+	{
+		//you should already have this buff, but if not:
+		//re-apply this buff:
+		if ( buff.canApplyBuff( player, moveBuff ) )
+			buff.applyBuff(player, moveBuff);
+
+		applySkillStatisticModifier(player, "cybernetic_run_buff", 40);
+	}
+
+	//commando legs!, for display only
+	skillMod = item.getInt( "commandoLegs" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_heavy_weapon_legs", skillMod);
+}
+
+void revokeCyberneticSkillMods( obj_id player, obj_id cyberneticItem )
+{
+	string templateName = getTemplateName( cyberneticItem );
+	dictionary item = dataTableGetRow(CYBORG_TABLE, templateName);
+	if ( item==null )
+	{
+		//debugSpeakMsg( player, templateName + " does not exist" );
+		return;//this item is undefined
+	}
+
+	//debugSpeakMsg( player, templateName + " is being removed" );
+
+	//throw range mod:
+	int skillMod = item.getInt( "throwRangeMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_throw_range", (-1*skillMod));
+
+	//ranged range mod
+	skillMod = item.getInt( "rangedRangeMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_ranged_range", (-1*skillMod));
+
+	//healing mod
+	skillMod = item.getInt( "healingMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_healing_mod", (-1*skillMod));
+
+	//melee accuract mod
+	skillMod = item.getInt( "meleeAccuracyMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_melee_acc", (-1*skillMod));
+
+	//melee defense. mod
+	skillMod = item.getInt( "meleeDefMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_melee_def", (-1*skillMod));
+
+	//ranged acc. mod
+	skillMod = item.getInt( "rangedAccuracyMod" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_ranged_acc", (-1*skillMod) );
+
+	//move rate mod, for display only
+	string moveBuff = item.getString( "moveRateBuff" );
+	if ( moveBuff != null && moveBuff != "" )
+		applySkillStatisticModifier(player, "cybernetic_run_buff", -40);
+
+	//commando legs!, for display only
+	skillMod = item.getInt( "commandoLegs" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_heavy_weapon_legs", (-1*skillMod));
+
+}
+
+void validateSkillMods( obj_id player )
+{
+	//step one, revoke all of the player's cybernetic skillmods:
+	int skillMod = getSkillStatMod(player, "cybernetic_throw_range");
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_throw_range", (-1*skillMod));
+
+	skillMod = getSkillStatMod(player, "cybernetic_ranged_range");
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_ranged_range", (-1*skillMod));
+
+	skillMod = getSkillStatMod(player, "cybernetic_healing_mod");
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_healing_mod", (-1*skillMod));
+
+	skillMod = getSkillStatMod(player, "cybernetic_melee_acc");
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_melee_acc", (-1*skillMod));
+
+	skillMod = getSkillStatMod(player, "cybernetic_melee_def");
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_melee_def", (-1*skillMod));
+
+	skillMod = getSkillStatMod(player, "cybernetic_ranged_acc");
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_ranged_acc", (-1*skillMod));
+
+	//move rate mod, for display only
+	skillMod = getSkillStatMod(player, "cybernetic_run_buff");
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_run_buff", (-1*skillMod));
+
+	//commando legs, for display only
+	skillMod = getSkillStatMod(player, "cybernetic_heavy_weapon_legs" );
+	if ( skillMod != 0 )
+		applySkillStatisticModifier(player, "cybernetic_heavy_weapon_legs", (-1*skillMod));
+
+	//step three: apply what the values really ought to be:
+	obj_id[] cybernetics = getInstalledCybernetics( player );
+	if ( cybernetics != null && cybernetics.length > 0)
+	{
+		for ( int i = 0; i < cybernetics.length; ++i )
+		{
+			grantCyberneticSkillMods( player, cybernetics[i] );
+		}
+	}
+
+	//recalc speed - fixes people that were granted a permanent increase to moveRate
+	// and then un-installed their legs, didn't get recalc'd back to 1.0 speed:
+	movement.refresh(player);
+}
+
+void revokeAllOccurancesOfCommand( obj_id player, string commandName )
+{
+	revokeCommand(player, commandName);
+	while ( hasCommand( player, commandName ))
+		revokeCommand(player, commandName);
+}
+
+boolean doCyborgRevive( obj_id player, obj_id target )
+{
+	if ( !isIdValid(player) || !isIdValid(target) )
+	{
+		sendSystemMessage(player, new string_id("ep3/cybernetic", "bad_target") );
+		return false;
+	}
+
+	if ( player == target || !isPlayer(target) )
+	{
+		sendSystemMessage(player, new string_id("ep3/cybernetic", "bad_target") );
+		return false;
+	}
+
+	if ( !hasObjVar(target, pclib.VAR_BEEN_COUPDEGRACED) )
+	{
+		sendSystemMessage(player, new string_id("ep3/cybernetic", "bad_target") );
+		return false;
+	}
+
+	if ( !pvpCanHelp(player, target) )
+	{
+		sendSystemMessage(player, new string_id("ep3/cybernetic", "bad_target") );
+		return false;
+	}
+
+	else if ( !group.inSameGroup(player, target) && !pclib.hasConsent(player, target) )
+	{
+		sendSystemMessage(player, new string_id("ep3/cybernetic", "no_consent") );
+		return false;
+	}
+
+	// Set pvp helper flag
+	pvpHelpPerformed(player, target);
+	if ( getPosture(player) != POSTURE_CROUCHED )
+		setPosture(player, POSTURE_CROUCHED);
+	playClientEffectObj(player, "clienteffect/pl_force_heal_self.cef", target, "");
+	messageTo(target, "handlePlayerResuscitated", null, 5, false);
+	messageTo(player, "handleReviveStand", null, 5, false);
+	return true;
+}
+
+obj_id getSpecificCybernetic( obj_id player, string commandName )
+{
+	int colNum = dataTableFindColumnNumber(CYBORG_TABLE, "specialCommand");
+	if ( colNum < 0 )
+		return null;//not found!
+
+	int cyberneticRow = dataTableSearchColumnForString(commandName, colNum, CYBORG_TABLE);
+	if ( cyberneticRow < 0 )
+		return null;//command not found!
+
+	string itemName = dataTableGetString( CYBORG_TABLE, cyberneticRow, "templateName" );
+	if ( itemName == null || itemName == "" )
+		return null;//no such thing!
+
+	obj_id[] installed = getInstalledCybernetics( player );
+	if ( installed == null || installed.length < 1 )
+		return null;//nothing installed.
+
+	for ( int i = 0; i < installed.length; ++i )
+	{
+		if ( itemName.equals( getTemplateName( installed[i] ) ) )
+			return installed[i];
+	}
+
+	//You have nothing equipped which would allow you do do this
+	// So I'm going to revoke the command you shouldn't have anyway
+	revokeAllOccurancesOfCommand( player, commandName );
+	return null;
+}
+
+boolean hasUndamagedCybernetic( obj_id player, string commandName )
+{
+	obj_id cyberneticItem = getSpecificCybernetic( player, commandName );
+	if ( !isIdValid( cyberneticItem ))
+		return false;//you don't even have this item.
+
+	int maxHps = getMaxHitpoints( cyberneticItem );
+	int hps = getHitpoints( cyberneticItem );
+	//debugSpeakMsg( player, "hps: " + hps + "/" + maxHps );
+	if ( hps > 0  )
+		return true;
+
+	sendSystemMessage( player, new string_id("ep3/cybernetic", "too_damaged"));
+	return false;
+}
+
+void verifyInstallPayment( obj_id npc, obj_id player, int amt, obj_id item )
+{
+	prose_package prompt = new prose_package();
+	prompt = prose.setStringId( prompt, new string_id( "ep3/cybernetic", "install_pay_prompt" ) );
+	prompt = prose.setDI( prompt, amt );
+	string title = "@ep3/cybernetic:install_pay_title";
+	utils.setScriptVar( player, "cyborg.install.amount", amt );
+	utils.setScriptVar( player, "cyborg.install.item", item );
+	//debugSpeakMsg( player, "sending the prompt" );
+	int pid = sui.msgbox( player, player, prompt, sui.OK_CANCEL, title, sui.MSG_QUESTION, "handleInstallPaymentConfirmed");
+	sui.setPid(player, pid, PID_VAR);
+}
+
+void verifyUnInstallPayment( obj_id npc, obj_id player, int amt, obj_id item )
+{
+	prose_package prompt = new prose_package();
+	prompt = prose.setStringId( prompt, new string_id( "ep3/cybernetic", "remove_pay_prompt" ) );
+	prompt = prose.setDI( prompt, amt );
+	string title = "@ep3/cybernetic:remove_pay_title";
+	utils.setScriptVar( player, "cyborg.remove.amount", amt );
+	utils.setScriptVar( player, "cyborg.remove.item", item );
+	//debugSpeakMsg( player, "sending the prompt" );
+	int pid = sui.msgbox( player, player, prompt, sui.OK_CANCEL, title, sui.MSG_QUESTION, "handleUnInstallPaymentConfirmed");
+	sui.setPid(player, pid, PID_VAR);
+}
+
+void verifyRepairPayment( obj_id npc, obj_id player, int amt, obj_id item )
+{
+	prose_package prompt = new prose_package();
+	prompt = prose.setStringId( prompt, new string_id( "ep3/cybernetic", "repair_pay_prompt" ) );
+	prompt = prose.setDI( prompt, amt );
+	string title = "@ep3/cybernetic:repair_pay_title";
+	utils.setScriptVar( player, "cyborg.repair.amount", amt );
+	utils.setScriptVar( player, "cyborg.repair.item", item );
+	//debugSpeakMsg( player, "sending the prompt" );
+	int pid = sui.msgbox( player, player, prompt, sui.OK_CANCEL, title, sui.MSG_QUESTION, "handleRepairPaymentConfirmed");
+	sui.setPid(player, pid, PID_VAR);
+}
+
+/*
+This function checks to see if the selected Cybernetic can be installed without exceeding the 
+player's cyber-psychosis skill mod.  Returns true if it can be installed - false otherwise.
+*/
+boolean canInstallSelectedCybernetic(obj_id player, obj_id cybernetic)
+{
+	//let's see if the player can have this item installed.
+	int playerInstalledCount = getPlayerInstalledCyberneticCount(player);
+	int playerCyberSkillMod = getEnhancedSkillStatisticModifierUncapped(player, "cybernetic_psychosis_resistance");
+	int cyberneticToInstall = getCyberneticPointValue(cybernetic);
+
+	if(playerInstalledCount < 0 || playerCyberSkillMod < 0 || cyberneticToInstall < 0)
+	{
+		CustomerServiceLog("cyborg", "Player("+ getPlayerFullName(player) +", "+ player +") can not install Cybernetic (" + cybernetic + ") - Code issues - please contact the Design Team.");
+		sendSystemMessage(player, new string_id("ep3/cybernetic", "cannot_install"));
+		return false;
+	}
+	
+	/*if((playerInstalledCount + cyberneticToInstall) > playerCyberSkillMod)
+	{
+		CustomerServiceLog("cyborg", "Player("+ getPlayerFullName(player) +", "+ player +") can not install Cybernetic (" + cybernetic + ") because it would surpass his/her allowed point value of ("+ playerCyberSkillMod +")");
+		sendSystemMessage(player, new string_id( "ep3/cybernetic", "not_enough_cybernetic_points"));
+		return false;
+	}*/
+	
+	return true;
+}

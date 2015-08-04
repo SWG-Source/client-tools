@@ -1,0 +1,436 @@
+include library.utils;
+include library.trial;
+include library.create;
+include library.ai_lib;
+
+const string SPAWN_DATATABLE				= "base_builder.spawn_datatable";
+const string SPAWN_LIST					= "base_builder.spawn_list";
+const string SPAWN_POSITION				= "base_builder.spawn_position";
+const string CONTROLLER_ID				= "base_builder.unique_tag";
+const string MASTER_OBJECT				= "base_builder.master_object";
+const string PHASE_ARRAY				= "base_builder.phase_array";
+const string CURRENT_PHASE				= "base_builder.current_phase";
+const string OVERRIDE_PHASE				= "base_builder.override_phase";
+
+
+const boolean LOGGING					= false;
+
+trigger OnAttach()
+{
+	dictionary dict = trial.getSessionDict(self);
+	messageTo(self, "initializePhase", dict, 5, false);
+	if (hasObjVar(self, "element"))
+		setName(self, getStringObjVar(self, "element"));
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	dictionary dict = trial.getSessionDict(self);
+	messageTo(self, "initializePhase", dict, 5, false);
+	if (hasObjVar(self, "element"))
+		setName(self, getStringObjVar(self, "element"));
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	cleanupChildren(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	cleanupChildren(self);
+ 	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanupEvent()
+{
+	string dataTable = getStringObjVar(self, SPAWN_DATATABLE);
+	
+	if (hasObjVar(self, SPAWN_LIST))
+		cleanupChildren(self);
+		
+	int spawnPhase = getCurrentPhase(self);
+	
+	if (hasObjVar(self, OVERRIDE_PHASE))
+		spawnPhase = getIntObjVar(self, OVERRIDE_PHASE);	
+		
+	doSpawning(self, dataTable, spawnPhase);
+	
+	return SCRIPT_CONTINUE;	
+}
+
+messageHandler initializePhase()
+{	
+	if (!trial.verifySession(self, params))
+		return SCRIPT_CONTINUE;
+		
+	if (!hasObjVar(self, SPAWN_DATATABLE))
+	{
+		doLogging("initializePhase", "Did not have the "+SPAWN_DATATABLE+" objvar");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string dataTable = getStringObjVar(self, SPAWN_DATATABLE);
+	
+	if (!dataTableOpen(dataTable))
+	{
+		doLogging("initializePhase", dataTable+" was not a valid table");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (hasObjVar(self, SPAWN_LIST))
+		cleanupChildren(self);
+		
+	int spawnPhase = getCurrentPhase(self);
+	
+	if (hasObjVar(self, OVERRIDE_PHASE))
+		spawnPhase = getIntObjVar(self, OVERRIDE_PHASE);	
+		
+	doSpawning(self, dataTable, spawnPhase);
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+void cleanupChildren(obj_id self)
+{
+	obj_id[] objects = getObjectsInRange(getSelf(), 400.0f);
+	
+	if (objects == null || objects.length == 0)
+	{
+		removeObjVar(self, SPAWN_LIST);
+		return;
+	}
+
+	boolean isMaster = (getStringObjVar(self, "element").equals("ph1_restuss_master"));
+	for (int i=0;i<objects.length;i++)
+	{
+		if (trial.isChild(self, objects[i]))
+		{
+			trial.cleanupObject(objects[i]);
+			continue;
+		}
+		
+		if (isMaster)
+		{
+			if (hasObjVar(objects[i], trial.PARENT))
+			{
+				if (!isIdValid(trial.getParent(objects[i])) || !hasScript(trial.getParent(objects[i]), "theme_park.npc_base_builder"))
+						trial.cleanupObject(objects[i]);
+			}
+		}
+	}
+	
+	removeObjVar(self, SPAWN_LIST);
+	return;
+}
+
+void doSpawning(obj_id self, string dataTable, int phase)
+{
+	doSpawning(self, dataTable, phase, -1);
+}
+
+void doSpawning(obj_id self, string dataTable, int phase, int lineNumber)
+{
+	const int SPAWN_OFFSET = 0;
+	const int SPAWN_LITERAL = 1;
+	
+	int length = dataTableGetNumRows(dataTable);
+	resizeable obj_id[] children = new obj_id[0];
+	string LAST_POB	= "lastPob";
+	
+	if (phase > -1)
+		setObjVar(self, CURRENT_PHASE, phase);
+	
+	for (int i=0;i<length;i++)
+	{
+		dictionary data = dataTableGetRow(dataTable, i);
+		string toSpawn = data.getString("object");
+		string spawnPhase = data.getString("phase");
+		int locationType = data.getInt("location_type");
+		float locX = data.getFloat("x_offset");
+		float locY = data.getFloat("y_offset");
+		float locZ = data.getFloat("z_offset");
+		float yaw = data.getFloat("yaw");
+		string cell = data.getString("cell");
+		string scriptString = data.getString("script");
+		string objvarString = data.getString("objvar");
+		string respawn = data.getString("respawn");
+		
+		if (!validatePhase(phase, spawnPhase) && i != lineNumber)
+			continue;
+		
+		obj_id newObject = null;
+		
+		if (!cell.equals("world"))
+		{
+			if (!utils.hasScriptVar(self, LAST_POB))
+			{
+				obj_id[] cells = getCellIds(self);
+				
+				if (cells == null)
+				{
+					doLogging("doSpawning", "I am the parent object("+getName(self)+"/"+self+") but I have no cells. skipping creation of "+toSpawn);
+					continue;
+				}
+				else
+					utils.setScriptVar(self, LAST_POB, self);
+			}
+
+			obj_id lastPob = utils.getObjIdScriptVar(self, LAST_POB);
+			
+			if (!hasCell(lastPob, cell))
+			{
+				doLogging("doSpawning", "The pob in question("+getName(lastPob)+"/"+lastPob+") does not have the required cell("+cell+") skipping creation of "+toSpawn);
+				continue;
+			}
+			
+			obj_id cellId = getCellId(lastPob, cell);
+			
+			if (!isIdValid(cellId))
+			{
+				doLogging("doSpawning", "Specified cell was invalid. skipping creation of "+toSpawn);
+				continue;
+			}
+			
+			location spawnLoc = new location(locX, locY, locZ, getCurrentSceneName(), cellId);
+			
+			if (toSpawn.endsWith(".iff"))
+				newObject = createObjectInCell(toSpawn, lastPob, cell, spawnLoc);
+			else
+			{
+				newObject = create.object(toSpawn, spawnLoc);
+				ai_lib.setDefaultCalmBehavior(newObject, ai_lib.BEHAVIOR_SENTINEL);
+			}	
+			
+		}
+		else
+		{
+			if (locationType == SPAWN_OFFSET)
+			{
+				location baseLoc = getLocation(self);
+				locX += baseLoc.x;
+				locY += baseLoc.y;
+				locZ += baseLoc.z;
+			}
+			
+			location spawnLoc = new location(locX, locY, locZ);
+			
+			if (toSpawn.endsWith(".iff"))
+			{
+				newObject = createObject(toSpawn, spawnLoc);
+				obj_id[] cells = getCellIds(newObject);
+				
+				if (cells != null && cells.length > 0)
+					utils.setScriptVar(self, LAST_POB, newObject);
+			}
+			else
+			{
+				newObject = create.object(toSpawn, spawnLoc);
+				ai_lib.setDefaultCalmBehavior(newObject, ai_lib.BEHAVIOR_SENTINEL);
+			}	
+			
+		}
+		
+		if (!isIdValid(newObject))
+		{
+			doLogging("doSpawning", "Failed to create object("+toSpawn+")");
+			continue;
+		}
+		
+		
+		trial.setParent(self, newObject, true);
+		setObjVar(newObject, SPAWN_POSITION, i);
+		setSpawnObjVar(newObject, objvarString);
+		attachSpawnScript(newObject, scriptString, respawn);		
+		setYaw(newObject, yaw);
+		setObjVar(self, SPAWN_LIST, "base_builder.childrenInWorld");	
+	}
+	
+	
+
+}
+
+messageHandler handleEntityRespawn()
+{
+	if (!trial.verifySession(self, params))
+		return SCRIPT_CONTINUE;
+		
+	int lineNumber = params.getInt("spawnNumber");
+	string dataTable = getStringObjVar(self, SPAWN_DATATABLE);
+	
+	if (!dataTableOpen(dataTable))
+	{
+		doLogging("hnadleEntityRespawn", dataTable+" was not a valid table");
+		return SCRIPT_CONTINUE;
+	}
+	
+	doSpawning(self, dataTable, -1, lineNumber);
+	return SCRIPT_CONTINUE;
+}
+
+boolean validatePhase(int phase, string spawnPhase)
+{
+	string[] parse = split(spawnPhase, ',');
+	
+	
+	for (int i=0;i<parse.length;i++)
+	{
+		int intParse = utils.stringToInt(parse[i]);
+		if (intParse == -1 || intParse == phase)
+			return true;
+	}
+	return false;
+}
+
+void attachSpawnScript(obj_id newObject, string scriptString, string respawn)
+{
+	if (!respawn.equals("-1"))
+	{
+		setObjVar(newObject, "respawn", respawn);
+		attachScript(newObject, "theme_park.npc_base_builder_respawn");
+	}
+	
+	if (scriptString.equals("none"))
+		return;
+		
+	string[] parse = split(scriptString, ';');
+	if (parse == null || parse.length == 0)
+		return;
+		
+	for (int i=0;i<parse.length;i++)
+		attachScript(newObject, parse[i]);
+}
+
+void setSpawnObjVar(obj_id newObject, string objvarString)
+{
+	if (objvarString.equals("none"))
+		return;
+		
+	string[] parse = split(objvarString, ';');
+	
+	if (parse == null || parse.length == 0)
+		return;
+		
+	for (int i=0;i<parse.length;i++)
+	{
+		string[] typeDataSplit = split(parse[i], ':');
+		string type = typeDataSplit[0];
+		string data = typeDataSplit[1];
+		
+		string[] nameValueSplit = split(data, '=');
+		string name = nameValueSplit[0];
+		string value = nameValueSplit[1];
+		
+		if (type.equals("int"))
+			setObjVar(newObject, name, utils.stringToInt(value));
+		if (type.equals("float"))
+			setObjVar(newObject, name, utils.stringToFloat(value));
+		if (type.equals("string"))
+			setObjVar(newObject, name, value);
+		if (type.equals("boolean") && (value.equals("true")|| value.equals("1")))
+			setObjVar(newObject, name, true);
+		if (type.equals("boolean") && (value.equals("false") || value.equals("0")))
+			setObjVar(newObject, name, false);
+	}
+
+}
+
+messageHandler incrimentPhase()
+{
+	incrimentPhase(self);
+	return SCRIPT_CONTINUE;
+}
+
+void incrimentPhase(obj_id self)
+{
+	if (!canIncrimentPhase(self))
+	{
+		doLogging("incrimentPhase", "Cannot incriment phase");
+		return;
+	}	
+	if (hasObjVar(self, CURRENT_PHASE))
+		setObjVar(self, CURRENT_PHASE, getIntObjVar(self, CURRENT_PHASE) + 1);
+	else
+		setObjVar(self, CURRENT_PHASE, 1);
+	
+	string dataTable = getStringObjVar(self, SPAWN_DATATABLE);
+	
+	if (hasObjVar(self, SPAWN_LIST))
+		cleanupChildren(self);
+		
+	int spawnPhase = getCurrentPhase(self);
+	
+	messageTo(self, "initializePhase", trial.getSessionDict(self), 1.0f, false);
+	// Delay is necessary due to pob issues
+}
+
+boolean canIncrimentPhase(obj_id self)
+{
+	int phase = 0;
+	
+	if (hasObjVar(self, CURRENT_PHASE))
+		phase = getIntObjVar(self, CURRENT_PHASE);
+		
+	string table = getStringObjVar(self, SPAWN_DATATABLE);
+	
+	int length = dataTableGetNumRows(table);
+	
+	for (int i=0;i<length;i++)
+	{
+		dictionary data = dataTableGetRow(table, i);
+		string spawnPhase = data.getString("phase");
+		
+		if (validatePhase(phase +1, spawnPhase))
+			return true;
+	}
+	
+	return false;
+}
+
+messageHandler decrimentPhase()
+{
+	decrimentPhase(self);
+	return SCRIPT_CONTINUE;
+}
+
+void decrimentPhase(obj_id self)
+{
+	if (!hasObjVar(self, CURRENT_PHASE) || getIntObjVar(self, CURRENT_PHASE) == 0)
+	{
+		doLogging("decrimentPhase", "Tried to decriment to a negative phase");
+		return;
+	}
+	
+	setObjVar(self, CURRENT_PHASE, getIntObjVar(self, CURRENT_PHASE) -1);
+	
+	string dataTable = getStringObjVar(self, SPAWN_DATATABLE);
+	
+	if (hasObjVar(self, SPAWN_LIST))
+		cleanupChildren(self);
+		
+	int spawnPhase = getCurrentPhase(self);
+	
+	messageTo(self, "initializePhase", trial.getSessionDict(self), 1.0f, false);
+	// Delay is necessary due to pob issues
+	
+}
+
+int getCurrentPhase(obj_id self)
+{
+	if (!hasObjVar(self, CURRENT_PHASE))
+		setObjVar(self, CURRENT_PHASE, 0);
+		
+	return getIntObjVar(self, CURRENT_PHASE);
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING)
+		LOG("doLogging/npc_base_builder/"+section, message);
+}

@@ -1,0 +1,464 @@
+include library.factions;
+include library.money;
+include library.prose;
+include library.static_item;
+include library.township;
+include library.trial;
+include library.utils;
+
+const string VENDOR_TOKEN_TYPE 		= "item.token.type";
+const string_id SID_INV_FULL		= new string_id("spam", "npc_vendor_player_inv_full");
+
+trigger OnAttach()
+{
+	setObjVar(self, township.OBJECT_FOR_SALE_ON_VENDOR, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (item == menu_info_types.ITEM_PUBLIC_CONTAINER_USE1)
+	{
+		if(hasObjVar(self, "faction_recruiter.faction"))
+		{
+			string itemFactionName = getStringObjVar(self, "faction_recruiter.faction");
+
+			int playerFaction = pvpGetAlignedFaction(player);
+			string playerFactionName = factions.getFactionNameByHashCode(playerFaction);
+
+			if( !itemFactionName.equals(playerFactionName) )
+			{
+				sendSystemMessage(player, new string_id("spam", "wrong_faction"));
+				return SCRIPT_OVERRIDE;
+			}
+		}
+		if(!confirmInventory(self, player))
+			return SCRIPT_OVERRIDE;
+
+		if(confirmFunds(self, player))
+		{
+			processItemPurchase(self, player);
+		}
+		else
+		{
+			sendSystemMessage(player, new string_id("spam", "buildabuff_nsf_buffee"));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	if (names == null || attribs == null || names.length != attribs.length)
+		return SCRIPT_CONTINUE;
+
+	const int firstFreeIndex = getFirstFreeIndex(names);
+	if (firstFreeIndex >= 0 && firstFreeIndex < names.length)
+	{
+		names[firstFreeIndex] = utils.packStringId( new string_id ( "set_bonus", "vendor_cost"));
+		attribs[firstFreeIndex] = createPureConcatenatedJoy(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// String-fu to display the "Cost" attribute above.
+string createPureConcatenatedJoy(obj_id self)
+{
+	// The compiler says "\^" is an invalid escape character so we start with this so the examine info lines up nicely.
+	string pureConcatenatedJoy = getString(new string_id("set_bonus", "vendor_sale_object_justify_line"));
+
+	int creditCost = 0;
+	int tokenArrayLength = 0;
+
+	creditCost = getIntObjVar(self, "item.object_for_sale.cash_cost");
+	int[] tokenCost = getIntArrayObjVar(self, "item.object_for_sale.token_cost");
+
+	if (!hasObjVar(self, VENDOR_TOKEN_TYPE))
+	{
+		// Ideally these should always be the same but in case its not...
+		if(tokenCost.length > trial.HEROIC_TOKENS.length)
+		{
+			tokenArrayLength = trial.HEROIC_TOKENS.length;
+		}
+		else if(tokenCost.length > 0)
+			tokenArrayLength = tokenCost.length;
+
+		for(int i = 0; i < tokenArrayLength; i++)
+		{
+			if(tokenCost[i] > 0)
+			{
+				pureConcatenatedJoy += "["+tokenCost[i] + "] " + getString(new string_id("static_item_n", trial.HEROIC_TOKENS[i])) +"\n";
+			}
+		}
+	}
+	//Using a custom token, such as a halloween coin.
+	else
+	{
+		string tokenList = getStringObjVar(self, VENDOR_TOKEN_TYPE);
+		string[] differentTokens = split(tokenList, ',');
+		// Ideally these should always be the same but in case its not...
+		if(tokenCost.length > differentTokens.length)
+		{
+			tokenArrayLength = differentTokens.length;
+		}
+		else if(tokenCost.length > 0)
+			tokenArrayLength = tokenCost.length;
+
+		for(int i = 0; i < tokenArrayLength; i++)
+		{
+			if(tokenCost[i] > 0)
+			{
+				pureConcatenatedJoy += "["+tokenCost[i] + "] " + getString(new string_id("static_item_n", differentTokens[i])) +"\n";
+			}
+		}
+	}
+
+	if(creditCost > 0)
+	{
+		pureConcatenatedJoy += creditCost + getString(new string_id("set_bonus", "vendor_credits"));
+	}
+
+	return pureConcatenatedJoy;
+}
+//Confirming that player inventory is not full.
+boolean confirmInventory(obj_id self, obj_id player)
+{
+	obj_id pInv = utils.getInventoryContainer(player);
+
+	if(!isValidId(pInv) || !exists(pInv))
+		return false;
+
+	if(getVolumeFree(pInv) <= 0)
+	{
+		sendSystemMessage(player, SID_INV_FULL);
+		return false;
+	}
+	return true;
+}
+// Make sure we have both the cash and all the tokens needed first. We also make sure players inventory is not full.
+boolean confirmFunds(obj_id self, obj_id player)
+{
+	boolean canPay = false;
+	boolean hasTheCredits = false;
+	boolean hasTheTokens = false;
+	boolean foundTokenHolderBox = false;
+
+	obj_id[] inventoryContents = getInventoryAndEquipment(player);
+
+	int creditCost = getIntObjVar(self, "item.object_for_sale.cash_cost");
+	int[] tokenCostInThisFunction = getIntArrayObjVar(self, "item.object_for_sale.token_cost");
+
+	// TODO: Actually check for credits.
+	if(creditCost < 1)
+		hasTheCredits = true;
+
+	//check players total cash
+	if(creditCost >= 1)
+	{
+		if(money.hasFunds(player, money.MT_TOTAL, creditCost))
+			hasTheCredits = true;
+	}
+
+	int owedTokenCount = 0;
+	boolean owesTokens = false;
+	for(int o = 0; o < tokenCostInThisFunction.length; o++)
+	{
+		owedTokenCount += tokenCostInThisFunction[o];
+	}
+
+	if(owedTokenCount > 0)
+	{
+		owesTokens = true;
+	}
+
+	// Token cost. Only do this if we really need too.
+	if(owesTokens)
+	{
+		for(int i = 0; i < inventoryContents.length; i++)
+		{
+			string itemName = getStaticItemName(inventoryContents[i]);
+			if (itemName != null && itemName != "")
+			{
+				//Custom tokens such as halloween coins
+				if (hasObjVar(self, VENDOR_TOKEN_TYPE))
+				{
+					string tokenList = getStringObjVar(self, VENDOR_TOKEN_TYPE);
+					string[] differentTokens = split(tokenList, ',');
+
+					for(int j = 0; j < differentTokens.length; j++)
+					{
+						if(itemName.equals(differentTokens[j]) && tokenCostInThisFunction[j] > 0)
+						{
+							if(getCount(inventoryContents[i]) > 1)
+							{
+								// Count down on count of physical token.
+								for(int m = 0; m < getCount(inventoryContents[i]); m++)
+								{
+									if(tokenCostInThisFunction[j] > 0)
+									{
+										tokenCostInThisFunction[j]--;
+									}
+								}
+							}
+							else
+							{
+								tokenCostInThisFunction[j]--;
+							}
+						}
+					}
+				}
+				else
+				{
+					// Physical tokens.
+					for(int j = 0; j < trial.HEROIC_TOKENS.length; j++)
+					{
+						if(itemName.equals(trial.HEROIC_TOKENS[j]) && tokenCostInThisFunction[j] > 0)
+						{
+							if(getCount(inventoryContents[i]) > 1)
+							{
+								// Count down on count of physical token.
+								for(int m = 0; m < getCount(inventoryContents[i]); m++)
+								{
+									if(tokenCostInThisFunction[j] > 0)
+									{
+										tokenCostInThisFunction[j]--;
+									}
+								}
+							}
+							else
+							{
+								tokenCostInThisFunction[j]--;
+							}
+						}
+					}
+
+					// Virtual tokens.
+					if(!foundTokenHolderBox && itemName.equals("item_heroic_token_box_01_01"))
+					{
+						foundTokenHolderBox = true;
+
+						if(hasObjVar(inventoryContents[i], "item.set.tokens_held"))
+						{
+							int[] virtualTokens = getIntArrayObjVar(inventoryContents[i], "item.set.tokens_held");
+							for(int k = 0; k < trial.HEROIC_TOKENS.length; k++)
+							{
+								if(tokenCostInThisFunction[k] > 0 && virtualTokens[k] > 0)
+								{
+									// Count down on the virtual tokens until we get 0
+									int paymentIterations = tokenCostInThisFunction[k];
+									for(int l = 0; l < paymentIterations; l++)
+									{
+										if(virtualTokens[k] > 0)
+										{
+											virtualTokens[k]--;
+											tokenCostInThisFunction[k]--;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	// Ok after all of that, if the tokenCostInThisFunction array is full of 0's we're ok for tokens.
+	int outstandingTokensOwed = 0;
+	for(int n = 0; n < tokenCostInThisFunction.length; n++)
+	{
+		outstandingTokensOwed += tokenCostInThisFunction[n];
+	}
+
+	if(outstandingTokensOwed == 0)
+	{
+		hasTheTokens = true;
+	}
+
+	return hasTheCredits && hasTheTokens;
+}
+
+// Now do almost the same thing we did above, only this time for reals.
+void processItemPurchase(obj_id self, obj_id player)
+{
+	obj_id inventory = utils.getInventoryContainer(player);
+	obj_id[] inventoryContents = getInventoryAndEquipment(player);
+
+	int creditCost = getIntObjVar(self, "item.object_for_sale.cash_cost");
+	int[] tokenCostForReals = getIntArrayObjVar(self, "item.object_for_sale.token_cost");
+
+	obj_id purchasedItem = obj_id.NULL_ID;
+	string myName = "";
+
+	if(static_item.isStaticItem(self))
+	{
+		myName = static_item.getStaticItemName(self);
+
+		purchasedItem = static_item.createNewItemFunction(myName, inventory);
+	}
+	else
+	{
+		myName = getTemplateName(self);
+
+		purchasedItem = createObjectOverloaded(myName, inventory);
+	}
+
+	if(hasScript(purchasedItem, "npc.faction_recruiter.biolink_item"))
+		setBioLink(purchasedItem, player);
+
+	CustomerServiceLog("Heroic-Token: ", "player " + getFirstName(player) + "(" + player + ") purchased item " + myName + "(" + purchasedItem + ")");
+
+	if(!exists(purchasedItem))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_cant_purchase"));
+		return;
+	}
+
+	string readableName = getString(parseNameToStringId(getName(self), self));
+	prose_package pp = new prose_package();
+	pp = prose.setStringId(pp, new string_id("set_bonus", "vendor_item_purchased"));
+	pp = prose.setTT(pp, readableName);
+	sendSystemMessageProse(player, pp);
+
+
+	//remove players cash if item has cash component
+	if(creditCost >= 1)
+	{
+		//put nasty note here, we need to go 3 levels up to find the vendor
+		obj_id containedBy = getContainedBy(getContainedBy(getContainedBy(self)));
+		money.requestPayment(player, containedBy, creditCost, "no_handler", null, false);
+	}
+
+
+
+	// Destroy tokens
+	boolean foundTokenHolderBox = false;
+
+	for(int i = 0; i < inventoryContents.length; i++)
+	{
+		string itemName = getStaticItemName(inventoryContents[i]);
+		if (itemName != null && itemName != "")
+		{
+			//Custom tokens such as halloween coins
+			if (hasObjVar(self, VENDOR_TOKEN_TYPE))
+			{
+				string tokenList = getStringObjVar(self, VENDOR_TOKEN_TYPE);
+				string[] differentTokens = split(tokenList, ',');
+
+				for(int j = 0; j < differentTokens.length; j++)
+				{
+					if(itemName.equals(differentTokens[j]) && tokenCostForReals[j] > 0)
+					{
+						if(getCount(inventoryContents[i]) > 1)
+						{
+							int numInStack = getCount(inventoryContents[i]);
+							// Count down on count of physical token until 1.
+							for(int m = 0; m < numInStack-1; m++)
+							{
+								if(tokenCostForReals[j] > 0)
+								{
+									tokenCostForReals[j]--;
+									setCount(inventoryContents[i], getCount(inventoryContents[i]) - 1);
+								}
+							}
+
+						}
+
+						if(getCount(inventoryContents[i]) <= 1 && tokenCostForReals[j] > 0)
+						{
+							destroyObject(inventoryContents[i]);
+							tokenCostForReals[j]--;
+						}
+					}
+				}
+			}
+			else
+			{
+				// Physical tokens.
+				for(int j = 0; j < trial.HEROIC_TOKENS.length; j++)
+				{
+					if(itemName.equals(trial.HEROIC_TOKENS[j]) && tokenCostForReals[j] > 0)
+					{
+						if(getCount(inventoryContents[i]) > 1)
+						{
+							int numInStack = getCount(inventoryContents[i]);
+							// Count down on count of physical token until 1.
+							for(int m = 0; m < numInStack-1; m++)
+							{
+								if(tokenCostForReals[j] > 0)
+								{
+									tokenCostForReals[j]--;
+									setCount(inventoryContents[i], getCount(inventoryContents[i]) - 1);
+								}
+							}
+
+						}
+
+						if(getCount(inventoryContents[i]) <= 1 && tokenCostForReals[j] > 0)
+						{
+							destroyObject(inventoryContents[i]);
+							tokenCostForReals[j]--;
+						}
+					}
+				}
+
+				// Virtual tokens.
+				if(!foundTokenHolderBox && itemName.equals("item_heroic_token_box_01_01"))
+				{
+					foundTokenHolderBox = true;
+
+					if(hasObjVar(inventoryContents[i], "item.set.tokens_held"))
+					{
+						int[] virtualTokens = getIntArrayObjVar(inventoryContents[i], "item.set.tokens_held");
+						for(int k = 0; k < trial.HEROIC_TOKENS.length; k++)
+						{
+							if(tokenCostForReals[k] > 0 && virtualTokens[k] > 0)
+							{
+								// Count down on the virtual tokens until we get 0
+								int paymentCounter = tokenCostForReals[k];
+								for(int l = 0; l < paymentCounter; l++)
+								{
+									if(virtualTokens[k] > 0)
+									{
+										virtualTokens[k]--;
+										tokenCostForReals[k]--;
+									}
+								}
+							}
+						}
+						setObjVar(inventoryContents[i], "item.set.tokens_held", virtualTokens);
+					}
+				}
+			}
+
+		}
+	}
+
+	return;
+}
+
+string_id parseNameToStringId(string itemName, obj_id item)
+{
+	string[] parsedString = split(itemName, ':');
+
+	string_id itemNameSID;
+
+	if (static_item.isStaticItem(item))
+		itemNameSID = static_item.getStaticItemStringIdName(item);
+
+	else if(parsedString.length > 1)
+	{
+		string stfFile = parsedString[0];
+		string reference = parsedString[1];
+		itemNameSID = new string_id(stfFile, reference);
+	}
+	else	// It's a resource or some other non-localized crap!
+	{
+		string stfFile = parsedString[0];
+		itemNameSID = new string_id(stfFile, " ");
+	}
+
+	return itemNameSID;
+
+}

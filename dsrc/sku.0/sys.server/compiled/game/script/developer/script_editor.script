@@ -1,0 +1,210 @@
+include developer.file_access;
+include library.utils;
+include java.io.InputStream;
+include library.chat;
+include java.util.Date;
+
+// todo: make this a command handler
+trigger OnSpeaking(string text)
+{
+	if(! isGod(self))
+		return SCRIPT_CONTINUE;
+
+	if(! text.startsWith("editScript"))
+		return SCRIPT_CONTINUE;
+	
+	java.util.StringTokenizer st = new java.util.StringTokenizer(text);
+
+	st.nextToken();
+	String params = st.nextToken();
+	
+	// validate the parameter string, it should be the name of a script to edit
+	if(params == null)
+	{
+		sendSystemMessageTestingOnly(self, "Usage: /editScript <script name>  e.g. /editScript justin.test_scriptedit");
+		return SCRIPT_OVERRIDE;
+	}
+
+	if(params.length() < 1)
+	{
+		sendSystemMessageTestingOnly(self, "Usage: /editScript <script name>  e.g. /editScript justin.test_scriptedit");
+		return SCRIPT_OVERRIDE;
+	}
+
+	// get script file name
+	String scriptBaseName = params;
+	String prefix = "../../dsrc/sku.0/sys.server/compiled/game/script";
+	String classPrefix = "../../data/sku.0/sys.server/compiled/game/script";
+	String[] path = split(scriptBaseName, '.');
+	String scriptClassName = classPrefix;
+	String scriptFileName = prefix;
+
+	// convert .'s to /'s
+	int iter = 0;
+	for(iter = 0; iter < path.length; ++iter)
+	{
+		scriptFileName += "/" + path[iter];
+	}
+
+	for(iter = 0; iter < path.length; ++iter)
+	{
+		scriptClassName += "/" + path[iter];
+	}
+
+	scriptClassName += ".class";
+	
+	// append the script source extension
+	scriptFileName += ".script";
+
+	String scriptContents = file_access.readTextFile(scriptFileName);
+	if(scriptContents == null)
+	{
+		// if the file could not be opened, try a .scriptlib
+		scriptFileName += "lib";
+		scriptContents = file_access.readTextFile(scriptFileName);
+	}
+
+	if(scriptContents == null)
+	{
+		// the file does not exist, advise the user
+		sendSystemMessageTestingOnly(self, "Could not get script contents from " + scriptBaseName + ".script or " + scriptBaseName + ".scriptlib");
+		return SCRIPT_OVERRIDE;
+	}
+
+	// create the user interface
+	int page = createSUIPage("/Script.editScript", self, self);
+
+	// put the contents of the script on the page
+	setSUIProperty(page, "pageText.text", "Text", scriptContents);
+	setSUIProperty(page, "bg.caption.text", "LocalText", "EDIT SCRIPT - " + scriptBaseName);
+	// listen for a user request to send the script contents
+	// to the server for a recompile and reload
+	subscribeToSUIEvent(page, sui_event_type.SET_onButton, "btnOk", "onScriptEditBtnOk");
+	subscribeToSUIPropertyForEvent(page, sui_event_type.SET_onButton, "btnOk", "pageText.text", "LocalText");
+
+	// also track the output window. Error/standard out from the
+	// script compile process will be appended to it
+	subscribeToSUIPropertyForEvent(page, sui_event_type.SET_onButton, "btnOk", "outputPage.text", "LocalText");
+	
+	setSUIAssociatedObject(page, self);
+	boolean showResult = showSUIPage(page);
+	flushSUIPage(page);
+
+	// setup tracking info for this UI page
+	String trackPage = "scriptFileName" + page;
+	utils.setScriptVar(self, trackPage, scriptFileName);
+	String trackScriptName = "scriptBase" + page;
+	utils.setScriptVar(self, trackScriptName, scriptBaseName);
+	String trackClassName = "classBase" + page;
+	utils.setScriptVar(self, trackClassName, scriptClassName);
+	return SCRIPT_OVERRIDE;
+}
+
+messageHandler onScriptEditBtnOk()
+{
+	if(!isGod(self))
+		return SCRIPT_CONTINUE;
+
+	String scriptContents = params.getString("pageText.text.LocalText");
+	if(scriptContents == null)
+	{
+		sendSystemMessageTestingOnly(self, "could not get script contents from the client");
+	}
+
+	String outputWindowText = new String();
+	if(params.getString("outputPage.text.LocalText") != null)
+	{
+		//outputWindowText += params.getString("outputPage.text.LocalText");
+	}
+	
+	if(scriptContents.length() > 0)
+	{
+		// compile and reload the script!
+		int pageId = params.getInt("pageId");
+		if(pageId >= 0)
+		{
+			String scriptFileNameKey = "scriptFileName" + pageId;
+			if(scriptFileNameKey != null)
+			{
+				String scriptFileName = utils.getStringScriptVar(self, scriptFileNameKey);
+				if(scriptFileName != null)
+				{
+					outputWindowText += "--== Compiling " + scriptFileName + " ==--\n";
+					if(! perforce.openExistingFileForExclusiveEdit(scriptFileName))
+					{
+						outputWindowText += "*** ERROR: Could not edit/lock " + scriptFileName + "\n";
+					}
+					else
+					{
+						String scriptNameScriptVar = "scriptBase" + pageId;
+						String scriptName = utils.getStringScriptVar(self, scriptNameScriptVar);
+						
+						// open the class file!
+						String classNameScriptVar = "classBase" + pageId;
+						String className = utils.getStringScriptVar(self, classNameScriptVar); 
+						if(! perforce.openExistingFileForExclusiveEdit(className))
+						{
+							outputWindowText += "*** ERROR: Could not edit/lock " + className + "\n";
+						}
+						else
+						{
+							if(file_access.writeTextFile(scriptFileName, scriptContents))
+							{
+								Runtime run = Runtime.getRuntime();
+								if(run != null)
+								{
+									try
+									{
+										String outputString = system_process.runAndGetOutput("python ../../exe/shared/script_prep.py " + scriptFileName);
+																				
+										
+										if(outputString != null)
+											outputWindowText += outputString + "\n";
+										
+										// reload the script
+										if(scriptName != null)
+										{
+											if(reloadScript(scriptName))
+											{
+												Date d = new Date();
+												outputWindowText += "Script " + scriptName + " reloaded successfully at " + d + "\n";
+											}
+											else
+											{
+												outputWindowText += "*** ERROR: Could not reload " + scriptName + "\n";
+											}
+										}
+									}
+									catch(Exception e)
+									{
+										outputWindowText += "*** ERROR: An exception occurred while trying to compile " + scriptFileName + " : " + e + "\n";
+									}
+								}
+								else
+								{
+									outputWindowText += "*** ERROR: could not get runtime\n";
+								}
+							}
+							else
+							{
+								outputWindowText += "*** ERROR: could not write " + scriptFileName + "\n";
+							}
+						}
+					}
+				}
+				else
+				{
+					outputWindowText += "*** ERROR: could not retrieve script file name from " + scriptFileNameKey + "\n";
+				}
+			}
+			else
+			{
+					outputWindowText += "*** ERROR: could not create file name key \"scriptFileName" + pageId + "\"\n";
+			}
+			setSUIProperty(pageId, "outputPage.text", "Text", outputWindowText);
+			boolean showResult = showSUIPage(pageId);
+			flushSUIPage(pageId);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,434 @@
+include library.ai_lib;
+include library.create;
+include library.groundquests;
+include library.stealth;
+include library.utils;
+
+const boolean LOGGING_ON			= true; 
+
+const string TRIGGER_NAME_PREFIX 		= "camp_defense_trigger_";
+const string SCRIPT_LOG				= "outbreak_trigger";
+const string CLIENT_EFFECT			= "appearance/pt_smoke_puff.prt";
+const string WAITING_TO_START			= "waitingAtPost";
+const string BEGIN_DEFENSE_SIGNAL		= "hasWaitedAtPost";
+const string END_DEFENSE_SIGNAL			= "hasKilledWave";
+const string FAIL_DEFENSE_SIGNAL		= "campDefenseFailed";
+const string SPAWNER_OBJVAR			= "spawnerObject";
+const string GUARD_OCCUPIED			= "occupied";
+
+const float TRIGGER_RADIUS 			= 10f;
+const float SEARCH_RADIUS 			= 100f;
+const int WAIT_DELAY				= 5;
+const int FAIL_TIMER				= 480;
+
+const string MENU_STRING_FILE			= "theme_park/outbreak/outbreak";
+const string_id SID_COME_BACK_LATER		= new string_id(MENU_STRING_FILE, "guard_post_occupied_come_back_later");
+
+trigger OnInitialize()
+{
+	CustomerServiceLog("outbreak_themepark", "camp_defense.OnInitialize() initializing a camp defense controller.");
+
+	messageTo(self, "findPathNodes", null, 2, false);
+
+	createTriggerVolume(TRIGGER_NAME_PREFIX + self, TRIGGER_RADIUS, true);
+	if(!hasTriggerVolume(self, TRIGGER_NAME_PREFIX + self))
+		messageTo(self, "triggerVolFailsafe", null, 2, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id whoTriggeredMe)
+{
+	if(!hasObjVar(self, "questObject"))
+		return SCRIPT_CONTINUE;
+
+	if(!isPlayer(whoTriggeredMe))
+		return SCRIPT_CONTINUE;
+
+	if(!utils.hasScriptVar(self, "ourSpawner"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.OnTriggerVolumeEntered() the controller, "+self+", has no spawner object.");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id ourSpawner = utils.getObjIdScriptVar(self, "ourSpawner");
+	if(!isValidId(ourSpawner) || !exists(ourSpawner))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.OnTriggerVolumeEntered() the controller, "+self+", has an invalid spawner object.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string questName = getStringObjVar(self, "questObject");
+	if(questName == null || questName.length() <= 0)
+		return SCRIPT_CONTINUE;
+	
+	if(!groundquests.isQuestActive(whoTriggeredMe, questName)) 
+		return SCRIPT_CONTINUE;
+	
+	if(!groundquests.isTaskActive(whoTriggeredMe, questName, "goToPost")
+	&& !groundquests.isTaskActive(whoTriggeredMe, questName, WAITING_TO_START))
+		return SCRIPT_CONTINUE;
+
+	if(utils.hasScriptVar(self, GUARD_OCCUPIED))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.OnTriggerVolumeEntered() Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ ") is attempting to occupy a post that is already occupied.");
+		sendSystemMessage(whoTriggeredMe, SID_COME_BACK_LATER);
+		return SCRIPT_CONTINUE;		
+	}
+	
+	CustomerServiceLog("outbreak_themepark", "camp_defense.OnTriggerVolumeEntered() Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ ") has triggered the volume and is ready to defend camp.");
+	
+	int combatLevel = getLevel(whoTriggeredMe);
+	if(combatLevel < 0 || combatLevel > 90)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.OnTriggerVolumeEntered() Player "+whoTriggeredMe+" has a level that is invalid. Player level is: "+combatLevel+". Aborting the camp defense.");
+		return SCRIPT_CONTINUE;	
+	}
+	
+	int campDefenseKey = 0;
+	
+	if(!utils.hasScriptVar(whoTriggeredMe, "campDefenseKey"))
+	{
+		utils.setScriptVar(whoTriggeredMe, "campDefenseKey", 0);
+	}
+	else
+	{
+		campDefenseKey = utils.getIntScriptVar(whoTriggeredMe, "campDefenseKey");
+		if(campDefenseKey >= 0)
+		{
+			campDefenseKey = campDefenseKey + 1;
+		}
+		else
+		{
+			campDefenseKey = 0;
+		}
+		utils.setScriptVar(whoTriggeredMe, "campDefenseKey", campDefenseKey);		
+	}
+	
+	dictionary webster = new dictionary();
+	webster.put("player", whoTriggeredMe);	
+	webster.put("questName", questName);
+	webster.put("combatLevel", combatLevel);
+	webster.put("ourSpawner", ourSpawner);
+	webster.put("campDefenseKey", campDefenseKey);
+	webster.put("tookTooLong", true);
+	
+	messageTo(self, "updatePlayerDefense", webster, WAIT_DELAY, false);
+	messageTo(self, "failPlayerDefense", webster, FAIL_TIMER, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id whoTriggeredMe)
+{
+	if(!hasObjVar(self, "questObject"))
+		return SCRIPT_CONTINUE;
+
+	if(!isPlayer(whoTriggeredMe))
+		return SCRIPT_CONTINUE;
+
+	string questName = getStringObjVar(self, "questObject");
+	if(questName == null || questName.length() <= 0)
+		return SCRIPT_CONTINUE;
+
+	if(utils.hasScriptVar(self, GUARD_OCCUPIED))
+	{
+		obj_id occupyingPlayer = utils.getObjIdScriptVar(self,GUARD_OCCUPIED);
+		if(!isValidId(whoTriggeredMe) || !exists(whoTriggeredMe) || occupyingPlayer == whoTriggeredMe)
+		{
+			utils.removeScriptVar(self,GUARD_OCCUPIED);
+		}
+	}
+	
+	if(!groundquests.isQuestActive(whoTriggeredMe, questName)) 
+		return SCRIPT_CONTINUE;
+	
+	if(!groundquests.isTaskActive(whoTriggeredMe, questName, "surviveTimer")
+	&& !groundquests.isTaskActive(whoTriggeredMe, questName, "waitToCleanUpAll"))
+		return SCRIPT_CONTINUE;
+
+	dictionary webster = new dictionary();
+	webster.put("player", whoTriggeredMe);	
+	webster.put("questName", questName);
+	webster.put("tookTooLong", false);	
+	messageTo(self, "failPlayerDefense", webster, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler updatePlayerDefense()
+{
+	CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() initialized.");
+
+	if((params == null) || (params.isEmpty()))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() Params invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	if(!params.containsKey("player"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() player param not found.");
+		return SCRIPT_CONTINUE;
+	}
+	if(!params.containsKey("questName"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() questName param not found.");
+		return SCRIPT_CONTINUE;
+	}
+	if(!params.containsKey("combatLevel"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() questName param not found.");
+		return SCRIPT_CONTINUE;
+	}
+	if(!params.containsKey("ourSpawner"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() ourSpawner param not found.");
+		return SCRIPT_CONTINUE;
+	}
+
+	CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() validation completed.");
+	
+	obj_id player = params.getObjId("player");
+	if(!isValidId(player) || !exists(player))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() player OID invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	string questName = params.getString("questName");
+	if(questName == null || questName.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() player "+player+" has received an invalid quest name.");
+		return SCRIPT_CONTINUE;
+	}
+	int combatLevel = params.getInt("combatLevel");
+	if(combatLevel < 0 || combatLevel > 90)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() Player "+player+" has a level that is invalid. Player level is: "+combatLevel+". Aborting the camp defense.");
+		return SCRIPT_CONTINUE;	
+	}
+
+	if(!groundquests.isQuestActive(player, questName)) 
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() Player "+player+" did not have the appropriate quest active. Aborting the camp defense.");
+		return SCRIPT_CONTINUE;	
+	}
+	
+	if(!groundquests.isTaskActive(player, questName, WAITING_TO_START))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() Player "+player+" did not have the appropriate quest TASK active. Aborting the camp defense.");
+		return SCRIPT_CONTINUE;	
+	}
+	obj_id ourSpawner = params.getObjId("ourSpawner");
+	if(!isValidId(ourSpawner) || !exists(ourSpawner))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() ourSpawner OID invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	if(utils.hasScriptVar(player, "enemyList"))
+	{
+		utils.removeScriptVar(player, "enemyList");
+	}
+
+	groundquests.sendSignal(player, BEGIN_DEFENSE_SIGNAL);
+	CustomerServiceLog("outbreak_themepark", "camp_defense.updatePlayerDefense() messaging Spawner.");	
+	messageTo(ourSpawner, "startSpawning", params, 1, false);
+	utils.setScriptVar(self, GUARD_OCCUPIED, player);
+	utils.setScriptVar(player, GUARD_OCCUPIED, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler failPlayerDefense()
+{
+	//CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() has initialized");
+
+	if((params == null) || (params.isEmpty()))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() Params invalid.");
+		return SCRIPT_CONTINUE;
+
+	}
+	if(!params.containsKey("player"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() player param not found.");
+		return SCRIPT_CONTINUE;
+	}
+	if(!params.containsKey("questName"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() questName param not found.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	int campDefenseKey = 0;
+	if(params.containsKey("campDefenseKey"))
+	{
+		//CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() campDefenseKey param found. Continuing anyway");
+		campDefenseKey = params.getInt("campDefenseKey");
+	}
+	boolean tookTooLong = true;
+	if(params.containsKey("tookTooLong"))
+	{
+		//CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() tookTooLong param found. Continuing with that var");
+		tookTooLong = params.getBoolean("tookTooLong");
+	}
+	
+	//CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() validation completed");
+	
+	obj_id player = params.getObjId("player");
+	if(!isValidId(player) || !exists(player))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() player OID invalid.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string questName = params.getString("questName");
+	if(questName == null || questName.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() player "+player+" has received an invalid quest name. Aborthing quest failure.");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!groundquests.isQuestActive(player, questName)) 
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() Player "+player+" did not receive the appropriate quest in a payload for a messageHandler. Aborting the camp defense quest failure.");
+		return SCRIPT_CONTINUE;	
+	}
+
+	if(groundquests.hasCompletedTask(player, questName, "waitToCleanUpAll"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() Player "+player+" has completed the task, abort the removal!");
+		return SCRIPT_CONTINUE;	
+	}
+	
+	//If the quest fail is due to the player taking too long to complete, 
+	//do this block, otherwise the player has just
+	//left the trigger volume or died. 
+	if(tookTooLong)
+	{
+		int playerCampDefenseKey = 0;
+		if(!utils.hasScriptVar(player, "campDefenseKey"))
+		{
+			CustomerServiceLog("outbreak_themepark", "camp_defense.failPlayerDefense() Player "+player+" did not have the appropriate quest campDefenseKey on their character. Continuing anyway.");	
+			//We want to make sure that the quest clears to clear up any exploit or munged data
+			playerCampDefenseKey = campDefenseKey;
+		}
+		else
+		{
+			playerCampDefenseKey = utils.getIntScriptVar(player, "campDefenseKey");
+			if(playerCampDefenseKey < 0)
+			{
+				//We want to make sure that the quest clears to clear up any exploit or munged data
+				playerCampDefenseKey = campDefenseKey;
+			}
+		}
+
+		if(playerCampDefenseKey != campDefenseKey)
+		{
+			//this player is on a different quest, not the same quest. Don't clear!
+			return SCRIPT_CONTINUE;	
+		}
+		
+
+		if(!utils.hasScriptVar(player, "givenMoreDefenseTime")
+		&& ai_lib.isInCombat(player) 
+		&& utils.hasScriptVar(player, "enemyList") 
+		&& utils.hasScriptVar(self, "ourSpawner"))
+		{
+
+			obj_id ourSpawner = utils.getObjIdScriptVar(self, "ourSpawner");
+			if(isValidId(ourSpawner))
+			{
+
+				int spawnAmt = getIntObjVar(ourSpawner, "numberOfEnemies");
+				if(spawnAmt > 0)
+				{
+
+					obj_id[] enemyList = utils.getObjIdArrayScriptVar(player, "enemyList");
+					if(enemyList != null && enemyList.length > 0)
+					{
+
+						if(spawnAmt > enemyList.length)
+						{
+							utils.setScriptVar(player, "givenMoreDefenseTime", true);
+							messageTo(self, "failPlayerDefense", params, FAIL_TIMER, false);
+							return SCRIPT_CONTINUE;				
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	groundquests.sendSignal(player, FAIL_DEFENSE_SIGNAL); 
+	utils.removeScriptVar(self,GUARD_OCCUPIED);
+	utils.removeScriptVar(player, "givenMoreDefenseTime");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler triggerVolFailsafe()
+{
+	CustomerServiceLog("outbreak_themepark", "camp_defense.triggerVolFailsafe() initializing triggerVolFailsafe to make sure the object has a volume trigger on "+self);	
+
+	createTriggerVolume(TRIGGER_NAME_PREFIX + self, TRIGGER_RADIUS, true);
+	if(!hasTriggerVolume(self, TRIGGER_NAME_PREFIX + self))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.triggerVolFailsafe() initializing triggerVolFailsafe has failed for "+self+". Critical failure.");	
+		messageTo(self, "triggerVolFailsafe", null, 2, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler findPathNodes()
+{
+	if(!hasObjVar(self, "questObject"))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.findPathNodes() initializing failed. The controller, "+self+" had no questObject objvar. Location: "+getLocation(self));	
+		return SCRIPT_CONTINUE;
+	}
+	
+	string questName = getStringObjVar(self, "questObject");
+	if(questName == null || questName.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.findPathNodes() initializing failed. The controller, "+self+" had no questName objvar. Location: "+getLocation(self));	
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] spawnerList = getAllObjectsWithObjVar(getLocation(self), SEARCH_RADIUS, SPAWNER_OBJVAR);
+	if(spawnerList == null || spawnerList.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.findPathNodes() the controller, "+self+" failed to find any valid spawner objects within "+SEARCH_RADIUS+" of "+getLocation(self));
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id ourSpawner = obj_id.NULL_ID;
+	
+	for(int i = 0; i < spawnerList.length; i++)
+	{
+		string spawnerQuestNameMatch = getStringObjVar(spawnerList[i], SPAWNER_OBJVAR);
+		if(spawnerQuestNameMatch == null || spawnerQuestNameMatch.length() <= 0)
+		{
+			CustomerServiceLog("outbreak_themepark", "camp_defense.findPathNodes() the controller, "+self+" found a spawner object that did not have a quest string. Spawner: "+spawnerList[i]);
+			continue;
+		}
+		if(spawnerQuestNameMatch != questName)
+			continue;
+			
+		ourSpawner = spawnerList[i];
+		break;
+	}
+
+	if(!isValidId(ourSpawner) || !exists(ourSpawner))
+	{
+		CustomerServiceLog("outbreak_themepark", "camp_defense.findPathNodes() the controller, "+self+" failed to find any valid spawner objects (after a loop of all objects) within "+SEARCH_RADIUS+" of "+getLocation(self));
+		return SCRIPT_CONTINUE;
+	}
+	
+	utils.setScriptVar(self, "ourSpawner", ourSpawner);
+	return SCRIPT_CONTINUE;
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON)
+		LOG(SCRIPT_LOG,msg);
+	return true;
+}

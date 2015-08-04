@@ -1,0 +1,277 @@
+//----------------------------------------------------------
+// vehicle_ping.script
+//
+// This script is attached to a vehicle.  It is setup to
+// send a ping to the vehicle's vehicle control device (VCD).
+// If the VCD does not respond to the ping in a timely fashion
+// or it responds with an indication that this vehicle is not
+// supposed to be out, the vehicle is destroyed.  A positive
+// acknowledgement from the VCD is required for the vehicle
+// to continue to exist in the world.
+//----------------------------------------------------------
+
+include library.callable;
+include library.pet_lib;
+include library.utils;
+include library.vehicle;
+
+//----------------------------------------------------------
+
+const string VCDPING_VCD_SCRIPT_NAME         = "systems.vehicle_system.vcd_ping_response";
+
+const string VCDPING_SEND_MESSAGE_NUMBER     = "vcdping.sendMsgNumber";
+const string VCDPING_LAST_ACK_MESSAGE_NUMBER = "vcdping.lastAckNumber";
+
+const string VCDPING_MESSAGE_VEHICLE_ID_NAME = "vehicleId";
+const string VCDPING_MESSAGE_MESSAGE_ID_NAME = "messageId";
+const string VCDPING_MESSAGE_RIDER_ID_NAME   = "riderId";
+
+const string VCDPING_PING_CALLBACK_NAME      = "vehiclePingCallback";
+const string VCDPING_VCD_MESSAGEHANDLER_NAME = "handleVehiclePing";
+
+const int    VCDPING_MAX_UNACKNOWLEDGED_MESSAGE_COUNT = 3;
+const int    VCDPING_PING_INTERVAL_INITIAL            = 10;
+const int    VCDPING_PING_INTERVAL_STANDARD           = 300;
+const int    VCDPING_PING_INTERVAL_RETRY              = 30;
+
+const boolean debug = false;
+
+//----------------------------------------------------------
+
+trigger OnAttach()
+{
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.OnAttach(): self = [" + self + "] entered");
+
+	//-- Initialize vcd ping variables.
+	// Note: these objvars are not expensive because vehicles are not persisted.
+	setObjVar(self, VCDPING_SEND_MESSAGE_NUMBER, 0);
+	setObjVar(self, VCDPING_LAST_ACK_MESSAGE_NUMBER, 0);
+
+	//-- Kick off the first ping heartbeat now.
+	messageTo(self, VCDPING_PING_CALLBACK_NAME, null, VCDPING_PING_INTERVAL_INITIAL, false);
+
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.OnAttach(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+/**
+ * This is the heartbeat callback function for the vehicle/vcd ping system.
+ */
+
+messageHandler vehiclePingCallback()
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.vehiclePingCallback(): self = [" + self + "] entered");
+	
+	//-- Setup the new vehicle ping message number.  These get incremented by 1 each ping callback.
+	const int previousMessageNumber = getIntObjVar(self, VCDPING_SEND_MESSAGE_NUMBER);
+	const int newMessageNumber = previousMessageNumber + 1;
+	setObjVar(self, VCDPING_SEND_MESSAGE_NUMBER, newMessageNumber);
+	
+	if (vehicle.isBattlefieldVehicle(self))
+		return SCRIPT_CONTINUE;
+
+	//-- If previousMessageNumber == 0, this means we're just starting.
+	if (previousMessageNumber == 0)
+		ensureVcdHasSisterScript(self);
+	
+	//-- Retrieve the last VCD-acknowledged message number.
+	const int mostRecentAcknowledgedMessageNumber = getIntObjVar(self, VCDPING_LAST_ACK_MESSAGE_NUMBER);
+	
+	//-- Check if we've exceeded the maximum number of unacknowledged 
+	const int unacknowledgedGap = previousMessageNumber - mostRecentAcknowledgedMessageNumber;
+	if (unacknowledgedGap > VCDPING_MAX_UNACKNOWLEDGED_MESSAGE_COUNT)
+	{
+		boolean killSuccess = doPingBasedKill(self, "vehicle received no acknowledgement from VCD, killing vehicle with unacknowleged gap=[" + unacknowledgedGap + "]. VCD appears to be unloaded.");
+		if (killSuccess)
+			return SCRIPT_CONTINUE;
+		else
+		{
+			LOG("mounts-bug", "vehicle_ping.vehiclePingCallback(): doPingBasedKill() failed for vehicle=[" + self + "], continuing ping loop so that we can try to kill it later.");
+			// continue through here so we requeue the callback for another attempt (or possible recovery) later.
+		}
+	}
+
+	//-- Determine next callback interval based on whether our most recent send was acknowledged.
+	//   If our most recent send has been acknowledged, use the infrequent, standard time interval
+	//   for this callback.  Otherwise accelerate the ping so we get rid of this suspect vehicle
+	//   more rapidly.
+	const int nextCallbackInterval = (unacknowledgedGap <= 0) ? VCDPING_PING_INTERVAL_STANDARD : VCDPING_PING_INTERVAL_RETRY;
+	
+	//-- Setup ping message to the vehicle control device.
+	// Get the VCD id.
+	obj_id controlDevice = callable.getCallableCD(self);
+
+	if(!isIdValid(controlDevice))
+	{
+		boolean killSuccess = doPingBasedKill(self, "vehicle does not have a valid VCD objvar");
+		if (killSuccess)
+			return SCRIPT_CONTINUE;
+		else
+		{
+			LOG("mounts-bug", "vehicle_ping.vehiclePingCallback(): doPingBasedKill() failed for vehicle=[" + self + "], continuing ping loop so that we can try to kill it later.");
+			// continue through here so we requeue the callback for another attempt (or possible recovery) later.
+		}
+	}
+	else
+	{
+		// Construct the dictionary of info about this vehicle that we'll pass to the VCD.
+		dictionary messageData = new dictionary();
+
+		messageData.put(VCDPING_MESSAGE_VEHICLE_ID_NAME, self);
+		messageData.put(VCDPING_MESSAGE_MESSAGE_ID_NAME, newMessageNumber);
+
+		// If this vehicle has a rider, include the rider id.
+		obj_id riderId = getRiderId(self);
+		if (isIdValid(riderId))
+			messageData.put(VCDPING_MESSAGE_RIDER_ID_NAME, riderId);
+		
+		// Send the ping message to the VCD, get it there as fast as possible.
+		messageTo(controlDevice, VCDPING_VCD_MESSAGEHANDLER_NAME, messageData, 1, false);
+
+		if (debug)
+			LOG("vcdping-debug", "vehicle_ping.vehiclePingCallback(): self = [" + self + "] sent ping message to VCD.");
+	}
+	
+	
+	//-- Enqueue next vehicle ping callback.
+	messageTo(self, VCDPING_PING_CALLBACK_NAME, null, nextCallbackInterval, false);
+	
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.vehiclePingCallback(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+/**
+ * This message is sent by the VCD and received by the vehicle
+ * when the VCD is in agreement that this vehicle should be out.
+ */
+ 
+messageHandler handlePositiveAcknowledgementFromVcd()
+{
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.handlePositiveAcknowledgementFromVcd(): self = [" + self + "] entered");
+
+	//-- Extract the acknowledgement message number from the message data.
+	const int ackMessageNumber = params.getInt(VCDPING_MESSAGE_MESSAGE_ID_NAME);
+
+	//-- Retrieve the last acknowledged message number for the vehicle.
+	const int mostRecentAckMessageNumber = getIntObjVar(self, VCDPING_LAST_ACK_MESSAGE_NUMBER);
+
+	//-- Apply message ack number if it is larger than the largest ack number we've seen so far.
+	if (ackMessageNumber > mostRecentAckMessageNumber)
+	{
+		// This message is an ack to a newer message number than the previous highest ack.  Store it.
+		setObjVar(self, VCDPING_LAST_ACK_MESSAGE_NUMBER, ackMessageNumber);
+
+		if (debug)
+			LOG("vcdping-debug", "vehicle_ping.handlePositiveAcknowledgementFromVcd(): processed newer positive VCD ack number=[" + ackMessageNumber + "]");
+	}
+	else
+	{
+		// Skip this ack --- it's an ack for an older message when we've already received a newer one.
+		if (debug)
+			LOG("vcdping-debug", "vehicle_ping.handlePositiveAcknowledgementFromVcd(): discarded older positive VCD ack number=[" + ackMessageNumber + "], highest ack is [" + mostRecentAckMessageNumber + "]");
+	}
+	
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.handlePositiveAcknowledgementFromVcd(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+/**
+ * This message is sent by the VCD and received by the vehicle
+ * when the VCD does not believe this vehicle should be out.
+ */
+
+messageHandler handleNegativeAcknowledgementFromVcd()
+{
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.handleNegativeAcknowledgementFromVcd(): self = [" + self + "] entered");
+
+	//-- Destroy the vehicle now.
+	const boolean killSuccess = doPingBasedKill(self, "VCD indicated that this vehicle should not exist");
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.handleNegativeAcknowledgementFromVcd(): self = [" + self + "] attempted to kill vehicle per VCD request.  killSuccess=[" + killSuccess + "]");
+	
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.handleNegativeAcknowledgementFromVcd(): self = [" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+boolean doPingBasedKill(obj_id vehicle, string reason)
+{
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.doPingBasedKill(): vehicle = [" + vehicle + "] entered");
+
+	//-- Log the ping-based kill.
+	LOG("vcdping-kill", "Killing vehicle id=[" + vehicle + "]: reason=[" + reason + "]");
+
+	//-- Destroy the vehicle.
+
+	// Dismount the rider of this mount/vehicle if there's anything on it.
+	obj_id rider = getRiderId(vehicle);
+	if (isIdValid(rider))
+	{
+		// Do the dismount immediately.
+		boolean dismountSuccess = pet_lib.doDismountNow(rider);
+		if (!dismountSuccess)
+			LOG("mounts-bug", "vehicle_ping.doPingBasedKill(): creature [" + vehicle + "], rider [" + rider + "] failed to dismount.  Will still try to kill the vehicle.");
+	}
+
+	// Destroy the vehicle.
+	obj_id vehicleControlDevice = callable.getCallableCD(vehicle);
+	pet_lib.savePetInfo( vehicle, vehicleControlDevice );
+	utils.setScriptVar( vehicle, "stored", true );
+
+	boolean killSuccess = destroyObject(vehicle);
+	
+	if (!killSuccess)
+		LOG("vcdping-kill", "failed to destroy vehicle=[" + vehicle + "].");
+
+	if (debug)
+		LOG("vcdping-debug", "vehicle_ping.doPingBasedKill(): vehicle = [" + vehicle + "] exited");
+
+	return killSuccess;
+}
+
+//----------------------------------------------------------
+
+void ensureVcdHasSisterScript(obj_id vehicle)
+{
+	//-- Double check that the VCD for this vehicle has the VCD sister script attached.
+	// @todo might as well handle this here and remove the one that attaches the script
+	// to the VCD via the vehicle_control_device.script's OnInitialize() trigger.
+
+	// Get the vehicle control device.
+	obj_id controlDevice = callable.getCallableCD(vehicle);
+	
+	// Ensure that the VCD has the vehicle ping response script attached.
+	if(isIdValid(controlDevice) && !hasScript(controlDevice, VCDPING_VCD_SCRIPT_NAME))
+	{
+		if (debug)
+			LOG("vcdping-debug", "vehicle_ping.ensureVcdHasSisterScript(): attaching script [" + VCDPING_VCD_SCRIPT_NAME + "] to VCD id=[" + controlDevice + "]");
+		attachScript(controlDevice, VCDPING_VCD_SCRIPT_NAME);
+	}
+	else
+	{
+		if (debug)
+			LOG("vcdping-debug", "vehicle_ping.ensureVcdHasSisterScript(): couldn't attach script [" + VCDPING_VCD_SCRIPT_NAME + "] to VCD because didn't have objvar");
+	}
+
+}
+
+//----------------------------------------------------------

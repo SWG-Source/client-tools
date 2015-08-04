@@ -1,0 +1,407 @@
+// ================================================================================
+//
+// spawn.script
+// copyright 2006, Sony Online Entertainment LLC
+//
+// ================================================================================
+
+include ai.ai_combat;
+include library.ai_lib;
+include library.buff;
+include library.create;
+include library.groundquests;
+include library.locations;
+include library.utils;
+include library.ship_ai;
+include library.space_quest;
+include library.space_utils;
+include library.space_create;
+include library.space_transition;
+
+// --------------------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// --------------------------------------------------------------------------------
+
+const String dataTableColumnCreatureType = "CREATURE_TYPE";
+const String dataTableColumnMinCount = "MIN_COUNT";
+const String dataTableColumnMaxCount = "MAX_COUNT";
+const String dataTableColumnMinDistance = "MIN_DISTANCE";
+const String dataTableColumnMaxDistance = "MAX_DISTANCE";
+const String dataTableColumnMinLevelDifference = "MIN_LEVEL_DIFFERENCE";
+const String dataTableColumnMaxLevelDifference = "MAX_LEVEL_DIFFERENCE";
+const String dataTableColumnGroundStartCombat = "GROUND_START_COMBAT";
+const String dataTableColumnDismountPlayer = "DISMOUNT_PLAYER";
+const String dataTableColumnMountBlockDuration = "MOUNT_BLOCK_DURATION";
+const String dataTableColumnBuffName = "BUFF_NAME";
+
+const String dataTableColumnShipType = "SHIP_TYPE";
+const String dataTableColumnShipMinCount = "SHIP_MIN_COUNT";
+const String dataTableColumnShipMaxCount = "SHIP_MAX_COUNT";
+const String dataTableColumnSpaceStartCombat = "SPACE_START_COMBAT";
+const String dataTableColumnHyperspaceBlockDuration = "HYPERSPACE_BLOCK_DURATION";
+
+const String dataTableColumnMinStartDelay = "MIN_START_DELAY";
+const String dataTableColumnMaxStartDelay = "MAX_START_DELAY";
+const String dataTableColumnChanceToSkip = "CHANCE_TO_SKIP";
+
+const String objvarPlayedTimeEnd = "playedTimeEnd";
+
+const String objvarOnCreatureOwner = "quest.owner";
+const String objvarOnCreatureQuestCrc = "quest.questCrc";
+const String objvarOnCreatureTaskId = "quest.taskId";
+const String objvarOnCreatureCount = "quest.count";
+
+const String taskType = "spawn";
+const String dot = ".";
+
+const float cleanupTime = 300.f;
+const float cleanupRetryTime = 60.f;  
+
+const String scriptSpawnOnCreature = "quest.task.ground.spawn_on_creature";
+const String scriptSpawnOnShip = "quest.task.ground.spawn_on_ship";
+
+// --------------------------------------------------------------------------------
+
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+
+	int minStartDelay = Math.max(0, groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMinStartDelay));
+	int maxStartDelay = Math.max(minStartDelay, groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMaxStartDelay));
+
+	int timeLeft = 0;
+
+	if (minStartDelay > 0 && maxStartDelay > 0)
+		timeLeft = rand(minStartDelay, maxStartDelay);
+
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "Spawn will start in " + timeLeft + " seconds.");
+
+	dictionary params = new dictionary();
+	params.put("questCrc", questCrc);
+	params.put("taskId",   taskId);
+
+	float playerPlayedTimeWhenTimerEnds = (float)getPlayerPlayedTime(self) + timeLeft;
+	setObjVar(self, baseObjVar + "." + objvarPlayedTimeEnd, playerPlayedTimeWhenTimerEnds);
+
+	messageTo(self, "messageStartQuestSpawn", params, timeLeft, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+messageHandler messageStartQuestSpawn()
+{
+	int questCrc    = params.getInt  ("questCrc");
+	int taskId      = params.getInt  ("taskId");
+
+	if(questIsTaskActive(questCrc, taskId, self))
+	{
+		String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+		float playerPlayedTimeWhenTimerEnds = getFloatObjVar(self, baseObjVar + "." + objvarPlayedTimeEnd);
+		float timeLeft = playerPlayedTimeWhenTimerEnds - (float)getPlayerPlayedTime(self);
+
+		if(timeLeft > 1)
+		{
+			messageTo(self, "messageStartQuestSpawn", params, timeLeft, true);
+			return SCRIPT_CONTINUE;
+		}
+
+		int chanceToSkip = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnChanceToSkip);
+	
+		int chanceRoll = rand(0, 99);
+
+		if(chanceToSkip > chanceRoll)
+		{
+			questCompleteTask(questCrc, taskId, self);
+			return SCRIPT_CONTINUE;
+		}
+		
+		if (isSpaceScene())
+			startSpaceQuestSpawn(self, questCrc, taskId);
+		else
+			startGroundQuestSpawn(self, questCrc, taskId);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+void startGroundQuestSpawn(obj_id player, int questCrc, int taskId)
+{
+	String creatureType = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnCreatureType);
+	int minCount = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMinCount);
+	int maxCount = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMaxCount);
+	float minRadius = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMinDistance);
+	float maxRadius = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMaxDistance);
+	boolean shouldDismountPlayer = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableColumnDismountPlayer, false);
+	int mountBlockDuration = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMountBlockDuration);
+	String buffName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnBuffName);
+
+	int minLevelDifference = Math.max(0, groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMinLevelDifference));
+	int maxLevelDifference = Math.max(0, groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMaxLevelDifference));
+	boolean doAutoLeveling = minLevelDifference > 0 || maxLevelDifference > 0;
+	
+	location l = null;
+	location locTest = getLocation(player);
+			
+	if(!isIdValid(locTest.cell))
+	{
+		location locA = locTest;
+		location locB = locTest;
+	
+		locA.x -= 5;
+		locA.y -= 5;
+		locA.z -= 5;
+		
+		locB.x += 5;
+		locB.y += 5;
+		locB.z += 5;
+	
+		// getGoodLocation(float hintX, float hintZ, location searchRectLL, location searchRectUR, boolean dontCheckWater, boolean dontCheckSlope)
+		l = getGoodLocation(1, 1, locA, locB, false, true);
+
+		// Bad location found?
+		if(getDistance(l, locTest) < 0.0f || getDistance(l, locTest) > 10.0f)
+		{
+			questCompleteTask(questCrc, taskId, player);
+			return;
+		}
+	}
+			
+	if (shouldDismountPlayer)
+		utils.dismountRiderJetpackCheck(player);
+	
+	if (mountBlockDuration > 0)
+		utils.setScriptVar(player, "mountBlock", getPlayerPlayedTime(player) + mountBlockDuration);
+	
+	if (buffName != null && buffName.length() > 0)
+		buff.applyBuff(player, buffName);
+
+	if (maxCount < minCount)
+		maxCount = minCount;
+
+	int count = rand(minCount, maxCount);
+	for (int i = 0; i < count; ++i)
+	{
+		l = null;
+
+		if(!isIdValid(locTest.cell))
+		{
+			l = groundquests.getRandom2DLocationAroundPlayer(player, minRadius, maxRadius);
+		}
+		else
+		{
+			// handle the case where the player is inside a building
+			string strCell = getCellName(locTest.cell);
+			obj_id objBuilding = getTopMostContainer(player);
+			l = getGoodLocation(objBuilding, strCell);                                                             
+		}
+
+
+		obj_id creature;
+		int creatureLevel = 0;
+
+		if (doAutoLeveling)
+		{
+			int minLevel = Math.max(1, getLevel(player) - minLevelDifference);
+			int maxLevel = Math.max(minLevel, getLevel(player) + maxLevelDifference);
+			
+			creatureLevel = rand(minLevel, maxLevel);
+			
+			if(creatureLevel > 90)
+			{
+				creatureLevel = 90;
+			}
+			else if(creatureLevel < 1)
+			{
+				creatureLevel = 1;
+			}
+
+			creature = create.createCreature(creatureType, l, creatureLevel, true);
+		}
+		else
+		{
+			creature = create.createCreature(creatureType, l, true);
+		}
+
+		setObjVar(creature, objvarOnCreatureOwner, player);
+		setObjVar(creature, objvarOnCreatureQuestCrc, questCrc);
+		setObjVar(creature, objvarOnCreatureTaskId, taskId);
+		setObjVar(creature, objvarOnCreatureCount, i);
+		attachScript(creature, scriptSpawnOnCreature);
+
+		// if we can be talked to, that probably means we shouldn't be attacking.
+		if (!hasCondition(creature, CONDITION_CONVERSABLE))
+		{
+			groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "startGroundQuestSpawn",
+				"Spawned " + creature + "(" + creatureLevel + ") at [" + l.x + ", " + l.y + ", " + l.z + "] to attack " + player);
+
+			boolean shouldStartCombat = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableColumnGroundStartCombat, false);
+
+			if (shouldStartCombat)
+				startCombat(creature, player);
+		}
+	}
+
+	questCompleteTask(questCrc, taskId, player);
+	return;
+}
+
+// --------------------------------------------------------------------------------
+
+void startSpaceQuestSpawn(obj_id player, int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "startSpaceQuestSpawn",
+		"Space spawn started!");
+
+	boolean shouldStartCombat = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableColumnSpaceStartCombat, false);
+
+	if (shouldStartCombat && !space_utils.isPlayerShipAttackable(player))
+	{
+		groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "startSpaceQuestSpawn",
+			"Spawn failed due to player's ship being unattackable.");
+		questFailTask(questCrc, taskId, player);
+		return;
+	}
+
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+
+	String shipType = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnShipType);
+
+	if (shipType == null || shipType.length() == 0)
+	{
+		groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "startSpaceQuestSpawn",
+			"Spawn failed due to starting in space with no shipType defined.");
+		questFailTask(questCrc, taskId, player);
+		return;
+	}
+
+	int hyperspaceBlockDuration = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnHyperspaceBlockDuration);
+
+	if (hyperspaceBlockDuration > 0)
+		space_utils.setHyperspaceBlock(player, hyperspaceBlockDuration, true);
+
+	int minCount = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnShipMinCount);
+	int maxCount = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnShipMaxCount);
+
+	if (maxCount < minCount)
+		maxCount = minCount;
+
+	int squad = ship_ai.squadCreateSquadId();
+	int count = rand(minCount, maxCount);
+
+	for (int i = 0; i < count; ++i)
+	{
+		transform gloc = getTransform_o2w(space_transition.getContainingShip(player));
+
+		// Move the starting spot out in front of us.
+		float dist = rand(700.f, 800.f);
+		vector n = gloc.getLocalFrameK_p().normalize().multiply(dist); // Project a point out in front of us.
+		gloc = gloc.move_p(n);
+
+		// Flip the starting spot around so its facing us.
+		gloc = gloc.yaw_l(3.14f);
+
+		// Find a spot on the IJ plane for deviation in a cone shape.
+		vector vi = gloc.getLocalFrameI_p().normalize().multiply(rand(-150.f, 150.f));
+		vector vj = gloc.getLocalFrameJ_p().normalize().multiply(rand(-150.f, 150.f));
+		vector vd = vi.add(vj);
+		gloc = gloc.move_p(vd);
+
+		obj_id newship = space_create.createShipHyperspace(shipType, gloc);
+		ship_ai.unitSetLeashDistance(newship, 16000);
+		if (count > 3)
+			ship_ai.unitSetSquadId(newship, squad);
+
+		attachScript(newship, scriptSpawnOnShip);
+
+		if (shouldStartCombat)
+		{
+			// This guy can only be harmed by the player or his group.
+			setObjVar(newship, "objMissionOwner", player);
+			ship_ai.unitAddExclusiveAggro(newship, player);
+			dictionary dict = new dictionary ();
+			dict.put("player", space_transition.getContainingShip(player));
+			messageTo(newship, "spawnAttackPlayerShip", dict, 4.0f, false);
+		}
+	}
+
+	// Set a formation.
+	if (count > 3)
+		ship_ai.squadSetFormationRandom(squad);
+
+	questCompleteTask(questCrc, taskId, player);
+	return;
+}
+
+// --------------------------------------------------------------------------------
+
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + " task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// --------------------------------------------------------------------------------
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+trigger OnLogout()
+{
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	// make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// --------------------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	return SCRIPT_CONTINUE;
+}
+
+// ================================================================================

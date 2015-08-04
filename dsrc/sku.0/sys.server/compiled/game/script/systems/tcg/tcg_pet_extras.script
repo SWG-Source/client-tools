@@ -1,0 +1,378 @@
+/*
+This script controls the 'eggs' that nunas lay while roaming around inside of
+a player's house.  These egss are considered 'rotten' and can be picked up and 
+placed outside (within 40m of the player's home).
+Once placed outside, they can:
+A. Fertilize the 'lawn' and cause a collectible flower to grow (can be consumed for a collection)
+B. Spawn a large number of baby-nuna which can be harvested in a unique way.
+*/
+include library.ai_lib;
+include library.buff;
+include library.create;
+include library.house_pet;
+include library.locations;
+include library.player_structure;
+include library.static_item;
+include library.utils;
+
+const string_id SID_PICK_UP_EGG 		= new string_id("tcg", "pick_up_eggs");
+const string_id SID_DISCARD_EGG 		= new string_id("tcg", "discard_eggs");
+const string_id SID_WHILE_DEAD			= new string_id("spam", "while_dead");
+const string_id SID_NOT_OUTSIDE			= new string_id("tcg", "not_outside");
+const string_id SID_EGGS_CRUMBLE		= new string_id("tcg", "eggs_crumble");
+const string_id SID_TOO_FAR_FROM_HOME		= new string_id("tcg", "too_far_from_home");
+const string NUNA_FLOWER_01 			= "object/tangible/item/nuna_egg_flower_stage_01.iff";
+const string NUNA_FLOWER_02  			= "object/tangible/item/nuna_egg_flower_stage_02.iff";
+const string NUNA_FLOWER_03  			= "object/tangible/item/nuna_egg_flower_stage_03.iff";
+const string NUNA_FLOWER_DEAD  			= "object/tangible/item/nuna_egg_flower_dead.iff";
+const string THIS_SCRIPT 			= "systems.tcg.tcg_pet_extras";
+
+trigger OnInitialize()
+{
+	//Here we need to store the data from the House the egg was created in..
+	//A Player must place the eggs within 40m of the house they were created in.
+	obj_id rottenEgg = getSelf();
+	if(utils.isInHouseCellSpace(rottenEgg))
+	{
+		obj_id structure = getTopMostContainer(rottenEgg);
+		if(!isIdValid(structure))
+		{
+			return SCRIPT_CONTINUE;
+		}
+		setObjVar(rottenEgg, "house", structure);	
+	}
+
+	if(hasObjVar(self, "placed_in_world"))
+	{
+		int placedTime = getIntObjVar(self, "placed_in_world");
+		int gameTime = getCalendarTime();
+		if(gameTime - placedTime > 259200) //3 days
+		{
+			CustomerServiceLog("tcg","Nuna Eggs ("+ self +") persisted in the world for 3 days. Deleting this item.");	
+			destroyObject(self);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	//Here we need to store the data from the House the egg was created in..
+	//A Player must place the eggs within 40m of the house they were created in.
+	obj_id rottenEgg = getSelf();
+	if(utils.isInHouseCellSpace(rottenEgg))
+	{
+		obj_id structure = getTopMostContainer(rottenEgg);
+		if(!isIdValid(structure))
+		{
+			return SCRIPT_CONTINUE;
+		}
+		setObjVar(rottenEgg, "house", structure);	
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+/*
+You can put the following in the nuna egg’s OnAboutToBeTransferred() trigger to only allow it to be transferred 
+from cell->player inventory or player inventory->world
+
+
+Then in the nuna egg’s OnTransferred() trigger, if the destination container is the world cell *and* the nuna egg 
+isObjectPersisted(), destroy the object, and create a non-persisted replacement.
+*/
+/*
+	if (!isIdValid(sourceContainer))
+		return SCRIPT_OVERRIDE;
+
+	string templateNameSourceContainer = getTemplateName(sourceContainer);
+
+	if (templateNameSourceContainer == null)
+		return SCRIPT_OVERRIDE;
+
+	// can only go from cell->player inventory
+	if (templateNameSourceContainer.equals(structure.TEMPLATE_CELL))
+	{
+		if (!isIdValid(destContainer))
+			return SCRIPT_OVERRIDE;
+
+		string templateNameDestContainer = getTemplateName(destContainer);
+
+		if (templateNameDestContainer == null)
+			return SCRIPT_OVERRIDE;
+
+		if (!templateNameDestContainer.equals("object/tangible/inventory/character_inventory.iff"))
+			return SCRIPT_OVERRIDE;
+
+		return SCRIPT_CONTINUE;
+	}
+	// can only go from player inventory to world
+	else if (templateNameSourceContainer. equals(“object/tangible/inventory/character_inventory.iff”))
+	{
+		if destContainer is not world cell  // I don’t know the call to check for this off the top of my head
+			return SCRIPT_OVERRIDE;
+
+		return SCRIPT_CONTINUE;
+	}
+*/
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id rottenEgg = self;
+
+	if(!isIdValid(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if(isDead(player) || isIncapacitated(player))
+	{
+		sendSystemMessage(player, SID_WHILE_DEAD);
+		return SCRIPT_CONTINUE;
+	}
+	//You must be the owner of the house
+	obj_id structure = getTopMostContainer(rottenEgg);
+	if(!player_structure.isOwner(structure, player))
+		return SCRIPT_CONTINUE;	
+		
+	if(utils.isNestedWithinAPlayer(rottenEgg))
+	{
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_DISCARD_EGG);
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	obj_id rottenEgg = self;
+	
+	if(!isIdValid(player) || !isIdValid(rottenEgg))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if(isDead(player) || isIncapacitated(player) )
+	{
+		sendSystemMessage( player, SID_WHILE_DEAD );
+		return SCRIPT_CONTINUE;
+	}
+
+	if(item == menu_info_types.ITEM_USE)
+	{
+		//we need to find out exactly where the egg is at.
+		if(utils.isNestedWithinAPlayer(rottenEgg))
+		{
+			if(getTopMostContainer(self) == player)
+			{
+				LOG("sissynoid", "In Player's Inventory - Player in World");
+				placeRottenEgg(player, rottenEgg);
+				//allow them to place the egg - look at City Decoration Script for guidance
+			}
+			else
+				sendSystemMessage(player, SID_NOT_OUTSIDE);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+void placeRottenEgg(obj_id player, obj_id rottenEgg)
+{
+	if(!isIdValid(player) || !isIdValid(rottenEgg))
+	{
+		return;
+	}
+	location loc = getLocation(player);
+	if(!hasObjVar(rottenEgg, "house"))
+	{
+		sendSystemMessage( player, SID_EGGS_CRUMBLE );
+		destroyObject(rottenEgg);
+		return;
+	}
+	obj_id playerHouse = getObjIdObjVar(rottenEgg, "house");
+	if(!isIdValid(playerHouse))
+	{
+		sendSystemMessage( player, SID_EGGS_CRUMBLE );
+		destroyObject(rottenEgg);
+		return;
+	}
+	
+	//let's make sure they are in range of their house.
+	location structureLoc = getLocation(playerHouse);
+	float dist = utils.getDistance2D(loc, structureLoc);
+	if((dist > 50))
+	{
+		//You are too far away from your home, please move closer
+		sendSystemMessage( player, SID_TOO_FAR_FROM_HOME );		
+		return;
+	}
+		
+	//Move Egg to the player's location.
+	setLocation(rottenEgg, loc);	
+	//the old object is persisted because the player put it in his inventory. - create a new unpersisted object.
+	obj_id replacementEggs = createObject("object/tangible/tcg/series4/house_pet_rotten_egg.iff", getLocation(rottenEgg));
+	//set objvars so we can track how long the item has been in the world.
+	attachScript(replacementEggs, "systems.tcg.tcg_pet_extras");
+	attachScript(replacementEggs, "item.special.nomove");
+	setObjVar(replacementEggs, "placed_in_world",getCalendarTime());
+	setObjVar(replacementEggs, "placed_by", player);
+	setObjVar(replacementEggs, "flower_cycle_phase", 0);
+	//Set the owner to the egg itself - so the player can't pick it up.
+	setOwner(replacementEggs, replacementEggs);
+	
+	destroyObject(rottenEgg);
+	
+	if(!isGod(player))
+		messageTo(replacementEggs, "handleRottenEggPulseUpdate", null, 1800, false);
+	else
+		messageTo(replacementEggs, "handleRottenEggPulseUpdate", null, 180, false);
+}
+
+messageHandler handleRottenEggPulseUpdate()
+{
+	LOG("sissynoid", "Pulsing Rotten Egg.");
+	//pulse update every 30 minutes during the egg's lifespan.
+	int randRoll = rand(1, 100);
+	if(randRoll >= 1 && randRoll <= 10)
+	{
+		if(!hasObjVar(self, "placed_by"))
+		{
+			//Destroy the egg because we don't have an owner.
+			destroyObject(self);
+			return SCRIPT_CONTINUE;
+		}
+		location myLoc = getLocation(self);
+		obj_id originalOwner = getObjIdObjVar(self, "placed_by");
+		destroyObject(self);
+		obj_id newItem = createObject(NUNA_FLOWER_DEAD, myLoc);
+
+		if(exists(newItem) && isIdValid(newItem))
+		{
+			//dead flower - it will be destroyed in 5 minutes
+			attachScript(newItem, THIS_SCRIPT);
+			setOwner(newItem, newItem);
+			setObjVar(newItem, "placed_by", originalOwner);
+			
+			//message to delete
+			if(!isGod(originalOwner))
+				messageTo(newItem, "handleDestroyDeadFlowerUpdate", null, 300, false);
+			else
+			{
+				sendSystemMessageTestingOnly(originalOwner, "The wildflower has died - ");
+				messageTo(newItem, "handleDestroyDeadFlowerUpdate", null, 60, false);	
+			}
+		}		
+	}
+	if(randRoll >= 11 && randRoll <= 100)
+	{
+		LOG("sissynoid", "Pulsing - Good Roll ("+ randRoll +")- Updating Flower");
+		if(!hasObjVar(self, "flower_cycle_phase"))
+		{
+			destroyObject(self);
+			return SCRIPT_CONTINUE;
+		}
+		
+		//Flower Phase Updates
+		if(getIntObjVar(self, "flower_cycle_phase") < 1)
+		{
+			LOG("sissynoid", "Phase 1 Flower Update");
+			if(!hasObjVar(self, "placed_by"))
+			{
+				//Destroy the egg because we don't have an owner.
+				destroyObject(self);
+				return SCRIPT_CONTINUE;
+			}
+			obj_id originalOwner = getObjIdObjVar(self, "placed_by");
+			//Giv it the phase 1 flower appearance
+			location myLoc = getLocation(self);
+			destroyObject(self);
+			obj_id newItem = createObject(NUNA_FLOWER_01, myLoc);
+			
+			if(exists(newItem) && isIdValid(newItem))
+			{
+				//phase 1 complete
+				attachScript(newItem, THIS_SCRIPT);
+				setObjVar(newItem, "flower_cycle_phase", 1);
+				setObjVar(newItem, "placed_by", originalOwner);
+				//No one can pick it yet.
+				setOwner(newItem, newItem);
+
+				if(!isGod(originalOwner))
+					messageTo(newItem, "handleRottenEggPulseUpdate", null, 1800, false);
+				else
+					messageTo(newItem, "handleRottenEggPulseUpdate", null, 180, false);
+			}
+			return SCRIPT_CONTINUE;
+		}
+		if(getIntObjVar(self, "flower_cycle_phase") < 2)
+		{
+			LOG("sissynoid", "Phase 2 Flower Update");
+			if(!hasObjVar(self, "placed_by"))
+			{
+				//Destroy the egg because we don't have an owner.
+				destroyObject(self);
+				return SCRIPT_CONTINUE;
+			}
+			obj_id originalOwner = getObjIdObjVar(self, "placed_by");
+			//Giv it the phase 2 flower appearance
+			location myLoc = getLocation(self);
+			destroyObject(self);
+			obj_id newItem = createObject(NUNA_FLOWER_02, myLoc);
+			
+			if(exists(newItem) && isIdValid(newItem))
+			{
+				attachScript(newItem, THIS_SCRIPT);
+				setObjVar(newItem, "flower_cycle_phase", 2);
+				setObjVar(newItem, "placed_by", originalOwner);
+				setOwner(newItem, newItem);
+
+				if(!isGod(originalOwner))
+					messageTo(newItem, "handleRottenEggPulseUpdate", null, 1800, false);
+				else
+					messageTo(newItem, "handleRottenEggPulseUpdate", null, 180, false);
+			}
+			return SCRIPT_CONTINUE;
+		}
+		if(getIntObjVar(self, "flower_cycle_phase") < 3)
+		{
+			LOG("sissynoid", "Phase 3 Flower Update");
+			if(!hasObjVar(self, "placed_by"))
+			{
+				//Destroy the egg because we don't have an owner.
+				destroyObject(self);
+				return SCRIPT_CONTINUE;
+			}
+			obj_id originalOwner = getObjIdObjVar(self, "placed_by");
+			//Giv it the phase 3 flower appearance
+			location myLoc = getLocation(self);
+			destroyObject(self);
+			obj_id newItem = createObject(NUNA_FLOWER_03, myLoc);
+			
+			if(exists(newItem) && isIdValid(newItem))
+			{
+				setObjVar(newItem, "flower_cycle_phase", 3);
+				setObjVar(newItem, "placed_by", originalOwner);
+				setObjVar(newItem, "can_be_picked", 1);
+				//The owner can now pick the flower!
+				setOwner(newItem, originalOwner);
+			}
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		destroyObject(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//dead flower handler
+messageHandler handleDestroyDeadFlowerUpdate()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+

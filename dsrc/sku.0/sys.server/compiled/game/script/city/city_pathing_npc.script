@@ -1,0 +1,166 @@
+include library.utils;
+
+const int NEXT_ACTION_NONE = -1;
+const int NEXT_ACTION_FACETO = 0;
+const int NEXT_ACTION_DOANIM = 1;
+const int NEXT_ACTION_PATHTONEXT = 2;
+
+const int LAST_POSSIBLE_ACTION = 2;
+
+trigger OnAttach()
+{
+	executeAction( self, NEXT_ACTION_NONE );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler resumeDefaultCalmBehavior()
+{
+	//debugSpeakMsg( self, "calm");
+	executeAction( self, NEXT_ACTION_NONE );
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnMovePathComplete()
+{
+	//debugSpeakMsg( self, "path complete");
+	executeAction( self, NEXT_ACTION_FACETO );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathNotFound()
+{
+	//debugSpeakMsg( self, "no path");
+	executeAction( self, NEXT_ACTION_PATHTONEXT );
+	checkForFeetGluedToFloor(self);
+	return SCRIPT_CONTINUE;
+}
+
+void executeAction( obj_id npc, int lastAction )
+{
+	//debugSpeakMsg( npc, "action: " + lastAction );
+
+	obj_id currentStop = utils.getObjIdScriptVar( npc, "pathing.currentStop" );
+	if ( !isIdValid( currentStop ) )
+	{
+		debugServerConsoleMsg( npc, "WARNING: error in city.city_pathing_npc: cannot find stop " + currentStop + " so I don't know what to do" );
+		stop( npc );
+		doAnimationAction( npc, "weeping");
+		return;
+	}
+
+	switch ( lastAction )
+	{
+		case NEXT_ACTION_NONE :
+			//all done, go home and start over:
+			pathTo( npc, getHomeLocation( npc ) );
+			obj_id homeStop = utils.getObjIdScriptVar( npc, "pathing.homeStop" );
+			utils.setScriptVar( npc, "pathing.currentStop", homeStop );
+			return;
+		case NEXT_ACTION_FACETO :
+			//faceto if specified:
+			if ( hasObjVar( currentStop, "faceto" ))
+			{
+				doFacingAction( npc, currentStop );
+				return;
+			}
+		case NEXT_ACTION_DOANIM :
+			//always call this, even if no anim is specified
+			// because this is ALSO where we do the delay
+			executeAnimation( npc, currentStop );
+			return;
+		case NEXT_ACTION_PATHTONEXT :
+			//always do this, 'cause if there is no next, we'll go home:
+			pathToNext( npc, currentStop );
+			return;
+	}
+	lastAction++;
+	if ( lastAction > LAST_POSSIBLE_ACTION )
+		lastAction = NEXT_ACTION_NONE;
+
+	executeAction( npc, lastAction );
+}
+
+messageHandler handleNextAction()
+{
+	//debugSpeakMsg( self, "handle next action");
+
+	int nextAction = params.getInt( "nextAction" );
+	executeAction( self, nextAction );
+
+	return SCRIPT_CONTINUE;
+}
+
+void doFacingAction( obj_id npc, obj_id currentStop )
+{
+	//debugSpeakMsg( npc, "facing");
+
+	int intThingToFace = getIntObjVar( currentStop, "faceto" );
+	obj_id objThingToFace = utils.stringToObjId( "" + intThingToFace );
+	if ( isIdValid( objThingToFace ) )
+		faceTo( npc, objThingToFace );
+
+
+	dictionary parms = new dictionary();
+	parms.put( "nextAction", NEXT_ACTION_DOANIM );
+	messageTo( npc, "handleNextAction", parms, 3, false );
+}
+
+void executeAnimation( obj_id npc, obj_id currentStop )
+{
+	//debugSpeakMsg( npc, "anim");
+
+	string animToDo = getStringObjVar( currentStop, "anim" );
+	int delay = getIntObjVar( currentStop, "delay" );
+	if ( delay == 0 )
+		delay = 10;//no delay specified, so wait here 60 seconds
+
+	if ( animToDo != null )
+		doAnimationAction( npc, animToDo );
+
+	dictionary parms = new dictionary();
+	parms.put( "nextAction", NEXT_ACTION_PATHTONEXT );
+	messageTo( npc, "handleNextAction", parms, delay, false );
+}
+
+void pathToNext( obj_id npc, obj_id currentStop )
+{
+	if ( hasObjVar( currentStop, "destination") )
+	{
+		int destination = getIntObjVar( currentStop, "destination" );
+		obj_id dest = utils.stringToObjId( "" + destination );
+		utils.setScriptVar( npc, "pathing.currentStop", dest );
+		pathTo( npc, getLocation( dest ) );
+
+		//debugSpeakMsg( npc, "pathing to " + dest );
+
+	}
+	else
+	{
+		//no more destinations, so reset:
+		executeAction( npc, NEXT_ACTION_NONE );
+
+		//debugSpeakMsg( npc, "pathing to home" );
+
+	}
+
+}
+
+void checkForFeetGluedToFloor(obj_id self)
+{
+	location here = getLocation(self);
+	setObjVar (self, "mightBeStuck", here);
+	messageTo (self, "amIStuck", null, 300, false);
+	return;
+}
+
+messageHandler amIStuck()
+{
+	location now = getLocation(self);
+	location here = getLocationObjVar (self, "mightBeStuck");
+	if (now == here)
+	{
+		//NPC hasn't moved in 5 minutes.  He needs to be cleaned up
+		destroyObject (self);
+	}
+	return SCRIPT_CONTINUE;
+}

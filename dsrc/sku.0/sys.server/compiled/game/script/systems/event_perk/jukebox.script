@@ -1,0 +1,437 @@
+include library.sui;
+include library.utils;
+
+const string TBL_SONGS = "datatables/event_perk/jukebox_songs.iff";
+const string JUKBOX_SONG_OBJVAR = "storyteller.jukebox_song";
+const string JUKBOX_RANGE_OBJVAR = "storyteller.jukebox_range";
+
+const string JUKEBOX_ROOM_SCRIPT = "systems.event_perk.jukebox_room";
+const string JUKEBOX_ROOM_OBJVAR = "storyteller.room.myJukebox";
+
+trigger OnAttach()
+{
+	messageTo(self, "initializeJukebox", null, 5, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	messageTo(self, "initializeJukebox", null, 9, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler initializeJukebox()
+{
+	if ( hasObjVar(self, "storytellerid") )
+	{
+		if ( !hasTriggerVolume(self, "storytellerJukebox") )
+		{
+			float jukebox_range = 100f;
+			
+			obj_id myBuilding = getTopMostContainer(self);
+			if ( isIdValid(myBuilding) && myBuilding != self )
+			{
+				jukebox_range = 30f;
+			}
+			setObjVar(self, JUKBOX_RANGE_OBJVAR, jukebox_range);
+			createTriggerVolume("storytellerJukebox", jukebox_range, true); 
+		}
+	}
+	else
+	{
+		messageTo(self, "cleanUpJukebox", null, 1, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id breacher)
+{
+	if ( !isIdValid(breacher) || !isPlayer(breacher) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( !hasObjVar(self, JUKBOX_SONG_OBJVAR) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( allowedToListen(self, breacher) )
+	{
+		if (volumeName == "storytellerJukebox")
+		{
+			string song = getStringObjVar(self, JUKBOX_SONG_OBJVAR);
+			if ( song != null && song.length() > 0 && !song.equals("none") )
+			{
+				playMusic(breacher, song);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id breacher)
+{
+	if ( !isIdValid(breacher) || !isPlayer(breacher) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( allowedToListen(self, breacher) )
+	{
+		if ( volumeName == "storytellerJukebox" )
+		{
+			playMusic(breacher, "sound/music_silence.snd");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if ( allowedToUse(self, player) )
+	{
+		int userMenu = mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("event_perk", "jukebox_options"));		
+		mi.addSubMenu(userMenu, menu_info_types.SERVER_MENU4, new string_id("event_perk", "jukebox_start_music"));
+		mi.addSubMenu(userMenu, menu_info_types.SERVER_MENU5, new string_id("event_perk", "jukebox_stop_music"));
+		mi.addSubMenu(userMenu, menu_info_types.SERVER_MENU6, new string_id("event_perk", "jukebox_start_listening"));
+		mi.addSubMenu(userMenu, menu_info_types.SERVER_MENU7, new string_id("event_perk", "jukebox_stop_listening"));
+	}
+	else if (allowedToListen(self, player))
+	{
+		int listenerMenu = mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("event_perk", "jukebox_options"));	
+		mi.addSubMenu(listenerMenu, menu_info_types.SERVER_MENU6, new string_id("event_perk", "jukebox_start_listening"));
+		mi.addSubMenu(listenerMenu, menu_info_types.SERVER_MENU7, new string_id("event_perk", "jukebox_stop_listening"));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	// Start the jukebox or stop it
+	if( item == menu_info_types.ITEM_USE || item == menu_info_types.SERVER_MENU4  )
+	{
+		if ( allowedToUse(self, player) )
+		{
+			showMusicSelection(self, player);
+		}
+		else if (  allowedToListen(self, player) )
+		{
+			startListeningToMusic(self, player);
+		}
+	}
+	
+	else if( item == menu_info_types.SERVER_MENU5 )
+	{
+		if ( allowedToUse(self, player) )
+		{
+			messageTo(self, "stopMusic", null, 1, false);	
+		}
+	} 
+	
+	// Listen or stop listening
+	if( item == menu_info_types.SERVER_MENU6 )
+	{
+		if ( allowedToListen(self, player) )
+		{
+			startListeningToMusic(self, player);
+		}
+	}
+	
+	if( item == menu_info_types.SERVER_MENU7 )
+	{
+		playMusic(player, "sound/music_silence.snd");
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+boolean allowedToUse(obj_id self, obj_id player)
+{
+	obj_id storyteller = getObjIdObjVar(self, "storytellerid");
+	if ( isIdValid(storyteller) )
+	{
+		if ( storyteller == player  )
+		{
+			return true;
+		}
+		else if ( utils.hasScriptVar(player, "storytellerAssistant") )
+		{
+			obj_id whoAmIAssisting = utils.getObjIdScriptVar(player, "storytellerAssistant");
+			if ( isIdValid(whoAmIAssisting) && storyteller == whoAmIAssisting )
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+boolean allowedToListen(obj_id self, obj_id player)
+{
+	// You may listen to a jukebox as if you are not in a story.
+	//
+	// If you are in a story, own the jukebox, or are assisting the jukebox owner,
+	// you may listen to the jukeboxes that are part of that story, but not to any other jukeboxes.
+	// This is intended to help prevent griefers from plopping down jukeboxes all over the place to grief other storytellers.
+	
+	obj_id storyteller = getObjIdObjVar(self, "storytellerid");
+	if ( isIdValid(storyteller) )
+	{
+		if (allowedToUse(self, player)  )
+		{
+			return true;
+		}
+		
+		if ( utils.hasScriptVar(player, "storytellerid") )
+		{
+			obj_id playersStoryteller = utils.getObjIdScriptVar(player, "storytellerid");
+			if ( isIdValid(playersStoryteller) && storyteller == playersStoryteller )
+			{
+				return true;
+			}
+		}
+		else
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void showMusicSelection(obj_id self, obj_id player)
+{
+	string[] rawSongs = dataTableGetStringColumn(TBL_SONGS, 0);
+	
+	string[] alphabetizedSongList = getAlphabetizedSongList(rawSongs);
+	
+	string[] songs = new string[alphabetizedSongList.length];
+	for (int i=0; i<alphabetizedSongList.length; i++ )
+	{
+		songs[i] = "@event_perk_jukebox_songs:"+alphabetizedSongList[i];
+	}
+	
+	sui.listbox(self, player, "@event_perk_jukebox_songs:songs_d", sui.OK_CANCEL, "@event_perk_jukebox_songs:songs_t", songs, "selectMusic", true );
+	
+	return;
+}
+
+string[] getAlphabetizedSongList(string[] songList)
+{
+	string[] namesColonSongs = new string[songList.length];
+	
+	for ( int i = 0; i < songList.length; i++ )
+	{
+		string temp = getString(new string_id("event_perk_jukebox_songs", songList[i]))+ "|" + songList[i];
+		namesColonSongs[i] = temp;
+	}
+
+	Arrays.sort(namesColonSongs);
+
+	string[] finalList = new string[namesColonSongs.length];
+	for ( int j = 0; j < namesColonSongs.length; j++ )
+	{
+		string[] splitText = split(namesColonSongs[j], '|');
+		finalList[j] = splitText[1];
+	}
+	
+	return finalList;
+}
+
+void startListeningToMusic(obj_id self, obj_id player)
+{
+	if ( hasObjVar(self, JUKBOX_SONG_OBJVAR) )
+	{
+		string song = getStringObjVar(self, JUKBOX_SONG_OBJVAR);
+		if( song != null && song.length() > 0 && !song.equals("none") )
+		{
+			playMusic(player, song);	
+		}
+	}
+	
+	return;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	removeObjVar(self, JUKBOX_SONG_OBJVAR);
+	//messageTo(self, "cleanUpJukebox", null, 1, false);
+ 	return SCRIPT_CONTINUE;
+}
+
+messageHandler selectMusic()
+{
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow(params);
+	if (idx < 0) idx = 0;
+	int btn = sui.getIntButtonPressed(params);
+
+	if (btn == sui.BP_CANCEL)
+		return SCRIPT_CONTINUE;
+
+	string[] songTemplate = dataTableGetStringColumn(TBL_SONGS, 1);
+	string[] rawSongs = dataTableGetStringColumn(TBL_SONGS, 0);
+	string[] alphabetizedSongList = getAlphabetizedSongList(rawSongs);
+	string songTitle = alphabetizedSongList[idx];
+	
+	int songIndex =  dataTableSearchColumnForString(songTitle, 0, TBL_SONGS);
+	string song = songTemplate[songIndex];
+	
+	setObjVar(self, JUKBOX_SONG_OBJVAR, song);
+	
+	messageTo(self, "prepareToPlaySelectedSong", null, 1, false);	
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler stopMusic()
+{
+	setObjVar(self, JUKBOX_SONG_OBJVAR, "none");
+	stopPlayingMusic(self);
+	return SCRIPT_CONTINUE;
+}
+
+void stopPlayingMusic(obj_id self)
+{
+	location here = getLocation(self);
+	float jukebox_range = getFloatObjVar(self, JUKBOX_RANGE_OBJVAR) + 10;
+	obj_id[] players =  getPlayerCreaturesInRange(here, jukebox_range);
+	for ( int i = 0; i < players.length; i++ )
+	{
+		obj_id player = players[i];
+		if ( isIdValid(player) )
+		{
+			if ( allowedToListen(self, player) )
+			{
+				playMusic(player, "sound/music_silence.snd");
+			}
+		}
+	}
+	obj_id thisRoom = here.cell;
+	if ( isIdValid(thisRoom) )
+	{
+		if ( !hasScript(thisRoom, JUKEBOX_ROOM_SCRIPT) )
+		{
+			attachScript(thisRoom, JUKEBOX_ROOM_SCRIPT);
+		}
+		
+		if ( !hasObjVar(thisRoom, JUKEBOX_ROOM_OBJVAR) )
+		{
+			setObjVar(thisRoom, JUKEBOX_ROOM_OBJVAR, self);
+		}
+		
+		messageTo(thisRoom, "stopSong", null, 1, false);
+	}
+	
+	return;
+}
+
+messageHandler prepareToPlaySelectedSong()
+{
+	obj_id storyteller = getObjIdObjVar(self, "storytellerid");
+	if ( !isIdValid(storyteller) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	location here = getLocation(self);
+	float jukebox_range = getFloatObjVar(self, JUKBOX_RANGE_OBJVAR);
+	obj_id[] players =  getPlayerCreaturesInRange(here, jukebox_range);
+	for ( int i = 0; i < players.length; i++ )
+	{
+		obj_id player = players[i];
+		if ( allowedToListen(self, player) )
+		{
+			playMusic(player, "sound/music_silence.snd");
+		}
+	}
+	
+	obj_id thisRoom = here.cell;
+	if ( isIdValid(thisRoom) )
+	{
+		if ( !hasScript(thisRoom, JUKEBOX_ROOM_SCRIPT) )
+		{
+			attachScript(thisRoom, JUKEBOX_ROOM_SCRIPT);
+		}
+
+		if ( !hasObjVar(thisRoom, JUKEBOX_ROOM_OBJVAR) )
+		{
+			setObjVar(thisRoom, JUKEBOX_ROOM_OBJVAR, self);
+		}
+		
+		messageTo(thisRoom, "prepareToPlaySelectedSong", null, 1, false);
+	}
+
+	messageTo(self, "playSelectedSong", null, 1, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler playSelectedSong()
+{
+	string song = getStringObjVar(self, JUKBOX_SONG_OBJVAR);
+
+	if(!song.equals("none"))
+	{
+		
+		obj_id storyteller = getObjIdObjVar(self, "storytellerid");
+		if ( !isIdValid(storyteller) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+		
+		location here = getLocation(self);
+		float jukebox_range = getFloatObjVar(self, JUKBOX_RANGE_OBJVAR);
+		obj_id[] players =  getPlayerCreaturesInRange(here, jukebox_range);
+		for ( int i = 0; i < players.length; i++ )
+		{
+			obj_id player = players[i];
+			if ( allowedToListen(self, player) )
+			{
+				playMusic(player, song);
+			}
+		}	
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanUpJukebox()
+{
+	cleanUpRoom(self);
+	messageTo(self, "destroyJukebox", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroyJukebox()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	cleanUpRoom(self);
+	stopPlayingMusic(self);
+ 	return SCRIPT_CONTINUE;
+}
+
+void cleanUpRoom(obj_id self)
+{	
+	if ( isIdValid(self) )
+	{
+		location here = getLocation(self);
+		obj_id thisRoom = here.cell;
+
+		if( isIdValid(thisRoom) && hasScript(thisRoom, JUKEBOX_ROOM_SCRIPT) )
+		{
+			messageTo(thisRoom, "stopAndCleanUp", null, 1, false);
+		}
+	}
+	return;
+}

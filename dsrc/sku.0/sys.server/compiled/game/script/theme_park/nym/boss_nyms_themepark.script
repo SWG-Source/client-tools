@@ -1,0 +1,538 @@
+include library.ai_lib;
+include library.chat;
+include library.group;
+include library.groundquests;
+include library.hue;
+include library.trial;
+include library.utils;
+
+const int RADIUS				= 100;
+const int MIN_DIST				= 25;
+const string_id SID_SYS_TOO_FAR			= new string_id("spam","too_far_from_spawn_point");
+const string_id SID_SYS_ONE_MINUTE_WARNING	= new string_id("spam","one_minute_warning_before_despawn");
+
+
+const string DISTANCE_CHECK			= "distance_check";
+
+trigger OnAttach()
+{
+	messageTo(self, "moveCreatureToWaypoint", null, 1, false);
+	messageTo(self, "checkCombatStatus", null, 1, false);
+	messageTo(self, "willDespawn", null, 540, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeIncapacitated(obj_id killer)
+{
+	CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob "+self+" incapacitated by: "+killer);
+
+	if(!hasObjVar(self, "theme_park_boss"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasObjVar(self, "theme_park_boss_slot"))
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob "+self+" did not have the collection slot needed. aborting.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string bossQuest = getStringObjVar(self, "theme_park_boss");
+	if(bossQuest == null || bossQuest.length() <= 0)
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob "+self+" did not have the boss quest objvar needed. aborting.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string bossQuestTask = "";
+	if(hasObjVar(self, "theme_park_task"))
+	{
+		bossQuestTask = getStringObjVar(self, "theme_park_task");
+		if(bossQuestTask == null || bossQuestTask.length() <= 0)
+		{
+			CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob "+self+" did not have the boss quest task objvar needed. aborting.");
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	string bossQuestSlot = getStringObjVar(self, "theme_park_boss_slot");
+	if(bossQuestSlot == null || bossQuestSlot.length() <= 0)
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob "+self+" did not have the boss quest slot objvar needed. aborting.");
+		return SCRIPT_CONTINUE;
+	}
+
+	CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob slot and quest name data validated. Boss: "+bossQuest+" Slot: "+bossQuestSlot);
+	
+	//get the list of attackers, this is anyone who did damage
+	obj_id[] attackerList = utils.getObjIdBatchScriptVar(self, "creditForKills.attackerList.attackers");
+	//validate the list
+
+	if(attackerList != null && attackerList.length > 0)
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob attackerList = "+attackerList.length);
+
+		for(int i = 0; i < attackerList.length; i++)
+		{
+			if(!isIdValid(attackerList[i]))
+			{
+				continue;
+			}
+
+			if(hasCompletedCollectionSlot(attackerList[i], bossQuestSlot))
+			{
+				CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" already has the collection slot for this enemy completed. This player does NOT GET CREDIT.");
+				continue;
+			}
+			
+			if(!groundquests.isQuestActive(attackerList[i], bossQuest))
+			{
+				CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" did not have the quest active. This player does NOT GET CREDIT.");
+				continue;
+			}
+
+			if(hasObjVar(self, "theme_park_task") && bossQuestTask != null)
+			{
+				if(!groundquests.isTaskActive(attackerList[i], bossQuest, bossQuestTask))
+				{
+					CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob attacker: "+attackerList[i]+" did not have boss quest task: "+bossQuestTask);
+					continue;
+				}
+			}
+			
+			if(!hasCompletedCollectionSlotPrereq(attackerList[i], bossQuestSlot))
+			{
+				CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" did not have the collection prerequisite for this boss. This player does NOT GET CREDIT.");
+				continue;
+			}
+
+			CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" had all prerequisites for the boss collection. This player received credit.");
+
+			modifyCollectionSlotValue(attackerList[i], bossQuestSlot, 1);			
+
+			if(group.isGrouped(attackerList[i]))
+			{
+				obj_id groupObj = getGroupObject(attackerList[i]);
+				obj_id[] groupMembers = getGroupMemberIds(groupObj);				
+				for(int j = 0; j < groupMembers.length; j++)
+				{
+					if(!isIdValid(groupMembers[j]))
+					{
+						continue;
+					}
+					
+					
+					if(!groundquests.isQuestActive(groupMembers[j], bossQuest))
+					{
+						CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" did not have the quest active. This player does NOT GET CREDIT.");
+						continue;
+					}
+
+					if(hasObjVar(self, "theme_park_task") && bossQuestTask != null)
+					{
+						if(!groundquests.isTaskActive(groupMembers[j], bossQuest, bossQuestTask))
+						{
+							CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() Boss Mob attacker: "+attackerList[i]+" did not have boss quest task: "+bossQuestTask);
+							continue;
+						}
+					}
+					
+					if(hasCompletedCollectionSlot(groupMembers[j], bossQuestSlot))
+					{
+						CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" already has the collection slot for this enemy completed. This player does NOT GET CREDIT.");
+						continue;
+					}
+
+					if(!hasCompletedCollectionSlotPrereq(groupMembers[j], bossQuestSlot))
+					{
+						CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" did not have the collection prerequisite for this boss. This player does NOT GET CREDIT.");
+						continue;
+					}
+
+					CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnAboutToBeIncapacitated() attackerList player "+attackerList[i]+" had all prerequisites for the boss collection. This player received credit.");
+
+					modifyCollectionSlotValue(groupMembers[j], bossQuestSlot, 1);			
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnEnteredCombat()
+{
+	if(!isIdValid(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//Shuttle guys ignore this
+	if(hasObjVar(self, "shuttle"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	int maxDist = getIntObjVar(self, DISTANCE_CHECK);
+	if(maxDist <= 0)
+	{
+		maxDist = MIN_DIST;
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnEnteredCombat() maximum distance from creation location for boss mob ("+self+") was invalid or NULL.");	
+	}
+
+	obj_id parent = getObjIdObjVar(self, trial.PARENT);
+	if(!isIdValid(parent) || !exists(parent))
+	{
+		destroyObject(self);
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.willDespawn() FAILED to find parent object.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id playerEnemy = utils.getObjIdScriptVar(parent, "waveEventPlayer");
+	if(!isIdValid(playerEnemy) || !exists(playerEnemy))
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnEnteredCombat() Mob could not find the wave event player: "+playerEnemy);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] players = getPlayerCreaturesInRange(self, maxDist);
+	if(players != null && players.length > 0)
+	{
+		for(int i = 0; i < players.length; i++)
+		{
+			if(!isIdValid(players[i]) && !exists(players[i]) || isIncapacitated(players[i]) || !isDead(players[i]))
+				continue;
+			
+			/*
+			if(!group.inSameGroup(players[i], playerEnemy))
+				continue;
+			*/	
+			addHate(self, players[i], 1000.0f);
+			startCombat(self, players[i]);
+		}
+	}
+	
+	messageTo(self, "handleBossDistanceCheck", null, 3, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitateTarget(obj_id victim)
+{
+	if(!isIdValid(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//Shuttle guys ignore this
+	if(hasObjVar(self, "shuttle"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id parent = getObjIdObjVar(self, trial.PARENT);
+	if(!isIdValid(parent) || !exists(parent))
+	{
+		destroyObject(self);
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnIncapacitateTarget() FAILED to find parent object.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(getRandomCombatTarget(self, parent))
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.OnIncapacitateTarget() Boss Mob has found someone in the player's group.");
+		return SCRIPT_CONTINUE;
+	}
+
+	dictionary webster = trial.getSessionDict(parent);
+	messageTo(parent, "defaultEventReset", webster, 2, false);
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnExitedCombat()
+{
+	if(!isIdValid(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//Shuttle guys ignore this
+	if(hasObjVar(self, "shuttle"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id parent = getObjIdObjVar(self, trial.PARENT);
+	if(!isIdValid(parent) || !exists(parent))
+	{
+		destroyObject(self);
+		CustomerServiceLog("quest", "boss_nyms_themepark.OnExitedCombat() FAILED to find parent object.");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(getRandomCombatTarget(self, parent))
+		return SCRIPT_CONTINUE;
+	dictionary webster = trial.getSessionDict(parent);
+	messageTo(parent, "defaultEventReset", webster, 2, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBossDistanceCheck()
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;	
+
+	if(!ai_lib.isInCombat(self))
+	{
+		messageTo(self, "checkCombatStatus", null, 0, false);
+		return SCRIPT_CONTINUE;	
+	}
+
+	location currentLoc = getLocation(self);
+	if(currentLoc == null)
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.handleBossDistanceCheck() current boss mob ("+self+") location NULL.");	
+		return SCRIPT_CONTINUE;
+	}
+	
+	location creationLoc = aiGetHomeLocation(self);
+	if(creationLoc == null)
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.handleBossDistanceCheck() creation location for boss mob ("+self+") was NULL.");	
+		return SCRIPT_CONTINUE;
+	}
+	
+	float distanceCheck = utils.getDistance2D(currentLoc, creationLoc);
+	int maxDist = getIntObjVar(self, DISTANCE_CHECK);
+	if(maxDist <= 0)
+	{
+		maxDist = MIN_DIST;
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.handleBossDistanceCheck() maximum distance from creation location for boss mob ("+self+") was invalid or NULL.");	
+	}
+
+	obj_id parent = getObjIdObjVar(self, trial.PARENT);
+	if(!isIdValid(parent) || !exists(parent))
+	{
+		destroyObject(self);
+		CustomerServiceLog("quest", "boss_nyms_themepark.handleBossDistanceCheck() FAILED to find parent object.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(distanceCheck > maxDist)
+	{
+
+		obj_id playerEnemy = utils.getObjIdScriptVar(parent, "waveEventPlayer");
+		if(isIdValid(playerEnemy) && exists(playerEnemy))
+		{
+			sendSystemMessage(playerEnemy, SID_SYS_TOO_FAR);
+
+			obj_id myGroup = getGroupObject(playerEnemy);
+			if(isValidId(myGroup))
+			{
+				obj_id[] members = getGroupMemberIds(myGroup);
+
+				for(int i = 0; i < members.length; i++)
+				{
+					if(!isIdValid(members[i]))
+						continue;
+					
+					sendSystemMessage(members[i], SID_SYS_TOO_FAR);
+				}	
+			}
+		}
+
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.handleBossDistanceCheck() boss mob ("+self+") has moved too far from creation location. Moving back to creation location.");	
+		dictionary webster = trial.getSessionDict(parent);
+		messageTo(parent, "defaultEventReset", webster, 2, false);
+
+	}
+	else
+	{
+		messageTo(self, "handleBossDistanceCheck", null, 3, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean getRandomCombatTarget(obj_id self, obj_id parent)
+{
+	if(!isIdValid(self) || !exists(self))
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.getRandomCombatTarget() FAILED to find self.");
+		return false;
+	}
+
+	if(!isIdValid(parent) || !exists(parent))
+	{
+		destroyObject(self);
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.getRandomCombatTarget() FAILED to find parent object.");
+		return false;
+	}
+
+	int maxDist = getIntObjVar(self, DISTANCE_CHECK);
+
+	if(maxDist <= 0)
+	{
+		maxDist = MIN_DIST;
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.getRandomCombatTarget() maximum distance from creation location for boss mob ("+self+") was invalid or NULL.");	
+	}
+
+	obj_id[] targets = trial.getValidTargetsInRadiusIgnoreLOS(self, maxDist);
+	if(targets == null || targets.length == 0)
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.getRandomCombatTarget() no targets for boss ("+self+") is: "+maxDist);	
+		dictionary webster = trial.getSessionDict(parent);
+		messageTo(parent, "defaultEventReset", webster, 2, false);
+		return false;
+	}
+	
+	for(int i = 0; i < targets.length; i++)
+	{
+		if(!isIdValid(targets[i]))
+			continue;
+
+		if(!isPlayer(targets[i]))
+			continue;
+
+		location a = getLocation(self);
+		location b = getLocation(targets[i]);		
+		if(a.cell != b.cell)
+			continue;
+			
+		startCombat(self, targets[i]);
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.getRandomCombatTarget(): Player "+ targets[i] + " was found as a valid target. Boss Mob: "+self+" attacking player.");
+		return true;
+	}
+	CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.getRandomCombatTarget(): Boss Mob: "+self+" failed to find a player to attack.");
+	dictionary webster = trial.getSessionDict(parent);
+	messageTo(parent, "defaultEventReset", webster, 2, false);
+	return false;
+
+}
+
+messageHandler moveCreatureToWaypoint()
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+	
+	//If this is not an arena fighter, disregard
+	if(!hasObjVar(self, "arena") && !hasObjVar(self, "shuttle")
+	&& !hasObjVar(self, "henchmen"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(hasObjVar(self, "arena"))
+	{
+		location startPos = new location(472.5f, 34.4f, 4815.6f, "lok", null);
+
+		setLocation(self, startPos);
+		aiSetHomeLocation(self, startPos);
+		setYaw(self, 160.0f);
+	}
+	if(hasObjVar(self, "shuttle"))
+	{	
+		location locCenter = new location(473.0f, 12.0f, 4868.0f, "lok", null);
+		location locDestination = utils.getRandomLocationInRing(locCenter, 4.0f, 6.0f);
+		setLocation(self, locDestination);
+		aiSetHomeLocation(self, locDestination);		
+	}
+	if(hasObjVar(self, "henchmen"))
+	{	
+		location locCenter = getLocation(self);
+		location locDestination = utils.getRandomLocationInRing(locCenter, 4.0f, 6.0f);
+		setLocation(self, locDestination);
+		aiSetHomeLocation(self, locDestination);		
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkCombatStatus()
+{
+	if(!isValidId(self) || !exists(self))
+	{
+		return SCRIPT_CONTINUE;	
+	}
+	
+	if(ai_lib.isDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isInCombat(self))
+	{
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.checkCombatStatus(): Boss Mob: "+self+" is already in combat.");
+
+		return SCRIPT_CONTINUE;	
+	}
+		
+	obj_id parent = getObjIdObjVar(self, "parent");	
+	if(isIdValid(parent))
+	{
+		if(getRandomCombatTarget(self, parent))
+			return SCRIPT_CONTINUE;
+		dictionary webster = trial.getSessionDict(parent);
+		messageTo(parent, "defaultEventReset", webster, 2, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler willDespawn()
+{
+	if(!isValidId(self) || !exists(self))
+	{
+		return SCRIPT_CONTINUE;	
+	}
+	
+	if(ai_lib.isDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!ai_lib.isInCombat(self))
+	{
+		messageTo(self, "checkCombatStatus", null, 0, false);
+		return SCRIPT_CONTINUE;	
+	}
+
+	obj_id parent = getObjIdObjVar(self, trial.PARENT);
+	if(!isIdValid(parent) || !exists(parent))
+	{
+		destroyObject(self);
+		CustomerServiceLog("nyms_themepark", "boss_nyms_themepark.willDespawn() FAILED to find parent object.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id playerEnemy = utils.getObjIdScriptVar(parent, "waveEventPlayer");
+	if(isIdValid(playerEnemy) && exists(playerEnemy))
+	{
+		sendSystemMessage(playerEnemy, SID_SYS_ONE_MINUTE_WARNING);
+
+		obj_id myGroup = getGroupObject(playerEnemy);
+		if(isValidId(myGroup))
+		{
+			obj_id[] members = getGroupMemberIds(myGroup);
+
+			for(int i = 0; i < members.length; i++)
+			{
+				if(!isIdValid(members[i]))
+					continue;
+
+				sendSystemMessage(members[i], SID_SYS_ONE_MINUTE_WARNING);
+			}	
+		}
+
+	}
+	
+	return SCRIPT_CONTINUE;
+}

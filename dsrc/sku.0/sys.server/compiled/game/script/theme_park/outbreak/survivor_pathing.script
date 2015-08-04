@@ -1,0 +1,351 @@
+include library.ai_lib;
+include library.attrib;
+include library.create;
+include library.groundquests;
+include library.stealth;
+include library.utils;
+
+const boolean LOGGING_ON			= true;
+const string SCRIPT_LOG				= "outbreak_pathing";
+const string PATHING_NODE			= "pathing_node";
+const string SPAWNER_PATH			= "spawner_path";
+const string SUCCESS_SIGNAL			= "success_signal";
+const string FAIL_SIGNAL			= "fail_signal";
+const string UPDATE_SIGNAL			= "update_signal";
+const string WAYPOINT_LIST			= "wayPointList";
+const string WAYPOINT_LOCS			= "wayPtLocs";
+
+const int RADIUS				= 300;
+
+trigger OnIncapacitated (obj_id killer)
+{
+	if(hasObjVar(self, "rescue") || hasObjVar(self, "incap"))
+		return SCRIPT_CONTINUE;
+
+	setObjVar(self, "incap", true);
+	playerFailedQuest(self);	
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	obj_id player = getObjIdObjVar(self, "myEscort");
+	if(isValidId(player))
+	{
+		npcEndConversation(player);
+	}
+	
+	if(hasObjVar(self, "rescue") || hasObjVar(self, "incap"))
+		return SCRIPT_CONTINUE;
+
+	playerFailedQuest(self);	
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnMovePathComplete()
+{
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.OnMovePathComplete() setting to run.");
+
+	setMovementRun(self);
+	setBaseRunSpeed(self, (getBaseRunSpeed(self)-8));
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMoveMoving()
+{
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.OnMoveMoving() setting to run.");
+
+	setMovementRun(self);
+	setBaseRunSpeed(self, (getBaseRunSpeed(self)-8));
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startSurvivorPathing()
+{
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() Initialized NPC Pathing Functionality.");
+
+	string creatureType = getStringObjVar(self, "creature_type");
+	if(creatureType == null || creatureType.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() the NPC creature_type was not valid");
+		return SCRIPT_CONTINUE;
+	}
+	
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() the NPC creature_type is: "+creatureType);
+	
+	if(!hasObjVar(self, WAYPOINT_LOCS))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() Mob: "+self+" FAILED TO FIND waypointPathNodeLocations OBJVAR.");
+		return SCRIPT_CONTINUE;		
+	}	
+
+	location[] wayPtLocs = getLocationArrayObjVar(self, WAYPOINT_LOCS);
+	if(wayPtLocs == null || wayPtLocs.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() Mob: "+self+" FAILED TO FIND waypointPathNodeLocations OBJVAR.");
+		return SCRIPT_CONTINUE;		
+	}
+	
+	setMovementRun(self);
+	setBaseRunSpeed(self, (getBaseRunSpeed(self)-8));	
+	
+	setInvulnerable(self, false);
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() the NPC is no longer invulnerable for player.");
+	
+	utils.setScriptVar(self, ai_lib.SCRIPTVAR_CACHED_PATROL_NAMED_PATH, wayPtLocs);
+	utils.setScriptVar(self, ai_lib.SCRIPTVAR_CACHED_PATROL_TYPE, 0);
+	patrolOnce(self, wayPtLocs, 0);
+	detachScript(self, "conversation.survivor_01");
+	clearCondition(self, CONDITION_CONVERSABLE);
+	setAttributeAttained(self, attrib.OUTBREAK_SURVIVOR);
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() the NPC is successfully pathing to the next node");
+	messageTo(self, "checkOwnerValidity", null, 10, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler creditPlayerRescue()
+{
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.creditPlayerRescue() Initalized Message Handler.");
+
+	if(!playerSuccessQuest(self))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.creditPlayerRescue() ERROR - Player could not be properly credited for rescuing this NPC.");
+	}
+	else
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.creditPlayerRescue() Player was properly credited for rescuing this NPC.");
+		destroyObject(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanUpNpcTimer()
+{
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.cleanUpNpcTimer() Initalized Message Handler.");
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+		
+	if(!hasObjVar(self, "neverSpokenTo"))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.cleanUpNpcTimer() The player owner has alread spoken to this NPC, this NPC will not destroy self early.");
+		return SCRIPT_CONTINUE;
+	}
+
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.cleanUpNpcTimer() The player owner has failed to speak to this NPC so this NPC will destroy self early.");
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+boolean playerFailedQuest(obj_id self)
+{
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerFailedQuest() Initialized.");
+	obj_id player = getObjIdObjVar(self, "myEscort");
+	if(!isValidId(player))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerFailedQuest() Player: "+player+" IOD was invalid so the player could not receive the fail signal.");
+		return false;
+	}
+
+	string signalFail = getStringObjVar(self, FAIL_SIGNAL);
+	if(signalFail == null || signalFail.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerFailedQuest() The Rescued NPC did not have the appropriate FAIL signal as an objvar for Player: "+player+" ("+getPlayerName(player)+").");
+		return false;	
+	}
+	
+	groundquests.sendSignal(player, signalFail); 
+	return true;
+}
+
+boolean playerSuccessQuest(obj_id self)
+{
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerSuccessQuest() Initialized.");
+	if(hasObjVar(self, "incap"))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerSuccessQuest() The NPC was incapacitated and the player actually didn't rescue the NPC before death. Exiting this function.");
+		return false;
+	}
+	
+	obj_id player = getObjIdObjVar(self, "myEscort");
+	if(!isValidId(player))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerSuccessQuest() Player: "+player+" IOD was invalid so the player could not receive the fail signal.");
+		return false;
+	}
+
+	//The update is signal just in case the survivor was rescued but 
+	//the player failed to converse with the NPC.
+	string signalUpdate = getStringObjVar(self, UPDATE_SIGNAL);
+	if(signalUpdate == null || signalUpdate.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerSuccessQuest() The Rescued NPC did not have the appropriate signal to update the players quest for Player: "+player+" ("+getPlayerName(player)+"). The player may not receive credit for the rescue.");
+		return false;	
+	}
+	
+	groundquests.sendSignal(player, signalUpdate);
+
+	string signalSuccess = getStringObjVar(self, SUCCESS_SIGNAL);
+	if(signalSuccess == null || signalSuccess.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerSuccessQuest() The Rescued NPC did not have the appropriate signal as an objvar for Player: "+player+" ("+getPlayerName(player)+"). The player may not receive credit for the rescue.");
+		return false;	
+	}
+	
+	groundquests.sendSignal(player, signalSuccess);
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.playerSuccessQuest() The Rescued NPC was able to correctly credit the player for the rescue.");
+	setObjVar(self, "rescue", true);
+	return true;
+}
+
+messageHandler checkOwnerValidity()
+{
+	//NPC is already invulnerable. Don't move
+	if(hasScript(self, "conversation.survivor_02"))
+		return SCRIPT_CONTINUE;	
+	
+	if(!hasObjVar(self,"myEscort"))
+		return SCRIPT_CONTINUE;	
+
+	obj_id owner = getObjIdObjVar(self, "myEscort");
+	if(!isValidId(owner) || !exists(owner))
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" FAILED TO FIND OWNER OBJVAR.");	
+		return SCRIPT_CONTINUE;	
+	}
+
+	if(!hasObjVar(self,"creature_type"))
+		return SCRIPT_CONTINUE;	
+
+	string creatureType = getStringObjVar(self, "creature_type");
+	if(creatureType == null || creatureType.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() the NPC creature_type was not valid");
+		return SCRIPT_CONTINUE;
+	}
+	
+	//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is checking their current location to see if they are stuck.");
+	
+	if(!ai_lib.isInCombat(self))
+	{
+		//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is not in combat.");
+
+		if(!hasObjVar(self, "lastLocation"))
+		{
+			CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is checking its very first location. Will check again later to see if stuck.");
+			setObjVar(self,"lastLocation", getLocation(self));
+		}
+		else
+		{
+			//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" has a location objvar.");
+		
+			location currentLocation = getLocation(self);
+			location lastLocation = getLocationObjVar(self, "lastLocation");
+			if(Math.abs(currentLocation.x - lastLocation.x) < 0.5 && Math.abs(currentLocation.z - lastLocation.z) < 0.5)
+			{
+				//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is STUCK!!! Calculating new path.");
+				if(!hasObjVar(self, WAYPOINT_LIST))
+				{
+					CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is STUCK and doesnt have waypoint object list. Blowing up this NPC!");
+					messageTo(self, "blowUp", null, 2, false);
+				}
+				if(!hasObjVar(self, WAYPOINT_LOCS))
+				{
+					CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is STUCK and doesnt have waypoint location list. Blowing up this NPC!");
+					messageTo(self, "blowUp", null, 2, false);
+				}
+								
+				obj_id waypointList[] = getObjIdArrayObjVar(self, WAYPOINT_LIST);
+				if(waypointList == null || waypointList.length <= 0)
+				{
+					CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is STUCK and doesnt have a valid waypoint object list. Blowing up this NPC!");
+					messageTo(self, "blowUp", null, 2, false);
+				}
+
+				location waypointLocList[] = getLocationArrayObjVar(self, WAYPOINT_LOCS);
+				if(waypointLocList == null || waypointLocList.length <= 0)
+				{
+					CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is STUCK and doesnt have a valid waypoint location list. Blowing up this NPC!");
+					messageTo(self, "blowUp", null, 2, false);
+				}				
+
+				float smallestDist = 300;
+				obj_id closestObj = obj_id.NULL_ID;
+				boolean modified = false;
+				for(int i = 0; i < waypointList.length ; i++)
+				{
+					if(!isValidId(waypointList[i]) || !exists(waypointList[i]))
+						continue;
+				
+					float npcAndWaypointDist = getDistance(self, waypointList[i]);
+					if(npcAndWaypointDist > smallestDist)
+					{
+						//The OID array is not in order by location so the entire array must be looped through to find closest one.
+						continue;
+					}
+					else
+					{
+						CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" has found a node ("+waypointList[i]+") that is closer than any previously found node. Previous dist: "+smallestDist+". New Dist: "+npcAndWaypointDist);
+				
+						smallestDist = npcAndWaypointDist;
+						closestObj = waypointList[i];
+						modified = true;
+					}
+				}
+								
+				if(isValidId(closestObj) && exists(closestObj))
+				{
+			
+					if(!hasObjVar(closestObj, creatureType))
+					{
+						CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is STUCK and the closest pathNode has no pathNode number!");
+						return SCRIPT_CONTINUE;			
+					}
+					
+					int pathNodePriority = getIntObjVar(closestObj, creatureType); //1 - 3
+					int newArrayLength = (waypointList.length - (pathNodePriority - 1));
+					//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() pathNodePriority: "+pathNodePriority);
+					//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() smallestDist: "+smallestDist);
+					//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() newArrayLength: "+newArrayLength);
+
+					if(newArrayLength < 0)
+					{
+						CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" pathNode priority was: "+pathNodePriority+" while the waypoint length was: "+waypointList.length+". subtracting the 2 gave an invalid number!");	
+						return SCRIPT_CONTINUE;			
+
+					}
+					else if(newArrayLength == 0 || newArrayLength == 1)
+					{
+						//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is pathing to the LAST NODE in the list");
+						pathTo(self, waypointLocList[waypointLocList.length-1]);
+						return SCRIPT_CONTINUE;	
+					}
+					else
+					{
+						//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() successfully found a new path list. (pathNodePriority): "+pathNodePriority);
+						location[] newPathLocs = new location[newArrayLength];
+						System.arraycopy(waypointLocList, (pathNodePriority-1), newPathLocs, 0, newArrayLength);
+						patrolOnce(self,newPathLocs);
+					}
+				}
+				
+			}
+			else
+			{
+				//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" location has changed. Check again later.");
+				setObjVar(self,"lastLocation", getLocation(self));
+			}
+		}
+	}
+	else
+	{
+		//CustomerServiceLog("outbreak_themepark", "survivor_pathing.checkOwnerValidity() Mob: "+self+" is in combat. Will check for being stuck later.");
+	
+	}
+	messageTo(self, "checkOwnerValidity", null, 10, false);
+
+	return SCRIPT_CONTINUE;				
+}

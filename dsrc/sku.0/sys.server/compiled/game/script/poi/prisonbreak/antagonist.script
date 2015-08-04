@@ -1,0 +1,481 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        antagonist.script
+ * Description:  antagonist object script: POI = prisonbreak
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+/*
+	In the core scenario, the antagonists are pirates captured by farmers.
+*/
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.ai_lib;
+include library.poi;
+include library.scenario;
+include library.utils;
+include library.chat;
+include ai.ai_combat;
+
+//-----------------------------------------------
+// Inherits
+//-----------------------------------------------
+
+inherits poi.base.scenario_actor;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string SCRIPT_CONVERSE				= "npc.converse.npc_converse_menu";
+const string LOG_NAME						= "poiPrisonBreak Antagonist";
+
+// Conversation states.
+const int	CONV_GREET						= 0;	// Player hasn't spoken to anyone and needs a greeting.
+const int	CONV_INSULT						= 1;	// Player insulted the antagonist leader.
+const int	CONV_NOHELP						= 2;	// Player refused to help the antagonist leader.
+const int	CONV_YESHELP					= 3;	// Player said he would help the antagonist leader.
+const int	CONV_TALKMEDIATOR				= 4;	// Player needs to ask for work.
+const int	CONV_CHECKGUARD					= 5;	// Player told to check on guard.
+const int	CONV_GUARDPEEING				= 6;	// Player told the guard to go pee.
+const int	CONV_GUARDHOLDINGIT				= 7;	// Player told the guard to hold it.
+const int	CONV_MAYBEHELP					= 8;	// Player has been greeted by the antagonist and might help.
+const int	CONV_SABOTAGEPLAN				= 9;	// Player has been tasked with sabotage.
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnStartNpcConversation
+//------------------------------------------------
+
+trigger OnStartNpcConversation( obj_id speaker )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	// Get base object reference.
+	obj_id poiMaster = poi.getBaseObject(self);
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation ( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Look up our progress.
+	int progress = scenario.getPlayerProgress( speaker );
+
+	// Check to see if we are the leader.
+	boolean isLeader = poi.isNpcTagged( self, "antagonist_0" );
+
+	// Check to see if the antagonists have been defeated.
+	boolean mediatorsDead = false;
+	obj_id[] mediators = scenario.getTeamMembers( "mediator" );
+	int deadcount = scenario.getDeadTeamMemberCount( poiMaster, "mediator" );
+	if ( deadcount == mediators.length )
+		mediatorsDead = true;
+
+	// If the mediators are all dead, just chatter about how cool we are.
+	// This is what we say to any players that wander by after the battle.
+	if ( mediatorsDead )
+	{
+		// Say some victory chatter.
+		int idx = rand( 1, 4 );
+		poi.quickSay( self, "a_victory_" + idx );
+
+		// Cut off the convo (no responses).
+		npcEndConversation( speaker );
+	}
+
+	//------------------------------------------------
+	// Minion chatter.
+	//------------------------------------------------
+
+	if ( !isLeader )
+	{
+		// Handle normal minion chatter.
+		minionChatter( self, convo, speaker, poiMaster );
+		return SCRIPT_CONTINUE;
+	}
+
+	//------------------------------------------------
+	// Antagonist chatter.
+	//------------------------------------------------
+
+	// Msg/response vars.
+	string_id msg = new string_id( convo, "a_greet" );
+	resizeable string_id[] responses = new string_id[0];
+
+	// Choose something to say based on this player's progrss.
+	switch ( progress )
+	{
+		// Antagonist has not spoken to anyone yet.
+		case CONV_GREET:
+			// Greet the player.
+			msg = new string_id( convo, "a_greet" );
+			responses = utils.addElement( responses, new string_id(convo, "r_greet_tellstory") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+
+			// Add the player to the scenario.
+			//scenario.addPlayer( poiMaster, speaker );
+			scenario.setPlayerProgress( speaker, CONV_MAYBEHELP );
+			break;
+
+		// Player hasn't said he'd help.
+		case CONV_MAYBEHELP:
+			// Say we could use some help.
+			msg = new string_id( convo, "a_couldusehelp" );
+			responses = utils.addElement( responses, new string_id(convo, "r_couldusehelp_yeshelp") );
+			responses = utils.addElement( responses, new string_id(convo, "r_couldusehelp_nohelp") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+			break;
+
+		// Antagonist was insulted.
+		case CONV_INSULT:
+			scenario.say( self, convo, "a_insulted", false );
+			npcEndConversation( speaker );
+			return SCRIPT_CONTINUE;
+
+		// Player asked antagonist if he could help.
+		case CONV_YESHELP:
+		case CONV_SABOTAGEPLAN:
+			scenario.say( self, convo, "a_please_distractguard", false );
+			npcEndConversation( speaker );
+			break;
+
+		// Player told the antagonist he wouldn't help.
+		case CONV_NOHELP:
+			scenario.say( self, convo, "a_insulted_nohelp", false );
+			npcEndConversation( speaker );
+			break;
+
+		// Generally we get to this point if the player is firmly assisting the mediators.
+		default:
+			scenario.say( self, convo, "a_insulted", false );
+			npcEndConversation( speaker );
+			break;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// minionChatter
+//------------------------------------------------
+
+void minionChatter( obj_id self, string convo, obj_id speaker, obj_id poiMaster )
+{
+	// Say some guard chatter.
+	int idx = rand( 1, 4 );
+	poi.quickSay( self, "a_minion_" + idx );
+
+	// Cut off the convo (no responses).
+	npcEndConversation( speaker );
+}
+
+//------------------------------------------------
+// OnNpcConversationResponse
+//------------------------------------------------
+
+trigger OnNpcConversationResponse( string convoName, obj_id speaker, string_id response )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get reference to conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Validate our conversation.
+	if ( !convoName.equals(convo) )
+		return SCRIPT_CONTINUE;
+
+	// Look up the player's progress.
+	int progress = scenario.getPlayerProgress( speaker );
+
+	// Check to see if we are the leader.
+	boolean isLeader = poi.isNpcTagged( self, scenario.ANTAGONIST + "_0" );
+
+	// Only the leader can chat.
+	if ( !isLeader )
+		return SCRIPT_CONTINUE;
+
+	// Respond to the player's comment.
+	string aId = response.getAsciiId();
+	resizeable string_id[] responses = new string_id[0];
+
+	// Zero out responses.
+	npcSetConversationResponses( speaker, responses );
+
+	// What are you doing here?
+	if ( ( aId.equals("r_greet_tellstory") ) )
+	{
+		// Tell our story.
+		npcSpeak( speaker, new string_id( convo, "a_mystory" ) );
+
+		// Set player responses.
+		responses = utils.addElement( responses, new string_id(convo, "r_mystory_howhorrible") );
+		responses = utils.addElement( responses, new string_id(convo, "r_mystory_looklikefarmers") );
+		npcSetConversationResponses( speaker, responses );
+	}
+
+	// How horrible!
+	else if ( ( aId.equals("r_mystory_howhorrible") ) )
+	{
+		// Tell our story.
+		npcSpeak( speaker, new string_id( convo, "a_couldusehelp_horrible" ) );
+
+		// Set player responses.
+		responses = utils.addElement( responses, new string_id(convo, "r_couldusehelp_yeshelp") );
+		responses = utils.addElement( responses, new string_id(convo, "r_couldusehelp_nohelp") );
+		npcSetConversationResponses( speaker, responses );
+	}
+
+	// They look like farmers to me!
+	else if ( ( aId.equals("r_mystory_looklikefarmers") ) )
+	{
+		npcSpeak( speaker, new string_id( convo, "a_angrylooklikefarmers" ) );
+
+		scenario.setPlayerProgress( speaker, CONV_INSULT );
+	}
+
+	// The player will help.
+	else if ( ( aId.equals("r_couldusehelp_yeshelp") ) )
+	{
+		npcSpeak( speaker, new string_id( convo, "a_please_distractguard" ) );
+
+		scenario.setPlayerProgress( speaker, CONV_YESHELP );
+	}
+
+	// The player won't help.
+	else if ( ( aId.equals("r_couldusehelp_nohelp") ) )
+	{
+		npcSpeak( speaker, new string_id( convo, "a_angrynohelp" ) );
+
+		scenario.setPlayerProgress( speaker, CONV_NOHELP );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// attackWallLeader
+//
+// The leader will call the others to attack the wall.
+//------------------------------------------------
+
+messageHandler attackWallLeader()
+{
+	// Say something devious.
+	poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_DEVIOUS, "a_attackwall_leader" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// attackEveryone
+//
+// Order the attack on the farmers.
+// This causes a huge melee to break out.
+//------------------------------------------------
+
+messageHandler attackEveryone()
+{
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Get reference to conversation.
+	string convo = getStringObjVar( poiMaster, scenario.VAR_SCENARIO_CONVO );
+	if ( convo.equals("") )
+		return SCRIPT_CONTINUE;
+
+	// Say something encouraging!
+	if ( params.getBoolean( "idiot" ) )
+		poi.quickSay( self, chat.CHAT_BELLOW, chat.MOOD_ANGRY, "a_idiots" );
+	else
+		poi.quickSay( self, chat.CHAT_BELLOW, chat.MOOD_ENTHUSIASTIC, "a_attackeveryone" );
+
+	// Get players.
+	obj_id[] players = getObjIdArrayObjVar( poiMaster, scenario.VAR_SCENARIO_PLAYERS );
+
+	// Have pirates hate farmers.
+	obj_id[] mediators = scenario.getTeamMembers( poiMaster, "mediator" );
+	obj_id[] antagonists = scenario.getTeamMembers( poiMaster, "antagonist" );
+	for ( int i=0; i<antagonists.length; i++ )
+	{
+		// Find this guy.
+		obj_id found = antagonists[i];
+		if ( (found == null) || (found == obj_id.NULL_ID) )
+			continue;
+
+		// Don't fight if you are down.
+		if ( isIncapacitated( found ) || isDead( found ) )
+			continue;
+
+		// Find someone to kill.
+		//ai_lib.setIgnoreCombat( found, false );
+		obj_id enemy = mediators[rand(0,mediators.length-1)];
+		startCombat( found, enemy );
+		LOG( LOG_NAME, "Pirate: " + found + " attacking Farmer: " + enemy);
+		LOG( LOG_NAME, "Pirate: " + found + " can attack Farmer: " + enemy + ": " + pvpCanAttack(found, enemy));
+
+		// Make pirate hate all farmers.
+		for (int j=0; j<mediators.length; j++)
+		{
+			ai_lib.addToMentalStateToward( found, mediators[j], ANGER, 100f );
+		}
+		
+		// Have pirates hate players too.
+		if ( players != null )
+		{
+			for ( int j=0; j<players.length; j++ )
+			{
+				if ( (players[j] != null) && (players[j] != obj_id.NULL_ID) )
+					ai_lib.addToMentalStateToward( found, players[j], ANGER, 100f, BEHAVIOR_ATTACK );
+			}
+		}
+	}
+
+	// Have farmers hate pirates.
+	int k = 1;
+	for ( int i=0; i<mediators.length; i++ )
+	{
+		// Find this guy.
+		obj_id found = mediators[i];
+		if ( (found == null) || (found == obj_id.NULL_ID) )
+			continue;
+
+		// Don't fight if you are down.
+		if ( isIncapacitated( found ) || isDead( found ) )
+			continue;
+
+		// Every few farmers shout something.
+		if ( i%3 == 0 )
+		{
+			poi.quickSay( found, chat.CHAT_SHOUT, chat.MOOD_SURPRISED, "m_underattack_" + k++ );
+			if ( k > 3 )
+				k = 0;
+		}
+		
+		// Find someone to kill.
+		//ai_lib.setIgnoreCombat( found, false );
+		obj_id enemy = antagonists[rand(0,antagonists.length-1)];
+		startCombat( found, enemy );
+		LOG( LOG_NAME, "Farmer: " + found + " attacking Pirate: " + enemy);
+		LOG( LOG_NAME, "Farmer: " + found + " can attack Pirate: " + enemy + ": " + pvpCanAttack(found, enemy));
+
+		// Make farmer hate all pirates
+		for (int j=0; j<antagonists.length; j++)
+		{
+			ai_lib.addToMentalStateToward( found, antagonists[j], ANGER, 100f );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSawAttack(obj_id defender, obj_id[] attackers)
+{
+	if ( !isIdValid( defender ) || getTarget( self ) == defender )
+		return SCRIPT_CONTINUE;
+
+	if ( attackers == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id poiMaster = poi.getBaseObject( self );
+	obj_id[] mediators = scenario.getTeamMembers( poiMaster, "mediator" );
+	obj_id[] antagonists = scenario.getTeamMembers( poiMaster, "antagonist" );
+
+	boolean antagonistAttacked = false;
+	for (int i = 0; i < antagonists.length; i++)	
+	{
+		if (defender == antagonists[i])
+			antagonistAttacked = true;
+	}
+	if (!antagonistAttacked)
+		return SCRIPT_CONTINUE;
+
+	boolean mediatorAttacking = false;
+	for (int i = 0; i < mediators.length; i++)
+	{
+		for (int j = 0; j < attackers.length; j++)
+		{
+			if (attackers[j] == mediators[i])
+				mediatorAttacking = true;
+		}
+	}
+	if (!mediatorAttacking)
+		return SCRIPT_CONTINUE;
+	
+	if ( !canSee( self, defender ) )
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( defender == self || ai_lib.isAiDead( defender ))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !ai_lib.isInCombat(self) )
+	{
+		obj_id enemy = antagonists[rand(0,antagonists.length-1)];
+		startCombat( self, enemy );
+	}
+	
+	return SCRIPT_OVERRIDE;
+}
+

@@ -1,0 +1,2502 @@
+include ai.ai_combat;
+include library.ai_lib;
+include library.battlefield;
+include library.beast_lib;
+include library.bio_engineer;
+include library.callable;
+include library.chat;
+include library.colors;
+include library.combat_consts;
+include library.consumable;
+include library.food;
+include library.group;
+include library.healing;
+include library.hue;
+include library.pet_lib;
+include library.player_stomach;
+include library.poi;
+include library.space_crafting;
+include library.space_transition;
+include library.stealth;
+include library.sui;
+include library.utils;
+include library.xp;
+
+
+const string ALERT_VOLUME_NAME = "alertTriggerVolume";
+
+const string ACTION_ALERT = "alert";
+const string ACTION_THREATEN = "threaten";
+
+const float CORPSE_CLEANUP_DELAY = 30.0f;
+
+const string STRING_FILE = "hireling/hireling";
+const string MENU_FILE = "pet/pet_menu";
+const string CONVO = "HIRELING_CONVO";
+const string CREATURE_TABLE 			= "datatables/mob/creatures.iff";
+
+const string PCDPING_PET_SCRIPT_NAME = "ai.pet_ping";
+const string MESSAGE_PET_ID          = "petId";
+
+const boolean debug = false;
+
+const string BARK_TRIGGER_VOLUME		= "module.bark_trigger_volume";
+const string CAN_BARK 				= "module.can_bark";
+const float BARK_RANGE				= 20.0f;
+const float BARK_DELAY				= 60.0f;
+const int FALSE					= 0;
+const int TRUE 					= 1;
+
+const string_id SID_HELPER_DEFAULT_REMINDER	= new string_id(MENU_FILE, "helper_default_reminder");
+const string_id SID_MUST_DISMOUNT		= new string_id("pet/pet_menu","must_dismount");
+const string_id PCOLOR 				= new string_id("sui", "set_primary_color");
+
+
+trigger OnAttach()
+{
+	// Pet Familiar Code - PMW
+	if (pet_lib.getPetType(self) == pet_lib.PET_TYPE_FAMILIAR)
+	{
+		attachScript(self, "ai.familiar");
+		detachScript(self, "ai.pet");
+		detachScript(self, "systems.combat.combat_actions");
+		detachScript(self, "ai.ai");
+	}
+	else
+	{
+		messageTo( self, "handleSetupPet", null, 1, false );
+	}
+	setObjVar( self, "alreadyTamed", true );
+
+	//remove poi and npc attachments:
+	if ( hasObjVar( self, "poi") )
+	{
+		obj_id poiBaseObject = poi.getBaseObject( self );
+		poi.removeFromMasterList( poiBaseObject, self );
+		removeObjVar( self, "poi" );
+		if ( hasObjVar( self, "npc_lair") )
+			removeObjVar( self, "npc_lair" );
+	}
+
+	if ( pet_lib.isSpeakingPet( self ) )
+		setCondition (self, CONDITION_CONVERSABLE);
+
+	//-- Ensure that the vehicle has the PCD ping script attached.
+	if (!hasScript(self, PCDPING_PET_SCRIPT_NAME))
+	{
+		if (debug)
+			LOG("pcdping-debug", "pet.OnInitialize(): attaching script [" + PCDPING_PET_SCRIPT_NAME + "] to vehicle id=[" + self + "]");
+		attachScript(self, PCDPING_PET_SCRIPT_NAME);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	// convert the old patrol objvars to the new one
+	if ( hasObjVar(self, "ai.patrolPoint") )
+	{
+		obj_var_list oldPath = getObjVarList(self, "ai.patrolPoint");
+		if ( oldPath != null )
+		{
+			location[] newPath = new location[oldPath.getNumItems()];
+			for ( int i = 0; i < newPath.length; ++i )
+			{
+				location point = oldPath.getLocationObjVar("" + i);
+				newPath[i] = point;
+			}
+			setObjVar(self, pet_lib.OBJVAR_PET_PATROL_POINTS, newPath);
+			removeObjVar(self, "ai.patrolPoint");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAddedToWorld()
+{
+	if ( isDead( self ) )
+	{
+		destroyObject( self );
+		return SCRIPT_CONTINUE;
+	}
+	messageTo( self, "handleSetupPet", null, 1, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+
+	if(isIdValid(getMaster(self)))
+	{
+		names[idx] = "owner";
+		attribs[idx] = getName(getMaster(self));
+		idx++;
+	}
+
+	if(pet_lib.isDroidPet(self))
+	{
+		names[idx] = "pet_stats.level";
+		attribs[idx] = "" + getLevel(self);
+		idx++;
+
+		if(idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+		obj_id petControlDevice = callable.getCallableCD(self);
+
+		if(isIdValid(petControlDevice) && exists(petControlDevice))
+		{
+			int powerLevel = getIntObjVar(petControlDevice, "ai.pet.powerLevel");
+
+			float percentRemaining = (((float)pet_lib.OUT_OF_POWER - (float)powerLevel) / (float)pet_lib.OUT_OF_POWER) * 100.0f;
+
+			names[idx] = "pet_stats.battery_power";
+			attribs[idx] = " " + (int)percentRemaining + "%";
+			idx++;
+
+			if(idx >= names.length)
+			{
+				return SCRIPT_CONTINUE;
+			}
+
+			if(hasObjVar(petControlDevice, "creature_attribs.general_protection"))
+			{
+				int general_protection = getIntObjVar(petControlDevice, "creature_attribs.general_protection");
+				names[idx] = "pet_stats.dna_comp_armor_effectiveness";
+				attribs[idx] = "" + general_protection;
+				idx++;
+
+				if(idx >= names.length)
+				{
+					return SCRIPT_CONTINUE;
+				}
+			}
+
+			string creatureName = getStringObjVar(petControlDevice, "pet.creatureName");
+
+			if(creatureName == null || creatureName == "")
+			{
+				return SCRIPT_CONTINUE; //wtf is this?
+			}
+
+			int niche = dataTableGetInt(CREATURE_TABLE, creatureName, "niche");
+
+			if(niche != NICHE_DROID || pet_lib.isCombatDroidPCD(petControlDevice))
+			{
+				if(hasObjVar(petControlDevice, "creature_attribs.toHitChance"))
+				{
+					names[idx] = "pet_stats.creature_tohit";
+					int value = getIntObjVar(petControlDevice, "creature_attribs.toHitChance");
+					attribs[idx] = "" + value;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "creature_attribs.defenseValue"))
+				{
+					names[idx] = "pet_stats.creature_defense";
+					int value = getIntObjVar(petControlDevice, "creature_attribs.defenseValue");
+					attribs[idx] = "" + value;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "creature_attribs.stateResist"))
+				{
+					names[idx] = "pet_stats.creature_state_resist";
+					float value = getFloatObjVar(petControlDevice, "creature_attribs.stateResist");
+					attribs[idx] = "" + value * 100 + "%";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "creature_attribs.critChance"))
+				{
+					names[idx] = "pet_stats.creature_crit_chance";
+					float value = getFloatObjVar(petControlDevice, "creature_attribs.critChance");
+					attribs[idx] = "" + value * 100 + "%";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "creature_attribs.critSave"))
+				{
+					names[idx] = "pet_stats.creature_crit_save";
+					float value = getFloatObjVar(petControlDevice, "creature_attribs.critSave");
+					attribs[idx] = "" + value * 100 + "%";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "creature_attribs.aggroBonus"))
+				{
+					names[idx] = "pet_stats.creature_aggro_bonus";
+					float value = getFloatObjVar(petControlDevice, "creature_attribs.aggroBonus");
+					attribs[idx] = "" + value * 100 + "%";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "creature_attribs.minDamage"))
+				{
+					names[idx] = "pet_stats.creature_damage";
+
+					obj_id creatureWeapon = getCurrentWeapon(self);
+
+					int min = getWeaponMinDamage(creatureWeapon);
+					int max = getWeaponMaxDamage(creatureWeapon);
+
+					int[] dmgBonus = pet_lib.getPetAbilityDamageBonus(petControlDevice, min, max);
+					min += dmgBonus[0];
+					max += dmgBonus[1];
+
+					attribs[idx] = "" + min + " - " + max;
+
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+/*
+				if(hasObjVar(petControlDevice, "creature_attribs." + bio_engineer.ATTRIB_DICT_SPECIAL_ATTACK_1))
+				{
+					int attack = getIntObjVar(petControlDevice, "creature_attribs." + bio_engineer.ATTRIB_DICT_SPECIAL_ATTACK_1);
+					names[idx] = "pet_stats.spec_atk_1";
+					attribs[idx] = ai_lib.getAttackString(attack);
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "creature_attribs." + bio_engineer.ATTRIB_DICT_SPECIAL_ATTACK_2))
+				{
+					int attack = getIntObjVar(petControlDevice, "creature_attribs." + bio_engineer.ATTRIB_DICT_SPECIAL_ATTACK_2);
+					names[idx] = "pet_stats.spec_atk_2";
+					attribs[idx] = ai_lib.getAttackString(attack);
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+*/
+				if(hasObjVar(petControlDevice, "creature_attribs." + bio_engineer.ATTRIB_DICT_RANGED_WEAPON))
+				{
+					string weapon = getStringObjVar(petControlDevice, "creature_attribs." + bio_engineer.ATTRIB_DICT_RANGED_WEAPON);
+					if(weapon != null)
+					{
+						names[idx] = "pet_stats.dna_comp_ranged_attack";
+						if(weapon.equals(""))
+							attribs[idx] = "No";
+						else
+							attribs[idx] = "Yes";
+						idx++;
+						if(idx >= names.length)
+							return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "ai.pet.isRepairDroid"))
+				{
+					names[idx] = "pet_stats.is_repair_droid";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "storageModuleRating"))
+				{
+					names[idx] = "pet_stats.storage_module_rating";
+					int storage = getIntObjVar(petControlDevice, "storageModuleRating");
+					attribs[idx] = "" + storage;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "ai.pet.hasContainer"))
+				{
+					names[idx] = "pet_stats.storage_module_rating";
+					int storage = getIntObjVar(petControlDevice, "ai.pet.hasContainer");
+					attribs[idx] = "" + storage;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+
+					obj_id petInv = utils.getInventoryContainer(petControlDevice);
+
+					if(isIdValid(petInv))
+					{
+						storage = getTotalVolume(petInv);
+
+						if(storage > 0)
+						{
+							names[idx] = "pet_stats.inventory_capacity";
+
+							attribs[idx] = "" + storage;
+							idx++;
+
+							if(idx >= names.length)
+							{
+								return SCRIPT_CONTINUE;
+							}
+						}
+					}
+				}
+				if(hasObjVar(petControlDevice, "dataModuleRating"))
+				{
+					//names[idx] = "pet_stats.data_module_rating";
+					int datastorage = getIntObjVar(petControlDevice, "dataModuleRating");
+					//attribs[idx] = " " + datastorage;
+					//idx++;
+					//if(idx >= names.length)
+					//	return SCRIPT_CONTINUE;
+
+
+					if(space_crafting.isUsableAstromechPet(petControlDevice))
+					{
+						obj_id[] loadedDroidCommands = space_crafting.getDatapadDroidCommands(petControlDevice);
+						if((loadedDroidCommands!=null)&&(loadedDroidCommands.length>0))
+						{
+							names[idx] = "pet_stats.droid_program_loaded";
+							attribs[idx] = " ";
+							idx++;
+							if(idx >= names.length)
+								return SCRIPT_CONTINUE;
+
+							for (int i = 0; i< loadedDroidCommands.length; i++)
+							{
+								if(hasObjVar(loadedDroidCommands[i], "strDroidCommand"))
+								{
+									string programName = getStringObjVar(loadedDroidCommands[i], "strDroidCommand");
+									names[idx] = "pet_stats.droid_program";
+									attribs[idx] = " " + localize(new string_id("space/droid_commands", programName));
+									idx++;
+									if(idx >= names.length)
+										return SCRIPT_CONTINUE;
+								}
+							}
+						}
+
+
+						names[idx] = "pet_stats.data_module_cert_needed";
+						string certNeeded = "Level 1";
+						if((datastorage > 0) && (datastorage <= 2))
+							certNeeded = "Level 1";
+						else if(datastorage <= 4)
+							certNeeded = "Level 2";
+						else if(datastorage <= 6)
+							certNeeded = "Level 3";
+						else if(datastorage <= 8)
+							certNeeded = "Level 4";
+						else if(datastorage <= 10)
+							certNeeded = "Level 5";
+						else if(datastorage > 10)
+							certNeeded = "Level 6";
+
+						attribs[idx] = " " + certNeeded;
+						idx++;
+
+						if(idx >= names.length)
+						{
+							return SCRIPT_CONTINUE;
+						}
+
+						names[idx] = "pet_stats.data_module_rating";
+						attribs[idx] = "" + datastorage;
+						idx++;
+						if(idx >= names.length)
+							return SCRIPT_CONTINUE;
+
+						obj_id petInv = utils.getObjectInSlot(petControlDevice, "datapad");
+
+						if(isIdValid(petInv))
+						{
+							int storage = getTotalVolume(petInv);
+
+							if(storage > 0)
+							{
+								names[idx] = "pet_stats.datapad_slots";
+
+								attribs[idx] = "" + storage;
+								idx++;
+
+								if(idx >= names.length)
+								{
+									return SCRIPT_CONTINUE;
+								}
+							}
+						}
+					}
+
+
+				}
+				if(hasObjVar(petControlDevice, "craftingStation"))
+				{
+					names[idx] = "pet_stats.crafting_station";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "craftingStationSpace"))
+				{
+					names[idx] = "pet_stats.crafting_station_space";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "craftingStationStructure"))
+				{
+					names[idx] = "pet_stats.crafting_station_structure";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "craftingStationClothing"))
+				{
+					names[idx] = "pet_stats.crafting_station_clothing";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "craftingStationFood"))
+				{
+					names[idx] = "pet_stats.crafting_station_food";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "craftingStationWeapon"))
+				{
+					names[idx] = "pet_stats.crafting_station_weapon";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "ai.diction"))
+				{
+					names[idx] = "pet_stats.ai_diction";
+					string personality = getStringObjVar(petControlDevice, "ai.diction");
+					attribs[idx] = " " +localize(new string_id("npc_reaction/npc_diction", personality));
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "module_data.bomb_level"))
+				{
+					names[idx] = "pet_stats.bomb_level";
+					int datastorage = getIntObjVar(petControlDevice, "module_data.bomb_level");
+					if(hasObjVar(petControlDevice, "module_data.bomb_level_bonus"))
+						datastorage += getIntObjVar(petControlDevice, "module_data.bomb_level_bonus");
+
+					int minDamage = datastorage * pet_lib.DETONATION_DROID_MIN_DAMAGE;
+					int maxDamage = datastorage * pet_lib.DETONATION_DROID_MAX_DAMAGE;
+
+					attribs[idx] = " " + datastorage +" ("+minDamage+" - "+maxDamage+")";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "module_data.merchant_barker"))
+				{
+					names[idx] = "pet_stats.merchant_barker";
+					attribs[idx] = " installed";
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+				if(hasObjVar(petControlDevice, "module_data.stimpack_capacity"))
+				{
+					names[idx] = "pet_stats.stimpack_power";
+					int power = getIntObjVar(petControlDevice, "module_data.stim_power");
+					int supply = getIntObjVar(petControlDevice, "module_data.stimpack_supply");
+					int capacity = getIntObjVar(petControlDevice, "module_data.stimpack_capacity");
+					int speed = getIntObjVar(petControlDevice, "module_data.stimpack_speed");
+					if(power < 0)
+						power = 0;
+					if(supply < 0)
+						supply = 0;
+
+					attribs[idx] = " " + power;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+
+					names[idx] = "pet_stats.stimpack_capacity";
+					attribs[idx] = " " + supply + " / " + capacity;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+
+					names[idx] = "pet_stats.stimpack_speed";
+					attribs[idx] = " " + speed;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "module_data.auto_repair_power"))
+				{
+					names[idx] = "pet_stats.auto_repair_power";
+					int datastorage = getIntObjVar(petControlDevice, "module_data.auto_repair_power");
+					attribs[idx] = " " + datastorage;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "module_data.playback.modules"))
+				{
+					names[idx] = "pet_stats.playback_modules";
+					int numModules = getIntObjVar(petControlDevice, "module_data.playback.modules");
+					attribs[idx] = " " + numModules;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "module_data.harvest_power"))
+				{
+					names[idx] = "pet_stats.harvest_power";
+					int bonusHarvest = getIntObjVar(petControlDevice, "module_data.harvest_power");
+					attribs[idx] = " " + bonusHarvest;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "module_data.entertainer_effects"))
+				{
+					string[] effects = pet_lib.getLightingEffects(petControlDevice);
+					if(effects != null)
+					{
+						for (int i = 0; i < effects.length; i++)
+						{
+							names[idx] = "pet_stats."+effects[i];
+							attribs[idx] = " installed";
+							idx++;
+							if(idx >= names.length)
+								return SCRIPT_CONTINUE;
+						}
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "module_data.struct_maint"))
+				{
+					names[idx] = "pet_stats.struct_module_rating";
+					int struct = getIntObjVar(petControlDevice, "module_data.struct_maint");
+					attribs[idx] = " " + struct;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+				if(hasObjVar(petControlDevice, "module_data.trap_bonus"))
+				{
+					names[idx] = "pet_stats.trap_bonus";
+					int trapBonus = getIntObjVar(petControlDevice, "module_data.trap_bonus");
+					attribs[idx] = " " + trapBonus;
+					idx++;
+
+					if(idx >= names.length)
+					{
+						return SCRIPT_CONTINUE;
+					}
+				}
+
+
+				if(hasObjVar(self, "module_data.fire_potency"))
+				{
+					names[idx] = "pet_stats.fire_potency";
+					int firePotency = getIntObjVar(self, "module_data.fire_potency");
+					attribs[idx] = " " + firePotency;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+
+					names[idx] = "pet_stats.flame_jet_level";
+					int bonusFlameJetLevel = pet_lib.getDroidModuleCommandLevel(player, firePotency);
+
+					attribs[idx] = " " + bonusFlameJetLevel;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+				}
+
+				if(hasObjVar(self, "module_data.arc_projector"))
+				{
+					names[idx] = "pet_stats.arc_projector";
+					int attribValue = getIntObjVar(self, "module_data.arc_projector");
+					attribs[idx] = " " + attribValue;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+
+					names[idx] = "pet_stats.electrical_shock_level";
+					int bonusCommandLevel = pet_lib.getDroidModuleCommandLevel(player, attribValue);
+
+					attribs[idx] = " " + bonusCommandLevel;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+				}
+
+				if(hasObjVar(self, "module_data.shield_heatsink"))
+				{
+					names[idx] = "pet_stats.shield_heatsink";
+					int attribValue = getIntObjVar(self, "module_data.shield_heatsink");
+					attribs[idx] = " " + attribValue;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+
+					names[idx] = "pet_stats.droideka_shield_level";
+					int bonusCommandLevel = pet_lib.getDroidModuleCommandLevel(player, attribValue);
+
+					attribs[idx] = " " + bonusCommandLevel;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+				}
+
+				if(hasObjVar(self, "module_data.pain_inducer"))
+				{
+					names[idx] = "pet_stats.pain_inducer";
+					int attribValue = getIntObjVar(self, "module_data.pain_inducer");
+					attribs[idx] = " " + attribValue;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+
+					names[idx] = "pet_stats.torturous_needle_level";
+					int bonusCommandLevel = pet_lib.getDroidModuleCommandLevel(player, attribValue);
+
+					attribs[idx] = " " + bonusCommandLevel;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+				}
+
+				if(hasObjVar(self, "module_data.quickset_metal"))
+				{
+					names[idx] = "pet_stats.quickset_metal";
+					int attribValue = getIntObjVar(self, "module_data.quickset_metal");
+					attribs[idx] = " " + attribValue;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+
+					names[idx] = "pet_stats.regenerative_plating_level";
+					int bonusCommandLevel = pet_lib.getDroidModuleCommandLevel(player, attribValue);
+
+					attribs[idx] = " " + bonusCommandLevel;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+				}
+
+				if(hasObjVar(self, "module_data.dump_capacitors"))
+				{
+					names[idx] = "pet_stats.dump_capacitors";
+					int attribValue = getIntObjVar(self, "module_data.dump_capacitors");
+					attribs[idx] = " " + attribValue;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+
+					names[idx] = "pet_stats.battery_dump_level";
+					int bonusCommandLevel = pet_lib.getDroidModuleCommandLevel(player, attribValue);
+
+					attribs[idx] = " " + bonusCommandLevel;
+					idx++;
+
+					if(idx >= names.length)
+						return SCRIPT_CONTINUE;
+				}
+			}
+		}
+
+		if(hasObjVar(self, "module_data.sampling_power"))
+		{
+			names[idx] = "sampling_power";
+			int bonusHarvest = getIntObjVar(self, "module_data.sampling_power");
+			attribs[idx] = " " + bonusHarvest;
+			idx++;
+			if (idx >= names.length)
+				return SCRIPT_CONTINUE;
+		}
+
+
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+messageHandler handleSetupPet()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "pet::handleSetupPet() self(" + self + ":" + getName(self) + ") master(" + getMaster(self) + ":" + getName(getMaster(self)) + ")");
+
+	if ( !isMob(self) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster( self );
+	if (!isIdValid(master))
+	{
+		destroyObject( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasScript( self, "theme_park.poi.poi_object" ))
+		detachScript( self, "theme_park.poi.poi_object" );
+
+	setOwner( utils.getInventoryContainer(self), master );
+
+	managePowerConsumption(self);
+	if ( !pet_lib.findMaster( self ))
+		messageTo( self, "handleLostMaster", null, 1800, false );
+
+	if ( hasScript( self, "ai.droid" ))
+		detachScript( self, "ai.droid");//this script is for un-owned, non-pet, NPC droids.
+
+	pet_lib.petFollow(self, master);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLostMaster()
+{
+
+	//debugServerConsoleMsg( self, "I have lost my master, so feh:" );
+	if ( !pet_lib.findMaster( self ) )
+	{
+		//debugServerConsoleMsg( self, "destroying myself!" );
+		destroyObject( self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	if ( !isMob(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id master = getMaster( self );
+
+	if(isIdValid(master) && exists(master))
+	{
+		pet_lib.removeFromPetList( self );
+	}
+
+	removeObjVar( self, "ai.pet");
+
+	if ( !ai_lib.isAiDead( self ) )
+	{
+		ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_WANDER );
+	}
+
+	setOwner( utils.getInventoryContainer(self), obj_id.NULL_ID );
+
+	setObjVar( self, "alreadyTrained", true );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	if ( hasObjVar( self, "pet.controlDestroyed" ) || !isMob( self ))
+	{
+		return SCRIPT_CONTINUE;//already handled this stuff
+	}
+
+	obj_id master = getMaster( self );
+
+	if(isIdValid(master))
+	{
+		pet_lib.removeFromPetList( self );
+	}
+
+	//You cannot store battlefield pets at all, and
+	// incap'd NPC pets will destroy their pet control device when they are destroyed:
+
+	//If we ever give creature handlers NPC pets OR
+	// if we ever grant creature-pets via faction-perks THEN
+	// all faction pets will have to be flagged as such and this will
+	// need to be updated to check for that flag:
+	boolean isFactionPet = ( ai_lib.isNpc(self) || ai_lib.aiGetNiche(self) == NICHE_VEHICLE || ai_lib.isAndroid(self));
+	obj_id petControlDevice = callable.getCallableCD(self);
+
+	if (hasObjVar( self, battlefield.VAR_CONSTRUCTED ) || (isFactionPet && ai_lib.aiIsDead(self) ) )
+	{
+		if ( isIdValid( petControlDevice) )
+		{
+			messageTo( petControlDevice, "handleFlagDeadCreature", null, 0, false );
+		}
+	}
+
+	if ( isIdValid( petControlDevice ) && petControlDevice.isLoaded() )
+	{
+		obj_id currentPet = callable.getCDCallable(petControlDevice);
+
+		if ( isIdValid( currentPet ) && currentPet == self )
+		{
+			pet_lib.savePetInfo( self, petControlDevice );
+			setObjVar( petControlDevice, "pet.timeStored", getGameTime() );
+
+			callable.setCDCallable(petControlDevice, null);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler resumeDefaultCalmBehavior()
+{
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	if ( !pet_lib.findMaster( self ))
+	{
+		destroyObject( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( ai_lib.isInCombat( self ))
+		return SCRIPT_CONTINUE;//you probably don't want to do anything if the creature is in combat
+
+	if ( hasObjVar( self, "ai.conversing") )
+	{
+		//the npc is conversing.  Want to do something special?
+		// return SCRIPT_OVERRIDE;
+		// otherwise
+		return SCRIPT_CONTINUE;
+	}
+
+	//if you don't want a calm NPC to resume his default calm behavior,
+	// then
+	//
+	// YOUR CODE GOES HERE
+	//
+	// return SCRIPT_OVERRIDE;
+	// else
+
+	obj_id master = getMaster(self);
+	if ( isIdValid(master) )
+		setHomeLocation( self, getLocation( master ) );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	//Trigger support for merchant barker droid
+	if (volumeName == BARK_TRIGGER_VOLUME)
+	{
+		if (!isPlayer(breacher) || !isIdValid(breacher))
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		if (!utils.hasScriptVar(self, CAN_BARK))
+			utils.setScriptVar(self, CAN_BARK, TRUE);
+
+		if (TRUE == utils.getIntScriptVar(self, CAN_BARK))
+		{
+			utils.setScriptVar(self, CAN_BARK, FALSE);
+			messageTo(self, "msgMerchantBark", null, 1.0f, false);
+		}
+	}
+
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	if ( volumeName == ALERT_VOLUME_NAME && breacher == getMaster(self) )
+	{
+		chat.setGoodMood( self );
+		ai_lib.barkString( self, "hi_nice" );
+	}
+
+	//pets ignore everything
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnTriggerVolumeExited( string volumeName, obj_id breacher )
+{
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	if ( volumeName == ALERT_VOLUME_NAME && breacher == getMaster( self ) )
+	{
+		chat.setGoodMood( self );
+		ai_lib.barkString( self, "bye_nice" );
+	}
+	//pets ignore everything:
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowWaiting(obj_id target)
+{
+	pet_lib.validateFollowTarget(self, target);
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnFollowMoving( obj_id target )
+{
+	if ( getLocomotion( self ) != LOCOMOTION_RUNNING );
+		setMovementRun( self );
+
+	pet_lib.validateFollowTarget(self, target);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnBehaviorChange( int newBehavior, int oldBehavior, int[] changeFlags )
+{
+	if ( ai_lib.isAiDead( self) )
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat( self ) )
+		return SCRIPT_CONTINUE;//you probably don't want to do anything if you are in combat
+
+	//don't put code in this trigger.  Put it in doCalmerBehavior or doAgitated behavior
+	// this is hard enough to read already:
+	if ( newBehavior <= oldBehavior )
+	{
+		if ( doCalmerBehavior( self, newBehavior, oldBehavior ) == SCRIPT_CONTINUE)
+			return SCRIPT_CONTINUE;
+		else
+			return SCRIPT_OVERRIDE;
+	}
+	else
+	{
+		if ( doAgitatedBehavior( self, newBehavior, oldBehavior) == SCRIPT_CONTINUE )
+			return SCRIPT_CONTINUE;
+		else
+			return SCRIPT_OVERRIDE;
+	}
+}
+
+int doCalmerBehavior( obj_id npc, int newBehavior, int oldBehavior )
+{
+	//You are now calming down.
+	// return SCRIPT_OVERRIDE to stomp on default behaviors:
+	switch ( newBehavior )
+	{
+	 	case BEHAVIOR_CALM:
+			//going from More Agitated to Calm
+			// Your code goes here.
+			break;
+		case BEHAVIOR_ALERT:
+			//going from More Agitated to Alert
+			// Your code goes here.
+			break;
+		case BEHAVIOR_THREATEN:
+			//going from More Agitated to Threaten
+			// Your code goes here.
+			break;
+		case BEHAVIOR_FLEE:
+			//going from More Agitated to Flee
+			// Your code goes here.
+			break;
+		case BEHAVIOR_PANIC:
+			//going from More Agitated to Panic
+			//  Your code goes here.
+			break;
+		case BEHAVIOR_ATTACK:
+			//Going from More Agitated to Attack
+			//  Your code goes here.
+			break;
+		case BEHAVIOR_FRENZY:
+			//This is impossible.
+			break;
+	 	default :
+			// This is an error
+			break;
+	}
+	return SCRIPT_OVERRIDE;
+}
+
+int doAgitatedBehavior( obj_id npc, int newBehavior, int oldBehavior )
+{
+	//You are becoming more Fearful or more Angry
+	// return SCRIPT_OVERRIDE to stomp on default behaviors:
+	switch ( newBehavior )
+	{
+	 	case BEHAVIOR_CALM:
+			//this is impossible
+			break;
+		case BEHAVIOR_ALERT:
+			//going from Calmer to Alert
+			// Your code goes here.
+			break;
+		case BEHAVIOR_THREATEN:
+			//going from Calmer to Threaten
+			// Your code goes here.
+			break;
+		case BEHAVIOR_FLEE:
+			//going from Calmer to Flee
+			// Your code goes here.
+			break;
+		case BEHAVIOR_PANIC:
+			//Going from Calmer to Panic
+			//  Your code goes here.
+			break;
+		case BEHAVIOR_ATTACK:
+			//Going from Calmer to Attack
+			//  Your code goes here.
+			break;
+		case BEHAVIOR_FRENZY:
+			//going from Calmer to Frenzy
+			break;
+	 	default :
+			// This is an error
+			break;
+	}
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnExitedCombat()
+{
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	utils.setScriptVar( self, "pet.combatEnded", getGameTime() );
+
+	if (!utils.hasScriptVar(self, "ai.pet.staying"))
+	{
+		obj_id master = getMaster( self );
+
+		if (isIdValid(master) && master.isLoaded())
+		{
+			aiSetHomeLocation(self, getLocation(master));
+		}
+		else
+		{
+			aiSetHomeLocation(self, getLocation(self));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePetTargetKilled()
+{
+	if ( !ai_lib.isMonster( self ) )
+		return SCRIPT_CONTINUE;
+
+	if ( pet_lib.isNpcPet( self ) || pet_lib.isDroidPet( self ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster( self );
+	if (!isIdValid(master))
+		return SCRIPT_CONTINUE;
+
+	if ( !hasSkill( master, "outdoors_creaturehandler_novice" ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id defender = params.getObjId( "defender" );
+	if (!isIdValid(defender))
+		return SCRIPT_CONTINUE;
+
+	if ( getDistance( self, defender ) > 30.0f )
+		return SCRIPT_CONTINUE;//too far away from defender
+
+	int defLevel = ai_lib.getLevel( defender );
+	int level = ai_lib.getLevel( self );
+
+	int adultLevel = pet_lib.getAdultLevel(self);
+	if ( level < (adultLevel/2) )
+		level = (adultLevel/2);
+
+	int amount = (defLevel - level) + 10;
+	if ( level > ( defLevel*2 ) )
+		amount = 1;
+	else if ( amount < 1 )
+	{
+		amount = 1;
+	}
+	else
+	{
+		if ( level < 5 )
+			amount *= 7;
+		else if (level < 10)
+			amount *= 10;
+		else if (level < 15)
+			amount *= 13;
+		else
+			amount *= 20;
+	}
+
+	if ( amount > 2000 )
+		amount = 2000;
+
+	int numPets = pet_lib.countPetsOfType( master, pet_lib.getPetType( self ) );
+	if ( numPets > 1 )
+		amount = amount / numPets;
+
+	xp.grant( master, xp.CREATUREHANDLER, amount );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler lairThreatened()
+{
+	return SCRIPT_OVERRIDE;
+}
+
+//--------------- DEATH -----------------------//
+trigger OnIncapacitated( obj_id attacker )
+{
+	utils.setScriptVar( self, "recapTimer", getGameTime() );
+	if (pet_lib.isPet(attacker))
+		attacker = getMaster(attacker);
+	utils.setScriptVar( self, "killer", attacker);
+
+	xp.cleanupCreditForKills();
+	obj_id master = getMaster( self );
+	int petRestriction = getIntObjVar(self, "pet.petRestriction");
+
+	// Officer pets need to be reallyKilledForReals as opposed to just killed.
+	if(petRestriction==1)
+	{
+		reallyKill( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Droids need to die allowing master to res them - PMW
+	if ( (master.isLoaded()) && ( isIdValid( master ) ) )
+	{
+		if ( pet_lib.isDroidPet( self ) || pet_lib.isCombatDroid( self ) )
+		{
+			pet_lib.storePet( self, master );
+			sendSystemMessage(master, pet_lib.SID_SYS_PACKED_DROID);
+			// Need to send a message here
+			return SCRIPT_CONTINUE;
+		}
+	}
+	if ( isIdValid( master ) && isDead( master ) )
+	{
+		pet_lib.killPet( self );
+		return SCRIPT_CONTINUE;
+	}
+	else if ( !pet_lib.findMaster( self ) )
+	{
+		pet_lib.killPet( self );
+		return SCRIPT_CONTINUE;
+	}
+
+
+	//if master is too far away when I am incap'd, I die:
+	if ( (!master.isLoaded()) || getDistance( self, master ) > combat_engine.getMaxCombatRange() )
+	{
+		pet_lib.killPet( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	//If we ever give creature handlers NPC pets OR
+	// if we ever grant creature-pets via faction-perks THEN
+	// all faction pets will have to be flagged as such and this will
+	// need to be updated to check for that flag:
+	boolean isFactionPet = ( ai_lib.isNpc(self) || ai_lib.aiGetNiche(self)==NICHE_VEHICLE || ai_lib.isAndroid(self));
+	if (hasObjVar( self, battlefield.VAR_CONSTRUCTED ) || isFactionPet )
+	{
+		reallyKill( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	//pets don't die if Master is O.K., but that has to be handled in ai.ai
+	// because a return SCRIPT_OVERRIDE here will prevent this from incap'ing
+
+	dictionary dictIncap = new dictionary();
+	int incapTimer = getGameTime();
+	utils.setScriptVar( self, "incapTimer", incapTimer );
+	dictIncap.put( "incapTimer", incapTimer );
+	messageTo( self, "handlePetIncappedDecay", dictIncap, 120, false );//auto-store the pet in 120
+	// Make sure the pet does not regen and stand back up
+
+	deltadictionary dict = self.getScriptVars();
+	dict.put("pet.regenMultiplier", 0);
+
+	stop(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePetIncappedDecay()
+{
+	int incapTimer = utils.getIntScriptVar( self, "incapTimer" );
+	int messageTimer = params.getInt( "incapTimer" );
+	if ( incapTimer != messageTimer )
+	{
+		//LOG("ai_pet", "Timers dont match messageTimer = " + messageTimer + "\n incapTimer = " + incapTimer);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isMob(self) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster(self);
+	if ( !isIdValid(master) )
+	{
+		//LOG("ai_pet", "Master has an invalid Id, ("+master+")." );
+		return SCRIPT_CONTINUE;
+	}
+	if(isIncapacitated(self))
+		destroyObject( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnRecapacitated()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "pet::OnRecapacitated() self(" + self + ":" + getName(self) + ") master(" + getMaster(self) + ":" + getName(getMaster(self)) + ")");
+	debugSpeakMsgc(aiLoggingEnabled(self), self, "OnRecapacitated");
+
+	pet_lib.petFollow(self, getMaster(self));
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	if ( ai_lib.isInCombat( self ) ||ai_lib.isAiDead( self ))
+		return SCRIPT_OVERRIDE;
+
+	if ( ai_lib.isInCombat( speaker ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( !pet_lib.isSpeakingPet( self ))
+		return SCRIPT_OVERRIDE;
+
+	if ( speaker != getMaster(self) )
+		return SCRIPT_OVERRIDE;
+
+	chat.setGoodMood( self );
+
+	string myStringFile = STRING_FILE;
+	if ( hasObjVar( self, "ai.diction" ))
+	{
+		string myDiction = getStringObjVar( self, "ai.diction" );
+		if ( myDiction != null && myDiction != "townperson" )
+		 	myStringFile = STRING_FILE + "_" + myDiction;
+	}
+
+	string_id greeting = new string_id (myStringFile, "start_convo_1");//Yes?
+	string_id response[] = new string_id [4];
+	response[0] = new string_id (myStringFile, "command_reply_1");//I need to teach you some commands.
+
+	if (!group.inSameGroup( self, speaker ))
+		response[1] = new string_id (myStringFile, "command_group_1");//join my group
+	else
+		response[1] = new string_id (myStringFile, "command_group_2");//leave my group
+
+	response[2] = new string_id (myStringFile, "command_release");//you're fired
+	response[3] = new string_id (myStringFile, "command_clear_patrol_points");//join my group
+
+
+	npcStartConversation (speaker, self, CONVO, greeting, response);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnNpcConversationResponse(string convo, obj_id player, string_id response)
+{
+	if ( convo != CONVO )
+		return SCRIPT_CONTINUE;
+
+	if ( player != getMaster( self ) )
+		return SCRIPT_CONTINUE;
+
+	string myStringFile = STRING_FILE;
+	if ( hasObjVar( self, "ai.diction" ))
+	{
+		string myDiction = getStringObjVar( self, "ai.diction" );
+		if ( myDiction != null && myDiction != "townperson" )
+		 	myStringFile = STRING_FILE + "_" + myDiction;
+	}
+
+	if ( response.getAsciiId().equals("command_reply_1"))//I need to teach you some commands
+	{
+		string_id message = new string_id (myStringFile, "start_convo_2");//what sort of command?
+		string_id[] nextResponse;
+		boolean addCombatOption = true;
+		if ( pet_lib.isDroidPet( self ) && !pet_lib.isCombatDroid( self ) )
+		{
+			nextResponse = new string_id [4];
+			addCombatOption = false;
+		}
+		else
+			nextResponse = new string_id [5];
+   		nextResponse[0] = new string_id (myStringFile, "move_commands");
+   		nextResponse[1] = new string_id (myStringFile, "patrolling_commands");
+		nextResponse[2] = new string_id (myStringFile, "formation_commands");
+   		nextResponse[3] = new string_id (myStringFile, "friendship_commands");
+		if ( addCombatOption )
+			nextResponse[4] = new string_id (myStringFile, "combat_commands");
+
+		npcSpeak( player, message );
+		npcSetConversationResponses(player, nextResponse);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( response.getAsciiId().equals("move_commands"))
+	{
+		string_id message = new string_id (myStringFile, "which_command");//Which one?
+		if ( pet_lib.isRepairDroid(self) )
+		{
+			string_id nextResponse[] = new string_id [4];
+			nextResponse[0] = new string_id (myStringFile, "command_stay");//Stay!
+			nextResponse[1] = new string_id (myStringFile, "command_follow");//Follow me.
+			nextResponse[2] = new string_id (myStringFile, "command_follow_other");//Follow other.
+			nextResponse[3] = new string_id (myStringFile, "menu_repair_other");//Repair other.
+			npcSpeak( player, message );
+			npcSetConversationResponses(player, nextResponse);
+		}
+		else
+		{
+			string_id nextResponse[] = new string_id [3];
+			nextResponse[0] = new string_id (myStringFile, "command_stay");//Stay!
+			nextResponse[1] = new string_id (myStringFile, "command_follow");//Follow me.
+			nextResponse[2] = new string_id (myStringFile, "command_follow_other");//Follow other.
+			npcSpeak( player, message );
+			npcSetConversationResponses(player, nextResponse);
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( response.getAsciiId().equals("combat_commands"))
+	{
+		string_id message = new string_id (myStringFile, "which_command");//Which one?
+		string_id nextResponse[] = new string_id [2];
+		nextResponse[0] = new string_id (myStringFile, "command_attack");
+		nextResponse[1] = new string_id (myStringFile, "command_guard");
+		npcSpeak( player, message );
+		npcSetConversationResponses(player, nextResponse);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( response.getAsciiId().equals("patrolling_commands"))
+	{
+		string_id message = new string_id (myStringFile, "which_command");//Which one?
+		string_id nextResponse[] = new string_id [3];
+		nextResponse[0] = new string_id (myStringFile, "command_patrol");//start patrolling
+		nextResponse[1] = new string_id (myStringFile, "command_get_patrol_point");//remember this patrol point
+		nextResponse[2] = new string_id (myStringFile, "command_clear_patrol_points");//forget your patrol points
+		npcSpeak( player, message );
+		npcSetConversationResponses(player, nextResponse);
+		return SCRIPT_CONTINUE;
+	}
+
+	////debugSpeakMsg( self, response.getAsciiId());
+
+	if ( response.getAsciiId().equals("formation_commands"))
+	{
+		string_id message = new string_id (myStringFile, "which_command");//Which one?
+		string_id nextResponse[] = new string_id [2];
+		nextResponse[0] = new string_id (myStringFile, "command_assume_formation_1");//wedge
+		nextResponse[1] = new string_id (myStringFile, "command_assume_formation_2");//column
+		npcSpeak( player, message );
+		npcSetConversationResponses(player, nextResponse);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( response.getAsciiId().equals("friendship_commands"))
+	{
+		string_id message = new string_id (myStringFile, "which_command");//Which one?
+		string_id nextResponse[] = new string_id [2];
+		nextResponse[0] = new string_id (myStringFile, "command_transfer");
+		nextResponse[1] = new string_id (myStringFile, "command_friend");
+		npcSpeak( player, message );
+		npcSetConversationResponses(player, nextResponse);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( response.getAsciiId().equals("command_group_1"))//Join my group
+		pet_lib.doCommandNum( self, pet_lib.COMMAND_GROUP, player );
+	else if ( response.getAsciiId().equals("command_group_2"))//leave my group
+		pet_lib.doCommandNum( self, pet_lib.COMMAND_GROUP, player );
+	else if ( response.getAsciiId().equals("command_clear_patrol_points"))//clear patrol point
+		pet_lib.doCommandNum( self, pet_lib.COMMAND_CLEAR_PATROL_POINTS, player );
+	else if ( response.getAsciiId().equals("command_release"))//Goodbye!
+		pet_lib.doCommandNum( self, pet_lib.COMMAND_RELEASE, player );
+	else if ( response.getAsciiId().equals("command_stay"))//Stay
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_STAY );
+	else if ( response.getAsciiId().equals("command_follow"))//Follow me!
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_FOLLOW );
+	else if ( response.getAsciiId().equals("command_follow_other"))//Follow other!
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_FOLLOW_OTHER );
+	else if ( response.getAsciiId().equals("menu_repair_other") && pet_lib.isRepairDroid(self))//REPAIR other!
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_TRICK_2 );
+	else if ( response.getAsciiId().equals("command_guard"))//guard what I am looking at
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_GUARD );
+	else if ( response.getAsciiId().equals("command_friend"))//befriend what I am looking at
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_FRIEND );
+	else if ( response.getAsciiId().equals("command_attack"))//attack what I am looking at
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_ATTACK );
+	else if ( response.getAsciiId().equals("command_patrol"))//patrol
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_PATROL );
+	else if ( response.getAsciiId().equals("command_get_patrol_point"))//get patrol point
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_SET_PATROL_POINT );
+	else if ( response.getAsciiId().equals("command_assume_formation_1"))//get in formation
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_ASSUME_FORMATION_1 );
+	else if ( response.getAsciiId().equals("command_assume_formation_2"))//get in formation
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_ASSUME_FORMATION_2 );
+	else if ( response.getAsciiId().equals("command_transfer"))//Meet your new boss
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_TRANSFER );
+
+	npcEndConversation(player);
+	return SCRIPT_CONTINUE;
+}
+
+/*
+trigger OnEndNpcConversation(obj_id speaker )
+{
+	//if you return SCRIPT_OVERRIDE from this trigger, then do
+	// this stuff FIRST!
+
+	removeObjVar( self, "ai.conversing");
+	if ( getBehavior(self) == BEHAVIOR_CALM )
+		messageTo( self, "resumeDefaultCalmBehavior", null, 5, false );
+
+	return SCRIPT_CONTINUE;
+}
+*/
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if ( isDead(self) || ai_lib.aiIsDead(player) )
+		return SCRIPT_CONTINUE;
+
+	if ( !isMob(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( player != getMaster( self ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id petControlDevice = callable.getCallableCD(self);
+
+	if(hasObjVar(petControlDevice, beast_lib.OBJVAR_OLD_PET_IDENTIFIER) && !hasObjVar(petControlDevice, beast_lib.OBJVAR_OLD_PET_REHUED))
+	{
+		mi.addRootMenu(menu_info_types.SERVER_MENU1, PCOLOR);
+	}
+
+	if (getMountsEnabled())
+	{
+		//Mounts are mountable:
+		if ( pet_lib.canMount( self, player ))
+		{
+			// CuiRadialMenuManager.cpp assumes the pet mount command is SERVER_PET_MOUNT so
+			// that the client can do client side validation to see if pet mounting is allowed
+			debugServerConsoleMsg( player, "+++ pet.onObjectMenuRequest +++ SERVER_PET_MOUNT menu object ADDED to request Menu" );
+			mi.addRootMenu (menu_info_types.SERVER_PET_MOUNT, new string_id(MENU_FILE,"menu_mount"));
+		}
+
+		//Mounts you are riding are dismountable:
+		if ( pet_lib.isMountedOnCreatureQueried( self, player ))
+		{
+			debugServerConsoleMsg( player, "+++ pet.onObjectMenuRequest +++ SERVER_PET_DISMOUNT menu object ADDED to request Menu" );
+			mi.addRootMenu (menu_info_types.SERVER_PET_DISMOUNT, new string_id(MENU_FILE,"menu_dismount"));
+		}
+	}
+
+	if ( ai_lib.isInCombat( self ) )
+		return SCRIPT_CONTINUE;
+
+	int opt_menu = 0;
+
+	string name = getCreatureName (self);
+	if (name.equals("tutorial_droid"))
+	{
+		handleTutorialDroidSetUp(player, mi, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(pet_lib.isDroidPet(self))
+		opt_menu = mi.addRootMenu(menu_info_types.VOTE, new string_id(MENU_FILE,"droid_options"));
+
+	if (!hasObjVar( self, battlefield.VAR_CONSTRUCTED ) && !ai_lib.isInCombat(player) ) {
+
+		if(pet_lib.isDroidPet(self))
+		{
+			mi.addSubMenu(opt_menu, menu_info_types.PET_STORE, new string_id(MENU_FILE,"menu_store"));
+		}
+		else
+		{
+			if (!pet_lib.isMountedOnCreatureQueried( self, player ))
+			{
+				mi.addRootMenu (menu_info_types.PET_STORE, new string_id(MENU_FILE,"menu_store"));
+			}
+		}
+	}
+
+	if (isIncapacitated(self)  && !ai_lib.isInCombat(player))
+		mi.addRootMenu(menu_info_types.ITEM_ACTIVATE, new string_id(MENU_FILE, "awaken"));
+
+	if ( ai_lib.isAiDead( self ) )
+		return SCRIPT_CONTINUE;
+
+	//------------------------------------------------------
+
+	//Droids with Containers can be Opened.
+	if ( pet_lib.hasContainer( self ) ) {
+
+		// mi.addRootMenu (menu_info_types.SERVER_PET_OPEN, new string_id(MENU_FILE,"menu_command_open"));
+		mi.addSubMenu(opt_menu, menu_info_types.SERVER_PET_OPEN, new string_id(MENU_FILE,"menu_command_open"));
+	}
+
+	//Droids with Datapads can have those Opened.
+	if ( pet_lib.hasDatapad( self ) ) {
+
+		// mi.addRootMenu (menu_info_types.SERVER_PET_DPAD, new string_id(MENU_FILE,"menu_dpad"));
+		mi.addSubMenu(opt_menu, menu_info_types.SERVER_PET_DPAD, new string_id(MENU_FILE,"menu_dpad"));
+	}
+
+	//Droids can be recharged:
+	if ( pet_lib.isDroidPet( self )  && !pet_lib.isNewPlayerHelperDroid(self) ) {
+
+		// mi.addRootMenu (menu_info_types.PET_FEED, new string_id(MENU_FILE,"menu_recharge"));
+		mi.addSubMenu(opt_menu, menu_info_types.PET_FEED, new string_id(MENU_FILE,"menu_recharge"));
+	}
+
+	// Management skill mod.
+	int manageSkillMod = 100;
+	if ( !pet_lib.isDroidPet( self ) )
+		manageSkillMod = getSkillStatisticModifier( player, "private_creature_management" );
+
+	// Empathy skill mod.
+	int empathySkillMod = 100;
+	if ( !pet_lib.isDroidPet( self ) )
+		empathySkillMod = getSkillStatisticModifier( player, "private_creature_empathy" );
+
+	// Training skill mod.
+	int trainingSkillMod = 100;
+	if ( !pet_lib.isDroidPet( self ) )
+		trainingSkillMod = getSkillStatisticModifier( player, "private_creature_training" );
+
+	//MENU DRIVEN PETS:
+	int mnu = 0;
+
+	//Train a pet, Progam a droid:
+	if ( !pet_lib.isNewPlayerHelperDroid(self) )
+	{
+		if ( pet_lib.isDroidPet( self ) )
+			mnu = mi.addRootMenu (menu_info_types.PET_COMMAND, new string_id(MENU_FILE,"menu_command_droid"));
+		else
+		{
+			//if you have no skill that's all you can do:
+			if ( !hasSkill( player, "outdoors_creaturehandler_novice" ) )
+				return SCRIPT_CONTINUE;
+
+			mnu = mi.addRootMenu (menu_info_types.PET_COMMAND, new string_id(MENU_FILE,"menu_command"));
+		}
+	}
+
+	////debugSpeakMsg( self, "the menu is ready" );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	////debugSpeakMsg( self, "performing chechs");
+
+	if ( ai_lib.aiIsDead(player) )
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat( self ) )
+		return SCRIPT_CONTINUE;
+
+	if ( !isMob(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( player != getMaster(self) )
+		return SCRIPT_CONTINUE;
+
+	obj_id petControlDevice = callable.getCallableCD(self);
+	//if ( !isIdValid( petControlDevice) )
+
+
+	//can't use a switch statement here because these are not consts:
+	if ( item == menu_info_types.PET_STORE )
+	{
+		if (pet_lib.isMountedOnCreatureQueried( self, player ))
+		{
+			sendSystemMessage(player, SID_MUST_DISMOUNT);
+			return SCRIPT_CONTINUE;
+		}
+
+		if (!hasObjVar( self, battlefield.VAR_CONSTRUCTED ) && !ai_lib.isInCombat(player) )
+		{
+			if (!pet_lib.wasInCombatRecently( self, player, true ))
+				pet_lib.storePet( self, player );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if (item == menu_info_types.ITEM_ACTIVATE)
+	{
+		if (isDead(self))
+			return SCRIPT_CONTINUE;
+
+		messageTo(self, "awakenPet", null, 0f, false);
+	}
+
+
+	if ( ai_lib.isAiDead( self ))
+		return SCRIPT_CONTINUE;
+
+	if (pet_lib.isNpcPet(self))
+		return SCRIPT_CONTINUE;
+
+	string creature_name = getName(self);
+
+	// CuiRadialMenuManager.cpp assumes the pet mount command is SERVER_PET_MOUNT so
+	// that the client can do client side validation to see if pet mounting is allowed
+	if ( item == menu_info_types.SERVER_PET_MOUNT )
+	{
+		debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ SERVER_PET_MOUNT menu object selected" );
+		if (getMountsEnabled())	//GOTTA Have mounts enabled in server config
+		{
+			debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ getMountsEneabled returnted TRUE" );
+			if ( pet_lib.canMount( self, player ))
+			{
+				debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ pet_lib.canMount(self,player) returned TRUE" );
+				queueCommand(player, ##"mount", self, creature_name, COMMAND_PRIORITY_FRONT);
+				debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ just attempted to Enqueue MOUNT command" );
+			}
+		}
+		else
+			debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ getMountsEneabled returnted FALSE" );
+	}
+	else if ( item == menu_info_types.SERVER_PET_DISMOUNT )
+	{
+		debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ SERVER_PET_DISMOUNT menu object selected" );
+		if (getMountsEnabled())	//GOTTA Have mounts enabled in server config
+		{
+			debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ have selected to DISMOUNT and getMountsEnabled has returned true, so proceed" );
+			if ( pet_lib.isMountedOnCreatureQueried( self, player ))
+			{
+				debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ pet_lib.isMountedOnCreatureQueried has returned true, so we're going to enqueue a dismount command" );
+				queueCommand(player, ##"dismount", self, creature_name, COMMAND_PRIORITY_FRONT);
+				debugServerConsoleMsg( player, "+++ pet.onObjectMenuSelect +++ dismount command was just enqueued" );
+			}
+		}
+	}
+
+
+	if (item == menu_info_types.VOTE)
+	{	if (!pet_lib.isNewPlayerHelperDroid(self))
+			pet_lib.feedPet(self, player);
+		else sendSystemMessage(player, SID_HELPER_DEFAULT_REMINDER);
+	}
+
+	if ( ai_lib.isInCombat( player ) || ai_lib.isAiDead( player ))
+		return SCRIPT_CONTINUE;
+
+	if ( item == menu_info_types.PET_FEED )
+		pet_lib.feedPet( self, player );
+	else if ( item == menu_info_types.SERVER_PET_OPEN )
+	{
+		if ( pet_lib.hasContainer( self ) )
+			pet_lib.openPetContainer( self, player );
+	}
+	else if ( item == menu_info_types.SERVER_PET_DPAD )
+	{
+		if ( pet_lib.hasDatapad( self ) )
+			pet_lib.openPetDatapad( self, player );
+	}
+	else if ( item == menu_info_types.PET_COMMAND )
+	{
+		pet_lib.openLearnCommandSui(self, player);
+	}
+
+	if(item == menu_info_types.SERVER_MENU1)
+	{
+		if(hasObjVar(petControlDevice, beast_lib.OBJVAR_OLD_PET_IDENTIFIER) && !hasObjVar(petControlDevice, beast_lib.OBJVAR_OLD_PET_REHUED))
+		{
+			sui.colorize(self, player, self, hue.INDEX_1, "handlePrimaryColorize");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePrimaryColorize()
+{
+	obj_id pcd = callable.getCallableCD(self);
+
+	if(!isValidId(pcd))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = sui.getColorPickerIndex(params);
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if ( idx > -1 )
+	{
+		setObjVar(pcd, beast_lib.OBJVAR_BEAST_HUE, idx);
+		hue.setColor(self, "/private/index_color_1", idx);
+		setObjVar(pcd, beast_lib.OBJVAR_OLD_PET_REHUED, 1);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLearnCommandDialog()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		utils.removeScriptVarTree(self, "ai.learnCommand");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	obj_id pet = utils.getObjIdScriptVar(self, "ai.learnCommand.pet");
+
+	resizeable int[] commandIndexList = utils.getResizeableIntArrayScriptVar(pet, "ai.learnCommand.commandIndexList");
+	int bp = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	switch (bp)
+	{
+		case sui.BP_OK:
+		{
+			if (idx > -1)
+			{
+				int cmdIndex = commandIndexList[idx];
+				pet_lib.learnPetCommand(pet, cmdIndex);
+			}
+			break;
+		}
+
+		case sui.BP_CANCEL:
+		{
+			utils.removeScriptVarTree(self, "ai.learnCommand");
+			return SCRIPT_CONTINUE;
+		}
+
+	}
+
+	utils.removeScriptVarTree(self, "ai.learnCommand");
+
+	//openLearnCommandSui(pet, player);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLearnCommandUpdate()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		utils.removeScriptVarTree(self, "ai.learnCommand");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id pet = utils.getObjIdScriptVar(self, "ai.learnCommand.pet");
+	int pid = utils.getIntScriptVar(self, "ai.learnCommand.pid");
+	int idx = sui.getListboxSelectedRow(params);
+	resizeable int[] commandIndexList = utils.getResizeableIntArrayScriptVar(pet, "ai.learnCommand.commandIndexList");
+
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	int command = commandIndexList[idx];
+	string prompt = utils.packStringId (new string_id("pet/pet_ability", "learn_command_header"));
+	//prompt += getLearnCommandDescription(command);
+
+	setSUIProperty(pid, sui.LISTBOX_PROMPT, sui.PROP_TEXT, prompt);
+	flushSUIPage(pid);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnHearSpeech(obj_id master, string text)
+{
+	pet_lib.processSpeech( self, master, text );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTellPet()
+{
+	string text = params.getString("text");
+	obj_id master = params.getObjId("master");
+	if ( isIdValid(master) )
+	{
+		if ( text != null && !text.equals("") )
+			pet_lib.processSpeech( self, master, text );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleGroupInvite()
+{
+	//debugSpeakMsg( self, "joining" );
+	queueCommand( self, ##"join", null, "", COMMAND_PRIORITY_DEFAULT);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler awakenPet()
+{
+	utils.removeScriptVar( self, "recapTimer" );
+	if ( getAttrib(self, HEALTH ) < 1)
+		setAttrib(self, HEALTH, 1 );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler postCombatPathHome()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "pet::postCombatPathHome() self(" + self + ":" + getName(self) + ") master(" + getMaster(self) + ":" + getName(getMaster(self)) + ")");
+
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	if (utils.hasScriptVar(self, "ai.pet.staying"))
+		return SCRIPT_CONTINUE;
+
+	obj_id guardTarget = utils.getObjIdScriptVar(self, "ai.pet.guarding");
+
+	if (isIdValid(guardTarget))
+	{
+		pet_lib.petFollow(self, guardTarget);
+	}
+	else if ( hasObjVar( self, "ai.inFormation" ))
+	{
+		ai_lib.resumeFormationFollowing( self );
+	}
+	else
+	{
+		obj_id master = getMaster(self);
+
+		if (isIdValid(master) && master.isLoaded())
+		{
+			pet_lib.petFollow(self, master);
+		}
+		else
+		{
+			stop( self );
+		}
+	}
+
+	checkForWounds( self );
+	return SCRIPT_OVERRIDE;
+}
+
+void checkForWounds( obj_id pet )
+{
+}
+
+void managePowerConsumption( obj_id pet )
+{
+	if ( !pet_lib.isNewPlayerHelperDroid(pet) )
+	{
+		messageTo( pet, "handleAbandonment", null, 86400, false );
+		if ( pet_lib.isDroidPet( pet ) )
+			messageTo( pet, "consumePower", null, 360, false );
+	}
+}
+
+messageHandler handleAbandonment()
+{
+	int ignoredForDays = getIntObjVar( self, "ai.pet.ignoredForDays" );
+	ignoredForDays++;
+	if ( ignoredForDays > 3 )
+	{
+		pet_lib.releasePet( self );
+		return SCRIPT_CONTINUE;
+	}
+	else
+		setObjVar( self, "ai.pet.ignoredForDays", ignoredForDays );
+
+	messageTo( self, "handleAbandonment", null, 86400, false );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler consumePower()
+{
+	obj_id petControlDevice = callable.getCallableCD(self);
+	int powerLevel = getIntObjVar( petControlDevice, "ai.pet.powerLevel" );
+	powerLevel++;
+	if ( powerLevel == pet_lib.OUT_OF_POWER )
+		messageTo( self, "powerWarningText", null, 30, false );
+
+	if ( powerLevel < pet_lib.OUT_OF_POWER )
+		setObjVar( petControlDevice, "ai.pet.powerLevel", powerLevel );
+	else
+		setObjVar( petControlDevice, "ai.pet.powerLevel", (pet_lib.OUT_OF_POWER + 1) );
+
+	messageTo( self, "consumePower", null, 360, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler powerWarningText()
+{
+	obj_id petControlDevice = callable.getCallableCD(self);
+	int powerLevel = getIntObjVar( petControlDevice, "ai.pet.powerLevel" );
+	if ( powerLevel < 10 )
+		return SCRIPT_CONTINUE;
+
+	showFlyText( self, new string_id( "npc_reaction/flytext", "low_power" ), .75f, colors.DARKORANGE);
+
+	messageTo( self, "powerWarningText", null, 30, false );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler resumePetTrick()
+{
+	obj_id master = params.getObjId("master");
+	int trickNum = params.getInt("trickNum");
+	pet_lib.doStupidPetTrick( self, master, trickNum);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGiveItem(obj_id item, obj_id player)
+{
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster( self );
+	if (!isIdValid(master))
+		return SCRIPT_CONTINUE;
+
+	// Check to see if this is pet food.
+	int pet_food = getIntObjVar( item, "race_restriction" );
+	if ( pet_lib.isCreaturePet( self ) && (pet_food == -2) && (player == master) )
+	{
+		food.petEatFood( self, master, item, player );
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id petControlDevice = callable.getCallableCD(self);
+	obj_id petInv = utils.getInventoryContainer(petControlDevice);
+	if (!isIdValid(petInv))
+		return SCRIPT_CONTINUE;
+
+	if ( player != master )
+		return SCRIPT_CONTINUE;
+
+	if (isMob(item))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( pet_lib.isDroidPet(self) )
+	{
+		if (!pet_lib.hasContainer( self ))
+			return SCRIPT_CONTINUE;
+	}
+	else if ( !ai_lib.isNpc( self ) || !ai_lib.isAndroid(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+
+	////debugSpeakMsg( self, "yum!!");
+	putIn(item, petInv);
+
+	/** Verify the item was received:
+	obj_id contents[] = getContents(petInv);
+	if ( contents == null || contents.length == 0 )
+		//debugSpeakMsg( self, "I got nothing");
+	else
+	{
+		for ( int i = 0; i < contents.length; i++ )
+		{
+			//debugSpeakMsg( self, "I got " + getName( contents[i] ) );
+		}
+	}
+	*/
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleMoveToMaster()
+{
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster( self );
+	if ( isIdValid( master ) )
+	{
+		location spawnLoc = new location( getLocation( master ) );
+		spawnLoc.x += rand(-4.0f, +4.0f );
+		spawnLoc.z += rand(-4.0f, +4.0f );
+		spawnLoc.y = getHeightAtLocation(spawnLoc.x, spawnLoc.z);
+
+		setLocation(self, getLocation( master ));
+		pathTo( self, spawnLoc );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+	/*******************************************/
+
+messageHandler handlePackRequest()
+{
+	debugServerConsoleMsg( null, "+++ ai.pet.messageHandler handlePackRequest +++ entered HANDLEPACKREQUEST message handler" );
+
+	if(!isIdValid(self) || !exists(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//-- Dismount the rider of this mount/vehicle if there's anything on it.
+	obj_id rider = getRiderId(self);
+
+	if(isIdValid(rider))
+	{
+		// Do the dismount immediately.
+		boolean dismountSuccess = pet_lib.doDismountNow(rider);
+
+		if(!dismountSuccess)
+		{
+			LOG("mounts-bug", "pet.messageHandler handlePackRequest(): creature [" + self + "], rider [" + rider + "] failed to dismount, aborting pack request.  This mount probably is in an invalid state now.");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// -TRF- Note: I removed the block that tries to come at this from the side of the mount.
+	// If we can't get this mount's rider, there is nothing we can do to dismount, so don't
+	// bother trying.
+
+	//-- Destroy the object.
+   	debugServerConsoleMsg(null, "+++ pet.messageHandler handlePackRequest +++ destroying the pet now" );
+   	obj_id petControlDevice = callable.getCallableCD(self);
+   	//vehicle.saveVehicleInfo(petControlDevice, self);
+   	utils.setScriptVar(self, "stored", true );
+
+   	// Create dictionary for message.
+   	dictionary messageData = new dictionary();
+   	messageData.put(MESSAGE_PET_ID, self);
+
+	if(isIdValid(petControlDevice) && petControlDevice.isLoaded() && exists(petControlDevice))
+	{
+ 		sendDirtyObjectMenuNotification (petControlDevice);
+ 	}
+
+   	if(destroyObject(self))
+    		messageTo(petControlDevice, "handleRemoveCurrentPet", messageData, 1, false);
+   	else
+   		debugServerConsoleMsg( null, "+++ pet.messageHandler handlePackRequest +++ WARNINGWARNING - FAILED TO DESTROY SELF" );
+
+   	return SCRIPT_CONTINUE;
+
+/*
+	sendDirtyObjectMenuNotification (vehicleControlDevice);
+
+	//-- Destroy the object.
+	debugServerConsoleMsg( null, "+++ ai.pet.messageHandler handlePackRequest +++ destroying pet now" );
+	utils.setScriptVar( self, "stored", true );
+	destroyObject( self );
+
+	return SCRIPT_CONTINUE;
+ */
+}
+
+	/*******************************************/
+
+messageHandler handleAddToStomach()
+{
+	int stomach = params.getInt("stomach");
+	int vol = params.getInt("vol");
+
+	player_stomach.addToStomach(self, stomach, vol);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSetColors()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	setColors(self, params);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSetCustomization()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	dictionary dc = params.getDictionary("dc");
+	boolean updatedColors = setColors(self, dc);
+	params.remove("dc");
+
+	obj_id tool = params.getObjId("tool");
+	if ( !isIdValid(tool) )
+		return SCRIPT_CONTINUE;
+
+	if ( updatedColors )
+		messageTo(tool, "customizationSuccess", params, 0f, false);
+	else
+		messageTo(tool, "customizationFailed", params, 0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean setColors(obj_id self, dictionary params)
+{
+	if ( params == null || params.isEmpty() )
+		return false;
+
+	boolean litmus = true;
+
+	java.util.Enumeration keys = params.keys();
+	while ( keys.hasMoreElements() )
+	{
+		string var = (string)keys.nextElement();
+		int idx = params.getInt(var);
+
+		litmus &= hue.setColor(self, var, idx);
+	}
+
+	return litmus;
+}
+
+void reallyKill( obj_id self )
+{
+	if ( !isMob( self ) )
+		return;
+
+	obj_id master = getMaster( self );
+
+	if ( isIdValid( master ) )
+		pet_lib.removeFromPetList( self );
+
+	obj_id petControlDevice = callable.getCallableCD(self);
+
+	if ( isIdValid( petControlDevice) )
+		messageTo( petControlDevice, "handleFlagDeadCreature", null, 0, false );
+
+	kill( self );
+}
+
+trigger OnEnteredCombat()
+{
+	if ( !isMob( self ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster( self );
+	if ( isIdValid( master ) && master.isLoaded() )
+		aiSetHomeLocation(self, getLocation(master));
+	else
+		aiSetHomeLocation(self, getLocation(self));
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDefenderCombatAction( obj_id attacker, obj_id weapon, int combatResult )
+{
+	if ( utils.hasScriptVar( self, "petIgnoreAttacks" ) )
+	{
+		int timeStarted = utils.getIntScriptVar( self, "petIgnoreAttacks" );
+		if ( getGameTime() < ( timeStarted + 20 ) )
+		{
+			//not time to stop ignoring combat just yet:
+			return SCRIPT_OVERRIDE;
+		}
+		utils.removeScriptVar( self, "petIgnoreAttacks" );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAddedToGroup(obj_id groupId)
+{
+	if ( !hasScript(self, group.SCRIPT_GROUP_MEMBER) )
+		attachScript(self, group.SCRIPT_GROUP_MEMBER);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnRemovedFromGroup(obj_id groupId)
+{
+	detachScript(self, group.SCRIPT_GROUP_MEMBER);
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnReceivedItem(obj_id objSource, obj_id objTransferer, obj_id objItem)
+{
+	if(isPlayer(objItem))
+	{
+		if(!pet_lib.isGalloping(self))
+		{
+			int intState = getState(objItem, STATE_COMBAT);
+			if(intState>0)
+			{
+				// 6.0meters a second for you buddy!
+				setBaseRunSpeed(self, 6.0f); // RUn like the wind! the slow ass wind.
+				return SCRIPT_CONTINUE;
+
+			}
+		}
+		obj_id objControlDevice = callable.getCallableCD(self);
+
+		if(!utils.hasScriptVar(objControlDevice, "mount.intGalloping"))
+		{
+			pet_lib.setMountedMovementRate(objItem, self);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLostItem(obj_id objDestinationContainer, obj_id objTransferer, obj_id objItem)
+{
+	if(isPlayer(objItem))
+	{
+		pet_lib.setUnmountedMovementRate(objItem, self);
+	}
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnSawEmote(obj_id performer, string emote)
+{
+	obj_id master = getMaster(self);
+	if(performer != master)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isMob(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( !isPlayer( master ) )
+		return SCRIPT_CONTINUE;
+
+	//mounted critters don't do this
+	obj_id petsCurrentRider = getRiderId(self);
+	if ( isIdValid( petsCurrentRider ))
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat(self) || ai_lib.isInCombat(master) || ai_lib.aiIsDead(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( getLookAtTarget(master) != self )
+		return SCRIPT_CONTINUE;
+
+	if ( emote.startsWith("pet") || emote.equals("reassure") || emote.equals("nuzzle") || emote.equals("hug") )
+	{
+		if ( rand(1,2)==1 )
+		{
+			stop(self);
+			if ( ai_lib.canSit( self ) )
+			{
+				if ( rand(1,2)==1 )
+					ai_lib.aiSetPosture( self, POSTURE_SITTING );
+				else
+					ai_lib.aiSetPosture( self, POSTURE_LYING_DOWN );
+			}
+			else if (ai_lib.canLieDown( self ))
+			{
+				ai_lib.aiSetPosture( self, POSTURE_LYING_DOWN );
+			}
+		}
+		else
+		{
+			ai_lib.doAction( self, "happy" );
+		}
+	}
+	else if ( emote.equals("bonk") || emote.equals("whap") || emote.equals("scold") || emote.equals("bad") || emote.equals("slap") )
+		ai_lib.doAction( self, "ashamed" );
+	else if ( emote.equals("pointat") || emote.equals("tap") )
+		ai_lib.doAction( self, ai_lib.ACTION_ALERT );
+	else if ( emote.equals("beckon") || emote.equals("summon") )
+	{
+		if ( rand(1,2)==1 )
+		{
+			ai_lib.doAction( self, "confused" );
+		}
+		else
+		{
+			pet_lib.doFollowCommand( self, master );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePetTradeInStore()
+{
+	obj_id pet = params.getObjId( "pet" );
+	obj_id master = params.getObjId( "master" );
+	obj_id petControlDevice = callable.getCallableCD(pet);
+	boolean isMount = params.getBoolean( "isMount" );
+
+	if (isMount == true)
+	{
+		setObjVar( petControlDevice, "ai.pet.trainedMount", 1 );
+	}
+
+	pet_lib.storePet( pet, master );
+
+	return SCRIPT_CONTINUE;
+}
+
+/*
+trigger OnHibernateBegin()
+{
+	obj_id petControlDevice = callable.getCallableCD(self);
+	if ( isIdValid( petControlDevice ) )
+		pet_lib.savePetInfo( self, petControlDevice );
+
+	destroyObject( self );
+
+	return SCRIPT_CONTINUE;
+}
+*/
+
+/********* see systems.combat.credit_for_kills ***********/
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	obj_id master = getMaster(self);
+	CustomerServiceLog("Pets","*Pet DEATH: (" + self + ": " + getName(self) + ") has died. Their master was, (" + master + " sid:"+getPlayerObject(master));
+	return SCRIPT_CONTINUE;
+}
+
+
+void handleTutorialDroidSetUp(obj_id player, menu_info mi, obj_id self)
+{
+	int opt_menu = 0;
+	int mnu = 0;
+
+	opt_menu = mi.addRootMenu(menu_info_types.VOTE, new string_id(MENU_FILE,"droid_options"));
+	mnu = mi.addRootMenu (menu_info_types.PET_COMMAND, new string_id(MENU_FILE,"menu_command_droid"));
+
+	mi.addSubMenu(opt_menu, menu_info_types.PET_STORE, new string_id(MENU_FILE,"menu_store"));
+	mi.addSubMenu(mnu, menu_info_types.PET_GROUP, new string_id(MENU_FILE,"menu_group"));
+	mi.addSubMenu(mnu, menu_info_types.PET_STAY, new string_id(MENU_FILE,"menu_stay"));
+	mi.addSubMenu(mnu, menu_info_types.PET_FOLLOW, new string_id(MENU_FILE,"menu_follow"));
+	return;
+}
+
+messageHandler receiveCreditForKill()
+{
+	//ignore this message if grouped, master is getting his own.
+ 	if ( group.isGrouped(self) )
+		return SCRIPT_CONTINUE;
+
+	//ungrouped, forward the message to master:
+	obj_id master = getMaster( self );
+	if ( isIdValid(master) )
+	{
+		string creatureName = params.getString("creatureName");
+		params.put("col_faction", dataTableGetString("datatables/mob/creatures.iff", creatureName, "col_faction"));
+		params.put("col_faction", dataTableGetInt("datatables/mob/creatures.iff", creatureName, "difficultyClass"));
+		messageTo(master, "receiveCreditForKill", params, 0.0f, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+

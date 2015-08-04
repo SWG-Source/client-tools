@@ -1,0 +1,187 @@
+/**
+ * Copyright (C)2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        player.player_community_crafting.script
+ * Description:  This script gets attached to a player involved with a community crafting project.
+ * @author       $Author: Steve Jakab $
+ * @version      $Revision: #1 $
+ */
+
+
+/***** INCLUDES ********************************************************/
+
+include library.community_crafting;
+include library.utils;
+
+
+/***** CONSTANTS *******************************************************/
+
+const float MIN_NPC_DISTANCE = 6.0f;
+
+const string OBJVAR_CLEANUP             = community_crafting.OBJVAR_COMMUNITY_CRAFTING_BASE + ".cleanup";
+const string OBJVAR_REWARD_PRIZE        = community_crafting.OBJVAR_COMMUNITY_CRAFTING_BASE + "." + community_crafting.REWARD_PRIZE;
+const string OBJVAR_REWARD_PRIZE_SLOT   = community_crafting.OBJVAR_COMMUNITY_CRAFTING_BASE + "." + community_crafting.REWARD_PRIZE_SLOT;
+const string OBJVAR_REWARD_PRIZE_TYPE   = community_crafting.OBJVAR_COMMUNITY_CRAFTING_BASE + "." + community_crafting.REWARD_PRIZE_TYPE;
+const string OBJVAR_REWARD_PRIZE_SCRIPT = community_crafting.OBJVAR_COMMUNITY_CRAFTING_BASE + "." + community_crafting.REWARD_PRIZE_SCRIPT;
+
+const string_id SID_CC_PRIZE_INVENTORY_FULL         = new string_id("crafting", "cc_prize_inventory_full");
+const string_id SID_CC_PRIZE_INVENTORY_FULL_SUBJECT = new string_id("system_msg", "inventory_full");
+const string_id SID_CC_PRIZE_INVENTORY_FROM         = new string_id("crafting", "cc_prize_inventory_full_from");
+
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnLogin()
+{
+	boolean canCleanup = true;
+	if ( hasObjVar(self, OBJVAR_REWARD_PRIZE) )
+	{
+		int prizeCrc = getIntObjVar(self, OBJVAR_REWARD_PRIZE);
+		int slot = getIntObjVar(self, OBJVAR_REWARD_PRIZE_SLOT);
+		int type = getIntObjVar(self, OBJVAR_REWARD_PRIZE_TYPE);
+		string script = getStringObjVar(self, OBJVAR_REWARD_PRIZE_SCRIPT);
+		if ( givePlayerPrize(self, prizeCrc, slot, type, script) )
+			removeObjVar(self, OBJVAR_REWARD_PRIZE);
+		else
+			canCleanup = false;
+	}
+	if ( canCleanup && hasObjVar(self, OBJVAR_CLEANUP) )
+		cleanup(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGE HANDLERS ************************************************/
+
+/**
+ * Called when a community crafting session is over.
+ */
+messageHandler handleCleanupCommunityCrafting()
+{
+	if ( !hasObjVar(self, OBJVAR_REWARD_PRIZE) )
+		cleanup(self);
+	else
+		setObjVar(self, OBJVAR_CLEANUP, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Called when we have gotten a reward from the community crafting system.
+ */
+messageHandler handleCommunityCraftingReward()
+{
+	int prizeCrc = params.getInt(community_crafting.REWARD_PRIZE);
+	int slot = params.getInt(community_crafting.REWARD_PRIZE_SLOT);
+	int type = params.getInt(community_crafting.REWARD_PRIZE_TYPE);
+	string script = params.getString(community_crafting.REWARD_PRIZE_SCRIPT);
+
+	if ( !givePlayerPrize(self, prizeCrc, slot, type, script) )
+	{
+		setObjVar(self, OBJVAR_REWARD_PRIZE, prizeCrc);
+		setObjVar(self, OBJVAR_REWARD_PRIZE_SLOT, slot);
+		setObjVar(self, OBJVAR_REWARD_PRIZE_TYPE, type);
+		if ( script != null )
+			setObjVar(self, OBJVAR_REWARD_PRIZE_SCRIPT, script);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Called periodically when we are viewing the inventory of an npc we are giving ingredients to.
+ * If we move too far away from the npc, we will close the npc's inventory.
+ */
+messageHandler handleViewingNpcInventory()
+{
+	obj_id npc = params.getObjId("npc");
+	if ( isIdValid(npc) )
+	{
+		// if we are far away from the npc, force the inventory window to close
+		if ( getDistance(self, npc) > MIN_NPC_DISTANCE )
+		{
+			obj_id npcInventory = utils.getInventoryContainer(npc);
+			if (isIdValid(npcInventory))
+			{
+				queueCommand(self, ##"closeContainer", npcInventory, "", COMMAND_PRIORITY_IMMEDIATE);
+			}
+		}
+		else
+			messageTo(self, "handleViewingNpcInventory", params, 15, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+
+/**
+ * Removes any objvars we use and removes this script from the player.
+ *
+ * @param self
+ */
+void cleanup(obj_id self)
+{
+	if ( !isIdValid(self) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING player_community_crafting.script: cleanup passed "+
+			"invalid player id");
+		return;
+	}
+
+	// remove any schematics granted to me
+	int[] schematics = getIntArrayObjVar(self, community_crafting.OBJVAR_COMMUNITY_CRAFTING_PLAYER_SCHEMATICS);
+	if ( schematics != null )
+	{
+		for ( int i = 0; i < schematics.length; ++i )
+		{
+			if ( schematics[i] != 0 )
+			{
+				revokeSchematic(self, schematics[i]);
+			}
+		}
+	}
+
+	// clean up my objvars and remove this script
+	removeObjVar(self, community_crafting.OBJVAR_COMMUNITY_CRAFTING_BASE);
+	detachScript(self, community_crafting.SCRIPT_COMMUNITY_CRAFTING_PLAYER);
+}
+
+/**
+ * Gives the player a prize from the community crafting system.
+ *
+ * @param self
+ * @param prizeCrc
+ * @param slot
+ * @param type
+ * @param script
+ *
+ * @return true if the prize was given, false if not
+ */
+boolean givePlayerPrize(obj_id self, int prizeCrc, int slot, int type, string script)
+{
+	if ( !isIdValid(self) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING player_community_crafting.script: givePlayerPrize passed "+
+			"invalid player id");
+		return false;
+	}
+
+	obj_id prize = createObjectInInventoryAllowOverload(prizeCrc, self);
+	if ( !isIdValid(prize) )
+	{
+		CustomerServiceLog("community_crafting", "WARNING player_community_crafting.script: givePlayerPrize could "+
+			"not create prize " + prizeCrc + " for player %TU", self);
+		return false;
+	}
+	if ( script != null && script.length() > 0 )
+	{
+		attachScript(prize, script);
+	}
+
+	CustomerServiceLog("community_crafting", "Gave player %TU community crafting prize " + prize, self);
+	return true;
+}
+
+

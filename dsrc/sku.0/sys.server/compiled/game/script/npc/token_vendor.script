@@ -1,0 +1,585 @@
+include library.utils;
+include library.sui;
+include library.trial;
+include library.static_item;
+
+const string VENDOR_TABLE = "datatables/item/token_vendor.iff";
+
+const int COMMANDO 							= 1;
+const int SMUGGLER 							= 2;
+const int MEDIC 							= 3;
+const int OFFICER 							= 4;
+const int SPY 								= 5;
+const int BOUNTY_HUNTER 						= 6;
+const int FORCE_SENSITIVE 						= 7;
+const int TRADER 							= 8;
+const int ENTERTAINER 							= 9;
+
+messageHandler showInventorySUI()
+{
+	obj_id player = params.getObjId("player");
+	cleanScriptVars(player);
+
+	string prompt = "@set_bonus:vendor_sui_1_prompt";
+	string title = "@set_bonus:vendor_sui_1_title";
+
+	string[] purchaseList = getPurchaseList(self, player);
+
+	if(purchaseList.length > 1)
+	{
+		int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, purchaseList, "handleItemSelect", true, false);
+		setWindowPid(player, pid);
+	}
+	else
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_not_qualified"));
+
+	return SCRIPT_CONTINUE;
+}
+
+string[] getPurchaseList(obj_id self, obj_id player)
+{
+	int numRowsInTable = dataTableGetNumRows(VENDOR_TABLE);
+	int itemCount = 0;
+
+	resizeable string[] purchaseList = new string[0];
+	resizeable int[] itemIndexes = new int[0];
+
+	for(int i = 0; i < numRowsInTable; i++)
+	{
+		int reqClass = dataTableGetInt(VENDOR_TABLE, i, "class");
+		int category = dataTableGetInt(VENDOR_TABLE, i, "category");
+		string item = dataTableGetString(VENDOR_TABLE, i, "item");
+
+		// No requirement
+		if(reqClass < 1 || utils.isProfession(player, reqClass))
+		{
+			string itemName = getString(new string_id("static_item_n", item));
+			utils.addElement(purchaseList, itemName);
+			utils.addElement(itemIndexes, itemCount);
+		}
+
+		itemCount++;
+	}
+	utils.setScriptVar(player, "item.set.token_vendor_list", itemIndexes);
+
+	return purchaseList;
+}
+
+messageHandler handleItemSelect()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+	int[] purchaseList = utils.getIntArrayScriptVar(player, "item.set.token_vendor_list");
+	int tokenCosts[] = new int[trial.HEROIC_TOKENS.length+1];
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		cleanScriptVars(player);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( idx == -1 || idx > purchaseList.length)
+	{
+		cleanScriptVars(player);
+		return SCRIPT_CONTINUE;
+	}
+
+	int[] intendedPayment = new int[trial.HEROIC_TOKENS.length];
+
+	for(int i = 0; i < intendedPayment.length; i++)
+	{
+		intendedPayment[i] = 0;
+	}
+
+	utils.setScriptVar(player, "item.set.intended_payment", intendedPayment);
+
+	// Determine and display how much is owed for what the player selected.
+	int selectionRow = purchaseList[idx];
+	dictionary d = dataTableGetRow(VENDOR_TABLE, selectionRow);
+
+	//Remember what they want to purchase.
+	utils.setScriptVar(player, "item.set.intended_purchase", selectionRow);
+	string item = d.getString("item");	
+
+	// The first time through.
+	if(!utils.hasScriptVar(player, "item.set.owed_tokens"))
+	{
+		tokenCosts[trial.HEROIC_TOKENS.length] = d.getInt("any_token");
+		int totalCost = tokenCosts[trial.HEROIC_TOKENS.length];
+
+		for(int i = 0; i < trial.HEROIC_TOKENS.length; i++)
+		{
+			string reference = "token" + i;
+			int cost = d.getInt(reference);
+			totalCost += cost;
+			tokenCosts[i] = d.getInt(reference);
+		}
+
+  		// There's no cost! Either the discount or a data error, charge 1 of any token.
+		if(totalCost == 0)
+			tokenCosts[trial.HEROIC_TOKENS.length] = 1;
+
+		utils.setScriptVar(player, "item.set.owed_tokens", tokenCosts);
+		utils.setScriptVar(player, "item.set.final_cost", tokenCosts);
+	}
+
+	// They owe
+	int[] tokensOwed = utils.getIntArrayScriptVar(player, "item.set.owed_tokens");
+	string title = "@set_bonus:vendor_sui_2_title";
+	string prompt = getTokensOwedPrompt(player);
+
+	string[] inventoryTokens = getInventoryTokens(player);
+	refreshMenu(player, prompt, title, inventoryTokens, "handlePaymentUpdate", false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePaymentUpdate()
+{
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+	int[] tokensOwed = utils.getIntArrayScriptVar(player, "item.set.owed_tokens");
+	int[] tokensRemaining = utils.getIntArrayScriptVar(player, "item.set.tokens_remaining");
+	int[] intendedPayment = utils.getIntArrayScriptVar(player, "item.set.intended_payment");
+	string[] lastListStringData = utils.getStringArrayScriptVar(player, "item.set.inventory_token_strings");
+	string title = "@set_bonus:vendor_sui_2_title";
+	string prompt = getTokensOwedPrompt(player);
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		cleanScriptVars(player);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (idx == -1 || idx > tokensOwed.length || idx > intendedPayment.length)
+	{
+		cleanScriptVars(player);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(tokensRemaining[idx] == 0)
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_no_token"));
+		refreshMenu(player, prompt, title, getInventoryTokens(player), "handlePaymentUpdate", false);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(tokensOwed[idx] < 1 && tokensOwed[trial.HEROIC_TOKENS.length] < 1)
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_dont_need_token"));
+		refreshMenu(player, prompt, title, getInventoryTokens(player), "handlePaymentUpdate", false);
+		return SCRIPT_CONTINUE;
+	}
+	else if(tokensOwed[idx] > 0)
+	{
+		tokensOwed[idx]--;
+		intendedPayment[idx]++;
+	}
+	else if(tokensOwed[trial.HEROIC_TOKENS.length] > 0)
+	{
+		tokensOwed[trial.HEROIC_TOKENS.length]--;
+		intendedPayment[idx]++;
+	}
+
+	utils.setScriptVar(player, "item.set.owed_tokens", tokensOwed);
+	utils.setScriptVar(player, "item.set.intended_payment", intendedPayment);
+
+	int tokensPaidInFull = 0;
+
+	for(int i = 0; i < tokensOwed.length; i++)
+	{
+
+
+		if(tokensOwed[i] == 0)
+		{
+			tokensPaidInFull++;
+		}
+		
+		if(tokensPaidInFull == trial.HEROIC_TOKENS.length+1)
+		{
+			processItemPurchase(player);		
+			closeOldWindow(player);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	prompt = getTokensOwedPrompt(player);
+	refreshMenu(player, prompt, title, getInventoryTokens(player), "handlePaymentUpdate", false);
+
+	return SCRIPT_CONTINUE;
+}
+
+// Determine the total of physical token objects and virtual tokens in the token box. Return the string[] of them.
+string[] getInventoryTokens(obj_id player)
+{
+	// 1 for each heroic and an "any" token.
+	int[] totalTokens = new int[trial.HEROIC_TOKENS.length+1];
+	string[] inventoryTokens = new string[trial.HEROIC_TOKENS.length];
+
+	for(int h = 0; h < totalTokens.length; h++)
+	{
+		totalTokens[h] = 0;
+	}
+	
+	obj_id inventory = utils.getInventoryContainer(player);
+	obj_id[] inventoryContents = getContents(inventory);
+	boolean foundTokenHolderBox = false;
+	
+	// Find and count physical token items and the token holder box if they have one.
+	for(int i = 0; i < inventoryContents.length; i++)
+	{
+		string itemName = getStaticItemName(inventoryContents[i]);
+		if (itemName != null && itemName != "")
+		{
+			// Physical tokens.
+			for(int j = 0; j < trial.HEROIC_TOKENS.length; j++)
+			{
+				if(itemName.equals(trial.HEROIC_TOKENS[j]))
+				{
+					if(getCount(inventoryContents[i]) > 1)
+						totalTokens[j] += getCount(inventoryContents[i]);
+					else
+						totalTokens[j]++;
+				}
+			}
+			
+			// Virtual tokens. Box is unique so hypothetically they only have one on them...
+			if(!foundTokenHolderBox && itemName.equals("item_heroic_token_box_01_01"))
+			{
+				foundTokenHolderBox = true;
+				
+				if(hasObjVar(inventoryContents[i], "item.set.tokens_held"))
+				{
+					int[] virtualTokens = getIntArrayObjVar(inventoryContents[i], "item.set.tokens_held");
+					for(int k = 0; k < trial.HEROIC_TOKENS.length; k++)
+					{
+						int thisTokenCount = virtualTokens[k];
+						totalTokens[k] += thisTokenCount;
+					}
+				}
+			}
+		}
+	}
+
+	// Subtract any intended payments from the totalTokens[] list.
+	if(utils.hasScriptVar(player, "item.set.intended_payment"))
+	{
+		int[] intendedPayment = utils.getIntArrayScriptVar(player, "item.set.intended_payment");
+
+		for(int i = 0; i < intendedPayment.length; i++)
+		{
+			totalTokens[i] = totalTokens[i] - intendedPayment[i];
+		}
+	}
+
+	//Construct the string[] to return.
+	for(int i = 0; i < trial.HEROIC_TOKENS.length; i++)
+	{
+		inventoryTokens[i] = "["+totalTokens[i] + "] " + getString(new string_id("static_item_n", trial.HEROIC_TOKENS[i]));
+	}
+
+	utils.setScriptVar(player, "item.set.tokens_remaining", totalTokens);
+	utils.setScriptVar(player, "item.set.inventory_token_strings", inventoryTokens);
+
+
+	return inventoryTokens;
+}
+
+void processItemPurchase(obj_id player)
+{
+	int intendedPurchaseRow = utils.getIntScriptVar(player, "item.set.intended_purchase");
+	int[] tokenCost = utils.getIntArrayScriptVar(player, "item.set.final_cost");
+	int[] intendedPayment = utils.getIntArrayScriptVar(player, "item.set.intended_payment");
+
+	dictionary d = dataTableGetRow(VENDOR_TABLE, intendedPurchaseRow);
+	string item = d.getString("item");
+
+	// Verify tokens.
+	if(!verifyTokens(player, intendedPayment))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_cant_purchase"));
+		closeOldWindow(player);
+		cleanScriptVars(player);
+		return;	
+	}
+
+	// Attempt to make the item in their inventory.
+	obj_id inventory = utils.getInventoryContainer(player);
+	obj_id purchasedItem = static_item.createNewItemFunction(item, inventory);
+
+	if(!exists(purchasedItem))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_cant_purchase"));
+		closeOldWindow(player);
+		cleanScriptVars(player);
+		return;
+	}
+
+	// Destroy tokens
+	obj_id[] inventoryContents = getContents(inventory);
+	boolean foundTokenHolderBox = false;
+	
+	for(int i = 0; i < inventoryContents.length; i++)
+	{
+		string itemName = getStaticItemName(inventoryContents[i]);
+		if (itemName != null && itemName != "")
+		{
+			// Physical tokens.
+			for(int j = 0; j < trial.HEROIC_TOKENS.length; j++)
+			{
+				if(itemName.equals(trial.HEROIC_TOKENS[j]) && intendedPayment[j] > 0)
+				{
+					if(getCount(inventoryContents[i]) > 1)
+					{
+						setCount(inventoryContents[i], getCount(inventoryContents[i]) - 1);
+					}
+					else
+					{
+						destroyObject(inventoryContents[i]);
+					}
+					intendedPayment[j]--;
+				}
+			}
+			
+			// Virtual tokens.
+			if(!foundTokenHolderBox && itemName.equals("item_heroic_token_box_01_01"))
+			{
+				foundTokenHolderBox = true;
+				
+				if(hasObjVar(inventoryContents[i], "item.set.tokens_held"))
+				{
+					int[] virtualTokens = getIntArrayObjVar(inventoryContents[i], "item.set.tokens_held");
+					for(int k = 0; k < trial.HEROIC_TOKENS.length; k++)
+					{
+						if(intendedPayment[k] > 0 && virtualTokens[k] > 0)
+						{
+							// Count down on the virtual tokens until we get 0
+							int paymentCounter = intendedPayment[k];
+							for(int l = 0; l < paymentCounter; l++)
+							{
+								if(virtualTokens[k] >= 0)
+								{
+									virtualTokens[k]--;
+									intendedPayment[k]--;
+								}
+							}
+						}
+					}
+					setObjVar(inventoryContents[i], "item.set.tokens_held", virtualTokens);
+				}
+			}
+
+		}
+	}
+
+	cleanScriptVars(player);
+	closeOldWindow(player);
+	return;
+}
+
+// Does damn near the same thing. Count our tokens make sure we're not a filthy cheater.
+boolean verifyTokens(obj_id player, int[] intendedPayment)
+{
+	obj_id inventory = utils.getInventoryContainer(player);
+	obj_id[] inventoryContents = getContents(inventory);
+	boolean foundTokenHolderBox = false;
+	int tokensNeeded = 0;
+	int tokensIGot = 0;
+	int[] payment = new int[trial.HEROIC_TOKENS.length]; //OMG. OMFG.
+	
+	// The depths of my hatred that I must do this cannot be expressed in the tongues of mortal man.
+	// That's right kids. Arrays are passed by reference.
+	for(int z = 0; z < payment.length; z++)
+	{
+		payment[z] = intendedPayment[z];
+	}
+
+	// Count tokens needed.
+	for(int i = 0; i < payment.length; i++)
+	{
+		tokensNeeded += payment[i];
+	}
+	
+	for(int i = 0; i < inventoryContents.length; i++)
+	{
+		string itemName = getStaticItemName(inventoryContents[i]);
+		if (itemName != null && itemName != "")
+		{
+			// Physical tokens.
+			for(int j = 0; j < trial.HEROIC_TOKENS.length; j++)
+			{
+				if(itemName.equals(trial.HEROIC_TOKENS[j]) && payment[j] > 0)
+				{
+					if(getCount(inventoryContents[i]) > 1)
+					{
+						// Count down on count of physical token.
+						for(int m = 0; m < getCount(inventoryContents[i]); m++)
+						{
+							if(payment[j] > 0)
+							{
+								payment[j]--;
+								tokensIGot++;
+							}
+						}
+					}
+					else
+					{
+						payment[j]--;
+						tokensIGot++;
+					}
+				}
+			}
+			
+			// Virtual tokens.
+			if(!foundTokenHolderBox && itemName.equals("item_heroic_token_box_01_01"))
+			{
+				foundTokenHolderBox = true;
+				
+				if(hasObjVar(inventoryContents[i], "item.set.tokens_held"))
+				{
+					int[] virtualTokens = getIntArrayObjVar(inventoryContents[i], "item.set.tokens_held");
+					for(int k = 0; k < trial.HEROIC_TOKENS.length; k++)
+					{
+						if(payment[k] > 0 && virtualTokens[k] > 0)
+						{
+							// Count down on the virtual tokens until we get 0
+							int paymentIterations = payment[k];
+							for(int l = 0; l < paymentIterations; l++)
+							{
+								if(virtualTokens[k] > 0)
+								{
+									virtualTokens[k]--;
+									payment[k]--;
+									tokensIGot++;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if(tokensNeeded != tokensIGot)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+string getTokensOwedPrompt(obj_id player)
+{
+	int[] tokensOwed = utils.getIntArrayScriptVar(player, "item.set.owed_tokens");
+	string prompt = getString(new string_id("set_bonus", "vendor_sui_2_prompt"));
+	prompt += "\n";
+	
+	for(int i = 0; i < trial.HEROIC_TOKENS.length; i++)
+	{
+		if(tokensOwed[i] > 0)
+		{
+			prompt += "["+tokensOwed[i] + "] " + getString(new string_id("static_item_n", trial.HEROIC_TOKENS[i])) +"\n";
+		}
+	}
+
+	if(tokensOwed[trial.HEROIC_TOKENS.length] > 0)	
+		prompt += "["+tokensOwed[trial.HEROIC_TOKENS.length] + "] " + getString(new string_id("set_bonus", "vendor_sui_any_token"));
+
+	return prompt;
+}
+
+void cleanScriptVars(obj_id player)
+{
+	obj_id self = getSelf();
+
+	utils.removeScriptVarTree(player, "item.set");
+	utils.removeScriptVarTree(self, "item.set");
+}
+
+void refreshMenu(obj_id player, string prompt, string title, string[] options, string myHandler, boolean draw)
+{
+	obj_id self = getSelf();
+	closeOldWindow(player);
+	
+	if(outOfRange(self , player, true))
+	{
+		cleanScriptVars(player);
+		return;
+	}
+
+	if (draw == false)
+	{
+		int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, options, myHandler, false, false);
+//		sui.listboxUseOtherButton(pid, "Back");
+		sui.showSUIPage(pid);
+		setWindowPid(player, pid);
+
+	}
+	else
+	{
+		int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, options, myHandler, true, false);
+		sui.showSUIPage(pid);
+		setWindowPid(player, pid);
+	}
+}
+
+void closeOldWindow(obj_id player)
+{
+	string playerPath = "item.set.";
+	if(utils.hasScriptVar(player, "item.set.pid"))
+	{
+		int oldpid = utils.getIntScriptVar(player, "item.set.pid");
+		forceCloseSUIPage (oldpid);
+		utils.removeScriptVar(player, "item.set.pid");
+	}
+}
+
+void setWindowPid(obj_id player, int pid)
+{
+	if (pid > -1) utils.setScriptVar(player, "item.set.pid", pid);
+}
+
+
+boolean outOfRange(obj_id self, obj_id player, boolean message)
+{
+	//gods override range checks
+	if(isGod(player))
+		return false;
+		
+	location a = getLocation(self);
+	location b = getLocation(player);
+	if (a.cell == b.cell && a.distance(b) < 8.0f)
+		return false;
+		
+	if (message)
+		sendSystemMessageTestingOnly(player, "Out of Range of Character Builder Terminal.");
+		
+	return true;
+}
+
+/** TEMP for faking it **/
+/*trigger OnSpeaking(String text)
+{
+	java.util.StringTokenizer tok = new java.util.StringTokenizer (text);
+	String command = tok.nextToken ();
+
+	if(isGod(self))
+	{
+		if (command.equalsIgnoreCase ("show_vendor_sui"))
+		{
+			dictionary d = new dictionary();
+			d.put("player", self);
+			messageTo(self, "showInventorySUI", d, 0, false);
+		}
+		
+	}
+
+	return SCRIPT_CONTINUE;
+}*/

@@ -1,0 +1,240 @@
+/*
+systems.collections.consume_loot.script
+Used to trigger a collection update when double clicked
+Authors: Jesse Benjamin, James Michener, and Jeff Haskell
+*/
+
+//libraries
+include library.collection;
+include library.prose;
+include library.stealth;
+include library.sui;
+include library.utils;
+
+//constants
+const string OBJVAR_SLOT_NAME				= "collection.slotName";
+const string VAR_ACCESS_DELAY				= "delay.access_delay";
+const string COLLECTION_HANDLER 			= "modifySlot";
+const string NEWBIE_COMM				= "collection.newbie_comm_series";
+
+const int MAX_RANGE_TO_COLLECT				= 3;
+const int COLLECT_TIMER_BEGIN				= 0;
+const int COLLECT_TIMER_END				= 5;
+const int COLLECT_TIMER_DELAY				= COLLECT_TIMER_END + 3;
+
+
+const string_id SID_CONSUME_PROMPT			= new string_id("collection", "click_item_prompt");
+const string_id SID_CONSUME_TITLE			= new string_id("collection", "consume_item_title");
+const string_id SID_CONSUME_ITEM			= new string_id("collection", "consume_item");
+const string_id SID_REPORT_CONSUME_ITEM_FAIL		= new string_id("collection", "report_consume_item_fail");
+const string_id SID_ALREADY_HAVE_SLOT			= new string_id("collection", "already_have_slot");
+const string_id SID_ALREADY_FINISHED_COLLECTION		= new string_id("collection", "already_finished_collection");
+const string_id COUNTDOWN_TIMER		 	 	= new string_id("collection", "click_countdown_timer");
+const string_id SID_COUNTDOWN_LOCOMOTION		= new string_id("quest/groundquests", "countdown_interrupted_locomotion");
+const string_id SID_INTERRUPTED_INCAPACITATED		= new string_id("quest/groundquests", "countdown_interrupted_incapacitated");
+const string_id SID_INTERRUPTED_DAMAGED			= new string_id("quest/groundquests", "countdown_interrupted_damaged");
+const string_id SID_NOT_CLOSE_ENOUGH			= new string_id("collection", "not_close_enough");
+const string_id SID_INVIS_COLLECTION_FAIL		= new string_id("collection", "invis_collection_failed");
+const string_id SID_CONTROL_ACCESS_DELAY		= new string_id("collection", "access_delay");
+const string_id SID_GCW_SENSITIVE_DATA			= new string_id("collection", "gcw_sensitive_data");
+const string_id SID_GCW_NO_DATA				= new string_id("collection", "gcw_no_data");
+
+//triggers
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//set collectionItem to self
+	obj_id collectionItem = self;
+
+	if(hasObjVar(collectionItem, "useStringFile") && hasObjVar(collectionItem, "useMenu"))
+	{
+		string useStringFile = getStringObjVar(collectionItem, "useStringFile");
+		if(useStringFile != null && useStringFile.length() > 0)
+		{
+
+			string useMenu = getStringObjVar(collectionItem, "useMenu");
+			if(useMenu != null && useMenu.length() > 0)
+			{
+				string_id thisStringId = new string_id(useStringFile, useMenu);
+				mi.addRootMenu(menu_info_types.ITEM_USE, thisStringId);
+			}
+		}
+	}
+	else
+	{
+		mi.addRootMenu (menu_info_types.ITEM_USE, SID_CONSUME_ITEM);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{	
+	sendDirtyObjectMenuNotification(self);
+	//set collectionItem to self
+	obj_id collectionItem = self;
+	
+	if (item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	
+	//Newbie Comm Series
+	if(hasObjVar(collectionItem, NEWBIE_COMM))
+	{
+		collection.giveNewbieCommWindow(player, self);
+	}
+	
+	//GCW COLLECTION CHECK - THIS CHECKS ITEMS FOR FACTION CONTROL
+	boolean isGCW = false;
+	if(hasObjVar(collectionItem, "collection.gcw_control_check"))
+	{
+		//if FALSE - Dont all them to collect the item
+		if(!collection.gcwBaseControlCheck(collectionItem, player))
+		{
+			sendSystemMessage(player, SID_GCW_SENSITIVE_DATA);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//Checking to see if the GCW item lockout is active.
+			if(utils.hasScriptVar(collectionItem, "collection.gcw_lockout_time"))
+			{
+				sendSystemMessage(player, SID_GCW_NO_DATA);
+				return SCRIPT_CONTINUE;	
+			}
+			else
+			{
+				isGCW = true;
+			}
+		}
+	}
+	
+	//format for objvars:
+	//<collectionName>:<slotName> Seperated by a colon
+
+	if(utils.hasScriptVar(player, VAR_ACCESS_DELAY))
+	{
+		int accessTime = utils.getIntScriptVar(player, VAR_ACCESS_DELAY);
+		int gameTime = getGameTime();
+		LOG("collection","Var Delay Exists. accessTime: " + accessTime);
+		
+		if((accessTime + COLLECT_TIMER_DELAY) > gameTime)
+		{
+			prose_package pp = new prose_package();
+			pp = prose.setStringId(pp, SID_CONTROL_ACCESS_DELAY);
+			pp = prose.setDI(pp, (accessTime + COLLECT_TIMER_DELAY) - gameTime);
+
+			sendSystemMessageProse(player, pp);
+
+			return SCRIPT_CONTINUE;
+		}
+		else
+			utils.removeScriptVar(player, VAR_ACCESS_DELAY);
+	}
+		
+	string baseSlotName = getStringObjVar(collectionItem, OBJVAR_SLOT_NAME);
+	//split the entry by : to seperate the collection name from the slot name
+	string[] splitSlotNames = split(baseSlotName, ':');
+
+	string slotName = splitSlotNames[1];
+	string collectionName = splitSlotNames[0];
+	//GCW Collection Check - GCW items need to update the slotName
+	if(isGCW && utils.hasScriptVar(collectionItem, "collection.gcwSlotName"))
+	{
+		slotName = utils.getStringScriptVar(collectionItem, "collection.gcwSlotName");
+		utils.removeScriptVar(collectionItem, "collection.gcwSlotName");		
+	}
+	//check to see if they have completed the prereqs for the collection
+	if(!hasCompletedCollectionSlotPrereq(player, slotName))
+	{
+		//you need to activate this collection
+		sendSystemMessage(player, collection.SID_NEED_TO_ACTIVATE_COLLECTION);
+		return SCRIPT_CONTINUE;
+	}
+
+	//Check to make sure they havent completed the collection yet.
+	if(hasCompletedCollection(player, collectionName))
+	{
+		//tell the player They have already finished the collection
+		sendSystemMessage(player, SID_ALREADY_FINISHED_COLLECTION);
+		return SCRIPT_CONTINUE;
+	}
+
+	//check to see if they already have this slot completed
+	if((slotName == null || slotName.equals("")) || hasCompletedCollectionSlot(player, slotName))
+	{
+		//tell the player They have already finished all collections for this item
+		sendSystemMessage(player, SID_ALREADY_HAVE_SLOT);
+		return SCRIPT_CONTINUE;
+	}
+
+	boolean currentState = collection.checkState(player);
+	if(!currentState)
+		return SCRIPT_CONTINUE;	
+
+	boolean isCloseEnough = collection.checkDistance(self, player, MAX_RANGE_TO_COLLECT);
+	if(!isCloseEnough)
+	{
+		LOG("collection","Not Close ENOUGH");
+		sendSystemMessage(player, SID_NOT_CLOSE_ENOUGH);
+		return SCRIPT_CONTINUE;	
+	}
+	
+	LOG("collection","Player collecting " + slotName);
+
+	int flags = 0;
+
+	flags |= sui.CD_EVENT_INCAPACITATE;
+	flags |= sui.CD_EVENT_DAMAGED;
+	flags |= sui.CD_EVENT_COMBAT;
+	flags |= sui.CD_EVENT_LOCOMOTION;
+	
+	stealth.testInvisNonCombatAction(player, self);
+	collection.giveAreaMobsHate(self, player);
+	
+	int collectTimerEnd = COLLECT_TIMER_END;
+	
+	if(hasObjVar(self, "collection.timerLength"))
+	{
+		collectTimerEnd = getIntObjVar(self, "collection.timerLength");
+	}
+	
+	if(utils.hasScriptVar(player, "collection.qa.clickBypass"))
+	{
+		collectTimerEnd = 1;
+	}
+	
+	if(collectTimerEnd > 0)
+	{
+		int pid = sui.smartCountdownTimerSUI(player, player, "quest_countdown_timer", COUNTDOWN_TIMER, COLLECT_TIMER_BEGIN, collectTimerEnd, COLLECTION_HANDLER, MAX_RANGE_TO_COLLECT, flags);
+		sui.setPid(player, pid, collection.CONSUME_PID_NAME);
+		utils.setScriptVar(player, "col.id", pid);
+		utils.setScriptVar(player, "col.collectionItem", collectionItem);
+		utils.setScriptVar(player, "col.slotName", slotName);
+		//for GCW insurgency - if true, this will be used to set the lockout timer for the object.
+		if(isGCW)
+		{
+			utils.setScriptVar(player, "col.isGCW", 1);
+		}
+	}
+	else
+	{
+		//Update the player with the slot
+		if(modifyCollectionSlotValue(player, slotName, 1))
+		{
+			CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was consumed into a collection, for player " + getFirstName(player) + "(" + player + ").");
+		}
+		else
+		{
+			//tell cs we failed
+			CustomerServiceLog("CollectionConsume: ", "collectionItem (" + collectionItem + ")"+ " was NOT consumed into a collection, for player " + getFirstName(player) + "(" + player + ").");
+			//tell the player we failed
+			sendSystemMessage(player, SID_REPORT_CONSUME_ITEM_FAIL);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeGcwCollectionLockout()
+{
+	utils.removeScriptVar(self, "collection.gcw_lockout_time");
+	return SCRIPT_CONTINUE;
+}

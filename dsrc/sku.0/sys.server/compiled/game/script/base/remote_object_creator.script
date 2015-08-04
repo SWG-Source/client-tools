@@ -1,0 +1,141 @@
+// =====================================================================
+//
+// remote_object_creator.script
+// copyright, Sony Online Entertainment
+//
+// =====================================================================
+
+include library.create;
+include library.space_create;
+include library.space_quest;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits base.remote_object;
+
+// =====================================================================
+
+/**
+ * Register an object for remote object creation.
+ *   Self is registered to be available to create objects in its scene.
+ */
+void registerForRemoteObjectCreation(obj_id self)
+{
+	log("registerForRemoteObjectCreation: setting cluster wide data.");
+
+	dictionary objectData = new dictionary();
+	objectData.put(CREATOR, self);
+	objectData.put(IN_SPACE, isSpaceScene());
+
+	//-- may want to put scene loading data here as well ... (and periodically update it)
+
+	replaceClusterWideData(REMOTE_OBJECT_MANAGER, getCurrentSceneName(), objectData, false, 0);
+}
+
+// ---------------------------------------------------------------------
+
+/**
+ * Create a remote object.
+ *   Set an script var on the created object to the object id of the requester for future communication.
+ *   Send a message back to the requester with the object id of the object created.
+ *     This will be an invalid id if creation fails.
+ */
+messageHandler createRemoteObject()
+{
+	log("createRemoteObject: message received.");
+	log("createRemoteObject: " + params.toString());
+
+	//-- read input parameters
+	obj_id requester = params.getObjId(REQUESTER);
+	String objectName = params.getString(OBJECT_NAME);
+	boolean useRandomLocation = params.getBoolean(USE_RANDOM_LOCATION);
+	float x, y, z;
+
+	if (!useRandomLocation)
+	{
+		x = params.getFloat(X);
+		y = params.getFloat(Y);
+		z = params.getFloat(Z);
+	}
+	else
+	{
+		x = y = z = 0;
+	}
+
+	//-- create the object in the current scene
+	obj_id created;
+
+	if (isSpaceScene())
+	{
+		if (!useRandomLocation)
+		{
+			created = space_create.createShip(objectName, transform.identity.setPosition_p(x, y, z));
+		}
+		else
+		{
+			//-- determine a random location
+			transform randomTransform = space_quest.getRandomPositionInSphere(transform.identity, 512, 2048);
+
+			vector pos = randomTransform.getPosition_p();
+			params.put(X, pos.x);
+			params.put(Y, pos.y);
+			params.put(Z, pos.z);
+			
+			//created = space_create.createShip(objectName, randomTransform);
+			created = space_create.createShipHyperspace(objectName, randomTransform);
+		}
+	}
+	else
+	{
+		created = create.object(objectName, new location(x, y, z));
+	}
+
+	params.put(SCENE_NAME, getCurrentSceneName());
+
+	//-- validation
+	if (isValidId(created))
+	{
+		log("createRemoteObject: creation successful. [" + objectName + "][" + created + "]");
+		utils.setScriptVar(created, REQUESTER, requester);
+		utils.setScriptVar(created, CREATE_PARAMS, params);
+
+		if (params.containsKey(ATTACH_SCRIPTS))
+		{
+			String[] scripts = split(params.getString(ATTACH_SCRIPTS), ':');
+			for (int i=0; i<scripts.length; ++i)
+			{
+				if (!hasScript(created, scripts[i]))
+				{
+					attachScript(created, scripts[i]);
+				}
+			}
+		}
+	}
+	else
+	{
+		logError("createRemoteObject: creation failed.");
+	}
+
+	//-- if the creation fails, the object id returned will be invalid
+    params.put(REMOTE_OBJECT, created);
+
+	//-- return message to requester
+	messageTo(requester, CREATE_REMOTE_OBJECT_RESPONSE, params, 0.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+/**
+ * Register the object for remote object creation.
+ */
+trigger OnInitialize()
+{
+	registerForRemoteObjectCreation(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+// =====================================================================

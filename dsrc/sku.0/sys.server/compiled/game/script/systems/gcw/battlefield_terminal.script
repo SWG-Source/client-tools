@@ -1,0 +1,957 @@
+include library.buff;
+include library.colors_hex;
+include library.combat;
+include library.create;
+include library.factions;
+include library.gcw;
+include library.instance;
+include library.planetary_map;
+include library.prose;
+include library.pvp;
+include library.restuss_event;
+include library.stealth;
+include library.sui;
+include library.utils;
+
+const int NO_CONTROL						= factions.FACTION_FLAG_UNKNOWN;
+const int IMPERIAL_CONTROL					= factions.FACTION_FLAG_IMPERIAL;
+const int REBEL_CONTROL						= factions.FACTION_FLAG_REBEL;
+
+const int TERMINAL_CAPTURE_TIME					= 30;
+
+const string_id SID_CONTROL_TERMINAL_MENU_USE			= new string_id("gcw", "static_base_control_terminal_menu_use");
+const string_id SID_CONTROL_TERMINAL_ACCESS_DELAY		= new string_id("gcw", "static_base_control_terminal_access_delay");
+const string_id SID_CONTROL_TERMINAL_CANNOT_USE			= new string_id("gcw", "static_base_control_terminal_cannot_use");
+const string_id SID_CONTROL_TERMINAL_TOO_FAR			= new string_id("gcw", "static_base_control_terminal_too_far");
+const string_id SID_CONTROL_TERMINAL_ALREADY_CONTROL		= new string_id("gcw", "static_base_control_terminal_already_control");
+const string_id SID_CONTROL_TERMINAL_IN_COMBAT			= new string_id("gcw", "static_base_control_terminal_in_combat");
+const string_id SID_CONTROL_TERMINAL_ALREADY_CAPTURING		= new string_id("gcw", "static_base_control_terminal_already_capturing");
+const string_id SID_CONTROL_TERMINAL_ALREADY_CAPTURED		= new string_id("gcw", "static_base_control_terminal_already_captured");
+const string_id SID_CONTROL_TERMINAL_MOVED			= new string_id("gcw", "static_base_control_terminal_moved");
+const string_id SID_CONTROL_TERMINAL_ENTERED_COMBAT		= new string_id("gcw", "static_base_control_terminal_entered_combat");
+const string_id SID_CONTROL_TERMINAL_INCAPACITATED		= new string_id("gcw", "static_base_control_terminal_incapacitated");
+const string_id SID_CONTROL_TERMINAL_CAPTURE_CANCELLED		= new string_id("gcw", "static_base_control_terminal_capture_cancelled");
+const string_id SID_CONTROL_TERMINAL_CAPTURE_SUCCESS		= new string_id("gcw", "static_base_control_terminal_capture_success");
+const string_id SID_CONTROL_TERMINAL_SUI_PROMPT			= new string_id("gcw", "static_base_control_terminal_sui_prompt");
+const string_id SID_CONTROL_TERMINAL_NO_STASIS			= new string_id("gcw", "static_base_control_terminal_no_stasis");
+
+const string_id SID_BATTLEFIELD_TERMINAL_BATTLE_NOT_STARTED	= new string_id("gcw", "battlefield_terminal_battle_not_started");
+const string_id SID_BATTLEFIELD_TERMINAL_DESTROYED		= new string_id("gcw", "battlefield_terminal_destroyed");
+
+const string BATTLEFIELD_BUILDING_TABLE				= "datatables/pvp/pvp_battlefield_building_effects.iff";
+
+const string VAR_MASTER						= "gcw.static_base.master";
+const string VAR_TERMINAL_ID					= "gcw.static_base.terminal_id";
+const string VAR_LAST_MESSAGE					= "gcw.static_base.last_message";
+const string VAR_ACCESS_DELAY					= "gcw.static_base.access_delay";
+const string VAR_ICON_OBJECT					= "gcw.static_base.icon_object";
+
+const string SCRIPT_VAR_CAPTURING				= "gcw.static_base.control_terminal.capturing";
+
+const string COLOR_REBELS					= "\\" + colors_hex.COLOR_REBELS;
+const string COLOR_IMPERIALS					= "\\" + colors_hex.COLOR_IMPERIALS;
+
+void blog(obj_id controller, string text)
+{
+	pvp.bfLog(controller, text);
+}
+
+trigger OnAttach()
+{
+	messageTo(self, "registerTerminal", null, 5.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	messageTo(self, "registerTerminal", null, 5.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnHearSpeech(obj_id speaker, string text)
+{
+	if(!isIdValid(speaker) || !isGod(speaker))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] words = split(text, ' ');
+
+	if(words[0].equals("treset"))
+	{
+		terminalReset(self);
+		sendSystemMessageTestingOnly(speaker, "Terminal Reset.");
+	}
+
+	if(words[0].equals("blow"))
+	{
+		utils.setScriptVar(self, "battlefield.terminal_mitigation", 0);
+		blowUpBuilding(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler registerTerminal()
+{
+	registerTerminalWithController(self);
+	return SCRIPT_CONTINUE;
+}
+
+obj_id getLocalBattlefieldController(obj_id self)
+{
+	obj_id controller = null;
+
+	if(utils.hasScriptVar(self, "battlefield.controller"))
+	{
+		controller = utils.getObjIdScriptVar(self, "battlefield.controller");
+	}
+
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		controller = gcw.getPvpRegionControllerIdByPlayer(self);
+	}
+
+	// Controller objects must be on the same subserver as the terminal.
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return null;
+	}
+
+	utils.setScriptVar(self, "battlefield.controller", controller);
+
+	return controller;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	mid.setLabel(SID_CONTROL_TERMINAL_MENU_USE);
+	mid.setServerNotify(true);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	obj_id controller = getLocalBattlefieldController(self);
+
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Something wrong with the terminal?
+	if(!pvp.bfTerminalIsRegistered(controller, self))
+	{
+		pvp.bfTerminalRegister(controller, self);
+		terminalReset(self);
+
+		blog(controller, "Battlefield terminal was not registered.");
+	}
+
+	if(item == menu_info_types.ITEM_USE)
+	{
+		if(!utils.hasScriptVar(player, "battlefield.active"))
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		int capturesLeft = utils.getIntScriptVar(self, "battlefield.terminal_captures_left");
+
+		if(capturesLeft < 1)
+		{
+			sendSystemMessage(player, SID_BATTLEFIELD_TERMINAL_DESTROYED);
+			return SCRIPT_CONTINUE;
+		}
+
+		int bfState = utils.getIntScriptVar(controller, "battlefield.state");
+
+		// We do not record battlefield data for phases outside of a running battle.
+		if(bfState != pvp.PVP_STATE_BATTLE_ENGAGED)
+		{
+			sendSystemMessage(player, SID_BATTLEFIELD_TERMINAL_BATTLE_NOT_STARTED);
+			return SCRIPT_CONTINUE;
+		}
+
+		if(getDistance(self, player) > 5.0f)
+		{
+			sendSystemMessage(player, SID_CONTROL_TERMINAL_TOO_FAR);
+			return SCRIPT_CONTINUE;
+		}
+
+		int playerFaction = factions.getFactionFlag(player);
+
+		if(isDead(player) || isIncapacitated(player) || playerFaction == factions.FACTION_FLAG_NEUTRAL || factions.isOnLeave(player))
+		{
+			sendSystemMessage(player, SID_CONTROL_TERMINAL_CANNOT_USE);
+			return SCRIPT_CONTINUE;
+		}
+
+		if(hasObjVar(self, VAR_ACCESS_DELAY))
+		{
+			int accessTime = getIntObjVar(self, VAR_ACCESS_DELAY);
+			int gameTime = getGameTime();
+
+			if(accessTime > gameTime)
+			{
+				prose_package pp = new prose_package();
+				pp = prose.setStringId(pp, SID_CONTROL_TERMINAL_ACCESS_DELAY);
+				pp = prose.setDI(pp, (accessTime - gameTime));
+
+				sendSystemMessageProse(player, pp);
+
+				return SCRIPT_CONTINUE;
+			}
+			else
+				removeObjVar(self, VAR_ACCESS_DELAY);
+		}
+
+		int terminalFaction = utils.getIntScriptVar(self, "battlefield.terminal_faction");
+
+		if(playerFaction == terminalFaction)
+		{
+			sendSystemMessage(player, SID_CONTROL_TERMINAL_ALREADY_CONTROL);
+			return SCRIPT_CONTINUE;
+		}
+
+		if(buff.hasBuff(player, "me_stasis_1") || buff.hasBuff(player, "me_stasis_self_1"))
+		{
+			sendSystemMessage(player, SID_CONTROL_TERMINAL_NO_STASIS);
+			return SCRIPT_CONTINUE;
+		}
+
+		if(pvp.bfGetBattlefieldType(controller) == pvp.BATTLEFIELD_TYPE_CAPTURE_THE_FLAG)
+		{
+			if(utils.hasScriptVar(self, "battlefield.terminalRunner"))
+			{
+				obj_id runner = utils.getObjIdScriptVar(self, "battlefield.terminalRunner");
+
+				// Only the runner can use capture the flag terminals.
+				if(isIdValid(runner) && runner != player)
+				{
+					return SCRIPT_CONTINUE;
+				}
+			}
+			// There isn't a runner for this terminal.
+			else
+			{
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		if(utils.hasScriptVar(player, SCRIPT_VAR_CAPTURING))
+		{
+			int captureTime = utils.getIntScriptVar(player, SCRIPT_VAR_CAPTURING);
+			int gameTime = getGameTime();
+
+			if((gameTime - captureTime) > (TERMINAL_CAPTURE_TIME + 10))
+			{
+				utils.removeScriptVar(player, SCRIPT_VAR_CAPTURING);
+			}
+			else
+			{
+				sendSystemMessage(player, SID_CONTROL_TERMINAL_ALREADY_CAPTURING);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		if(utils.hasScriptVar(self, SCRIPT_VAR_CAPTURING))
+		{
+			int captureTime = utils.getIntScriptVar(self, SCRIPT_VAR_CAPTURING);
+			int gameTime = getGameTime();
+
+			if((gameTime - captureTime) > (TERMINAL_CAPTURE_TIME + 10))
+			{
+				utils.removeScriptVar(self, SCRIPT_VAR_CAPTURING);
+			}
+			else
+			{
+				sendSystemMessage(player, SID_CONTROL_TERMINAL_ALREADY_CAPTURED);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		string terminalStringFaction = convertIntFactionToString(terminalFaction);
+		startControlAttempt(self, player, terminalStringFaction);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void startControlAttempt(obj_id self, obj_id player, string terminalFaction)
+{
+	int gameTime = getGameTime();
+
+	utils.setScriptVar(self, SCRIPT_VAR_CAPTURING, gameTime);
+	utils.setScriptVar(player, SCRIPT_VAR_CAPTURING, gameTime);
+
+	stealth.testInvisCombatAction(player, self);
+
+	int flags = 0;
+	flags |= sui.CD_EVENT_LOCOMOTION;
+	flags |= sui.CD_EVENT_INCAPACITATE;
+	flags |= sui.CD_EVENT_DAMAGED;
+	flags |= sui.CD_EVENT_STEALTHED;
+	flags |= sui.CD_EVENT_DAMAGE_IMMUNE;
+
+	int captureTime = TERMINAL_CAPTURE_TIME;
+
+	obj_id controller = getLocalBattlefieldController(self);
+
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return;
+	}
+
+	if(isGod(player) || pvp.bfGetBattlefieldType(controller) == pvp.BATTLEFIELD_TYPE_CAPTURE_THE_FLAG)
+	{
+		captureTime = 3;
+	}
+
+	string terminalName = getStringObjVar(self, "battlefield.terminalName");
+
+	if(terminalName != null && terminalName.length() > 0)
+	{
+		if(pvp.bfGetBattlefieldType(controller) != pvp.BATTLEFIELD_TYPE_CAPTURE_THE_FLAG)
+		{
+			pvp.bfActivePlayersAnnounce(controller, new string_id("spam", "battlefield_terminal_capture_attempt_" + terminalName));
+		}
+
+		dictionary dict = new dictionary();
+
+		dict.put("terminal_location", getWorldLocation(self));
+		dict.put("terminal", self);
+		pvp.bfMessagePlayersOnBattlefield(controller, terminalFaction, "createBattlefieldWaypoint", dict);
+	}
+
+	int pid = sui.smartCountdownTimerSUI(self, player, "gcwStaticBaseControlTerminal", SID_CONTROL_TERMINAL_SUI_PROMPT, 0, captureTime, "handleControlAttemptResults", 4.0f, flags);
+}
+
+string convertIntFactionToString(int faction)
+{
+	if(faction == 1)
+		return pvp.BATTLEFIELD_ACTIVE_REBEL_PLAYERS;
+	else if(faction == 2)
+		return pvp.BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS;
+	else
+		return null;
+}
+
+void registerTerminalWithController(obj_id self)
+{
+	obj_id controller = getLocalBattlefieldController(self);
+
+	// Controller objects must be on the same subserver as the terminal.
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		messageTo(self, "registerTerminal", null, 1.0f, false);
+		return;
+	}
+
+	pvp.bfTerminalRegister(controller, self);
+}
+
+void cleanupWaypoint(obj_id controller, obj_id terminal)
+{
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return;
+	}
+
+	dictionary dict = new dictionary();
+	dict.put("terminal", terminal);
+
+	pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_REBEL_PLAYERS, "destroyBattlefieldWaypoint", dict);
+	pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS, "destroyBattlefieldWaypoint", dict);
+}
+
+messageHandler handleControlAttemptResults()
+{
+	int pid = params.getInt("id");
+	obj_id player = params.getObjId("player");
+	obj_id controller = getLocalBattlefieldController(self);
+	string terminalFaction = convertIntFactionToString(utils.getIntScriptVar(self, "battlefield.terminal_faction"));
+
+	if(!isIdValid(player) || !exists(player))
+	{
+		//clean up the waypoint
+		cleanupWaypoint(controller, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int faction = factions.getFactionFlag(player);
+	int bp = sui.getIntButtonPressed(params);
+
+	if(bp == sui.BP_CANCEL)
+	{
+		utils.removeScriptVar(player, SCRIPT_VAR_CAPTURING);
+		utils.removeScriptVar(self, SCRIPT_VAR_CAPTURING);
+
+		detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+		sendSystemMessage(player, SID_CONTROL_TERMINAL_CAPTURE_CANCELLED);
+
+		//clean up the waypoint
+		cleanupWaypoint(controller, self);
+		return SCRIPT_CONTINUE;
+	}
+	else if(bp == sui.BP_REVERT)
+	{
+		utils.removeScriptVar(player, SCRIPT_VAR_CAPTURING);
+		utils.removeScriptVar(self, SCRIPT_VAR_CAPTURING);
+
+		int event = params.getInt("event");
+
+		if(event == sui.CD_EVENT_COMBAT)
+			sendSystemMessage(player, SID_CONTROL_TERMINAL_ENTERED_COMBAT);
+		else if(event == sui.CD_EVENT_LOCOMOTION)
+			sendSystemMessage(player, SID_CONTROL_TERMINAL_MOVED);
+		else if(event == sui.CD_EVENT_INCAPACITATE)
+			sendSystemMessage(player, SID_CONTROL_TERMINAL_INCAPACITATED);
+
+		//clean up the waypoint
+		cleanupWaypoint(controller, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR))
+	{
+		//clean up the waypoint
+		cleanupWaypoint(controller, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int test_pid = getIntObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR);
+
+	if(pid != test_pid)
+	{
+		//clean up the waypoint
+		cleanupWaypoint(controller, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	forceCloseSUIPage(pid);
+
+	utils.removeScriptVar(player, SCRIPT_VAR_CAPTURING);
+	utils.removeScriptVar(self, SCRIPT_VAR_CAPTURING);
+
+	detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+
+	string iconTemplate = "";
+
+	int mitigation = getIntObjVar(self, "battlefield.terminal_mitigation");
+
+	if(mitigation < 1)
+	{
+		mitigation = 1;
+	}
+
+	if(isIdValid(controller) && exists(controller))
+	{
+		int capturesLeft = utils.getIntScriptVar(self, "battlefield.terminal_captures_left");
+		boolean captured = false;
+
+		int bfState = utils.getIntScriptVar(controller, "battlefield.state");
+
+		// If the battlefield is not engaged, then remove the waypoint.
+		if(bfState != pvp.PVP_STATE_BATTLE_ENGAGED)
+		{
+			cleanupWaypoint(controller, self);
+			return SCRIPT_CONTINUE;
+		}
+
+		switch(pvp.bfGetBattlefieldType(controller))
+		{
+			case pvp.BATTLEFIELD_TYPE_REINFORCEMENTS:
+			{
+				if(capturesLeft > 1)
+				{
+					if(faction == factions.FACTION_FLAG_REBEL)
+					{
+						setName(self, new string_id("gcw", "battlefield_terminal_rebel"));
+						iconTemplate = "object/tangible/gcw/static_base/rebel_icon.iff";
+					}
+					else if(faction == factions.FACTION_FLAG_IMPERIAL)
+					{
+						setName(self, new string_id("gcw", "battlefield_terminal_imperial"));
+						iconTemplate = "object/tangible/gcw/static_base/imperial_icon.iff";
+					}
+
+					capturesLeft--;
+
+					utils.setScriptVar(self, "battlefield.terminal_captures_left", capturesLeft);
+					captured = true;
+
+					utils.setScriptVar(self, "battlefield.terminal_mitigation", mitigation);
+				}
+				else
+				{
+					if(capturesLeft == 1)
+					{
+						captured = true;
+					}
+
+					faction = 0;
+					utils.setScriptVar(self, "battlefield.terminal_captures_left", 0);
+
+					utils.setScriptVar(self, "battlefield.terminal_mitigation", 0);
+
+					blowUpBuilding(self);
+				}
+
+				string terminalName = getStringObjVar(self, "battlefield.terminalName");
+
+				blog(controller, "terminalName: " + terminalName + " captured: " + captured + " by: " + getName(player));
+
+				if(terminalName != null && terminalName.length() > 0 && captured)
+				{
+					pvp.bfActivePlayersAnnounce(controller, new string_id("spam", "battlefield_terminal_capture_completed_" + terminalName));
+				}
+
+				// Stats and rewards for capturing a terminal.
+				if(captured)
+				{
+					pvp.bfCreditForCapture(player, 1);
+
+					int gcwCredits = gcw.BATTLEFIELD_TERMINAL_CAPTURE_MULTIPLIER * mitigation;
+
+					params = new dictionary();
+
+					params.put("gcwCredits", gcwCredits);
+
+					if(gcwCredits > 0)
+					{
+						int playerFaction = factions.getFactionFlag(player);
+
+						if(playerFaction == factions.FACTION_FLAG_REBEL)
+						{
+							pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_REBEL_PLAYERS, "receiveBattlefieldTerminalCapture", params);
+						}
+						else if(playerFaction == factions.FACTION_FLAG_IMPERIAL)
+						{
+							pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS, "receiveBattlefieldTerminalCapture", params);
+						}
+					}
+				}
+
+				break;
+			}
+
+			case pvp.BATTLEFIELD_TYPE_CAPTURE_THE_FLAG:
+			{
+				if(!buff.hasBuff(player, "battlefield_communication_run"))
+				{
+					cleanupWaypoint(controller, self);
+					return SCRIPT_CONTINUE;
+				}
+
+				// Cleanup the runner information
+				buff.removeBuff(player, "battlefield_communication_run");
+				pvp.bfClearRunner(controller);
+				utils.removeScriptVar(self, "battlefield.terminalRunner");
+
+				// Credit the player for capturing a flag
+				pvp.bfCreditForCapture(player, 1);
+
+				// Log the capture
+				string terminalName = getStringObjVar(self, "battlefield.terminalName");
+
+				blog(controller, "terminalName: " + terminalName + " flag captured by: " + getName(player));
+
+				// Grant GCW points
+				int gcwCredits = gcw.BATTLEFIELD_TERMINAL_CAPTURE_MULTIPLIER * mitigation;
+
+				params = new dictionary();
+
+				params.put("gcwCredits", gcwCredits);
+
+				if(gcwCredits > 0)
+				{
+					int playerFaction = factions.getFactionFlag(player);
+
+					if(playerFaction == factions.FACTION_FLAG_REBEL)
+					{
+						pvp.bfActivePlayersAnnounce(controller, new string_id("spam", "battlefield_rebel_flag_capture"));
+
+						pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_REBEL_PLAYERS, "receiveBattlefieldTerminalCapture", params);
+					}
+					else if(playerFaction == factions.FACTION_FLAG_IMPERIAL)
+					{
+						pvp.bfActivePlayersAnnounce(controller, new string_id("spam", "battlefield_imperial_flag_capture"));
+
+						pvp.bfMessagePlayersOnBattlefield(controller, pvp.BATTLEFIELD_ACTIVE_IMPERIAL_PLAYERS, "receiveBattlefieldTerminalCapture", params);
+					}
+				}
+
+				faction = 0;
+
+				break;
+			}
+		}
+	}
+	else
+	{
+		//clean up the waypoint
+		cleanupWaypoint(controller, self);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Flip flop the terminal's icon.
+	if(hasObjVar(self, VAR_ICON_OBJECT))
+	{
+		obj_id oldIcon = getObjIdObjVar(self, VAR_ICON_OBJECT);
+		destroyObject(oldIcon);
+	}
+
+	if(faction != 0)
+	{
+		utils.setScriptVar(self, "battlefield.terminal_faction", faction);
+
+		location iconLoc = getLocation(self);
+		iconLoc.y += 2.0f;
+
+		obj_id newIcon = create.object(iconTemplate, iconLoc);
+
+		if(isIdValid(newIcon))
+			setObjVar(self, VAR_ICON_OBJECT, newIcon);
+
+		updateMapLabel(self);
+	}
+
+	//clean up the waypoint
+	cleanupWaypoint(controller, self);
+	return SCRIPT_CONTINUE;
+}
+
+void updateMapLabel(obj_id self)
+{
+	obj_id topMost = getTopMostContainer(self);
+	
+	if(!isIdValid(topMost) || !exists(topMost))
+	{
+		return;
+	}
+
+	location here = getWorldLocation(topMost);
+
+	int faction = utils.getIntScriptVar(self, "battlefield.terminal_faction");
+
+	string terminalName = "unknown";
+	string color = "";
+
+	if(faction == factions.FACTION_FLAG_REBEL)
+	{
+		color = COLOR_REBELS;
+	}
+	else if(faction == factions.FACTION_FLAG_IMPERIAL)
+	{
+		color = COLOR_IMPERIALS;
+	}
+
+	if(hasObjVar(self, "battlefield.terminalName"))
+	{
+		terminalName = getStringObjVar(self, "battlefield.terminalName");
+	}
+
+	string name = color + localize(new string_id("spam", terminalName));
+	string sub_cat = "terminal_gcw_static_base";
+
+	addPlanetaryMapLocationIgnoreLocationCountLimits(self, name, (int)here.x, (int)here.z - 10, planetary_map.CAT_TERMINAL, sub_cat, MLT_STATIC, planetary_map.NO_FLAG);
+
+}
+
+void terminalReset(obj_id self)
+{
+	string iconTemplate = "";
+	obj_id controller = getLocalBattlefieldController(self);
+
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		location loc = getLocation(self);
+
+		blog(self, "Battlefield Terminal is invalid at " + loc);
+		return;
+	}
+
+	int faction = getIntObjVar(self, "battlefield.terminal_faction");
+
+	if(faction == factions.FACTION_FLAG_REBEL)
+	{
+		utils.setScriptVar(self, "battlefield.terminal_faction", factions.FACTION_FLAG_REBEL);
+		iconTemplate = "object/tangible/gcw/static_base/rebel_icon.iff";
+
+		setName(self, new string_id("gcw", "battlefield_terminal_rebel"));
+	}
+	else if(faction == factions.FACTION_FLAG_IMPERIAL)
+	{
+		utils.setScriptVar(self, "battlefield.terminal_faction", factions.FACTION_FLAG_IMPERIAL);
+		iconTemplate = "object/tangible/gcw/static_base/imperial_icon.iff";
+
+		setName(self, new string_id("gcw", "battlefield_terminal_imperial"));
+	}
+	else
+	{
+		if(pvp.bfGetBattlefieldType(controller) != pvp.BATTLEFIELD_TYPE_CAPTURE_THE_FLAG)
+		{
+			utils.setScriptVar(self, "battlefield.terminal_faction", factions.FACTION_FLAG_NEUTRAL);
+			setName(self, new string_id("gcw", "battlefield_terminal_n"));
+			iconTemplate = "";
+		}
+	}
+
+	int capturesLeft = getIntObjVar(self, "battlefield.terminal_maximum_captures");
+
+	utils.setScriptVar(self, "battlefield.terminal_captures_left", capturesLeft);
+
+	int mitigation = getIntObjVar(self, "battlefield.terminal_mitigation");
+
+	utils.setScriptVar(self, "battlefield.terminal_mitigation", mitigation);
+
+	if(hasObjVar(self, VAR_ICON_OBJECT))
+	{
+		obj_id oldIcon = getObjIdObjVar(self, VAR_ICON_OBJECT);
+		destroyObject(oldIcon);
+	}
+
+	if(!iconTemplate.equals(""))
+	{
+		location iconLoc = getLocation(self);
+		iconLoc.y += 2.0f;
+
+		obj_id newIcon = create.object(iconTemplate, iconLoc);
+
+		if(isIdValid(newIcon))
+		{
+			setObjVar(self, VAR_ICON_OBJECT, newIcon);
+		}
+	}
+
+	string terminalName = "unknown";
+
+	if(hasObjVar(self, "battlefield.terminalName"))
+	{
+		terminalName = getStringObjVar(self, "battlefield.terminalName");
+	}
+
+	updateMapLabel(self);
+
+	blog(controller, "Battlefield terminal reset for faction: " + faction + " terminalName: " + terminalName);
+}
+
+messageHandler receiveBattlefieldReset()
+{
+	terminalReset(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+void playEffectAtLoc(string effect, location loc, obj_id[] playerList)
+{
+	if(loc == null)
+	{
+		return;
+	}
+
+	obj_id newObject = createObject("object/tangible/theme_park/invisible_object.iff", loc);
+	setObjVar(newObject, restuss_event.EFFECT_NAME, effect);
+	setObjVar(newObject, restuss_event.EFFECT_VISABILITY, "visibility-200");
+	setObjVar(newObject, restuss_event.EFFECT_DELTA, "0");
+
+	if(playerList != null)
+	{
+		utils.setScriptVar(newObject, instance.PLAYER_ID_LIST, playerList);
+	}
+
+	attachScript(newObject, "theme_park.restuss_event.restuss_clientfx_controller");
+}
+
+void playEffectAtLoc(string effect, location loc, resizeable obj_id[] playerList)
+{
+	if(loc == null)
+	{
+		return;
+	}
+
+	obj_id newObject = createObject("object/tangible/theme_park/invisible_object.iff", loc);
+	setObjVar(newObject, restuss_event.EFFECT_NAME, effect);
+	setObjVar(newObject, restuss_event.EFFECT_VISABILITY, "visibility-200");
+	setObjVar(newObject, restuss_event.EFFECT_DELTA, "0");
+
+	if(playerList != null)
+	{
+		utils.setScriptVar(newObject, instance.PLAYER_ID_LIST, playerList);
+	}
+
+	attachScript(newObject, "theme_park.restuss_event.restuss_clientfx_controller");
+}
+
+void blowUpBuilding(obj_id self)
+{
+	if(!isIdValid(self) || !exists(self))
+	{
+		return;
+	}
+
+	obj_id controller = getLocalBattlefieldController(self);
+	
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		return;
+	}
+	
+	obj_id topMost = getTopMostContainer(self);
+	
+	if(!isIdValid(topMost) || !exists(topMost))
+	{
+		return;
+	}
+	
+	string template = getTemplateName(topMost);
+	
+	dictionary dict = utils.dataTableGetRow(BATTLEFIELD_BUILDING_TABLE, template);
+	
+	if(dict == null)
+	{
+		return;
+	}
+	
+	string buildingTable = dict.getString("building_table");
+	
+	if(buildingTable == null || buildingTable.length() < 1)
+	{
+		return;
+	}
+	
+	int numRows = dataTableGetNumRows(buildingTable);
+	
+	if(numRows <= 0)
+	{
+		return;
+	}
+
+	resizeable obj_id[] playerList = utils.getResizeableObjIdBatchScriptVar(controller, pvp.BATTLEFIELD_ACTIVE_PLAYERS);
+	
+	for(int i = 0; i < numRows; i++)
+	{
+		dictionary row = dataTableGetRow(buildingTable, i);
+
+		if(row == null)
+		{
+			continue;
+		}
+		
+		string effect = row.getString("name");
+		string room = row.getString("room");
+		location loc = getLocation(self);
+	
+		// Cell location
+		if(room != null && room.length() > 0)
+		{
+			loc.x = row.getFloat("loc_x");
+			loc.y = row.getFloat("loc_y");
+			loc.z = row.getFloat("loc_z");
+			loc.cell = getCellId(topMost, room);
+		}
+		else // World location
+		{
+			loc = getLocation(topMost);
+			loc.x += row.getFloat("loc_x");
+			loc.y += row.getFloat("loc_y");
+			loc.z += row.getFloat("loc_z");
+		}
+		
+		dictionary params = new dictionary();
+		
+		params.put("loc", loc);
+		params.put("effect", effect);
+		
+		if(playerList != null)
+		{
+			params.put("playerList", playerList);
+		}
+		
+		float delay = row.getFloat("delay");
+		
+		messageTo(self, "effectDelay", params, delay, false);
+	}
+
+	messageTo(self, "sparkTerminal", null, 2.0f, false);
+	messageTo(self, "buildingSmoke", null, 2.0f, false);
+}
+
+messageHandler effectDelay()
+{
+	if(params == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	location loc = params.getLocation("loc");
+	string effect = params.getString("effect");
+	obj_id[] playerList = params.getObjIdArray("playerList");
+
+	playEffectAtLoc(effect, loc, playerList);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler sparkTerminal()
+{
+	location loc = getLocation(self);
+
+	obj_id controller = getLocalBattlefieldController(self);
+
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		blog(self, "Battlefield Terminal is invalid at " + loc);
+		return SCRIPT_CONTINUE;
+	}
+	
+	resizeable obj_id[] playerList = utils.getResizeableObjIdBatchScriptVar(controller, pvp.BATTLEFIELD_ACTIVE_PLAYERS);
+
+	playEffectAtLoc("pt_electricity_battlefield_terminal.prt", loc, playerList);
+
+	int mitigation = utils.getIntScriptVar(self, "battlefield.terminal_mitigation");
+
+	// If mitigation is zero, then the terminal is destroyed in the building.
+	if(mitigation <= 0)
+	{
+		messageTo(self, "sparkTerminal", null, 2.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler buildingSmoke()
+{
+	obj_id topMost = getTopMostContainer(self);
+	
+	if(!isIdValid(topMost) || !exists(topMost))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	location loc = getLocation(topMost);
+
+	obj_id controller = getLocalBattlefieldController(self);
+
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		blog(self, "Battlefield Terminal is invalid at " + loc);
+		return SCRIPT_CONTINUE;
+	}
+	
+	resizeable obj_id[] playerList = utils.getResizeableObjIdBatchScriptVar(controller, pvp.BATTLEFIELD_ACTIVE_PLAYERS);
+
+	playEffectAtLoc("pt_smoke_large_battlefield.prt", loc, playerList);
+
+	int mitigation = utils.getIntScriptVar(self, "battlefield.terminal_mitigation");
+
+	// If mitigation is zero, then the terminal is destroyed in the building.
+	if(mitigation <= 0)
+	{
+		messageTo(self, "buildingSmoke", null, 6.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}

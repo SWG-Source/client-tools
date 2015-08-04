@@ -1,0 +1,1120 @@
+/**
+ * Copyright (c) ©2003 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        city_hall.script
+ * Description:  city hall
+ * @author       $Author:Brandon Reinhart$
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.player_structure;
+include library.utils;
+include library.city;
+include library.prose;
+include library.planetary_map;
+include library.money;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id		NEW_CITY_SUBJECT			= new string_id( "city/city", "new_city_subject" );
+const string_id		NEW_CITY_BODY				= new string_id( "city/city", "new_city_body" );
+
+const string_id		NEW_CITY_SUCCESS_SUBJECT		= new string_id( "city/city", "new_city_success_subject" );
+const string_id		NEW_CITY_SUCCESS_BODY			= new string_id( "city/city", "new_city_success_body" );
+
+const string_id		NEW_CITY_FAIL_SUBJECT			= new string_id( "city/city", "new_city_fail_subject" );
+const string_id		NEW_CITY_FAIL_BODY			= new string_id( "city/city", "new_city_fail_body" );
+
+const string_id		STRUCTURE_DESTROYED_RADIUS_SUBJECT	= new string_id( "city/city", "structure_destroyed_subject" );
+const string_id		STRUCTURE_DESTROYED_RADIUS_BODY		= new string_id( "city/city", "structure_destroyed_radius_body" );
+
+const string_id		CITY_MAINT_SUBJECT			= new string_id( "city/city", "city_maint_subject" );
+const string_id		CITY_MAINT_BODY				= new string_id( "city/city", "city_maint_body" );
+
+const string_id		BUSTED_CIVIC_CAP_SUBJECT		= new string_id( "city/city", "busted_civic_cap_subject" );
+const string_id		BUSTED_CIVIC_CAP_BODY			= new string_id( "city/city", "busted_civic_cap_body" );
+
+//Safe House Citizen Stuffs
+const string_id		CITIZEN_OVERAGE_WARNING_SUBJECT 	= new string_id("city/city", "safe_citizen_overage_subject");
+const string_id		CITIZEN_OVERAGE_WARNING_BODY 		= new string_id("city/city", "safe_citizen_overage_body");
+const int 		SAFE_HOUSE_GRACE_PERIOD			= 60*60*24*4; //4 days
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Send a mail to the creator a bit after we are made.
+	messageTo(self, "initializeNewCity", null, 3.f, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Make sure there are no taxes set for a rank 1 city.
+	int city_id = findCityByCityHall(self);
+
+	if(city.getCityRank(city_id) < 2)
+		city.removeTaxes(city_id);
+
+	// Unregister a city that is below rank 3.
+	if((city.getCityRank(city_id) < 3) && city.isCityRegistered(city_id))
+		city.unregisterCity(city_id);
+
+	// Validate our location.
+	location hallLoc = getLocation(self);
+	location cityLoc = cityGetLocation(city_id);
+	float dx = cityLoc.x - hallLoc.x;
+	float dz = cityLoc.z - hallLoc.z;
+
+	if(dx * dx + dz * dz > 4.0f)	// more than 2 meters of drift, fix it.
+		messageTo(self, "updateCityLocation", null, 30.f, false);
+
+	// Send an update email if we are not the correct version.
+	int CITY_VERSION = getIntObjVar(self, "CITY_VERSION");
+
+	if(CITY_VERSION != city.CITY_VERSION)
+	{
+		// Update our version.
+		setObjVar(self, "CITY_VERSION", city.CITY_VERSION);
+
+		// Send info about the changes to players.
+		// This is a way to tell players about new changes.
+		obj_id[] citizens = cityGetCitizenIds(city_id);
+
+		if(citizens != null)
+		{
+			for(int i = 0; i < citizens.length; i++)
+			{
+				string cname = cityGetCitizenName(city_id, citizens[i]);
+				prose_package bodypp = prose.getPackage(new string_id("city/city", "city_version_update_body_" + city.CITY_VERSION), city.CITY_VERSION);
+
+				utils.sendMail(new string_id("city/city", "city_version_update_subject_" + city.CITY_VERSION), bodypp, cname, "Planetary Civic Authority");
+			}
+		}
+
+		if(city.CITY_VERSION == 3)
+		{
+			// Special init for first time we load under publish 11.2.
+			// Wipe all votes.
+			for(int i = 0; i < citizens.length; i++)
+			{
+				city.setCitizenAllegiance(city_id, citizens[i], null);
+			}
+
+			// Wipe the candidate list.
+			removeObjVar(self, "candidate_list");
+		}
+
+		//Update 8 - Resetting All City Specializations to null - removing the 'spec_stamp' objvar to
+		//allow them to choose another specialization.
+		if(city.CITY_VERSION == 4)
+		{
+			if(hasObjVar(self, "spec_stamp"))
+			{
+				removeObjVar(self, "spec_stamp");
+			}
+			city.setSpecialization(city_id, null);
+		}
+	}
+
+	//update 8 - giving players the ability to add players to admin list - mainly for decorating.
+	if(!hasObjVar(self, player_structure.VAR_ADMIN_LIST))
+	{
+		obj_id ownerId = player_structure.getStructureOwnerObjId(self);
+		string[] adminList = new string[1];
+		adminList[0] = "" + ownerId;
+		setObjVar(self, player_structure.VAR_ADMIN_LIST, adminList);
+	}
+
+	//Check the City on startup to see if they are above their 'Safe Citizen' Cap.
+	validateSafeCitizenCount(self, city_id);
+
+	//Depersist city factional alignment
+	int factionId = 0;
+	if (hasObjVar(self, "cityFactionAlign"))
+		factionId = getIntObjVar(self, "cityFactionAlign");
+
+	citySetFaction(city_id, factionId, false);
+
+	// check again in 1 minute and try again if for some
+	// reason the city factional alignment didn't get set
+	int numberOfRetry = 0;
+	dictionary params = new dictionary();
+	params.put("number_of_retry", numberOfRetry);
+	messageTo(self, "retryDepersistCityFactionalAlignment", params, 60.0f, false);
+
+	//Depersist city GCW Region Defender
+	string region = null;
+	int regionTimeStartDefend = 0;
+	int regionTimeEndDefend = 0;
+	if (hasObjVar(self, "cityGcwRegionDefender.region"))
+		region = getStringObjVar(self, "cityGcwRegionDefender.region");
+
+	if (hasObjVar(self, "cityGcwRegionDefender.timeBegin"))
+		regionTimeStartDefend = getIntObjVar(self, "cityGcwRegionDefender.timeBegin");
+
+	if (hasObjVar(self, "cityGcwRegionDefender.timeEnd"))
+		regionTimeEndDefend = getIntObjVar(self, "cityGcwRegionDefender.timeEnd");
+
+	if ((region != null) && (region.length() > 0) && (regionTimeStartDefend > 0) && (regionTimeEndDefend <= 0))
+	{
+		citySetGcwDefenderRegion(city_id, region, regionTimeStartDefend, false);
+
+		// check again in 1 minute and try again if for some
+		// reason the city GCW Region Defender didn't get set
+		numberOfRetry = 0;
+		params = new dictionary();
+		params.put("number_of_retry", numberOfRetry);
+		messageTo(self, "retryDepersistCityGcwRegionDefender", params, 60.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnDestroy
+//------------------------------------------------
+trigger OnDestroy()
+{
+	CustomerServiceLog("player_city", "Handling OnDestroy for a city hall.  Hall: " + self);
+
+	// Tell the city master to confirm our city was removed.
+	obj_id cityMaster = getMasterCityObject();
+	dictionary outparams = new dictionary();
+
+	outparams.put("city_hall", self);
+	messageTo(cityMaster, "confirmCityRemoved", outparams, 600, true);
+
+	// Destroy all of the civic structures and special objects under us.
+	int city_id = findCityByCityHall(self);
+
+	obj_id[] structures = cityGetStructureIds(city_id);
+
+	if(structures != null)
+	{
+		for(int i = 0; i < structures.length; i++)
+		{
+			if(!isIdValid(structures[i]))
+				continue;
+
+			if(structures[i] == self)
+				continue;
+
+			if(player_structure.isCivic(structures[i]))
+			{
+				messageTo(structures[i], "msgDestroyStructure", null, 0.f, true);
+			}
+			else if(!city.isNormalStructure(city_id, structures[i]))
+			{
+				messageTo(structures[i], "requestDestroy", null, 0.f, true);
+			}
+		}
+	}
+
+	// Remove us from the city object.
+	if(cityExists(city_id))
+	{
+		CustomerServiceLog("player_city", "Handling removal of city.  City: " + city_id + " Hall: " + self);
+		removeCity(city_id);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// updateCityLocation
+// Fixes up cities that had a bad location due to a bug prior to 12/03/03
+//------------------------------------------------
+
+messageHandler updateCityLocation()
+{
+	int city_id = findCityByCityHall(self);
+
+	city.updateLocation(city_id, getLocation(self));
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializeNewCity
+//------------------------------------------------
+
+messageHandler initializeNewCity()
+{
+	CustomerServiceLog("player_city", "Initializing new city for structure " + self);
+
+	// Double check to see if a city exists here or nearby.
+	int max_radius = dataTableGetInt(city.RANK_TABLE, city.RANK_MAX, city.RANK_RADIUS);
+	int city_id = getCityAtLocation(getLocation(self), max_radius);
+
+	if(cityExists(city_id))
+	{
+		// Notify the player.
+
+		// Destroy us.
+		player_structure.destroyStructure(self, true);
+		CustomerServiceLog("player_city", "Failed to create city for structure " + self + " because a city already existed here.");
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get our owner.
+	obj_id owner = player_structure.getStructureOwnerObjId(self);
+
+	if(!isIdValid(owner))
+	{
+		LOG("PlayerCity", "Critical failure: No structure owner when initializing new city.");
+		player_structure.destroyStructure(self, true);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get initial rank info from the rank table.
+	int radius = dataTableGetInt(city.RANK_TABLE, city.RANK_MIN, city.RANK_RADIUS);
+
+	// Get city name.
+	string newCityName = "A New City";
+
+	if(hasObjVar(self, "cityName"))
+	{
+		newCityName = getStringObjVar(self, "cityName");
+		removeObjVar(self, "cityName");
+	}
+
+	// Register this city with the city object.
+	location cityLoc = getLocation(self);
+	int new_city_id = createCity(newCityName, self, cityLoc, radius, owner, 0, 0, 0, null, 0, false, null, null, null);
+
+	citySetStructureInfo(new_city_id, self, city.SF_COST_CITY_HALL, true);
+	setObjVar(self, "lastUpdateTime", getGameTime());
+	setObjVar(self, "currentInterval", 60 * 60 * 24 * 7);
+	setBuildingCityId(self, new_city_id);
+
+	obj_id city_hall = cityGetCityHall(city_id);
+	string city_name = cityGetName(city_id);
+
+	CustomerServiceLog("player_city", "Created a new city.  City hall: " + self + " Mayor: " + owner + " City: " + new_city_id);
+
+	// Set our version.
+	setObjVar(city_hall, "CITY_VERSION", city.CITY_VERSION);
+
+	// Add the creator as the initial citizen.
+	citySetCitizenInfo(new_city_id, owner, getName(owner), owner, city.CP_CITIZEN);
+
+	// Mayor are not allowed to have a declared residence, so
+	// remove any declared residence the mayor may currently have
+	obj_id declaredStructure = getHouseId(owner);
+
+	if(isIdValid(declaredStructure))
+	{
+		setHouseId(owner, obj_id.NULL_ID);
+		messageTo(declaredStructure, "removeResidentVar", null, 0.f, true);
+	}
+
+	// Send a mail to the creator.
+	prose_package bodypp = prose.getPackage(NEW_CITY_BODY, getName(owner));
+
+	utils.sendMail(NEW_CITY_SUBJECT, bodypp, getName(owner), "Planetary Civic Authority");
+
+	// Add structures in range.
+	dictionary outparams = new dictionary();
+
+	outparams.put("cityLoc", cityLoc);
+	outparams.put("radius", radius);
+	outparams.put("city_id", new_city_id);
+	messageTo(self, "addNewCityStructures", outparams, 30.f, false);
+
+	// Send a message to us to check our civilian count after 24 hours.
+	messageTo(self, "validateCity", null, 86400.f, true);
+
+	// Store the founder info.
+	setObjVar(self, "founder.id", getName(owner));
+	setObjVar(self, "founder.time", getGameTime());
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// addNewCityStructures
+//------------------------------------------------
+
+messageHandler addNewCityStructures()
+{
+	// Search for all structures in the city radius and add them.
+	int city_id = params.getInt("city_id");
+	location cityLoc = params.getLocation("cityLoc");
+	int radius = params.getInt("radius");
+
+	obj_id[] range_objects = getObjectsInRange(cityLoc, radius);
+
+	if(range_objects != null)
+	{
+		for(int i = 0; i < range_objects.length; i++)
+		{
+			if(isIdValid(range_objects[i]) && hasScript(range_objects[i], player_structure.SCRIPT_PERMANENT_STRUCTURE))
+			{
+				// This is a permanent structure.  Add it to the city.
+				if(getContainedBy(range_objects[i]) == obj_id.NULL_ID)
+					city.addStructureToCity(range_objects[i], city_id);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// validateCity
+//
+// Called 24 hours after initial city placement.
+// Make sure the city is valid.
+//------------------------------------------------
+
+messageHandler validateCity()
+{
+	// Get our city id and mayor.
+	int city_id = findCityByCityHall(self);
+	obj_id mayor = cityGetLeader(city_id);
+
+	int total_citizens = 0;
+
+	obj_id[] citizens = cityGetCitizenIds(city_id);
+
+	if(citizens != null)
+		total_citizens = citizens.length;
+
+	if(total_citizens >= dataTableGetInt(city.RANK_TABLE, 0, city.RANK_POPULATION))
+	{
+		// They succeeded.
+		string mname = cityGetCitizenName(city_id, mayor);
+		prose_package bodypp = prose.getPackage(NEW_CITY_SUCCESS_BODY, mayor);
+
+		utils.sendMail(NEW_CITY_SUCCESS_SUBJECT, bodypp, mname, "Planetary Civic Authority");
+	}
+	else
+	{
+		// They failed to get the appropriate # of citizens on time.
+		string mname = cityGetCitizenName(city_id, mayor);
+		prose_package bodypp = prose.getPackage(NEW_CITY_FAIL_BODY, mayor);
+
+		utils.sendMail(NEW_CITY_FAIL_SUBJECT, bodypp, mname, "Planetary Civic Authority");
+
+		player_structure.destroyStructure(self, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// registerVoteTerminal
+//------------------------------------------------
+
+messageHandler registerVoteTerminal()
+{
+	if(params == null)
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = params.getObjId("terminal");
+
+	setObjVar(self, "vote_terminal", terminal);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// resetVoteTerminal
+//
+// The master city object wants us to wipe our vote terminal.
+//------------------------------------------------
+
+messageHandler resetVoteTerminal()
+{
+	// Record city update info.
+	setObjVar(self, "currentInterval", params.getInt("currentInterval"));
+	setObjVar(self, "lastUpdateTime", params.getInt("lastUpdateTime"));
+
+	// Forward this message to the vote terminal.
+	obj_id terminal = getObjIdObjVar(self, "vote_terminal");
+
+	messageTo(terminal, "resetVoteTerminal", null, 0.f, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// expandCity
+// rank param is zero based
+//------------------------------------------------
+
+messageHandler expandCity()
+{
+	int rank = params.getInt("rank") + 1;
+	int radius = params.getInt("radius");
+
+	int city_id = findCityByCityHall(self);
+	location cityLoc = cityGetLocation(city_id);
+
+	obj_id mayor = cityGetLeader(city_id);
+
+	// Store the new radius.
+	city.setRadius(city_id, radius);
+
+	// See if any current structures need to be updated.
+	obj_id[] structures = cityGetStructureIds(city_id);
+
+	for(int i = 0; i < structures.length; i++)
+	{
+		if(!isIdValid(structures[i]))
+			continue;
+		if(!structures[i].isLoaded())
+			continue;
+
+		city.checkStructureValid(city_id, structures[i], rank);
+	}
+
+	// Search for all structures in the city radius and add them.
+	obj_id[] range_objects = getObjectsInRange(cityLoc, radius);
+
+	if(range_objects != null)
+	{
+		for(int i = 0; i < range_objects.length; i++)
+		{
+			if(isIdValid(range_objects[i]) && hasScript(range_objects[i], player_structure.SCRIPT_PERMANENT_STRUCTURE))
+			{
+				// This is a permanent structure.  Add it to the city.
+				if(getContainedBy(range_objects[i]) == obj_id.NULL_ID)
+					city.addStructureToCity(range_objects[i], city_id);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// contractCity
+// rank param is zero based
+//------------------------------------------------
+
+messageHandler contractCity()
+{
+	int rank = params.getInt("rank") + 1;
+	int radius = params.getInt("radius");
+
+	int city_id = findCityByCityHall(self);
+	location cityLoc = cityGetLocation(city_id);
+
+	obj_id mayor = cityGetLeader(city_id);
+	string mayor_name = cityGetCitizenName(city_id, mayor);
+
+	obj_id city_hall = cityGetCityHall(city_id);
+	string city_name = cityGetName(city_id);
+
+	if(hasObjVar(city_hall, city.OBJVAR_DERANK_EXEMPT))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Set up temporary counter variables.
+	utils.setScriptVar(self, "city.mt_count", 0);
+	utils.setScriptVar(self, "city.st_count", 0);
+	utils.setScriptVar(self, "city.deco_count", 0);
+
+	// Examine our current structure list and remove ones outside our new radius.
+	obj_id[] structures = cityGetStructureIds(city_id);
+
+	for(int i = 0; i < structures.length; i++)
+	{
+		if(!isIdValid(structures[i]))
+			continue;
+
+		if(!structures[i].isLoaded())
+			continue;
+
+		float dist = utils.getDistance2D(self, structures[i]);
+
+		if(dist > radius)
+		{
+			if(!city.isNormalStructure(city_id, structures[i]))
+			{
+				CustomerServiceLog("player_city", "City destroyed special outside new radius. City: " + city_name + " (" + city_id + "/" + city_hall + ")" + " Object: " + structures[i]);
+				// Destroy special structures.
+				destroyObject(structures[i]);
+
+				string structure_name = localize(getNameStringId(structures[i]));
+				prose_package bodypp = prose.getPackage(STRUCTURE_DESTROYED_RADIUS_BODY, structure_name, mayor_name);
+
+				utils.sendMail(STRUCTURE_DESTROYED_RADIUS_SUBJECT, bodypp, mayor_name, "City Hall");
+				continue;
+			}
+
+			// This structure is now outside our radius.
+			city.removeStructureFromCity(city_id, structures[i]);
+
+			// If it is a CIVIC structure, we need to destroy it.
+			// CIVIC structures must exist within a city.
+			if(player_structure.isCivic(structures[i]))
+			{
+				CustomerServiceLog("player_city", "City destroyed structure outside new radius. City: " + city_name + " (" + city_id + "/" + city_hall + ")" + " Structure: " + structures[i]);
+
+				//player_structure.destroyStructure( structures[i] );
+				messageTo(structures[i], "msgDestroyStructure", null, 0.f, false);
+
+				// Notify the mayor.
+				string structure_name = localize(getNameStringId(structures[i]));
+				prose_package bodypp = prose.getPackage(STRUCTURE_DESTROYED_RADIUS_BODY, structure_name, mayor_name);
+
+				utils.sendMail(STRUCTURE_DESTROYED_RADIUS_SUBJECT, bodypp, mayor_name, "City Hall");
+			}
+		}
+		else
+		{
+			// See if we need to disable the structure.
+			city.checkStructureValid(city_id, structures[i], rank);
+		}
+	}
+
+	// Clear temporary variables.
+	utils.removeScriptVar(self, "city.mt_count");
+	utils.removeScriptVar(self, "city.st_count");
+	utils.removeScriptVar(self, "city.deco_count");
+
+	// Unregister the city if it fell below rank 3.
+	if((rank < 3) && city.isCityRegistered(city_id))
+		city.unregisterCity(city_id);
+
+	// Store the new radius.
+	// Reset taxes if we fell to rank 1.
+	// We don't reset the travel fee, though, that can stay.  Removing it will mess up city travel for cities with shuttleports.
+	if(rank < 2)
+		city.removeTaxesSetRadius(city_id, radius);
+	else
+		city.setRadius(city_id, radius);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// checkCivicCap
+//------------------------------------------------
+
+messageHandler checkCivicCap()
+{
+	int city_id = findCityByCityHall(self);
+	obj_id mayor = cityGetLeader(city_id);
+	string mayor_name = cityGetCitizenName(city_id, mayor);
+
+	// Determine if we have too many civic structures.
+	int civic_count = city.getCivicCount(city_id);
+	int max_civic = city.getMaxCivicCount(city_id);
+
+	if(civic_count > max_civic)
+	{
+		// We have more civic structures than our city rank can support.
+		int diff = civic_count - max_civic;
+		prose_package bodypp = prose.getPackage(BUSTED_CIVIC_CAP_BODY, cityGetName(city_id), diff);
+
+		utils.sendMail(BUSTED_CIVIC_CAP_SUBJECT, bodypp, mayor_name, "Planetary Civic Authority");
+	}
+	else if(hasObjVar(self, "city.civic_cap_penalty"))
+		removeObjVar(self, "city.civic_cap_penalty");
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// payMaintenance
+//
+// Called via persistent message each week.
+//------------------------------------------------
+
+messageHandler payMaintenance()
+{
+	int city_id = findCityByCityHall(self);
+
+	// Reset pay total tracker var.
+	utils.setScriptVar(self, "maint.paid", 0);
+
+	// Always do the city hall first.
+	payStructureMaint(self, city_id, self, true);
+
+	// Do the other structures.
+	obj_id[] structures = cityGetStructureIds(city_id);
+
+	for(int i = 0; i < structures.length; i++)
+	{
+		if(structures[i] == self)
+			continue;
+
+		if(city.isNormalStructure(city_id, structures[i]))
+			payStructureMaint(self, city_id, structures[i], false);
+		else
+			paySpecialMaint(self, city_id, structures[i]);
+	}
+
+	messageTo(self, "reportTotalPaid", null, 120, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// reportTotalPaid
+//------------------------------------------------
+
+messageHandler reportTotalPaid()
+{
+	// Report total amount paid.
+	int city_id = findCityByCityHall(self);
+	int total_paid = utils.getIntScriptVar(self, "maint.paid");
+	obj_id mayor = cityGetLeader(city_id);
+	string mayor_name = cityGetCitizenName(city_id, mayor);
+	prose_package bodypp = prose.getPackage(CITY_MAINT_BODY, mayor_name, total_paid);
+
+	utils.sendMail(CITY_MAINT_SUBJECT, bodypp, mayor_name, "City Hall");
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// payStructureMaint
+//------------------------------------------------
+
+void payStructureMaint(obj_id self, int city_id, obj_id structure, boolean spec)
+{
+	int cost = city.getStructureCost(city_id, structure);
+
+	if(cost == 0)
+		return;
+	if(spec)
+		cost += city.cityGetSpecCost(city_id);
+
+	dictionary payparams = new dictionary();
+
+	payparams.put("city_id", city_id);
+	payparams.put("cost", cost);
+	payparams.put("structure", structure);
+	transferBankCreditsToNamedAccount(self, money.ACCT_CITY, cost, "handleMaintSuccess", "handleMaintFail", payparams);
+}
+
+//------------------------------------------------
+// handleMaintSuccess
+//------------------------------------------------
+
+messageHandler handleMaintSuccess()
+{
+	int cost = params.getInt("cost");
+	obj_id structure = params.getObjId("structure");
+
+	messageTo(structure, "repairCityDamage", null, 0.f, true);
+
+	int total_paid = utils.getIntScriptVar(self, "maint.paid");
+
+	total_paid += cost;
+	utils.setScriptVar(self, "maint.paid", total_paid);
+
+	// Track the money.
+	utils.moneyOutMetric(self, money.ACCT_CITY, cost);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleMaintFail
+//------------------------------------------------
+
+messageHandler handleMaintFail()
+{
+	int city_id = params.getInt("city_id");
+	int cost = params.getInt("cost");
+	obj_id structure = params.getObjId("structure");
+	obj_id city_hall = cityGetCityHall(city_id);
+	string city_name = cityGetName(city_id);
+
+	// No money to pay for this at all.
+	CustomerServiceLog("player_city", "City unable to pay for structure.  Damaging it.  City: " + city_name + " (" + city_id + "/" + city_hall + ")" + " Structure: " + structure);
+	damageCityStructure(self, structure, cost);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// damageCityStructure
+//------------------------------------------------
+
+void damageCityStructure(obj_id self, obj_id structure, int cost)
+{
+	// Notify the mayor.
+	int city_id = findCityByCityHall(self);
+	obj_id mayor = cityGetLeader(city_id);
+	string mayor_name = cityGetCitizenName(city_id, mayor);
+	string structure_name = localize(getNameStringId(structure));
+
+	// Damage it.
+	dictionary outparams = new dictionary();
+
+	outparams.put("cost", cost);
+	messageTo(structure, "takeCityDamage", outparams, 0.f, true);
+}
+
+//------------------------------------------------
+// paySpecialMaint
+//------------------------------------------------
+
+void paySpecialMaint(obj_id self, int city_id, obj_id structure)
+{
+	int cost = city.getStructureCost(city_id, structure);
+
+	if(cost == 0)
+		return;
+
+	dictionary payparams = new dictionary();
+
+	payparams.put("city_id", city_id);
+	payparams.put("cost", cost);
+	payparams.put("structure", structure);
+	transferBankCreditsToNamedAccount(self, money.ACCT_CITY, cost, "handleSpecMaintSuccess", "handleSpecMaintFail", payparams);
+}
+
+//------------------------------------------------
+// handleSpecMaintSuccess
+//------------------------------------------------
+
+messageHandler handleSpecMaintSuccess()
+{
+	// We paid for it.
+	int cost = params.getInt("cost");
+	int total_paid = utils.getIntScriptVar(self, "maint.paid");
+
+	total_paid += cost;
+	utils.setScriptVar(self, "maint.paid", total_paid);
+
+	// Track the money.
+	utils.moneyOutMetric(self, money.ACCT_CITY, cost);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleSpecMaintFail
+//------------------------------------------------
+
+messageHandler handleSpecMaintFail()
+{
+	int city_id = params.getInt("city_id");
+	obj_id city_hall = cityGetCityHall(city_id);
+	string city_name = cityGetName(city_id);
+	obj_id mayor = cityGetLeader(city_id);
+	string mayor_name = cityGetCitizenName(city_id, mayor);
+	obj_id structure = params.getObjId("structure");
+	string structure_name = localize(getNameStringId(structure));
+
+	CustomerServiceLog("player_city", "City unable to pay for special.  Destroying it.  City: " + city_name + " (" + city_id + "/" + city_hall + ")" + " Object: " + structure);
+
+	// No money to pay for this at all, remove it.
+	destroyObject(structure);
+
+	// Notify the mayor.
+	prose_package bodypp = prose.getPackage(city.STRUCTURE_DESTROYED_MAINT_BODY, structure_name, mayor_name);
+
+	utils.sendMail(city.STRUCTURE_DESTROYED_MAINT_SUBJECT, bodypp, mayor_name, "City Hall");
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// setVoteInterval
+//------------------------------------------------
+
+messageHandler setVoteInterval()
+{
+	if(params == null)
+		return SCRIPT_CONTINUE;
+
+	int cityVoteInterval = params.getInt("cityVoteInterval");
+
+	setObjVar(self, "cityVoteInterval", cityVoteInterval);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgCheckMyCityMotd()
+{
+	if(hasObjVar(self, "city_citizen_message"))
+	{
+		string city_motd = getStringObjVar(self, "city_citizen_message");
+		if(city_motd != null && city_motd.length() > 0)
+		{
+			obj_id player = params.getObjId("player");
+			dictionary outparams = new dictionary();
+			outparams.put("city_motd", city_motd);
+			messageTo(player, "myCityMotdResponse", outparams, 0, false);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler st_citySpecBonusCheck()
+{
+	int city_id = getCityAtLocation(getLocation(self), 0);
+
+	if(city_id > 0 && city.cityHasSpec(city_id, city.SF_SPEC_STORYTELLER))
+	{
+		obj_id st_object = params.getObjId("queryObject");
+		messageTo(st_object, "st_receivedCityResponse", null, 0.0f, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// validateSafeCitizenCount: Validates the number of Safe Houses a City Has - Mails the Mayor, start a timer.
+//------------------------------------------------
+void validateSafeCitizenCount(obj_id city_hall, int city_id)
+{
+	if(!isIdValid(city_hall))
+	{
+		//LOG("sissynoid", "City Hall ID Invalid (" + city_hall + ") - Was attempting to Validate Safe Citizen Counts for City ID: " + city_id + ".");
+		CustomerServiceLog("player_city", "City Hall ID Invalid (" + city_hall + ") - Was attempting to Validate Safe Citizen Counts for City ID: " + city_id + ".");
+		return;
+	}
+
+	int maxSafe = city.getMaxSafeHouseCount(city_id);
+	int curSafe = city.getCurrentSafeHouseCount(city_id);
+
+	if(curSafe > maxSafe)
+	{
+		//you have too many safe houses
+		//LOG("sissynoid", "City: "+ cityGetName(city_id) +"("+ city_id +") has too many Safe Houses.  Max("+ maxSafe +"), Current Count("+ curSafe +")");
+		CustomerServiceLog("player_city", "City: "+ cityGetName(city_id) +"("+ city_id +") has too many Safe Houses.  Max("+ maxSafe +"), Current Count("+ curSafe +")");
+		//we need to stamp the city hall with a timer.
+		if(hasObjVar(city_hall, "city.safe_house_capacity_overload"))
+		{
+			//they have already been warned - check the time and remove Citizens if necessary.
+			int curTime = getCalendarTime();
+			int overageTimeStamp = getIntObjVar(city_hall, "city.safe_house_capacity_overload");
+
+			int gracePeriod = SAFE_HOUSE_GRACE_PERIOD;
+
+			//For QA Testing - having this objvar on the City Hall allows for 1Hour testing blocks instead of 4 days.
+			if(hasObjVar(city_hall, "qa.test_capacity_overload"))
+				gracePeriod = 60*20;//20 minutes
+			if((overageTimeStamp + gracePeriod) < curTime) //we are passed our overage time - remove citizens.
+			{
+				//we are passed our overage time - remove citizens.
+				int numCitizensToRemove = curSafe - maxSafe;
+				if(numCitizensToRemove > 0)
+				{
+					//LOG("sissynoid", "City: "+ cityGetName(city_id) +"("+ city_id +") is still in violation of the Inactive Citizen Act after 4 days - We will be removing " + numCitizensToRemove + " Citizen(s) today");
+					CustomerServiceLog("player_city", "City: "+ cityGetName(city_id) +"("+ city_id +") is still in violation of the Inactive Citizen Act after 4 days - We will be removing " + numCitizensToRemove + " Citizen(s) today");
+					forceRemoveSafeCitizen(city_id, numCitizensToRemove, city_hall);
+				}
+			}
+		}
+		else
+		{
+			//Stamp the City Hall with current time.
+			int curTime = getCalendarTime();
+			setObjVar(city_hall, "city.safe_house_capacity_overload", curTime);
+			//Mail the Mayor
+			obj_id mayor = cityGetLeader(city_id);
+			string mayorName = cityGetCitizenName(city_id, mayor);
+			prose_package bodypp = prose.getPackage(CITIZEN_OVERAGE_WARNING_BODY, mayor);
+			utils.sendMail(CITIZEN_OVERAGE_WARNING_SUBJECT, bodypp, mayorName, "Planetary Civic Authority");
+			//LOG("sissynoid", "Mayor("+ mayor +")"+ cityGetCitizenName(city_id, mayor) +" of City: "+ cityGetName(city_id) +"("+ city_id +") has been send a Mail concerning the Safe House Overage -  Max Safe Count: ("+ maxSafe +"), Current Safe Count: ("+ curSafe +")...Stamping City Hall");
+			CustomerServiceLog("player_city", "Mayor("+ mayor +")"+ cityGetCitizenName(city_id, mayor) +" of City: "+ cityGetName(city_id) +"("+ city_id +") has been send a Mail concerning the Safe House Overage -  Max Safe Count: ("+ maxSafe +"), Current Safe Count: ("+ curSafe +")...Stamping City Hall");
+		}
+	}
+}
+
+void forceRemoveSafeCitizen(int city_id, int numCitizensToRemove, obj_id city_hall)
+{
+	if(!cityExists(city_id))
+	{
+		//LOG("sissynoid", "Attempting to remove "+ numCitizensToRemove +" Safe House Citizen(s) due to overages- but City does not exist: City ID: " + city_id);
+		CustomerServiceLog("player_city", "Attempting to remove "+ numCitizensToRemove +" Safe House Citizen(s) due to overages- but City does not exist: City ID: " + city_id);
+		return;
+	}
+	if(numCitizensToRemove <= 0)
+	{
+		//LOG("sissynoid", "Attempting to remove Safe Citizen Overages - but numCitizensToRemove is Zero or Less for City: " + city_id);
+		CustomerServiceLog("player_city", "Attempting to remove Safe Citizen Overages - but numCitizensToRemove is Zero or Less for City: " + city_id);
+		return;
+	}
+
+	//Get the safe house citizens in the city.
+	obj_id[] safeHouseCitizenList = city.getCitySafeHouseCitizenList(city_id);
+	if(safeHouseCitizenList == null || safeHouseCitizenList.length <= 0)
+	{
+		//LOG("sissynoid", "Attempting to remove Safe Citizen Overages but Safe House List returned NULL");
+		CustomerServiceLog("player_city", "Attempting to remove Safe Citizen Overages but Safe House List returned NULL");
+		return;
+	}
+
+	//now get the last login time of each citizen -
+	int[] safeHouseCitizenLoginTime = new int[safeHouseCitizenList.length];
+	for(int i = 0; i < safeHouseCitizenList.length; i++)
+	{
+		safeHouseCitizenLoginTime[i] = getPlayerLastLoginTime(safeHouseCitizenList[i]);
+
+		if(safeHouseCitizenLoginTime[i] == 0) //invalid time - set it to -1
+			safeHouseCitizenLoginTime[i] = -1;
+	}
+
+	//the Citizen with the largest Last Login Time will be removed (largest means he logged in most recently.)
+	int largestTime = 0;
+	obj_id citizenToRemove = obj_id.NULL_ID;
+
+	for(int j = 0; j < safeHouseCitizenList.length; j++)
+	{
+		//if this is the first valid time, set it to the lowest time.
+		if(largestTime == 0)
+		{
+			largestTime = safeHouseCitizenLoginTime[j];
+			citizenToRemove = safeHouseCitizenList[j];
+			continue;
+		}
+
+		if(safeHouseCitizenLoginTime[j] > largestTime)
+		{
+			//he logged in sooner since seconds are larger
+			largestTime = safeHouseCitizenLoginTime[j];
+			citizenToRemove = safeHouseCitizenList[j];
+		}
+	}
+
+	//now we remove the citizen
+	if(isIdValid(citizenToRemove))
+	{
+		//LOG("sissynoid", "Safe House Citizen Removal: Citizen: "+ cityGetCitizenName(city_id, citizenToRemove) +"("+ citizenToRemove +") has been removed from City Protection due to the Mayor having too many Safe Houses.");
+		CustomerServiceLog("player_city", "Safe House Citizen Removal: Citizen: "+ cityGetCitizenName(city_id, citizenToRemove) +"("+ citizenToRemove +") has been removed from City Protection due to the Mayor having too many Safe Houses.");
+		city.removeSafeHouseCitizen(city_id, citizenToRemove);
+
+		//decrement # of Citizens to remove
+		numCitizensToRemove--;
+		if(numCitizensToRemove > 0)
+		{
+			//call to remove more citizens.
+			dictionary d = new dictionary();
+			d.put("city_id", city_id);
+			d.put("citizen_count", numCitizensToRemove);
+			d.put("city_hall", city_hall);
+			messageTo(city_hall, "handleMultipleSafeHouseCitizenRemoval", d, 300.0f, false);
+		}
+		else
+		{
+			//everyone has been removed - remove the ObjVar from the City Hall
+			removeObjVar(city_hall, "city.safe_house_capacity_overload");
+		}
+	}
+}
+
+messageHandler handleMultipleSafeHouseCitizenRemoval()
+{
+	int city_id = params.getInt("city_id");
+	int removeCount = params.getInt("citizen_count");
+	obj_id city_hall = params.getObjId("city_hall");
+
+	forceRemoveSafeCitizen(city_id, removeCount, city_hall);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler QaTestSafeHouseOverload()
+{
+	int city_id = getCityAtLocation(getLocation(self), 0);
+	obj_id city_hall = cityGetCityHall(city_id);
+	validateSafeCitizenCount(city_hall, city_id);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler retryDepersistCityFactionalAlignment()
+{
+	// stop after 5 retry
+	int numberOfRetry = params.getInt("number_of_retry");
+	if (numberOfRetry >= 5)
+		return SCRIPT_CONTINUE;
+
+	int city_id = findCityByCityHall(self);
+	if (city_id > 0)
+	{
+		// Depersist city factional alignment
+		int factionId = 0;
+		if (hasObjVar(self, "cityFactionAlign"))
+			factionId = getIntObjVar(self, "cityFactionAlign");
+
+		if (cityGetFaction(city_id) == factionId)
+			return SCRIPT_CONTINUE; // confirmed
+		else
+			citySetFaction(city_id, factionId, false); // try again
+	}
+
+	// check again in 1 minute and try again if for some
+	// reason the city factional alignment didn't get set
+	++numberOfRetry;
+	if (numberOfRetry < 5)
+	{
+		params.put("number_of_retry", numberOfRetry);
+		messageTo(self, "retryDepersistCityFactionalAlignment", params, 60.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler retryDepersistCityGcwRegionDefender()
+{
+	// stop after 5 retry
+	int numberOfRetry = params.getInt("number_of_retry");
+	if (numberOfRetry >= 5)
+		return SCRIPT_CONTINUE;
+
+	//Depersist city GCW Region Defender
+	string region = null;
+	int regionTimeStartDefend = 0;
+	int regionTimeEndDefend = 0;
+	if (hasObjVar(self, "cityGcwRegionDefender.region"))
+		region = getStringObjVar(self, "cityGcwRegionDefender.region");
+
+	if (hasObjVar(self, "cityGcwRegionDefender.timeBegin"))
+		regionTimeStartDefend = getIntObjVar(self, "cityGcwRegionDefender.timeBegin");
+
+	if (hasObjVar(self, "cityGcwRegionDefender.timeEnd"))
+		regionTimeEndDefend = getIntObjVar(self, "cityGcwRegionDefender.timeEnd");
+
+	if ((region != null) && (region.length() > 0) && (regionTimeStartDefend > 0) && (regionTimeEndDefend <= 0))
+	{
+		int city_id = findCityByCityHall(self);
+		if (city_id > 0)
+		{
+			const String gcwDefenderRegion = cityGetGcwDefenderRegion(city_id);
+			if ((gcwDefenderRegion != null) && (gcwDefenderRegion.length() > 0) && gcwDefenderRegion.equals(region))
+				return SCRIPT_CONTINUE; // confirmed
+			else
+				citySetGcwDefenderRegion(city_id, region, regionTimeStartDefend, false);
+		}
+
+		// check again in 1 minute and try again if for some
+		// reason the city factional alignment didn't get set
+		++numberOfRetry;
+		if (numberOfRetry < 5)
+		{
+			params.put("number_of_retry", numberOfRetry);
+			messageTo(self, "retryDepersistCityGcwRegionDefender", params, 60.0f, false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,501 @@
+/**
+ * Copyright (c) ©2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        item.armor.new_armor.script
+ * Description:  displays the attributes for armor created by the new armor system
+ * @author       $Author: Steve Jakab$
+ * @version      $Revision: 0$
+ */
+
+
+/***** INCLUDES ********************************************************/
+
+include library.armor;
+include library.craftinglib;
+include library.metrics;
+include library.utils;
+include library.prose;
+include library.static_item;
+
+/***** CONSTANTS *******************************************************/
+
+const java.text.NumberFormat floatFormat = new java.text.DecimalFormat("###.#");
+const java.text.NumberFormat percentFormat = new java.text.DecimalFormat("###.#%");
+
+const string[] SID_SPECIAL_TOOLTIP_PROTECTIONS  =
+{
+	"armor_eff_kinetic",
+	"armor_eff_energy",
+	"armor_eff_elemental_heat",
+	"armor_eff_elemental_cold",
+	"armor_eff_elemental_acid",
+	"armor_eff_elemental_electrical",
+};
+
+const string[] SPECIAL_PROTECTIONS =
+{
+	"kinetic",
+	"energy",
+	"heat",
+	"cold",
+	"acid",
+	"electricity"
+};
+const string APPEARANCE_TBL = "datatables/appearance/appearance_table.iff";
+
+string getSpeciesName(string speciesName)
+{
+	string species = "";
+	java.util.StringTokenizer st = new java.util.StringTokenizer(speciesName);
+
+	if (st.hasMoreTokens())
+	{
+		string gender = st.nextToken();
+
+		if (gender.length() > 0 && st.hasMoreTokens())
+		{
+			species = st.nextToken();
+		}
+	}
+
+	return species;
+}
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnAttach()
+{
+	// If we are not armor or cybernetics, detach us.
+	int ourType = getGameObjectType( self );
+	if (!isGameObjectTypeOf(ourType, GOT_armor) &&
+		!isGameObjectTypeOf(ourType, GOT_component_armor ) &&
+		!isGameObjectTypeOf(ourType, GOT_component_new_armor) &&
+		!isGameObjectTypeOf(ourType, GOT_cybernetic) &&
+		!isGameObjectTypeOf(ourType, GOT_cybernetic_arm) &&
+		!isGameObjectTypeOf(ourType, GOT_cybernetic_legs) &&
+		!isGameObjectTypeOf(ourType, GOT_cybernetic_torso))
+		detachScript(self, "item.armor.new_armor");
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	getProtections(self);
+	// cache any restrictions based on the species.
+	{
+		java.util.HashSet speciesRequirementsSet = new java.util.HashSet();
+
+		string armorSharedObjectTemplateName = getSharedObjectTemplateName(self);
+		if (armorSharedObjectTemplateName != null)
+		{
+			int startingIndex = armorSharedObjectTemplateName.lastIndexOf('/') + 1;
+			int endingIndex = armorSharedObjectTemplateName.lastIndexOf('.');
+			armorSharedObjectTemplateName = armorSharedObjectTemplateName.substring(startingIndex, endingIndex);
+
+			dictionary appearanceRestrictions = dataTableGetRow(APPEARANCE_TBL, armorSharedObjectTemplateName);
+			if ( appearanceRestrictions != null )
+			{
+				java.util.Enumeration speciesNames = appearanceRestrictions.keys();
+				while ( speciesNames.hasMoreElements() )
+				{
+					string species = (String)(speciesNames.nextElement());
+					if ( species != "Object Template Name" )
+					{
+						Object speciesAppearance = appearanceRestrictions.get(species);
+						if ( speciesAppearance != null && (speciesAppearance instanceof string) )
+						{
+							string speciesAppearanceNameString = ((string)speciesAppearance);
+
+							if ( speciesAppearanceNameString != ":block" )
+								speciesRequirementsSet.add(getSpeciesName(species));
+						}
+					}
+				}
+			}
+		}
+
+		string speciesRequirements = "";
+		java.util.Iterator itSpecies = speciesRequirementsSet.iterator();
+
+		while ( itSpecies.hasNext() )
+		{
+			speciesRequirements += itSpecies.next();
+			speciesRequirements += " ";
+		}
+
+		utils.setScriptVar(self, armor.SCRIPTVAR_SPECIES_RESTRICTIONS, speciesRequirements);
+	}
+
+	//Fix for Clone Trooper armor was not properly configured, so we fix it if it has no stats
+	if (!isGameObjectTypeOf(self, GOT_armor_foot) && !isGameObjectTypeOf(self, GOT_armor_hand) && !hasObjVar(self, "armor.general_protection") )
+		messageTo(self, "checkArmorData", null, 1, false);
+
+	if (isGameObjectTypeOf(self, GOT_armor_misc) && !hasObjVar(self, "armor.armorStatCleaned"))
+	{
+		armor.removeAllArmorData(self);
+		setObjVar (self, "armor.armorStatCleaned", 1);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	if (isPlayer(destContainer) || isAPlayerAppearanceInventoryContainer(destContainer))
+	{
+		obj_id player = destContainer;
+
+		if(isAPlayerAppearanceInventoryContainer(destContainer))
+			player = getContainedBy(destContainer);
+
+		if(!armor.isArmorCertified(player, self))
+		{
+			prose_package pp = new prose_package();
+			pp = prose.setStringId(pp, new string_id("spam", "armor_no_cert"));
+			pp = prose.setTT(pp, self);
+			sendSystemMessageProse(player, pp);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	// keep track of how much armor our player is wearing for Jedi purposes
+	// This method doesn't trap all armor swaps correctly.  Using a slightly more expensive but much safer method
+	obj_id player;
+
+	if (isPlayer(destContainer))
+		player = destContainer;
+	else if (isPlayer(sourceContainer))
+		player = sourceContainer;
+	else
+		return SCRIPT_CONTINUE;
+
+	// Recalculate Armor
+	armor.recalculateArmorForPlayer(player);
+	// 2/2006 mhalash: No more armor hindrance (FACTOID: hindrance and hinderance are both correct spellings)
+//	armor.calculateArmorHinderances(player);
+
+ 	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Called when a player requests info about an object. The trigger should fill
+ * in a localization name and attribute value for each attribute it wants
+ * the player to know about.
+ *
+ * @param self		the object being queried
+ * @param player    the player requesting the attributes
+ * @param names		localization name of the attributes
+ * @param attribs	value of the attributes
+ */
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	if ( player == null || names == null || attribs == null || names.length != attribs.length )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int free = getFirstFreeIndex(names);
+	if (free == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// get the data associated with the armor
+	int armorType = getGameObjectType(self);
+	if ( armor.isFinalArmor(armorType) )
+		armorType = GOT_armor;
+
+	int armorLevel = -1;
+	int armorCategory = -1;
+	int armorRow = armor.getArmorDatatableRow(self);
+	if ( armorRow < 0 )
+	{
+		CustomerServiceLog("armor", "WARNING: could not find armor datatable row for armor " + self);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( armorType == GOT_armor || armorType == GOT_armor_core || armorType == GOT_armor_psg )
+	{
+		// get the armor level and category
+		armorLevel = armor.getArmorLevel(self);
+		armorCategory = armor.getArmorCategory(self);
+		if ( armorLevel < 0 || armorCategory < 0 )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	dictionary protections = armor.getArmorSpecialProtections(self);
+	float general_protection = armor.getArmorGeneralProtection(self);
+	float[] penalties = null;
+	if ( general_protection > 0 && armorLevel >= 0 && armorCategory >= 0 )
+	{
+		// penalties are based on general protection, so get them now
+		penalties = armor.getScaledArmorPenalties(self, general_protection, armorRow, armorLevel, armorCategory);
+	}
+
+	if (armorCategory >= 0)
+	{
+		Object catName = armor.ARMOR_CATEGORY_MAP.get(new Integer(armorCategory));
+		if ( catName != null && free < names.length )
+		{
+			names[free] = armor.SID_ARMOR_CATEGORY;
+			attribs[free++] = (string)catName;
+
+			// tooltip: armor category
+			names[free] = "tooltip.armor_category";
+			attribs[free++] = (string)catName;
+		}
+	}
+
+	//check for health bonus
+	if (hasObjVar(self, "attribute.bonus.0"))
+	{
+		names[free] = "health_bonus";
+		attribs[free++] = "+"+ getIntObjVar(self, "attribute.bonus.0");;
+	}
+
+	// show the protection values
+	string[][] entries = {{"kinetic", "energy"}, {"heat", "cold", "acid", "electricity"}};
+	int realArmorType = getGameObjectType(self);
+	if (realArmorType == GOT_armor_hand || realArmorType == GOT_armor_foot)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	for ( int i = 0; i < entries.length; ++i )
+	{
+		for ( int j = 0; j < entries[i].length; ++j )
+		{
+			if ( free < names.length )
+			{
+				float value = general_protection + 0.5f;
+				if ( protections != null )
+					value += protections.getFloat(entries[i][j]);
+				names[free] = (string)(armor.SPECIAL_PROTECTION_MAP.get(entries[i][j]));
+				attribs[free++] = Integer.toString((int)value);
+			}
+		}
+	}
+
+	// tooltip: protections
+	{
+		for ( int i = 0; i < SPECIAL_PROTECTIONS.length; ++i )
+		{
+			names[free] = "tooltip." + SID_SPECIAL_TOOLTIP_PROTECTIONS[i];
+
+			float value = general_protection + 0.5f;
+			if ( protections != null )
+				value += protections.getFloat(SPECIAL_PROTECTIONS[i]);
+
+			attribs[free++] = Integer.toString((int)value);
+		}
+	}
+/************************ No more hindrance debuffs ***********************
+	//show raw hindrances
+	if ( penalties != null )
+	{
+		float [] rawpenalties = penalties;
+		// show the modified hindrances
+		penalties = armor.reduceCertifiedArmorPenalties(player, armorCategory, penalties);
+		for ( int i = 0; i < penalties.length && free < names.length; ++i )
+		{
+			if ( i != armor.ARMOR_DEFENSE_PENALTY )
+			{
+				string text = armor.ARMOR_PENALTY_FORMAT.format(rawpenalties[i])+"\\>165";
+				if (penalties[i] > 0)
+					text +="\\#pcontrast2 ";
+
+				else
+					text +="\\#pcontrast1 ";
+				text += armor.ARMOR_PENALTY_FORMAT.format(penalties[i])+"\\#.";
+				names[free] = armor.SID_ARMOR_PENALTIES[i];
+				attribs[free++] = text;
+			}
+		}
+	}
+***************************************************************************/
+	if ( armorType == GOT_armor_psg )
+	{
+		// show the current efficiency and recharge rate
+		float efficiency = utils.getFloatScriptVar(self, armor.OBJVAR_ARMOR_BASE + "." + armor.OBJVAR_PSG_CURRENT_EFFICIENCY);
+		float recharge = getFloatObjVar(self, armor.OBJVAR_ARMOR_BASE + "." + armor.OBJVAR_PSG_RECHARGE_RATE);
+		if ( free < names.length )
+		{
+			names[free] = "@obj_attr_n:" + armor.OBJVAR_PSG_CURRENT_EFFICIENCY;
+			attribs[free++] = percentFormat.format(efficiency);
+		}
+		if ( free < names.length )
+		{
+			names[free] = "@obj_attr_n:" + armor.OBJVAR_PSG_RECHARGE_RATE;
+			attribs[free++] = floatFormat.format(recharge);
+		}
+	}
+
+	string speciesRequirements = utils.getStringScriptVar(self, armor.SCRIPTVAR_SPECIES_RESTRICTIONS);
+	if ( speciesRequirements != null && speciesRequirements.length() > 0 )
+	{
+		names[free] = "species_restrictions.species_name";
+		attribs[free++] = speciesRequirements;
+
+		names[free] = "tooltip.species_restrictions";
+		attribs[free++] = speciesRequirements;
+	}
+
+	/*
+	//-- slicing nasty warning
+	if ( hasObjVar(self, "slicing.new_hacked") ||  hasObjVar(self, "slicing.hacked"))
+	{
+		names[free] = "species_restrictions.arm_attr";
+		attribs[free] = "@obj_attr_n:hacked";
+		free++;
+	}
+
+	//display no slice message if we are static
+	if(static_item.isStaticItem(self))
+	{
+		names[free] = "species_restrictions.arm_attr";
+		attribs[free] = "@obj_attr_n:can_not_alter_armor";
+		free++;
+	}
+	*/
+
+	// tier.
+	if (static_item.isStaticItem(self))
+	{
+		dictionary itemData = new dictionary();
+		itemData = static_item.getMasterItemDictionary(self);
+
+		// tier
+		int tier = itemData.getInt("tier");
+		names[free] = "tier";
+		attribs[free++] = "" + tier;
+		// tooltip: tier
+		names[free] = "tooltip.tier";
+		attribs[free++] = "" + tier;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** HANDLERS ********************************************************/
+
+messageHandler delayedEquip()
+{
+	obj_id player = params.getObjId("player");
+
+	equip(self, player);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkArmorData()
+{
+	//lets fix helms from old theme park quests
+	string template = getTemplateName(self);
+	string name = null;
+	if (template.endsWith("armor_ubese_helmet_quest.iff"))
+		name = "object/tangible/wearables/armor/ubese/armor_ubese_helmet_quest.iff";
+	if (template.endsWith("armor_stormtrooper_helmet_quest.iff"))
+		name = "object/tangible/wearables/armor/stormtrooper/armor_stormtrooper_helmet_quest.iff";
+
+	if(name != null)
+	{
+		utils.replaceSnowflakeItem(self, name);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (armor.getArmorGeneralProtection(self) < 0)
+	{
+		if (!isGameObjectTypeOf(self, GOT_armor_foot) && !isGameObjectTypeOf(self, GOT_armor_hand))
+		{
+			// The armor pieces need to have properties set on them
+			const string[] ARMOR_SET = {
+				// ARMOR_SET_IMPERIAL
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_leggings.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_helmet.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_gloves.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_chest_plate.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_bracer_r.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_bracer_l.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_boots.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_bicep_r.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_imperial_s01_bicep_l.iff",
+
+				// ARMOR_SET_REBEL
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_leggings.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_helmet.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_gloves.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_chest_plate.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_bracer_r.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_bracer_l.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_boots.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_bicep_r.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_rebel_s01_bicep_l.iff",
+
+				// ARMOR_SET_NEUTRAL
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_leggings.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_helmet.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_gloves.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_chest_plate.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_bracer_r.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_bracer_l.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_boots.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_bicep_r.iff",
+				"object/tangible/wearables/armor/clone_trooper/armor_clone_trooper_neutral_s01_bicep_l.iff",
+			};
+
+			const string objectTemplateName = getTemplateName(self);
+			for (int i = 0; i < ARMOR_SET.length; i++)
+			{
+				if (objectTemplateName == ARMOR_SET[i])
+				{
+					armor.setArmorDataPercent(self, 2, 1, 0.94f, 0.95f);
+					break;
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void getProtections(obj_id self)
+{
+	// get the data associated with the armor
+	int armorType = getGameObjectType(self);
+	if ( armor.isFinalArmor(armorType) )
+		armorType = GOT_armor;
+
+	int armorLevel = -1;
+	int armorCategory = -1;
+	int armorRow = armor.getArmorDatatableRow(self);
+	if ( armorRow < 0 )
+	{
+		CustomerServiceLog("armor", "WARNING: could not find armor datatable row for armor " + self);
+		return;
+	}
+
+	if ( armorType == GOT_armor || armorType == GOT_armor_core || armorType == GOT_armor_psg )
+	{
+		// get the armor level and category
+		armorLevel = armor.getArmorLevel(self);
+		armorCategory = armor.getArmorCategory(self);
+		if ( armorLevel < 0 || armorCategory < 0 )
+		{
+			return;
+		}
+	}
+
+	dictionary protections = armor.getArmorSpecialProtections(self);
+	float general_protection = armor.getArmorGeneralProtection(self);
+
+	return;
+}

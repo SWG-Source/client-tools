@@ -1,0 +1,464 @@
+
+/******************** INCLUDES *************************/
+
+include library.hq;
+include library.utils;
+include library.ai_lib;
+include library.create;
+include library.factions;
+include library.uberlair;
+include library.locations;
+
+/******************** CONSTANTS *************************/
+
+const string VAR_SPAWN_PATHPOINTS			= hq.VAR_SPAWN_BASE + ".pathPoints";
+
+const string VAR_SPAWN_FORMATION			= hq.VAR_SPAWN_BASE + ".formation";
+
+const string VAR_CLEANING_UP				= hq.VAR_SPAWN_BASE + ".cleaningUp";
+
+/******************** TRIGGERS *************************/
+
+trigger OnAttach()
+{
+	//LOG("hq","spawn_egg attached: self = " + self);
+	createPatrolPathPoints(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	setObjVar(self, VAR_CLEANING_UP, 1);
+
+	obj_id[] children = getObjIdArrayObjVar(self, hq.VAR_SPAWN_CHILDREN);
+	if ( children == null || children.length == 0 )
+		return SCRIPT_CONTINUE;
+
+	utils.destroyObjects(children);
+	return SCRIPT_CONTINUE;
+}
+
+/******************** HANDLERS *************************/
+
+messageHandler handleSpawnRequest()
+{
+	//LOG("hq","spawn_egg::handleSpawnRequest   ////\\\\ entered... ");
+
+	//LOG("hq","handleSpawnRequest: self = " + self);
+	if ( hasObjVar(self, hq.VAR_SPAWN_CHILDREN) )
+		return SCRIPT_CONTINUE;
+
+	//LOG("hq","spawn_egg::handleSpawnRequest   ////\\\\ doesn't have objvar hq.VAR_SPAWN_CHILDREN. Continuing");
+
+	obj_id[] children = loadSpawns(self);
+	if ( children != null && children.length > 0 )
+	{
+		setObjVar(self, hq.VAR_SPAWN_CHILDREN, children);
+		//LOG("hq","spawn_egg::handleSpawnRequest   ////\\\\ Loaded new children. Setting objvar hq.VAR_SPAWN_CHILDREN. Number of objects was: "+children.length);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleLeaderIncapacitated()
+{
+	if ( hasObjVar(self, VAR_CLEANING_UP) )
+		return SCRIPT_CONTINUE;
+
+	resizeable obj_id[] children = getResizeableObjIdArrayObjVar(self, hq.VAR_SPAWN_CHILDREN);
+	if ( children == null || children.length == 0 )
+		return SCRIPT_CONTINUE;
+
+	obj_id oid = params.getObjId("oid");
+	if ( !isIdValid(oid) )
+		return SCRIPT_CONTINUE;
+
+	children = utils.removeElement(children, oid);
+	if ( children != null || children.length > 0 )
+	{
+		int pos = 0;
+		obj_id leader = null;
+
+		int formation = getIntObjVar(self, VAR_SPAWN_FORMATION);
+
+		for ( int i = 0; i < children.length; i++ )
+		{
+			if ( !ai_lib.aiIsDead(children[i]) )
+			{
+				if ( !isIdValid(leader) )	//declare new leader!
+				{
+					leader = children[i];
+					setObjVar(leader, hq.VAR_SPAWN_LEADER, true);
+
+					if ( hasObjVar(self, VAR_SPAWN_PATHPOINTS) )
+					{
+						//get patrol waypoints
+						location[] pathpoints = getLocationArrayObjVar(self, VAR_SPAWN_PATHPOINTS);
+						if ( pathpoints != null && pathpoints.length > 0 )
+						{
+							//set to patrol
+							ai_lib.setPatrolPath(leader, pathpoints);
+						}
+					}
+					else
+					{
+						ai_lib.setDefaultCalmBehavior( leader, ai_lib.BEHAVIOR_LOITER );
+					}
+				}
+				else
+				{
+					ai_lib.followInFormation(children[i], leader, formation, pos);
+				}
+
+				pos++;
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleChildDestroyed()
+{
+	//LOG("hq","spawn_egg::handleChildDestroyed   ////\\\\ entered...");
+
+	if ( hasObjVar(self, VAR_CLEANING_UP) )
+		return SCRIPT_CONTINUE;
+
+	resizeable obj_id[] children = getResizeableObjIdArrayObjVar(self, hq.VAR_SPAWN_CHILDREN);
+	if ( children == null || children.length == 0 )
+		return SCRIPT_CONTINUE;
+
+	//LOG("hq","spawn_egg::handleChildDestroyed   ////\\\\ looked up resizeable obj_id[] children. Current count is: "+children.length);
+
+	obj_id oid = params.getObjId("oid");
+	if ( !isIdValid(oid) )
+		return SCRIPT_CONTINUE;
+
+	int original_count = getIntObjVar(self, hq.VAR_SPAWN_COUNT);
+
+	//LOG("hq","spawn_egg::handleChildDestroyed   ////\\\\ looked up original_count. That value is equal to: "+original_count);
+
+	children = utils.removeElement(children, oid);
+	if ( children == null || children.length == 0 || original_count == 0 || children.length < original_count/4 )
+	{
+		removeObjVar(self, hq.VAR_SPAWN_CHILDREN);
+
+		float delay = 3600;	//ORIGINAL VALUE
+		//float delay = 90f;	//TEST VALUE TEST VALUE TEST VALUE
+
+		if ( getTopMostContainer(self) != self )	//its inside!
+		{
+			delay = 3600;		//ORIGINAL VALUE
+			//delay = 30f;	//TEST VALUE TEST VALUE TEST VALUE
+		}
+
+		messageTo(self, "handleSpawnRequest", null, delay, false);
+
+		//LOG("hq","spawn_egg::handleChildDestroyed   ////\\\\ Fired a 'handleSpawnRequest to SELF. The delay on the message was: "+delay);
+	}
+	else
+	{
+		setObjVar(self, hq.VAR_SPAWN_CHILDREN, children);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/******************** FUNCTIONS *************************/
+obj_id[] loadSpawns(obj_id self)
+{
+	int spawnType = getIntObjVar(self, hq.VAR_SPAWN_TYPE);
+
+	string faction = toLower(factions.getFaction(self));
+	//LOG("hq","loadSpawns: faction = " + faction);
+	if ( faction == null || faction.equals("") )
+		return null;
+
+	obj_id parent = getObjIdObjVar(self, hq.VAR_SPAWN_PARENT);
+	//LOG("hq","loadSpawns: parent = " + parent);
+	if ( !isIdValid(parent) )
+		return null;
+
+	string template = utils.getTemplateFilenameNoPath(parent);
+	//LOG("hq","loadSpawns: parent template = " + template);
+	if ( template == null || template.equals("") )
+		return null;
+
+	string tbl = hq.TBL_SPAWN_EGG_PATH + template;
+	//LOG("hq","loadSpawns: tbl = " + tbl);
+
+	string[] spawnList = null;
+	switch ( spawnType )
+	{
+		case hq.ST_MEDIUM:
+			spawnList = dataTableGetStringColumnNoDefaults(tbl, "medium");
+			break;
+
+		case hq.ST_LARGE:
+			spawnList = dataTableGetStringColumnNoDefaults(tbl, "large");
+			break;
+
+		case hq.ST_SMALL:
+		case hq.ST_NONE:
+		default:
+			spawnList = dataTableGetStringColumnNoDefaults(tbl, "small");
+			break;
+	}
+
+	if ( spawnList == null || spawnList.length == 0 )
+	{
+		//LOG("hq","loadSpawns: spawnList returned from datatable with invalid data...");
+		return null;
+	}
+
+	string spawnKey = getStringObjVar(self, hq.VAR_SPAWN_TEMPLATE);
+	if ( spawnKey == null || spawnKey.equals("") )
+	{
+		spawnKey = spawnList[rand(0,spawnList.length - 1)];
+		//LOG("hq","loadSpawns: spawnKey = " + spawnKey);
+		if ( spawnKey == null || spawnKey.equals("") )
+			return null;
+	}
+
+	location here = getLocation(self);
+
+	location spawnLoc = locations.getGoodLocationAroundLocation(here, 1f, 1f, 4f, 4f);
+	if ( spawnLoc == null )
+		spawnLoc = here;
+
+	resizeable obj_id[] spawns = new obj_id[0];
+
+	if ( spawnKey.startsWith("formation:") )
+	{
+		string[] args = split(spawnKey, ':');
+		if ( args == null || args.length != 3 )
+			return null;
+
+		string tbl_formation = hq.TBL_SPAWN_FORMATION_PATH + args[1] + ".iff";
+		string col = args[2];
+
+		//LOG("hq", "** formation spawn: tbl = " + tbl_formation + " col = " + col);
+
+		string[] tmpkeys = dataTableGetStringColumnNoDefaults(tbl_formation, col);
+		if ( tmpkeys == null || tmpkeys.length == 0 )
+		{
+			//LOG("hq", "spawnKey: '" + spawnKey + "' unable to retrieve formation data from column!");
+			return null;
+		}
+
+		resizeable string[] keys = new Vector(Arrays.asList(tmpkeys));
+		if ( keys == null || tmpkeys.length == 0 )
+		{
+			//LOG("hq", "spawnKey: '" + spawnKey + "' unable to convert tmpkeys to Vector");
+			return null;
+		}
+
+		int formation = utils.stringToInt(keys[0]);
+		if ( formation < ai_lib.FORMATION_COLUMN )
+		{
+			//LOG("hq", "attempting to convert formation from '" + keys[0] + "' lead to " + formation);
+			return null;
+		}
+
+		setObjVar(self, VAR_SPAWN_FORMATION, formation);
+
+		keys = utils.removeElementAt(keys, 0);
+
+		obj_id leader = null;
+
+		float dtheta = 30;
+		if ( keys.length > 1 )
+			dtheta = 360f/(keys.length-1);
+
+		location baseLoc = null;
+		for ( int i = 0; i < keys.length; i++ )
+		{
+			if ( i == 0 )
+			{
+				baseLoc = spawnLoc;
+			}
+			else
+			{
+				spawnLoc = utils.rotatePointXZ(baseLoc, 0.75f, dtheta*i);
+			}
+
+			obj_id spawn = createSpawn(keys[i], spawnLoc);
+			if ( isIdValid(spawn) )
+			{
+				spawns = utils.addElement(spawns, spawn);
+
+				if ( isIdValid(leader) )
+				{
+					ai_lib.followInFormation(spawn, leader, formation, i);
+				}
+				else
+				{
+					leader = spawn;
+					setObjVar(spawn, hq.VAR_SPAWN_LEADER, true);
+
+					if ( hasObjVar(self, VAR_SPAWN_PATHPOINTS) )
+					{
+						//get patrol waypoints
+						location[] pathpoints = getLocationArrayObjVar(self, VAR_SPAWN_PATHPOINTS);
+						if ( pathpoints != null && pathpoints.length > 0 )
+						{
+							//set to patrol
+							ai_lib.setPatrolPath(leader, pathpoints);
+						}
+					}
+					else
+					{
+						ai_lib.setDefaultCalmBehavior(leader, ai_lib.BEHAVIOR_LOITER );
+					}
+				}
+			}
+			else
+			{
+				LOG("hq", "unable to create formation spawn: " + keys[i]);
+			}
+
+			spawnLoc = null;
+		}
+	}
+	else
+	{
+		obj_id spawn = createSpawn(spawnKey, spawnLoc);
+		if ( isIdValid(spawn) )
+		{
+			spawns = utils.addElement(spawns, spawn);
+
+			float yaw = getFloatObjVar(self, hq.VAR_SPAWN_YAW);
+			setYaw(spawn, yaw);
+
+			if ( getTopMostContainer(self) == self ) //outside
+				ai_lib.setDefaultCalmBehavior(spawn, ai_lib.BEHAVIOR_LOITER );
+		}
+	}
+
+	if ( spawns == null || spawns.length == 0 )
+		return null;
+
+	setObjVar(self, hq.VAR_SPAWN_COUNT, spawns.length);
+	return spawns;
+}
+
+obj_id createSpawn(string type, location there)
+{
+	if ( type == null || type.equals("") )
+		return null;
+
+	if ( there == null )
+	{
+		obj_id self = getSelf();
+		there = getLocation(self);
+	}
+
+	obj_id spawn = create.object(type, there);
+	if ( isIdValid(spawn) )
+	{
+		obj_id self = getSelf();
+		attachScript(spawn, hq.SCRIPT_SPAWN_CHILD);
+		setObjVar(spawn, hq.VAR_SPAWN_PARENT, self);
+		return spawn;
+	}
+
+	return null;
+}
+
+void createPatrolPathPoints(obj_id self)
+{
+	if ( getTopMostContainer(self) != self )	//its inside!
+		return;
+
+	obj_id parent = getObjIdObjVar(self, hq.VAR_SPAWN_PARENT);
+	if ( !isIdValid(parent) )
+		return;
+
+	float maxTheaterSpawn = getFloatObjVar(parent, "poi.fltSize") - 20f;
+
+	location here = getLocation(self);
+	location there = getLocation(parent);
+
+	if ( getDistance(here, there) > maxTheaterSpawn )	//its a perimeter spawn!
+	{
+		//LOG("hq","spawn_egg(" + self + "): IS perimeter spawn...");
+		location[] pathpoints = new location[rand(4, 8)];
+
+		float dTheta = 360f / pathpoints.length;
+
+		float patrol_distance = maxTheaterSpawn + rand(15f, 30f);
+
+		float minDistance = Float.POSITIVE_INFINITY;
+		int closeIndex = 0;
+
+		for ( int i = 0; i < pathpoints.length; i++ )
+		{
+			pathpoints[i] = utils.rotatePointXZ(there, patrol_distance, (i * dTheta) - 180f);
+
+			float dist = getDistance(here, pathpoints[i]);
+			if ( dist < minDistance )
+			{
+				minDistance = dist;
+				closeIndex = i;
+			}
+		}
+
+		location[] toUse = new location[pathpoints.length];
+		for ( int i = 0; i < pathpoints.length; i++ )
+		{
+			int idx = i + closeIndex;
+			if ( idx < pathpoints.length )
+			{
+				//everything is just fine
+			}
+			else
+			{
+				idx -= pathpoints.length;
+			}
+
+			toUse[i] = pathpoints[idx];
+		}
+
+		setObjVar(self, VAR_SPAWN_PATHPOINTS, toUse);
+	}
+}
+
+
+
+
+messageHandler handleParentCleanup()
+{
+	//LOG("hq","spawn_egg::handleParentCleanup   ////\\\\ entered...");
+
+	if ( !hasObjVar(self, hq.VAR_SPAWN_CHILDREN ))
+	{
+		destroyObject(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	resizeable obj_id[] children = getResizeableObjIdArrayObjVar(self, hq.VAR_SPAWN_CHILDREN);
+	if ( children == null || children.length == 0 )
+	{
+		destroyObject(self);
+		return SCRIPT_CONTINUE;
+	}
+
+
+	for ( int i = 0; i < children.length; i++ )
+	{
+		if ( ai_lib.isInCombat(children[i]) )
+		{
+			messageTo(self, "handleParentCleanup", null, 600, false);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	destroyObject(self);
+
+	messageTo(self, "handleParentCleanup", null, 600, false);
+
+	//LOG("hq","spawn_egg::handleParentCleanup   ////\\\\ Fired a 'handleParentCleanup' to SELF. ");
+
+	return SCRIPT_CONTINUE;
+}

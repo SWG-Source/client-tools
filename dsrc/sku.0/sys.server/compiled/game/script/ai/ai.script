@@ -1,0 +1,3165 @@
+include ai.ai_aggro;
+include ai.ai_combat;
+include ai.ai_combat_assist;
+include java.lang.Math
+include library.ai_lib;
+include library.attrib;
+include library.beast_lib;
+include library.buff;
+include library.callable;
+include library.camping;
+include library.chat;
+include library.collection;
+include library.colors;
+include library.corpse;
+include library.create;
+include library.factions;
+include library.gcw;
+include library.group;
+include library.groundquests;
+include library.instance;
+include library.locations;
+include library.loot;
+include library.performance;
+include library.permissions;
+include library.pet_lib;
+include library.posture;
+include library.prose;
+include library.resource;
+include library.scheduled_drop;
+include library.scenario;
+include library.scout;
+include library.static_item;
+include library.stealth;
+include library.storyteller;
+include library.sui;
+include library.utils;
+include library.xp;
+
+const boolean LOGGING_ON				= false;
+const string LOGGING_CATEGORY				= "ai_script";
+
+const string MENU_FILE 					= "pet/pet_menu";
+
+const float CORPSE_CLEANUP_DELAY 			= 300.0f;
+
+const string CREATURE_TABLE = "datatables/mob/creatures.iff";
+
+const string_id SID_NOTIFY_STALKED = new string_id("skl_use","notify_stalked");
+const string_id SID_CANT_MILK = new string_id("skl_use","milk_cant");
+const string_id SID_MILK_NOT_HIDDEN = new string_id("skl_use","milk_not_hidden");
+const string_id SID_MILK_BEGIN = new string_id("skl_use","milk_begin");
+const string_id SID_MILK_TOO_FAR = new string_id("skl_use","milk_too_far");
+const string_id SID_CANT_MILK_THE_DEAD = new string_id("skl_use","milk_cant_milk_the_dead");
+const string_id SID_MILK_CONTINUE = new string_id("skl_use","milk_continue");
+const string_id SID_MILK_SUCCESS = new string_id("skl_use","milk_success");
+const string_id SID_BEING_MILKED = new string_id("skl_use","being_milked");
+const string_id SID_CANT_MILK_MOUNTED = new string_id("skl_use","milk_mounted");
+const string_id SID_CANT_MILK_COMBAT 			= new string_id("skl_use","milk_combat");
+const string_id SID_CANT_MILK_INV_FULL 			= new string_id("skl_use","milk_inventory_full");
+
+//Meatlump Messages
+const string_id SID_ALREADY_RECRUITED			= new string_id("collection", "already_recruited");
+const string_id SID_ENEMY_RECRUIT			= new string_id("collection", "enemy_recruit");
+const string_id SID_GAVE_RECRUIT_ITEM			= new string_id("collection", "gave_recruit_item");
+const string_id SID_NPC_MEATLUMP_SPEAK			= new string_id("collection", "npc_meatlump_speak");
+const string_id SID_NO_RECRUIT_REB_IMP			= new string_id("collection", "no_recruit_reb_imp");
+
+void initializeScript()
+{
+	obj_id self = getSelf();
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::initializeScript() self(" + self + ":" + getName(self) + ")");
+
+	if ( hasObjVar(self, "ai.threat") )
+	{
+		removeObjVar(self, "ai.threat");
+	}
+
+	// This makes the dot on the radar show red for this AI
+
+	if(ai_lib.isAggro(self))
+	{
+		setCondition(self, CONDITION_AGGRESSIVE);
+	}
+
+	location loc = getLocation(self);
+	boolean setHomeLoc = true;
+	if(loc == null)
+	{
+		setHomeLoc = false;
+		LOG("debug_ai", "WARNING: got null location in ai.initializeScript for creature " + self);
+	}
+	else if(loc.area == null)
+	{
+		setHomeLoc = false;
+		LOG("debug_ai", "WARNING: null scene from getLocation in ai.initializeScript for creature " + self);
+	}
+	else if(loc.area.length() == 0)
+	{
+		setHomeLoc = false;
+		LOG("debug_ai", "WARNING: empty scene from getLocation in ai.initializeScript for creature " + self);
+	}
+
+	if ( setHomeLoc )
+		aiSetHomeLocation(self, loc);
+
+
+	setWantSawAttackTriggers(self, aiIsAssist(self) || aiIsGuard(self));
+
+	// If a previous script already set the default behavior, lets not overwrite it!
+	if(!hasObjVar(self, "ai.defaultCalmBehavior"))
+	{
+		setObjVar(self, "ai.defaultCalmBehavior", ai_lib.BEHAVIOR_LOITER);
+	}
+
+	ai_lib.resetAi();
+}
+
+/**
+ * This is called when a a script gets attached to the AI and the AI
+ * is not being restored from a persisted state. When an AI is restored
+ * from a persisted state, OnAddedToWorld() gets called.
+ */
+trigger OnAttach()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnAttach() self(" + self + ":" + getName(self) + ")");
+
+	initializeScript();
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * This is when an AI gets restored from a persisted state. This will
+ * not be called when an AI is first created because this script is
+ * not attached yet. When the object is first created, OnAttach() is
+ * called.
+ */
+trigger OnAddedToWorld()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnAddedToWorld() self(" + self + ":" + getName(self) + ")");
+
+	messageTo(self, "handleOnAddedToWorldDelay", null, 2, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleOnAddedToWorldDelay()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnAddedToWorld() self(" + self + ":" + getName(self) + ")");
+
+	initializeScript();
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnRemovingFromWorld()
+{
+	if(ai_lib.isAiDead(self) && !pet_lib.isPet(self) && !beast_lib.isBeast(self) && isObjectPersisted(self))
+	{
+		destroyObject(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFleeTargetLost(obj_id oldTarget)
+{
+	if(aiLoggingEnabled(self))
+	{
+		debugSpeakMsg(self, "OnFleeTargetLost(" + oldTarget + ")");
+	}
+
+	removeObjVar(self, "ai.threat");
+	doDefaultCalmBehavior(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFleePathNotFound(obj_id oldTarget)
+{
+	if(aiLoggingEnabled(self))
+	{
+		debugSpeakMsg(self, "OnFleePathNotFound(" + oldTarget + ")");
+	}
+
+	doDefaultCalmBehavior(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFleeWaypoint(obj_id target)
+{
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler resumeDefaultCalmBehavior()
+{
+	if(isInNpcConversation(self) || aiIsTethered(self))
+	{
+		if (!hasMessageTo(self, "resumeDefaultCalmBehavior"))
+			messageTo(self, "resumeDefaultCalmBehavior", null, 5, false);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::resumeDefaultCalmBehavior() self(" + self + getName(self) + ")");
+
+	doDefaultCalmBehavior(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+void doDefaultCalmBehavior(obj_id npc)
+{
+	if(!npc.isLoaded() || !exists(npc))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(?) ISN'T LOADED!");
+		return;
+	}
+
+	if(ai_lib.isInCombat(npc))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") I THINK I AM IN COMBAT");
+		return;
+	}
+
+	if(ai_lib.isAiDead(npc))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") I THINK I AM INCAPACITATED");
+		return;
+	}
+
+	removeObjVar(npc, "ai.threat");
+	ai_lib.setMood(npc, ai_lib.MOOD_CALM);
+
+	if(!hasObjVar(npc, "ai.rangedOnly"))
+	{
+		//debugSpeakMsg(npc, "xx: ai");
+		//ai_combat.unequipWeapon(npc);
+	}
+
+// NOTE: uncomment this if we start using suspendMovement() for all movement and not just patrols
+//	if(hasSuspendedMovement(npc))
+//	{
+//		if(getPosture(npc) != POSTURE_UPRIGHT)
+//			posture.stand(npc);
+//		resumeMovement(npc);
+//		return;
+//	}
+
+	/*----------- FOLLOWING -----------------------*/
+	if(ai_lib.isFollowing(npc))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") FOLLOWING");
+
+		obj_id target = ai_lib.getFollowTarget(npc);
+
+		if(isIdValid(target) && exists(target) && !ai_lib.isAiDead(target) && isInWorld(target))
+		{
+			ai_lib.resumeFollow(npc);
+			return;
+		}
+		else
+		{
+			removeObjVar(npc, "ai.persistantFollowing");
+		}
+	}
+
+	/*----------- IN FORMATION -----------------------*/
+	if(hasObjVar(npc, "ai.inFormation"))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") IN FORMATION");
+
+		//debugSpeakMsg(npc, "i am in formation!");
+		if(getPosture(npc) != POSTURE_UPRIGHT)
+		{
+			posture.stand(npc);
+		}
+
+		ai_lib.resumeFormationFollowing(npc);
+		return;
+	}
+
+	//debugSpeakMsg(npc, "i am NOT in formation!");
+
+	/*----------- PATROLING -----------------------*/
+	if(ai_lib.canPatrol(npc))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") PATROLING");
+
+		if(getPosture(npc) != POSTURE_UPRIGHT)
+		{
+			posture.stand(npc);
+		}
+
+		ai_lib.resumePatrol(npc);
+		return;
+	}
+
+	/*----------- PATHING   -----------------------*/
+	if(hasObjVar(npc, "ai.persistentPathing"))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") PATHING");
+
+		if(getPosture(npc) != POSTURE_UPRIGHT)
+		{
+			posture.stand(npc);
+		}
+
+		location pathLoc = getLocationObjVar(npc, "ai.persistentPathing");
+		pathTo(npc, pathLoc);
+		return;
+	}
+
+	if(hasObjVar(npc, "ai.persistentPathingWaypoint"))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") ai.persistentPathingWaypoint");
+
+		if(getPosture(npc) != POSTURE_UPRIGHT)
+		{
+			posture.stand(npc);
+		}
+
+		string pathWaypoint = getStringObjVar(npc, "ai.persistentPathingWaypoint");
+		pathTo(npc, pathWaypoint);
+		return;
+	}
+
+	if(getConfigSetting("GameServer", "disableAILoitering")!=null)
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + ") disableAILoitering");
+		return;
+	}
+
+	const int defaultBehavior = ai_lib.getDefaultCalmBehavior(npc);
+
+	switch (defaultBehavior)
+	{
+		case ai_lib.BEHAVIOR_STOP:
+		case ai_lib.BEHAVIOR_SENTINEL:
+			LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::doDefaultCalmBehavior() npc(" + npc + getName(npc) + ") BEHAVIOR_STOP");
+			stop(npc);
+
+			break;
+
+		default:
+		case ai_lib.BEHAVIOR_LOITER:
+		case ai_lib.BEHAVIOR_WANDER:
+			if(pet_lib.isPet(npc) || beast_lib.isBeast(npc))
+			{
+				aiSetHomeLocation(npc, getLocation(npc));
+			}
+
+			const float collisionRadius = getObjectCollisionRadius(npc);
+			float minDistance = 0.0f;
+			float maxDistance = 0.0f;
+
+			if(hasObjVar(npc, "ai.loiterMinRange"))
+			{
+				minDistance = getFloatObjVar(npc, "ai.loiterMinRange");
+				maxDistance = getFloatObjVar(npc, "ai.loiterMaxRange");
+			}
+			else
+			{
+				// If the AI is in the world, let it loiter at a greater distance
+
+				const float cellDistanceModifier = !isIdValid(getLocation(npc).cell) ? 3.0f : 1.0f;
+
+				maxDistance = Math.min(128.0f, collisionRadius * 7.0f * cellDistanceModifier);
+				minDistance = 0.0f;
+			}
+
+			const float minDelay = Math.min(Math.max(8.0f, collisionRadius * 2.0f), 16.0f);
+			const float maxDelay = Math.min(Math.max(8.0f, collisionRadius * 4.0f), 16.0f);
+
+			loiterLocation(npc, aiGetHomeLocation(npc), minDistance, maxDistance, minDelay, maxDelay);
+
+			break;
+	}
+}
+
+trigger OnFollowMoving(obj_id target)
+{
+	if(ai_lib.isInCombat(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isAiDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(getPosture(self) != POSTURE_UPRIGHT)
+	{
+		stop(self);
+		removeObjVar(self, "ai.combat.moveMode");
+		posture.stand(self);
+
+		messageTo(self, "resumeDefaultCalmBehavior", null, 2, false);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowTargetLost(obj_id oldTarget)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnFollowTargetLost() self(" + self + ":" + getName(self) + ")");
+
+	if(!ai_lib.isInCombat(self))
+	{
+		ai_lib.aiStopFollowing(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnExitedCombat()
+{
+	if(utils.hasScriptVar(self, "sentAllyDistressCall"))
+	{
+		utils.removeScriptVar(self, "sentAllyDistressCall");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowWaiting(obj_id target)
+{
+	if(!target.isLoaded() || !exists(target))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(hasObjVar(target, "gm"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isInCombat(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!isIdValid(target) || ai_lib.isAiDead(target))
+	{
+		ai_lib.aiStopFollowing(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnFollowPathNotFound(obj_id target)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnFollowPathNotFound() self(" + self + ":" + getName(self) + ")");
+
+	if(!ai_lib.isInCombat(self))
+	{
+		ai_lib.aiStopFollowing(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathComplete()
+{
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+	
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnMovePathComplete() self(" + self + ")");
+
+	if(hasObjVar(self, "ai.persistentPathing"))
+	{
+		location pathLoc = getLocationObjVar(self, "ai.persistentPathing");
+		if(utils.getDistance(self, pathLoc) < 2.0f)
+		{
+			removeObjVar(self, "ai.persistentPathing");
+		}
+	}
+
+	if(hasObjVar(self, "ai.persistentWaypoint"))
+	{
+		removeObjVar(self, "ai.persistentPathingWaypoint");
+	}
+
+	if(!ai_lib.isInCombat(self))
+	{
+		//if(hasObjVar(self, "ai.stalking"))
+		//	maintainStalking(self);
+
+		if(getBehavior(self) <= BEHAVIOR_CALM)
+		{
+			ai_lib.resumePatrol(self);
+		}
+
+		if(utils.hasScriptVar(self, "pathingToAttack"))
+		{
+			obj_id target = utils.getObjIdScriptVar(self, "pathingToAttack");
+
+			if(isIdValid(target))
+			{
+				//debugSpeakMsg(self, "attack 1");
+				startCombat(self, target);
+			}
+
+			utils.removeScriptVar(self, "pathingToAttack");
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathNotFound()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnMovePathNotFound() self(" + self + ":" + getName(self) + ")");
+
+	if(utils.hasScriptVar(self, "pathingToAttack"))
+	{
+		utils.removeScriptVar(self, "pathingToAttack");
+	}
+
+	//debugSpeakMsg(self, "move path not found");
+	stop(self);
+
+	if(getBehavior(self) <= BEHAVIOR_CALM && !ai_lib.isAiDead(self))
+	{
+		setLocation(self, aiGetHomeLocation(self));
+		messageTo(self, "resumeDefaultCalmBehavior", null, 5, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id breacher)
+{
+	// Set non-aggro wherever a pet is initialized and remove this scriptvar
+	if(utils.hasScriptVar(self, "petBeingInitialized"))
+	{
+		LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") self(" + self + ":" + getName(self) + ") PET BEING INITIALIZED");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!isMob(breacher))
+	{
+		LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") SCRIPT_CONTINUE - The breacher is not a mob");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(breacher == self)
+	{
+		LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") SCRIPT_CONTINUE - The breacher == self");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isAiDead(self))
+	{
+		LOGC(aiLoggingEnabled(self), "debug_ai", "WARNING: ai::OnTriggerVolumeEntered(" + volumeName + ") self(" + self + ":" + getName(self) + ") I AM DEAD");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(beast_lib.isBeast(self) && (!beast_lib.getBeastDefensive(self) || !hasCommand(getMaster(self), beast_lib.BM_COMMAND_ATTACK)))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") self(" + self + ":" + getName(self) + ") radius(" + getTriggerVolumeRadius(self, volumeName) + ") breacher(" + breacher + ":" + getName(breacher) + ")");
+
+	const boolean breacherIsAPlayer = isPlayer(breacher);
+
+	if(volumeName.equals(ai_lib.ALERT_VOLUME_NAME))
+	{
+		if(isPlayer(breacher) && !ai_lib.isMonster(self))
+		{
+			ai_lib.greet(self, breacher);
+		}
+
+		if(hasTriggerVolume(self, ai_lib.AGGRO_VOLUME_NAME))
+		{
+			boolean aggro = false;
+
+			if(pvpIsEnemy(self, breacher))
+			{
+				LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") Breacher is a threat (pvp enemy)");
+				aggro = true;
+			}
+			else
+			{
+				if(isPlayer(breacher))
+				{
+					// AI vs Player
+					const int factionStatus = factions.getFactionStatus(self, breacher);
+
+					if(factionStatus == factions.STATUS_ENEMY)
+					{
+						LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") Player breacher is a threat (faction enemy)");
+						aggro = true;
+					}
+
+					else if((factionStatus == factions.STATUS_NEUTRAL) && aiIsAggressive(self))
+					{
+						LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") Player breacher is a threat (faction neutral, I am aggressive)");
+						aggro = true;
+					}
+					else if(pvpGetAlignedFaction(self) != 0)
+					{
+						LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") Player breacher is a NOT currently a threat (but could be with faction alignment change)");
+						aggro = true;
+					}
+					else
+					{
+						LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") Player breacher is a NOT a threat");
+					}
+				}
+				else
+				{
+					if(aiIsGuard(self))
+					{
+						// Guard AI vs AI
+
+						const string breacherFaction = factions.getFaction(breacher);
+
+						if(  (breacherFaction != null)
+							&& (breacherFaction.equals("townsperson") || breacherFaction.equals("ImperialCitizen") || breacherFaction.equals("RebelCitizen")))
+						{
+							LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") guard: AI breacher is a NOT a threat (townsperson)");
+						}
+						else
+						{
+							if(ai_lib.isSameSocialGroup(self, breacher))
+							{
+								LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") guard: AI breacher is NOT a threat (same social group)");
+							}
+							else if(pet_lib.isPet(breacher) || beast_lib.isBeast(breacher))
+							{
+								LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") guard: AI breacher is NOT a threat (pet)");
+							}
+							else
+							{
+								if(ai_lib.isAnimal(breacher))
+								{
+									LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") guard: AI breacher is a threat (animal)");
+									aggro = true;
+								}
+								else if(factions.getFactionStatus(self, breacher) == factions.STATUS_ENEMY)
+								{
+									LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") guard: AI breacher is a threat (factional enemy)");
+									aggro = true;
+								}
+								else if(hasAttributeAttained(breacher, attrib.THUG))
+								{
+									LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") guard: AI breacher is a threat (thug)");
+									aggro = true;
+								}
+								else
+								{
+									LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") guard: AI breacher is NOT a threat");
+								}
+							}
+						}
+					}
+					else
+					{
+						// AI vs AI
+
+						if(ai_lib.isSameSocialGroup(self, breacher))
+						{
+							LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") AI breacher is NOT a threat (same social group)");
+						}
+						else
+						{
+							const int factionStatus = factions.getFactionStatus(self, breacher);
+
+							if(factionStatus == factions.STATUS_ENEMY)
+							{
+								LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") AI breacher is a threat (factional enemy)");
+								aggro = true;
+							}
+							else
+							{
+								LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") AI breacher is NOT a threat");
+							}
+						}
+					}
+				}
+			}
+
+			// storyteller aggro check
+			if(hasObjVar(self, "storytellerid"))
+			{
+				if(!utils.hasScriptVar(breacher, "storytellerid"))
+				{
+					LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") Player breacher is a NOT a member of my Story");
+					aggro = false;
+				}
+				else
+				{
+					obj_id selfStoryTellerId = getObjIdObjVar(self, "storytellerid");
+					obj_id breacherStoryTellerId = utils.getObjIdScriptVar(breacher, "storytellerid");
+					if( selfStoryTellerId != breacherStoryTellerId )
+					{
+						LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeEntered(" + volumeName + ") Player breacher is a NOT a member of my Story (but he is a member of another Story)");
+						aggro = false;
+					}
+				}
+			}
+
+			if(aggro)
+			{
+				addTriggerVolumeEventSource(ai_lib.AGGRO_VOLUME_NAME, breacher);
+				//pvpSetPermanentPersonalEnemyFlag(self, breacher);
+				//pvpAttackPerformed(self, breacher);
+			}
+		}
+	}
+	else if(volumeName.equals(ai_lib.AGGRO_VOLUME_NAME))
+	{
+		if(!isPlayer(breacher))
+		{
+			ai_aggro.requestAggroCheck(breacher);
+		}
+		else
+		{
+			if(scout.isScentMasked(breacher, self))
+			{
+				//debugSpeakMsgc(aiLoggingEnabled(self), self, "handleAggroCheck(" + breacher + ") SCENT IS MASKED");
+			}
+			else
+			{
+				if(isIncapacitated(breacher))
+				{
+					LOGC(aiLoggingEnabled(self), "debug_ai", "ai::requestSawRecapacitation() self(" + self + ":" + getName(self) + ") breacher(" + breacher + ":" + getName(breacher) + ") Listening for breacher recapacitation");
+
+					listenToMessage(breacher, "handleSawRecapacitation");
+				}
+
+				ai_aggro.requestAggroCheck(breacher);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id breacher)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnTriggerVolumeExited(" + volumeName + ") self(" + self + ":" + getName(self) + ") radius(" + getTriggerVolumeRadius(self, volumeName) + ") breacher(" + breacher + ":" + getName(breacher) + ")");
+
+	// Set non-aggro wherever a pet is initialized and remove this scriptvar
+
+	if(utils.hasScriptVar(self, "petBeingInitialized"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(volumeName.equals(ai_lib.ALERT_VOLUME_NAME))
+	{
+
+		if(  isPlayer(breacher)
+		    && !ai_lib.isMonster(self))
+		{
+			ai_lib.dismiss(self, breacher);
+		}
+
+		removeTriggerVolumeEventSource(ai_lib.AGGRO_VOLUME_NAME, breacher);
+
+		// if we are a bounty hunter target, we always
+		// maintain a PEF on the bounty hunter
+		if(hasScript(self, "systems.missions.dynamic.mission_bounty_target"))
+		{
+			obj_id objHunter = getObjIdObjVar(self, "objHunter");
+			if(!isIdValid(objHunter) || objHunter != breacher)
+			{
+				pvpRemovePersonalEnemyFlags(self, breacher);
+			}
+		}
+		else
+		{
+			pvpRemovePersonalEnemyFlags(self, breacher);
+		}
+	}
+	else if(volumeName.equals(ai_lib.AGGRO_VOLUME_NAME))
+	{
+		if(isPlayer(breacher))
+		{
+			LOGC(aiLoggingEnabled(self), "debug_ai", "ai::requestSawRecapacitation() self(" + self + ":" + getName(self) + ") breacher(" + breacher + ":" + getName(breacher) + ") Stop listening for breacher recapacitation");
+
+			stopListeningToMessage(breacher, "handleSawRecapacitation");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLoiterWaiting(modifiable_float time)
+{
+	// LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnLoiterWaiting() self(" + self + ":" + getName(self) + ") time(" + time + ")");
+
+	// AI needs to possibly sit or lie down during the loiter wait times using the following functions
+	// ai_lib.isMonster(self)
+	// ai_lib.canLieDown(self)
+	// ai_lib.canSit(self, POSTURE_SITTING)
+	// ai_lib.canLieDown(self)
+	// ai_lib.aiSetPosture(self, POSTURE_LYING_DOWN)
+
+	if(ai_lib.isHerdingCreature(self))
+	{
+		ai_lib.doAction(self, "eat");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean isThreat(obj_id npc, obj_id breacher)
+{
+	if(hasObjVar(breacher, "gm"))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") breacher is a gm");
+		return false;
+	}
+
+	if(!isValidId(breacher))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") invalid breacher id");
+		return false;
+	}
+
+	if(!isMob(breacher))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") breacher is not a mob");
+		return false;
+	}
+
+	if(ai_lib.isAiDead(npc))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") npc is dead");
+		return false;
+	}
+
+	if(!isPlayer(breacher) && ai_lib.isAiDead(breacher))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") breacher is dead ai");
+		return false;
+	}
+
+	if(isInvulnerable(npc))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") npc is invulnerable");
+		return false;
+	}
+
+	if(isInvulnerable(breacher))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") breacher is invulnerable");
+		return false;
+	}
+
+	if(!pvpCanAttack(npc, breacher))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() !pvpCanAttack - npc(" + npc + ":" + getName(npc) + ") npcPvpType(" + pvpGetType(npc) + ") npcPvpAlignedFaction(" + pvpGetAlignedFaction(npc) + ") breacher(" + breacher + ":" + getName(breacher) + ") breacherPvpType(" + pvpGetType(breacher) + ") breacherPvpAlignedFaction(" + pvpGetAlignedFaction(breacher) + ")");
+		return false;
+	}
+
+	obj_id master = getMaster(breacher);
+
+	if(isIdValid(master) && exists(master))
+	{
+		LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::isThreat() npc(" + npc + ") breacher(" + breacher + ") breacher is a pet/beast with a master");
+		return false;
+	}
+
+	return (ai_lib.isAggroToward(npc, breacher) || ai_lib.isAggroToward(breacher, npc));
+}
+
+void goAlert(obj_id npc)
+{
+	//debugSpeakMsg(npc, "going alert!");
+	if(ai_lib.isAiDead(npc))
+		return;
+
+	if(ai_lib.isInCombat(npc))
+		return;
+
+	//showFlyText(npc, new string_id("npc_reaction/flytext", "alert"), 2.0f, colors.MEDIUMSLATEBLUE);
+
+	if(!hasObjVar(npc, "ai.pathingAwayFrom"))
+	{
+		stop(npc);
+	}
+
+	ai_lib.doAction(npc, ai_lib.ACTION_ALERT);
+	ai_lib.setMood(npc, ai_lib.MOOD_NERVOUS);
+
+	obj_id threat = getObjIdObjVar(npc, "ai.threat");
+
+	if(isIdValid(threat))
+	{
+		debugSpeakMsg(npc, "FEAR 7");
+		addToMentalStateToward(npc, threat, FEAR, -5.0f);
+	}
+
+}
+
+void goThreaten(obj_id npc)
+{
+	//debugSpeakMsg(npc, "threatening something");
+	if(ai_lib.isAiDead(npc))
+	{
+		return;
+	}
+
+	if(ai_lib.isInCombat(npc))
+	{
+		return;
+	}
+
+	obj_id threat = getObjIdObjVar(npc, "ai.threat");
+
+	if(!isIdValid(threat))
+	{
+		return;
+	}
+
+	if(hasObjVar(threat, "gm"))
+	{
+		return;
+	}
+
+	//showFlyText(npc, new string_id("npc_reaction/flytext", "threaten"), 2.0f, colors.ORANGERED);
+
+	stop(npc);
+	faceTo(npc, threat);
+	ai_lib.doThreatenAnimation(npc);
+	debugSpeakMsg(npc, "FEAR 8");
+	addToMentalStateToward(npc, threat, FEAR, -5.0f);
+
+	if(!isPlayer(threat))
+	{
+		debugSpeakMsg(threat, "FEAR 9");
+		addToMentalStateToward(threat, npc, FEAR, 10.0f);
+	}
+
+	ai_lib.setMood(npc, ai_lib.MOOD_NERVOUS);
+}
+
+trigger OnBehaviorChange(int newBehavior, int oldBehavior, int[] changeFlags)
+{
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSetDefaultBehavior()
+{
+	doDefaultCalmBehavior(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+
+	if(idx == -1)
+	{
+		blog("idx was negative 1");
+		return SCRIPT_CONTINUE;
+	}
+
+	string milkType = ai_lib.getMilkType(self);
+
+	if(milkType != null && ai_lib.isMonster(self) && !beast_lib.isBeast(self))
+	{
+		names[idx] = "got_milk";
+		string_id strIdMilkType = new string_id("resource/resource_names", milkType);
+		attribs[idx] = utils.packStringId(strIdMilkType);
+		idx++;
+	}
+
+	const String creatureName = getCreatureName(self);
+
+	if(creatureName == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	dictionary creatureKnowledge = beast_lib.getBeastMasterExamineInfo(player, self, names, attribs, idx);
+	names = creatureKnowledge.getStringArray("names");
+	attribs = creatureKnowledge.getStringArray("attribs");
+	idx = creatureKnowledge.getInt("idx");
+
+
+	return SCRIPT_CONTINUE;
+}
+
+// MUCH OF THIS MESSAGE HANDLER HAS BEEN DEPRECATED AS WELL. KEEPING IT AROUND ONLY FOR THE FLY TEXT
+//
+// Called when snare effect turns off.
+messageHandler snareEffectOff()
+{
+	// Fly over text.
+	string_id strFlyText = new string_id("combat_effects", "no_snare");
+	color colFlyText = colors.TOMATO;
+	showFlyText(self, strFlyText, 1.0f, colFlyText);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDefenderCombatAction(obj_id attacker, obj_id weapon, int combatResult)
+{
+	if(ai_lib.isAiDead(self) || isInvulnerable(self))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	//check for Flee Percentage here to either shout for Help, or to Flee.
+	if(combatResult == COMBAT_RESULT_HIT)
+	{
+		chat.setAngryMood(self);
+		ai_lib.barkString(self, "hit");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSawAttack(obj_id defender, obj_id[] attackers)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnSawAttack() self(" + self + ":" + getName(self) + ") defender (" + defender + ") attackers.length(" + attackers.length + ")");
+
+	if(beast_lib.isBeast(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Lair Assist - MSB: Not sure why lair assist is here yet. It should be in some lair_ai script on the mob spawned by the lair
+	if(defendLair(self, defender, attackers, false))
+	{
+		if(hasScript(self, "npc.converse.npc_convo"))
+		{
+			if(!isInNpcConversation(self) && !pet_lib.isPet(self) && !beast_lib.isBeast(self))
+			{
+				detachScript(self, "npc.converse.npc_convo");
+				clearCondition(self, CONDITION_CONVERSABLE);
+			}
+		}
+
+		debugSpeakMsgc(aiLoggingEnabled(self), self, "lair defense");
+	}
+	else
+	{
+		if(pet_lib.isPet(self) && pet_lib.isGuarding(self, defender))
+		{
+			for (int i = 0; i < attackers.length; ++i)
+			{
+				const obj_id attacker = attackers[i];
+
+				if(isIdValid(attacker))
+				{
+					startCombat(self, attacker);
+
+					if(!ai_lib.isInCombat(self) && (defender == getMaster(self)))
+					{
+						ai_lib.barkString(self, "ally");
+					}
+				}
+			}
+		}
+		else if(aiIsGuard(self))
+		{
+			boolean assistDefender = false;
+			const string defenderFaction = factions.getFaction(defender);
+
+			if(defenderFaction != null)
+			{
+				if(defenderFaction.equals("townsperson") || defenderFaction.equals("ImperialCitizen") || defenderFaction.equals("RebelCitizen"))
+				{
+					assistDefender = true;
+				}
+			}
+
+			if(!assistDefender && ai_lib.isSameSocialGroup(self, defender))
+			{
+				assistDefender = true;
+			}
+
+			for (int i = 0; i < attackers.length; ++i)
+			{
+				const obj_id attacker = attackers[i];
+
+				if(isIdValid(attacker))
+				{
+					// Guards assist with thugs and any animals that are not pets
+
+					if(assistDefender || hasAttributeAttained(attacker, attrib.THUG) ||
+						(ai_lib.isMonster(attacker) && (!pet_lib.isPet(attacker))))
+					{
+						debugSpeakMsgc(aiLoggingEnabled(self), self, "OnSawAttackGuard() attacking(" + attacker + ")");
+
+						ai_combat_assist.assist(self, attacker);
+						break;
+					}
+					else if(ai_lib.isSameSocialGroup(self, attacker))
+					{
+						debugSpeakMsgc(aiLoggingEnabled(self), self, "OnSawAttack() attacking(" + defender + ")");
+						ai_combat_assist.assist(self, defender);
+						break;
+					}
+				}
+			}
+		}
+		else
+		{
+			//if(hasScript(self, "npc.converse.npc_convo"))
+			//{
+			//	if(!isInNpcConversation(self) && !pet_lib.isPet(self))
+			//	{
+			//		detachScript(self, "npc.converse.npc_convo");
+			//		clearCondition(self, CONDITION_CONVERSABLE);
+			//	}
+			//}
+			for (int i = 0; i < attackers.length; ++i)
+			{
+				const obj_id attacker = attackers[i];
+
+				if(isIdValid(attacker))
+				{
+					if( hasObjVar(self, "storytellerid") )
+					{
+						if( !utils.hasScriptVar(defender, "storytellerid") && !utils.hasScriptVar(attacker, "storytellerid") )
+						{
+							debugSpeakMsgc(aiLoggingEnabled(self), self, "OnSawAttack() not attacking(" + defender + ") or (" + attacker + ") as they are not a part of my story");
+							break;
+						}
+						else if( hasObjVar(defender, "storytellerid") && utils.hasScriptVar(attacker, "storytellerid") )
+						{
+							obj_id attackerStorytellerId = utils.getObjIdScriptVar(attacker, "storytellerid");
+							obj_id defenderStorytellerId  = getObjIdObjVar(defender, "storytellerid");
+							obj_id myStorytellerId  = getObjIdObjVar(self, "storytellerid");
+
+							if(myStorytellerId == defenderStorytellerId && ai_lib.isSameSocialGroup(self, defender))
+							{
+								debugSpeakMsgc(aiLoggingEnabled(self), self, "OnSawAttack() attacking(" + attacker + ")");
+								ai_combat_assist.assist(self, defender);
+								break;
+							}
+
+						}
+						else if( utils.hasScriptVar(defender, "storytellerid") && hasObjVar(attacker, "storytellerid") )
+						{
+							obj_id attackerStorytellerId = getObjIdObjVar(attacker, "storytellerid");
+							obj_id defenderStorytellerId = utils.getObjIdScriptVar(defender, "storytellerid");
+							obj_id myStorytellerId = getObjIdObjVar(self, "storytellerid");
+
+							if( myStorytellerId == attackerStorytellerId && ai_lib.isSameSocialGroup(self, attacker) )
+							{
+								debugSpeakMsgc(aiLoggingEnabled(self), self, "OnSawAttack() attacking(" + defender + ")");
+								ai_combat_assist.assist(self, attacker);
+								break;
+							}
+						}
+					}
+
+
+					if(ai_lib.isSameSocialGroup(self, defender))
+					{
+						debugSpeakMsgc(aiLoggingEnabled(self), self, "OnSawAttack() attacking(" + attacker + ")");
+						ai_combat_assist.assist(self, attacker);
+						break;
+					}
+					else if(ai_lib.isSameSocialGroup(self, attacker))
+					{
+						debugSpeakMsgc(aiLoggingEnabled(self), self, "OnSawAttack() attacking(" + defender + ")");
+						ai_combat_assist.assist(self, defender);
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean defendLair(obj_id npc, obj_id defender, obj_id[] attackers, boolean isInCombat)
+{
+	//LOGC(aiLoggingEnabled(self), "debug_ai", "ai::defendLair() npc(" + npc + ") defender(" + defender + ")");
+
+	//debugSpeakMsg(npc, "lair defense?");
+
+	//they can't be attacking my lair if the defender is a mobile.
+	if(isMob(defender))
+	{
+		return false;
+	}
+
+	//debugSpeakMsg(npc, "defender is a mobile");
+
+	//DO I know that I do NOT have a lair?
+	if(utils.hasScriptVar(npc, "ai.noLair"))
+	{
+		return false;
+	}
+
+	obj_id myPOI = ai_lib.getLair(npc);
+
+	if(!isIdValid(myPOI))
+	{
+		return false;
+	}
+
+	if(!hasObjVar(defender, "poi.baseObject"))
+	{
+		return false;
+	}
+
+	//debugSpeakMsg(npc, "you're attacking my lair:");
+
+	//debugSpeakMsg(npc, "myPOI is " + myPOI);
+	//debugSpeakMsg(npc, "defender baseObj is " + getObjIdObjVar(defender, "poi.baseObject"));
+
+	if(getObjIdObjVar(defender, "poi.baseObject") == myPOI)
+	{
+
+		int curHP = getHitpoints(defender);
+		int maxHP = getMaxHitpoints(defender);
+
+		if(curHP >= maxHP)
+		{
+			return true;	//although we're not doing anything here, it's only
+					// because the lair hasn't been damaged yet - the
+					// first time we get an OnSawAttack after the lair
+					// has taken damage, then we will respond appropriately:
+		}
+
+		if(pvpGetAlignedFaction(npc) == ##"nonaggressive")
+		{
+			factions.setFaction(npc, "angry");
+		}
+
+		int endLoop = attackers.length;
+
+		if(endLoop > 20)
+		{
+			endLoop = 20;
+		}
+
+		for (int i = 0; i < endLoop; i++)
+		{
+			if(isIdValid(attackers[i]))
+			{
+				if(!isInCombat)
+				{
+					//debugSpeakMsg(npc, "attack 27");
+
+					startCombat(npc, attackers[i]);
+
+					if(utils.hasScriptVar(npc, "pathingToAttack"))
+					{
+						utils.removeScriptVar(npc, "pathingToAttack");
+					}
+
+					return true;
+				}
+			}
+		}
+		return true;
+	}
+
+	return false;
+}
+
+messageHandler stopFleeing()
+{
+	debugSpeakMsg(self, "stopping fleeing");
+	//utils.removeScriptVar(self, "ai.fleeingFromCombat");
+
+	if(!ai_lib.isInCombat(self))
+	{
+		if(getDistance(getLocation(self), aiGetHomeLocation(self)) > 40.0f)
+		{
+			pathTo(self, aiGetHomeLocation(self));
+		}
+	}
+
+	if(getBehavior(self) <= BEHAVIOR_CALM)
+	{
+		messageTo(self, "resumeDefaultCalmBehavior", null, 5, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//--------------- DEATH -----------------------//
+trigger OnIncapacitated(obj_id attacker)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", ("ai::OnIncapacitated() self(" + self + ":" + getName(self) + ") attacker(" + attacker + ")"));
+
+	debugSpeakMsgc(aiLoggingEnabled(self), self, "OnIncapacitated");
+
+	chat.setBadMood(self);
+	ai_lib.barkString(self, "death");
+
+	//pets don't die, unless they should, in which case ai.pet handles it.
+	if(!pet_lib.isPet(self) && !beast_lib.isBeast(self) && !utils.hasScriptVar(self, "petBeingInitialized"))
+	{
+		// Ensure all weapons are destroyed, except for pet weapons, this is to prevent players from looting these items from AI
+
+		obj_id weapon = getCurrentWeapon(self);
+
+		if( isIdValid(weapon) && !isDefaultWeapon(weapon) )
+		{
+			destroyObject(weapon);
+		}
+
+		//clear corpse inventory
+
+		obj_id cInv = utils.getInventoryContainer(self);
+
+		if(isIdValid(cInv))
+		{
+			utils.emptyContainerExceptStorytellerLoot(cInv);
+		}
+
+		ai_lib.clearCombatData();
+
+		setObjVar(self, xp.VAR_LANDED_DEATHBLOW, attacker);
+
+		if(!kill(self))
+		{
+			obj_id[] haters = getHateList(self);
+
+			if (haters != null || haters.length > 0)
+			{
+				for(int i=0;i<haters.length;i++)
+				{
+					removeHateTarget(haters[i], self);
+				}
+			}
+
+			destroyObject(self);
+		}
+
+		clearCondition(self, CONDITION_INTERESTING);
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	if (isIdValid(killer) && exists(killer) && isIdValid(self) && exists(self))
+	{
+		removeHateTarget(killer, self);
+	}
+	
+	obj_id player = utils.getObjIdScriptVar(self, "ai.listeningTo");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	
+	//This is for GCW entertainer quests and NPC cleanup
+	if(hasObjVar(self, gcw.GCW_ENTERTAINMENT_FLAG) && utils.hasScriptVar(self, gcw.GCW_SCRIPTVAR_PARENT + ".isGcwEntertained"))
+	{
+		LOG("gcw_entertainer","NPC is saving time player stopped entertaining");
+		utils.setScriptVar(self, gcw.GCW_STOPPED_ENTERTAINING, getGameTime());
+		
+		//Close the count down UI if possible.
+		int pid = sui.getPid(player, gcw.ENTERTAIN_GCW_TROOPS_PID);
+		if(pid > 0)
+		{
+			forceCloseSUIPage(pid);
+		}
+
+		if(hasObjVar(self, gcw.GCW_PATROL_OBJ))
+		{
+			obj_id patrolObject = getObjIdObjVar(self, gcw.GCW_PATROL_OBJ);
+			if(isValidId(patrolObject))
+			{
+				dictionary webster = new dictionary();
+				webster.put("npc",self);
+				webster.put("player",player);			
+				messageTo(patrolObject, "handleOffensiveEntertainedNpcCleanUp", webster, 1, false);
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler xpDelegated()
+{
+	obj_id cInv = utils.getInventoryContainer(self);
+
+	if(isIdValid(cInv))
+	{
+		setOwner(cInv, obj_id.NULL_ID);
+	}
+
+	//attach corpse script
+	if(!beast_lib.isBeast(self))
+	{
+		attachScript(self, corpse.SCRIPT_AI_CORPSE);
+
+		//message that corpse is prepared
+		messageTo(self, "aiCorpsePrepared", null, 0, false);
+	}
+	else
+	{
+		xp.cleanupCreditForKills();
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler aiCorpsePrepared()
+{
+	// Try to drop a TCG Promotion Card
+	obj_id [] killers = getObjIdArrayObjVar(self, scenario.VAR_PRIMARY_KILLERS);
+
+	obj_id [] pks = null;
+
+	if(killers != null && killers.length > 0)
+	{
+		pks = xp.getPlayersFromKillerList(killers);
+	}
+
+	if(pks == null || pks.length <= 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//spawn loot (if any)
+	boolean hasLoot = loot.addLoot(self);
+	
+	// *********************************************
+	// checking whether to drop chronicles loot
+	// if the player has set chronicles loot drop off, we do not bother to attempt to create any
+	// if one member of a group has their chronicles loot drop on, then we attempt to drop chronicles loot
+	boolean hasChanceToDropChroniclesLoot = false;
+	if ( hasObjVar(self, xp.VAR_TOP_GROUP) )
+	{
+		obj_id killCredit = getObjIdObjVar(self, xp.VAR_TOP_GROUP);
+		if ( group.isGroupObject(killCredit) )
+		{
+			obj_id[] killList = getGroupMemberIds(killCredit);
+			for ( int k = 0; k < killList.length; k++ )
+			{
+				if ( !loot.hasToggledChroniclesLootOff(killList[k]) )
+				{
+					hasChanceToDropChroniclesLoot = true;
+				}
+			}
+		}
+		else
+		{
+			if ( !loot.hasToggledChroniclesLootOff(killCredit) )
+			{
+				hasChanceToDropChroniclesLoot = true;
+			}
+		}
+	}
+	
+	if ( hasChanceToDropChroniclesLoot )
+	{
+		hasLoot |= loot.addChronicleLoot(self);
+	}
+	// *********************************************
+	
+
+	int corpseLevel = getLevel(self);
+	boolean doNotDropCard = false;
+	int difficultyClass = getIntObjVar(self, "difficultyClass");
+	int sourceSystem = scheduled_drop.SYSTEM_COMBAT_NORMAL;
+
+	switch(difficultyClass)
+	{
+
+		case 0:
+			sourceSystem = scheduled_drop.SYSTEM_COMBAT_NORMAL;
+			break;
+		case 1:
+			sourceSystem = scheduled_drop.SYSTEM_COMBAT_ELITE;
+			break;
+		case 2:
+			sourceSystem = scheduled_drop.SYSTEM_COMBAT_BOSS;
+			break;
+	}
+
+
+	int delayCount = 0;
+
+	// Check the levels of the killers to make sure it is in a valid range for dropping a card.
+	// Make sure free trial players do not get cards, too.
+	// Also, count the number of killers that have a delay on the next card to drop.
+
+		for(int i = 0, j = pks.length; i < j; i++)
+		{
+			if(isIdValid(pks[i]) && (corpseLevel + 5 < getLevel(pks[i]) || utils.isFreeTrial(pks[i])))
+			{
+				doNotDropCard = true;
+			}
+
+
+			if(isIdValid(pks[i]) &&  scheduled_drop.hasCardDelay(pks[i], sourceSystem))
+			{
+				delayCount++;
+			}
+		}
+
+	// If half or more killers of this creature have a delay on them, then do not drop a card for the group of killers.
+	if(delayCount > pks.length / 2)
+	{
+		doNotDropCard = true;
+	}
+
+	boolean canDrop = scheduled_drop.canDropCard(sourceSystem);
+	// Set the delay on the killers for the next card to drop, since they all had a chance for this card drop.
+		for(int i = 0, j = pks.length; i < j; i++)
+		{
+			if(isIdValid(pks[i]))
+			{
+				utils.setScriptVar(pks[i], scheduled_drop.PLAYER_SCRIPTVAR_DROP_TIME, getGameTime());
+
+				//if you are in god mode and have the override objvar
+				//and doNotDropCard is not false make sure you get it no matter what
+				if(isGod(pks[i]) && hasObjVar(pks[i], "qa_tcg_always_drop"))
+				{
+					if(!doNotDropCard)
+					{
+						canDrop = true;
+					}
+				}
+
+				if(isGod(pks[i]) && hasObjVar(pks[i], "qa_tcg"))
+				{
+					sendSystemMessageTestingOnly(pks[i], "QA TCG COMBAT.  Do not drop card? " + doNotDropCard + " hasCardDelay? " + scheduled_drop.hasCardDelay(pks[i], sourceSystem) + " isTrial? " + utils.isFreeTrial(pks[i]) + " bad level? " + (corpseLevel + 5 < getLevel(pks[i])) );
+				}
+			}
+		}
+
+	if(!doNotDropCard)
+	{
+		obj_id inv = utils.getInventoryContainer(self);
+
+		if(isIdValid(inv) && canDrop)
+		{
+			scheduled_drop.dropCard(sourceSystem, inv);
+			hasLoot = true;
+		}
+	}
+
+	// END TCG Promotion code
+
+	if(hasLoot)
+	{
+		corpse.showLootMeParticle(self);
+	}
+
+	setObjVar(self, "readyToLoot", true);
+
+	xp.cleanupCreditForKills();
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler corpseCleanup()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", ("ai::OnStartNpcConversation() self(" + self + ":" + getName(self) + ") speaker(" + speaker + ":" + getName(speaker) + ")"));
+
+	if(!isInNpcConversation(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isAiDead(self))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	if(ai_lib.isInCombat(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isInCombat(speaker))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	ai_lib.setMood(self, ai_lib.MOOD_CALM);
+	stop(self);
+	faceTo(self, speaker);
+
+	//debugSpeakMsg(self, "SETTING AI CONVERSING TO FALSE");
+	messageTo(self, "handleAbortConversation", null, 30, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAbortConversation()
+{
+	if(!isInNpcConversation(self))
+	{
+		if(getBehavior(self) <= BEHAVIOR_CALM)
+		{
+			messageTo(self, "resumeDefaultCalmBehavior", null, 5, false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEndNpcConversation(obj_id speaker)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", ("ai::OnEndNpcConversation() self(" + self + ":" + getName(self) + ") speaker(" + speaker + ":" + getName(speaker) + ")"));
+
+	if(ai_lib.isAiDead(self))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	if(getBehavior(self) <= BEHAVIOR_CALM)
+	{
+		messageTo(self, "resumeDefaultCalmBehavior", null, 5, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler disableAI()
+{
+	string[] scriptList = getScriptList(self);
+
+	for (int i = 0; i < scriptList.length; i++)
+	{
+		if(scriptList[i].startsWith("ai."))
+		{
+			detachScript(self, scriptList[i]);
+		}
+	}
+
+	stop(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleClearPathingFlag()
+{
+	removeObjVar(self, "ai.pathingAwayFrom");
+
+	if(getBehavior(self) <= BEHAVIOR_CALM)
+	{
+		messageTo(self, "resumeDefaultCalmBehavior", null, 5, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAnimationAction()
+{
+	//debugSpeakMsg(self, "doing thing");
+	string anim = params.getString("anim");
+
+	if(anim != null)
+	{
+		//debugSpeakMsg(self, "doing action");
+		ai_lib.doAction(self, anim);
+	}
+	else
+	{
+		//debugSpeakMsg(self, "doing animMood");
+		string animMood = params.getString("animMood");
+
+		if(animMood != null)
+		{
+			ai_lib.setMood(self, animMood);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// PET STUFF (Beasts do not use handleAddMaster() or handleRemoveMaster())
+messageHandler handleAddMaster()
+{
+	obj_id pet = params.getObjId("pet");
+	obj_id controlDevice = params.getObjId("controlDevice");
+
+	if(!isIdValid(controlDevice))
+	{
+		controlDevice = callable.getCallableCD(pet);
+	}
+
+	if(!isIdValid(controlDevice))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!isIdValid(pet))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if((pet != self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id master = params.getObjId("master");
+
+	if(!isIdValid(master))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int petType = pet_lib.getPetType(self);
+
+	if(pet_lib.hasMaxPets(master, petType, pet) && callable.hasCallableCD(self))
+	{
+		destroyObject(self); //this thing was created and now it can't be made a pet, so get rid of it
+
+		return SCRIPT_CONTINUE;
+	}
+	if(!hasScript(self, "ai.pet"))
+	{
+		setMaster(self, master);
+		setOwner(utils.getInventoryContainer(self), master);
+		attachScript(self, "ai.pet");
+		setObjVar(pet, "ai.pet.masterName", getEncodedName(master));
+
+		if(utils.hasScriptVar(self, "petBeingInitialized"))
+		{
+			utils.removeScriptVar(self, "petBeingInitialized");
+		}
+	}
+
+	if(!ai_lib.isMonster(self))
+	{
+		pet_lib.setupDefaultCommands(self);
+	}
+
+	pet_lib.addToPetList(master, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRemoveMaster()
+{
+	obj_id pet = params.getObjId("pet");
+
+	if(pet != self || !isIdValid(pet))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!pet_lib.hasMaster(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id master = getMaster(self);
+	params.put("master", master);
+
+	const String creatureName = getCreatureName(self);
+
+	if(creatureName != null)
+	{
+		params.put("ai.creatureName", creatureName);
+	}
+
+	obj_id group = getGroupObject(pet);
+	queueCommand(pet, ##"disband", group, "", COMMAND_PRIORITY_DEFAULT);
+
+	removeObjVar(pet, "ai.pet.masterName");
+
+	ai_lib.aiStopFollowing(pet);
+	stop(pet);
+
+	setMaster(pet, null);
+	setOwner(utils.getInventoryContainer(self), obj_id.NULL_ID);
+
+	removeTriggerVolume(ai_lib.ALERT_VOLUME_NAME);
+
+	removeObjVar(pet, "ai.pet.friendList");
+	removeObjVar(pet, "ai.pet.guarding");
+	removeObjVar(pet, "ai.inFormation");
+
+	pet_lib.removeFromPetList(pet);
+
+	if(hasScript(pet, "ai.pet"))
+	{
+		detachScript(pet, "ai.pet");
+	}
+
+	messageTo(pet, "destroyAbandonedPet", null, 300, true);
+
+	ai_lib.setDefaultCalmBehavior(pet, ai_lib.BEHAVIOR_LOITER);
+
+	if(ai_lib.isMonster(pet))
+   	{
+   		messageTo(pet, "handleWailingPet", null, 5, false);
+   	}
+
+   	return SCRIPT_CONTINUE;
+   }
+
+messageHandler handleWailingPet()
+{
+	if(pet_lib.hasMaster(self) || ai_lib.isAiDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	switch(rand(1,3))
+	{
+		case 1 :
+			stop(self);
+			ai_lib.doAction(self, "ashamed");
+			break;
+		case 2 :
+			stop(self);
+			ai_lib.doAction(self, "vocalize");
+			break;
+		case 3 :
+			if(getBehavior(self) <= BEHAVIOR_CALM)
+			{
+				doDefaultCalmBehavior(self);
+			}
+			break;
+	}
+
+	messageTo(self, "handleWailingPet", null, 15, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroyAbandonedPet()
+{
+	if(!pet_lib.hasMaster(self))
+	{
+		destroyObject(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean crossPortalBreach(obj_id npc, obj_id breacher)
+{
+	obj_id myCell = getLocation(npc).cell;
+	obj_id yourCell = getLocation(breacher).cell;
+
+	if(isIdValid(myCell) == isIdValid(yourCell))
+	{
+		if(!canSee(npc,breacher))
+		{
+			return true;//treat as a cross portal breach, since I can't see you
+		}
+		else
+		{
+			return false;//we're either both inside or both outside
+		}
+	}
+
+	return true;
+}
+
+//the person is very close, but still is outside, while I am inside:
+void manageCrossPortalBreach(obj_id npc, obj_id breacher)
+{
+	if(!isPlayer(breacher))
+	{
+		return;
+	}
+
+	dictionary params = new dictionary();
+	params.put("breacher", breacher);
+	messageTo(npc, "handleMonitorMovement", params, 5, false);
+	return;
+}
+
+messageHandler handleMonitorMovement()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::handleMonitorMovement() self(" + self + ")");
+
+	if(ai_lib.isAiDead(self))
+	{
+		return SCRIPT_CONTINUE;//I'm busy
+	}
+
+	obj_id breacher = params.getObjId("breacher");
+
+	if(!isIdValid(breacher) || !exists(breacher) || !isInWorld(breacher))
+	{
+		return SCRIPT_CONTINUE;//you're gone
+	}
+
+	if(ai_lib.isAiDead(breacher))
+	{
+		return SCRIPT_CONTINUE;//you're dead
+	}
+
+	obj_id[] myContents = getTriggerVolumeContents(self, ai_lib.ALERT_VOLUME_NAME);
+
+	if(utils.getElementPositionInArray(myContents, breacher) == -1)
+	{
+		return SCRIPT_CONTINUE;//you left
+	}
+
+	obj_id myCell = getLocation(self).cell;
+	obj_id yourCell = getLocation(breacher).cell;
+
+	if(!isIdValid(yourCell))
+	{
+		return SCRIPT_CONTINUE;//you're still outside
+	}
+
+	if(yourCell != myCell)
+	{
+		messageTo(self, "handleMonitorMovement", params, 3, false);//you're still not here, check again later
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isInCombat(self))
+	{
+		messageTo(self, "handleMonitorMovement", params, 3, false);//I'm busy, so check later
+		return SCRIPT_CONTINUE;
+	}
+
+	startCombat(self, breacher);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	if(pet_lib.isPet(self))
+	{
+		return SCRIPT_CONTINUE;//let pets do whatever
+	}
+
+	if(beast_lib.isBeast(self))
+	{
+		//return SCRIPT_OVERRIDE;
+		return SCRIPT_CONTINUE;//let beasts do whatever
+	}
+
+	obj_id bldg = getTopMostContainer(destContainer);
+
+	if(isPlayer(bldg))
+	{
+		return SCRIPT_CONTINUE;//this is a creature being xfer'd to a player's inventory
+	}
+
+	if(!isIdValid(destContainer))
+	{
+		return SCRIPT_CONTINUE;//transferring to the world
+	}
+
+	boolean wontEnter = false;
+	int niche = ai_lib.aiGetNiche(self);
+
+	if(niche == NICHE_VEHICLE)
+	{
+		wontEnter = true;//vehicles won't enter bldgs
+	}
+
+	if(!permissionsIsAllowed(destContainer, self))
+	{
+		wontEnter = true;//and nothing will enter a building if it cannot
+	}
+
+	if(wontEnter)
+	{
+		if(ai_lib.isInCombat(self))
+		{
+			removeObjVar(self, "ai.combat.moveMode");
+			stop(self);
+		}
+		else
+		{
+			stop(self);
+			pathTo(self, aiGetHomeLocation(self));
+			messageTo(self, "resumeDefaultCalmBehavior", null, 20, false);
+		}
+
+		return SCRIPT_OVERRIDE;
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+boolean fightNotFlee(obj_id npc, obj_id threat)
+{
+	LOGC(aiLoggingEnabled(npc), "debug_ai", "ai::fightNotFlee() npc(" + npc + ") threat(" + threat + ")");
+
+	if(hasObjVar(threat, "gm"))
+	{
+		return false;
+	}
+
+	if(!ai_lib.isInCombat(npc))
+	{
+		if(factions.isAggro(npc) && factions.getFactionReaction(npc, threat)==factions.REACTION_NEGATIVE)
+		{
+			//debugSpeakMsg(npc, "you have low faction standing with me");
+			//debugSpeakMsg(npc, "attack 31");
+			startCombat(npc, threat);
+
+			return true;
+		}
+
+		if(pvpIsEnemy(npc, threat) && pvpCanAttack(npc, threat))
+		{
+			//debugSpeakMsg(npc, "you are a pvp enemy");
+			//debugSpeakMsg(npc, "attack 32");
+			startCombat(npc, threat);
+
+			return true;
+		}
+
+		if(ai_lib.isMonster(npc) && ai_lib.isMonster(threat) && ai_lib.isAggro(npc))
+		{
+			//debugSpeakMsg(npc, "attack 33");
+			startCombat(npc, threat);
+
+			return true;
+		}
+
+		//carnivores and predators attack herbivores:
+		if((ai_lib.aiGetNiche(npc) == NICHE_CARNIVORE || ai_lib.aiGetNiche(npc) == NICHE_PREDATOR) && ai_lib.aiGetNiche(threat) == NICHE_HERBIVORE)
+		{
+			//debugSpeakMsg(npc, "attack 34");
+			startCombat(npc, threat);
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+messageHandler handleEntertainmentStart()
+{
+	obj_id player = params.getObjId("entertainer");
+
+	if(!isIdValid(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isInCombat(self) || ai_lib.aiIsDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isInNpcConversation(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!ai_lib.isInSameBuilding(self,player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(hasScript (self, "ai.soldier") && !hasObjVar(self, gcw.GCW_ENTERTAINMENT_FLAG))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (instance.isInInstanceArea(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(hasObjVar(self, performance.NPC_ENTERTAINMENT_NO_ENTERTAIN))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int niche = ai_lib.aiGetNiche(self);
+
+	if(niche != NICHE_NPC)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Poor Darth doesn't have time to appreciate music or dance.
+	string npcType = getCreatureName(self);
+
+	if(npcType.equals("darth_vader"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//If this is a GCW Troop that can be entertained, lets make sure the player can entertain them
+	if(hasObjVar(self, gcw.GCW_ENTERTAINMENT_FLAG) && !gcw.canEntertainGcwNonPlayingCharacter(player, self))
+	{	
+		return SCRIPT_CONTINUE;		
+	}
+
+	if(hasObjVar(self, gcw.GCW_ENTERTAINMENT_FLAG) && utils.hasScriptVar(player, gcw.GCW_SCRIPTVAR_PARENT + ".gcwNpc"))
+	{
+		//already entertaining some other NPC
+		return SCRIPT_CONTINUE;		
+	}
+
+	
+	string entertainmentType = params.getString("perf_type");
+	string skillName = "healing_music_ability";
+
+	if(entertainmentType != null)
+	{
+		if(entertainmentType.equals(performance.PERFORMANCE_TYPE_DANCE))
+		{
+			skillName = "healing_dance_ability";
+		}
+		else if(entertainmentType.equals(performance.PERFORMANCE_TYPE_JUGGLE))
+		{
+			skillName = "healing_juggle_ability";
+		}
+	}
+
+	int skillMod = rand(1,100);
+
+	if(entertainmentType != null)
+	{
+		skillMod = getSkillStatisticModifier(player, skillName);
+	}
+
+	if(skillMod == 0)
+	{
+		skillMod = rand(1,100); //must be a bogus entertainmentType
+	}
+
+	if(utils.hasScriptVar(self, "ai.listeningTo"))
+	{
+		//I'm already listening to someone...
+		int oldSkillMod = utils.getIntScriptVar(self, "ai.oldEntertainerSkillMod");
+
+		if(skillMod < oldSkillMod)
+		{
+			return SCRIPT_CONTINUE;//...and he's better than you
+		}
+	}
+
+	//If the NPC is a valid 'GCW Rally quest NPC' and the player is on the quest
+	if(hasObjVar(self, "faction_recruit_quest"))
+	{
+		
+		if(!groundquests.isQuestActive(player, gcw.GCW_ENTERTAIN_RALLY))
+		{
+			return SCRIPT_CONTINUE;
+		}
+		
+		if((factions.isImperialorImperialHelper(player) && factions.isImperialorImperialHelper(self) && !factions.isOnLeave(player)) 
+		|| (factions.isRebelorRebelHelper(player) && factions.isRebelorRebelHelper(self) && !factions.isOnLeave(player)))
+		{
+			utils.setScriptVar(self, "faction_ent",player);
+			//Send readyToTalk message with a delay. If the entertainer is still entertaining 
+			//when the message arrives they will be able to talk to the NPC
+			messageTo(self, "readyToTalk", params, 20, false);
+			//Send lostInterest message. If the player isent finished when the message arrives 
+			//they've lost their chance and the NPC will reset
+			params.put("lostInterestTime", getGameTime());
+			utils.setScriptVar(self, "lostInterestTime", getGameTime());
+			messageTo(self, "lostInterest", params, 60, false );
+		}		
+		else
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	utils.setScriptVar(self, "ai.oldEntertainerSkillMod", skillMod);
+
+	if(!hasObjVar(self, "ai.oldYaw"))
+	{
+		setObjVar(self, "ai.oldYaw", getYaw(self));//mind not to stomp my original Yaw
+	}
+
+	utils.setScriptVar(self, "ai.listeningTo", player);
+	faceToBehavior(self, player);
+
+
+
+	if(skillMod < 20)
+	{
+		if(rand(1,2)==1)
+		{
+			setAnimationMood(self, "npc_sad");
+		}
+		else
+		{
+			setAnimationMood(self, "bored");
+		}
+	}
+
+	if(skillMod < 50)
+	{
+		if(rand(1,2)==1)
+		{
+			setAnimationMood(self, "bored");
+		}
+		else
+		{
+			setAnimationMood(self, "entertained");
+		}
+	}
+	else
+	{
+		setAnimationMood(self, "entertained");
+	}
+
+	listenToMessage(player, "handlePerformerStopPerforming");
+	messageTo(self, "handleNoEntertainment", null, 30, false);
+
+	if(hasObjVar(self, gcw.GCW_ENTERTAINMENT_FLAG))
+	{	
+		gcw.setEntertainGcwNonPlayerCharacter(player, self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleNoEntertainment()
+{
+	boolean stopListening = false;
+
+	if(!utils.hasScriptVar(self, "ai.listeningTo"))
+	{
+		return SCRIPT_CONTINUE;//must have quit listening already
+	}
+
+	obj_id player = utils.getObjIdScriptVar(self, "ai.listeningTo");
+
+	if(!isIdValid(player))
+	{
+		stopListening = true;
+	}
+	else if(!exists(player) || !isInWorld(player) || !ai_lib.isInSameBuilding(self,player) || getPerformanceType(player) == 0)
+	{
+		stopListening = true;
+	}
+
+	if(stopListening)
+	{
+		//well, you left:
+		utils.removeScriptVar(self, "ai.oldEntertainerSkillMod");
+		utils.removeScriptVar(self, "ai.listeningTo");//stop listening to this guy
+		stop(self);//cancel that faceToBehavior
+		messageTo(self, "resumeDefaultCalmBehavior", null, 0, false);//this will setYaw back to the original pos.
+	}
+	else
+	{
+		//check again in 30:
+		messageTo(self, "handleNoEntertainment", null, 30, false);
+	}
+
+	return SCRIPT_CONTINUE;//dunno where you went, so...
+}
+
+messageHandler handlePerformerStopPerforming()
+{
+	// This forces the "handleEntertainmentStop" to run immediately without using messageTo()
+	utils.notifyObject(self, "handleEntertainmentStop", params);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleEntertainmentStop()
+{
+
+	obj_id player = obj_id.NULL_ID;
+	if(params.containsKey("entertainer"))
+	{
+		player = params.getObjId("entertainer");
+	}
+	else if(params.containsKey("performer"))
+	{
+		player = params.getObjId("performer");
+	}
+
+	if(!isIdValid(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id entertainer = utils.getObjIdScriptVar(self, "ai.listeningTo");
+
+	if(entertainer != player)
+	{
+		return SCRIPT_CONTINUE;//not listening to this guy
+	}
+
+	if(ai_lib.aiIsDead(self) || ai_lib.isInCombat(self))
+	{
+		return SCRIPT_CONTINUE;//something bad happened to me
+	}
+
+	setAnimationMood(self, "calm");
+
+	int skillMod = utils.getIntScriptVar(self, "ai.oldEntertainerSkillMod");
+
+	if(skillMod == 0)
+	{
+		skillMod = rand(1,100);//must be a bogus entertainmentType
+	}
+	if(skillMod < 20)
+	{
+		switch (rand(1,4))
+		{
+			case 1 :
+				doAnimationAction(self, "hold_nose");
+				break;
+			case 2 :
+				doAnimationAction(self, "cover_ears_mocking");
+				break;
+			case 3 :
+				doAnimationAction(self, "point_away");
+				break;
+			case 4 :
+				doAnimationAction(self, "shake_head_no");
+				break;
+		}
+	}
+	else if(skillMod < 40)
+	{
+		switch (rand(1,4))
+		{
+			case 1 :
+				doAnimationAction(self, "shake_head_no");
+				break;
+			case 2 :
+				doAnimationAction(self, "applause_polite");
+				break;
+			case 3 :
+				doAnimationAction(self, "yes");
+				break;
+			case 4 :
+				doAnimationAction(self, "snap_finger1");
+				break;
+		}
+	}
+	else if(skillMod < 60)
+	{
+		switch(rand(1,4))
+		{
+			case 1 :
+				doAnimationAction(self, "snap_finger1");
+				break;
+			case 2 :
+				doAnimationAction(self, "applause_polite");
+				break;
+			case 3 :
+				doAnimationAction(self, "yes");
+				break;
+			case 4 :
+				doAnimationAction(self, "applause_excited");
+				break;
+		}
+	}
+	else
+	{
+		switch (rand(1,3))
+		{
+			case 1 :
+				doAnimationAction(self, "applause_excited");
+				break;
+			case 2 :
+				doAnimationAction(self, "clap_rousing");
+				break;
+			case 3 :
+				doAnimationAction(self, "implore");
+				break;
+			case 4 :
+				doAnimationAction(self, "applause_polite");
+				break;
+		}
+	}
+
+	utils.removeScriptVar(self, "ai.oldEntertainerSkillMod");
+	utils.removeScriptVar(self, "ai.listeningTo");//stop listening to this guy
+	stop(self);//cancel that faceToBehavior
+	messageTo(self, "resumeDefaultCalmBehavior", null, 5, false);//this will setYaw back to the original pos.
+								   // and get them back into the conversing mood
+								   // or whatever it was they were doing	
+	
+	//This is for GCW entertainer quests and NPC cleanup
+	if(hasObjVar(self, gcw.GCW_ENTERTAINMENT_FLAG) && utils.hasScriptVar(self, gcw.GCW_SCRIPTVAR_PARENT + ".isGcwEntertained"))
+	{
+		LOG("gcw_entertainer","NPC is saving time player stopped entertaining");
+		utils.setScriptVar(self, gcw.GCW_STOPPED_ENTERTAINING, getGameTime());
+		if(hasObjVar(self, gcw.GCW_PATROL_OBJ))
+		{
+			obj_id patrolObject = getObjIdObjVar(self, gcw.GCW_PATROL_OBJ);
+			if(isValidId(patrolObject))
+			{
+				dictionary webster = new dictionary();
+				webster.put("npc",self);
+				webster.put("player",player);			
+				messageTo(patrolObject, "handleOffensiveEntertainedNpcCleanUp", webster, 1, false);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnChangedPosture(int before, int after)
+{
+	return SCRIPT_CONTINUE;
+}
+messageHandler dizzyCheckFailed()
+{
+	ai_lib.aiSetPosture(self, POSTURE_KNOCKED_DOWN);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler applyModTrap()
+{
+	if(params == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(utils.hasScriptVar(self, "trapmod.enable"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	java.util.Enumeration keys = params.keys();
+
+	while(keys.hasMoreElements())
+	{
+		string key = (string)keys.nextElement();
+		int mod = params.getInt(key);
+
+		if(!key.equals("prefix"))
+		{
+			utils.setScriptVar(self, "trapmod."+key, mod);
+		}
+	}
+
+	utils.setScriptVar(self, "trapmod.enable", 1);
+
+	messageTo(self, "removeModTrap", params, 60.f, false);
+
+	string prefix = params.getString("prefix");
+	showFlyText(self, new string_id("trap/trap", prefix+"_on"), 1.2f, colors.ORANGERED);
+
+	obj_id[] players = getPlayerCreaturesInRange(self, 50.f);
+
+	for (int i=0; i<players.length; i++)
+	{
+		playClientEffectLoc(players[i], "clienteffect/combat_trap_"+prefix+".cef", getLocation(self), 0f);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeModTrap()
+{
+	utils.removeScriptVar(self, "trapmod");
+	string prefix = params.getString("prefix");
+
+	showFlyText(self, new string_id("trap/trap", prefix+"_off"), 1.2f, colors.ORANGERED);
+
+	return SCRIPT_CONTINUE;
+}
+
+//temp pet clean-up:
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(pet_lib.isPet(self) || beast_lib.isBeast(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	location here = getLocation(self);
+
+	if(here == null)
+	{
+		LOG("designer_fatal", "ai.ai::OnObjectMenuRequest() -> getLocation(self) == null. WTF?!");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isIdValid(here.cell))
+	{
+		return SCRIPT_CONTINUE;//I'm in a building
+	}
+
+	obj_id myContainer = getContainedBy(self);
+
+	if(!isIdValid(myContainer))
+	{
+		return SCRIPT_CONTINUE;//Not contained by anything
+	}
+
+	//if I am not a pet, not in a building, but I am in Something, then
+	// I must be a hosed pet in someone's inventory.
+	// Goodbye!
+	destroyObject(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	obj_id group = getGroupObject(self);
+
+	if(isIdValid(group))
+	{
+		queueCommand(self, ##"disband", group, "", COMMAND_PRIORITY_DEFAULT);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler forceAnimalAttack()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::forceAnimalAttack() self(" + self + ")");
+
+	if(ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+
+	obj_id target = params.getObjId("target");
+	if(!isIdValid(target))
+		return SCRIPT_CONTINUE;
+
+	if(!pvpCanAttack(self, target))
+		return SCRIPT_CONTINUE;
+
+	utils.setScriptVar(self, "ai.combat.isTaunted", (getGameTime() + 20));
+
+	if(ai_lib.isInCombat(self))
+	{
+		removeObjVar(self, "ai.combat.moveMode");
+		stop(self);
+		setLookAtTarget(self, target);
+	}
+	else
+	{
+		//debugSpeakMsg(self, "attack 7");
+		startCombat(self, target);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler attemptMilkHandler()
+{
+	if(params == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = params.getObjId("player");
+
+	attemptMilk(player, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+void attemptMilk(obj_id player, obj_id self)
+{
+	// A player wants to milk us.
+	obj_id playerCurrentMount = getMountId (player);
+	obj_id pInv = utils.getInventoryContainer(player);
+	if(!isValidId(pInv) || !exists(pInv))
+		return;
+	if(getVolumeFree(pInv) <= 0)
+	{
+		sendSystemMessage(self, SID_CANT_MILK_INV_FULL);
+		return;
+	}
+	// Can't milk while you are mounted.
+	if(isIdValid(playerCurrentMount))
+	{
+		sendSystemMessage(player, SID_CANT_MILK_MOUNTED);
+		return;
+	}
+	// Are we being milked?
+	if(utils.hasScriptVar(self, "milk.attempts"))
+	{
+		sendSystemMessage(player, SID_BEING_MILKED);
+		return;
+	}
+	// Are we a pet?
+	if(pet_lib.isPet(self) || beast_lib.isBeast(self))
+	{
+		showFlyText(self, new string_id("npc_reaction/flytext", "threaten"), 2.0f, colors.ORANGERED);
+		sendSystemMessage(player, SID_CANT_MILK);
+		return;
+	}
+	// Is he scent masked?
+	if(stealth.hasInvisibleBuff(player))
+	{
+		showFlyText(self, new string_id("npc_reaction/flytext", "threaten"), 2.0f, colors.ORANGERED);
+		sendSystemMessage(player, SID_MILK_NOT_HIDDEN);
+		return;
+	}
+	// When were we last milked?
+	if(utils.hasScriptVar(self, "milk.lasttime"))
+	{
+		int milktime = utils.getIntScriptVar(self, "milk.lasttime");
+
+		if(getGameTime() - milktime < 3600)
+		{
+			showFlyText(self, new string_id("npc_reaction/flytext", "threaten"), 2.0f, colors.ORANGERED);
+			sendSystemMessage(player, SID_CANT_MILK);
+			return;
+		}
+	}
+
+	float milkStunModified 		= 0.0f;
+
+	//creature_milking_buff is an ability given to players
+	//that complete the exceptional milk collection
+	if(buff.hasBuff(player, "creature_milking_buff") || buff.hasBuff(player, "drink_starshine_surprise"))
+	{
+		milkStunModified += ((float)getEnhancedSkillStatisticModifierUncapped(player, "milk_stun_modified"));
+		CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" has a buff that gives a stun chance of: "+milkStunModified+".");
+	}	
+
+	if(milkStunModified > 0)
+	{
+		int randStunRoll = rand(1, 100);
+		if(randStunRoll < milkStunModified)
+		{
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" has successfully stunned creature "+self+".  The creature will stand still for a few seconds.");
+		
+			messageTo(self, "milkingCreatureStunned", null, 0, false);
+			messageTo(self, "milkingCreatureStunRemoval", null, 4, false);
+		}
+		else
+		{
+			messageTo(self, "milkingCreatureStunFail", null, 0, false);
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" failed to stun the creature.");
+		}
+	}
+
+	// The player wants to milk us!
+	showFlyText(self, new string_id("npc_reaction/flytext", "alert"), 2.0f, colors.MEDIUMSLATEBLUE);
+
+	sendSystemMessage(player, SID_MILK_BEGIN);
+
+	utils.setScriptVar(self, "milk.attempts", 0);
+	dictionary params = new dictionary();
+	params.put("player", player);
+	messageTo(self, "handleMilking", params, 7, false);
+}
+
+messageHandler handleMilking()
+{
+	obj_id player = params.getObjId("player");
+
+	//stop milking if the player killed the creature during the milking process.
+	if(isDead(self))
+	{
+		sendSystemMessage(player, SID_CANT_MILK_THE_DEAD);
+		return SCRIPT_CONTINUE;
+	}
+	if(params == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id playerCurrentMount = getMountId (player);
+
+	if(isIdValid(playerCurrentMount))
+	{
+		sendSystemMessage(player, SID_CANT_MILK_MOUNTED);
+		return SCRIPT_CONTINUE;
+	}
+
+	float dist = getDistance(self, player);
+
+	if((dist < -3) || (dist > 3))
+	{
+		showFlyText(self, new string_id("npc_reaction/flytext", "threaten"), 2.0f, colors.ORANGERED);
+		sendSystemMessage(player, SID_MILK_TOO_FAR);
+		utils.removeScriptVar(self, "milk.attempts");
+		return SCRIPT_CONTINUE;
+	}
+	if(stealth.hasInvisibleBuff(player) || ai_lib.isInCombat(self) || ai_lib.isInCombat(player))
+	{
+		showFlyText(self, new string_id("npc_reaction/flytext", "threaten"), 2.0f, colors.ORANGERED);
+		sendSystemMessage(player, SID_MILK_NOT_HIDDEN);
+		utils.removeScriptVar(self, "milk.attempts");
+		return SCRIPT_CONTINUE;
+	}
+
+	int attempts = utils.getIntScriptVar(self, "milk.attempts");
+	attempts++;
+	utils.setScriptVar(self, "milk.attempts", attempts);
+
+	boolean shortenAttempts 	= false;
+	float milkQuantityModified 	= 0.0f;
+	float milkExceptionalModified 	= 0.0f;
+	float milkStunModified 		= 0.0f;
+
+	//creature_milking_buff is an ability given to players
+	//that complete the exceptional milk collection
+	if(buff.hasBuff(player, "creature_milking_buff") || buff.hasBuff(player, "drink_starshine_surprise"))
+	{
+		if(buff.hasBuff(player, "creature_milking_buff"))
+			CustomerServiceLog("buff", "creature_milking_buff Buff used by player: "+player+" Name: " +getName(player)+ " has creature_milking_buff ");		
+		else if(buff.hasBuff(player, "drink_starshine_surprise"))
+			CustomerServiceLog("buff", "creature_milking_buff Buff used by player: "+player+" Name: " +getName(player)+ " has drink_starshine_surprise buff ");		
+		
+		milkExceptionalModified += ((float)getEnhancedSkillStatisticModifierUncapped(player, "milk_exceptional_modified"));
+		CustomerServiceLog("buff", "creature_milking_buff Buff used by player: "+player+" Name: " +getName(player)+ " has a exceptional milk modifier of: "+milkExceptionalModified);		
+		milkQuantityModified += ((float)getEnhancedSkillStatisticModifierUncapped(player, "milk_quantity_modified"));
+		CustomerServiceLog("buff", "creature_milking_buff Buff used by player: "+player+" Name: " +getName(player)+ " has a milk quantity modifier of: "+milkQuantityModified);		
+		shortenAttempts = true;		
+	}	
+
+	if(attempts == 3 || shortenAttempts)
+	{
+		// Get the player's inventory.
+		obj_id pInv = utils.getInventoryContainer(player);
+		if(!isValidId(pInv) || !exists(pInv))
+			return SCRIPT_CONTINUE;
+		//check the volume
+		else if(getVolumeFree(pInv) <= 0)
+		{
+			sendSystemMessage(self, SID_CANT_MILK_INV_FULL);
+			return SCRIPT_CONTINUE;
+		}
+
+		int lev = ai_lib.getLevel(self);
+		if(lev > 50)
+			lev = 50;
+		int mlev = lev/2;
+		if(mlev < 1)
+			mlev = 1;
+		int amt = rand(mlev*10, lev*10);
+		
+		//buff modifier
+		if(shortenAttempts && milkQuantityModified > 0)
+			amt = amt + (int)(amt * milkQuantityModified);
+
+		string resourceType = ai_lib.getMilkType(self);
+		if(resourceType == null || resourceType.equals(""))
+		{
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but could not retrieve a valid milk type on " + self + " "+getName(self));
+			blog("ai.handleMilking: cannot get resource type from ai_lib.getMilkType");
+			return SCRIPT_CONTINUE;
+		}
+		string sceneName = getCurrentSceneName();
+		if(sceneName == null || sceneName.equals(""))
+		{
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but could not retrieve a valid scene name (planet name) while milking " + self + " "+getName(self));
+			blog("ai.handleMilking: cannot get scene name");
+			return SCRIPT_CONTINUE;
+		}
+
+		string rsrcMapTable = "datatables/creature_resource/resource_scene_map.iff";
+		if(rsrcMapTable == null || rsrcMapTable.equals(""))
+		{
+			blog("ai.handleMilking: cannot get resource map table data");
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but could not retrieve resource map table data to receive the milk resources while milking " + self + " "+getName(self));
+			return SCRIPT_CONTINUE;
+		}
+
+		string correctedPlanetName = dataTableGetString(rsrcMapTable, sceneName, 1);
+		if(correctedPlanetName == null || correctedPlanetName.equals(""))
+		{
+			correctedPlanetName = "tatooine";
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but received an invlaid Planet Name. As a result the milk resource planet attrib has been defaulted to TATOOINE.");
+		}
+
+		resourceType = resourceType + "_" + correctedPlanetName;
+
+		int useDistMap = dataTableGetInt(rsrcMapTable, sceneName, "useDistributionMap");
+		if(useDistMap < 0)
+		{
+			blog("ai.handleMilking: cannot get int data from distribution data table");
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but could not retrieve resource distribution data while milking " + self + " "+getName(self));
+			return SCRIPT_CONTINUE;
+		}
+		location worldLoc = getWorldLocation(self);
+		if(worldLoc == null)
+		{
+			blog("ai.handleMilking: cannot get world location from cpp");
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but could not retrieve world location while milking " + self + " "+getName(self));
+			return SCRIPT_CONTINUE;
+		}
+		if(useDistMap == 0)
+		{
+			worldLoc.area = correctedPlanetName;
+		}
+
+		obj_id[] resourceList = resource.createRandom(resourceType, amt, worldLoc, pInv, player, 2);
+		if(resourceList == null)
+		{
+			blog("ai.handleMilking: cannot get resource data from resource.createRandom function");
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but could not resource data from resource.createRandom function while milking " + self + " "+getName(self));
+			return SCRIPT_CONTINUE;
+		}
+
+		//used in loop below for proper stacking of the
+		//Milk in player inventory
+		location curloc = getLocation(player);
+		if(curloc == null)
+		{
+			blog("ai.handleMilking: cannot get resource data from getLocation cpp");
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" attempted to milk but could not retrieve location data while milking " + self + " "+getName(self));
+			return SCRIPT_CONTINUE;
+		}
+		//This is for proper stacking of the Milk in player inventory
+		for (int i = 0; i < resourceList.length; i++)
+		{
+			//this makes the resource auto stack in player inventory
+			blog(""+resourceList[i]);
+			setLocation(resourceList[i], curloc);
+			putIn(resourceList[i], pInv, player);
+		}
+
+		sendSystemMessage(player, SID_MILK_SUCCESS);
+		utils.setScriptVar(self, "milk.lasttime", getGameTime());
+		utils.removeScriptVar(self, "milk.attempts");
+
+		//Collection Milk
+		if(!collection.collectionResource(player, "milk", (int)milkExceptionalModified))
+		{
+			blog("ai.handleMilking: cannot get resource data from getLocation cpp");
+			CustomerServiceLog("milking_and_lair_search", "handleMilking: Player: "+getName(player)+" OID: "+player+" did not receive an exceptional milk from creature " + self + " "+getName(self)+". Check the collection logs for additional details.");
+			return SCRIPT_CONTINUE;
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		sendSystemMessage(player, SID_MILK_CONTINUE);
+	}
+
+	messageTo(self, "handleMilking", params, 7, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSpawnParameters()
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::handleSpawnParameters() self(" + self + ")");
+
+	if(params == null || params.isEmpty())
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int actionCode = params.getInt("actionCode");
+	obj_id target = params.getObjId("actionTarget");
+
+	switch (actionCode)
+	{
+		case gcw.AC_ATTACK:
+			if(isIdValid(target))
+			{
+				startCombat(self, target);
+			}
+			break;
+
+		case gcw.AC_SCAN:
+			int scanInterests = params.getInt("scanInterests");
+
+			if(scanInterests == 0)
+			{
+				gcw.assignScanInterests(self);
+			}
+			else
+			{
+				utils.setScriptVar(self, gcw.SCRIPTVAR_SCAN_INTEREST, scanInterests);
+			}
+
+			gcw.harass(self, target);
+			break;
+
+		default:
+			break;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler playDelayedClientEffect()
+{
+	string clientEffect = params.getString("effect");
+	obj_id target = params.getObjId("target");
+
+	playClientEffectObj(target, clientEffect, target, "");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler clearScriptVar()
+{
+	string scriptVarName = params.getString("name");
+
+	utils.removeScriptVar(self, scriptVarName);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInvulnerableChanged(boolean invulnerable)
+{
+	LOGC(aiLoggingEnabled(self), "debug_ai", "ai::OnInvulnerableChanged() self(" + self + ") invulerable(" + invulnerable + ")");
+
+	if(invulnerable)
+	{
+		removeTriggerVolume(ai_lib.ALERT_VOLUME_NAME);
+		removeTriggerVolume(ai_lib.AGGRO_VOLUME_NAME);
+	}
+	else
+	{
+		ai_lib.resetCombatTriggerVolumes();
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnIncapacitateTarget(obj_id victim)
+{
+	if(!utils.hasScriptVar(self,"experienced"))
+	{
+		if(isIdValid(victim))
+		{
+			if(isPlayer(victim))
+			{
+				if(rand(1,1000)==999)
+				{
+					ai_lib.creatureLevelUp(self, victim);
+					utils.setScriptVar(self,"experienced",1);
+				}
+			}
+		}
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//Collections:
+//This messageHandler clears the Camera particle from the creature
+//that had its picture taken.
+messageHandler clearCollectionCameraParticle()
+{
+	//Get the target's ID
+	obj_id target = params.getObjId("target");
+	//Clear the particle and ScriptVar from the creature
+	stopClientEffectObjByLabel(target, "root_buff");
+	utils.removeScriptVar(target, "picture_taken_debuff");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGiveItem (obj_id item, obj_id giver)
+{
+	if(!hasCompletedCollectionSlot(giver, "meatlump_recruiter_starter"))
+		return SCRIPT_CONTINUE;
+	if(!isIdValid(giver) || !exists(giver))
+		return SCRIPT_CONTINUE;
+	if(!isIdValid(item) || !exists(item))
+		return SCRIPT_CONTINUE;
+
+	//make sure it is the correct item being given
+	string itemName = getStaticItemName(item);
+	if(!itemName.equals("col_meatlump_recruit_manual_02_01"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	//get the mob's socialGroup - if they're meatlumps, deny!
+	//   storyteller_meatlump / meatlump / angry_meatlump
+	string mobName = getCreatureName(self);
+	string socialMeatlump = dataTableGetString(CREATURE_TABLE, mobName, "socialGroup");
+
+	if(socialMeatlump.startsWith("meatlump") || socialMeatlump.endsWith("meatlump"))
+	{
+		if(!ai_lib.isNpc(self))
+		{
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			sendSystemMessage(giver, SID_ALREADY_RECRUITED);
+		}
+		return SCRIPT_CONTINUE;
+	}
+	if(toLower(socialMeatlump).equals("rebel") || toLower(socialMeatlump).equals("rebel"))
+	{
+		if(!ai_lib.isNpc(self))
+		{
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			sendSystemMessage(giver, SID_NO_RECRUIT_REB_IMP);
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	//If has completed the collection - BAIL
+	if(hasCompletedCollection(giver, "col_meatlump_recruiter_01"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if(utils.hasScriptVar(self, "collection.recruited"))
+	{
+		sendSystemMessage(giver, SID_ALREADY_RECRUITED);
+		return SCRIPT_CONTINUE;
+	}
+	if(utils.hasScriptVar(self, "collection.investigator"))
+	{
+		sendSystemMessage(giver, SID_ENEMY_RECRUIT);
+		return SCRIPT_CONTINUE;
+	}
+	//make sure this NPC is an NPC
+	if(!ai_lib.isNpc(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	//make sure this NPC is invulnerable
+	if(!isInvulnerable(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//player has passed all checks, let's see if someone attacks
+	int attackRoll = rand(1,100);
+	if(attackRoll <= 10)
+	{
+		chat.chat(self, SID_NPC_MEATLUMP_SPEAK);
+
+		float searchSize = 12.0f;
+		//initialize mob
+		obj_id mob = null;
+		//mob level minus 2 levels due to Traders
+		int mobLevel = getLevel(giver) -2;
+		//get the player's location
+		location currentLoc = getLocation(giver);
+
+		location locGoodLocation = locations.getGoodLocationAroundLocationAvoidCollidables(currentLoc, searchSize, searchSize, searchSize, searchSize, false, false, 6.0f);
+		if(locGoodLocation==null)
+		{
+			locGoodLocation = currentLoc;
+		}
+
+		int mobCount = rand(1, 3);
+		//if(isProfession(obj_id player, int profession))
+		if(utils.isProfession(giver, utils.TRADER))
+		{
+			//Give them an easy kill - no silver elite for them.
+			mobCount = 2;
+		}
+
+		if(mobCount == 1)
+		{
+			mob = create.object("mtp_recruiter_corsec_detective", locGoodLocation, mobLevel);
+		}
+		if(mobCount == 2)
+		{
+			mob = create.object("mtp_recruiter_corsec_investigator", locGoodLocation, mobLevel);
+		}
+		if(mobCount == 3)
+		{
+			mob = create.object("mtp_recruiter_corsec_agent", locGoodLocation, mobLevel);
+		}
+		addHate(mob, giver, 1000.0f);
+
+		//set scriptvar lockout - and send messageTo
+		utils.setScriptVar(self, "collection.investigator", 1);
+		messageTo(self, "removeMeatlumpInvestigatorScriptVar", null, 82800, false);
+	}
+	else
+	{
+		//tell the player
+		sendSystemMessage(giver, SID_GAVE_RECRUIT_ITEM);
+		//Decrement the stack count of the Meatlump Manifesto -
+		int count = getCount(item);
+		count--;
+
+		if(count <= 0)
+		{
+			//remove the 'noDestroy' script first!
+			detachScript(item, "item.special.nodestroy");
+			destroyObject(item);
+		}
+		else
+		{
+			setCount(item, count);
+		}
+
+		//Modify the slot value
+		modifyCollectionSlotValue(giver, "meatlump_recruiter_01", 1);
+		//set scriptvar lockout - and send messageTo
+		utils.setScriptVar(self, "collection.recruited", 1);
+		messageTo(self, "removeMeatlumpRecruitmentScriptVar", null, 82800, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeMeatlumpRecruitmentScriptVar()
+{
+	if(utils.hasScriptVar(self, "collection.recruited"))
+	{
+		utils.removeScriptVar(self, "collection.recruited");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeMeatlumpInvestigatorScriptVar()
+{
+	if(utils.hasScriptVar(self, "collection.investigator"))
+	{
+		utils.removeScriptVar(self, "collection.investigator");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler milkingCreatureStunned()
+{
+	showFlyText(self, new string_id("npc_reaction/flytext", "stun"), 2.0f, colors.ORANGERED);
+
+	ai_lib.setDefaultCalmBehavior(self, ai_lib.BEHAVIOR_SENTINEL);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler milkingCreatureStunFail()
+{
+	showFlyText(self, new string_id("npc_reaction/flytext", "stun_fail"), 2.0f, colors.ORANGERED);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler milkingCreatureStunRemoval()
+{
+	showFlyText(self, new string_id("npc_reaction/flytext", "stun_expired"), 2.0f, colors.ORANGERED);
+	ai_lib.setDefaultCalmBehavior(self, ai_lib.BEHAVIOR_LOITER);
+	return SCRIPT_CONTINUE;
+}
+
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON && !msg.equals(""))
+		LOG(LOGGING_CATEGORY, msg);
+	return true;
+}

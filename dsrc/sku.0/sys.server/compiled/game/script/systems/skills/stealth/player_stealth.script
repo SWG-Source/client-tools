@@ -1,0 +1,180 @@
+include library.utils;
+include library.jedi;
+include library.combat;
+include library.buff;
+include library.colors;
+include library.ai_lib;
+include library.stealth;
+include library.group;
+include library.prose;
+include library.money;
+
+inherits systems.combat.combat_base;
+
+const java.text.NumberFormat floatFormat = new java.text.DecimalFormat("#####");
+
+messageHandler smokeBombTimerExpired()
+{
+	// Check For script var and remove
+	if (utils.hasScriptVar(self, "sp_smoke_bomb"))
+	{
+		utils.removeScriptVar(self, "sp_smoke_bomb");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler withoutTraceTimerExpired()
+{
+	// Check For script var and remove
+	if (utils.hasScriptVar(self, "sp_without_a_trace"))
+	{
+		utils.removeScriptVar(self, "sp_without_a_trace");
+	}
+
+	// Check for state to see if they are still stealthed
+	// If They are apply normal stealth to them
+
+	string invisBuff = stealth.getInvisBuff(self);
+	if(invisBuff == null || invisBuff.length() < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (invisBuff == "invis_sp_buff_invis_notrace_1")
+	{
+		// Ok they are cloaked
+		// Regular Stealth em
+		buff.removeBuff(self, "invis_sp_buff_invis_notrace_1");
+		buff.applyBuff(self, "invis_sp_buff_invis_1");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgMotionSensorTripped()
+{
+	obj_id sensor 		= params.getObjId("sensor");
+	obj_id breacher 	= params.getObjId("breacherId");
+	string breacherName = params.getString("breacherName");
+	boolean wasFiltered = params.getBoolean("wasFiltered");
+	location loc 		= params.getLocation("sensorLoc");
+	string planetString	= utils.packStringId(new string_id("planet_n", loc.area));
+	string locString 	=  planetString.startsWith("Kashyyyk") || planetString.startsWith("Mustafar")? " some location " : floatFormat.format(loc.x) + ", " + floatFormat.format(loc.z);
+
+	//LOG("stealth", "msgMotionSensorTripped - loc=" + loc);
+
+	prose_package pp = null;
+	if(!wasFiltered)
+	{
+		pp = prose.getPackage(new string_id("spam", "sensor_tripped"));
+		pp = prose.setTT(pp, locString);
+		pp = prose.setTU(pp, planetString);
+	}
+	else
+	{
+		pp = prose.getPackage(new string_id("spam", "sensor_tripped_filtered"));
+		pp = prose.setTT(pp, locString);
+		pp = prose.setTU(pp, planetString);
+		pp = prose.setTO(pp, breacherName);
+	}
+
+	sendSystemMessageProse(self, pp);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgTrackingBeaconLocationRequest()
+{
+	//LOG("stealth", "Got msgTrackingBeaconLocationRequest on object " + getName(self));
+	obj_id sendingPlayer = params.getObjId("sendingPlayer");
+	obj_id sendingBeacon = params.getObjId("sendingBeacon");
+	string myName = getName(self);
+
+	dictionary dic = new dictionary();
+	dic.put("location", getLocation(self));
+	dic.put("sendingTarget", self);
+	dic.put("name", myName);
+
+	//LOG("stealth", "Sending message msgTrackingBeaconLocationReply to object " + getName(sendingBeacon));
+	messageTo(sendingBeacon, "msgTrackingBeaconLocationReply", dic, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler invisibilityUpkeep()
+{
+	utils.removeScriptVar(self, stealth.INVIS_UPKEEP_MSG_DISPATCHED);
+	boolean perpetuate = false;
+	string invisBuff = stealth.getInvisBuff(self);
+	//LOG("stealth", "invisibilityUpkeep - " + self + " with buff " + invisBuff);
+
+	if(invisBuff == null || invisBuff.length() < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int invis = getStringCrc(toLower(invisBuff));
+	//LOG("stealth", "invis_urbanStealth=" + ##"invis_urbanStealth" + ", stringCrc for buff '" + invisBuff + "' = " + invis);
+	switch(invis)
+	{
+		case ##"invis_forcecloak":
+			perpetuate = stealth.checkForceCloakUpkeep(self);
+			break;
+		case ##"invis_blendin":
+			break;
+		case ##"invis_camouflage":
+			break;
+		case ##"invis_cover":
+			break;
+		case ##"invis_urbanstealth":
+			perpetuate = stealth.checkUrbanStealthUpkeep(self);
+			break;
+		case ##"invis_wildernessstealth":
+			perpetuate = stealth.checkWildernessStealthUpkeep(self);
+			break;
+		case ##"invis_sp_buff_stealth_4":
+			perpetuate = stealth.checkSpyStealthUpkeep(self);
+			break;
+		default:
+			//LOG("stealth", "Buff " + invisBuff + " does not appear to require upkeep.");
+			break;
+	}
+
+
+	//LOG("stealth", "invisibilityUpkeep - perpetuate=" + perpetuate);
+	if(perpetuate && !utils.hasScriptVar(self, stealth.INVIS_UPKEEP_MSG_DISPATCHED))
+	{
+		utils.setScriptVar(self, stealth.INVIS_UPKEEP_MSG_DISPATCHED, 1);
+		messageTo(self, "invisibilityUpkeep", null, 2, false);
+		//LOG("stealth", "invisibilityUpkeep - message dispatched");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//
+// Ranger Stealing ability
+//
+
+messageHandler handleStealCashSuccess()
+{
+	int amt = params.getInt(money.DICT_AMOUNT);
+	withdrawCashFromBank(self, amt, "handleStealCashFinal","handleStealCashFail", params);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleStealCashFail()
+{
+	int amt = params.getInt(money.DICT_AMOUNT);
+	CustomerServiceLog("stealing", "%TU failed to steal "+amt+" credits.", self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleStealCashFinal()
+{
+	int amt = params.getInt(money.DICT_AMOUNT);
+
+	prose_package pp = prose.getPackage(new string_id("spam", "stole_cash"), amt);
+	sendSystemMessageProse(self, pp);
+
+	return SCRIPT_CONTINUE;
+}

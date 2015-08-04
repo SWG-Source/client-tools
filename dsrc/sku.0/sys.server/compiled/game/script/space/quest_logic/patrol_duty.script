@@ -1,0 +1,188 @@
+//------------------------------------------------
+// patrol_duty.script
+// Brandon Reinhart
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_quest;
+include library.space_utils;
+include library.prose;
+include library.money;
+include library.badge;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits space.quest_logic.patrol
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_LAP_REWARD					= new string_id( "space/quest", "patrol_lap_reward" );
+const string_id SID_SPECIAL_REWARD				= new string_id( "space/quest", "destroy_special_reward" );
+const string_id SID_BADGE_REWARD				= new string_id( "space/quest", "destroy_badge_reward" );
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, questName );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open or find quest '"+questName+"' in " + questType + ".iff" );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Grab mission specific data.
+	setObjVar( self, "reward", questInfo.getInt( "reward" ) );
+	setObjVar( self, "rewardVariance", questInfo.getInt( "rewardVariance" ) );
+	setObjVar( self, "specialReward", questInfo.getInt( "specialReward" ) );
+	setObjVar( self, "specialRewardIncrement", questInfo.getInt( "specialRewardIncrement" ) );
+	setObjVar( self, "badge", questInfo.getInt( "badge" ) );
+	setObjVar( self, "badgeLaps", questInfo.getInt( "badgeLaps" ) );
+	setObjVar( self, "badgeReward", questInfo.getInt( "badgeReward" ) );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// arrivedAtLocation
+//------------------------------------------------
+
+messageHandler arrivedAtLocation()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	// See if this location is on our list!
+	string name = params.getString( "name" );
+	obj_id player = params.getObjId( "player" );
+
+	string[] navPoints = getStringArrayObjVar( self, "navPoints" );
+	int currentNav = getIntObjVar( self, "currentNavPoint" );
+	string destNav = navPoints[currentNav]; // add bounds check here.
+
+	java.util.StringTokenizer st = new java.util.StringTokenizer( destNav, ":" );
+	string scene = st.nextToken();
+	destNav = st.nextToken();
+
+	st = new java.util.StringTokenizer( navPoints[0], ":" );
+	scene = st.nextToken();
+	string navzero = st.nextToken();
+
+	if ( destNav.equals( name ) )
+	{
+		// Mark as in progress.
+		space_quest.showQuestUpdate( self, SID_WAYPOINT_ARRIVED );
+
+		// We arrived at our desired location!
+		currentNav++;
+		setObjVar( self, "currentNavPoint", currentNav );
+		if ( currentNav == navPoints.length )
+		{
+			int curLap = getIntObjVar( self, "currentLap" );
+
+			// We need to do another lap.
+			setObjVar( self, "currentNavPoint", 0 );
+			registerPatrolWaypoint( self, player, navzero );
+			int currentLap = curLap+1;
+			setObjVar( self, "currentLap", currentLap );
+
+			// Pay the man.
+			int reward = getIntObjVar( self, "reward" );
+			int rewardVariance = getIntObjVar( self, "rewardVariance" );
+			if ( rewardVariance > 0 )
+			{
+				if ( rand() >= 0.5 )
+					reward += rand( 1, rewardVariance );
+				else if ( rand() < 0.5 )
+					reward -= rand( 1, rewardVariance );
+			}
+
+			// Give the reward to the player.
+			money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward );
+			space_quest.showQuestUpdate( self, SID_LAP_REWARD, reward );
+
+			// Check for performance badge reward.
+			int ibadge = getIntObjVar( self, "badge" );
+			string badgeName = getCollectionSlotName(ibadge);
+			int badgeLaps = getIntObjVar( self, "badgeLaps" );
+			if ( (badgeName != null) && (badgeName.length() > 0) && (badgeLaps > 0) && (currentLap == badgeLaps) )
+			{
+				if ( !badge.hasBadge( player, badgeName ) )
+				{
+					// Give them the badge cash.
+					reward = getIntObjVar( self, "badgeReward" );
+					money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward );
+					space_quest.showQuestUpdate( self, SID_BADGE_REWARD, reward );
+
+					// Give them the badge.
+					badge.grantBadge( player, badgeName );
+
+					// Send them an email.
+					string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+					string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+					string_id badgeEmailFrom = new string_id ( "spacequest/"+questType+"_"+questName, "badgefrom" );
+					string_id badgeEmailSubject = new string_id ( "spacequest/"+questType+"_"+questName, "badgesubject" );
+					string_id badgeEmailBody = new string_id ( "spacequest/"+questType+"_"+questName, "badgebody" );
+
+					// Send the player the mail.
+					string player_name = getName( player );
+					string body_oob = chatMakePersistentMessageOutOfBandBody( null, badgeEmailBody );
+					chatSendPersistentMessage( "@"+badgeEmailFrom.toString(), player_name, "@" + badgeEmailSubject.toString(), null, body_oob );
+				}
+			}
+			else
+			{
+				// Check for special reward.
+				int specialRewardIncrement = getIntObjVar( self, "specialRewardIncrement" );
+				if ( currentLap % specialRewardIncrement == 0 )
+				{
+					reward = getIntObjVar( self, "specialReward" );
+					money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward );
+					space_quest.showQuestUpdate( self, SID_SPECIAL_REWARD, reward );
+				}
+			}
+		}
+		else
+		{
+			st = new java.util.StringTokenizer( navPoints[currentNav], ":" );
+			scene = st.nextToken(); destNav = st.nextToken();
+
+			// Register the next one.
+			registerPatrolWaypoint( self, player, destNav );
+		}
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	// Do nothing if the player dies.
+	return SCRIPT_OVERRIDE;
+}

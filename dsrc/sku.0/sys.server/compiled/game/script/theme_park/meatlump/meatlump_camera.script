@@ -1,0 +1,159 @@
+/*
+When used, a player is able to update his collection when having the correct object targeted. 
+Authors: James Michener
+*/
+
+//libraries
+include library.buff;
+include library.collection;
+include library.player_structure;
+include library.sui;
+include library.utils;
+
+//constants
+const string_id SID_USE_CAMERA				= new string_id("collection", "use_camera");
+const string_id SID_INVALID_OBJECT			= new string_id("collection", "invalid_camera_target");
+const string_id SID_PICTURE_TAKEN			= new string_id("collection", "picture_taken");
+const string_id SID_INVALID_TARGET			= new string_id("collection", "invalid_target");
+const string_id SID_SUCCESS_SNAPSHOT			= new string_id("collection", "successful_snapshot");
+const string_id SID_PHOTO_SLOT_COMPLETE			= new string_id("collection", "photo_slot_complete");
+const string_id NOT_WHILE_INCAPPED			= new string_id ("quest/ground/util/quest_giver_object", "not_while_incapped");
+const string_id SID_NOT_WHILE_IN_COMBAT			= new string_id("base_player", "not_while_in_combat");
+const string_id MUST_DISMOUNT				= new string_id ("collection", "must_dismount");
+const string_id SID_NO_DESTROY_YOUR_STUFF		= new string_id("collection", "nodestroy_your_stuff");
+const string PHOTO_COLLECTION 				= "col_meatlump_photo_01";
+const string HOPPER_OBJVAR				= "player_structure.deed.maxHopperSize";
+
+
+//triggers
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//set myCamera to self
+	obj_id myCamera = self;
+	
+	//can only consume if you have it picked up
+	if(utils.isNestedWithinAPlayer(myCamera))
+	{
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_USE_CAMERA);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	
+	sendDirtyObjectMenuNotification(self);
+	obj_id myCamera = self;
+	
+	// checks for combat
+	if(getState(player, STATE_COMBAT) > 0)
+	{
+		sendSystemMessage(player, SID_NOT_WHILE_IN_COMBAT);
+		return SCRIPT_CONTINUE;
+	}
+	if(getState(player, STATE_RIDING_MOUNT) == 1)
+	{
+		sendSystemMessage(player, MUST_DISMOUNT);
+		return SCRIPT_CONTINUE;
+	}
+	if(isDead(player) || isIncapacitated(player))
+	{
+		sendSystemMessage(player, NOT_WHILE_INCAPPED);
+		return SCRIPT_CONTINUE;
+	}
+	//get the lookAtTarget
+	obj_id intended = getIntendedTarget(player);
+	
+	if(!isIdValid(intended))
+	{
+		//both targets are null	
+		sendSystemMessage(player, SID_INVALID_TARGET);				
+	}
+	else
+	{			
+		//check to see if the target qualifies
+		checkValidObject(player, intended);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean checkValidObject(obj_id player, obj_id target)
+{
+	if(!isIdValid(player) || !exists(player))
+	{
+		return false;
+	}
+	if(!isIdValid(target) || !exists(target))
+	{
+		return false;
+	}
+	
+	string[] adminList = getStringArrayObjVar(target, player_structure.VAR_ADMIN_LIST);
+	string str_player_id = ""+ player;
+	for(int q = 0; q < adminList.length; q++)
+	{
+		if(adminList[q].equals(str_player_id))
+		{
+			sendSystemMessage(player, SID_NO_DESTROY_YOUR_STUFF);
+			return false;
+		}
+	}	
+		
+	//Alread completed Collection
+	if(hasCompletedCollection(player, PHOTO_COLLECTION))
+	{
+		return false;
+	}
+	//make sure it's a player-owned extractor - and that it's a permanent structure.
+	if(!hasObjVar(target, HOPPER_OBJVAR) || hasScript(target, "structure.temporary_structure"))
+	{
+		sendSystemMessage(player, SID_INVALID_OBJECT);
+		return false;	
+	}
+	//make sure a picture has not been taken of this object 
+	if(utils.hasScriptVar(target, "collection.picture_taken"))
+	{
+		sendSystemMessage(player, SID_PICTURE_TAKEN);
+		return false;	
+	}
+	
+	//get planetName
+	string planetName = getCurrentSceneName();
+	//check to see if he's completed that slot - if so - bail and message the player
+	//if he has not completed the slot - increment slot and tag the object.
+	string slotToModify = "meatlump_photo_" + planetName;
+
+	if(hasCompletedCollectionSlot(player, slotToModify))
+	{
+		sendSystemMessage(player, SID_PHOTO_SLOT_COMPLETE);
+		return false;
+	}	
+	modifyCollectionSlotValue(player, slotToModify, 1);
+	tagTheObject(player, target);
+	return true;
+}
+
+void tagTheObject(obj_id player, obj_id photoTarget)
+{
+	if(!isIdValid(player) || !exists(player))
+	{
+		return;
+	}
+	if(!isIdValid(photoTarget) || !exists(photoTarget))
+	{
+		return;
+	}
+
+	utils.setScriptVar(photoTarget, "collection.picture_taken", 1);
+	//build dictionary for messageTo
+	dictionary dict = new dictionary();
+	dict.put("target", photoTarget);
+	//send messageTo to clear the particle  and scriptVar after 1 Hour
+	messageTo(photoTarget, "clearCollectionMeatlumpCamera", dict, 3600, false);
+	//Inform the player the picture has been taken
+	sendSystemMessage(player, SID_SUCCESS_SNAPSHOT);
+}
+
+

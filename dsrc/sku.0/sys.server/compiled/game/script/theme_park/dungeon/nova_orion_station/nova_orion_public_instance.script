@@ -1,0 +1,106 @@
+/**********************************************************************/
+
+include library.utils;
+
+/******************** CONSTANTS ********************/
+
+const boolean LOGGING                           = true;
+const float   POPULATION_UPDATE_TIME            = 20.0f;
+const float   STATION_SCAN_RADIUS               = 500.0f;
+const string  VAR_STATION_INSTANCE_ID           = "nova_orion_instance_id";
+
+/******************** METHODS ********************/
+
+trigger OnInitialize() 
+{
+	getClusterWideData("public_instances", getStringObjVar(self, "instance_name")+"_"+ self, true, self);
+	doLogging("OnInitialize", "Requested cluster wide data for "+getStringObjVar(self, "instance_name")+"_"+self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnClusterWideDataResponse(string manage_name, string name, int request_id, string[] element_name_list, dictionary[] data, int lock_key)
+{
+	// Oh god, how I hate this. The ValueDictionary in C++ doesn't support anything but basic types, but we need to store an array of object 
+	// ids here so that other servers can know the population here. So, what we do is cheat. We create the Vector and pack it into a string 
+	// to be stored as data, and then unpack it on the other side. Not the best solution by far, but there is simply not enough time to add in 
+	// all the array types into ValueType* :'(
+	Vector players = getPlayersInStation(self);
+	string players_string = new string(utils.packObject(players));
+	
+	dictionary info = new dictionary();
+	location wloc = getLocation(self);
+	info.put("building_id", self);
+	info.put("population_info", players_string);
+	info.put("population_num", players.size());
+	info.put("world_location.x", wloc.x);
+	info.put("world_location.y", wloc.y);
+	info.put("world_location.z", wloc.z);
+	
+	doLogging("OnClusterWideDataResponse", "Updated info for: "+self+" size: "+info.size());
+	replaceClusterWideData(manage_name, name, info, true, lock_key);
+	releaseClusterWideDataLock(manage_name, lock_key);
+	
+	// periodic messageTo to update the population
+	dictionary params = new dictionary();
+	messageTo(self, "updatePopulation", params, POPULATION_UPDATE_TIME, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler updatePopulation()
+{
+	doLogging("updatePopulation", "Got message to updatePopulation");
+	getClusterWideData("public_instances", getStringObjVar(self, "instance_name")+"_"+ self, true, self);
+	return SCRIPT_CONTINUE;
+}
+
+Vector getPlayersInStation(obj_id self)
+{
+	obj_id[] players = getPlayerCreaturesInRange(getLocation(self), STATION_SCAN_RADIUS);
+	Vector players_ret = new Vector();
+	
+	if (players != null && players.length > 0)
+	{
+		for (int i=0 ;i<players.length; i++)
+		{
+			if (isIdValid(players[i]) && utils.hasScriptVar(players[i], VAR_STATION_INSTANCE_ID))
+			{
+				obj_id station = utils.getObjIdScriptVar(players[i], VAR_STATION_INSTANCE_ID);
+				
+				if (isIdValid(station) && station == self)
+					players_ret.add(players[i]);
+			}
+		}
+	}
+	
+	return players_ret;
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING)
+		LOG("npe_public_instance:"+section, message);
+}
+
+trigger OnLostItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if(isPlayer(item))
+	{
+		removeObjVar(item, VAR_STATION_INSTANCE_ID);
+		utils.removeScriptVar(item, VAR_STATION_INSTANCE_ID);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnReceivedItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if(isPlayer(item))
+	{
+		removeObjVar(item, VAR_STATION_INSTANCE_ID);
+		utils.setScriptVar(item, VAR_STATION_INSTANCE_ID, self);
+	}
+	
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,682 @@
+// ======================================================================
+//
+// space/terminal/terminal_space.script
+//
+// Copyright 2004 Sony Online Entertainment
+//
+// ======================================================================
+
+include library.ai_lib;
+include library.callable;
+include library.features;
+include library.locations;
+include library.performance;
+include library.pet_lib;
+include library.player_structure;
+include library.regions;
+include library.session;
+include library.space_crafting;
+include library.space_flags;
+include library.space_transition;
+include library.space_utils;
+include library.stealth;
+include library.sui;
+include library.travel;
+include library.utils;
+include library.vehicle;
+include library.buff;
+include library.event_perk;
+
+inherits terminal.base.base_terminal;
+
+// ======================================================================
+
+const float TERMINAL_USE_DISTANCE = 8.0f;
+const string_id SID_LAUNCH_SHIP = new string_id("space/space_terminal", "launch_ship");
+const string_id SID_MUSTAFAR = new string_id("space/space_terminal", "mustafar_exception");
+const string_id SID_NOT_IN_COMBAT           = new string_id("travel", "not_in_combat");
+
+// ======================================================================
+
+trigger OnInitialize()
+{
+	requestPreloadCompleteTrigger(self);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnPreloadComplete()
+{
+	//LOG("space", "space.terminal.terminal_space.OnPreloadComplete()");
+
+	string strFileName= "datatables/space_zones/launch_locations.iff";
+
+	string strName = "mos_eisley"; // default
+	location locTest = getLocation(self);
+	region[] rgnCities = getRegionsWithGeographicalAtPoint(locTest, regions.GEO_CITY);
+
+	dictionary dctTeleportInfo = null;
+
+	if (rgnCities == null || rgnCities.length == 0)
+	{
+		setName(self, "BUSTED TERMINAL! PUT ME IN A CITY!@!@!@!@");
+	}
+	else
+	{
+		for ( int i = 0; i < rgnCities.length; i++ )
+		{
+			region rgnTest = rgnCities[i];
+			strName = rgnTest.getName();
+			//LOG("space", "strName is "+strName);
+
+			if ( strName.startsWith("@") )
+			{
+				string_id strTest = utils.unpackString(strName);
+				strName = strTest.getAsciiId();
+
+				dctTeleportInfo = dataTableGetRow(strFileName, strName);
+				if ( dctTeleportInfo != null )
+				{
+					break;
+				}
+			}
+		}
+	}
+
+	// never found an entry for this terminal location
+	if (dctTeleportInfo == null)
+	{
+		setName(self, "NO ENTRY FOR "+strName+" in teleport datable. Busted terminal");
+		return SCRIPT_CONTINUE;
+	}
+
+	utils.setScriptVar(
+		self,
+		"space.loc.space",
+		new location(
+			dctTeleportInfo.getFloat("spaceX"),
+			dctTeleportInfo.getFloat("spaceY"),
+			dctTeleportInfo.getFloat("spaceZ"),
+			dctTeleportInfo.getString("spaceScene")));
+	utils.setScriptVar(self, "space.locationName", "w"+dctTeleportInfo.getInt("spaceLocationIndex"));
+
+	utils.setScriptVar(
+		self,
+		"space.loc.ground",
+		new location(
+			dctTeleportInfo.getFloat("groundX"),
+			dctTeleportInfo.getFloat("groundY"),
+			dctTeleportInfo.getFloat("groundZ"),
+			dctTeleportInfo.getString("groundScene")));
+	utils.setScriptVar(self, "ground.locationName", dctTeleportInfo.getString("pointName"));
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnAboutToLaunchIntoSpace(obj_id player, obj_id shipControlDevice, obj_id[] membersApprovedByShipOwner, string destinationGroundPlanet, string destinationGroundTravelPoint)
+{
+	LOG("space", "triggered OnAboutToLaunchIntoSpace");
+
+	if (!doSpacePrecheck(player))
+		return SCRIPT_CONTINUE;
+
+	if (!features.isSpaceEdition(player))
+	{
+		LOG("space", "NO EXPANSION");
+		string_id strSpam = new string_id("space/space_interaction", "no_space_expansion");
+		sendSystemMessage(player, strSpam);
+		if (!isGod(player))
+		{
+			LOG("space", "NO EXPANSION - RETURNING");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( ai_lib.isInCombat( player ) )
+	{
+		sendSystemMessage( player, SID_NOT_IN_COMBAT );
+		return SCRIPT_CONTINUE;
+	}
+
+	boolean isStarportToStarportLaunch = destinationGroundPlanet != null && !destinationGroundPlanet.equals("");
+
+	if (travel.isTravelBlocked(player, !isStarportToStarportLaunch))
+		return SCRIPT_CONTINUE;
+
+	if (getState(self, STATE_GLOWING_JEDI) != 0)
+	{
+		setState(self, STATE_GLOWING_JEDI, false);
+	}
+
+	location warpLocation = utils.getLocationScriptVar(self, "space.loc.space");
+
+	if (warpLocation == null)
+		LOG("space", "OnAboutToLaunchIntoSpace warpLocation space.loc.space was null on terminal");
+	else
+	{
+		LOG("space", "getting scd and stuff");
+
+		LOG("space", "scd is " + shipControlDevice);
+		if (isIdValid(shipControlDevice))
+		{
+			obj_id ship = space_transition.getShipFromShipControlDevice(shipControlDevice);
+
+			blog("component_fix", "TERMINAL - WORKING");
+
+			//check for the collection reactors
+			//UNCOMMENT IN NEXT CHAPTER
+			//if(!hasObjVar(shipControlDevice, space_crafting.COLLECTION_REACTOR_CHECKED))
+			//{
+				boolean success = space_crafting.checkForCollectionReactor(shipControlDevice, ship);
+				if(success)
+				{
+					CustomerServiceLog("ShipComponents","Collection reactor found and handled for: (" + self + ") " + getName(self));
+					return SCRIPT_CONTINUE;
+				}
+				//set the SCD to checked so we dont go through this all the time.
+				space_crafting.setCollectionReactorChecked(shipControlDevice);
+			//}
+
+			//CustomerServiceLog("ShipComponents","Collection reactor NOT found or failed to uninstall for: (" + self + ") " + getName(self));
+
+			if (!space_utils.isShipUsable(ship, player))
+			{
+				return SCRIPT_CONTINUE; // bad ship, system messages handled by checker
+			}
+
+			float currentShipMass = getChassisComponentMassCurrent(ship);
+			float maxAllowableShipMass = getChassisComponentMassMaximum(ship);
+			if ((currentShipMass > maxAllowableShipMass) && !isGod(player) )
+			{
+				string_id strSpam = new string_id("space/space_interaction", "too_heavy");
+				sendSystemMessage(player, strSpam);
+				return SCRIPT_CONTINUE;
+			}
+
+			if (space_utils.isShipWithInterior(ship))
+			{
+				//LOG("spce", "checking control devices");
+				//ships in the datapad
+				obj_id [] objControlDevices = space_transition.findShipControlDevicesForPlayer(player, true);
+				int intCount = 0;
+				for (int intI = 0; intI < objControlDevices.length; intI++)
+				{
+					obj_id objTestShip = space_transition.getShipFromShipControlDevice(objControlDevices[intI]);
+					//LOG("spce", "testShip is "+objTestShip+" ship is "+ship);
+					if (space_utils.isShipWithInterior(objTestShip))
+					{
+						if (objTestShip != ship)
+						{
+							int intItemCount = player_structure.getStructureNumItems(objTestShip);
+							//LOG("space", "for "+objTestShip+" count is "+intItemCount);
+							//LOG("space", "type i s"+getTemplateName(objTestShip));
+							if (intItemCount>0)
+							{
+
+
+								// no pob ship with items in another ship
+								intCount = intCount+1;
+								if(intCount>=2)
+								{
+									string_id strSpam = new string_id("space/space_interaction", "too_many_pobs");
+									sendSystemMessage(player, strSpam);
+									return SCRIPT_CONTINUE;
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if (isIdValid(ship))
+			{
+				utils.setLocalVar(player, "objControlDevice", shipControlDevice);
+
+				callable.storeCallables(player);
+				vehicle.storeAllVehicles(player);
+
+				// If this is an entertainer with Hologram images clean them up
+				if (utils.hasScriptVar(player, "currentHolo"))
+				{
+					performance.holographicCleanup(player);
+				}
+
+				if (isStarportToStarportLaunch)
+				{
+					doStarportToStarportLaunch(player, ship, membersApprovedByShipOwner, destinationGroundPlanet, destinationGroundTravelPoint);
+				}
+				else
+				{
+					//go to hyperspace point!@!@!
+					LOG("space", "location is "+warpLocation);
+					location locDestination = space_utils.getRandomLocationInSphere(warpLocation, 150, 300);
+					LOG("space", "launching to "+locDestination ); // so they don't show up on the spacestation
+
+					location locFinalDestination = getFinalHyperspaceLocation(player, locDestination);
+					if (locFinalDestination == null)
+					{
+						string_id tooFull = new string_id("shared_hyperspace", "zone_too_full_use_travel");
+						sendSystemMessage(player, tooFull);
+						return SCRIPT_CONTINUE;
+					}
+					utils.setScriptVar(player, "strLaunchPointName", utils.getStringScriptVar(self, "space.locationName"));
+					location groundLoc = utils.getLocationScriptVar(self, "space.loc.ground");
+					session.logActivity(player, session.ACTIVITY_SPACE_LAUNCH);
+
+					//stop all dancing and music playing
+					if (hasScript(player, performance.DANCE_HEARTBEAT_SCRIPT))
+						performance.stopDance(player);
+					if(hasScript(player, performance.MUSIC_HEARTBEAT_SCRIPT))
+						performance.stopMusic(player);
+					if(membersApprovedByShipOwner != null && membersApprovedByShipOwner.length > 0)
+					{
+						for(int i = 0; i < membersApprovedByShipOwner.length; ++i)
+						{
+							if (hasScript(membersApprovedByShipOwner[i], performance.DANCE_HEARTBEAT_SCRIPT))
+								performance.stopDance(membersApprovedByShipOwner[i]);
+							if (hasScript(membersApprovedByShipOwner[i], performance.MUSIC_HEARTBEAT_SCRIPT))
+								performance.stopMusic(membersApprovedByShipOwner[i]);
+						}
+					}
+
+					launch(player, ship, membersApprovedByShipOwner, locFinalDestination, groundLoc);
+				}
+
+				return SCRIPT_CONTINUE;
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+void doStarportToStarportLaunch(obj_id player, obj_id ship, obj_id[] membersApprovedByShipOwner, string planet, string pointName)
+{
+	// Verify that they actually are allowed to go to the point they sent us
+	if (!getPlanetTravelPointInterplanetary(planet, pointName))
+		return;
+
+	if (planet == "mustafar")
+	{
+		sendSystemMessage(player, SID_MUSTAFAR);
+		return;
+	}
+
+	if(planet == "kashyyyk_main")
+	{
+		// We have to check the expansion bits of the ship owner here or else his ship might fly to Kashyyyk
+		// even though he gets left behind at the starport because he doesn't have the expansion.
+		if(!features.hasEpisode3Expansion(player))
+		{
+			sendSystemMessage(player, travel.SID_KASHYYYK_UNAUTHORIZED);
+			return;
+		}
+	}
+
+	if(space_utils.isBasicShip(ship))
+	{
+		location locTest = getLocation(player);
+		if(!planet.equals(locTest.area))
+		{
+			string_id strSpam = new string_id("space/space_interaction", "no_travel_basic");
+			sendSystemMessage(player, strSpam);
+			return;
+		}
+	}
+
+	if(callable.hasAnyCallable(player))
+	{
+		callable.storeCallables(player);
+	}
+
+	LOG("space", "doStarportToStarportLaunch");
+	// HOORAY
+	resizeable obj_id[] groupMembersToWarp = utils.addElement(null, player);
+	resizeable int[] groupMemberStartIndex = utils.addElement(null, 0);
+	resizeable location[] shipStartLocations = space_transition.getShipStartLocations(ship);
+
+	boolean callableInGroup = false;
+
+	if(shipStartLocations != null && shipStartLocations.length > 0)
+	{
+		int startIndex = 0;
+		location playerLoc = getLocation(player);
+
+		if(isIdValid(playerLoc.cell))
+		{
+			for(int i = 0; i < membersApprovedByShipOwner.length; ++i)
+			{
+				if(membersApprovedByShipOwner[i] != player && exists(membersApprovedByShipOwner[i])
+				    && getLocation(membersApprovedByShipOwner[i]).cell == playerLoc.cell)
+				{
+					startIndex = space_transition.getNextStartIndex(shipStartLocations, startIndex);
+
+					if(startIndex <= shipStartLocations.length)
+					{
+						groupMembersToWarp = utils.addElement(groupMembersToWarp, membersApprovedByShipOwner[i]);
+						groupMemberStartIndex = utils.addElement(groupMemberStartIndex, startIndex);
+					}
+
+
+					if(callable.hasAnyCallable(membersApprovedByShipOwner[i]))
+					{
+						callable.storeCallables(membersApprovedByShipOwner[i]);
+					}
+
+				}
+			}
+		}
+	}
+
+	// set parking location on scd
+//	space_utils.setLandingLocation(getContainedBy(ship), pointName);
+
+	for(int i = 0; i < groupMembersToWarp.length; ++i)
+	{
+		travel.movePlayerToDestination(groupMembersToWarp[i], planet, pointName);
+	}
+
+	return;
+
+}
+
+// ----------------------------------------------------------------------
+
+void launch(obj_id player, obj_id ship, obj_id[] membersApprovedByShipOwner, location warpLocation, location groundLoc)
+{
+	if(callable.hasAnyCallable(player))
+	{
+		callable.storeCallables(player);
+	}
+
+	// Stealth should be removed prior to launching into space.  Some stealth buffs have recurring action costs
+	// that spam messages on the player's screen.
+	stealth.checkForAndMakeVisible(player);
+
+	//If a player is shapechanged, we remove it when they launch in to space.
+	int shapechange = buff.getBuffOnTargetFromGroup(player, "shapechange");
+
+	if(shapechange != 0)
+	{
+		buff.removeBuff(player, shapechange);
+		sendSystemMessage(player, event_perk.SHAPECHANGE_SPACE);
+	}
+
+	//sendSystemMessageTestingOnly(player, "(unlocalized) Launching...");
+	space_transition.clearOvertStatus(ship);
+	resizeable obj_id[] groupMembersToWarp = utils.addElement(null, player);
+	resizeable int[] groupMemberStartIndex = utils.addElement(null, 0);
+	utils.setScriptVar(player, "strLaunchPointName", "launching");
+	resizeable location[] shipStartLocations = space_transition.getShipStartLocations(ship);
+
+	if (shipStartLocations != null && shipStartLocations.length > 0)
+	{
+		int startIndex = 0;
+		location playerLoc = getLocation(player);
+		if (isIdValid(playerLoc.cell))
+		{
+			for (int i = 0; i < membersApprovedByShipOwner.length; ++i)
+			{
+				if (membersApprovedByShipOwner[i] != player
+					&& exists(membersApprovedByShipOwner[i])
+					&& getLocation(membersApprovedByShipOwner[i]).cell == playerLoc.cell)
+				{
+					if (features.isSpaceEdition(membersApprovedByShipOwner[i]))
+					{
+						startIndex = space_transition.getNextStartIndex(shipStartLocations, startIndex);
+						if (startIndex <= shipStartLocations.length)
+						{
+							groupMembersToWarp = utils.addElement(groupMembersToWarp, membersApprovedByShipOwner[i]);
+							groupMemberStartIndex = utils.addElement(groupMemberStartIndex, startIndex);
+						}
+					}
+					else
+					{
+						string_id strSpam = new string_id("space/space_interaction", "no_space_expansion");
+						sendSystemMessage(membersApprovedByShipOwner[i], strSpam);
+					}
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < groupMembersToWarp.length; ++i)
+	{
+		if(callable.hasAnyCallable(groupMembersToWarp[i]))
+		{
+			callable.storeCallables(groupMembersToWarp[i]);
+		}
+
+		// Stealth should be removed prior to launching into space.  Some stealth buffs have recurring action costs
+		// that spam messages on the player's screen.
+		stealth.checkForAndMakeVisible(groupMembersToWarp[i]);
+
+		//If a player is shapechanged, we remove it when they launch in to space.
+		shapechange = buff.getBuffOnTargetFromGroup(groupMembersToWarp[i], "shapechange");
+
+		if(shapechange != 0)
+		{
+			buff.removeBuff(groupMembersToWarp[i], shapechange);
+			sendSystemMessage(groupMembersToWarp[i], event_perk.SHAPECHANGE_SPACE);
+		}
+
+		space_transition.setLaunchInfo(groupMembersToWarp[i], ship, groupMemberStartIndex[i], groundLoc);
+		warpPlayer(
+			groupMembersToWarp[i],
+			warpLocation.area,
+			warpLocation.x, warpLocation.y, warpLocation.z,
+			null,
+			warpLocation.x, warpLocation.y, warpLocation.z);
+	}
+	//sendSystemMessageTestingOnly(player, "(unlocalized) Finishing launch sequence...");
+}
+
+// ======================================================================
+
+boolean doSpacePrecheck(obj_id objPlayer)
+{
+
+	if(isIncapacitated(objPlayer))
+	{
+		string_id strSpam = new string_id("space/space_interaction", "no_use_terminal_incapacitated");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+	if(isDead(objPlayer))
+	{
+		string_id strSpam = new string_id("space/space_interaction", "no_use_terminal_dead");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+	int intState = getState(objPlayer, STATE_COMBAT);
+	if(intState>0)
+	{
+		string_id strSpam = new string_id("space/space_interaction", "no_use_terminal_combat");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+	return true;
+}
+
+
+
+void doHyperspaceSelector(obj_id self, obj_id objPlayer)
+{
+	string strFileName = "datatables/space/hyperspace/hyperspace_locations.iff";
+	string[] strPointNames = dataTableGetStringColumnNoDefaults(strFileName, "HYPERSPACE_POINT_NAME");
+	utils.setScriptVar(self, "strPointNames", strPointNames);
+	string [] strLocalizedNames = new string[strPointNames.length];
+
+	for(int intI = 0; intI< strPointNames.length; intI++)
+	{
+		strLocalizedNames[intI] = utils.packStringId(new string_id("hyperspace_points_n", strPointNames[intI]));
+	}
+
+		//string_id strPromptId = new string_id("space/space_interaction", "Choose a Hyperspace Point");
+	string strPrompt = "Choose a Hyperspace point";
+	sui.listbox(self, objPlayer, strPrompt, strLocalizedNames, "chooseHyperspaceSpot");
+
+}
+
+
+
+messageHandler chooseHyperspaceSpot()
+{
+	if ( params == null )
+	{
+		LOG("space", "params");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player= sui.getPlayerId(params);
+	if (!isIdValid(player))
+	{
+		LOG("space", "invalid ");
+		return SCRIPT_CONTINUE;
+	}
+
+	int btn = sui.getIntButtonPressed(params);
+	if ( btn == sui.BP_CANCEL )
+	{
+		LOG("space", "cancel");
+		return SCRIPT_CONTINUE;
+	}
+
+	int intIndex= sui.getListboxSelectedRow(params);
+	if ( intIndex== -1 )
+	{
+		LOG("space", "Row");
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] strPointNames=utils.getStringArrayScriptVar(self, "strPointNames");
+	if(intIndex>strPointNames.length-1)
+	{
+		LOG("space", "array length");
+		return SCRIPT_CONTINUE;
+	}
+
+
+	string strFileName = "datatables/space/hyperspace/hyperspace_locations.iff";
+	dictionary dctPointInfo = dataTableGetRow(strFileName, strPointNames[intIndex]);
+	if(dctPointInfo==null)
+	{
+		LOG("space", "no point");
+		return SCRIPT_CONTINUE;
+	}
+
+	location warpLocation = new location();
+	warpLocation.x = (float)dctPointInfo.getInt("X");
+	warpLocation.y = (float)dctPointInfo.getInt("Y");
+	warpLocation.z = (float)dctPointInfo.getInt("Z");
+	warpLocation.area  = dctPointInfo.getString("SCENE");
+
+
+	obj_id shipControlDevice = utils.getObjIdLocalVar(player, "objControlDevice");
+	LOG("space", "shipControlDevice is "+shipControlDevice);
+	obj_id ship = space_transition.getShipFromShipControlDevice(shipControlDevice);
+
+	if(!space_utils.isShipUsable(ship, player))
+	{
+		LOG("space", "bnadship");
+		return SCRIPT_CONTINUE; // bad ship, system messages handled by checker
+	}
+	if(space_utils.isShipWithInterior(ship))
+	{
+	}
+
+
+	if (isIdValid(ship))
+	{
+		obj_id[] membersApprovedByShipOwner = new obj_id[0];
+
+		//LOG("space", "location is "+warpLocation);
+		location locDestination = space_utils.getRandomLocationInSphere(warpLocation, 150, 300);
+		//LOG("space", "Launching to "+locDestination);
+		//LOG("space", "launching to "+locDestination ); // so they don't show up on the spacestation
+		location groundLoc = utils.getLocationScriptVar(self, "space.loc.ground");
+		launch(player, ship, membersApprovedByShipOwner, locDestination, groundLoc);
+		//sendSystemMessageTestingOnly(player, "(unlocalized) Completing launch sequence...");
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		//sendSystemMessageTestingOnly(player, "(unlocalized) Invalid ship - aborting.");
+	}
+	sendDirtyObjectMenuNotification (self);
+
+	return SCRIPT_CONTINUE;
+
+}
+
+
+
+
+
+location getFinalHyperspaceLocation(obj_id objPlayer, location locTest)
+{
+
+	return locTest;
+/*
+	string[] strDoubledZones = 	{
+					"space_tatooine",
+					"space_naboo",
+					"space_corellia"
+					};
+
+	int intIndex = utils.getElementPositionInArray(strDoubledZones, locTest.area);
+	if(intIndex<0)
+	{
+		location[] locLocations= new location[1];
+		locLocations[0]=locTest;
+		return checkZonePopulation(locLocations);
+	}
+
+	if(space_flags.hasOneTierOneSkill(objPlayer))
+	{
+		location[] locLocations= new location[1];
+		locLocations[0]=locTest;
+		return checkZonePopulation(locLocations);
+	}
+	else
+	{
+		// check tat 2, then tat 1, then tough crap
+		location[] locLocations= new location[2];
+		location locTest2 = locTest;
+		locTest2.area = locTest2.area + "_2";
+		locLocations[0] = locTest2;
+		locLocations[1]=locTest;
+
+
+		return checkZonePopulation(locLocations);
+
+
+	}
+*/
+
+
+}
+location checkZonePopulation(location[] locTest)
+{
+
+	// rturns null if it's full
+	for(int intI =0; intI < locTest.length; intI++)
+	{
+		if(!isAreaTooFullForTravel(locTest[intI].area, 0, 0))
+		{
+			return locTest[intI];
+		}
+	}
+	return null;
+}
+
+boolean blog(string category, string msg)
+{
+	//LOG(category, msg);
+	return true;
+}

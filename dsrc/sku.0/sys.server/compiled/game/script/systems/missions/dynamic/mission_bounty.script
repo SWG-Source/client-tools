@@ -1,0 +1,836 @@
+include library.locations;
+include library.utils;
+include library.ai_lib;
+include library.jedi;
+include library.missions;
+
+inherits systems.missions.base.mission_dynamic_base;
+
+trigger OnInitialize ()
+{
+	//LOG("bh", "mission object initialized");
+	
+	if (!hasScript (self, "systems.missions.base.mission_cleanup_tracker"))
+	{
+		attachScript (self, "systems.missions.base.mission_cleanup_tracker");
+	}
+
+	if (hasObjVar(self, "movingTarget"))
+	{
+		//LOG("bh", "Had objvar moving target");
+		if (hasObjVar(self, "intTargetSpawned"))
+		{
+			//LOG("bh", "had intTargetSpawned");
+			removeObjVar(self, "movingTarget");
+		}
+		else
+		{
+			dictionary d = new dictionary();
+			d.put("moveTargetSequence", utils.getIntScriptVar(self, "moveTargetSequence"));
+			messageTo(self, "moveTarget", d, rand(30, 60), false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler onArrivedAtLocation()
+{
+	debugServerConsoleMsg(self, "Arrived at location message");
+	obj_id objPlayer = getMissionHolder(self);
+	dictionary dctParams = new dictionary();
+
+	dctParams.put("objMission", self);
+	messageTo(objPlayer, "bounty_Arrival", dctParams, 0, true);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler abortMission()
+{
+	obj_id target = getObjIdObjVar(self, "objTarget");
+	obj_id owner = getMissionHolder(self);
+	if ( isIdValid(target) && isIdValid(owner) )
+		removeJediBounty(target, owner);
+
+	if ( isIdValid(owner) )
+		setObjVar(owner, "intState", missions.STATE_MISSION_COMPLETE);
+
+	dictionary newParams = new dictionary();
+	if (target == null)
+		target = obj_id.NULL_ID;
+	newParams.put("target", target);
+	bountyIncomplete(self, newParams);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler timedOutMission()
+{
+	obj_id target = getObjIdObjVar(self, "objTarget");
+	obj_id owner = getMissionHolder(self);
+	if ( isIdValid(target) && isIdValid(owner) )
+		removeJediBounty(target, owner);
+
+	if ( isIdValid(owner) )
+		setObjVar(owner, "intState", missions.STATE_MISSION_COMPLETE);
+
+	dictionary newParams = new dictionary();
+	if (target == null)
+		target = obj_id.NULL_ID;
+	newParams.put("target", target);
+	bountyTimedOut(self, newParams);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler OnStartMission()
+{
+
+	setupInvisibleWaypoint(self);
+
+	if(!hasObjVar(self, "objTarget"))
+	{
+		setObjVar(self, "intMissionDynamic", 1);
+		location locSpawnLocation = getLocationObjVar(self, "locSpawnLocation");
+		setObjVar(self, "locSpawnLocation", locSpawnLocation);
+		setupSpawn(self, locSpawnLocation);
+
+	}
+	else
+	{
+		obj_id objTarget = getObjIdObjVar(self, "objTarget");
+
+		dictionary dctParams = new dictionary();
+		dctParams.put("objMission", self);
+		dctParams.put("objKiller", getMissionHolder(self));
+		messageTo(objTarget, "addJediListener", dctParams, 0, true);
+
+
+		dictionary d = new dictionary();
+		d.put("gametime", getGameTime());
+		messageTo(objTarget, "handleUpdateBountyMissionTime", d, 0.0f, true);
+	}
+
+	setObjVar(self, "intState", STATE_BOUNTY_INFORMANT); // talk to informant
+
+	obj_id objMissionData = getMissionData(self);
+	obj_id objPlayer = getMissionHolder(self);
+
+
+
+	//debugSpeakMsg(objPlayer, "Destruction Mission Started");
+
+// holocron stuff
+	int intMissionDifficulty = getIntObjVar(objMissionData, "intBountyDifficulty"); // this is used to modify many things
+	string strEventName = "";
+	if(intMissionDifficulty==1)
+	{
+		strEventName = "EasyBountyMissionGranted";
+	}
+	else
+	{
+		strEventName = "HardBountyMissionGranted";
+	}
+
+	dictionary dctParams = new dictionary();
+	dctParams.put("eventName",strEventName);
+	messageTo(objPlayer, "handleHolocronEvent", dctParams, 0, false);
+	return SCRIPT_CONTINUE;
+
+
+}
+
+
+
+messageHandler bountyIncomplete()
+{
+	obj_id objPlayer = getMissionHolder(self);
+	string strTitleString = MISSION_INCOMPLETE_PERSISTENT_MESSAGE;
+	obj_id objMissionData = getMissionData(self);
+	int intStringId = getIntObjVar(objMissionData, "intStringId");
+	string strMessageString = "m"+intStringId+"d"; // description
+	string_id strMessage= new string_id(GENERIC_MISSION_MESSAGE_STRING_FILE, "incomplete");
+	sendSystemMessage(objPlayer, strMessage);
+	sendMissionPersistentMessage(self, "incomplete");
+	//increase BH incomplete counter by one
+	if (hasObjVar(objMissionData, "jediBonusReward"))
+	{
+		missions.increaseBountyJediKillTracking(objPlayer, missions.ABORTS);
+	}
+		endMission(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bountyTimedOut()
+{
+	obj_id objPlayer = getMissionHolder(self);
+	string strTitleString = MISSION_TIMED_OUT_PERSISTENT_MESSAGE;
+	obj_id objMissionData = getMissionData(self);
+	int intStringId = getIntObjVar(objMissionData, "intStringId");
+	string strMessageString = "m"+intStringId+"d"; // description
+	string_id strMessage= new string_id(GENERIC_MISSION_MESSAGE_STRING_FILE, "timed_out");
+	sendSystemMessage(objPlayer, strMessage);
+	sendMissionPersistentMessage(self, "timed_out");
+	//increase BH timeout counter by one
+	if (hasObjVar(objMissionData, "jediBonusReward"))
+	{
+		missions.increaseBountyJediKillTracking(objPlayer, missions.TIMEOUTS);
+	}
+	endMission(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bountyFailure()
+{
+	obj_id objPlayer = getMissionHolder(self);
+	string_id strMessage= new string_id(GENERIC_MISSION_MESSAGE_STRING_FILE, "failed");
+	sendSystemMessage(objPlayer, strMessage);
+
+	string strTitleString = MISSION_FAILURE_PERSISTENT_MESSAGE;
+
+	obj_id objMissionData = getMissionData(self);
+	int intStringId = getIntObjVar(objMissionData, "intStringId");
+	string strMessageString = "m"+intStringId+"d"; // description
+
+	sendMissionPersistentMessage(self, "fail");
+	//increase BH fail counter by one
+	if (hasObjVar(objMissionData, "jediBonusReward"))
+	{
+		missions.increaseBountyJediKillTracking(objPlayer, missions.LOSSES);
+	}
+	endMission(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler bountySuccess()
+{
+	if (!hasObjVar(self, "intCompleted"))
+	{
+		setObjVar(self, "intCompleted", 1);
+		obj_id objPlayer = getMissionHolder(self);
+		deliverReward(self);
+		playMusic(objPlayer, "sound/music_mission_complete.snd");
+		endMission(self);
+	}
+	return SCRIPT_CONTINUE;
+
+}
+
+messageHandler OnEndMission()
+{
+	//LOG("LOG_CHANNEL", "Mission end!");
+	cleanupObjects(self);
+	debugServerConsoleMsg(self, "Ending mission");
+	// cleanup goes here
+	cleanupLocationTargets(self);
+	debugServerConsoleMsg(self, "cleaned up locationt argets, getting objwaypoint objvars");
+	obj_id objTargetWaypoint = getObjIdObjVar(self, "objTargetWaypoint");
+	debugServerConsoleMsg(self, "got waypoint objvar");
+
+	if(objTargetWaypoint ==null)
+	{
+		// something bad
+		debugServerConsoleMsg(self, "objTargetWaypoint ObjVar is null!");
+		return SCRIPT_CONTINUE;
+
+	}
+	debugServerConsoleMsg(self, "ObjTargetWaypoint is "+objTargetWaypoint);
+	setWaypointActive(objTargetWaypoint, false);
+	setWaypointVisible(objTargetWaypoint, false);
+
+	destroyObject(objTargetWaypoint);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler targetInWater()
+{
+	dictionary dctParams = new dictionary();
+	
+	obj_id objPlayer = getMissionHolder(self);
+	obj_id objDroid = getObjIdObjVar(self, "objDroid");
+	int intDroidType = getIntObjVar(self, "intDroidType");
+	int intTrackType = getIntObjVar(self, "intTrackType");
+	
+	dctParams.put("intDroidType", intDroidType);
+	dctParams.put("objDroid", objDroid);
+	dctParams.put("intTrackType", intTrackType);
+	dctParams.put("objPlayer", objPlayer);
+	
+	messageTo(self, "findTarget", dctParams, 10, true);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler findTarget()
+{
+// abilities : droid_find
+// droid_track
+// bounty_hunter_basic
+// bounty_hunter_advanced
+// bounty_hunter_expert
+
+// mods
+// droid_find_chance = #
+// droid_track_chance = #
+// droid_tracks = #
+// droid_response_speed = #
+// droid_track_speed = #
+
+//DROID_TRACK_TARGET
+//DROID_FIND_TARGET
+	debugServerConsoleMsg(self, "Tracking target");
+	dictionary dctParams = new dictionary();
+	obj_id objPlayer = getMissionHolder(self);
+	utils.setScriptVar(self, "intTracking", 1);
+
+	obj_id objDroid = params.getObjId("objDroid");
+	int intDroidType = params.getInt("intDroidType");
+	int intTrackType = params.getInt("intTrackType");
+	location locCurrentLocation = getLocation(objPlayer);
+	string strHomePlanet = locCurrentLocation.area;
+	debugServerConsoleMsg(self, "strHomePlanet is "+strHomePlanet);
+
+	obj_id objMissionData = getMissionData(self);
+
+
+	// 1 : do we succed
+	// target_not_found_1 -> 6
+	// target_track_lost
+	// target_not_on_planet
+	int intTrackChance = getSkillStatMod(objPlayer, "droid_track_chance");
+	int intFindChance = getSkillStatMod(objPlayer, "droid_find_chance");
+	int intTracksLeft = getSkillStatMod(objPlayer, "droid_tracks");
+	int intTrackSpeed = getSkillStatMod(objPlayer, "droid_track_speed");
+	int intFindSpeed = getSkillStatMod(objPlayer, "droid_find_speed"); // %, need to be convereted to floats to modify time
+
+	LOG("missions", "intTrackSpeed = "+intTrackSpeed);
+	LOG("missions", "intFindSpeed = "+intFindSpeed); // skill mods
+
+
+	// we use bounty_find_speed as our base
+
+	location locPlayerLocation = getLocation(objPlayer);
+
+	float fltDistance = 0;
+
+	if(!hasObjVar(self, "objTarget"))
+	{
+		location locSpawnLocation = getLocationObjVar(self, "locSpawnLocation");
+
+
+		fltDistance = getDistance(locPlayerLocation, locSpawnLocation);
+		if(locPlayerLocation.area!=locSpawnLocation.area)
+		{
+			fltDistance = fltDistance + 8000;
+		}
+	}
+	else
+	{
+		fltDistance = rand(5000, 15000);
+	}
+
+	//intDistance for offplanet = 8000->24000
+	// otherwise it's 0->160000
+	// min time is BOUNTY_TRAC_SPEED
+	// BOUNTY_FIND_SPEED
+	// max time is 20 minutes
+	LOG("missions", "fltDistance is "+fltDistance);
+
+	float fltBaseFindSpeed = fltDistance/150;
+	float fltBaseTrackSpeed =fltDistance/75;
+	LOG("missions", "base find speed is "+fltBaseFindSpeed);
+	LOG("missions", "base track speed is "+fltBaseTrackSpeed);
+
+	fltBaseFindSpeed = fltBaseFindSpeed + BOUNTY_FIND_SPEED;
+	fltBaseTrackSpeed = fltBaseTrackSpeed + BOUNTY_TRACK_SPEED;
+
+	LOG("missions", "base1 find speed is "+fltBaseFindSpeed);
+	LOG("missions", "base1 track speed is "+fltBaseTrackSpeed);
+
+	fltBaseFindSpeed = fltBaseFindSpeed + rand(60, 120);
+	fltBaseTrackSpeed = fltBaseTrackSpeed + rand(60, 180);
+
+	LOG("missions", "base2 find speed is "+fltBaseFindSpeed);
+	LOG("missions", "base2 track speed is "+fltBaseTrackSpeed);
+
+
+	float fltTrackSpeed = (float)(intTrackSpeed);
+	float fltFindSpeed = (float)(intFindSpeed);
+	fltTrackSpeed = 1f - (fltTrackSpeed / 100);
+	fltFindSpeed = 1f - (fltFindSpeed / 100);
+
+	if (fltTrackSpeed <= 0)
+		fltTrackSpeed = .01f;
+	if (fltFindSpeed <= 0)
+		fltFindSpeed = .01f;
+
+	fltTrackSpeed = fltBaseTrackSpeed* fltTrackSpeed;
+	fltFindSpeed = fltBaseFindSpeed* fltFindSpeed;
+
+	if(fltTrackSpeed<30)
+	{
+		fltTrackSpeed = 30.0f;
+	}
+
+
+	if(fltFindSpeed<60)
+	{
+		fltFindSpeed = 60.0f;
+
+	}
+
+	// 1: do we succeed at finding our target.
+	int intRoll = rand(1, 100);
+	
+	if(intTrackType==DROID_TRACK_TARGET)
+	{
+		debugServerConsoleMsg(self, "track type is DROID_TRACK_TARGER");
+			// we do a find and a track check.. if the track check fails, we do a find.
+		if(intRoll<=intFindChance)
+		{
+			if(intRoll<=intTrackChance)
+			{
+				// We TRACK!
+				utils.setScriptVar(self, "intTracking", 1);
+				dctParams.put("intDroidType", intDroidType);
+				dctParams.put("strHomePlanet", locCurrentLocation.area);
+				dctParams.put("intTracksLeft", intTracksLeft);
+				dctParams.put("fltTrackSpeed", fltTrackSpeed);
+				dctParams.put("intTrackType", intTrackType);
+				messageTo(self, "probe_Droid_Response", dctParams, fltTrackSpeed, true);
+
+			}
+			else
+			{
+				// WE FIND!
+				utils.setScriptVar(self, "intTracking", 1);
+				dctParams.put("intDroidType", intDroidType);
+				dctParams.put("strHomePlanet", locCurrentLocation.area);
+				dctParams.put("intTracksLeft", 1);
+				dctParams.put("intTrackType", intTrackType);
+				messageTo(self, "probe_Droid_Response", dctParams, fltFindSpeed, true);
+			}
+		}
+		else
+		{
+			messageTo(self, "probe_Droid_Find_Fail", null, rand(0, 5), true);
+			return SCRIPT_CONTINUE;
+
+			// WE FAIL!
+		}
+	}
+	else if(intTrackType==DROID_FIND_TARGET)
+	{
+		// we just do a find, 1 shot
+		if(intRoll<=intFindChance)
+		{
+			debugServerConsoleMsg(self, "finding target at speed "+fltFindSpeed);
+			utils.setScriptVar(self, "intTracking", 1);
+			dctParams.put("intDroidType", intDroidType);
+			dctParams.put("strHomePlanet", locCurrentLocation.area);
+			dctParams.put("intTracksLeft", 1);
+			dctParams.put("intTrackType", intTrackType);
+			messageTo(self, "probe_Droid_Response", dctParams, fltFindSpeed, true);
+			// WE FIND
+		}
+		else
+		{
+			messageTo(self, "probe_Droid_Find_Fail", null, rand(0, 5), true);
+			return SCRIPT_CONTINUE;
+			// WE FAIL!
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler probe_Droid_Find_Fail()
+{
+	string_id strSpam = new string_id("mission/mission_generic", "target_not_found_"+rand(1,6));
+	sendSystemMessage(getMissionHolder(self), strSpam);
+	utils.removeScriptVar(self, "intTracking");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler probe_Droid_Track_Lost()
+{
+	string_id strSpam = new string_id("mission/mission_generic", "target_track_lost");
+	sendSystemMessage(getMissionHolder(self), strSpam);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler probe_Droid_Response()
+{
+	dictionary dctParams = new dictionary();
+	obj_id objMissionData = getMissionData(self);
+	obj_id objPlayer = getMissionHolder(self);
+	string strHomePlanet = params.getString("strHomePlanet");
+
+	int intTracksLeft = params.getInt("intTracksLeft");
+	intTracksLeft = intTracksLeft - 1;
+
+	if(intTracksLeft<0)
+	{
+		// CLEANUP
+		debugServerConsoleMsg(self, "intTracksLeft is "+intTracksLeft);
+		utils.removeScriptVar(self, "intTracking");
+		messageTo(self, "probe_Droid_Track_Lost", dctParams, rand(5, 10), false);
+		return SCRIPT_CONTINUE;
+	}
+	boolean canBeResolved = true;
+	if (strHomePlanet != null && strHomePlanet.equals("dungeon1"))
+	{
+		string_id strSpam = new string_id("mission/mission_generic", "out_in_space");
+		sendSystemMessage(objPlayer, strSpam);
+		utils.removeScriptVar(self, "intTracking");
+		messageTo(self, "probe_Droid_Track_Lost", dctParams, rand(5, 10), false);
+		return SCRIPT_CONTINUE;
+	}
+
+//BEGIN START LOCATION (get the location of the target)
+	location locSpawnLocation = new location();
+	obj_id objTarget = null;
+
+	if(hasObjVar(objMissionData, "objTarget")) // it's a jedi mission
+	{
+
+		// is the jedi online/offline
+		objTarget = getObjIdObjVar(objMissionData, "objTarget");
+		if(objTarget == null)
+		{
+			CustomerServiceLog("BountyHunter", "Lost target for hunter %TU" , self);
+			utils.removeScriptVar(self, "intTracking");
+			messageTo(self, "probe_Droid_Track_Lost", dctParams, rand(5, 10), false);
+			return SCRIPT_CONTINUE;
+		}
+
+		location tmpLocation = getLocation(objTarget);
+		if (tmpLocation != null)
+		{
+			obj_id topmost = getTopMostContainer(objTarget);
+			if (topmost != null)
+			{
+				tmpLocation = getLocation(topmost);
+			}
+			locSpawnLocation = tmpLocation;
+		}
+		else
+		{
+			canBeResolved = false;
+			dictionary dctJediInfo = requestJedi(objTarget);
+			if(dctJediInfo == null)
+			{
+				// target not available.
+				string_id strSpam = new string_id("mission/mission_generic", "jedi_not_online");
+				sendSystemMessage(objPlayer, strSpam);
+				utils.removeScriptVar(self, "intTracking");
+				messageTo(self, "probe_Droid_Track_Lost", dctParams, rand(5, 10), false);
+				return SCRIPT_CONTINUE;
+			}
+
+			boolean boolOnline = dctJediInfo.getBoolean("online");
+			if (boolOnline)
+			{
+				locSpawnLocation = dctJediInfo.getLocation("location");
+				if (locSpawnLocation == null)
+				{
+					CustomerServiceLog("BountyHunter", "Got null location from Jedi manager for Jedi %TT hunted by %TU" , self, objTarget);
+					utils.removeScriptVar(self, "intTracking");
+					messageTo(self, "probe_Droid_Track_Lost", dctParams, rand(5, 10), false);
+					return SCRIPT_CONTINUE;
+				}
+			}
+			else
+			{
+				// target not available
+				string_id strSpam = new string_id("mission/mission_generic", "jedi_not_online");
+				sendSystemMessage(objPlayer, strSpam);
+				utils.removeScriptVar(self, "intTracking");
+				messageTo(self, "probe_Droid_Track_Lost", dctParams, rand(5, 10), false);
+				return SCRIPT_CONTINUE;
+			}
+		}
+	}
+	else if(hasObjVar(objMissionData, "intTargetCreated")) //not a jedi
+	{
+		locSpawnLocation = getMissionStartLocation(objMissionData);
+
+	}
+	else //not a jedi
+	{
+		locSpawnLocation = getLocationObjVar(self, "locSpawnLocation");
+	}
+//END GET LOCATION
+
+	float fltTrackSpeed = params.getFloat("fltTrackSpeed");
+	/// speed up later tracks
+	fltTrackSpeed = fltTrackSpeed / 4;
+	params.put("intTracksLeft", intTracksLeft);
+	// target_located_area
+	int intDroidType = params.getInt("intDroidType");
+
+	boolean sendProbotResponse = false;
+	boolean sendSeekerResponse = false;
+	boolean booleanCoverState = params.getBoolean("booleanCoverState");
+
+	if(toLower(locSpawnLocation.area).startsWith("kashyyyk") &&  intDroidType == DROID_PROBOT  )
+	{
+		sendSystemMessage(objPlayer, new string_id("mission/mission_generic", "no_seek_kashyyyk"));
+		utils.removeScriptVar(self, "intTracking");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(toLower(locSpawnLocation.area).equals("dungeon1") &&  intDroidType == DROID_PROBOT  )
+	{
+		//LOG("bh", "dungeon1 reached");
+		if(hasObjVar(objMissionData, "objTarget")) //looking for a player
+		{
+			// is the player online and is he on the Nova Orion station?
+			//LOG("bh", "objTarget reached. ObjTarget is " + objTarget);
+			if(isIdValid(objTarget))
+			{
+				dictionary dctJediInfo = requestJedi(objTarget);
+				location targetLoc = dctJediInfo.getLocation("location");
+				
+				if(targetLoc!=null)
+				{
+					string buildoutAreaName = getBuildoutAreaName(targetLoc.x, targetLoc.z, "dungeon1");
+					//LOG("bh", "buildoutAreaName is "+ buildoutAreaName);
+					if(buildoutAreaName.equals ("nova_orion_station"))
+					{
+						string_id strSpam = new string_id("mission/mission_generic", "bounty_on_nova_orion");
+						sendSystemMessage(objPlayer, strSpam);
+						utils.removeScriptVar(self, "intTracking");
+						return SCRIPT_CONTINUE;
+					}
+				}
+			}
+		}
+	}
+
+
+	if(toLower(locSpawnLocation.area).startsWith("mustafar")  &&  intDroidType == DROID_PROBOT  )
+	{
+		sendSystemMessage(objPlayer, new string_id("mission/mission_generic", "no_seek_mustafar"));
+		utils.removeScriptVar(self, "intTracking");
+		return SCRIPT_CONTINUE;
+	}
+
+	if (!locSpawnLocation.area.equals(strHomePlanet))
+	{
+		if(intDroidType == DROID_PROBOT)
+		{
+			sendProbotResponse = true;
+		}
+		else
+		{
+			string_id strSpam = new string_id("mission/mission_generic", "target_not_on_planet");
+			sendSystemMessage(objPlayer, strSpam);
+			utils.removeScriptVar(self, "intTracking");
+			return SCRIPT_CONTINUE;
+		}
+	} //if not on same planet
+	else if (canBeResolved) //i am on the same planet and can find the object
+	{
+		if(intDroidType==DROID_PROBOT)
+		{
+			sendProbotResponse = true;
+		}
+		else
+		{
+			sendSeekerResponse = true;
+		}
+	}
+	else if (objTarget != null)//I am on the same planet, but cannot find the object.  Use the new function to find it
+	{
+		findObjectAnywhere(objTarget, self);
+		messageTo(self, "probe_Droid_Response", params, fltTrackSpeed, true);
+	}
+	else
+	{
+		CustomerServiceLog("BountyHunter", "Could not acquire target for hunter %TU" , self);
+		utils.removeScriptVar(self, "intTracking");
+		messageTo(self, "probe_Droid_Track_Lost", dctParams, rand(5, 10), false);
+		return SCRIPT_CONTINUE;
+	}
+	if (sendProbotResponse)
+	{
+		updateMissionWaypoint(self, locSpawnLocation);
+		string_id strSpam = new string_id("mission/mission_generic", "target_location_updated");
+		sendSystemMessage(objPlayer, strSpam);
+		string strTargetLocation = "target_located_" + locSpawnLocation.area;
+		strSpam = new string_id("mission/mission_generic", strTargetLocation);
+		sendSystemMessage(objPlayer, strSpam);
+
+		messageTo(self, "probe_Droid_Response", params, fltTrackSpeed, true);
+	}
+	else if(sendSeekerResponse)
+	{
+		int intTrackType = params.getInt("intTrackType");
+
+		updateMissionWaypoint(self, locSpawnLocation);
+		string_id strSpam = new string_id("mission/mission_generic", "target_location_updated");
+		sendSystemMessage(objPlayer, strSpam);
+
+		if (intTrackType == DROID_TRACK_TARGET)
+		{
+			if(intTracksLeft>0)
+			{
+				strSpam =new string_id( "mission/mission_generic", "target_continue_tracking");
+				sendSystemMessage(objPlayer, strSpam);
+			}
+		}
+		else if (intTrackType == DROID_FIND_TARGET)
+		{
+			if (hasObjVar(objMissionData, "strTargetName"))
+			{
+				string msg = utils.packStringId(new string_id("mission/mission_generic", "seeker_droid_seek_target"));
+				msg += " "+getStringObjVar(objMissionData, "strTargetName");
+				sendSystemMessage(objPlayer, msg, null);
+			}
+		}
+
+		messageTo(self, "probe_Droid_Response", params, fltTrackSpeed, true);
+	}	return SCRIPT_CONTINUE;
+}
+
+messageHandler foundObject()
+{
+	string sceneId = params.getString("scene");
+	location loc = params.getLocation("location");
+	loc.area = sceneId;
+	obj_id objPlayer = getMissionHolder(self);
+
+	updateMissionWaypoint(self, loc);
+	string_id strSpam = new string_id("mission/mission_generic", "target_location_updated");
+	sendSystemMessage(objPlayer, strSpam);
+	strSpam =new string_id( "mission/mission_generic", "target_continue_tracking");
+	sendSystemMessage(objPlayer, strSpam);
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler moveTarget()
+{
+	//LOG("bh", "moveTarget called");
+	
+	int sequence = utils.getIntScriptVar(self, "moveTargetSequence");
+	if (params.getInt("moveTargetSequence") != sequence)
+	{
+		//LOG("bh", "sequences didn't match");
+		return SCRIPT_CONTINUE;
+	}
+
+	if (hasObjVar(self, "intTargetSpawned"))
+	{
+		//LOG("bh", "intTargetSpawned returned true");
+		return SCRIPT_CONTINUE;
+	}
+
+	//LOG("bh", "moveTargetSequence is" + sequence);
+
+	debugServerConsoleMsg(self, "Moving Target");
+
+	const int MOVEMENT_RATE_PER_SECOND = 1; /// lets use 1 + mission difficulty, capped at 4
+	const int MOVEMENT_RATE_MIN_CALLBACK = 40;
+	const int MOVEMENT_RATE_MAX_CALLBACK = 75;
+	int intDelay = rand(MOVEMENT_RATE_MIN_CALLBACK, MOVEMENT_RATE_MAX_CALLBACK);
+
+	obj_id objMissionData = getMissionData(self);
+	int intMissionDifficulty = getIntObjVar(objMissionData, "intBountyDifficulty"); // this is used to modify many things
+	float fltMovementRate = MOVEMENT_RATE_PER_SECOND + intMissionDifficulty;
+	float fltOffPlanetChance = intMissionDifficulty * 30; // 60-90% chance of going off planet, since noob doesnt move
+	if(hasObjVar(self, "intMovedOffPlanet"))
+	{
+		fltOffPlanetChance = 0; // DOn't go off planet if you just left
+	}
+	if(fltMovementRate>4)
+	{
+		fltMovementRate = 4;
+	}
+
+	float fltDelay;
+
+	location locSpawnLocation = getLocationObjVar(self, "locSpawnLocation");
+	// how do we move the npc..
+	// how often do we move
+
+	if(!hasObjVar(self, "locDestination"))
+	{
+		//LOG("bh", "didn't have locDestination objvar");
+		
+		// we're going somewhere!
+		// so we want to pick a random city on the planet and travel towards that
+		int intRoll = rand(1,100);
+		if((intRoll<fltOffPlanetChance)&&(hasStarPort(locSpawnLocation)))
+		{
+			// we decide if we move off planet, if we do, we change the spawnloction, add a callback
+			string strNewPlanet = PLANETS[rand(0, PLANETS.length-1)];
+			location locDestination = locations.getBountyLocation(strNewPlanet);
+			setObjVar(self, "locSpawnLocation", locDestination);
+			setObjVar(self, "intMovedOffPlanet", 1); // so we don't bounce twice
+			fltDelay = rand(30, 120);
+		}
+		else
+		{
+			location locDestination = locations.getBountyLocation(locSpawnLocation.area);
+			setObjVar(self, "locDestination", locDestination);
+			fltDelay = rand(100, 300);
+		}
+	}
+	else
+	{
+		location locDestination = getLocationObjVar(self, "locDestination");
+		// move towards location!
+		float fltDistance = 0;
+		float fltTime = params.getFloat("fltTime");
+
+		fltDistance = fltMovementRate * fltTime;
+		locSpawnLocation = locations.moveLocationTowardsLocation(locSpawnLocation, locDestination, fltDistance);
+		setObjVar(self, "locSpawnLocation", locSpawnLocation);
+
+		fltDistance = getDistance(locDestination, locSpawnLocation);
+		if(fltDistance<128)
+		{
+			setObjVar(self, "locSpawnLocation", locDestination);
+			locSpawnLocation = locDestination;
+			removeObjVar(self, "locDestination");
+		}
+		setupSpawn(self, locSpawnLocation);
+		fltDelay = rand(MOVEMENT_RATE_MIN_CALLBACK, MOVEMENT_RATE_MAX_CALLBACK);
+		//LOG("bh", "had locDestination. locDestination is " + locDestination);
+		//LOG("bh", "fltDistance is " + fltDistance);
+		//LOG("bh", "fltDelay is " + fltDelay);
+	}
+
+
+	dictionary dctParams = new dictionary();
+	dctParams.put("fltTime", fltDelay);
+
+	sequence = sequence + 1;
+	utils.setScriptVar(self, "moveTargetSequence", sequence);
+	dctParams.put("moveTargetSequence", sequence);
+	messageTo(self, "moveTarget", dctParams, fltDelay, false);
+	//LOG("bh", "message to moveTarget again sent. fltDelay is " + fltDelay);
+	//LOG("bh", "new locSpawnLocation is " + locSpawnLocation);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler stopTracking()
+{
+	utils.removeScriptVar(self, "intTracking");
+	return SCRIPT_CONTINUE;
+}
+
+// Just making sure the player knows the seeker hasn't forgotten him
+messageHandler halfwayNotification()
+{
+	if((params == null) || (params.isEmpty()))
+		return SCRIPT_CONTINUE;
+
+	obj_id objPlayer = params.getObjId("objPlayer");
+	//Seeker should report shortly, please stand by.
+	string_id strSpam = new string_id("mission/mission_generic", "seeker_droid_standby");
+	sendSystemMessage(objPlayer, strSpam);
+	return SCRIPT_CONTINUE;
+}

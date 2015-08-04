@@ -1,0 +1,562 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        master.script
+ * Description:  master poi object script: POI = factoryliberation
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include ai.ai_combat;
+include library.poi;
+include library.scenario;
+include library.debug;
+include library.theater;
+include library.ai_lib;
+include library.combat;
+include library.factions;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits theme_park.poi.base;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string SCENARIO_NAME				= "factoryliberation";
+const string LOG_NAME					= "poiFactoryLiberation Master";
+//const string SCENARIO_THEATER				= "object/building/poi/hq/factory_liberation_theatre.iff";
+const string SCENARIO_THEATER				= "object/building/poi/tatooine_factory_liberation.iff";
+const string BASE_PATH					= "poi." + SCENARIO_NAME;
+const string SCRIPT_ANTAGONIST				= BASE_PATH + ".antagonist";
+const string SCRIPT_MEDIATOR				= BASE_PATH + ".mediator";
+const string SCRIPT_PRISONER				= BASE_PATH + ".prisoner";
+const string SCRIPT_PIRATE				= BASE_PATH + ".pirate";
+const string TBL					= "datatables/poi/" + SCENARIO_NAME + "/setup.iff";
+const string MEDIATOR_EASY				= "MEDIATOR_TEMPLATE_EASY";
+const string MEDIATOR_MEDIUM				= "MEDIATOR_TEMPLATE_MEDIUM";
+const string MEDIATOR_HARD				= "MEDIATOR_TEMPLATE_HARD";
+const string MEDIATOR_TYPE				= "MEDIATOR_TYPE";
+const string ANTAGONIST_EASY				= "ANTAGONIST_TEMPLATE_EASY";
+const string ANTAGONIST_MEDIUM				= "ANTAGONIST_TEMPLATE_MEDIUM";
+const string ANTAGONIST_HARD				= "ANTAGONIST_TEMPLATE_HARD";
+const string ANTAGONIST_TYPE				= "ANTAGONIST_TYPE";
+const int	 DEFAULT_ANTAGONIST_COUNT		= 1;
+const int	 antagonistCoordsX[]			= { 8,  -10,  30,  -20, 30,  0,   35 };
+const int	 antagonistCoordsZ[]			= { 15, -15,  13,  15,  -15, -20, 0 };
+const int	 MAX_DIFF				= 70;
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	if ( !scenario.initScenario( self, TBL ) )
+		scenario.cleanup( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnUnloadedFromMemory
+//------------------------------------------------
+
+trigger OnUnloadedFromMemory()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanupScenario
+//------------------------------------------------
+
+messageHandler cleanupScenario()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// destroySelf
+//------------------------------------------------
+
+messageHandler destroySelf()
+{
+	if ( !scenario.initScenario( self, TBL ) )
+		scenario.cleanup( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initScenario
+//
+// Called by scenario lib.
+//------------------------------------------------
+
+messageHandler initScenario()
+{
+	// Validate parameters.
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		scenario.cleanup(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Environment Setup
+	*/
+
+	// Set wall state to not destroyed.
+	setObjVar( self, "wallHasBeenDestroyed", false );
+
+	// Get our mediator types.
+	setObjVar( self, MEDIATOR_EASY, params.getString( MEDIATOR_EASY ) );
+	setObjVar( self, MEDIATOR_MEDIUM, params.getString( MEDIATOR_MEDIUM ) );
+	setObjVar( self, MEDIATOR_HARD, params.getString( MEDIATOR_HARD ) );
+
+	// Get our antagonist type.
+	setObjVar( self, ANTAGONIST_EASY, params.getString( ANTAGONIST_EASY ) );
+	setObjVar( self, ANTAGONIST_MEDIUM, params.getString( ANTAGONIST_MEDIUM ) );
+	setObjVar( self, ANTAGONIST_HARD, params.getString( ANTAGONIST_HARD ) );
+
+	// Get our difficulty level (we support 5 to 70).
+	// Easy			5-27
+	// Medium		28-47
+	// Hard			48-70
+	int difficultyLevel = getIntObjVar( self, "spawning.intDifficultyLevel" );
+	if ( difficultyLevel == 0 ) // Force for debug.
+		difficultyLevel = 5;
+
+	if ( (difficultyLevel >= 5) && (difficultyLevel < 28) )
+	{
+		// Prepare an easy scenario.
+		setObjVar( self, ANTAGONIST_TYPE, getStringObjVar( self, ANTAGONIST_EASY ) );
+		setObjVar( self, MEDIATOR_TYPE, getStringObjVar( self, MEDIATOR_EASY ) );
+	}
+	else if ( (difficultyLevel >= 28) && (difficultyLevel < 48) )
+	{
+		// Prepare a medium scenario.
+		setObjVar( self, ANTAGONIST_TYPE, getStringObjVar( self, ANTAGONIST_MEDIUM ) );
+		setObjVar( self, MEDIATOR_TYPE, getStringObjVar( self, MEDIATOR_MEDIUM ) );
+	}
+	else
+	{
+		// Cap at max difficulty?
+		if ( difficultyLevel > MAX_DIFF )
+			difficultyLevel = MAX_DIFF;
+
+		// Prepare a hard scenario.
+		setObjVar( self, ANTAGONIST_TYPE, getStringObjVar( self, ANTAGONIST_HARD ) );
+		setObjVar( self, MEDIATOR_TYPE, getStringObjVar( self, MEDIATOR_HARD ) );
+	}
+
+	// Create teams.
+	scenario.createTeam( self, "antagonist", self.toString() + "_antagonist" );
+	scenario.createTeam( self, "mediator", self.toString() + "_mediator" );
+
+	/*
+	Spawn Theaters
+	*/
+
+	if ( !createTheater( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Spawn Antagonist
+	*/
+
+	if ( !createAntagonist( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !createAntagonistMinions( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Spawn Mediators
+	*/
+
+	if ( !createMediator( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !createMediatorMinions( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Set titles.
+	messageTo( self, "setTitles", null, 2, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//  createTheater
+//
+//  Spawns the theater for the scenario.
+//------------------------------------------------
+
+boolean createTheater( obj_id self )
+{
+	// Create the theater.
+	obj_id theater = poi.createObject( SCENARIO_THEATER, 0, 0 );
+	if ( (theater == null) || (theater == obj_id.NULL_ID) )
+		return false;
+
+	// Store theater reference.
+	setObjVar( self, "theater", theater );
+
+	return true;
+}
+
+//------------------------------------------------
+// handleTheaterComplete
+//
+// Called when the theaters load.
+//------------------------------------------------
+
+messageHandler handleTheaterComplete()
+{
+	/*
+	Finalize theater.
+	*/
+
+	// Get theater ref.
+	obj_id donetheater = params.getObjId( theater.DICT_MASTER );
+
+	// Attach destroyable wall scripts to the theater.
+	attachWallScripts( self, donetheater );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//  attachWallScripts
+//
+//  Attaches wall scripts to the prison walls.
+//  The scripts handle wall damage.
+//------------------------------------------------
+
+void attachWallScripts( obj_id self, obj_id prison )
+{
+	if ( (prison == null) || (prison == obj_id.NULL_ID) )
+		return;
+
+	obj_id[] children = getObjIdArrayObjVar( prison, theater.VAR_CHILDREN );
+	if ( (children == null) || (children.length == 0) )
+	{
+		return;
+	}
+	else
+	{
+		int j = 0;
+		for ( int i = 0; i < children.length; i++ )
+		{
+			obj_id child = children[i];
+			if ( (child == null) || (child == obj_id.NULL_ID) )
+			{
+
+			}
+			else
+			{
+				// We found a child.  See if it is a wall.
+				string childname = getName( child );
+				if ( ( childname != null ) && childname.equals( "battlefield:barbed_wall" ) )
+				{
+					// Go ahead and attach the wall script.
+					if ( j == 0 )
+					{
+						// Load localization file and assign a name to the wall.
+						string convo = getStringObjVar( self, scenario.VAR_SCENARIO_CONVO );
+						if ( convo.equals("") )
+							return;
+
+						string_id wallName = new string_id( convo, "weakened_wall_name" );
+						setName( child, getString(wallName) );
+
+						// The destroyable wall.
+						attachScript( child, "poi.factoryliberation.weakened_wall" );
+					}
+					else // This wall cannot be destroyed.
+						attachScript( child, "poi.factoryliberation.invulnerable_wall" );
+
+					// Set the wall's base object.
+					setObjVar( child, POI_BASE_OBJECT, self );
+
+					j++; // Increment wall count.
+				}
+			}
+		}
+	}
+
+	return;
+}
+
+//------------------------------------------------
+// createAntagonist
+//
+// Creates the leader of the antagonist gang.
+//------------------------------------------------
+
+boolean createAntagonist( obj_id self )
+{
+	// Spawn the scenario antagonist (pirate captain).
+	string type = getStringObjVar( self, ANTAGONIST_TYPE );
+	string ident = "antagonist_0";
+	location loc = getLocation( self );
+	loc.x += -3;  //-16;
+	loc.z += 12;  //10;
+	obj_id antagonist = scenario.createTeamNpc( self, "antagonist", type, ident, loc );
+	if ( (antagonist == null) || (antagonist == obj_id.NULL_ID) )
+		return false;
+
+	// Assign initial behavior to the antagonist.
+	attachScript( antagonist, SCRIPT_ANTAGONIST );
+	ai_lib.setDefaultCalmBehavior( antagonist, ai_lib.BEHAVIOR_SENTINEL );
+
+	return true;
+}
+
+//------------------------------------------------
+// createAntagonistMinions
+//
+// Creates the rest of the antagonist group.
+//------------------------------------------------
+
+boolean createAntagonistMinions( obj_id self )
+{
+	location baseloc = getLocation( self );
+	string type = getStringObjVar( self, ANTAGONIST_TYPE );
+	if ( !type.equals("") )
+	{
+		for ( int i = 0; i < 4; i++ )
+		{
+			string ident = "antagonist_" + (i + 1);
+
+			location loiterloc = new location( baseloc );
+			loiterloc.x += antagonistCoordsX[i] - 20;
+			loiterloc.z += antagonistCoordsZ[i];
+
+			obj_id antagonist = scenario.createTeamNpc( self, "antagonist", type, ident, loiterloc );
+			if ( (antagonist == null) || (antagonist == obj_id.NULL_ID) )
+			{
+				LOG( LOG_NAME, "Couldn't create antagonist minion." );
+			}
+			else
+			{
+				setYaw( antagonist, rand(0, 359) );
+				attachScript( antagonist, SCRIPT_ANTAGONIST );
+				attachScript( antagonist, SCRIPT_PIRATE );
+				ai_lib.setDefaultCalmBehavior( antagonist, ai_lib.BEHAVIOR_LOITER );
+				ai_lib.setLoiterRanges( antagonist, 0, 2 );
+			}
+		}
+	}
+
+	return true;
+}
+
+//------------------------------------------------
+// createMediator
+//
+// Creates the leader of the mediator group.
+//------------------------------------------------
+
+boolean createMediator( obj_id self )
+{
+	// Spawn the scenario mediator (prisoner leader).
+	string type = getStringObjVar( self, MEDIATOR_TYPE );
+	string ident = "mediator_0";
+	location loc = getLocation( self );
+	loc.x += 19;  //16
+	loc.z += 1;
+	obj_id mediator = scenario.createTeamNpc( self, "mediator", type, ident, loc );
+	if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+		return false;
+
+	// Assign initial behavior to the mediator.
+	attachScript( mediator, SCRIPT_MEDIATOR );
+	attachScript( mediator, SCRIPT_PRISONER );
+	ai_lib.setDefaultCalmBehavior( mediator, ai_lib.BEHAVIOR_SENTINEL );
+
+	return true;
+}
+
+//------------------------------------------------
+// createMediatorMinions
+//
+// Creates the rest of the mediator group.
+//------------------------------------------------
+
+boolean createMediatorMinions( obj_id self )
+{
+	location baseloc = getLocation( self );
+	string type = getStringObjVar( self, MEDIATOR_TYPE );
+	if ( !type.equals("") )
+	{
+		for ( int i = 0; i < 3; i++ )
+		{
+			string ident = "mediator_" + (i + 1);
+
+			float xdelta = rand( 1f, 3f );
+			if ( i%2 == 1 )
+				xdelta *= -1f;
+			float zdelta = rand( 1f, 3f );
+			if ( i%2 == 0 )
+				zdelta *= -1f;
+			location loiterloc = new location( baseloc );
+			loiterloc.x += xdelta + 26;  //17
+			loiterloc.z += zdelta - 1;   //4
+
+			obj_id mediator = scenario.createTeamNpc( self, "mediator", type, ident, loiterloc );
+			if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+			{
+				LOG( LOG_NAME, "Couldn't create mediator minion." );
+			}
+			else
+			{
+				setYaw( mediator, rand(0, 359) );
+				attachScript( mediator, SCRIPT_MEDIATOR );
+				attachScript( mediator, SCRIPT_PRISONER );
+				ai_lib.setDefaultCalmBehavior( mediator, ai_lib.BEHAVIOR_LOITER );
+				ai_lib.setLoiterRanges( mediator, 0, 2 );
+			}
+		}
+	}
+
+	return true;
+}
+
+//------------------------------------------------
+// wallDamaged
+//
+// Called by the weakened_wall script.
+// Used to track when the wall takes damage for the first time.
+//------------------------------------------------
+
+messageHandler wallDamaged()
+{
+	obj_id m = poi.findObject( "mediator_0" );
+	if ( (m == null) || (m == obj_id.NULL_ID) || ai_lib.isInCombat( m ) )
+		return SCRIPT_CONTINUE;
+	messageTo( m, "celebrateWallLeader", null, 0, false );
+
+	// Find one other mediator and tell him to celebrate.
+	m = poi.findObject( "mediator_1" );
+	if ( (m == null) || (m == obj_id.NULL_ID) || ai_lib.isInCombat( m ) )
+		return SCRIPT_CONTINUE;
+	messageTo( m, "celebrateWall", null, 0, false );
+
+	// Set the progress to account for wall damage.
+	setObjVar( self, "wallDamaged", true );
+
+	// Get the attacker.
+	obj_id attacker = params.getObjId( "attacker" );
+	if ( (attacker == null) || (attacker == obj_id.NULL_ID) )
+		return SCRIPT_CONTINUE;
+
+	// Call in the guards!
+	obj_id[] team = scenario.getTeamMembers( self, "antagonist" );
+	for ( int i=0; i<team.length; i++ )
+	{
+		// Have the leader say something.
+		if ( i == 0 )
+			messageTo( team[i], "defendWall", null, 0, false );
+
+		// Don't go if we are already fighting.
+		if ( ai_lib.isInCombat( team[i] ) )
+			continue;
+
+		// Take him out!
+		ai_lib.addToMentalStateToward( team[i], attacker, FEAR, 50f );
+ 		startCombat( team[i], attacker );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// wallDestroyed
+//
+// Called by the weakened_wall script.
+// Used to track when the wall has fallen.
+//------------------------------------------------
+
+messageHandler wallDestroyed()
+{
+	// One is sufficient, ignore others.
+	boolean wallHasBeenDestroyed = getBooleanObjVar( self, "wallHasBeenDestroyed" );
+	if ( wallHasBeenDestroyed )
+		return SCRIPT_CONTINUE;
+
+	setObjVar( self, "wallHasBeenDestroyed", true );
+
+	// Set the prisoner's faction back to normal so they can be attacked.
+	obj_id[] team = scenario.getTeamMembers( self, "mediator" );
+	for ( int i=0; i<team.length; i++ )
+	{
+		// Reset the faction on the others.
+		factions.setFaction( team[i], getStringObjVar( team[i], "oldFaction" ) );
+
+		// See combat.
+		ai_lib.setIgnoreCombat( team[i], false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// setTitles
+//------------------------------------------------
+
+messageHandler setTitles()
+{
+	obj_id m = poi.findObject( "mediator_0" );
+	if ( (m == null) || (m == obj_id.NULL_ID) || ai_lib.isInCombat( m ) )
+		return SCRIPT_CONTINUE;
+	poi.setTitle( m, "m_title" );
+
+	obj_id a = poi.findObject( "antagonist_0" );
+	if ( (a == null) || (a == obj_id.NULL_ID) || ai_lib.isInCombat( a ) )
+		return SCRIPT_CONTINUE;
+	poi.setTitle( a, "a_title" );
+
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,10 @@
+AUTOMAKE_OPTIONS=foreign
+SUBDIRS=src .
+lib_LTLIBRARIES=libswgSharedNetworkMessages.la
+libswgSharedNetworkMessages_la_LIBADD=src/shared/combat/libswgSharedNetworkMessagessharedcombat.la \
+	src/shared/consent/libswgSharedNetworkMessagessharedconsent.la \
+	src/shared/core/libswgSharedNetworkMessagessharedcore.la \
+	src/shared/permissionList/libswgSharedNetworkMessagessharedpermissionList.la \
+	src/shared/survey/libswgSharedNetworkMessagessharedsurvey.la
+libswgSharedNetworkMessages_la_SOURCES=src/shared/FirstSwgSharedNetworkMessages.h
+libswgSharedNetworkMessages_la_LDFLAGS=-avoid-version

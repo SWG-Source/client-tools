@@ -1,0 +1,176 @@
+/**
+ * Copyright (c) ©2004 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        item.armor.psg.script
+ * Description:  handles recharging the efficiency of a personal shield generator
+ * @author       $Author: Steve Jakab$
+ * @version      $Revision: 0$
+ */
+
+
+/***** INCLUDES ********************************************************/
+
+include library.armor;
+include library.utils;
+
+
+/***** CONSTANTS *******************************************************/
+
+const float BASE_UPDATE_TIME = 5.0f;
+const float RAND_UPDATE_TIME = 1.0f;
+
+const string PARAM_TIME       = "time";
+const string PARAM_MESSAGE_ID = "recharge_id";
+const string PSG_EFFECT_TIME  = "psgEffectTime";
+
+const string SCRIPTVAR_RECHARGE_RATE = armor.OBJVAR_ARMOR_BASE + "." + armor.OBJVAR_PSG_RECHARGE_RATE;
+const string SCRIPTVAR_MESSAGE_ID    = armor.OBJVAR_ARMOR_BASE + "." + PARAM_MESSAGE_ID;
+
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnInitialize()
+{
+	messageTo(self, "handleInitializePsg", null, 0.1f, false);
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * If we are being equipped, start regenerating. If we are being unequipped, reset our efficiency.
+ */
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	float recharge = utils.getFloatScriptVar(self, SCRIPTVAR_RECHARGE_RATE);
+	if ( recharge <= 0 )
+		return SCRIPT_CONTINUE;
+
+	armor.setPsgEfficiency(self, 0);
+
+	if ( isPlayer(destContainer) )
+	{
+		// start our efficiency timer
+		startRegeneration(self);
+
+		// play a startup effect BUT ONLY DO IT ONCE EVERY 5 SECONDS!
+		boolean playStartUpEffect = true;
+		
+		if(utils.hasScriptVar(destContainer, PSG_EFFECT_TIME))
+		{
+			if(getGameTime() < utils.getIntScriptVar(destContainer, PSG_EFFECT_TIME))
+				playStartUpEffect = false;
+		}
+		
+		if(playStartUpEffect)
+		{
+			int psgLevel = armor.getArmorLevel(self);
+			if ( psgLevel < 0 || psgLevel >= armor.PSG_STARTUP_EFFECTS.length )
+				psgLevel = 0;
+			playClientEffectObj(destContainer, armor.PSG_STARTUP_EFFECTS[psgLevel], destContainer, "");
+			utils.setScriptVar(destContainer, PSG_EFFECT_TIME , (getGameTime() + 5));
+		}
+		
+	}
+	else if ( isPlayer(sourceContainer) && !isPlayer(destContainer) )
+	{
+		// stop the update loop by clearing our message id scriptvar
+		utils.removeScriptVar(self, SCRIPTVAR_MESSAGE_ID);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/***** CALLBACK FUNCTIONS **********************************************/
+
+messageHandler handleInitializePsg()
+{
+	armor.setPsgEfficiency(self, 0);
+
+	// determine our efficiency recharge rate
+	float baseRecharge = getFloatObjVar(self, armor.OBJVAR_ARMOR_BASE + "." + armor.OBJVAR_PSG_RECHARGE_RATE);
+	dictionary protections = armor.getArmorSpecialProtections(self);
+	float recharge = 0;
+	if ( protections != null && protections.size() > 0)
+	{
+		for ( int i = 0; i < armor.DATATABLE_SPECIAL_PROTECTIONS.length; ++i )
+		{
+			float value = protections.getFloat(armor.DATATABLE_SPECIAL_PROTECTIONS[i]);
+			if ( value > 0 )
+			{
+				recharge = baseRecharge / value;
+				if ( recharge > 1.0f )
+					recharge = 1.0f;
+				debugServerConsoleMsg(self, "*** SETTING PSG RECHARGE RATE to " + recharge + " from base " +
+					baseRecharge + ", protection " + value);
+				break;
+			}
+		}
+		if ( recharge <= 0 )
+		{
+			CustomerServiceLog("armor", "WARNING: psg " + self + " has no recharge value");
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+		return SCRIPT_CONTINUE;
+
+	utils.setScriptVar(self, SCRIPTVAR_RECHARGE_RATE, recharge);
+
+	if ( recharge > 0 )
+	{
+		// if we are equipped, start regenerating
+		obj_id parent = getContainedBy(self);
+		if ( isIdValid(parent) && isPlayer(parent) )
+		{
+			startRegeneration(self);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleEfficiencyUpdate()
+{
+	if ( !utils.hasScriptVar(self, armor.SCRIPTVAR_PSG_EFFICIENCY) || !utils.hasScriptVar(self, SCRIPTVAR_MESSAGE_ID) )
+		return SCRIPT_CONTINUE;
+
+	int messageId = params.getInt(PARAM_MESSAGE_ID);
+	int storedId = utils.getIntScriptVar(self, SCRIPTVAR_MESSAGE_ID);
+	if ( messageId != storedId )
+		return SCRIPT_CONTINUE;
+
+	// update our efficiency
+	float efficiency = armor.getPsgEfficiency(self);
+	long currentTime = System.currentTimeMillis();
+	if ( efficiency < 1.0f )
+	{
+		float recharge = utils.getFloatScriptVar(self, SCRIPTVAR_RECHARGE_RATE);
+		if ( recharge > 0 )
+		{
+			long startTime = params.getLong(PARAM_TIME);
+			float delta = recharge * (currentTime - startTime) / 5000.0f;
+			efficiency += delta;
+			armor.setPsgEfficiency(self, efficiency);
+		}
+	}
+
+	// start another update loop
+	startRegeneration(self);
+	return SCRIPT_CONTINUE;
+}
+
+/***** UTILITY FUNCTIONS ***********************************************/
+
+void startRegeneration(obj_id self)
+{
+	// start our efficiency timer
+	float time = BASE_UPDATE_TIME + rand(0.0f, RAND_UPDATE_TIME);
+	dictionary params = new dictionary();
+	params.put(PARAM_TIME, new Long(System.currentTimeMillis()));
+	// we set an id on us and pass it in the messageTo params to avoid handling more than one message sequence,
+	// since we can't cancel messageTos
+	int messageId = rand(0, Integer.MAX_VALUE - 1);
+	params.put(PARAM_MESSAGE_ID, messageId);
+	utils.setScriptVar(self, SCRIPTVAR_MESSAGE_ID, messageId);
+	messageTo(self, "handleEfficiencyUpdate", params, time, false);
+}
+

@@ -1,0 +1,396 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        manufacture.script
+ * Description:  script for manufacturing installations
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.player_structure;
+include library.craftinglib;
+include library.prose;
+include library.sui;
+
+/***** CONSTANTS *******************************************************/
+
+const string SCRIPT_ME							= "structure.manufacture.manufacture";
+
+const string_id SID_FACTORY_OPTIONS				= new string_id("manf_station","options");
+const string_id SID_SCHEMATIC					= new string_id("manf_station","schematic");
+const string_id SID_FACTORY_EXAMINE_PROMPT		= new string_id("manf_station","examine_prompt");
+const string_id SID_ACTIVATE					= new string_id("manf_station","activate");
+const string_id SID_DEACTIVATE					= new string_id("manf_station","deactivate");
+const string_id SID_INPUT_HOPPER				= new string_id("manf_station","input_hopper");
+const string_id SID_OUTPUT_HOPPER				= new string_id("manf_station","output_hopper");
+const string_id SID_SCHEMATIC_ADDED				= new string_id("manf_station","schematic_added");
+const string_id SID_SCHEMATIC_NOT_ADDED			= new string_id("manf_station","schematic_not_added");
+const string_id SID_SCHEMATIC_REMOVED			= new string_id("manf_station","schematic_removed");
+const string_id SID_SCHEMATIC_NOT_REMOVED		= new string_id("manf_station","schematic_not_removed");
+const string_id SID_INGREDIENTS					= new string_id("manf_station","ingredients");
+const string_id SID_STATION_ACTIVATED           = new string_id("manf_station","activated");
+const string_id SID_STATION_DEACTIVATED         = new string_id("manf_station","deactivated");
+const string_id SID_NO_VALID_SCHEMATIC          = new string_id("manf_station", "no_valid_schematic");
+
+const string HANDLER_UPDATE_SCHEMATIC			= "handleUpdateSchematic";
+
+const string OBJVAR_SCHEMATICS = "crafting.schematics";
+
+
+/***** TRIGGERS ********************************************************/
+
+/**
+ * Called when an object has been initialized.
+ **/
+trigger OnInitialize()
+{
+	// clear internal objvars that may be hanging around
+	removeObjVar(self, OBJVAR_SCHEMATICS);
+
+	// Check if this is a weapon factory and update it's data
+	string template = getTemplateName(self);
+
+	if (template != null && template.indexOf("weapon_factory.iff") >= 0)
+	{
+		int craftingType = getIntObjVar(self, craftinglib.OBJVAR_CRAFTING_TYPE);
+
+		craftingType &= ~CT_genericItem;	// Clear CT_genericItem bit
+		craftingType |= CT_misc;			// Set CT_misc bit
+		craftingType |= CT_space;			// Set CT_space bit
+		craftingType |= CT_reverseEngineering;	// Set CT_reverseEngineering bit
+
+		setObjVar(self, craftinglib.OBJVAR_CRAFTING_TYPE, craftingType);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	//string player_name = getFirstName(player);
+	//if ( player_name == null || player_name.length() == 0 )
+	//	return SCRIPT_CONTINUE;
+
+	if(player_structure.isStructureCondemned(self) && player_structure.isOwner(player, self))
+	{		
+		player_structure.doCondemnedSui(self, player);
+		return SCRIPT_OVERRIDE;	
+	}
+
+	boolean canAccess = player_structure.canHopper(self, player) || player_structure.isAdmin(self, player);
+
+	int mnu;
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.EXAMINE);
+	if ( mid == null )
+	{
+		mnu = mi.addRootMenu(menu_info_types.EXAMINE, new string_id("",""));
+	}
+	else
+	{
+		mid.setServerNotify(true);
+	}
+
+	mnu = mi.addRootMenu(menu_info_types.SERVER_ITEM_OPTIONS, SID_FACTORY_OPTIONS);
+
+	int id;
+	if ( isHarvesterActive(self) )
+	{
+		id = mi.addSubMenu(mnu, menu_info_types.ITEM_DEACTIVATE, SID_DEACTIVATE);
+		if ( id != 0 && !canAccess )
+			mi.getMenuItemById(id).setEnabled(false);
+	}
+	else
+	{
+		string stationSchematic = getManufactureStationSchematic(self);
+		if ( stationSchematic != null )
+		{
+			id = mi.addSubMenu(mnu, menu_info_types.ITEM_ACTIVATE, SID_ACTIVATE);
+			if ( id != 0 && !canAccess )
+				mi.getMenuItemById(id).setEnabled(false);
+			id = mi.addSubMenu(mnu, menu_info_types.SERVER_HARVEST_CORPSE, SID_INGREDIENTS);
+			if ( id != 0 && !canAccess )
+				mi.getMenuItemById(id).setEnabled(false);
+		}
+		if (stationSchematic != null || hasValidManufactureSchematicsForStation(player, self))
+		{
+			id = mi.addSubMenu(mnu, menu_info_types.SERVER_MANF_STATION_SCHEMATIC, SID_SCHEMATIC);
+			if ( id != 0 && !canAccess )
+				mi.getMenuItemById(id).setEnabled(false);
+		}
+		else
+		{
+			// send a system message to the player saying they don't have a valid schematic
+			sendSystemMessage (player, SID_NO_VALID_SCHEMATIC);
+		}
+		id = mi.addSubMenu(mnu, menu_info_types.SERVER_MANF_HOPPER_INPUT, SID_INPUT_HOPPER);
+		if ( id != 0 && !canAccess )
+			mi.getMenuItemById(id).setEnabled(false);
+		id = mi.addSubMenu(mnu, menu_info_types.SERVER_MANF_HOPPER_OUTPUT, SID_OUTPUT_HOPPER);
+		if ( id != 0 && !canAccess )
+			mi.getMenuItemById(id).setEnabled(false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	if(player_structure.isStructureCondemned(self))
+	{		
+		player_structure.doCondemnedSui(self, player);
+		return SCRIPT_CONTINUE;	
+	}
+	//string player_name = getFirstName(player);
+	//if ( player_name == null || player_name.length() == 0 )
+	//	return SCRIPT_CONTINUE;
+
+	boolean canAccess = player_structure.canHopper(self, player) || player_structure.isAdmin(self, player);
+	if ( !canAccess )
+		return SCRIPT_CONTINUE;
+
+	if ( item == menu_info_types.SERVER_HARVEST_CORPSE )
+	{
+		if (getManufactureStationSchematic(self) != null)
+		{
+			//get ingredients list here
+			string[][] ingredients = new string[1][];
+			ingredients[0] = null;
+			getIngredientsForManufactureStation(self, ingredients);
+
+			string prompt = getString(SID_FACTORY_EXAMINE_PROMPT);
+			if ( ingredients[0] != null )
+			{
+				sui.listbox(player, prompt, ingredients[0]);
+			}
+			else
+			{
+//				sui.listbox(player, prompt, (string[])null);
+			}
+		}
+	}
+	else if ( item == menu_info_types.ITEM_ACTIVATE ||
+			( item == menu_info_types.ITEM_USE && !isHarvesterActive(self) )
+			)
+	{
+		activate(self);
+		if ( isHarvesterActive(self) )
+		{
+			prose_package pp = prose.getPackage( SID_STATION_ACTIVATED, self );
+			if ( pp != null )
+				sendSystemMessageProse( player, pp );
+		}
+	}
+	else if ( item == menu_info_types.ITEM_DEACTIVATE ||
+			( item == menu_info_types.ITEM_USE && isHarvesterActive(self) )
+			)
+	{
+		deactivate(self);
+		if ( !isHarvesterActive(self) )
+		{
+			prose_package pp = prose.getPackage( SID_STATION_DEACTIVATED, self );
+			if ( pp != null )
+				sendSystemMessageProse( player, pp );
+		}
+	}
+	else if ( item == menu_info_types.SERVER_MANF_HOPPER_INPUT  )
+	{
+		obj_id inputHopper = getManufactureStationInputHopper(self);
+		if ( inputHopper != null )
+			queueCommand(player, ##"openContainer", inputHopper, "", COMMAND_PRIORITY_DEFAULT);
+	}
+	else if ( item == menu_info_types.SERVER_MANF_HOPPER_OUTPUT || item == menu_info_types.SERVER_ITEM_OPTIONS )
+	{
+		obj_id outputHopper = getManufactureStationOutputHopper(self);
+		if ( outputHopper != null )
+			queueCommand(player, ##"openContainer", outputHopper, "", COMMAND_PRIORITY_DEFAULT);
+	}
+	else if ( item == menu_info_types.SERVER_MANF_STATION_SCHEMATIC  )
+	{
+		//do schematic stuff here
+		string currentSchematicName = getManufactureStationSchematic(self);
+		if ( currentSchematicName != null )
+		{
+			int markerPos = currentSchematicName.indexOf('*');
+			if ( markerPos >= 0 )
+				currentSchematicName = currentSchematicName.substring(markerPos + 1);
+		}
+		else
+			currentSchematicName = "";
+
+		string prompt = "Current schematic installed: " + currentSchematicName;
+
+		string[][] schematics = new string[1][];
+		schematics[0] = null;
+		getValidManufactureSchematicsForStation(player, self, schematics);
+
+		if ( schematics[0] != null )
+		{
+			// extract the schematic ids from the returned strings and save them to an objvar
+			string[] schematicIds = new string[schematics[0].length];
+			for ( int i = 0; i < schematicIds.length; ++i )
+			{
+				int markerPos = schematics[0][i].indexOf('*');
+				if ( markerPos >= 0 )
+				{
+					schematicIds[i] = schematics[0][i].substring(0, markerPos);
+					schematics[0][i] = schematics[0][i].substring(markerPos + 1);
+				}
+				else
+				{
+					string err = "ERROR " + getClass().getName() + ".OnObjectMenuSelect: handling SERVER_HARVESTER_MANAGE " +
+						"schematics for player " + player + " returned invalid schematic string <" + schematics[0][i] + ">";
+					debugServerConsoleMsg(null, err);
+					LOG("crafting", err);
+					schematicIds[i] = "";
+					schematics[0][i] = "";
+				}
+			}
+			if ( schematicIds.length > 0 )
+				setObjVar(self, OBJVAR_SCHEMATICS, schematicIds);
+			else
+				removeObjVar(self, OBJVAR_SCHEMATICS);
+
+			int pid = -1;
+			if ( schematics[0].length > 0 )
+				pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, sui.DEFAULT_TITLE, schematics[0], HANDLER_UPDATE_SCHEMATIC, false);
+			else
+				pid = sui.emptylistbox(self, player, prompt, sui.OK_CANCEL, sui.DEFAULT_TITLE, HANDLER_UPDATE_SCHEMATIC, false);
+			if ( pid == -1 )
+			{
+				LOG("crafting", "Error creating schematic listbox");
+			}
+			else
+			{
+				if (currentSchematicName != "")
+					sui.listboxUseOtherButton (pid, "@remove_schematic");
+
+				sui.setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, "@use_schematic");
+				sui.showSUIPage(pid);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+
+/***** MESSAGEHANDLERS *************************************************/
+
+/**
+ * Handles a player selcting a schematic to use in the station.
+ */
+messageHandler handleUpdateSchematic()
+{
+	string[] schematicIds = getStringArrayObjVar(self, OBJVAR_SCHEMATICS);
+	removeObjVar(self, OBJVAR_SCHEMATICS);
+
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int bp = sui.getIntButtonPressed(params);
+	switch (bp)
+	{
+		case sui.BP_CANCEL:
+			return SCRIPT_CONTINUE;
+		case sui.BP_REVERT:
+		{
+			if (sui.getListboxOtherButtonPressed (params) == true)
+			{
+				// transfer the manf schematic in the station back to the player
+				removeSchematicFromStation(self, player);
+				return SCRIPT_CONTINUE;
+			}
+		}
+	}
+
+	if ( schematicIds == null )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx < 0 )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	else if (idx >= schematicIds.length)
+	{
+		string err = "ERROR " + getClass().getName() + ".handleUpdateSchematic: bad index " + idx +
+			" chosen for schematic list of length " + schematicIds.length;
+		debugServerConsoleMsg(null, err);
+		LOG("crafting", err);
+	}
+	else if (schematicIds[idx] == null || schematicIds[idx].length() == 0)
+	{
+		string err = "ERROR " + getClass().getName() + ".handleUpdateSchematic: null/empty schematic id at index " + idx;
+		debugServerConsoleMsg(null, err);
+		LOG("crafting", err);
+	}
+	else
+	{
+		// see if we need to remove the current schematic
+ 		removeSchematicFromStation(self, player);
+
+		prose_package pp = null;
+		obj_id schematic = obj_id.getObjId(Long.parseLong(schematicIds[idx]));
+		if ( schematic == null || schematic == obj_id.NULL_ID )
+		{
+			string err = "ERROR " + getClass().getName() + ".handleUpdateSchematic: schematic id " + schematicIds[idx] +
+				"at index " + idx + " gives an invalid obj_id";
+			debugServerConsoleMsg(null, err);
+			LOG("crafting", err);
+		}
+		else
+		{
+			if (transferManufactureSchematicToStation(schematic, self))
+				pp = prose.getPackage( SID_SCHEMATIC_ADDED, schematic );
+			else
+				pp = prose.getPackage( SID_SCHEMATIC_NOT_ADDED, schematic );
+		}
+		if ( pp != null )
+			sendSystemMessageProse( player, pp );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Removes a schematic from a manf station and puts it in a player's datapad.
+ *
+ * @param station		the manf station
+ * @param player		the player
+ *
+ * @return true if the schematic was removed, false if not
+ **/
+boolean removeSchematicFromStation(obj_id station, obj_id player)
+{
+	prose_package pp = null;
+	string schematicName = getManufactureStationSchematic(station);
+	boolean transferred = transferManufactureSchematicToPlayer(station, player);
+	if ( schematicName != null && schematicName.length() > 0 )
+	{
+		obj_id schematicId = obj_id.getObjId(Long.valueOf(schematicName.substring(0, schematicName.indexOf('*'))));
+		if (isIdValid(schematicId))
+		{
+			if ( transferred )
+				pp = prose.getPackage( SID_SCHEMATIC_REMOVED, schematicId );
+			else
+				pp = prose.getPackage( SID_SCHEMATIC_NOT_REMOVED, schematicId );
+		}
+	}
+	if ( pp != null )
+		sendSystemMessageProse( player, pp );
+	return transferred;
+}

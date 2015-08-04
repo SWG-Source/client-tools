@@ -1,0 +1,758 @@
+include library.ai_lib;
+include library.callable;
+include ai.ai_combat;
+include library.pet_lib;
+include library.healing;
+include library.utils;
+include library.battlefield;
+include library.attrib;
+include library.hue;
+include library.vehicle;
+include library.city;
+include library.trial;
+include library.buff;
+
+//----------------------------------------------------------
+
+const string MENU_FILE = "pet/pet_menu";
+const string VCDPING_VEHICLE_SCRIPT_NAME = "systems.vehicle_system.vehicle_ping";
+const string MESSAGE_VEHICLE_ID          = "vehicleId";
+const string_id SID_CITY_GARAGE_BANNED 	= new string_id("city/city","garage_banned");
+const string_id SID_NO_GROUND_VEHICLE_IN_SPACE = new string_id("space/space_interaction", "no_ground_vehicle_in_space");
+
+const boolean debug = false;
+
+//----------------------------------------------------------
+
+/*
+trigger OnAttach()
+{
+	obj_id petControlDevice = callable.getCallableCD(self);
+	if ( !(couldPetBeMadeMountable(self)==0 ))
+	{
+		debugServerConsoleMsg( null, "+++ VEHICLE . onAttach +++ couldPetBeMadeMountable(pet) returned FALSE." );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !makePetMountable( self ) )
+	{
+		debugServerConsoleMsg( null, "+++ VEHICLE . onAttach +++ makePetMountable(pet) returned FALSE." );
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		setObjVar( petControlDevice, "ai.pet.trainedMount", 1 );
+	}
+	return SCRIPT_CONTINUE;
+}
+*/
+
+messageHandler revertVehicleMod()
+{
+	//LOG("vehicle", "Got revertVehicleMod msg");
+	if(params == null || !params.containsKey("type"))
+	{
+		//LOG("vehicle", "Bad parms. Bailing.");
+		return SCRIPT_CONTINUE;
+	}
+
+	int type = params.getInt("type");
+	//LOG("vehicle", "type = " + type);
+
+	if(type == vehicle.MOD_TYPE_MAX_SPEED)
+	{
+		float oldSpeed = 0.0f;
+		if(hasObjVar(self, vehicle.OBJVAR_MOD_MAX_SPEED_OLD))
+		{
+			oldSpeed = getFloatObjVar(self, vehicle.OBJVAR_MOD_MAX_SPEED_OLD);
+			removeObjVar(self, vehicle.OBJVAR_MOD_MAX_SPEED_OLD);
+		}
+
+		if(hasObjVar(self, vehicle.OBJVAR_MOD_MAX_SPEED_DURATION))
+		{
+			removeObjVar(self, vehicle.OBJVAR_MOD_MAX_SPEED_DURATION);
+		}
+
+		if(oldSpeed > 0.0f)
+		{
+			vehicle.setMaximumSpeed(self, oldSpeed);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	setAttributeAttained(self, attrib.VEHICLE);
+	//vehicle.decayVehicle(self);
+	//-- Ensure that the vehicle has the VCD ping script attached.
+	if (!hasScript(self, VCDPING_VEHICLE_SCRIPT_NAME))
+	{
+		if (debug)
+			LOG("vcdping-debug", "vehicle_base.OnInitialize(): attaching script [" + VCDPING_VEHICLE_SCRIPT_NAME + "] to vehicle id=[" + self + "]");
+		attachScript(self, VCDPING_VEHICLE_SCRIPT_NAME);
+	}
+
+	sendDestroyUnattendedVehicleSignal(self);
+
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkForJetpack ()
+{
+	string creature_name = getTemplateName (self);
+	obj_id player = params.getObjId ("player");
+	
+	boolean storeJetpack = false;
+	if (vehicle.isJetPackVehicle(self))
+	{
+		if (getMountsEnabled())	//GOTTA Have mounts enabled in server config
+		{
+			debugServerConsoleMsg( player, "+++ pet . onObjectMenuSelect +++ getMountsEneabled returnted TRUE" );
+			if ( pet_lib.canMount( self, player ))
+			{
+				debugServerConsoleMsg( player, "+++ pet . onObjectMenuSelect +++ pet_lib.canMount(self,player) returned TRUE" );
+				queueCommand(player, ##"mount", self, creature_name, COMMAND_PRIORITY_FRONT);
+				debugServerConsoleMsg( player, "+++ pet . onObjectMenuSelect +++ just attempted to Enqueue MOUNT command" );
+			}
+			else
+			{
+				storeJetpack = true;
+			}
+		}
+		else
+		{
+			storeJetpack = true;
+		}
+	}
+	
+	if ( storeJetpack )
+	{
+		string_id jetpackStoredMsg = new string_id ("pet/pet_menu", "jetpack_stored");
+		sendSystemMessage(player, jetpackStoredMsg);
+
+		obj_id petControlDevice = callable.getCallableCD(self);
+		vehicle.storeVehicle(petControlDevice, player);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleVehicleDecay()
+{
+	//vehicle.decayVehicle(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if ( isDead(self) || ai_lib.aiIsDead(player) )
+		return SCRIPT_CONTINUE;
+
+	boolean isMountedOn = isMountedOnCreatureQueried(self, player);
+	boolean isOwnedByPlayer = player == getMaster(self);
+
+	sendDestroyUnattendedVehicleSignal(self);
+
+	if (!isOwnedByPlayer && !isMountedOn)		//added for multi-passenger vehicles 7/12/05 - rct
+	{
+	LOG("special_sign", "!isOwnedByPlayer && !isMountedOn");
+		if (!doesMountHaveRoom(self))
+		{
+			LOG("special_sign", "!doesMountHaveRoom(self)");
+
+			return SCRIPT_CONTINUE;
+		}
+		else if (!vehicle.mountPermissionCheck (self, player, false))
+		{
+			LOG("special_sign", "vehicle.mountPermissionCheck ");
+		
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+		LOG("special_sign", "isOwnedByPlayer || isMountedOn");
+
+	obj_id petControlDevice = callable.getCallableCD(self);
+
+	string vehicle_name = getTemplateName (self);
+
+	if (getMountsEnabled())
+	{
+		//Mounts are mountable:
+		if (!vehicle.isJetPackVehicle(self))
+		{
+			if(pet_lib.canMount( self, player ) || isMountedOn)
+			{
+				// CuiRadialMenuManager.cpp assumes the vehicle enter/exit command is SERVER_VEHICLE_ENTER_EXIT
+				// so that the client can do client side validation to see if vehicle mounting is allowed
+				mi.addRootMenu (menu_info_types.SERVER_VEHICLE_ENTER_EXIT, new string_id(MENU_FILE,"menu_enter_exit")); // Enter/Exit toggle
+			}
+		}
+	}
+
+	if (!isOwnedByPlayer)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( ai_lib.isInCombat( player ) || pet_lib.wasInCombatRecently( self, player, false ) )
+		return SCRIPT_CONTINUE;
+
+	if (!hasObjVar( self, battlefield.VAR_CONSTRUCTED ) && !ai_lib.isInCombat(player) )
+		mi.addRootMenu (menu_info_types.PET_STORE, new string_id(MENU_FILE,"menu_store"));
+
+	if ( ai_lib.isAiDead( self ) )
+		return SCRIPT_CONTINUE;
+	
+	if ( utils.hasScriptVar(self, "inRepairZone") 
+	&& (!isDisabled(self) || (vehicle.canRepairDisabledVehicle(petControlDevice) && isDisabled(self))) )
+	{
+		obj_id garage = utils.getObjIdScriptVar(self, "inRepairZone");
+		if ( isIdValid(garage) && exists(garage) && garage.isLoaded() )
+		{
+			mi.addRootMenu(menu_info_types.SERVER_MENU1, new string_id(MENU_FILE, "menu_repair_vehicle"));
+		}
+	}
+	else if ( isDisabled(self) && hasBarcRepairKit( player ) )
+	{
+		mi.addRootMenu(menu_info_types.SERVER_MENU1, new string_id("barc_repair", "refurbish_barc"));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	// Make sure we aren't in space.
+	if (isSpaceScene())
+	{
+		sendSystemMessage(player, SID_NO_GROUND_VEHICLE_IN_SPACE);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( ai_lib.aiIsDead(player) )
+		return SCRIPT_CONTINUE;
+
+	if ( ai_lib.isInCombat( player ) || pet_lib.wasInCombatRecently( self, player, false ) )
+		return SCRIPT_CONTINUE;
+
+	boolean isMountedOn = isMountedOnCreatureQueried(self, player);
+
+	// CuiRadialMenuManager.cpp assumes the vehicle enter/exit command is SERVER_VEHICLE_ENTER_EXIT
+	// so that the client can do client side validation to see if vehicle mounting is allowed
+	if ((item != menu_info_types.SERVER_VEHICLE_ENTER_EXIT) && (player != getMaster(self)))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( ai_lib.isAiDead( player ))
+		return SCRIPT_CONTINUE;
+
+	string creature_name = getName(self);
+	obj_id petControlDevice = callable.getCallableCD(self);
+
+	//can't use a switch statement here because these are not consts:
+	if ( item == menu_info_types.PET_STORE )
+	{
+		// Removing barrier to store vehicle
+		if(!hasObjVar( self, battlefield.VAR_CONSTRUCTED ))
+		{
+			vehicle.storeVehicle(petControlDevice, player);
+		}
+			
+		return SCRIPT_CONTINUE;
+	}
+
+	// CuiRadialMenuManager.cpp assumes the vehicle enter/exit command is SERVER_VEHICLE_ENTER_EXIT
+	// so that the client can do client side validation to see if vehicle mounting is allowed
+	else if(item == menu_info_types.SERVER_VEHICLE_ENTER_EXIT)
+	{
+		debugServerConsoleMsg(player, "+++ pet . onObjectMenuSelect +++ SERVER_VEHICLE_ENTER_EXIT menu object selected");
+
+		if(getMountsEnabled())	//GOTTA Have mounts enabled in server config
+		{
+			debugServerConsoleMsg(player, "+++ pet . onObjectMenuSelect +++ getMountsEneabled returnted TRUE");
+
+			if(isMountedOn)
+			{
+				queueCommand(player, ##"dismount", self, creature_name, COMMAND_PRIORITY_FRONT);
+			}
+			else if(pet_lib.canMount(self, player))
+			{
+				debugServerConsoleMsg( player, "+++ pet . onObjectMenuSelect +++ pet_lib.canMount(self,player) returned TRUE" );
+				queueCommand(player, ##"mount", self, creature_name, COMMAND_PRIORITY_FRONT);
+				debugServerConsoleMsg( player, "+++ pet . onObjectMenuSelect +++ just attempted to Enqueue MOUNT command" );
+			}
+		}
+		else
+		{
+			debugServerConsoleMsg( player, "+++ pet . onObjectMenuSelect +++ getMountsEneabled returnted FALSE" );
+		}
+	}
+	else if ( item == menu_info_types.SERVER_MENU1 )
+	{
+		if ( ai_lib.isInCombat( player ))
+			return SCRIPT_CONTINUE;
+
+		if ( utils.hasScriptVar(self, "inRepairZone") 
+		&& (!isDisabled(self) || (vehicle.canRepairDisabledVehicle(petControlDevice) && isDisabled(self))) )
+		{
+			int city_id = getCityAtLocation( getLocation(self), 0 );
+			if ( (city_id>0) && city.isCityBanned( player, city_id ) )
+			{
+				sendSystemMessage( player, SID_CITY_GARAGE_BANNED );
+				return SCRIPT_CONTINUE;
+			}
+
+			//repair the vehicle
+			vehicle.repairVehicle(player, self);
+			sendDirtyObjectMenuNotification( self );
+		}
+		else if ( isDisabled(self) && hasBarcRepairKit( player ) )
+		{
+			vehicle.restoreVehicle(player, self);
+			sendDirtyObjectMenuNotification( self );
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+boolean isMountedOnCreatureQueried( obj_id pet, obj_id player )
+{
+	//check that both master and pet are valid objects
+	if ( !isIdValid( pet ) )
+		return false;
+	if ( !isIdValid( player ) )
+		return false;
+
+	obj_id playerCurrentMount = getMountId (player);
+
+	//check that the player is mounted on something
+	if ( !isIdValid( playerCurrentMount ) )
+		return false;
+
+	//check that the player is mounted on the creature creature targeted
+	if ( playerCurrentMount != pet )
+		return false;
+
+	return true;
+}
+
+//----------------------------------------------------------
+
+boolean canTrainAsMount( obj_id pet, obj_id player )
+{
+	//check that both master and pet are valid objects
+	if ( !isIdValid( pet ) )
+	{
+		debugServerConsoleMsg( player, "+++ PET_LIB . canTrainAsMount +++ isIdValid failed for (pet)" );
+		return false;
+	}
+	if ( !isIdValid( player ) )
+	{
+		debugServerConsoleMsg( player, "+++ PET_LIB . canTrainAsMount +++ isIdValid failed for (player)" );
+		return false;
+	}
+
+
+	//check that the pet can be a mount
+	// couldPetBeMadeMountable() == MSC_CREATURE_MOUNTABLE
+	if ( !(couldPetBeMadeMountable(pet)== MSC_CREATURE_MOUNTABLE ))
+	{
+		debugServerConsoleMsg( player, "+++ PET_LIB . canTrainAsMount +++ couldPetBeMadeMountable (pet) returned something other than MSC_CREATURE_MOUNTABLE " );
+		debugServerConsoleMsg( player, "+++ PET_LIB . canTrainAsMount +++ couldPetBeMadeMountable (pet) returned "+ couldPetBeMadeMountable (pet));
+		return false;
+	}
+
+	//check that the player is skilled enoughcreature is mountable, code-wise
+	//if ( !('player has mad training skills')
+	//	return false;
+
+	return true;
+}
+
+//----------------------------------------------------------
+
+boolean trainMount( obj_id pet, obj_id player )
+{
+	//check that both master and pet are valid objects
+	if(!isIdValid(pet) || !isIdValid(player))
+	{
+		return false;
+	}
+
+	//check that the pet can be a mount
+	if ( !canTrainAsMount(pet, player) )
+		return false;
+
+	if ( !makePetAMount( pet, player ) )
+	{
+		debugServerConsoleMsg( player, "+++ VEHICLE . onAttach +++ makePetAMount(self,player) returned FALSE" );
+		return false;
+	}
+	else
+	{
+		debugServerConsoleMsg( player, "+++ VEHICLE . onAttach +++ makePetAMount(self,player) returned TRUE. YEAH!" );
+	}
+
+	return true;
+}
+
+//----------------------------------------------------------
+
+boolean makePetAMount( obj_id pet, obj_id player )
+{
+	//check that both master and pet are valid objects
+	if(!isIdValid(pet) || !isIdValid(player))
+	{
+		return false;
+	}
+
+	obj_id petControlDevice = callable.getCallableCD(pet);
+
+	//check that the pet can be a mount
+	// couldPetBeMadeMountable() == MRC_CREATURE_MOUNTABLE
+	if ( !(couldPetBeMadeMountable(pet)==0 ))
+	{
+		debugServerConsoleMsg( player, "+++ VEHICLE . onAttach +++ couldPetBeMadeMountable(pet) returned FALSE." );
+		return false;
+	}
+
+	if ( !makePetMountable( pet ) )
+	{
+		debugServerConsoleMsg( player, "+++ VEHICLE . onAttach +++ makePetMountable(pet) returned FALSE." );
+		return false;
+	}
+	else
+	{
+		setObjVar( petControlDevice, "ai.pet.trainedMount", 1 );
+	}
+
+	return true;
+}
+
+//----------------------------------------------------------
+
+trigger OnGetAttributes( obj_id player, string[] names, string[] attribs )
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if ( hasObjVar(self, "ai.pet.masterName"))
+	{
+		names[idx] = "owner";
+		attribs[idx] = getStringObjVar( self, "ai.pet.masterName" );
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+trigger OnObjectDisabled (obj_id killer)
+{
+	obj_id owner = getMaster(self);
+	
+	if(isIdValid(owner))
+	{
+		obj_id vcd = callable.getCallableCD(self);
+
+		if (isIdValid(vcd))
+		{
+			string killerDesc = null;
+
+			if (isIdValid(killer))
+			{
+				string killerName = getPlayerName(killer);
+				if (killerName != null && killerName.length() > 0)
+					killerDesc = "player " + killer + "(" + killerName + ")";
+				else
+					killerDesc = "npc " + killer + "(" + getName(killer) + ")";
+			}
+			else if (getIntObjVar(vcd, "attrib.hit_points") > 0)
+				killerDesc = "decay";
+
+			if (killerDesc != null)
+			{
+				CustomerServiceLog(
+					"vehicle",
+					"vehicle template:" + getTemplateName(self) +
+						" vcd:" + vcd +
+						" owner:" + owner + "(" + getName(owner) + ") disabled by " +
+						killerDesc);
+			}
+		}
+
+		sendSystemMessage (owner, pet_lib.SID_SYS_VEHICLE_DISABLED);
+		LOG("vehicle_base", "It is destroyed");
+		obj_id rider = getRiderId(self);
+		if ( isIdValid(rider) )
+			utils.dismountRiderJetpackCheck(rider);
+		if(ai_lib.isInCombat( self ))
+			vehicle.storeVehicle (vcd, rider, false);
+		else
+			messageTo( self, "handleDisabledPackRequest", null, 120, false );
+			
+		int vehicleBuff = buff.getBuffOnTargetFromGroup(rider, "vehicle");
+
+		if(vehicleBuff !=0)
+			buff.removeBuff(rider, vehicleBuff);		
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+trigger OnDestroy()
+{
+	if ( hasObjVar( self, "pet.controlDestroyed" ) )
+		return SCRIPT_CONTINUE;//already handled this stuff
+
+	obj_id master = getMaster( self );
+
+	//You cannot store battlefield pets at all, and
+	// incap'd NPC pets will destroy their pet control device when they are destroyed:
+
+	//If we ever give creature handlers NPC pets OR
+	// if we ever grant creature-pets via faction-perks THEN
+	// all faction pets will have to be flagged as such and this will
+	// need to be updated to check for that flag:
+	boolean isFactionPet = ( ai_lib.isNpc(self) || ai_lib.aiGetNiche(self) == NICHE_VEHICLE || ai_lib.isAndroid(self));
+	obj_id petControlDevice = callable.getCallableCD(self);
+	
+	if (hasObjVar( self, battlefield.VAR_CONSTRUCTED ) || (isFactionPet && ai_lib.aiIsDead(self) ) )
+	{
+		if ( isIdValid( petControlDevice) )
+		{
+			messageTo( petControlDevice, "handleFlagDeadCreature", null, 0, false );
+		}
+	}
+
+	if ( isIdValid( petControlDevice ) )
+	{
+		obj_id currentPet = callable.getCDCallable(petControlDevice);
+		
+		if ( isIdValid( currentPet ) && currentPet == self )
+		{
+			pet_lib.savePetInfo( self, petControlDevice );
+			setObjVar( petControlDevice, "pet.timeStored", getGameTime() );
+			
+			callable.setCDCallable(petControlDevice, null);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+messageHandler handleDisabledPackRequest()
+{
+	if(isDisabled(self))
+		messageTo( self, "handlePackRequest", null, 1, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePackRequest()
+{
+	debugServerConsoleMsg( null, "+++ vehicle_base.messageHandler handlePackRequest +++ entered HANDLEPACKREQUEST message handler" );
+
+	// Dismount the rider of this mount/vehicle if there's anything on it.
+	obj_id rider = getRiderId(self);
+	if ( isIdValid (rider))
+	{
+		// Do the dismount immediately.
+		boolean dismountSuccess = pet_lib.doDismountNow(rider);
+		if (!dismountSuccess)
+		{
+			LOG("mounts-bug", "vehicle_base.messageHandler handlePackRequest(): creature [" + self + "], rider [" + rider + "] failed to dismount, aborting pack request.  This mount/vehicle probably is in an invalid state now.");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// -TRF- Note: I removed the block that tries to come at this from the side of the mount.
+	// If we can't get this mount's rider, there is nothing we can do to dismount, so don't
+	// bother trying.
+
+	//-- Destroy the object.
+	debugServerConsoleMsg( null, "+++ vehicle_base.messageHandler handlePackRequest +++ destroying the vehicle now" );
+	obj_id vehicleControlDevice = callable.getCallableCD(self);
+	vehicle.saveVehicleInfo(vehicleControlDevice, self);
+	utils.setScriptVar( self, "stored", true );
+
+	// Create dictionary for message.
+	dictionary messageData = new dictionary();
+	messageData.put(MESSAGE_VEHICLE_ID, self);
+
+	sendDirtyObjectMenuNotification (vehicleControlDevice);
+
+	if (destroyObject( self ))
+ 		messageTo( vehicleControlDevice, "handleRemoveCurrentVehicle", messageData, 1, false );
+	else
+		debugServerConsoleMsg( null, "+++ vehicle_base.messageHandler handlePackRequest +++ WARNINGWARNING - FAILED TO DESTROY SELF" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+messageHandler destroyNow()
+{
+	setObjVar(self, "pet.controlDestroyed", true);
+	CustomerServiceLog("vehicle_bug", "vehicle_base - destroyNow::Recieved signal to destroy with ID: "+params.getInt("signalId"));
+	destroyObject(self);
+	return SCRIPT_OVERRIDE;
+}
+
+//----------------------------------------------------------
+
+trigger OnCreatureDamaged( obj_id attacker, obj_id weapon, int[] damage )
+{
+	utils.setScriptVar( self, "pet.combatEnded", getGameTime() );
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+	utils.setScriptVar( self, "pet.combatEnded", getGameTime() );
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+messageHandler handleSetColors()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	setColors(self, params);
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+//////////////////////  NEW COLORIZATION STUFF BELOW /////////////////
+
+messageHandler handleSetCustomization()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	dictionary dc = params.getDictionary("dc");
+	boolean updatedColors = setColors(self, dc);
+	params.remove("dc");
+
+	obj_id tool = params.getObjId("tool");
+	if ( !isIdValid(tool) )
+		return SCRIPT_CONTINUE;
+
+	if ( updatedColors )
+		messageTo(tool, "customizationSuccess", params, 0f, false);
+	else
+		messageTo(tool, "customizationFailed", params, 0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------
+
+//////////////////////  NEW COLORIZATION STUFF BELOW /////////////////
+
+boolean setColors(obj_id self, dictionary params)
+{
+	if ( params == null || params.isEmpty() )
+		return false;
+
+	boolean litmus = true;
+
+	java.util.Enumeration keys = params.keys();
+	
+	while ( keys.hasMoreElements() )
+	{
+		string var = (string)keys.nextElement();
+		int idx = params.getInt(var);
+
+		litmus &= hue.setColor(self, var, idx);
+	}
+
+	return litmus;
+}
+
+boolean hasBarcRepairKit( obj_id player )
+{
+	obj_id tool = utils.getItemPlayerHasByTemplate(player, "object/tangible/item/ep3/barc_repair_tool.iff");
+	return (isIdValid( tool ));
+}
+
+
+//------------------------------------------------------------
+
+void sendDestroyUnattendedVehicleSignal(obj_id vehicle)
+{
+	trial.bumpSession(vehicle);
+	messageTo(vehicle, "handleDestroyUnattended", trial.getSessionDict(vehicle), 600, false);
+}
+
+messageHandler handleDestroyUnattended()
+{
+	
+	if (!trial.verifySession(self, params))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (vehicle.isBattlefieldVehicle(self))
+		return SCRIPT_CONTINUE;
+		
+	obj_id rider = getRiderId(self);
+	
+	if (isIdValid(rider))
+	{
+		sendDestroyUnattendedVehicleSignal(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Vehicle has not been touched or ridden in last 10 minutes, validate self
+
+	obj_id vcd = callable.getCallableCD(self);
+	
+	if (!isIdValid(vcd))
+	{
+		//My VCD was invalid, destroying self.
+		params.put("signalId", 0);
+		messageTo(self, "destroyNow", params, 0, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id currentVehicle = callable.getCDCallable(vcd);
+
+	if (!isIdValid(currentVehicle) || currentVehicle != self)
+	{
+		//I am an orphaned vehicle, destroying self
+		params.put("signalId", 1);
+		messageTo(self, "destroyNow", params, 0, false);
+		CustomerServiceLog("vehicle_bug", "vehicle_base - handleDestroyUnattended::Validating current vehicle("+currentVehicle+") vs self("+self+"): "+params.getInt("signalId"));
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = utils.getContainingPlayer(vcd);
+	// I am my players current vehicle, but have been left unused for 10 minutes.
+	vehicle.storeVehicle(vcd, player);
+	
+	return SCRIPT_CONTINUE;
+}
+

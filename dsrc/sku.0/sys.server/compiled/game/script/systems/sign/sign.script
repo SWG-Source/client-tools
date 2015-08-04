@@ -1,0 +1,269 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        sign.script
+ * Description:  script for displaying sign text
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.city;
+include library.sui;
+include library.utils;
+include library.player_structure;
+include library.prose;
+include library.utils;
+
+//LOGGING
+const boolean LOGGING_ON					= false;
+const string LOGGING_CATEGORY					= "packup";
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_TERMINAL_MANAGEMENT 			= new string_id("player_structure", "management");
+const string_id SID_TERMINAL_PACK_HOUSE				= new string_id("sui", "packup_house");
+const string_id EMAIL_TITLE					= new string_id("spam", "email_title");
+const string_id EMAIL_BODY					= new string_id("spam", "email_body");
+const string_id SID_OWNER_PACKUP_AT_TERMINAL			= new string_id("player_structure", "onwer_packup_at_terminal");
+const int minTimeDelayBetweenSameServerRequests 		= 300; // 5 minutes
+const string timeOfLastSameServerRequest 			= "timeOfLastSameServerRequest";
+const string_id SID_MAYOR_HOUSE_SIGN_DISPLAY 			= new string_id("city/city", "house_owner");
+
+// city demolition options
+const string_id SID_TERMINAL_CITY_PACK_HOUSE			= new string_id("city/city", "city_packup_house");
+const string_id SID_NOT_CITY_ABANDONED				= new string_id("city/city", "not_city_abandoned");
+const int cityMinTimeDelayBetweenSameServerRequests 		= 300; // 5 minutes
+const string cityTimeOfLastSameServerRequest 			= "timeOfLastSameServerRequest";
+/***** TRIGGERS ********************************************************/
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data menuData = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	if(menuData != null)
+		menuData.setServerNotify(true);
+
+	deltadictionary scriptvars = self.getScriptVars();
+	
+	if(!utils.hasScriptVar(self, "player_structure.parent"))
+	{
+		//CS Log the Broken Sign - Bail
+		LOG("sissynoid",		"Player ("+ player +")"+ getPlayerFullName(player) +" attempted to access a house sign("+ self +") - and the sign has no parent (parent is the House ObjId).");		
+		CustomerServiceLog("playerStructure",	"Player ("+ player +")"+ getPlayerFullName(player) +" attempted to access a house sign("+ self +") - and the sign has no parent (parent is the House ObjId).");		
+		return SCRIPT_CONTINUE;
+	}
+	obj_id house = scriptvars.getObjId("player_structure.parent");
+			
+	if(player_structure.canShowPackOption(player, house))
+	{
+		int management_root = mi.addRootMenu (menu_info_types.SERVER_TERMINAL_MANAGEMENT, SID_TERMINAL_MANAGEMENT);
+		mi.addSubMenu(management_root, menu_info_types.SERVER_MENU10, SID_TERMINAL_PACK_HOUSE);
+	}
+	
+	// City Demolition - 
+	//if it's a structure that can be packed && is not eligible for House Packup.
+	//this makes sure players get credit for packups when the Packup system is active.
+	if(player_structure.doesUnmarkedStructureQualifyForHousePackup(house) /*checks: template, civic, installation*/
+	&& !player_structure.isAbandoned(house) /*checks: abandoned*/
+	&& player_structure.isCityAbandoned(house) /*checks for city abandoned objvar*/
+	&& cityIsInactivePackupActive()) //checks server config 'cityCitizenshipInactivePackupStartTimeEpoch'
+	{
+		int management_root = mi.addRootMenu (menu_info_types.SERVER_TERMINAL_MANAGEMENT, SID_TERMINAL_MANAGEMENT);
+		mi.addSubMenu(management_root, menu_info_types.SERVER_MENU11, SID_TERMINAL_CITY_PACK_HOUSE);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(item == menu_info_types.ITEM_USE)
+	{
+		obj_id parent = obj_id.NULL_ID;
+		string text = "";
+		
+		//we must have a parent to get structure info...no parent = no player structure
+		if(utils.hasScriptVar(self, "player_structure.parent"))
+		{
+			parent = utils.getObjIdScriptVar(self, "player_structure.parent");
+			//ensure it's a player structure
+			if(player_structure.isPlayerStructure(parent))
+			{
+				//get the name off the sign.
+				text = getName(self);
+				//get the cityId
+				int cityId = getCityAtLocation(getLocation(parent), 0);
+				//if CityId is valid and we are the mayor - show additional info.
+				if(cityId > 0 && city.isTheCityMayor(player, cityId))
+				{
+					//get the owner
+					obj_id houseOwnerId = player_structure.getStructureOwnerObjId(parent);
+					//get owner's name
+					string houseOwnerName = getPlayerFullName(houseOwnerId);
+					//construct the text to show on the house sign.					
+					prose_package pp = new prose_package();
+					prose.setStringId(pp, SID_MAYOR_HOUSE_SIGN_DISPLAY);
+					prose.setTT(pp, text);
+					prose.setTU(pp, houseOwnerName);
+					//give them a SUI
+					sui.msgbox(self, player, pp, "noHandlerNeeded");
+					return SCRIPT_CONTINUE;
+				}
+				else
+				{
+					sui.msgbox(self, player, text, "noHandlerNeeded");
+					return SCRIPT_CONTINUE;
+				}
+			}
+			else
+			{
+				string_id desc = getDescriptionStringId(self);
+				text = utils.packStringId(desc);
+				return SCRIPT_CONTINUE;
+			}
+		}
+		string_id desc = getDescriptionStringId(self);
+		text = utils.packStringId(desc);
+		//show the sign
+		sui.msgbox(self, player, text, "noHandlerNeeded");
+	}
+	if(item == menu_info_types.SERVER_MENU10)
+	{
+		//Gets the OID of the structure for use later
+		deltadictionary scriptvars = self.getScriptVars();
+		obj_id house = scriptvars.getObjId("player_structure.parent");
+
+		//do not allow the owner to pack up the house
+		//from the sign if abandoned.
+		if(player_structure.isOwner(house, player))
+		{
+			sendSystemMessage(player, SID_OWNER_PACKUP_AT_TERMINAL);
+			return SCRIPT_CONTINUE;
+		}
+		
+		//Player is waiting on long pack up of structure or
+		//timeout.
+		if(player_structure.isPlayerGatedFromHousePackUp(player))
+			return SCRIPT_CONTINUE;
+
+		if(!player_structure.canPlayerPackAbandonedStructure(player, house))
+		{
+
+			if(isAtPendingLoadRequestLimit())
+			{
+				sendSystemMessage(player, new string_id("player_structure", "abandoned_structure_pack_up_try_again_later"));
+			}
+			else if(player_structure.isAbandoned(house) && (!house.isAuthoritative() || !player.isAuthoritative()))
+			{
+				if(!utils.hasScriptVar(player, timeOfLastSameServerRequest) ||
+					utils.getIntScriptVar(player, timeOfLastSameServerRequest) < getGameTime())
+				{
+					requestSameServer(player, house);
+					utils.setScriptVar(player, timeOfLastSameServerRequest, getGameTime() + minTimeDelayBetweenSameServerRequests);
+					utils.setScriptVar(player, "requestedSameServerToAbandonHouse", house);
+				}
+
+				sendSystemMessage(player, new string_id("player_structure", "abandoned_structure_pack_up_please_wait_processing"));
+			}
+
+			return SCRIPT_CONTINUE;
+		}
+
+		if(isIdValid(house) && !utils.hasScriptVar(house, player_structure.SCRIPTVAR_HOUSE_PACKUP_LOCKOUT_TIME))
+		{
+			dictionary params = new dictionary();
+			params.put("house", house);
+			params.put("player", player);
+
+			messageTo (house, "packAbandonedBuilding", params, 4, false);
+			messageTo (player, "handlePlayerStructurePackupLockout", params, 0, false);
+
+			//send an email if this is the player's first house pack up
+			if(!hasObjVar(player, player_structure.HOUSE_PACKUP_ARRAY_OBJVAR))
+			{
+				string recipient = getPlayerName(player);
+				utils.sendMail(EMAIL_TITLE, EMAIL_BODY, recipient, "Galactic Vacant Building Demolishing Movement");
+			}
+		}
+	}
+	//City House Packup System - 
+	if(item == menu_info_types.SERVER_MENU11 && cityIsInactivePackupActive())
+	{
+		obj_id sign = getSelf();
+		AttemptPackCityAbandonedStructure(player, sign);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//This handles messages coming for a player attempting to pack up a structure when 
+//they are beyond the range of the sign.  Currently set to 10m to allow Mustafar
+//Shop Sign structures to be packed, as well as structures where the sign is below terrain.
+messageHandler handleRemoteCommandCityHousePackup()
+{
+	if(params == null || params.isEmpty())
+	{
+		CustomerServiceLog("playerStructure",	"Remote City Abandoned Packup - Params were NULL when messageTo was sent.");				
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = params.getObjId("player");
+	obj_id paramsSign = params.getObjId("sign");
+	
+	if(!isIdValid(player) || !isIdValid(paramsSign))
+	{
+		CustomerServiceLog("playerStructure",	"Remote City Abandoned Packup - Params were bad: Player("+ player +"), paramsSign("+ paramsSign +")");					
+		return SCRIPT_CONTINUE;
+	}
+	
+	//verify the sign is the sign
+	if(paramsSign != self)
+	{
+		CustomerServiceLog("playerStructure",	"Remote City Abandoned Packup - Player("+ player +") was attempting to pack a house - but the signs don't match: paramsSign("+ paramsSign +"), self("+ self +")");
+		return SCRIPT_CONTINUE;
+	}
+		
+	AttemptPackCityAbandonedStructure(player, paramsSign);
+	
+	return SCRIPT_CONTINUE;
+}
+
+void AttemptPackCityAbandonedStructure(obj_id player, obj_id sign)
+{
+	if(!utils.hasScriptVar(sign, "player_structure.parent"))
+	{
+		CustomerServiceLog("playerStructure", "Player("+ player +") attempted city pack a structure - but the House Sign("+ sign +") has invalid data.");
+		return;
+	}
+		
+	obj_id house = utils.getObjIdScriptVar(sign, "player_structure.parent");
+
+	//authoritative check
+	if(!house.isAuthoritative() || !player.isAuthoritative())
+	{
+		LOG("sissynoid",			"Player ("+ player +")"+ getPlayerFullName(player) +" attempted to access a house sign("+ sign +") - Structure and Sign were on different server processes - requesting Same Server.");		
+		CustomerServiceLog("playerStructure",	"Player ("+ player +")"+ getPlayerFullName(player) +" attempted to access a house sign("+ sign +") - Structure and Sign were on different server processes - requesting Same Server.");				
+
+		if(!utils.hasScriptVar(player, cityTimeOfLastSameServerRequest) ||
+			utils.getIntScriptVar(player, cityTimeOfLastSameServerRequest) < getGameTime())
+		{
+			requestSameServer(player, house);
+			utils.setScriptVar(player, cityTimeOfLastSameServerRequest, getGameTime() + cityMinTimeDelayBetweenSameServerRequests);
+			utils.setScriptVar(player, "cityRequestedSameServerToAbandonHouse", house);
+		}
+
+		sendSystemMessage(player, new string_id("player_structure", "abandoned_structure_pack_up_please_wait_processing"));			
+	}
+	else
+	{
+		player_structure.confirmCityAbandonedAndPack(house, player);
+	}
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON && msg != null && !msg.equals(""))
+		LOG(LOGGING_CATEGORY, msg);
+	return true;
+}

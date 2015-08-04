@@ -1,0 +1,125 @@
+AUTOMAKE_OPTIONS=foreign
+
+lib_LTLIBRARIES=libsharedCollisionsharedcore.la
+libsharedCollisionsharedcore_la_CXXFLAGS=-I$(srcdir)/../../../include/public \
+	-I$(engine_dir)/shared/library/sharedCompression/include/public \
+	-I$(engine_dir)/shared/library/sharedDebug/include/public \
+	-I$(engine_dir)/shared/library/sharedFile/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundation/include/public \
+	-I$(engine_dir)/shared/library/sharedFoundationTypes/include/public \
+	-I$(engine_dir)/shared/library/sharedFractal/include/public \
+	-I$(engine_dir)/shared/library/sharedGame/include/public \
+	-I$(engine_dir)/shared/library/sharedLog/include/public \
+	-I$(engine_dir)/shared/library/sharedMath/include/public \
+	-I$(engine_dir)/shared/library/sharedMemoryManager/include/public \
+	-I$(engine_dir)/shared/library/sharedMessageDispatch/include/public \
+	-I$(engine_dir)/shared/library/sharedObject/include/public \
+	-I$(engine_dir)/shared/library/sharedRandom/include/public \
+	-I$(engine_dir)/shared/library/sharedSynchronization/include/public \
+	-I$(engine_dir)/shared/library/sharedTerrain/include/public \
+	-I$(engine_dir)/shared/library/sharedThread/include/public \
+	-I$(engine_dir)/shared/library/sharedUtility/include/public \
+	 \
+	-I$(archive_dir)/include \
+	-I$(localization_dir)/include \
+	-I$(unicode_dir)/include \
+	-I$(fileInterface_dir)/include/public \
+	-Wno-ctor-dtor-privacy
+libsharedCollisionsharedcore_la_SOURCES=BarrierObject.cpp \
+	BarrierObject.h \
+	BaseClass.h \
+	BoxTree.cpp \
+	BoxTree.h \
+	Bresenham.cpp \
+	Bresenham.h \
+	CollideParameters.cpp \
+	CollideParameters.h \
+	Collision2d.cpp \
+	Collision2d.h \
+	CollisionBuckets.cpp \
+	CollisionBuckets.h \
+	CollisionEnums.cpp \
+	CollisionEnums.h \
+	CollisionInfo.h \
+	CollisionMesh.cpp \
+	CollisionMesh.h \
+	CollisionNotification.cpp \
+	CollisionNotification.h \
+	CollisionProperty.cpp \
+	CollisionProperty.h \
+	CollisionResolve.cpp \
+	CollisionResolve.h \
+	CollisionSurface.cpp \
+	CollisionSurface.h \
+	CollisionUtils.cpp \
+	CollisionUtils.h \
+	CollisionVolume.cpp \
+	CollisionVolume.h \
+	CollisionWorld.cpp \
+	CollisionWorld.h \
+	ConfigSharedCollision.cpp \
+	ConfigSharedCollision.h \
+	Contact3d.cpp \
+	Contact3d.h \
+	ContactPoint.cpp \
+	ContactPoint.h \
+	Containment1d.cpp \
+	Containment1d.h \
+	Containment2d.cpp \
+	Containment2d.h \
+	Containment3d.cpp \
+	Containment3d.h \
+	Distance2d.cpp \
+	Distance2d.h \
+	Distance3d.cpp \
+	Distance3d.h \
+	DoorHelper.cpp \
+	DoorHelper.h \
+	DoorInfo.h \
+	DoorObject.cpp \
+	DoorObject.h \
+	FirstSharedCollision.h \
+	FloorContactShape.cpp \
+	FloorContactShape.h \
+	Floor.cpp \
+	Floor.h \
+	FloorLocator.cpp \
+	FloorLocator.h \
+	FloorManager.cpp \
+	FloorManager.h \
+	FloorMesh.cpp \
+	FloorMesh.h \
+	FloorTri.cpp \
+	FloorTri.h \
+	Footprint.cpp \
+	Footprint.h \
+	FootprintForceReattachManager.cpp \
+	FootprintForceReattachManager.h \
+	Intersect1d.cpp \
+	Intersect1d.h \
+	Intersect2d.cpp \
+	Intersect2d.h \
+	Intersect3d.cpp \
+	Intersect3d.h \
+	MultiList.cpp \
+	MultiList.h \
+	NeighborObject.cpp \
+	NeighborObject.h \
+	Overlap2d.cpp \
+	Overlap2d.h \
+	Overlap3d.cpp \
+	Overlap3d.h \
+	Resolve3d.cpp \
+	Resolve3d.h \
+	SetupSharedCollision.cpp \
+	SetupSharedCollision.h \
+	SimpleCollisionMesh.cpp \
+	SimpleCollisionMesh.h \
+	SpaceAvoidanceManager.cpp \
+	SpaceAvoidanceManager.h \
+	SpatialDatabase.cpp \
+	SpatialDatabase.h
+
+libsharedCollisionsharedcore_la_LDFLAGS=-avoid-version
+
+include $(engine_dir)/../make_include/engine.include

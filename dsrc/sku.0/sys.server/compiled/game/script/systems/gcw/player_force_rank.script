@@ -1,0 +1,2036 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        player_force_rank
+ * Description:  Script that attaches to players in the force rank system
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.force_rank;
+include library.player_structure;
+include library.prose;
+include library.utils;
+include library.sui;
+include library.arena;
+include library.trace;
+
+/***** CONSTANTS *******************************************************/
+const string SCRIPT_VAR_SUI_PID 		= "force_rank.vote_sui";
+const string SCRIPT_VAR_TERMINAL		= "force_rank.vote_terminal";
+const string SCRIPT_VAR_PETITIONERS		= "force_rank.vote_petitioners";
+const string SCRIPT_VAR_VOTE_RANK		= "force_rank.vote_rank";
+const string SCRIPT_VAR_RANK_LIST		= "force_rank.rank_list";
+const string SCRIPT_VAR_NAMES			= "force_rank.challenge_vote_name";
+const string SCRIPT_VAR_CHALLENGE_SELECTED	= "force_rank.challenge_vote_selected";
+const string SCRIPT_VAR_CHAL_TERMINAL		= "force_rank.challenge_vote_terminal";
+
+const string JEDI_GUARDIAN_TITLE_SKILL	= "force_title_jedi_rank_04";
+const string JEDI_MASTER_TITLE_SKILL	= "force_title_jedi_master";
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnIncapacitated(obj_id killer)
+{
+	if(utils.hasScriptVar(self, arena.VAR_I_AM_DUELING))
+	{
+		obj_id opponent = utils.getObjIdScriptVar(self, arena.VAR_I_AM_DUELING);
+		if(isIdValid(opponent))
+		{
+			// Tell opponent not to leave arena until challenge resolved
+			sendSystemMessage(opponent, new string_id("pvp_rating", "arena_incap_opponent"));		
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+//
+// Synch our enemy lists to the enclave's enemy data
+//
+trigger OnInitialize()
+{
+	/*
+	if(force_rank.getCouncilAffiliation(self) == force_rank.DARK_COUNCIL)
+	{
+		force_rank.requestPEFs(self);
+	}
+	*/
+	
+	detachScript(self, "systems.gcw.player_force_rank");
+	return SCRIPT_OVERRIDE;
+	/**
+	
+	// Clean up FRS scripts from player if FRS is disabled
+	string frsConfig = getConfigSetting("GameServer", "enableFRS");
+	if(frsConfig == null || frsConfig.length() < 1)
+	{
+		// Remove the data.
+		removeObjVar(self, "force_rank");
+		if (hasScript(self, force_rank.SCRIPT_FRS_PLAYER))
+			detachScript(self, force_rank.SCRIPT_FRS_PLAYER);
+
+		return SCRIPT_CONTINUE;
+	}
+	
+	force_rank.validateFRSPlayerData(self);
+    	messageTo(self, "msgMoveToCommonSpot", null, 7.0f, false);
+	
+	return SCRIPT_CONTINUE;
+	**/
+}
+
+trigger OnAttach()
+{
+	force_rank.getEnclaveObjId(self, force_rank.getCouncilAffiliation(self), "enclaveIdResponse");
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	// update jedi manager to know that this jedi is no longer force ranked
+	updateJediScriptData(self, "bountyTrackingData.forceRank", -1); 
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogin()
+{
+	force_rank.requestExperienceDebt(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSkillRevoked(string skill)
+{
+	// LOG("force_rank", "11player_force_rank.OnSkillRevoked");
+	// If the skill loss is not the result of a voluntary surrender, stop now.
+	if (utils.hasScriptVar(self, force_rank.SCRIPT_VAR_SKILL_RESYNC))
+	{
+		//LOG("force_rank", "player_force_rank.OnSkillRevoked -- ignored");
+		return SCRIPT_CONTINUE;
+	}
+	if (force_rank.getForceRank(self) < 0)
+		return SCRIPT_CONTINUE;
+
+	int council = force_rank.getCouncilAffiliation(self);
+	if (council == -1)
+	{
+		LOG("force_rank", "player_force_rank.OnSkillRevoked -- " + self + " does not have a valid council affiliation.");
+		return SCRIPT_CONTINUE;
+	}
+
+	int skill_rank = force_rank.getForceSkillRank(skill, council);
+	if (skill_rank != -1)
+	{
+		if (skill_rank > 0)
+		{
+			CustomerServiceLog("force_rank", "Demoting %TU to rank " + (skill_rank - 1) + " since skill " + skill + " was voluntarily surrendered.", self, null);
+			force_rank.demoteForceRank(self, skill_rank - 1);
+		}
+		else
+			// The player is leaving the FRS.
+			force_rank.removeFromForceRankSystem(self, true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSkillGranted(string skill)
+{
+	LOG("force_rank", "player_force_rank::OnSkillGranted: -> Skill Granted: " + skill);
+
+	if(skill == "force_rank_dark_rank_09" || skill == "force_rank_light_rank_09")
+	{
+		CustomerServiceLog("force_rank", "Adding skill " + JEDI_MASTER_TITLE_SKILL + " to %TU since it should be granted for rank 9", self, null);
+		grantSkill(self, JEDI_MASTER_TITLE_SKILL);
+	}
+
+	if(skill == "force_rank_dark_rank_05" || skill == "force_rank_light_rank_05")
+	{
+		CustomerServiceLog("force_rank", "Adding skill " + JEDI_GUARDIAN_TITLE_SKILL + " to %TU since it should be granted for rank 0", self, null);
+		grantSkill(self, JEDI_GUARDIAN_TITLE_SKILL);
+	}
+
+
+	return SCRIPT_CONTINUE;
+}
+
+/*
+trigger OnCreatureDamaged(obj_id attacker, obj_id weapon, int[] damage)
+{
+	if (!isIdValid(attacker))
+	{
+		LOG("force_rank", "player_force_rank.OnCreatureDamaged -- attacker is invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	if (damage == null || damage.length < 9)
+	{
+		LOG("force_rank", "player_force_rank.OnCreatureDamaged -- bad damage value (null or wrong length).");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (!isPlayer(attacker))
+		return SCRIPT_CONTINUE;
+	
+	int vengeance_rating = getEnhancedSkillStatisticModifier(self, "frs_dark_vengeance");
+	if (vengeance_rating > 0)
+	{	
+		int total_damage = 0;
+		for (int i = 0; i < 3; i++)
+		{
+			// We only care about damage to the pools.
+			total_damage += damage[i*3];
+		}
+		force_rank.performFRSAttackVengeance(self, attacker, total_damage, vengeance_rating);
+	}
+	
+	int serenity_rating = getEnhancedSkillStatisticModifier(self, "frs_light_serenity");
+	if (serenity_rating > 0)
+	{
+		int total_damage = 0;
+		for (int i = 0; i < 3; i++)
+		{
+			// We only care about damage to the pools.
+			total_damage += damage[i*3];
+		}
+		force_rank.performFRSAttackSerenity(self, attacker, total_damage, serenity_rating);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+*/
+
+/***** MESSAGEHANDLERS *************************************************/
+
+messageHandler msgResynchFRSData()
+{
+	force_rank.validateFRSPlayerData(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgMoveToCommonSpot()
+{
+	// this method checks to see if the player is in the enclave as well as which enclave and 
+	// then moves them as appropriate.  logging into an enclave causes trouble with access permissions.
+	
+	force_rank.moveEnclavedPlayerToNeutralCell(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler PEFSynchResponse()
+{
+	LOG("force_rank", "player_force_rank::PEFSynchResponse: -> (" + utils.getRealPlayerFirstName(self) + ") Got PEF synch response.");
+	if(!params.containsKey("enemies"))
+	{
+		LOG("force_rank", "player_force_rank::PEFSynchResponse: -> (" + utils.getRealPlayerFirstName(self) + ") Missing @sender or @enemies params. Not updating PEF.");
+	}
+
+	obj_id[] enemies = params.getObjIdArray("enemies");
+	if(enemies != null)
+	{
+		force_rank.makePlayerEnemyOfGroup(self, enemies);
+		LOG("force_rank", "player_force_rank::PEFSynchResponse: -> (" + utils.getRealPlayerFirstName(self) + ") PEFd enemies from enclave.");
+
+		for(int i = 0; i < enemies.length; i++)
+		{
+			LOG("force_rank", "player_force_rank::PEFSynchResponse: -> [" + enemies[i] + "]");
+		}
+
+	}
+	else
+	{
+		LOG("force_rank", "player_force_rank::PEFSynchResponse: -> (" + utils.getRealPlayerFirstName(self) + ") PEFd enemies received as NULL from enclave.");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgPvPActionStart()
+{
+	obj_id initiator 		= params.getObjId("initiator");
+	string pvpAction		= params.getString("pvpAction");
+	obj_id[] actionTargets 	= params.getObjIdArray("actionTargets");
+	obj_id enclave			= params.getObjId("enclave");
+
+	if(actionTargets == null || actionTargets.length < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// flagging.  anyone receiving this message needs to be at war with all actionTargets
+	force_rank.makePlayerEnemyOfGroup(self, actionTargets);
+
+	// message the player
+	if(pvpAction.equals(force_rank.ACTION_VENDETTA))
+	{
+		// only the two ppl involved in a vendetta get the message, so anyone getting this msg needs to notify the enclave of death
+		setObjVar(self, force_rank.VAR_NOTIFY_ENCLAVE_OF_DEATH, enclave);
+		string_id id = new string_id("pvp_rating", "vendetta_target_start");
+		obj_id target = initiator;
+
+		if(initiator == self)
+		{
+			target = actionTargets[0];
+			id = new string_id("pvp_rating", "vendetta_initiator_start");
+		}
+
+		prose_package pp = prose.getPackage(id, target);
+		if(pp != null)
+		{
+			sendSystemMessageProse(self, pp);
+		}
+	}
+	else
+	{
+		// the only time the initiator needs to let the enclave know of death, is during a vendetta.
+		// the only other time we need to let the enclave know of death, is when we are the target of an action
+		if(utils.getElementPositionInArray(actionTargets, self) > -1)
+		{
+			setObjVar(self, force_rank.VAR_NOTIFY_ENCLAVE_OF_DEATH, enclave);
+		}
+
+		string_id sid = null;
+		obj_id target = actionTargets[0];
+		if(pvpAction.equals(force_rank.ACTION_BANISHMENT))
+		{
+			sid = new string_id("pvp_rating", "banishment_start");
+		}
+		else if(pvpAction.equals(force_rank.ACTION_PURGE_COUNCIL))
+		{
+			sid = new string_id("pvp_rating", "purge_start");
+		}
+		else if(pvpAction.equals(force_rank.ACTION_CANDIDATE_SUDDEN_DEATH))
+		{
+			sid = new string_id("pvp_rating", "sudden_death_start");
+		}
+
+		prose_package pp2 = prose.getPackage(sid, target);
+		if(pp2 != null)
+		{
+			sendSystemMessageProse(self, pp2);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// received only as a result of another player's death.  actions do timeout, but this occurs as part of the enclave OnInit method
+// and thus the player never receives any messages about it
+messageHandler msgPvPActionEnd()
+{
+	obj_id killer = null;
+	if(params.containsKey("killer"))
+	{
+		killer	 		= params.getObjId("killer");
+	}
+	string pvpAction		= params.getString("pvpAction");
+	obj_id[] peaceTargets 	= params.getObjIdArray("peaceTargets");
+	boolean actionTimedOut	= params.getBoolean("actionTimedOut");
+
+	// flagging.  anyone receiving this message needs to be at peace with all actionTargets
+	force_rank.makePlayerFriendsWithGroup(self, peaceTargets); // *** No server functionality to remove "PEF" at this time, but PEFs should only last until death. currently just prints out debug message.
+
+	// message the player.
+	if(pvpAction.equals(force_rank.ACTION_CANDIDATE_SUDDEN_DEATH))
+	{
+		string_id id = null;
+		obj_id target = null;
+
+		if(!actionTimedOut)
+		{
+			id = new string_id("pvp_rating", "sudden_death_death");
+			target = peaceTargets[0];
+
+			if(killer != null && killer == self)
+			{
+				target = peaceTargets[0];
+			}
+			prose_package pp = prose.getPackage(id, target);
+			sendSystemMessageProse(self, pp);
+		}
+	}
+	else // ALL OTHER ACTIONS - if the action has timed out, then other judgements may still stand, otherwise they are knocked out for good
+	{
+		string_id id = null;
+		obj_id target = null;
+		if(!actionTimedOut)
+		{
+			id = new string_id("pvp_rating", "pvp_action_end_death");
+			target = peaceTargets[0]; // if the action didnt time out, we should only ever have one person in the peace list, as this message is sent as a result of that person's death
+			prose_package ppto = prose.getPackage(id, target);
+			sendSystemMessageProse(self, ppto);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// comes from the enclave_controller
+messageHandler XPDeathValidateResponse()
+{
+	java.util.Enumeration pKeys = params.keys();
+	obj_id player = null;
+	int curDelta = 0;
+	while(pKeys.hasMoreElements())
+	{
+		player 	= (obj_id)pKeys.nextElement();
+		curDelta = params.getInt(player);
+		if(curDelta > 0)
+		{
+			trace.log("force_rank", "Dark Jedi PvP Council XP Adjustment for %TU: " + curDelta, player, trace.TL_CS_LOG);
+			force_rank.adjustForceRankXP(player, curDelta);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgForceRankPromotePlayer()
+{
+	LOG("force_rank", "player_force_rank.msgForceRankPromotePlayer -- " + params);
+	if (params.containsKey("success"))
+	{
+		boolean success = params.getBoolean("success");
+		if (success)
+		{
+			// Force an enclave update
+			obj_id enclave = force_rank.getEnclave(self);
+			if (isIdValid(enclave))
+				messageTo(enclave, "msgForceEnclaveUpdate", null, 0.0f, false);
+
+			// Check for new items to grant
+			force_rank.grantRankItems(self);
+
+			// Message the player about his promotion.
+			string rank_skill = force_rank.getForceRankSkill(force_rank.getForceRank(self), force_rank.getCouncilAffiliation(self));
+			int new_rank = force_rank.getForceRank(self);
+			updateJediScriptData(self, "bountyTrackingData.forceRank", new_rank); 
+			string_id rank_name = new string_id(force_rank.STF_FILE, "rank" + new_rank);
+			prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "rank_gained"), rank_name, 0);
+			sendSystemMessageProse(self, pp);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgForceRankDemotePlayer()
+{
+	if (params.containsKey("success"))
+	{
+		boolean success = params.getBoolean("success");
+		if (success)
+		{
+			int new_rank = params.getInt("rank");
+			int current_rank = force_rank.getForceRank(self);
+			//LOG("force_rank", "new_rank ->" + new_rank + "  current_rank ->" + current_rank);
+			if (new_rank >= current_rank)
+			{
+				LOG("force_rank", "player_force_rank.msgForceRankDemotePlayer -- can't demote " + self + " since the demotion rank is >= current rank.");
+				return SCRIPT_CONTINUE;
+			}
+
+			// Remove the skill
+			force_rank.removeForceRankSkills(self, new_rank);
+			// Adjust the rank on the player.
+			setObjVar(self, force_rank.VAR_RANK, new_rank);
+			updateJediScriptData(self, "bountyTrackingData.forceRank", new_rank); 
+
+			// Force an enclave update
+			obj_id enclave = force_rank.getEnclave(self);
+			if (isIdValid(enclave))
+				messageTo(enclave, "msgForceEnclaveUpdate", null, 0.0f, false);
+
+			// Message the player about his demotion.
+			string_id rank_name = new string_id(force_rank.STF_FILE, "rank" + new_rank);
+			prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "rank_lost"), rank_name, 0);
+			sendSystemMessageProse(self, pp);
+
+			// if the player is currently in the enclave they need to get kicked to a commons area cell in case they
+			// are cut off from returning due to permission.
+			// this method checks to see if the player is in the enclave as well as which enclave and then moves them as appropriate
+			//force_rank.moveEnclavedPlayerToNeutralCell(self);
+		}
+
+		if (utils.hasScriptVar(self, "jedi.revokeSkill"))
+		{
+			force_rank.removeFromForceRankSystem(self, false);
+
+			string skill = utils.getStringScriptVar(self, "jedi.revokeSkill");
+			revokeSkill(self, skill);
+
+			utils.removeScriptVar(self, "jedi.revokeSkill");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSCHallengeViewScores()
+{
+	LOG("force_rank", "player_force_rank.msgFRSCHallengeViewScores");
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChallengeViewChallenges()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+	int[] challengesToView = utils.getIntArrayScriptVar(self, arena.SCRIPT_VAR_CH_VIEW_CHALLENGES);
+
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_VIEW_CHALLENGES);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordSelect -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordSelect -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordSelect -- " + enclave + " is not an enclave building.");
+			return SCRIPT_CONTINUE;
+	}
+
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if(row_selected+1 > challengesToView.length)
+	{
+		LOG("force_rank", "player_force_rank::msgFRSChallengeViewChallenges: -> Selected Idx out of bounds.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] rankChallenges = arena.getChallengerNamesWithTimeRemaining(terminal, challengesToView[row_selected]);
+	int pid = sui.listbox(self, self, "@pvp_rating:ch_terminal_pending", rankChallenges, "msgFRSChallengeDoneLooking");
+	utils.setScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID, pid);
+	utils.setScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChallengeDoneLooking()
+{
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChallengeConfirmAcceptChallenge()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- " + enclave + " is not an enclave building.");
+			return SCRIPT_CONTINUE;
+	}
+
+	if(getDistance(terminal, self) > 15)
+	{
+		sendSystemMessage(self, new string_id("pvp_rating", "ch_terminal_too_far"));
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int rank = force_rank.getForceRank(enclave, getFirstName(self));
+	LOG("force_rank", "player_force_rank::msgFRSChallengeConfirmAcceptChallenge: -> Rank for self is " + rank);
+	if(rank > 1)
+	{
+		if(arena.getChallengerIdsForRank(terminal, rank).size() > 0)
+		{
+			string[] challengers = arena.getChallengerNamesWithTimeRemaining(terminal, rank);
+			resizeable string[] challengerIds = arena.getChallengerIdsForRank(terminal, rank);
+			int pid = sui.listbox(self, self, "@pvp_rating:ch_terminal_choose_challenge", challengers, "msgFRSChallengeConfirmAcceptChallengeFinal");
+
+			utils.setScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID, pid);
+			utils.setScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL, terminal);
+			utils.setScriptVar(self, arena.SCRIPT_VAR_CH_SELECT_ACCEPT, challengerIds);
+		}
+		else
+		{
+			sendSystemMessage(self, new string_id("pvp_rating", "ch_terminal_no_challenges_for_rank"));
+		}
+	}
+	else
+	{
+		sendSystemMessage(self, new string_id("pvp_rating", "ch_terminal_no_challenges_for_rank"));
+	}
+
+	sendDirtyObjectMenuNotification(terminal);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChallengeConfirmAcceptChallengeFinal()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+	obj_id[] challengers = utils.getObjIdArrayScriptVar(self, arena.SCRIPT_VAR_CH_SELECT_ACCEPT);
+
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_SELECT_ACCEPT);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- " + enclave + " is not an enclave building.");
+			return SCRIPT_CONTINUE;
+	}
+
+	if(getDistance(terminal, self) > 15)
+	{
+		sendSystemMessage(self, new string_id("pvp_rating", "ch_terminal_too_far"));
+		return SCRIPT_CONTINUE;
+	}
+
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(row_selected+1 > challengers.length)
+	{
+		LOG("force_rank", "player_force_rank::msgFRSChallengeConfirmAcceptChallengeFinal: -> Selected Idx out of bounds.");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id challenger = challengers[row_selected];
+	if(arena.validateAndRemoveChallenger(terminal, challenger, self, enclave))
+	{
+		if(!arena.acceptChallenge(terminal, self, challenger))
+		{
+			trace.log("force_rank", "Failed to accept challenge issued by %TU.", challenger, trace.TL_CS_LOG | trace.TL_DEBUG);
+			// gotta add the data back in if the challenge doesnt go all the way through.
+			arena.addChallengeIssueData(terminal, challenger, force_rank.getForceRank(enclave, getFirstName(self)));
+		}
+	}
+
+	sendDirtyObjectMenuNotification(terminal);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChallengeConfirmIssueChallenge()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_SUI_CH_PID);
+	utils.removeScriptVar(self, arena.SCRIPT_VAR_CH_TERMINAL);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- " + enclave + " is not an enclave building.");
+			return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int rank = force_rank.getForceRank(enclave, getFirstName(self));
+
+	if(rank > 0 && rank < 11)
+	{
+		if(arena.isArenaOpenForChallenges(terminal))
+		{
+			int avail_slots = force_rank.getAvailableRankSlots(enclave, rank+1);
+			if(avail_slots >= 3)
+			{
+				if(hasObjVar(self, "force_rank.qa.overrideArenaOpenSlots"))
+				{
+					sendSystemMessageTestingOnly(self, "QA open slot Vote-Force override.");
+				}
+				else
+				{
+					sendSystemMessage(self, new string_id("pvp_rating", "ch_terminal_no_need_challenge"));
+					return SCRIPT_CONTINUE;
+				}
+			}
+			if(arena.canPlayerIssueChallenge(self, terminal))
+			{
+				if(!arena.issueChallengeAgainstRank(terminal, self, rank+1))
+				{
+					LOG("force_rank", "player_force_rank.msgFRSChallengeConfirmIssueChallenge -- failed to issue challenge");
+				}
+			}
+		}
+		else
+		{
+			sendSystemMessage(self, new string_id("pvp_rating", "ch_terminal_arena_closed"));
+		}
+	}
+	else
+	{	// first and last rank cannot challenge.  ever.
+		prose_package rankBoundsPP = prose.getPackage(new string_id("pvp_rating", "ch_terminal_cant_challenge_rank_bounds"), rank);
+		sendSystemMessageProse(self, rankBoundsPP);
+	}
+
+	sendDirtyObjectMenuNotification(terminal);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePlayerDeath()
+{
+	if(!utils.hasScriptVar(self, arena.VAR_I_AM_DUELING))
+	{
+		//trace.log("force_rank", "Arena error: player_force_rank::handlePlayerDeath: -> " + self + " is missing arena.VAR_I_AM_DUELING", null, trace.TL_CS_LOG | trace.TL_DEBUG);
+		return SCRIPT_CONTINUE;
+	}
+
+	arena.duelistDied(self, utils.getObjIdScriptVar(self, arena.VAR_I_AM_DUELING), force_rank.getEnclave(self), false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSVoteStatusSelect()
+{
+	PROFILER_START("vote_select");
+	//LOG("force_rank", "player_force_rank.msgFRSVoteStatusSelect");
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_TERMINAL);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "terminal_frs_voting.OnObjectMenuSelect -- terminal is invalid");
+		PROFILER_STOP("vote_select");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+	{
+		PROFILER_STOP("vote_select");
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "terminal_frs_voting.OnObjectMenuSelect -- enclave is invalid");
+		PROFILER_STOP("vote_select");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "terminal_frs_voting.OnObjectMenuRequest -- " + enclave + " is not an enclave building.");
+		PROFILER_STOP("vote_select");
+		return SCRIPT_CONTINUE;
+	}
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		PROFILER_STOP("vote_select");
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		PROFILER_STOP("vote_select");
+		return SCRIPT_CONTINUE;
+	}
+
+	int status = force_rank.getVoteStatus(enclave, row_selected + 1);
+	if (status == -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_rank_selected"));
+		PROFILER_STOP("vote_select");
+		return SCRIPT_CONTINUE;
+	}
+	int end_time = force_rank.getVoteEndTime(enclave, row_selected + 1);
+	int time_remaining = end_time - getGameTime();
+	string time_str = null;
+	if (time_remaining > 0)
+		time_str = player_structure.assembleTimeRemaining(player_structure.convertSecondsTime(time_remaining));
+	else
+	   	time_str = "closed.";
+
+	resizeable string[] dsrc = new string[0];
+	//string[] status_names = {"@force_rank:petition_open", "@force_rank:voting_open", "@force_rank:acceptance_open", "@force_rank:voting_closed"};
+	string[] status_names = {"Petitioning", "Voting", "Acceptance", "Inactive"};
+	//string status_loc = localize(status_names[status - 1]);
+	dsrc.add("Current Stage: " + status_names[status - 1]);
+	// Show slots available.
+	PROFILER_START("vote_select.slots");
+	int slots_available = force_rank.getAvailableRankSlots(enclave, row_selected + 1);
+	PROFILER_STOP("vote_select.slots");
+	if (slots_available < 0)
+		slots_available = 0;
+
+	dsrc.add("Seats Available: " + slots_available);
+	// Show the time remaining.
+	if (time_str != null)
+		dsrc.add("Time Remaining: " + time_str);
+
+	dsrc.add("");
+	if (status == 1 || status == 2)
+	{
+		// Show petitioners.
+		string[] petitioners = force_rank.getRankPetitioners(enclave, row_selected + 1);
+		int[] votes = force_rank.getRankPetitionerVotes(enclave, row_selected + 1);
+
+		PROFILER_START("vote_select.petitioners");
+		if (petitioners != null)
+		{
+			if ( petitioners.length > 20)
+			{
+				CustomerServiceLog("force_rank", "WARNING: msgFRSVoteStatusSelect petitioners array too large, size = " + petitioners.length);
+			}
+
+			dsrc.add("Petitioners: ");
+			for (int i = 0; i < petitioners.length; i++)
+			{
+				if (status == 2 && votes != null && votes.length > i)
+					dsrc.add("   " + petitioners[i] + "    " + votes[i]);
+				else
+					dsrc.add("   " + petitioners[i]);
+			}
+		}
+		PROFILER_STOP("vote_select.petitioners");
+	}
+	else if (status == 3 || status == 4)
+	{
+		PROFILER_START("vote_select.winners");
+		string[] winners = force_rank.getVoteWinners(enclave, row_selected + 1);
+		if (winners != null)
+		{
+			if ( winners.length > 20)
+			{
+				CustomerServiceLog("force_rank", "WARNING: msgFRSVoteStatusSelect winners array too large, size = " + winners.length);
+			}
+
+			dsrc.add("Awaiting Acceptance:");
+			for (int i = 0; i < winners.length; i++)
+				dsrc.add("   " + winners[i]);
+		}
+		PROFILER_STOP("vote_select.winners");
+	}
+
+	string rank_str = localize(new string_id(force_rank.STF_FILE, "rank" + (row_selected + 1)));
+	PROFILER_START("vote_select.sui");
+	int pid = sui.listbox(self, self, "Vote stats for " + rank_str, sui.OK_CANCEL, "@force_rank:vote_status", dsrc, "msgFRSVoteStatusClosed");
+	PROFILER_STOP("vote_select.sui");
+	utils.setScriptVar(self, SCRIPT_VAR_SUI_PID, pid);
+
+	PROFILER_STOP("vote_select");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSVoteStatusClosed()
+{
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSVoteRecordSelect()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordSelect -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordSelect -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordSelect -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int status = force_rank.getVoteStatus(enclave, row_selected + 1);
+	if (status == -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_rank_selected"));
+		return SCRIPT_CONTINUE;
+	}
+	if (status != 2)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "voting_not_open"));
+		return SCRIPT_CONTINUE;
+	}
+
+	int player_rank = force_rank.getForceRank(self);
+	int vote_weight = force_rank.getVoteWeight(player_rank, row_selected + 1);
+	if (vote_weight < 1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "cant_vote_for_rank"));
+		return SCRIPT_CONTINUE;
+	}
+
+	resizeable string[] players_voted = new string[0];
+	if (hasObjVar(terminal, force_rank.BATCH_VAR_VOTERS))
+		players_voted = utils.getResizeableStringBatchObjVar(terminal, force_rank.BATCH_VAR_VOTERS);
+
+	int idx = players_voted.indexOf(getFirstName(self));
+	if (idx != -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "already_voted"));
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] petitioners = force_rank.getRankPetitioners(enclave, row_selected + 1);
+	if (petitioners == null)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "noone_to_vote_for"));
+		return SCRIPT_CONTINUE;
+	}
+
+	int pid = sui.listbox(self, self, "@force_rank:vote_record_select_player", sui.OK_CANCEL, "@force_rank:vote_player_selection", petitioners, "msgFRSVoteRecordPlayer");
+	utils.setScriptVar(self, SCRIPT_VAR_SUI_PID, pid);
+	utils.setScriptVar(self, SCRIPT_VAR_PETITIONERS, petitioners);
+	utils.setScriptVar(self, SCRIPT_VAR_VOTE_RANK, row_selected + 1);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSVoteRecordPlayer()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_TERMINAL);
+	string[] petitioners = utils.getStringArrayScriptVar(self, SCRIPT_VAR_PETITIONERS);
+	int rank = utils.getIntScriptVar(self, SCRIPT_VAR_VOTE_RANK);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_PETITIONERS);
+	utils.removeScriptVar(self, SCRIPT_VAR_VOTE_RANK);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordPlayer -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordPlayer -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordPlayer -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+	if (petitioners == null)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteRecordPlayer -- petitioners is null.");
+		return SCRIPT_CONTINUE;
+	}
+	if (rank < 1 || rank > 11)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_rank_selected"));
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int status = force_rank.getVoteStatus(enclave, rank);
+	if (status == -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_rank_selected"));
+		return SCRIPT_CONTINUE;
+	}
+	if (status != 2)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "voting_not_open"));
+		return SCRIPT_CONTINUE;
+	}
+	if (force_rank.isVoteTimeExpired(enclave, rank))
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "vote_time_expired"));
+		return SCRIPT_CONTINUE;
+	}
+	int player_rank = force_rank.getForceRank(self);
+	int vote_weight = force_rank.getVoteWeight(player_rank, rank);
+	if (vote_weight < 1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "cant_vote_for_rank"));
+		return SCRIPT_CONTINUE;
+	}
+
+	resizeable string[] players_voted = new string[0];
+	if (hasObjVar(terminal, force_rank.BATCH_VAR_VOTERS + rank))
+		players_voted = utils.getResizeableStringBatchObjVar(terminal, force_rank.BATCH_VAR_VOTERS + rank);
+
+	int idx = players_voted.indexOf(getFirstName(self));
+	if (idx != -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "already_voted"));
+		return SCRIPT_CONTINUE;
+	}
+
+	string player_selected = petitioners[row_selected];
+	// Mark the player has having voted.
+	players_voted.add(getFirstName(self));
+	string[] vote_list = new string[players_voted.size()];
+	players_voted.toArray(vote_list);
+	utils.setBatchObjVar(terminal, force_rank.BATCH_VAR_VOTERS + rank, vote_list);
+
+	// Add in the votes.
+	int[] votes = force_rank.getRankPetitionerVotes(enclave, rank);
+	votes[row_selected] += vote_weight;
+	string obj_var_name = force_rank.VAR_VOTING_BASE + rank + ".votes";
+	setObjVar(enclave, obj_var_name, votes);
+
+	prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "vote_cast"), player_selected);
+	sendSystemMessageProse(self, pp);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSVotePromotionSelect()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_TERMINAL);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVotePromotionSelect -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVotePromotionSelect -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVotePromotionSelect -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int status = force_rank.getVoteStatus(enclave, row_selected + 1);
+	if (status == -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_rank_selected"));
+		return SCRIPT_CONTINUE;
+	}
+	if (status != 3)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "acceptance_not_open"));
+		return SCRIPT_CONTINUE;
+	}
+	if (force_rank.isVoteTimeExpired(enclave, row_selected + 1))
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "acceptance_time_expired"));
+		return SCRIPT_CONTINUE;
+	}
+
+	string obj_var_name = force_rank.VAR_VOTING_BASE + (row_selected + 1) + ".winner";
+	resizeable string[] winners = getResizeableStringArrayObjVar(enclave, obj_var_name);
+	int idx = winners.indexOf(getFirstName(self));
+	if (winners == null || idx == -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "not_a_winner"));
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check to see that there's still a slot available.
+	int slots = force_rank.getAvailableRankSlots(enclave, row_selected + 1);
+	if (slots < 1)
+	{
+		// If there are winners left, but no slots. Close voting and await the next open slot.
+		setObjVar(enclave, force_rank.VAR_VOTING_BASE + (row_selected + 1) + ".status", 4);
+
+		// Message the remaining winners
+		string_id sub = new string_id(force_rank.STF_FILE, "vote_last_seat_taken_sub");
+		string_id body = new string_id(force_rank.STF_FILE, "vote_last_seat_taken_body");
+		string rank_str = localize(new string_id(force_rank.STF_FILE, "rank" + (row_selected + 1)));
+		prose_package pp = prose.getPackage(body, rank_str);
+		for (int i = 0; i < winners.length; i++)
+			utils.sendMail(sub, pp, winners[i], "Enclave Records");
+
+		sendSystemMessageProse(self, pp);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check to make sure the player is still eligible
+	if (force_rank.isPlayerEligibleForPromotion(self, row_selected + 1))
+	{
+		// Make sure the player hasn't already been promoted by another means.
+		if (force_rank.getForceRank(self) >= row_selected + 1)
+		{
+			sendSystemMessage(self, new string_id(force_rank.STF_FILE, "promotion_already_have_rank"));
+			return SCRIPT_CONTINUE;
+		}
+
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "promotion_accepted"));
+		CustomerServiceLog("force_rank", "%TU has accepted a promotion to rank " + (row_selected + 1), self, null);
+		force_rank.promoteForceRank(self);
+
+		// send mail to those in the rank.
+		string_id sub = new string_id(force_rank.STF_FILE, "promotion_accepted_sub");
+		string_id body = new string_id(force_rank.STF_FILE, "promotion_accepted_body");
+		string rank_str = localize(new string_id(force_rank.STF_FILE, "rank" + (row_selected + 1)));
+		prose_package pp = prose.getPackage(body, getName(self), rank_str);
+		force_rank.sendRankMail(enclave, row_selected + 1, sub, pp);
+
+		winners.remove(idx);
+		if (winners.size() < 1)
+		{
+			// If there's noone left, this acceptance period is over.
+			//removeObjVar(enclave, force_rank.VAR_VOTING_BASE + (row_selected + 1));
+			force_rank.resetVotingTerminal(enclave, row_selected + 1);
+		}
+		else
+		{
+			setObjVar(enclave, obj_var_name, winners);
+			if (slots - 1 < 1)
+			{
+				// If there are winners left, but no slots. Close voting and await the next open slot.
+				setObjVar(enclave, force_rank.VAR_VOTING_BASE + (row_selected + 1) + ".status", 4);
+
+				// Message the remaining winners
+				sub = new string_id(force_rank.STF_FILE, "vote_last_seat_taken_sub");
+				body = new string_id(force_rank.STF_FILE, "vote_last_seat_taken_body");
+				rank_str = localize(new string_id(force_rank.STF_FILE, "rank" + (row_selected + 1)));
+				pp = prose.getPackage(body, rank_str);
+				for (int i = 0; i < winners.length; i++)
+					utils.sendMail(sub, pp, winners[i], "Enclave Records");
+			}
+		}
+	}
+	else
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "not_eligible_for_promotion"));
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSVotePetitionSelect()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_TERMINAL);
+
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVotePromotionSelect -- terminal is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	else if (!terminal.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVotePromotionSelect -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVotePromotionSelect -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int status = force_rank.getVoteStatus(enclave, row_selected + 1);
+	if (status == -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_rank_selected"));
+		return SCRIPT_CONTINUE;
+	}
+	if (status != 1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "petition_not_open"));
+		return SCRIPT_CONTINUE;
+	}
+	if (force_rank.isVoteTimeExpired(enclave, row_selected + 1))
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "petition_time_expired"));
+		return SCRIPT_CONTINUE;
+	}
+	if (force_rank.getForceRank(self) >= row_selected + 1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "petition_already_have_rank"));
+		return SCRIPT_CONTINUE;
+	}
+
+	string obj_var_name = force_rank.VAR_VOTING_BASE + (row_selected + 1) + ".petition";
+	resizeable string[] petitioners = getResizeableStringArrayObjVar(enclave, obj_var_name);
+	if (petitioners == null)
+		petitioners = new Vector();
+
+	if (petitioners.indexOf(getFirstName(self)) != -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "already_petitioning"));
+		return SCRIPT_CONTINUE;
+	}
+	if (petitioners.size() >= force_rank.MAX_PETITIONERS)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "petitioning_no_room"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if (force_rank.isPlayerEligibleForPromotion(self, row_selected + 1))
+	{
+		petitioners.add(getFirstName(self));
+		setObjVar(enclave, obj_var_name, petitioners);
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "petitioning_complete"));
+
+		CustomerServiceLog("force_rank", "%TU petitioned for promotion to rank " + row_selected, self, null);
+	}
+	else
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "petitioning_not_eligible"));
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSDemoteSelect()
+{
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSDemoteSelect -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSDemoteSelect -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int rank_selected = row_selected + 1;
+	int tier_selected = force_rank.getForceTier(rank_selected);
+	int player_rank = force_rank.getForceRank(self);
+	int player_tier = force_rank.getForceTier(player_rank);
+	
+	// A player can demote someone from at least two tiers lower. The council leader can demote anyone.
+	if (player_tier != 5)
+	{
+		if (player_tier - 1 <= tier_selected)
+		{
+			sendSystemMessage(self, new string_id(force_rank.STF_FILE, "demote_too_low_rank"));
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	// Check to see the time since the player's demotion request.
+	int last_demote = 0;
+	if (hasObjVar(self, force_rank.VAR_REQUEST_DEMOTE))
+		last_demote = getIntObjVar(self, force_rank.VAR_REQUEST_DEMOTE);
+	
+	if (last_demote > getGameTime())
+	{
+		int time_remaining = last_demote - getGameTime();
+		string time_str = "1 second.";
+		if (time_remaining > 0)
+			time_str = player_structure.assembleTimeRemaining(player_structure.convertSecondsTime(time_remaining));
+		
+		prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "demote_too_soon"), time_str);
+		sendSystemMessageProse(self, pp);
+		
+		return SCRIPT_CONTINUE;
+	}
+	
+	string[] rank_list = force_rank.getPlayersInForceRank(enclave, rank_selected);
+	if (rank_list == null)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "no_players_in_rank"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	int pid = sui.listbox(self, self, "@force_rank:demote_select_player", sui.OK_CANCEL, "@force_rank:demote_selection", rank_list, "msgFRSDemotePlayerSelected");
+	utils.setScriptVar(self, SCRIPT_VAR_SUI_PID, pid);
+	utils.setScriptVar(self, SCRIPT_VAR_VOTE_RANK, rank_selected);
+	utils.setScriptVar(self, SCRIPT_VAR_RANK_LIST, rank_list);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSDemotePlayerSelected()
+{
+	string[] rank_list = utils.getStringArrayScriptVar(self, SCRIPT_VAR_RANK_LIST);
+	int rank_selected = utils.getIntScriptVar(self, SCRIPT_VAR_VOTE_RANK);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_RANK_LIST);
+	utils.removeScriptVar(self, SCRIPT_VAR_VOTE_RANK);
+	
+	if (rank_list == null)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSDemotePlayerSelected -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (rank_selected < 1 || rank_selected > 11)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSDemotePlayerSelected -- rank_selected has an illegal value " + rank_selected);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id enclave = getTopMostContainer(self);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSDemotePlayerSelected -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSDemotePlayerSelected -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (row_selected >= rank_list.length)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_selection"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	string player_selected = rank_list[row_selected];
+	int player_rank = force_rank.getForceRank(enclave, player_selected);
+	if (player_rank != rank_selected)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "demote_player_changed_rank"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	// A player can demote someone from at least two tiers lower. The council leader can demote anyone.
+	int tier_selected = force_rank.getForceTier(player_rank);
+	int user_tier = force_rank.getForceTier(force_rank.getForceRank(self));
+	if (user_tier != 5)
+	{
+		if (user_tier - 1 <= tier_selected)
+		{
+			sendSystemMessage(self, new string_id(force_rank.STF_FILE, "demote_too_low_rank"));
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	// Check to see the time since the player's demotion request.
+	int last_demote = 0;
+	if (hasObjVar(self, force_rank.VAR_REQUEST_DEMOTE))
+		last_demote = getIntObjVar(self, force_rank.VAR_REQUEST_DEMOTE);
+		
+	if (last_demote > getGameTime())
+	{
+		int time_remaining = last_demote - getGameTime();
+		string time_str = "1 second.";
+		if (time_remaining > 0)
+			time_str = player_structure.assembleTimeRemaining(player_structure.convertSecondsTime(time_remaining));
+			
+		prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "demote_too_soon"), time_str);
+		sendSystemMessageProse(self, pp);
+		
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Deduct the costs
+	if (force_rank.spendForceRankXP(self, force_rank.REQUEST_DEMOTION_COST * player_rank) < 0)
+	{
+		int cost = force_rank.REQUEST_DEMOTION_COST * player_rank;
+		prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "insufficient_experience"), cost);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Set the timestamp for next demote
+	// The council leader can demote twice as fast.
+	if (user_tier == 5)
+		setObjVar(self, force_rank.VAR_REQUEST_DEMOTE, getGameTime() + force_rank.getDemotionInterval() / 2);
+	else
+		setObjVar(self, force_rank.VAR_REQUEST_DEMOTE, getGameTime() + force_rank.getDemotionInterval());
+	
+	// Demote the player.
+	CustomerServiceLog("force_rank", "%TU has used a demotion privilege on " + player_selected, self, null);
+	force_rank.demoteForceRank(enclave, player_selected, player_rank - 1);
+	
+	// Do all of the messaging.
+	prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "demote_player_complete"), player_selected);
+	sendSystemMessageProse(self, pp);
+	
+	string_id sub = new string_id(force_rank.STF_FILE, "demote_request_sub");
+	string_id body = new string_id(force_rank.STF_FILE, "demote_request_body");
+	prose_package pp_mail = prose.getPackage(body, getFirstName(self));
+	utils.sendMail(sub, pp_mail, player_selected, "Enclave Records");
+	
+	// Send mail to all in the rank of the player demoted and the rank of the player doing the demotion..
+	//string_id sub2 = new string_id(force_rank.STF_FILE, "demote_request_sub_rank");
+	//string_id body2 = new string_id(force_rank.STF_FILE, "demote_request_body_rank");
+	//prose_package pp_mail2 = prose.getPackage(body, player_selected, null, utils.getRealPlayerFirstName(self));
+	//force_rank.sendRankMail(enclave, player_rank, sub2, pp_mail2);
+	//force_rank.sendRankMail(enclave, force_rank.getForceRank(self), sub2, pp_mail2);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgForceRankRenamePlayer()
+{
+	if (params.containsKey("success") && params.getBoolean("success") == true)
+		CustomerServiceLog("force_rank", "%TU has been successfully renamed in the Enclave data.", self, null);
+	else
+		CustomerServiceLog("force_rank", "Failed to rename %TU in the Enclave data.", self, null);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChalVoteStatusSelect()
+{
+	string[] names = utils.getStringArrayScriptVar(self, SCRIPT_VAR_NAMES);
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_NAMES);
+	if (names == null)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalVoteStatusSelect -- names is null.");
+		return SCRIPT_CONTINUE;
+	}
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalVoteStatusSelect -- terminal is invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (row_selected >= names.length)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_selection"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	string challenge_selected = names[row_selected];
+	resizeable string[] dsrc = new string[0];
+	int status = force_rank.getChallengeVoteStatus(terminal, challenge_selected);
+	string status_str = "Voting Complete";
+	if (status == 1)
+		status_str = "Voting Open";
+	
+	int end_time = force_rank.getChallengeVoteEndTime(terminal, challenge_selected);
+	int time_remaining = end_time - getGameTime();
+	string time_str = null;
+	if (time_remaining > 0)
+		time_str = player_structure.assembleTimeRemaining(player_structure.convertSecondsTime(time_remaining));
+	else
+	   	time_str = "closed.";
+	
+	int[] votes = force_rank.getChallengeVotes(terminal, challenge_selected);
+	if (votes == null)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalVoteStatusSelect -- votes is null for challenge " + challenge_selected);
+		return SCRIPT_CONTINUE;
+	}
+	
+	dsrc.add("Current Stage: " + status_str);
+	if (status == 1)
+		dsrc.add("Time Remaining: " + time_str);
+		
+	dsrc.add("Votes For: " + votes[0]);
+	dsrc.add("Votes Against: " + votes[1]);
+	
+	int pid = sui.listbox(self, self, "No-Confidence Challenge Status for " + challenge_selected, sui.OK_CANCEL, "@force_rank:challenge_vote_status_title", dsrc, "msgFRSVoteStatusClosed");
+	utils.setScriptVar(self, SCRIPT_VAR_SUI_PID, pid);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChalVoteRecordSelect()
+{
+	string[] names = utils.getStringArrayScriptVar(self, SCRIPT_VAR_NAMES);
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_NAMES);
+	if (names == null)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalVoteRecordSelect -- names is null.");
+		return SCRIPT_CONTINUE;
+	}
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalVoteRecordSelect -- terminal is invalid.");
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (row_selected >= names.length)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_selection"));
+		return SCRIPT_CONTINUE;
+	}
+	string challenge_selected = names[row_selected];
+	
+	resizeable string[] players_voted = new string[0];
+	if (hasObjVar(terminal, force_rank.BATCH_VAR_VOTERS + "." + challenge_selected))
+		players_voted = utils.getResizeableStringBatchObjVar(terminal, force_rank.BATCH_VAR_VOTERS + "." + challenge_selected);
+
+	int idx = players_voted.indexOf(getFirstName(self));
+	if (idx != -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "already_voted"));
+		return SCRIPT_CONTINUE;
+	}
+		
+	string[] dsrc = {"@force_rank:vote_for", "@force_rank:vote_against"};
+	int pid = sui.listbox(self, self, "Do you vote for or against the removal of " + challenge_selected + "?", sui.OK_CANCEL, "@force_rank:challenge_vote_record_vote_title", dsrc, "msgFRSChalVoteRecordVote");
+	utils.setScriptVar(self, SCRIPT_VAR_SUI_PID, pid);
+	utils.setScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL, terminal);
+	utils.setScriptVar(self, SCRIPT_VAR_CHALLENGE_SELECTED, challenge_selected);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChalVoteRecordVote()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	string challenge_selected = utils.getStringScriptVar(self, SCRIPT_VAR_CHALLENGE_SELECTED);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_CHALLENGE_SELECTED);
+	
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalVoteRecordVote -- terminal is invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	if (challenge_selected == null)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalVoteRecordVote -- challenge_selected is null.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (row_selected > 1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_selection"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (force_rank.isChallengeVoteTimeExpired(terminal, challenge_selected))
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "vote_time_expired"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	int[] votes = force_rank.getChallengeVotes(terminal, challenge_selected);
+	if (votes == null)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "vote_failed"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Mark the player has having voted.
+	resizeable string[] players_voted = new string[0];
+	if (hasObjVar(terminal, force_rank.BATCH_VAR_VOTERS + "." + challenge_selected))
+		players_voted = utils.getResizeableStringBatchObjVar(terminal, force_rank.BATCH_VAR_VOTERS + "." + challenge_selected);
+	
+	int idx = players_voted.indexOf(getFirstName(self));
+	if (idx != -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "already_voted"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	players_voted.add(getFirstName(self));
+	string[] vote_list = new string[players_voted.size()];
+	players_voted.toArray(vote_list);
+	utils.setBatchObjVar(terminal, force_rank.BATCH_VAR_VOTERS + "." + challenge_selected, vote_list);
+	
+	votes[row_selected] += 1;
+	string obj_var_name = force_rank.VAR_CHAL_VOTING_BASE + "." + challenge_selected + ".votes";
+	setObjVar(terminal, obj_var_name, votes);
+	
+	sendSystemMessage(self, new string_id(force_rank.STF_FILE, "challenge_vote_success"));
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSVoteChalSelectRank()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSVoteChalSelectRank -- terminal is invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	obj_id enclave = getTopMostContainer(terminal);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "terminal_frs_voting.msgFRSVoteChalSelectRank -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "terminal_frs_voting.msgFRSVoteChalSelectRank -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+	int rank_selected = params.getInt("challenge_rank");
+	if (rank_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	LOG("force_rank", "enclave ->" + enclave + "  rank_selected ->" + rank_selected);
+	string[] rank_list = force_rank.getPlayersInForceRank(enclave, rank_selected);
+	if (rank_list == null)
+	{
+		LOG("force_rank", "terminal_frs_voting.msgFRSVoteChalSelectRank -- rank_list is null.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	int pid = sui.listbox(self, self, "@force_rank:challenge_vote_select_name", sui.OK_CANCEL, "@force_rank:challenge_vote_select_name_title", rank_list, "msgFRSChalSelectConfirm");
+	utils.setScriptVar(self, SCRIPT_VAR_SUI_PID, pid);
+	utils.setScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL, terminal);
+	utils.setScriptVar(self, SCRIPT_VAR_RANK_LIST, rank_list);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgFRSChalSelectConfirm()
+{
+	obj_id terminal = utils.getObjIdScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	string[] rank_list = utils.getStringArrayScriptVar(self, SCRIPT_VAR_RANK_LIST);
+	utils.removeScriptVar(self, SCRIPT_VAR_SUI_PID);
+	utils.removeScriptVar(self, SCRIPT_VAR_CHAL_TERMINAL);
+	utils.removeScriptVar(self, SCRIPT_VAR_RANK_LIST);
+	if (!isIdValid(terminal))
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalSelectConfirm -- terminal is invalid.");
+		return SCRIPT_CONTINUE;
+	}
+	if (rank_list == null)
+	{
+		LOG("force_rank", "player_force_rank.msgFRSChalSelectConfirm -- rank_list is null.");
+		return SCRIPT_CONTINUE;
+	}
+	obj_id enclave = getTopMostContainer(terminal);
+	if (!isIdValid(enclave))
+	{
+		LOG("force_rank", "terminal_frs_voting.msgFRSChalSelectConfirm -- enclave is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!hasScript(enclave, force_rank.SCRIPT_ENCLAVE_CONTROLLER))
+	{
+		LOG("force_rank", "terminal_frs_voting.msgFRSChalSelectConfirm -- " + enclave + " is not an enclave building.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	if (row_selected >= rank_list.length)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_selection"));
+		return SCRIPT_CONTINUE;
+	}
+	string challenge = rank_list[row_selected];
+	if (challenge == null)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "invalid_selection"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (force_rank.getNumChallengeVoteList(terminal) >= force_rank.MAX_CHAL_LIST_SIZE)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "vote_challenge_too_many"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	int player_rank = force_rank.getForceRank(self);
+	int challenge_rank = force_rank.getForceRank(enclave, challenge);
+	if (challenge_rank - player_rank != 1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "vote_challenge_not_correct_rank"));
+		return SCRIPT_CONTINUE;
+	}
+	string objvar_name = force_rank.VAR_CHAL_VOTING_BASE + "." + challenge;
+	if (hasObjVar(terminal, objvar_name))
+	{
+		prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "vote_challenge_already_challenged"), challenge);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Check to see the time since the player's demotion request.
+	int last_demote = 0;
+	if (hasObjVar(self, force_rank.VAR_VOTE_CHALLENGE))
+		last_demote = getIntObjVar(self, force_rank.VAR_VOTE_CHALLENGE);
+
+	if (last_demote > getGameTime())
+	{
+		int time_remaining = last_demote - getGameTime();
+		string time_str = "1 second.";
+		if (time_remaining > 0)
+			time_str = player_structure.assembleTimeRemaining(player_structure.convertSecondsTime(time_remaining));
+
+		prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "challenge_too_soon"), time_str);
+		sendSystemMessageProse(self, pp);
+
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (force_rank.spendForceRankXP(self, force_rank.VOTE_CHALLENGE_COST * challenge_rank) == -1)
+	{
+		sendSystemMessage(self, new string_id(force_rank.STF_FILE, "vote_challenge_not_enough_xp"));
+		return SCRIPT_CONTINUE;
+	}
+		
+	setObjVar(terminal, objvar_name + ".status", 1);
+	setObjVar(terminal, objvar_name + ".time", getGameTime() + force_rank.getVoteInterval());
+	setObjVar(terminal, objvar_name + ".rank", challenge_rank);
+	int[] votes = {0,0};
+	setObjVar(terminal, objvar_name + ".votes", votes);
+	setObjVar(self, force_rank.VAR_VOTE_CHALLENGE, getGameTime() + force_rank.VOTE_CHALLENGE_DURATION);
+	
+	prose_package pp = prose.getPackage(new string_id(force_rank.STF_FILE, "vote_challenge_initiated"), challenge);
+	sendSystemMessageProse(self, pp);
+	
+	string_id sub = new string_id(force_rank.STF_FILE, "challenge_vote_begun_sub");
+	string_id body = new string_id(force_rank.STF_FILE, "challenge_vote_begun_body");
+	pp = prose.getPackage(body, getFirstName(self), challenge);
+	force_rank.sendChallengeVoterMail(enclave, challenge_rank, sub, pp);
+
+	return SCRIPT_CONTINUE;
+}
+
+/***********************************************************************
+ *
+ * @brief	Listbox display to select a rank to display for the force
+ * 			rankings.
+ ************************************************************************/
+
+messageHandler handleForceRank()
+
+{
+	int row_selected = sui.getListboxSelectedRow(params) + 1;
+	int button_pressed = sui.getIntButtonPressed(params);
+	int council = force_rank.getCouncilAffiliation(self);
+
+	if (button_pressed == 0)
+	{
+		utils.setScriptVar (self, "row_selected", row_selected);
+		force_rank.getPlayersInForceRank(self, row_selected, council,"handlePlayersInForceRankSelected");
+
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***********************************************************************
+ *
+ * @brief	Displays Rank List of Force rank selected.
+ *  ***********************************************************************/
+
+
+messageHandler handlePlayersInForceRankSelected()
+{
+	int row_selected = utils.getIntScriptVar(self, "row_selected");
+	string force_rank_list[] = params.getStringArray("rank_list");
+	string rank_str = localize(new string_id(force_rank.STF_FILE, "rank" + row_selected));
+
+	if ( utils.hasScriptVar(self, "force_rank.ShowCouncilRank2"))
+	{
+		int oldpid = utils.getIntScriptVar(self, "force_rank.ShowCouncilRank2");
+		forceCloseSUIPage (oldpid);
+		utils.removeScriptVar(self, "force_rank.ShowCouncilRank2");
+	}
+
+	int pid = sui.listbox(self,"Members in " + rank_str, rank_str, force_rank_list);
+	utils.removeScriptVar(self, "row_selected");
+
+	if (pid > -1) utils.setScriptVar(self, "force_rank.ShowCouncilRank2", pid);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler enclaveIdResponse()
+{
+	if(!params.containsKey("enclave"))
+	{
+		LOG("force_rank", "player_force_rank::enclaveIdResponse: -> Missing @enclave parm.  bailing.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id enclave = params.getObjId("enclave");
+	if(enclave == null)
+	{
+		LOG("force_rank", "player_force_rank::enclaveIdResponse: -> @enclave parm came back from cluster wide data store as null.  bailing.");
+	}
+	
+	setObjVar(self, force_rank.VAR_MY_ENCLAVE_ID, enclave);
+	force_rank.requestPEFs(self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgApplyExperienceDebt()
+{
+	int xp_debt = params.getInt("xp_debt");
+	if (xp_debt > 0)
+		force_rank.adjustForceRankXP(self, -xp_debt);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgValidateFRSPlayerData()
+{
+	if (params == null)
+	{
+		LOG("force_rank", "enclave_controller.msgValidateFRSPlayerData(player) -- params is null");
+		return SCRIPT_CONTINUE;
+	}
+	
+	int player_rank = params.getInt("player_rank");
+	if (player_rank < 0 || player_rank > 11)
+	{	
+		LOG("force_rank", "enclave_controller.msgValidateFRSPlayerData(player) -- player_rank is not a legal value: " + player_rank);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (player_rank != force_rank.getForceRank(self))
+	{
+		CustomerServiceLog("force_rank", "%TU has a conflicting rank. Player data is rank " + force_rank.getForceRank(self) + " and enclave data is rank " + player_rank + ". Resetting to enclave rank.", self, null);
+		setObjVar(self, force_rank.VAR_RANK, player_rank);
+	}
+	
+	// Check the skills.
+	force_rank.resyncForceRankSkills(self);
+
+	string frsConfig = getConfigSetting("GameServer", "enableFRS");
+	if((frsConfig == null || frsConfig.length() < 1) && force_rank.getForceRank(self) == 0)
+	{
+		force_rank.removeFromForceRankSystem(self, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Check PVP declarations
+	int council = force_rank.getCouncilAffiliation(self);
+	if (council == force_rank.LIGHT_COUNCIL)
+		pvpSetAlignedFaction(self, force_rank.getFactionId("Rebel"));
+	else
+		pvpSetAlignedFaction(self, force_rank.getFactionId("Imperial"));
+	
+	pvpMakeDeclared(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** COMMANDHANDLERS *************************************************/
+/***********************************************************************
+ *
+ * @brief	Displays the force rank list for players in the force
+ *			ranking, displays You are not in the ranking for unranked
+ *			players accessed by the /showcouncilrank command
+ *  ***********************************************************************/
+commandHandler cmdShowCouncilRank()
+{
+	int council = force_rank.getCouncilAffiliation(self);
+	if (council == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	else
+	{
+		if ( utils.hasScriptVar(self, "force_rank.ShowCouncilRank1"))
+		{
+			int oldpid = utils.getIntScriptVar(self, "force_rank.ShowCouncilRank1");
+			forceCloseSUIPage (oldpid);
+			utils.removeScriptVar(self, "force_rank.ShowCouncilRank1");
+		}
+		if ( utils.hasScriptVar(self, "force_rank.ShowCouncilRank2"))
+		{
+			int oldpid = utils.getIntScriptVar(self, "force_rank.ShowCouncilRank2");
+			forceCloseSUIPage (oldpid);
+			utils.removeScriptVar(self, "force_rank.ShowCouncilRank2");
+		}
+
+		string[] force_rank_list = new string [11];
+		for(int i = 0; i < force_rank_list.length; i++)
+		{
+			force_rank_list[i] = localize(new string_id(force_rank.STF_FILE, "rank" + (i + 1)));
+		}
+
+		int pid = sui.listbox(self,"select a rank to display members of that rank","Force Ranks", force_rank_list, "handleForceRank");
+		if (pid > -1) utils.setScriptVar(self, "force_rank.ShowCouncilRank1", pid);
+
+		return SCRIPT_CONTINUE;
+	}
+}
+
+
+/***** FUNCTIONS *******************************************************/
+
+
+

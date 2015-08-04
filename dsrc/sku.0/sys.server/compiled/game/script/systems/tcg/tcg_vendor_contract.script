@@ -1,0 +1,489 @@
+/**
+ *
+ * Title:	tcg_vendor_contract.script
+ * Description:	This script checks the player profession and allows the trader to consume the contract
+ 		and receive a TCG Vendor Skill mod OR allows the non-trader to create a no-feature stuffed Vendor
+ * @author	Jeff Haskell
+ * @version	1.0
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.prose;
+include library.static_item;
+include library.sui;
+include library.utils;
+include library.vendor_lib;
+
+//-----------------LOGGING
+const boolean LOGGING_ON				= true;
+const string LOGGING_CATEGORY				= "vendor";
+
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_NO_USE_WHILE_DEAD	 		= new string_id("player_structure", "while_dead");
+const string_id SKILLMOD_APPLIED			= new string_id("base_player", "skillmod_applied");
+const string_id CANT_APPLY_SKILLMOD			= new string_id("base_player", "cant_use_item");
+const string_id SID_VENDOR_INVOCATION_CANCELED		= new string_id("player_vendor", "vendor_invocation_canceled");
+const string_id SID_NON_TRADER_CONFIRMATION_MSG		= new string_id("player_vendor", "non_trader_confirmation_msg");
+const string_id SID_NONVENDOR_PLACEMENT_INSTRUCT	= new string_id("player_vendor", "non_trader_placement_instructions");
+const string_id SID_INVALID_VENDOR_LOCATION		= new string_id("player_vendor", "non_trader_invalid_location");
+const string_id SID_NAME_NON_VENDOR_T			= new string_id("player_vendor", "name_nonevendor_title");
+const string_id SID_NAME_NON_VENDOR_D			= new string_id("player_vendor", "name_nonevendor_description");
+const string_id SID_NONVENDOR_APPEARANCE_TYPE_T		= new string_id("player_vendor", "nonevendor_appear_title");
+const string_id SID_NONVENDOR_APPEARANCE_TYPE_D		= new string_id("player_vendor", "nonevendor_appear_description");
+const string_id SID_VENDOR_CONSUMED			= new string_id("player_vendor", "vendor_deed_applied");
+
+const string OWNER_OID 					= "owner";
+
+const string CONTRACT_PREFIX 				= "vendor_contract";
+const string NON_TRADER_AGREEMENT			= CONTRACT_PREFIX + ".non_trader_agreement"; //dictates the menu type player receives
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	blog("tcg_vendor_contract.OnObjectMenuRequest: Init.");
+
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+	if(!utils.isNestedWithinAPlayer(self) || utils.getContainingPlayer(self) != player)
+		return SCRIPT_CONTINUE;
+		
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	if(mid != null)
+		mid.setServerNotify(true);
+	else
+		mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("ui_radial", "item_use"));
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	blog("tcg_vendor_contract.OnObjectMenuSelect: Init.");
+
+	if(!utils.isNestedWithinAPlayer(self) || utils.getContainingPlayer(self) != player)
+		return SCRIPT_CONTINUE;
+		
+	if(item != menu_info_types.ITEM_USE)
+		return SCRIPT_CONTINUE;
+	
+	string classTemplate = getSkillTemplate(player);
+	if (classTemplate == null || classTemplate.equals(""))
+		return SCRIPT_CONTINUE;
+		
+	if(classTemplate.startsWith("trader"))
+	{
+		blog("tcg_vendor_contract.OnObjectMenuSelect: Found player to be a trader.");
+		if(!giveTcgTraderSkillMod(self, player))
+		{
+			blog("tcg_vendor_contract.OnObjectMenuSelect: Vendor Skill Mod Application Failed.");
+			sendSystemMessage(player, SID_VENDOR_INVOCATION_CANCELED);
+			CustomerServiceLog("vendor", " TCG Vendor Contract: " + self + " failed to apply a TCG vendor skill mod to player: " + player + ". The contract was not deleted.");
+			return SCRIPT_CONTINUE;
+		}
+		blog("tcg_vendor_contract.OnObjectMenuSelect: Vendor Skill Mod Application Succeeded. Deleting Contract");
+		CustomerServiceLog("vendor", " TCG Vendor Contract: " + self + " successfully applied a TCG vendor skill mod to player: " + player + ". The contract will now be deleted.");
+		//if the skill mod is set, delete the contract
+		destroyObject(self);
+		return SCRIPT_CONTINUE;		
+	}
+	if(!hasObjVar(self, NON_TRADER_AGREEMENT))
+	{
+		//PLAYER IS NOT A TRADER
+		//give player confirmation SUI
+		blog("tcg_vendor_contract.OnObjectMenuSelect: NON-TRADE USING A VENDOR CONTRACT (no confirmation)");
+		CustomerServiceLog("vendor", " TCG Vendor Contract: " + self + " is being used by a NON-TRADER player: " + player + ". The contract is asking for confirmation before usage.");
+		sui.msgbox(self, player, utils.packStringId(SID_NON_TRADER_CONFIRMATION_MSG), sui.YES_NO, "msgConfirmNonTraderVendorUse");
+	}
+	else if(hasObjVar(self, NON_TRADER_AGREEMENT) && getBooleanObjVar(self, NON_TRADER_AGREEMENT) == true)
+	{
+		blog("tcg_vendor_contract.OnObjectMenuSelect: NON-TRADE USING A VENDOR CONTRACT (confirmation objvar found)");
+		CustomerServiceLog("vendor", " TCG Vendor Contract: " + self + " is being used by a NON-TRADER player: " + player + " who has converted the contract to create a limited functionality vendor.");
+		if(!vendor_lib.validateNpcPlacementInStructure(player))
+		{
+			sendSystemMessage(player, SID_INVALID_VENDOR_LOCATION);
+			CustomerServiceLog("vendor", " TCG Vendor Contract: " + self + " failed to drop the apply a TCG vendor skill mod to player: " + player + ". The contract was not deleted.");
+			return SCRIPT_CONTINUE;		
+		}
+		//a valid location was found, send player to customization menus
+		blog("tcg_vendor_contract.OnObjectMenuSelect: Player in valid structure location");
+		CustomerServiceLog("vendor", " TCG Vendor Contract: " + self + " has found a valid player structure location and will commence with offering the player: " + player + " menu options to create a NON-VENDOR VENDOR.");
+		//messageTo(player, "handleNonVendorSetUp", null, 0, false);
+		if(!getNonVendorData(self, player))
+		{
+			blog("tcg_vendor_contract.OnObjectMenuSelect: Player could not get valid non-vendor data");
+			CustomerServiceLog("vendor", " TCG Vendor Contract: " + self + " did not give player necessary data to create a NON-VENDOR VENDOR for player: " + player + ".");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgConfirmNonTraderVendorUse()
+{
+	blog("tcg_vendor_contract.msgConfirmNonTraderVendorUse: Init.");
+
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+		
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player) || !exists(player))
+	{
+		removeVars(self, player);
+		return SCRIPT_CONTINUE;
+	}
+
+	int bp = sui.getIntButtonPressed(params);
+	if(bp == sui.BP_CANCEL)
+	{
+		blog("tcg_vendor_contract.msgConfirmNonTraderVendorUse: Selected Cancel or No.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	blog("tcg_vendor_contract.msgConfirmNonTraderVendorUse: Confirmed, setting vars.");
+	//this just flips a switch so the vendor contract USE option
+	//does something other than default
+	setObjVar(self, NON_TRADER_AGREEMENT, true);
+	sendSystemMessage(player, SID_NONVENDOR_PLACEMENT_INSTRUCT);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleNonVendorAppearanceSelection()
+{
+	blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: Init.");
+
+	// Grab params.
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx < 0 ) idx = 0;
+	
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player) || !exists(player))
+	{
+		removeVars(self, player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int btn = sui.getIntButtonPressed(params);
+	if (btn == sui.BP_CANCEL)
+	{
+		removeVars(self, player);
+		return SCRIPT_CONTINUE;
+	}
+	blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: all verification completed.");	
+	
+	string[] templateChoices = utils.getStringArrayScriptVar(player, vendor_lib.NONVENDOR_CREATURE_TEMPLATE_LIST);
+	if(templateChoices == null || templateChoices.length <= 0)
+	{
+		blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: templateeChoices script var returned null or had wrong length.");	
+		removeVars(self, player);	
+		return SCRIPT_CONTINUE;
+	}
+	string[] appearanceChoices = utils.getStringArrayScriptVar(player, vendor_lib.NONVENDOR_APPEARANCE_LIST);	
+	if(appearanceChoices == null || appearanceChoices.length <= 0)
+	{
+		blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: appearanceChoices script var returned null or had wrong length.");	
+		removeVars(self, player);	
+		return SCRIPT_CONTINUE;
+	}
+	string[] appearanceCreatureNames = utils.getStringArrayScriptVar(player, vendor_lib.NONVENDOR_CREATURENAME_LIST_SCRVAR);	
+	if(appearanceCreatureNames == null || appearanceCreatureNames.length <= 0)
+	{
+		blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: appearanceCreatureNames script var returned null or had wrong length.");	
+		removeVars(self, player);	
+		return SCRIPT_CONTINUE;
+	}
+	if(templateChoices.length != appearanceChoices.length || templateChoices.length != appearanceCreatureNames.length)
+	{
+		blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: appearanceChoices and appearanceCreatureNames are not equal in length.");	
+		removeVars(self, player);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: appearanceChoices[idx]: "+appearanceChoices[idx]);	
+	blog("tcg_vendor_contract.handleNonVendorAppearanceSelection: appearanceCreatureNames[idx]: "+appearanceCreatureNames[idx]);	
+	
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_SELECTION_SCRVAR, appearanceChoices[idx]);
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_CREATURE_NAME_SCRVAR, appearanceCreatureNames[idx]);
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_CREATURE_TEMPLATE_SCRVAR, templateChoices[idx]);
+	
+	sui.inputbox(self, player, utils.packStringId(SID_NAME_NON_VENDOR_D), sui.OK_CANCEL, utils.packStringId(SID_NAME_NON_VENDOR_T), sui.INPUT_NORMAL, null, "handleSetNonVendorName", null);		
+	
+	return SCRIPT_CONTINUE;	
+}
+
+messageHandler handleSetNonVendorName()
+{
+	blog("tcg_vendor_contract.handleSetNonVendorName: init");
+
+	// Store the nonvendor name.
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player) || !exists(player))
+	{
+		removeVars(self, player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int btn = sui.getIntButtonPressed(params);
+	if(btn == sui.BP_CANCEL)
+	{
+		removeVars(self, player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	string creatureName = sui.getInputBoxText(params);
+	if(creatureName == null || creatureName.equals("") || isNameReserved(creatureName))
+	{
+		sendSystemMessage(self, vendor_lib.SID_OBSCENE);
+		sui.inputbox(self, player, utils.packStringId(SID_NAME_NON_VENDOR_D), sui.OK_CANCEL, utils.packStringId(SID_NAME_NON_VENDOR_T), sui.INPUT_NORMAL, null, "handleSetNonVendorName", null);		
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(creatureName.length() > 40)
+		creatureName = creatureName.substring(0, 39);
+
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_CUSTOM_NAME_SCRVAR, creatureName);
+
+	if(!vendor_lib.buildNpcInPlayerStructure(self, player, vendor_lib.NONVENDOR_VAR_PREFIX, true))
+	{
+		blog("tcg_vendor_contract.handleSetNonVendorName: Unable to create a nonvendor vendor because vendor_lib.buildNpcInPlayerStructure said NO");
+		removeVars(self, player);	
+		return SCRIPT_CONTINUE;	
+	}
+	
+	removeVars(self, player);
+	blog("tcg_vendor_contract.getNonVendorData: Player was able to create a nonvendor vendor - SUCCESS");
+	destroyObject(self);								
+	return SCRIPT_CONTINUE;
+}
+
+boolean getNonVendorData(obj_id self, obj_id player)
+{
+	if(!isValidId(self) || !exists(self))
+		return false;
+	else if(!isValidId(player) || !exists(player))
+		return false;
+	else if(!hasObjVar(self, vendor_lib.NONTRADER_NONVENDOR_TYPE))
+		return false;
+
+	string nonVendorType = getStringObjVar(self, vendor_lib.NONTRADER_NONVENDOR_TYPE);
+	if(nonVendorType == null || nonVendorType.equals("") || !nonVendorType.startsWith(vendor_lib.NONVENDOR_TYPE_PREFIX))
+		return false;
+
+	blog("tcg_vendor_contract.getNonVendorData: Player has contract type: "+nonVendorType);
+	string creatureType = vendor_lib.getGreeterNonVendorCreatureType(player, nonVendorType);
+	if(creatureType == null || creatureType.equals(""))
+		return false;
+
+	blog("tcg_vendor_contract.getNonVendorData: creatureType: "+creatureType);
+	
+	
+	int row = dataTableSearchColumnForString(creatureType, vendor_lib.COL_CREATURE_TYPE, vendor_lib.TBL_GREETER_NONVENDOR_TABLE);
+	if(row < 0)
+	{
+		blog("tcg_vendor_contract.getNonVendorData: TABLE ROW FAILED");
+		removeVars(self, player);			
+		return false;
+	}
+	
+	blog("tcg_vendor_contract.getNonVendorData: row: "+row);	
+	dictionary nonVendorDict = dataTableGetRow(vendor_lib.TBL_GREETER_NONVENDOR_TABLE, row);
+	if(nonVendorDict == null && !nonVendorDict.isEmpty())
+	{
+		removeVars(self, player);	
+		return false;
+	}
+
+	blog("tcg_vendor_contract.getNonVendorData: Setting individual vars from dictionary.");	
+	//init variables for the nonvendor from the entire row
+	
+	string nonVendorTemplate	= nonVendorDict.getString(vendor_lib.COL_NONVENDOR_CREATURE_TEMPLATE);
+	string nonVendorNames		= nonVendorDict.getString(vendor_lib.COL_NONVENDOR_CREATURE_NAME);
+	string nonVendorStrIds		= nonVendorDict.getString(vendor_lib.COL_NONVNDR_STRING_ID);	
+
+	
+	blog("tcg_vendor_contract.getNonVendorData: nonVendorTemplate: " +nonVendorTemplate);	
+
+	//save the scriptvars on player for use later
+	
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_CREATURE_TYPE_SCRVAR, creatureType);
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_NAMES_SCRVAR, nonVendorNames); //this is a non split list in string form
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_STRING_ID_SCRVAR, nonVendorStrIds);	
+
+	string[] templateChoices = split(nonVendorTemplate, ','); //there may be more than one appearance so evaluate this possiblity by splitting the string 
+	if(templateChoices == null)
+	{
+		blog("tcg_vendor_contract.getNonVendorData: templateChoices == null.");
+		removeVars(self, player);			
+		return false;
+	}
+
+	string[] appearanceChoices = split(nonVendorStrIds, ','); //there may be more than one appearance so evaluate this possiblity by splitting the string 
+	if(appearanceChoices == null)
+	{
+		blog("tcg_vendor_contract.getNonVendorData: appearanceChoices == null.");
+		removeVars(self, player);			
+		return false;
+	}
+	
+	string[] appearanceCreatureNames = split(nonVendorNames, ',');
+	if(appearanceCreatureNames == null)
+	{
+		blog("tcg_vendor_contract.getNonVendorData: appearanceCreatureNames == null.");
+		removeVars(self, player);			
+		return false;
+	}
+	int templateChoicesLength = templateChoices.length;
+	int appearanceChoicesLength = appearanceChoices.length;
+	int appearanceCreatureNamesLength = appearanceCreatureNames.length;
+	
+	blog("tcg_vendor_contract.getNonVendorData: appearanceChoicesLength: "+appearanceChoicesLength);
+	blog("tcg_vendor_contract.getNonVendorData: appearanceCreatureNamesLength: "+appearanceCreatureNamesLength);
+	if(appearanceChoicesLength != appearanceCreatureNamesLength)
+	{
+		blog("tcg_vendor_contract.getNonVendorData: appearanceCreatureNames & appearanceCreatureNamesLength are not the same size.");
+		removeVars(self, player);			
+		return false;
+	}
+	//we don't need the creature string name becasue that is just used for a menu that won't be created for a list on length = 1
+	if(templateChoicesLength == 1 && appearanceChoicesLength == 1 && appearanceCreatureNamesLength == 1)
+	{
+		blog("tcg_vendor_contract.getNonVendorData: Going to name nonvendor handler.");
+	
+		utils.setScriptVar(player, vendor_lib.NONVENDOR_SELECTION_SCRVAR, appearanceChoices[0]);	
+		utils.setScriptVar(player, vendor_lib.NONVENDOR_CREATURE_NAME_SCRVAR, appearanceCreatureNames[0]);
+		utils.setScriptVar(player, vendor_lib.NONVENDOR_CREATURE_TEMPLATE_SCRVAR, templateChoices[0]);
+		sui.inputbox(self, player, utils.packStringId(SID_NAME_NON_VENDOR_D), sui.OK_CANCEL, utils.packStringId(SID_NAME_NON_VENDOR_T), sui.INPUT_NORMAL, null, "handleSetNonVendorName", null);		
+		return true;		
+	}
+
+	int appearanceLength = appearanceChoices.length;
+
+	if(appearanceLength != appearanceChoicesLength) //we already know that appearanceChoicesLength & appearanceCreatureNamesLength are the same
+	{
+		blog("tcg_vendor_contract.getNonVendorData: appearanceChoiceStrings.length != appearanceChoicesLength. appearanceChoiceStrings.length: "+ appearanceLength +"listLength: "+appearanceChoicesLength);	
+		removeVars(self, player);	
+		return false;
+	}
+
+	// Get race types.
+	string[] appearanceStrings = new string[appearanceLength];
+	for (int i=0; i < appearanceLength; i++)
+	{
+		appearanceStrings[i] = "@player_vendor:"+appearanceChoices[i];
+	}
+	if(appearanceStrings == null || appearanceStrings.length <= 0)
+	{
+		blog("tcg_vendor_contract.getNonVendorData: appearanceStrings was null or had wrong length.");	
+		removeVars(self, player);	
+		return false;
+	}
+	//set the appearanceChoices list scriptvar on player to use later 
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_APPEARANCE_LIST, appearanceChoices);
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_CREATURENAME_LIST_SCRVAR, appearanceCreatureNames);
+	utils.setScriptVar(player, vendor_lib.NONVENDOR_CREATURE_TEMPLATE_LIST, templateChoices);
+	sui.listbox(self, player, utils.packStringId(SID_NONVENDOR_APPEARANCE_TYPE_D), sui.OK_CANCEL, utils.packStringId(SID_NONVENDOR_APPEARANCE_TYPE_T), appearanceStrings, "handleNonVendorAppearanceSelection", true);
+
+	return true;
+}
+
+//The Special Vendors are a Skill Mod. This Function Grants the skill mod 
+//based on the master item/item stats tables.
+boolean giveTcgTraderSkillMod(obj_id self, obj_id player)
+{
+	if(!isValidId(player) || !exists(player))
+		return false;
+
+	if(isIncapacitated(player) || isDead(player))
+	{
+		sendSystemMessage(player, SID_NO_USE_WHILE_DEAD);
+		return false;
+	}
+
+	string itemName = getStaticItemName(self);
+	dictionary itemData = dataTableGetRow(static_item.ITEM_STAT_BALANCE_TABLE, itemName);
+	if(itemData == null)
+	{
+		LOG("create", itemName + "TCG Vendor Initalize could not happen because row in datatable is bad");
+		return false;
+	}	
+
+	string skillMod = itemData.getString("skill_mods");
+	string clientEffect = itemData.getString("client_effect");
+	string clientAnimation = itemData.getString("client_animation");
+	string skillModName = "";
+	int skillModValue = 0;
+
+	if(skillMod == null || skillMod.equals(""))
+	{
+		LOG( "create", "This object needs a skill mod in the itemstats table to be used " +itemName);
+		return false;
+	}
+
+	dictionary dict = static_item.parseSkillModifiers(player, skillMod);
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+		while(keys.hasMoreElements())
+		{
+			skillModName = (string)keys.nextElement();
+			skillModValue = dict.getInt(skillModName);
+		}
+	}
+	if(skillModName == null || skillModName.equals(""))
+	{
+		LOG("create", "This object skill mod was incorrectly named in itemstats table " +itemName);
+		return false;
+	}
+	else if(skillModValue <= 0)
+	{
+		LOG("create", "This object skill mod had an invalid value " +itemName);
+		return false;
+	}
+
+	blog("tcg_vendor_contract.OnObjectMenuSelect: Applying skillmod: "+skillModName+" with a value of: "+skillModValue);
+
+	blog("tcg_vendor_contract.OnObjectMenuSelect: Entire skillmod string: "+skillMod);
+
+	if(!applySkillStatisticModifier(player, skillModName, skillModValue))
+	{
+		blog("tcg_vendor_contract.OnObjectMenuSelect: Applying skillmod failed");
+
+		CustomerServiceLog("create", " Item: " + self + " had skill mod: " + skillMod + " that was added/given to the Owner: " + player + ". Skill mod incremented by 1.");
+		sendSystemMessage(player, CANT_APPLY_SKILLMOD);
+		return false;
+	}
+	blog("tcg_vendor_contract.OnObjectMenuSelect: skillmod succeessfully applied.");
+	CustomerServiceLog("create", " Item: " + self + " had skill mod: " + skillMod + " that was added/given to the Owner: " + player + ". Skill mod incremented by 1.");
+
+	sendSystemMessage(player, SID_VENDOR_CONSUMED);
+
+	if(clientAnimation != null && !clientAnimation.equals(""))
+		doAnimationAction(player, clientAnimation);
+	if(clientEffect != null && !clientEffect.equals(""))
+		playClientEffectObj(player, clientEffect, player, "");
+
+	return true;
+}
+
+boolean removeVars(obj_id self, obj_id player)
+{
+	if(!isValidId(player) || !exists(player))
+		return false;
+	utils.removeScriptVarTree(self, vendor_lib.NONVENDOR_VAR_PREFIX);
+	blog("tcg_vendor_contract.removeVars: removed NONVENDOR_VAR_PREFIX Vars ");
+	return true;
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON && msg != null && !msg.equals(""))
+		LOG(LOGGING_CATEGORY, msg);
+	return true;
+}
+

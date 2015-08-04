@@ -1,0 +1,276 @@
+//This script is used in conjunction with quest.task.ground.retrieve_item.
+
+//This script is attached to the object from which you wish to retrieve items.  It adds a radial menu item that sends a messageto
+//to the player that quest.task.ground.retrieve_item will pick up and handle appropriately.
+
+// ---------------------------------------------------------------------
+
+include library.groundquests;
+include library.sui;
+include library.stealth;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+trigger OnAttach()
+{
+	if ( isMob(self)  )
+	{
+		setCondition (self, CONDITION_CONVERSABLE);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	if ( isMob(self)  )
+	{
+		setCondition (self, CONDITION_CONVERSABLE);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnObjectMenuRequest (obj_id player, menu_info menuInfo)
+{
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if ( isIncapacitated(self) )
+	{
+		if ( !hasScript(self, "npc.static_npc.npc_dead") )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	int menu = 0;
+	if ( isMob(self) )
+	{
+		menu = menuInfo.addRootMenu (menu_info_types.CONVERSE_START, null);
+	}
+	else
+	{
+		menu = menuInfo.addRootMenu (menu_info_types.ITEM_USE, new string_id("ui_radial", "item_use"));
+	}
+
+	if(hasScript(player, "quest.task.ground.retrieve_item"))
+	{
+		if(groundquests.playerNeedsToRetrieveThisItem(player, self))
+		{
+			String menuText = groundquests.getRetrieveMenuText(player, self);
+			string_id menuStringId = utils.unpackString(menuText);
+
+			if ( isMob(self)  )
+			{
+				menu = menuInfo.addRootMenu (menu_info_types.CONVERSE_START, menuStringId);
+			}
+			else
+			{
+				menu = menuInfo.addRootMenu (menu_info_types.ITEM_USE, menuStringId);
+			}
+		}
+	}
+
+	menu_info_data menuInfoData = menuInfo.getMenuItemById (menu);
+
+	if ( menuInfoData != null )
+	{
+ 		menuInfoData.setServerNotify(true);
+ 	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if( item == menu_info_types.ITEM_USE || item == menu_info_types.CONVERSE_START )
+	{
+		if(hasScript(player, "quest.task.ground.retrieve_item"))
+		{
+			if(groundquests.playerNeedsToRetrieveThisItem(player, self))
+			{
+				if ( groundquests.gcwActiveDutyCheck(self, player) )
+				{
+					int countdownTimer = groundquests.getQuestCountdownTime(player, self);
+					if ( countdownTimer > 0 )
+					{
+						String menuText = groundquests.getRetrieveMenuText(player, self);
+						string_id menuStringId = utils.unpackString(menuText);
+
+						string handler = "handleQuestCountdownTimer";
+						int startTime = 0;
+						int range = 3;
+
+						int flags = 0;
+						//flags |= sui.CD_EVENT_LOCOMOTION;
+						flags |= sui.CD_EVENT_INCAPACITATE;
+						flags |= sui.CD_EVENT_DAMAGED;
+
+						stealth.testInvisNonCombatAction(player, self);
+
+						int countdownSui = sui.smartCountdownTimerSUI(self, player, "quest_countdown_timer", menuStringId, startTime, countdownTimer, handler, range, flags);
+					}
+					else
+					{
+						sendRetrieveObjectFoundMessage(self, player);
+					}
+				}
+				else
+				{
+					sendSystemMessage(player, new string_id("quest/groundquests", "retrieve_item_not_active_duty"));
+				}
+
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				String itemTemplateName = getTemplateName(self);
+
+				dictionary tasks = groundquests.getActiveTasksForTaskType(player, "retrieve_item");
+				if ( (tasks != null) && !tasks.isEmpty() )
+				{
+					java.util.Enumeration keys = tasks.keys();
+					while (keys.hasMoreElements())
+					{
+						String questCrcString = (string)keys.nextElement();
+						int questCrc = utils.stringToInt(questCrcString);
+						int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+						for(int i = 0; i < tasksForCurrentQuest.length; ++i)
+						{
+							int taskId = tasksForCurrentQuest[i];
+							String baseObjVar = groundquests.getBaseObjVar(player, "retrieve_item", questGetQuestName(questCrc), taskId);
+							String retrieveTemplateName = groundquests.getTaskStringDataEntry(questCrc, taskId, "SERVER_TEMPLATE");
+							if(itemTemplateName == retrieveTemplateName)
+							{
+								sendSystemMessage(player, new string_id("quest/groundquests", "retrieve_item_already_used"));
+								return SCRIPT_CONTINUE;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	string_id msg = new string_id("quest/groundquests", "retrieve_item_no_interest");
+	if( isMob(self)  )
+	{
+		msg = new string_id("quest/groundquests", "retrieve_item_no_interest_mob");
+		
+		if ( isIncapacitated(self) || hasScript(self, "npc.static_npc.npc_dead") )
+		{
+			msg = new string_id("quest/groundquests", "retrieve_item_no_interest_mob_dead");
+		}
+	}
+
+	sendSystemMessage(player, msg);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleQuestCountdownTimer()
+{
+ 	int pid = params.getInt("id");
+	obj_id player = params.getObjId("player");
+
+	if( !isIdValid(player) )
+	{
+		return SCRIPT_CONTINUE;
+	}	
+
+	int bp = sui.getIntButtonPressed(params);
+
+	// Cancel button is sent when player manually closes the countdown window,
+	// or when he/she moves out of range.
+	if(bp == sui.BP_CANCEL)
+	{
+		detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+		return SCRIPT_CONTINUE;
+	}
+	
+	else if(bp == sui.BP_REVERT)
+	{
+		// Gets the reason why the timer was aborted
+		int event = params.getInt("event");
+
+		// You can handle the situation differently depending on the reason
+		if(event == sui.CD_EVENT_LOCOMOTION)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_locomotion"));
+		}
+		else if(event == sui.CD_EVENT_INCAPACITATE)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_incapacitated"));
+		}
+		else if(event == sui.CD_EVENT_DAMAGED)
+		{
+			sendSystemMessage(player, new string_id("quest/groundquests", "countdown_interrupted_damaged"));
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR))
+		return SCRIPT_CONTINUE;
+
+	int test_pid = getIntObjVar(player, sui.COUNTDOWNTIMER_SUI_VAR);
+
+	if(pid != test_pid)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	forceCloseSUIPage(pid);
+	detachScript(player, sui.COUNTDOWNTIMER_PLAYER_SCRIPT);
+
+	// Retrieve Item target found
+	sendRetrieveObjectFoundMessage(self, player);
+	
+	return SCRIPT_CONTINUE;
+}
+
+void sendRetrieveObjectFoundMessage(obj_id self, obj_id player)
+{
+	dictionary webster = new dictionary();
+	webster.put("source", self);
+	messageTo(player, "questRetrieveItemObjectFound", webster, 0, false);
+
+	if(hasObjVar(self, "questRetrieveSignal"))
+	{
+		string questRetrieveSignal = getStringObjVar(self, "questRetrieveSignal");
+
+		if(questRetrieveSignal != null && questRetrieveSignal.length() > 0)
+		{
+			groundquests.sendSignal(player, questRetrieveSignal);
+		}
+	}
+	
+	messageTo(self, "destroyMe", null, 1, false);
+	
+	return;
+}
+
+messageHandler destroyMe()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnDestroy()
+{
+	if(!utils.hasScriptVar(self, "intCleanedUp"))
+	{
+		utils.setScriptVar(self, "intCleanedUp", 1);
+		obj_id objParent = getObjIdObjVar(self, "objParent");
+		messageTo(objParent, "spawnDestroyed", null, 0, false);
+	}
+	
+	return SCRIPT_CONTINUE;
+}

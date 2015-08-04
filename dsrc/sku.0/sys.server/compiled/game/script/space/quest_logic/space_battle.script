@@ -1,0 +1,731 @@
+//------------------------------------------------
+// space_battle.script
+// Brandon Reinhart
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_create;
+include library.space_quest;
+include library.space_utils;
+include library.space_crafting;
+include library.space_transition;
+include library.utils;
+include library.ship_ai;
+include library.prose;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_ABANDONED_BATTLE 		= new string_id( "space/quest", "battle_abandoned" );
+const string_id WARPOUT_FAILURE				= new string_id( "space/quest", "warpout_failure" );
+
+const string SOUND_SPAWN_ALLIES				= "clienteffect/ui_quest_spawn_friendly.cef";
+const string SOUND_SPAWN_ENEMIES			= "clienteffect/ui_quest_spawn_enemy.cef";
+
+/*
+
+	- Player enters the zone.
+	- Spawn enemy ships.
+	- Spawn allied ships.
+	- Set both groups to not attack.
+	- Send both groups to a waypoint.
+	- Have them attack each other.
+	- Mission is failed when all allies die.
+	- Mission is won when all enemies are destroyed.
+
+*/
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the amount of time to elapse before arrival.
+	setObjVar( self, "allyArrivalDelay", questInfo.getInt("allyArrivalDelay") );
+	setObjVar( self, "enemyArrivalDelay", questInfo.getInt("enemyArrivalDelay") );
+
+	// Determine the distance each group will warp in from the battle point.
+	setObjVar( self, "allyOriginDist", questInfo.getInt("allyOriginDist") );
+	setObjVar( self, "enemyOriginDist", questInfo.getInt("enemyOriginDist") );
+	setObjVar( self, "allyArrivalDist", questInfo.getInt("allyArrivalDist") );
+	setObjVar( self, "enemyArrivalDist", questInfo.getInt("enemyArrivalDist") );
+
+	// Store the list of allied ships.
+	string[] allyShips = dataTableGetStringColumn( qTable, "allyForce" );
+	space_quest.cleanArray( self, "allyShips", allyShips );
+
+	// Store the list of enemy ships.
+	string[] enemyShips = dataTableGetStringColumn( qTable, "enemyForce" );
+	space_quest.cleanArray( self, "enemyShips", enemyShips );
+
+	// Get the waypoint of the battle.
+	setObjVar( self, "battlePoint", questInfo.getString("battlePoint") );
+
+	// Damage multiplier.
+	setObjVar( self, "damageMultiplier", questInfo.getInt( "damageMultiplier" ) );
+
+	// Get the conversation data, if any.
+	int useConvo = questInfo.getInt( "useConversation" );
+	if ( useConvo == 1 )
+	{
+		setObjVar( self, "useConvo", 1 );
+		string[] convoStrings = dataTableGetStringColumn( qTable, "convo" );
+		space_quest.cleanArray( self, "convo", convoStrings );
+		int[] convoDelay = dataTableGetIntColumn( qTable, "convo_delay" );
+		space_quest.cleanArray( self, "convo_delay", convoDelay );
+	}
+
+	// Try to notify the player of the first objective (if we are in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	// Add quest journal objectives.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set us up if we are in the appropriate zone.
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearMissionWaypoint( self );
+			space_quest.showQuestUpdate( self, SID_ABANDONED_BATTLE );
+			space_quest.setQuestFailed( player, self, false );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar( self, "initialized" ) )
+		return SCRIPT_CONTINUE;
+
+	// Determine the battle location.
+	string battlePoint = getStringObjVar( self, "battlePoint" );
+	if ( battlePoint == null )
+		return SCRIPT_CONTINUE;
+	java.util.StringTokenizer st = new java.util.StringTokenizer( battlePoint, ":" );
+	string scene = st.nextToken();
+	battlePoint = st.nextToken();
+	if ( getCurrentSceneName().startsWith( scene ) )
+		findBattleLoc( self, player, battlePoint );
+
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 1, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// findBattleLoc
+//------------------------------------------------
+
+void findBattleLoc( obj_id self, obj_id player, string destNav )
+{
+	// Register the waypoint with the quest manager.
+	obj_id navPoint = space_quest.findQuestLocation(self, player, destNav, "nav");
+	if (isIdValid(navPoint))
+	{
+		location loc = getLocation(navPoint);
+		transform wptrans = getTransform_o2w(navPoint);
+
+		// Create a waypoint to this location.
+		obj_id waypoint = getObjIdObjVar( self, "battle_waypoint" );
+		if ( !isIdValid(waypoint) )
+			waypoint = createWaypointInDatapad( player, loc );
+		if ( isIdValid(waypoint) )
+		{
+			setWaypointVisible( waypoint, true );
+			setWaypointActive( waypoint, true );
+			setWaypointLocation( waypoint, loc );
+			setWaypointName( waypoint, "Mission Objective" );
+			setWaypointColor( waypoint, "space" );
+			setObjVar( self, "battle_waypoint", waypoint );
+		}
+		setObjVar( self, "battle_transform", wptrans );
+
+		space_quest._setQuestInProgress( self );
+
+		// Determine origin & arrival transforms for each side.
+		int enemyDist = getIntObjVar( self, "enemyOriginDist" );
+		int enemyArriveDist = getIntObjVar( self, "enemyArrivalDist" );
+		transform enemyOrigin = wptrans.move_l( new vector( 0, 0, enemyDist ) ).yaw_l( (float) Math.PI );
+		setObjVar( self, "enemyOrigin", enemyOrigin );
+		transform enemyArrive = wptrans.move_l( new vector( 0, 0, enemyArriveDist ) ).yaw_l( (float) Math.PI );
+		setObjVar( self, "enemyArrive", enemyArrive );
+
+		int allyDist = getIntObjVar( self, "allyOriginDist" );
+		int allyArriveDist = getIntObjVar( self, "allyArrivalDist" );
+		transform allyOrigin = wptrans.move_l( new vector( 0, 0, allyDist ) );
+		setObjVar( self, "allyOrigin", allyOrigin );
+		transform allyArrive = wptrans.move_l( new vector( 0, 0, allyArriveDist ) );
+		setObjVar( self, "allyArrive", allyArrive );
+
+		// Target located. A waypoint has been created.
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "found_loc" );
+		questUpdate( self, foundLocation );
+
+		questSetQuestTaskLocation(player, "spacequest/"+questType+"/"+questName, 1, loc);
+
+		// Summon both armies!
+		dictionary outp = new dictionary();
+		outp.put( "enemy", 0 );
+		messageTo( self, "armyArrives", outp, getIntObjVar( self, "allyArrivalDelay" ), false );
+		outp.put( "enemy", 1 );
+		messageTo( self, "armyArrives", outp, getIntObjVar( self, "enemyArrivalDelay" ), false );
+	}
+
+	setObjVar( self, "initialized", 1 );
+}
+
+//------------------------------------------------
+// armyArrives
+//------------------------------------------------
+
+messageHandler armyArrives()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Get the army data.
+	transform armyArrive = null;
+	transform armyOrigin = null;
+	string[] army = null;
+	string name = null;
+	int enemy = params.getInt( "enemy" );
+	if ( enemy == 1 )
+	{
+		name = "enemies";
+		army = getStringArrayObjVar( self, "enemyShips" );
+		armyOrigin = getTransformObjVar( self, "enemyOrigin" );
+		armyArrive = getTransformObjVar( self, "enemyArrive" );
+
+		string_id noto = new string_id( "spacequest/"+questType+"/"+questName, "enemies_arrived" );
+		questUpdate( self, noto );
+
+		playClientEffectObj( player, SOUND_SPAWN_ENEMIES, player, "" );
+	}
+	else
+	{
+		name = "allies";
+		army = getStringArrayObjVar( self, "allyShips" );
+		armyOrigin = getTransformObjVar( self, "allyOrigin" );
+		armyArrive = getTransformObjVar( self, "allyArrive" );
+
+		string_id noto = new string_id( "spacequest/"+questType+"/"+questName, "allies_arrived" );
+		questUpdate( self, noto );
+
+		playClientEffectObj( player, SOUND_SPAWN_ALLIES, player, "" );
+	}
+
+	// Get the initial spawn point transform.
+	transform[] translist = new transform[1];
+	translist[0] = armyArrive;
+
+	// Spawn the hordes of the fell legions!!! EKO AZERAK!
+	int squad = ship_ai.squadCreateSquadId();
+	setObjVar( self, "squad_"+name, squad );
+	obj_id[] ships = new obj_id[army.length];
+	for ( int i=0; i<army.length; i++ )
+	{
+		// Spawn the escorts.
+		ships[i] = space_create.createShipHyperspace( army[i], armyOrigin );
+		ship_ai.unitSetLeashDistance( ships[i], 16000 );
+		attachScript( ships[i], "space.quest_logic.space_battle_ship" );
+		attachScript( ships[i], "space.quest_logic.destroyduty_ship" );
+		setObjVar( ships[i], "quest", self );
+		setObjVar( ships[i], "name", name );
+		ship_ai.unitSetSquadId( ships[i], squad );
+		ship_ai.unitSetAttackOrders( ships[i], ship_ai.ATTACK_ORDERS_RETURN_FIRE );
+		space_quest._addMissionCriticalShip( player, self, ships[i] );
+		setObjVar( ships[i], "objMissionOwner", player );
+		ship_ai.unitAddExclusiveAggro( ships[i], player );
+
+		// Set the damage multiplier.
+		int dmult = getIntObjVar( self, "damageMultiplier" );
+		if ( dmult < 1 )
+			dmult = 1;
+		setObjVar( ships[i], "damageMultiplier", dmult );
+	}
+	setObjVar( self, name, ships );
+	ship_ai.squadSetLeader( squad, ships[0] );
+	ship_ai.squadSetFormationRandom( squad );
+	ship_ai.squadMoveTo( squad, translist );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// shipArrived
+//------------------------------------------------
+
+messageHandler shipArrived()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id ship = params.getObjId( "ship" );
+	string name = getStringObjVar( ship, "name" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	// Bogue says I don't need to idle ships that have arrived.
+	// It crashes the server, anyway.
+//	ship_ai.squadIdle( ship_ai.unitGetSquadId( ship ) );
+
+	if ( hasObjVar( self, "arrived" ) )
+	{
+		// One of the armies already arrived.
+		if ( hasObjVar( self, "useConvo" ) )
+		{
+			// Start a conversation.
+			dictionary outp = new dictionary();
+			outp.put( "line", 0 );
+			convo(self, outp);
+		}
+		else
+		{
+			// FIGHT!
+			startBattle(self, null);
+		}
+	}
+	else
+	{
+		// Wait for the other side to arrive.
+		setObjVar( self, "arrived", name );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// startBattle
+//------------------------------------------------
+
+messageHandler startBattle()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	// Update the quest journal.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 2, player );
+		if ( questIsTaskActive( questid, 1, player ) )
+			questCompleteTask( questid, 1, player );
+	}
+
+	// Notify the player that the fight is on!
+	string_id noto = new string_id( "spacequest/"+questType+"/"+questName, "battle_started" );
+	questUpdate( self, noto );
+
+	// Order them to fight.
+	int asquad = getIntObjVar( self, "squad_allies" );
+	if ( ship_ai.isSquadIdValid( asquad ) )
+		ship_ai.squadSetAttackOrders( asquad, ship_ai.ATTACK_ORDERS_ATTACK_FREELY );
+
+	int esquad = getIntObjVar( self, "squad_enemies" );
+	if ( ship_ai.isSquadIdValid( esquad ) )
+		ship_ai.squadSetAttackOrders( esquad, ship_ai.ATTACK_ORDERS_ATTACK_FREELY );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// convo
+//------------------------------------------------
+
+messageHandler convo()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// So many variables!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id[] allies = getObjIdArrayObjVar( self, "allies" );
+	obj_id[] enemies = getObjIdArrayObjVar( self, "enemies" );
+	string[] convo = getStringArrayObjVar( self, "convo" );
+	int[] convo_delay = getIntArrayObjVar( self, "convo_delay" );
+	int line = params.getInt( "line" );
+	obj_id ally = allies[0];
+	obj_id enemy = enemies[0];
+	if ( line >= convo.length )
+	{
+		// Convo is over. Start the fight!
+		startBattle(self, null);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Build our vituperation...
+	int delay = convo_delay[line];
+	string sline = convo[line];
+	java.util.StringTokenizer st = new java.util.StringTokenizer( sline, ":" );
+	string side = st.nextToken();
+	string id = st.nextToken();
+	string_id phrase = new string_id( "spacequest/"+questType+"/"+questName, id );
+	prose_package pp = prose.getPackage( phrase, 0 );
+
+	// Lay the verbal smack down.
+	if ( side.equals( "ally" ) )
+	{
+//		obj_id[] observed_ships = getObservedPlayerShips( ally, true );
+//		space_quest._tauntShips( ally, observed_ships, pp );
+		space_quest.groupTaunt( ally, player, pp );
+	}
+	else
+	{
+//		obj_id[] observed_ships = getObservedPlayerShips( enemy, true );
+//		space_quest._tauntShips( enemy, observed_ships, pp );
+		space_quest.groupTaunt( enemy, player, pp );
+	}
+
+	params.put( "line", line+1 );
+	messageTo( self, "convo", params, delay, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// clearMissionWaypoint
+//------------------------------------------------
+
+void clearMissionWaypoint( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id waypoint = getObjIdObjVar( self, "battle_waypoint" );
+	if ( isIdValid(waypoint) )
+		destroyWaypointInDatapad( waypoint, player );
+}
+
+//------------------------------------------------
+// targetDestroyed
+//------------------------------------------------
+
+messageHandler targetDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id deadship = params.getObjId( "ship" );
+	string name = getStringObjVar( deadship, "name" );
+
+	obj_id targets[] = null;
+	if ( name.equals( "enemies" ) )
+		targets = getObjIdArrayObjVar( self, "enemies" );
+	else
+		targets = getObjIdArrayObjVar( self, "allies" );
+
+	int deadships = getIntObjVar( self, "dead_"+name );
+	for ( int i=0; i<targets.length; i++ )
+	{
+		if ( deadship == targets[i] )
+		{
+			deadships++;
+			setObjVar( self, "dead_"+name, deadships );
+			space_quest._removeMissionCriticalShip( player, self, deadship );
+
+			if ( deadships == targets.length )
+			{
+				// One side has been wiped out.
+				if ( name.equals( "enemies" ) )
+				{
+					// We win.
+					string_id noto = new string_id( "spacequest/"+questType+"/"+questName, "allies_win" );
+					questUpdate( self, noto );
+
+					messageTo( self, "winMission", null, 2.f, false );
+				}
+				else
+				{
+					// We lose.
+					string_id noto = new string_id( "spacequest/"+questType+"/"+questName, "enemies_win" );
+					questUpdate( self, noto );
+
+					messageTo( self, "loseMission", null, 2.f, false );
+				}
+
+				return SCRIPT_CONTINUE;
+			}
+
+			break;
+		}
+	}
+	int remaining = targets.length - deadships;
+	string_id noto = new string_id( "spacequest/"+questType+"/"+questName, name+"_remain" );
+	prose_package pp = prose.getPackage( noto, remaining );
+	space_quest.sendQuestMessage( player, pp );
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// winMission
+//------------------------------------------------
+
+messageHandler winMission()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( questIsTaskActive( questid, 2, player ) )
+			questCompleteTask( questid, 2, player );
+	}
+
+	questCompleted( self );
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// loseMission
+//------------------------------------------------
+
+messageHandler loseMission()
+{
+	questFailed( self );
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// questCompleted
+//------------------------------------------------
+
+void questCompleted( obj_id self )
+{
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// Warp out the ships in a minute.
+	warpOutShips( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestWon( player, self );
+}
+
+//------------------------------------------------
+// questFailed
+//------------------------------------------------
+
+void questFailed( obj_id self )
+{
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// Warp out the ships in a minute.
+	warpOutShips( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestFailed( player, self );
+}
+
+//------------------------------------------------
+// questAborted
+//------------------------------------------------
+
+void questAborted( obj_id self )
+{
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// Warp out the ships in a minute.
+	warpOutShips( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestAborted( player, self );
+}
+
+//------------------------------------------------
+// removeQuest
+//------------------------------------------------
+
+messageHandler removeQuest()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Flag the main quest journal entry as finished.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( (questid != 0) && questIsQuestActive( questid, player ) )
+		questCompleteQuest( questid, player );
+
+	space_quest._removeQuest( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	if ( hasObjVar( self, "noAbort" ) )
+		return SCRIPT_CONTINUE;
+
+	questAborted( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// warpOutShips
+//------------------------------------------------
+
+void warpOutShips( obj_id self )
+{
+	obj_id[] allies = getObjIdArrayObjVar( self, "allies" );
+	if ( allies != null )
+	{
+		for ( int i=0; i<allies.length; i++ )
+		{
+			if ( isIdValid( allies[i] ) && exists( allies[i] ) )
+				messageTo( allies[i], "warpOut", null, 60.f, false );
+		}
+	}
+
+	obj_id[] enemies = getObjIdArrayObjVar( self, "enemies" );
+	if ( enemies != null )
+	{
+		for ( int i=0; i<enemies.length; i++ )
+		{
+			if ( isIdValid( enemies[i] ) && exists( enemies[i] ) )
+				messageTo( enemies[i], "warpOut", null, 60.f, false );
+		}
+	}
+}
+
+//------------------------------------------------
+// questUpdate
+//------------------------------------------------
+
+void questUpdate( obj_id self, string_id update_id )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string_id update_prefix = new string_id( "spacequest/"+questType+"/"+questName, "quest_update" );
+	prose_package pp = prose.getPackage( update_prefix, update_id );
+	space_quest.sendQuestMessage( player, pp );
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+		warpOutShips( self );
+		questFailed( self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// warpoutFailure
+//------------------------------------------------
+
+messageHandler warpoutFailure()
+{
+	if ( hasObjVar( self, "handling_warpout_failure" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "handling_warpout_failure", 1 );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	sendQuestSystemMessage( player, WARPOUT_FAILURE );
+	warpOutShips( self );
+	questFailed( self );
+
+	return SCRIPT_CONTINUE;
+}

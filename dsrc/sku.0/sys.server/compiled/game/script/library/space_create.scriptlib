@@ -1,0 +1,524 @@
+include vector;
+include transform;
+include library.hue;
+include library.ship_ai;
+include library.sui;
+
+const int MAX_SQUAD_SIZE= 10;
+// space creation libraries
+
+const string SHIP_DATATABLE = "datatables/space_mobile/space_mobile.iff";
+const string SHIP_DIRECTORY = "object/ship/";
+
+obj_id createShip( string strShipType, transform locTransform )
+{
+	return createShip( strShipType, locTransform, null );
+}
+
+obj_id createShip( string strShipType, transform locTransform, obj_id objCell )
+{
+	return _createShip( strShipType, locTransform, objCell, false );
+}
+
+obj_id createShipHyperspace( string strShipType, transform locTransform )
+{
+	return _createShip( strShipType, locTransform, null, true );
+}
+
+obj_id createShipHyperspace( string strShipType, transform locTransform, obj_id objCell )
+{
+	return _createShip( strShipType, locTransform, objCell, true );
+}
+
+
+obj_id _createShip( string strShipType, transform locTransform, obj_id objCell, boolean hyperspace)
+{
+	dictionary dctShipInfo= dataTableGetRow( SHIP_DATATABLE, strShipType );
+	if ( dctShipInfo == null )
+	{
+		//LOG("creation_failure", "CREATION_FAILURE, no object of type "+strShipType+" specified in ship spawning datatable");
+		return null;
+	}
+	string strShip = "object/ship/"+dctShipInfo.getString("strShip")+".iff"; // make our ship
+
+	obj_id objShip = null;
+	if ( hyperspace )
+		objShip = createObjectHyperspace( strShip, locTransform, objCell );
+	else
+		objShip = createObject( strShip, locTransform, objCell );
+	if ( !isIdValid(objShip) )
+	{
+		//LOG("creation_failure", "CREATION_FAILURE No ship of type "+strShip+" exists in the object/ship directory, type passed in was "+strShipType);
+		return null;
+	}
+
+	setObjVar( objShip, "ship.shipName", strShipType );
+	string strPilot = dctShipInfo.getString( "strPilot" );	
+	setObjVar( objShip, "ship.pilotType", strPilot );
+	ship_ai.unitSetPilotType( objShip, strPilot );
+	setupAIFlightModeling(objShip, strPilot);
+	int intXP = dctShipInfo.getInt( "intXP" );
+	setObjVar( objShip, "xp.intXP", intXP );
+
+	string strShipt = dctShipInfo.getString("strShip");
+	setShipTypeName( objShip, strShipt );
+
+	// Set the ship's difficulty if it's tiered.
+	if ( strShipt.indexOf( "tier" ) > -1 )
+	{
+		int index = strShipt.lastIndexOf( "_" );
+		if ( index > -1 )
+		{
+			string tier = strShipt.substring( index+1, strShipt.length() );
+			setShipDifficulty( objShip, tier );
+		}
+	}
+
+	string strFaction = dctShipInfo.getString("space_faction");
+	setShipFaction(objShip, strFaction);
+
+	int intMinCredits = dctShipInfo.getInt( "intMinCredits" );
+	int intMaxCredits = dctShipInfo.getInt( "intMaxCredits" );
+	setObjVar( objShip, "loot.intCredits", rand(intMinCredits, intMaxCredits) );
+
+	int intRolls = dctShipInfo.getInt( "intRolls" );
+	float fltItemChance = dctShipInfo.getFloat( "fltItemChance" );
+
+	int intNumItems = 0;
+	fltItemChance = fltItemChance * 100;
+	//LOG( "space", "Item chance is "+fltItemChance );
+	for( int intI = 0; intI<intRolls; intI++ )
+	{
+		int intRoll = rand(1, 100);
+		//LOG( "space", "roll is "+intRoll );
+		if ( intRoll < fltItemChance )
+		{
+			//LOG( "space", "Increasing items" );
+			intNumItems = intNumItems+1; // you get an item!
+		}
+	}
+	setObjVar( objShip, "loot.intNumItems", intNumItems );
+	string strLootLookup = dctShipInfo.getString( "strLootLookup" );
+	setObjVar( objShip, "loot.strLootTable", strLootLookup );
+
+	//Save collection data to the ship in objvar form
+	string collectionLoot = dctShipInfo.getString("collectionLoot");
+	if (!collectionLoot.equals("no_loot") && collectionLoot != null) 
+	{
+		//LOG( "space_collections", "ADDING COLLECTION DATA TO SHIP" );
+		int rollBaseChance = dctShipInfo.getInt("collectionRoll");  // get roll base chance from table
+		setObjVar(objShip, "collection.collectionLoot", collectionLoot);	
+		setObjVar(objShip, "collection.rollBaseChance", rollBaseChance);
+	}
+	
+	//save nova orion resouce to the ship in objvar form
+	int novaOrionLoot =  dctShipInfo.getInt("novaOrionLoot");
+	if(novaOrionLoot >= 0)
+	{
+		setObjVar(objShip, "loot.novaOrionLoot", novaOrionLoot);		
+	}
+	
+	attachScript( objShip, "space.ai.space_ai" );
+
+	string_id strSpam = new string_id("space/ship_names", strShipType);
+	setName( objShip, strSpam );
+
+	// Add customization flags.
+	int intColor0 = dctShipInfo.getInt( "index_color_1");
+	int intColor1 = dctShipInfo.getInt( "index_color_2");
+	int intTextureIndex = dctShipInfo.getInt("index_texture_1");
+
+	if(intColor0 > -1)
+		hue.setColor( objShip, "/shared_owner/index_color_1", intColor0);
+
+	if(intColor1 > -1)
+		hue.setColor( objShip, "/shared_owner/index_color_2", intColor1);
+
+	if(intTextureIndex > -1)
+		hue.setRangedIntCustomVar( objShip, "/shared_owner/index_texture_1", intTextureIndex);
+
+
+	 //* Objvars are stored in the format:
+	 //* int:name=value,string:name=value,float:name=value
+
+	// Handle Objvars
+	string objvars = dctShipInfo.getString("objvars");
+	if(objvars != null && objvars.length() >0)
+	{
+		utils.setObjVarsList(objShip, objvars);
+	}
+
+	
+	string script = dctShipInfo.getString("scriptlist");
+	if(script != null && script.length() > 0)
+	{
+		string[] scriptArray = split(script, ',');
+		for(int i = 0; i < scriptArray.length; i++)
+		{
+			attachScript(objShip, scriptArray[i]);
+		}
+	}
+
+
+	// Add cargo.
+	string cargo_type = dctShipInfo.getString( "cargo" );
+	if ( (cargo_type != null) && !cargo_type.equals( "none" ) && !cargo_type.equals( "" ) )
+	{
+		string[] cargo_types = dataTableGetStringColumn( "datatables/spacequest/inspect_cargo/"+cargo_type+".iff", "name" );
+
+		if ( cargo_types != null && cargo_types.length > 0 )
+		{
+			string cargo = null;
+			
+			if (cargo_types.length == 1)
+				cargo = cargo_types[0];
+			else
+				cargo = cargo_types[rand(0,cargo_types.length-1)];
+			
+			setObjVar( objShip, "cargo", cargo );
+			setObjVar( objShip, "cargo_type", cargo_type );
+		}
+	}
+	string strCapitalShipType = dctShipInfo.getString("strCapitalShipType");
+
+	if ( strCapitalShipType != "" )
+	{
+		setObjVar( objShip, "strCapitalShipType", strCapitalShipType );
+		attachScript( objShip, "space.combat.combat_ship_capital" );
+	}
+	string strInteriorChassisType = dctShipInfo.getString( "strInteriorChassisType" );
+	if ( strInteriorChassisType != "" )
+	{
+		// THIS HAS TO GO BEFORE THE BOARDING TYPE. THE INFORMATION BELOW IS REQUIRED FOR THE SPAWNERS BELOW TO WORK.
+		setObjVar( objShip, "strInteriorChassisType", strInteriorChassisType );
+		attachScript( objShip, "space.ship.ship_interior" );
+		dictionary dctParams = new dictionary();
+		space_utils.notifyObject( objShip, "doInteriorBuildout", dctParams );
+	}
+
+	string strBoardingType= dctShipInfo.getString( "strBoardingType" );
+	if ( strBoardingType != "" )
+	{
+
+		setObjVar( objShip, "strBoardingType", strBoardingType );
+		attachScript( objShip, "space.combat.combat_ship_boardable" );
+
+	}
+	string strAppearanceType = dctShipInfo.getString("strAppearance");
+	string[] strAppearances = dataTableGetStringColumnNoDefaults("datatables/space_mobile/space_appearances.iff", strAppearanceType);
+	if((strAppearances!=null)&&(strAppearances.length>0))
+	{
+		if (strAppearances.length == 1)
+			setObjVar(objShip, "convo.appearance", strAppearances[0]);
+		else
+			setObjVar(objShip, "convo.appearance", strAppearances[rand(0, strAppearances.length-1)]);
+	}
+	string strDiction = dctShipInfo.getString("strTauntDiction");
+	if(strDiction!="")
+	{
+		utils.setLocalVar(objShip, "strTauntDiction", strDiction);
+	}
+	string strConversation = dctShipInfo.getString("strConversation");
+	if((strConversation!=null)&&(strConversation!=""))
+	{
+		attachScript(objShip, strConversation);
+	}
+	
+	float fltAttackTauntChance = dctShipInfo.getFloat("fltAttackTauntChance");
+	utils.setLocalVar(objShip, "fltAttackTauntChance", fltAttackTauntChance);
+
+	float fltDefendTauntChance = dctShipInfo.getFloat("fltDefendTauntChance");
+	utils.setLocalVar(objShip, "fltDefendTauntChance", fltDefendTauntChance);
+
+
+	float fltDieTauntChance = dctShipInfo.getFloat("fltDieTauntChance");
+	utils.setLocalVar(objShip, "fltDieTauntChance", fltDieTauntChance);
+
+
+	utils.setLocalVar(objShip, "intImperialFactionPoints", dctShipInfo.getInt("intImperialFactionPoints"));
+	utils.setLocalVar(objShip, "intRebelFactionPoints", dctShipInfo.getInt("intRebelFactionPoints"));
+
+
+	return objShip;
+}
+
+obj_id makeCreditChip( obj_id objContainer, int intCredits)
+{
+	//LOG("space", "making chip");
+	string TEMPLATE_NAME = "object/tangible/item/loot_credit_chip.iff";
+	if(intCredits>0)
+	{
+
+		obj_id objCreditChip = getCreditChip(objContainer);
+		if(isIdValid(objCreditChip))
+		{
+			int intAmount= getIntObjVar(objCreditChip, "loot.intCredits");
+			intAmount = intAmount + intCredits;
+			setCount(objCreditChip, intAmount);
+			setObjVar(objCreditChip, "loot.intCredits", intAmount);
+			return objCreditChip;
+		}
+		else
+		{
+			//LOG("space", "No existing one");
+			if(isIdValid(objContainer))
+			{
+				//LOG("space", "valid container");
+				// make the object in the box
+				obj_id objChip = space_utils.createObjectTrackItemCount(TEMPLATE_NAME, objContainer);
+				if(isIdValid(objChip))
+				{
+					setCount(objChip, intCredits);
+					setObjVar(objChip, "loot.intCredits", intCredits);
+					//LOG("space", "made chip in of "+objChip+ "in "+objContainer);
+				}
+				return objChip;
+			}
+		}
+	}
+	return null;
+}
+
+
+obj_id getCreditChip(obj_id objContainer)
+{
+
+	if(!isIdValid(objContainer))
+	{
+		//LOG("space", "no inventory");
+		return null;
+	}
+	obj_id[] objContents= getContents(objContainer);
+	if(objContents==null)
+	{
+		//LOG("space", "no contents");
+		return null;
+	}
+	for ( int intI= 0; intI< objContents.length; intI++)
+	{
+		//LOG("space", "objContents is "+objContents[intI]);
+		if ( hasObjVar(objContents[intI], "loot.intCredits"))
+		{
+			return objContents[intI];
+		}
+	}
+	return null;
+}
+
+resizeable obj_id[] createSquad( obj_id objParent, string strSquad, transform trSpawnLocation, float fltDistance, obj_id objCell )
+{
+	return _createSquad( objParent, strSquad, trSpawnLocation, fltDistance, objCell, false);
+}
+
+resizeable obj_id[] createSquadHyperspace( obj_id objParent, string strSquad, transform trSpawnLocation, float fltDistance, obj_id objCell )
+{
+	return _createSquad( objParent, strSquad, trSpawnLocation, fltDistance, objCell, true);
+}
+
+
+resizeable obj_id[] _createSquad( obj_id objParent, string strSquad, transform trSpawnLocation, float fltDistance, obj_id objCell, boolean hyperspace)
+{
+	dictionary dctSquadInfo = dataTableGetRow( "datatables/space_content/spawners/squads.iff", strSquad );
+	if ( strSquad == null )
+	{
+		//LOG( "space", "No formation of type "+strSquad+" found" );
+		return null;
+	}
+	resizeable obj_id[] objMembers = new obj_id[0];
+
+	for ( int intI = 1; intI< MAX_SQUAD_SIZE; intI++ )
+	{
+		string strShipType = dctSquadInfo.getString("strShip"+intI);
+		if ( strShipType != "" )
+		{
+			obj_id objShip = null;
+			if(hasObjVar(objParent, "intLaunchFromDockingPoint"))
+			{
+				objShip = space_create.createShip(strShipType, getTransform_o2p(objParent), null);
+				transform trTest = ship_ai.unitGetDockTransform(objParent, objShip);
+				transform trFoo = getTransform_o2p(objShip).rotateTranslate_l2p(trTest);
+				
+				//transform trTest = getTransform_o2p(objParent);
+				location locTest = space_utils.getLocationFromTransform(trFoo);
+				//setLocation(objShip, locTest);
+				//LOG("space", "SETTING LOCATION TO "+locTest);
+				setTransform_o2p(objShip, trFoo);
+			}
+			else
+			{
+				transform trTest = space_utils.getRandomPositionInSphere(trSpawnLocation, 0f, fltDistance, true);
+				objShip = space_create._createShip( strShipType, trTest, objCell, hyperspace);
+			}
+
+			if(!isIdValid(objShip))
+			{
+				//LOG("space", "Bad shiptype of "+strShipType+" in formation "+strSquad);
+			}
+			else
+			{
+				objMembers = utils.addElement(objMembers, objShip);
+				string strMemberScript= dctSquadInfo.getString("strMemberScript");
+				if(strMemberScript!="")
+				{
+					attachScript(objShip, strMemberScript);
+				}
+				attachScript(objShip, "space.content_tools.squad_member");
+			}
+		}
+		else
+		{
+			intI = MAX_SQUAD_SIZE +1;
+		}
+
+	}
+	if ( objMembers.length > 0 )
+	{
+		float fltDestroyPercentage = dctSquadInfo.getFloat("fltDestroyPercentage");
+		//int intSquadId = ship_ai.squadCreateSquadId(); // A NUMBER!
+		int intSquadId = ship_ai.unitGetSquadId(objMembers[0]);
+		utils.setScriptVar(objMembers[0], "fltDestroyPercentage", fltDestroyPercentage);
+		utils.setScriptVar(objMembers[0], "intStartPopulation", objMembers.length);
+		for ( int intI = 1; intI < objMembers.length; intI++ )
+		{
+			// we setup our thang.
+			//LOG("space", "intSquadId is "+intSquadId);
+			//LOG("space", "count is "+intI+" member is "+objMembers[intI]+" setting intStartPopulation to "+objMembers.length);
+			utils.setScriptVar(objMembers[intI], "fltDestroyPercentage", fltDestroyPercentage);
+			utils.setScriptVar(objMembers[intI], "intStartPopulation", objMembers.length);
+			setObjVar(objMembers[intI], "intNoDump", 1);
+			ship_ai.unitSetSquadId(objMembers[intI], intSquadId);
+			if ( !isIdValid(objParent))
+			{
+				setObjVar( objMembers[intI], "objParent", objParent );
+			}
+		}
+		//LOG( "space", "intSquadId2 is "+intSquadId );
+		ship_ai.squadSetFormation( intSquadId, dctSquadInfo.getInt("intFormationShape") );
+		ship_ai.squadSetLeader( intSquadId, objMembers[0] );
+	}
+	else
+	{
+		//LOG( "space", "Formation "+strSquad+" is 100% fucked up. Goodbye" );
+		return null;
+	}
+	for(int intI = 0; intI < objMembers.length; intI++)
+	{
+		//LOG("space", "for "+objMembers[intI]+" squad id is "+ship_ai.unitGetSquadId(objMembers[intI]));
+
+	}
+
+	return objMembers;
+}
+
+
+obj_id setupShipFromObjVars(obj_id objShip)
+{
+	//LOG("SPACE_FATAL", "Setting up "+objShip);
+	string strShipType = getStringObjVar(objShip, "ship.shipName");
+	dictionary dctShipInfo= dataTableGetRow( space_create.SHIP_DATATABLE, strShipType );
+
+	if ( dctShipInfo == null )
+	{
+		//LOG("SPACE_FATAL", "Destroying ship becayse there is no ship.shipName or value o f"+strShipType);
+		destroyObject(objShip);
+		return null;
+	}
+
+	setObjVar( objShip, "ship.shipName", strShipType );
+	string strPilot = dctShipInfo.getString( "strPilot" );
+	if(hasObjVar(objShip, "ship.pilotType"))
+	{
+		strPilot = getStringObjVar(objShip, "ship.pilotType");
+		if((strPilot==null)||(strPilot==""))
+		{
+			strPilot = "default";
+		}
+		
+	
+	}
+	else
+	{
+		if((strPilot==null)||(strPilot==""))
+		{
+			strPilot = "default";
+		}
+		setObjVar( objShip, "ship.pilotType", strPilot );	
+
+	}
+
+		
+	// Set the ship's difficulty if it's tiered.
+	if ( strPilot.indexOf( "tier" ) > -1 )
+	{
+		int index = strPilot.lastIndexOf( "_" );
+		if ( index > -1 )
+		{
+			string tier = strPilot.substring( index+1, strPilot.length() );
+			setShipDifficulty( objShip, tier );
+		}
+	}	
+	setShipTypeName( objShip, dctShipInfo.getString("strShip") );	
+	string strFaction = "";
+	if(!hasObjVar(objShip, "ship.space_faction"))
+	{
+		//LOG("space", "NO OBJVAR ON "+objShip);
+		strFaction = dctShipInfo.getString("space_faction");
+	}
+	else
+	{
+		//LOG("space", "FOUND OBJVAR ON "+objShip);
+		strFaction = getStringObjVar(objShip, "ship.space_faction");
+	}
+	//LOG("space", "Setting Ship to faction "+strFaction);
+	setShipFaction(objShip, strFaction);
+	
+	
+	string_id strSpam = new string_id("space/ship_names", strShipType);
+	setName( objShip, strSpam );
+	ship_ai.unitSetPilotType(objShip, strPilot );
+	//LOG("SPACE_FATAL", "SETUP "+objShip);
+	return objShip;
+
+}
+void setupAIFlightModeling(obj_id objShip, string strPilotType)
+{
+	if((strPilotType!=null)&&(strPilotType!=""))
+	{
+		dictionary dctShipInfo = dataTableGetRow("datatables/ship/ship_debug.iff",strPilotType);
+		if(dctShipInfo==null)
+		{
+			//LOG("space", "bad entry "+strPilotType);
+			return;
+		}
+		
+		setShipEngineAccelerationRate(objShip, dctShipInfo.getFloat("engine_accel"));
+		setShipEngineDecelerationRate(objShip, dctShipInfo.getFloat("engine_decel"));
+		setShipEnginePitchAccelerationRateDegrees(objShip, dctShipInfo.getFloat("engine_pitch_accel"));
+		setShipEngineYawAccelerationRateDegrees(objShip, dctShipInfo.getFloat("engine_yaw_accel"));
+		setShipEngineRollAccelerationRateDegrees(objShip, dctShipInfo.getFloat("engine_roll_accel"));
+		setShipEnginePitchRateMaximumDegrees(objShip, dctShipInfo.getFloat("engine_pitch"));
+		setShipEngineYawRateMaximumDegrees(objShip, dctShipInfo.getFloat("engine_yaw"));
+		setShipEngineRollRateMaximumDegrees(objShip, dctShipInfo.getFloat("engine_roll"));
+		setShipEngineSpeedMaximum(objShip, dctShipInfo.getFloat("engine_speed"));
+		setShipEngineSpeedRotationFactorMaximum(objShip, dctShipInfo.getFloat("speed_rotation_factor_max"));
+		setShipEngineSpeedRotationFactorMinimum(objShip, dctShipInfo.getFloat("speed_rotation_factor_min"));
+		setShipEngineSpeedRotationFactorOptimal(objShip, dctShipInfo.getFloat("speed_rotation_factor_optimal"));
+		setShipSlideDampener(objShip, dctShipInfo.getFloat("slideDamp"));
+		int intHoldFire = dctShipInfo.getInt("intHoldFire");
+		if(intHoldFire>0)
+		{
+			ship_ai.unitSetAttackOrders(objShip, ship_ai.ATTACK_ORDERS_HOLD_FIRE);
+		}
+		if(isShipSlotInstalled(objShip, space_crafting.BOOSTER))
+		{
+
+
+			setShipBoosterEnergyCurrent(objShip, dctShipInfo.getFloat("booster_energy"));
+			setShipBoosterEnergyMaximum(objShip, dctShipInfo.getFloat("booster_energy"));
+			setShipBoosterEnergyRechargeRate(objShip, dctShipInfo.getFloat("booster_recharge"));
+			setShipBoosterEnergyConsumptionRate(objShip, dctShipInfo.getFloat("booster_consumption"));
+			setShipBoosterAcceleration(objShip, dctShipInfo.getFloat("booster_accel"));
+			setShipBoosterSpeedMaximum(objShip, dctShipInfo.getFloat("booster_speed"));				
+		}
+	}
+}

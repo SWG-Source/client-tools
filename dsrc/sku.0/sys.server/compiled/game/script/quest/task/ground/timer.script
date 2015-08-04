@@ -1,0 +1,166 @@
+include library.groundquests;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const String dataTableColumnMinTime = "MIN_TIME";
+const String dataTableColumnMaxTime = "MAX_TIME";
+const String dataTableColumnVisible = "IS_VISIBLE";
+
+const String timeObjVar             = "playedTimeEnd";
+
+const String taskType = "timer";
+const String dot = ".";
+
+// ---------------------------------------------------------------------
+
+//fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + "task activated.");
+		
+	//gather data for this task
+	float minTime = groundquests.getTaskIntDataEntry   (questCrc, taskId, dataTableColumnMinTime);
+	float maxTime = groundquests.getTaskIntDataEntry   (questCrc, taskId, dataTableColumnMaxTime);
+	int isVisible = groundquests.getTaskIntDataEntry   (questCrc, taskId, dataTableColumnVisible);
+	
+	if(minTime > maxTime)
+	{
+		float temp = minTime;
+		minTime    = maxTime;
+		maxTime    = temp;
+	}
+	
+	float timerLength = rand(minTime, maxTime);
+	float playerPlayedTimeWhenTimerEnds = (float)getPlayerPlayedTime(self) + timerLength;
+
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "Setting timer for " + timerLength + " seconds.");
+	
+	dictionary params = new dictionary();
+	params.put("questcrc", questCrc);
+	params.put("taskid", taskId);
+
+	messageTo(self, "QuestTimerTaskCompleted", params, timerLength, true);
+
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+	setObjVar(self, baseObjVar + dot + timeObjVar, playerPlayedTimeWhenTimerEnds);
+
+	//only set a timer on the client for visible timers	
+	if(isVisible != 0)
+		questSetQuestTaskTimer(self, questGetQuestName(questCrc), taskId, "quest/groundquests:timer_timertext", (int)playerPlayedTimeWhenTimerEnds);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler QuestTimerTaskCompleted()
+{
+	int questCrc = params.getInt("questcrc");
+	int taskId   = params.getInt("taskid");
+
+	if(questIsTaskActive(questCrc, taskId, self))
+	{
+		String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+		float playerPlayedTimeWhenTimerEnds = getFloatObjVar(self, baseObjVar + dot + timeObjVar);
+		float timeLeft = playerPlayedTimeWhenTimerEnds - (float)getPlayerPlayedTime(self);
+		//dealing with client/server lag and messageto processing, end at 1 second
+
+		if(timeLeft <= 0)
+		{
+			questCompleteTask(questCrc, taskId, self);
+		}
+		else
+		{
+			dictionary newParams = new dictionary();
+			newParams.put("questcrc", questCrc);
+			newParams.put("taskid", taskId);
+			messageTo(self, "QuestTimerTaskCompleted", newParams, timeLeft, true);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + "task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + "task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is cleared
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + "task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+commandHandler handleClientLogin()
+{
+	dictionary tasks = groundquests.getActiveTasksForTaskType(self, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for(int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+
+				String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+				float playerPlayedTimeWhenTimerEnds = getFloatObjVar(self, baseObjVar + dot + timeObjVar);
+				if((float)getPlayerPlayedTime(self) < playerPlayedTimeWhenTimerEnds)
+				{
+					//only set a timer on the client for visible timers	
+					int isVisible = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnVisible);
+					if(isVisible != 0)
+						questSetQuestTaskTimer(self, questGetQuestName(questCrc), taskId, "quest/groundquests:timer_timertext", (int)playerPlayedTimeWhenTimerEnds);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}

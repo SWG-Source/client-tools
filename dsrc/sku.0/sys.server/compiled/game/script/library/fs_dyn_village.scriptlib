@@ -1,0 +1,1345 @@
+include library.utils;
+include java.lang.Math;
+include library.trace;
+include library.create;
+include library.quests;
+include library.player_structure;
+include library.turret;
+include library.fs_counterstrike;
+
+// Data tables used
+const string CITY_STAGES_DATATABLE		= "datatables/fs_quests/fs_dyn_city.iff";
+const string CITY_BAD_GUY_SPAWN_TABLE	= "datatables/quest/force_sensitive/base_spawn.iff";
+const string CITY_DESTRUCTION_COORDS	= "datatables/quest/force_sensitive/village_destruction_coords.iff";
+const string CITY_DEFENSES_DATATABLE	= "datatables/fs_quests/fs_defenses.iff";
+
+// Columns for data tables
+const string DT_COL_PHASE				= "phase";
+const string DT_COL_AREA				= "area";
+const string DT_COL_TEMPLATE			= "object_template";
+const string DT_COL_OBJECT_X			= "object_x";
+const string DT_COL_OBJECT_Y			= "object_y";
+const string DT_COL_OBJECT_Z			= "object_z";
+const string DT_COL_IS_DELTA			= "is_coord_delta";
+const string DT_COL_HEADING				= "heading";
+const string DT_COL_GAME_CRITICAL		= "game_critical";
+const string DT_COL_SCRIPT				= "script";
+const string DT_COL_PHASE_NAME			= "phase_name";
+const string DT_COL_SPECIAL_OBJ_MOD		= "special_obj_mod";
+const string DT_COL_WAVE_PREFIX			= "fs_village_";
+const string DT_COL_WAVE_SMALL			= "small";
+const string DT_COL_WAVE_MEDIUM			= "medium";
+const string DT_COL_WAVE_LARGE			= "large";
+const string DT_COL_WAVE_EASY			= "easy";
+const string DT_COL_WAVE_NORMAL			= "normal";
+const string DT_COL_WAVE_HARD			= "hard";
+const string DT_COL_WAVE_ABYSS			= "abyss";
+
+// string constants
+const string START_LOC					= "START_LOC";
+const string LOG_CHAN					= "fs_quests";
+const string OBJ_MOD_IS_SPAWNER			= "spawner";
+const string OBJ_MOD_IS_HEALING_STRUCT	= "healing";
+const string DYNVILLAGE_CLUSTER_NAME	= "cluster.dynVillage";
+const string CLUSTER_SET_FS				= "cluster.dynVillage.fs_data";
+
+
+const string CLUSTER_OBJID_KEY_MASTER	= "cluster.dynVillage.masterObject";
+const string CLUSTER_INT_KEY_CUR_PHASE	= "cluster.dynVillage.curPhase";
+const string CLUSTER_INT_KEY_PHASE_UID	= "cluster.dynVillage.curPhaseUID";
+
+// Numeric constants
+const int DATAMODE_ADD_OBJID			= 1;
+const int DATAMODE_GET_OBJID			= 2;
+const int DATAMODE_ADD_INT				= 3;
+const int DATAMODE_GET_INT				= 4;
+
+const int VILLAGE_MIN_ENEMY_RADIUS		= 150;
+const int VILLAGE_MAX_ENEMY_RADIUS		= 250;
+
+const int VILLAGE_SMALL_WAVE			= 1;
+const int VILLAGE_MEDIUM_WAVE			= 2;
+const int VILLAGE_LARGE_WAVE			= 3;
+const int VILLAGE_UBER_WAVE				= 4;
+
+const int VILLAGE_MEDIUM_THRESHOLD		= 10;
+const int VILLAGE_LARGE_THRESHOLD		= 20;
+const int VILLAGE_UBER_THRESHOLD		= 35;
+
+const int VILLAGE_MIN_ENEMY_SPAWN_PULSE	= 5000; // ~83 minutes
+const int VILLAGE_MAX_ENEMY_SPAWN_PULSE	= 7000; // ~116 minutes
+const int VILLAGE_ENEMY_MAX_LIFE		= 1200; // 20 minute max lifetime before self-destruct
+
+const int DEFAULT_PHASE_DURATION		= 1814400; // 3 weeks.
+
+const int MAX_PHASE_NUMBER				= 4; // 4 phases (1-4)
+
+// template constants
+const string TEMPLATE_NO_DRAW			= "object/tangible/spawning/fs_village_npc_spawner.iff";
+
+// script name constants
+const string SCRIPT_VILLAGE_NPC_SPAWNER = "systems.fs_quest.fs_village_npc_spawner";
+const string SCRIPT_DYN_VILLAGE_THING	= "systems.fs_quest.fs_dynamic_village_object";
+const string SCRIPT_FS_DATAHANDLER		= "systems.fs_quest.fs_datahandler";
+const string SCRIPT_FS_VILLAGE_MASTER	= "systems.fs_quest.fs_village_master";
+
+// objvar constants
+const string OBJVAR_CRITICAL_OBJECT		= "fs_quest.isGameCritical";
+const string OBJVAR_IS_HEALING_STRUCT	= "healing.canhealwound";
+const string OBJVAR_CURRENT_PHASE		= "fs_quest.phase.current";
+const string OBJVAR_NEXT_PHASE			= "fs_quest.phase.next";
+const string OBJVAR_PHASE_VERSION		= "fs_quest.phase.version";
+const string OBJVAR_PHASE_START_TIME	= "fs_quest.phase.startTime";
+const string OBJVAR_MY_SPAWNER 			= "fs_quest.mySpawner";
+const string OBJVAR_MY_NPC_TEMPLATE		= "fs_quest.myNpcTemplate";
+const string OBJVAR_MY_NPC_SCRIPTS		= "fs_quest.myNpcScripts";
+const string OBJVAR_MY_SPAWNED_NPC		= "fs_quest.mySpawnedNpc";
+const string OBJVAR_VILLAGE_SPAWNERS	= "fs_quest.spawners";
+const string OBJVAR_VILLAGE_OBJECTS		= "fs_quest.objects";
+const string OBJVAR_MY_MASTER_OBJECT	= "fs_quest.myMaster";
+const string OBJVAR_LOCK_VILLAGE		= "fs_quest.village.locked";
+const string OBJVAR_CAN_ATTACK 			= "turret.validTargetObjVar"; // this is the objvar on our turrets
+const string OBJVAR_TURRET_TARGET		= "fs_quest.turret.isTarget"; // gets attached to player so turrets can attack
+const string OBJVAR_PLAYER_COUNT		= "fs_quest.players.count";  // the number of players thought to be in the village at this time
+const string OBJVAR_VILLAGE_DEFENSES    = "crafted_village_defenses";
+const string OBJVAR_VILLAGE_SHIELDS     = "crafted_village_shields";
+const string OBJVAR_TURRET_ACCURACY     = "turret_accuracy";
+const string OBJVAR_TURRET_SPEED        = "turret_speed";
+const string OBJVAR_TURRET_POWER        = "turret_power";
+
+// scriptvar constants
+const string SCRIPT_VAR_DATA_REQUEST	= "fs_quest.data_request";
+const string SCRIPT_VAR_PARAMS_REQUEST	= "fs_quest.data_request_params";
+const string SCRIPT_VAR_HANDLER_REQ		= "fs_quest.handler_request";
+
+
+//
+//  returns an array of city destruction coords from the CITY_DESTRUCTION_COORDS data table using @id as the
+//  key for the coord set. the returned vector contains loc/yaw pairs
+//
+Vector getCityDestructionCoords(string id)
+{
+	int num_items = dataTableGetNumRows(CITY_DESTRUCTION_COORDS);
+	Vector loc = new Vector();
+	int idx = dataTableSearchColumnForString(id, "coord_type", CITY_DESTRUCTION_COORDS);
+	dictionary line = null;
+	float yaw = 0.0f;
+
+	for (int i = idx + 1; i < num_items; i++)
+	{
+		dictionary row = dataTableGetRow(CITY_DESTRUCTION_COORDS, i);
+
+		// When the next spawner name is reached, we've gotten everything there is to get.
+		if (row.getString("coord_type").length() > 0)
+		{
+			break;
+		}
+		else
+		{
+			line = dataTableGetRow(CITY_DESTRUCTION_COORDS, i);
+			if(line == null || !line.containsKey("x") || !line.containsKey("y") || !line.containsKey("z"))
+			{
+				continue;
+			}
+			else
+			{
+				if(line.containsKey("yaw"))
+				{
+					yaw = line.getFloat("yaw");
+				}
+				loc.add(new location(line.getFloat("x"), line.getFloat("y"), line.getFloat("z")));
+				loc.add(new Float(yaw));
+			}
+		}
+	}
+
+	return loc;
+}
+
+//
+// returns the village entry points as defined in CITY_DESTRUCTION_COORDS
+//
+location[] getVillageLocs(string id)
+{
+	Vector locs = getCityDestructionCoords(id);
+	if(locs.size() < 1 || locs.size() % 2 != 0)
+	{
+		return new location[0];
+	}
+
+	location[] aLocs = new location[locs.size() / 2];
+	int count = 0;
+	for(int i = 0; i < locs.size(); i += 2)
+	{
+		aLocs[count] = (location)locs.get(i);
+		count++;
+	}
+
+	return aLocs;
+}
+
+
+//
+//  checks the phase duration against the phase start time and sets the next phase, if necessary
+//
+void checkPhaseExpiration(obj_id master)
+{
+	if(!isIdValid(master) || !exists(master))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::checkPhaseExpiration: -> Village master object (" + master + ") is not valid / doesn't exist.");
+		return;
+	}
+
+	if(!hasObjVar(master, OBJVAR_PHASE_START_TIME))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::checkPhaseExpiration: -> Missing phase start time.  Adding now, but will probably be incorrect.");
+		setObjVar(master, OBJVAR_PHASE_START_TIME, getGameTime());
+		return;
+	}
+
+	int forcedPhase = getStartupPhaseFromConfig();
+	if(forcedPhase > 0)
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::checkPhaseExpiration: -> Village has been forced into phase " + forcedPhase + " via server config.");
+		setNextPhaseAuth(master, forcedPhase);
+		return;
+	}
+
+	int curPhase = getCurrentPhaseAuth(master);
+	int duration = getPhaseDuration(curPhase);
+	int startTime = getIntObjVar(master, OBJVAR_PHASE_START_TIME);
+
+	if((startTime + duration) <= getGameTime())
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::checkPhaseExpiration: -> Phase " + curPhase + " has expired. Moving to next phase.");
+		int nextPhase = curPhase + 1;
+		if(nextPhase > MAX_PHASE_NUMBER)
+		{
+			nextPhase = 1;
+		}
+
+		setNextPhaseAuth(master, nextPhase);
+	}
+
+	return;
+}
+
+//
+//  returns the default phase duration or the phase duration from a server config, if present.
+//
+int getPhaseDuration(int phase)
+{
+	if(phase < 1 || phase > MAX_PHASE_NUMBER)
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::getPhaseDuration: -> Invalid phase passed in (" + phase + "). Bailing.", null, trace.TL_ERROR_LOG);
+		return -1;
+	}
+
+	int duration = 0;
+
+	// see if there is a specific duration value for this phase
+	string cfgDuration = getConfigSetting("GameServer", "FsVillagePhaseDuration_Phase_" + phase);
+	if(cfgDuration != null && cfgDuration.length() > 0)
+	{
+		duration = utils.stringToInt(cfgDuration);
+	}
+
+	if(duration <= 0)
+	{
+		// see if we have a general setting for all phases
+		cfgDuration = getConfigSetting("GameServer", "FsVillagePhaseDuration");
+		if(cfgDuration != null && cfgDuration.length() > 0)
+		{
+			duration = utils.stringToInt(cfgDuration);
+			if(duration < 1)
+			{
+				duration = DEFAULT_PHASE_DURATION;
+			}
+		}
+	}
+
+	if(duration <= 0)
+	{
+		duration = DEFAULT_PHASE_DURATION;
+	}
+
+	//trace.log(LOG_CHAN, "fs_dyn_village::getPhaseDuration: -> Phase duration for phase " + phase + " is " +
+	//	player_structure.assembleTimeRemaining(player_structure.convertSecondsTime(duration)));
+
+	return duration;
+}
+
+int getStartupPhaseFromConfig()
+{
+	string cfgPhase = getConfigSetting("GameServer", "FsVillage_ForcePhase");
+	int phase = -1;
+	if(cfgPhase != null && cfgPhase.length() > 0)
+	{
+		phase = utils.stringToInt(cfgPhase);
+	}
+
+	if(phase < 1 || phase > MAX_PHASE_NUMBER)
+	{
+		phase = -1;
+	}
+	return phase;
+}
+
+//
+//  destroys the NPC that was associated with the @spawner
+//
+void destroySpawnersNpc(obj_id spawner)
+{
+	if(!isIdValid(spawner) || !exists(spawner))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::destroySpawnersNpc: -> Spawner " + spawner + " not valid / doesn't exist. Can't destroy npc.", spawner, trace.TL_WARNING);
+		return;
+	}
+
+	if(hasObjVar(spawner, OBJVAR_MY_SPAWNED_NPC))
+	{
+		obj_id npc = getObjIdObjVar(spawner, OBJVAR_MY_SPAWNED_NPC);
+		destroyObject(npc);
+	}
+
+	return;
+}
+
+//
+// creates an instance of the NPC that is assigned the given @spawner.  If the NPC already exists and @createIfExists is true, another copy
+// of the NPC will be create.  If an additional copy of the NPC is created and @destroyOldIfExists is true, the first copy will be destroyed
+//
+boolean spawnNpcAuth(obj_id spawner, boolean createIfExists, boolean destroyOldIfExists)
+{
+	if(!isIdValid(spawner) || !exists(spawner))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::spawnNpcAuth: -> Spawner " + spawner + " not valid / doesn't exist. Can't create npc.", spawner, trace.TL_ERROR_LOG);
+		return false;
+	}
+
+	if(!hasObjVar(spawner, OBJVAR_MY_NPC_TEMPLATE) || !hasObjVar(spawner, OBJVAR_MY_NPC_SCRIPTS))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::spawnNpcAuth: -> Spawner " + spawner + " missing " + OBJVAR_MY_NPC_TEMPLATE + " or " + OBJVAR_MY_NPC_SCRIPTS + " objvar(s). Can't create npc.", spawner, trace.TL_ERROR_LOG);
+		return false;
+	}
+
+	// check if an instance of the NPC is already in the world
+	if(hasObjVar(spawner, OBJVAR_MY_SPAWNED_NPC))
+	{
+		obj_id curMob = getObjIdObjVar(spawner, OBJVAR_MY_SPAWNED_NPC);
+		if(isIdValid(curMob) && exists(curMob))
+		{
+			// instance already in the world
+			if(createIfExists)
+			{
+				if(destroyOldIfExists)
+				{
+					destroyObject(curMob);
+				}
+			}
+			else
+			{
+				// the npc is in the world
+				return true;
+			}
+		}
+	}
+
+	string template = getStringObjVar(spawner, OBJVAR_MY_NPC_TEMPLATE);
+	//trace.log(LOG_CHAN, "fs_dyn_village::spawnNpcAuth: -> Spawning creature " + template);
+	obj_id mob = create.object(template, getLocation(spawner));
+	if (!isIdValid(mob))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::spawnNpcAuth: -> Unable to spawn " + template + " from spawner " + spawner, spawner, trace.TL_ERROR_LOG);
+		return false;
+	}
+
+	setObjVar(mob, OBJVAR_MY_SPAWNER, spawner);
+	setObjVar(spawner, OBJVAR_MY_SPAWNED_NPC, mob);
+	setObjVar(mob, OBJVAR_MY_MASTER_OBJECT, getObjIdObjVar(spawner, OBJVAR_MY_MASTER_OBJECT));
+
+	string scriptDat = getStringObjVar(spawner, OBJVAR_MY_NPC_SCRIPTS);
+	scriptDat = scriptDat.trim(); // eat any whitespaces that might be in there from faulty data entry
+	if(scriptDat != null && scriptDat.length() > 0)
+	{
+		string[] scripts = null;
+		if(scriptDat.indexOf("|") > -1)
+		{
+			scripts = split(scriptDat, '|');
+		}
+		else
+		{
+			scripts = new string[]{scriptDat};
+		}
+
+		for(int i = 0; i < scripts.length; i++)
+		{
+			//trace.log(LOG_CHAN, "fs_dyn_village::spawnNpcAuth: -> Attaching " + scripts[i] + " to " + mob);
+			if(scripts[i] != null && scripts[i].length() > 0 && !scripts[i].equals("none"))
+			{
+
+				attachScript(mob, scripts[i]);
+			}
+		}
+	}
+
+	setHomeLocation(mob);
+
+	return true;
+}
+
+//
+//  spawns the turret defenses for the village
+//
+void spawnTurrets(obj_id master)
+{
+	const float MAX_ATTRIB_VALUE = 1000.0f;
+
+	boolean useAttributes = false;
+	float kinetic_resistance = 0;
+	float armor_integrity = 0;
+	float armor_effectiveness = 0;
+	float accuracy = 0;
+	float speed = 0;
+	float power = 0;
+	if ( hasObjVar(master, OBJVAR_VILLAGE_DEFENSES) )
+	{
+		obj_var_list defenses = getObjVarList(master, OBJVAR_VILLAGE_DEFENSES);
+		kinetic_resistance = defenses.getFloatObjVar("kinetic_resistance") / MAX_ATTRIB_VALUE;
+		if ( kinetic_resistance > 1.0f )
+			kinetic_resistance = 1.0f;
+		armor_integrity = defenses.getFloatObjVar("armor_integrity") / MAX_ATTRIB_VALUE;
+		if ( armor_integrity > 1.0f )
+			armor_integrity = 1.0f;
+		armor_effectiveness = defenses.getFloatObjVar("armor_effectiveness") / MAX_ATTRIB_VALUE;
+		if ( armor_effectiveness > 1.0f )
+			armor_effectiveness = 1.0f;
+		accuracy = defenses.getFloatObjVar("accuracy") / MAX_ATTRIB_VALUE;
+		if ( accuracy > 1.0f )
+			accuracy = 1.0f;
+		speed = defenses.getFloatObjVar("speed") / MAX_ATTRIB_VALUE;
+		if ( speed > 1.0f )
+			speed = 1.0f;
+		power = defenses.getFloatObjVar("power") / MAX_ATTRIB_VALUE;
+		if ( power > 1.0f )
+			power = 1.0f;
+
+		int[] attribNames = dataTableGetIntColumn(CITY_DEFENSES_DATATABLE, "attribute");
+		float[] attribMins = dataTableGetFloatColumn(CITY_DEFENSES_DATATABLE, "min");
+		float[] attribMaxs = dataTableGetFloatColumn(CITY_DEFENSES_DATATABLE, "max");
+		if ( attribNames != null && attribMins != null && attribMaxs != null && attribNames.length == attribMins.length &&
+			attribNames.length == attribMaxs.length)
+		{
+			int count = 0;
+			for ( int i = 0; i < attribNames.length; ++i )
+			{
+				switch ( attribNames[i] )
+				{
+					case ##"kinetic_resistance" :
+						kinetic_resistance = attribMins[i] + (attribMaxs[i] - attribMins[i]) * kinetic_resistance;
+						LOG("fs_village", "village defenses phase 3,4 kinetic resistance = " + kinetic_resistance);
+						++count;
+						break;
+					case ##"armor_integrity" :
+						armor_integrity = attribMins[i] + (attribMaxs[i] - attribMins[i]) * armor_integrity;
+						LOG("fs_village", "village defenses phase 3,4 armor integrity = " + armor_integrity);
+						++count;
+						break;
+					case ##"armor_effectiveness" :
+						armor_effectiveness = attribMins[i] + (attribMaxs[i] - attribMins[i]) * armor_effectiveness;
+						LOG("fs_village", "village defenses phase 3,4 armor effectiveness = " + armor_effectiveness);
+						++count;
+						break;
+					case ##"accuracy" :
+						accuracy = attribMins[i] + (attribMaxs[i] - attribMins[i]) * accuracy;
+						LOG("fs_village", "village defenses phase 3,4 accuracy = " + accuracy);
+						++count;
+						break;
+					case ##"speed" :
+						speed = attribMins[i] + (attribMaxs[i] - attribMins[i]) * speed;
+						LOG("fs_village", "village defenses phase 3,4 speed = " + speed);
+						++count;
+						break;
+					case ##"power" :
+						power = attribMins[i] + (attribMaxs[i] - attribMins[i]) * power;
+						LOG("fs_village", "village defenses phase 3,4 power = " + power);
+						++count;
+						break;
+					default:
+						CustomerServiceLog("fs_village", "WARNING: Defenses datatable has unknown attribute at index " + i);
+						break;
+				}
+			}
+			if ( count == attribNames.length )
+				useAttributes = true;
+		}
+	}
+	if (!useAttributes)
+	{
+		CustomerServiceLog("fs_village", "WARNING: Creating village turrets with default attributes");
+	}
+
+	Vector turretLocs = getCityDestructionCoords("village_turrets");
+	if (turretLocs.size() < 2 || turretLocs.size() % 2 != 0)
+	{
+		return;
+	}
+
+	for (int i = 0; i < turretLocs.size(); i += 2)
+	{
+		obj_id oturret = createObject("object/installation/turret/fs_village_turret.iff", (location)turretLocs.get(i));
+		if (isIdValid(oturret))
+		{
+			setObjVar(oturret, turret.OBJVAR_CAN_ATTACK, fs_dyn_village.OBJVAR_TURRET_TARGET);
+			float yaw = ((Float)turretLocs.get(i+1)).floatValue();
+			setYaw(oturret, yaw);
+			if ( useAttributes )
+			{
+				// clear out any previous armor
+				armor.removeAllArmorData(oturret);
+
+				armor.setAbsoluteArmorData(oturret, AL_advanced, AC_assault, (int)armor_effectiveness, (int)armor_integrity);
+				armor.setArmorSpecialProtectionPercent(oturret, 0, kinetic_resistance / 100.0f);
+				setObjVar(oturret, OBJVAR_TURRET_ACCURACY, accuracy);
+				setObjVar(oturret, OBJVAR_TURRET_SPEED, speed);
+				setObjVar(oturret, OBJVAR_TURRET_POWER, power);
+			}
+		}
+	}
+
+	return;
+}
+
+//
+//  creates spawn wave from data table.  @struct_master is the center of the target
+//  @startRadius is the possible starting point of the spawner drop
+//  @endRadius is the end point of the spawner drops
+//  @spawnWaves is an array of all spawn lists that will be pulled out of base_spawn.tab every
+//  time a spawner is dropped down
+//
+void doEnemySpawn(obj_id struct_master, float minDistance, float maxDistance, string[] spawnWaves)
+{
+	if(!isIdValid(struct_master) || !exists(struct_master))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::doEnemySpawn: -> Error creating enemy spawn.  Structure master (" + struct_master + ") was invalid or didn't exist.", struct_master, trace.TL_ERROR_LOG);
+		return;
+	}
+
+	if(spawnWaves == null || spawnWaves.length < 1)
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::doEnemySpawn: -> Error creating enemy spawn.  SpawnWaves is not defined.", struct_master, trace.TL_ERROR_LOG);
+		return;
+	}
+
+	string wave = "";
+	float heading = 0.0f;
+	location spawnerLoc = null;
+	location masterLoc = getLocation(struct_master);
+	obj_id spawner = null;
+
+	resizeable location[] spawnLocations = new Vector();
+	spawnLocations.add(new location());
+	spawnLocations[0].area = "dathomir";
+	spawnLocations[0].x = 5240;
+	spawnLocations[0].z = -4335;
+	spawnLocations.add(new location());
+	spawnLocations[1].area = "dathomir";
+	spawnLocations[1].x = 5374;
+	spawnLocations[1].z = -3947;
+
+	spawnLocations.add(new location());
+	spawnLocations[2].area = "dathomir";
+	spawnLocations[2].x = 5415;
+	spawnLocations[2].z = -3959;
+	spawnLocations.add(new location());
+	spawnLocations[3].area = "dathomir";
+	spawnLocations[3].x = 5331;
+	spawnLocations[3].z = -4361;
+
+	spawnLocations.add(new location());
+	spawnLocations[4].area = "dathomir";
+	spawnLocations[4].x = 5187;
+	spawnLocations[4].z = 4369;
+
+	resizeable obj_id[] spawners = null;
+	if(hasObjVar(struct_master, "attack_spawners"))
+	{
+		spawners = getResizeableObjIdArrayObjVar(struct_master, "attack_spawners");
+	}
+	else
+	{
+		spawners = new Vector();
+	}
+
+	for(int i = 0; i < spawnWaves.length; i++)
+	{
+		if( i >= spawnLocations.length)
+			break;
+
+		wave = spawnWaves[i];
+		spawnerLoc = spawnLocations[i];
+		//spawnerLoc = utils.getRandomAwayLocation(masterLoc, minDistance, maxDistance);
+		LOG("fs_quest", "Sending enemy spawner to " + spawnerLoc.toString());
+
+
+		spawners.add(quests.createSpawner(wave, spawnerLoc, CITY_BAD_GUY_SPAWN_TABLE, struct_master));
+
+	}
+
+	if(spawners.length > 0)
+	{
+		setObjVar(struct_master, "attack_spawners", spawners);
+	}
+	else
+	{
+		removeObjVar(struct_master, "attack_spawners");
+	}
+
+	return;
+}
+
+//
+// determines the necessary enemy wave spawn level
+//
+int getNecessarySpawnLevel(obj_id master)
+{
+	int numPlayers = numPlayersInVillage(master);
+	int level = VILLAGE_SMALL_WAVE;
+
+	if(numPlayers > VILLAGE_MEDIUM_THRESHOLD)
+	{
+		level = VILLAGE_MEDIUM_WAVE;
+	}
+
+	if(numPlayers > VILLAGE_LARGE_THRESHOLD)
+	{
+		level = VILLAGE_LARGE_WAVE;
+	}
+
+	if(numPlayers > VILLAGE_UBER_THRESHOLD)
+	{
+		level = VILLAGE_UBER_WAVE;
+	}
+
+	return level;
+}
+
+//
+// returns the number of players based on the obj_id in the master object
+//
+int numPlayersInVillage(obj_id struct_master)
+{
+	int num = 0;
+	if(!hasObjVar(struct_master, OBJVAR_PLAYER_COUNT))
+	{
+		return num;
+	}
+
+	return getIntObjVar(struct_master, OBJVAR_PLAYER_COUNT);
+}
+
+//
+//  sends a message to the spawner to initiate a NPC spawn
+//
+void spawnNpcAsynch(obj_id spawner, boolean createIfExists, boolean destroyOldIfExists)
+{
+	dictionary d = new dictionary();
+	d.put("createIfExists", createIfExists);
+	d.put("destroyOldIfExists", destroyOldIfExists);
+	messageTo(spawner, "msgSpawnNpc", d, 0.0f, false);
+
+	return;
+}
+
+//
+// sends a message to the village npc @spawner that is responsible for an NPC death
+//
+void notifySpawnerOfDeath(obj_id deadNpc)
+{
+	if(!hasObjVar(deadNpc, OBJVAR_MY_SPAWNER))
+	{
+		trace.log(LOG_CHAN, "fs_village_npc::notifyMasterOfDeath: -> Missing " + OBJVAR_MY_SPAWNER + " objvar.  Can't notify spawner to create a new version of " + getTemplateName(deadNpc), deadNpc, trace.TL_ERROR_LOG);
+		return;
+	}
+
+	obj_id mySpawner = getObjIdObjVar(deadNpc, OBJVAR_MY_SPAWNER);
+	dictionary d = new dictionary();
+	d.put("victim", deadNpc);
+	messageTo(mySpawner, "msgNpcDestroyed", d, 0.0f, false);
+
+	return;
+}
+
+//
+// Sets the next phase objvar on the village @village_master to @value
+//
+void setNextPhaseAuth(obj_id village_master, int value)
+{
+	if(!isIdValid(village_master) || !exists(village_master))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::setNextPhaseAuth: -> Village master object (" + village_master + ") is not valid / doesn't exist.");
+		return;
+	}
+
+	setObjVar(village_master, OBJVAR_NEXT_PHASE, value);
+	return;
+}
+
+//
+//  Extracts the phase number from the uid
+//
+int getPhaseFromVersionUid(int uid)
+{
+	string suid = "" + uid;
+	int phase = utils.stringToInt(suid.substring(0,1));
+	if(phase < 1 || phase > MAX_PHASE_NUMBER)
+	{
+		return 0;
+	}
+
+	return phase;
+}
+
+//
+//  Extracts the version number from the uid
+//
+int getVersionFromVersionUid(int uid)
+{
+	string suid = "" + uid;
+	int ver = utils.stringToInt(suid.substring(1));
+	return ver;
+}
+
+
+//
+// gets the current version number of the village cycle
+//
+int getCurrentVersionAuth(obj_id village_master)
+{
+	int curVersion = 0;
+	if(!isIdValid(village_master) || !exists(village_master))
+	{
+		return curVersion;
+	}
+
+	if(hasObjVar(village_master, OBJVAR_PHASE_VERSION))
+	{
+		curVersion = getIntObjVar(village_master, OBJVAR_PHASE_VERSION);
+	}
+
+	return curVersion;
+}
+
+//
+// grabs the current phase from the village_master object
+//
+int getCurrentPhaseAuth(obj_id village_master)
+{
+	if(!isIdValid(village_master) || !exists(village_master))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::getCurrentPhase: -> Village master object (" + village_master + ") is not valid / doesn't exist.");
+		return -1;
+	}
+
+	if(!hasObjVar(village_master, OBJVAR_CURRENT_PHASE))
+	{
+		return -1;
+	}
+
+	return getIntObjVar(village_master, OBJVAR_CURRENT_PHASE);
+}
+
+//
+// grabs the current uid from the village_master object
+//
+int getCurrentUidAuth(obj_id village_master)
+{
+	if(!isIdValid(village_master) || !exists(village_master))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::getCurrentUidAuth: -> Village master object (" + village_master + ") is not valid / doesn't exist.");
+		return -1;
+	}
+
+	int phase   = getCurrentPhaseAuth(village_master);
+	int version = getCurrentVersionAuth(village_master);
+
+	if (phase == -1 || version == -1)
+	{
+		return -1;
+	}
+
+	string phaseString   = Integer.toString(phase);
+	string versionString = Integer.toString(version);
+	string uidString = phaseString + versionString; // example: 423 = phase 4, version 23.
+
+	int uid = utils.stringToInt(uidString);	
+
+	return uid;
+}
+
+//
+//  (re)starts a spawn pulse cycle and does an enemy spawn
+//
+void doEnemySpawnPulse(obj_id master, string msgHandler)
+{
+	int level = getNecessarySpawnLevel(master);
+	string[] spawnWaves = null;
+
+	// construct the spawn waves definition
+	/*
+	SMALL	// max population of 10
+	MEDIUM	// max population of 20
+	LARGE	// max population of 30
+	*/
+
+
+	String enemyLevelString = getConfigSetting("GameServer", "fsVillageEnemyDifficulty");
+	if(enemyLevelString != null && enemyLevelString.length() > 0)
+	{
+		level = utils.stringToInt(enemyLevelString);
+	}
+
+	switch(level)
+	{
+		case VILLAGE_SMALL_WAVE:
+			spawnWaves = new string[]
+			{"fs_village_easy_small",
+			"fs_village_easy_small",
+			"fs_village_easy_small"};
+			break;
+
+		case VILLAGE_MEDIUM_WAVE:
+			spawnWaves = new string[]
+			{"fs_village_easy_medium",
+			"fs_village_normal_medium",
+			"fs_village_normal_medium",
+			"fs_village_abyss_medium"};
+			break;
+
+		case VILLAGE_LARGE_WAVE:
+			spawnWaves = new string[]
+			{"fs_village_normal_large",
+			"fs_village_normal_large",
+			"fs_village_hard_large",
+			"fs_village_abyss_large"};
+			break;
+
+		case VILLAGE_UBER_WAVE:
+			spawnWaves = new string[]
+			{"fs_village_normal_large",
+			"fs_village_hard_large",
+			"fs_village_hard_large",
+			"fs_village_abyss_large",
+			"fs_village_abyss_large"};
+			break;
+		default:
+			spawnWaves = new string[]
+				{"fs_village_normal_large",
+				 "fs_village_hard_large",
+				 "fs_village_hard_large",
+				 "fs_village_abyss_large",
+				 "fs_village_abyss_large"};
+			break;
+
+	}
+
+	int minDistance = VILLAGE_MIN_ENEMY_RADIUS;
+	int maxDistance = VILLAGE_MAX_ENEMY_RADIUS;
+
+	if(spawnWaves != null)
+	{
+		doEnemySpawn(master, minDistance, maxDistance, spawnWaves);
+		spawnVillageVictims();
+	}
+
+	// restart the spawn pulse
+	String spawnPulseSecondsString = getConfigSetting("GameServer", "fsVillageEnemyRespawnPulseTime");
+	float spawnPulseSeconds = (float)rand(VILLAGE_MIN_ENEMY_SPAWN_PULSE, VILLAGE_MAX_ENEMY_SPAWN_PULSE);
+	if(spawnPulseSecondsString != null && spawnPulseSecondsString.length() > 0)
+	{
+		spawnPulseSeconds = utils.stringToFloat(spawnPulseSecondsString);
+		if(spawnPulseSeconds < 2500.0f)
+			spawnPulseSeconds = 2500.0f;
+	}
+
+	messageTo(master, msgHandler, null, spawnPulseSeconds, false);
+	return;
+}
+
+void spawnVillageVictims()
+{
+	LOG("quests", "fs_dyn_village.spawnVillageVictims()");
+	location[] victimLocations = getVillageLocs("village_victims");
+	if(victimLocations != null)
+	{
+		int iter = 0;
+		for(iter = 0; iter < victimLocations.length; ++iter)
+		{
+			LOG("quests", "fs_dyn_village.spawnVillageVictims() - spawning at " + victimLocations[iter]);
+			quests.createSpawner("fs_villagers", victimLocations[iter], CITY_BAD_GUY_SPAWN_TABLE);
+		}
+	}
+}
+
+//
+// any tasks that need to be performed after the phase initialization
+//
+void doPostPhaseInitTasks(obj_id master)
+{
+	if(hasObjVar(master, OBJVAR_LOCK_VILLAGE))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::doPostPhaseInitTasks: -> Master object locked. Not performing tasks.", master, trace.TL_ERROR_LOG);
+		return;
+	}
+
+	int curPhase = getCurrentPhaseAuth(master);
+	if (curPhase == 3 || curPhase == 4)
+	{
+		spawnTurrets(master);
+		if (curPhase == 4)
+		doEnemySpawnPulse(master, "msgEnemySpawnPulse");
+	}
+
+	return;
+}
+
+//
+//  destroys phase camps if they exist
+//
+void destroyPhase3Camps(obj_id villageMaster)
+{
+	LOG("fs_quest", "DESTROY PHASE 3 CAMPS");
+	obj_id[] campIds = null;
+	if(utils.hasScriptVar(villageMaster, fs_counterstrike.OBJVAR_CREATED_CAMP_IDS))
+	{
+		campIds = utils.getObjIdArrayScriptVar(villageMaster, fs_counterstrike.OBJVAR_CREATED_CAMP_IDS);
+	}
+
+	if(campIds != null && campIds.length > 0)
+	{
+
+		for(int i = 0; i < campIds.length; i++)
+		{
+			if(campIds[i] == null)
+			{
+				continue;
+			}
+
+			messageTo(campIds[i], "msgSelfDestruct", null, 0.0f, false);
+		}
+	}
+
+	removeObjVar(villageMaster, "fs_cs");
+	utils.removeScriptVarTree(villageMaster, "fs_cs");
+
+	return;
+}
+
+//
+//  runs before the village is shifted from one phase to another - only runs one time at phase change
+//
+void doPrePhaseShiftCleanup(int oldPhase, int newPhase, obj_id villageMaster)
+{
+	trace.log(LOG_CHAN, "****fs_dyn_village::doPrePhaseShiftCleanup; -> previous phase was " + oldPhase + ", new phase is " + newPhase);
+
+	// kill the phase 3 enemy camps
+	destroyPhase3Camps(villageMaster);
+	
+	/*
+	if(newPhase != 3)
+	{
+		destroyPhase3Camps(villageMaster);
+	}
+	else
+	{
+		fs_counterstrike.initializeEnemyCamps(villageMaster);
+	}
+	*/
+	return;
+}
+
+//
+//  pushes the OBJVAR_NEXT_PHASE value to OBJVAR_CURRENT_PHASE and initiates the phase object creation for phase OBJVAR_CURRENT_PHASE
+//  -- also increments the OBJVAR_PHASE_VERSION value if we're flipping to a lower numbered phase
+//  -- @returns false if there was a problem pushing to the specified phase (no data foundin data table most likely)
+//
+boolean pushAndInitPhase(obj_id master)
+{
+	trace.log(LOG_CHAN, "---!!! pushAndInitPhase !!!---");
+	// if it's time to change phases, we need to synch up the next/current phase objvars
+	if(hasObjVar(master, OBJVAR_NEXT_PHASE))
+	{
+		int curPhase = getIntObjVar(master, OBJVAR_CURRENT_PHASE);
+		int nextPhase = getIntObjVar(master, OBJVAR_NEXT_PHASE);
+
+		// make sure nextPhase has a place in the data table
+		int nextRow = getRowIndexForPhase(nextPhase);
+		if(nextRow > -1)
+		{
+			// check if we need to increment the phase version
+			if(nextPhase < curPhase)
+			{
+				int curVersion = 0;
+				if(hasObjVar(master, OBJVAR_PHASE_VERSION))
+				{
+					curVersion = getIntObjVar(master, OBJVAR_PHASE_VERSION);
+				}
+
+				curVersion++;
+				trace.log(LOG_CHAN, "fs_dyn_village::pushAndInitPhase: -> FS Village Version advanced to " + curVersion, master, trace.TL_CS_LOG);
+				setObjVar(master, OBJVAR_PHASE_VERSION, curVersion);
+			}
+
+			if(curPhase != nextPhase)
+			{
+				doPrePhaseShiftCleanup(curPhase, nextPhase, master);
+				setObjVar(master, OBJVAR_PHASE_START_TIME, getGameTime());
+			}
+
+			setObjVar(master, OBJVAR_CURRENT_PHASE, nextPhase);
+		}
+		else
+		{
+			trace.log(LOG_CHAN, "fs_dyn_village::pushAndInitPhase: -> Specified 'nextPhase' (" + nextPhase + ") does not have any build data in data table.  Not pushing to nextPhase.",
+				master, trace.TL_CS_LOG);
+			//setObjVar(master, OBJVAR_NEXT_PHASE, curPhase);
+		}
+	}
+
+	int phaseAuth = getCurrentPhaseAuth(master);
+	int uidAuth   = getCurrentUidAuth(master);
+
+	// save current phase in cluster data	
+	registerIntegerInClusterWideData(phaseAuth, CLUSTER_INT_KEY_CUR_PHASE, "msgIntRegisteredPhase", master);
+	registerIntegerInClusterWideData(uidAuth, CLUSTER_INT_KEY_PHASE_UID, "msgIntRegisteredUID", master);
+
+	if(hasObjVar(master, OBJVAR_LOCK_VILLAGE))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::pushAndInitPhase: -> Master object locked. Not creating phase objects.", master, trace.TL_ERROR_LOG);
+		return false;
+	}
+
+	int row = getRowIndexForPhase(phaseAuth);
+	if(row < 0)
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::pushAndInitPhase: -> Unable to find data entry point for phase " +
+			phaseAuth + ".  Can't create phase objects.", master, trace.TL_ERROR_LOG);
+		return false;
+	}
+
+	if (!createPhaseObjects(master, row))
+	{
+		return false;
+	}
+
+	// any post-init tasks; this includes starting the enemy spawns for phase 4, for instance
+	doPostPhaseInitTasks(master);
+
+	return true;
+}
+
+//
+// will create all objects listed in a data table starting at @tableRowIdxStart
+// method stops creating items once it reaches either the next phase in the table OR the end of the table
+// created items are registered with the @master_object
+//
+// @returns false if the creation failed as a whole - most likely no table data found for @tableRowIdxStart
+boolean createPhaseObjects(obj_id master_object, int tableRowIdxStart)
+{
+	// destroy any existing objects, although in a production environment there should never be any
+	// since this method should only ever be called as the cluster comes up
+	destroyDynamicVillage(master_object);
+
+	int totalRows = dataTableGetNumRows(CITY_STAGES_DATATABLE);
+	if(totalRows < tableRowIdxStart + 1)
+	{
+		trace.log(LOG_CHAN, "fs_dyn_city::createPhaseObjects: -> Gave starting row of " + tableRowIdxStart + ", but " + CITY_STAGES_DATATABLE + " only has " + totalRows + " rows.", null,
+			trace.TL_ERROR_LOG);
+		return false;
+	}
+
+	string marker = dataTableGetString(CITY_STAGES_DATATABLE, tableRowIdxStart, DT_COL_TEMPLATE);
+	if(!marker.equals(START_LOC))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_city::createPhaseObjects: -> Row Index " + tableRowIdxStart + " is not the starting row for any phase.", null, trace.TL_ERROR_LOG);
+		return false;
+	}
+
+	Vector villageObjects = new Vector();
+	Vector villageSpawners = new Vector();
+
+	// Look for objects immediately after the start row
+	// continue looping through the rows, until we're done or we hit the next START_LOC in the DT_COL_TEMPLATE column
+	for(int i = tableRowIdxStart + 1; i < totalRows; i++)
+	{
+		marker = dataTableGetString(CITY_STAGES_DATATABLE, i, DT_COL_TEMPLATE);
+		// There are no more objects if the next phase is reached
+		if(marker.equals(START_LOC))
+		{
+			trace.log(LOG_CHAN, "fs_dyn_scriptlib::createPhaseObjects: -> Done creating items for this phase.  Stopped at data table row " + i);
+			break;
+		}
+
+		// Grab the entire row
+		dictionary object_row 	= dataTableGetRow(CITY_STAGES_DATATABLE, i);
+
+		// Extract the data from the row
+		string 		obj_template 	= object_row.getString(DT_COL_TEMPLATE);
+		float 		x 				= object_row.getFloat(DT_COL_OBJECT_X);
+		float 		y 				= object_row.getFloat(DT_COL_OBJECT_Y);
+		float 		z 				= object_row.getFloat(DT_COL_OBJECT_Z);
+		int 		delta 			= object_row.getInt(DT_COL_IS_DELTA);
+		float 		heading 		= object_row.getFloat(DT_COL_HEADING);
+		int 		game_critical 	= object_row.getInt(DT_COL_GAME_CRITICAL);
+		string 		script 			= object_row.getString(DT_COL_SCRIPT);
+		string 		obj_mod			= object_row.getString(DT_COL_SPECIAL_OBJ_MOD);
+		string 		planet 			= getCurrentSceneName();
+		location 	obj_loc 		= null;
+		obj_id 		createdObj 		= null;
+		boolean 	isSpawner 		= false;
+
+		// figure out the location
+		if(delta == 1)
+		{
+			// Use delta coordinates from the @master_object.
+			location city_loc = getLocation(master_object);
+			obj_loc = new location(city_loc.x - x, city_loc.y - y, city_loc.z - z, planet);
+		}
+		else
+		{
+			obj_loc = new location(x, y, z, planet);
+		}
+
+		// is it a spawner?  if so, we actually create a known spawner template (TEMPLATE_NO_DRAW) and set it up with @obj_template info
+		// instead of creating @obj_template directly.  If not a spawner, then just create the object outright.
+		if(obj_mod != null && toLower(obj_mod).equals(OBJ_MOD_IS_SPAWNER))
+		{
+			//trace.log(LOG_CHAN, "Creating spawner");
+			createdObj = createObject(TEMPLATE_NO_DRAW, obj_loc);
+			isSpawner = true;
+		}
+		else
+		{
+			//trace.log(LOG_CHAN, "Creating normal object");
+			createdObj = createObject(obj_template, obj_loc);
+		}
+
+		if(createdObj == null)
+		{
+			if(isSpawner)
+			{
+				trace.log(LOG_CHAN, "fs_dyn_city::createPhaseObjects: -> Null Object Pointer -> Unable to create NPC spawner " + TEMPLATE_NO_DRAW, master_object, trace.TL_ERROR_LOG);
+			}
+			else
+			{
+				trace.log(LOG_CHAN, "fs_dyn_city::createPhaseObjects: -> Null Object Pointer -> Unable to create object " + obj_template, master_object, trace.TL_ERROR_LOG);
+			}
+			continue;
+		}
+		else // object creation successful!
+		{
+			//trace.log(LOG_CHAN, "	createdObj = " + createdObj);
+			setObjVar(createdObj, OBJVAR_MY_MASTER_OBJECT, master_object);
+			// if we created a spawner, tag it with the necessary stuff
+			if(isSpawner)
+			{
+				villageSpawners.add(createdObj);
+				// objvars MUST be set before the script is attached
+				setObjVar(createdObj, OBJVAR_MY_NPC_TEMPLATE, obj_template);
+				setObjVar(createdObj, OBJVAR_MY_NPC_SCRIPTS, script);
+				attachScript(createdObj, SCRIPT_VILLAGE_NPC_SPAWNER);
+			}
+			else
+			{
+				villageObjects.add(createdObj);
+			}
+
+			if(heading != 0.0f);
+			{
+				setYaw(createdObj, heading);
+			}
+
+			// Check for special object modifiers from the data table
+			if(obj_mod != null && obj_mod.length() > 0)
+			{
+				if(toLower(obj_mod).equals(OBJ_MOD_IS_HEALING_STRUCT))
+				{
+					// This is a healing station.
+					setObjVar(createdObj, OBJVAR_IS_HEALING_STRUCT, 1);
+				}
+			}
+
+			// Add objvars and scripts to game critical objects
+			if(game_critical == 1)
+			{
+				setObjVar(createdObj, OBJVAR_CRITICAL_OBJECT, 1);
+			}
+
+			// Every spawned object gets this script
+			attachScript(createdObj, SCRIPT_DYN_VILLAGE_THING);
+		}
+	}
+
+	utils.setResizeableBatchObjVar(master_object, OBJVAR_VILLAGE_OBJECTS, villageObjects);
+	utils.setResizeableBatchObjVar(master_object, OBJVAR_VILLAGE_SPAWNERS, villageSpawners);
+	return true;
+}
+
+
+//
+// Inits cluster wide data with initial blank data so we can update it later
+//
+void initFsClusterData()
+{
+	// objvar dataset
+	replaceClusterWideData(DYNVILLAGE_CLUSTER_NAME, CLUSTER_SET_FS, new dictionary(), false, -1);
+	return;
+}
+
+//
+//  registers an objvar @id along with a @key withthe cluster data.
+//
+boolean registerObjIdInClusterWideData(obj_id id, string key, string msgHandler, obj_id source)
+{
+	return _updateClusterData(source, DATAMODE_ADD_OBJID, key + "|" + id.toString(), msgHandler, true);
+}
+
+//
+// pulls out an objvar from the cluster data using @key that was set in registerObjIdInClusterWideData
+//
+boolean getRegisteredObjIdFromClusterWideData(string key, string msgHandler, obj_id source)
+{
+	return _updateClusterData(source, DATAMODE_GET_OBJID, key, msgHandler, false);
+}
+
+
+//
+//  registers an integer @value along with a @key with the cluster data.
+//
+boolean registerIntegerInClusterWideData(int value, string key, string msgHandler, obj_id source)
+{
+	return _updateClusterData(source, DATAMODE_ADD_INT, key + "|" + value, msgHandler, true);
+}
+
+//
+// pulls out an objvar from the cluster data using @key that was set in registerObjIdInClusterWideData
+//
+boolean getRegisteredIntegerFromClusterWideData(string key, string msgHandler, obj_id source)
+{
+	return _updateClusterData(source, DATAMODE_GET_INT, key, msgHandler, false);
+}
+
+
+//
+// private function that routs cluster data updates / requests
+//
+boolean _updateClusterData(obj_id source, int data_mode, string params, string handler, boolean lock_data)
+{
+	//trace.log(LOG_CHAN, "fs_dyn_village::_updateClusterData: --> data_mode="+data_mode +", handler="+handler + ", params=" + params);
+
+	if(!isIdValid(source))
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::_updateClusterData: -> source is invalid.", source, trace.TL_ERROR_LOG);
+		return false;
+	}
+	if(params == null)
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::_updateClusterData: -> params is null.", source, trace.TL_ERROR_LOG);
+		return false;
+	}
+	/*
+	if(handler == null || handler.length() < 1)
+	{
+		trace.log(LOG_CHAN, "fs_dyn_village::_updateClusterData: -> handler is null/empty.", source, trace.TL_ERROR_LOG);
+		return false;
+	}
+	*/
+
+	// Update the Clusterwide data.
+	//trace.log(LOG_CHAN, "Script " + SCRIPT_FS_DATAHANDLER + " attached to " + source + "? ->" + hasScript(source, SCRIPT_FS_DATAHANDLER));
+	if(!hasScript(source, SCRIPT_FS_DATAHANDLER))
+	{
+		//trace.log(LOG_CHAN, "Attaching script " + SCRIPT_FS_DATAHANDLER + " to " + source + "...");
+		attachScript(source, SCRIPT_FS_DATAHANDLER);
+	}
+
+	int request_id = getClusterWideData(DYNVILLAGE_CLUSTER_NAME, CLUSTER_SET_FS, lock_data, source);
+	utils.setScriptVar(source, SCRIPT_VAR_DATA_REQUEST 		+ "." + request_id, data_mode);
+	utils.setScriptVar(source, SCRIPT_VAR_PARAMS_REQUEST 	+ "." + request_id, params);
+	utils.setScriptVar(source, SCRIPT_VAR_HANDLER_REQ 		+ "." + request_id, handler);
+
+	return true;
+}
+
+//
+// searches column DT_COL_PHASE in @table for @phase and returns the row index.
+// this is theoretically the first row for the given phase
+//
+int getRowIndexForPhase(int phase)
+{
+	if(phase < 1)
+	{
+		return -1;
+	}
+
+	return dataTableSearchColumnForInt(phase, DT_COL_PHASE, CITY_STAGES_DATATABLE);
+}
+
+//
+//  attempts to destroy everything in the village that was dynamically created by the @villageMaster object
+//
+void destroyDynamicVillage(obj_id villageMaster)
+{
+	destroyDynamicVillageObjects(villageMaster);
+	destroyDynamicVillageSpawners(villageMaster);
+
+	return;
+}
+
+//
+// attempts to destroy any non-spawner objects created by the @villageMaster object
+//
+void destroyDynamicVillageObjects(obj_id villageMaster)
+{
+	obj_id[] objs = new obj_id[0];
+	if(hasObjVar(villageMaster, OBJVAR_VILLAGE_OBJECTS))
+	{
+		objs = utils.getObjIdBatchObjVar(villageMaster, OBJVAR_VILLAGE_OBJECTS);
+	}
+
+	for(int i = 0; i < objs.length; i++)
+	{
+		if(isIdValid(objs[i]) && exists(objs[i]))
+		{
+			destroyObject(objs[i]);
+		}
+	}
+
+	removeObjVar(villageMaster, OBJVAR_VILLAGE_OBJECTS);
+	return;
+}
+
+//
+// attempts to destroy npc spawner objects created by the @villageMaster object
+//
+void destroyDynamicVillageSpawners(obj_id villageMaster)
+{
+	obj_id[] objs = new obj_id[0];
+	if(hasObjVar(villageMaster, OBJVAR_VILLAGE_SPAWNERS))
+	{
+		objs = utils.getObjIdBatchObjVar(villageMaster, OBJVAR_VILLAGE_SPAWNERS);
+	}
+
+	for(int i = 0; i < objs.length; i++)
+	{
+		if(isIdValid(objs[i]) && exists(objs[i]))
+		{
+			destroyObject(objs[i]);
+		}
+	}
+
+	removeObjVar(villageMaster, OBJVAR_VILLAGE_SPAWNERS);
+
+	return;
+}
+

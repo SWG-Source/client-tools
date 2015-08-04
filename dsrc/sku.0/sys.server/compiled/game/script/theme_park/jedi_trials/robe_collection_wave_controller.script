@@ -1,0 +1,321 @@
+include library.ai_lib;
+include library.buff;
+include library.create;
+include library.prose;
+include library.storyteller;
+include library.sui;
+include library.trial;
+include library.utils;
+
+const string DATATABLE					= "datatables/quest/jedi_collection/jedi_robe_collection.iff";
+const string DATA_SLOT_PREREQ			= "slot_prereq";
+const string DATA_SLOT_AWARDED			= "slot_awarded";
+const string DATA_EVENT_SPAWN			= "event_spawn";
+const string DATA_SPAWN_X				= "event_spawn_x";
+const string DATA_SPAWN_Y				= "event_spawn_y";
+const string DATA_SPAWN_Z				= "event_spawn_z";
+const string DATA_SPAWN_YAW				= "event_spawn_yaw";
+const string DATA_SPAWN_FX				= "client_effect";
+const string DATA_STARTING_MSG			= "starting_msg";
+const string DATA_EVENT_SCRIPT			= "event_script";
+const string DATA_FAILURE_DEBUFF		= "failure_debuff";
+
+const string OBJVAR_EVENT_NAME			= "jediRobeEventName";
+const string SCRIPTVAR_EVENT_PLAYER		= "jediRobeEventPlayer";
+const string SCRIPTVAR_CHILDRENLIST		= "jediRobeEventChildrenList";
+
+const int EVENT_DEFAULT_AUTO_RESET		= 600;
+
+//-----------------------------------------------------------------
+
+const boolean	LOGGING				= false;
+
+trigger OnObjectMenuRequest (obj_id player, menu_info menuInfo)
+{
+	int menu = menuInfo.addRootMenu(menu_info_types.ITEM_USE, new string_id("quest2", "jedi_event_general_menu"));
+	
+	if ( isGod(player) )
+		menu = menuInfo.addRootMenu(menu_info_types.SERVER_MENU1, new string_id("quest2", "jedi_event_reset_menu"));
+
+	if( isEligibleForJediEvent(self, player) )
+	{
+		menu = menuInfo.addRootMenu (menu_info_types.ITEM_USE, new string_id("quest2", "jedi_event_start_menu"));
+	}
+
+	menu_info_data menuInfoData = menuInfo.getMenuItemById (menu);
+
+	if ( menuInfoData != null )
+	{
+ 		menuInfoData.setServerNotify(true);
+ 	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (isDead(player) || isIncapacitated(player) )
+	{
+		sendSystemMessage(player, new string_id("quest2", "jedi_event_start_dead"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if( item == menu_info_types.ITEM_USE )
+	{
+ 		if ( ai_lib.isInCombat(player) )
+ 		{
+ 				sendSystemMessage(player, new string_id("quest2", "jedi_event_start_in_combat"));
+				return SCRIPT_CONTINUE;
+ 		}
+		
+		if( isEligibleForJediEvent(self, player) )
+		{
+			// Don't start a wave event if another is already in progress
+			if ( utils.hasScriptVar(self, SCRIPTVAR_EVENT_PLAYER) )
+			{
+				sendSystemMessage(player, new string_id("quest/groundquests", "wave_event_already_underway"));
+				return SCRIPT_CONTINUE;
+			}
+
+			jediEventBegin(self, player);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			dictionary eventData = getJediEventData(self);
+			if ( eventData != null )
+			{
+				if ( hasCompletedCollectionSlot(player, eventData.getString(DATA_SLOT_AWARDED)) )
+				{
+					sendSystemMessage(player, new string_id("quest2", "jedi_event_already_has"));
+					return SCRIPT_CONTINUE;
+				}
+				else if ( hasJediEventFailedBuff(self, player) )
+				{
+					sendSystemMessage(player, new string_id("quest2", "jedi_event_failed_buff"));
+					return SCRIPT_CONTINUE;
+				}
+			}
+		}
+	}
+	
+	if( item == menu_info_types.SERVER_MENU1 )
+	{
+		if ( isGod(player) )
+		{
+			sendSystemMessage(player, "Reseting wave event controller...", "");
+			clearEventArea(self);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	sendSystemMessage(player, new string_id("quest/groundquests", "retrieve_item_no_interest"));
+	return SCRIPT_CONTINUE;
+}
+
+boolean isEligibleForJediEvent(obj_id self, obj_id player)
+{	
+	if ( utils.isProfession(player, utils.FORCE_SENSITIVE) )
+	{
+		if ( hasObjVar(self, OBJVAR_EVENT_NAME) )
+		{
+			dictionary eventData = getJediEventData(self);
+			if ( eventData != null )
+			{
+				string slotPrereq = eventData.getString(DATA_SLOT_PREREQ);
+				string slotAwarded = eventData.getString(DATA_SLOT_AWARDED);
+
+				if ( hasCompletedCollectionSlot(player, slotPrereq) )
+				{
+					if ( !hasCompletedCollectionSlot(player, slotAwarded) && !hasJediEventFailedBuff(self, player) )
+					{
+						return true;
+					}
+				}
+			}
+		}
+	}
+	return false;
+}
+
+dictionary getJediEventData(obj_id self)
+{
+	string eventName = getStringObjVar(self, OBJVAR_EVENT_NAME);
+	if ( eventName != null && eventName.length() > 0 )
+	{
+		return dataTableGetRow(DATATABLE, eventName);
+	}
+	return null;
+}
+
+boolean hasJediEventFailedBuff(obj_id self, obj_id player)
+{
+	dictionary eventData = getJediEventData(self);
+	if ( eventData != null )
+	{
+		string failureDebuff = eventData.getString(DATA_FAILURE_DEBUFF);
+		if( buff.hasBuff(player, failureDebuff) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+
+void jediEventBegin(obj_id self, obj_id player)
+{		
+	if ( !hasObjVar(self, OBJVAR_EVENT_NAME) )
+	{
+		return;
+	}
+	
+	string eventName = getStringObjVar(self, OBJVAR_EVENT_NAME);
+	dictionary eventData = getJediEventData(self);
+	if ( eventData == null || eventData.isEmpty() )
+	{
+		return;
+	}
+	
+	clearEventArea(self);
+	
+	// reset the wave event in 10 minutes if the player has not completed it
+	dictionary resetDict = trial.getSessionDict(self);
+	messageTo(self, "defaultEventReset", resetDict, EVENT_DEFAULT_AUTO_RESET, false);
+
+	utils.setScriptVar(self, SCRIPTVAR_EVENT_PLAYER, player);
+
+	string_id startingMessage = new string_id("quest2", eventData.getString(DATA_STARTING_MSG));
+	sendSystemMessage(player, startingMessage);
+	
+	messageTo(self, "handleStartJediEvent", null, 1, false);
+	return;
+}
+
+messageHandler handleStartJediEvent()
+{
+	if ( !hasObjVar(self, OBJVAR_EVENT_NAME) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = utils.getObjIdScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+	if ( !isIdValid(player) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	string eventName = getStringObjVar(self, OBJVAR_EVENT_NAME);
+	dictionary eventData = getJediEventData(self);
+	if ( eventData == null || eventData.isEmpty() )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	location statueLoc = getLocation(self);
+	float statueYaw = getYaw(self);
+
+	string primaryTarget = eventData.getString(DATA_EVENT_SPAWN);
+	float spawnX = eventData.getFloat(DATA_SPAWN_X);
+	float spawnY = eventData.getFloat(DATA_SPAWN_Y);
+	float spawnZ = eventData.getFloat(DATA_SPAWN_Z);
+	float spawnYaw = eventData.getFloat(DATA_SPAWN_YAW);
+	string spawnFx = eventData.getString(DATA_SPAWN_FX);
+	location spawnLoc = new location(statueLoc.x + spawnX, statueLoc.y + spawnY, statueLoc.z + spawnZ);
+
+	if ( statueYaw != 0 )
+	{
+		spawnLoc = storyteller.rotateLocationXZ(statueLoc, spawnLoc, statueYaw);
+	}
+	spawnYaw -= (0 - statueYaw);
+	
+	playClientEffectLoc(getPlayerCreaturesInRange(spawnLoc, 100.0f), spawnFx, spawnLoc, 0.0f);
+	obj_id spawnedTarget = create.object(primaryTarget, spawnLoc);
+	if (!isIdValid(spawnedTarget))
+	{
+		// The primary target was not valid, so clean up the event.
+		messageTo(self, "cleanupEvent", null, 2, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	setYaw(spawnedTarget, spawnYaw);
+	setHibernationDelay(spawnedTarget, 3600.0f);
+	setAILeashTime(spawnedTarget, 3600.0f);
+	setFloatingTime(spawnedTarget, 0);
+
+	trial.setParent(self, spawnedTarget, true);
+	trial.setInterest(spawnedTarget);
+	
+	attachScript(spawnedTarget, eventData.getString(DATA_EVENT_SCRIPT));
+	
+	utils.setScriptVar(spawnedTarget, SCRIPTVAR_EVENT_PLAYER, player);
+	setObjVar(spawnedTarget, OBJVAR_EVENT_NAME, eventName);
+	
+	pvpSetAlignedFaction(spawnedTarget, ##"bubblecombat");
+	pvpSetPermanentPersonalEnemyFlag(spawnedTarget, player);
+	
+	startCombat(spawnedTarget, player);
+	addHate(spawnedTarget, player, 1000.0f);
+
+	resizeable obj_id[] jediEventChildrenList = new obj_id[0];
+	utils.addElement (jediEventChildrenList, spawnedTarget);
+	utils.setScriptVar(self, SCRIPTVAR_CHILDRENLIST, jediEventChildrenList);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler jediEventChildDestroyed()
+{
+	messageTo(self, "cleanupEvent", null, 0.25f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler defaultEventReset()
+{
+	int passed  = params.getInt(trial.MESSAGE_SESSION);
+	int current = trial.getSession(self);
+
+	if ( !trial.verifySession(self, params) )
+	{		
+		//debugSpeakMsg(self, "Incorrect Session Id! (current = "+ current+" and passed = "+passed);
+		return SCRIPT_CONTINUE;
+	}
+	
+	//debugSpeakMsg(self, "Default Auto-resetting... (current = "+ current+" and passed = "+passed);
+	
+	clearEventArea(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanupEvent()
+{
+	clearEventArea(self);
+	return SCRIPT_CONTINUE;
+}
+
+void clearEventArea(obj_id self)
+{
+	utils.removeScriptVar(self, SCRIPTVAR_EVENT_PLAYER);
+	utils.removeScriptVar(self, SCRIPTVAR_CHILDRENLIST);
+	trial.bumpSession(self);
+	
+	obj_id[] objects = trial.getChildrenInRange(self, self, 1000.0f);
+	if (objects == null || objects.length == 0)
+		return;
+
+	for (int i=0;i<objects.length;i++)
+	{
+		obj_id child = objects[i];
+		if ( isIdValid(child) && child != self && !isPlayer(child))
+		{
+			if ( !hasScript(child, "corpse.ai_corpse") )
+			{
+				trial.cleanupObject(child);
+			}
+		}
+	}
+	
+	return;
+}
+

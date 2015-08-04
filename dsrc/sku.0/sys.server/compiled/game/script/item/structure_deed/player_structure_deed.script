@@ -1,0 +1,293 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        player_structure_deed.script
+ * Description:  base script for player structure deeds
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.player_structure;
+include library.utils;
+include library.sui;
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_NO_PLACING_STRUCTURES_IN_SPACE = new string_id("space/space_interaction", "no_placing_structures_in_space");
+
+// Fix up variables.
+const string LIGHT_HARVESTERS[] = { "object/installation/mining_gas/mining_gas_harvester_style_1.iff",
+									"object/installation/mining_liquid/mining_liquid_harvester_style_1.iff",
+									"object/installation/mining_liquid/mining_liquid_moisture_harvester.iff",
+									"object/installation/mining_ore/mining_ore_harvester_style_1.iff",
+									"object/installation/mining_organic/mining_organic_flora_farm.iff" };
+
+const string MEDIUM_HARVESTERS[] = {"object/installation/mining_gas/mining_gas_harvester_style_2.iff",
+									"object/installation/mining_liquid/mining_liquid_harvester_style_2.iff",
+									"object/installation/mining_liquid/mining_liquid_moisture_harvester_medium.iff",
+									"object/installation/mining_ore/mining_ore_harvester_style_2.iff",
+									"object/installation/mining_organic/mining_organic_flora_farm_medium.iff" };
+
+const string HEAVY_HARVESTERS[] = { "object/installation/mining_gas/mining_gas_harvester_style_3.iff",
+									"object/installation/mining_liquid/mining_liquid_harvester_style_3.iff",
+									"object/installation/mining_liquid/mining_liquid_moisture_harvester_heavy.iff",
+									"object/installation/mining_ore/mining_ore_harvester_heavy.iff",
+									"object/installation/mining_organic/mining_organic_flora_farm_heavy.iff" };
+
+
+
+/***** TRIGGERS ********************************************************/
+
+// !!! For testing only !!!
+trigger OnAttach()
+{
+	//setObjVar(self, VAR_DEED_TEMPLATE, "");
+	//setObjVar(self, player_structure.VAR_DEED_BUILDTIME, 30);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	// Update old deed scenes. 12/09/03
+	string deed_scene = getStringObjVar( self, "player_structure.deed.scene" );
+	if (deed_scene != null && deed_scene.length() > 0)
+	{
+		if ( deed_scene.equals( "tatooine" ) )
+		{
+			deed_scene = "tatooine,lok,dantooine";
+			setObjVar( self, "player_structure.deed.scene", deed_scene );
+		}
+		else if ( deed_scene.equals( "naboo" ) )
+		{
+			deed_scene = "naboo,rori,dantooine";
+			setObjVar( self, "player_structure.deed.scene", deed_scene );			
+		}
+		else if ( deed_scene.equals( "corellia" ) )
+		{
+			deed_scene = "corellia,talus";
+			setObjVar( self, "player_structure.deed.scene", deed_scene );			
+		}
+		//removed because harvesters no longer worked
+		else if(deed_scene.equals("tatooine,lok,naboo,rori,dantooine,corellia,talus"))
+		{
+			CustomerServiceLog("playerStructure", "Deed " + self + " has had all invalid/old objvars removed.");
+			removeObjVar(self, "player_structure.deed.scene");
+		}
+	}
+	else
+		setObjVar( self, "player_structure.deed.scene", deed_scene );			
+
+	if (hasObjVar(self, player_structure.VAR_DEED_SURPLUS_MAINTENANCE))
+	{
+		int maintenance_pool = getIntObjVar(self, player_structure.VAR_DEED_SURPLUS_MAINTENANCE);
+		if (maintenance_pool > 10000000)
+		{
+			CustomerServiceLog("playerStructure", "Deed " + self + " has a suspicious amount of credits: " + maintenance_pool + ".");
+		}
+	}
+	
+	// Initialization may not have the hopper size on harvesters, so we need to validate it later on.
+	if(hasObjVar(self, player_structure.VAR_DEED_MAX_EXTRACTION))
+	{
+		messageTo(self, "validateHopper", null, 1.0f, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	if ( !exists(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	//int idx = 0;
+	int idx = getFirstFreeIndex(names);
+	if ( idx < 0 || idx > names.length )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Determine maintenance cost.
+	int table_idx = dataTableSearchColumnForString(player_structure.getDeedTemplate(self), "STRUCTURE", player_structure.PLAYER_STRUCTURE_DATATABLE);
+	if (table_idx != -1)
+	{
+		int maintenance_rate = dataTableGetInt(player_structure.PLAYER_STRUCTURE_DATATABLE, table_idx, "MAINT_RATE");
+		int civic = dataTableGetInt(player_structure.PLAYER_STRUCTURE_DATATABLE, table_idx, "CIVIC");
+		if ( maintenance_rate > 0 && civic == 0 )
+		{
+			names[idx] = "examine_maintenance_rate";
+			attribs[idx] = Integer.toString(maintenance_rate*2) + " / hour";
+			idx++;
+		}
+	}
+
+	if ( utils.hasObjVar(self, player_structure.VAR_DEED_SURPLUS_MAINTENANCE) )
+	{
+		int maintenance = getIntObjVar(self, player_structure.VAR_DEED_SURPLUS_MAINTENANCE);
+	
+		if(maintenance > 0)
+		{
+			names[idx] = "examine_maintenance";
+			attribs[idx] = Integer.toString(maintenance);
+			idx++;
+		}
+	}
+
+	if(hasObjVar(self, player_structure.VAR_DEED_SURPLUS_POWER))	
+	{
+		int power = Math.round(getFloatObjVar(self, player_structure.VAR_DEED_SURPLUS_POWER));
+	
+		if(power > 0)
+		{
+			names[idx] = "examine_power";
+			attribs[idx] = Integer.toString(power);
+			idx++;
+		}
+	}
+	
+	if ( hasObjVar( self, "player_structure.deed.maxHopperSize" ) )
+	{
+		int hs = getIntObjVar( self, "player_structure.deed.maxHopperSize" );
+
+		if(hs > 0)
+		{
+			names[idx] = "examine_hoppersize";
+			attribs[idx] = Integer.toString( hs );
+			idx++;
+		}
+	}
+	if ( hasObjVar( self, "player_structure.deed.currentExtractionRate" ) )
+	{
+		int hs = getIntObjVar( self, "player_structure.deed.currentExtractionRate" );
+		
+		if(hs > 0)
+		{
+			names[idx] = "examine_extractionrate";
+			attribs[idx] = Integer.toString( hs );
+			idx++;
+		}
+	}
+	if ( hasObjVar( self, player_structure.VAR_DEED_SCENE ) )
+	{
+		string deed_scene = player_structure.getDeedScene( self );
+ 	 	java.util.StringTokenizer st = new java.util.StringTokenizer( deed_scene, "," );
+ 	 	while ( st.hasMoreTokens() )
+ 	 	{
+			string curScene = st.nextToken();
+			names[idx] = "examine_scene";
+			attribs[idx] = curScene;
+			idx++;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data mid = mi.getMenuItemByType (menu_info_types.ITEM_USE);
+	if (mid != null)
+	{
+		mid.setServerNotify (true);
+	}
+
+	mid = mi.getMenuItemByType (menu_info_types.EXAMINE);
+	if (mid != null)
+	{
+		mid.setServerNotify (true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect (obj_id player, int item)
+{
+	//fix incorrectly stamped deed scenes
+	if(hasObjVar(self, "player_structure.deed.scene"))
+	{
+		string deed_scene = getStringObjVar( self, "player_structure.deed.scene" );
+		if (deed_scene != null && deed_scene.length() > 0)
+		{
+			//removed because harvesters no longer worked
+			if(deed_scene.equals("tatooine,lok,naboo,rori,dantooine,corellia,talus"))
+			{
+				CustomerServiceLog("playerStructure", "Deed " + self + " has had all invalid/old objvars removed.");
+				removeObjVar(self, "player_structure.deed.scene");
+			}
+		}
+	}
+	
+	// Make sure we aren't in space.
+	if (isSpaceScene())
+	{
+		sendSystemMessage(player, SID_NO_PLACING_STRUCTURES_IN_SPACE);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( item == menu_info_types.ITEM_USE)
+	{
+		player_structure.tryQueueStructurePlacement(self, player);
+	}
+
+	if ( item == menu_info_types.EXAMINE)
+	{
+		LOG("LOG_CHANNEL", "player_structure_deed::OnExamine");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS *************************************************/
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *************************************************/
+messageHandler handleNoReclaimConfirm()
+{
+	utils.removeScriptVarTree(self, "noreclaim");
+
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	if ( !utils.isNestedWithin(self, player) )
+		return SCRIPT_CONTINUE;
+
+	queueCommand(player, ##"placeStructureMode", self, "", COMMAND_PRIORITY_DEFAULT);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler validateHopper()
+{
+	int objvar_hopper = getIntObjVar(self, player_structure.VAR_DEED_MAX_HOPPER);
+
+	int hopperSize = player_structure.validateHopperSize(self);
+
+	if(hopperSize < 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(objvar_hopper != hopperSize)
+	{
+		setObjVar(self, player_structure.VAR_DEED_MAX_HOPPER, hopperSize);
+	}
+
+	return SCRIPT_CONTINUE;
+}

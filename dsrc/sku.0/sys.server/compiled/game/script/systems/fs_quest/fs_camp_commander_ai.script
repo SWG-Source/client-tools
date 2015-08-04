@@ -1,0 +1,414 @@
+// phase fs quest commander
+include library.fs_counterstrike;
+include library.quests;
+include library.ai_lib;
+include library.chat;
+include library.utils;
+include library.create;
+
+const int RUNAWAY_TIME_LIMIT	= 180; // The commander can roam for 3 minutes before the quest is lost (we just kill the commander)
+const float MIN_DISTANCE_TO_RUN	= 50f; // The commander will run at least this far every run pulse
+const float MAX_DISTANCE_TO_RUN = 100f; // the commander will at most run this far every run pulse
+const float RUN_PULSE_TIME		= 10; // every ten seconds
+const int  	MIN_RESCUERS		= 1;
+const int	MAX_RESCUERS		= 2;
+const float HELP_SPAWN_TIME_MIN	= 180;
+const float HELP_SPAWN_TIME_MAX = 300;
+
+
+void lifeExpired()
+{	
+	obj_id self = getSelf();
+
+	if (hasScript(self, "ai.ai"))
+	{
+		detachScript(self, "ai.ai");
+	}
+
+	if (hasScript(self, "ai.creature_combat"))
+	{
+		detachScript(self, "ai.creature_combat");
+	}
+
+	if (hasScript(self, "systems.combat.credit_for_kills"))
+	{
+		detachScript(self, "systems.combat.credit_for_kills");
+	}
+
+	if (hasScript(self, "systems.combat.combat_actions"))
+	{
+		detachScript(self, "systems.combat.combat_actions");
+	}
+
+	setPosture(self, POSTURE_KNOCKED_DOWN);	
+	utils.setScriptVar(self, "deathSequence", 1);
+	messageTo(self, "msgDeathSequence", null, 5.0f, false);	
+	
+	return;
+}
+
+messageHandler msgSpawnRescuers()
+{
+	if(utils.hasScriptVar(self, "deathSequence"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	//LOG("fs_quest", "*=*=*= Spawning rescuers...");
+	if(hasObjVar(self, "fs_cs.iAmFree") || !hasObjVar(self, "fs_cs.primaryEscort"))
+	{
+		if(hasObjVar(self, "fs_cs.helpCallPending"))
+		{
+			removeObjVar(self, "fs_cs.helpCallPending");
+		}
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id target = getObjIdObjVar(self, "fs_cs.primaryEscort");	
+	int amount = rand(MIN_RESCUERS, MAX_RESCUERS);
+	location targetLoc = getLocation(target);
+	location here = getLocation(self);
+	if(targetLoc != null && targetLoc.distance(here) < 300)
+	{
+		location spawnLoc = utils.getRandomAwayLocation(targetLoc, 75, 100);
+
+		for(int i = 0; i < amount; i++)
+		{
+			obj_id mob = create.createCreature("shadow_pirate_nonaggro", spawnLoc, true);	
+			if(isIdValid(mob) && exists(mob))
+			{
+				setObjVar(mob, "fs_cs.target", target); // make sure to attach objvar first
+				attachScript(mob, "systems.fs_quest.fs_commander_rescue_ai"); // script handles running after target
+			}
+		}
+	}
+	
+	//LOG("fs_quest", "Sending rescue spawn message...");
+	messageTo(self, "msgSpawnRescuers", null, rand(HELP_SPAWN_TIME_MIN, HELP_SPAWN_TIME_MAX), false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgDeathSequence()
+{
+	if(!utils.hasScriptVar(self, "deathSequence"))
+	{
+		destroyObject(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int phase = utils.getIntScriptVar(self, "deathSequence");
+	switch(phase)
+	{
+		case 1:
+			chat.chat(self, new string_id("fs_quest_village", "commander_pain"));		
+			utils.setScriptVar(self, "deathSequence", 2);
+			messageTo(self, "msgDeathSequence", null,(float)rand(5, 10), false);
+			break;
+		case 2:
+			chat.chat(self, new string_id("fs_quest_village", "commander_pain2"));		
+			utils.setScriptVar(self, "deathSequence", 3);
+			messageTo(self, "msgDeathSequence", null,(float)rand(5, 10), false);
+			break;
+		case 3:
+			chat.chat(self, new string_id("fs_quest_village", "commander_pain3"));		
+			utils.setScriptVar(self, "deathSequence", 4);
+			messageTo(self, "msgDeathSequence", null, (float)rand(5, 10), false);
+			break;
+		default: // death			
+			obj_id primaryEscort = null;
+			obj_id shieldKiller = null;
+			dictionary dic = new dictionary();
+			dic.put("sender", self);
+			if(hasObjVar(self, fs_counterstrike.OBJVAR_CAMP_SHIELD_KILLER))
+			{
+				shieldKiller = getObjIdObjVar(self, fs_counterstrike.OBJVAR_CAMP_SHIELD_KILLER);
+			}
+			
+			if(hasObjVar(self, "fs_cs.primaryEscort"))
+			{
+				primaryEscort = getObjIdObjVar(getSelf(), "fs_cs.primaryEscort");	
+			}
+			
+			if(isIdValid(primaryEscort))
+			{			
+				messageTo(primaryEscort, "msgCommanderDied", dic, 0.0f, false);	
+			}
+
+			if(isIdValid(shieldKiller) && (shieldKiller != primaryEscort) && !hasObjVar(self, "fs_cs.shieldKillerOusted"))
+			{
+				messageTo(shieldKiller, "msgCommanderDied", dic, 0.0f, false);
+			}
+
+			destroyObject(self);
+			break;
+	}		
+	
+	return SCRIPT_CONTINUE;
+}
+
+//
+//  dispatched by the camp master when the camp is resetting (the NPC should die at that point)
+//
+messageHandler msgLifeExpired()
+{
+	lifeExpired();
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{	
+	//ai_lib.setDefaultMoveSpeed(self, ai_lib.MOVE_SPEED_RUN);
+	messageTo(self, "msgLifeExpired", null, fs_counterstrike.getCampBossDeathTime(), false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int mnuUse 	= 0;
+	if(!hasObjVar(self, "fs_cs.primaryEscort"))
+	{
+		mnuUse = mi.addRootMenu(menu_info_types.SERVER_MENU1, new string_id("fs_quest_village", "camp_commander_capture"));
+	}
+	
+	if(hasObjVar(self, "fs_cs.allowShieldKillerRecap"))
+	{						
+		obj_id shieldKiller = getObjIdObjVar(self, fs_counterstrike.OBJVAR_CAMP_SHIELD_KILLER);
+		if(!isIdValid(shieldKiller))
+		{
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(shieldKiller != player)
+		{
+			return SCRIPT_CONTINUE;
+		}
+		mnuUse 	= mi.addRootMenu(menu_info_types.SERVER_MENU2, new string_id("fs_quest_village", "fs_cs_recapture"));
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(player);
+	if(item == menu_info_types.SERVER_MENU1) // Capture
+	{					
+		if(hasObjVar(self, "fs_cs.primaryEscort"))
+		{
+			// make sure dirty menu didnt get us here
+			return SCRIPT_CONTINUE;
+		}
+		
+		obj_id shieldKiller = getObjIdObjVar(self, fs_counterstrike.OBJVAR_CAMP_SHIELD_KILLER);
+		if(!isIdValid(shieldKiller))
+		{
+			sendSystemMessage(player, new string_id("fs_quest_village", "camp_commander_no_auth"));
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(shieldKiller != player && (!fs_counterstrike.arePlayersInSameGroup(shieldKiller, player) || !quests.isActive("fs_cs_intro", player)))
+		{
+			sendSystemMessage(player, new string_id("fs_quest_village", "camp_commander_no_auth"));
+			return SCRIPT_CONTINUE;
+		}
+		
+		// make sure the commander isnt already captured
+		// person has authority to capture
+		// gotta set this objvars manually
+		
+		dictionary d = new dictionary();
+		d.put("capturedBy", player);
+		d.put("commander", self);
+		messageTo(shieldKiller, "msgCommanderCaptured", d, 0.0f, false);		
+		if(shieldKiller != player)
+		{			
+			messageTo(player, "msgCommanderCaptured", d, 0.0f, false);
+		}
+		
+		if(!hasObjVar(self, "fs_cs.helpCallPending"))
+		{
+			//LOG("fs_quest", "Sending rescue spawn message...");
+			setObjVar(self, "fs_cs.helpCallPending", 1);
+			messageTo(self, "msgSpawnRescuers", null, rand(HELP_SPAWN_TIME_MIN, HELP_SPAWN_TIME_MAX), false);	
+		}
+		
+		chat.chat(self, new string_id("fs_quest_village", "commander_death_notify"));		
+	}
+	else if(item == menu_info_types.SERVER_MENU2) // Recapture
+	{
+		if(!hasObjVar(self, "fs_cs.iAmFree"))
+		{
+			// dirty menu safety net
+			return SCRIPT_CONTINUE;
+		}
+		
+		location here = getLocation(self);
+		location userLoc = getLocation(player);
+		if(here.distance(userLoc) > 10f)
+		{
+			sendSystemMessage(self, new string_id("fs_quest_village", "commander_too_far"));
+			return SCRIPT_CONTINUE;
+		}
+		
+		if(hasObjVar(self, "fs_cs.allowShieldKillerRecap"))
+		{						
+			obj_id shieldKiller = getObjIdObjVar(self, fs_counterstrike.OBJVAR_CAMP_SHIELD_KILLER);
+			if(!isIdValid(shieldKiller))
+			{			
+				return SCRIPT_CONTINUE;
+			}
+			
+			if(shieldKiller != player)
+			{
+				return SCRIPT_CONTINUE;
+			}
+						
+			removeObjVar(self, "fs_cs.allowShieldKillerRecap");
+			removeObjVar(self, "fs_cs.iAmFree");
+			removeObjVar(self, "quests.supressFollowMenu");
+			dictionary d = new dictionary();
+			d.put("capturedBy", player);
+			d.put("commander", self);
+			messageTo(shieldKiller, "msgCommanderCaptured", d, 0.0f, false);						
+			if(!hasObjVar(self, "fs_cs.helpCallPending"))
+			{
+				//LOG("fs_quest", "Sending rescue spawn message...");
+				setObjVar(self, "fs_cs.helpCallPending", 1);
+				messageTo(self, "msgSpawnRescuers", null, rand(HELP_SPAWN_TIME_MIN, HELP_SPAWN_TIME_MAX), false);	
+			}
+		}	
+	}
+	
+	sendDirtyObjectMenuNotification(player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgPrimaryEscortDied()
+{
+	ai_lib.aiStopFollowing(self);	
+	obj_id shieldKiller = getObjIdObjVar(self, fs_counterstrike.OBJVAR_CAMP_SHIELD_KILLER);
+	
+	if(!isIdValid(shieldKiller))
+	{
+		return SCRIPT_CONTINUE;
+	}	
+	
+	if(!hasObjVar(self, "fs_cs.primaryEscort"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id primaryEscort = getObjIdObjVar(self, "fs_cs.primaryEscort");
+	setObjVar(self, "fs_cs.iAmFree", 1);	
+	setObjVar(self, "quests.supressFollowMenu", 1);
+	if(primaryEscort != shieldKiller)
+	{
+		if(hasObjVar(self, "fs_cs.shieldKillerOusted"))
+		{
+			messageTo(self, "msgLifeExpired", null, 0.0f, false);
+			return SCRIPT_CONTINUE;
+		}
+		
+		// start running
+		messageTo(self, "msgRun", null, 0.0f, false);
+		messageTo(self, "msgRanAwaySuccessfully", null, RUNAWAY_TIME_LIMIT, false);
+		
+		// primary escort was the not the shield killer.  shield killer is on last chance
+		dictionary dsk = new dictionary();
+		dsk.put("questFailure", false);		
+		setObjVar(self, "fs_cs.allowShieldKillerRecap", 1);	
+		messageTo(shieldKiller, "msgCommanderFree", dsk, 0.0f, false);		
+		
+		// if the shield killer != primary escort than the primary escort still loses the quest, except we don't
+		// go through the death sequence for the commander first, since we still need the commander for the 
+		// shield killer's last chance quest step
+		dictionary ped = new dictionary();
+		ped.put("questFailure", true);
+		messageTo(primaryEscort, "msgCommanderFree", ped, 0.0f, false);
+	}
+	else
+	{
+		// if this was the shield killer who died, then we can make the commander die now
+		messageTo(self, "msgLifeExpired", null, 0.0f, false);
+	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgShieldKillerOuster()
+{
+	setObjVar(self, "fs_cs.shieldKillerOusted", 1);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgPrimaryEscortAbandoned()
+{
+	ai_lib.aiStopFollowing(self);
+	obj_id shieldKiller = getObjIdObjVar(self, fs_counterstrike.OBJVAR_CAMP_SHIELD_KILLER);
+	
+	if(!isIdValid(shieldKiller))
+	{
+		return SCRIPT_CONTINUE;
+	}	
+	
+	if(!hasObjVar(self, "fs_cs.primaryEscort"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id primaryEscort = getObjIdObjVar(self, "fs_cs.primaryEscort");
+	setObjVar(self, "fs_cs.iAmFree", 1);
+	setObjVar(self, "quests.supressFollowMenu", 1);
+	if(primaryEscort != shieldKiller)
+	{
+		// start running
+		messageTo(self, "msgRun", null, 0.0f, false);
+		messageTo(self, "msgRanAwaySuccessfully", null, RUNAWAY_TIME_LIMIT, false);
+		
+		// primary escort was the not the shield killer.  shield killer is on last chance
+		dictionary dsk = new dictionary();
+		dsk.put("questFailure", false);		
+		setObjVar(self, "fs_cs.allowShieldKillerRecap", 1);	
+		messageTo(shieldKiller, "msgCommanderFree", dsk, 0.0f, false);
+	}
+	else
+	{
+		// if this was the shield killer who died, then we can make the commander die now
+		messageTo(self, "msgLifeExpired", null, 0.0f, false);
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgRanAwaySuccessfully()
+{
+	if(!hasObjVar(self, "fs_cs.iAmFree"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	messageTo(self, "msgLifeExpired", null, 0.0f, false);	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgRun()
+{
+	if(!hasObjVar(self, "fs_cs.iAmFree"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	run();
+	messageTo(self, "msgRun", null, RUN_PULSE_TIME, false);
+	return SCRIPT_CONTINUE;
+}
+
+void run()
+{
+	LOG("fs_quest", "COMMANDER RUNNING");
+	obj_id self = getSelf();
+	location target = utils.getRandomAwayLocation(getLocation(self), MIN_DISTANCE_TO_RUN, MAX_DISTANCE_TO_RUN);
+	setMovementRun(self);
+	ai_lib.aiPathTo(self, target);
+	
+	return;
+}

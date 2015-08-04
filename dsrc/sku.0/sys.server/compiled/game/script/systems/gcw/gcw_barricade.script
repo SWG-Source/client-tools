@@ -1,0 +1,301 @@
+include library.buff;
+include library.factions;
+include library.gcw;
+include library.groundquests;
+include library.resource;
+include library.restuss_event;
+include library.static_item;
+include library.trial;
+include library.utils;
+const boolean LOGGING_ON			= false;
+
+trigger OnAttach()
+{
+	setObjVar(self, gcw.GCW_TOOL_TEMPLATE_OBJVAR, "object/tangible/gcw/crafting_quest/gcw_barricade_tool.iff");
+	setObjVar(self, "questCallBack", 1);
+	
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnInitialize()
+{
+	//This object has the script defined in the template
+	//OnAttach() will not fire properly.
+	messageTo(self, "handleGCWBarricade", null, 2, false);
+	
+	dictionary params = new dictionary();
+	location loc = getLocation(self);
+	params.put("particleLoc", loc);
+	int playIconTime = getGameTime();
+	params.put("iconMessageTime", playIconTime);
+	utils.setScriptVar(self, "iconMessageTime", playIconTime);
+	messageTo(self, "playQuestIcon", params, 2.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	if(!exists(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = utils.getValidAttributeIndex(names);
+
+	if(idx == -1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	names[idx] = "object_repaired";
+	int repairCount = getIntObjVar(self, gcw.GCW_OBJECT_REPAIR_COUNT);
+	if(repairCount > 0)
+	{
+		attribs[idx] = ""+repairCount+" out of "+gcw.REPAIR_COUNT_MAX;
+	}
+	else
+	{
+		attribs[idx] = "Never Repaired";		
+	}
+	idx++;
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(!utils.hasScriptVar(self, "faction"))
+	{
+		blog("no faction on turret obj");	
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!factions.isPlayerSameGcwFactionAsSchedulerObject(player, self))
+	{
+		blog("faction invalid on turret obj");
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		if(utils.isProfession(player, utils.TRADER))
+		{
+			blog("player is trader");
+
+			if(!gcw.canGcwObjectBeRepaired(self))
+			{
+				blog("OnObjectMenuRequest no repair needed");
+
+				return SCRIPT_CONTINUE;
+			}
+			if(!gcw.hasConstructionOrRepairTool(player, self))
+			{
+				blog("OnObjectMenuRequest no resources");
+
+				return SCRIPT_CONTINUE;
+			}
+		}
+		
+		//if not a trader, the same faction can still use the barricade
+		menu_info_data data = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+
+		if(data != null)
+			data.setServerNotify(true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	blog("OnObjectMenuSelect");	
+
+	if(!isIdValid(player) || !exists(player) || isIncapacitated(player) || isDead(player) || factions.isOnLeave(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!utils.hasScriptVar(self, "faction"))
+	{
+		blog("no faction on patrol obj");	
+		return SCRIPT_CONTINUE;
+	}
+	
+	int faction = utils.getIntScriptVar(self, "faction");
+	if(faction < 0)
+	{
+		blog("faction invalid on patrol obj");
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!factions.isPlayerSameGcwFactionAsSchedulerObject(player, self))
+	{
+		blog("Wrong Faction");
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		if(utils.isProfession(player, utils.TRADER))
+		{
+			blog("player is trader");
+
+			if(!gcw.canGcwObjectBeRepaired(self))
+			{
+				sendSystemMessage(player, gcw.SID_DOESNT_NEED_REPAIR);
+				return SCRIPT_CONTINUE;
+			}
+			if(!gcw.hasConstructionOrRepairTool(player, self))
+			{
+				gcw.playerSystemMessageResourceNeeded(player, self, false);
+				return SCRIPT_CONTINUE;
+			}
+			
+			if(groundquests.isQuestActive(player, gcw.GCW_REPAIR_BARRICADE_QUEST))
+			{			
+				if(gcw.useGcwObjectForQuest(player, self, gcw.GCW_REPAIR_BARRICADE_QUEST))
+				{
+					gcw.useConstructionOrRepairTool(player, self);
+				}				
+				return SCRIPT_CONTINUE;
+			}
+			
+			if(groundquests.hasCompletedQuest(player, gcw.GCW_REPAIR_BARRICADE_QUEST))
+			{
+				groundquests.clearQuest(player, gcw.GCW_REPAIR_BARRICADE_QUEST); 
+			}
+			if(!groundquests.isQuestActive(player, gcw.GCW_REPAIR_BARRICADE_QUEST))
+			{
+				groundquests.grantQuest(player, gcw.GCW_REPAIR_BARRICADE_QUEST); 
+			}
+		}
+		else
+		{
+			string questName = gcw.GCW_DEFEND_BARRICADE_REBEL;
+			if(faction == factions.FACTION_FLAG_IMPERIAL)
+			{
+				questName = gcw.GCW_DEFEND_BARRICADE_IMPERIAL;
+			}
+		
+			if(groundquests.isQuestActive(player, questName))
+			{						
+				return SCRIPT_CONTINUE;
+			}
+			
+			if(groundquests.hasCompletedQuest(player, questName))
+			{
+				groundquests.clearQuest(player, questName); 
+			}
+			if(!groundquests.isQuestActive(player, questName))
+			{
+				setObjVar(player,"defend_target", self);
+				groundquests.grantQuest(player, questName); 
+			}
+		}
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler playQuestIcon()
+{
+	gcw.playQuestIconHandler(self, params);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleGCWBarricade()
+{
+	obj_id[] objects = getObjectsInRange(self, 5.0f);
+
+	int faction = -1;
+	
+	if(utils.hasScriptVar(self, "faction"))
+	{
+		faction = utils.getIntScriptVar(self, "faction");
+	}
+
+	if(objects != null && objects.length > 0)
+	{
+		for(int i = 0; i < objects.length; i++)
+		{
+			obj_id object = objects[i];
+
+			if(isIdValid(object) && isMob(object) && factions.isPlayerSameGcwFactionAsSchedulerObject(object, self))
+			{
+				buff.applyBuff(object, self, "barricade_defender");
+			}
+		}
+	}
+	
+	messageTo(self, "handleGCWBarricade", null, 2, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleQuestCallBack()
+{
+	if(params == null)
+		return SCRIPT_CONTINUE;
+	
+	if(!params.containsKey("questComplete"))
+		return SCRIPT_CONTINUE;
+	if(!params.containsKey("player"))
+		return SCRIPT_CONTINUE;
+	if(params.getBoolean("questComplete"))
+	{
+		obj_id player = params.getObjId("player");
+		if(!isValidId(player))
+			return SCRIPT_CONTINUE;
+			
+		trial.addNonInstanceFactionParticipant(player, self);	
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroyGCWBarricade()
+{
+	trial.cleanupObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	handleDestroyBarricade(self, killer);
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDisabled(obj_id killer)
+{
+	handleDestroyBarricade(self, killer);
+	return SCRIPT_CONTINUE;
+}
+
+void handleDestroyBarricade(obj_id self, obj_id killer)
+{
+	playClientEffectLoc(self, "clienteffect/combat_explosion_lair_large.cef", getLocation(self), 0);
+	setInvulnerable( self, true );
+	messageTo(self, "destroyGCWBarricade", null, 1f, false);
+
+	int faction = utils.getIntScriptVar(self, "faction");
+	if(faction < 0)
+	{
+		blog("handleDestroyBarricade - faction invalid on obj");
+		return;
+	}
+
+	if(faction == factions.FACTION_FLAG_IMPERIAL)
+	{
+		gcw.signalAllParticipantsForDamage(self, gcw.GCW_DESTROY_BARRICADE, gcw.GCW_IMP_DESTROY_BARRICADE_TASK, gcw.GCW_IMP_DESTROY_BARRICADE_SIGNAL);
+	}
+	else if(faction == factions.FACTION_FLAG_REBEL)
+	{
+		gcw.signalAllParticipantsForDamage(self, gcw.GCW_DESTROY_BARRICADE, gcw.GCW_REB_DESTROY_BARRICADE_TASK, gcw.GCW_REB_DESTROY_BARRICADE_SIGNAL);
+	}
+ 	return;
+}
+
+void blog(string text)
+{
+	if(LOGGING_ON)
+	{
+		LOG("gcw_barricade", text);
+	}
+}
+

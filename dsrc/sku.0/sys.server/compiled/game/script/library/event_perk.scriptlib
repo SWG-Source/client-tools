@@ -1,0 +1,399 @@
+include library.utils;
+include library.buff;
+include library.ai_lib;
+include library.camping;
+include library.locations;
+include library.city;
+include library.battlefield;
+include library.player_structure;
+
+/***** CONSTS **********************************************************/
+//Halloween stuff
+const string HALLOWEEN			= new string("event/halloween");
+const string_id STEALTHED		= new string_id(HALLOWEEN, "stealthed");
+const string_id TEN_COINS		= new string_id(HALLOWEEN, "ten_coins");
+const string_id FIVE_COINS		= new string_id(HALLOWEEN, "five_coins");
+const string_id STATIC_NPC		= new string_id(HALLOWEEN, "static_npc");
+const string_id REACHED_LIMIT		= new string_id(HALLOWEEN, "reached_limit");
+const string_id ZOZ			= new string_id(HALLOWEEN, "zozpheratu");
+const string COUNTER			= new string("galacticCoinCounter.numberOfCoins");
+const string COUNTER_TIMESTAMP		= new string("galacticCoinCounter.timeStamp");
+const string COUNTER_RESTARTTIME	= new string("galacticCoinCounter.startTime");
+const int COIN_LIMIT			= 599;
+const int COIN_AMOUNT_LOW		= 5;
+const int COIN_AMOUNT_HIGH		= 10;
+const int LOCKOUT_LENGTH		= 240;
+const string LIST_VAR			= new string("galacticMoonNpcList");
+const string_id TOO_SOON		= new string_id(HALLOWEEN, "too_soon");
+const string_id	SHAPECHANGE_SPACE 	= new string_id("spam", "shapechange_space");
+
+//Misc
+const string DATATABLE = "datatables/event_perk/perk_data.iff";
+const string STF_FILE = "event_perk";
+
+boolean canPlaceEventPerkHere(obj_id self, obj_id player, location here)
+{
+
+	if(!isIdValid(player) || (here == null))
+		return false;
+
+	if(isIdValid(here.cell))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "not_inside"));
+		return false;
+	}
+
+	if(here.area.startsWith("space_"))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "not_in_space"));
+		return false;
+	}
+
+	// Battlefield
+	region bf = battlefield.getBattlefield(here);
+	if(bf != null)
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "not_in_battlefield"));
+		return false;
+	}
+
+	// Any city/outpost
+	if(locations.isInMissionCity(here))
+	{
+		int city_id = getCityAtLocation(here, 0);
+		
+		// It's an NPC city
+		if(city_id == 0)
+		{
+			sendSystemMessage(player, new string_id(STF_FILE, "not_in_municipal_zone"));
+			return false;
+		}
+
+		// Zoning rights for player city		
+		if (cityExists(city_id) && city.isCityZoned(city_id) && isIdValid(player))
+		{
+			if(!city.hasZoningRights(player, city_id))
+			{
+				sendSystemMessage(player, new string_id(STF_FILE, "no_zoning_rights"));
+				return false;		
+			}
+		}
+	}
+
+	if(tooCloseToSomething(here, player, self))
+		return false;
+		
+	if(tooManyPerks(here, player))
+		return false;
+
+	return true;
+}
+
+boolean tooCloseToSomething(location here, obj_id player, obj_id self)
+{
+	if (here == null || !isIdValid(player))
+		return true;
+
+	int numEventObjects = 0;
+	int deedNumber = getIntObjVar(self, "event_perk.deedNumber");
+	float range = dataTableGetFloat(DATATABLE, deedNumber, "RANGE");
+
+//	If range is less then 0 we don't care about being too close.
+	if(range < 0)
+	{
+		return false;
+	}
+
+	obj_id[] objs = getNonCreaturesInRange(here, range);
+	if ((objs == null) || (objs.length == 0))
+	{
+		return false;
+	}
+	else
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "too_close_something"));
+		return true;
+	}
+	
+}
+
+boolean tooManyPerks(location here, obj_id player)
+{
+	int numPerkObjects = 0;
+	float range = 256;
+
+	obj_id[] objNPCs = getNPCsInRange(here, range);	
+	obj_id[] objs = getNonCreaturesInRange(here, range);
+
+	if(	(objs == null || objs.length == 0)	&& 	(objNPCs == null || objNPCs.length == 0) 	)
+	{
+		return false;
+	}
+	else
+	{
+		for(int i = 0; i < objs.length; i++)
+		{
+			obj_id item = objs[i];
+			if(hasObjVar(item, "event_perk.lifeSpan"))
+			{
+				numPerkObjects++;				
+				
+				if(numPerkObjects > 25)
+				{
+					sendSystemMessage(player, new string_id(STF_FILE, "too_many_perks"));
+					return true;
+				}
+			}
+		}
+
+		for(int i = 0; i < objNPCs.length; i++)
+		{
+			obj_id item = objNPCs[i];
+			if(hasObjVar(item, "event_perk.lifeSpan"))
+			{
+				numPerkObjects++;				
+				
+				if(numPerkObjects > 25)
+				{
+					sendSystemMessage(player, new string_id(STF_FILE, "too_many_perks"));
+					return true;
+				}
+			}
+		}
+	}
+	
+	return false;
+}
+
+boolean canCallShuttle(obj_id self, obj_id player)
+{
+	if(hasObjVar(self, "event_perk.shuttle.shuttle"))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "already_have_shuttle"));
+		return false;
+	}
+	else
+		return true;
+
+}
+
+//HALLOWEEN STUFF
+void increaseDailyCoinCounter(obj_id player)
+{
+	if (!hasObjVar(player, COUNTER))
+		setObjVar(player, COUNTER, COIN_AMOUNT_LOW);
+	else
+	{
+		int currentCoinLimit = getIntObjVar(player, COUNTER);
+		int newCoinLimit = currentCoinLimit + COIN_AMOUNT_LOW;
+		setObjVar(player, COUNTER, newCoinLimit);
+		
+		int limit = utils.stringToInt(getConfigSetting("GameServer", "halloweenCoinLimit"));
+
+		if (limit <=0)
+			limit = event_perk.COIN_LIMIT;	
+			
+		if (newCoinLimit > limit)
+			buff.applyBuff(player, "event_halloween_coin_limit");
+	}
+}
+
+void playerLaugh(obj_id player)
+{
+	if (buff.hasBuff(player, "event_halloween_costume_jawa"))
+		play2dNonLoopingSound(player, "sound/utinni.snd");
+	
+	if (buff.hasBuff(player, "event_halloween_costume_droid"))
+		play2dNonLoopingSound(player, "sound/voc_dro_ig106_emote.snd");
+		
+	if (buff.hasBuff(player, "event_halloween_costume_kowakian"))
+		play2dNonLoopingSound(player, "sound/voc_kowakian_laugh.snd");
+		
+	if (buff.hasBuff(player, "event_halloween_costume_hutt_female"))
+		play2dNonLoopingSound(player, "sound/halloween_jabba.snd");
+		
+	if (buff.hasBuff(player, "event_halloween_costume_toydarian"))
+		play2dNonLoopingSound(player, "sound/halloween_toydarian_laugh.snd");		
+}
+
+void giveTreat(obj_id player, int quality)
+{
+	//Get player inventory.
+	obj_id pInv = utils.getInventoryContainer(player);
+	//create the halloween coins in their inventory.
+	obj_id halloweenCoins = utils.getStaticItemInInventory(player, "item_event_halloween_coin");
+	if (quality == 2)
+	{
+		if (isIdValid(halloweenCoins))
+		{
+			int currentCoins = getCount(halloweenCoins);
+			setCount(halloweenCoins, currentCoins + COIN_AMOUNT_HIGH);
+			increaseDailyCoinCounter(player);
+		}
+		else
+		{
+			obj_id coins = static_item.createNewItemFunction("item_event_halloween_coin", pInv, COIN_AMOUNT_HIGH);
+			increaseDailyCoinCounter(player);
+		}
+		playerLaugh(player);
+		sendSystemMessage(player, TEN_COINS);
+	}
+	if (quality == 1)
+	{
+		if (isIdValid(halloweenCoins))
+		{
+			int currentCoins = getCount(halloweenCoins);
+			setCount(halloweenCoins, currentCoins + COIN_AMOUNT_LOW);
+			increaseDailyCoinCounter(player);
+		}
+		else
+		{
+			obj_id coins = static_item.createNewItemFunction("item_event_halloween_coin", pInv, COIN_AMOUNT_LOW);
+			increaseDailyCoinCounter(player);
+		}
+		playerLaugh(player);
+		sendSystemMessage(player, FIVE_COINS);
+	}
+	if (!hasObjVar(player, event_perk.COUNTER_RESTARTTIME))
+	{
+		int now = getCalendarTime();
+		int secondsUntil = secondsUntilNextDailyTime(10, 0, 0);
+		int then = now + secondsUntil;
+		setObjVar(player, event_perk.COUNTER_RESTARTTIME, then);
+	}
+}
+
+//Check if the npc is scared or not.
+void handlePayout(obj_id player, obj_id npc)
+{
+	//NPC can say one of 5 random lines.
+	int trickTreatDialogue = rand(1, 5);
+	//Determining if the NPC will accept the trick or treat
+	int trickOrTreat = rand(1,100);
+	//Trick or treat successful
+	if (trickOrTreat < 51)
+	{
+		faceTo(npc, player);
+		doAnimationAction(npc, "shiver");
+		chat.chat(npc, player, chat.CHAT_STUTTER, new string_id(HALLOWEEN, "treat_" + trickTreatDialogue), chat.ChatFlag_targetOnly);
+		buff.applyBuff(npc, "event_halloween_trick_cooldown");
+		giveTreat(player, 1);
+	}
+	else
+	{
+		faceTo(npc, player);
+		doAnimationAction(npc, "laugh");
+		chat.chat(npc, player, chat.CHAT_SAY, new string_id(HALLOWEEN, "trick_" + trickTreatDialogue), chat.ChatFlag_targetOnly);
+		buff.applyBuff(npc, "event_halloween_trick_cooldown");
+		utils.setScriptVar(npc, "readyForTrickFromPlayer."+player, player);
+	}
+}
+
+//Checking if it's a new day and the players coin limit should be reset.
+boolean newDayOrNot(obj_id player)
+{
+	if (hasObjVar(player, event_perk.COUNTER_TIMESTAMP))
+	{
+		int now = getCalendarTime();
+		int then = getIntObjVar(player, event_perk.COUNTER_TIMESTAMP);
+
+		if (now > then)
+			return true;
+		else
+			return false;
+	}
+	if (hasObjVar(player, event_perk.COUNTER_RESTARTTIME))
+	{
+		int now = getCalendarTime();
+		int then = getIntObjVar(player, event_perk.COUNTER_RESTARTTIME);
+
+		if (now > then)
+			return true;
+		else
+			return false;
+	}
+	return true;
+}
+
+//Checking if player is eligible to continue collecting coins.
+boolean timeStampCheck(obj_id player)
+{
+	int limit = utils.stringToInt(getConfigSetting("GameServer", "halloweenCoinLimit"));
+
+	if (limit <=0)
+		limit = event_perk.COIN_LIMIT;
+
+	//It's a new day, players timestamp is from yesterday.
+	if (newDayOrNot(player) == true)
+	{
+		//player has the coin limit buff
+		if (buff.hasBuff(player, "event_halloween_coin_limit"))
+		{
+			//we remove the coin limit buff
+			buff.removeBuff(player, "event_halloween_coin_limit");
+			//player has the counter
+			if (hasObjVar(player, event_perk.COUNTER))
+			{
+				//We remove the counter so that the player can start over collecting coins.
+				removeObjVar(player, event_perk.COUNTER);
+			}
+			//Player has a timestamp from yesterday, we remove it.
+			if (hasObjVar(player, event_perk.COUNTER_TIMESTAMP))
+				removeObjVar(player, event_perk.COUNTER_TIMESTAMP);
+			if (hasObjVar(player, event_perk.COUNTER_RESTARTTIME))
+				removeObjVar(player, event_perk.COUNTER_RESTARTTIME);
+			return true;
+		}
+		//Player does not have the coin limit buff but has reached their limit. We attach the limit buff and set a timestamp.
+		else if (hasObjVar(player, event_perk.COUNTER))
+		{
+			if (hasObjVar(player, event_perk.COUNTER_RESTARTTIME))
+			{
+				int now = getCalendarTime();
+				int then = getIntObjVar(player, event_perk.COUNTER_RESTARTTIME);
+				if (now > then)
+				{
+					removeObjVar(player, event_perk.COUNTER_RESTARTTIME);
+					removeObjVar(player, event_perk.COUNTER);
+					return true;
+				}
+			}
+			int currentCoinCount = getIntObjVar(player, event_perk.COUNTER);
+
+			if (currentCoinCount > limit)
+			{
+				buff.applyBuff(player, "event_halloween_coin_limit");
+				sendSystemMessage(player, event_perk.REACHED_LIMIT);
+				return false;
+			}
+		}
+		return true;
+	}
+	//It is not a new day
+	if (newDayOrNot(player) == false)
+	{
+		if (hasObjVar(player, event_perk.COUNTER))
+		{
+			int currentCoinCount = getIntObjVar(player, event_perk.COUNTER);
+			//Player has reached their limit for the day.
+			if (currentCoinCount > limit)
+			{
+				//The player doesn't have the coin limit buff, we attach it.
+				if (!buff.hasBuff(player, "event_halloween_coin_limit"))
+				{
+					sendSystemMessage(player, event_perk.REACHED_LIMIT);
+					buff.applyBuff(player, "event_halloween_coin_limit");
+					return false;
+				}
+				sendSystemMessage(player, event_perk.REACHED_LIMIT);
+				return false;
+			}
+		}
+		return true;
+	}
+	sendSystemMessage(player, event_perk.REACHED_LIMIT);
+	if (!buff.hasBuff(player, "event_halloween_coin_limit"))
+		buff.applyBuff(player, "event_halloween_coin_limit");
+
+	return false;
+}

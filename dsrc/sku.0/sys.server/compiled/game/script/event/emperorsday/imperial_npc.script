@@ -1,0 +1,223 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.ai_lib;
+include library.anims;
+include library.chat;
+include library.colors;
+include library.factions;
+include library.holiday;
+include library.pclib;
+include library.prose;
+include library.stealth;
+include library.utils;
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	string npcType = getStringObjVar (self, "emperorsday.npcType");
+	if (npcType != null)
+	{
+		obj_id masterObject = holiday.masterObjectObjId(self);
+		if (isIdValid(masterObject))
+		{
+			dictionary params = new dictionary();
+			params.put("type", npcType);
+			params.put("npcObjId", self);
+			
+			messageTo(masterObject, "npcTypeList", params, 3.0f, false);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+//Checking if Vader has arrived either in front of the officer or back at the shuttle.
+trigger OnMovePathComplete()
+{
+	if(!hasObjVar(self, "vader"))
+		return SCRIPT_CONTINUE;
+		
+	obj_id spawnPoint = holiday.getEmpireDayWaypointObjectObjId(self, "spawnVader", holiday.OBJECT_NEAR_CHECK_RANGE_10M);
+	obj_id pathPoint = holiday.getEmpireDayWaypointObjectObjId(self, "pathVader", holiday.OBJECT_NEAR_CHECK_RANGE_10M);
+	if (isIdValid(pathPoint) && exists(pathPoint))
+	{
+		obj_id masterObject = holiday.masterObjectObjId(self);
+		if (isIdValid(masterObject))
+		{
+			messageTo(masterObject, "startConversation", null, 3.0f, false);
+		}
+	}
+	
+	if (isIdValid(spawnPoint) && exists(spawnPoint))
+	{
+		obj_id masterObject = holiday.masterObjectObjId(self);
+		if (isIdValid(masterObject))
+		{
+			//Removing sound object
+			obj_id oldSoundObject = utils.getObjIdScriptVar(self, "musicObject");
+
+			if ((isIdValid(oldSoundObject)) && (exists(oldSoundObject)))
+				destroyObject(oldSoundObject);
+
+			messageTo(masterObject, "destroyParade", null, 5.0f, false);
+		}
+	}		
+	return SCRIPT_CONTINUE;
+}
+
+//Badge giving process.
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(!isIdValid(player) || ai_lib.isInCombat(player) || isIncapacitated(player) || isDead(player))
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, "vader") && hasObjVar(self, "readyForBadge") && utils.hasScriptVar(player, "emperorsDayBadge"))
+	{
+		CustomerServiceLog("holidayEvent", "imperial_npc.OnObjectMenuSelect: The player is authorized to access Vader and receive reward badge.");				
+	
+		mi.addRootMenu(menu_info_types.ITEM_USE, holiday.BOW);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player) || ai_lib.isInCombat(player) || isIncapacitated(player) || isDead(player))
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, "vader") && hasObjVar(self, "readyForBadge") && utils.hasScriptVar(player, "emperorsDayBadge"))
+	{
+		obj_id[] listOfWinners = getObjIdArrayObjVar(self, "listOfWinners");
+		if(listOfWinners == null || listOfWinners.length <= 0)
+		{
+			CustomerServiceLog("holidayEvent", "imperial_npc.OnObjectMenuSelect: THE LIST OF WINNERS WASNT FOUND ON VADER. Vader cannot give the player his badge.");				
+			return SCRIPT_CONTINUE;
+		}
+		
+		boolean playerReward = false;
+		for(int i = 0;i < listOfWinners.length; i++)
+		{
+			if(player != listOfWinners[i])
+				continue;
+			
+			playerReward = true;
+			break;
+		}
+		
+		if(!playerReward)
+			return SCRIPT_CONTINUE;
+			
+		CustomerServiceLog("holidayEvent", "imperial_npc.OnObjectMenuSelect: The list of winners was received. Player: "+player+" has the variable to claim reward.");						
+		if(!holiday.grantEmperorDayBadge(player, self, listOfWinners, holiday.IMPERIAL_PLAYER))
+		{
+			CustomerServiceLog("holidayEvent", "imperial_npc.OnObjectMenuSelect: The grantEmperorDayBadge function shows that rewarding the player: "+player+" FAILED!");
+		}
+	}
+	sendDirtyObjectMenuNotification(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSawEmote(obj_id emoteSayer, string emotein)
+{
+	obj_id emotetarget = getLookAtTarget(emoteSayer);
+	if(!isIdValid(emotetarget) || ai_lib.isInCombat(self) || ai_lib.isInCombat(emoteSayer) || isIncapacitated(self) || isDead(self))
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, "vader") && factions.isRebel(emoteSayer) && emotetarget == self)
+		forceChokePlayer(self, emoteSayer);
+
+	if(!hasObjVar(self, "vader") && factions.isRebel(emoteSayer) && emotetarget == self)
+	{
+		holiday.slapPlayerDownForBeingRude(self, emoteSayer);
+		CustomerServiceLog("holidayEvent", "imperial_npc.OnObjectMenuSelect: Player: "+emoteSayer+" was rude to an NPC at the ceremony and will now be punished.");	
+	}
+	
+	if(hasObjVar(self, "vader") && hasObjVar(self, "readyForBadge") && utils.hasScriptVar(emoteSayer, "emperorsDayBadge"))
+	{
+		//Making sure master object is still around
+		obj_id masterObject = holiday.masterObjectObjId(self);
+		if(!isIdValid(masterObject) && !exists(masterObject))
+			return SCRIPT_CONTINUE;
+		if(emotetarget != self)
+			return SCRIPT_CONTINUE;
+			
+		if (factions.isImperial(emoteSayer))
+		{
+			switch ( holiday.getEmoteBeligerence(emotein) )
+			{
+
+			case 2:
+				// Ignores this
+				break;
+
+			case 1:
+				// Unacceptable, leaves.
+				doAnimationAction(self, "shake_head_no");
+
+				//removeObjVar(self, "readyForBadge");
+				utils.removeScriptVar(emoteSayer, "emperorsDayBadge");
+				factions.addFactionStanding(emoteSayer, factions.FACTION_IMPERIAL, -250);
+
+				prose_package pp = prose.getPackage(holiday.DARTH_BADGE_2);
+				prose.setTT (pp, emoteSayer);
+				chat.chat(self, emoteSayer, pp);
+				forceChokePlayer(self, emoteSayer);
+				//messageTo(masterObject, "vaderLeaving", null, 5.0f, false);
+
+				break;
+
+			case 0:
+				// Ignores this
+				break;
+
+			default:
+
+				break;
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+/***** HANDLERS ********************************************************/
+
+messageHandler playerKnockedOut()
+{
+	obj_id player = params.getObjId("myTarget");
+	if(!isValidId(player) && !exists(player))
+		return SCRIPT_CONTINUE;
+
+	CustomerServiceLog("holidayEvent", "imperial_npc.playerKnockedOut: The player: "+player+" was knocked down by an Empire Day Ceremony NPC.");			
+	damage(player, DAMAGE_KINETIC, HIT_LOCATION_BODY, 100);
+	setPosture(player, POSTURE_INCAPACITATED);
+	if(factions.isRebel(player))
+		holiday.giveCeremonyAreaMobsHate(player, holiday.NPC_ATTACK_RANGE);
+		
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS ********************************************************/
+
+boolean forceChokePlayer(obj_id npcObject, obj_id playerToBeIncapped)
+{
+	stealth.testInvisNonCombatAction(playerToBeIncapped, npcObject);
+	doAnimationAction(npcObject, "force_choke" );
+	doAnimationAction(playerToBeIncapped, "heavy_cough_vomit");
+
+	dictionary eDict = new dictionary();
+	eDict.put("myTarget", playerToBeIncapped);
+	messageTo(npcObject, "playerKnockedOut", eDict, 6, false);
+	
+	for(int i = 0;i < 4; i++)
+	{
+		string_id strText = new string_id("combat_effects", "choke"); // flytext
+		color colTest = colors.RED;
+		showFlyText(playerToBeIncapped, strText, 1, colTest);
+	}
+	string_id strSpam = new string_id("combat_effects", "choke_single"); 
+	sendSystemMessage(playerToBeIncapped, strSpam);
+	return true;
+}
+
+// END END END END END END END END END END END END END END END END END END END END END END END END END

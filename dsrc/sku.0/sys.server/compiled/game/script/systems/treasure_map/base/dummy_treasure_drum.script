@@ -1,0 +1,399 @@
+/**
+ * Copyright (c) ©2007 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        dummy_treasure_drum.script
+ * Description:  Code for treasure chest.
+ * @author       $Author: jhaskell $
+ * @version      $Revision:  $
+ */
+
+//------------------------------------------------
+// Include
+//------------------------------------------------
+include java.util.Vector
+include library.ai_lib;
+include library.create;
+include library.groundquests
+include library.loot;
+include library.utils;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+const string SCRIPT_TREASUREGUARD 			= "systems.treasure_map.base.treasure_guard";
+const string REAL_CHEST 				= "object/tangible/container/drum/treasure_drum.iff";
+const string SCRIPT_REAL_CHEST 				= "systems.treasure_map.base.treasure_drum";
+const string BONUS_LOOT_TABLE_81_90 			= "treasure/treasure_bonus_81_90";
+const string RARE_BONUS_LOOT_TABLE_81_90 		= "treasure/treasure_rare_bonus_81_90";
+const string LOOT_TABLE_81_90 				= "treasure/treasure_81_90";
+
+const string SID_WRONG_PLAYER				= "@treasure_map/treasure_map:wrong_player";
+const string SID_KILL_GUARDS 				= "@treasure_map/treasure_map:kill_guards_message";
+const string SID_UNLOCK_CHEST 				= "@treasure_map/treasure_map:unlock_chest";
+
+const int TREASURE_LOOT_ITEMS				= 6;
+const int NUMBER_OF_BONUS_LOOT_ITEMS 			= 1;
+const int EIGHT_MEMBER_GROUP_BONUS			= 2;
+const int EIGHT_GROUP_PERCENT_CHANCE_FOR_SUPER_RARE	= 2;
+const int EIGHT_GROUP_PERCENT_CHANCE_FOR_RARE		= 20;
+const int FOUR_GROUP_PERCENT_CHANCE_FOR_RARE		= 25; 
+
+
+//------------------------------------------------
+// TRIGGERS
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set a destroy callback to 16 minutes.
+	messageTo(self, "cleanUpFakeChest", null, 1000, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info item)
+{
+	obj_id fake_chest = self;
+	if(!exists(fake_chest))
+		return SCRIPT_CONTINUE;
+
+	obj_id owner = getObjIdObjVar(fake_chest, "owner");
+	if(!isValidId(owner) || !exists(owner))
+		return SCRIPT_CONTINUE;
+	
+	messageTo(fake_chest, "recalculateGuardArray", null, 0, false);
+	
+	if(owner != player)
+	{
+		sendSystemMessage(player, SID_WRONG_PLAYER, null);	
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] guards = getObjIdArrayObjVar(fake_chest, "guards");
+	if(guards == null) //This means the guards are dead
+	{
+		sendSystemMessage(player, SID_UNLOCK_CHEST, null);	
+		messageTo(fake_chest, "setupChest", null, 1, false);
+	}
+	else
+	{
+		sendSystemMessage(player, SID_KILL_GUARDS, null);	
+	
+		// Order attackers to attack!
+		for (int i=0; i<guards.length; i++)
+		{
+			if ((isIdNull(guards[i])) || !exists(guards[i]) || isDead(guards[i]))
+				continue;
+				
+			messageTo(guards[i], "attackThief", null, 0, false);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// MESSAGE HANDLERS
+//------------------------------------------------
+
+messageHandler setupChest()
+{
+	obj_id fake_chest = self;
+	if(!isValidId(fake_chest) || !exists(fake_chest))
+		return SCRIPT_CONTINUE;
+
+	obj_id player = getObjIdObjVar(fake_chest, "owner");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	location treasureLoc = getLocation(fake_chest);
+	obj_id treasureChest = createObject(REAL_CHEST, treasureLoc );
+		
+	if (isValidId(treasureChest) && exists(treasureChest))
+	{
+		attachScript(treasureChest, SCRIPT_REAL_CHEST);
+		if (hasObjVar(fake_chest, "treasureMapWaypoint"))
+		{
+			setObjVar(treasureChest, "treasureMapWaypoint", getObjIdObjVar(fake_chest, "treasureMapWaypoint"));
+		}
+		obj_id owner = getObjIdObjVar(fake_chest, "owner");
+		//legacy owner setting
+		if (hasObjVar(fake_chest, "owner"))
+		{
+			setObjVar(treasureChest, "owner", owner);
+			setOwner(treasureChest, owner);
+		}
+		
+		int treasureLevel = getIntObjVar(fake_chest, "treasureLevel");	
+		int groupModifier = getIntObjVar(fake_chest, "groupModifier");
+		CustomerServiceLog("treasureMap", "groupModifier for player " + player + " is: " + groupModifier + " [ setupChest() ]");		
+		
+		string loot_table = getStringObjVar(fake_chest, "loot_table");
+
+		// Set a destroy callback to around 16 minutes.
+		messageTo(treasureChest, "cleanUpChest", null, 1000, false);				
+		
+		boolean lootIssued = fillTreasureChestWithLoot(player, treasureChest, groupModifier, loot_table, treasureLevel);		
+		if(lootIssued)
+		{
+			messageTo(fake_chest, "cleanUpFakeChest", null, 0, false);
+		}
+		
+	}
+	else
+	{
+		//Make sure to clean up the chest anyway
+		CustomerServiceLog("treasureMap", "a treasure chest failed spawn and fill with loot for player " + player + ". [ setupChest() ]");		
+		messageTo(fake_chest, "cleanUpFakeChest", null, 0, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanUpFakeChest()
+{
+	obj_id fake_chest = self;
+	if(!isValidId(fake_chest) || !exists(fake_chest))
+		return SCRIPT_CONTINUE;
+		
+	obj_id player = getObjIdObjVar(fake_chest, "owner");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;	
+
+	if (hasObjVar(fake_chest, "treasureMapWaypoint"))
+	{
+		obj_id mapWaypoint = getObjIdObjVar(fake_chest, "treasureMapWaypoint");
+		if ( isIdValid(mapWaypoint) )
+		{
+			destroyWaypointInDatapad(mapWaypoint, player);
+			removeObjVar(fake_chest, "treasureMapWaypoint");
+		}
+	}	
+	playClientEffectLoc(self, "clienteffect/lair_damage_light.cef", getLocation(self), 1f);
+
+	destroyObject(fake_chest);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnTreasureGuards()
+{
+	//LOG("treasureMap", "Spawning treasure guards.");
+	obj_id fake_chest = self;
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Get difficulty based defaults.
+	resizeable obj_id[] guards = null;
+	obj_id player = params.getObjId( "player" );
+	location treasureLoc = params.getLocation( "location" );
+	string type = params.getString( "type" );
+	int count = params.getInt( "count" );
+	int mobLevel = params.getInt( "mobLevel" );	
+	string loot_table = params.getString( "loot_table" );
+	string boss_mob = params.getString("boss_mob");
+	int groupModifier = params.getInt("groupModifier");
+	setObjVar(fake_chest, "groupModifier", groupModifier);
+
+	if (type.equals(""))
+		return SCRIPT_CONTINUE;
+
+	//if there is a boss, incr. an the spawned mob count +1
+	if(!boss_mob.equals("none"))
+	{
+		count++;
+		CustomerServiceLog("treasureMap", "Player: " + player + " " + getName(player)
+			+ " has eight group members and will receive a boss mob"
+			+ ". [ spawnTreasureGuards() ]");
+	}
+	for (int i = 0; i < count; i++)
+	{
+		//Spread the enemies out so they do not bunch up
+		//Make sure they are not in rocks or trees
+		location guardLocation = groundquests.getRandom2DLocationAroundLocation(fake_chest, 1, 1, 5, 12);
+		//this is where the guard is spawned
+		
+		obj_id antagonist = null;
+		if(i == 0 && !boss_mob.equals("none"))
+		{
+			antagonist = create.object(boss_mob, guardLocation, mobLevel);
+		}
+		else
+		{
+			antagonist = create.object(type, guardLocation, mobLevel);
+		}
+		
+		if (!isIdNull(antagonist))
+		{
+			setYaw( antagonist, rand(0, 359) );
+			//make sure the enemies wander so they don't get stuck in rocks/trees
+			ai_lib.setDefaultCalmBehavior(antagonist, ai_lib.BEHAVIOR_WANDER);
+			ai_lib.setLoiterRanges(antagonist, 0, 7);
+			setObjVar( antagonist, "player", player );
+			attachScript( antagonist, SCRIPT_TREASUREGUARD );
+			setObjVar(antagonist, "fake_chest", fake_chest);
+			
+			if ( i == 0 )
+			{
+				faceTo(antagonist, player);
+				messageTo( antagonist, "barkAttack", params, 2, false );
+				// Move chest to this location.
+			}
+
+			guards = utils.addElement( guards, antagonist );
+		}
+	}
+
+	if(guards != null && guards.length > 0) 
+	{
+		setObjVar(fake_chest, "guards", guards);
+		//another loop for logging -- I didn't want to have logging in the main mob spawn loop
+		for (int i = 0; i < guards.length; i++)
+		{
+			CustomerServiceLog("treasureMap", "Player: " + player + " " + getName(player)
+				+ " has spawned boss mob level: " + guards[i]
+				+ " at: " + getLocation(guards[i])
+				+ ". [ spawnTreasureGuards() ]");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler recalculateGuardArray()
+{
+	obj_id fake_chest = self;
+	obj_id player = getObjIdObjVar(fake_chest, "owner");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;
+
+	Vector latestGuardList = new Vector();
+	obj_id[] guards = getObjIdArrayObjVar(fake_chest, "guards");
+	if (guards == null || guards.length == 0)
+	{
+		sendSystemMessage(player, SID_UNLOCK_CHEST, null);	
+		messageTo(fake_chest, "setupChest", null, 0, false);
+		return SCRIPT_CONTINUE;		
+	}
+
+	for (int i = 0; i < guards.length; i++)
+	{
+		if ((isIdNull(guards[i])) || !exists(guards[i]) || isDead(guards[i]))
+		{
+			continue;
+		}
+		utils.addElement(latestGuardList, guards[i]);
+	}
+	obj_id[] newGuardArray = new obj_id[latestGuardList.size()];
+	if (newGuardArray == null || newGuardArray.length == 0)
+	{
+		sendSystemMessage(player, SID_UNLOCK_CHEST, null);	
+		messageTo(fake_chest, "setupChest", null, 0, false);
+		return SCRIPT_CONTINUE;		
+	}
+
+	latestGuardList.toArray(newGuardArray);
+	setObjVar(fake_chest, "guards", newGuardArray);
+	return SCRIPT_CONTINUE;
+}
+
+//Function added to give players in groups a bonus rare loot item
+boolean fillTreasureChestWithLoot(obj_id player, obj_id treasureChest, int groupModifier, string loot_table, int treasureLevel)
+{
+	loot.makeLootInContainer(treasureChest, loot_table, TREASURE_LOOT_ITEMS, treasureLevel);
+
+	CustomerServiceLog("treasureMap", "Player: " + player + " " + getName(player)
+		+ " has spawned a treasure chest: " + treasureChest
+		+ " with loot of level: " + treasureLevel
+		+ " using loot table: " + loot_table
+		+ ". This function gives the chest 6 items. [ fillTreasureChestWithLoot() ]");
+
+	if(groupModifier < 4)
+		return true;
+
+	//if bonus loot items are extended to more than one level, this will need to be modified
+	if(!loot_table.equals(LOOT_TABLE_81_90))
+		return true;
+
+	//If there are 4 in the group, give the map owner an additional rare loot item 
+	if(groupModifier >= 4 && groupModifier < 8)
+	{
+		int bonus = rand(1,100);
+		boolean bonusReceived = fourParticipantBonusLootItem(treasureChest, treasureLevel, bonus);
+		
+		CustomerServiceLog("treasureMap", "Player: " + player + " " + getName(player)
+			+ " has received a bonus treasure item in: " + treasureChest
+			+ " because the player was in a group of 4 or more (but less than 8 total)"
+			+ ". This function gives the chest 1 item and the chest should now have 7 items total. [ fillTreasureChestWithLoot() ]");		
+	}
+	//If there are 8 in the group, give the map owner two additional rare loot items 
+	else if(groupModifier >= 8)
+	{
+		//Roll for each bonus item 
+		int firstBonus = rand(1,100);
+		int secondBonus = rand(1,100);
+		boolean firstBonusReceived = eightParticipantBonusLootItem(treasureChest, treasureLevel, firstBonus);
+		boolean secondBonusReceived = eightParticipantBonusLootItem(treasureChest, treasureLevel, secondBonus);
+		
+		CustomerServiceLog("treasureMap", "Player: " + player + " " + getName(player)
+			+ " has received a TWO bonus treasure items in: " + treasureChest
+			+ " because the player was in a group of 8"
+			+ ". This function gives the chest 2 items and the chest should now have 8 items total. [ fillTreasureChestWithLoot() ]");		
+	}
+	return true;
+}
+
+//An eightparticipant group will not get the EIGHT_GROUP_PERCENT_CHANCE_FOR_SUPER_RARE loot
+boolean eightParticipantBonusLootItem(obj_id treasureChest, int treasureLevel, int randomNumber)
+{
+	if(randomNumber <= EIGHT_GROUP_PERCENT_CHANCE_FOR_SUPER_RARE)
+	{
+		loot.makeLootInContainer(treasureChest, RARE_BONUS_LOOT_TABLE_81_90, NUMBER_OF_BONUS_LOOT_ITEMS, treasureLevel);
+		
+		CustomerServiceLog("treasureMap", "Treasure Chest: " + treasureChest
+			+ " has received a VERY RARE treasure item because they rolled a: " + randomNumber
+			+ ". The player should have this rare item added to their chest. [ eightParticipantBonusLootItem() ]");		
+	
+		return true;
+	}
+	else if(randomNumber > EIGHT_GROUP_PERCENT_CHANCE_FOR_SUPER_RARE && randomNumber <= EIGHT_GROUP_PERCENT_CHANCE_FOR_RARE)
+	{
+		loot.makeLootInContainer(treasureChest, BONUS_LOOT_TABLE_81_90, NUMBER_OF_BONUS_LOOT_ITEMS, treasureLevel);
+
+		CustomerServiceLog("treasureMap", "Treasure Chest: " + treasureChest
+			+ " has received a SOMEWHAT RARE treasure item because they rolled a: " + randomNumber
+			+ ". The player should have this rare item added to their chest. [ eightParticipantBonusLootItem() ]");		
+
+		return true;
+	}
+		
+	loot.makeLootInContainer(treasureChest, LOOT_TABLE_81_90, NUMBER_OF_BONUS_LOOT_ITEMS, treasureLevel);
+
+	CustomerServiceLog("treasureMap", "Treasure Chest: " + treasureChest
+		+ " has received a regular roll: " + randomNumber
+		+ ". They still have a slight chance of receiving a somewhat rare item."
+		+ " The player should have this rare item added to their chest. [ eightParticipantBonusLootItem() ]");		
+
+	return true;
+}
+
+//A four through seven participant group will not get the RARE_BONUS_LOOT_TABLE_81_90 loot
+//instead they get the regular rare loot
+boolean fourParticipantBonusLootItem(obj_id treasureChest, int treasureLevel, int randomNumber)
+{
+	if(randomNumber <= FOUR_GROUP_PERCENT_CHANCE_FOR_RARE)
+	{
+		loot.makeLootInContainer(treasureChest, BONUS_LOOT_TABLE_81_90, NUMBER_OF_BONUS_LOOT_ITEMS, treasureLevel);
+
+		CustomerServiceLog("treasureMap", "Treasure Chest: " + treasureChest
+			+ " has received a SOMEWHAT RARE treasure item because they rolled a: " + randomNumber
+			+ ". The player should have this rare item added to their chest. [ fourParticipantBonusLootItem() ]");		
+
+		return true;
+	}
+		
+	loot.makeLootInContainer(treasureChest, LOOT_TABLE_81_90, NUMBER_OF_BONUS_LOOT_ITEMS, treasureLevel);
+	
+	CustomerServiceLog("treasureMap", "Treasure Chest: " + treasureChest
+		+ " has received a regular roll: " + randomNumber
+		+ ". They still have a slight chance of receiving a somewhat rare item."
+		+ " The player should have this rare item added to their chest. [ fourParticipantBonusLootItem() ]");		
+
+	return true;
+}

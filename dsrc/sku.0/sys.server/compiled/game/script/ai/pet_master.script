@@ -1,0 +1,465 @@
+include library.beast_lib;
+include library.buff;
+include library.callable;
+include library.utils;
+include library.pet_lib;
+include library.colors;
+include library.ai_lib;
+include library.chat;
+include library.combat;
+include library.scout;
+include library.create;
+include library.vehicle;
+include library.sui;
+include library.factions;
+
+const string CREATURE_TABLE = "datatables/mob/creatures.iff";
+
+const string STF_FILE = "pet/droid_modules";
+
+const string_id SID_SYS_EMBOLDEN		= new string_id("pet/pet_menu","sys_embolden");
+const string_id SID_SYS_FAIL_EMBOLDEN	= new string_id("pet/pet_menu","sys_fail_embolden");
+const string_id SID_SYS_ENRAGE			= new string_id("pet/pet_menu","sys_enrage");
+const string_id SID_SYS_FAIL_ENRAGE		= new string_id("pet/pet_menu","sys_fail_enrage");
+const string_id SID_SYS_CANT_BUFF 		= new string_id("pet/pet_menu","sys_cant_buff");
+
+trigger OnRemovedFromGroup(obj_id group)
+{
+	if(!callable.hasAnyCallable(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] memberList = getGroupMemberIds(group);
+	
+	if(memberList == null || memberList.length < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	for (int i = 0; i < memberList.length; i++)
+	{
+		if(isIdValid(memberList[i]) && pet_lib.isMyPet(memberList[i], self))
+		{
+			queueCommand(memberList[i], ##"leaveGroup", group, "", COMMAND_PRIORITY_DEFAULT);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDefenderCombatAction(obj_id attacker, obj_id weapon, int combatResult)
+{
+	obj_id pet = callable.getCallable(self, callable.CALLABLE_TYPE_COMBAT_PET);
+
+	if(isIdValid(pet) && exists(pet) && !ai_lib.isInCombat(pet) && !beast_lib.isBeast(pet) && utils.hasScriptVar(pet, "ai.pet.guarding"))
+	{
+		addHate(pet, attacker, 0.0f);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler failPetBuff()
+{
+	// The player can't buff.  Probably because of his position.
+	sendSystemMessage(self, SID_SYS_CANT_BUFF);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSkillGranted(string skillName)
+{
+	if(hasObjVar(self, "familiar"))
+	{
+		obj_id pet = getObjIdObjVar(self, "familiar");
+		
+		if(exists(pet) && isInWorld(pet))
+		{
+			dictionary trickData = new dictionary();
+			trickData.put("pet", pet);
+			trickData.put("trickNum", 2);
+			trickData.put("heartBeat", false);
+			messageTo(pet, "doFamiliarTrick", trickData, 1, false);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnRemovingFromWorld()
+{
+	if(!callable.hasAnyCallable(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	callable.storeCallables(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	if(!callable.hasAnyCallable(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(pet_lib.isPet(killer))
+	{
+		killer = getMaster(killer);
+	}
+
+	callable.killCallables(self, killer);
+	
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler cmdDetonateDroid()
+{
+	LOG("droid_module", "ai.pet_master.cmdDetonateDroid");
+
+	if(!isIdValid(target))
+	{
+		target = getLookAtTarget(self);
+		
+		if(!isIdValid(target))
+		{
+			sendSystemMessage(self, new string_id(STF_FILE, "invalid_droid_bomb"));
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if(!pet_lib.isDroidPet(target))
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "invalid_droid_bomb"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if(getMaster(target) != self)
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "must_be_owner_droid_bomb"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if(ai_lib.isAiDead(target))
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "droid_disabled_detonate"));
+		return SCRIPT_CONTINUE;
+	}
+
+	int bomb_level = getIntObjVar(target, "module_data.bomb_level");
+	
+	if(bomb_level < 1)
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "no_bomb_module"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasSkill(self, "class_smuggler_phase1_novice") && !hasSkill(self, "class_bountyhunter_phase1_novice"))
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "insufficient_skill_detonate"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if(utils.hasScriptVar(target, "droid_module.countdown"))
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "countdown_already_started"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if(utils.hasScriptVar(self, "droid.bomb_droid_active") &&
+		utils.getIntScriptVar(self, "droid.bomb_droid_active") > getGameTime())
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "countdown_already_started"));
+		return SCRIPT_CONTINUE;
+	}
+
+	if(utils.hasScriptVar(target, "module_data.detonation_warmup"))
+	{
+		sendSystemMessage(self, new string_id(STF_FILE, "detonation_warmup"));
+		return SCRIPT_CONTINUE;
+	}
+
+	// Start the countdown
+	utils.setScriptVar(target, "droid_module.countdown", 1);
+	dictionary d = new dictionary();
+	d.put("master", self);
+	d.put("count", 3);
+	messageTo(target, "msgDetonationCountdown", d, 1.0f, false);
+
+	sendSystemMessage(self, new string_id(STF_FILE, "countdown_started"));
+
+	// Flag player with active detonation droid
+	utils.setScriptVar(self, "droid.bomb_droid_active", (getGameTime() + 10));
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler clearBombDroidTimer()
+{
+	if(utils.hasScriptVar(self, "droid.bomb_droid_active"))
+	{
+		utils.removeScriptVar(self, "droid.bomb_droid_active");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+boolean hasPrereq(obj_id pet, int ability)
+{
+	if(!isIdValid(pet) || !exists(pet))
+	{
+		return false;
+	}
+
+	obj_id pcd = callable.getCallableCD(pet);
+
+	int[] abilityList = getIntArrayObjVar(pcd, "ai.petAbility.abilityList");
+	
+	if(abilityList == null || abilityList.length == 0)
+	{
+		return false;
+	}
+
+	return (hasPrereq(abilityList, ability));
+}
+
+boolean hasPrereq(int[] abilityList, int ability)
+{
+	int row = dataTableSearchColumnForInt(ability, "abilityCrc", pet_lib.PET_ABILITY_TABLE);
+	
+	if(row == -1)
+	{
+		return false;
+	}
+
+	dictionary abilityData = dataTableGetRow(pet_lib.PET_ABILITY_TABLE, row);
+	string prereq = abilityData.getString("prereq");
+
+	if(prereq == null || prereq.equals(""))
+	{
+		return true;
+	}
+
+	int prereqCrc = getStringCrc(prereq.toLowerCase());
+	
+	if(utils.getElementPositionInArray(abilityList, prereqCrc) != -1)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+int[] buildPrereqList(int ability)
+{
+	resizeable int[] prereqList = new int[0];
+
+	// Create list of pre & post-reqs for a given ability
+	int row = dataTableSearchColumnForInt(ability, "abilityCrc", pet_lib.PET_ABILITY_TABLE);
+	
+	if(row == -1)
+	{
+		return null;
+	}
+
+	dictionary abilityData = dataTableGetRow(pet_lib.PET_ABILITY_TABLE, row);
+	string prereq = abilityData.getString("prereq");
+
+	if(prereq == null || prereq.equals(""))
+	{
+		return null;
+	}
+
+	int prereqCrc = getStringCrc(prereq.toLowerCase());
+
+	while(prereqCrc != 0)
+	{
+		// Validate prereq
+		row = dataTableSearchColumnForInt(prereqCrc, "abilityCrc", pet_lib.PET_ABILITY_TABLE);
+		
+		if(row == -1)
+		{
+			break;
+		}
+
+		// Add prereq to list
+		prereqList = utils.addElement(prereqList, prereqCrc);
+
+		// Find next prereq
+		abilityData = dataTableGetRow(pet_lib.PET_ABILITY_TABLE, row);
+		prereq = abilityData.getString("prereq");
+
+		if(prereq == null || prereq.equals(""))
+		{
+			break;
+		}
+
+		prereqCrc = getStringCrc(prereq.toLowerCase());
+	}
+
+	return prereqList;
+}
+
+commandHandler droid_follow()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_FOLLOW))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_follow_other()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_FOLLOW_OTHER))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_stay()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_STAY))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_guard()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_GUARD))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_friend()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_FRIEND))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_attack()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_ATTACK))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_patrol()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_PATROL))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_patrol_point()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_SET_PATROL_POINT))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_patrol_clear()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_CLEAR_PATROL_POINTS))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_store()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_RELEASE))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_transfer()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_TRANSFER))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_group()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_GROUP))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_trick_1()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_TRICK_1))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_trick_2()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_TRICK_2))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_trick_3()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_TRICK_3))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler droid_trick_4()
+{
+	if(!pet_lib.doCommandNum(self, pet_lib.COMMAND_TRICK_4))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}

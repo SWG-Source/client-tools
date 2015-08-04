@@ -1,0 +1,1323 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        pazaak
+ * Description:  Script that handles the logic for the pazaak table
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.money;
+include library.gambling;
+include library.prose;
+include library.utils;
+include library.sui;
+include library.player_structure;
+
+inherits gambling.base.table;
+
+/***** CONSTANTS *******************************************************/
+const int[] PLAY_DECK				= {1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10};
+const int[] DEFAULT_SIDE_DECK			= {1,1,2,2,3,3,4,4,5,5};
+
+const string SCRIPT_VAR_HAND				= "gambling.game.players.hand";
+const string SCRIPT_VAR_BOARD				= "gambling.game.players.board";
+const string SCRIPT_VAR_DECK				= "gambling.game.deck";
+const string SCRIPT_VAR_TURN				= "gambling.game.turn.player";
+const string SCRIPT_VAR_TURN_PID			= "gambling.game.turn.pid";
+const string SCRIPT_VAR_ACTIVE_PLAYERS			= "gambling.game.players.active";
+const string SCRIPT_VAR_POT_TOTAL			= "gambling.game.pot_total";
+
+const string VAR_HOUSE_RAKE					= "gambling.rake";
+
+const string_id SID_MAX_BET			= new string_id("gambling/pazaak", "max_bet");
+const string_id SID_MIN_BET			= new string_id("gambling/pazaak", "min_bet");
+const string_id SID_BET_REFUND_OVERBET		= new string_id("gambling/pazaak", "bet_refund_overbet");
+const string_id SID_NOT_ENOUGH_PLAYERS		= new string_id("gambling/pazaak", "not_enough_players");
+const string_id SID_PAZAAK_BEGIN		= new string_id("gambling/pazaak", "pazaak_begin");
+const string_id SID_PAZAAK_ERROR		= new string_id("gambling/pazaak", "pazaak_error");
+const string_id SID_NEXT_TURN_SELF		= new string_id("gambling/pazaak", "next_turn_self");
+const string_id SID_NEXT_TURN_OTHER		= new string_id("gambling/pazaak", "next_turn_other");
+const string_id SID_DRAW_CARD_SELF		= new string_id("gambling/pazaak", "draw_card_self");
+const string_id SID_DRAW_CARD_OTHER		= new string_id("gambling/pazaak", "draw_card_other");
+const string_id SID_PLAY_CARD_SELF		= new string_id("gambling/pazaak", "play_card_self");
+const string_id SID_PLAY_CARD_OTHER		= new string_id("gambling/pazaak", "play_card_other");
+const string_id SID_PLAYER_BUSTED_SELF		= new string_id("gambling/pazaak", "player_busted_self");
+const string_id SID_PLAYER_BUSTED_OTHER		= new string_id("gambling/pazaak", "player_busted_other");
+const string_id SID_PLAYER_STAND_SELF		= new string_id("gambling/pazaak", "player_stand_self");
+const string_id SID_PLAYER_STAND_OTHER		= new string_id("gambling/pazaak", "player_stand_other");
+const string_id SID_GAME_OVER			= new string_id("gambling/pazaak", "game_over");
+const string_id SID_PLAYER_WIN_SELF		= new string_id("gambling/pazaak", "player_win_self");
+const string_id SID_PLAYER_WIN_OTHER		= new string_id("gambling/pazaak", "player_win_other");
+const string_id SID_PLAYER_INACTIVE_SELF	= new string_id("gambling/pazaak", "player_inactive_self");
+const string_id SID_PLAYER_INACTIVE_OTHER	= new string_id("gambling/pazaak", "player_inactive_other");
+
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	reseed(getGameTime());
+	
+	// Take any money that's in the table and put it in the house.
+	obj_id structure = player_structure.getStructure(self);
+	int table_balance = getBankBalance(self);
+	if (isIdValid(structure))
+		transferBankCreditsTo(self, structure, table_balance, "noHandler", "noHandler", new dictionary());
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler handleBetPlaced()
+{
+	LOG("LOG_CHANNEL", "pazaak::handleBetPlaced");
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	int ret = params.getInt(money.DICT_CODE);
+	int amt = params.getInt(money.DICT_TOTAL);
+	if ( ret == money.RET_FAIL || amt < 1 )
+	{
+		dictionary d = new dictionary();
+		d.put("player", player);
+		messageTo(self, "handleBetFailed", d, 0, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	boolean bet_success = true;
+	string arg = params.getString("arg");
+	string scriptvar_pid = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if (utils.hasScriptVar(self, scriptvar_pid))
+	{
+		int oldpid = utils.getIntScriptVar(self, scriptvar_pid);
+		sui.closeSUI(player, oldpid);
+
+		utils.removeScriptVar(self, scriptvar_pid);
+	}
+	
+	// Check for minimum bid.
+	int minBet = getIntObjVar(self, gambling.VAR_TABLE_BET_MIN);
+	if (minBet > 0 && amt < minBet)
+	{
+		sendSystemMessageTestingOnly(player, " The minimum bet for this station is " + minBet + " credits.");
+		bet_success = false;
+	}
+	
+	int playerIdx = gambling.getGamePlayerIndex(self, player);
+	if (playerIdx < 0)
+		bet_success = false;
+
+	string ovpath = gambling.VAR_GAME_PLAYERS + "." + playerIdx + ".bet";
+	
+	if (hasObjVar(self, ovpath))
+	{
+		amt += getIntObjVar(self, ovpath);
+		int maxBet = getIntObjVar(self, gambling.VAR_TABLE_BET_MAX);
+		if (maxBet > 0 && amt > maxBet)
+		{
+			int refund = amt - maxBet;
+			prose_package pp = prose.getPackage(SID_MAX_BET, maxBet);
+			sendSystemMessageProse(player, pp);
+			pp = prose.getPackage(SID_BET_REFUND_OVERBET, refund);
+			sendSystemMessageProse(player, pp);
+			//sendSystemMessageTestingOnly(player, "The maximum bet for this station is " + maxBet + " credits.");
+			//sendSystemMessageTestingOnly(player, "Bet Refund (over-bet): " + refund + " credits");
+			transferBankCreditsTo(self, player, refund, "noHandler", "noHandler", new dictionary());
+			amt = maxBet;
+		}
+	}
+	
+	if (bet_success)
+	{
+		setObjVar(self, ovpath, amt);
+		addToPazaakPot(self, amt);
+
+		// Need to update ui for every player so that everyone can see the bet.
+		obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+		if (players != null && players.length > 0)
+		{
+			for (int i = 0; i < players.length; i++)
+			{
+				LOG("LOG_CHANNEL", "players ->" + players[i]);
+				updateBetSUI(self, players[i]);
+			}
+		}
+	}
+	else
+	{
+		transferBankCreditsTo(self, player, amt, "noHandler", "noHandler", new dictionary());
+		updateBetSUI(self, player);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetVerifiedFailed()
+{
+	LOG("LOG_CHANNEL", "saarlac_wheel::handleBetVerifiedFailed");
+	
+	obj_id player = params.getObjId("player");
+	if (isIdValid(player) && player.isLoaded())
+	{
+		LOG("LOG_CHANNEL", player + " -> You have insufficent funds.");
+		//sendSystemMessage(player, SID_INSUFFICIENT_FUNDS);
+	}
+	
+	// refund the bet
+	int amt = params.getInt("amt");
+	if (amt > 0)
+		transferBankCreditsTo(self, player, amt, "noHandler", "noHandler", new dictionary());
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePlayerRemoved()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	string ovpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if ( utils.hasScriptVar(self, ovpath) )
+	{
+		int pid = utils.getIntScriptVar(self, ovpath);
+		sui.closeSUI(player, pid);
+		utils.removeScriptVar(self, ovpath);
+	}
+	
+	if ( !hasObjVar(self, gambling.VAR_TABLE_PLAYERS) )
+	{
+		stopTableGame(self);
+	}
+	else
+	{
+		prose_package pp = prose.getPackage(gambling.PROSE_PLAYER_LEAVE_OTHER, player);
+		sendTableMessage(self, pp);
+		
+		if (utils.hasScriptVar(self, SCRIPT_VAR_GAME_ACTIVE))
+		{
+			// If the player was in an active game, invalidate him.
+			removeActivePlayer(self, player);
+			addToPazaakBoard(self, player, -999);  // Any board of -99 or less is invalid.
+			
+			// Remove bets from the table.
+			int player_idx = gambling.getGamePlayerIndex(self, player);
+			string bet_path = gambling.VAR_GAME_PLAYERS + "." + player_idx + ".bet";
+						
+			if (hasObjVar(self, bet_path))
+				removeObjVar(self, bet_path);
+
+			// Message the table.
+			sendSystemMessage(player, SID_PLAYER_INACTIVE_SELF);
+			pp = prose.getPackage(SID_PLAYER_INACTIVE_OTHER, player, player);
+			sendTableMessage(self, pp, player);
+			
+			obj_id players[] = getPazaakPlayers(self);
+			LOG("LOG_CHANNEL", "removePlayer -- players ->" + players.length);
+			if (players != null && players.length == 1)
+			{
+				// If we are down to one player left, clean up left over turn ui and end the game.
+				obj_id next_turn = utils.getObjIdScriptVar(self, SCRIPT_VAR_TURN);
+				if (isIdValid(next_turn))
+				{
+					int pid = utils.getIntScriptVar(self, SCRIPT_VAR_TURN_PID);
+					if (pid > -1)
+						sui.closeSUI(next_turn, pid);
+				}
+				endPazaakGame(self);
+				
+			}
+			else
+			{
+				obj_id next_turn = utils.getObjIdScriptVar(self, SCRIPT_VAR_TURN);
+				if (isIdValid(next_turn))
+				{
+					// The the player that left is currently taking his turn, start the next turn.
+					if (next_turn == player)
+					{
+						int pid = utils.getIntScriptVar(self, SCRIPT_VAR_TURN_PID);
+						if (pid > -1)
+							sui.closeSUI(next_turn, pid);
+						startNextPazaakTurn(self);
+					}
+				}
+			}
+		}
+		else
+		{
+			// If not in an active game, give him his money back.
+			int bet = getPazaakPlayerBet(self, player);
+			if (bet > -1)
+			{
+				transferBankCreditsTo(self, player, bet, "noHandler", "noHandler", new dictionary());
+				addToPazaakPot(self, -bet);
+			}
+				
+			// Remove the bet from the table.
+			int player_idx = gambling.getGamePlayerIndex(self, player);
+			string bet_path = gambling.VAR_GAME_PLAYERS + "." + player_idx + ".bet";
+						
+			if (hasObjVar(self, bet_path))
+				removeObjVar(self, bet_path);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgPlayPazaakCard()
+{
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+	{
+		// Next turn.
+		startNextPazaakTurn(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Make sure the player is at the table and on-line.
+	if (!validatePlayer(self, player))
+	{
+		startNextPazaakTurn(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{	
+		// Give the player the chance to stand.
+		displayStandUI(self, player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected > -1)
+	{
+		int[] hand = getPazaakHand(self, player);
+		if (hand != null && hand.length > 0)
+		{
+			int card_selected = hand[row_selected];
+			playPazaakCardFromHand(self, player, card_selected);
+			
+			// Message the players
+			string card_selected_str = displayPazaakCard(card_selected);
+			int board_total = getPazaakBoardTotal(self, player);
+			prose_package pp = prose.getPackage(SID_PLAY_CARD_SELF, player, null, card_selected_str, board_total);
+			sendSystemMessageProse(player, pp);
+			pp = prose.getPackage(SID_PLAY_CARD_OTHER, player, null, card_selected_str, board_total);
+			sendTableMessage(self, pp, player);
+			
+			// Check to see if the player busted.
+			if (!verifyPazaakBoard(self, player))
+			{
+				startNextPazaakTurn(self);
+				return SCRIPT_CONTINUE;
+			}
+			
+			// Update UI.
+			updatePazaakBetSUI(self);
+		}
+	}
+
+	// Give the player the chance to stand.
+	displayStandUI(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgStandPazaakHand()
+{
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+	{
+		// Next turn
+		startNextPazaakTurn(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+	if (!isIdValid(player))
+	{
+		// Next turn
+		startNextPazaakTurn(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Make sure the player is at the table and on-line.
+	if (!validatePlayer(self, player))
+	{
+		startNextPazaakTurn(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (verifyPazaakBoard(self, player))
+	{
+		int board_total = getPazaakBoardTotal(self, player);
+		prose_package pp = prose.getPackage(SID_PLAYER_STAND_SELF, new string_id("", ""), board_total);
+		sendSystemMessageProse(player, pp);
+		pp = prose.getPackage(SID_PLAYER_STAND_OTHER, player, player, new string_id("", ""), board_total);
+		sendTableMessage(self, pp, player);
+		removeActivePlayer(self, player);
+		updatePazaakBetSUI(self);
+	}
+	
+	// Next turn
+	startNextPazaakTurn(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgStartPazaakGame()
+{
+	removeObjVar(self, gambling.VAR_GAME_BASE);
+	utils.removeScriptVarTree(self, "gambling.game");
+	
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	if (players != null)
+	{
+		for (int i = 0; i < players.length; i++)
+			updateBetSUI(self, players[i]);
+	}
+	
+	if (players.length < getIntObjVar(self, gambling.VAR_TABLE_PLAYER_LIMIT_MIN))
+	{
+		// If we fall below the minimum amount for the game, stop betting.
+		utils.removeScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+		sendTableMessage(self, SID_NOT_ENOUGH_PLAYERS);
+	}
+	else
+		startTableBetting(self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+void startTableGame(obj_id self)
+{
+	LOG("LOG_CHANNEL", "hasObjVar ->" + hasObjVar(self, gambling.VAR_GAME_BASE));
+	// Clear any old scriptvars
+	// utils.removeScriptVarTree(self, "gambling.game");
+	// Close betting.
+	utils.removeScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+	// Set the game as active.
+	utils.setScriptVar(self, SCRIPT_VAR_GAME_ACTIVE, 1);
+	
+	// Check to make sure that there's enough players that have put up their cash.
+	obj_id[] players = getPazaakPlayers(self);
+	if (players != null)
+	{
+		LOG("LOG_CHANNEL", "players ->" + players.length);
+		if (players.length < 2)
+		{
+			sendTableMessage(self, SID_NOT_ENOUGH_PLAYERS);
+			// Give back cash that has already been wagered	
+			if (players != null)
+			{
+				for (int i = 0; i < players.length; i++)
+				{
+					int bet_amt = getPazaakPlayerBet(self, players[i]);
+					LOG("LOG_CHANNEL", "startTableGame: " + players[i] + " amt ->" + bet_amt);
+					removePazaakPlayerBet(self, players[i]);
+					if (bet_amt > 0)
+						transferBankCreditsTo(self, players[i], bet_amt, "noHandler", "noHandler", new dictionary());
+				}
+			}
+		}
+
+		// Draw hands for each of the players who have placed their bets.
+		for (int i = 0; i < players.length; i++)
+			int[] hand = drawPazaakHand(self, players[i]);
+	}
+	
+	// Start the game.
+	sendTableMessage(self, SID_PAZAAK_BEGIN);
+	// Mark all players as active.
+	LOG("LOG_CHANNEL", "players ->" + players);
+	LOG("LOG_CHANNEL", "hasObjVar ->" + hasObjVar(self, gambling.VAR_GAME_BASE));
+	
+	utils.setScriptVar(self, SCRIPT_VAR_ACTIVE_PLAYERS, players);
+	obj_id player = getNextPlayerTurn(self);
+	if (player == null)
+	{
+		sendTableMessage(self, SID_PAZAAK_ERROR);
+		stopTableGame(self);
+	}
+	
+	// Now update the UI for everyone.
+	for (int i = 0; i < players.length; i++)
+		updateBetSUI(self, players[i]);
+		
+	// Start the first turn
+	startPazaakTurn(self, player);
+	
+	return;
+}
+
+void showBetUi(obj_id self, obj_id player)
+{
+	if ( !isIdValid(self) || !isIdValid(player) )
+		return;
+	
+	string gameType = getStringObjVar(self, gambling.VAR_TABLE_TYPE);
+	if ( gameType == null || gameType.equals("") )
+		return;
+	
+	string title = "@gambling/game_n:" + gameType;
+	string prompt = "The following is a summary of current table bets...\n\n";
+	prompt += "Use /bet <amount> to wager.\n\n";
+	prompt += "Bet Per Hand : " + getIntObjVar(self, gambling.VAR_TABLE_BET_MIN) + "\n";
+	prompt += "Cash : " + getCashBalance(player) + "\n";
+	prompt += "Bank : " + getBankBalance(player) + "\n";
+	prompt += "Total: " + getTotalMoney(player) + "\n";
+	prompt += "\nNOTE: if you leave the table after placing a bet, all of your outstanding bets will be forfeit.";
+	
+	resizeable string[] entries = new string[0];
+	int total = 0;
+	
+	if (utils.hasScriptVar(self, SCRIPT_VAR_TURN))
+	{
+		obj_id turn_player = utils.getObjIdScriptVar(self, SCRIPT_VAR_TURN);
+		if (isIdValid(turn_player))
+		{
+			if (turn_player == player)
+				entries = utils.addElement(entries, "It is your turn.");
+			else
+				entries = utils.addElement(entries, "It is " + getFirstName(turn_player) + "'s turn.");
+		}
+	}
+	
+	obj_id[] bet_players = getObjIdArrayObjVar(self, gambling.VAR_GAME_PLAYERS_IDS);
+	if (bet_players != null && bet_players.length > 0)
+	{
+		// Display the hand and board info if the game is active.
+		if (utils.hasScriptVar(self, SCRIPT_VAR_GAME_ACTIVE))
+		{
+			for (int i = 0; i < bet_players.length; i++)
+			{
+				boolean active = isActivePlayer(self, bet_players[i]);
+				// Display hands
+				int[] hand = getPazaakHand(self, bet_players[i]);
+				if (hand != null)
+				{
+					if (bet_players[i] == player)
+					{
+						if (active)
+							entries = utils.addElement(entries, "Your Hand: " +  displayPazaakCards(hand));
+						else
+							entries = utils.addElement(entries, "Your Hand: Standing");
+					}
+					else
+					{
+						if (active)
+						{
+							int hand_size = getPazaakHand(self, bet_players[i]).length;
+							entries = utils.addElement(entries, getFirstName(bet_players[i]) + "'s Hand: " + hand_size + " cards");			
+						}
+						else
+							entries = utils.addElement(entries, getFirstName(bet_players[i]) + "'s Hand: Standing");	
+					}
+				}
+				
+				// Display Boards
+				int[] board = getPazaakBoard(self, bet_players[i]);
+				int board_total = getPazaakBoardTotal(self, bet_players[i]);
+				if (board != null)
+				{
+					if (bet_players[i] == player)
+					{
+						// board totals of -99 are bugged or have been invalidated for inactivity. Board totals over 20 have busted.
+						if (board_total <= -99 || (board_total > 20 && !active))
+							entries = utils.addElement(entries, "Your Board: Out");
+						else
+							entries = utils.addElement(entries, "Your Board: " +  displayPazaakCards(board) + " (Total: " + board_total + ")");
+					}
+					else
+					{
+						if (board_total <= -99 || (board_total > 20 && !active))
+							entries = utils.addElement(entries, getFirstName(bet_players[i]) + "'s Board: Out");
+						else
+							entries = utils.addElement(entries, getFirstName(bet_players[i]) + "'s Board: " + displayPazaakCards(board) + " (Total: " + board_total + ")");
+					}
+					
+					//entries = utils.addElement(entries, "");
+				}
+			}
+		}
+
+		for (int i = 0; i < bet_players.length; i++)
+		{
+			string betVar = gambling.VAR_GAME_PLAYERS + "." + i + ".bet";
+			if (bet_players[i].isLoaded())
+			{
+				string entry;
+				if (hasObjVar(self, betVar))
+				{
+					int amt = getIntObjVar(self, betVar);
+					if (bet_players[i] == player)
+						entry = "Your bet : " + amt;
+					else
+						entry = getFirstName(bet_players[i]) + "'s bet : " + amt;
+					entries = utils.addElement(entries, entry);
+					total += amt;
+				}
+				else
+				{
+					if (bet_players[i] == player)
+						entry = "You : 0";
+					else
+						entry = getFirstName(bet_players[i]) + " : 0";
+					entries = utils.addElement(entries, entry);
+				}
+			}
+
+			entries = utils.alphabetizeStringArray(entries);	
+			entries = utils.addElement(entries, " ");
+		}
+	}
+	
+	int table_pot = utils.getIntScriptVar(self, SCRIPT_VAR_POT_TOTAL);
+	entries = utils.addElement(entries, "Total Bet : " + table_pot);
+	
+	int pid = sui.listbox(self, player, prompt, sui.REFRESH_LEAVE_GAME, title, entries, "handleBetUi");
+	if ( pid == -1 )
+	{
+		sendSystemMessageTestingOnly(player, "The table was unable to create an interface for you.");
+		return;
+	}
+
+	utils.setScriptVar(self, gambling.VAR_GAME_PLAYERS + "." + player + ".pid", pid);
+}
+
+boolean startPazaakTurn(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+	if (!isIdValid(player))
+		return false;
+	
+	// First thing the player does is draw a card from the deck and add it to his board.
+	int drawn_card = drawPazaakCardFromDeck(table, player);
+	string drawn_card_str = displayPazaakCard(drawn_card);
+	addToPazaakBoard(table, player, drawn_card);
+	int board_total = getPazaakBoardTotal(table, player);
+	
+	// Message the player.
+	prose_package pp = prose.getPackage(SID_DRAW_CARD_SELF, player, null, drawn_card_str, board_total);
+	sendSystemMessageProse(player, pp);
+	
+	// Message the target.
+	pp = prose.getPackage(SID_DRAW_CARD_OTHER, player, null, drawn_card_str, board_total);
+	sendTableMessage(table, pp, player);
+	
+	// Update the table's UI
+	obj_id[] players = getPazaakPlayers(table);
+	if (players == null)
+		return false;
+	
+	for (int i = 0; i < players.length; i++)
+		updateBetSUI(table, players[i]);
+	
+	// The player can now play a card from this hand. Display the UI if he's got a hand.
+	int[] hand = getPazaakHand(table, player);
+	if (hand != null && hand.length > 0)
+	{
+		displayPlayCardUI(table, player);
+		return true;
+	}
+	else
+	{
+		// If the player has more than 20 at this point, he busts.
+		if (verifyPazaakBoard(table, player))
+		{
+			// Player may stand on his hand.
+			displayStandUI(table, player);
+		}
+	}
+	
+	return true;
+}
+
+boolean startNextPazaakTurn(obj_id table)
+{
+	LOG("LOG_CHANNEL", "startNextPazaakTurn");
+	if (!isIdValid(table))
+		return false;
+		
+	obj_id player = getNextPlayerTurn(table);
+	LOG("LOG_CHANNEL", "startNextPazaakTurn -- player ->" + player);
+	if (player == null)
+	{
+		// Noone left to take a turn. Game is over.
+		endPazaakGame(table);
+		return false;
+	}
+	else
+		return startPazaakTurn(table, player);
+}
+
+boolean endPazaakGame(obj_id table)
+{
+	LOG("LOG_CHANNEL", "endPazaakGame -- table ->" + table);
+	if (!isIdValid(table))
+		return false;
+	
+	// Get all of the current players.  The one with the highest score wins.
+	obj_id[] players = getPazaakPlayers(table);
+	LOG("LOG_CHANNEL", "endPazaakGame -- players ->" + players);
+	if (players != null && players.length > 0)
+	{
+		int[] board_totals = new int[players.length];
+		int winning_total = -99;
+		for (int i = 0; i < board_totals.length; i++)
+		{
+			int total = getPazaakBoardTotal(table, players[i]);
+			if (total > winning_total && total < 21)
+				winning_total = total;
+			board_totals[i] = total;
+		}
+		Vector winners = new Vector();
+		
+		if (winning_total > -99)
+		{
+			// Winnings are split with all players with the winning total.
+			for (int i = 0; i < players.length; i++)
+			{
+				LOG("LOG_CHANNEL", "endGame -- player ->" + players[i] + " board ->" + board_totals[i] + " win ->" + winning_total);
+				if (board_totals[i] == winning_total)
+					winners.add(players[i]);
+			}
+			
+			prose_package pp = prose.getPackage(SID_GAME_OVER, winning_total);
+			sendTableMessage(table, pp);
+		}
+		else
+		{
+			// If there is no winning total, that means that we've only got one player left so the game ended
+			// by default.  Give the win to the remaining player.
+			winners.add(players[0]);
+		}
+		if (winners.size() > 0)
+		{
+			obj_id[] winners_array = new obj_id[winners.size()];
+			winners.toArray(winners_array);
+
+			int table_balance = getBankBalance(table);
+			int rake = 0;
+			if (hasObjVar(table, VAR_HOUSE_RAKE))
+				rake = getIntObjVar(table, VAR_HOUSE_RAKE);
+
+			int pay_out = (int)(table_balance * (100 - rake) / 100) / winners_array.length;
+			for (int i = 0; i < winners_array.length; i++)
+			{
+				prose_package pp = prose.getPackage(SID_PLAYER_WIN_SELF, pay_out);
+				sendSystemMessageProse(winners_array[i], pp);
+				pp = prose.getPackage(SID_PLAYER_WIN_OTHER, winners_array[i], winners_array[i], pay_out);
+				sendTableMessage(table, pp, winners_array[i]);
+				transferBankCreditsTo(table, winners_array[i], pay_out, "noHandler", "noHandler", new dictionary());
+				table_balance -= pay_out;
+			}
+
+			// Transfer the rest of the cash to the house.
+			obj_id structure = player_structure.getStructure(table);
+			if (isIdValid(structure))
+				transferBankCreditsTo(table, structure, table_balance, "noHandler", "noHandler", new dictionary());
+		}
+	}
+	
+	// Restart for the next game
+	//removeObjVar(table, gambling.VAR_GAME_BASE);
+	//utils.removeScriptVarTree(table, "gambling.game");
+	messageTo(table, "msgStartPazaakGame", null, 10, false);
+	
+	return true;
+}
+
+int getPazaakPlayerBet(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return -1;
+	if (!isIdValid(player))
+		return -1;
+	
+	int idx = gambling.getGamePlayerIndex(table, player);
+	string betVar = gambling.VAR_GAME_PLAYERS + "." + idx + ".bet";
+	LOG("LOG_CHANNEL", "getPazaakPlayerBet: betVar ->" + betVar + " amt ->" + getIntObjVar(table, betVar));
+	if (hasObjVar(table, betVar))
+		return getIntObjVar(table, betVar);
+	else
+		return -1;
+}
+
+boolean removePazaakPlayerBet(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+	if (!isIdValid(player))
+		return false;
+	
+	int idx = gambling.getGamePlayerIndex(table, player);
+	string betVar = gambling.VAR_GAME_PLAYERS + "." + idx + ".bet";
+	if (hasObjVar(table, betVar))
+	{
+		removeObjVar(table, betVar);
+		return true;
+	}
+	else
+		return false;
+}
+
+
+obj_id[] getPazaakPlayers(obj_id table)
+{
+	if (!isIdValid(table))
+		return null;
+	
+	obj_id[] players = getObjIdArrayObjVar(table, gambling.VAR_GAME_PLAYERS_IDS);
+	resizeable obj_id[] valid_players = new obj_id[0];
+	if (players != null)
+	{
+		for (int i = 0; i < players.length; i++)
+		{
+			if (getPazaakPlayerBet(table, players[i]) > 0)
+				valid_players.add(players[i]);
+		}
+	}
+	
+	return valid_players;
+}
+
+boolean verifyPazaakBoard(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+	if (!isIdValid(player))
+		return false;
+	
+	int board_total = getPazaakBoardTotal(table, player);
+	if (board_total > 20)
+	{
+		prose_package pp = prose.getPackage(SID_PLAYER_BUSTED_SELF, new string_id("", ""), board_total);
+		sendSystemMessageProse(player, pp);
+		pp = prose.getPackage(SID_PLAYER_BUSTED_OTHER, player, player, new string_id("", ""), board_total);
+		sendTableMessage(table, pp, player);
+		removeActivePlayer(table, player);
+		return false;
+	}
+	else
+		return true;
+}
+
+boolean isActivePlayer(obj_id table, obj_id player)
+{	
+	if (!isIdValid(table))
+		return false;
+	if (!isIdValid(player))
+		return false;
+	
+	obj_id[] active_players = utils.getObjIdArrayScriptVar(table, SCRIPT_VAR_ACTIVE_PLAYERS);
+	int idx = utils.getElementPositionInArray(active_players, player);
+	if (idx == -1)
+		return false;
+	else
+		return true;
+}
+
+boolean removeActivePlayer(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return true;
+	if (!isIdValid(player))
+		return true;
+	
+	resizeable obj_id[] active_players = utils.getResizeableObjIdArrayScriptVar(table, SCRIPT_VAR_ACTIVE_PLAYERS);
+	//LOG("LOG_CHANNEL", "removeActivePlayer -- active_players(before) ->" + active_players.size());
+	if (active_players != null)
+	{
+		int idx = utils.getElementPositionInArray(active_players, player);
+		//LOG("LOG_CHANNEL", "removeActivePlayer -- idx ->" + active_players.size());
+		if (idx == -1)
+			return false;
+		else
+		{
+			active_players.removeElementAt(idx);
+			//LOG("LOG_CHANNEL", "removeActivePlayer -- active_players ->" + active_players.size());
+			obj_id[] array = new obj_id[active_players.size()];
+			active_players.toArray(array);
+			utils.setScriptVar(table, SCRIPT_VAR_ACTIVE_PLAYERS, array);
+				
+			return true;
+		}
+	}
+	else
+		return false;
+}
+
+boolean validatePlayer(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+	if (!isIdValid(player))
+		return false;
+	
+	if (!gambling.isTablePlayer(table, player) || !player.isLoaded())
+	{
+		// Remove this player from the active player lists and invalidate his board.
+		removeActivePlayer(table, player);
+		addToPazaakBoard(table, player, -999);  // Any board of -99 or less is invalid.
+		
+		// Message the table.
+		sendSystemMessage(player, SID_PLAYER_INACTIVE_SELF);
+		prose_package pp = prose.getPackage(SID_PLAYER_INACTIVE_OTHER, player, player);
+		sendTableMessage(table, pp, player);
+		return false;
+	}
+	
+	return true;
+}
+
+int[] getPazaakBets(obj_id table)
+{
+	if (!isIdValid(table))
+		return null;
+	
+	obj_id[] players = getObjIdArrayObjVar(table, gambling.VAR_GAME_PLAYERS_IDS);
+	if (players != null && players.length > 0)
+	{
+		resizeable int[] bets = new int[0];
+		for (int i = 0; i < players.length; i++)
+		{
+			string betVar = gambling.VAR_GAME_PLAYERS + "." + i + ".bet";
+			if (players[i].isLoaded())
+			{
+				if (hasObjVar(table, betVar))
+				{
+					int amt = getIntObjVar(table, betVar);
+					if (amt > 0)
+						bets = utils.addElement(bets, amt);
+				}
+			}
+		}
+		return bets;
+	}
+	else
+		return null;
+}
+
+int[] drawPazaakHand(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return null;
+	
+	if (!isIdValid(player))
+		return null;
+	
+	// Add in search for a player's custom deck.
+	
+	
+	resizeable int[] default_deck = new int[0];
+	for (int i = 0; i < DEFAULT_SIDE_DECK.length; i++)
+		default_deck = utils.addElement(default_deck, DEFAULT_SIDE_DECK[i]);
+	
+	int[] hand = new int[4];
+	for (int i = 0; i < 4; i++)
+	{
+		if (default_deck.length < 1)
+			break;
+			
+		int rand_idx = rand(0, default_deck.length - 1);
+		int card = default_deck[rand_idx];
+		hand[i] = card;
+		default_deck.removeElementAt(rand_idx);
+	}
+	
+	// Write out the hand
+	int player_idx = gambling.getGamePlayerIndex(table, player);
+	if (player_idx > -1)
+	{
+		string objvar_name = SCRIPT_VAR_HAND + "." + player_idx;
+		utils.setScriptVar(table, objvar_name, hand);
+	}
+	
+	return hand;
+}
+
+int drawPazaakCardFromDeck(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return -1;
+		
+	if (!isIdValid(player))
+		return -1;
+	
+	resizeable int[] deck = new int[0];
+	if (utils.hasScriptVar(table, SCRIPT_VAR_DECK))
+		deck = utils.getResizeableIntArrayScriptVar(table, SCRIPT_VAR_DECK);
+	else
+	{
+		for (int i = 0; i < PLAY_DECK.length; i++)
+			deck = utils.addElement(deck, PLAY_DECK[i]);
+	}
+	
+	if (deck == null || deck.length < 1)
+		return -1;
+	
+	int rand_idx = rand(0, deck.length - 1);
+	int card = deck[rand_idx];
+	deck.removeElementAt(rand_idx);
+	utils.setScriptVar(table, SCRIPT_VAR_DECK, deck);
+	
+	return card;
+}
+
+int[] getPazaakHand(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return null;
+		
+	if (!isIdValid(player))
+		return null;
+	
+	int player_idx = gambling.getGamePlayerIndex(table, player);
+	string objvar_name = SCRIPT_VAR_HAND + "." + player_idx;
+	if (utils.hasScriptVar(table, objvar_name))
+	{
+		return utils.getIntArrayScriptVar(table, objvar_name);
+	}
+	else
+		return null;
+}
+
+int[] getPazaakBoard(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return null;
+
+	if (!isIdValid(player))
+		return null;
+
+	int player_idx = gambling.getGamePlayerIndex(table, player);
+	string objvar_name = SCRIPT_VAR_BOARD + "." + player_idx;
+	if (utils.hasScriptVar(table, objvar_name))
+	{
+		return utils.getIntArrayScriptVar(table, objvar_name);
+	}
+	else
+		return null;
+}
+
+int getPazaakBoardTotal(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return -999;
+	
+	if (!isIdValid(player))
+		return -999;
+	
+	int[] board = getPazaakBoard(table, player);
+	if (board != null)
+	{
+		int total = 0;
+		for (int i = 0; i < board.length; i++)
+			total += board[i];
+		
+		return total;
+	}
+	else
+		return -999;
+}
+
+int addToPazaakPot(obj_id table, int amt)
+{
+	if (!isIdValid(table))
+		return -1;
+	
+	int table_pot = 0;
+	if (utils.hasScriptVar(table, SCRIPT_VAR_POT_TOTAL))
+		table_pot = utils.getIntScriptVar(table, SCRIPT_VAR_POT_TOTAL);
+	
+	table_pot += amt;
+	utils.setScriptVar(table, SCRIPT_VAR_POT_TOTAL, table_pot);
+	
+	return table_pot;
+}
+
+string displayPazaakCards(int[] cards)
+{
+	if (cards == null || cards.length < 1)
+		return null;
+	
+	string cards_str = new string();
+	for (int i = 0; i < cards.length; i++)
+	{
+		if (cards[i] >= 0)
+		{
+			if (cards[i] / 100 > 0)
+			{
+				// Cards multiplied by 100 are +/- cards.
+				cards_str += "+/- " + cards[i] / 100;
+			}
+			else
+				cards_str += "+" + cards[i];
+		}
+		else
+			cards_str += Integer.toString(cards[i]);
+		
+		if (i < cards.length - 1)
+			cards_str += ", ";
+		else if (i != cards.length -1)
+			cards_str += " ";
+	}
+	
+	return cards_str;
+}
+
+string displayPazaakCard(int card)
+{
+	int[] cards = new int[1];
+	cards[0] = card;
+	
+	return displayPazaakCards(cards);
+}
+
+string[] displayPazaakCardsAsArray(int[] cards)
+{
+	if (cards == null || cards.length < 1)
+		return null;
+	
+	//resizeable string[] cards_str = new string[0];
+	Vector cards_str = new Vector();
+	for (int i = 0; i < cards.length; i++)
+	{
+		if (cards[i] >= 0)
+		{
+			if (cards[i] / 100 > 0)
+			{
+				// Cards multiplied by 100 are +/- cards.
+				utils.addElement(cards_str, "+/- " + cards[i] / 100);
+			}
+			else
+				utils.addElement(cards_str, "+" + cards[i]);
+		}
+		else
+			utils.addElement(cards_str, Integer.toString(cards[i]));
+	}
+	
+	string[] card_array = new string[cards_str.size()];
+	cards_str.toArray(card_array);
+	return card_array;
+}
+
+boolean playPazaakCardFromHand(obj_id table, obj_id player, int card)
+{
+	if (!isIdValid(table))
+		return false;
+			
+	if (!isIdValid(player))
+		return false;
+	
+	int player_idx = gambling.getGamePlayerIndex(table, player);
+	string objvar_name = SCRIPT_VAR_HAND + "." + player_idx;
+	
+	int[] hand = getPazaakHand(table, player);
+	if (hand == null || hand.length < 1)
+		return false;
+
+	int card_idx = utils.getElementPositionInArray(hand, card);
+	if (card_idx == -1)
+		return false;
+
+	resizeable int[] new_hand = utils.getResizeableIntArrayScriptVar(table, objvar_name);
+	new_hand.removeElementAt(card_idx);
+	utils.setScriptVar(table, objvar_name, new_hand);
+	
+	// Add it to the board
+	addToPazaakBoard(table, player, card);
+	
+	return true;
+}
+
+boolean addToPazaakBoard(obj_id table, obj_id player, int card)
+{
+	if (!isIdValid(table))
+		return false;
+		
+	if (!isIdValid(player))
+		return false;
+	
+	int player_idx = gambling.getGamePlayerIndex(table, player);
+	string objvar_name = SCRIPT_VAR_BOARD + "." + player_idx;
+	
+	resizeable int[] boards = new int[0];
+	if (utils.hasScriptVar(table, objvar_name))
+		boards = utils.getResizeableIntArrayScriptVar(table, objvar_name);
+	
+	boards = utils.addElement(boards, card);
+	utils.setScriptVar(table, objvar_name, boards);
+	
+	return true;
+}
+
+obj_id getNextPlayerTurn(obj_id table)
+{
+	LOG("LOG_CHANNEL", "pazaak::getNextPlayerTurn");
+	if (!isIdValid(table))
+		return null;
+	
+	obj_id[] active_players = utils.getObjIdArrayScriptVar(table, SCRIPT_VAR_ACTIVE_PLAYERS);
+	// If there are no active players left, the game is over.
+	if (active_players == null || active_players.length == 0)
+		return null;
+		
+	// If there's only one active player left, it's always his turn until he stands.
+	if (active_players.length == 1)
+	{
+		obj_id next_player = active_players[0];		
+		utils.setScriptVar(table, SCRIPT_VAR_TURN, active_players[0]);
+		sendSystemMessage(next_player, SID_NEXT_TURN_SELF);
+		prose_package pp = prose.getPackage(SID_NEXT_TURN_OTHER, next_player);
+		sendTableMessage(table, pp, next_player);			
+		return next_player;		
+	}
+	
+	obj_id[] players = getPazaakPlayers(table);
+	if (players != null && players.length > 0)
+	{
+		LOG("LOG_CHANNEL", "players ->" + players.length);
+		obj_id next_player = obj_id.NULL_ID;
+		if (utils.hasScriptVar(table, SCRIPT_VAR_TURN))
+		{
+			obj_id last_turn = utils.getObjIdScriptVar(table, SCRIPT_VAR_TURN);
+			//LOG("LOG_CHANNEL", "last_turn ->" + last_turn);
+			int idx = utils.getElementPositionInArray(players, last_turn);
+			if (idx != -1)
+			{
+				boolean end_list = false;
+				while (next_player == obj_id.NULL_ID)
+				{
+					idx += 1;
+					// If we've reached the end of the list, start over.
+					if (idx > players.length - 1)
+					{
+						if (end_list)
+						{
+							// We've already gone through this once. This shouldn't happen, so we'll stop it
+							// now to prevent a possible infinite loop.
+							break;
+						}
+						else
+						{
+							idx = 0;
+							end_list = true;
+						}
+					}
+				
+					// Check to make sure that the player hasn't decided to stand with his hand.
+					if (isActivePlayer(table, players[idx]))
+					{
+						utils.setScriptVar(table, SCRIPT_VAR_TURN, players[idx]);
+						next_player = players[idx];
+					}
+				}
+			}
+			else
+			{
+				sendTableMessage(table, SID_PAZAAK_ERROR);
+				stopTableGame(table);
+			}
+		}
+		else
+		{
+			// If there was no valid last turn player, pick one at random.
+			int idx = rand(0, players.length - 1);
+			utils.setScriptVar(table, SCRIPT_VAR_TURN, players[idx]);
+			next_player = players[idx];
+		}
+		
+		if (isIdValid(next_player))
+		{
+			sendSystemMessage(next_player, SID_NEXT_TURN_SELF);
+			prose_package pp = prose.getPackage(SID_NEXT_TURN_OTHER, next_player);
+			sendTableMessage(table, pp, next_player);
+			
+			return next_player;
+		}
+		else
+			return null;
+	}
+	else
+		return null;
+}
+
+boolean displayPlayCardUI(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+			
+	if (!isIdValid(player))
+		return false;
+	
+	int[] hand = getPazaakHand(table, player);
+	
+	string[] hand_str = new string[1];
+	if (hand != null && hand.length > 0)
+		hand_str = displayPazaakCardsAsArray(hand);
+	else
+		hand_str[0] = "@gambling/pazaak:no_hand_remaining";
+	
+	resizeable string[] entries = new string[0];
+	string title = "@gambling/game_n:pazaak";
+	string prompt = "Select a card to play.";
+		
+	int pid = sui.listbox(table, player, prompt, sui.OK_CANCEL, title, hand_str, "msgPlayPazaakCard");
+	utils.setScriptVar(table, SCRIPT_VAR_TURN_PID, pid);
+	
+	return true;
+}
+
+boolean displayStandUI(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+				
+	if (!isIdValid(player))
+		return false;
+	
+	string title = "@gambling/game_n:pazaak";
+	int board_total = getPazaakBoardTotal(table, player);
+	string prompt = "You have a board total of " + board_total + ". Do you wish to stand?";
+	int pid = sui.msgbox(table, player, prompt, sui.YES_NO, "msgStandPazaakHand");
+	utils.setScriptVar(table, SCRIPT_VAR_TURN_PID, pid);
+	
+	return true;
+}
+
+boolean updatePazaakBetSUI(obj_id table)
+{
+	if (!isIdValid(table))
+		return false;
+							
+	obj_id[] players = getObjIdArrayObjVar(table, gambling.VAR_TABLE_PLAYERS);
+	if (players != null && players.length > 0)
+	{
+		for (int i = 0; i < players.length; i++)
+		{
+			LOG("LOG_CHANNEL", "players ->" + players[i]);
+			updateBetSUI(table, players[i]);
+		}
+	}
+	
+	return true;
+}

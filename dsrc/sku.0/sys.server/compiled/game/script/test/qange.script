@@ -1,0 +1,217 @@
+//**********************************************************
+// Copyright (c) ©2005, 2006 Sony Online Entertainment Inc.
+// All Rights Reserved
+//
+// Title:		qange.script
+// Version:		Version 1.0
+// Description:  	NGE TOOL.  Script allows a tester to simulate being a legacy profession and logging in for
+//			the first time.  Script also allows the tester to attain a respec inventory item and switch
+//			the respec level on that tool to any combat level.
+//
+// Version Changes:	- Added new script tool options
+//
+// @author       	$Author: Jeff Haskell
+// @version      	$All Revisions:
+//***********************************************************
+// ======================================================================
+// Library Includes
+// ======================================================================
+
+include library.utils;
+include library.qa;
+include library.sui;
+include library.static_item;
+include java.util.Arrays;
+include java.util.HashSet;
+include java.util.Vector;
+
+/********* CONSTANTS *****************************************/
+const string SCRIPTVAR	 		= "qange";
+
+const string NGE_TOOL_TITLE 		= "QA NGE TOOL";
+const string RESPEC_TOOL_PROMPT 	= "This tool allows the tester to attain a Respec item in their inventory.\n\nPlease select a number (between 1 - 90) that will represent the level that the player character will respec to (Example: 61).";
+
+/***** TRIGGER *******************************************************/
+trigger OnAttach()
+{
+	if (isGod(self))
+	{	
+		if(getGodLevel(self) < 10)
+		{
+			detachScript(self, "test.qange");	
+			sendSystemMessage(self, "You do not have the appropriate access level to use this script.", null);
+		}
+	}
+	else if (!isGod(self))
+	{
+		detachScript(self, "test.qange");
+	}
+	return SCRIPT_CONTINUE;	
+}
+
+trigger OnSpeaking(string text)
+{
+	if(isGod(self))
+	{
+		if ( toLower(text).equals(SCRIPTVAR) )
+		{
+			//FUNCTION TO SHOW THE MAIN MENU OF THE TOOL
+			toolMainMenu ( self );
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+/******** Message Handlers *************************************/
+
+messageHandler handleGiveRespecItem()
+{
+	if (isGod(self))
+	{
+		//STATIC SCRIPT VARIBLE
+		if (utils.hasScriptVar( self, SCRIPTVAR+".pid"))
+		{
+			//sendSystemMessageTestingOnly(self, "handleGiveRespecItem");
+
+			qa.checkParams(params, SCRIPTVAR);
+			obj_id player = sui.getPlayerId(params);
+			int idx = sui.getListboxSelectedRow(params);
+			int btn = sui.getIntButtonPressed(params);
+			string stringEntry = sui.getInputBoxText( params );
+
+			int entry = utils.stringToInt(stringEntry);
+
+			//CHECK FOR CANCEL BUTTON
+			if (btn == sui.BP_CANCEL)
+			{
+				removePlayer(player, "");
+				return SCRIPT_CONTINUE;
+			}
+			else if(btn == sui.BP_REVERT)
+			{
+				toolMainMenu ( self );
+				return SCRIPT_CONTINUE;
+			}
+
+			if (entry > 0 && entry < 91)
+			{
+				spawnRespecItem(self, entry);
+			}
+			else
+			{
+				sendSystemMessageTestingOnly(player, "Invalid entry");
+				qa.createInputBox ( player, RESPEC_TOOL_PROMPT, NGE_TOOL_TITLE, "handleGiveRespecItem", SCRIPTVAR+".pid");
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDeletionQuestion() 
+{
+	if (isGod(self))
+	{
+
+		int bp = sui.getIntButtonPressed(params);
+
+		if (bp == sui.BP_CANCEL)
+		{
+			removePlayer(self, "");
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			if (!utils.hasScriptVar(self, SCRIPTVAR+".deleteInventory"))
+			{
+				qa.showConfirmationSui(self, "Delete Inventory?", "Do you want to delete everything in your inventory (that isn't equiped) to make room for roadmap items?", "handleDeletionResponse");
+			}
+
+			//if no script attached, the tester needs no additional popups
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDeletionResponse() 
+{
+	if (isGod(self))
+	{
+		int bp = sui.getIntButtonPressed(params);
+
+		if (bp == sui.BP_CANCEL)
+		{
+			removePlayer(self, "");
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			obj_id inventory = utils.getInventoryContainer(self);
+			obj_id respecDevice = utils.getStaticItemInBankOrInventory(self, "item_respec_token_01_01");
+			obj_id[] items = getContents(inventory);
+			for(int i = 0; i < items.length; i++)
+			{
+				if (items[i] != respecDevice)
+					destroyObject(items[i]);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+/*------------- ALL FUNCTIONS ----------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+
+//BUILDS THE MAIN TOOL MENU
+void toolMainMenu ( obj_id player )
+{
+	qa.createInputBox ( player, RESPEC_TOOL_PROMPT, NGE_TOOL_TITLE, "handleGiveRespecItem", SCRIPTVAR+".pid");
+}
+
+//THIS FUNCTION IS A GENERIC SCRIPT REMOVAL FUNCTION
+void removePlayer ( obj_id player, string err )
+{
+	sendSystemMessageTestingOnly(player, err);
+	qa.removeScriptVars(player, SCRIPTVAR);
+	utils.removeScriptVarTree(player, SCRIPTVAR);
+}
+
+void spawnRespecItem (obj_id self, int combatLevel)
+{
+	obj_id respecDevice = utils.getStaticItemInBankOrInventory(self, "item_respec_token_01_01");
+	if (hasScript(self, "systems.respec.click_combat_respec"))
+	{
+		detachScript(self, "systems.respec.click_combat_respec");
+	}
+
+	//If a token exists, delete it
+	if (isIdValid(respecDevice))
+	{
+		destroyObject(respecDevice);
+	}
+
+	//Reset all previous profession data
+	resetTester(self);
+
+	utils.setScriptVar(self, "clickRespec.combatLevel", combatLevel);
+
+	//create a token
+	obj_id newRespecDevice = static_item.createNewItemFunction("item_respec_token_01_01", self);
+	CustomerServiceLog("qaTool","User: (" + self + ") " + getName(self) + " has spawned a Respec Token with combat level of " + combatLevel + " by using the QA NGE Tool.");				
+	if (isIdValid(newRespecDevice))
+	{
+		setObjVar(newRespecDevice, "combatLevel", combatLevel);
+		setObjVar(newRespecDevice, "highestLevel", true );
+	}
+
+	string popupText = "You must use the Respec Token in your inventory to get a new profession and the level you specified.";
+	int pid = sui.msgbox(self, self, popupText, sui.OK_ONLY, "Respec Tool Instructions", "handleDeletionQuestion");
+}
+
+void resetTester (obj_id self)
+{
+	removeObjVar (self, "clickRespec");
+	qa.revokeAllSkills(self);
+}

@@ -1,0 +1,217 @@
+include library.buff;
+include library.create;
+include library.factions;
+include library.gcw;
+include library.groundquests;
+include library.resource;
+include library.restuss_event;
+include library.static_item;
+include library.trial;
+include library.utils;
+
+const string bossImperials = "gcw_city_atat";
+
+const string bossRebels = "gcw_city_hailfire_droid";
+
+trigger OnInitialize()
+{
+	messageTo(self, "handleGCWPatrol", null, 2, false);
+
+	return SCRIPT_CONTINUE;
+};
+
+int getConstructionQuestsCompleted(obj_id pylon)
+{
+	int completed = 0;
+	
+	if(!isIdValid(pylon) || !exists(pylon))
+	{
+		return 0;
+	}
+	
+	if(hasObjVar(pylon, "gcw.constructionQuestsCompleted"))
+	{
+		completed = getIntObjVar(pylon, "gcw.constructionQuestsCompleted");
+	}
+	
+	return completed;
+}
+
+messageHandler handleGCWPatrol()
+{
+	int faction = -1;
+	
+	if(utils.hasScriptVar(self, "faction"))
+	{
+		faction = utils.getIntScriptVar(self, "faction");
+	}
+
+	obj_id kit = utils.getObjIdScriptVar(self, "creator");
+
+	if(!isIdValid(kit) || !exists(kit))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	int patrolType = getIntObjVar(kit, "patrolType");
+	int construction = getConstructionQuestsCompleted(kit);
+
+	string npcName = "";
+	
+	if(construction >= gcw.GCW_CONSTRUCTION_MAXIMUM)
+	{
+		if(faction == factions.FACTION_FLAG_REBEL)
+		{
+			npcName = bossRebels;
+		}
+		else if(faction == factions.FACTION_FLAG_IMPERIAL)
+		{
+			npcName = bossImperials;
+		}
+	}
+	
+	if(getSchedulerNPCs(kit, "gcwPatrol") < 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id npc = null;
+
+	if(patrolType == 0 && getSchedulerNPCs(kit, "gcwPatrol") < 500) // Defensive
+	{
+		obj_id currentPatrol = utils.getObjIdScriptVar(kit, "currentPatrol");
+		
+		if(!isIdValid(currentPatrol) || !exists(currentPatrol) || isIncapacitated(currentPatrol) || isDead(currentPatrol))
+		{
+			npc = createSchedulerNPC(kit, npcName);
+			
+			utils.setScriptVar(kit, "currentPatrol", npc);
+		}
+	}
+	
+	if(patrolType == 1 && getSchedulerNPCs(kit, "gcwPatrol") < 500) // Offensive
+	{
+		npc = createSchedulerNPC(kit, npcName);
+	}
+
+	if(isIdValid(npc) && exists(npc))
+	{
+		detachScript(npc, "systems.vehicle_system.vehicle_base");
+		detachScript(npc, "systems.vehicle_system.vehicle_ping");
+	}
+
+	// LOG("doLogging", "handleGCWPatrol complete.  npc: " + npc + " npcName: " + npcName + " getSchedulerNPCs(kit, 'gcwPatrol'): " + getSchedulerNPCs(kit, "gcwPatrol"));
+	
+	messageTo(self, "handleGCWPatrol", null, 900.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+int getSchedulerNPCs(obj_id kit, string npcID)
+{
+	if(!isIdValid(kit) || !exists(kit))
+	{
+		return -1;
+	}
+	
+	obj_id kitParent = trial.getParent(kit);
+	
+	if(!isIdValid(kitParent) || !exists(kitParent))
+	{
+		return -1;
+	}
+	
+	obj_id[] npcs = trial.getObjectsInInstanceBySpawnId(trial.getParent(kit), npcID);
+	
+	if(npcs == null)
+	{
+		return 0;
+	}
+	
+	return npcs.length;
+}
+
+obj_id createSchedulerNPC(obj_id kit, string npcName)
+{
+	// LOG("doLogging", "createSchedulerNPC kit: " + kit + " npcName: " + npcName);
+
+	if(!isIdValid(kit) || !exists(kit))
+	{
+		return null;
+	}
+	
+	obj_id kitParent = trial.getParent(kit);
+
+	if(!isIdValid(kitParent) || !exists(kitParent))
+	{
+		return null;
+	}
+
+	// Create the npc
+	location loc = getLocation(kit);
+	
+	obj_id npc = create.object(npcName, loc);
+	
+	if(!isIdValid(npc) || !exists(npc))
+	{
+		return null;
+	}
+	
+	trial.markAsTempObject(npc, true);
+	trial.setParent(kitParent, npc, true);
+	trial.setInterest(npc);
+
+	setObjVar(npc, "spawn_id", "gcwPatrol");
+	
+	trial.storeSpawnedChild(kitParent, npc, "gcwPatrol");
+
+	string patrol = getStringObjVar(kit, "patrolPoint");
+
+	// LOG("doLogging", "createSchedulerNPC npc: " + npc + " npcName: " + npcName);
+	
+	if(patrol != null && patrol.length() > 0)
+	{
+		dictionary path_data = utils.hasScriptVar(kitParent, trial.SEQUENCER_PATH_DATA) ? utils.getDictionaryScriptVar(kitParent, trial.SEQUENCER_PATH_DATA) : null;
+
+		if (path_data != null && !path_data.isEmpty())
+			utils.setScriptVar(npc, trial.SEQUENCER_PATH_DATA, utils.getDictionaryScriptVar(kitParent, trial.SEQUENCER_PATH_DATA));
+
+		setObjVar(npc, "patrol_path", patrol);
+		setHibernationDelay(npc, 3600.0f);
+	}
+
+	attachScript(npc, "systems.dungeon_sequencer.ai_controller");
+
+	return npc;
+}
+
+messageHandler destroyGCWPatrol()
+{
+	trial.cleanupObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	handleDestroyPatrol(self, killer);
+
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDisabled(obj_id killer)
+{
+	handleDestroyPatrol(self, killer);
+	return SCRIPT_CONTINUE;
+}
+
+void handleDestroyPatrol(obj_id self, obj_id killer)
+{
+	location death = getLocation( self );
+	playClientEffectObj(killer, "clienteffect/combat_explosion_lair_large.cef", self, "");
+	playClientEffectLoc(killer, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+
+	setInvulnerable(self, true);
+	messageTo(self, "destroyGCWPatrol", null, 1f, false);
+
+ 	return;
+}

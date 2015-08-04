@@ -1,0 +1,322 @@
+include library.utils;
+include library.sui;
+include library.temp_schematic;
+include library.space_crafting;
+include library.create;
+include library.xp;
+
+const string_id LOOT_LIST					= new string_id("sui", "analyze_loot");
+
+const string TOOL						= "reverse_engineering_tool";
+
+const string TABLE							= "datatables/ship/components/shield.iff";
+
+const string LOOT						= "datatables/space_loot/reverse_engineering/reverse_loot.iff";
+const string LOOT_LOOKUP						= "datatables/space_loot/reverse_engineering/reverse_loot_lookup.iff";
+
+const string SCRIPTVAR_ANALYZE_SUI			= "analyzer.sui";
+const string SCRIPTVAR_ANALYZE_IDS			= "analyzer.ids";
+
+const string STF = "component_analyzer";
+
+const string ANALYZE_TITLE					= "@" + STF + ":analyze_title";
+const string ANALYZE_PROMPT					= "@" + STF + ":analyze_prompt";
+const string NO_ITEMS_PROMPT				= "@" + STF + ":no_items";
+
+const string BTN_ANALYZE					= "@" + STF + ":analyze";
+
+trigger OnAttach()
+{
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	// for CTS, allow all contained item(s) to be unpacked
+	if (utils.hasLocalVar(self, "ctsBeingUnpacked"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (space_crafting.getShipComponentStringType(item) != "shield")
+	{
+		string_id errormessage2 = new string_id(TOOL, "wrong_component_type");
+		sendSystemMessage(transferer, errormessage2);
+		return SCRIPT_OVERRIDE;
+	}
+	if (getBooleanObjVar(item, "cannotReverseEngineer") == true)
+	{
+		string_id errormessage = new string_id(TOOL, "already_engineered");
+		sendSystemMessage(transferer, errormessage);
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes( obj_id player, string[] names, string[] attribs )
+{
+
+	int idx = utils.getValidAttributeIndex(names);
+		if (idx == -1)
+		{
+			return SCRIPT_CONTINUE;
+		}
+	if (hasObjVar(self, "reverse_engineering.charges"))
+	{
+
+		int value = getIntObjVar(self, "reverse_engineering.charges");
+		names[idx] = "charges";
+		attribs[idx] = Integer.toString(value);
+		idx++;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if ( !utils.isNestedWithin(self, player) )
+		return SCRIPT_CONTINUE;
+
+	int lootList = mi.addRootMenu(menu_info_types.SERVER_MENU1, LOOT_LIST);
+	if ( lootList > -1 && (( getContainedBy(self) != getOwner(self) ) || isGod(player)) )
+	{
+		string template = utils.getTemplateFilenameNoPath(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( !utils.isNestedWithin(self, player) )
+			return SCRIPT_CONTINUE;
+
+	string template = utils.getTemplateFilenameNoPath(self);
+
+	if ( item == menu_info_types.SERVER_MENU1 )
+	{
+		int charges = getIntObjVar(self, "reverse_engineering.charges");
+		obj_id[] x = getContents(self);
+		int countX = 0;
+		string temp = "";
+		if (x[0] != null)
+		{
+			temp = getTemplateName(x[0]);
+
+		}
+		for (int i = 0; i < x.length; i++)
+		{
+			// is it a shield component?
+			if (space_crafting.getShipComponentStringType(x[i]) != "shield")
+			{
+				string_id errormessage2 = new string_id(TOOL, "wrong_component_type");
+				sendSystemMessage(player, errormessage2);
+				return SCRIPT_CONTINUE;
+			}
+
+			// is it the same item as the first?
+			if (getTemplateName(x[i]).equals(temp))
+				countX++;
+
+			// is it specially flagged non engineerable?
+			if (getBooleanObjVar(x[i], "cannotReverseEngineer") == true)
+			{
+				string_id errormessage = new string_id(TOOL, "already_engineered");
+				sendSystemMessage(player, errormessage);
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+
+		int level = space_crafting.getReverseEngineeringLevel(x[0]);
+
+		if (level == countX)
+		{
+			int revSkill = getSkillStatisticModifier(player, "reverse_engineering");
+			debugSpeakMsg(player, "Skill = " + revSkill);
+			if (revSkill < level)
+			{
+				string_id sysmessage = new string_id(TOOL, "not_skilled");
+				sendSystemMessage(player, sysmessage);
+				return SCRIPT_CONTINUE;
+			}
+			float pct = dataTableGetFloat(LOOT, temp, 1);
+			int intPct = (int)(pct*10);
+			int pctCheck = rand(0, 1000);
+			if (intPct >= pctCheck)
+			{
+				string category1 = dataTableGetString(LOOT, temp, 2);
+				createLegendaryLoot(player, self, category1);
+				return SCRIPT_CONTINUE;
+			}
+			int roll = rand(0, 100);
+			if (roll < revSkill)
+			{
+				createSpecialLoot(player, temp);
+				string_id sysmessage = new string_id(TOOL, "special");
+				sendSystemMessage(player, sysmessage);
+			}
+			else
+			{
+				createImprovedLoot(player, temp);
+				string_id sysmessage = new string_id(TOOL, "improved");
+				sendSystemMessage(player, sysmessage);
+			}
+			int xpGranted = 0;
+			if (level == 1)
+				{xpGranted = level * 20;}
+			else if (level == 2 || level == 3)
+				{xpGranted = level * 25;}
+			else if (level == 4 || level == 5)
+				{xpGranted = level * 30;}
+			else if (level == 6 || level == 7)
+				{xpGranted = level * 35;}
+			else if (level == 8 || level == 9)
+				{xpGranted = level * 40;}
+			else if (level == 10)
+				{xpGranted = level * 45;}
+			xp.grant(player, "reverse_engineering", xpGranted);
+			//debugSpeakMsg(player, "charges =" + charges);
+			charges--;
+			//debugSpeakMsg(player, "charges =" + charges);
+			setObjVar(self, "reverse_engineering.charges" ,charges);
+			if (charges > 0)
+			{
+				for (int i = 0; i < x.length; i++)
+				{
+					destroyObject(x[i]);
+				}
+			}
+			if (charges <= 0)
+			{
+				destroyObject(self);
+			}
+		}
+
+		if (level < countX)
+		{
+			string_id errortoomany = new string_id(TOOL, "too_many");
+			sendSystemMessage(player, errortoomany);
+			return SCRIPT_CONTINUE;
+		}
+
+		if (level > countX)
+		{
+			string_id errortoofew = new string_id(TOOL, "too_few");
+			sendSystemMessage(player, errortoofew);
+			return SCRIPT_CONTINUE;
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+obj_id createLegendaryLoot(obj_id player, obj_id tool, string category)
+{
+
+
+	string[] items = dataTableGetStringColumn(LOOT_LOOKUP, category);
+	int pick = rand(0, (items.length-1));
+	string rare = dataTableGetString(LOOT_LOOKUP, pick, category);
+	string msg = dataTableGetString(LOOT_LOOKUP, pick, (category+"_strings"));
+	obj_id newLoot = createSpecialLoot(player, rare);
+	string_id sysmessage = new string_id(TOOL, msg);
+	sendSystemMessage(player, sysmessage);
+	destroyObject(tool);
+	return newLoot ;
+}
+
+obj_id createImprovedLoot(obj_id player, string template)
+{
+	obj_id playerInv = utils.getInventoryContainer(player);
+	obj_id newWeapon = create.object(template, playerInv, false, false);
+
+	//get and set basic
+
+	float energyMaintenance = dataTableGetFloat(TABLE, template, "fltEnergyMaintenance");
+	float energyMaintenanceModifier = dataTableGetFloat(TABLE, template, "fltEnergyMaintenanceModifier");
+	energyMaintenance = energyMaintenance - energyMaintenanceModifier;
+	float mass = dataTableGetFloat(TABLE, template, "fltMass");
+	float massModifier = dataTableGetFloat(TABLE, template, "fltMassModifier");
+	mass = mass - massModifier;
+	space_crafting.setComponentMass(newWeapon, mass);
+	space_crafting.setComponentEnergyMaintenance(newWeapon, energyMaintenance);
+
+	float armorHp = dataTableGetFloat(TABLE, template, "fltMaximumArmorHitpoints");
+	float armorHpMod = dataTableGetFloat(TABLE, template, "fltMaximumArmorHitpointsModifier");
+	armorHp = armorHp + armorHpMod;
+	space_crafting.setComponentCurrentArmorHitpoints(newWeapon, armorHp);
+	space_crafting.setComponentMaximumArmorHitpoints(newWeapon, armorHp);
+
+	//get and set specific
+
+	float fltShieldHitpointsMaximumFrontModifier = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumFrontModifier");
+	float fltShieldHitpointsMaximumFront = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumFront");
+	fltShieldHitpointsMaximumFront = fltShieldHitpointsMaximumFront + fltShieldHitpointsMaximumFrontModifier;
+
+	float fltShieldHitpointsMaximumBackModifier = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumBackModifier");
+	float fltShieldHitpointsMaximumBack = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumBack");
+	fltShieldHitpointsMaximumBack = fltShieldHitpointsMaximumBack + fltShieldHitpointsMaximumBackModifier;
+
+	space_crafting.setShieldGeneratorMaximumFrontHitpoints(newWeapon, fltShieldHitpointsMaximumFront);
+	space_crafting.setShieldGeneratorMaximumBackHitpoints(newWeapon, fltShieldHitpointsMaximumBack);
+
+	setObjVar(newWeapon, "cannotReverseEngineer", true);
+
+	return newWeapon;
+
+}
+
+
+
+obj_id createSpecialLoot(obj_id player, string template)
+{
+	obj_id playerInv = utils.getInventoryContainer(player);
+	obj_id newWeapon = create.object(template, playerInv, false, false);
+
+	//get and set basic
+
+	float energyMaintenance = dataTableGetFloat(TABLE, template, "fltEnergyMaintenance");
+	float energyMaintenanceModifier = dataTableGetFloat(TABLE, template, "fltEnergyMaintenanceModifier");
+	energyMaintenance = energyMaintenance - energyMaintenanceModifier;
+	energyMaintenance = energyMaintenance - ((.05f)*energyMaintenance);
+	float mass = dataTableGetFloat(TABLE, template, "fltMass");
+	float massModifier = dataTableGetFloat(TABLE, template, "fltMassModifier");
+	mass = mass - massModifier;
+	mass = mass - ((.05f)*mass);
+	space_crafting.setComponentMass(newWeapon, mass);
+	space_crafting.setComponentEnergyMaintenance(newWeapon, energyMaintenance);
+
+	float armorHp = dataTableGetFloat(TABLE, template, "fltMaximumArmorHitpoints");
+	float armorHpMod = dataTableGetFloat(TABLE, template, "fltMaximumArmorHitpointsModifier");
+	armorHp = armorHp + armorHpMod;
+	space_crafting.setComponentCurrentArmorHitpoints(newWeapon, armorHp);
+	space_crafting.setComponentMaximumArmorHitpoints(newWeapon, armorHp);
+
+	//get and set specific
+
+	float fltShieldHitpointsMaximumFrontModifier = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumFrontModifier");
+	float fltShieldHitpointsMaximumFront = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumFront");
+	fltShieldHitpointsMaximumFront = fltShieldHitpointsMaximumFront + fltShieldHitpointsMaximumFrontModifier;
+	fltShieldHitpointsMaximumFront = fltShieldHitpointsMaximumFront + ((.05f)*fltShieldHitpointsMaximumFront);
+
+	float fltShieldHitpointsMaximumBackModifier = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumBackModifier");
+	float fltShieldHitpointsMaximumBack = dataTableGetFloat(TABLE, template, "fltShieldHitpointsMaximumBack");
+	fltShieldHitpointsMaximumBack = fltShieldHitpointsMaximumBack + fltShieldHitpointsMaximumBackModifier;
+	fltShieldHitpointsMaximumBack = fltShieldHitpointsMaximumBack + ((.05f)*fltShieldHitpointsMaximumBack);
+
+	space_crafting.setShieldGeneratorMaximumFrontHitpoints(newWeapon, fltShieldHitpointsMaximumFront);
+	space_crafting.setShieldGeneratorMaximumBackHitpoints(newWeapon, fltShieldHitpointsMaximumBack);
+
+	setObjVar(newWeapon, "cannotReverseEngineer", true);
+
+	return newWeapon;
+
+}

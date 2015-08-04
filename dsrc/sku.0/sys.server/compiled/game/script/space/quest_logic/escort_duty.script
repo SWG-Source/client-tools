@@ -1,0 +1,1142 @@
+//------------------------------------------------
+// escort.script
+// Brandon Reinhart
+//
+// Protect <ship_type> as it paths through <n> points.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_create;
+include library.space_quest;
+include library.space_transition;
+include library.space_utils;
+include library.utils;
+include library.ship_ai;
+include library.prose;
+include library.money;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_ABANDONED_MISSION		= new string_id( "space/quest", "destroy_abandoned" );
+const string_id SID_ABANDONED_DUTY			= new string_id( "space/quest", "mission_abandoned" );
+const string_id SID_TARGETS_REMAINING		= new string_id( "space/quest", "destroy_duty_targets_remaining" );
+const string_id SID_ESCORT_REWARD			= new string_id( "space/quest", "escort_reward" );
+/*
+const string_id SID_BADGE_REWARD			= new string_id( "space/quest", "escort_badge_reward" );
+const string_id SID_SPECIAL_REWARD			= new string_id( "space/quest", "destroy_special_reward" );
+*/
+
+const string SOUND_SPAWN_ESCORT				= "clienteffect/ui_quest_spawn_escort.cef";
+const string SOUND_SPAWN_WAVE				= "clienteffect/ui_quest_spawn_wave.cef";
+const string SOUND_DESTROYED_WAVE		= "clienteffect/ui_quest_destroyed_wave.cef";
+
+/*
+
+x You get a waypoint to the escort target rendezvous point.
+x When you arrive, the escort ship warps in.
+x It gives you a reason it wants to go where its going.
+x Enemies attack while you are en route.
+x When you arrive, the ship leaves, you are scored, and you get a new rendezvous.
+x If it is destroyed, you lose.
+x Spawn more difficult groups of enemies as time goes on?
+x Give a reward based on distance traveled and enemies defeated.
+? The escorted ship should be chatty.
+x The escorted ship should move at a reasonable rate.
+
+x After 'attackPeriod' spawn an attack of X ships from list Y(rand).
+  x Escort target should panic.
+  x Ships should attack the escort target.
+  x Escort target should notify the player when his shields are out.
+  x Escort target should notify the player when his hull is at half.
+  x Escort target should return to his path when the attacking ships are defeated. (This should be handled by the AI system.)
+  x Escort target should not freak out if the player attacks it...
+  x Attacking ships should taunt the player and the escort target.
+x After 'Z*attackPeriod' spawn an attack of X+1 ships from list Y(rand).
+
+x Make sure all arrive locations registered by this script are removed in all exit conditions.
+
+x Need to prevent the escort target from being griefable. (Takes no damage from players.)
+
+*/
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Are these valid now?
+//	removeObjVar( self, "ship" );
+//	removeObjVar( self, "targets" );
+//	removeObjVar( self, "deadships" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the types of ships for escort.
+	string[] rawEscortShipTypes = dataTableGetStringColumn( qTable, "escortShipTypes" );
+	if ( rawEscortShipTypes == null )
+	{
+		rawEscortShipTypes = new string[1];
+		rawEscortShipTypes[0] = questInfo.getString( "escortShipType" );
+		if ( rawEscortShipTypes == null )
+		{
+			sendSystemMessageTestingOnly( player, "Debug: escortShipTypes are missing from "+qTable );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	space_quest.cleanArray( self, "escortShipTypes", rawEscortShipTypes );
+
+	// Get our escort point list.
+	string[] rawEscortPoints = dataTableGetStringColumn( qTable, "escortPoints" );
+	if ( rawEscortPoints == null )
+	{
+		rawEscortPoints = dataTableGetStringColumn( qTable, "escortPath" );
+
+		if ( rawEscortPoints == null )
+		{
+			sendSystemMessageTestingOnly( player, "Debug: escortPoints are missing from "+qTable );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	space_quest.cleanArray( self, "escortPoints", rawEscortPoints );
+
+	// Get our responses.
+	setObjVar( self, "numResponses", questInfo.getInt( "numResponses" ) );
+
+	// Get attack info.
+	int numAttackShipLists = questInfo.getInt( "numAttackShipLists" );
+	setObjVar( self, "numAttackShipLists", numAttackShipLists );
+	for ( int i=0; i<numAttackShipLists; i++ )
+	{
+		string[] attackShips = dataTableGetStringColumn( qTable, "attackShips"+(i+1) );
+		space_quest.cleanArray( self, "attackShips"+(i+1), attackShips );
+	}
+	setObjVar( self, "attackPeriod", questInfo.getInt( "attackPeriod" ) );
+	setObjVar( self, "attackCount", 0 );
+	setObjVar( self, "attackListType", questInfo.getInt( "attackListType" ) );
+
+	// Get rewards.
+	setObjVar( self, "reward", questInfo.getInt( "reward" ) );
+	setObjVar( self, "killReward", questInfo.getInt( "killReward" ) );
+
+	// Get distance polling info.
+	setObjVar( self, "noDistancePolling", questInfo.getInt( "noDistancePolling" ) );
+
+	// Destroy is success?
+	int destroyIsSuccess = questInfo.getInt( "destroyIsSuccess" );
+	if ( destroyIsSuccess == 1 )
+		setObjVar( self, "destroyIsSuccess", 1 );
+
+	// Use custom distance messages.
+	setObjVar( self, "customDistanceMessages", questInfo.getInt( "customDistanceMessages" ) );
+
+	// Initial attack code.
+	setObjVar( self, "attackcode", 1 );
+
+	// Damage multiplier.
+	setObjVar( self, "damageMultiplier", questInfo.getInt( "damageMultiplier" ) );
+
+	// set amount of Hate towards target
+	setObjVar( self, "hateModifier", questInfo.getInt( "hateModifier" ) );
+
+	// Try to notify the player of the first objective (if we are in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	// Add quest journal objectives.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set us up if we are in the appropriate zone.
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearMissionWaypoint( self );
+			if ( hasObjVar( self, space_quest.QUEST_DUTY ) )
+			{
+				space_quest.showQuestUpdate( self, SID_ABANDONED_DUTY );
+				space_quest.setQuestWon( player, self );
+			}
+			else
+			{
+				space_quest.showQuestUpdate( self, SID_ABANDONED_MISSION );
+				space_quest.setQuestFailed( player, self, false );
+			}
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar( self, "initialized" ) )
+		return SCRIPT_CONTINUE;
+
+	// Mix up the list a bit.
+	buildRandomNavList( self );
+
+	string[] escortPoints = getStringArrayObjVar( self, "escortPoints" );
+	if ( escortPoints == null )
+		return SCRIPT_CONTINUE;
+	string destPoint = escortPoints[0];
+
+	// Check to see if that nav is on this planet.
+	java.util.StringTokenizer st = new java.util.StringTokenizer( destPoint, ":" );
+	string scene = st.nextToken();
+	destPoint = st.nextToken();
+
+	if ( getCurrentSceneName().startsWith( scene ) )
+		registerEscortLocation( self, player, destPoint );
+
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 1, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// buildRandomNavList
+//------------------------------------------------
+
+void buildRandomNavList( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	string[] escortPoints = getStringArrayObjVar( self, "escortPoints" );
+	if ( escortPoints == null )
+		return;
+
+	int i = rand( 0, escortPoints.length-1 );
+
+	int k = 0;
+	string[] preSortPoints = new string[escortPoints.length];
+	for ( int j=i; j<escortPoints.length; j++ )
+	{
+		preSortPoints[k++] = escortPoints[j];
+	}
+	for ( int j=0; j<i; j++ )
+	{
+		preSortPoints[k++] = escortPoints[j];
+	}
+
+	if ( rand() < 0.25 )
+	{
+		string[] sortedPoints = new string[escortPoints.length];
+		for ( int j=preSortPoints.length-1; j>=0; j-- )
+		{
+			sortedPoints[j] = preSortPoints[j];
+		}
+		setObjVar( self, "escortPoints", sortedPoints );
+	}
+	else
+	{
+		setObjVar( self, "escortPoints", preSortPoints );
+	}
+}
+
+//------------------------------------------------
+// registerEscortLocation
+//------------------------------------------------
+
+void registerEscortLocation( obj_id self, obj_id player, string destNav )
+{
+	// Register the waypoint with the quest manager.
+	obj_id navPoint = space_quest.findQuestLocation(self, player, destNav, "nav");
+	if (isIdValid(navPoint))
+	{
+		location loc = getLocation(navPoint);
+		transform wptrans = getTransform_o2w(navPoint);
+
+		// Create a waypoint to this location.
+		obj_id waypoint = getObjIdObjVar( self, "escort_waypoint" );
+		if ( !isIdValid(waypoint) )
+			waypoint = createWaypointInDatapad( player, loc );
+		if ( isIdValid(waypoint) )
+		{
+			setWaypointVisible( waypoint, true );
+			setWaypointActive( waypoint, true );
+			setWaypointLocation( waypoint, loc );
+			setWaypointName( waypoint, "Escort Rendezvous" );
+			setWaypointColor( waypoint, "space" );
+			setObjVar( self, "escort_waypoint", waypoint );
+		}
+		setObjVar( self, "escort_transform", wptrans );
+
+		space_quest._setQuestInProgress( self );
+
+		// Duty target located. A waypoint has been created.
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "found_loc" );
+		dutyUpdate( self, foundLocation );
+
+		// Update the task location
+		questSetQuestTaskLocation(player, "spacequest/"+questType+"/"+questName, 1, loc);
+
+		// Tell the player to register this location as an OnArrived location.
+		removeObjVar( self, "escorting" );
+		string name = questName + ":" + destNav;
+		setObjVar( self, "loc", name );
+		addLocationTarget3d(player, name, loc, space_quest.PATROL_NAV_RADIUS);
+	}
+
+	setObjVar( self, "initialized", 1 );
+}
+
+//------------------------------------------------
+// arrivedAtLocation
+//------------------------------------------------
+
+messageHandler arrivedAtLocation()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	if ( hasObjVar( self, "escorting" ) )
+		return SCRIPT_CONTINUE;
+
+	string name = params.getString( "name" );
+	obj_id player = params.getObjId( "player" );
+	location loc = params.getLocation( "loc" );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	string[] escortPoints = getStringArrayObjVar( self, "escortPoints" );
+	string destNav = escortPoints[0];
+
+	java.util.StringTokenizer st = new java.util.StringTokenizer( destNav, ":" );
+	string scene = st.nextToken();
+	destNav = st.nextToken();
+	destNav = questName + ":" + destNav;
+
+	if ( destNav.equals( name ) )
+	{
+		// We've arrived.
+		string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "arrived_at_loc" );
+		dutyUpdate( self, foundLocation );
+
+		// Update the quest journal.
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			questActivateTask( questid, 2, player );
+			if ( questIsTaskActive( questid, 1, player ) )
+				questCompleteTask( questid, 1, player );
+		}
+
+		// Play the music.
+		play2dNonLoopingMusic( player, space_quest.MUSIC_QUEST_ESCORT_ARRIVAL );
+
+		// Warp in the ship.
+		messageTo( self, "warpShipDelay", params, 5 + rand(1,5), false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// warpShipDelay
+//------------------------------------------------
+
+messageHandler warpShipDelay()
+{
+	// See if this location is our start point.
+	string name = params.getString( "name" );
+	obj_id player = params.getObjId( "player" );
+	location loc = params.getLocation( "loc" );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+
+	// Get rid of the waypoint.
+	clearMissionWaypoint( self );
+
+	// WARP
+	// Warp in the escort ship.
+	obj_id ship = warpInEscortShip( self );
+	ship_ai.unitSetLeashDistance( ship, 16000 );
+	setObjVar( self, "ship", ship );
+	setObjVar( ship, "intNoPlayerDamage", 1 );
+	setLookAtTarget( player, ship );
+	space_quest._addMissionCriticalShip( player, self, ship );
+	setObjVar( ship, "objMissionOwner", player );
+	ship_ai.unitAddExclusiveAggro( ship, player );
+	playClientEffectObj( player, SOUND_SPAWN_ESCORT, player, "" );
+
+	// Set the damage multiplier.
+	int dmult = getIntObjVar( self, "damageMultiplier" );
+	if ( dmult < 1 )
+		dmult = 1;
+	setObjVar( ship, "damageMultiplier", dmult );
+
+	space_utils.matchEngineSpeed(player, ship, .5f, true);
+
+	// Set up the ship's patrol path.
+	transform[] translist = getEscortTransforms( self );
+	ship_ai.spacePatrol( ship, translist );
+	ship_ai.unitSetAttackOrders( ship, ship_ai.ATTACK_ORDERS_HOLD_FIRE );
+
+	// Attach the escort target script to the ship and register our destination.
+	attachScript( ship, "space.quest_logic.escort_target" );
+	dictionary outparams = new dictionary();
+	outparams.put( "quest", self );
+	outparams.put( "loc", getLocationObjVar( self, "last_loc" ) );
+	outparams.put( "player", player );
+	messageTo( ship, "registerDestination", outparams, 1.f, false );
+
+	// Say hi.
+	messageTo( self, "sayHello", null, 2.f, false );
+
+	// Launch an attack.
+	int attackPeriod = getIntObjVar( self, "attackPeriod" );
+	if ( attackPeriod > 0 )
+	{
+		dictionary outparamss = new dictionary();
+		outparamss.put( "code", getIntObjVar( self, "attackcode" ) );
+		messageTo( self, "launchAttack", outparamss, attackPeriod, false );
+	}
+
+	setObjVar( self, "escorting", 1 );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// sayHello
+//------------------------------------------------
+
+messageHandler sayHello()
+{
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int reasons = getIntObjVar( self, "numResponses" );
+	string_id hello = new string_id( "spacequest/"+questType+"/"+questName, "reason_" + rand( 1, reasons ) );
+	string cargo = getStringObjVar( ship, "cargo" );
+	string_id cargo_id = new string_id( "space/cargo", cargo );
+	if ( localize( cargo_id ) == null )
+	{
+		cargo_id = new string_id( "space/cargo", "some_cargo" );
+	}
+	prose_package pp = prose.getPackage( hello, cargo_id );
+	space_quest.groupTaunt( ship, player, pp );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// warpInEscortShip
+//------------------------------------------------
+
+obj_id warpInEscortShip( obj_id self )
+{
+	string[] shipTypes = getStringArrayObjVar( self, "escortShipTypes" );
+	string shipType = shipTypes[rand(0,shipTypes.length-1)];
+	transform trans = getTransformObjVar( self, "escort_transform" );
+	transform spawnLoc = space_quest.getRandomPositionInSphere( trans, 100, 200 );
+	return space_create.createShipHyperspace( shipType, spawnLoc );
+}
+
+//------------------------------------------------
+// getEscortTransforms
+//------------------------------------------------
+
+transform[] getEscortTransforms( obj_id self )
+{
+	// We access the quest manager directly.
+	// Normally we wouldn't be able to do this, but its okay since space zones are single server.
+	obj_id questManager = getNamedObject( space_quest.QUEST_MANAGER );
+	if ( questManager == null )
+		return null;
+	obj_id[] points = utils.getObjIdArrayScriptVar( questManager, "nav_list" );
+	string[] escortPoints = getStringArrayObjVar( self, "escortPoints" );
+	transform[] translist = new transform[escortPoints.length];
+	for ( int j=0; j<escortPoints.length; j++ )
+	{
+		for ( int i=0; i<points.length; i++ )
+		{
+			string pointName = getStringObjVar( points[i], "nav_name" );
+			string eName = escortPoints[j];
+
+			java.util.StringTokenizer st = new java.util.StringTokenizer( eName, ":" );
+			string scene = st.nextToken();
+			eName = st.nextToken();
+
+			if ( (pointName != null) && pointName.equals( eName ) )
+			{
+				translist[j] = getTransform_o2w( points[i] );
+
+				// Also store the location of the last point.
+				if ( j+1 == escortPoints.length )
+					setObjVar( self, "last_loc", getLocation( points[i] ) );
+
+				break;
+			}
+
+		}
+	}
+
+	return translist;
+}
+
+//------------------------------------------------
+// escortComplete
+//------------------------------------------------
+
+messageHandler escortComplete()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	obj_id ship = params.getObjId( "ship" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Warp the ship out.
+	messageTo( ship, "missionAbort", null, 2.f, false ); // Delayed so we can send a taunt message.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int reasons = getIntObjVar( self, "numResponses" );
+	string_id bye = new string_id( "spacequest/"+questType+"/"+questName, "goodbye_" + rand( 1, reasons ) );
+	prose_package pp = prose.getPackage( bye, 0 );
+	space_quest.groupTaunt( ship, player, pp );
+	string_id complete = new string_id( "spacequest/"+questType+"/"+questName, "complete" );
+	dutyUpdate( self, complete );
+	removeObjVar( self, "ship" );
+	removeObjVar( self, "escorting" );
+	removeObjVar( self, "initialized" );
+	removeObjVar( self, "wave1" );
+	removeObjVar( self, "wave2" );
+
+	setObjVar( self, "attackcode", getIntObjVar( self, "attackcode" )+1 );
+
+	// Warp out any remaining targets.
+	obj_id[] targets = getObjIdArrayObjVar( self, "targets" );
+	if ( targets != null )
+	{
+		for ( int i=0; i<targets.length; i++ )
+		{
+			if ( isIdValid( targets[i] ) )
+				destroyObjectHyperspace( targets[i] );
+		}
+		removeObjVar( self, "targets" );
+	}
+	removeObjVar( self, "deadships" );
+
+	// Give the reward to the player.
+	int reward = getIntObjVar( self, "reward" );
+	int rewardships = getIntObjVar( self, "rewardships" );
+	removeObjVar( self, "rewardships" );
+	int killreward = getIntObjVar( self, "killReward" );
+	rewardships *= killreward;
+	reward += rewardships;
+	money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward );
+	pp = prose.getPackage( SID_ESCORT_REWARD, reward );
+	sendQuestSystemMessage( player, pp );
+
+	// Increment escort count.
+	int escortCount = getIntObjVar( self, "escortCount" );
+	escortCount++;
+	setObjVar( self, "escortCount", escortCount );
+
+/*
+	// Check for performance badge reward.
+	int ibadge = getIntObjVar( self, "badge" );
+	string badgeName = getCollectionSlotName(ibadge);
+	int badgeLoops = getIntObjVar( self, "badgeLoops" );
+	if ( (badgeName != null) && (badgeName.length() > 0) && (badgeLoops > 0) && (escortCount == badgeLoops) )
+	{
+		if ( !badge.hasBadge( player, badgeName ) )
+		{
+			// Give them the badge cash.
+			reward = getIntObjVar( self, "badgeReward" );
+			money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward ); // Replace with API reward function.
+			space_quest.showQuestUpdate( self, SID_BADGE_REWARD, reward );
+
+			// Give them the badge.
+			badge.grantBadge( player, badgeName );
+
+			// Send them an email.
+			string_id badgeEmailFrom = new string_id ( "spacequest/"+questType+"_"+questName, "badgefrom" );
+			string_id badgeEmailSubject = new string_id ( "spacequest/"+questType+"_"+questName, "badgesubject" );
+			string_id badgeEmailBody = new string_id ( "spacequest/"+questType+"_"+questName, "badgebody" );
+
+			// Send the player the mail.
+			string player_name = getName( player );
+			string body_oob = chatMakePersistentMessageOutOfBandBody( null, badgeEmailBody );
+			chatSendPersistentMessage( "@"+badgeEmailFrom.toString(), player_name, "@" + badgeEmailSubject.toString(), null, body_oob );
+		}
+	}
+	else
+	{
+		// Check for special reward.
+		int specialRewardIncrement = getIntObjVar( self, "specialRewardIncrement" );
+		if ( escortCount % specialRewardIncrement == 0 )
+		{
+			reward = getIntObjVar( self, "specialReward" );
+			money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward ); // Replace with API reward function.
+			space_quest.showQuestUpdate( self, SID_SPECIAL_REWARD, reward );
+		}
+	}
+*/
+
+	// Update the quest journal.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( questIsTaskActive( questid, 2, player ) )
+			questCompleteTask( questid, 2, player );
+	}
+
+	// Find a new escort.
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 10.f, false );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// escortFailed
+//------------------------------------------------
+
+messageHandler escortFailed()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	obj_id ship = params.getObjId( "ship" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	int reason = params.getInt( "reason" );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	// Our ship was destroyed.
+	if ( reason == 0 )
+	{
+		string_id failed = new string_id( "spacequest/"+questType+"/"+questName, "failed_protect" );
+		dutyUpdate( self, failed );
+		questFailed( self, false );
+	}
+	else if ( reason == 1 )
+	{
+		string_id failed = new string_id( "spacequest/"+questType+"/"+questName, "failed_destroy" );
+		dutyUpdate( self, failed );
+
+		if ( !hasObjVar( self, space_quest.QUEST_DUTY ) && hasObjVar( self, "destroyIsSuccess" ) )
+		{
+			questFailed( self, true );
+		}
+		else
+		{
+			questFailed( self, true );
+		}
+	}
+
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// clearMissionWaypoint
+//------------------------------------------------
+
+void clearMissionWaypoint( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id waypoint = getObjIdObjVar( self, "escort_waypoint" );
+	if ( isIdValid(waypoint) )
+		destroyWaypointInDatapad( waypoint, player );
+	removeObjVar( self, "escort_waypoint" );
+
+	// Unregister the arrive trigger.
+	dictionary params = new dictionary();
+	string loc = getStringObjVar( self, "loc" );
+	if ( loc != null )
+		removeLocationTarget(player, loc);
+}
+
+//------------------------------------------------
+// questCompleted
+//------------------------------------------------
+
+void questCompleted( obj_id self )
+{
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestWon( player, self );
+}
+
+//------------------------------------------------
+// questFailed
+//------------------------------------------------
+
+void questFailed( obj_id self, boolean split )
+{
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestFailed( player, self, split );
+}
+
+//------------------------------------------------
+// questAborted
+//------------------------------------------------
+
+void questAborted( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	space_quest.setQuestWon( player, self );
+//	space_quest.setQuestAborted( player, self );
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	// We aborted the mission, warp the escort ship out.
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	if ( isIdValid( ship ) && (ship != null) && exists( ship ) )
+	{
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		string_id abort = new string_id( "spacequest/"+questType+"/"+questName, "abort" );
+		prose_package pp = prose.getPackage( abort, 0 );
+		space_quest.groupTaunt( ship, player, pp );
+		messageTo( ship, "missionAbort", null, 2.f, false );
+	}
+
+	questAborted( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// dutyUpdate
+//------------------------------------------------
+
+void dutyUpdate( obj_id self, string_id update_id )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string_id update_prefix = new string_id( "spacequest/"+questType+"/"+questName, "duty_update" );
+	prose_package pp = prose.getPackage( update_prefix, update_id );
+	space_quest.sendQuestMessage( player, pp );
+}
+
+//------------------------------------------------
+// launchAttack
+//------------------------------------------------
+
+messageHandler launchAttack()
+{
+	// Abort if the ship already arrived or hasn't shown up yet.
+	if ( !hasObjVar( self, "initialized" ) || !hasObjVar( self, "escorting" ) || !hasObjVar( self, "ship" ) )
+		return SCRIPT_CONTINUE;
+
+	int code = params.getInt( "code" );
+	if ( code != getIntObjVar( self, "attackcode" ) )
+		return SCRIPT_CONTINUE;
+
+	// It's time to launch an attack on the convoy.
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	// Determine if enough waves are already launched.
+	if ( hasObjVar( self, "wave1" ) && hasObjVar( self, "wave2" ) )
+	{
+		// Both waves are active, so we can't spawn another right now.
+		setObjVar( self, "new_wave_pending", 1 );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the wave number.
+	int wavenum = 0;
+	if ( hasObjVar( self, "wave1" ) )
+		wavenum = 2;
+	else
+		wavenum = 1;
+
+	// Gather the info we need to spawn.
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	int numAttackShipLists = getIntObjVar( self, "numAttackShipLists" );
+
+	if ( (ship == null) || !isIdValid(ship) || !exists(ship) )
+		return SCRIPT_CONTINUE;
+
+	// Use attack lists incrementally.
+	int attack = getIntObjVar( self, "attackindex" );
+	if ( (attack < 1) || (attack > numAttackShipLists) )
+		attack = 1;
+	setObjVar( self, "attackindex", attack+1 );
+
+	if ( getIntObjVar( self, "attackListType" ) == 1 )
+		attack = rand( 1, numAttackShipLists );
+
+	string[] shipList = getStringArrayObjVar( self, "attackShips"+attack );
+
+	int count = shipList.length;
+
+	int k = 0;
+	obj_id[] targets = null;
+	obj_id[] oldtargets = getObjIdArrayObjVar( self, "targets" );
+	if ( oldtargets == null )
+		targets = new obj_id[count];
+	else
+	{
+		targets = new obj_id[count+oldtargets.length];
+		k = oldtargets.length;
+
+		// Copy old targets into buffer.
+		for ( int i=0; i<oldtargets.length; i++ )
+		{
+			targets[i] = oldtargets[i];
+		}
+	}
+
+	int squad = ship_ai.squadCreateSquadId();
+
+	// Spawn the attackers.
+	int j = 0;
+	for ( int i=k; i<count+k; i++ )
+	{
+		transform gloc = getTransform_o2w( ship );
+
+		// Move the starting spot out in front of us.
+		float dist = rand( 1000.f, 1200.f );
+		vector n = gloc.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+		gloc = gloc.move_p( n );
+
+		// Flip the starting spot around so its facing us.
+		gloc = gloc.yaw_l( 3.14f );
+
+		// Find a spot on the IJ plane for deviation in a cone shape.
+		vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+		vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+		vector vd = vi.add( vj );
+		gloc = gloc.move_p( vd );
+
+		obj_id newship = space_create.createShipHyperspace( shipList[j], gloc );
+
+		//Check Hate Modifier and set how hard it is for players to gain aggro
+		float fltHateMod = 500.0f;
+		if (hasObjVar(newship, "hateModifier"))
+		{
+			int hateMod = getIntObjVar(newship, "hateModifier");
+			fltHateMod = (float)(hateMod);
+			if(fltHateMod <=0)
+			{
+				fltHateMod = 500.0f;
+			}
+		}
+
+		ship_ai.unitSetLeashDistance( newship, 16000 );
+		if ( count > 3 )
+			ship_ai.unitSetSquadId( newship, squad );
+		attachScript( newship, "space.quest_logic.dynamic_ship" );
+		attachScript( newship, "space.quest_logic.destroyduty_ship" );
+		targets[i] = newship;
+		ship_ai.unitIncreaseHate( newship, ship, fltHateMod, 10.0f, 20 );
+		setObjVar( newship, "quest", self );
+		space_quest._addMissionCriticalShip( player, self, newship );
+		setObjVar( newship, "objMissionOwner", player );
+		ship_ai.unitAddExclusiveAggro( newship, player );
+
+		// Mark the ship with its wave.
+		setObjVar( newship, "wave", wavenum );
+
+		j++;
+		if ( j >= shipList.length )
+			j = 0;
+	}
+
+	// Record this wave count.
+	setObjVar( self, "wave"+wavenum, count );
+
+	// Set a formation.
+	if ( count > 3 )
+		ship_ai.squadSetFormationRandom( squad );
+
+	setObjVar( self, "targets", targets );
+
+	// Notify the player.
+	string_id attack_notify = new string_id( "spacequest/"+questType+"/"+questName, "attack_notify" );
+	space_quest.sendQuestMessage( player, attack_notify );
+	playClientEffectObj( player, SOUND_SPAWN_WAVE, player, "" );
+
+	// The ship should say something.
+	int reasons = getIntObjVar( self, "numResponses" );
+	string_id hello = new string_id( "spacequest/"+questType+"/"+questName, "panic_" + rand( 1, reasons ) );
+	prose_package pp = prose.getPackage( hello, 0 );
+	space_quest.groupTaunt( ship, player, pp );
+
+	// Launch another attack.
+	int attackPeriod = getIntObjVar( self, "attackPeriod" );
+	dictionary outparamss = new dictionary();
+	outparamss.put( "code", getIntObjVar( self, "attackcode" ) );
+	messageTo( self, "launchAttack", outparamss, attackPeriod, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// targetDestroyed
+//------------------------------------------------
+
+messageHandler targetDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id deadship = params.getObjId( "ship" );
+	obj_id targets[] = getObjIdArrayObjVar( self, "targets" );
+	int deadships = getIntObjVar( self, "deadships" );
+	boolean launchWave = false;
+	for ( int i=0; i<targets.length; i++ )
+	{
+		if ( deadship == targets[i] )
+		{
+			deadships++;
+			setObjVar( self, "deadships", deadships );
+			space_quest._removeMissionCriticalShip( player, self, deadship );
+
+			// Decrement this wave.
+			int shipswave = getIntObjVar( deadship, "wave" );
+			int wavecount = getIntObjVar( self, "wave"+shipswave );
+			wavecount--;
+			if ( wavecount <= 0 )
+			{
+				// The wave was wiped out.
+				removeObjVar( self, "wave"+shipswave );
+
+				// Launch a new wave if we aren't finished.
+				launchWave = true;
+			}
+			else
+			{
+				// The wave has ships remaining.
+				setObjVar( self, "wave"+shipswave, wavecount );
+			}
+
+			if ( deadships == targets.length )
+			{
+				playClientEffectObj( player, SOUND_DESTROYED_WAVE, player, "" );
+
+				// All attackers have been eliminated.
+				int rewardships = getIntObjVar( self, "rewardships" );
+				rewardships += deadships;
+				setObjVar( self, "rewardships", rewardships );
+
+				removeObjVar( self, "targets" );
+				removeObjVar( self, "deadships" );
+
+				// Notify the player.
+				string_id attack_notify = new string_id( "spacequest/"+questType+"/"+questName, "attack_stopped" );
+				space_quest.sendQuestMessage( player, attack_notify );
+
+				// The ship should say something.
+				int reasons = getIntObjVar( self, "numResponses" );
+				string_id hello = new string_id( "spacequest/"+questType+"/"+questName, "thanks_" + rand( 1, reasons ) );
+				prose_package pp = prose.getPackage( hello, 0 );
+				space_quest.groupTaunt( ship, player, pp );
+
+				// Increment the count.
+				int attackCount = getIntObjVar( self, "attackCount" );
+				attackCount++;
+				setObjVar( self, "attackCount", attackCount );
+
+				// Check for a special event.
+				checkSpecialEvent( self, player, attackCount );
+
+				return SCRIPT_CONTINUE;
+			}
+
+			break;
+		}
+	}
+	int remaining = targets.length - deadships;
+	prose_package pp = prose.getPackage( SID_TARGETS_REMAINING, remaining );
+	space_quest.sendQuestMessage( player, pp );
+
+	// Should we launch a new wave?
+	if ( launchWave && hasObjVar( self, "new_wave_pending" ) )
+	{
+		// A wave is pending for launch.
+		dictionary outparamss = new dictionary();
+		outparamss.put( "code", getIntObjVar( self, "attackcode" ) );
+		messageTo( self, "launchAttack", outparamss, 0, false );
+		removeObjVar( self, "new_wave_pending" );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// checkSpecialEvent
+//------------------------------------------------
+
+boolean checkSpecialEvent( obj_id self, obj_id player, int attackCount )
+{
+	return false;
+}
+
+//------------------------------------------------
+// removeQuest
+//------------------------------------------------
+
+messageHandler removeQuest()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	clearMissionWaypoint( self );
+
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	destroyObjectHyperspace( ship );
+
+	// Flag the main quest journal entry as finished.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( (questid != 0) && questIsQuestActive( questid, player ) )
+		questCompleteQuest( questid, player );
+
+	space_quest._removeQuest( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+		cleanupShips( self );
+		questFailed( self, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanupShips
+//------------------------------------------------
+
+void cleanupShips( obj_id self )
+{
+	// Warp out the main ship.
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	if ( isIdValid( ship ) && exists( ship ) )
+		destroyObjectHyperspace( ship );
+
+	// Warp out the remaining escort fighters.
+	obj_id[] targets = getObjIdArrayObjVar( self, "targets" );
+	if ( targets != null )
+	{
+		for ( int i=0; i<targets.length; i++ )
+		{
+			if ( isIdValid( targets[i] ) && exists( targets[i] ) )
+			{
+				destroyObjectHyperspace( targets[i] );
+			}
+		}
+	}
+}

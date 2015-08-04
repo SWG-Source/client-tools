@@ -1,0 +1,223 @@
+include library.ai_lib;
+include library.create;
+include library.utils;
+include library.chat;
+include ai.ai_combat;
+
+
+const string[] TEMPLATE_LIST	= { "object/building/poi/generic_flatten_medium.iff",
+									"coa3_warehouse_captain",
+									"coa3_warehouse_guard",
+									"coa3_warehouse_guard",
+									"coa3_warehouse_guard",
+									"coa3_warehouse_thug",
+									"coa3_warehouse_thug",
+									"coa3_warehouse_thug"
+									};
+
+const string[] CELL_LIST		= { "",
+									"room3",
+									"room3",
+									"room2",
+									"room1",
+									"room1",
+									"",
+									""
+									};
+
+const float[][] LOCATION_LIST	= { {   0.00f, 0.00f,   0.0f,     0.0f },
+									{  -3.19f, 0.13f,  -4.60f,   20.0f },
+									{  -4.22f, 0.13f,  -1.82f,  160.0f },
+									{   3.28f, 0.13f,  -2.53f, -160.0f },
+									{   4.08f, 0.13f,   3.86f,    0.0f },
+									{   4.09f, 0.13f,   0.75f,  -40.0f },
+									{  -1.50f, 0.13f,   9.00f,    0.0f },
+									{   1.50f, 0.00f,   9.00f,    0.0f }
+									};
+
+
+
+trigger OnAttach()
+{
+	createTriggerVolume( "guards", 20f, true );
+
+	dictionary params = new dictionary();
+	params.put("index", 0);
+
+	messageTo(self, "spawnNextObject", params, 1, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnNextObject()
+{
+	int objectNum = params.getInt("index");
+
+	// Spawn object
+	location loc = getLocation(self);
+
+	if (CELL_LIST[objectNum].equals(""))
+	{
+		loc.x += LOCATION_LIST[objectNum][0];
+		loc.y += LOCATION_LIST[objectNum][1];
+		loc.z += LOCATION_LIST[objectNum][2];
+	}
+	else
+	{
+		obj_id spawnCell = getCellId (self, CELL_LIST[objectNum]);
+		loc.x = LOCATION_LIST[objectNum][0];
+		loc.y = LOCATION_LIST[objectNum][1];
+		loc.z = LOCATION_LIST[objectNum][2];
+		loc.cell = spawnCell;
+	}
+	obj_id newObject = create.object(TEMPLATE_LIST[objectNum], loc);
+
+	if (isIdValid(newObject))
+	{
+		setYaw(newObject, LOCATION_LIST[objectNum][3]);
+
+		setObjVar(newObject, "coa3.shared.warehouse", self);
+
+		resizeable obj_id[] objectList = getResizeableObjIdArrayObjVar(self, "coa3.shared.obj_list");
+		if (objectList == null)
+		{
+			objectList = new Vector();
+		}
+		utils.addElement(objectList, newObject);
+
+		if(objectList.length > 0) {
+
+			setObjVar(self, "coa3.shared.obj_list", objectList);
+		}
+
+		if (ai_lib.isNpc(newObject))
+		{
+			int count = utils.getIntScriptVar(self, "coa3.shared.guards");
+			count++;
+			utils.setScriptVar(self, "coa3.shared.guards", count);
+
+			obj_id player = getObjIdObjVar(self, "coa3.shared.playerId");
+			setObjVar(newObject, "coa3.shared.playerId", player);
+
+			ai_lib.setDefaultCalmBehavior(newObject, ai_lib.BEHAVIOR_SENTINEL);
+
+			if (count == 1)
+				setCondition(self, CONDITION_CONVERSABLE);
+		}
+	}
+
+	objectNum++;
+
+	if (objectNum < TEMPLATE_LIST.length)
+	{
+		params.put("index", objectNum);
+		messageTo(self, "spawnNextObject", params, 0, false);
+	}
+	else
+	{
+		initWarehouse();
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void initWarehouse()
+{
+	obj_id self = getSelf();
+	setObjVar(self, "coa3.shared.numGuards", 7);
+
+	// Spawn Flora Crate
+	string planet = getLocation(self).area;
+	obj_id room3 = getCellId (self, "room3");
+	location crateLoc = new location (-4.5f, 0.13f, -3.23f, planet, room3);
+	obj_id crate = createObject ("object/tangible/container/drum/poi_prize_box_off.iff", crateLoc);
+
+	setOwner(crate, self);
+	setObjVar(crate, "owner", self);
+	setObjVar(self, "coa3.shared.crateId", crate);
+
+	// Add Flora to Crate
+	int count = rand(1, 3);
+	for (int i = 0; i < count; i++)
+	{
+		obj_id flora = createObject ("object/tangible/theme_park/alderaan/act3/alderaan_flora.iff", crate, "");
+	}
+
+	// Spawn destroy terminal
+	location termLoc = new location (-5.45f, 0.13f, -4.43f, planet, room3);
+	obj_id terminal = createObject ("object/tangible/furniture/imperial/data_terminal_s1.iff", termLoc);
+	setYaw(terminal, 90);
+	setObjVar(self, "coa3.shared.terminalId", terminal);
+	setObjVar(terminal, "coa3.shared.warehouse", self);
+	attachScript (terminal, "theme_park.alderaan.act3.shared_flora_terminal");
+}
+
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	if ( !isPlayer( breacher ))
+		return SCRIPT_CONTINUE;//something other than a player
+
+	if ( volumeName == "guards" )
+	{
+		obj_id player = getObjIdObjVar(self, "coa3.shared.playerId");
+		if (breacher == player)
+		{
+			resizeable obj_id[] objectList = getResizeableObjIdArrayObjVar(self, "coa3.shared.obj_list");
+
+			for (int i = 0; i < objectList.length; i++)
+			{
+				if (isIdValid(objectList[i]) && ai_lib.isNpc(objectList[i]))
+				{
+					startCombat (objectList[i], breacher);
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler guardKilled()
+{
+	int numGuards = getIntObjVar(self, "coa3.shared.numGuards");
+
+	numGuards--;
+
+	setObjVar(self, "coa3.shared.numGuards", numGuards);
+	//debugSpeakMsg(self, "Guards remaining = " + numGuards);
+
+	if (numGuards == 0)
+	{
+		// Unlock Crate
+		obj_id player = getObjIdObjVar(self, "coa3.shared.playerId");
+		obj_id crate = getObjIdObjVar(self, "coa3.shared.crateId");
+		setOwner (crate, player);
+		setObjVar (crate, "owner", player);
+
+		// Force building to cleanup in 15 minutes.
+		messageTo(self, "cleanup", params, 60*15, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanup()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	resizeable obj_id[] objectList = getResizeableObjIdArrayObjVar(self, "coa3.shared.obj_list");
+
+	for (int i = 0; i < objectList.length; i++)
+	{
+		if (isIdValid(objectList[i]))
+		{
+			destroyObject(objectList[i]);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}

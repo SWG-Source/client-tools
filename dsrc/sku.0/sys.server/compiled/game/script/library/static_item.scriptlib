@@ -1,0 +1,2601 @@
+//Library for the static item system
+include library.jedi;
+include java.lang.Math;
+include library.loot;
+include library.pgc_quests;
+include library.storyteller;
+
+
+const int NUM_DYNAMIC_MODIFIERS = 3;
+
+/***** CONSTANTS *******************************************************/
+const string MASTER_ITEM_TABLE 				= "datatables/item/master_item/master_item.iff";
+const string WEAPON_STAT_BALANCE_TABLE 			= "datatables/item/master_item/weapon_stats.iff";
+const string ARMOR_STAT_BALANCE_TABLE 			= "datatables/item/master_item/armor_stats.iff";
+const string ITEM_STAT_BALANCE_TABLE 			= "datatables/item/master_item/item_stats.iff";
+const string WEAPON_EXAMINE_SCRIPT 			= "systems.combat.combat_weapon";
+const string COLUMN_CAN_RE	 			= "can_reverse_engineer";
+const string_id SID_NOT_LINKED				= new string_id("base_player", "not_linked");
+const string_id SID_NOT_LINKED_TO_HOLDER		= new string_id("base_player", "not_linked_to_holder");
+const string_id ALREADY_HAVE_SIMILAR_BUFF		= new string_id("base_player", "already_have_similar_buff");
+const string_id BUFF_APPLIED				= new string_id("base_player", "buff_applied");
+const string_id SID_ITEM_LEVEL_TOO_LOW			= new string_id("base_player", "level_too_low_for_effect");
+const string_id SID_UNIQUE_NO_CREATE			= new string_id("base_player", "unique_failed_create");
+const string_id SID_ITEM_NOT_ENOUGH_SKILL		= new string_id("base_player", "not_correct_skill");
+const string STATIC_ITEM_NAME				= "static_item_n";
+const string ORIG_OWNER					="origOwner";
+const string NO_SET_ITEM_EQUIP_SPAM			= "noSpam";
+
+
+const int IT_WEAPON 	= 1;
+const int IT_ARMOR	= 2;
+const int IT_ITEM	= 3;
+
+const java.text.NumberFormat noDecimalFormat = new java.text.DecimalFormat("###");
+
+const string SET_BONUS_TABLE = "datatables/item/item_sets.iff";
+
+/***** FUNCTIONS **************************************************/
+
+
+
+//create static item at a location
+obj_id createNewItemFunction(string itemName, obj_id container)
+{
+	return createNewItemFunction (itemName, container, null, 0);
+}
+
+obj_id createNewItemFunction(string itemName, obj_id container, int charges)
+{
+	return createNewItemFunction(itemName, container, null, charges);
+}
+
+obj_id createNewItemFunction(string itemName, obj_id container, location pos)
+{
+	return createNewItemFunction(itemName, container, pos, 0);
+}
+
+//lets make one of the new Static items
+obj_id createNewItemFunction(string itemName, obj_id container, location pos, int charges)
+{
+
+	if (itemName == null || itemName == "")
+	{
+		LOG( "loot", itemName + " could not be made because itemName is null" );
+		return null;
+	}
+	if (isIdNull(container))
+	{
+		LOG( "loot", itemName + " could not be made because inital container is bad " +container );
+		return null;
+	}
+
+	if (isUniqueStaticItem(itemName))
+	{
+		if (!canCreateUniqueStaticItem(container, itemName))
+		{
+			sendSystemMessage(container, SID_UNIQUE_NO_CREATE);
+			return null;
+		}
+	}
+
+	dictionary itemData = new dictionary();
+	itemData = dataTableGetRow(MASTER_ITEM_TABLE, itemName);
+	if (charges > 0)
+	{
+		itemData.put("charges", itemData.getInt("charges")+ charges);
+	}
+	
+	if ( itemData == null)
+	{
+		LOG( "loot", itemName + " could not be made because row in datatable is bad" );
+		return null;
+	}
+
+	//check out the container
+	if (getContainerType(container) != 2 && pos == null) // 2= CT_volume
+	{
+		container = utils.getInventoryContainer(container);
+
+		if (getContainerType(container) != 2)
+		{
+			LOG( "loot", itemName + " could not be made because we failed the inventory container check" );
+			return null;
+		}
+	}
+
+	obj_id newItem = null;
+
+	if (pos != null)
+	{
+		if(isValidInteriorLocation(pos))
+		{
+			newItem = createObject (itemData.getString ("template_name"), pos);
+		}
+	}
+	else
+	{
+		//at this point we know if we are a container or not
+		//if we are a container inside a player allow us to overload, if not use standard create function
+		if (utils.isNestedWithinAPlayer(container))
+		{
+			newItem = createObjectOverloaded(itemData.getString ("template_name"), container);
+		}
+		else
+		{
+			newItem = createObject(itemData.getString ("template_name"), container, "");
+		}
+	}
+
+	//make the object
+
+	if (!isIdValid(newItem))
+	{
+		LOG( "loot", itemName + " could not be made because item is not valid" );
+		return null;
+	}
+
+
+	//set the persistant objvar with datatable name for reference
+	setStaticItemName(newItem, itemName );
+	string objVarList = itemData.getString("creation_objvars");
+
+	//check for  creation objvars these objvars can only be set at creation
+	if ( objVarList != null && objVarList != "" )
+	{
+		utils.setObjVarsList(newItem, objVarList);
+	}
+
+	//set the version number
+	setStaticItemVersion(newItem, itemData.getInt("version"));
+
+	int chargeList = itemData.getInt("charges");
+	//check to see if this is an item with charges this can only be set at creation, capping it at 500
+	if ( chargeList > 0 &&  chargeList <= 500)
+	{
+		setCount(newItem, chargeList);
+	}
+
+	//item is made, lets call the initialize and put stats on it
+	initializeObject(newItem, itemData);
+
+	return newItem;
+}
+
+
+void initializeObject(obj_id object, dictionary itemData)
+{
+
+	string scriptList = itemData.getString("scripts");
+	string itemName = itemData.getString("name");
+
+	if (itemName == null || itemName == "")
+	{
+		LOG( "create", object + " InitializeObject FAILED: No NAME field in datatable or bad dictionary passed in" );
+		return;
+	}
+	//attach all our scripts from the master item table this will also check to make sure we are not attaching scripts we already have
+	if ( scriptList != null && scriptList != "" )
+	{
+		string[] scriptArray = split(scriptList, ',' );
+		for ( int i = 0; i < scriptArray.length; i++ )
+		{
+			if (!hasScript(object,scriptArray[i]))
+				attachScript( object, scriptArray[i] );
+		}
+	}
+
+	//all static items need this script!
+	attachScript(object, "item.static_item_base");
+
+	//we have to Null out the string name in case it was set, this has to be done or else the string name trumps the string name ID
+	//until programming enables us to change string colors lets leave the Jedi color tuning alone
+	if(!jedi.isCrystalTuned(object))
+		setName(object, "");
+	//set the name of the object unless its an expansion quest token.
+	if (exists(object) && !hasObjVar (object, "playerQuest"))
+	{
+		setName(object, new string_id("static_item_n", itemName));
+	}
+
+	//set the description of the object
+	setDescriptionStringId(object, new string_id("static_item_d", itemName));
+	LOG("npe", "MAKING THING");
+	switch (itemData.getInt("type"))
+	{
+		case 1://weapon
+			initializeWeapon(object,itemName);
+			break;
+		case 2://armor
+			initializeArmor(object,itemName);
+			break;
+		case 3://item
+			initializeItem(object,itemName);
+			break;
+		case 4://storyteler token
+			initializeStorytellerObject(object, itemName);
+			break;
+		case 5://misc
+			break;
+	}
+
+	return;
+}
+
+
+//add stats to armor item
+boolean initializeArmor( obj_id object, string itemName)
+{
+
+	dictionary itemData = new dictionary();
+
+	int row = dataTableSearchColumnForString( itemName , 0, ARMOR_STAT_BALANCE_TABLE);
+	if (row == -1)
+		return false;
+	itemData =	dataTableGetRow(ARMOR_STAT_BALANCE_TABLE, row);
+
+
+
+	float condition = itemData.getFloat("condition_multiplier");
+	float generalProtection = itemData.getFloat("protection");
+	int armorLevel = itemData.getInt("armor_level");
+	int armorCategory = itemData.getInt("armor_category");
+	int sockets = itemData.getInt("sockets");
+	int hitPoints = itemData.getInt("hit_points");
+	string skillMods = itemData.getString("skill_mods");
+	string attributeBonus = itemData.getString("attribute_bonus");
+	string objVarList = itemData.getString("objvars");
+	string colorMods = itemData.getString("color");
+
+	armor.setArmorDataPercent(object, armorLevel, armorCategory, generalProtection, condition);
+	//check to see if we need to add a recon layer or assault layer
+	if (armorCategory == 0)
+	{
+		armor.setArmorSpecialProtectionPercent(object, armor.DATATABLE_RECON_LAYER, 1.0f);
+	}
+	if (armorCategory == 2)
+	{
+		armor.setArmorSpecialProtectionPercent(object, armor.DATATABLE_ASSAULT_LAYER, 1.0f);
+	}
+
+	//set hit points , have to set max and current
+	setMaxHitpoints(object, hitPoints);
+	setHitpoints(object, hitPoints);
+
+	//check for sockets
+	if(sockets > 0)
+		setSkillModSockets(object, 1);
+	else
+		setSkillModSockets(object, 0);
+
+	//check for attribute bonuses, may want to make a function of this
+	if (attributeBonus != null && attributeBonus != "")
+	{
+
+		string[] stringArray = split(attributeBonus, ',' );
+		for ( int i = 0; i < stringArray.length; i++ )
+		{
+
+			string[] attributeArray = split(stringArray[i], '=' );
+			for ( int x = 0; x < attributeArray.length; x++ )
+			{
+				int attribute = 0;
+				if (attributeArray[0].equalsIgnoreCase ("health"))
+					attribute = HEALTH;
+				else if (attributeArray[0].equalsIgnoreCase ("action"))
+					attribute = ACTION;
+				else if (attributeArray[0].equalsIgnoreCase ("mind"))
+					attribute = MIND;
+				else if (attributeArray[0].equalsIgnoreCase ("constitution"))
+					attribute = CONSTITUTION;
+				else if (attributeArray[0].equalsIgnoreCase ("stamina"))
+					attribute = STAMINA;
+				else if (attributeArray[0].equalsIgnoreCase ("willpower"))
+					attribute = WILLPOWER;
+
+				setAttributeBonus(object, attribute, utils.stringToInt(attributeArray[1]));
+			}
+		}
+
+	}
+
+	dictionary dict = parseSkillModifiers(null, skillMods);
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+		while (keys.hasMoreElements())
+		{
+			string skillModName = (string)keys.nextElement();
+			int skillModValue = dict.getInt(skillModName);
+			setSkillModBonus(object, skillModName, skillModValue);
+		}
+	}
+
+	//check for objvars
+	if ( objVarList != null && objVarList != "" )
+	{
+		utils.setObjVarsList(object, objVarList);
+	}
+
+
+	//lets add some color palette stuff, unfortunately the art isnt consistent but this is the best we can do
+	if (colorMods != null && colorMods != "")
+	{
+		string[] colorArray = split(colorMods, ',' );
+		for ( int i = 0; i < colorArray.length; i++ )
+		{
+
+			string[] colorIndex = split(colorArray[i], '=' );
+			for ( int x = 0; x < colorIndex.length; x++ )
+			{
+				hue.setColor(object, "/private/" +colorIndex[0], Integer.parseInt(colorIndex[1]));
+
+			}
+		}
+	}
+
+	return true;
+}
+
+
+//add stats to weapon
+boolean initializeWeapon( obj_id object, string itemName)
+{
+
+	dictionary itemData = new dictionary();
+
+	int row = dataTableSearchColumnForString( itemName , 0, WEAPON_STAT_BALANCE_TABLE);
+	if (row == -1)
+		return false;
+	itemData =	dataTableGetRow(WEAPON_STAT_BALANCE_TABLE, row);
+
+
+
+	// get the stats
+	int minDamage = itemData.getInt("min_damage");
+	int maxDamage = itemData.getInt("max_damage");
+	int attackSpeed  = itemData.getInt("attack_speed");
+	int woundChance = itemData.getInt("wound_chance");
+	int hp = itemData.getInt("hit_points");
+	int accuracy = itemData.getInt("accuracy");
+	int minRange = itemData.getInt("min_range_distance");
+	int maxRange = itemData.getInt("max_range_distance");
+	int attackCost = itemData.getInt("special_attack_cost");
+	int elementalType  = itemData.getInt("elemental_type");
+	int elementalDamage = itemData.getInt("elemental_damage");
+	int damageType = itemData.getInt("damage_type");
+	string skillMods = itemData.getString("skill_mods");
+	string objVarList = itemData.getString("objvars");
+
+	// damage type
+	if(damageType == 1)
+		damageType = DAMAGE_KINETIC;
+	else
+		damageType = DAMAGE_ENERGY;
+
+	//make sure we have the base weapons script
+	if(!hasScript(object, WEAPON_EXAMINE_SCRIPT))
+		attachScript(object, WEAPON_EXAMINE_SCRIPT);
+
+	setObjVar(object, "weapon.original_max_range", (float)maxRange);
+
+	/// set the stats
+	setWeaponMinDamage(object, minDamage);
+	setWeaponMaxDamage(object, maxDamage);
+	setWeaponAttackSpeed(object, (float)attackSpeed/100.0f);
+	setWeaponWoundChance(object, (float)woundChance/10.0f);
+	setMaxHitpoints(object,(hp));
+	setHitpoints(object,(hp));
+	setWeaponAccuracy(object, accuracy);
+	setWeaponDamageType(object, damageType);
+	setWeaponRangeInfo(object, (float)minRange, (float) maxRange);
+	setWeaponAttackCost(object, attackCost);
+	setWeaponElementalDamage(object, elementalType, elementalDamage);
+	weapons.setHeavyWeaponAoeSplashPercent(object);
+
+	//check for item specific objvars
+	if ( objVarList != null && objVarList != "" )
+	{
+		utils.setObjVarsList(object, objVarList);
+	}
+
+	dictionary dict = parseSkillModifiers(null, skillMods);
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+		while (keys.hasMoreElements())
+		{
+			string skillModName = (string)keys.nextElement();
+			int skillModValue = dict.getInt(skillModName);
+			setSkillModBonus(object, skillModName, skillModValue);
+		}
+	}
+	weapons.setWeaponData(object);
+
+	return true;
+}
+
+//add stats to items, set any item scripts in the master item table, for now all we need in here is attribs and skillmods
+boolean initializeItem( obj_id object, string itemName)
+{
+
+	dictionary itemData = new dictionary();
+
+	int row = dataTableSearchColumnForString( itemName , 0, ITEM_STAT_BALANCE_TABLE);
+	if (row == -1)
+		return false;
+	itemData =	dataTableGetRow(ITEM_STAT_BALANCE_TABLE, row);
+
+
+
+
+	string skillMods = itemData.getString("skill_mods");
+	string attributeBonus = itemData.getString("attribute_bonus");
+	string objVarList = itemData.getString("objvars");
+	string colorMods = itemData.getString("color");
+
+	//check for attribute bonuses, may want to make a function of this
+	if (attributeBonus != null && attributeBonus != "")
+	{
+
+		string[] stringArray = split(attributeBonus, ',' );
+		for ( int i = 0; i < stringArray.length; i++ )
+		{
+
+			string[] attributeArray = split(stringArray[i], '=' );
+			for ( int x = 0; x < attributeArray.length; x++ )
+			{
+				int attribute = 0;
+				if (attributeArray[0].equalsIgnoreCase ("health"))
+					attribute = HEALTH;
+				else if (attributeArray[0].equalsIgnoreCase ("action"))
+					attribute = ACTION;
+				else if (attributeArray[0].equalsIgnoreCase ("constitution"))
+					attribute = CONSTITUTION;
+				else if (attributeArray[0].equalsIgnoreCase ("stamina"))
+					attribute = STAMINA;
+
+				setAttributeBonus(object, attribute, utils.stringToInt(attributeArray[1]));
+			}
+		}
+
+	}
+
+	dictionary dict = parseSkillModifiers(null, skillMods);
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+		while (keys.hasMoreElements())
+		{
+			string skillModName = (string)keys.nextElement();
+			int skillModValue = dict.getInt(skillModName);
+			setSkillModBonus(object, skillModName, skillModValue);
+		}
+	}
+
+	//check for item specific objvars
+	if ( objVarList != null && objVarList != "" )
+	{
+		utils.setObjVarsList(object, objVarList);
+	}
+
+	//lets add some color palette stuff, unfortunately the art isnt consistent but this is the best we can do
+	if (colorMods != null && colorMods != "")
+	{
+		string[] colorArray = split(colorMods, ',' );
+		for ( int i = 0; i < colorArray.length; i++ )
+		{
+
+			string[] colorIndex = split(colorArray[i], '=' );
+			for ( int x = 0; x < colorIndex.length; x++ )
+			{
+				hue.setColor(object, "/private/" +colorIndex[0], Integer.parseInt(colorIndex[1]));
+
+			}
+		}
+	}
+
+	return true;
+}
+
+boolean initializeStorytellerObject(obj_id newObject, string itemName)
+{
+
+	dictionary itemData = new dictionary();
+	if (!dataTableOpen(storyteller.STORYTELLER_DATATABLE))
+		return false;
+
+	int row = dataTableSearchColumnForString( itemName , "name", storyteller.STORYTELLER_DATATABLE);
+	if (row == -1)
+		return false;
+
+	itemData = dataTableGetRow(storyteller.STORYTELLER_DATATABLE, row);
+
+	string template = itemData.getString("template_name");
+	int type = itemData.getInt("type");
+	string objvarString = itemData.getString("objvar");
+	string scriptString = itemData.getString("scripts");
+
+	setObjVarString(newObject, objvarString, type);
+	setScriptString(newObject, scriptString, type);
+	
+	string name = getString(new string_id("static_item_n", itemName)) + getString(new string_id("storyteller", "token_label"));
+	if ( pgc_quests.isPgcRelicObject(newObject) )
+	{
+		name = getString(new string_id("static_item_n", itemName));
+	}
+ 		
+	setName(newObject, name);
+
+	return true;
+}
+
+void setObjVarString(obj_id object, string objVarString)
+{
+	setObjVarString(object, objVarString, -1);
+}
+
+void setObjVarString(obj_id object, string objVarString, int type)
+{
+	//Attach type dependant objVar
+	switch (type)
+	{
+		case storyteller.PROP:
+			break;
+		case storyteller.STATIC_EFFECT:
+			break;
+		case storyteller.IMMEDIATE_EFFECT:
+			break;
+		case storyteller.COMBAT_NPC:
+			break;
+		case storyteller.FLAVOR_NPC:
+			break;
+		case storyteller.OTHER:
+			break;
+		case storyteller.THEATER:
+			break;
+	}
+
+	if ( objVarString != null && objVarString.length() > 0 )
+	{
+		if ( objVarString.equals("none")  )
+		{
+		}
+		else
+		{
+			utils.setObjVarsList(object, objVarString);
+		}
+	}
+	
+	return;
+}
+
+void setScriptString(obj_id object, string scriptString)
+{
+	setScriptString(object, scriptString, -1);
+}
+
+void setScriptString(obj_id object, string scriptString, int type)
+{
+	//Attach type dependant scripts
+	switch (type)
+	{
+		case storyteller.PROP:
+			attachScript(object, "systems.storyteller.prop_token");
+			break;
+		case storyteller.STATIC_EFFECT:
+			attachScript(object, "systems.storyteller.effect_token");
+			break;
+		case storyteller.IMMEDIATE_EFFECT:
+			attachScript(object, "systems.storyteller.effect_token");
+			break;
+		case storyteller.COMBAT_NPC:
+			attachScript(object, "systems.storyteller.npc_token");
+			break;
+		case storyteller.FLAVOR_NPC:
+			attachScript(object, "systems.storyteller.npc_token");
+			break;
+		case storyteller.OTHER:
+			break;
+		case storyteller.THEATER:
+			attachScript(object, "systems.storyteller.theater_token");
+			break;
+	}
+
+	if (scriptString == null || scriptString.equals("") || scriptString.equals("none"))
+		return;
+
+	string[] parse = split(scriptString, ',');
+
+	if (parse == null || parse.length == 0)
+		return;
+
+	for (int i=0;i<parse.length;i++)
+		attachScript(object, parse[i]);
+
+}
+
+//verifys the level of the item vs playerlevel
+boolean validateLevelRequired( obj_id player, int requiredLevel)
+{
+	int playerLevel = getLevel(player);
+	////sendSystemMessageTestingOnly(player, "My level is " +playerLevel);
+	////sendSystemMessageTestingOnly(player, "Required level is " +requiredLevel);
+	if(playerLevel < requiredLevel)
+		return false;
+
+	return true;
+}
+
+//verifys the level of the overload to clean it up a bit
+boolean validateLevelRequired( obj_id player, obj_id item)
+{
+	int playerLevel = getLevel(player);
+	dictionary itemData = getMasterItemDictionary(item);
+
+	if(itemData != null)
+	{
+		int requiredLevel = itemData.getInt("required_level");
+		if ( requiredLevel > 0 )
+		{
+			////sendSystemMessageTestingOnly(player, "Required level is " +requiredLevel);
+			if(playerLevel < requiredLevel)
+			return false;
+		}
+	}
+	////sendSystemMessageTestingOnly(player, "My level is " +playerLevel);
+	return true;
+}
+
+//verifys the level for a worn effect
+boolean validateLevelRequiredForWornEffect( obj_id player, obj_id item)
+{
+	int playerLevel = getLevel(player);
+	string itemName = getStaticItemName(item);
+	dictionary itemData = getStaticObjectTypeDictionary(itemName);
+
+	if(itemData != null)
+	{
+		int requiredLevel = itemData.getInt("required_level_for_effect");
+		if ( requiredLevel > 0 )
+		{
+			////sendSystemMessageTestingOnly(player, "Required level is " +requiredLevel);
+			if(playerLevel < requiredLevel)
+			return false;
+		}
+	}
+	////sendSystemMessageTestingOnly(player, "My level is " +playerLevel);
+	return true;
+}
+
+//generic count decreaser
+void decrementStaticItem(obj_id item)
+{
+	if(!isIdValid(item))
+		return;
+
+	int count = getCount(item);
+	count--;
+
+	if(count <= 0)
+		destroyObject(item);
+	else
+		setCount(item, count);
+}
+
+//decrease count by another amount than one
+void decrementStaticItemAmount(obj_id item, int amount)
+{
+    if(!isIdValid(item))
+		return;
+
+	int count = getCount(item);
+    int newCount = count - amount;
+
+    if(count < amount)
+		return;
+    else if(newCount <= 0)
+    	destroyObject(item);
+    else
+		setCount(item, newCount);
+}
+
+//decrease the amount of items located in several different stacks
+void decrementUnstackedStaticItemAmount(obj_id[] items, int amount)
+{
+	int totalCount = amount;
+
+	for( int i = 0; i < items.length; i++ )
+	{
+		int itemCount = getCount(items[i]);
+
+		if (itemCount <= totalCount)
+		{
+			destroyObject(items[i]);
+		}
+		else if (itemCount > totalCount)
+		{
+			totalCount = itemCount - totalCount;
+			setCount(items[i], totalCount);
+			return;
+		}
+
+		totalCount = totalCount - itemCount;
+	}
+}
+
+//gets the dictionary of the item from the master item datatable
+dictionary getMasterItemDictionary (string itemName)
+
+{
+	if ( itemName == null || itemName == "" )
+	{
+		LOG( "create", " Bad itemName passed into the getMasterItemDictionary " +itemName );
+		return null;
+	}
+
+	dictionary itemData = new dictionary();
+	itemData = dataTableGetRow(MASTER_ITEM_TABLE, itemName);
+	if ( itemData == null)
+	{
+		LOG( "create", itemName + " Initalize from getMasterItemDictionary could not happen because row in datatable is bad" );
+		return null;
+	}
+
+
+	return itemData;
+}
+
+//reads objvar off item and heads into the dictionary call with name
+dictionary getMasterItemDictionary (obj_id item)
+
+{
+	if(isIdValid(item))
+	{
+		string itemName = getStaticItemName(item);
+		if ( itemName == null || itemName == "" )
+		{
+			CustomerServiceLog( "static_item", item + " BAD ITEM:No Static Item Name this item needs to be fixed by adding a value to objvar staticItem" );
+			return null;
+		}
+		return getMasterItemDictionary (itemName);
+	}
+	else
+	{
+		LOG( "create","Bad item passed into the getMasterItemDictionary, bailing out" );
+		return null;
+	}
+}
+
+
+//checks to see if we are a static item
+boolean isStaticItem (obj_id item)
+{
+	string itemName = getStaticItemName(item);
+	if (itemName == null || itemName == "")
+		return false;
+	else
+		return true;
+}
+
+//checks to see if a string is a static item
+boolean isStaticItem (string itemName)
+{
+	int rowNum = dataTableSearchColumnForString(itemName, 0, MASTER_ITEM_TABLE);
+
+	return rowNum != -1;
+}
+
+//pass in an object string and it returns the type column from the master table
+int getStaticObjectType(string itemName)
+{
+	return dataTableGetInt(MASTER_ITEM_TABLE, itemName, "type");
+}
+
+//pass in an object string and it returns the credit value from the master table
+int getStaticObjectValue(string itemName)
+{
+	return dataTableGetInt(MASTER_ITEM_TABLE, itemName, "value");
+}
+
+//pass in an object string and it passes back the correct stats dictionary
+dictionary getStaticObjectTypeDictionary(string itemName)
+{
+	if ( itemName == null || itemName == "" )
+	{
+		LOG( "create", " Itemname is Bad " +itemName );
+		return null;
+	}
+
+	dictionary itemData = null;
+	switch (getStaticObjectType(itemName))
+	{
+		case 1:
+			itemData = getStaticItemWeaponDictionary(itemName);
+			break;
+		case 2:
+			itemData = getStaticArmorDictionary(itemName);
+			break;
+		case 3:
+			itemData = getStaticItemDictionary(itemName);
+			break;
+	}
+
+	return itemData;
+
+}
+
+//gets the dictionary of the weapon from the weapon Stats datatable
+dictionary getStaticItemWeaponDictionary (string itemName)
+
+{
+	if ( itemName == null || itemName == "" )
+	{
+		LOG( "create", " Itemname is Bad " +itemName );
+		return null;
+	}
+
+	dictionary itemData = new dictionary();
+	itemData = dataTableGetRow(WEAPON_STAT_BALANCE_TABLE, itemName);
+	if ( itemData == null)
+		LOG( "create", itemName + " Initalize from getStaticItemWeaponDictionary could not happen because row in datatable is bad" );
+
+
+	return itemData;
+}
+
+//reads objvar off weapon and heads into the dictionary call with name
+dictionary getStaticItemWeaponDictionary (obj_id item)
+
+{
+	if(isIdValid(item))
+	{
+		string itemName = getStaticItemName(item);
+		return getStaticItemWeaponDictionary (itemName);
+	}
+	else
+	{
+		LOG( "create","Bad item passed into the getWeaponDictionary, bailing out" );
+		return null;
+	}
+}
+
+//gets the dictionary of the item from the item stats datatable
+dictionary getStaticItemDictionary (string itemName)
+
+{
+	if ( itemName == null || itemName == "" )
+	{
+		LOG( "create", " Itemname is Bad " +itemName );
+		return null;
+	}
+
+	dictionary itemData = new dictionary();
+	itemData = dataTableGetRow(ITEM_STAT_BALANCE_TABLE, itemName);
+	if ( itemData == null)
+		LOG( "create", itemName + " Initalize from getStaticItemDictionary could not happen because row in datatable is bad" );
+
+
+	return itemData;
+}
+
+//reads objvar off item and heads into the dictionary call with name
+dictionary getStaticItemDictionary (obj_id item)
+
+{
+	if(isIdValid(item))
+	{
+		string itemName = getStaticItemName(item);
+		return getStaticItemDictionary (itemName);
+	}
+	else
+	{
+		LOG( "create","Bad item passed into the getStaticItemDictionary, bailing out" );
+		return null;
+	}
+}
+
+//gets the dictionary of the armor from the armor stats datatable
+dictionary getStaticArmorDictionary (string itemName)
+
+{
+	if ( itemName == null || itemName == "" )
+	{
+		LOG( "create", " Itemname is Bad " +itemName );
+		return null;
+	}
+
+	dictionary itemData = new dictionary();
+	itemData = dataTableGetRow(ARMOR_STAT_BALANCE_TABLE, itemName);
+	if ( itemData == null)
+		LOG( "create", itemName + " Initalize from getStaticArmorDictionary could not happen because row in datatable is bad" );
+
+
+	return itemData;
+}
+
+//reads objvar off armor and heads into the dictionary call with name
+dictionary getStaticArmorDictionary (obj_id item)
+
+{
+	if(isIdValid(item))
+	{
+		string itemName = getStaticItemName(item);
+		return getStaticArmorDictionary (itemName);
+	}
+	else
+	{
+		LOG( "create","Bad armor passed into the getStaticArmorDictionary, bailing out" );
+		return null;
+	}
+}
+
+//this is to force item to destory itself and recreate if we have pressed the panic button
+void versionUpdate(obj_id self, dictionary itemData)
+{
+
+
+	string itemName = itemData.getString("name");
+	obj_id player = utils.getContainingPlayer(self);
+	obj_id bioLink= getBioLink(self);
+
+	//begin checks for object template changes
+	string currentTemplate = getTemplateName(self);
+	string staticName = getStaticItemName(self);
+	if(staticName.equals("") || staticName == null)
+		return;//I am not a static item, what happened?
+
+	//get row for static item
+	int itemRow = dataTableSearchColumnForString(staticName, "name", MASTER_ITEM_TABLE);
+	//get template name according to datatable
+	string tableTemplate = dataTableGetString(MASTER_ITEM_TABLE, itemRow, "template_name");
+
+	if(!currentTemplate.equals(tableTemplate))//templates dont match, we need to update to the new template
+	{
+		CustomerServiceLog("versionUpdate: ", "Old Item's (" + self + ") object template has changed. A new one must be created.");
+		//get my container
+		obj_id container = getContainedBy(self);
+		if(isIdValid(container))
+		{
+			//create a new version of me
+			obj_id newItem = createNewItemFunction(staticName, getContainedBy(self));
+			if(isIdValid(newItem))//did a new version get created correctly?
+			{
+				//tell CS what we are doing
+				if(isIdValid(player))
+					CustomerServiceLog("versionUpdate: ", "New Item (" + newItem + ") has been created in " + getPlayerName(player) + "("+player+")'s inventory.");
+				else
+				{
+					obj_id newItemsContainer = getContainedBy(newItem);
+					CustomerServiceLog("versionUpdate: ", "New Item (" + newItem + ") has been created in container (" + newItemsContainer + ").");
+				}
+				CustomerServiceLog("versionUpdate: ", "Now deleting the old object (" + self + ").");
+				//if we were biolinked re-link us
+				if (bioLink != null && bioLink != utils.OBJ_ID_BIO_LINK_PENDING)
+					setBioLink(newItem, bioLink);
+				//destroy old version
+				destroyObject(self);
+			}
+			else
+				CustomerServiceLog("versionUpdate: ", "A new version was NOT created, so we will NOT destroy old item ("+self+")");
+		}
+		else
+			CustomerServiceLog("versionUpdate: ", "Old Item (" + self + ") returned an invalid container, we will NOT destroy it.");
+		//we need to return here, as our templates have changed, no need to run thru all the other steps
+		return;
+	}
+
+	
+	//equipped items should be unequipped before updating values, then re-equipped later.
+	if(utils.isEquipped(self))
+	{
+		obj_id pInv = utils.getInventoryContainer(player);
+		putInOverloaded(self, pInv);
+		dictionary dict = new dictionary();
+		dict.put("player", player);
+		messageTo(self, "handleStaticReEquipItem", dict, 1.0f, false);		
+	}
+
+	detachAllScripts(self);
+	removeWornBuffs(self, player);
+	checkForRemoveSetBonus(self, player);
+	removeAllObjVars(self);
+
+	//if we were biolinked re-link us
+	if (bioLink != null && bioLink != utils.OBJ_ID_BIO_LINK_PENDING)
+		setBioLink(self, bioLink);
+
+	//set the persistant objvar with datatable name for reference
+	setStaticItemName(self, itemName );
+	string objVarList = itemData.getString("creation_objvars");
+
+	//check for  creation objvars these objvars can only be set at creation
+	if ( objVarList != null && objVarList != "" )
+	{
+		utils.setObjVarsList(self, objVarList);
+	}
+
+	//set the version number
+	setStaticItemVersion(self, itemData.getInt("version"));
+
+	int chargeList = itemData.getInt("charges");
+	//check to see if this is an item with charges this can only be set at creation, capping it at 500
+	if ( chargeList > 0 &&  chargeList <= 500)
+	{
+		setCount(self, chargeList);
+	}
+
+	//item is clean, lets call the initialize and put stats on it
+	initializeObject(self, itemData);
+
+	return;
+}
+
+//this checks for an items effects and activates them if you can wear them
+void validateWornEffects(obj_id player)
+{
+	obj_id[] equipSlots = metrics.getWornItems(player);
+		if (equipSlots != null && equipSlots.length > 0)
+		{
+			for(int i = 0; i < equipSlots.length; i++)
+			{
+				string itemName = getStaticItemName(equipSlots[i]);
+				if (itemName != null && itemName != "")
+				{
+					dictionary itemData = getStaticObjectTypeDictionary(itemName);
+					if(itemData != null)
+					{
+						string buffName = itemData.getString("buff_name");
+						if ( buffName != null && buffName != "" )
+						{
+							if(	validateLevelRequiredForWornEffect(player,(equipSlots[i])))
+							{
+								applyWornBuffs(equipSlots[i], getContainedBy(equipSlots[i]));
+								checkForAddSetBonus(equipSlots[i], getContainedBy(equipSlots[i]));
+							}
+						}
+					}
+				}
+			}
+		}
+}
+
+//this applies worn buffs when equipping an item
+void applyWornBuffs(obj_id self, obj_id player)
+{
+
+//check to see if we have bio link script
+	if(hasScript(self, "item.armor.biolink_item_non_faction"))
+	{
+		//bio link check
+		obj_id bioLinked = getBioLink(self);
+		if (bioLinked == null || bioLinked == utils.OBJ_ID_BIO_LINK_PENDING)
+		{
+			sendSystemMessage(player, SID_NOT_LINKED);
+			return;
+		//make sure the bio link is to user if not they do not get the effect
+		}
+		if(bioLinked != player)
+		{
+			sendSystemMessage(player, SID_NOT_LINKED_TO_HOLDER);
+			return;
+		}
+	}
+
+	//get name of item
+	string itemName = getStaticItemName(self);
+	if ( itemName == null || itemName == "" )
+	{
+			LOG( "create", "Worn Buff Itemname bad, name is " +itemName );
+			return;
+	}
+
+	////sendSystemMessageTestingOnly(player, "Item Name is " +itemName);
+	//see what type of object we have and go to the correct table
+	dictionary itemData = getStaticObjectTypeDictionary(itemName);
+
+	if ( itemData == null)
+	{
+		LOG( "create", itemName + "Worn Buff Apply could not happen because row in datatable is bad" );
+		return;
+	}
+
+	string buffName = itemData.getString("buff_name");
+	string clientEffect = itemData.getString("client_effect");
+	int requiredLevel = itemData.getInt("required_level_for_effect");
+	int playerLevel = getLevel(player);
+
+	if ( buffName == null || buffName == "" )
+	{
+		LOG( "create","Worn Buff Name is bad" );
+		return;
+	}
+
+	//make sure they meet the level requirements
+	if(static_item.validateLevelRequired(player,requiredLevel))
+	{
+		if (buff.canApplyBuff(player, buffName))
+		{
+			buff.applyBuff(player, player, buffName);
+			//sendSystemMessage(transferer, BUFF_APPLIED);
+			//play an animation
+			playClientEffectObj(player, clientEffect, player, "");
+		}
+		else
+		{
+			utils.setScriptVar(self,"buffNotApplied", true);
+			sendSystemMessage(player, ALREADY_HAVE_SIMILAR_BUFF);
+			return;
+		}
+	}
+	else
+	{
+		utils.setScriptVar(self,"buffNotApplied", true);
+		sendSystemMessage(player, SID_ITEM_LEVEL_TOO_LOW);
+		return;
+	}
+
+	return;
+}
+
+void removeWornBuffs(obj_id self, obj_id player)
+{
+	//get name of item
+	string itemName = getStaticItemName(self);
+	if ( itemName == null || itemName == "" )
+	{
+		LOG( "create", "Worn Buff Itemname bad, name is " +itemName );
+		return;
+	}
+
+	dictionary itemData = getStaticObjectTypeDictionary(itemName);
+
+	if ( itemData == null)
+	{
+		LOG( "create", itemName + "Worn Buff Remove could not happen because row in datatable is bad" );
+		return;
+	}
+
+	string buffName = itemData.getString("buff_name");
+
+	if ( buffName == null || buffName == "" )
+	{
+		LOG( "create","Remove Buff Name is bad" );
+		return;
+	}
+
+	if(!utils.hasScriptVar(self, "buffNotApplied"))
+		buff.removeBuff(player, buffName);
+	else
+		utils.removeScriptVar(self,	"buffNotApplied");
+
+	return;
+}
+
+// If we're a set bonus item and we're wearing enough of the set, apply a bonus buff.
+void checkForAddSetBonus(obj_id item, obj_id player)
+{
+	if(!isSetBonusItem(item))
+		return;
+
+	int setBonusIndex = getSetBonusIndex(item);
+	int numberOfSetItems = getNumSetItems(player, item, setBonusIndex);
+	string setBonusBuffName = getSetBonusBuffName(item, setBonusIndex, numberOfSetItems);
+
+	if(!setBonusBuffName.equals(null) && !setBonusBuffName.equals("none"))
+	{
+		if(!buff.hasBuff(player, setBonusBuffName))
+		{
+			buff.applyBuff(player, player, setBonusBuffName);
+			
+			if(!utils.hasScriptVar(item, NO_SET_ITEM_EQUIP_SPAM))
+				sendSystemMessage(player, new string_id("set_bonus", setBonusBuffName + "_sys"));
+		}
+	}
+
+	return;
+}
+
+// If we're a set bonus item, remove the bonus buff we might have had and maybe apply a different buff.
+void checkForRemoveSetBonus(obj_id item, obj_id player)
+{
+	if(!isSetBonusItem(item))
+		return;
+
+	int setBonusIndex = getSetBonusIndex(item);	
+	int numberOfSetItems = getNumSetItems(player, item, setBonusIndex);
+	string setBonusBuffName = getSetBonusBuffName(item, setBonusIndex, numberOfSetItems + 1);
+
+	if(utils.hasScriptVar(item, NO_SET_ITEM_EQUIP_SPAM))
+		utils.removeScriptVar(item, NO_SET_ITEM_EQUIP_SPAM);
+	
+	if(!setBonusBuffName.equals(null) && !setBonusBuffName.equals("none"))
+	{
+		if(buff.hasBuff(player, setBonusBuffName))
+			buff.removeBuff(player, setBonusBuffName);
+
+		// If there's multiple levels of set bonus buff effects, apply the lower level buff if there is one.
+		string lowerSetBonusBuffName = getSetBonusBuffName(item, setBonusIndex, numberOfSetItems);
+
+		if(!lowerSetBonusBuffName.equals(null) && !lowerSetBonusBuffName.equals("none"))
+		{
+			if(!buff.hasBuff(player, lowerSetBonusBuffName))
+				buff.applyBuff(player, player, lowerSetBonusBuffName);
+		}
+		//lets see if there is another buff we can apply for one less
+		//this allows us to have set bonuses for every other piece
+		else
+		{
+			lowerSetBonusBuffName = getSetBonusBuffName(item, setBonusIndex, (numberOfSetItems - 1));
+			if(!lowerSetBonusBuffName.equals(null) && !lowerSetBonusBuffName.equals("none"))
+			{
+				if(!buff.hasBuff(player, lowerSetBonusBuffName))
+					buff.applyBuff(player, player, lowerSetBonusBuffName);
+			}
+		}
+	}
+
+	return;
+}
+
+// Set bonus items have this script.
+boolean isSetBonusItem(obj_id item)
+{
+	return hasObjVar(item, "item.set.set_id");
+}
+
+// Stored as an objvar
+int getSetBonusIndex(obj_id item)
+{
+	int setBonusIndex = -1;
+	
+	if(!isIdValid(item))
+		return setBonusIndex;
+		
+	if(hasObjVar(item, "item.set.set_id"))
+	{
+		setBonusIndex = getIntObjVar(item, "item.set.set_id");
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(getContainedBy(item), "getSetBonusIndex called on object missing set bonus index objvar.");
+	}
+
+	return setBonusIndex;
+}
+
+// How many other equipped items match our index
+int getNumSetItems(obj_id player, obj_id item, int setBonusIndex)
+{
+	int numSetItems = 0;
+
+	if(setBonusIndex == -1)
+	{
+		return numSetItems;
+	}
+
+	obj_id[] equippedItems = metrics.getWornItems(player);
+
+	if (equippedItems != null && equippedItems.length > 0)
+	{
+		for(int i = 0; i < equippedItems.length; i++)
+		{
+			if(isSetBonusItem(equippedItems[i]))
+			{
+				if(setBonusIndex == getSetBonusIndex(equippedItems[i]))
+					numSetItems++;
+			}
+		}
+	}
+
+	return numSetItems;
+}
+
+// Refer to datatable using index and number of worn set items to get our buff name or null.
+string getSetBonusBuffName(obj_id item, int setBonusIndex, int numberOfSetItems)
+{
+	string setBonusBuffName = "none";
+
+	int numTableRows = dataTableGetNumRows(SET_BONUS_TABLE);
+
+	for(int i = 0; i < numTableRows; i++)
+	{
+		int thisRowSetBonusIndex = dataTableGetInt(SET_BONUS_TABLE, i, "SETID");
+		int thisRowNumberOfSetItems = dataTableGetInt(SET_BONUS_TABLE, i, "NUM_ITEMS");
+
+		// Match. Return the buff name from table
+		if(setBonusIndex == thisRowSetBonusIndex && numberOfSetItems == thisRowNumberOfSetItems)
+		{
+			setBonusBuffName = dataTableGetString(SET_BONUS_TABLE, i, "EFFECT");
+			return setBonusBuffName;
+		}
+
+	}
+
+	return setBonusBuffName;
+}
+
+string getItemType(string itemName)
+{
+	dictionary itemData = new dictionary();
+	itemData = dataTableGetRow(MASTER_ITEM_TABLE, itemName);
+	if ( itemData == null)
+	{
+		return "";
+	}
+
+	switch (itemData.getInt("type"))
+	{
+		case 1:
+			return "weapon";
+		case 2:
+			return "armor";
+		case 3:
+			return "item";
+	}
+
+	return "";
+}
+
+dictionary getMergedItemDictionary (string itemName)
+{
+	dictionary masterItemData = getMasterItemDictionary(itemName);
+	string itemType = static_item.getItemType(itemName);
+	dictionary specificItemData = null;
+	if(itemType == "weapon")
+	{
+		specificItemData = getStaticItemWeaponDictionary (itemName);
+	}
+	else if(itemType == "armor")
+	{
+		specificItemData = getStaticArmorDictionary (itemName);
+	}
+	else if(itemType == "item")
+	{
+		specificItemData = getStaticItemDictionary (itemName);
+	}
+
+	//merge dictionaries
+	if(specificItemData != null)
+	{
+		java.util.Enumeration e = specificItemData.keys();
+		while(e.hasMoreElements())
+		{
+			string s = e.nextElement().toString();
+			masterItemData.put(s, specificItemData.get(s));
+		}
+	}
+	return masterItemData;
+}
+
+
+void getAttributes(obj_id player, string staticItemName, string[] names, string[] attribs)
+{
+	string itemType = static_item.getItemType(staticItemName);
+	if(itemType == "weapon")
+	{
+		getStaticWeaponObjectAttributes(player, staticItemName, names, attribs);
+	}
+	else if(itemType == "armor")
+	{
+		getStaticArmorObjectAttributes(player, staticItemName, names, attribs);
+	}
+	else if(itemType == "item")
+	{
+ 		getStaticItemObjectAttributes(player, staticItemName, names, attribs);
+	}
+}
+
+void getStaticWeaponObjectAttributes(obj_id player, string staticItemName, string[] names, string[] attribs)
+{
+	String at = "@obj_attr_n:";
+	int free = 0;
+
+	dictionary itemData = static_item.getMergedItemDictionary(staticItemName);
+
+	int levelRequired = itemData.getInt("required_level");
+	names[free] = "healing_combat_level_required";
+	attribs[free++] = "" + levelRequired;
+	// tooltip: level requirement
+	names[free] = "tooltip.healing_combat_level_required";
+	attribs[free++] = "" + levelRequired;
+
+	// Check skill requirement
+	string skillRequired = itemData.getString("required_skill");
+	string skillRequiredAttribute;
+	if (skillRequired != null && skillRequired != "")
+	{
+		skillRequiredAttribute = "@skl_n:" + skillRequired;
+	}
+	else
+	{
+		skillRequiredAttribute = "None";
+	}
+
+	names[free] = "skillmodmin";
+	attribs[free++] = skillRequiredAttribute;
+	// tooltip: check skill requirement
+	names[free] = "tooltip.skillmodmin";
+	attribs[free++] = skillRequiredAttribute;
+
+	//damage type
+	int damageType = itemData.getInt("damage_type");
+	String wpn_damage_type = "cat_wpn_damage.wpn_damage_type";
+	names[free] = wpn_damage_type;
+	String damageTypeStr = "kinetic";
+	if(damageType == 1)
+		damageTypeStr = "kinetic";
+	else if(damageType == 2)
+		damageTypeStr = "energy";
+	else
+		damageTypeStr = "unknown";
+	attribs[free++] = at + "armor_eff_" + damageTypeStr;
+	// tooltip: damage type
+	names[free] = "tooltip.wpn_damage_type";
+	attribs[free++] = at + "armor_eff_" + damageTypeStr;
+
+	//damage
+	int minDamage = itemData.getInt("min_damage");
+	int maxDamage = itemData.getInt("max_damage");
+	names[free] = "cat_wpn_damage.damage";
+	string weaponDamage = Integer.toString(minDamage) + " - " + Integer.toString(maxDamage);
+	attribs[free++] = weaponDamage;
+	// tooltip: damage
+	names[free] = "tooltip.damage";
+	attribs[free++] = weaponDamage;
+
+	//range
+	names[free] = "cat_wpn_other.wpn_range";
+	int minRange = itemData.getInt("min_range_distance");
+	int maxRange = itemData.getInt("max_range_distance");
+	string weaponRange = noDecimalFormat.format(minRange) + "-" + noDecimalFormat.format(maxRange) + "m";
+	attribs[free++] = weaponRange;
+	// tooltip: range
+	names[free] = "tooltip.wpn_range";
+	attribs[free++] = weaponRange;
+
+	// tier
+	int tier = itemData.getInt("tier");
+	names[free] = "tier";
+	attribs[free++] = "" + tier;
+	// tooltip: tier
+	names[free] = "tooltip.tier";
+	attribs[free++] = "" + tier;
+
+	string skillMods = itemData.getString("skill_mods");
+	dictionary dict = parseSkillModifiers(player, skillMods);
+	String statstf = "@stat_n:";
+
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+
+		while(keys.hasMoreElements())
+		{
+			string skillModName = (string)keys.nextElement();
+			int skillModValue = dict.getInt(skillModName);
+
+			names[free] = statstf + skillModName;
+			attribs[free++] = Integer.toString(skillModValue);
+
+			names[free] = "tooltip." + statstf + skillModName;
+			attribs[free++] = Integer.toString(skillModValue);
+		}
+	}
+}
+
+void getStaticArmorObjectAttributes(obj_id player, string staticItemName, string[] names, string[] attribs)
+{
+	String at = "@obj_attr_n:";
+	int free = 0;
+
+	dictionary itemData   = static_item.getMergedItemDictionary(staticItemName);
+
+	int levelRequired = itemData.getInt("required_level");
+	names[free] = "healing_combat_level_required";
+	attribs[free++] = "" + levelRequired;
+	// tooltip: level requirement
+	names[free] = "tooltip.healing_combat_level_required";
+	attribs[free++] = "" + levelRequired;
+
+	// Check skill requirement
+	string skillRequired = itemData.getString("required_skill");
+	string skillRequiredAttribute;
+	if (skillRequired != null && skillRequired != "")
+	{
+		skillRequiredAttribute = "@skl_n:" + skillRequired;
+	}
+	else
+	{
+		skillRequiredAttribute = "None";
+	}
+
+	names[free] = "skillmodmin";
+	attribs[free++] = skillRequiredAttribute;
+	// tooltip: check skill requirement
+	names[free] = "tooltip.skillmodmin";
+	attribs[free++] = skillRequiredAttribute;
+
+	//damage type
+	int damageType = itemData.getInt("damage_type");
+	String wpn_damage_type = "cat_wpn_damage.wpn_damage_type";
+	names[free] = wpn_damage_type;
+	String damageTypeStr = "kinetic";
+	if(damageType == 1)
+		damageTypeStr = "kinetic";
+	else if(damageType == 2)
+		damageTypeStr = "energy";
+	else
+		damageTypeStr = "unknown";
+	attribs[free++] = at + "armor_eff_" + damageTypeStr;
+
+	// tier
+	int tier = itemData.getInt("tier");
+	names[free] = "tier";
+	attribs[free++] = "" + tier;
+	// tooltip: tier
+	names[free] = "tooltip.tier";
+	attribs[free++] = "" + tier;
+
+	string skillMods = itemData.getString("skill_mods");
+	dictionary dict = parseSkillModifiers(player, skillMods);
+	String statstf = "@stat_n:";
+
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+
+		while(keys.hasMoreElements())
+		{
+			string skillModName = (string)keys.nextElement();
+			int skillModValue = dict.getInt(skillModName);
+
+			names[free] = statstf + skillModName;
+			attribs[free++] = Integer.toString(skillModValue);
+
+			names[free] = "tooltip." + statstf + skillModName;
+			attribs[free++] = Integer.toString(skillModValue);
+		}
+	}
+
+}
+
+
+void getStaticItemObjectAttributes(obj_id player, string item_name, string[] names, string[] attribs)
+{
+	String at = "@obj_attr_n:";
+	int free = 0;
+
+	dictionary itemData = static_item.getMergedItemDictionary(item_name);
+
+	//display required Level
+	int requiredLevelToEquip = itemData.getInt("required_level");
+	if (requiredLevelToEquip != 0)
+	{
+			names[free] = utils.packStringId(new string_id ("proc/proc", "required_combat_level"));
+			attribs[free++] = "" + requiredLevelToEquip;
+			names[free] = utils.packStringId(new string_id ("proc/proc", "tooltip.required_combat_level"));
+			attribs[free++] = "" + requiredLevelToEquip;
+	}
+
+	//display required Skill
+	string requiredSkillToEquip = itemData.getString("required_skill");
+	if (requiredSkillToEquip != null && requiredSkillToEquip != "")
+	{
+			names[free] = utils.packStringId(new string_id ("proc/proc", "required_skill"));
+			attribs[free++] = utils.packStringId(new string_id ("ui_roadmap", requiredSkillToEquip));
+			names[free] = utils.packStringId(new string_id ("proc/proc", "tooltip.required_skill"));
+			attribs[free++] = utils.packStringId(new string_id ("ui_roadmap", requiredSkillToEquip));
+	}
+
+	//display reuse time
+	int reuseTime = itemData.getInt("reuse_time");
+	if (reuseTime != 0)
+	{
+			names[free] = utils.packStringId(new string_id ("proc/proc", "reuse_time"));
+			attribs[free++] = "" + reuseTime + " / sec";
+			names[free] = utils.packStringId(new string_id ("proc/proc", "tooltip.reuse_time"));
+			attribs[free++] = "" + reuseTime + " / sec";
+	}
+
+	//if the reuse time is long, show the player in days, minutes, hours, seconds
+	if (reuseTime > 30)
+	{
+		names[free] = utils.packStringId(new string_id ("spam", "reuse_time_counted"));
+
+		string coolDownGroup = itemData.getString("cool_down_group");
+		string varName = "clickItem." + coolDownGroup;
+		int current_time = getGameTime();
+		int timestamp = -1;
+
+		if (hasObjVar(player,varName))
+			timestamp = getIntObjVar(player,varName);
+
+		int time_remaining = timestamp - current_time;
+
+		if (timestamp == -1 || time_remaining <= 0)
+		{
+			attribs[free] = "0";
+		}
+		else
+		{
+			attribs[free] = utils.assembleTimeRemainToUse(time_remaining);
+		}
+		free++;
+	}
+
+	//required level for effect
+	int requiredLevelForEffect = itemData.getInt("required_level_for_effect");
+	if (requiredLevelForEffect != 0)
+	{
+		names[free] = utils.packStringId(new string_id ("proc/proc", "effect_level"));
+		attribs[free++] = "" + requiredLevelForEffect;
+		names[free] = utils.packStringId(new string_id ("proc/proc", "tooltip.effect_level"));
+		attribs[free++] = "" + requiredLevelForEffect;
+	}
+
+	//display buff name
+	string buffName = itemData.getString("buff_name");
+	if (buffName != null && buffName != "")
+	{
+		names[free] = utils.packStringId(new string_id ("proc/proc", "proc_name"));
+		attribs[free++] = utils.packStringId(new string_id ("ui_buff", buffName));
+		names[free] = utils.packStringId(new string_id ("proc/proc", "tooltip.proc_name"));
+		attribs[free++] = utils.packStringId(new string_id ("ui_buff", buffName));
+	}
+
+	string skillMods = itemData.getString("skill_mods");
+	dictionary dict = parseSkillModifiers(player, skillMods);
+	String statstf = "@stat_n:";
+
+	if(dict != null)
+	{
+		java.util.Enumeration keys = dict.keys();
+
+		while(keys.hasMoreElements())
+		{
+			string skillModName = (string)keys.nextElement();
+			int skillModValue = dict.getInt(skillModName);
+
+			names[free] = statstf + skillModName;
+			attribs[free++] = Integer.toString(skillModValue);
+
+			names[free] = "tooltip." + statstf + skillModName;
+			attribs[free++] = Integer.toString(skillModValue);
+		}
+	}
+
+	// tier
+	int tier = itemData.getInt("tier");
+	names[free] = "tier";
+	attribs[free++] = "" + tier;
+	// tooltip: tier
+	names[free] = "tooltip.tier";
+	attribs[free++] = "" + tier;
+}
+
+dictionary parseSkillModifiers(obj_id player, string skillMods)
+{
+	dictionary dict = new dictionary();
+	if (skillMods != null && skillMods != "")
+	{
+		string[] stringArray = split(skillMods, ',');
+		for (int i = 0; i < stringArray.length; i++ )
+		{
+			string[] modsArray = split(stringArray[i], '=');
+			for (int x = 0; x < modsArray.length; x+=2)
+			{
+				dict.put(modsArray[0], utils.stringToInt(modsArray[1]));
+			}
+		}
+	}
+	return dict;
+}
+
+
+
+
+
+obj_id makeDynamicObject(string strName, obj_id objContainer, int intLevel)
+{
+	int whatRow = -1;
+	if(intLevel>90)
+	{
+		intLevel = 90;
+	}
+	if(intLevel<1)
+	{
+		intLevel = 1;
+	}
+	string strBaseTable = "datatables/item/dynamic_item/types/";
+	boolean boolIsWeapon = false;
+	if(strName.startsWith("dynamic_weapon"))
+	{
+		strBaseTable = strBaseTable+"weapons.iff";
+		boolIsWeapon = true;
+	}
+	// There's no armor under level 22
+	else if(strName.startsWith("dynamic_armor") && intLevel > 21)
+	{
+		strBaseTable = strBaseTable + "armor.iff";
+	}
+	else if(strName.startsWith("dynamic_clothing"))
+	{
+		strBaseTable = strBaseTable + "clothing.iff";
+	}
+	else
+	{
+		return null;
+	}
+	// get it's entry
+	dictionary dctItemInfo = dataTableGetRow(strBaseTable, strName);
+	if(dctItemInfo==null)
+	{
+		return null;
+	}
+	string strAppearance = dctItemInfo.getString("strBaseAppearance");
+	if(strAppearance.endsWith(".iff"))
+	{
+
+	}
+	else
+	{
+		string[] strTemplates = dataTableGetStringColumnNoDefaults("datatables/item/dynamic_item/appearances/"+strAppearance+".iff", "strTemplate");
+		if((strTemplates==null)||(strTemplates.length<1))
+		{
+              		return null;
+		}
+		// get it from a datatable. Adding whatRow variable so I can use it below.
+		whatRow = rand(0, strTemplates.length-1);
+		strAppearance = strTemplates[whatRow];
+	}
+	obj_id objObject = createObject(strAppearance, objContainer, "");
+
+	if(utils.hasScriptVar(objContainer, "theft_in_progress") )
+		loot.notifyThiefOfItemStolen(objContainer, objObject);
+
+	if(!isIdValid(objObject))
+	{
+		return null;
+	}
+	if(boolIsWeapon)
+	{
+		dictionary dctWeaponStats = dataTableGetRow("datatables/item/dynamic_item/root_balance_data/weapon_data.iff",intLevel);
+		return setupDynamicWeapon(objObject, strName, intLevel, dctWeaponStats, dctItemInfo, true);
+	}
+
+	if(strName.startsWith("dynamic_armor"))
+	{
+		if(strName.startsWith("dynamic_armor_jedi") )
+		{
+			setObjVar(objObject, "dynamic_item.required_skill", "force_sensitive");
+		}
+
+		// Hue it, if applicable. Set armor objvar too.
+		if(whatRow > -1)
+		{
+			string strAppearanceForReals = dctItemInfo.getString("strBaseAppearance");
+			int indexColor = dataTableGetInt("datatables/item/dynamic_item/appearances/"+strAppearanceForReals+".iff", whatRow, "indexColor");
+			int maxHue = dataTableGetInt("datatables/item/dynamic_item/appearances/"+strAppearanceForReals+".iff", whatRow, "maxHue");
+			int datatableArmorType = dataTableGetInt("datatables/item/dynamic_item/appearances/"+strAppearanceForReals+".iff", whatRow, "armorType");
+
+			if(indexColor >= 0 && maxHue >= 0)
+			{
+				int thisHue = rand(0, maxHue);
+				hue.setColor(objObject, "/private/index_color_" + indexColor, thisHue);
+			}
+
+			if(datatableArmorType > -1)
+			{
+				setObjVar(objObject, "armor.armorCategory", datatableArmorType);
+			}
+
+		}
+
+		return setupDynamicArmor(objObject, intLevel, dctItemInfo, true);
+	}
+
+	if(strName.startsWith("dynamic_clothing"))
+	{
+		// Hue it, if applicable.
+		if(whatRow > -1)
+		{
+			string strAppearanceForReals = dctItemInfo.getString("strBaseAppearance");
+			int indexColor = dataTableGetInt("datatables/item/dynamic_item/appearances/"+strAppearanceForReals+".iff", whatRow, "indexColor");
+			int maxHue = dataTableGetInt("datatables/item/dynamic_item/appearances/"+strAppearanceForReals+".iff", whatRow, "maxHue");
+
+			if(indexColor >= 0 && maxHue >= 0)
+			{
+				int thisHue = rand(0, maxHue);
+				hue.setColor(objObject, "/private/index_color_" + indexColor, thisHue);
+			}
+		}
+		setObjVar(objObject, "dynamic_item.intLevelRequired", intLevel);
+		generateItemStatBonuses(objObject, intLevel, dctItemInfo);
+		string strSuffix = getArmorNameSuffix(objObject);
+		dctItemInfo.put("strSuffix", strSuffix);
+		setupDynamicItemName(objObject, dctItemInfo);
+		attachScript(objObject, "item.armor.dynamic_armor");
+// Junk Dealer Price.
+		int basePrice = (int)(Math.pow( (intLevel*12.0f), 1.3f) );
+
+		if(basePrice > 10200)
+			basePrice = 10200;
+
+		setObjVar(objObject, "junkDealer.intPrice", basePrice);
+		int minPriceValue = 0;
+		int maxPriceValue = intLevel * 10;
+		setupJunkDealerPrice(objObject, minPriceValue, maxPriceValue, 0);
+	}
+
+	return objObject;
+}
+
+obj_id setupDynamicArmor(obj_id objArmor, int intLevel)
+{
+
+	return setupDynamicArmor(objArmor, intLevel, null, false);
+}
+
+obj_id setupDynamicArmor(obj_id objArmor, int intLevel, dictionary dctItemInfo, boolean boolSetupData)
+{
+	string armorBalanceTable = "datatables/item/dynamic_item/root_balance_data/armor_data.iff";
+	string modifiersTable = "datatables/item/dynamic_item/modifiers/armor_mods.iff";
+	string armorTypeTable = "datatables/item/dynamic_item/types/armor.iff";
+
+	int minLevel = dataTableGetInt(armorBalanceTable, 0, "minLevel");
+	int protectIncreasePerLevel = dataTableGetInt(armorBalanceTable, 0, "protectIncreasePerLevel");
+	int minRawProtection = dataTableGetInt(armorBalanceTable, 0, "minRawProtection");
+	int maxRawProtection = dataTableGetInt(armorBalanceTable, 0, "maxRawProtection");
+	float balanceMod = dataTableGetFloat(armorBalanceTable, 0, "balanceMod");
+	float minBaseMod = dataTableGetFloat(armorBalanceTable, 0, "minBaseMod");
+	float maxBaseMod = dataTableGetFloat(armorBalanceTable, 0, "maxBaseMod");
+	float minPrimaryMod = dataTableGetFloat(armorBalanceTable, 0, "minPrimaryMod");
+	float maxPrimaryMod = dataTableGetFloat(armorBalanceTable, 0, "maxPrimaryMod");
+	float minSpecialMod = dataTableGetFloat(armorBalanceTable, 0, "minSpecialMod");
+	float maxSpecialMod = dataTableGetFloat(armorBalanceTable, 0, "maxSpecialMod");
+	float baseSpecialMod = dataTableGetFloat(armorBalanceTable, 0, "baseSpecialMod");
+
+	float baseMod = minBaseMod;
+	float primaryMod = minPrimaryMod;
+	float specialMod = minSpecialMod;
+	int armorTypeModRow = 0;
+
+	// Making item for the first time.
+	if(boolSetupData)
+	{
+		// Get baseline, primary, and special modifiers.
+		// Determine our "Blah armor of Blah" type.
+		// Protection-wise everything derived from these five values.
+		baseMod = rand(minBaseMod, maxBaseMod);
+		primaryMod = rand(minPrimaryMod, maxPrimaryMod);
+		specialMod = rand(minSpecialMod, maxSpecialMod);
+		armorTypeModRow = rand(0, dataTableGetNumRows(modifiersTable) - 1 );
+
+		setObjVar(objArmor, "dynamic_item.intLevelRequired", intLevel);
+		setObjVar(objArmor, "dynamic_item.baseMod", baseMod);
+		setObjVar(objArmor, "dynamic_item.primaryMod", primaryMod);
+		setObjVar(objArmor, "dynamic_item.specialMod", specialMod);
+		setObjVar(objArmor, "dynamic_item.armorTypeModRow", armorTypeModRow);
+	}
+	// Data is supposedly there, so clamp it to acceptable ranges.
+	else
+	{
+		baseMod = getFloatObjVar(objArmor, "dynamic_item.baseMod");
+		primaryMod = getFloatObjVar(objArmor, "dynamic_item.primaryMod");
+		specialMod = getFloatObjVar(objArmor, "dynamic_item.specialMod");
+		armorTypeModRow = getIntObjVar(objArmor, "dynamic_item.armorTypeModRow");
+		intLevel = getIntObjVar(objArmor, "dynamic_item.intLevelRequired");
+
+		if(baseMod < minBaseMod)
+		{
+			baseMod = minBaseMod;
+			setObjVar(objArmor, "dynamic_item.baseMod", baseMod);
+		}
+
+		if(baseMod > maxBaseMod)
+		{
+			baseMod = maxBaseMod;
+			setObjVar(objArmor, "dynamic_item.baseMod", baseMod);
+		}
+
+		if(primaryMod < minPrimaryMod)
+		{
+			primaryMod = minPrimaryMod;
+			setObjVar(objArmor, "dynamic_item.primaryMod", primaryMod);
+		}
+		if(primaryMod > maxPrimaryMod)
+		{
+			primaryMod = maxPrimaryMod;
+			setObjVar(objArmor, "dynamic_item.primaryMod", primaryMod);
+		}
+
+		if(specialMod < minSpecialMod)
+		{
+			specialMod = minSpecialMod;
+			setObjVar(objArmor, "dynamic_item.specialMod", specialMod);
+		}
+
+		if(specialMod > maxSpecialMod)
+		{
+			specialMod = maxSpecialMod;
+			setObjVar(objArmor, "dynamic_item.specialMod", specialMod);
+		}
+
+		if(armorTypeModRow > dataTableGetNumRows(modifiersTable) - 1)
+		{
+			armorTypeModRow = dataTableGetNumRows(modifiersTable) - 1;
+			setObjVar(objArmor, "dynamic_item.armorTypeModRow", armorTypeModRow);
+		}
+
+		if(armorTypeModRow < 0)
+		{
+			armorTypeModRow = 0;
+			setObjVar(objArmor, "dynamic_item.armorTypeModRow", armorTypeModRow);
+		}
+
+		if(intLevel > 90)
+		{
+			intLevel = 90;
+			setObjVar(objArmor, "dynamic_item.intLevelRequired", intLevel);
+		}
+
+		if(intLevel < 1)
+		{
+			intLevel = 1;
+			setObjVar(objArmor, "dynamic_item.intLevelRequired", intLevel);
+		}
+	}
+
+// Derive and store the actual protections.
+// Start at (1500) at (lvl 22) and add (66) per level to a max of (6000) somewhere around 90.
+	int rawProtection = ( (intLevel - minLevel) * protectIncreasePerLevel ) + minRawProtection;
+	rawProtection *= balanceMod;
+
+	if(rawProtection > maxRawProtection)
+		rawProtection = maxRawProtection;
+
+	dictionary armorTypeMods = dataTableGetRow(modifiersTable, armorTypeModRow);
+	float baseProtection =  baseMod * rawProtection;
+
+// Determine Kinetic and Energy Protection values.
+	float kinMod = armorTypeMods.getFloat("kinMod");
+	float engMod = armorTypeMods.getFloat("engMod");
+
+	float kinProtFloat = (1 + (kinMod * primaryMod) ) * baseProtection;
+	float engProtFloat = (1 + (engMod * primaryMod) ) * baseProtection;
+
+// Determine special protections
+	float heatMod = armorTypeMods.getFloat("heatMod");
+	float coldMod = armorTypeMods.getFloat("coldMod");
+	float acidMod = armorTypeMods.getFloat("acidMod");
+	float electMod = armorTypeMods.getFloat("electMod");
+
+	float heatProtFloat = (1 + (heatMod * specialMod) ) * baseProtection * baseSpecialMod;
+	float coldProtFloat = (1 + (coldMod * specialMod) ) * baseProtection * baseSpecialMod;
+	float acidProtFloat = (1 + (acidMod * specialMod) ) * baseProtection * baseSpecialMod;
+	float electProtFloat = (1 + (electMod * specialMod) ) * baseProtection * baseSpecialMod;
+
+// Set the protections on the item and attach the static item scripts.
+
+	setObjVar(objArmor, "armor.fake_armor.kinetic", (int)kinProtFloat);
+	setObjVar(objArmor, "armor.fake_armor.energy", (int)engProtFloat);
+	setObjVar(objArmor, "armor.fake_armor.heat", (int)heatProtFloat);
+	setObjVar(objArmor, "armor.fake_armor.cold", (int)coldProtFloat);
+	setObjVar(objArmor, "armor.fake_armor.acid", (int)acidProtFloat);
+	setObjVar(objArmor, "armor.fake_armor.electricity", (int)electProtFloat);
+
+	if(boolSetupData)
+	{
+	// Junk Dealer Price.
+		int basePrice = (int)(Math.pow( (intLevel*12.0f), 1.3f) );
+
+		if(basePrice > 10200)
+			basePrice = 10200;
+
+		setObjVar(objArmor, "junkDealer.intPrice", basePrice);
+
+		int minPriceValue = 0;
+		int maxPriceValue = intLevel * 10;
+
+		attachScript(objArmor, "item.armor.dynamic_armor");
+		setupJunkDealerPrice(objArmor, minPriceValue, maxPriceValue, 0);
+		generateItemStatBonuses(objArmor, intLevel, dctItemInfo);
+
+		string strSuffix = getArmorNameSuffix(objArmor);
+		armorTypeMods.put("strSuffix", strSuffix);
+		setupDynamicItemName(objArmor, armorTypeMods);
+
+	// Make sure the armor script is attached for clothing armor.
+		if(!hasScript(objArmor, "item.armor.new_armor") )
+			attachScript(objArmor, "item.armor.new_armor");
+	}
+
+	return objArmor;
+}
+
+float getDynamicWeaponRange(obj_id weapon)
+{
+	int level = getIntObjVar(weapon, "dynamic_item.intLevelRequired");
+	dictionary dctWeaponStats = dataTableGetRow("datatables/item/dynamic_item/root_balance_data/weapon_data.iff", level);
+	int intWeaponType = getWeaponType(weapon);
+	string strWeaponString = combat.getWeaponStringType(intWeaponType);
+	return dctWeaponStats.getFloat(strWeaponString + "_max_range");
+}
+
+obj_id  setupDynamicWeapon(obj_id objWeapon, string itemName, int intLevel, dictionary dctWeaponStats, dictionary dctItemInfo, boolean boolSetupData)
+{
+	obj_id self = getSelf();
+
+	dictionary dctItemNames = new dictionary();
+
+	if(boolSetupData)
+	{
+		string strBaseName = dctItemInfo.getString("strRootName");
+		if(strBaseName!="")
+		{
+			dctItemNames.put("strBaseName", strBaseName);
+		}
+	}
+
+	float fltMinDamageVal = 0;
+	float fltMaxDamageVal = 0;
+
+	if(boolSetupData)
+	{
+		fltMinDamageVal = rand(0f, 1f);
+		fltMaxDamageVal = rand(0f, 1f);
+		setObjVar(objWeapon, "dynamic_item.minDamageVal", fltMinDamageVal);
+		setObjVar(objWeapon, "dynamic_item.maxDamageVal", fltMaxDamageVal);
+	}
+	else
+	{
+		fltMinDamageVal = getFloatObjVar(objWeapon, "dynamic_item.minDamageVal");
+		fltMaxDamageVal = getFloatObjVar(objWeapon, "dynamic_item.maxDamageVal");
+
+	}
+
+	int intWeaponType = getWeaponType(objWeapon);
+	string strWeaponString = combat.getWeaponStringType(intWeaponType);
+
+	int intMinDamageMin = dctWeaponStats.getInt(strWeaponString + "_min_damage_min");
+	int intMinDamageMax = dctWeaponStats.getInt(strWeaponString + "_min_damage_max");
+
+	int intMaxDamageMin = dctWeaponStats.getInt(strWeaponString + "_max_damage_min");
+	int intMaxDamageMax = dctWeaponStats.getInt(strWeaponString + "_max_damage_max");
+
+	float fltMin = (float) (intMinDamageMax - intMinDamageMin);
+	float fltMax = (float) (intMaxDamageMax - intMaxDamageMin);
+
+	fltMin = fltMin * fltMinDamageVal;
+	fltMax = fltMax * fltMaxDamageVal;
+
+	int intMinDamage = intMinDamageMin + (int)fltMin;
+	int intMaxDamage = intMaxDamageMin + (int)fltMax;
+
+	float fltAttackSpeed = dctWeaponStats.getFloat(strWeaponString + "_attack_speed");
+	float fltMaxRange = dctWeaponStats.getFloat(strWeaponString + "_max_range");
+
+	int intDamageType = DAMAGE_NONE;
+
+	if(boolSetupData)
+	{
+		intDamageType = dctItemInfo.getInt("baseDamageType");
+
+		if(intDamageType == -1)
+		{
+			int intRoll = rand(1,2);
+			if(intRoll==1)
+				intDamageType = DAMAGE_KINETIC;
+			else
+				intDamageType = DAMAGE_ENERGY;
+		}
+	}
+	else
+		intDamageType = getWeaponDamageType(objWeapon);
+
+	setWeaponMinDamage(objWeapon, intMinDamage);
+	setWeaponMaxDamage(objWeapon, intMaxDamage);
+	setWeaponAttackSpeed(objWeapon, fltAttackSpeed);
+	setWeaponWoundChance(objWeapon, 0);
+	setMaxHitpoints(objWeapon,(1000));
+	setHitpoints(objWeapon,(1000));
+	setWeaponAccuracy(objWeapon, 0);
+	setWeaponDamageType(objWeapon, intDamageType);
+	setWeaponRangeInfo(objWeapon, 0, fltMaxRange);
+	setWeaponAttackCost(objWeapon, 0);
+
+
+	setupJunkDealerPrice(objWeapon, dctWeaponStats.getInt("intMinValue"), dctWeaponStats.getInt("intMaxValue"), (fltMinDamageVal + fltMaxDamageVal) /2);
+
+	/*
+	// Modifiers were never being applied to these weapons because the intRoll was explicitly being set to 0, so just commenting out this whole section.
+	for(int intI = 1; intI <= NUM_DYNAMIC_MODIFIERS; intI++)
+	{
+
+		string strModifier = dctItemInfo.getString("strModifier"+intI);
+		int intApplicationChance = dctItemInfo.getInt("intApplicationChance"+intI);
+		//sendSystemMessageTestingOnly(getSelf(), "chance is "+intApplicationChance);
+		int intRoll = rand(1, 100);
+		intRoll = 0;
+		if (intRoll <intApplicationChance)
+		{
+			// do the application
+			dctItemNames = applyWeaponItemModifers(objWeapon, strModifier, intMinDamage, intMaxDamage, dctItemNames);
+		}
+	}
+	*/
+
+	setObjVar(objWeapon, "dynamic_item.intLevelRequired", intLevel);
+	setObjVar(objWeapon, "weapon.original_max_range", fltMaxRange);
+
+	if(boolSetupData)
+		setupDynamicItemName(objWeapon, dctItemNames);
+
+	weapons.setWeaponData(objWeapon);
+	setConversionId(objWeapon, weapons.CONVERSION_VERSION);
+
+	return objWeapon;
+}
+
+void generateItemStatBonuses(obj_id item, int level, dictionary dctItemInfo)
+{
+	//LOG("dynamic_stats", "entering generateItemStatBonuses ");
+	float[] numStatChances = {101.0f, 101.0f, 101.0f, 101.0f, 101.0f, 101.0f, 101.0f};
+	int[] statBonuses = {0, 0, 0, 0, 0, 0, 0};
+	string[] statBonusNames = { "precision_modified", "strength_modified", "stamina_modified",
+					"constitution_modified", "agility_modified", "luck_modified", "camouflage"};
+
+// Build the array to determine the chances for how many stats are applied.
+	for(int i = 0; i < numStatChances.length; i ++)
+	{
+		float thisChance = dctItemInfo.getFloat( i + "statChance");
+
+		if(thisChance < 0)
+			thisChance = 0;
+
+		numStatChances[i] = thisChance;
+	}
+
+// Decide how many stats to apply.
+	float numberOfStatsRoll = rand(1.0f, 100.0f);
+	int numberOfStats = 0;
+
+	for(int i = 6; i > 0; i --)
+	{
+		if(numberOfStatsRoll > numStatChances[i])
+		{
+			numberOfStats = i;
+			break;
+		}
+	}
+
+// Determine the value of the stat and where its going to be applied.
+	if(numberOfStats > 0)
+	{
+		for(int i = 0; i < numberOfStats; i ++)
+		{
+			int statBonus = generateStatMod(level);
+
+			// Try up to 12 times to look for a new stat.
+			for(int j = 0; j < 12; j ++)
+			{
+				int isCamo = rand(1, 100);
+				int thisStat = rand(0, 5);
+				if(isCamo <= 5)
+				{
+					thisStat = 6; //camo
+				}
+				//LOG("dynamic_stats", "thisStat = " + thisStat);
+				if(statBonuses[thisStat] == 0)
+				{
+					//LOG("dynamic_stats", "statBonuses[thisStat] = " + statBonuses[thisStat]);
+					//LOG("dynamic_stats", "statBonus = " + statBonus);
+					statBonuses[thisStat] = statBonus;
+					break;
+				}
+			}
+		}
+	}
+
+//Apply the stats to the item.
+	for(int i = 0; i < statBonuses.length; i++)
+	{
+		if(statBonuses[i] > 0)
+		{
+			setObjVar(item, "skillmod.bonus." + statBonusNames[i], statBonuses[i]);
+		}
+	}
+
+	return;
+}
+
+// Returns a variable stat mod based on an acceptable range for that level.
+// This function is based on the data in worksheet in datatables/item/dynamic_item/root_balance_data/dynamic_item_scaling.xls
+int generateStatMod(int level)
+{
+	const float VARIANCE = 0.125f;
+	const float BASE_MOD = 0.2f;
+	const float MAX_MOD = 0.312f;
+	const float FLOOR_CHANCE = 60.0f;
+
+	float varianceIncrements = level*MAX_MOD-level*BASE_MOD;
+	float exponentIncrement = 18/varianceIncrements;
+	float baseMod = level* BASE_MOD;
+	float maxMod = level*MAX_MOD;
+	float currentIncrement = 0.0f;
+
+	float finalModFloat = baseMod;
+
+	if(varianceIncrements < 1)
+		varianceIncrements = 1.0f;
+
+	if(exponentIncrement < 1)
+		exponentIncrement = 1.0f;
+
+	if(baseMod < 1)
+		baseMod = 1.0f;
+
+	if(maxMod < 1)
+		maxMod = 1.0f;
+
+	float roll = rand(1.0f, 100.0f);
+
+	for(float f = 0.0f; f <= 18; f += exponentIncrement)
+	{
+		currentIncrement = (float)Math.pow(FLOOR_CHANCE, 1+(f/100) );
+
+		if(roll < currentIncrement)
+		{
+			finalModFloat = baseMod;
+			break;
+		}
+		baseMod++;
+	}
+
+	if(baseMod > maxMod)
+		baseMod = maxMod;
+
+	int statMod = (int)baseMod;
+
+	return statMod;
+}
+
+// Look at the stat mods and returns the appropriate suffix string
+string getArmorNameSuffix(obj_id item)
+{
+	string strSuffix = "@dynamic_items:armor_none";
+	int numStats = 0;
+	int highestStatNum = 0;
+	int highestStatValue = 0;
+
+	string[] statBonusNames = { "precision_modified", "strength_modified", "stamina_modified",
+					"constitution_modified", "agility_modified", "luck_modified", "camouflage"};
+
+	if(hasObjVar(item, "skillmod.bonus") )
+	{
+		for(int i = 0; i < statBonusNames.length; i++)
+		{
+			int thisStat = getIntObjVar(item, "skillmod.bonus." + statBonusNames[i]);
+
+			if(thisStat > 0)
+			{
+				numStats++;
+
+				if(thisStat > highestStatValue)
+				{
+					highestStatNum = i;
+					highestStatValue = thisStat;
+				}
+			}
+		}
+
+		if(numStats >= 6)
+			strSuffix = "@dynamic_items:armor_six_stat";
+
+		if(numStats == 5)
+			strSuffix = "@dynamic_items:armor_five_stat";
+
+		if(numStats >= 1 && numStats < 5)
+		{
+			strSuffix = "@dynamic_items:armor_" + statBonusNames[highestStatNum] + "_" + numStats;
+		}
+	}
+
+	return strSuffix;
+}
+
+void setupJunkDealerPrice(obj_id objObject, int intMinValue, int intMaxValue, float fltRange)
+{
+
+	if(fltRange!=0)
+	{
+		// use it as a modifer
+		int intPrice = getIntObjVar(objObject, "junkDealer.intPrice");
+		float fltDiff = (float)(intMaxValue - intMinValue);
+		//sendSystemMessageTestingOnly(getSelf(), "min price is "+intMinValue+" and max is "+intMaxValue+" diff is "+fltDiff);
+
+		fltDiff = fltDiff * fltRange;
+
+		intPrice = intMinValue + (int) fltDiff;
+		//sendSystemMessageTestingOnly(getSelf(), "diff 2 is "+fltDiff+" and price is "+intPrice);
+		setObjVar(objObject, "junkDealer.intPrice", intPrice);
+	}
+	else
+	{
+		int intPrice = getIntObjVar(objObject, "junkDealer.intPrice");
+		intPrice = intPrice + rand(intMinValue, intMaxValue);
+		//sendSystemMessageTestingOnly(getSelf(), "min price is "+intMinValue+" and max is "+intMaxValue);
+		//sendSystemMessageTestingOnly(getSelf(), "price is "+intPrice);
+		setObjVar(objObject, "junkDealer.intPrice", intPrice);
+	}
+	return;
+}
+
+dictionary applyWeaponItemModifers(obj_id objWeapon, string strModifier, int intMinDamage, int intMaxDamage, dictionary dctItemNames)
+{
+
+
+	// types so far are
+	//elemental_damage
+	dictionary dctModifierInfo =null;
+	if(strModifier.startsWith("elemental_damage"))
+	{
+		// elemental damage datatable!
+		//sendSystemMessageTestingOnly(getSelf(), "1");
+		string strTable = "datatables/item/dynamic_item/modifiers/elemental_damage_modifiers.iff";
+		dctModifierInfo = dataTableGetRow(strTable, strModifier);
+		//sendSystemMessageTestingOnly(getSelf(), "Getting "+strModifier);
+		if(dctModifierInfo ==null)
+		{
+			return dctItemNames;
+		}
+		//sendSystemMessageTestingOnly(getSelf(), "2");
+		float fltMedianDamage = (float)(intMinDamage + intMaxDamage)/2;
+		if(fltMedianDamage<1)
+		{
+			return dctItemNames ;
+		}
+		//sendSystemMessageTestingOnly(getSelf(), "3");
+		float fltDamageAdded = dctModifierInfo.getFloat("fltDamageAdded");
+		int intDamageType = dctModifierInfo.getInt("intDamageType");
+		int intDamage = (int)(fltDamageAdded * fltMedianDamage);
+		if(intDamage<1)
+		{
+			return dctItemNames;
+		}
+		setWeaponElementalDamage(objWeapon, intDamageType, intDamage);
+
+	}
+	if(dctModifierInfo==null)
+	{
+		return dctItemNames;
+	}
+	setupJunkDealerPrice(objWeapon, dctModifierInfo.getInt("intMinValueAdded"), dctModifierInfo.getInt("intMaxValueAdded"), 0);
+	// add the names
+	string strPrefix = dctModifierInfo.getString("strDisplayPrefix");
+	string strSuffix = dctModifierInfo.getString("strDisplaySuffix");
+	if(strPrefix!="")
+	{
+		//sendSystemMessageTestingOnly(getSelf(), "putting prefix "+strPrefix);
+		dctItemNames.put("strPrefix", strPrefix);
+	}
+	if(strSuffix!="")
+	{
+		//sendSystemMessageTestingOnly(getSelf(), "putting suffix "+strSuffix);
+		dctItemNames.put("strSuffix", strSuffix);
+	}
+
+	return dctItemNames;
+
+}
+
+void setupDynamicItemName(obj_id objItem, dictionary dctNames)
+{
+
+	// 3 names
+	// strPrefix
+	//strBaseName
+	//strSuffix
+
+	string strPrefix = dctNames.getString("strPrefix");
+	string strBaseName= dctNames.getString("strBaseName");
+	string strSuffix = dctNames.getString("strSuffix");
+
+	if(strPrefix!=null)
+	{
+		int intIndex = strPrefix.indexOf('@');
+		if(intIndex>-1)
+		{
+			strPrefix = getString(utils.unpackString(strPrefix));
+		}
+	}
+	else
+	{
+		strPrefix = "";
+	}
+	if(strBaseName!=null)
+	{
+		int intIndex = strBaseName.indexOf('@');
+		if(intIndex>-1)
+		{
+			strBaseName = getString(utils.unpackString(strPrefix));
+		}
+
+	}
+	else
+	{
+		strBaseName = "";
+	}
+	if(strSuffix!=null)
+	{
+		int intIndex = strSuffix.indexOf('@');
+		if(intIndex>-1)
+		{
+			strSuffix= getString(utils.unpackString(strSuffix));
+		}
+
+	}
+	else
+	{
+		strSuffix = "";
+	}
+	//sendSystemMessageTestingOnly(getSelf(), "prefix is "+strPrefix);
+	//sendSystemMessageTestingOnly(getSelf(), "suffix is "+strSuffix);
+	//sendSystemMessageTestingOnly(getSelf(), "base name is "+strBaseName);
+
+
+	if((strPrefix!="")||(strSuffix!="")||(strBaseName!=""))
+	{
+		// start with prefix.
+		string strName = "";
+		if(strPrefix!="")
+			strName +=strPrefix + " ";
+
+		if(strBaseName!="")
+		{
+			strName+=strBaseName+" ";
+		}
+		else
+		{
+			// use encoded name
+			strName+=getString(utils.unpackString(getEncodedName(objItem)))+" ";
+		}
+		if(strSuffix!="")
+		{
+			strName+=strSuffix;
+		}
+		//sendSystemMessageTestingOnly(getSelf(), "setting name to "+strName);
+		if(strName!="")
+		{
+			setName(objItem, "");
+			setName(objItem, strName);
+		}
+	}
+
+
+
+	return;
+}
+
+boolean isDynamicItem(obj_id objItem)
+{
+	if(hasObjVar(objItem, "dynamic_item"))
+	{
+		return true;
+	}
+	return false;
+}
+
+boolean isUniqueStaticItem(obj_id item)
+{
+	string item_name = getStaticItemName(item);
+	dictionary dict = getMasterItemDictionary(item_name);
+	if(dict != null)
+		return dict.getInt("unique") == 1;
+	else
+	{
+		LOG( "create", " Could not check for unique, dictionary returned null " +item );
+		return false;
+	}
+}
+
+boolean isUniqueStaticItem(string item)
+{
+	dictionary dict = getMasterItemDictionary(item);
+	if(dict != null)
+	{
+		return dict.getInt("unique") == 1;
+	}
+	else
+	{
+		LOG( "create", " Could not check for unique, dictionary returned null " +item );
+		return false;
+	}
+
+}
+
+boolean canCreateUniqueStaticItem(obj_id container, string itemName)
+{
+	if (!isPlayer(getOwner(container)))
+	{
+		return true;
+	}
+
+	return (!utils.playerHasStaticItemInBankOrInventory(getOwner(container), itemName));
+}
+
+boolean canEquip(obj_id player, obj_id item)
+{
+	dictionary itemData = static_item.getMasterItemDictionary(item);
+
+	int requiredLevel = itemData.getInt("required_level");
+	string requiredSkill = itemData.getString("required_skill");
+
+	boolean canEquip = true;
+
+	if(!static_item.validateLevelRequired(player,requiredLevel))
+	{
+		canEquip = false;
+	}
+	if ( requiredSkill != null && requiredSkill != "" )
+	{
+		string classTemplate = getSkillTemplate(player);
+		if ( classTemplate != null && classTemplate != "" )
+		{
+			if (!classTemplate.startsWith(requiredSkill))
+			{
+				canEquip = false;
+			}
+		}
+	}
+
+	return canEquip;
+}
+
+//adds an objvar of the first players inventory I am in
+void origOwnerCheckStamp(obj_id object, obj_id player)
+{
+	if(hasObjVar(object, ORIG_OWNER))
+		return;
+
+	if(!utils.isNestedWithinAPlayer(object))
+		return;
+
+	if(isIdValid(player))
+		setObjVar(object, ORIG_OWNER, player);	
+
+	return;
+}
+
+//returns true if the orig owner is the current owner
+boolean userIsOrigOwner(obj_id object, obj_id player)
+{
+	if(!isIdValid(object) || !isIdValid(player))
+		return false;
+	
+	obj_id origOwner = utils.getObjIdObjVar(object, ORIG_OWNER);
+	obj_id currentOwner = utils.getContainingPlayer(object);
+	
+	if(!isIdValid(origOwner) || !isIdValid(currentOwner))
+		return false;
+	
+	if(origOwner == currentOwner)
+		return true;
+		
+	return false;
+}
+
+//returns the string id for the name of the static item
+string_id getStaticItemStringIdName(obj_id object)
+{
+	if(!isIdValid(object) || !exists(object))
+		return null;
+		
+	if(!isStaticItem(object))
+		return null;
+	
+	string staticItemName = getStaticItemName(object);
+	
+	return new string_id(STATIC_ITEM_NAME, staticItemName);
+}

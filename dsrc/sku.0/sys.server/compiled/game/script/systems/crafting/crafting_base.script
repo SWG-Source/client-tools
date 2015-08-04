@@ -1,0 +1,931 @@
+/**
+ * Copyright (c) ©2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        crafting_base.script
+ * Description:  base crafting script that should be used by all other crafting scripts
+ * @author       $Author: Reece Thornton & Friends$
+ * @version      $Revision: 0$
+ */
+
+/**
+ * Include Libraries
+ */
+// include anyLibrary;	/** a .scriptlib file */
+include library.utils;
+include library.craftinglib;
+include library.collection;
+include library.weapons;
+include library.temp_schematic;
+include library.xp;
+include library.sui;
+
+/**
+ * Constants
+ * @{
+ */
+/** The version number of this script. */
+const string VERSION = "v0.00.00";
+/* @} */
+
+/*****************************************************************************************************************************************
+ *****************************************************************************************************************************************
+ *    THESE FUNCTIONS MUST BE OVERRIDDEN BY A DERIVED SCRIPT!                                                                           **
+ *****************************************************************************************************************************************
+ *****************************************************************************************************************************************/
+
+string[] getRequiredSkills()
+{
+	LOG("crafting", "Called into crafting_base script getRequiredSkills()! This function should have been overridden!");
+	return null;
+}
+
+string[] getAssemblySkillMods()
+{
+	LOG("crafting", "Called into crafting_base script getAssemblySkillMods()! This function should have been overridden!");
+	return null;
+}
+
+string[] getExperimentSkillMods()
+{
+	LOG("crafting", "Called into crafting_base script getExperimentSkillMods()! This function should have been overridden!");
+	return null;
+}
+
+resource_weight[] getResourceMaxResourceWeights()
+{
+	LOG("crafting", "Called into craftin_base script getResourceMaxResourceWeights()! This function should have been overridden!");
+	return null;
+}
+
+resource_weight[] getAssemblyResourceWeights()
+{
+	LOG("crafting", "Called into crafting_base script getAssemblyResourceWeights()! This function should have been overridden!");
+	return null;
+}
+
+void calcAndSetPrototypeProperties ( obj_id prototype, draft_schematic.attribute[] itemAttributes )
+{
+	LOG("crafting", "Called into crafting_base script calcAndSetPrototypeProperties()! This function should have been overridden!");
+}
+
+String[] getAppearances(obj_id player, draft_schematic.slot[] slots)
+{
+	LOG("crafting", "Called into crafting_base script getAppearances()! This function should have been overridden!");
+	return null;
+}
+
+draft_schematic.custom[] getCustomizations(obj_id player, draft_schematic.custom[] customizations)
+{
+	LOG("crafting", "Called into crafting_base script getCustomizations()! This function should have been overridden!");
+	return null;
+}
+
+// Optional, used for multicrafted deeds.
+void modifyForCustomAppearance( obj_id self, obj_id newObject )
+{
+}
+
+/*****************************************************************************************************************************************
+ *****************************************************************************************************************************************
+ *    INTERNAL FUNCTIONS                                                                                                                **
+ *****************************************************************************************************************************************
+ *****************************************************************************************************************************************/
+
+/**
+ * Sets object property for properties that are common to all crafted objects.
+ *
+ * @param prototype			the object whose property to set
+ * @param itemAttribute		the attribute property to change
+ *
+ * @return true if the property was handled, false if not
+ */
+boolean calcAndSetPrototypeProperty ( obj_id prototype, draft_schematic.attribute itemAttribute )
+{
+	if ( itemAttribute == null )
+		return false;
+
+	// set attributes that are common to all objects
+	boolean result = false;
+	if ( itemAttribute.name.equals("complexity") )
+	{
+		setComplexity (prototype, itemAttribute.currentValue);
+		setComplexity (getSelf(), itemAttribute.currentValue);
+		result = true;
+	}
+	else if ( itemAttribute.name.equals("hitPoints"))
+	{
+		setMaxHitpoints (prototype, (int) itemAttribute.currentValue);
+		result = true;
+	}
+	else if ( itemAttribute.name.equals("xp") )
+	{
+		utils.setScriptVar(prototype, "crafting.creator.xp", (int)(itemAttribute.currentValue + 0.5f));
+		result = true;
+	}
+	else if ( itemAttribute.name.equals("sockets") )
+	{
+		if((int)itemAttribute.currentValue > 0 && getGameObjectType(prototype) != GOT_misc_container_wearable)
+		{
+			//Allow 2 sockets for Cybernetic Arms and Cybernetic Legs.
+			if(getGameObjectType(prototype) == GOT_cybernetic_legs || getGameObjectType(prototype) == GOT_cybernetic_arm)
+				setSkillModSockets(prototype, 2);
+			//Allow 1 socket for Cybernetic Forearms.
+			else if(getGameObjectType(prototype) == GOT_cybernetic_forearm)
+				setSkillModSockets(prototype, 1);
+			//Cybernetic Hands do not get sockets.
+			else if(getGameObjectType(prototype) == GOT_cybernetic_hand)
+				setSkillModSockets(prototype, 0);
+			//all other items (armor and such) go here.
+			else
+				setSkillModSockets(prototype, 1);
+		}
+		else
+			setSkillModSockets(prototype, 0);
+
+		result = true;
+	}
+	else if ( itemAttribute.name.getTable().equals(craftinglib.OBJVAR_SKILLMOD_BONUS) )
+	{
+		setSkillModBonus(prototype, itemAttribute.name.getAsciiId(), (int)itemAttribute.currentValue);
+		result = true;
+	}
+	return result;
+}
+
+/**
+ * Merge the crafting dictionary into the item attributes.
+ *
+ * @param prototype						the prototype object
+ * @param itemAttributes				attributes of the prototype
+ * @param craftingValuesDictionary      dictionary containing component updates to the item attributes
+ **/
+void calcAndSetPrototypeProperties ( obj_id prototype, draft_schematic.attribute[] itemAttributes, dictionary craftingValuesDictionary )
+{
+	debugServerConsoleMsg(null, "*** crafting base calcAndSetPrototypeProperties enter ***");
+
+	// update the attributes for the components
+ 	obj_var_list componentData = getObjVarList(getSelf(), craftinglib.COMPONENT_ATTRIBUTE_INTERNAL_OBJVAR_NAME);
+ 	if ( componentData != null )
+	{
+ 		for ( int i = 0; i < itemAttributes.length; ++i )
+ 		{
+ 			if (itemAttributes[i] == null)
+ 				continue;
+
+ 			obj_var component = componentData.getObjVar(itemAttributes[i].name.getAsciiId());
+ 			if ( component != null )
+ 			{
+ 				if ( component.getData() instanceof Integer )
+ 				{
+ 					itemAttributes[i].currentValue = component.getIntData();
+ 				}
+ 				else if ( itemAttributes[i].minValue != itemAttributes[i].maxValue )
+ 				{
+ 					debugServerConsoleMsg(null, "updating attrib " + itemAttributes[i].name.getAsciiId() +
+ 						", current value = " + itemAttributes[i].currentValue + " by component value " +
+ 						component.getFloatData());
+ 					itemAttributes[i].currentValue += component.getFloatData();
+ 				}
+ 				else
+ 				{
+ 					debugServerConsoleMsg(null, "updating attrib " + itemAttributes[i].name.getAsciiId() +
+ 						", current value = " + itemAttributes[i].currentValue + " by component value " +
+ 						component.getFloatData());
+ 					itemAttributes[i].currentValue = itemAttributes[i].minValue + component.getFloatData();
+ 				}
+ 			}
+		}
+		if ( componentData.hasObjVar(craftinglib.OBJVAR_COMPONENT_ATTRIB_BONUSES) )
+		{
+			// copy the arrib bonuses to the schematic
+			float[] componentBonuses = componentData.getFloatArrayObjVar(craftinglib.OBJVAR_COMPONENT_ATTRIB_BONUSES);
+			if ( componentBonuses != null && componentBonuses.length == NUM_ATTRIBUTES)
+			{
+				int[] bonuses = new int[componentBonuses.length];
+				for ( int i = 0; i < componentBonuses.length; ++i )
+					bonuses[i] = (int)(componentBonuses[i]);
+				setAttributeBonuses(getSelf(), bonuses);
+			}
+		}
+	}
+
+	debugServerConsoleMsg(null, "*** crafting base calcAndSetPrototypeProperties exit ***");
+}
+
+/**
+ * Grants experience to the players who contributed ingredients to an object.
+ */
+void grantExperience( obj_id player, draft_schematic.slot[] slots )
+{
+	if ( slots == null )
+		return;
+
+	for ( int i = 0; i < slots.length; ++i )
+	{
+		if ( slots[i].ingredients == null )
+			continue;
+
+		if ( slots[i].ingredientType == draft_schematic.IT_item || slots[i].ingredientType == draft_schematic.IT_template ||
+			 slots[i].ingredientType == draft_schematic.IT_templateGeneric)
+		{
+			for (int j = 0; j < slots[i].ingredients.length; ++j)
+			{
+				// Only grant UXP for components if we didn't make them.
+				if(isIdValid(slots[i].ingredients[j].source) && slots[i].ingredients[j].source != player)
+					grantExperiencePoints(slots[i].ingredients[j].source, slots[i].ingredients[j].xpType, slots[i].ingredients[j].xpAmount);
+			}
+		}
+		/*
+		// Brandon says: I disabled this because it isn't really necessary any more.
+		// The idea was that you got mining xp for selling resources, but it ends up making it far too easy to advance
+		// in surveying, now that mining has been removed.
+		// I'm not deleting the code, because we might decide to use it later.
+		else if (slots[i].ingredientType == draft_schematic.IT_resourceType || slots[i].ingredientType == draft_schematic.IT_resourceClass )
+		{
+			for (int j = 0; j < slots[i].ingredients.length; ++j)
+			{
+				grantExperiencePoints(slots[i].ingredients[j].source, slots[i].ingredients[j].xpType, (int)(slots[i].ingredients[j].count *
+					craftinglib.EXPERIENCE_PER_RESOURCE));
+			}
+		}
+		*/
+	}
+}
+
+/*****************************************************************************************************************************************
+ *****************************************************************************************************************************************
+ *    TRIGGERS  TRIGGERS  TRIGGERS  TRIGGERS TRIGGERS   TRIGGERS  TRIGGERS  TRIGGERS  TRIGGERS TRIGGERS   TRIGGERS  TRIGGERS  TRIGGERS  **
+ *****************************************************************************************************************************************
+ *****************************************************************************************************************************************/
+
+// Crafting Assembly phase TRIGGER
+trigger OnManufacturingSchematicCreation(obj_id player, obj_id prototype, draft_schematic schematic, modifiable_int assemblyResult, modifiable_int experimentPoints)
+{
+	//we need to be sure that if there is an RE component it needs to not have a modifier that is not allowed
+	//in PuPs
+	if(!craftinglib.validateReComponent(player, schematic))
+	{
+		//setting the assembly result to 9 will cause the crafting session to end without destroying the
+		//ingrediants.
+		assemblyResult.set(9);
+		endCraftingSession(player, obj_id.NULL_ID, prototype);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Hack in support for genetics crafting, which overrides this function but doesn't want to chain into it
+	if ( schematic.getCategory() == CT_genetics || schematic.getCategory() == CT_animalBreeding)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	debugServerConsoleMsg(self, "OnManufacturingSchematicCreation enter");
+	//set up my scratchpad dictionary for crafting calculations
+	dictionary craftingValuesDictionary = new dictionary();
+	//grab info from schematic
+	draft_schematic.slot[] slots = schematic.getSlots();
+	draft_schematic.attribute[] objectAttribs = schematic.getAttribs();
+	draft_schematic.attribute[] experimentalAttribs = schematic.getExperimentalAttribs();
+	
+	for ( int i = 0; i < objectAttribs.length; ++i )
+	{
+		float modifiedValue = objectAttribs[i].currentValue;
+		string attribName = objectAttribs[i].name.getAsciiId();
+
+	}
+
+
+	// set up an array of the object attribute names
+	string[] obj_attributes = new string[objectAttribs.length];
+	for ( int i = 0; i < obj_attributes.length; ++i )
+	{
+		obj_attributes[i] = objectAttribs[i].name.getAsciiId();
+	}
+
+	float refactorPercent = 0;
+	float refactorComplexity = 0;
+	if ( hasObjVar(self, craftinglib.OBJVAR_REFACTOR) )
+	{
+		refactorPercent = getFloatObjVar(self, craftinglib.OBJVAR_REFACTOR);
+		if ( refactorPercent > 0 && refactorPercent < 1.0f )
+		{
+			debugServerConsoleMsg(null, "Using refactor value " + refactorPercent);
+			craftingValuesDictionary.put(craftinglib.OBJVAR_REFACTOR, refactorPercent);
+
+			// add the refactored object's complexity to ours
+			int myDraftSchematic = getDraftSchematicCrc(self);
+			if ( myDraftSchematic != 0 )
+			{
+				for ( int i = 0; i < slots.length; ++i )
+				{
+					// the refactored ingredient MUST be in an IT_schematic slot
+					if ( slots[i].ingredientType == draft_schematic.IT_schematic &&
+						myDraftSchematic == getSourceDraftSchematic(slots[i].ingredients[0].ingredient))
+					{
+						refactorComplexity = getComplexity(slots[i].ingredients[0].ingredient);
+						break;
+					}
+				}
+			}
+			// adjust the object's max attrib value by the refactor value
+			for ( int i = 0; i < objectAttribs.length; ++i )
+			{
+				if ( objectAttribs[i].maxValue > objectAttribs[i].minValue &&
+					!obj_attributes[i].equals("complexity") &&
+					!obj_attributes[i].equals("armorSpecialType"))
+				{
+					debugServerConsoleMsg(null, "Refactoring attribute max " + obj_attributes[i] +
+						" from " + objectAttribs[i].maxValue + " to " + objectAttribs[i].maxValue * refactorPercent);
+					objectAttribs[i].maxValue *= refactorPercent;
+				}
+			}
+		}
+		else
+			CustomerServiceLog("crafting", "WARNING: schematic " + self + " has invalid refactor objvar value " + refactorPercent);
+	}
+
+	//now send out feeback on what was grabbed from the ingredient slots on the schematic - DEBUG CODE ONLY
+	debugServerConsoleMsg(self, "Ingredient slot info (" + slots.length + " slots):");
+	for ( int i = 0; i < slots.length; ++i )
+	{
+		debugServerConsoleMsg(self, "\tslot " + slots[i].name + ", ingredient " + slots[i].ingredients[0].ingredient + ", amount = " + slots[i].ingredients[0].count);
+	}
+
+	//now send out feeback on what was grabbed from the schematic's attributes - DEBUG CODE ONLY
+	debugServerConsoleMsg(self, "Item attribute info (" + objectAttribs.length + " attribs):");
+
+	// pass the crafting type around for special-case items
+	craftingValuesDictionary.put ("craftingType", schematic.getCategory());
+
+	// Set-up and initialize 'current' values for each attribute by averaging the min and max values, and special-case the complexity values (store them un-altered in a dictionary for later alteration)
+	for ( int i = 0; i < objectAttribs.length; ++i )
+	{
+		//load initial
+		if ( objectAttribs[i].name.equals("complexity") )
+		{
+			//load current item complexity value into craftingValuesDictionary
+			float defaultComplexity = objectAttribs[i].minValue;
+			float currentComplexity = objectAttribs[i].currentValue + refactorComplexity;
+			craftingValuesDictionary.put ("itemDefaultComplexity", defaultComplexity);
+			craftingValuesDictionary.put ("itemCurrentComplexity", currentComplexity);
+			debugServerConsoleMsg(self, "\tdefault complexity " + defaultComplexity + ", current complexity " + currentComplexity);
+		}
+		else if ( objectAttribs[i].name.equals("armorSpecialType") )
+		{
+			//load current item armor type into craftingValuesDictionary
+			craftingValuesDictionary.put ("itemDefaultArmorSpecialType", objectAttribs[i].minValue);
+			craftingValuesDictionary.put ("itemCurrentArmorSpecialType", objectAttribs[i].currentValue);
+		}
+		else if (objectAttribs[i].name.equals("sockets") )
+		{
+			// decide how many sockets there are based on the crafter's skill
+			int[] mods = getEnhancedSkillStatisticModifiersUncapped(player, getAssemblySkillMods());
+			if ( mods != null )
+			{
+				int experimentModTotal = 0;
+				for ( int j = 0; j < mods.length; ++j )
+					experimentModTotal += mods[j];
+
+				if ( experimentModTotal > craftinglib.socketThreshold )
+				{
+					int sockets = 0;
+					int chance = experimentModTotal - 50;
+
+					if(chance > rand(1, 100))
+						sockets = 1;
+
+					objectAttribs[i].minValue = sockets;
+					objectAttribs[i].maxValue = sockets;
+					objectAttribs[i].currentValue = sockets;
+
+					if ( sockets > 0 )
+						setCondition(prototype, CONDITION_MAGIC_ITEM);
+				}
+			}
+		}
+		debugServerConsoleMsg(self, "\tattrib " + objectAttribs[i].name + ", values = " + objectAttribs[i].minValue + ".." + objectAttribs[i].maxValue);
+	}
+
+	// grant xp to anyone who contributed components to the session; we do this even if the crafter gets a crit fail
+	grantExperience( player, slots );
+	
+	//check the collection mechanics to increment crafting collections
+	collection.updateCraftingSlot(player, getTemplateName(prototype));
+
+	int forceCritSuccessCount = getIntObjVar(self, craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS);
+	if ( forceCritSuccessCount > 0 )
+	{
+		craftingValuesDictionary.put(craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS, true);
+	}
+
+	// This will be the primary attribute calculation call for the crafting assembly phase
+	int assemblySuccess = craftinglib.calcAssemblyPhaseAttributes ( player, slots, objectAttribs, craftingValuesDictionary,
+		getAssemblySkillMods(), getResourceMaxResourceWeights(), getAssemblyResourceWeights());
+	assemblyResult.set(assemblySuccess);
+	if ( assemblySuccess == craftinglib.STATE_CRITICAL_FAILURE || assemblySuccess == craftinglib.STATE_CRITICAL_FAILURE_NODESTROY )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	debugServerConsoleMsg(self, "OnManufacturingSchematicCreation calling craftinglib.calcExperimentalAttribs");
+	craftinglib.calcExperimentalAttribs(schematic);
+	debugServerConsoleMsg(self, "OnManufacturingSchematicCreation return from craftinglib.calcExperimentalAttribs");
+
+	float resourceMalleabilitySkillMod = craftingValuesDictionary.getFloat (craftinglib.RESOURCE_MALLEABILITY_SKILL_MOD);
+	utils.setScriptVar (self, craftinglib.RESOURCE_MALLEABILITY_SKILL_MOD, resourceMalleabilitySkillMod);
+
+	experimentPoints.set(craftinglib.calcExperimentPoints(player, getExperimentSkillMods()));
+
+	debugServerConsoleMsg(self, "OnManufacturingSchematicCreation setting current attributes");
+	if (setSchematicAttributes(self, objectAttribs))
+		debugServerConsoleMsg(self, "OnManufacturingSchematicCreation set initial attributes of schematic");
+	else
+		debugServerConsoleMsg(self, "OnManufacturingSchematicCreation failed to set initial attributes of schematic!");
+
+	debugServerConsoleMsg(self, "OnManufacturingSchematicCreation setting experimental attributes");
+	if (setSchematicExperimentalAttributes(self, experimentalAttribs))
+		debugServerConsoleMsg(self, "OnManufacturingSchematicCreation set experimental attributes of schematic");
+	else
+		debugServerConsoleMsg(self, "OnManufacturingSchematicCreation failed to set experimental attributes of schematic!");
+
+	// get an approximate experimental mod value so the player will have a better idea of the success chance of experimentation
+	craftinglib.calcPerExperimentationCheckMod (player, craftingValuesDictionary, 0, objectAttribs, getExperimentSkillMods());
+	setSchematicExperimentMod(self, craftingValuesDictionary.getFloat ("totalExperimentPointModifier"));
+
+	// set up customization data for the object
+	if ( slots != null && slots.length > 0 )
+	{
+		String[] appearances = getAppearances(player, slots);
+		if ( appearances != null && appearances.length > 0 )
+			setSchematicAppearances(self, appearances);
+	}
+
+	debugServerConsoleMsg(self, "OnManufacturingSchematicCreation getting customization data");
+	draft_schematic.custom[] customizations = schematic.getCustomizations();
+	if ( customizations != null && customizations.length > 0 )
+	{
+		debugServerConsoleMsg(self, "OnManufacturingSchematicCreation calling getCustomizations");
+		customizations = getCustomizations(player, customizations);
+		if ( customizations != null && customizations.length > 0 )
+			setSchematicCustomizations(self, customizations);
+	}
+	else
+	{
+		if ( customizations == null )
+			debugServerConsoleMsg(self, "OnManufacturingSchematicCreation customizations == null");
+		else
+			debugServerConsoleMsg(self, "OnManufacturingSchematicCreation customizations.length == 0");
+	}
+
+	// if we refactored our max values, change them back to what they were
+	if ( refactorPercent != 0 )
+	{
+		for ( int i = 0; i < objectAttribs.length; ++i )
+		{
+			if ( objectAttribs[i].maxValue > objectAttribs[i].minValue &&
+				!obj_attributes[i].equals("complexity") &&
+				!obj_attributes[i].equals("armorSpecialType"))
+			{
+				objectAttribs[i].resourceMaxValue /= refactorPercent;
+				objectAttribs[i].maxValue /= refactorPercent;
+				debugServerConsoleMsg(self, "OnManufacturingSchematicCreation final attrib " + objectAttribs[i].name.getAsciiId() +
+					" values: current = " + objectAttribs[i].currentValue + ", rmax = " + objectAttribs[i].resourceMaxValue +
+					", max = " + objectAttribs[i].maxValue);
+			}
+		}
+	}
+
+	if ( craftingValuesDictionary.containsKey(craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS_RESULT) )
+	{
+		setObjVar(self, craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS, forceCritSuccessCount - 1 );
+	}
+
+ 	// now adjust the attributes for the components and update the prototype
+	// also store armor objvar data, not including any components
+ 	weapons.storeWeaponCraftingValues(prototype, self, schematic);
+ 	craftinglib.storeSecondarySkillBonuses(prototype, schematic);
+ 	calcAndSetPrototypeProperties (prototype, objectAttribs, craftingValuesDictionary);
+	craftinglib.storeTissueDataAsObjvars(craftingValuesDictionary, objectAttribs, prototype, true);
+ 	calcAndSetPrototypeProperties(prototype, objectAttribs);
+ 
+	return SCRIPT_CONTINUE;
+}
+
+//Crafting Experimentation phase TRIGGER
+trigger OnCraftingExperiment(obj_id player, obj_id prototype, string_id[] attributeNames, int[] experimentPoints, int totalPoints,
+	modifiable_int experimentResult, int coreLevel)
+{
+	if ( utils.hasScriptVar(self, "skipCraftingExperiment") )
+	{
+		utils.removeScriptVar(self, "skipCraftingExperiment");
+		return SCRIPT_CONTINUE;
+	}
+
+ 	if ( doCraftingExperiment(self, player, prototype, attributeNames, experimentPoints, totalPoints, experimentResult, coreLevel) == SCRIPT_CONTINUE )
+ 		return SCRIPT_CONTINUE;
+ 	return SCRIPT_OVERRIDE;
+}
+
+int doCraftingExperiment(obj_id self, obj_id player, obj_id prototype, string_id[] attributeNames, int[] experimentPoints, int totalPoints,
+	modifiable_int experimentResult, int coreLevel)
+{
+	debugServerConsoleMsg(self, "OnCraftingExperiment enter");
+
+	draft_schematic schematic = getSchematicForExperimentalAttributes(self, attributeNames);
+	if ( schematic == null )
+	{
+		debugServerConsoleMsg(self, "OnCraftingExperiment NO SCHEMATIC");
+		return SCRIPT_OVERRIDE;
+	}
+	draft_schematic.attribute[] objectAttribs = schematic.getAttribs();
+	draft_schematic.attribute[] experimentalAttribs = schematic.getExperimentalAttribs();
+
+	if ( objectAttribs == null || experimentalAttribs == null )
+	{
+		debugServerConsoleMsg(self, "OnCraftingExperiment NO ATTRIBS");
+		return SCRIPT_OVERRIDE;
+	}
+
+	// set up an array of the object attribute names
+	string[] obj_attributes = new string[objectAttribs.length];
+	for ( int i = 0; i < obj_attributes.length; ++i )
+	{
+		obj_attributes[i] = objectAttribs[i].name.getAsciiId();
+		//while we are in here, we will update the core level
+		if(obj_attributes[i].equals("coreLevel"))
+		{
+			objectAttribs[i].currentValue = coreLevel;
+		}
+	}
+
+	dictionary craftingValuesDictionary = new dictionary();
+
+	float refactorPercent = 0;
+	float refactorComplexity = 0;
+	if ( hasObjVar(self, craftinglib.OBJVAR_REFACTOR) )
+	{
+		refactorPercent = getFloatObjVar(self, craftinglib.OBJVAR_REFACTOR);
+		if ( refactorPercent > 0 && refactorPercent < 1.0f )
+		{
+			debugServerConsoleMsg(null, "Using refactor value " + refactorPercent);
+			craftingValuesDictionary.put(craftinglib.OBJVAR_REFACTOR, refactorPercent);
+
+			// adjust the object's max attrib value by the refactor value
+			for ( int i = 0; i < objectAttribs.length; ++i )
+			{
+				if ( objectAttribs[i].maxValue > objectAttribs[i].minValue &&
+					!obj_attributes[i].equals("complexity") &&
+					!obj_attributes[i].equals("armorSpecialType"))
+				{
+					debugServerConsoleMsg(null, "Refactoring attribute max " + obj_attributes[i] +
+						" from " + objectAttribs[i].maxValue + " to " + objectAttribs[i].maxValue * refactorPercent);
+					objectAttribs[i].maxValue *= refactorPercent;
+				}
+			}
+		}
+		else
+			CustomerServiceLog("crafting", "WARNING: schematic " + self + " has invalid refactor objvar value " + refactorPercent);
+	}
+
+	// convert experimental attribs to object attribs
+	float[] objExperimentPoints = craftinglib.convertExperimentalPointsToObjectPoints(schematic, attributeNames, experimentPoints);
+	if ( objExperimentPoints == null )
+	{
+		debugServerConsoleMsg(self, "OnCraftingExperiment NO POINTS");
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( getIntObjVar(self, craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS) > 0 )
+	{
+		craftingValuesDictionary.put(craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS, true);
+	}
+
+	float resourceMalleabilitySkillMod = utils.getFloatScriptVar(self, craftinglib.RESOURCE_MALLEABILITY_SKILL_MOD);
+	craftingValuesDictionary.put (craftinglib.RESOURCE_MALLEABILITY_SKILL_MOD, resourceMalleabilitySkillMod);
+	craftinglib.calcExpFullSinglePointValue (craftingValuesDictionary, objectAttribs);
+	craftinglib.calcPerExperimentationCheckMod (player, craftingValuesDictionary, experimentPoints.length, objectAttribs, getExperimentSkillMods());
+	craftinglib.calcSuccessPerAttributeExperimentation (craftingValuesDictionary, objExperimentPoints, objectAttribs, player, getRequiredSkills());
+	craftinglib.calcExperimentalAttribs(schematic);
+
+	experimentResult.set(craftingValuesDictionary.getInt("experimentSuccessState"));
+
+	// increase the complexity of the object by 1
+  	for ( int i = 0 ; i < objectAttribs.length; ++i )
+  	{
+		if ( objectAttribs[i] != null && objectAttribs[i].name.equals("complexity") )
+		{
+			++objectAttribs[i].currentValue;
+			break;
+		}
+	}
+
+ 	// save the base (resource-derived) attributes to the schematic
+	debugServerConsoleMsg(self, "OnCraftingExperiment setting current attributes");
+	if (setSchematicAttributes(self, objectAttribs))
+		debugServerConsoleMsg(self, "OnCraftingExperiment set initial attributes of schematic");
+	else
+		debugServerConsoleMsg(self, "OnCraftingExperiment failed to set initial attributes of schematic!");
+
+	debugServerConsoleMsg(self, "OnCraftingExperiment setting experimental attributes");
+	if (setSchematicExperimentalAttributes(self, experimentalAttribs))
+		debugServerConsoleMsg(self, "OnCraftingExperiment set experimental attributes of schematic");
+	else
+		debugServerConsoleMsg(self, "OnCraftingExperiment failed to set experimental attributes of schematic!");
+
+	// if we refactored our max values, change them back to what they were
+	if ( refactorPercent != 0 )
+	{
+		for ( int i = 0; i < objectAttribs.length; ++i )
+		{
+			if ( objectAttribs[i].maxValue > objectAttribs[i].minValue &&
+				!obj_attributes[i].equals("complexity") &&
+				!obj_attributes[i].equals("armorSpecialType"))
+			{
+				objectAttribs[i].resourceMaxValue /= refactorPercent;
+				objectAttribs[i].maxValue /= refactorPercent;
+			}
+		}
+	}
+
+	if ( craftingValuesDictionary.containsKey(craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS_RESULT) )
+	{
+		setObjVar(self, craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS, getIntObjVar(self, craftinglib.OBJVAR_FORCE_CRITICAL_SUCCESS) - 1 );
+	}
+ 	// now adjust the attributes for the components and update the prototype
+	// also store armor objvar data, not including any components
+ 	calcAndSetPrototypeProperties (prototype, objectAttribs, craftingValuesDictionary);
+	craftinglib.storeTissueDataAsObjvars(craftingValuesDictionary, objectAttribs, prototype, true);
+ 	calcAndSetPrototypeProperties(prototype, objectAttribs);
+ 	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Writes the final attibutes out to the manf scematic.
+ *
+ * @param self 			manufacturing schematic
+ * @param player		player making the object (may or may not be the original crafter)
+ * @param prototype		object being created
+ * @param schematic     current schematic info
+ *
+ * @return ignored
+ */
+trigger OnFinalizeSchematic(obj_id player, obj_id prototype, draft_schematic schematic)
+{
+	//get the crc of the schematic
+	int myDraftSchematic = getDraftSchematicCrc(self);
+	//check to see if this is a temp schematic with a bioLink attached
+	obj_id bioLink = temp_schematic.getBioLinkSchematicId(player, myDraftSchematic);
+	
+	//if we have a valid BioLink, we need to link the ne object.
+	if(isIdValid(bioLink))
+		setBioLink(prototype,bioLink);
+	
+	draft_schematic.attribute[] objectAttribs = schematic.getAttribs();
+	dictionary craftingValuesDictionary = new dictionary();
+	
+
+	for ( int i = 0; i < objectAttribs.length; ++i )
+	{
+		float modifiedValue = objectAttribs[i].currentValue;
+		string attribName = objectAttribs[i].name.getAsciiId();
+	}
+	calcAndSetPrototypeProperties (prototype, objectAttribs, craftingValuesDictionary);
+	setSchematicAttributes(self, objectAttribs);
+	craftinglib.storeTissueDataAsObjvars(craftingValuesDictionary, objectAttribs, prototype, true);
+	weapons.storeWeaponCraftingValues(prototype, self, schematic);
+	weapons.setSchematicVariablesFromSchematic(self, prototype);
+	// clean up unneeded objvars
+	removeObjVar(self, craftinglib.COMPONENT_ATTRIBUTE_INTERNAL_OBJVAR_NAME);
+	return SCRIPT_CONTINUE;
+}
+
+int getInspirationBuffXpBonus(obj_id self, int category, int amt)
+{
+	if(utils.hasScriptVar(self, "buff.general_inspiration.value"))
+	{
+		float mod = utils.getFloatScriptVar(self, "buff.general_inspiration.value");
+		mod /= 100f;
+
+		float modAmt = (float)amt * mod;
+
+		return Math.round(modAmt);
+	}
+
+	if(!utils.hasScriptVar(self, "buff.xpBonus.types") && !utils.hasScriptVar(self, "buff.xpBonusGeneral.types"))
+		return 0;
+
+	if(!utils.hasScriptVar(self, "buff.craftBonus.types"))
+		return 0;
+
+	int flags = utils.getIntScriptVar(self, "buff.craftBonus.types");
+
+	if((flags & category) > 0)
+	{
+		float mod = 0;
+		if ( utils.hasScriptVar(self, "buff.xpBonus.value") )
+			mod += utils.getFloatScriptVar(self, "buff.xpBonus.value");
+			
+		if ( utils.hasScriptVar(self, "buff.xpBonusGeneral.value") )
+			mod += utils.getFloatScriptVar(self, "buff.xpBonusGeneral.value");	
+		
+		float modAmt = (float)amt * mod;
+
+		return Math.round(modAmt);
+	}
+
+	return 0;
+}
+
+/**
+ * Called when a object is being created from a manufacturing schematic. Should set the attributes of the object.
+ *
+ * @param self 			manufacturing schematic
+ * @param player		player making the object (may or may not be the original crafter)
+ * @param newObject		object being created
+ * @param schematic     manf schematic data used to make the object
+ * @param isPrototype   flag that the object being made is a prototype object or not
+ *
+ * @return SCRIPT_CONTINUE if the item is manufactured successfully, SCRIPT_OVERRIDE if the item should be destroyed
+ */
+trigger OnManufactureObject(obj_id player, obj_id newObject, draft_schematic schematic, boolean isPrototype, boolean isRealObject)
+{
+	draft_schematic.attribute[] objectAttribs = schematic.getAttribs();
+	draft_schematic.attribute[] experimentalAttribs = schematic.getExperimentalAttribs();
+	
+	for ( int i = 0; i < objectAttribs.length; ++i )
+	{
+		float modifiedValue = objectAttribs[i].currentValue;
+		string attribName = objectAttribs[i].name.getAsciiId();
+	}
+	
+	if ( isPrototype )
+ 	{
+ 		OnFinalizeSchematic(self, player, newObject, schematic);
+ 	}
+
+ 	calcAndSetPrototypeProperties( newObject, schematic.getAttribs() );
+ 	if ( getSkillModSockets(newObject) > 0)
+	{
+		setCondition(newObject, CONDITION_MAGIC_ITEM);
+	}
+
+	// copy attrib bonuses from us to the object
+	int[] bonuses = getAttributeBonuses(self);
+	if ( bonuses != null )
+		setAttributeBonuses(newObject, bonuses);
+
+	if (isIdValid(player))
+	{
+		// Store the XP obj vars.
+		obj_id id = getObjIdObjVar( newObject, "crafting.creator.id" );
+		string name = getStringObjVar( newObject, "crafting.creator.name" );
+		string xpType = getStringExperienceType(getIntObjVar( newObject, "crafting.creator.xpType" ));
+		int xpAmount = utils.getIntScriptVar(newObject, "crafting.creator.xp");
+
+		int buffXP = getInspirationBuffXpBonus(player, schematic.getCategory(), xpAmount);
+		xpAmount += buffXP;
+
+		// Lower XP granted for factory items.
+		if ( !isPrototype )
+		{
+			// Don't modify the xp var here, just assign a lowered objvar for the call to grantCrafterExperiencePoints.
+			xpAmount = (int) (xpAmount * 0.1);
+		}
+		else if ( !isRealObject )
+		{
+			// reward player for not making real items
+			xpAmount = (int) (xpAmount * 1.05);
+		}
+
+	 	// Grant the XP 
+	 	if (xpType != null)
+	 		xp.grantCraftingStyleXp( player, xpType, xpAmount);
+
+		setObjVar( newObject, "crafting.creator.id", id );
+		setObjVar( newObject, "crafting.creator.name", name );
+
+
+		string expertiseSkill = craftinglib.getCraftingSubskill(getRequiredSkills());
+
+		int complexityDecrease = (int)getSkillStatisticModifier(player, "expertise_complexity_decrease_" + expertiseSkill);
+
+		if(complexityDecrease > 0)
+		{
+			int newComplexity = (int)getComplexity(newObject) - complexityDecrease;
+
+			if(newComplexity > 0)
+			{
+				setComplexity(newObject, newComplexity);
+				setComplexity(getSelf(), newComplexity);
+			}
+			else
+			{
+				setComplexity(newObject, 1);
+				setComplexity(getSelf(), 1);
+			}
+		}
+	}
+
+	// Do any additional work as a result of the custom appearance.
+	if ( hasObjVar( self, "customAppearance" ) )
+		modifyForCustomAppearance( self, newObject );
+	weapons.validateDamage(player, newObject);
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * Called when we are creating a "fake" crafted item.
+ *
+ * @param self 					manufacturing schematic
+ * @param prototype				id of a test prototype object whose attributes can be changed and viewed by the player
+ * @param schematic				data about the draft schematic and ingredients used in crafting
+ * @param qualityPercent		how good the item should be, 0 = worst, 100 = best
+ *
+ * @return ignored
+ **/
+trigger OnMakeCraftedItem(obj_id prototype, draft_schematic schematic, float qualityPercent)
+{
+	
+	draft_schematic.attribute[] objectAttribs = schematic.getAttribs();
+	draft_schematic.attribute[] experimentalAttribs = schematic.getExperimentalAttribs();
+	
+	for ( int i = 0; i < objectAttribs.length; ++i )
+	{
+		float modifiedValue = objectAttribs[i].currentValue;
+		string attribName = objectAttribs[i].name.getAsciiId();
+	}
+
+	debugServerConsoleMsg(null, "OnMakeCraftedItem enter, quality = " + qualityPercent);
+	//set up my scratchpad dictionary for crafting calculations
+	dictionary craftingValuesDictionary = new dictionary();
+	//grab info from schematic
+
+	for ( int i = 0; i < objectAttribs.length; ++i )
+	{
+		objectAttribs[i].currentValue = objectAttribs[i].minValue + (objectAttribs[i].maxValue - objectAttribs[i].minValue) *
+			(qualityPercent / 100.0f);
+	}
+
+	setSchematicAttributes(self, objectAttribs);
+ 	calcAndSetPrototypeProperties(prototype, objectAttribs);
+
+	OnManufactureObject(self, null, prototype, schematic, true, true);
+	debugServerConsoleMsg(null, "OnMakeCraftedItem exit");
+
+	return SCRIPT_CONTINUE;
+}
+
+/**
+ * This function is called when a request for resource weight information by a player is received.
+ * It is not associated with any object, and is ok for self to be 0.
+ *
+ * @param desiredAttribs   array of attrib names from the schematic
+ * @param attribs		   array to be filled in with schematic attribute names - first for the assembly weights, and
+ *               		   then for the resource max weights
+ * @param counts		   array to be filled in with the number of resource attributes associated with each schematic attribute
+ * @param data			   array to be filled in with the resource types and weights
+ *
+ * @return ignored
+ */
+ /*
+   My sources tell me that this is not a predefined trigger. This function may not be getting called when we think it's getting called.
+   FYI: this trigger gets called in the serverGame/src/shared/object/DraftSchematicObject.cpp requestResourceWeights() function.
+ */
+trigger OnRequestResourceWeights(obj_id player, string[] desiredAttribs, string[] attribs, int[] slots, int[] counts, int[] data)
+{
+	int attribIndex = 0;
+	int dataIndex = 0;
+
+   // convert the desiredAttribs into something easily searchable
+   java.util.HashSet attribSet = new java.util.HashSet(java.util.Arrays.asList(desiredAttribs));
+
+	resource_weight[] weights = getAssemblyResourceWeights();
+	for ( int i = 0; i < 2; ++i )
+	{
+		if ( weights == null )
+			return SCRIPT_OVERRIDE;
+
+		for ( int j = 0; j < weights.length; ++j )
+		{
+			if ( attribSet.contains(weights[j].attribName) )
+			{
+				attribs[attribIndex] = weights[j].attribName;
+				slots[attribIndex] = weights[j].slot;
+				counts[attribIndex++] = weights[j].weights.length;
+				resource_weight.weight[] resources = weights[j].weights;
+				for ( int k = 0; k < resources.length; ++k )
+				{
+					data[dataIndex++] = resources[k].resource;
+					data[dataIndex++] = resources[k].weight;
+				}
+			}
+		}
+
+		if ( i == 0 )
+			weights = getResourceMaxResourceWeights();
+	}
+
+	return SCRIPT_CONTINUE;
+}
+

@@ -1,0 +1,817 @@
+/** THIS SCRIPT IS ATTACHED TO NPCS SPAWNED BY NPC_LAIR IN ORDER
+ * TO MANAGE LAIR-SPECIFIC BEHAVIORS
+ */
+
+include library.ai_lib;
+include ai.ai_combat;
+include ai.ai_combat_movement;
+include library.pet_lib;
+include library.healing;
+include library.utils;
+include library.factions;
+
+inherits theme_park.poi.base;
+
+trigger OnAttach()
+{
+	obj_id baseObj = poiGetBaseObject( self );
+	if ( !isIdValid(baseObj) )
+	{
+		messageTo( self, "handleDestruction", null, 5, false );
+		return SCRIPT_CONTINUE;
+	}
+	if ( !isMob(self) )
+	{
+		messageTo( self, "handleDetachment", null, 5, false );
+		return SCRIPT_CONTINUE;
+	}
+
+	listenToMessage( baseObj, "handleNpcLairCustomAi");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDestruction()
+{
+	destroyObject( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	if ( hasScript( self, "ai.pet" ) )
+	{
+		detachScript( self, "systems.npc_lair.npc_lair_ai" );
+		return SCRIPT_OVERRIDE;
+	}
+
+	obj_id baseObj = poiGetBaseObject( self );
+	if ( isIdValid(baseObj) )
+		stopListeningToMessage(baseObj, "handleNpcLairCustomAi");
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	obj_id baseObj = poiGetBaseObject( self );
+	if ( isIdValid(baseObj) )
+		stopListeningToMessage(baseObj, "handleNpcLairCustomAi");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDetachment()
+{
+	detachScript( self, "systems.npc_lair.npc_lair_ai" );
+	return SCRIPT_CONTINUE;
+}
+
+const int JOB_NONE   	= 0;//just do default behavior
+const int JOB_LOITER 	= 1;//loiter around the lair
+const int JOB_SCOUT  	= 2;//wander around the lair, return for lair-defense
+const int JOB_REST   	= 3;//sentinel at the lair, sit or lie down
+const int JOB_DEFEND 	= 4;//a scout is reporting an attack
+const int JOB_HEAL	 	= 5;//lair is calling for healing
+const int JOB_CONVERSE 	= 6;//chat
+const int JOB_DANCE		= 7;//dance
+
+void doImmediateCommand( obj_id mobile, int job, dictionary params )
+{
+	switch ( job )
+	{
+		case JOB_DEFEND :
+			obj_id target = params.getObjId( "target" );
+			respondToScoutAlarm( mobile, target );
+			return;
+		case JOB_HEAL :
+			if ( !ai_lib.isMonster(mobile) )
+				return;//only mobs do this
+
+			obj_id myTarget = getTarget( mobile );
+			if ( !isIdValid(myTarget) )
+				doLairHealing( mobile, params );
+			else if ( getTarget( myTarget ) != mobile )
+				doLairHealing( mobile, params );
+	}
+
+}
+
+void respondToScoutAlarm( obj_id mobile, obj_id target )
+{
+
+	if ( !isIdValid(target) || ai_lib.isAiDead( target ) )
+	{
+		return;
+	}
+
+	if ( !ai_lib.isInCombat(mobile) )
+	{
+
+		if ( pvpGetAlignedFaction( mobile ) == ##"nonaggressive" )
+		{
+			//debugSpeakMsg( npc, "i am non aggro" );
+			factions.setFaction( mobile, "angry" );
+		}
+
+		//debugSpeakMsg( mobile, "defending the lair!" );
+		if ( getDistance( mobile,target)>60.0f )
+		{
+			utils.setScriptVar( mobile, "pathingToAttack", target );
+			pathTo( mobile, getLocation( target ));
+		}
+		else
+			startCombat( mobile, target );
+	}
+}
+
+messageHandler handleNpcLairCustomAi()
+{
+	//if the thing has been tamed, then detach this:
+	if ( pet_lib.isPet(self) )
+	{
+		detachScript( self, "systems.npc_lair.npc_lair_ai" );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( ai_lib.isAiDead(self) )
+	{
+		detachScript( self, "systems.npc_lair.npc_lair_ai" );
+		return SCRIPT_CONTINUE;
+	}
+
+	/** If there's a Job to To then just do it:					*/
+	int jobToDo = params.getInt( "job" );
+	if ( jobToDo > 0 )
+	{
+		////debugSpeakMsg( self, "received a commoand to do a job" );
+		doImmediateCommand( self, jobToDo, params );
+		return SCRIPT_CONTINUE;
+	}
+
+	//This must be a setup message:
+
+	if ( !hasObjVar( self, "npc_lair.mobileNumber") )
+		return SCRIPT_CONTINUE;
+
+	obj_id baseObj = params.getObjId( "baseObj" );
+	if ( !isIdValid( baseObj ) )
+	{
+		detachScript( self, "systems.npc_lair.npc_lair_ai" );
+		return SCRIPT_CONTINUE;
+	}
+	if ( !exists( baseObj ) || !isInWorld( baseObj ) )
+	{
+		detachScript( self, "systems.npc_lair.npc_lair_ai" );
+	 	return SCRIPT_CONTINUE;
+	}
+
+	////debugSpeakMsg(self,"herding check");
+
+	//if you're a herding creature And you do NOT have a lair, then don't do any of this, just herd
+	if ( ai_lib.isHerdingCreature( self ) )
+	{
+		obj_id myLair = ai_lib.getLair( self );
+		if (!isIdValid( myLair ) )
+		{
+			detachScript( self, "systems.npc_lair.npc_lair_ai" );//I don't have a lair, so I must be herding...
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	////debugSpeakMsg(self,"getting job assignment");
+
+	int mobileNum = getIntObjVar( self, "npc_lair.mobileNumber" );
+	int[] jobAssignment = params.getIntArray( "jobAssignments" );
+	if ( jobAssignment == null || jobAssignment.length == 0 )
+	{
+		////debugSpeakMsg(self,"job assignment is null");
+		detachScript( self, "systems.npc_lair.npc_lair_ai" );
+		return SCRIPT_CONTINUE;
+	}
+	if ( mobileNum >= jobAssignment.length )
+	{
+		////debugSpeakMsg(self,"job assignment 0 length");
+		detachScript( self, "systems.npc_lair.npc_lair_ai" );
+		return SCRIPT_CONTINUE;
+	}
+
+	////debugSpeakMsg(self,"performing job");
+
+	int job = jobAssignment[ mobileNum ];
+	setObjVar( self, "npc_lair.job", job );
+	switch ( job )
+	{
+		case JOB_NONE :
+			////debugSpeakMsg(self,"doing nothing"); 	//- but don't detach this
+													// because there might be
+													// an immediate command later
+			break;
+		case JOB_LOITER :
+			////debugSpeakMsg(self,"loitering");
+			setHomeLocation( self, getLocation( baseObj ));
+			ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_LOITER );
+			break;
+		case JOB_SCOUT :
+			////debugSpeakMsg(self,"scouting");
+			setHomeLocation( self, getLocation( baseObj ));
+			ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_WANDER );
+
+			//ONCE WE HAVE A LOCALIZABLE NAME+TITLE COMBO, THIS NEEDS TO BE UPDATED:
+			string myName = getAssignedName( self );
+			if ( myName != null && myName != "" )
+			{
+				if ( myName != "null" )
+					setName( self, myName + " (scout)" );
+				else
+				{
+					string crName = ai_lib.getCreatureName( self );
+					debugServerConsoleMsg( self, "WARNING: " + crName + " has an assigned name of Null - why is that?" );
+				}
+			}
+			else
+			{
+				if ( myName != "null" )
+					setName( self, (getString( getNameStringId(self) ) + " (scout)" ));
+				else
+				{
+					string crName = ai_lib.getCreatureName( self );
+					debugServerConsoleMsg( self, "WARNING: " + crName + " has an assigned name of Null - why is that?" );
+				}
+			}
+			break;
+		case JOB_REST :
+			////debugSpeakMsg(self,"resting");
+			if ( ai_lib.isMonster(self) )
+			{
+				if ( ai_lib.canSit( self ) )
+				{
+					setHomeLocationNearLair( self, baseObj );
+					ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+				}
+				else if ( ai_lib.canLieDown(self) )
+				{
+					setHomeLocationNearLair( self, baseObj );
+					ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+				}
+				else
+				{
+					////debugSpeakMsg(self,"...but I cant sit");
+					setHomeLocation( self, getLocation( baseObj ));
+					ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_LOITER );
+				}
+			}
+			else if ( ai_lib.aiGetNiche(self)==NICHE_NPC )
+			{
+				location danceLoc = getLocationObjVar( baseObj, "npc_lair.danceLoc" );
+				obj_id dancer = getObjIdObjVar( baseObj, "npc_lair.dancer" );
+				if ( isIdValid( dancer ) )
+					setObjVar( self, "npc_lair.dancer", dancer );
+
+				setObjVar( baseObj, "npc_lair.watcher", self );
+				boolean entertainment = getBooleanObjVar( baseObj, "npc_lair.entertainment" );
+				location startLoc = getLocation(self);
+				if ( startLoc.x > danceLoc.x )
+					danceLoc.x += (rand(2,3));
+				else
+					danceLoc.x -= (rand(2,3));
+
+				if ( startLoc.z > danceLoc.z )
+					danceLoc.z += (rand(2,3));
+				else
+					danceLoc.z -= (rand(2,3));
+
+				setHomeLocation( self, danceLoc );
+				ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+				{
+					switch ( rand(1,10) )
+					{
+						case 1 :
+							ai_lib.setDefaultCalmMood( self, "conversation" );
+							break;
+						case 2 :
+							ai_lib.setDefaultCalmMood( self, "npc_accusing" );
+							break;
+						case 3 :
+							ai_lib.setDefaultCalmMood( self, "npc_angry" );
+							break;
+						case 4 :
+							ai_lib.setDefaultCalmMood( self, "npc_consoling" );
+							break;
+						case 5 :
+							ai_lib.setDefaultCalmMood( self, "npc_sad" );
+							break;
+						case 6 :
+						case 7 :
+						case 8 :
+						case 9 :
+						case 10 :
+							ai_lib.setDefaultCalmMood( self, "npc_sitting_ground" );
+							break;
+					}
+				}
+			}
+			break;
+		case JOB_CONVERSE :
+			////debugSpeakMsg( self, "i converse");
+			ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+			if ( mobileNum != 0 )
+			{
+				////debugSpeakMsg( self, "waiting for a call from number 1");
+				return SCRIPT_CONTINUE;//just wait for a call from mob # 1
+			}
+			obj_id[] allNpcs = getAllNpcs(getLocation(self), 45.0f);
+			if ( allNpcs == null || allNpcs.length == 0 )
+			{
+				////debugSpeakMsg( self, "allNpcs is empty");
+				return SCRIPT_CONTINUE;
+			}
+			for ( int i = 0; i < allNpcs.length; i++ )
+			{
+				if ( allNpcs[i] != self )
+				{
+					int yourNum = getIntObjVar( allNpcs[i], "npc_lair.mobileNumber" );
+					if ( yourNum == 1 )
+					{
+						////debugSpeakMsg( self, "I spy " + getName( allNpcs[i] ) );
+						faceToBehavior( self, allNpcs[i] );
+						ai_lib.setDefaultCalmMood( self, "conversation" );
+						dictionary parms = new dictionary();
+						parms.put("converseWith", self);
+						setObjVar( self, "npc_lair.converseWith", allNpcs[i] );
+						messageTo( allNpcs[i], "handleRequestToConverse", parms, 5, false );
+						return SCRIPT_CONTINUE;
+					}
+				}
+			}
+			////debugSpeakMsg( self, "I found no one to talk to ");
+			break;
+		case JOB_DANCE :
+			location danceLoc = getLocationObjVar( baseObj, "npc_lair.danceLoc" );
+			setObjVar( baseObj, "npc_lair.dancer", self );
+			danceLoc.x += rand(-2,2);
+			danceLoc.z += rand(-2,2);
+			setHomeLocation( self, danceLoc );
+			ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+			switch ( rand(1,6) )
+			{
+				case 1 :
+					ai_lib.setDefaultCalmMood( self, "conversation" );
+					break;
+				case 2 :
+				case 3 :
+				case 4 :
+					if ( getGender(self)==GENDER_FEMALE )
+						ai_lib.setDefaultCalmMood( self, "themepark_oola" );
+					else
+						ai_lib.setDefaultCalmMood( self, "entertained" );
+
+					setObjVar( baseObj, "npc_lair.entertainment", true );
+					break;
+				case 5 :
+					ai_lib.setDefaultCalmMood( self, "npc_accusing" );
+					break;
+				case 6 :
+					ai_lib.setDefaultCalmMood( self, "npc_angry" );
+					break;
+			}
+			break;
+	}
+
+	////debugSpeakMsg(self,"all done");
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathComplete()
+{
+	int job = getIntObjVar( self, "npc_lair.job" );
+
+	if ( ai_lib.isInCombat( self ) && (getIntObjVar( self, "ai.combat.moveMode")==ai_combat_movement.MOVEMODE_PATHING_HOME) )
+	{
+		//Here a scout is returning to the Lair after being attacked
+		// Send a message to the handler on NPC_LAIR
+		// and it will broadcast a message JOB_DEFEND to all the critters
+		if ( job == JOB_SCOUT )
+		{
+			//set to normal behavior so it won't run back and forth:
+			obj_id poiObj = poiGetBaseObject( self );
+			if ( isIdValid(poiObj) )
+			{
+				obj_id myTarget = getTarget(self);
+				if ( isIdValid(myTarget) )
+				{
+					//sound the alarm:
+					dictionary parms = new dictionary();
+					parms.put( "target", myTarget );
+					messageTo(poiObj,"handleScoutAlarm", parms, 0, false);
+				}
+			}
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( utils.hasScriptVar( self, "pathingToHealLair" ))
+	{
+		utils.removeScriptVar( self, "pathingToHealLair" );
+		//removeObjVar( self, "ai.combat.ignoreCombat" );<-dont stop ignoring combat yet
+		doLairHealing( self, null );
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( utils.hasScriptVar( self, "pathingToAttack" ) )
+	{
+		obj_id target = utils.getObjIdScriptVar( self, "pathingToAttack" );
+		if ( isIdValid( target ) && exists( target ) && !ai_lib.aiIsDead( target ) )
+		{
+			if ( getDistance( self, target ) > 60.0f )
+			{
+				pathTo( self, getLocation( target ) );
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				startCombat( self, target );
+			}
+		}
+		utils.removeScriptVar( self, "pathingToAttack" );
+	}
+
+	if ( getBehavior(self) != BEHAVIOR_CALM )
+		return SCRIPT_CONTINUE;
+
+
+	if ( ai_lib.isMonster( self ) )
+	{
+		if ( job == JOB_REST )
+		{
+			if ( ai_lib.canSit( self ) )
+			{
+				if ( rand(1,2)==1 )
+					ai_lib.aiSetPosture(self, POSTURE_SITTING );
+				else
+					ai_lib.aiSetPosture(self, POSTURE_LYING_DOWN );
+			}
+			else if ( ai_lib.canLieDown(self) )
+			{
+				ai_lib.aiSetPosture(self, POSTURE_LYING_DOWN );
+			}
+			return SCRIPT_OVERRIDE;
+		}
+	}
+
+	if ( job == JOB_CONVERSE )
+	{
+		utils.removeScriptVar( self, "npc_lair.pathingToConverse" );
+		obj_id partner = getObjIdObjVar( self, "npc_lair.converseWith" );
+		if ( isIdValid( partner ) && exists( partner ) )
+		{
+			faceToBehavior( self, partner );
+			ai_lib.setDefaultCalmMood( self, "conversation" );
+			setHomeLocation( self, getLocation( self ));
+		}
+	}
+	else if ( hasObjVar( self, "npc_lair.dancer" ) )
+	{
+		obj_id dancer = getObjIdObjVar( self, "npc_lair.dancer" );
+		if ( isIdValid(dancer) && exists( dancer ))
+		{
+			faceToBehavior( self, dancer );
+			//debugSpeakMsg( self, "dancer" + getName( dancer ) );
+		}
+		else
+		{
+			//have to look for a dancer:
+			obj_id[] creatures = getCreaturesInRange( getLocation( self ), 6.0f );
+			if ( creatures!=null && creatures.length > 0 )
+			{
+				for ( int i = 0; i < creatures.length; i++ )
+				{
+					int yourJob = getIntObjVar( creatures[i], "npc_lair.job" );
+					if ( yourJob == JOB_DANCE )
+					{
+						faceToBehavior( self, creatures[i] );
+						faceToBehavior( creatures[i], self );
+						return SCRIPT_CONTINUE;
+					}
+				}
+			}
+		}
+	}
+	else if ( job == JOB_DANCE )
+	{
+		obj_id poiObj = poiGetBaseObject( self );
+		if ( isIdValid(poiObj) )
+		{
+			obj_id watcher = getObjIdObjVar( poiObj, "npc_lair.watcher" );
+			if ( isIdValid( watcher ) && exists( watcher ) )
+			{
+				faceToBehavior( self, watcher );
+				//debugSpeakMsg( self, "watcher" + getName( watcher ) );
+			}
+			else
+			{
+				//have to look for the watcher:
+				obj_id[] creatures = getCreaturesInRange( getLocation( self), 6.0f );
+				if ( creatures!=null && creatures.length > 0 )
+				{
+					for ( int i = 0; i < creatures.length; i++ )
+					{
+						if ( hasObjVar( creatures[i], "npc_lair.dancer" ))
+						{
+							faceToBehavior( self, creatures[i] );
+							faceToBehavior( creatures[i], self );
+							return SCRIPT_CONTINUE;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathBlocked()
+{
+	if ( utils.hasScriptVar( self, "pathingToHealLair" ))
+	{
+		////debugSpeakMsg( self, "move blocked" );
+		utils.removeScriptVar( self, "pathingToHealLair" );
+		removeObjVar( self, "ai.combat.ignoreCombat" );
+		utils.removeScriptVar( self, "npc_lair.willheal");
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathNotFound()
+{
+	if ( utils.hasScriptVar( self, "pathingToHealLair" ))
+	{
+		////debugSpeakMsg( self, "path not found" );
+		utils.removeScriptVar( self, "pathingToHealLair" );
+		removeObjVar( self, "ai.combat.ignoreCombat" );
+		utils.removeScriptVar( self, "npc_lair.willheal");
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+void setHomeLocationNearLair( obj_id mobile, obj_id baseObj )
+{
+	if (!isIdValid( baseObj ) )
+		return;
+
+	location baseLoc = getLocation( baseObj );
+	if (( baseLoc.x < 1.0f && baseLoc.x > -1.0f ) && ( baseLoc.z < 1.0f && baseLoc.z > 1.0f ))
+		return;//don't mess around with 0,0,0
+
+	baseLoc.x += rand(7,7);
+	baseLoc.z += rand(7,7);
+	setHomeLocation(mobile,baseLoc);
+}
+
+void doLairHealing( obj_id mobile, dictionary params )
+{
+	if ( !isIdValid( mobile ) || !exists( mobile ) )
+		return;
+
+	if ( ai_lib.isAiDead( mobile ) )
+		return;
+
+	if (!utils.hasScriptVar( mobile,"npc_lair.willheal") )
+	{
+		if ( rand(1,3)==1)
+			utils.setScriptVar( mobile, "npc_lair.willheal", true );//I will heal
+		else
+			return;
+	}
+
+	obj_id lair = getObjIdObjVar(mobile,"npc_lair.target");
+	if ( !isIdValid(lair) )
+	{
+		if (params != null)
+		{
+			lair = params.getObjId( "lair" );
+			if ( isIdValid(lair) && exists( lair ) )
+			{
+				setObjVar( mobile, "npc_lair.target", lair );
+			}
+			else
+			{
+				removeObjVar( mobile, "ai.combat.ignoreCombat" );
+				utils.setScriptVar( mobile, "npc_lair.willheal", false );//I will not heal
+				return;
+			}
+		}
+		else
+		{
+			return;//params is null and lair is invalid
+		}
+	}
+
+	//make sure the damn thing still exists:
+	if ( !exists(lair) || !isInWorld(lair) )
+	{
+		removeObjVar( mobile, "ai.combat.ignoreCombat" );
+		utils.setScriptVar( mobile, "npc_lair.willheal", false );//I will not heal
+		return;
+	}
+
+
+	////debugSpeakMsg( mobile, " healing " );
+
+	int maxHP = getMaxHitpoints( lair );
+	int curHP = getHitpoints(lair);
+	if ( curHP == maxHP )
+	{
+		////debugSpeakMsg( mobile, "my lair is not damaged" );
+		removeObjVar( mobile, "ai.combat.ignoreCombat" );
+		utils.removeScriptVar( mobile,"npc_lair.willheal");
+		if ( !ai_lib.isInCombat(mobile) )
+			messageTo( mobile, "resumeDefaultCalmBehavior", null, rand(3,5), false );
+		return;
+	}
+
+	//amount mobs heal lair for, decreasing divisor increases amount healed.
+	int amountToHeal = (maxHP/5);
+
+	location baseLoc = getLocation(lair);
+
+	//If we're not close enough to heal it, then path to it and call
+	// this function again:
+	if ( getDistance( lair, mobile ) > 3.0f )
+	{
+		////debugSpeakMsg( mobile, "moving to my lair" );
+		//first make sure combat script doesn't try to move this guy:
+		setObjVar( mobile, "ai.combat.ignoreCombat", true );
+		utils.setScriptVar( mobile, "pathingToHealLair", true );
+		stop( mobile );
+		setMovementRun( mobile );
+		pathToWithinTwoMetersOf( mobile, baseLoc );//on movePathComplete we'll call this function again
+		return;
+	}
+
+	switch ( rand(0,3) )
+	{
+		case 0 :
+			debugSpeakMsgc(aiLoggingEnabled(mobile), mobile, "eat");
+
+			stop( mobile );
+			doAnimationAction( mobile, "eat" );
+			break;
+		case 1 :
+			debugSpeakMsgc(aiLoggingEnabled(mobile), mobile, "vocalize");
+
+			stop( mobile );
+			doAnimationAction( mobile, "vocalize" );
+			break;
+		case 2 :
+			debugSpeakMsgc(aiLoggingEnabled(mobile), mobile, "loiter");
+
+			const location anchorLocation = getLocation(lair);
+			const float minDistance = 1.0f;
+			const float maxDistance = 3.0f;
+			const float minDelay = 1.0f;
+			const float maxDelay = 2.0f;
+
+			loiterLocation(mobile, anchorLocation, minDistance, maxDistance, minDelay, maxDelay);
+			break;
+	}
+	////debugSpeakMsg( mobile, "healing it" );
+	obj_id[] players = getAllPlayers(baseLoc, healing.VAR_EFFECT_DISPLAY_RADIUS);
+	if (players != null)
+	{
+		for (int i = 0; i < players.length; i++)
+		{
+			playClientEffectObj(players[i], "clienteffect/healing_healdamage.cef" , lair, "");
+			playClientEffectObj(players[i], "clienteffect/healing_healdamage.cef" , mobile, "");
+		}
+	}
+
+	curHP += amountToHeal;
+	if ( curHP < maxHP )
+		setHitpoints(lair,curHP);
+	else
+		setHitpoints(lair,maxHP);
+
+	////debugSpeakMsg( mobile, "callback start");
+	dictionary parms = new dictionary();
+	parms.put( "lair", lair );
+	messageTo( mobile, "handleRecoverFromHealingLair", parms, rand(3,5), false );
+
+}
+
+messageHandler resumeDefaultCalmBehavior()
+{
+	obj_id lair = getObjIdObjVar( self, "npc_lair.target" );
+	if ( isIdValid(lair) )
+	{
+		if ( !ai_lib.isInCombat(self) )
+		{
+			int maxHP = getMaxHitpoints( lair );
+			int curHP = getHitpoints(lair);
+			if ( curHP < maxHP )
+			{
+				params.put("lair",lair);
+				doLairHealing( self, params );
+			}
+
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRecoverFromHealingLair()
+{
+	////debugSpeakMsg( self, "callback received");
+	obj_id lair = params.getObjId( "lair" );
+	int maxHP = getMaxHitpoints( lair );
+	int curHP = getHitpoints(lair);
+	if ( curHP < maxHP )
+		doLairHealing( self, params );
+	else
+	{
+		////debugSpeakMsg( self, " i am done healing " );
+		removeObjVar( self, "ai.combat.ignoreCombat" );
+		utils.removeScriptVar( self, "pathingToHealLair" );
+		utils.removeScriptVar( self, "npc_lair.willheal");
+		if ( !ai_lib.isInCombat(self) )
+			messageTo( self, "resumeDefaultCalmBehavior", null, 5, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void pathToWithinTwoMetersOf( obj_id mobile, location destLoc )
+{
+	location startLoc = getLocation( mobile );
+	location baseLoc = new location( destLoc );
+	if ( startLoc.x > baseLoc.x )
+		baseLoc.x += 1.5f;
+	else
+		baseLoc.x -= 1.5f;
+
+	if ( startLoc.z > baseLoc.z )
+		baseLoc.z += 1.5f;
+	else
+		baseLoc.z -= 1.5f;
+
+	pathTo( mobile, baseLoc );
+}
+
+trigger OnSawAttack(obj_id defender, obj_id[] attackers)
+{
+	if ( hasObjVar( self, "ai.combat.ignoreCombat" ))
+	{
+		////debugSpeakMsg( self, "ignoring combat!" );
+		return SCRIPT_OVERRIDE;
+	}
+	else
+		return SCRIPT_CONTINUE;
+}
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id weapon, int[] damage)
+{
+	if ( hasObjVar( self, "ai.combat.ignoreCombat" ))
+	{
+		////debugSpeakMsg( self, "i took damage!");
+		obj_id lair = getObjIdObjVar( self, "npc_lair.target" );
+		utils.removeScriptVar( self, "npc_lair.willheal");
+		removeObjVar( self, "ai.combat.ignoreCombat" );
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRequestToConverse()
+{
+	////debugSpeakMsg( self, "i converse");
+	obj_id partner = params.getObjId("converseWith");
+	if ( !isIdValid(partner) || !exists( partner ) )
+	{
+		////debugSpeakMsg( self, "partner is invalid");
+		return SCRIPT_CONTINUE;
+	}
+
+	setObjVar( self, "npc_lair.converseWith", partner );
+	utils.setScriptVar( self, "npc_lair.pathingToConverse", true );
+	location destLoc = new location( getLocation( partner ));
+	location myLoc = getLocation( self );
+	if ( myLoc.x < destLoc.x )
+		destLoc.x -= 1;
+	else
+		destLoc.x += 1;
+	if ( myLoc.z < destLoc.z )
+		destLoc.z -= 1;
+	else
+		destLoc.z += 1;
+
+	pathTo( self, destLoc);
+	////debugSpeakMsg( self, "now I path to " + getName( partner ));
+	return SCRIPT_CONTINUE;
+}
+
+

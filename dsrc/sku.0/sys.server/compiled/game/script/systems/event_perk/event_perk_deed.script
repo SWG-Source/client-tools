@@ -1,0 +1,576 @@
+include library.utils;
+include library.ai_lib;
+include library.dressup;
+include library.sui;
+include library.create;
+include library.event_perk;
+include library.prose;
+
+const string TBL_PLAYER_TYPES = "datatables/vendor/vendor_player_types.iff";
+const string TBL_ALLNPC_TYPES = "datatables/vendor/vendor_allnpc_types.iff";
+const string DATATABLE = "datatables/event_perk/perk_data.iff";
+const string STF_FILE = "event_perk";
+
+trigger OnAttach()
+{
+// Get datatable position for this deed based on human friendly string name in datatable.
+	string name = getStringObjVar(self, "event_perk.deedName");
+	int numEntries = dataTableGetNumRows(DATATABLE);
+
+// Eventually terminalRegistration will be set by terminal this deed came from. For now we fake it.
+	float terminalRegistration = 999999;
+	setObjVar(self, "event_perk.terminal_registration", terminalRegistration);
+// End faking it........
+
+//	if(hasObjVar(self, "event_perk.redeeded"))
+//	{
+//		float timeStamp = getGameTime();
+//		setObjVar(self, "event_perk.timeStamp", timeStamp);
+//	}
+
+	if(!hasObjVar(self, "event_perk.deedNumber"))
+	{
+		for(int i = 0; i < numEntries; i++)
+		{
+			string currentName = dataTableGetString(DATATABLE, i, "NAME");
+			if(currentName.equals(name))
+			setObjVar(self, "event_perk.deedNumber", i);
+		}
+	}
+
+	int deedNumber = getIntObjVar(self, "event_perk.deedNumber");
+
+	if(!hasObjVar(self, "event_perk.redeeded") )
+	{
+		float lifeSpan = dataTableGetFloat(DATATABLE, deedNumber, "LIFESPAN");
+		setObjVar(self, "event_perk.lifeSpan", lifeSpan);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	checkTimeLimit(self, player);
+	string_id useEventPerk = new string_id(STF_FILE, "use_event_perk");
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+	if(mid != null)
+		mid.setServerNotify(true);
+	else
+	{
+		mi.addRootMenu (menu_info_types.ITEM_USE, useEventPerk);
+		//-- Timer change
+		if(hasObjVar(self, "event_perk.timeStamp") )
+		{
+			mi.addRootMenu(menu_info_types.SERVER_MENU1, new string_id("event_perk", "mnu_show_exp_time") );
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(item == menu_info_types.ITEM_USE)
+	{
+		useEventPerk(self, player);
+	}
+
+	if(item == menu_info_types.SERVER_MENU1)
+	{
+	
+		if(hasObjVar(self, "event_perk.timeStamp") )
+		{
+			float lifeSpan = getFloatObjVar(self, "event_perk.lifeSpan");
+			float timeStamp = getFloatObjVar(self, "event_perk.timeStamp");
+			float rightNow = getGameTime();
+			float expirationTimeMinutesFloat = ((lifeSpan + timeStamp) - rightNow)/60;
+			int expirationTimeMinutes = (int)expirationTimeMinutesFloat;
+			prose_package showExpiration = new prose_package();
+			showExpiration = prose.getPackage(new string_id("event_perk", "show_exp_time") );
+			prose.setDI(showExpiration, expirationTimeMinutes);
+			sendSystemMessageProse(player, showExpiration);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	checkTimeLimit(self, player);	
+	return SCRIPT_CONTINUE;
+}
+
+void useEventPerk(obj_id self, obj_id player)
+{
+
+	//Check in inventory
+	obj_id inventory = getObjectInSlot(player, "inventory");
+	if(!utils.isNestedWithin(self, player))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "from_inventory_only"));
+		return;
+	}
+
+	// Check for combat
+	if(ai_lib.isInCombat(player))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "not_in_combat"));
+		return;
+	}
+
+	// Check for swimming
+	if(1 == getState(player, STATE_SWIMMING))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "not_while_swimming"));
+		return;
+	}
+
+	// Check for the correct skill mod here.
+	int deedNumber = getIntObjVar(self, "event_perk.deedNumber");
+	string skillRequired = dataTableGetString(DATATABLE, deedNumber, "SKILL");
+	if(!skillRequired.equals("none"))
+	{
+		if(!hasSkill(player, skillRequired))
+		{
+			sendSystemMessage(player, new string_id(STF_FILE, "lack_the_skill"));
+			sendSystemMessage(player, "Skill required is " + skillRequired + ". I am deed number " + deedNumber, null);
+			return;
+		}
+	}
+
+	location here = getLocation(player);
+
+	// Check for planetary restrictions
+	string scene = getCurrentSceneName();
+	string sceneRestriction = dataTableGetString(DATATABLE, deedNumber, "SCENE");
+	if(!sceneRestriction.equals("none") )
+	{
+		if(scene != sceneRestriction)
+		{
+			sendSystemMessage(player, new string_id(STF_FILE, "not_on_this_planet") );
+			return;
+		}
+	}
+
+	if(event_perk.canPlaceEventPerkHere(self, player, here))
+	{
+		spawnEventPerk(self, player, here);
+	}
+
+}
+
+void spawnEventPerk(obj_id self, obj_id player, location here)
+{
+	if(!hasObjVar(self, "event_perk.timeStamp"))
+	{
+		float timeStamp = getGameTime();
+		setObjVar(self, "event_perk.timeStamp", timeStamp);
+	}
+
+	int deedNumber = getIntObjVar(self, "event_perk.deedNumber");
+	string type = dataTableGetString(DATATABLE, deedNumber, "TYPE");
+	string spawn = dataTableGetString(DATATABLE, deedNumber, "SPAWN");
+	string script = dataTableGetString(DATATABLE, deedNumber, "SCRIPT");
+	float lifeSpan = getFloatObjVar(self, "event_perk.lifeSpan");
+	float heading = getYaw(player);
+	float timeStamp = getFloatObjVar(self, "event_perk.timeStamp");
+	string ownerName = getFirstName(player);
+	float terminalRegistration = getFloatObjVar(self, "event_perk.terminal_registration");
+	string stringData1 = dataTableGetString(DATATABLE, deedNumber, "SDATA1");
+	float floatData1 = dataTableGetFloat(DATATABLE, deedNumber, "FDATA1");
+	float floatData2 = dataTableGetFloat(DATATABLE, deedNumber, "FDATA2");
+	
+	if(type == "static" || type == "recruiter" || type == "gamedroid" )
+	{
+		obj_id eventPerk = create.object(spawn, here);
+		setObjVar(eventPerk, "event_perk.lifeSpan", lifeSpan);
+		setObjVar(eventPerk, "event_perk.timeStamp", timeStamp);
+		setObjVar(eventPerk, "event_perk.owner", player);
+		setObjVar(eventPerk, "event_perk.ownerName", ownerName);
+		setObjVar(eventPerk, "event_perk.terminal_registration", terminalRegistration);
+
+		if(type == "recruiter")
+		{
+			ai_lib.setDefaultCalmBehavior(eventPerk, ai_lib.BEHAVIOR_SENTINEL);
+			ai_lib.stop(eventPerk);
+			attachScript(eventPerk, "npc.faction_recruiter.recruiter_setup");
+			attachScript(eventPerk, "npc.faction_recruiter.faction_recruiter");
+			setInvulnerable(eventPerk, true);
+			persistObject(eventPerk);
+		}
+
+		if(type == "gamedroid")
+		{
+			string_id droidNameSID = new string_id("event_perk", stringData1);
+			string droidName = getString(droidNameSID);
+			setName(eventPerk, droidName);
+			setInvulnerable(eventPerk, true);
+			persistObject(eventPerk);
+		}
+
+		if(!script == "none")
+			attachScript(eventPerk, script);
+
+		if(!stringData1 == "none")
+			setObjVar(eventPerk, "event_perk.stringData1", stringData1);
+
+		setYaw(eventPerk, heading);		
+		attachScript(eventPerk, "systems.event_perk.event_perk");
+		persistObject(eventPerk);		
+
+		if(eventPerk != null)
+		{
+			setObjVar(eventPerk, "event_perk.perk_type", type);
+			setObjVar(eventPerk, "event_perk.source_deed", getTemplateName(self) );
+			destroyObject(self);
+			CustomerServiceLog("EventPerk", "(Perk Created) Type [" + type + "] Location [" + here + "] OID + [" + eventPerk + "].");
+		}
+		else
+			sendSystemMessage(player, new string_id(STF_FILE, "bad_area"));
+	}
+
+	if(type == "theater")
+	{
+
+		if(script == "none")
+			script = "";
+
+		obj_id eventPerk = createTheater(spawn, here, script, TLT_none);
+		setObjVar(eventPerk, "event_perk.lifeSpan", lifeSpan);
+		setObjVar(eventPerk, "event_perk.timeStamp", timeStamp);
+		setObjVar(eventPerk, "event_perk.owner", player);
+		setObjVar(eventPerk, "event_perk.ownerName", ownerName);
+		setObjVar(eventPerk, "event_perk.terminal_registration", terminalRegistration);
+
+		if(!stringData1 == "none")
+			setObjVar(eventPerk, "event_perk.stringData1", stringData1);
+
+		attachScript(eventPerk, "systems.event_perk.event_perk");
+	
+
+		if(eventPerk != null)
+		{
+			// Add the control term
+			location termLoc = here;
+			termLoc.x = termLoc.x + floatData1;
+			termLoc.y = termLoc.y + floatData2;
+
+			obj_id venueTerm = create.object("object/tangible/terminal/terminal_event_venue.iff", termLoc);
+			setObjVar(venueTerm, "event_perk.lifeSpan", lifeSpan);
+			setObjVar(venueTerm, "event_perk.timeStamp", timeStamp);
+			setObjVar(venueTerm, "event_perk.owner", player);
+			setObjVar(venueTerm, "event_perk.ownerName", ownerName);
+			setObjVar(venueTerm, "event_perk.perk_type", type);
+			setObjVar(venueTerm, "event_perk.event_perk", eventPerk);
+			setObjVar(venueTerm, "event_perk.source_deed", getTemplateName(self) );
+			attachScript(venueTerm, "systems.event_perk.event_perk");
+
+			CustomerServiceLog("EventPerk", "(Perk Created) Type [" + type + "] Location [" + here + "] OID + [" + eventPerk + "].");
+			destroyObject(self);
+		}
+		else
+			sendSystemMessage(player, new string_id(STF_FILE, "bad_area"));
+	}
+
+	if(type == "honorguard")
+	{
+		int headCount = 0;
+		int numPerLine = (int)floatData1;
+		int numRows = (int)floatData2;
+		float offset = 2.0f;
+		float xLoc = here.x;
+		float yLoc = here.y;
+		float zLoc = here.z;
+	
+		for(int i = 0; i < numPerLine; i++)
+		{
+		
+			double xRowOffsetDbl = Math.sin(Math.toRadians(heading + 90)) * (i * offset);
+			float xRowOffset = (float)xRowOffsetDbl;
+			double zRowOffsetDbl = Math.cos(Math.toRadians(heading + 90)) * (i * offset);
+			float zRowOffset = (float)zRowOffsetDbl;
+			
+			for(int j = 0; j < numRows; j++)
+			{
+				double xSpawnDbl = Math.sin(Math.toRadians(heading)) * (j * offset) + xLoc + xRowOffset;
+				double zSpawnDbl = Math.cos(Math.toRadians(heading)) * (j * offset) + zLoc + zRowOffset;
+				float xSpawn = (float)xSpawnDbl;
+				float zSpawn = (float)zSpawnDbl;
+
+				location spawnPoint = new location();
+
+				spawnPoint.x = xSpawn;
+				spawnPoint.y = yLoc;
+				spawnPoint.z = zSpawn;
+			
+				obj_id eventPerk = create.object(spawn, spawnPoint);
+				setYaw(eventPerk, heading);
+
+				if(!script == "none")
+					attachScript(eventPerk, script);
+
+				setObjVar(eventPerk, "event_perk.lifeSpan", lifeSpan);
+				setObjVar(eventPerk, "event_perk.timeStamp", timeStamp);
+				setObjVar(eventPerk, "event_perk.owner", player);
+				setObjVar(eventPerk, "event_perk.ownerName", ownerName);
+				setObjVar(eventPerk, "event_perk.terminal_registration", terminalRegistration);
+				ai_lib.setDefaultCalmBehavior(eventPerk, ai_lib.BEHAVIOR_SENTINEL );
+				ai_lib.stop(eventPerk);
+				setInvulnerable(eventPerk, true);
+				setCreatureStatic(eventPerk, true);
+				persistObject(eventPerk);
+				attachScript(eventPerk, "systems.event_perk.event_perk");
+
+				if(!utils.hasScriptVar(self, "honorguard_leader") )
+				{
+					utils.setScriptVar(self, "honorguard_leader", eventPerk);
+					
+					string gottenName = getName(eventPerk);
+					string actualName = getString(utils.unpackString(gottenName));
+					string leaderName = actualName + " ***";
+					setName(eventPerk, leaderName);
+					setObjVar(eventPerk, "event_perk.perk_type", type);
+					setObjVar(eventPerk, "event_perk.source_deed", getTemplateName(self) );
+				}
+				
+				obj_id leader = utils.getObjIdScriptVar(self, "honorguard_leader");
+				setObjVar(leader, "event_perk.honorguard_num_" + headCount, eventPerk);
+				headCount++;
+			}
+
+		}
+
+		obj_id leader = utils.getObjIdScriptVar(self, "honorguard_leader");
+		setObjVar(leader, "event_perk.honorguard_headCount", headCount);
+		destroyObject(self);
+		CustomerServiceLog("EventPerk", "(Perk Created) Type [honorguard] Location [" + here + "].");
+	}
+
+
+	if(type == "npc")
+	{
+		utils.setScriptVar(self, "event_perk.lifeSpan", lifeSpan);
+		utils.setScriptVar(self, "event_perk.timeStamp", timeStamp);
+		utils.setScriptVar(self, "event_perk.heading", heading);
+		createNpcActor(self, player, here);
+	}
+}
+
+void checkTimeLimit(obj_id self, obj_id player)
+{
+	if(hasObjVar(self, "event_perk.timeStamp"))
+	{
+		float lifeSpan = getFloatObjVar(self, "event_perk.lifeSpan");
+		float timeStamp = getFloatObjVar(self, "event_perk.timeStamp");
+		float rightNow = getGameTime();
+		float delta = rightNow - timeStamp;
+	
+		if(delta > lifeSpan)
+		{
+			destroyObject(self);
+			sendSystemMessage(player, new string_id(STF_FILE, "deed_expired"));
+		}
+	}
+
+	return;
+}
+
+void createNpcActor(obj_id self, obj_id player, location here)
+{
+
+	string[] randomOnly = {"@player_structure:random" };
+	utils.setScriptVar(self, "event_perk.checkGender", 0 );
+
+	// Get race types.
+	string[] rawRaceTypes = dataTableGetStringColumn( TBL_ALLNPC_TYPES, 0 );
+	string[] raceTypes = new string[rawRaceTypes.length];
+	for (int i=0; i<rawRaceTypes.length; i++ )
+	{
+		raceTypes[i] = "@player_structure:race_"+rawRaceTypes[i];
+	}
+	utils.setScriptVar(self, "event_perk.races", rawRaceTypes );
+	utils.setScriptVar(self, "event_perk.checkGender", 1 );
+	sui.listbox(self, player, "@event_perk_npc_actor:race_type_d", sui.OK_CANCEL, "@event_perk_npc_actor:race_type_t", raceTypes, "handleNpcActorRaceSelect", true );
+
+	return;
+
+}
+
+messageHandler destroyYourself()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+/****************** MOVED HANDLERS **********************/
+
+messageHandler handleNpcActorRaceSelect()
+{
+	// Grab params.
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx < 0 ) idx = 0;
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Store the race index.
+	utils.setScriptVar( self, "event_perk.raceIndex", idx );
+
+	int checkGender = utils.getIntScriptVar( self, "event_perk.checkGender" );
+	if ( checkGender == 1 )
+	{
+		// The chosen race may not have a female counterpart.
+		int[] hasFemale = dataTableGetIntColumn( TBL_ALLNPC_TYPES, 1 );
+		if ( hasFemale[idx] == 0 )
+		{
+			// Don't ask about gender.
+			utils.setScriptVar( self, "event_perk.genderIndex", 0 );
+
+			// Ask them about the name.
+			sui.inputbox( self, player, "@event_perk_npc_actor:name_d", sui.OK_CANCEL, "@event_perk_npc_actor:name_t", sui.INPUT_NORMAL, null, "handleSetNpcActorName", null );
+
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Ask them about gender.
+	string[] possibleNPCGender = { "@player_structure:male", "@player_structure:female" };
+	sui.listbox( self, player, "@event_perk_npc_actor:gender_d", sui.OK_CANCEL, "@event_perk_npc_actor:gender_t", possibleNPCGender, "handleNpcActorGenderSelect", true );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleNpcActorGenderSelect()
+{
+	// Grab params.
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx < 0 ) idx = 0;
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Store the gender index.
+	utils.setScriptVar( self, "event_perk.genderIndex", idx );
+
+	// Ask them about the name.
+	sui.inputbox( self, player, "@event_perk_npc_actor:name_d", sui.OK_CANCEL, "@event_perk_npc_actor:name_t", sui.INPUT_NORMAL, null, "handleSetNpcActorName", null );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSetNpcActorName()
+{
+	// Store the vendor name.
+	obj_id player = sui.getPlayerId(params);
+	string vendorName = sui.getInputBoxText(params);
+	int btn = sui.getIntButtonPressed(params);
+
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// No zero length or obscene names.
+	if ( (vendorName == "") || isNameReserved(vendorName) )
+	{
+		// Ask them about the name.
+		sendSystemMessage(player, new string_id(STF_FILE, "no_obscene_stuff"));
+		sui.inputbox( self, player, "@event_perk_npc_actor:name_d", sui.OK_CANCEL, "@event_perk_npc_actor:name_t", sui.INPUT_NORMAL, null, "handleSetNpcActorName", null );
+		return SCRIPT_CONTINUE;
+	}
+
+	if (vendorName.length() > 40)
+		vendorName = vendorName.substring(0, 39);
+
+	utils.setScriptVar(self, "event_perk.vendorName", vendorName);
+
+	params.put("player", player);
+
+	// Send message to create the vendor.
+	messageTo(self, "buildNpcActor", params, 0, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler buildNpcActor()
+{
+	int deedNumber = getIntObjVar(self, "event_perk.deedNumber");
+	string type = dataTableGetString(DATATABLE, deedNumber, "TYPE");
+	string spawn = dataTableGetString(DATATABLE, deedNumber, "SPAWN");
+	obj_id player = params.getObjId("player");
+	location here = getLocation(player);
+
+	if(!event_perk.canPlaceEventPerkHere(self, player, here) )
+		return SCRIPT_CONTINUE;
+
+	// Get params.
+	string ownerName = getFirstName(player);
+	string terminalSuffix = "NPC";
+	string vendorName = utils.getStringScriptVar( self, "event_perk.vendorName" );
+	string_id titleAppend = new string_id("event_perk_npc_actor", "title_append");
+	string titleAppendStr = getString(titleAppend);
+	vendorName += titleAppendStr+ownerName+")";
+	float lifeSpan = utils.getFloatScriptVar(self, "event_perk.lifeSpan");
+	float timeStamp = utils.getFloatScriptVar(self, "event_perk.timeStamp");
+	float heading = utils.getFloatScriptVar(self, "event_perk.heading");
+
+	// Get object template.
+	string vendorTemplate = "object/tangible/vendor/vendor_" + terminalSuffix;
+
+		int raceIndex = utils.getIntScriptVar( self, "event_perk.raceIndex" );
+		int genderIndex = utils.getIntScriptVar( self, "event_perk.genderIndex" );
+		string[] raceTypes = utils.getStringArrayScriptVar( self, "event_perk.races" );
+		string[] playerTypes = dataTableGetStringColumn( TBL_PLAYER_TYPES, 0 );
+		string[] genderList = { "male", "female" };
+		string creatureName = "vendor";
+		string templateName;
+
+		if ( raceIndex == 0 )
+			templateName = playerTypes[rand(1,playerTypes.length-1)] + "_" + genderList[genderIndex] + ".iff";
+		else
+			templateName = raceTypes[raceIndex] + "_" + genderList[genderIndex] + ".iff";
+
+		obj_id vendor = create.object( create.TEMPLATE_PREFIX + "vendor/" + templateName, here);
+
+		if ( (vendor != null) )
+		{
+			// Set flags.
+			setInvulnerable( vendor, true );
+			ai_lib.setDefaultCalmBehavior( vendor, ai_lib.BEHAVIOR_SENTINEL );
+			setObjVar(vendor, "event_perk.lifeSpan", lifeSpan);
+			setObjVar(vendor, "event_perk.timeStamp", timeStamp);
+			setObjVar(vendor, "event_perk.owner", player);
+			setObjVar(vendor, "event_perk.ownerName", ownerName);
+
+			// Give him clothes.
+			if ( templateName.indexOf( "ithorian" ) > -1 )
+			{
+				dressup.dressNpc(vendor, "random_ithorian", true);
+			}
+			else
+			{
+				dressup.dressNpc(vendor, "rich_no_jacket");
+			}
+		}
+
+	setName(vendor, vendorName);
+	attachScript(vendor, "systems.event_perk.event_perk_npc");	
+	attachScript(vendor, "systems.event_perk.event_perk");
+
+	if(isIdValid(vendor))
+	{
+		persistObject(vendor);
+		setObjVar(vendor, "event_perk.perk_type", type);
+		setObjVar(vendor, "event_perk.source_deed", getTemplateName(self) );
+		destroyObject(self);
+		CustomerServiceLog("EventPerk", "(Perk Created) Type [NPC Actor] Location [" + here + "] OID + [" + vendor + "].");
+	}
+	else
+		sendSystemMessage(player, new string_id("event_perk", "npc_creation_error"));
+	
+	return SCRIPT_CONTINUE;
+}

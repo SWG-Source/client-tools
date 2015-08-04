@@ -1,0 +1,637 @@
+include library.anims;
+include library.ai_lib;
+include library.armor;
+include library.buff;
+include library.create;
+include library.combat;
+include library.prose;
+include library.static_item;
+include library.sui;
+include library.target_dummy;
+include library.utils;
+
+/***** LOGGING *******************************************************/
+
+const string TERMINAL_LOGGING						= "target_creature";
+const boolean LOGGING_ON						= false;
+
+/********* CONSTANTS *****************************************/
+
+const int OPTIONS_REPORT_COMBAT_DATA			= menu_info_types.SERVER_MENU1;
+const int OPTIONS_ROOT_MENU						= menu_info_types.SERVER_MENU2;
+const int OPTIONS_SET_LEVEL_MENU				= menu_info_types.SERVER_MENU3;
+const int OPTIONS_START_STOP_COMBAT				= menu_info_types.SERVER_MENU4;
+const int OPTIONS_SET_DIFFICULTY				= menu_info_types.SERVER_MENU5;
+const int OPTIONS_SET_DEFENSE					= menu_info_types.SERVER_MENU6;
+const int OPTIONS_CLEANUP						= menu_info_types.SERVER_MENU7;
+const int OPTIONS_CLEAR_YOUR_COMBAT_DATA		= menu_info_types.SERVER_MENU8;
+const int OPTIONS_CLEAR_ALL_COMBAT_DATA			= menu_info_types.SERVER_MENU9;
+const int OPTIONS_SHOW_RAW_COMBAT_DATA			= menu_info_types.SERVER_MENU10;
+
+const int OPTIONS_EXTRAS						= menu_info_types.SERVER_MENU11;
+const int OPTIONS_EXTRAS_RANDOM					= menu_info_types.SERVER_MENU12;
+const int OPTIONS_EXTRAS_TRICK					= menu_info_types.SERVER_MENU13;
+
+const int OPTIONS_ANIMATIONS					= menu_info_types.SERVER_MENU14;
+
+
+/*************************************************************/
+
+trigger OnAttach()
+{
+	messageTo(self, "handleTargetCreatureSetUp", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTargetCreatureSetUp()
+{
+	obj_id controller = target_dummy.getTargetDummyController(self);
+	if ( isIdValid(controller) )
+	{
+		// Default the target creature's level to 50.
+		// If the owner is around, it's level will be set to match their owner.
+		// If a previously set combat level is present (in the intCombatDifficulty objvar).
+		// we'll use that instead of the owner's level.
+		int combatLevel = 50;
+		if( hasObjVar(self, target_dummy.OWNER_OBJVAR) )
+		{
+			obj_id owner = getObjIdObjVar(self, target_dummy.OWNER_OBJVAR);
+			if ( isIdValid(owner) && exists(owner) )
+			{
+				combatLevel = getLevel(owner);
+			}
+		}
+		if ( hasObjVar(controller, "intCombatDifficulty") )
+		{
+			combatLevel = target_dummy.getTargetDummyCombatLevel(controller);
+		}
+
+		target_dummy.freezeMob(self);
+		target_dummy.removeCombatAi(self);
+		
+		int difficulty = target_dummy.getTargetDummyDifficulty(controller);
+		target_dummy.initializeTargetDummy(self, combatLevel, difficulty);
+		
+		for ( int i = 0; i < target_dummy.TARGET_DUMMY_DEFENSES.length; i++ )
+		{
+			string skillModName = target_dummy.TARGET_DUMMY_DEFENSES[i];
+			if ( hasObjVar(controller, "target_dummy_defense." + skillModName) )
+			{
+				int value = getIntObjVar(controller, "target_dummy_defense." + skillModName);
+				target_dummy.setTargetDummyDefensiveValue(self, obj_id.NULL_ID, value, skillModName);
+			}
+		}
+	}
+	else
+	{
+		destroyObject(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{	
+	sendDirtyObjectMenuNotification(self);
+	if ( !isInvulnerable(self) )
+	{
+		int menuStartStopCombat = mi.addRootMenu (OPTIONS_START_STOP_COMBAT, new string_id("target_dummy", "menu_stop_combat"));
+	}
+	
+	if ( hasObjVar(self, target_dummy.OWNER_OBJVAR) )
+	{
+		obj_id owner = getObjIdObjVar(self, target_dummy.OWNER_OBJVAR);
+		if ( isIdValid(owner) )
+		{	
+			if ( player == owner && !isInvulnerable(self) )
+			{
+				int menuNpcOptions = mi.addRootMenu (OPTIONS_ROOT_MENU, new string_id("target_dummy", "menu_options_root"));
+				mi.addSubMenu(menuNpcOptions, OPTIONS_SET_LEVEL_MENU, new string_id("target_dummy", "menu_set_combat_level"));
+				mi.addSubMenu(menuNpcOptions, OPTIONS_SET_DIFFICULTY, new string_id("target_dummy", "menu_set_combat_difficulty"));
+				mi.addSubMenu(menuNpcOptions, OPTIONS_SET_DEFENSE, new string_id("target_dummy", "menu_set_defense"));
+				if(getStringObjVar(self, "targetDummyCreatureName").equals("tcg_target_dummy"))
+				{
+					if(hasObjVar(self, target_dummy.TARGET_DUMMY_NO_SOUND))
+						mi.addSubMenu(menuNpcOptions, OPTIONS_ANIMATIONS, new string_id("target_dummy", "menu_turnon_target_dummy_anims"));
+					else
+						mi.addSubMenu(menuNpcOptions, OPTIONS_ANIMATIONS, new string_id("target_dummy", "menu_turnoff_target_dummy_anims"));
+				
+					mi.addSubMenu(menuNpcOptions, OPTIONS_CLEANUP, new string_id("target_dummy", "menu_cleanup_target_dummy"));
+					
+				}
+				else if(getStringObjVar(self, "targetDummyCreatureName").equals("tcg_target_creature_acklay"))
+					mi.addSubMenu(menuNpcOptions, OPTIONS_CLEANUP, new string_id("target_dummy", "menu_cleanup_target_creature"));
+				else
+					mi.addSubMenu(menuNpcOptions, OPTIONS_CLEANUP, new string_id("target_dummy", "menu_cleanup_target_object"));
+			
+			}
+			
+			if ( player == owner )
+			{				
+				if ( target_dummy.hasTargetDummyExtras(self) )
+				{
+					int menuExtras = mi.addRootMenu (OPTIONS_EXTRAS, new string_id("target_dummy", "menu_extras"));
+					if ( target_dummy.hasTargetDummyTrickAnim(self) )
+					{
+						mi.addSubMenu(menuExtras, OPTIONS_EXTRAS_TRICK, new string_id("target_dummy", "menu_extras_trick"));
+					}
+					if ( target_dummy.hasTargetDummyRandomAnim(self) )
+					{
+						mi.addSubMenu(menuExtras, OPTIONS_EXTRAS_RANDOM, new string_id("target_dummy", "menu_extras_random"));
+					}
+				}
+			}
+			
+			int menuReportCombatData = mi.addRootMenu (OPTIONS_REPORT_COMBAT_DATA, new string_id("target_dummy", "menu_report_combat_data"));
+			mi.addSubMenu(menuReportCombatData, OPTIONS_CLEAR_YOUR_COMBAT_DATA, new string_id("target_dummy", "menu_clear_combat_data"));
+			if ( player == owner )
+			{
+				mi.addSubMenu(menuReportCombatData, OPTIONS_CLEAR_ALL_COMBAT_DATA, new string_id("target_dummy", "menu_clear_all_combat_data"));
+			}
+			
+			if ( isGod(player) )
+			{
+				mi.addSubMenu(menuReportCombatData, OPTIONS_SHOW_RAW_COMBAT_DATA, new string_id("target_dummy", "menu_show_raw_combat_data"));
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int menu)
+{
+	if ( menu == OPTIONS_REPORT_COMBAT_DATA )
+	{
+		obj_id controller = target_dummy.getTargetDummyController(self);
+		if ( isIdValid(controller) )
+		{
+			target_dummy.reportCombatDataViaController(player, self, controller);
+		}
+	}
+	else if(menu == OPTIONS_ANIMATIONS)
+	{
+		if(!hasObjVar(self, target_dummy.TARGET_DUMMY_NO_SOUND))
+		{
+			setObjVar(self, target_dummy.TARGET_DUMMY_NO_SOUND, true);
+			sendSystemMessage(player, target_dummy.SID_SOUND_ANIMS_OFF);
+		}
+		else
+		{
+			removeObjVar(self, target_dummy.TARGET_DUMMY_NO_SOUND);
+			sendSystemMessage(player, target_dummy.SID_SOUND_ANIMS_ON);		
+		}
+	}	
+	else if ( menu == OPTIONS_CLEAR_YOUR_COMBAT_DATA )
+	{
+		target_dummy.confirmClearYourCombatData(self, player);
+	}
+	else if ( menu == OPTIONS_START_STOP_COMBAT )
+	{
+		target_dummy.endTargetDummyCombat(self, player);
+	}
+	else if ( menu == OPTIONS_SHOW_RAW_COMBAT_DATA )
+	{
+		if ( isGod(player) )
+		{
+			target_dummy.showRawCombatDataViaController(player, self);
+		}
+	}
+	// These options below are only available to the target_creature's owner
+	else if ( hasObjVar(self, target_dummy.OWNER_OBJVAR) )
+	{
+		obj_id owner = getObjIdObjVar(self, target_dummy.OWNER_OBJVAR);
+		if ( isIdValid(owner) && player == owner )
+		{
+			if ( menu == OPTIONS_ROOT_MENU )
+			{
+				sendSystemMessage(player, new string_id("target_dummy", "menu_options_prompt"));
+			}
+			else if ( menu == OPTIONS_SET_LEVEL_MENU )
+			{
+				target_dummy.promptForCombatLevel(self, player);
+			}
+			else if ( menu == OPTIONS_SET_DIFFICULTY )
+			{
+				target_dummy.promptForCombatDifficulty(self, player);
+			}
+			else if ( menu == OPTIONS_SET_DEFENSE )
+			{
+				target_dummy.showTargetDummyDefenseListSui(self, player);
+			}
+			else if ( menu == OPTIONS_CLEANUP )
+			{
+				obj_id controller = target_dummy.getTargetDummyController(self);
+				if ( isIdValid(controller) )
+				{
+					target_dummy.cleanupTargetDummy(controller, self);
+				}
+			}
+			else if ( menu == OPTIONS_CLEAR_ALL_COMBAT_DATA )
+			{
+				target_dummy.confirmClearAllCombatData(self, player);
+			}
+			else if ( menu == OPTIONS_EXTRAS )
+			{
+				if ( hasObjVar(self, target_dummy.TARGET_DUMMY_LAST_EXTRAS_ANIM) )
+				{
+					string animName = getStringObjVar(self, target_dummy.TARGET_DUMMY_LAST_EXTRAS_ANIM);
+					target_dummy.doTargetDummyAnimation(self, animName);
+				}
+			}
+			else if ( menu == OPTIONS_EXTRAS_RANDOM )
+			{
+				target_dummy.doTargetDummyRandomAnim(self);
+			}
+			else if ( menu == OPTIONS_EXTRAS_TRICK )
+			{
+				target_dummy.doTargetDummyTrick(self);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	blog("OnDestroy - creature reports being destroyed");
+	target_dummy.removeTargetDummyFromPermissions(self);
+	return SCRIPT_CONTINUE;
+}
+
+/*************************************************************/
+
+messageHandler handleTargetDummyCombatReport()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+	if ( isIdValid(player) )
+	{
+		// Determine which button was pressed.
+		int button = sui.getIntButtonPressed( params );
+		string revert = params.getString(sui.MSGBOX_BTN_REVERT+".RevertWasPressed");
+		if ( button == sui.BP_CANCEL )
+		{
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			obj_id controller = target_dummy.getTargetDummyController(self);
+			if ( isIdValid(controller) )
+			{
+				if (revert != null && !revert.equals(""))
+				{
+					// clearing combat data
+					if ( utils.hasScriptVarTree(controller, target_dummy.BASE_TARGET_DUMMY_VAR+"."+player) )
+					{
+						target_dummy.confirmClearYourCombatData(self, player);
+					}
+					else
+					{
+						// No data found - though this shouldn't happen from here.
+						sendSystemMessage(player, new string_id("target_dummy", "placement_no_combat_data"));
+					}
+				}
+				else 
+				{
+					// show combat data sui
+					target_dummy.reportCombatDataViaController(player, self, controller);
+				}
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler confirmClearYourCombatData()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	int bp = sui.getIntButtonPressed( params );
+	obj_id player = sui.getPlayerId( params );
+	if ( isIdValid(player) && bp == sui.BP_OK )
+	{
+		obj_id controller = target_dummy.getTargetDummyController(self);
+		if ( isIdValid(controller) )
+		{
+			if ( utils.hasScriptVarTree(controller, target_dummy.BASE_TARGET_DUMMY_VAR+"."+player) )
+			{
+				target_dummy.clearYourCombatData(self, player);
+			}
+			else
+			{
+				// No data found - though this shouldn't happen from here.
+				sendSystemMessage(player, new string_id("target_dummy", "placement_no_combat_data"));
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler confirmClearAllCombatData()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	int bp = sui.getIntButtonPressed( params );
+	obj_id player = sui.getPlayerId( params );
+	if ( isIdValid(player) && bp == sui.BP_OK )
+	{
+		obj_id controller = target_dummy.getTargetDummyController(self);
+		if ( isIdValid(controller) )
+		{
+			if ( utils.hasScriptVarTree(controller, target_dummy.BASE_TARGET_DUMMY_VAR) )
+			{
+				target_dummy.clearAllCombatData(self, player);
+			}
+			else
+			{
+				// No data found - though this shouldn't happen from here.
+				sendSystemMessage(player, new string_id("target_dummy", "placement_no_combat_data"));
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleTargetDummyLevelSelect()
+{
+	blog("handleTargetDummyLevelSelect - init");
+	if ( params == null || params.isEmpty() )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	int button = sui.getIntButtonPressed(params);
+	if ( button == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+	string text = sui.getInputBoxText(params);
+
+	int level = utils.stringToInt(text);
+
+	if (level < 1 || level > 100)
+	{
+		sendSystemMessage(player, new string_id("target_dummy", "combat_level_invalid"));
+	}
+	else
+	{
+		blog("handleTargetDummyLevelSelect - setting");
+
+		int difficulty = target_dummy.getTargetDummyDifficulty(self);
+		if ( target_dummy.initializeTargetDummy(self, level, difficulty) )
+		{
+			sendSystemMessage(player, new string_id("target_dummy", "combat_level_set"));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTargetDummyDifficultySelect()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int button = sui.getIntButtonPressed(params);
+	if ( button == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int difficulty_selected = sui.getListboxSelectedRow(params);
+	int combatLevel = getLevel(self);
+
+	if ( target_dummy.initializeTargetDummy(self, combatLevel, difficulty_selected) )
+	{
+		sendSystemMessage(player, new string_id("target_dummy", "combat_difficulty_set"));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler targetDummyDefenseTypeSelected()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int button = sui.getIntButtonPressed(params);
+	if ( button == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int skill_mod_selected = sui.getListboxSelectedRow(params);
+	target_dummy.promptForDefensiveValue(self, player, skill_mod_selected);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTargetDummyDefensiveSkillModSet()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	int button = sui.getIntButtonPressed(params);
+	if ( button == sui.BP_CANCEL )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id player = sui.getPlayerId(params);
+	string text = sui.getInputBoxText(params);
+
+	int value = utils.stringToInt(text);
+	target_dummy.setTargetDummyDefensiveValue(self, player, value);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/*************************************************************/
+
+trigger OnEnteredCombat()
+{
+	obj_id hateTarget = getHateTarget(self);
+	//debugSpeakMsg(self, "OnEnteredCombat:: hateTarget = "+hateTarget);
+	messageTo(self, "handleTargetDummyCombatTick", null, 3, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTargetDummyCombatTick()
+{	
+	obj_id[] enemies = getHateList(self);
+	if ( enemies != null && enemies.length > 0 )
+	{
+		messageTo(self, "handleTargetDummyCombatTick", null, 3, false);
+		for ( int i=0; i < enemies.length; i++ )
+		{
+			obj_id enemy = enemies[i];
+			if ( isIdValid(enemy) )
+			{
+				location there = getLocation(enemy);
+				location here = getLocation(self);
+				if ( there.cell != here.cell || utils.getDistance2D(here, there) > 60 )
+				{
+					target_dummy.removeAttackerFromCombat(self, enemy);
+				}
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnExitedCombat()
+{
+	//debugSpeakMsg(self, "OnExitedCombat");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnHateTargetChanged(obj_id target)
+{
+	//debugSpeakMsg(self, "OnHateTargetChanged");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnHateTargetRemoved(obj_id target)
+{
+	//debugSpeakMsg(self, "OnHateTargetRemoved");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id weapon, int[] damage)
+{
+	blog("OnCreatureDamaged - creature dmg");
+	faceTo(self, attacker);
+	
+	if(getStringObjVar(self, "targetDummyCreatureName").startsWith("tcg_target_dummy") && 
+	!hasObjVar(self, target_dummy.TARGET_DUMMY_NO_SOUND) &&
+	!utils.hasScriptVar(self, target_dummy.TARGET_DUMMY_SOUND_DELAY))
+		playTargetDummySound(self, attacker);
+		
+	int currentHealth = getAttrib(self, HEALTH);
+	
+	for ( int i = 0; i < damage.length; i++ )
+	{
+		currentHealth = currentHealth - damage[i];
+	}
+	blog("OnCreatureDamaged - currentHealth: "+currentHealth);
+	
+	if ( currentHealth <= 0 )
+	{
+		combat.sendCombatSpamMessage(attacker, target_dummy.SID_TARGET_DUMMY_DIED_RESSURECTION);
+		setHealth(self, getMaxAttrib(self, HEALTH));
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	return SCRIPT_OVERRIDE;
+}
+
+messageHandler faceThePlayer()
+{	
+	obj_id owner = getObjIdObjVar(self, target_dummy.OWNER_OBJVAR);
+	if(!isValidId(owner) || !exists(owner))
+		return SCRIPT_CONTINUE;
+
+	faceTo(self, owner);
+	messageTo(self, "waveThePlayer", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler waveThePlayer()
+{	
+	obj_id owner = getObjIdObjVar(self, target_dummy.OWNER_OBJVAR);
+	if(!isValidId(owner) || !exists(owner))
+		return SCRIPT_CONTINUE;
+
+	doAnimationAction (self, anims.PLAYER_SALUTE1);
+	playClientEffectObj(self, "sound/dro_fs_biped.snd", owner, "");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeSoundDelay()
+{	
+	utils.removeScriptVar(self, target_dummy.TARGET_DUMMY_SOUND_DELAY);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkCurrentLocation()
+{	
+	if(!isInWorldCell(self))
+		return SCRIPT_CONTINUE;
+
+	obj_id controller = target_dummy.getTargetDummyController(self);
+	if(!isIdValid(controller))
+		return SCRIPT_CONTINUE;
+
+	target_dummy.cleanupTargetDummy(controller, self);		
+	return SCRIPT_CONTINUE;
+}
+
+boolean playTargetDummySound(obj_id dummy, obj_id attacker)
+{
+	if(!isValidId(dummy) || !isValidId(attacker))
+		return false;
+	if(utils.hasScriptVar(dummy, target_dummy.TARGET_DUMMY_SOUND_DELAY))
+		return false;
+	if(rand(1,100) > 50)
+		return false;
+	
+	int randomAnimation = rand(0,(target_dummy.TARGET_DUMMY_ANIMS.length - 1));
+	if(randomAnimation <= 0)
+		return false;
+		
+	string anim = target_dummy.TARGET_DUMMY_ANIMS[randomAnimation];
+	if(anim == null || anim.length() <= 0)
+		return false;
+	
+	doAnimationAction (dummy, anim);
+	utils.setScriptVar(dummy, target_dummy.TARGET_DUMMY_SOUND_DELAY, true);
+	playClientEffectObj(dummy, "sound/dro_target_dummy_hit.snd", attacker, "");
+	messageTo(dummy, "removeSoundDelay", null, rand(3,10), false);
+	return true;	
+}
+
+boolean blog(string msg)
+{
+	if(msg == null || msg.equals(""))
+		return false;
+	if(LOGGING_ON)
+		LOG(TERMINAL_LOGGING, msg);
+		
+	return true;
+}
+
+

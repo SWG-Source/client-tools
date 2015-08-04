@@ -1,0 +1,390 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        group_object.script
+ * Description:  script for the group object
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+include java.util.Hashtable;
+include java.util.Set;
+include java.util.Iterator;
+
+trigger OnInitialize()
+{
+	return SCRIPT_CONTINUE;
+}
+
+/***** INHERITS ********************************************************/
+
+/***** CONSTANTS *******************************************************/
+
+/***** TRIGGER *********************************************************/
+
+/***** MESSAGEHANDLERS **************************************************/
+
+messageHandler volleyTargetDone()
+{
+	//LOG("combat", "Group object " + self + " received volleyTargetDone message.");
+	obj_id[] members = getGroupMemberIds(self);	
+	if(members == null || members.length < 1)
+	{
+		//LOG("combat", "No members in group.  Not messaging any members.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	for(int i = 0; i < members.length; i++)
+	{
+		//LOG("combat", "Messaging 'volleyTargetDone' to " + members[i]);
+		messageTo(members[i], "volleyTargetDone", params, 0, false);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler addGroupMember()
+{
+	// check the messageTo dictionary parameters
+	if(params != null)
+	{
+		// the group member is set in group_member.script
+		obj_id newGroupMember = params.getObjId("memberObjectId");
+		if(isIdValid(newGroupMember))
+		{
+			deltadictionary scriptVars = self.getScriptVars();
+			if(scriptVars != null)
+			{
+				// the new member might have missions closer
+				// for the group, run through the mssion select
+				// logic
+				selectNearestGroupMission(self);
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeGroupMember()
+{
+	if(params != null)
+	{
+		// set in group_member.script
+		obj_id groupMember = params.getObjId("sender");
+		if(isIdValid(groupMember))
+		{
+			deltadictionary scriptVars = self.getScriptVars();
+			if(scriptVars != null)
+			{
+				// the group member might have had the
+				// mission closest to the group. Run the
+				// group mission waypoint selection 
+				selectNearestGroupMission(self);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+location calculateNearestGroupMission(obj_id self)
+{
+	// iterate through the members and mission locations
+	// retrieved from the members. Each member 'votes' for
+	// the mission that is nearest to them. The location with
+	// the most 'votes' becomes the new group mission objective
+	location result = new location();
+	deltadictionary scriptVars = self.getScriptVars();
+	if(scriptVars != null)
+	{
+		// get the memberLocations and the missionLocations,
+		// bail out of either of them are empty (nothing to vote on)
+		location[] memberLocations = scriptVars.getLocationArray("memberLocations");
+		if((memberLocations == null) || (memberLocations.length < 1))
+		{
+			return null;
+		}
+		location[] missionLocations = scriptVars.getLocationArray("missionLocations");
+		if((missionLocations == null) || (missionLocations.length < 1))
+		{
+			return null;
+		}
+
+		// initialize the nearestGroupMission if it already exists
+		location nearestGroupMission = scriptVars.getLocation("nearestGroupMission");
+		if(nearestGroupMission == null)
+		{
+			if(missionLocations.length > 0)
+			{
+				// no nearestGroupMission, start with the first mission
+				// in the locations list
+				nearestGroupMission = missionLocations[0];
+			}
+			else
+			{
+				return null;
+			}
+		}
+
+		// this map contains the vote results. It's a map of locations and vote counts
+		// (int location, int votes)
+		Hashtable bestLocations = new Hashtable();
+
+		// outer loop iterates over the members
+		int memberLocationIndex = 0;
+		int preferredIndex = -1;
+		for(memberLocationIndex = 0; memberLocationIndex < memberLocations.length; ++memberLocationIndex)
+		{
+			int missionLocationIndex = 0;
+			//location memberPreferredLocation = nearestGroupMission;
+			float bestDistance = -1;
+			// inner loop iterates over mission locations
+			for(missionLocationIndex = 0; missionLocationIndex < missionLocations.length; ++missionLocationIndex)
+			{
+				// initialize the location under consideration
+				location currentLocation = missionLocations[missionLocationIndex];
+
+				// verify that the mission being considered is on the same
+				// planet as the group member
+				if(currentLocation.area.equals(memberLocations[memberLocationIndex].area))
+				{
+					// check the distance between the current location under consideration
+					// and the best candidate found so far
+					float currentDistance = currentLocation.distance(memberLocations[memberLocationIndex]);
+					if(bestDistance < 0 || currentDistance < bestDistance)
+					{
+						// the current mission is better, promote it to the
+						// 'best' candidate location
+						preferredIndex = missionLocationIndex;
+						bestDistance = currentDistance;
+					}
+				}
+			}
+
+			if(preferredIndex > -1)
+			{
+				Integer p = new Integer(preferredIndex);
+				// add the most preferred candidate location to the voting results map
+				if(bestLocations.containsKey(new Integer(preferredIndex)))
+				{
+					int votes = ((Integer)bestLocations.get(p)).intValue();
+					votes = votes + 1;
+					bestLocations.put(p, new Integer(votes));
+				}
+				else
+				{
+					Integer votes = new Integer(1);
+					bestLocations.put(p, votes);
+				}
+			}
+		}
+		
+		// tally the votes for the new nearest group mission
+		Set keySet = bestLocations.keySet();
+		Iterator votesIterator = keySet.iterator();
+		int mostVotes = 0;
+		while(votesIterator.hasNext())
+		{
+			Integer locationIndex = (Integer)(votesIterator.next());
+			//location l = (location)votesIterator.next();
+			int votes = ((Integer)bestLocations.get(locationIndex)).intValue();
+
+			// this location has the most votes(so far)
+			if(votes > mostVotes)
+			{
+				nearestGroupMission = missionLocations[locationIndex.intValue()];
+				mostVotes = votes;
+			}
+		}
+
+		// update the nearest group mission waypoint for everyone in the group
+		result = nearestGroupMission;
+		scriptVars.put("nearestGroupMission", nearestGroupMission);
+	}
+	else
+	{
+		result = null;
+	}
+	return result;
+}
+
+messageHandler missionLocationResponse()
+{
+	// group_member.script has responded to a request
+	// for mission location information
+	if((params != null) && (params.containsKey("requestMissionLocationsNumber")))
+	{
+		deltadictionary scriptVars = self.getScriptVars();
+		if((scriptVars != null) && (scriptVars.hasKey("requestMissionLocationsNumber")) && (params.getInt("requestMissionLocationsNumber") == scriptVars.getInt("requestMissionLocationsNumber")))
+		{
+			// retrieve mission and member information
+			// from the script parameter dictionary
+			obj_id missionHolder = params.getObjId("sender");
+			if(isIdValid(missionHolder))
+			{
+				// get the location of the group member
+				location senderLocation = params.getLocation("senderLocation");
+				if(senderLocation != null)
+				{
+					// match against other group member locations
+					// and member mission locations, update the
+					// nearest group mission and waypoint if necessary
+					resizeable location[] memberLocations = scriptVars.getResizeableLocationArray("memberLocations");
+					if(memberLocations == null)
+					{
+						memberLocations = new Vector();
+					}
+					memberLocations.add(senderLocation);
+					scriptVars.put("memberLocations", memberLocations);
+
+					location[] missionLocation = params.getLocationArray("missionLocation");
+					if((missionLocation != null) && (missionLocation.length > 0))
+					{
+						// mission locations are used in the
+						// group calculation (see comments in
+						// calculateNearestGroupMission
+						resizeable location[] missionLocations = scriptVars.getResizeableLocationArray("missionLocations");
+						if(missionLocations == null)
+						{
+							missionLocations = new Vector();
+						}
+
+						for(int i = 0; i < missionLocation.length; ++i)
+						{
+							missionLocations.add(missionLocation[i]);
+						}
+
+						scriptVars.put("missionLocations", missionLocations);
+
+						location nearestGroupMission = scriptVars.getLocation("nearestGroupMission");
+						if(nearestGroupMission == null)
+						{
+							nearestGroupMission = missionLocation[0];
+							scriptVars.put("nearestGroupMission", nearestGroupMission);
+						}
+					}
+
+					// once all group members have reported, execute the nearestGroupMission
+					// calculation and disseminate the results to group members; if members
+					// may have joined or left the group while we were accumulating the
+					// information which may cause what we have accumulated to be out of
+					// sync with the actual state of the group, don't worry about it, since
+					// we recalculate whenever someone joins or leaves the group
+					if (memberLocations.length >= getPCGroupSize(self))
+						tellMembersAboutNearestGroupMission(self, calculateNearestGroupMission(self));
+				}
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+void tellMembersAboutNearestGroupMission(obj_id self, location nearestGroupMission)
+{
+	// bail out early if no nearestGroupMission is available
+	if(nearestGroupMission != null)
+	{
+		deltadictionary scriptVars = self.getScriptVars();
+		if(scriptVars != null)
+		{
+			// update the nearest group mission waypoint for everyone in the group
+			// get the members list from scriptVars, use it to dispatch messageTo's
+			obj_id[] members = getGroupMemberIds(self);
+			int memberIndex = 0;
+
+			// create the messageTo parameters dictionary and put the
+			// nearestGroupMission location in it
+			dictionary msgData = new dictionary();
+			msgData.put("waypointLocation", nearestGroupMission);
+
+			// work around a bug/shortcoming of the messaging system. messageTo's
+			// are delivered out of sequence in a seemingly random fashion. To
+			// ensure that only the most recent update is applied, add a sequence
+			// to the message. group_member.script's messageHandler will discard
+			// messages with sequence values less than what it has already
+			// received.
+			int sequence = scriptVars.getInt("updateSequence");
+			sequence++;
+			scriptVars.put("updateSequence", sequence);
+			msgData.put("updateSequence", sequence);
+
+			// now iterate over the members list and send an updateGroupWaypoint
+			// messageTo with the sequence and nearestGroupMission location
+			for(memberIndex = 0; memberIndex < members.length; ++memberIndex)
+			{
+				messageTo(members[memberIndex], "updateGroupWaypoint", msgData, 0, false);
+			}
+		}
+	}
+}
+
+void selectNearestGroupMission(obj_id self)
+{
+	// starts the nearestGroupMission location
+	// selection protocol from scracth, removing
+	// the current nearestGroupMission locatio
+	// and replacing it with the best location
+	deltadictionary scriptVars = self.getScriptVars();
+	if(scriptVars != null)
+	{
+		// clear out old mission and member location data
+		// this will be refreshed by group member's responding
+		// to the requestMissionLocations message
+		scriptVars.remove("memberLocations");
+		scriptVars.remove("missionLocations");
+		scriptVars.remove("nearestGroupMission");
+
+		// iterate over the group members list and
+		// deliver the requestMissionLocations message.
+		// group_member.script will query its owner's
+		// mission objects for location information
+		obj_id[] members = getGroupMemberIds(self);
+		if(members != null)
+		{
+			// a counter to map responses to requestMissionLocations;
+			// we use this in cases where selectNearestGroupMission() is called
+			// before we have received all responses to a previous
+			// selectNearestGroupMission() call, in which case, we'll throw
+			// out the "stale" responses to requestMissionLocations
+			int requestMissionLocationsNumber = 1;
+			if (scriptVars.hasKey("requestMissionLocationsNumber"))
+			{
+				requestMissionLocationsNumber = scriptVars.getInt("requestMissionLocationsNumber");
+				++requestMissionLocationsNumber;
+			}
+
+			scriptVars.put("requestMissionLocationsNumber", requestMissionLocationsNumber);
+
+			dictionary requestData = new dictionary();
+			requestData.put("requestMissionLocationsNumber", requestMissionLocationsNumber);
+
+			int memberIndex = 0;
+			for(memberIndex = 0; memberIndex < members.length; ++memberIndex)
+			{
+				messageTo(members[memberIndex], "requestMissionLocations", requestData, 0, false);
+			}
+		}
+	}
+}
+
+messageHandler recaclulateNearestGroupWaypoint()
+{
+	// this message is received from a group member
+	// when it has been notified that one of its
+	// mission waypoints has been updated
+	selectNearestGroupMission(self);	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeMissionLocation()
+{
+	// this message is sent by a group member
+	// when a mission object is no longer
+	// available (it's been removed, finished,
+	// incomplete, aborted, etc.)
+	selectNearestGroupMission(self);	
+	return SCRIPT_CONTINUE;
+}

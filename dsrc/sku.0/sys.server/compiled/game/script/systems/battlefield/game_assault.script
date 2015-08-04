@@ -1,0 +1,365 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        game_assault
+ * Description:  handles specific log for the assault game.
+ *		 attaches to the battlefield master object.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.battlefield;
+include library.factions;
+include library.player_structure;
+include library.sui;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	LOG("LOG_CHANNEL", "battlefield.game_assault::OnAttach");
+
+	// Any critical object is part of the destroy objectives
+	obj_id[] crit_objs = battlefield.getGameCriticalObjects(self);
+
+	if (crit_objs == null || crit_objs.length < 1)
+	{
+		LOG("LOG_CHANNEL", "battlefield.game_assault::OnAttach -- (" + self + ") can't create a game with no destroy objectives.");
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get battlefield information
+	region bf = battlefield.getBattlefield(self);
+	string[] allowed_factions = battlefield.getFactionsAllowed(self);
+	string[] ai_factions = battlefield.getAIFactionsAllowed(self);
+	string[] all_factions = battlefield.getAllFactionsAllowed(self);
+
+	if (all_factions != null)
+	{
+		for(int i = 0; i < all_factions.length; i++)
+			LOG("LOG_CHANNEL", "...[" + i + "] ->" + all_factions[i]);
+	}
+
+	if (allowed_factions == null || all_factions == null)
+	{
+		LOG("LOG_CHANNEL", "battlefield.game_assault::OnAttach -- (" + self + ") allowed_factions/all_factions is null.");
+		return SCRIPT_CONTINUE;
+	}
+
+	if (battlefield.isBattlefieldPvP(bf))
+	{
+		LOG("LOG_CHANNEL", "battlefield.game_assault::OnAttach -- (" + self + ") Assault games cannot be played as PvP.");
+		return SCRIPT_CONTINUE;
+	}
+	else if (battlefield.isBattlefieldPvE(bf))
+	{
+		if (allowed_factions.length != 1)
+		{
+			LOG("LOG_CHANNEL", "battlefield.game_assault::OnAttach -- (" + self + ") can't create a pve destroy game with more than one player faction.");
+			return SCRIPT_CONTINUE;
+		}
+		else if (ai_factions.length < 1)
+		{
+			LOG("LOG_CHANNEL", "battlefield.game_assault::OnAttach -- (" + self + ") can't create a pve destroy game without any ai factions.");
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Sort the critical objects by faction and store them.
+	// Only ai factions have destroy objectives in the assault game.
+	for (int i = 0; i < ai_factions.length; i++)
+	{
+		int ai_faction_id = battlefield.getFactionId(ai_factions[i]);
+		resizeable obj_id[] faction_list = new obj_id[0];
+
+		for (int j = 0; j < crit_objs.length; j++)
+		{
+			int obj_faction_id = pvpBattlefieldGetFaction(crit_objs[j], bf);
+			if (obj_faction_id == ai_faction_id)
+			{
+				faction_list = utils.addElement(faction_list, crit_objs[j]);
+				string obj_name = ai_factions[i] + " Power Generator #" + faction_list.length;
+				setName(crit_objs[j], obj_name);
+			}
+		}
+
+		// Store the list
+		string objVar_name = battlefield.VAR_GAME + "." + ai_factions[i] + "_destroy";
+		setObjVar(self, objVar_name, faction_list);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgGameScriptPulse()
+{
+	// This message handler is called on each game pulse.
+	// param keys: time
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgBattlefieldKill()
+{
+	// This message handler is called everytime a player is killed.
+	// params keys: killer, victim
+
+	obj_id killer = params.getObjId("killer");
+	obj_id victim = params.getObjId("victim");
+
+	// Grant faction standing to the killer
+	if (isPlayer(killer))
+	{
+		region bf = battlefield.getBattlefield(self);
+		int killer_faction_id = pvpBattlefieldGetFaction(killer, bf);
+		string killer_faction = factions.getFactionNameByHashCode(killer_faction_id);
+
+		dictionary new_params = new dictionary();
+		new_params.put("faction", killer_faction);
+		new_params.put("battlefield", self);
+		new_params.put("standing", 1.0f);
+		messageTo(killer, "msgGrantFactionStanding", new_params, 0.0f, true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgAddPlayerToBattlefield()
+{
+	// This message handler is called every time a player is added to a faction
+	// params key: player, faction
+
+	LOG("LOG_CHANNEL", "battlefield.game_assault::msgAddPlayerToBattlefield -- " + params);
+
+	obj_id player = params.getObjId("player");
+	string faction = params.getString("faction");
+
+	if (!player.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	// Give a waypoint for the assault objective.
+	string[] allowed_factions = battlefield.getAIFactionsAllowed(self);
+	if (allowed_factions == null)
+	{
+		LOG("LOG_CHANNEL", "game_assault::msgAddPlayerToBattlefield -- AI factions is null." + self + "(" + battlefield.getBattlefieldName(self) + ")");
+		LOG("LOG_CHANNEL", "game_assault::msgAddPlayerToBattlefield -- player: " + player + " faction: " + faction);
+		return SCRIPT_CONTINUE;
+	}
+	
+	for (int i = 0; i < allowed_factions.length; i++)
+	{
+		// Get the objvars where the destroy objectives are stored.
+		string objVar_name = battlefield.VAR_GAME + "." + allowed_factions[i] + "_destroy";
+		if (hasObjVar(self, objVar_name))
+		{
+			// Get the destroy objectives
+			obj_id[] destroy_objs = getObjIdArrayObjVar(self, objVar_name);
+			for (int j = 0; j < destroy_objs.length; j++)
+			{
+				if (destroy_objs[j].isLoaded())
+					battlefield.addBattlefieldWaypoint(player, destroy_objs[j]);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgEliminateFaction()
+{
+	LOG("LOG_CHANNEL", "battlefield.game_assault::msgEliminateFaction");
+
+	string faction = params.getString("faction");
+	battlefield.eliminateFaction(self, faction);
+
+	string[] factions_left = battlefield.getAllFactionsRemaining(self);
+
+	if (factions_left == null || factions_left.length == 0)
+	{
+		LOG("LOG_CHANNEL", "game_assault::msgEliminateFaction -- factions_left is empty for " + self);
+		declareWinner(self, "AI");
+	}
+	else if (factions_left.length == 1)
+	{
+		// The remaining faction is the winner.
+		declareWinner(self, factions_left[0]);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgTimeExpired()
+{
+	// This is called by the battlefield_region script when time expires.
+
+	LOG("LOG_CHANNEL", "battlefield.game_assault::msgTime");
+
+	string[] factions = battlefield.getAllFactionsRemaining(self);
+	if (factions.length == 1)
+		declareWinner(self, factions[0]);
+	else
+		declareWinner(self, "AI");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgGameStats()
+{
+	// This is called whenever game specified statistics are requested.
+	// param keys: player   -- player issuing the command.
+
+	LOG("LOG_CHANNEL", "battlefield.game_assault::msgGameStats");
+
+	obj_id player = params.getObjId("player");
+	if (player == null || !player.isLoaded())
+		return SCRIPT_CONTINUE;
+
+	resizeable string[] dsrc = new string[0];
+
+	// Display status of remaining destroy objectives.
+	string[] factions_remaining = battlefield.getAIFactionsRemaining(self);
+
+	if (factions_remaining != null)
+	{
+		dsrc = utils.addElement(dsrc, "Objectives Remaining");
+		for (int i = 0; i < factions_remaining.length; i++)
+		{
+			string objVar_name = battlefield.VAR_GAME + "." + factions_remaining[i] + "_destroy";
+			obj_id[] destroy_objs = getObjIdArrayObjVar(self, objVar_name);
+			if (destroy_objs != null)
+			{
+				dsrc = utils.addElement(dsrc, "   " + factions_remaining[i]);
+				for (int j = 0; j < destroy_objs.length; j++)
+				{
+					float hitpoints = (float)getHitpoints(destroy_objs[j]);
+					float maxHitpoints = (float)getMaxHitpoints(destroy_objs[j]);
+					int percent = (int)((hitpoints / maxHitpoints) * 100.0f);
+					string name = getName(destroy_objs[j]);
+
+					dsrc = utils.addElement(dsrc, "      " + name + " at " + percent + "%");
+				}
+			}
+		}
+	}
+
+	// Display Kills and Deaths for each faction.
+	dsrc = utils.addElement(dsrc, "Kills/Deaths");
+	string[] factions_allowed = battlefield.getAllFactionsAllowed(self);
+	for (int i = 0; i < factions_allowed.length; i++)
+	{
+		dsrc = utils.addElement(dsrc, "   " + factions_allowed[i]);
+
+		int kills = battlefield.getFactionKills(self, factions_allowed[i]);
+		int deaths = battlefield.getFactionDeaths(self, factions_allowed[i]);
+		dsrc = utils.addElement(dsrc, "      " + "Kills: " + kills);
+		dsrc = utils.addElement(dsrc, "      " + "Deaths: " + deaths);
+	}
+
+	sui.listbox(player, "Battlefield Statistics", "Objective: Assault", dsrc);
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+void declareWinner(obj_id master_object, string faction)
+{
+	// Save game stats for review after the battle.
+	if (hasObjVar(master_object, battlefield.VAR_STAT_ROOT))
+		removeObjVar(master_object, battlefield.VAR_STAT_ROOT);
+
+	// Record game type (current battlefield game type could have changed on an update)
+	setObjVar(master_object, battlefield.VAR_STAT_TYPE, battlefield.getBattlefieldGameType(master_object));
+
+	// Record total game time
+	int time_remaining = battlefield.getGameTimeRemaining(master_object);
+	int game_duration = battlefield.getGameDuration(master_object);
+	int total_time = game_duration - time_remaining;
+	setObjVar(master_object, battlefield.VAR_STAT_TIME, total_time);
+	// Record the winning faction
+	setObjVar(master_object, battlefield.VAR_STAT_WINNER, faction);
+	// Record the number of players participating
+	obj_id[] participants = battlefield.getParticipantsOnBattlefield(master_object);
+	if (participants != null)
+		setObjVar(master_object, battlefield.VAR_STAT_PLAYERS, participants.length);
+	else
+		setObjVar(master_object, battlefield.VAR_STAT_PLAYERS, 0);
+	// Record the number of kills and deaths
+	string[] factions_allowed = battlefield.getAllFactionsAllowed(master_object);
+	if (factions_allowed != null)
+	{
+		for (int i = 0; i < factions_allowed.length; i++)
+		{
+			int kills = battlefield.getFactionKills(master_object, factions_allowed[i]);
+			int deaths = battlefield.getFactionDeaths(master_object, factions_allowed[i]);
+			setObjVar(master_object, battlefield.VAR_STAT_KILLS + factions_allowed[i], kills);
+			setObjVar(master_object, battlefield.VAR_STAT_DEATHS + factions_allowed[i], deaths);
+		}
+	}
+
+	if (faction == "AI")
+	{
+		string[] player_faction = battlefield.getFactionsAllowed(master_object);
+		if (player_faction == null)
+			LOG("LOG_CHANNEL", "game_assault::declareWinner -- player_faction is null for " + master_object);
+		else
+		{
+			// There's only one player faction in an assault game.
+			battlefield.sendBattlefieldMessage(master_object, "The battle is over. The " + player_faction[0] + " faction's assault has failed!");
+		}
+	}
+	else
+	{
+		battlefield.sendBattlefieldMessage(master_object, "The battle is over. The " + faction + " faction's assault is successful!");
+		// The battle must have lasted at least 15 minutes to get any rewards
+		//int time_remaining = battlefield.getGameTimeRemaining(master_object);
+		//int game_duration = battlefield.getGameDuration(master_object);
+		//int total_time = game_duration - time_remaining;
+		if (total_time < 900)
+		{
+			battlefield.sendBattlefieldMessage(master_object, "There are no rewards for such an easy victory.");
+			battlefield.endBattlefield(master_object);
+			return;
+		}
+
+		//obj_id[] participants = battlefield.getParticipantsOnBattlefield(master_object);
+
+		if (participants != null)
+		{
+			for (int i = 0; i < participants.length; i++)
+			{
+				// Check to see that the player has spent enough time on the battle to merit a reward.
+				// The player must have spent at least 10% of his time there.
+				int time_spent = battlefield.getTimeSpentInBattlefield(participants[i]);
+				float percent_time = (float)time_spent / (float)game_duration;
+
+				LOG("LOG_CHANNEL", "battlefield.game_destroy::declareWinner -- " + participants[i] + " at " + percent_time + "%");
+
+				if (percent_time > .1)
+				{
+					// Give rewards to all participants on winning faction.
+					dictionary params = new dictionary();
+					params.put("faction", faction);
+					params.put("battlefield", master_object);
+					params.put("standing", 25.0f);
+					messageTo(participants[i], "msgGrantFactionStanding", params, 0.0f, true);
+				}
+			}
+		}
+	}
+
+	// End the game.
+	battlefield.endBattlefield(master_object);
+
+	return;
+}

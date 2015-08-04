@@ -1,0 +1,247 @@
+include library.utils;
+include library.gcw;
+include library.trial;
+include library.factions;
+
+const float CYCLE_HEARTBEAT 	= 30.0f;
+const float CYCLE_MAX_RUN 	= 600.0f;
+
+
+const string PVP_AREA_RECORD	= "gcw_pvp_region.activity_list";
+const string CYCLE_STATUS	= "gcw_pvp_region.isActive";
+const string CYCLE_ITTERATION	= "gcw_pvp_region.cycle_itteration";
+const string GCW_REGION_DATA	= "gcw_pvp_region";
+const string LAST_CYCLE		= "gcw_pvp_region.lastCycle";
+
+trigger OnAttach()
+{
+	gcw.getRegionToRegister(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	gcw.getRegionToRegister(self);
+	return SCRIPT_CONTINUE;
+}
+
+boolean isCycleActive(obj_id self)
+{
+	if (utils.hasScriptVar(self, CYCLE_STATUS))
+	{
+		if (getGameTime() - utils.getIntScriptVar(self, LAST_CYCLE) > CYCLE_MAX_RUN)
+			return false;
+		else
+			return utils.getBooleanScriptVar(self, CYCLE_STATUS);
+	}
+
+	utils.setScriptVar(self, CYCLE_STATUS, false);
+
+	return false;
+}
+
+void setCycleActiveState(obj_id self, boolean state)
+{
+	if (state)
+		utils.setScriptVar(self, LAST_CYCLE, getGameTime());
+
+	utils.setScriptVar(self, CYCLE_STATUS, state);
+}
+
+void clearCycleData(obj_id self)
+{
+	utils.removeScriptVarTree(self, GCW_REGION_DATA);
+	setCycleActiveState(self, false);
+	trial.bumpSession(self);
+}
+
+int getCycleItteration(obj_id self)
+{
+	if (utils.hasScriptVar(self, CYCLE_ITTERATION))
+		return utils.getIntScriptVar(self, CYCLE_ITTERATION);
+
+	utils.setScriptVar(self, CYCLE_ITTERATION, 0);
+	return 0;
+}
+
+int itterateCycle(obj_id self)
+{
+	int current = getCycleItteration(self);
+	int newValue = current + 1;
+	utils.setScriptVar(self, CYCLE_ITTERATION, newValue);
+	return newValue;
+}
+
+messageHandler cycleUpdate()
+{
+	if(!trial.verifySession(self, params))
+		return SCRIPT_CONTINUE;
+
+	float cycleItteration = (float)getCycleItteration(self);
+	float maxItteration = CYCLE_MAX_RUN/CYCLE_HEARTBEAT;
+
+	doLogging("cycleUpdate", "We are on "+cycleItteration+" of "+maxItteration);
+
+	if(cycleItteration >= maxItteration)
+	{
+		clearCycleData(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	itterateCycle(self);
+
+	messageTo(self, "cycleUpdate", trial.getSessionDict(self), CYCLE_HEARTBEAT, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler diedInPvpRegion()
+{
+	obj_id player = params.getObjId("player");
+
+	resizeable string[] recordList = new string[0];
+
+	if(utils.hasResizeableStringBatchScriptVar(self, PVP_AREA_RECORD))
+		recordList = utils.getResizeableStringBatchScriptVar(self, PVP_AREA_RECORD);
+
+	utils.removeBatchScriptVar(self, PVP_AREA_RECORD);
+
+	if(getPlayerDataFromList(player, recordList) == null)
+		recordList = addPlayerToList(player, recordList, 0, 1);
+	else
+		recordList = incrementDeathsByPlayer(player, recordList);
+
+	utils.setBatchScriptVar(self, PVP_AREA_RECORD, recordList);
+
+	return SCRIPT_CONTINUE;
+}
+
+int getFactionCount (resizeable string[] recordList, string passedFaction)
+{
+	if (recordList == null || recordList.length == 0)
+		return 0;
+
+	int factionCount = 0;
+	for (int i=0;i<recordList.length;i++)
+	{
+		string[] parse = split(recordList[i], '-');
+		string faction = parse[1];
+		if (faction.equals(passedFaction))
+			factionCount++;
+	}
+	return factionCount;
+}
+
+int getTotalDeathCount(resizeable string[] recordList)
+{
+	if (recordList == null || recordList.length == 0)
+		return 0;
+
+	int deathCount = 0;
+	for (int i=0;i<recordList.length;i++)
+	{
+		string[] parse = split(recordList[i], '-');
+		int playerDeath = utils.stringToInt(parse[3]);
+		deathCount += playerDeath;
+	}
+	return deathCount;
+
+}
+
+resizeable string[] addPlayerToList(obj_id player, resizeable string[] recordList, int uniqueHits, int deaths)
+{
+	if(!isIdValid(player) || !exists(player) || !isPlayer(player) || recordList == null)
+	{
+		doLogging("addPlayerToList", "Attempting to add player to list but he is invalid");
+		return recordList;
+	}
+
+	string faction = factions.getFaction(player);
+
+	if(faction == null || (faction != "Rebel" && faction != "Imperial"))
+	{
+		doLogging("addPlayerToList", "Player was null faction or was neither rebel/imperial");
+		return recordList;
+	}
+
+	doLogging("xx", "Player is "+faction);
+
+	string newEntry = ""+player+"-"+faction+"-"+uniqueHits+"-"+deaths;
+	utils.addElement(recordList, newEntry);
+
+	doLogging("xx", "Adding element to array: "+newEntry);
+
+	return recordList;
+}
+
+string getPlayerDataFromList(obj_id player, resizeable string[] recordList)
+{
+	string listEntry = null;
+
+	if(recordList.length == 0)
+		return null;
+
+	for(int i = 0; i < recordList.length; i++)
+	{
+		string[] parse = split(recordList[i], '-');
+
+		obj_id listId = utils.stringToObjId(parse[0]);
+
+		if(listId == player)
+			listEntry = recordList[i];
+	}
+
+	return listEntry;
+}
+
+int getPositionInArrayByPlayer(obj_id player, resizeable string[] recordList)
+{
+	if (recordList.length == 0)
+		return -1;
+
+	int position = -1;
+	for (int i=0;i<recordList.length;i++)
+	{
+		string[] parse = split(recordList[i], '-');
+		obj_id listId = utils.stringToObjId(parse[0]);
+		if (listId == player)
+			position = i;
+	}
+
+	return position;
+}
+
+resizeable string[] incrementUpdateHitsByPlayer(obj_id player, resizeable string[] recordList)
+{
+	int playerData = getPositionInArrayByPlayer(player, recordList);
+	string[] parse = split(recordList[playerData], '-');
+	int uniqueHits = utils.stringToInt(parse[2]);
+	uniqueHits += 1;
+	string updatedData = ""+parse[0]+"-"+parse[1]+"-"+uniqueHits+"-"+parse[3];
+	doLogging("incrementUpdateHitsByPlayer", "Updating Data: "+recordList[playerData]+" to "+updatedData);
+	recordList[playerData] = updatedData;
+
+	return recordList;
+}
+
+resizeable string[] incrementDeathsByPlayer(obj_id player, resizeable string[] recordList)
+{
+	int playerData = getPositionInArrayByPlayer(player, recordList);
+	string[] parse = split(recordList[playerData], '-');
+	int deaths = utils.stringToInt(parse[3]);
+	deaths += 1;
+
+	if(deaths > gcw.MAX_DEATH_BY_PLAYER)
+		deaths = gcw.MAX_DEATH_BY_PLAYER;
+
+	string updatedData = ""+parse[0]+"-"+parse[1]+"-"+parse[2]+"-"+deaths;
+	doLogging("incrementDeathsByPlayer", "updating Data: "+recordList[playerData]+" to "+updatedData);
+	recordList[playerData] = updatedData;
+
+	return recordList;
+}
+
+void doLogging(string section, string message)
+{
+	//LOG("doLogging/pvp_region_bonus_controller/"+section, message);
+}

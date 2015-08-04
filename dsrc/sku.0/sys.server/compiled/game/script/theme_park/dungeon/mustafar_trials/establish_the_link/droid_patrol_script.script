@@ -1,0 +1,225 @@
+include library.ai_lib;
+include library.utils;
+include library.trial
+include library.pet_lib;
+include library.chat;
+include library.space_dungeon;
+include library.factions;
+
+
+const string_id[] DROID_RESPONSE			=
+							{
+								new string_id(trial.UPLINK_STF, "oww"),
+								new string_id(trial.UPLINK_STF, "quit_it"),
+								new string_id(trial.UPLINK_STF, "honestly"),
+								new string_id(trial.UPLINK_STF, "same_side"),
+								new string_id(trial.UPLINK_STF, "just_a_scratch"),
+								new string_id(trial.UPLINK_STF, "new_paint"),
+								new string_id(trial.UPLINK_STF, "watch_your_aim"),
+								new string_id(trial.UPLINK_STF, "hey"),
+								new string_id(trial.UPLINK_STF, "turn_around"),
+								new string_id(trial.UPLINK_STF, "help_help"),
+								new string_id(trial.UPLINK_STF, "amatures"),
+								new string_id(trial.UPLINK_STF, "stormtrooper"),
+								new string_id(trial.UPLINK_STF, "ouch"),
+								new string_id(trial.UPLINK_STF, "not_the_face"),
+							};
+
+								
+
+const boolean LOGGING					= true;
+
+trigger OnIncapacitated(obj_id killer)
+{
+	messageTo(self, "handleBotDeath", null, 10, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	if (trial.isUplinkActive(self))
+	{
+		obj_id parent = trial.getParent(self);
+		messageTo(parent, "droidDied", null, 10, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+trigger OnAttach()
+{
+	findWayPoints(self);
+	factions.setIgnorePlayer(self);
+	
+	messageTo (self, "pathToNextPoint", null, 25, false);
+	detachScript(self, "ai.creature_combat");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMoveMoving()
+{
+	if (isInvulnerable(self))
+		stop(self);
+		
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBotDeath()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+void findWayPoints(obj_id self)
+{
+	obj_id contents[] = utils.getSharedContainerObjects(self);
+	if (contents == null || contents.length == 0)
+	{
+		doLogging("findWayPoints", "Contents list was empty, exiting");
+		return;
+	}
+	string path = dataTableGetString(trial.UPLINK_DATA, 0, "path");
+	string[] pathList = split(path, ':');
+	
+	if (pathList == null || pathList.length == 0)
+	{
+		doLogging("findWayPoints", "Path list was empty, exiting");
+		return;
+	}
+	resizeable location[] waypoints = new location[0];
+	
+	for (int i = 0; i < contents.length; i++)
+	{
+		if (utils.hasScriptVar(contents[i], trial.WP_NAME))
+		{
+			for (int k = 0;k < pathList.length;k++)
+			{
+				if (pathList[k].equals(utils.getStringScriptVar(contents[i], trial.WP_NAME)))
+				{
+					utils.addElement(waypoints, getLocation(contents[i]));
+				}
+			}
+		}
+	}
+	
+	if (waypoints == null)
+	{
+		doLogging("findWayPoints", "No waypoints were found, exiting");
+		return;
+	}
+	
+	location[] patrolPoints = waypoints;
+	if (patrolPoints.length == 0)
+	{
+		doLogging("findWayPoints", "Patrol Point list was empty, exiting");
+		return;
+	}
+	
+	utils.setScriptVar(self, "patrolPoints", patrolPoints);
+	
+}
+
+trigger OnMovePathComplete()
+{
+	obj_id[] objects = getObjectsInRange(self, 1f);
+	{
+		if (objects == null || objects.length == 0)
+			return SCRIPT_CONTINUE;
+			
+		for (int i=0;i<objects.length;i++)
+		{
+			if (getTemplateName(objects[i]).equals(trial.WP_OBJECT))
+			{
+				createNewRelay(self);
+				messageTo(self, "pathToNextPoint", null, 0, false);
+			}		
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+void createNewRelay(obj_id self)
+{
+	obj_id[] objects = getObjectsInRange(self, 5f);
+	obj_id top = trial.getTop(self);
+	
+	if (objects == null || objects.length == 0)
+	{
+		location playLoc = getLocation(self);
+		obj_id relay = createObject(trial.RELAY_OBJECT, playLoc);
+		playClientEffectLoc(relay, trial.PRT_RELAY_CREATE, playLoc, 0.5f);
+		if (!isIdValid(relay))
+		{
+			doLogging("createNewRelay", "Failed to create relay object");
+		}
+		trial.markAsTempObject(relay, true);
+		messageTo(top, "validateRelays", null, 0, false);
+		return;
+	}
+
+	for (int i=0;i<objects.length;i++)
+	{
+		if (getTemplateName(objects[i]).equals(trial.RELAY_OBJECT))
+		{
+			messageTo(top, "validateRelays", null, 0, false);
+			return;
+		}
+	}
+	
+	location playLoc = getLocation(self);
+	obj_id newRelay = createObject(trial.RELAY_OBJECT, playLoc);
+	playClientEffectLoc(newRelay, trial.PRT_RELAY_CREATE, playLoc, 0.5f);
+	messageTo(top, "validateRelays", null, 0, false);
+	trial.markAsTempObject(newRelay, true);
+}
+
+messageHandler pathToNextPoint()
+{
+
+	int pathIndex = 0;
+	if (utils.hasScriptVar(self, "pathIndex"))
+		pathIndex = utils.getIntScriptVar(self, "pathIndex");
+	
+	if (!utils.hasScriptVar(self, "patrolPoints"))
+	{
+		doLogging("pathToNextPoint", "I do not have the patrolArray scriptvar");
+		return SCRIPT_CONTINUE;
+	}
+	
+	location[] patrolPoints = utils.getLocationArrayScriptVar(self, "patrolPoints");
+	
+	if (patrolPoints == null || patrolPoints.length == 0)
+	{
+		doLogging("pathToNextPoint", "Patrol points was null or length 0: ");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (pathIndex > patrolPoints.length-1)
+	{
+		handlePatrolTypeReset(self, patrolPoints);
+		return SCRIPT_CONTINUE;
+	}
+	ai_lib.aiPathTo(self, patrolPoints[pathIndex]);
+	setHomeLocation(self, patrolPoints[pathIndex]);
+	pathIndex += 1;
+	utils.setScriptVar(self, "pathIndex", pathIndex);
+
+	return SCRIPT_CONTINUE;
+}
+
+void handlePatrolTypeReset(obj_id self, location[] patrolPoints)
+{
+	location[] reversedList = new location[patrolPoints.length];
+	int k = patrolPoints.length - 1;
+	for (int i=0;i<patrolPoints.length;i++)
+	{
+		reversedList[i] = patrolPoints[k];
+		k--;
+	}	
+	utils.setScriptVar(self, "patrolPoints", reversedList);
+	utils.setScriptVar(self, "pathIndex", 1);
+	messageTo (self, "pathToNextPoint", null, 25, false);
+}
+void doLogging(string section, string message)
+{
+	if (LOGGING || trial.UPLINK_LOGGING)
+		LOG("logging/patrol_spawned_tracker/"+section, message);	
+}

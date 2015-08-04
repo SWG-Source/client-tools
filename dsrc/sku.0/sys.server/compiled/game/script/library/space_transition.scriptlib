@@ -1,0 +1,1614 @@
+// ======================================================================
+//
+// library/space_transition.scriptlib
+//
+// Copyright 2004 Sony Online Entertainment
+//
+// ======================================================================
+
+include library.callable;
+include library.pclib;
+include library.space_flags;
+include library.pet_lib;
+include library.ship_ai;
+include library.space_combat;
+include library.utils;
+include library.features;
+include library.space_dungeon;
+include library.space_dungeon_data;
+include library.township;
+
+// ======================================================================
+
+const boolean debugSpaceTransition = true;
+const string DATATABLE_SHIP_START_LOCATIONS = "datatables/ship/ship_start_locations.iff";
+const string COLUMN_TEMPLATE = "template";
+const string COLUMN_SLOT = "slot";
+const string COLUMN_CELL = "cell";
+const string COLUMN_X = "x";
+const string COLUMN_Y = "y";
+const string COLUMN_Z = "z";
+const int NEWBIE_CONVO_DELAY = 60;
+
+const int SHIP_LIMIT_EXPANSION		= 6;
+const int SHIP_LIMIT_MAX		= 3;
+
+const float STATION_COMM_MAX_DISTANCE = 750.0f;
+
+const string POB_SHIP_PILOT_SLOT_NAME = "ship_pilot_pob";
+const string SHIP_PILOT_SLOT_NAME = "ship_pilot";
+
+const string_id SID_PVP_NOW_OVERT			= new string_id("space/space_interaction", "pvp_now_overt");
+const string_id SID_PVP_NOW_NEUTRAL			= new string_id("space/space_interaction", "pvp_now_neutral");
+
+// ======================================================================
+// Functions for external use
+// ======================================================================
+
+void handlePotentialSceneChange(obj_id player)
+{
+	if (utils.hasLocalVar(player, "loggingOut"))
+		return;
+
+	obj_id containingShip = getContainingShip(player);
+	LIVE_LOG("TeleportFixup", "containingShip is "+containingShip);
+	if (isSpaceScene())
+	{
+		// Players in space scenes should be in ships.
+		if (isIdValid(containingShip))
+		{
+			// Ships should not have teleport fixups put them into interiors in space scenes
+			adjustShipTeleportFixupInSpaceScene(containingShip);
+			if (getOwner(containingShip) == player)
+				updateShipFaction(containingShip, player);
+			doAIImmunityCheck(containingShip);
+			return;
+		}
+
+		// Player is not in a ship, but is in space.  This means we need to check
+		// their launch information, and if they should be going to a portallized
+		// ship interior, send them there, or if they should be unpacking their
+		// ship, do so.
+
+		obj_id launchedShip = getObjIdObjVar(player, "space.launch.ship");
+		int launchedShipStartIndex = getIntObjVar(player, "space.launch.startIndex") - 1; // 0 is pilot
+
+		if ((!isGod(player)||(!utils.checkConfigFlag("ScriptFlags", "e3Demo"))&& shouldSendToGroundOnLogout()))
+		{
+			removeObjVar(player, "space.launch.ship");
+			removeObjVar(player, "space.launch.startIndex");
+		}
+
+		if (isIdValid(launchedShip) && launchedShip.isLoaded())
+		{
+			LOG("space", "checking "+launchedShip);
+			// player should be going into a valid ship, which may or may not
+			// currently be unpacked.
+			obj_id shipContainer = getContainedBy(launchedShip);
+			LOG("space", "2 shipContainer is "+shipContainer);
+			if (!isIdValid(shipContainer))
+			{
+				LOG("space", "shipContainer is "+shipContainer);
+				// Going to a valid ship which is already unpacked, so just move them there.
+				resizeable location[] startLocations = getShipStartLocations(launchedShip);
+				if (startLocations != null && startLocations.length > 0)
+				{
+					if (launchedShipStartIndex < 0)
+						launchedShipStartIndex = 0;
+					location loc = startLocations[launchedShipStartIndex % startLocations.length];
+					if (loc.cell == null)
+					{
+						// going to a ship station - loc.area is the slot name on the ship
+						boolean success = equip(player, launchedShip, loc.area);
+						if (success)
+						{
+							if (debugSpaceTransition)
+								LOG("space_transition", "Player [" + player + "] in space, going to an already unpacked ship [" + launchedShip + "] in station [" + loc.area + "] succeeded.");
+							return;
+						}
+						else if (debugSpaceTransition)
+							LOG("space_transition", "Player [" + player + "] in space, going to an already unpacked ship [" + launchedShip + "] in station [" + loc.area + "] failed.");
+					}
+					else
+					{
+						if (debugSpaceTransition)
+							LOG("space_transition", "Player [" + player + "] in space, going to an already unpacked ship [" + launchedShip + "] at location [" + loc + "].");
+						setLocation(player, loc);
+						return;
+					}
+				}
+				else if (hasObjVar(player, space_dungeon.VAR_TICKET_DUNGEON) && space_dungeon.isSpaceDungeon(launchedShip) && space_dungeon.getDungeonIdForPlayer(player) == launchedShip)
+				{
+					string dungeon = getStringObjVar(player, space_dungeon.VAR_TICKET_DUNGEON);
+					string cellName = space_dungeon_data.getDungeonStartCellName(dungeon);
+					location start = space_dungeon_data.getDungeonStartLocation(dungeon);
+                                       	obj_id cell = getCellId(launchedShip, cellName);
+					start.cell = cell;
+
+					LOG("space_transition", "Sending player " + player + " to dungeon " + dungeon + " " + launchedShip);
+					setLocation(player, start);
+
+					return;
+				}
+				else if (debugSpaceTransition)
+					LOG("space_transition", "Player [" + player + "] in space, going to an already unpacked ship [" + launchedShip + "] but could not find a start location.");
+			}
+			else
+			{
+				// Going to a ship which is not unpacked, so unpack it if it is ours and is in a control device in our datapad
+				if (getOwner(launchedShip) == player && getContainedBy(getContainedBy(launchedShip)) == utils.getDatapad(player))
+				{
+					if (debugSpaceTransition)
+						LOG("space_transition", "Player [" + player + "] in space, going to his own packed ship [" + launchedShip + "].");
+					if (unpackShipForPlayer(player, launchedShip))
+						return;
+				}
+			}
+		}
+
+		// Unable to unpack the player's default ship, so send him back to his bind point.
+		if (debugSpaceTransition)
+		{
+			if (isIdValid(launchedShip))
+				LOG("space_transition", "Player " + player + " could not enter ship in space, sending to launch point. Ship("+launchedShip+") isValid("+isIdValid(launchedShip)+") isLoaded("+launchedShip.isLoaded()+")");
+			else
+				LOG("space_transition", "Player " + player + " could not enter ship in space, sending to launch point. Ship(null)");
+
+			String scripts = "";
+			String[] scriptArray = getScriptList(player);
+			for (int i = 0; i < scriptArray.length; ++i)
+			{
+				scripts += (scriptArray[i] + "|");
+			}
+			LOG("space_transition", "Detailed player info: objvars: " + getPackedObjvars(player) + " scripts: " + scripts);
+		}
+
+		teleportPlayerToLaunchLoc(player);
+	}
+	else
+	{
+		// Players in ground scenes should not be in ships.
+		removeObjVar(player, "space.launch");
+		if (isIdValid(containingShip))
+		{
+			if (debugSpaceTransition)
+				LIVE_LOG("TeleportFixup", "Player " + player + " in a ship but not in space, packing the ship.");
+			packShip(containingShip);
+		}
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void handleLogout(obj_id player)
+{
+	obj_id containingShip = getContainingShip(player);
+
+	if (isIdValid(containingShip))
+	{
+		if (debugSpaceTransition)
+			LOG("space_transition", "player " + player + " logging out in ship " + containingShip);
+
+		obj_id owner = getOwner(containingShip);
+
+		// Players that own the ship they are in pack their ship where they are.
+		// This will send any passengers back to their launch location.
+		if (owner == player)
+		{
+			utils.setLocalVar(player, "loggingOut", true);
+			packShip(containingShip);
+			utils.removeLocalVar(player, "loggingOut");
+		}
+
+		// Players should now always get sent home when their ship gets packed up (or when they log back in after having done so).
+		// In god mode, we don't do this, so that you can unpilot a ship without getting thrown back to the ground.
+		if (!isGod(player))
+		{
+			// If we're the pilot of the ship at this point, we need to unpilot,
+			// since it's someone else's ship and we're logging out.  If it were
+			// our ship this would have been done from the packShip call above.
+			if (player == getPilotId(containingShip))
+				unpilotShip(player);
+
+			if (player != owner || shouldSendToGroundOnLogout())
+				teleportPlayerToLaunchLoc(player);
+		}
+	}
+}
+
+// ----------------------------------------------------------------------
+
+boolean shouldSendToGroundOnLogout()
+{
+	String s = getConfigSetting("ScriptFlags", "sendToGroundOnLogout");
+	if (   s != null
+	    && (   s.equals("false")
+	        || s.equals("0")
+	        || s.equals("off")))
+		return false;
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
+void setLaunchInfo(obj_id player, obj_id ship, int startLocationIndex, location groundLoc)
+{
+	setObjVar(player, "space.launch.worldLoc", groundLoc);
+	setObjVar(player, "space.launch.ship", ship);
+	setObjVar(player, "space.launch.startIndex", startLocationIndex);
+}
+
+// ======================================================================
+// Functions for internal use
+// ======================================================================
+
+obj_id getContainingShip(obj_id obj)
+{
+	obj_id containedBy = getContainedBy(obj);
+	while (isIdValid(containedBy))
+	{
+		if (isGameObjectTypeOf(getGameObjectType(containedBy), GOT_ship))
+			return containedBy;
+		containedBy = getContainedBy(containedBy);
+	}
+	return null;
+}
+
+// ----------------------------------------------------------------------
+obj_id[] findShipControlDevicesForPlayer(obj_id player)
+{
+	return findShipControlDevicesForPlayer(player, false);
+}
+
+
+obj_id[] findShipControlDevicesForPlayer(obj_id player, boolean checkHangar)
+{
+	obj_id datapad = utils.getDatapad(player);
+	obj_id playerHangar = obj_id.NULL_ID;
+
+	if(checkHangar)
+		playerHangar = utils.getPlayerHangar(player);
+
+	//LOG("space", "datapad is "+datapad);
+	if (isIdValid(datapad))
+	{
+		obj_id[] datapadContents = getContents(datapad);
+		//LOG("space", "contents length is "+datapadContents);
+		if (datapadContents != null)
+		{
+			int count = 0;
+			for (int i = 0; i < datapadContents.length; ++i)
+			{
+
+				//LOG("space", "datapadContents["+i+"] is "+ getGameObjectType(datapadContents[i]));
+				//LOG("space", "Check type is "+ GOT_data_ship_control_device);
+				if (isIdValid(datapadContents[i]) && getGameObjectType(datapadContents[i]) == GOT_data_ship_control_device)
+					++count;
+			}
+			if(checkHangar && isIdValid(playerHangar))
+			{
+				obj_id[] hangarContents = getContents(playerHangar);
+
+				if(hangarContents != null && hangarContents.length > 0)
+				{
+					for (int q = 0; q < hangarContents.length; ++q)
+					{
+						//LOG("space", "hangarContents["+q+"] is "+ getGameObjectType(hangarContents[q]));
+						//LOG("space", "Check type is "+ GOT_data_ship_control_device);
+						if (isIdValid(hangarContents[q]) && getGameObjectType(hangarContents[q]) == GOT_data_ship_control_device)
+							++count;
+					}
+				}
+			}
+			if (count > 0)
+			{
+				obj_id[] shipControlDevices = new obj_id[count];
+				//LOG("space", "Count is "+count);
+				count = 0;
+				for (int j = 0; j < datapadContents.length; ++j)
+				{
+					if (isIdValid(datapadContents[j]) && getGameObjectType(datapadContents[j]) == GOT_data_ship_control_device)
+					{
+						//LOG("space", "adding "+datapadContents[j]);
+						shipControlDevices[count++] = datapadContents[j];
+					}
+				}
+
+				if(checkHangar && isIdValid(playerHangar))
+				{
+					obj_id[] hangarContents = getContents(playerHangar);
+					if(hangarContents != null && hangarContents.length > 0)
+					{
+						for (int k = 0; k < hangarContents.length; ++k)
+						{
+							if (isIdValid(hangarContents[k]) && getGameObjectType(hangarContents[k]) == GOT_data_ship_control_device)
+							{
+								//LOG("space", "adding "+hangarContents[k]);
+								shipControlDevices[count++] = hangarContents[k];
+							}
+						}
+					}
+				}
+
+				return shipControlDevices;
+			}
+		}
+	}
+	return null;
+}
+
+obj_id[] findShipControlDevicesInHangarSlot(obj_id player)
+{
+	obj_id playerHangarSlot = utils.getPlayerHangar(player);
+	if ( isIdValid(playerHangarSlot) )
+	{
+		obj_id[] hangarContents = getContents(playerHangarSlot);
+
+		if( hangarContents != null && hangarContents.length > 0 )
+		{
+			int count = 0;
+			for (int q = 0; q < hangarContents.length; ++q)
+			{
+				//LOG("space", "hangarContents["+q+"] is "+ getGameObjectType(hangarContents[q]));
+				//LOG("space", "Check type is "+ GOT_data_ship_control_device);
+				if (isIdValid(hangarContents[q]) && getGameObjectType(hangarContents[q]) == GOT_data_ship_control_device)
+					++count;
+			}
+			
+			if ( count > 0 )
+			{
+				obj_id[] shipHangarSlotControlDevices = new obj_id[count];
+				count = 0;
+				for ( int k = 0; k < hangarContents.length; ++k )
+				{
+					if ( isIdValid(hangarContents[k]) && getGameObjectType(hangarContents[k]) == GOT_data_ship_control_device )
+					{
+						//LOG("vehicle", "adding "+hangarContents[k]);
+						shipHangarSlotControlDevices[count++] = hangarContents[k];
+					}
+				}
+				return shipHangarSlotControlDevices;
+			}
+		}
+	}
+	return null;
+}
+
+// ----------------------------------------------------------------------
+
+obj_id findEmptyShipControlDeviceForShip(obj_id player, obj_id ship)
+{
+	if ( hasObjVar( ship, "shipControlDevice" ) )
+		return getObjIdObjVar( ship, "shipControlDevice" );
+	else
+		return findEmptyShipControlDeviceForPlayer(player);//Just as a precaution...
+
+}
+
+//this function is the old one, and is prone to returning ship control devices
+//that in fact HAVE ships in them. We only call it if we can't figure out which is the
+//correct scd to use otherwise (per above!):
+obj_id findEmptyShipControlDeviceForPlayer(obj_id player)
+{
+	obj_id[] shipControlDevices = findShipControlDevicesForPlayer(player);
+	if (shipControlDevices != null)
+	{
+		for (int i = 0; i < shipControlDevices.length; ++i)
+		{
+			obj_id[] contents = getContents(shipControlDevices[i]);
+			if (contents == null || contents.length == 0)
+				return shipControlDevices[i];
+		}
+	}
+	return null;
+}
+
+// ----------------------------------------------------------------------
+
+obj_id getShipFromShipControlDevice(obj_id shipControlDevice)
+{
+	obj_id[] contents = getContents(shipControlDevice);
+	if (contents != null && contents.length > 0)
+		return contents[0];
+	return null;
+}
+
+// ----------------------------------------------------------------------
+
+int countShipControlDevicesForPlayer(obj_id player)
+{
+	int count = -1;
+
+	obj_id datapad = utils.getDatapad(player);
+	if (isIdValid(datapad))
+	{
+		obj_id[] datapadContents = getContents(datapad);
+		if (datapadContents != null)
+		{
+			count = 0;
+			for (int i = 0; i < datapadContents.length; ++i)
+				if (isIdValid(datapadContents[i]) && getGameObjectType(datapadContents[i]) == GOT_data_ship_control_device)
+					++count;
+		}
+	}
+
+	return count;
+}
+
+// ----------------------------------------------------------------------
+boolean isPlayerBelowShipLimit(obj_id player, obj_id destinationContainer)
+{
+	if(getTemplateName(destinationContainer).equals("object/tangible/datapad/character_hangar_datapad.iff"))
+		return true;
+	else
+		return isPlayerBelowShipLimit(player);
+}
+
+boolean isPlayerBelowShipLimit(obj_id player)
+{
+	int count = countShipControlDevicesForPlayer(player);
+
+	int limit = SHIP_LIMIT_MAX;
+
+	if (features.hasEpisode3Expansion( player ))
+	{
+		limit = SHIP_LIMIT_EXPANSION;
+	}
+
+	if (count < 0)
+		return false;
+
+	if (count >= limit)
+		return false;
+
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
+obj_id findPilotSlotObjectForShip(obj_id pilot, obj_id ship)
+{
+	// If this is a single person craft we can just go into its pilot slot
+	if (canPutInSlot(pilot, ship, SHIP_PILOT_SLOT_NAME) == CEC_SUCCESS)
+		return ship;
+	// Otherwise, this may be a portallized ship, in which case we may go into
+	// the ship_pilot_pob slot of an immediate content of a cell.
+	obj_id[] cells = getContents(ship);
+	if (cells != null)
+	{
+		for (int i = 0; i < cells.length; ++i)
+		{
+			obj_id[] contents = getContents(cells[i]);
+			if (contents != null)
+				for (int j = 0; j < contents.length; ++j)
+					if (canPutInSlot(pilot, contents[j], POB_SHIP_PILOT_SLOT_NAME) == CEC_SUCCESS)
+						return contents[j];
+		}
+	}
+	return null;
+}
+
+// ----------------------------------------------------------------------
+
+Vector getContainedPlayers(obj_id obj)
+{
+	return getContainedPlayers(obj, null);
+}
+
+// ----------------------------------------------------------------------
+
+Vector getContainedPlayers(obj_id obj, Vector players)
+{
+	if (isPlayer(obj))
+		return utils.addElement(players, obj);
+
+	obj_id[] contents = getContents(obj);
+	if (contents != null)
+		for (int i = 0; i < contents.length; ++i)
+			players = getContainedPlayers(contents[i], players);
+
+	return players;
+}
+
+// ----------------------------------------------------------------------
+
+void packShip(obj_id ship)
+{
+	// If we're packing a ship, we have to deal with players potentially still
+	// on the ship.  If the ship is being packed in space, we put the owner
+	// where the ship was heading and send everyone else to their launch
+	// location.  If not in space, we put each of those players at the location
+	// of the ship.  In case of ships teleporting to interiors, we transfer the
+	// teleport fixup information from the ship to each player that was
+	// being moved to the location of the ship, to cause those players to arrive
+	// where the ship was headed.
+
+	if ( getTopMostContainer(ship) != ship )
+		return;//this ship is already packed.
+
+	// if the ship is a space dungeon, we don't want to destroy it
+	if (space_dungeon.isSpaceDungeon(ship))
+		return;
+
+	boolean inSpace = isSpaceScene();
+	boolean teleportFixup = hasObjVar(ship, "teleportFixup");
+	obj_id pilot = getPilotId(ship);
+	obj_id owner = getOwner(ship);
+	location shipLoc = getLocation(ship);
+
+
+	if (debugSpaceTransition)
+		LIVE_LOG("TeleportFixup", "packShip, ship=" + ship + ", template=" + getTemplateName(ship) + ", pilot=" + pilot + ", teleportFixup=" + teleportFixup + ", inSpace=" + inSpace + ", owner=" + owner);
+
+	resizeable obj_id[] players = getContainedPlayers(ship, null);
+	if (players != null)
+	{
+		for (int i = 0; i < players.length; ++i)
+		{
+			obj_id player = players[i];
+
+			// fix up people who were lounging about in the ship
+			setState(player, STATE_SITTING_ON_CHAIR, false);
+			int posture = getPosture(player);
+			if (posture == POSTURE_SITTING || posture == POSTURE_PRONE)
+				setPostureClientImmediate(player, POSTURE_UPRIGHT);
+
+			revokeDroidCommands(player);
+			if (debugSpaceTransition)
+				LOG("space_transition", "packShip dealing with contained player " + player);
+			if (player == pilot)
+				unpilotShip(pilot);
+			if (inSpace && player != owner)
+			{
+				teleportPlayerToLaunchLoc(player);
+			}
+			else
+			{
+				if (teleportFixup)
+				{
+					copyObjVar(ship, player, "teleportFixup");
+					LIVE_LOG("TeleportFixup", "Copying teleportFixup objVar from " + ship + " to " + player);
+				}
+				setLocation(player, shipLoc);
+			}
+		}
+	}
+
+	if (teleportFixup)
+	{
+		removeObjVar(ship, "teleportFixup");
+		LIVE_LOG("TeleportFixup", "Removing teleportFixup objVar from " + ship);
+	}
+
+	// put the ship back in the owner's ship control device
+	if (isIdValid(owner))
+	{
+		space_combat.clearHyperspace(ship);
+		//obj_id shipControlDevice = findEmptyShipControlDeviceForPlayer(owner);
+
+		obj_id shipControlDevice = findEmptyShipControlDeviceForShip(owner, ship);
+
+		if (debugSpaceTransition)
+			LOG("space_transition", "packShip ship=" + ship + " scd=" + shipControlDevice);
+
+		obj_id droidControlDevice = getDroidControlDeviceForShip(ship);
+		LOG("space", "droidControlDevice is "+droidControlDevice);
+
+		if (isIdValid(droidControlDevice))
+		{
+			obj_id droid = callable.getCDCallable(droidControlDevice);
+
+			LOG("space", "droid is "+droid);
+
+			if(isIdValid(droid))
+			{
+				space_combat.removeFlightDroidFromShip(droidControlDevice, droid);
+			}
+		}
+		space_pilot_command.allPurposeShipComponentReset(ship);
+
+		if (isIdValid(shipControlDevice) && putIn(ship, shipControlDevice))
+		{
+			// Let any contents of a pob ship know that they are being packed so that they can react if necessary.
+			if ( isGameObjectTypeOf(ship, GOT_ship_fighter) && space_utils.isShipWithInterior(ship) )
+			{
+				obj_id[] shipContents = getAllObjectsInPob(ship);
+				if ( shipContents != null && shipContents.length > 0 )
+				{
+					for ( int i = 0; i < shipContents.length; i ++ )
+					{
+						if ( isIdValid(shipContents[i]) )
+						{
+							messageTo(shipContents[i], "OnPack", null, 1.0f, false);
+						}
+					}
+				}
+			}
+			return;
+		}
+	}
+
+	// something wasn't set up properly, so don't leave the ship hanging around
+	if (debugSpaceTransition)
+		LOG("space_transition", "packShip failed to clean up ship properly, destroying");
+	destroyObject(ship);
+}
+
+obj_id[] getAllObjectsInPob(obj_id pob)
+{
+	obj_id[] cells = getCellIds(pob);
+
+	if (cells == null || cells.length == 0)
+		return null;
+
+	resizeable obj_id[] objects = new obj_id[0];
+
+	for (int i=0;i<cells.length;i++)
+	{
+		obj_id[] contents = getContents(cells[i]);
+
+		if (contents != null && contents.length > 0)
+		{
+			for (int k=0;k<contents.length;k++)
+			{
+				utils.addElement(objects, contents[k]);
+			}
+		}
+	}
+
+	if (objects == null || objects.length == 0)
+		return null;
+
+	obj_id[] returnList = objects;
+
+	return returnList;
+}
+
+// ----------------------------------------------------------------------
+
+/*
+// **********************************************************************
+// Note: this stuff is rotted, will need to be reworked
+// **********************************************************************
+void transitionToInterior(obj_id ship, obj_id objDestinationShip)
+{
+	// If we're packing a ship, we have to deal with players potentially still
+	// on the ship.  We put each of those players at the location of the ship,
+	// and if the ship was teleporting to an interior, we set up the teleport
+	// fixup information to cause those players to arrive where the ship was
+	// headed.
+
+	boolean teleportFixup = hasObjVar(ship, "teleportFixup");
+	obj_id pilot = getPilotId(ship);
+
+	if (debugSpaceTransition)
+		LOG("space_transition", "packShip, ship=" + ship + ", pilot=" + pilot + ", teleportFixup=" + teleportFixup);
+
+	resizeable obj_id[] players = getContainedPlayers(ship, null);
+	if (players != null)
+	{
+		for (int i = 0; i < players.length; ++i)
+		{
+			if (debugSpaceTransition)
+				LOG("space_transition", "packShip dealing with contained player " + players[i]);
+			if (teleportFixup)
+				copyObjVar(ship, players[i], "teleportFixup");
+
+			if (players[i] == pilot)
+			{
+				unpilotShip(pilot);
+				utils.setLocalVar(players[i], "locLastSpawnLocation", getLocation(players[i]));
+				utils.setLocalVar(players[i], "objPilot", pilot);
+			}
+			else
+			{
+				utils.setLocalVar(players[i], "locLastSpawnLocation", getLocation(players[i]));
+				location locTest = getShipBoardingDestination(objDestinationShip);
+				utils.setLocalVar(players[i], "objPilot", pilot);
+				setLocation(players[i], locTest);
+			}
+		}
+	}
+
+	if (teleportFixup)
+		removeObjVar(ship, "teleportFixup");
+
+	// put the ship back in the owner's ship control device
+	obj_id owner = getOwner(ship);
+	if (isIdValid(owner))
+	{
+		LOG("space", "Valid owner");
+		obj_id shipControlDevice = findEmptyShipControlDeviceForPlayer(owner);
+		obj_id droidControlDevice = getDroidControlDeviceForShip(ship);
+		if (isIdValid(droidControlDevice))
+		{
+			obj_id objDroid = callable.getCDCallable(droidControlDevice);
+			if(isIdValid(objDroid))
+			{
+				pet_lib.storePet(objDroid);
+			}
+		}
+		LOG("space", "scd is " + shipControlDevice);
+		location locTest = getShipBoardingDestination(objDestinationShip);
+		setLocation(owner, locTest);
+		if (isIdValid(shipControlDevice) && putIn(ship, shipControlDevice))
+		{
+			sendSystemMessageTestingOnly(owner, "TEST TEST TEST ");
+			return;
+		}
+	}
+	// something wasn't set up properly, so don't leave the ship hanging around
+	if (debugSpaceTransition)
+		LOG("space_transition", "packShip failed to clean up ship properly, destroying");
+	destroyObject(ship);
+}
+
+// ----------------------------------------------------------------------
+
+boolean transitionOutOfInterior(obj_id player)
+{
+	obj_id ship = getObjIdObjVar(player, "space.launch.ship");
+	obj_id shipControlDevice = null;
+	if (isIdValid(ship))
+		shipControlDevice = getContainedBy(ship);
+	if (debugSpaceTransition)
+		LOG("space_transition", "unpackShipForPlayer: scd=" + shipControlDevice + " ship=" + ship + " player=" + player);
+	if (isIdValid(shipControlDevice))
+	{
+		// pull the ship out to the location of the player
+		obj_id objCell = getContainedBy(player);
+		obj_id objContainerShip = getContainedBy(objCell);
+
+		location locTest = getLocation(objContainerShip);
+		locTest.x = locTest.x + 100;
+		locTest.z = locTest.z;
+
+		setLocation(ship, locTest);
+		obj_id pilotSlotObject = findPilotSlotObjectForShip(player, ship);
+		if (debugSpaceTransition)
+			LOG("space_transition", "unpackShipForPlayer: ship=" + ship + " pilotSlotObject=" + pilotSlotObject + " player=" + player);
+		// pilot the ship
+		if (isIdValid(pilotSlotObject) && pilotShip(player, pilotSlotObject))
+		{
+
+			utils.removeLocalVar(player, "locLastSpawnLocation");
+			utils.removeLocalVar(player, "objPilot");
+			// unpack droid if necessary
+			resizeable obj_id[] players = getContainedPlayers(objContainerShip, null);
+			if (players != null)
+			{
+				for (int intI = 0; intI < players.length; intI++)
+				{
+					location locDestination = utils.getLocationLocalVar(players[intI], "locLastSpawnLocation");
+					utils.removeLocalVar(players[intI], "objPilot");
+					utils.removeLocalVar(players[intI], "locLastSpawnLocation");
+					if (locDestination == null)
+						teleportPlayerToLaunchLoc(players[intI]);
+					else
+						setLocation(players[intI], locDestination);
+				}
+			}
+			obj_id droidControlDevice = getDroidControlDeviceForShip(ship);
+			if (isIdValid(droidControlDevice))
+			{
+				if (debugSpaceTransition)
+					LOG("space_transition", "unpacking droid from control device " + droidControlDevice + ", ship=" + ship + ", pilotSlotObject=" + pilotSlotObject + ", pilot=" + player);
+				pet_lib.createPetFromData(droidControlDevice, pilotSlotObject);
+				if (!space_utils.isShipWithInterior(ship))
+					grantDroidCommands(player);
+			}
+
+			// make other ships not aggro on us if we are a gm
+			if (hasObjVar(player, "gm"))
+				ship_ai.unitSetAutoAggroImmuneTime(ship, 100000.f);
+		}
+		return true;
+	}
+
+	return false;
+}
+*/
+// ----------------------------------------------------------------------
+
+void setShipName(obj_id ship, obj_id player, obj_id shipControlDevice)
+{
+	string strName = getAssignedName(shipControlDevice);
+	LOG("space", "strName is "+strName);
+
+	if (strName == null || strName.length() == 0)
+	{
+		setName(ship, getName(player));
+	}
+	else
+	{
+		// no string id
+		setName(ship, getName(player)+" ("+strName+")");
+	}
+}
+
+// ----------------------------------------------------------------------
+
+boolean unpackShipForPlayer(obj_id player, obj_id ship)
+{
+	obj_id shipControlDevice = getContainedBy(ship);
+	if (debugSpaceTransition)
+		LOG("space_transition", "unpackShipForPlayer: scd=" + shipControlDevice + " ship=" + ship + " player=" + player);
+	if (isIdValid(shipControlDevice) && isIdValid(ship))
+	{
+		// pull the ship out to the location of the player\
+		setShipName(ship, player, shipControlDevice);
+		setLocation(ship, getLocation(player));
+
+		setObjVar( shipControlDevice, "ship", ship );
+		setObjVar( ship, "shipControlDevice", shipControlDevice );
+		obj_id pilotSlotObject = findPilotSlotObjectForShip(player, ship);
+		if (debugSpaceTransition)
+			LOG("space_transition", "unpackShipForPlayer: ship=" + ship + " pilotSlotObject=" + pilotSlotObject + " player=" + player);
+		// pilot the ship
+		LOG("space", "Trying to pilot the ship for slot "+pilotSlotObject);
+		if (isIdValid(pilotSlotObject) && pilotShip(player, pilotSlotObject))
+		{
+			LOG("space", "I think i piloted");
+			updateShipFaction(ship, player);
+			doAIImmunityCheck(ship);
+
+			// unpack droid if necessary
+			obj_id droidControlDevice = getDroidControlDeviceForShip(ship);
+
+			//check to see if there's already a droid there.
+			if (isIdValid(droidControlDevice))
+			{
+				obj_id objDroid = callable.getCDCallable(droidControlDevice);
+
+				if(isIdValid(objDroid))
+				{
+					space_combat.removeFlightDroidFromShip(droidControlDevice, objDroid);
+				}
+			}
+
+			if (isIdValid(droidControlDevice))
+			{
+				if(debugSpaceTransition)
+				{
+					LOG("space_transition", "unpacking droid from control device " + droidControlDevice + ", ship=" + ship + ", pilotSlotObject=" + pilotSlotObject + ", pilot=" + player);
+				}
+
+				space_combat.createFlightDroidFromData(droidControlDevice, pilotSlotObject);
+
+				obj_id objDroid = callable.getCDCallable(droidControlDevice);
+
+				setAnimationMood(objDroid, "ship");
+
+				if(!space_utils.isShipWithInterior(ship))
+				{
+					grantDroidCommands(player);
+				}
+
+				utils.setLocalVar(ship, "droidPcdId", droidControlDevice);
+			}
+			if (hasScript(ship, "conversation.ship_trainer_01")||hasScript(ship, "conversation.npe_new_jtl_tutorial"))
+			{
+				space_utils.openCommChannelAfterLoad(ship, ship);
+			}
+
+			// update the launch waypoint to match the spacestation we launched near
+			if (utils.hasScriptVar(player, "strLaunchPointName"))
+			{
+				obj_id objStation = space_combat.getClosestSpaceStation(ship);
+				string strLaunchName = getStringObjVar(objStation, "strName");
+				location locTest= getLocation(objStation);
+				space_transition.updateLaunchWaypoint(player, locTest, strLaunchName);
+				// also check if it's a n00b zone and send the system message if needed.
+				utils.setScriptVar(player, "intNewbieZoneLaunch", 1);
+			}
+			if (isSpaceBattlefieldZone())
+			{
+				if (hasObjVar(ship, "battlefield.locEntryLocation"))
+				{
+					location locEntryLocation = getLocationObjVar(ship, "battlefield.locEntryLocation");
+					warpPlayer(
+						ship,
+						locEntryLocation.area,
+						locEntryLocation.x,
+						locEntryLocation.y,
+						locEntryLocation.z,
+						locEntryLocation.cell,
+						locEntryLocation.x,
+						locEntryLocation.y,
+						locEntryLocation.z);
+				}
+			}
+
+			obj_id[] shipContents = trial.getAllObjectsInDungeon(ship);
+			if ( shipContents != null && shipContents.length > 0 )
+			{
+				for(int i = 0, j = shipContents.length; i < j; i++)
+				{
+					if ( isIdValid(shipContents[i]) )
+					{
+						messageTo(shipContents[i], "OnShipUnpack", null, 1.0f, false);
+					}
+				}
+			}
+
+			LOG("space", "AOK");
+			return true; // success
+		}
+		else
+		{
+			LOG("space", "NO piloting");
+		}
+
+		// we've failed, but have our ship out, so put it back
+		packShip(ship);
+	}
+	return false;
+}
+
+// ----------------------------------------------------------------------
+
+boolean inNovaOrionBattle(obj_id player)
+{
+	location here = getLocation(player);
+	if ( here.area.equals("space_nova_orion") )
+	{
+		if ( hasCompletedCollectionSlot(player, "orion_rank_01_04") || hasCompletedCollectionSlot(player, "nova_rank_01_04") )
+		{
+			if ( !hasCompletedCollectionSlot(player, "orion_rank_01_05") && !hasCompletedCollectionSlot(player, "nova_rank_01_05") )
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+// ----------------------------------------------------------------------
+
+int getPreOverridePlayerSpaceFaction(obj_id player)
+{
+	obj_id ship = getContainingShip(player);
+	if ( !isIdValid(ship) )
+		return 0;
+
+	if (hasObjVar(ship, "spaceFaction.FactionOverride"))
+	{
+		return getIntObjVar(ship, "spaceFaction.FactionOverride");
+	}
+	else if (hasSkill(player, "pilot_imperial_navy_novice"))
+	{
+		return ##"imperial";
+	}
+	else if (hasSkill(player, "pilot_rebel_navy_novice"))
+	{
+		return ##"rebel";
+	}
+	else
+	{
+		string strFaction = space_flags.getSpaceTrack(player);
+		if (strFaction != null)
+		{
+			// NEUTRAL or something else
+			if (strFaction.equals(space_flags.PRIVATEER_CORELLIA))
+			{
+				return ##"corsec";
+			}
+			if (strFaction.equals(space_flags.PRIVATEER_TATOOINE))
+			{
+				if (space_flags.isInTierTwo(player))
+					return ##"valarian";//in tier2 you are Valarian
+				else if (space_flags.isInTierThree(player) && (!space_quest.hasReceivedReward(player, "escort", "tatooine_privateer_tier2_4a")))
+					return ##"valarian";//in tier three, you're valarian 'til you finish the last mission!
+				else
+					return ##"hutt";
+			}
+			if (strFaction.equals(space_flags.PRIVATEER_NABOO))
+			{
+				return ##"rsf";
+			}
+		}
+	}
+
+	return ##"npe_player";
+}
+
+// ----------------------------------------------------------------------
+
+int getPlayerSpaceFaction(obj_id player)
+{
+	obj_id ship = getContainingShip(player);
+	if ( !isIdValid(ship) )
+		return 0;
+
+	// Check for nova or orion alliance in the battle between those two space factions.
+	if ( hasObjVar(player, township.OBJVAR_NOVA_ORION_FACTION) )
+	{
+		if ( inNovaOrionBattle(player) )
+		{
+			string novaOrionFaction = getStringObjVar(player, township.OBJVAR_NOVA_ORION_FACTION);
+			if ( novaOrionFaction!= null )
+			{
+				if ( novaOrionFaction.equals("nova") || novaOrionFaction.equals("orion") )
+				{
+					int[] alliedFactions = new int[3];
+					if ( novaOrionFaction.equals("nova") )
+					{
+						alliedFactions[0] = ##"nova";
+						alliedFactions[1] = ##"unattackable";
+						alliedFactions[2] = getPreOverridePlayerSpaceFaction(player);
+						shipSetSpaceFactionAllies( ship, alliedFactions );
+						return ##"nova";
+					}
+					else
+					{
+						alliedFactions[0] = ##"orion";
+						alliedFactions[1] = ##"unattackable";
+						alliedFactions[2] = getPreOverridePlayerSpaceFaction(player);
+						shipSetSpaceFactionAllies( ship, alliedFactions );
+						return ##"orion";
+					}
+				}
+			}
+		}
+	}
+
+	if (hasObjVar(ship, "spaceFaction.FactionOverride"))
+	{
+		int[] alliedFactions = new int[1];
+		alliedFactions[0] = ##"unattackable";
+		shipSetSpaceFactionAllies( ship, alliedFactions );
+		return getIntObjVar(ship, "spaceFaction.FactionOverride");
+	}
+	else if (hasSkill(player, "pilot_imperial_navy_novice"))
+	{
+		int[] alliedFactions = new int[2];
+		alliedFactions[0] = ##"rsf";
+		alliedFactions[1] = ##"unattackable";
+		shipSetSpaceFactionAllies( ship, alliedFactions );
+		return ##"imperial";
+	}
+	else if (hasSkill(player, "pilot_rebel_navy_novice"))
+	{
+		int[] alliedFactions = new int[2];
+		alliedFactions[0] = ##"nym";
+		alliedFactions[1] = ##"unattackable";
+		shipSetSpaceFactionAllies( ship, alliedFactions );
+		return ##"rebel";
+	}
+	else
+	{
+		string strFaction = space_flags.getSpaceTrack(player);
+		if (strFaction != null)
+		{
+			// NEUTRAL or something else
+			if (strFaction.equals(space_flags.PRIVATEER_CORELLIA))
+			{
+				int[] alliedFactions = new int[1];
+				alliedFactions[0] = ##"unattackable";
+				shipSetSpaceFactionAllies( ship, alliedFactions );
+				return ##"corsec";
+			}
+			if (strFaction.equals(space_flags.PRIVATEER_TATOOINE))
+			{
+				int[] alliedFactions = new int[1];
+				alliedFactions[0] = ##"unattackable";
+				shipSetSpaceFactionAllies( ship, alliedFactions );
+				if (space_flags.isInTierTwo(player))
+					return ##"valarian";//in tier2 you are Valarian
+				else if (space_flags.isInTierThree(player) && (!space_quest.hasReceivedReward(player, "escort", "tatooine_privateer_tier2_4a")))
+					return ##"valarian";//in tier three, you're valarian 'til you finish the last mission!
+				else
+					return ##"hutt";
+			}
+			if (strFaction.equals(space_flags.PRIVATEER_NABOO))
+			{
+				int[] alliedFactions = new int[2];
+				alliedFactions[0] = ##"imperial";
+				alliedFactions[1] = ##"unattackable";
+				shipSetSpaceFactionAllies(ship, alliedFactions);
+				return ##"rsf";
+			}
+		}
+	}
+	int[] alliedFactions = new int[1];
+	alliedFactions[0] = ##"unattackable";
+	shipSetSpaceFactionAllies(ship, alliedFactions);
+	return ##"npe_player";
+}
+
+// ----------------------------------------------------------------------
+
+void grantDroidCommands(obj_id objPlayer)
+{
+	string[] strDroidCommands = space_combat.getProgrammedDroidCommands(objPlayer);
+	if (strDroidCommands != null && strDroidCommands.length > 0)
+	{
+		for (int intI = 0; intI < strDroidCommands.length; intI++)
+		{
+			grantCommand(objPlayer, "droid+"+strDroidCommands[intI]);
+		}
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void revokeDroidCommands(obj_id objPlayer)
+{
+	string[] strDroidCommands = space_combat.getProgrammedDroidCommands(objPlayer);
+	if (strDroidCommands != null && strDroidCommands.length > 0)
+	{
+		for (int intI = 0; intI < strDroidCommands.length; intI++)
+		{
+			revokeCommand(objPlayer, "droid+"+strDroidCommands[intI]);
+		}
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void teleportPlayerToLaunchLoc(obj_id player)
+{
+	teleportPlayerToLaunchLoc(player, false);
+}
+
+void teleportPlayerToLaunchLoc(obj_id player, boolean hyperspace)
+{
+	// Note: this may be used on a player which is incapable of changing
+	// scenes, in which case we move them into the world and clear their
+	// ship launch information so they will be sent back next time they
+	// are in a valid state.
+	//
+	// This will also be called if the "Go Home" button is pushed on the client
+	// in that case, a hyperspace effect will be played for the transition
+
+	location worldLaunchLoc = getLocationObjVar(player, "space.launch.worldLoc");
+
+	// if the player is in the npe, let the npe teleportPlayerToLaunchLoc take care of this
+	if (hasObjVar(player, "npe.phase_number"))
+	{
+		// if the npe teleportPlayerToLaunchLoc fails, we continue here
+		if (npe.teleportPlayerToLaunchLoc(player, hyperspace))
+			return;
+	}
+
+	if (worldLaunchLoc == null)
+	{
+		// They didn't use a space terminal, so send them near the tatooine origin as punishment.
+		sendSystemMessageTestingOnly(player, "You do not have a launch location. This usually means that you didn't use the launch terminal. Please do so.");
+		worldLaunchLoc = new location(5.f, 195.f, 5.f, "tatooine");
+	}
+
+	float theta = rand()*(2.f*(float)Math.PI);
+	float radius = 2.f + rand()*3.f;
+	worldLaunchLoc.x += radius * Math.cos(theta);
+	worldLaunchLoc.z += radius * Math.sin(theta);
+
+	if (hyperspace)
+		hyperspacePlayerToLocation(player, worldLaunchLoc.area, worldLaunchLoc.x, worldLaunchLoc.y, worldLaunchLoc.z, null, worldLaunchLoc.x, worldLaunchLoc.y, worldLaunchLoc.z, null, false);
+	else
+		warpPlayer(player, worldLaunchLoc.area, worldLaunchLoc.x, worldLaunchLoc.y, worldLaunchLoc.z, null, worldLaunchLoc.x, worldLaunchLoc.y, worldLaunchLoc.z, null, false);
+}
+
+// ----------------------------------------------------------------------
+
+location getShipBoardingDestination(obj_id objShip)
+{
+	transform[] trEntrances= utils.getTransformArrayScriptVar(objShip, "locEntrance");
+	if (trEntrances == null)
+	{
+		obj_id[] objCells = getContents(objShip);
+		if (objCells == null || objCells.length == 0)
+		{
+			return null;
+		}
+		obj_id objCell = objCells[0];
+		location locTest = new location();
+		locTest.cell = objCell;
+		LOG("space", "HORRIBLY BAD SHIP OF OBJECT ID "+objShip);
+		return locTest;
+	}
+	obj_id[] objCells = utils.getObjIdArrayScriptVar(objShip, "locEntranceCells");
+	int intTest = rand(0, trEntrances.length-1);
+	transform tr = trEntrances[intTest];
+	location locDestination = space_utils.getLocationFromTransform(tr);
+	locDestination.cell = objCells[intTest];
+	return locDestination;
+}
+
+// ----------------------------------------------------------------------
+
+boolean isShipBoardable(obj_id objPlayer, obj_id objShip)
+{
+	obj_id objPlayerShip = getPilotedShip(objPlayer);
+
+	if (!isIdValid(objPlayerShip))
+	{
+		string_id strSpam = new string_id("space/space_advanced","no_board_without_ship");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+
+	if (!isIdValid(objShip))
+	{
+		string_id strSpam = new string_id("space/space_advanced","no_ship_targeted");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+
+	obj_id[] objCells = getContents(objShip);
+
+	if (objCells == null || objCells.length==0)
+	{
+		string_id strSpam = new string_id("space/space_advanced","not_boardable");
+		sendSystemMessage(objPlayer, strSpam);
+		return false;
+	}
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
+Vector getShipStartLocations(obj_id ship)
+{
+	Vector startLocations = null;
+	String shipTemplateName = getTemplateName(ship);
+
+	String[] templateNames = dataTableGetStringColumn(DATATABLE_SHIP_START_LOCATIONS, COLUMN_TEMPLATE);
+
+	if(templateNames != null)
+	{
+		int rowIndex = 0;
+		for(; rowIndex < templateNames.length; ++rowIndex)
+			if(templateNames[rowIndex].equals(shipTemplateName))
+				break;
+
+		if(rowIndex < templateNames.length)
+		{
+			do
+			{
+				string slotName = dataTableGetString(DATATABLE_SHIP_START_LOCATIONS, rowIndex, COLUMN_SLOT);
+
+				if(slotName != null && slotName.length() > 0)
+				{
+					int slot = utils.stringToInt(slotName.substring(11));
+
+					if(slot > 0 && isShipSlotInstalled(ship, slot + ship_chassis_slot_type.SCST_weapon_0))
+					{
+						startLocations = utils.addElement(startLocations, new location(0.f, 0.f, 0.f, slotName, null));
+					}
+					else
+					{
+						LOG("space", "Launching into space.  Turret not installed.  slotName: " + slotName + " slot: " + slot);
+					}
+				}
+				else
+				{
+					string cellName = dataTableGetString(DATATABLE_SHIP_START_LOCATIONS, rowIndex, COLUMN_CELL);
+					obj_id cell = getCellId(ship, cellName);
+
+					if(isIdValid(cell))
+					{
+						float x = dataTableGetFloat(DATATABLE_SHIP_START_LOCATIONS, rowIndex, COLUMN_X);
+						float y = dataTableGetFloat(DATATABLE_SHIP_START_LOCATIONS, rowIndex, COLUMN_Y);
+						float z = dataTableGetFloat(DATATABLE_SHIP_START_LOCATIONS, rowIndex, COLUMN_Z);
+						startLocations = utils.addElement(startLocations, new location(x, y, z, getCurrentSceneName(), cell));
+					}
+				}
+
+				++rowIndex;
+
+			}
+			while(rowIndex < templateNames.length && templateNames[rowIndex].length() == 0);
+		}
+	}
+	return startLocations;
+}
+
+// ----------------------------------------------------------------------
+
+void updateLaunchWaypoint(obj_id objPlayer, location locTest, string strName)
+{
+	// so the location is actually wrong..  we'll update this once we get the correct location
+	obj_id objLaunchWaypoint = null;
+
+	if (!hasObjVar(objPlayer, "space.objLaunchWaypoint"))
+	{
+		LOG("space", "HASOBJVAR");
+		objLaunchWaypoint = createWaypointInDatapad(objPlayer, locTest);
+	}
+	else
+	{
+		objLaunchWaypoint = getObjIdObjVar(objPlayer, "space.objLaunchWaypoint");
+		LOG("space", "objLaunchWaypoint of "+objLaunchWaypoint+" does not exist");
+		if (!space_utils.hasWaypointInDatapad(objPlayer, objLaunchWaypoint))
+		{
+			objLaunchWaypoint = createWaypointInDatapad(objPlayer, locTest);
+		}
+		else
+		{
+			setWaypointLocation(objLaunchWaypoint, locTest);
+		}
+	}
+	if (isIdValid(objLaunchWaypoint))
+	{
+		setObjVar(objPlayer, "space.objLaunchWaypoint", objLaunchWaypoint);
+		setWaypointActive(objLaunchWaypoint, true);
+		string_id strSpam = new string_id("launch_names", strName);
+		setWaypointName(objLaunchWaypoint, utils.packStringId(strSpam));
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void updateShipFaction(obj_id ship, obj_id player)
+{
+	int spaceFaction = 0;
+	if (isSpaceBattlefieldZone() && hasObjVar(ship, "intBattlefieldTeam"))
+	{
+		spaceFaction = getIntObjVar(ship, "intBattlefieldTeam");
+		shipSetSpaceFaction(ship, spaceFaction);
+	}
+	else
+	{
+		spaceFaction = getPlayerSpaceFaction(player);
+		shipSetSpaceFaction(ship, spaceFaction);
+		updatePVPStatus(ship);
+	}
+}
+
+// ----------------------------------------------------------------------
+
+/***********************************************************
+ *  This is called by the Imperial and Rebel space stations
+ * 	to make players overt / pvp-able
+ *
+ * 	It can only ever be "rebel" or "imperial"
+ **/
+ 
+// this version is called from C++
+void setPlayerOvert(long player)
+{
+	const obj_id playerObjId = obj_id.getObjId(player);
+	if (isIdValid(playerObjId) && exists(playerObjId) && playerObjId.isAuthoritative())
+		setPlayerOvert(playerObjId);
+}
+
+void setPlayerOvert(obj_id player)
+{
+	//Dan's magical code to set the bitches Overt goes here.
+	obj_id objShip = getContainingShip(player);
+	if (isIdValid(objShip))
+	{
+		setObjVar(objShip, "spaceFaction.overt", 1);
+		messageTo(objShip, "checkSpacePVPStatus", null, 30, false);
+	}
+	return;
+}
+
+// ----------------------------------------------------------------------
+
+void setPlayerOvert(obj_id player, int overrideFaction)
+{
+	obj_id ship = getContainingShip(player);
+	setObjVar(ship, "spaceFaction.FactionOverride", overrideFaction);
+	shipSetSpaceFaction(ship, overrideFaction);
+	setPlayerOvert(player);
+}
+
+// ----------------------------------------------------------------------
+
+// this version is called from C++
+void clearOvertStatus(long objShip)
+{
+	const obj_id objShipObjId = obj_id.getObjId(objShip);
+	if (isIdValid(objShipObjId) && exists(objShipObjId) && objShipObjId.isAuthoritative())
+		clearOvertStatus(objShipObjId);
+}
+
+void clearOvertStatus(obj_id objShip)
+{
+	if (isIdValid(objShip))
+	{
+		if(hasObjVar(objShip, "intBattlefieldTeam"))
+		{
+			removeObjVar(objShip, "intBattlefieldTeam");
+		}
+		removeObjVar(objShip, "spaceFaction.FactionOverride");
+		removeObjVar(objShip, "spaceFaction.overt");
+		space_utils.notifyObject(objShip, "checkSpacePVPStatus", null);
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void updatePVPStatus(obj_id objShip)
+{
+	if (hasObjVar(objShip, "spaceFaction.FactionOverride"))
+		shipSetSpaceFaction(objShip, getIntObjVar(objShip, "spaceFaction.FactionOverride"));
+
+	if (hasObjVar(objShip, "spaceFaction.overt"))
+	{
+		// HACK HACK
+		obj_id objPlayer = getPilotId(objShip);
+		// check if overt
+		int intType = pvpGetType(objShip);
+		if (intType != PVPTYPE_DECLARED)
+		{
+			if (isIdValid(objPlayer))
+			{
+				space_utils.sendSystemMessage(objPlayer, SID_PVP_NOW_OVERT);
+			}
+		}
+		pvpMakeDeclared(objShip);
+	}
+	else
+	{
+		int intType = pvpGetType(objShip);
+		if (intType == PVPTYPE_DECLARED)
+		{
+			obj_id objPlayer = getPilotId(objShip);
+			if (isIdValid(objPlayer))
+			{
+				space_utils.sendSystemMessage(objPlayer, SID_PVP_NOW_NEUTRAL);
+			}
+		}
+		pvpSetAlignedFaction(objShip, 0);
+		pvpMakeNeutral(objShip);
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void doAIImmunityCheck(obj_id objShip)
+{
+	string strChassisType = getShipChassisType(objShip);
+
+	// Clear me from any AI attack target lists
+
+	ship_ai.unitRemoveFromAllAttackTargetLists(objShip);
+
+	if (strChassisType.equals("player_sorosuub_space_yacht"))
+	{
+		LOG("space", "Setting sorosuub to be immune");
+		ship_ai.unitSetAutoAggroImmune(objShip, true); // auto-aggro immune for infinity
+	}
+	else
+	{
+		ship_ai.unitSetAutoAggroImmuneTime(objShip, 60); // 60 seconds of auto-aggro immunity
+	}
+
+	if (hasObjVar(getOwner(objShip), "gm"))
+	{
+		ship_ai.unitRemoveFromAllAttackTargetLists(objShip);
+		ship_ai.unitSetAutoAggroImmune(objShip, true);
+		ship_ai.unitSetDamageAggroImmune(objShip, true);
+		sendSystemMessageTestingOnly(getOwner(objShip), "aiIgnore[ON]: AI will no longer aggro you or fight back.");
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void adjustShipTeleportFixupInSpaceScene(obj_id ship)
+{
+	if (hasObjVar(ship, "teleportFixup"))
+	{
+		// The only portion of a teleport fixup which would be valid for a ship in a space scene is the callback.
+		string fixupCallback = getStringObjVar(ship, "teleportFixup.callback");
+		LIVE_LOG("TeleportFixup", "Removing teleport fixup from " + ship);
+		removeObjVar(ship, "teleportFixup");
+		if (fixupCallback != null && fixupCallback.length() > 0)
+			setObjVar(ship, "teleportFixup.callback", fixupCallback);
+	}
+}
+
+// ----------------------------------------------------------------------
+
+int getNextStartIndex(resizeable location[] shipStartLocations, int lastStartIndex)
+{
+	int startIndex = lastStartIndex+1;
+
+	// If we have more players than start locations, see if we have any start
+	// locations in cells and reuse those.  We assume that all start locations
+	// not in cells come at the beginning of the list.
+
+	if (startIndex > shipStartLocations.length)
+	{
+		for (startIndex = 1; startIndex <= shipStartLocations.length; ++startIndex)
+			if (shipStartLocations[startIndex-1].cell != null)
+				break;
+	}
+
+	return startIndex;
+}
+
+// ----------------------------------------------------------------------
+
+void launch(obj_id player, obj_id ship, obj_id[] passengers, location warpLocation, location groundLoc)
+{
+	resizeable obj_id[] passengersToWarp = utils.addElement(null, player);
+	resizeable int[] passengerStartIndexes = utils.addElement(null, 0);
+//	utils.setScriptVar(player, "strLaunchPointName", "launching");
+	resizeable location[] shipStartLocations = space_transition.getShipStartLocations(ship);
+
+	if (null != passengers)
+	{
+		if (shipStartLocations != null && shipStartLocations.length > 0)
+		{
+			int startIndex = 0;
+			location playerLoc = getLocation(player);
+
+			for (int i = 0; i < passengers.length; ++i)
+			{
+				obj_id passenger = passengers[i];
+				if (passenger != player)
+				{
+					if (features.isSpaceEdition(passenger))
+					{
+						startIndex = space_transition.getNextStartIndex(shipStartLocations, startIndex);
+						if (startIndex <= shipStartLocations.length)
+						{
+							passengersToWarp = utils.addElement(passengersToWarp, passenger);
+							passengerStartIndexes = utils.addElement(passengerStartIndexes, startIndex);
+						}
+					}
+					else
+					{
+						string_id strSpam = new string_id("space/space_interaction", "no_space_expansion");
+						sendSystemMessage(passenger, strSpam);
+					}
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < passengersToWarp.length; ++i)
+	{
+		obj_id passenger = passengersToWarp[i];
+		int passengerStartIndex = passengerStartIndexes[i];
+
+		space_transition.setLaunchInfo(passenger, ship, passengerStartIndex, groundLoc);
+		warpPlayer(
+			passenger,
+			warpLocation.area,
+			warpLocation.x, warpLocation.y, warpLocation.z,
+			null,
+			warpLocation.x, warpLocation.y, warpLocation.z);
+	}
+	//sendSystemMessageTestingOnly(player, "(unlocalized) Finishing launch sequence...");
+}
+// ======================================================================
+
+void exitCapitalShip(obj_id objPlayer, transform trTest)
+{
+
+	obj_id objContainingShip = space_transition.getContainingShip(objPlayer);
+	location locTest = getLocationObjVar(objContainingShip, "locLaunchLocation");
+
+	obj_id[] objControlDevices = space_transition.findShipControlDevicesForPlayer(objPlayer);
+	LOG("space", "control device is "+objControlDevices[0]);
+	obj_id ship = space_transition.getShipFromShipControlDevice(objControlDevices[0]);
+
+	setObjVar(objPlayer, "space.launch.worldLoc", locTest);
+	setObjVar(objPlayer, "space.launch.ship", ship);
+	setObjVar(objPlayer, "space.launch.startIndex", 0);
+	setLocation(ship, locTest);
+	LOG("space", "Putting ship at "+locTest);
+	dictionary dctParams = new dictionary();
+	dctParams.put("objShip", ship);
+	dctParams.put("locTest", locTest);
+	dctParams.put("trTest", trTest);
+
+	messageTo(objPlayer, "doDelayedPilot", dctParams, 1.0f, false);
+}
+
+void enterCapitalShip(obj_id objPlayer, transform trTest, obj_id objCell)
+{
+
+	space_transition.packShip(space_transition.getContainingShip(objPlayer));
+	location locTest = new location();
+	locTest.cell = objCell;
+	setLocation(objPlayer, locTest);
+	LOG("space", "sending player to "+locTest);
+	setTransform_o2p(objPlayer, trTest);
+
+}

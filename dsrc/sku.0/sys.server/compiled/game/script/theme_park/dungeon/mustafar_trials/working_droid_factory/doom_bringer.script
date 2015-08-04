@@ -1,0 +1,308 @@
+include library.ai_lib;
+include library.trial;
+include library.utils;
+
+
+const string_id SID_DOOM				= new string_id("mob/creature_names", "som_working_doom_bringer");
+const string_id SID_HAND				= new string_id("mob/creature_names", "som_working_hand_of_doom");
+
+const int HOD_CYCLE_DELAY				= 15;
+const boolean LOGGING					= true;
+
+trigger OnIncapacitated(obj_id killer)
+{
+	obj_id top = trial.getTop(self);
+	messageTo(top, "doomBringerKilled", null, 0, false);
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	trial.setHp(self, trial.HP_WORKING_DOOM_BRINGER);
+	setInvulnerable(self, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnExitedCombat()
+{
+	resetSelf(self);
+	return SCRIPT_CONTINUE;
+}
+
+void resetSelf(obj_id self)
+{
+	int max = getMaxHealth(self);
+	int current = getHealth(self);
+	int toHeal = max - current;
+	addToHealth(self, toHeal);
+	ai_lib.clearCombatData();
+}
+
+messageHandler beginDestruction()
+{
+	trial.bumpSession(self, "db_control");
+	obj_id[] hands = trial.getObjectsInDungeonWithScript(self, "theme_park.dungeon.mustafar_trials.working_droid_factory.doom_hand");
+	obj_id[] target = trial.getObjectsInDungeonWithScript(self, "theme_park.dungeon.mustafar_trials.working_droid_factory.doom_target");
+	
+	if (hands == null || hands.length == 0 || target == null || target.length == 0)
+	{
+		doLogging("beginDestruction", "No hands or targets could be found");
+		return SCRIPT_CONTINUE;
+	}
+	
+	resizeable obj_id[] activeHand = new obj_id[0];
+	
+	for (int i=0;i<hands.length;i++)
+	{
+		trial.setActiveHand(hands[i], false);
+		utils.addElement(activeHand, hands[i]);
+		utils.setScriptVar(hands[i], trial.WORKING_HOD_TARGET, target[0]);
+	}
+	
+	for (int q=0;q<3;q++)
+	{
+		utils.removeElement(activeHand, activeHand[rand(0, activeHand.length -1)]);
+	}
+	
+
+	setInvulnerable(target[0], false);
+	for (int k=0;k<activeHand.length;k++)
+	{
+		trial.setActiveHand(activeHand[k], true);
+		if (k == 0)
+		{
+			setName(activeHand[k], SID_DOOM);
+			trial.setPrimaryHand(activeHand[k], true);
+		}
+		messageTo(activeHand[k], "activate", trial.getSessionDict(self), 0, false);
+	}
+	
+	dictionary dict = trial.getSessionDict(self);
+	dict.put("cycle", 0);
+	messageTo(self, "manageHands", dict, HOD_CYCLE_DELAY, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler manageHands()
+{
+	if (!trial.verifySession(self, params))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	dictionary dict = trial.getSessionDict(self);
+	messageTo(self, "manageHands", dict, HOD_CYCLE_DELAY, false);
+	
+	
+	obj_id[] handObjects = trial.getObjectsInDungeonWithScript(self, "theme_park.dungeon.mustafar_trials.working_droid_factory.doom_hand");
+	resizeable obj_id[] hands = new obj_id[0];
+	
+	for (int a=0;a<handObjects.length;a++)
+	{
+		if (isIdValid(handObjects[a]) && !isDead(handObjects[a]))
+			utils.addElement(hands, handObjects[a]);
+	}
+	
+	if (hands == null || hands.length == 0)
+	{
+		messageTo(self, "activateSelf", null, 5, false);
+		trial.bumpSession(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int cycle = 0;
+	if (utils.hasScriptVar(self, "cycle"))
+		utils.getIntScriptVar(self, "cycle");
+	
+	boolean shuffle = false;
+	
+	if (cycle >= 3)
+		shuffle = true;
+		
+		
+	if (shuffle && hands.length > 3)
+	{
+		resizeable obj_id[] oldActive = new obj_id[0];
+		resizeable obj_id[] oldInactive = new obj_id[0];
+		resizeable obj_id[] newActive = new obj_id[0];
+		resizeable obj_id[] newInactive = new obj_id[0];
+		
+		for (int p=0;p<hands.length;p++)
+		{
+			if (!isDead(hands[p]) && trial.isActiveHand(hands[p]))
+			{
+				utils.addElement(oldActive, hands[p]);
+			}
+			else if (!isDead(hands[p]))
+			{
+				utils.addElement(oldInactive, hands[p]);
+			}
+		}
+		
+		for (int j=0;j<oldInactive.length;j++)
+		{
+			messageTo(oldInactive[j], "activate", null, 0, false);
+			trial.setActiveHand(oldInactive[j], true);
+			utils.addElement(newActive, oldInactive[j]);
+			
+			if (j == oldActive.length -1 || j< oldActive.length -1)
+			{
+				messageTo(oldActive[j], "deactivate", null, 0, false);
+				trial.setActiveHand(oldActive[j], false);
+				trial.setPrimaryHand(oldActive[j], false);
+				setName(oldActive[j], SID_HAND);
+				utils.addElement(newInactive, oldActive[j]);
+			}
+		}
+		
+		resizeable obj_id[] nonLeaders = new obj_id[0];
+		obj_id oldLeader = obj_id.NULL_ID;
+
+		for (int p=0;p<newActive.length;p++)
+		{
+			if (!trial.isPrimaryHand(newActive[p]))
+				utils.addElement(nonLeaders, newActive[p]);
+			else
+				oldLeader = newActive[p];
+		}
+
+		if (nonLeaders == null || nonLeaders.length == 0 && oldLeader == obj_id.NULL_ID)
+		{
+			messageTo(self, "activateSelf", null, 5, false);
+			trial.bumpSession(self);
+			return SCRIPT_CONTINUE;
+		}
+		else if (nonLeaders != null && nonLeaders.length > 0)
+		{
+			if (oldLeader != obj_id.NULL_ID)
+			{
+				setName(oldLeader, SID_HAND);
+				trial.setPrimaryHand(oldLeader, false);
+			}
+
+			int newLeader = rand(0, nonLeaders.length -1);
+			for (int r=0;r<nonLeaders.length;r++)
+			{
+				if (r == newLeader)
+				{
+					setName(nonLeaders[r], SID_DOOM);
+					trial.setPrimaryHand(nonLeaders[r], true);
+				}
+				else
+				{
+					setName(nonLeaders[r], SID_HAND);
+					trial.setPrimaryHand(nonLeaders[r], false);
+				}
+			}
+
+		}
+
+		cycle = 0;
+	}
+	else
+	{
+		resizeable obj_id[] activeHands = new obj_id[0];
+		resizeable obj_id[] inactiveHands = new obj_id[0];
+		for (int i=0;i<hands.length;i++)
+		{
+			if (isIdValid(hands[i]) && !isDead(hands[i]) && trial.isActiveHand(hands[i]))
+			{
+				utils.addElement(activeHands, hands[i]);
+			}
+			else if (isIdValid(hands[i]) && !isDead(hands[i]))
+			{
+				utils.addElement(inactiveHands, hands[i]);
+			}
+			
+		}
+		
+		if (activeHands.length < 3)
+		{
+			if (inactiveHands != null && inactiveHands.length > 0)
+			{
+				int r = 0;
+				for (int q=activeHands.length;q<3 && r<inactiveHands.length;q++)
+				{
+					if (isIdValid(inactiveHands[r]))
+					{
+						messageTo(inactiveHands[r], "activate", trial.getSessionDict(self), 0, false);
+						trial.setActiveHand(inactiveHands[r], true);
+						utils.addElement(activeHands, inactiveHands[r]);
+						r++;
+					}
+				}
+			}
+		}
+		
+		if (activeHands.length <= 0)
+		{
+			messageTo(self, "activateSelf", null, 5, false);
+			trial.bumpSession(self);
+			return SCRIPT_CONTINUE;
+		}
+		
+		resizeable obj_id[] nonLeaders = new obj_id[0];
+		obj_id oldLeader = obj_id.NULL_ID;
+		
+		for (int p=0;p<activeHands.length;p++)
+		{
+			if (!trial.isPrimaryHand(activeHands[p]))
+				utils.addElement(nonLeaders, activeHands[p]);
+			else
+				oldLeader = activeHands[p];
+		}
+
+		if (nonLeaders == null || nonLeaders.length == 0 && oldLeader == obj_id.NULL_ID)
+		{
+			messageTo(self, "activateSelf", null, 5, false);
+			trial.bumpSession(self);
+			return SCRIPT_CONTINUE;
+		}
+		else if (nonLeaders != null && nonLeaders.length > 0)
+		{
+			if (oldLeader != obj_id.NULL_ID)
+			{
+				setName(oldLeader, SID_HAND);
+				trial.setPrimaryHand(oldLeader, false);
+			}
+
+			int newLeader = rand(0, nonLeaders.length -1);
+			for (int r=0;r<nonLeaders.length;r++)
+			{
+				if (r == newLeader)
+				{
+					setName(nonLeaders[r], SID_DOOM);
+					trial.setPrimaryHand(nonLeaders[r], true);
+				}
+				else
+				{
+					setName(nonLeaders[r], SID_HAND);
+					trial.setPrimaryHand(nonLeaders[r], false);
+				}
+			}
+		
+		}
+		
+		cycle +=1;
+	}
+	
+	utils.setScriptVar(self, "cycle", cycle);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler activateSelf()
+{
+	setInvulnerable(self, false);
+	return SCRIPT_CONTINUE;
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING || trial.WORKING_LOGGING)
+		LOG("logging/doom_bringer/"+section, message);	
+}

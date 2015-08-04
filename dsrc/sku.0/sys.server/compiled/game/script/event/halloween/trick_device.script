@@ -1,0 +1,573 @@
+include library.create;
+include library.utils;
+include library.player_structure;
+include library.sui;
+include library.static_item;
+include library.buff;
+include library.chat;
+include library.ai_lib;
+include library.space_utils;
+include library.space_transition;
+include library.event_perk;
+
+/***** CONSTS **********************************************************/
+const string HALLOWEEN			= new string("event/halloween");
+//Menu option strings
+const string_id TRICK_OPTION_1_ID 	= new string_id(HALLOWEEN, "halloween_trick_1");
+const string_id TRICK_OPTION_2_ID	= new string_id(HALLOWEEN, "halloween_trick_2");
+const string_id TRICK_OPTION_3_ID	= new string_id(HALLOWEEN, "halloween_trick_3");
+const string_id TRICK_OPTION_4_ID 	= new string_id(HALLOWEEN, "halloween_trick_4");
+const string_id TRICK_OPTION_5_ID 	= new string_id(HALLOWEEN, "halloween_trick_5");
+//Trick particle effects
+const string TRICK_1		 	= new string("appearance/pt_spider_flock_trick_device.prt");
+const string TRICK_2		 	= new string("appearance/pt_moon_skulls.prt");
+const string TRICK_3		 	= new string("appearance/pt_moon_ghost_s05.prt");
+const string TRICK_4		 	= new string("appearance/pt_fire_face.prt");
+const string TRICK_5		 	= new string("appearance/pt_moon_vortex.prt");
+//Misc
+const string_id FAULTY_DEVICE	 	= new string_id(HALLOWEEN, "halloween_faulty_device");
+const string_id IN_COMBAT	 	= new string_id(HALLOWEEN, "halloween_in_combat");
+const string_id SID_TURN_ON 		= new string_id(HALLOWEEN, "fog_machine_on");
+const string_id SID_TURN_OFF	 	= new string_id(HALLOWEEN, "fog_machine_off");
+const string_id CANT_USE	 	= new string_id(HALLOWEEN, "cant_use_device");
+const string_id TEN_COINS		= new string_id(HALLOWEEN, "ten_coins");
+const string_id FIVE_COINS		= new string_id(HALLOWEEN, "five_coins");
+const string_id OUT_OF_RANGE		= new string_id(HALLOWEEN, "trick_device_oor");
+
+/***** FUNCTIONS ********************************************************/
+
+trigger OnInitialize()
+{
+	int projectorTier = getIntObjVar(self, "item.projector");
+	
+	if (projectorTier > 2)
+	{
+		if (inHouse(self))
+		{
+			if (hasObjVar(self, "fogOn"))
+			{
+				createTriggerVolume ("fogTrigger", 80f, true);
+				startFog(self);
+			}
+				
+			createTriggerVolume("trickAura", 5, true);
+		}
+		else
+			removeTriggerVolume("trickAura");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	if (hasObjVar(self, "fogOn"))
+	{
+		removeObjVar(self, "fogOn");
+		removeObjVar(self, "unmoveable");
+		stopFog(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	obj_id house = getTopMostContainer(self);
+	int projectorTier = getIntObjVar(self, "item.projector");
+	obj_id ship = space_transition.getContainingShip(destContainer);
+	string templateName ="";
+
+	if(isIdValid(ship))
+	{
+		templateName = getTemplateName(ship);
+	}
+
+	if (projectorTier > 2)
+	{
+		if (utils.isInHouseCellSpace(self) || space_utils.isPobType(templateName))
+		{
+			createTriggerVolume("trickAura", 5, true);
+		}
+		else
+			removeTriggerVolume("trickAura");
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//If I'm a permanent trick or treat device and placed in a house, we'll play a random trick on anyone breaching our trigger volume.
+trigger OnTriggerVolumeEntered(string volumeName, obj_id breacher)
+{
+	if (volumeName == "trickAura")
+	{
+		if (!buff.hasBuff(breacher, "event_halloween_no_trick"))
+		{
+			int idx = rand(0,4);
+			switch(idx)
+			{
+				case 0:  // trick1
+					playClientEffectObj(self, TRICK_1, breacher, "");
+					buff.applyBuff(breacher, "event_halloween_no_trick");
+					break;
+				case 1:  // trick2
+					playClientEffectObj(self, TRICK_2, breacher, "");
+					buff.applyBuff(breacher, "event_halloween_no_trick");
+					break;
+				case 2:  // trick3
+					playClientEffectObj(self, TRICK_3, breacher, "");
+					buff.applyBuff(breacher, "event_halloween_no_trick");
+					break;
+				case 3:  // trick4
+					playClientEffectObj(self, TRICK_4, breacher, "");
+					buff.applyBuff(breacher, "event_halloween_no_trick");
+					break;
+				case 4:  // trick5
+					playClientEffectObj(self, TRICK_5, breacher, "");
+					buff.applyBuff(breacher, "event_halloween_no_trick");
+					break;
+
+				default:
+			}
+		}
+	}
+	
+	if (volumeName == "fogTrigger")
+		startFog(self);
+	
+	return SCRIPT_CONTINUE;
+}
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data data = mi.getMenuItemByType (menu_info_types.ITEM_USE);
+	mi.addRootMenu (menu_info_types.ITEM_USE, new string_id("",""));
+
+	if (inHouse(self))
+	{
+		if(hasObjVar(self, "fogOn"))
+			int fogOnOff = mi.addRootMenu(menu_info_types.ITEM_USE, SID_TURN_OFF);
+		else
+			int fogOnOff = mi.addRootMenu(menu_info_types.ITEM_USE, SID_TURN_ON);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(inHouse(self))
+	{
+		if(item == menu_info_types.ITEM_USE && !hasObjVar(self, "fogOn"))
+		{
+			//turn on the machine (in-house)
+			startFog(self);
+			return SCRIPT_CONTINUE;
+		}
+		if(item == menu_info_types.ITEM_USE && hasObjVar(self, "fogOn"))
+		{
+			//turn off the machine (in-house)
+			stopFog(self);
+			return SCRIPT_CONTINUE;
+		}
+	}	
+	
+	else if (canUse(player, self) == true)
+	{
+		if ( item == menu_info_types.ITEM_USE )
+		{
+			startDevice(player);
+		} 
+		return SCRIPT_CONTINUE;
+	}
+	else if (item == menu_info_types.ITEM_USE)
+		sendSystemMessage(player, CANT_USE);
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean canUse(obj_id player, obj_id device)
+{
+	if(!inHouse(device))
+	{
+		//Checking if the player has received his daily max amount of halloween coins.
+		if (event_perk.timeStampCheck(player) == false)
+			return false;
+		
+		obj_id target = getIntendedTarget(player);
+		obj_id correctPlayer = utils.getObjIdScriptVar(target, "readyForTrickFromPlayer."+player);
+		//Making sure that the target is ready to be tricked by the player using the device before we add menus to perform the trick.
+		if (correctPlayer == player)
+			return true;
+	}
+	
+	return false;
+}
+
+void startDevice(obj_id player)
+{
+	string TRICK_OPTION_1		= utils.packStringId(TRICK_OPTION_1_ID);
+	string TRICK_OPTION_2		= utils.packStringId(TRICK_OPTION_2_ID);
+	string TRICK_OPTION_3		= utils.packStringId(TRICK_OPTION_3_ID);
+	string TRICK_OPTION_4		= utils.packStringId(TRICK_OPTION_4_ID);
+	string TRICK_OPTION_5		= utils.packStringId(TRICK_OPTION_5_ID);
+	//List menus
+	const string[] TRICK_OPTIONS_1		= {	TRICK_OPTION_1,
+							TRICK_OPTION_2,
+							TRICK_OPTION_3
+						};
+	const string[] TRICK_OPTIONS_2		= {	TRICK_OPTION_1,
+							TRICK_OPTION_2,
+							TRICK_OPTION_3,
+							TRICK_OPTION_4
+						};
+	const string[] TRICK_OPTIONS_3		= {	TRICK_OPTION_1,
+							TRICK_OPTION_2,
+							TRICK_OPTION_3,
+							TRICK_OPTION_4,
+							TRICK_OPTION_5
+						};
+	
+	obj_id self = getSelf();
+
+	string prompt = "Select the desired trick";
+	string title = "Trick or Treat Projector";
+
+	closeOldWindow(player);
+	
+	//Adding different tricks to the device menu depending on which of the three devices the player is using.
+	if (getIntObjVar(self, "item.projector") > 2)
+	{
+		int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, TRICK_OPTIONS_3, "handleOptionSelect", true, false);
+		setWindowPid(player, pid);
+	}
+	else if (getIntObjVar(self, "item.projector") > 1)
+	{
+		int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, TRICK_OPTIONS_2, "handleOptionSelect", true, false);
+		setWindowPid(player, pid);
+	}	
+	else if (getIntObjVar(self, "item.projector") > 0)
+	{
+		int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, TRICK_OPTIONS_1, "handleOptionSelect", true, false);
+		setWindowPid(player, pid);
+	}
+}
+
+messageHandler handleOptionSelect()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		cleanScriptVars(player);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( idx == -1)
+	{
+		cleanScriptVars(player);
+		return SCRIPT_CONTINUE;
+	}
+	obj_id target = getIntendedTarget(player);
+
+	if (isIdValid(target) && exists(target))
+	{
+		location selfLoc = getLocation(player);
+		location targetLoc = getLocation(target);
+		float fltDistance = getDistance(selfLoc, targetLoc);
+
+		if (fltDistance > 30.0f)
+		{
+			sendSystemMessage(player, OUT_OF_RANGE);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if (utils.hasScriptVar(target, "readyForTrickFromPlayer."+player))
+	{
+		obj_id correctPlayer = utils.getObjIdScriptVar(target, "readyForTrickFromPlayer."+player);
+		switch(idx)
+		{
+			case 0:  // trick1
+				//Making sure that the target is ready to be tricked by the player using the device before we allow tricks to be performed.
+				if (correctPlayer == player)
+				{
+					utils.removeScriptVar(target, "readyForTrickFromPlayer."+player);
+					playTrick(self, player, target, 1);
+				}
+				break;
+			case 1:  // trick2
+				if (correctPlayer == player)
+				{
+					utils.removeScriptVar(target, "readyForTrickFromPlayer."+player);
+					playTrick(self, player, target, 2);
+				}
+				break;
+			case 2:  // trick3
+				if (correctPlayer == player)
+				{
+					utils.removeScriptVar(target, "readyForTrickFromPlayer."+player);
+					playTrick(self, player, target, 3);
+				}
+				break;
+			case 3:  // trick4
+				if (correctPlayer == player)
+				{
+					utils.removeScriptVar(target, "readyForTrickFromPlayer."+player);
+					playTrick(self, player, target, 4);
+				}
+				break;
+			case 4:  // trick5
+				if (correctPlayer == player)
+				{
+					utils.removeScriptVar(target, "readyForTrickFromPlayer."+player);
+					playTrick(self, player, target, 5);
+				}
+				break;
+
+			default:
+				cleanScriptVars(player);
+				return SCRIPT_CONTINUE;
+		}
+	}
+
+
+	return SCRIPT_CONTINUE;
+}
+
+void playTrick(obj_id self, obj_id player, obj_id target, int trick)
+{
+	//Making sure player or NPC is not in combat.
+	if (!ai_lib.isInCombat(player) || !ai_lib.isInCombat(target))
+	{
+		int deviceQuality = getIntObjVar(self, "item.projector");
+		//Random roll to decide which trick will get the NPC super scared.
+		int scariestChance = rand(1, 5);
+		//Random roll to decide if the NPC get a little scared. Bigger chance the better the device.
+		int scareChance = 0;
+		if (deviceQuality == 3)
+			scareChance = rand(1, 70);
+		if (deviceQuality == 2)
+			scareChance = rand(1, 80);
+		if (deviceQuality == 1)
+			scareChance = rand(1, 100);
+		//If the obj var is zero or lower, something's gone wrong. The device is faulty.	
+		if (deviceQuality < 1)
+		{
+			sendSystemMessage(player, FAULTY_DEVICE);
+			return;
+		}
+		//The NPC can say different things in response to the trick.
+		int scareDialogue = rand(1, 5);
+
+		switch (trick)
+		{
+
+		case 1:
+			playClientEffectObj(player, TRICK_1, target, "");
+			if (scariestChance == 1)
+			{
+				chat.chat(target, player, chat.CHAT_SCREAM, new string_id(HALLOWEEN, "super_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 2);
+				doAnimationAction(target, "cover_eyes");
+			}
+			else if (scareChance < 51)
+			{
+				doAnimationAction(target, "scared");
+				chat.chat(target, player, chat.CHAT_STUTTER, new string_id(HALLOWEEN, "scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 1);
+			}
+			else
+			{
+				doAnimationAction(target, "dismiss");
+				chat.chat(target, player, chat.CHAT_SAY, new string_id(HALLOWEEN, "not_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+			}
+			break;
+
+		case 2:
+			playClientEffectObj(player, TRICK_2, target, "");
+			if (scariestChance == 2)
+			{
+				chat.chat(target, player, chat.CHAT_SCREAM, new string_id(HALLOWEEN, "super_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 2);
+				doAnimationAction(target, "cover_eyes");
+			}
+			else if (scareChance < 51)
+			{
+				doAnimationAction(target, "scared");
+				chat.chat(target, player, chat.CHAT_STUTTER, new string_id(HALLOWEEN, "scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 1);
+			}
+			else
+			{
+				doAnimationAction(target, "dismiss");
+				chat.chat(target, player, chat.CHAT_SAY, new string_id(HALLOWEEN, "not_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+			}		
+			break;
+
+		case 3:
+			playClientEffectObj(player, TRICK_3, target, "");
+			if (scariestChance == 3)
+			{
+				chat.chat(target, player, chat.CHAT_SCREAM, new string_id(HALLOWEEN, "super_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 2);
+				doAnimationAction(target, "cover_eyes");
+			}
+			else if (scareChance < 51)
+			{
+				doAnimationAction(target, "scared");
+				chat.chat(target, player, chat.CHAT_STUTTER, new string_id(HALLOWEEN, "scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 1);
+			}
+			else
+			{
+				doAnimationAction(target, "dismiss");
+				chat.chat(target, player, chat.CHAT_SAY, new string_id(HALLOWEEN, "not_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+			}		
+			break;
+
+		case 4:
+			playClientEffectObj(player, TRICK_4, target, "");
+			if (scariestChance == 4)
+			{
+				chat.chat(target, player, chat.CHAT_SCREAM, new string_id(HALLOWEEN, "super_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 2);
+				doAnimationAction(target, "cover_eyes");
+			}
+			else if (scareChance < 51)
+			{
+				doAnimationAction(target, "scared");
+				chat.chat(target, player, chat.CHAT_STUTTER, new string_id(HALLOWEEN, "scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 1);
+			}
+			else
+			{
+				doAnimationAction(target, "dismiss");
+				chat.chat(target, player, chat.CHAT_SAY, new string_id(HALLOWEEN, "not_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+			}		
+			break;
+
+		case 5:
+			playClientEffectObj(player, TRICK_5, target, "");
+			if (scariestChance == 5)
+			{
+				chat.chat(target, player, chat.CHAT_SCREAM, new string_id(HALLOWEEN, "super_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 2);
+				doAnimationAction(target, "cover_eyes");
+			}
+			else if (scareChance < 51)
+			{
+				doAnimationAction(target, "scared");
+				chat.chat(target, player, chat.CHAT_STUTTER, new string_id(HALLOWEEN, "scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+				event_perk.giveTreat(player, 1);
+			}
+			else
+			{
+				doAnimationAction(target, "dismiss");
+				chat.chat(target, player, chat.CHAT_SAY, new string_id(HALLOWEEN, "not_scared_" + scareDialogue), chat.ChatFlag_targetOnly);
+			}		
+			break;
+		default:
+
+			break;
+		}
+	}
+	else
+		sendSystemMessage(player, IN_COMBAT);
+}
+
+void cleanScriptVars(obj_id player)
+{
+	obj_id self = getSelf();
+
+	utils.removeScriptVarTree(player, "trick_or_treat_device");
+	utils.removeScriptVarTree(self, "trick_or_treat_device");
+
+	setObjVar(player, "trick_or_treat_device", true);
+}
+
+void closeOldWindow(obj_id player)
+{
+	string playerPath = "trick_or_treat_device.";
+	if ( utils.hasScriptVar(player, "trick_or_treat_device.pid"))
+	{
+		int oldpid = utils.getIntScriptVar(player, "trick_or_treat_device.pid");
+		forceCloseSUIPage (oldpid);
+		utils.removeScriptVar(player, "trick_or_treat_device.pid");
+	}
+}
+
+void setWindowPid(obj_id player, int pid)
+{
+	if (pid > -1) utils.setScriptVar(player, "trick_or_treat_device.pid", pid);
+}
+
+//House or POB ship check.
+boolean inHouse(obj_id device)
+{
+	obj_id selfContainer = getContainedBy(device);
+	obj_id ship = space_transition.getContainingShip(selfContainer);
+	string templateName ="";
+
+	if(isIdValid(ship))
+	{
+		templateName = getTemplateName(ship);
+	}
+
+	if ((utils.isInHouseCellSpace(device) || space_utils.isPobType(templateName)) && !utils.isNestedWithinAPlayer(device))
+		return true;
+
+	return false;
+}
+
+void startFog(obj_id device)
+{
+	stopClientEffectObjByLabel(device, "halloweenFog");
+
+	if (!hasObjVar(device, "fogOn"))
+		setObjVar(device, "fogOn", 1);
+
+	setObjVar(device, "unmoveable", 1);
+	playClientEffectObj(device, "clienteffect/halloween_fog_machine.cef", device, "", null, "halloweenFog");
+	messageTo(device, "continueFog", null, 18.0f, false);
+}
+
+void stopFog(obj_id device)
+{
+	stopClientEffectObjByLabel(device, "halloweenFog");
+	
+	if (hasObjVar(device, "fogOn"))
+		removeObjVar(device, "fogOn");
+	if (hasObjVar(device, "unmoveable"))
+		removeObjVar(device, "unmoveable");		
+}
+
+messageHandler continueFog()
+{
+	if(hasObjVar(self, "fogOn"))
+	{
+		playClientEffectObj(self, "clienteffect/halloween_fog_machine.cef", self, "", null, "halloweenFog");
+		messageTo(self, "continueFog", null, 18.0f, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//If destroying trick or treat projector III, we modify the collection slot value of the invisible collection that blocks players from having more than one.
+trigger OnDestroy()
+{
+	
+	if (getIntObjVar(self, "item.projector") > 2)
+	{
+		if (hasObjVar(self, "deviceOwner"))
+		{
+			obj_id player = getObjIdObjVar(self, "deviceOwner");
+
+			if (getCollectionSlotValue(player, "received_halloween_reward") > 0)
+				modifyCollectionSlotValue(player, "received_halloween_reward", -1);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}

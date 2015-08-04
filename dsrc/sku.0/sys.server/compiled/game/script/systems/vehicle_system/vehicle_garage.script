@@ -1,0 +1,215 @@
+// Script for city garages.
+
+include library.callable;
+include library.sui;
+include library.utils;
+include library.attrib;
+include library.money;
+include library.prose;
+include library.vehicle;
+include library.city;
+include library.player_structure;
+
+const string STF_PET				= "pet/pet_menu";
+
+const string VOL_GARAGE				= "garageRepairEntry";
+
+const string_id SID_PROCESSING_OVERPAYMENT		= new string_id(STF_PET, "processing_overpayment");
+const string_id SID_REPAIRED_TO_MAX				= new string_id(STF_PET, "repaired_to_max");
+const string_id SID_REPAIRS_COMPLETE			= new string_id(STF_PET, "repairs_complete");
+const string_id SID_REPAIR_FAILED_DUE_TO_FUNDS	= new string_id(STF_PET, "repair_failed_due_to_funds");
+
+trigger OnInitialize()
+{
+	if ( hasScript(self, "planet_map.map_loc") )
+		detachScript(self, "planet_map.map_loc");
+
+	if ( !hasScript(self, "planet_map.map_loc_both") )
+		attachScript(self, "planet_map.map_loc_both");
+
+	//create trigger volume with attrib interested as VEHICLE
+	createTriggerVolume(VOL_GARAGE, 64f, true);
+	setAttributeInterested( self, attrib.VEHICLE );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volName, obj_id who)
+{
+	if ( volName.equals(VOL_GARAGE) && hasScript(who, "systems.vehicle_system.vehicle_base") )
+	{
+		enterRepairZone(who);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void enterRepairZone(obj_id ride)
+{
+	if ( !isIdValid(ride) || utils.hasScriptVar(ride, "inRepairZone") )
+		return;
+
+	obj_id owner = getOwner(ride);
+	//debugSpeakMsg(ride, "my owner/master = " + owner);
+	if ( !isIdValid(owner) )
+		return;
+
+	obj_id self = getSelf();
+
+	sendSystemMessage(owner, new string_id(STF_PET,"garage_proximity"));
+	utils.setScriptVar(ride, "inRepairZone", self);
+}
+
+trigger OnTriggerVolumeExited(string volName, obj_id who)
+{
+	if ( volName.equals(VOL_GARAGE) && hasScript(who, "systems.vehicle_system.vehicle_base") )
+	{
+		utils.removeScriptVar(who, "inRepairZone");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRepairConfirm()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	obj_id vid = utils.getObjIdScriptVar(player, "vehicleRepair.vehicle");
+
+	if (!isGarageInRange(vid))
+	{
+		sendSystemMessage(player, new string_id(STF_PET, "garage_out_of_range"));
+		return SCRIPT_CONTINUE;
+	}
+
+
+	int cost = utils.getIntScriptVar(player, "vehicleRepair.cost");
+	if ( !isIdValid(vid) || !vid.isLoaded() || cost < 1 )
+	{
+		sendSystemMessage(player, new string_id(STF_PET,"err_repair_data"));
+		return SCRIPT_CONTINUE;
+	}
+
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	dictionary d = new dictionary();
+	d.put("player", player);
+	d.put("vehicle", vid);
+	d.put("cost", cost);
+
+
+	money.requestPayment(player, self, cost, "handleRepairPayment", d, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRepairPayment()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId("player");
+	obj_id vid = params.getObjId("vehicle");
+	int cost = params.getInt("cost");
+
+	if ( !isIdValid(player) || !isIdValid(vid) || !vid.isLoaded() || cost < 1 )
+		return SCRIPT_CONTINUE;
+
+	if ( params.getInt(money.DICT_CODE) == money.RET_FAIL )
+	{
+		sendSystemMessage(player, new string_id(STF_PET,"err_repair_fail"));
+
+		string prompt = utils.packStringId(SID_REPAIR_FAILED_DUE_TO_FUNDS);
+		sui.msgbox(player, prompt);
+		return SCRIPT_CONTINUE;
+	}
+
+	int current_cost = vehicle.getVehicleRepairCost(vid);
+	if ( current_cost > cost )
+	{
+		prose_package ppConditionChanged = prose.getPackage(new string_id(STF_PET, "repair_condition_changed"), cost);
+		sendSystemMessageProse(player, ppConditionChanged);
+	}
+
+	int city_take = (int)utils.getFloatScriptVar(vid, "vehicleRepair.city_tax");
+	int base_cost = cost - city_take;
+	obj_id cityId = utils.getObjIdScriptVar(vid, "vehicleRepair.city_id");
+
+	float repair_rate = vehicle.getVehicleRepairRate(vid);
+
+	int toHeal = Math.round(base_cost / repair_rate);
+
+	int cur_hp = getHitpoints(vid);
+
+	int max_hp = getMaxHitpoints(vid);
+
+	int cur_dam = max_hp - cur_hp;
+
+	int target_hp = cur_hp+toHeal;
+
+	if ( cur_dam < toHeal )
+	{
+		target_hp = max_hp;
+		int dam_delta = toHeal - cur_dam;
+		int refund = Math.round(dam_delta * repair_rate);
+		prose_package ppProcOverpay = prose.getPackage(SID_PROCESSING_OVERPAYMENT);
+		prose.setDI(ppProcOverpay, refund);
+		sendSystemMessageProse(player, ppProcOverpay);
+		transferBankCreditsFromNamedAccount(money.ACCT_VEHICLE_REPAIRS, player, refund, "noHandler", "noHandler", new dictionary());
+	}
+
+	obj_id vcd = callable.getCallableCD(vid);
+
+	if(isDisabled(vid))
+	{
+		clearCondition(vid, CONDITION_DISABLED);
+	}
+
+	setHitpoints(vid, target_hp);
+
+	vehicle.storeDamage(vcd, target_hp, 0);
+
+	if ( getHitpoints(vid) == getMaxHitpoints(vid) )
+	{
+		sendSystemMessage(player, SID_REPAIRED_TO_MAX);
+	}
+	else
+	{
+		sendSystemMessage(player, SID_REPAIRS_COMPLETE);
+	}
+	
+	if (isIdValid(cityId))
+	{
+//		money.requestPayment( player, cityId, city_take, "handlePayment", null );
+		transferBankCreditsFromNamedAccount(money.ACCT_VEHICLE_REPAIRS, cityId, city_take, "noHandler", "noHandler", new dictionary());
+	}
+	
+	transferBankCreditsToNamedAccount(self, money.ACCT_VEHICLE_REPAIRS, cost, "noHandler", "noHandler", new dictionary());
+
+	utils.moneyOutMetric(self, money.ACCT_VEHICLE_REPAIRS, base_cost);
+	return SCRIPT_CONTINUE;
+}
+
+boolean isGarageInRange(obj_id vehicle)
+{
+	location loc = getLocation(vehicle);
+	float range = 64f;
+	obj_id localGarage = null;
+	string script = "systems.vehicle_system.vehicle_garage";
+	localGarage = getFirstObjectWithScript(loc, range, script);
+
+	if(!isIdValid(localGarage))
+	{
+		return false;
+	}
+
+
+	return true;
+
+}//end isGarageInRange

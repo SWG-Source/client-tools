@@ -1,0 +1,376 @@
+include library.utils;
+include library.combat;
+include library.colors;
+include library.attrib;
+
+const string detonateVolName					= "landMineDetonationRadius";
+const string mineDataTable					= "datatables/combat/npc_landmines.iff";
+
+//targetType flags
+const string flagPlayer						= "targetFlag.playerAndPet";
+const string flagNpc						= "targetFlag.npc-SmugglerReversed";
+
+//String File
+const string STF						= "npc_landmines";
+const string_id mineHitMessage					= new string_id(STF, "hit_by_mine_detonation");
+const string_id commandoDefuseAction				= new string_id(STF, "commando_defuse");
+const string_id mineDefused					= new string_id(STF, "mine_defused");
+const string_id smugglerReverseTrigger				= new string_id(STF, "smuggler_reverse_trigger");
+const string_id mineTriggerReversed				= new string_id(STF, "mine_trigger_reversed");
+const string_id deactivated					= new string_id(STF, "deactivated");
+const string_id reversed					= new string_id(STF, "reversed");
+
+
+// change to false to shut off debug logging
+const boolean loggingOn						= false;
+
+
+trigger OnInitialize()
+{
+	verifyMine(self);
+	setDetonateVolumeByType(self);
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnAttach()
+{
+	verifyMine(self);
+	setDetonateVolumeByType(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	messageTo(getObjIdObjVar(self, "parentSpawner"), "handleMineRespawn", null, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+
+	if (isDeactivated() || isFlagSwitched())
+		return SCRIPT_CONTINUE;
+
+	if (isCommando(player))
+	{
+		doLogging("OnObjectMenuRequest", "Commando request the defuse option");
+		mi.addRootMenu(menu_info_types.LANDMINE_DISARM, commandoDefuseAction);
+	}
+
+	if (isSmuggler(player))
+	{
+		doLogging("OnObjectMenuRequest", "Smuggler requested the flip trigger option");
+		mi.addRootMenu(menu_info_types.LANDMINE_REVERSE_TRIGGER, smugglerReverseTrigger);
+	}
+
+	if (isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "You are getting the options because you are in god mode");
+		mi.addRootMenu(menu_info_types.LANDMINE_DISARM, commandoDefuseAction);
+		mi.addRootMenu(menu_info_types.LANDMINE_REVERSE_TRIGGER, smugglerReverseTrigger);
+	}
+
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.LANDMINE_DISARM)
+	{
+		doCommandoDeactivateAction(player);
+	}
+
+	if (item == menu_info_types.LANDMINE_REVERSE_TRIGGER)
+	{
+		doSmugglerFlagSwitchAction(player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void doCommandoDeactivateAction(obj_id player)
+{
+	doLogging("doCommandoDeactivationAction", "Deactivating mine, sending signal to destroy self in 10 minutes");
+
+	obj_id mine = getSelf();
+	setObjVar(mine, "deactivated", 1);
+	messageTo(mine, "destroySelf", null, 600, false);
+
+	sendSystemMessage(player, mineDefused);
+
+	dictionary params = new dictionary();
+	params.put("type", "commando");
+	messageTo(mine, "showStatusFlyText", params, 0, false);
+}
+
+void doSmugglerFlagSwitchAction(obj_id player)
+{
+	doLogging("doSmugglerFlagSwitchAction", "Flipping mine flag, sending signal to destroy self in 10 minutes");
+
+	obj_id mine = getSelf();
+	setObjVar(mine, "targetFlag", flagNpc);
+	messageTo(mine, "destroySelf", null, 600, false);
+
+	sendSystemMessage(player, mineTriggerReversed);
+
+	dictionary params = new dictionary();
+	params.put("type", "smuggler");
+	messageTo(mine, "showStatusFlyText", params, 0, false);
+}
+
+messageHandler showStatusFlyText()
+{
+	string type = params.getString("type");
+
+	if (type.equals("commando"))
+	{
+		showFlyText( getSelf(), deactivated, 1.0f, colors.GREEN );
+		messageTo(getSelf(), "showStatusFlyText", params, 5, false);
+		return SCRIPT_CONTINUE;
+	}
+	if (type.equals("smuggler"))
+	{
+		showFlyText( getSelf(), reversed, 1.0f, colors.ORANGERED );
+		messageTo(getSelf(), "showStatusFlyText", params, 5, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	doLogging("showStatusFlyText", "Fly text was called but neither commando or smuggler was the type");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroySelf()
+{
+	destroyObject(getSelf());
+	return SCRIPT_CONTINUE;
+}
+
+boolean isDeactivated()
+{
+	doLogging("isDeactivated", "Checking is deactivated "+hasObjVar(getSelf(), "deactivated"));
+	return hasObjVar(getSelf(), "deactivated");
+}
+
+boolean isFlagSwitched()
+{
+	doLogging("isFlagSwitched", "Current flag is: "+getStringObjVar(getSelf(), "targetFlag"));
+	return (getStringObjVar(getSelf(), "targetFlag").equals(flagNpc));
+}
+
+void verifyMine(obj_id landMine)
+{
+	if(!hasObjVar(landMine, "mineType"))
+	{
+		doLogging("verifyMine", "Mine destroyed itself due to invalid mineType objvar");
+		destroyObject(landMine);
+		return;
+	}
+	string mineType = getStringObjVar(landMine, "mineType");
+
+	string testValid = dataTableGetString(mineDataTable, mineType, "mineType");
+	if (testValid == null || testValid.equals(""))
+	{
+		doLogging("verifyMine", "Mine destroyed itself due to invalid entry("+mineType+") in datatable("+mineDataTable+")");
+		destroyObject(landMine);
+		return;
+	}
+}
+
+void setDetonateVolumeByType(obj_id landMine)
+{
+	string mineType = getStringObjVar(landMine, "mineType");
+	float detonateRange = dataTableGetFloat(mineDataTable, mineType, "detonateRange");
+	setAttributeInterested(landMine, attrib.ALL);
+
+	if (!hasTriggerVolume(landMine, detonateVolName))
+	{
+		doLogging("setDetonatevolumeByType", "Detonation range for mineType("+mineType+") set to: "+detonateRange);
+		createTriggerVolume(detonateVolName, detonateRange, true);
+	}
+
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id breacher)
+{
+	if (isDeactivated())
+		return SCRIPT_CONTINUE;
+
+	if (volumeName.equals(detonateVolName))
+	{
+		if (isValidTargetTypeByMineFlag(breacher))
+		{
+			if (willTriggerMineBlast(breacher))
+			{
+				obj_id[] targets = getTargetsInBlastRadius();
+				if (targets == null)
+				{
+					doLogging("OnTriggerVolumeEntered", "Mine destroyed iself because no targets were returned from getTargetsInBlastRadius");
+					destroyObject(getSelf());
+					return SCRIPT_CONTINUE;
+				}
+				applyMineEffects(targets);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+obj_id[] getTargetsInBlastRadius()
+{
+	obj_id landMine = getSelf();
+	string mineType = getStringObjVar(landMine, "mineType");
+	float blastRadius = dataTableGetFloat(mineDataTable, mineType, "blastRadius");
+	location loc = getLocation(landMine);
+	if (loc == null)
+		return null;
+
+	obj_id[] objects = getObjectsInRange(loc, blastRadius);
+	resizeable obj_id[] targetsInRadius = new obj_id[0];
+	for (int i = 0; i < objects.length; i++)
+	{
+		if (isValidTargetTypeByMineFlag(objects[i]))
+		{
+			if (!isIncapacitated(objects[i]) && !isDead(objects[i]))
+			{
+				targetsInRadius = utils.addElement(targetsInRadius, objects[i]);
+				doLogging("getTargetsInBlastRadius", "Target("+getName(objects[i])+"/"+objects[i]+") added to targetsInRadius array");
+			}
+
+		}
+	}
+
+	if (targetsInRadius.length < 1)
+	{
+		doLogging("getTargetsInBlastRadius", "targetsInRadius is less than 1, returning null");
+		return null;
+	}
+	else
+		return targetsInRadius;
+
+}
+
+void applyMineEffects(obj_id[] targets)
+{
+	obj_id landMine = getSelf();
+	location mineLoc = getLocation(getSelf());
+	string mineType = getStringObjVar(landMine, "mineType");
+	int minDamage = dataTableGetInt(mineDataTable, mineType, "minDamage");
+	int maxDamage = dataTableGetInt(mineDataTable, mineType, "maxDamage");
+	string stringDamageType = dataTableGetString(mineDataTable, mineType, "damageType");
+	string mineDetonationEffect = dataTableGetString(mineDataTable, mineType, "effectOnExplode");
+	int damageType = getDamageTypeFromString(stringDamageType);
+	doLogging("applyMineEffects", "mineType: "+mineType+", minDamage: "+minDamage+", maxDamage: "+maxDamage+", stringDamageType: "+stringDamageType+", mineDetonationEffect: "+mineDetonationEffect);
+	if (damageType == -1)
+	{
+		doLogging("applyMineEffects", "getDamageTypeFromString returned -1 when sent "+stringDamageType+" for mine "+mineType);
+		destroyObject(landMine);
+		return;
+	}
+	playClientEffectLoc(targets[0], mineDetonationEffect, mineLoc, 0.4f);
+	for (int i = 0;i<targets.length;i++)
+	{
+		int damageToApply = rand(minDamage, maxDamage);
+		if (damage(targets[i], damageType, HIT_LOCATION_BODY, damageToApply))
+			doLogging("applyMineEffects", "Applied "+damageToApply+" points of damage to "+getName(targets[i]));
+//		combat.performCombatSpam(targets[i], null, null, damageToApply, true, false, false, mineHitMessage);
+	}
+	destroyObject(landMine);
+	
+}
+
+int getDamageTypeFromString(string damageType)
+{
+	if (damageType == "blast")
+		return DAMAGE_BLAST;
+
+	if (damageType == "energy")
+		return DAMAGE_ENERGY;
+
+	if (damageType == "stun")
+		return DAMAGE_STUN;
+
+	if (damageType == "heat")
+		return DAMAGE_ELEMENTAL_HEAT;
+
+	if (damageType == "cold")
+		return DAMAGE_ELEMENTAL_COLD;
+
+	if (damageType == "acid")
+		return DAMAGE_ELEMENTAL_ACID;
+
+	if (damageType == "electrical")
+		return DAMAGE_ELEMENTAL_ELECTRICAL;
+
+	if (damageType == "kinetic")
+		return DAMAGE_KINETIC;
+
+	return -1;
+}
+
+boolean isValidTargetTypeByMineFlag(obj_id subject)
+{
+	string targetType = flagPlayer;
+
+	if (hasObjVar(getSelf(), "targetFlag"))
+		targetType = getStringObjVar(getSelf(), "targetFlag");
+
+	if (targetType.equals(flagPlayer))
+	{
+		if (isPlayer(subject) || hasScript(subject,"ai.pet"))
+			return true;
+	}
+
+	if (targetType.equals(flagNpc))
+	{
+		if (isMob(subject))
+		{
+			if (!isPlayer(subject) && !hasScript(subject, "ai.pet"))
+			{
+				return true;
+			}
+		}
+	}
+
+	doLogging("isValidTargetTypeByMineFlag", "Subject bypassed all flag checks: "+getName(subject));
+	return false;
+}
+
+boolean willTriggerMineBlast(obj_id breacher)
+{
+	if (getPosture(breacher) == POSTURE_PRONE)
+	{
+		if (!isCommandoOrSmuggler(breacher))
+			return (1 == rand(1,20));
+		else
+			return false;
+	}
+	doLogging("willTriggerMineBlast", "willTrigger returned the default true for breacher "+getName(breacher));
+	return true;
+}
+
+void doLogging(string section, string message)
+{
+	if (loggingOn)
+	{
+		LOG("debug/combat_mine/"+section, message);
+	}
+}
+
+boolean isCommandoOrSmuggler(obj_id subject)
+{
+	return (isCommando(subject) || isSmuggler(subject));
+}
+
+boolean isCommando(obj_id subject)
+{	//Hack in Weapons smiths to replace smugglers cuz the smuggler option is busted =(
+	return (hasSkill(subject, "class_commando_phase1_novice") || hasSkill(subject, "class_munitions_phase3_master"));
+}
+
+boolean isSmuggler(obj_id subject)
+{
+	//return hasSkill(subject, "combat_smuggler_novice");
+	return false;//Stupid trigger volumes
+}

@@ -1,0 +1,248 @@
+
+include library.combat;
+include library.sui;
+include library.quests;
+include library.ai_lib;
+include library.money;
+include library.chat;
+include library.pclib;
+include library.vehicle;
+include library.ship_ai;
+include library.space_content;
+include library.space_combat;
+include library.space_transition;
+include library.space_create;
+include library.space_utils;
+include library.features;
+
+trigger OnAttach()
+{
+	setObjVar(self, "mining_asteroid.numShipsSpawned", 0);
+	setObjVar(self, "dynamicCount", 0);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnShipInternalDamageOverTimeRemoved(int chassisSlot, float damageRate, float damageThreshold)
+{
+	obj_id pilot = getPilotId(self);
+
+	if (pilot != null)
+	{
+		//sendSystemMessageTestingOnly(pilot, "jwatson_ship IDOT removed slot=" + chassisSlot + ", damageRate=" + damageRate + ", threshold=" + damageThreshold);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnShipWasHit (obj_id attacker, int weaponIndex, boolean isMissile, int missileType, int chassisSlot, boolean isPlayerAutoTurret, float hitLocationX_o, float hitLocationY_o, float hitLocationZ_o)
+{
+
+
+	string strAsteroidTable = "datatables/space_mining/mining_asteroids.iff";
+
+	int intDangerLevel = getIntObjVar(self, "intDangerLevel");
+	int intDangerPct = getIntObjVar(self, "intDangerPct");
+
+	// player ID of mining pilot
+	obj_id attackingPilot = space_utils.getPilotForRealsies(attacker);
+
+
+
+	if(!isIdValid(attackingPilot) || !features.hasEpisode3Expansion(attackingPilot))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int intWeaponSlot = weaponIndex + ship_chassis_slot_type.SCST_weapon_0;
+
+	string strAsteroidType = getStringObjVar(self, "strAsteroidType");
+
+	// current location of attacking ship
+	location attackingLocation = getLocation(attacker);
+	vector attackingPosition_w = new vector(attackingLocation.x, attackingLocation.y, attackingLocation.z);
+
+	transform selfTransform = getTransform_o2w(self);
+
+	vector attackingLocation_o = selfTransform.rotateTranslate_p2l(attackingPosition_w);
+
+	// HP calculations
+
+	int weaponCrc = getShipComponentCrc(attacker, weaponIndex + ship_chassis_slot_type.SCST_weapon_first);
+
+	if (getShipComponentDescriptorWeaponIsMining(weaponCrc))
+	{
+		float fltDamage = space_combat.getShipWeaponDamage(attacker, self, intWeaponSlot);
+		fltDamage = fltDamage/100;
+
+		//space_utils.sendSystemMessageShip(attacker, new string_id("unlocalized", "fltDamage is " + fltDamage), true, true, true, true);
+
+		int maxHitpoints = getMaxHitpoints(self);
+		int oldHitpoints = getHitpoints(self);
+
+		setHitpoints(self, oldHitpoints - (int)fltDamage);
+
+		int newHitpoints = getHitpoints(self);
+
+		//space_utils.sendSystemMessageShip(attacker, new string_id("unlocalized", "hit asteroid static " + newHitpoints + "/" + maxHitpoints), true, true, true, true);
+
+		if (newHitpoints <= 0)
+		{
+			//space_utils.sendSystemMessageShip(attacker, new string_id("unlocalized", "*** asteroid static DESTROYED"), true, true, true, true);
+
+			handleShipDestruction(self, 1.0f);
+		}
+		else
+		{
+			vector hitLocation_o = new vector(hitLocationX_o, hitLocationY_o, hitLocationZ_o);
+			notifyShipHit(self, attackingLocation_o, hitLocation_o, ship_hit_type.HT_chassis, 0.5f, 1.0f);
+
+			//-- spawn new mini-roid every 50 hps
+
+			int newDamageBracket = newHitpoints / 50;
+			int oldDamageBracket = oldHitpoints / 50;
+
+			int damageBracketDifference = oldDamageBracket - newDamageBracket;
+
+			vector direction_o = attackingLocation_o.approximateNormalize();
+
+			location selfLocation = getLocation(self);
+
+			for (int i = 0; i < damageBracketDifference; ++i)
+			{
+				vector spawnDirection_o = new vector(direction_o.x * random.rand(), direction_o.y * random.rand(), direction_o.z * random.rand());
+				spawnDirection_o = spawnDirection_o.approximateNormalize();
+
+				vector spawnDirection_o_clone = spawnDirection_o;
+				vector spawnLocation_o = spawnDirection_o_clone.multiply(200.0f);
+
+				vector spawnLocation_w = getTransform_o2w(self).rotateTranslate_l2p(spawnLocation_o);
+				location spawnLoc = new location(spawnLocation_w.x, spawnLocation_w.y, spawnLocation_w.z);
+
+				if (intDangerLevel == 0 || intDangerLevel == 1)
+					spawnDirection_o = spawnDirection_o.multiply(20.0f + (random.rand() * 20.0f));
+
+				else if (intDangerLevel == 2 || intDangerLevel ==3 )
+					spawnDirection_o = spawnDirection_o.multiply(30.0f + (random.rand() * 20.0f));
+				else if (intDangerLevel == 4)
+					spawnDirection_o = spawnDirection_o.multiply(40.0f + (random.rand() * 20.0f));
+				else if (intDangerLevel == 5)
+					spawnDirection_o = spawnDirection_o.multiply(45.0f + (random.rand() * 20.0f));
+				else
+					spawnDirection_o = spawnDirection_o.multiply(40.0f + (random.rand() * 20.0f));
+
+				int choice = rand(3, 4);
+
+
+				int dynamicCount = getIntObjVar(self, "dynamicCount");
+
+				if (dynamicCount >= 3)
+					return SCRIPT_CONTINUE;
+
+				string template = dataTableGetString(strAsteroidTable, strAsteroidType, choice);
+				obj_id spawnDynamicAsteroid = createObject(template, spawnLoc);
+
+				//track # of dynamic asteroids active
+
+
+				setObjVar(self, "dynamicCount", dynamicCount+1);
+
+
+				if (null == spawnDynamicAsteroid)
+				{
+					space_utils.sendSystemMessageShip(attacker, new string_id("unlocalized", "FAILED TO CREATE DYNAMIC ASTEROID: " + template), true, true, true, true);
+					continue;
+				}
+
+				setObjVar(spawnDynamicAsteroid, "strAsteroidType", strAsteroidType);
+				setObjVar(spawnDynamicAsteroid, "objParentAsteroid", self);
+
+				setDynamicMiningAsteroidVelocity(spawnDynamicAsteroid, spawnDirection_o);
+
+				//roll to see if an attack happens!
+
+				int roll = rand(1 , 100);
+				if (roll <= intDangerPct && getIntObjVar(self, "mining_asteroid.numShipsSpawned") < 16)
+				{
+
+					int squad = ship_ai.squadCreateSquadId();
+
+					string attackTable = "datatables/space_mining/mining_threat/threat_tier_"+intDangerLevel+".iff";
+
+
+					int rows = dataTableGetNumRows(attackTable);
+
+					int spawnGroup = rand(0, rows-1);
+
+					//some spawning stuff taken from breinhart's scripts
+					for (int j = 1; j < 9; j++)
+					{
+						if (getIntObjVar(self, "mining_asteroid.numShipsSpawned") < 16)
+						{
+							string spawn = dataTableGetString(attackTable, spawnGroup, j);
+							//space_utils.sendSystemMessageShip(attacker, new string_id("unlocalized", "Spawn is " + spawn), true, true, true, true);
+
+							if (spawn == null)
+								return SCRIPT_CONTINUE;
+
+
+							transform playerLocation = getTransform_o2w( attacker );
+
+							float dist = rand( 700.f, 800.f );
+							vector n = playerLocation.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+							playerLocation = playerLocation.move_p( n );
+
+							playerLocation = playerLocation.yaw_l( 3.14f );
+
+							vector vi = playerLocation.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+							vector vj = playerLocation.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+							vector vd = vi.add( vj );
+							playerLocation = playerLocation.move_p( vd );
+
+							obj_id newship = space_create.createShipHyperspace(spawn , playerLocation );
+
+							attachScript(newship, "space_mining.mining_pirate");
+
+							setObjVar(newship, "space_mining.parentRoid", self);
+
+							int spawnCount = getIntObjVar(self, "mining_asteroid.numShipsSpawned");
+							setObjVar(self, "mining_asteroid.numShipsSpawned", spawnCount + 1);
+
+							if(isIdValid(newship))
+							{
+								ship_ai.unitSetSquadId( newship, squad );
+								ship_ai.spaceAttack( newship, attacker );
+							}
+						}
+					}
+					ship_ai.squadSetFormationRandom( squad );
+				}
+			}
+		}
+	}
+
+		return SCRIPT_CONTINUE;
+}
+
+trigger OnDestroy()
+{
+	if(hasObjVar(self, "objParent"))
+	{
+		space_content.notifySpawner(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePirateKilled()
+{
+	int spawnCount = getIntObjVar(self, "mining_asteroid.numShipsSpawned");
+	setObjVar(self, "mining_asteroid.numShipsSpawned", spawnCount - 1);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler decrementCount()
+{
+	int count = getIntObjVar(self, "dynamicCount");
+	setObjVar(self, "dynamicCount", count-1);
+	return SCRIPT_CONTINUE;
+}

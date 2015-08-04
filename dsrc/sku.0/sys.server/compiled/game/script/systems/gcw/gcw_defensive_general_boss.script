@@ -1,0 +1,542 @@
+include java.util.HashSet;
+include java.util.Iterator;
+
+include library.ai_lib;
+include library.armor;
+include library.buff;
+include library.factions;
+include library.gcw;
+include library.groundquests;
+include library.group;
+include library.resource;
+include library.restuss_event;
+include library.static_item;
+include library.trial;
+include library.utils;
+include library.xp;
+
+const boolean LOGGING_ON			= false;
+const int MAX_HIT_POINTS			= 1000000;
+const int MAX_GENERAL_BUFF_STACK		= 100;
+
+trigger OnAttach()
+{
+	blog("OnAttach init");	
+	//setInvulnerable(self, true);
+	setAttrib(self, HEALTH, MAX_HIT_POINTS);
+	setMaxAttrib(self, HEALTH, MAX_HIT_POINTS);
+
+	// Regeneration rate.
+	setRegenRate(self, HEALTH, 0);
+	setObjVar(self, "regen_mod.health", 0.0f); // Must be a float for ai.creature_combat to read it
+	
+	setObjVar(self, "forceNoMovement", 0);
+	
+	blog("OnAttach maxHitPoints: " + getMaxAttrib(self, HEALTH));
+
+	messageTo(self, "checkConstructionPhase", null, 20.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+//This trigger is used to get all medics as well as any combatants
+trigger OnHateTargetAdded(obj_id target)
+{
+	resizeable obj_id[] allPlayersHatedList = new obj_id[0];
+
+	if(utils.hasScriptVar(self, "allPlayersEverHated"))
+		allPlayersHatedList = utils.getResizeableObjIdArrayScriptVar(self, "allPlayersEverHated");
+
+	utils.addElement(allPlayersHatedList, target);
+	utils.setScriptVar(self, "allPlayersEverHated", allPlayersHatedList);
+	trial.addNonInstanceFactionParticipant(target, self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeIncapacitated(obj_id killer)
+{
+	//get the list of attackers, this is anyone who did damage
+	obj_id[] attackerList = utils.getObjIdBatchScriptVar(self, "creditForKills.attackerList.attackers");
+	//validate the list
+	resizeable obj_id[] allPlayersHatedList = utils.getResizeableObjIdArrayScriptVar(self, "allPlayersEverHated");
+
+	if((allPlayersHatedList == null || allPlayersHatedList.length <= 0) && (attackerList == null || attackerList.length <= 0))
+		return SCRIPT_CONTINUE;
+
+	HashSet allParticipants = new HashSet();
+
+	if(allPlayersHatedList != null && allPlayersHatedList.length > 0)
+	{
+		for(int i = 0; i < allPlayersHatedList.length; i++)
+		{
+			if(isIdValid(allPlayersHatedList[i]))
+			{
+				allParticipants.add(allPlayersHatedList[i]);
+			}
+		}
+	}
+
+	if(attackerList != null && attackerList.length > 0)
+	{
+		for(int i = 0; i < attackerList.length; i++)
+		{
+			if(!isIdValid(attackerList[i]))
+			{
+				continue;
+			}
+
+			if(group.isGroupObject(attackerList[i]))
+			{
+				obj_id[] members = getGroupMemberIds(attackerList[i]);
+
+				for(int j = 0, k = members.length; j < k; j++)
+				{
+					if(isIdValid(members[j]))
+					{
+						allParticipants.add(members[j]);
+					}
+				}
+			}
+			else
+			{
+				allParticipants.add(attackerList[i]);
+			}
+		}
+	}
+
+	obj_id[] participantList = new obj_id[allParticipants.size()];
+
+	Iterator participantIterator = allParticipants.iterator();
+	int j = 0;
+
+	while(participantIterator.hasNext())
+	{
+		participantList[j] = (obj_id)participantIterator.next();
+		j++;
+	}
+	
+	if(participantList == null || participantList.length <= 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!hasObjVar(self, "factionFlag"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int factionFlag = getIntObjVar(self, "factionFlag");
+	if(factionFlag != factions.FACTION_FLAG_IMPERIAL && factionFlag != factions.FACTION_FLAG_REBEL)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	blog("calculateGeneralHealthAndAbilities factionFlag: " + factionFlag);
+
+	string token = "";
+
+	//token is the opposing faction token static item name
+	if(factionFlag == factions.FACTION_FLAG_IMPERIAL)
+	{
+		token = gcw.GCW_REBEL_TOKEN;	
+	}
+	else if(factionFlag == factions.FACTION_FLAG_REBEL)
+	{
+		token = gcw.GCW_IMPERIAL_TOKEN;
+	}
+	
+	if(token == null || token.length() <= 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	string information = getName(self);
+
+	//loop thru the list of attackers
+	for(int i = 0; i < participantList.length; i++)
+	{
+		if(!isIdValid(participantList[i]) || !exists(participantList[i]) || !isPlayer(participantList[i]))
+			continue;
+			
+		//give the rewards to those who are still within distance			
+		if(utils.getDistance2D(self, participantList[i]) > 150.0)
+			continue;	
+
+		int damage = 0;
+		int damageBase = 10000;
+		int actualDmg = utils.getIntScriptVar(self, "creditForKills.attackerList." + participantList[i] + ".damage");
+
+		if(actualDmg > damageBase)
+			damage = actualDmg;
+		else
+			damage = damageBase;
+			
+		if(damage <= 0)
+			continue;
+		
+		//give the player GCW points.
+		//gcw.grantModifiedGcwPoints(self, attackerList[i], damage * gcw.GCW_GENERAL_GCW_BONUS_MULTIPLIER, false, gcw.GCW_POINT_TYPE_GROUND_PVE, information);
+		gcw.grantModifiedGcwPoints(self, participantList[i], gcw.GCW_GENERAL_GCW_BASE_AMOUNT, false, gcw.GCW_POINT_TYPE_GROUND_PVE, information);
+		
+		xp.grantQuestKillCredit(participantList[i], self);
+		
+		obj_id inv = getObjectInSlot(participantList[i], "inventory");
+
+		if(!isIdValid(inv))
+			continue;
+		
+		//give the player tokens
+		obj_id tokenObject = static_item.createNewItemFunction(token, inv);
+		if(!isValidId(tokenObject))
+			continue;
+
+		int count = damage / gcw.GCW_GENERAL_TOKEN_BONUS_DIVISOR;
+		
+		if(!incrementCount(tokenObject, count))
+		{
+			continue;
+		}
+
+		groundquests.sendPlacedMoreThanOneInInventorySystemMessage(participantList[i], tokenObject, count);
+		CustomerServiceLog("gcw_city_invasion", "GCW CITY SYSTEM HAS REWARDED PLAYER: "+participantList[i]+" with "+count+" "+tokenObject+" static item tokens for killing the DEFENSIVE GENERAL.");
+	}
+	return SCRIPT_CONTINUE;
+
+}
+
+messageHandler checkConstructionPhase()
+{
+	blog("checkConstructionPhase init");
+
+	if(hasObjVar(self, "offense") && getIntObjVar(self, "offense") == 1)
+	{
+		blog("OnAttach offensive general found, removing script.");
+		detachScript(self, "systems.gcw.gcw_defensive_general_boss");
+
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id parent = trial.getParent(self);
+
+	if(!isValidId(parent) || !exists(parent))
+	{
+		blog("checkConstructionPhase parnet invalid");
+		return SCRIPT_CONTINUE;	
+	}
+
+	blog("checkConstructionPhase parent: "+parent);
+	/*
+	If the phase is still construction and doesn't have an initialKitCount
+	*/
+	if(!utils.hasScriptVar(parent, "gcw.constructionEnded") && !hasObjVar(self, "initialKitCount"))
+	{	
+		/*
+		1. Get all the kits and pylons. Divide this number by 2 to get an 
+		accurate count of just the kits themselves. This gives a base number 
+		of possible turrets, towers and barricades.
+		*/
+		obj_id[] kitsAndPylons = trial.getObjectsInInstanceBySpawnId(parent, "defense_kit");
+		blog("checkConstructionPhase kitsAndPylons: " + kitsAndPylons.length);
+		/*
+		2. Get all the patrol points and and their pylons. Divide this number by 2 to get an 
+		accurate count of just the kits themselves. This gives a base number 
+		of possible patrol points.
+		*/		
+		obj_id[] patrolAndPylons = trial.getObjectsInInstanceBySpawnId(parent, "defense_patrol"); 
+		
+		/*
+		3. Take the length of both, divide the combined amount by 2 and set that as the initialKit
+		count.
+		*/
+		int combinedKitAmt = 0;
+		if(kitsAndPylons != null && kitsAndPylons.length > 0)
+		{
+			blog("checkConstructionPhase initial kitsAndPylons.length: " + kitsAndPylons.length);			
+			combinedKitAmt += kitsAndPylons.length;
+		}
+		if(patrolAndPylons != null && patrolAndPylons.length > 0)
+		{
+			blog("checkConstructionPhase initial patrolAndPylons.length: " + patrolAndPylons.length);			
+			combinedKitAmt += patrolAndPylons.length;
+		}
+		
+		setObjVar(self, "initialKitCount", combinedKitAmt / 2);
+		blog("checkConstructionPhase initial kit count: " + combinedKitAmt + " / 2 = "+ combinedKitAmt / 2);
+	}
+	else if(utils.hasScriptVar(parent, "gcw.constructionEnded"))
+	{
+		if(!hasObjVar(self, "initialKitCount"))
+		{
+			blog("checkConstructionPhase initialKitCount not found, default it to 0");
+			setObjVar(self, "initialKitCount", 0);	
+		}
+	
+		blog("checkConstructionPhase removing invulnerable from general");
+		//setInvulnerable(self, false);
+		messageTo(self, "calculateGeneralHealthAndAbilities", null, 10.0f, false);		
+
+		return SCRIPT_CONTINUE;	
+	}
+	blog("checkConstructionPhase fell through, recalling this messageHandler in 10");
+
+	messageTo(self, "checkConstructionPhase", null, 10.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler calculateGeneralHealthAndAbilities()
+{
+	if(!isValidId(self) || !exists(self) || ai_lib.isDead(self))
+	{
+		return SCRIPT_CONTINUE;	
+	}
+	
+	blog("calculateGeneralHealthAndAbilities init");
+
+	obj_id parent = trial.getParent(self);
+
+	if(!isValidId(parent) || !exists(parent))
+	{
+		blog("calculateGeneralHealthAndAbilities parent invalid");
+		return SCRIPT_CONTINUE;	
+	}
+
+	blog("calculateGeneralHealthAndAbilities parent: "+parent);
+	
+	if(!utils.hasScriptVar(parent, "gcw.constructionEnded"))
+	{
+		blog("calculateGeneralHealthAndAbilities parent is not in the correct phase");
+		return SCRIPT_CONTINUE;	
+	}
+	blog("calculateGeneralHealthAndAbilities parent is not in construction phase");
+
+	if(!hasObjVar(self, "initialKitCount"))
+	{
+		blog("calculateGeneralHealthAndAbilities initialKitCount not found");
+		return SCRIPT_CONTINUE;		
+	}
+	
+	int initialKitCount = getIntObjVar(self, "initialKitCount");
+
+	if(initialKitCount < 0)
+	{
+		blog("calculateGeneralHealthAndAbilities initialKitCount is 0 or less");
+		setObjVar(self, "initialKitCount", 0);	
+	}
+	
+	blog("calculateGeneralHealthAndAbilities initialKitCount: "+initialKitCount);
+
+	int combinedAmt = 0;
+	/*
+		Get the total patrol points from the parent egg. We know this number is the actual amount
+		of built patrol points. This could be an array of nothing if the defense team fails to 
+		craft patrol points. 
+	*/	
+	obj_id[] patrols = trial.getObjectsInInstanceBySpawnId(parent, "defense_patrol");
+
+	// Patrol spawn ID's include patrol objects and their spawn objects (gcw_city_kit_patrol)
+	if(patrols != null && patrols.length > 0)
+	{
+		blog("calculateGeneralHealthAndAbilities PATROLS FOUND: "+patrols.length);
+		combinedAmt += patrols.length / 2;
+	}
+	else
+	{
+		blog("calculateGeneralHealthAndAbilities PATROLS NOT FOUND");	
+	}
+	
+	/*
+		Get the total kits. This will return the kit and any objects spawned. This number 
+		should always be greater than 0 because it is retrieving the kit objects that should
+		be hard coded in the sequencer table.
+	*/	
+	obj_id[] kits = trial.getObjectsInInstanceBySpawnId(parent, "defense_kit");
+	if(kits == null || kits.length <= 0)
+	{
+		blog("calculateGeneralHealthAndAbilities KITS NOT FOUND");	
+		return SCRIPT_CONTINUE;		
+	}
+	blog("calculateGeneralHealthAndAbilities KITS FOUND: "+kits.length+" This number includes the kit as well as the crafted object.");
+	combinedAmt += kits.length;
+	
+	blog("calculateGeneralHealthAndAbilities kits: " + kits.length);
+
+	if(!hasObjVar(self, "alertedPlayersOfMyDamage"))
+	{
+		blog("general_announce general's health being checked to see if announcement shoudl be sent: ");
+
+		int maxHealth = getMaxAttrib(self, HEALTH);
+		int lowHealth = maxHealth / 2;
+		blog("general_announce general's health should not be lower than: "+lowHealth);
+
+		int curHealth = getAttrib(self, HEALTH);
+		blog("general_announce general's current health: "+curHealth);
+
+		if(curHealth < lowHealth)
+		{
+			blog("general_announce HALP the general~!");
+			messageTo(parent, "defenseGeneralUnderSustainedAttack", null, 0.0f, false);
+			setObjVar(self, "alertedPlayersOfMyDamage", 1);
+		}
+	}
+
+	//If the construction JUST ENDED, the general will need the total defense object count.
+	if(!hasObjVar(self, "defenseObjectCount") && initialKitCount > 0)
+	{
+		blog("calculateGeneralHealthAndAbilities setting up defenseObjectCount FOR THE FIRST TIME");
+
+		/*
+			Here we subtract the total patrol and kit amount from the initial kit count. 
+			Notice we assume the combinedAmt will be larger in value compared to the initial kit count.
+			We are counting on 0 or more defenses being built here. If 0 defenses are built,
+			the value of defenseObjectCount will be 0, if there are defenses built, the number
+			will be greater that zero.
+		*/
+		int defenseObjectCount = combinedAmt - initialKitCount;
+		if(defenseObjectCount < 0)
+		{
+			blog("calculateGeneralHealthAndAbilities defenseObjectCount is less than zero!");
+			setObjVar(self, "initialKitCount", 0);
+			messageTo(self, "calculateGeneralHealthAndAbilities", null, 10.0f, false);			
+			return SCRIPT_CONTINUE;		
+		}
+		
+		blog("calculateGeneralHealthAndAbilities defenseObjectCount --- THIS IS THE TOTAL NON PATROL DEFENSES CRAFTED: "+defenseObjectCount);
+		if(patrols != null && patrols.length > 0)
+		{
+			blog("calculateGeneralHealthAndAbilities defenseObjectCount --- THIS IS THE TOTAL PATROL DEFENSES CRAFTED: "+patrols.length);
+			defenseObjectCount += patrols.length;
+
+			blog("calculateGeneralHealthAndAbilities defenseObjectCount --- TOTAL OF BOTH: "+defenseObjectCount);
+		}
+
+		blog("calculateGeneralHealthAndAbilities defenseObjectCount --- THIS IS THE TOTAL POSSIBLE DEFENSES: "+initialKitCount);
+		blog("calculateGeneralHealthAndAbilities defenseObjectCount --- THIS IS THE AMT BEING SET AS INITIAL DEFENSE COUNT: "+initialKitCount);
+
+		//This number CAN be ZERO
+		setObjVar(self, "defenseObjectCount", defenseObjectCount);
+		
+		//Call back asap
+		messageTo(self, "calculateGeneralHealthAndAbilities", null, 0.25f, false);
+		
+		return SCRIPT_CONTINUE;		
+	}
+	else if(initialKitCount > 0)
+	{
+		blog("calculateGeneralHealthAndAbilities checking for a change in the defensive count");
+	
+		/*
+			Get the origianl defense count taken when the construction phase ended.
+			At this point the defenseObjectCount var should have the total amount of 
+			Defenses build. No division needed.
+		*/
+		float defenseObjectCount = (float)getIntObjVar(self, "defenseObjectCount");
+		if(defenseObjectCount < 0)
+		{
+			blog("calculateGeneralHealthAndAbilities defenseObjectCount is less than 0!");
+			setObjVar(self, "initialKitCount", 0);
+			messageTo(self, "calculateGeneralHealthAndAbilities", null, 10.0f, false);
+			return SCRIPT_CONTINUE;	
+		}
+
+		blog("calculateGeneralHealthAndAbilities This is what the defense count was when the fight first started: "+defenseObjectCount);
+
+		/*
+			This might look like the same as the above but the difference here is that we expect 
+			that the combinedAmt might have changed by 1 or more as the offense destroys a barricade,
+			turret, etc. We take the CURRENT up to date combinedAmt and subtract it from the known
+			initialKit Count AND THEN, compare it to the existing defense count we set when 
+			the phase originally was change to combat.
+		*/
+		float currentDefenseCount = combinedAmt - initialKitCount;
+		if(currentDefenseCount < 0)
+		{
+			blog("calculateGeneralHealthAndAbilities current kit count is less than 0");
+			setObjVar(self, "initialKitCount", 0);
+			messageTo(self, "calculateGeneralHealthAndAbilities", null, 10.0f, false);			
+			return SCRIPT_CONTINUE;		
+		}
+
+		blog("calculateGeneralHealthAndAbilities This is what the defense count is at this very moment: "+currentDefenseCount);
+		if(patrols != null && patrols.length > 0)
+		{
+			blog("calculateGeneralHealthAndAbilities defenseObjectCount --- THIS IS THE TOTAL PATROL DEFENSES CRAFTED: "+patrols.length);
+			currentDefenseCount += patrols.length;
+
+			blog("calculateGeneralHealthAndAbilities defenseObjectCount --- TOTAL OF BOTH: "+currentDefenseCount);
+		}
+	
+		//Defenses have changed! Adjust the General Health and Resistances
+		if(currentDefenseCount < defenseObjectCount || 
+		(!buff.hasBuff(self, gcw.BUFF_GENERAL_RESIST_STACK_IMP) &&
+		!buff.hasBuff(self, gcw.BUFF_GENERAL_RESIST_STACK_REB)))
+		{
+			blog("calculateGeneralHealthAndAbilities the currentDefenseCount has changed and is lower than the OG defenseObjectCount");
+
+			if(!hasObjVar(self, "factionFlag"))
+			{
+				return SCRIPT_CONTINUE;
+			}
+
+			blog("calculateGeneralHealthAndAbilities has factionFlag objvar");
+
+			int factionFlag = getIntObjVar(self, "factionFlag");
+
+			if(factionFlag != factions.FACTION_FLAG_IMPERIAL && factionFlag != factions.FACTION_FLAG_REBEL)
+			{
+				return SCRIPT_CONTINUE;
+			}
+
+			blog("calculateGeneralHealthAndAbilities factionFlag: " + factionFlag);
+
+			string gcwBuffName = "";
+
+			if(factionFlag == factions.FACTION_FLAG_IMPERIAL)
+			{
+				blog("calculateGeneralHealthAndAbilities faction is imp");
+				gcwBuffName = gcw.BUFF_GENERAL_RESIST_STACK_IMP;
+			}
+			else if(factionFlag == factions.FACTION_FLAG_REBEL)
+			{
+				blog("calculateGeneralHealthAndAbilities faction is reb");
+				gcwBuffName = gcw.BUFF_GENERAL_RESIST_STACK_REB;
+			}
+
+			if(gcwBuffName == null || gcwBuffName.length() <= 0)
+				return SCRIPT_CONTINUE;
+			
+			float percent = currentDefenseCount / defenseObjectCount;
+			blog("calculateGeneralHealthAndAbilities Percent: "+percent);
+			
+			int mobGeneralArmor = (int)getFloatObjVar(self, armor.OBJVAR_ARMOR_BASE + "." + armor.OBJVAR_GENERAL_PROTECTION);
+			blog("calculateGeneralHealthAndAbilities mobGeneralArmor: "+mobGeneralArmor);
+
+			float newMobGeneralArmor = mobGeneralArmor * percent;
+			blog("calculateGeneralHealthAndAbilities newMobGeneralArmor: "+newMobGeneralArmor);
+
+			int newstackAmt = (int)(MAX_GENERAL_BUFF_STACK * percent);
+			blog("calculateGeneralHealthAndAbilities newstackAmt: "+newstackAmt);
+
+			buff.removeBuff(self, gcwBuffName);
+			blog("calculateGeneralHealthAndAbilities making buff stack: "+newstackAmt);
+			buff.applyBuffWithStackCount(self, gcwBuffName, newstackAmt);
+
+			utils.setScriptVar(self, armor.SCRIPTVAR_CACHED_GENERAL_PROTECTION, newMobGeneralArmor);
+		}
+	}
+
+	messageTo(self, "calculateGeneralHealthAndAbilities", null, 10.0f, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+void blog(string text)
+{
+	if(LOGGING_ON)
+	{
+		LOG("gcw_defensive_general_boss", text);
+	}
+}
+

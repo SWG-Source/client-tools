@@ -1,0 +1,1035 @@
+//------------------------------------------------
+// destroy_duty.script
+// Brandon Reinhart
+//
+// Endless duty version of destroy
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.static_item;
+include library.space_transition;
+include library.space_quest;
+include library.space_utils;
+include library.space_create;
+include library.ship_ai;
+include library.utils;
+include library.money;
+include library.prose;
+include library.group;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_TARGET_LOCATED				= new string_id( "space/quest", "destroy_duty_target_located" );
+const string_id SID_TARGET_DETECTED				= new string_id( "space/quest", "destroy_duty_target_detected" );
+const string_id SID_BOSS_DETECTED				= new string_id( "space/quest", "destroy_duty_boss_detected" );
+const string_id SID_TARGETS_REMAINING			= new string_id( "space/quest", "destroy_duty_targets_remaining" );
+const string_id SID_ALL_TARGETS_DEAD			= new string_id( "space/quest", "destroy_duty_targets_dead" );
+const string_id SID_BOSS_DEAD					= new string_id( "space/quest", "destroy_duty_boss_dead" );
+const string_id SID_LEVEL_INCREASE				= new string_id( "space/quest", "destroy_duty_level_increase" );
+const string_id SID_LEVEL_BOSS_DEAD				= new string_id( "space/quest", "destroy_duty_level_boss_dead" );
+const string_id SID_LEVEL_BOSS					= new string_id( "space/quest", "destroy_duty_level_boss" );
+const string_id SID_COMPLETE					= new string_id( "space/quest", "destroy_duty_complete" );
+
+const string_id SID_ROUND_REWARD				= new string_id( "space/quest", "destroy_duty_round_reward" );
+const string_id SID_BOSS_REWARD					= new string_id( "space/quest", "destroy_duty_boss_reward" );
+const string_id SID_COMPLETE_REWARD				= new string_id( "space/quest", "destroy_duty_complete_reward" );
+const string_id SID_TOKEN_REWARD				= new string_id( "space/quest", "destroy_duty_tokens_received" );
+
+const string_id SID_ABANDONED_DESTROY			= new string_id( "space/quest", "destroy_abandoned" );
+const string_id WARPOUT_FAILURE					= new string_id( "space/quest", "warpout_failure" );
+
+// Sounds
+const string SOUND_SPAWN_BOSS					= "clienteffect/ui_quest_spawn_boss.cef";
+const string SOUND_SPAWN_WAVE					= "clienteffect/ui_quest_spawn_wave.cef";
+const string SOUND_DESTROYED_WAVE				= "clienteffect/ui_quest_destroyed_wave.cef";
+const string SOUND_DESTROYED_ALL				= "clienteffect/ui_quest_destroyed_all.cef";
+
+// Music
+const string MUSIC_BOSS_ARRIVE					= "sound/music_com_enter_battle.snd";
+const string MUSIC_ROUND_WON					= "sound/music_int_complete_neutral.snd";
+const string MUSIC_LEVEL_WON					= "sound/music_combat_bfield_vict.snd";
+const string MUSIC_DANGER						= "sound/music_event_danger.snd";
+
+
+/*
+	X. Longer travel time between levels.
+	X. Stronger fictional elements. (Chat with logos?)
+	3. Group support.
+	4. Megaboss.
+	X. Localized ranks for bosses.
+	6. Some kind of special HUD effect for winning, etc?
+	7. Radio static from transmissions?
+	X. Spawn enemies far out and ahead of you, facing you or close and behind you.
+
+
+	Level 1
+
+	 Round a
+	  Wave x
+	  	1 TIE Fighter (novice)
+	  Wave y
+	  	2 TIE Fighter (novice)
+	  Wave z
+	    3 TIE Fighter (novice)
+	 Round b
+	  Wave x
+	  	1 TIE Fighter (vet)
+	  Wave y
+	  	2 TIE Fighter (vet)
+	  Wave z
+	  	3 TIE Fighter (vet)
+
+	> Boss <
+
+
+	>>> Longer Travel Time <<< ?
+
+
+	Level 2
+
+	 Round a
+	  Wave x
+	  	2 TIE Fighter (novice)
+	  Wave y
+	  	3 TIE Fighter (novice)
+	  Wave z
+	    4 TIE Fighter (novice)
+	 Round b
+	  Wave x
+	  	2 TIE Fighter (vet)
+	  Wave y
+	  	3 TIE Fighter (vet)
+	  Wave z
+	  	4 TIE Fighter (vet)
+
+	...
+
+	> MegaBoss <
+*/
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the types of ships for the duty.
+	int numShipTypes = questInfo.getInt( "shipTypes" );
+	setObjVar( self, "numShipTypes", numShipTypes );
+	for ( int i=0; i<numShipTypes; i++ )
+	{
+		string[] ships = dataTableGetStringColumn( qTable, "shipType"+(i+1) );
+		space_quest.cleanArray( self, "shipType"+(i+1), ships );
+	}
+
+	// Grab mission specific data.
+	setObjVar( self, "reward", questInfo.getInt( "reward" ) );
+	setObjVar( self, "wavesPerRound", questInfo.getInt( "wavesPerRound" ) );
+	setObjVar( self, "roundsPerLevel", questInfo.getInt( "roundsPerLevel" ) );
+//	int levelsPerDuty = questInfo.getInt( "levelsPerDuty" );
+//	if ( levelsPerDuty > 5 )
+	int levelsPerDuty = 5;
+	setObjVar( self, "levelsPerDuty", levelsPerDuty );
+	setObjVar( self, "bossType", questInfo.getString( "bossType" ) );
+	setObjVar( self, "bossFreq", questInfo.getString( "bossFrequency" ) );
+
+	// Init difficulty.
+	setObjVar( self, "difficulty.count", 1 );
+	setObjVar( self, "difficulty.basecount", 1 );
+	setObjVar( self, "difficulty.ship", 0 );
+	setObjVar( self, "difficulty.level", 0 );
+
+	// Try to notify the player of the first objective (if we are in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	// Add quest journal objectives.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set us up if we are in the appropriate zone.
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearTargetWaypoint( self );
+			space_quest.showQuestUpdate( self, SID_ABANDONED_DESTROY );
+			space_quest.setQuestWon( player, self );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 1, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	findDutyLocation(self, null);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// findDutyLocation
+//------------------------------------------------
+
+messageHandler findDutyLocation()
+{
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	transform tloc = getTransform_o2w( space_transition.getContainingShip( player ) );
+	location sloc = getLocation( space_transition.getContainingShip( player ) );
+	location o = new location( 0.f, 0.f, 0.f );
+	location loc = null;
+
+	transform strans = null;
+	if ( hasObjVar( self, "moredist" ) )
+	{
+		removeObjVar( self, "moredist" );
+		strans = space_quest.getRandomPositionInSphere( tloc, 2000, 2500 );
+	}
+	else
+		strans = space_quest.getRandomPositionInSphere( tloc, 1000, 1400 );
+	vector v = strans.getPosition_p();
+	loc = new location( v.x, v.y, v.z );
+	float dist = getDistance( loc, o );
+	if ( dist >= 7500 )
+	{
+		// Find a totally new location if we move too far away.
+		strans = space_quest.getRandomPositionInSphere( transform.identity, 3000, 7000 );
+	}
+	v = strans.getPosition_p();
+	loc = new location( v.x, v.y, v.z );
+
+	setObjVar( self, "strans", strans );
+	setObjVar( self, "loc", loc );
+
+	// Register this location.
+	dictionary outparams = new dictionary();
+	string name = questName+":destroy_duty";
+	setObjVar( self, "loc", name );
+	addLocationTarget3d(player, name, loc, 250);
+
+	// Create the waypoint.
+	obj_id waypoint = getObjIdObjVar( self, "waypoint" );
+	if ( !isIdValid(waypoint) )
+		waypoint = createWaypointInDatapad( player, loc );
+	if ( isIdValid(waypoint) )
+	{
+		setWaypointVisible( waypoint, true );
+		setWaypointActive( waypoint, true );
+		setWaypointLocation( waypoint, loc );
+		setWaypointName( waypoint, "Target Location" );
+		setWaypointColor( waypoint, "space" );
+		setObjVar( self, "waypoint", waypoint );
+	}
+	space_quest._setQuestInProgress( self );
+
+	questSetQuestTaskLocation(player, "spacequest/"+questType+"/"+questName, 1, loc);
+
+	// Notify player.
+	// Duty target located. A waypoint has been created.
+	string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "found_loc" );
+	dutyUpdate( self, foundLocation );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// arrivedAtLocation
+//------------------------------------------------
+
+messageHandler arrivedAtLocation()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string name = params.getString( "name" );
+	if ( name.equals( questName+":destroy_duty" ) )
+	{
+		// We need to spawn the attack now.
+//		clearTargetWaypoint( self );
+		spawnDutyShips(self, null);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// spawnDutyShips
+//------------------------------------------------
+
+/*
+3
+2 from list 1, 1 from list 2
+
+4
+2 from list 1, 2 from list 2
+
+5
+2 from list 1, 2 from list 2, 1 from list 3
+
+6
+
+2 from list 1, 2 from list 2, 2 from list 3
+3 from list 1, 3 from list 2
+*/
+
+messageHandler spawnDutyShips()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	// Load ship info.
+	int numshiptypes = getIntObjVar( self, "numShipTypes" );
+	string[][] ships = new string[numshiptypes][];
+	for ( int i=0; i<numshiptypes; i++ )
+	{
+		ships[i] = getStringArrayObjVar( self, "shipType"+(i+1) );
+	}
+
+	int count = getIntObjVar( self, "difficulty.count" );
+	int basecount = getIntObjVar( self, "difficulty.basecount" );
+	int ship = getIntObjVar( self, "difficulty.ship" );
+	transform tloc = getTransformObjVar( self, "strans" );
+
+	int squad = ship_ai.squadCreateSquadId();
+
+	obj_id targets[] = null;
+	if(hasObjVar(self, "currentBossLevel") && !dutyMission(getStringObjVar(self, "bossType")))
+	{
+		// "Enemy commander on attack vector."
+		string_id bossInc   = new string_id( "spacequest/"+questType+"/"+questName, "boss_detected" );
+		space_quest.sendQuestMessage( player, bossInc );
+		playClientEffectObj( player, SOUND_SPAWN_BOSS, player, "" );
+		play2dNonLoopingMusic( player, MUSIC_BOSS_ARRIVE );
+
+		// Spawn the boss wing.
+		string bossType = getStringObjVar( self, "bossType" );
+		targets = new obj_id[basecount];
+		
+					
+		
+		for ( int i=0; i<basecount; i++ )
+		{
+			transform gloc = getTransform_o2w( space_transition.getContainingShip( player ) );
+
+			// Move the starting spot out in front of us.
+			float dist = rand( 1200.f, 1500.f );
+			vector n = gloc.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+			gloc = gloc.move_p( n );
+
+			// Flip the starting spot around so its facing us.
+			gloc = gloc.yaw_l( 3.14f );
+
+			// Find a spot on the IJ plane for deviation in a cone shape.
+			vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+			vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+			vector vd = vi.add( vj );
+			gloc = gloc.move_p( vd );
+
+			obj_id newship = space_create.createShipHyperspace( bossType, gloc );
+			ship_ai.unitSetLeashDistance( newship, 16000 );
+			if ( basecount > 3 )
+				ship_ai.unitSetSquadId( newship, squad );
+			attachScript( newship, "space.quest_logic.dynamic_ship" );
+			targets[i] = newship;
+			space_quest._addMissionCriticalShip( player, self, newship );
+			setObjVar( newship, "objMissionOwner", player );
+			ship_ai.unitAddExclusiveAggro( newship, player );
+			obj_id playership = space_transition.getContainingShip(player);
+			dictionary dict = new dictionary ();
+			dict.put ("player", space_transition.getContainingShip(player));
+			dict.put ("newship", newship);
+			messageTo (self, "attackPlayerShip", dict, 4.0f, false);
+
+			attachScript( newship, "space.quest_logic.destroyduty_boss" );
+			setObjVar( newship, "quest", self );
+			setObjVar( newship, "player", player );
+		}
+		setObjVar( self, "targets", targets );
+	}
+
+	else if(hasObjVar(self, "currentBossLevel") && dutyMission(getStringObjVar(self, "bossType")))
+	{
+		// "Enemy commander on attack vector."
+		string_id bossInc   = new string_id( "spacequest/"+questType+"/"+questName, "boss_detected" );
+		space_quest.sendQuestMessage( player, bossInc );
+		playClientEffectObj( player, SOUND_SPAWN_BOSS, player, "" );
+		play2dNonLoopingMusic( player, MUSIC_BOSS_ARRIVE );
+
+		// Spawn the boss wing.
+		string bossType = getStringObjVar( self, "bossType" );
+		targets = new obj_id[basecount];
+		
+		for ( int i=0; i<basecount; i++ )
+		{
+			transform gloc = getTransform_o2w( space_transition.getContainingShip( player ) );
+
+			// Move the starting spot out in front of us.
+			float dist = rand( 1200.f, 1500.f );
+			vector n = gloc.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+			gloc = gloc.move_p( n );
+
+			// Flip the starting spot around so its facing us.
+			gloc = gloc.yaw_l( 3.14f );
+
+			// Find a spot on the IJ plane for deviation in a cone shape.
+			vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+			vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+			vector vd = vi.add( vj );
+			gloc = gloc.move_p( vd );
+			string shipString = bossType;
+			if(i != 0)
+			{
+				shipString = ships[0][ship];
+			}
+
+			obj_id newship = space_create.createShipHyperspace(shipString, gloc );
+			
+			ship_ai.unitSetLeashDistance( newship, 16000 );
+			if ( basecount > 3 )
+				ship_ai.unitSetSquadId( newship, squad );
+			attachScript( newship, "space.quest_logic.dynamic_ship" );
+			targets[i] = newship;
+			space_quest._addMissionCriticalShip( player, self, newship );
+			setObjVar( newship, "objMissionOwner", player );
+			ship_ai.unitAddExclusiveAggro( newship, player );
+			obj_id playership = space_transition.getContainingShip(player);
+			dictionary dict = new dictionary ();
+			dict.put ("player", space_transition.getContainingShip(player));
+			dict.put ("newship", newship);
+			messageTo (self, "attackPlayerShip", dict, 4.0f, false);
+
+			attachScript( newship, "space.quest_logic.destroyduty_boss" );
+			setObjVar( newship, "quest", self );
+			setObjVar( newship, "player", player );
+		}
+		setObjVar( self, "targets", targets );
+	}
+	
+	else
+	{
+		// "Enemy targets are on an attack vector!"
+		boolean behind = false;
+		if ( rand() < 0.2f )
+		{
+			behind = true;
+			string_id foundTargets = new string_id( "spacequest/"+questType+"/"+questName, "targets_behind" );
+			space_quest.sendQuestMessage( player, foundTargets );
+		}
+		else
+		{
+			string_id foundTargets = new string_id( "spacequest/"+questType+"/"+questName, "targets_detected" );
+			space_quest.sendQuestMessage( player, foundTargets );
+		}
+		playClientEffectObj( player, SOUND_SPAWN_WAVE, player, "" );
+		play2dNonLoopingMusic( player, MUSIC_DANGER );
+
+		// Standard level.
+		// Spawn the ships.
+		targets = new obj_id[count];
+		int j = 0;
+		for ( int i=0; i<count; i++ )
+		{
+			transform gloc = getTransform_o2w( space_transition.getContainingShip( player ) );
+
+			if ( !behind )
+			{
+				// Move the starting spot out in front of us.
+				float dist = rand( 600.f, 700.f );
+				vector n = gloc.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+				gloc = gloc.move_p( n );
+
+				// Flip the starting spot around so its facing us.
+				gloc = gloc.yaw_l( 3.14f );
+
+				// Find a spot on the IJ plane for deviation in a cone shape.
+				vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+				vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+				vector vd = vi.add( vj );
+				gloc = gloc.move_p( vd );
+			}
+			else
+			{
+				// They came from...behind!
+				// Move the starting spot a bit behind us.
+				float dist = rand( 250.f, 300.f ) * -1.f;
+				vector n = gloc.getLocalFrameK_p().normalize().multiply( dist );
+				gloc = gloc.move_p( n );
+
+				// Find a spot on the IJ plane for deviation in a cone shape.
+				vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -75.f, 75.f ) );
+				vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -75.f, 75.f ) );
+				vector vd = vi.add( vj );
+				gloc = gloc.move_p( vd );
+			}
+
+			obj_id newship = space_create.createShipHyperspace(ships[j][ship], gloc );
+			ship_ai.unitSetLeashDistance( newship, 16000 );
+			if ( count > 3 )
+				ship_ai.unitSetSquadId( newship, squad );
+			attachScript( newship, "space.quest_logic.dynamic_ship" );
+			targets[i] = newship;
+			space_quest._addMissionCriticalShip( player, self, newship );
+			setObjVar( newship, "objMissionOwner", player );
+			ship_ai.unitAddExclusiveAggro( newship, player );
+			obj_id playership = space_transition.getContainingShip(player);
+			dictionary dict = new dictionary ();
+			dict.put ("player", space_transition.getContainingShip(player));
+			dict.put ("newship", newship);
+			messageTo (self, "attackPlayerShip", dict, 4.0f, false);
+
+			attachScript( newship, "space.quest_logic.destroyduty_ship" );
+			setObjVar( newship, "quest", self );
+
+			j++;
+			if ( j >= numshiptypes )
+				j = 0;
+		}
+		setObjVar( self, "targets", targets );
+	}
+
+	// Set a formation.
+	if ( (targets != null) && (targets.length > 3) )
+		ship_ai.squadSetFormationRandom( squad );
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean dutyMission(string bossType)
+{
+	if (bossType.endsWith("_duty_tier1") 
+	|| bossType.endsWith("_duty_tier2") 
+	|| bossType.endsWith("_duty_tier3") 
+	|| bossType.endsWith("_duty_tier4") 
+	|| bossType.endsWith("_duty_tier5"))
+	{
+		return true;
+	}
+	return false;
+
+}
+
+//------------------------------------------------
+// targetDestroyed
+//------------------------------------------------
+
+messageHandler targetDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id deadship = params.getObjId( "ship" );
+	obj_id targets[] = getObjIdArrayObjVar( self, "targets" );
+	int deadships = getIntObjVar( self, "deadships" );
+
+	if ( targets == null )
+		return SCRIPT_CONTINUE;
+
+	for ( int i=0; i<targets.length; i++ )
+	{
+		if ( deadship == targets[i] )
+		{
+			deadships++;
+			setObjVar( self, "deadships", deadships );
+			space_quest._removeMissionCriticalShip( player, self, deadship );
+
+			if ( deadships == targets.length )
+			{
+				// This wave has been eliminated.
+				int wavescomplete = getIntObjVar( self, "wavescomplete" );
+				wavescomplete++;
+				setObjVar( self, "wavescomplete", wavescomplete );
+
+				// Notify the player that all targets are dead.
+				if ( hasObjVar( self, "currentBossLevel" ) )
+				{
+					space_quest.sendQuestMessage( player, SID_BOSS_DEAD );
+					playClientEffectObj( player, SOUND_DESTROYED_ALL, player, "" );
+					play2dNonLoopingMusic( player, MUSIC_LEVEL_WON );
+				}
+				else
+				{
+					space_quest.sendQuestMessage( player, SID_ALL_TARGETS_DEAD );
+					playClientEffectObj( player, SOUND_DESTROYED_WAVE, player, "" );
+					play2dNonLoopingMusic( player, MUSIC_ROUND_WON );
+				}
+
+				// Go to the next wave.
+				nextWave(self, null);
+//				messageTo( self, "nextWave", null, 2.f, false );
+
+				return SCRIPT_CONTINUE;
+			}
+
+			break;
+		}
+	}
+	int remaining = targets.length - deadships;
+	prose_package pp = prose.getPackage( SID_TARGETS_REMAINING, remaining );
+	space_quest.sendQuestMessage( player, pp );
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// nextWave
+//------------------------------------------------
+
+messageHandler nextWave()
+{
+	// A wave has been eliminated.
+	// Possibly increase the round. Possibly increase the level.
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	// If we have completed all the waves for this round, start the next one.
+	int wavescomplete = getIntObjVar( self, "wavescomplete" );
+	int wavesperround = getIntObjVar( self, "wavesPerRound" );
+	int reward = getIntObjVar( self, "reward" );
+	int rounddeadships = getIntObjVar( self, "rounddeadships" );
+	rounddeadships += getIntObjVar( self, "deadships" );
+	setObjVar( self, "rounddeadships", rounddeadships );
+	removeObjVar( self, "deadships" );
+	dictionary outparams = new dictionary();
+
+	if ( (wavescomplete == wavesperround) || hasObjVar( self, "currentBossLevel" ) )
+	{
+		// The round is complete. Time for the next round.
+		// Clear our wave counter.
+		setObjVar( self, "wavescomplete", 0 );
+
+		int roundscomplete = getIntObjVar( self, "roundscomplete" );
+		roundscomplete++;
+		setObjVar( self, "roundscomplete", roundscomplete );
+		int roundsperlevel = getIntObjVar( self, "roundsPerLevel" );
+
+		// Have we completed the level?
+		if ( (roundscomplete == roundsperlevel) || hasObjVar( self, "currentBossLevel" ) )
+		{
+			// The level is complete. Time for a boss or the next level.
+			if ( !hasObjVar( self, "currentBossLevel" ) )
+			{
+				// Pay the player for the round.
+				int credits = rounddeadships * reward;
+				outparams.put( "type", 1 );
+				outparams.put( "reward", credits );
+				messageTo( self, "grantReward", outparams, 1.f, false );
+				removeObjVar( self, "rounddeadships" );
+
+				// Boss level.
+				setObjVar( self, "currentBossLevel", 1 );
+
+				// Notify the player that a boss level was reached.
+				outparams.put( "type", 1 );
+				messageTo( self, "notifyNextWave", outparams, 3.f, false );
+			}
+			else
+			{
+				// We just completed a boss level.
+				// Pay the player for the boss.
+				int credits = 3 * reward;
+				outparams.put( "type", 3 );
+				outparams.put( "reward", credits );
+				messageTo( self, "grantReward", outparams, 2.f, false );
+				removeObjVar( self, "rounddeadships" );
+
+				// Clear all previous wave/round stats & increment the base count.
+				int basecount = getIntObjVar( self, "difficulty.basecount" );
+				basecount++;
+				setObjVar( self, "difficulty.basecount", basecount );
+				setObjVar( self, "difficulty.count", basecount );
+				setObjVar( self, "difficulty.ship", 0 );
+				setObjVar( self, "roundscomplete", 0 );
+				setObjVar( self, "moredist", 0 );
+				removeObjVar( self, "currentBossLevel" );
+
+				int level = getIntObjVar( self, "difficulty.level" );
+				level++;
+				setObjVar( self, "difficulty.level", level );
+
+				int levelsperduty = getIntObjVar( self, "levelsPerDuty" );
+				if ( level == levelsperduty )
+				{
+					// Duty complete!
+					string_id complete = new string_id( "spacequest/"+questType+"/"+questName, "complete" );
+					dutyUpdate( self, complete );
+
+					// Pay the player for the duty.
+					credits = 25 * reward;
+					outparams.put( "type", 2 );
+					outparams.put( "reward", credits );
+					messageTo( self, "grantReward", outparams, 2.f, false );
+
+					// Clean up.
+					messageTo( self, "completeDuty", null, 3.f, false );
+
+					return SCRIPT_CONTINUE;
+				}
+
+				// Notify the player.
+				outparams.put( "type", 2 );
+				messageTo( self, "notifyNextWave", outparams, 3.f, false );
+			}
+		}
+		else
+		{
+			// Pay the player.
+			int credits = rounddeadships * reward;
+			outparams.put( "type", 1 );
+			outparams.put( "reward", credits );
+			messageTo( self, "grantReward", outparams, 1.f, false );
+			removeObjVar( self, "rounddeadships" );
+
+			// Start a new round in the same level.
+			// Reset ship count.
+			setObjVar( self, "difficulty.count", getIntObjVar( self, "difficulty.basecount" ) );
+
+			// Increment the type of ship to spawn.
+			string[] ships = getStringArrayObjVar( self, "shipType1" );
+			int ship = getIntObjVar( self, "difficulty.ship" );
+			ship++;
+			if ( ship >= ships.length )
+				ship = 0;
+			setObjVar( self, "difficulty.ship", ship );
+
+			// Notify the player.
+			outparams.put( "type", 3 );
+			messageTo( self, "notifyNextWave", outparams, 3.f, false );
+		}
+
+		// Find the location of the next round / level.
+		messageTo( self, "findDutyLocation", null, 6.f, false );
+	}
+	else
+	{
+		// Increment the ship count.
+		int count = getIntObjVar( self, "difficulty.count" );
+		count++;
+		setObjVar( self, "difficulty.count", count );
+
+		// Spawn the next wave at the current location.
+		messageTo( self, "spawnDutyShips", null, 6.f, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// grantReward
+//------------------------------------------------
+
+messageHandler grantReward()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	int reward = params.getInt( "reward" );
+	int type = params.getInt( "type" );
+
+	switch( type )
+	{
+		case 1:
+			prose_package pp = prose.getPackage( SID_ROUND_REWARD, reward );
+			sendQuestSystemMessage( player, pp );
+			break;
+
+		case 2:
+			pp = prose.getPackage( SID_COMPLETE_REWARD, reward );
+			sendQuestSystemMessage( player, pp );
+			break;
+
+		case 3:
+			pp = prose.getPackage( SID_BOSS_REWARD, reward );
+			sendQuestSystemMessage( player, pp );
+			break;
+
+		default:
+			break;
+	}
+
+	// Bank the money.
+	money.bankTo( money.ACCT_SPACE_QUEST_REWARD, player, reward );
+	obj_id pInv = utils.getInventoryContainer(player);
+
+	obj_id playerShip = space_transition.getContainingShip(player);
+
+	int tokens = reward/250;
+	if(tokens < 1)
+	{
+		tokens = 1;
+	}
+	
+	if(hasObjVar(playerShip, "spaceFaction.overt"))
+	{
+		int pvpTokens = tokens/2;	
+		tokens = tokens+pvpTokens;
+		
+	}
+	
+	prose_package pt = prose.getPackage(SID_TOKEN_REWARD, tokens);
+	sendQuestSystemMessage(player, pt);
+	
+	static_item.createNewItemFunction("item_token_duty_space_01_01", pInv, tokens);
+	CustomerServiceLog("space_piracy","Player "+player+" have received "+tokens+" Space Duty Tokens (item_token_duty_space_01_01)");
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// notifyNextWave
+//------------------------------------------------
+
+messageHandler notifyNextWave()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int type = params.getInt( "type" );
+
+	switch( type )
+	{
+		case 1: // BOSS
+			string_id level = new string_id( "spacequest/"+questType+"/"+questName, "level_boss" );
+			string_id bossTitle = new string_id( "spacequest/"+questType+"/"+questName, "boss_title_" + getIntObjVar( self, "difficulty.basecount" ) );
+			prose_package pp = prose.getPackage( level, bossTitle );
+			space_quest.sendQuestMessage( player, pp );
+
+			// Music.
+			play2dNonLoopingMusic( player, space_quest.MUSIC_QUEST_BOSS_COMING );
+			dutyUpdate( player, level );
+			break;
+
+		case 2: // BOSS DEAD
+			level = new string_id( "spacequest/"+questType+"/"+questName, "level_boss_dead" );
+			dutyUpdate( player, level );
+			break;
+
+		case 3: // LEVEL INCREASE
+			level = new string_id( "spacequest/"+questType+"/"+questName, "level_increase" );
+			dutyUpdate( player, level );
+			break;
+
+		default:
+			break;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// completeDuty
+//------------------------------------------------
+
+messageHandler completeDuty()
+{
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( questIsTaskActive( questid, 1, player ) )
+			questCompleteTask( questid, 1, player );
+	}
+
+	clearTargetWaypoint(self);
+
+	space_quest.setQuestWon(player, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+		clearTargetWaypoint(self);
+		cleanupShips(self);
+		obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+		space_quest.setQuestFailed( player, self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// attackPlayerShip
+//------------------------------------------------
+
+messageHandler attackPlayerShip()
+{
+	obj_id playerShip = params.getObjId ("player");
+	obj_id attackingShip = params.getObjId ("newship");
+	if(!isIdValid(attackingShip) || !exists(attackingShip) || !isIdValid(playerShip) || !exists(playerShip) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	ship_ai.spaceAttack(attackingShip, playerShip);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	clearTargetWaypoint( self );
+
+	// We aborted the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestWon( player, self );
+//	space_quest.setQuestAborted( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// clearTargetWaypoint
+//------------------------------------------------
+
+void clearTargetWaypoint( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id waypoint = getObjIdObjVar( self, "waypoint" );
+	if ( isIdValid(waypoint) )
+		destroyWaypointInDatapad( waypoint, player );
+	removeObjVar( self, "waypoint" );
+
+	// Unregister the arrive trigger.
+	dictionary params = new dictionary();
+	string loc = getStringObjVar( self, "loc" );
+	if ( loc != null )
+		removeLocationTarget(player, loc);
+}
+
+//------------------------------------------------
+// dutyUpdate
+//------------------------------------------------
+
+void dutyUpdate( obj_id self, string_id update_id )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string_id update_prefix = new string_id( "spacequest/"+questType+"/"+questName, "duty_update" );
+	prose_package pp = prose.getPackage( update_prefix, update_id );
+	space_quest.sendQuestMessage( player, pp );
+}
+
+//------------------------------------------------
+// cleanupShips
+//------------------------------------------------
+
+void cleanupShips( obj_id self )
+{
+	// Warp out the attackers.
+	obj_id[] targets = getObjIdArrayObjVar( self, "targets" );
+	if ( targets != null )
+	{
+		for ( int i=0; i<targets.length; i++ )
+		{
+			if ( isIdValid( targets[i] ) && exists( targets[i] ) )
+			{
+				destroyObjectHyperspace( targets[i] );
+			}
+		}
+	}
+}
+
+//------------------------------------------------
+// warpoutFailure
+//------------------------------------------------
+
+messageHandler warpoutFailure()
+{
+	if ( hasObjVar( self, "handling_warpout_failure" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "handling_warpout_failure", 1 );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	sendQuestSystemMessage( player, WARPOUT_FAILURE );
+	clearTargetWaypoint( self );
+	cleanupShips( self );
+	space_quest.setQuestFailed( player, self );
+
+	return SCRIPT_CONTINUE;
+}

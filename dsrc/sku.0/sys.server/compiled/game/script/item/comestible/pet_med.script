@@ -1,0 +1,255 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        medicine.script
+ * Description:  script for handling comestible consumption
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.ai_lib;
+include library.callable;
+include library.consumable;
+include library.factions;
+include library.healing;
+include library.pet_lib;
+include library.prose;
+include library.sui;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+
+const string SCRIPT_PET_MED                = "item.comestible.pet_med";
+
+const string_id SID_TARGET_NOT_CREATURE		= new string_id("error_message", "target_not_creature");
+const string_id SID_TARGETTING_ERROR		= new string_id("error_message", "targetting_error");
+
+const string_id SID_NO_VALID_MEDICINE		= new string_id("pet/pet_menu", "no_valid_medicine");
+const string_id SID_CANNOT_DO_THAT_NOW		= new string_id("pet/pet_menu", "cannot_do_that_now");
+const string_id SID_DO_NOT_HEAL				= new string_id("pet/pet_menu", "do_not_heal");
+const string_id SID_NOTHING_TO_HEAL			= new string_id("pet/pet_menu", "nothing_to_heal");
+
+/***** TRIGGERS ********************************************************/
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	LOG("LOG_CHANNEL", "OnObjectMenuRequest");
+	if ( hasObjVar(self, consumable.VAR_CONSUMABLE_BASE) )
+	{
+		menu_info_data mid = mi.getMenuItemByType(menu_info_types.EXAMINE);
+		if ( mid != null )
+		{
+			mid.setServerNotify(true);
+		}
+
+		menu_info_data mid2 = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+		if ( mid2 != null )
+		{
+			mid2.setServerNotify(true);
+		}
+	}
+	else
+	{
+		detachScript(self, SCRIPT_PET_MED);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	LOG("LOG_CHANNEL", "item ->" + item);
+	if ( item == menu_info_types.ITEM_USE)
+	{
+		obj_id target = getLookAtTarget(player);
+
+		if(!isIdValid(target))
+		{
+			sendSystemMessage(player, SID_TARGET_NOT_CREATURE);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			if (hasObjVar(self, "consumable.strength"))
+			{
+				// VitaPack
+				performPetHealVitality(player, target, self);
+			}
+			else
+			{
+				// StimPack
+				performPetHealDamage(player, target, self);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	attrib_mod[] am = getAttribModArrayObjVar(self, consumable.VAR_CONSUMABLE_MODS);
+
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if ( (am == null) || (am.length == 0) )
+	{
+		names[idx] = "strength";
+		attribs[idx] = Integer.toString(getIntObjVar(self, "consumable.strength"));
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		for ( int i = 0; i < am.length; i++ )
+		{
+			int attrib = am[i].getAttribute();
+			int val = am[i].getValue();
+			float atk = am[i].getAttack();
+			float dcy = am[i].getDecay();
+
+			names[idx] = "examine_heal_damage_" + consumable.STAT_NAME[attrib];
+			attribs[idx] = Integer.toString(val);
+			idx++;
+			if (idx >= names.length)
+				return SCRIPT_CONTINUE;
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+commandHandler healPetDamage()
+{
+	if(!isIdValid(target))
+	{
+		sendSystemMessage(self, SID_TARGET_NOT_CREATURE);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		obj_id pet_med = healing.findPetDamageMed(self);
+
+		if(!isIdValid(pet_med))
+		{
+			sendSystemMessage(self, SID_NO_VALID_MEDICINE);
+			return SCRIPT_CONTINUE;
+		}
+
+		performPetHealDamage(self, target, pet_med);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean performPetHealDamage(obj_id player, obj_id target, obj_id pet_med)
+{
+	int useTime = utils.getIntScriptVar(player, "pet_med.useTime");
+	int curTime = getGameTime();
+
+	if (curTime < useTime)
+	{
+		prose_package ppNoMedsNow = prose.getPackage(SID_CANNOT_DO_THAT_NOW, (useTime - curTime));
+		sendSystemMessageProse(player, ppNoMedsNow);
+		return false;
+	}
+
+	if ( !pet_lib.isCreaturePet(target) )
+	{
+		sendSystemMessage(player, SID_TARGET_NOT_CREATURE);
+		return false;
+	}
+
+	if (!factions.pvpDoAllowedHelpCheck(player, target))
+	{
+		sendSystemMessage(player, SID_DO_NOT_HEAL);
+		return false;
+	}
+
+	// Check to see if the target is damaged.
+	if (!healing.isDamaged(target))
+	{
+		prose_package ppNothingToHeal = prose.getPackage(SID_NOTHING_TO_HEAL, target);
+		sendSystemMessageProse(player, ppNothingToHeal);
+		return false;
+	}
+
+	if (healing.performMedicalHealDamage(player, target, pet_med, true))
+	{
+		doAnimationAction (player, "heal_other");
+		healing.playHealDamageEffect(getLocation(target));
+
+		useTime = curTime + 15;
+		utils.setScriptVar(player, "pet_med.useTime", useTime);
+
+		return true;
+	}
+
+	return false;
+}
+
+commandHandler healPetVitality()
+{
+	if(!isIdValid(target))
+	{
+		sendSystemMessage(self, SID_TARGET_NOT_CREATURE);
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		obj_id pet_med = healing.findPetVitalityMed(self);
+
+		if(!isIdValid(pet_med))
+		{
+			sendSystemMessage(self, SID_NO_VALID_MEDICINE);
+			return SCRIPT_CONTINUE;
+		}
+
+		performPetHealVitality(self, target, pet_med);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean performPetHealVitality(obj_id player, obj_id target, obj_id pet_med)
+{
+	if ( !pet_lib.isCreaturePet(target) )
+	{
+		sendSystemMessage(player, SID_TARGET_NOT_CREATURE);
+		return false;
+	}
+
+	if (!factions.pvpDoAllowedHelpCheck(player, target))
+	{
+		sendSystemMessage(player, SID_DO_NOT_HEAL);
+		return false;
+	}
+
+	obj_id petControlDevice = callable.getCallableCD(target);
+	int vitality = getIntObjVar(petControlDevice, "pet.vitality");
+
+	// Check to see if the target is damaged.
+	if (vitality < 1)
+	{
+		prose_package ppNothingToHeal = prose.getPackage(SID_NOTHING_TO_HEAL, target);
+		sendSystemMessageProse(player, ppNothingToHeal);
+		return false;
+	}
+
+	if (pet_lib.performVitalityHeal(player, target, petControlDevice, pet_med))
+	{
+		doAnimationAction (player, "heal_other");
+		healing.playHealDamageEffect(getLocation(target));
+
+		consumable.decrementCharges(pet_med, player);
+
+		return true;
+	}
+
+	return false;
+}
+
+/***** MESSAGEHANDLERS **************************************************/

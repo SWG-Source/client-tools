@@ -1,0 +1,416 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        travel.scriptlib
+ * Description:  library of methods for the traveling system.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+
+include library.skill;
+include library.sui;
+include library.prose;
+include library.group;
+include library.utils;
+include library.xp;
+
+/***** CONSTANTS *******************************************************/
+const string VAR_TEACHING		= "teaching";
+const string VAR_VALID_SKILLS		= "teaching.valid_skills";
+const string VAR_SKILL_TO_LEARN		= "teaching.skill_to_learn";
+const string VAR_TEACHER		= "teaching.teacher";
+const string VAR_STUDENT		= "teaching.student";
+const string VAR_SKILL_COST		= "teaching.experience";
+
+const string_id SID_TEACH			= new string_id("sui", "teach");
+const string_id SID_STUDENT_TOO_FAR		= new string_id("teaching", "student_too_far");
+const string_id SID_STUDENT_TOO_FAR_TARGET	= new string_id("teaching", "student_too_far_target");
+const string_id SID_STUDENT_HAS_OFFER_TO_LEARN	= new string_id("teaching", "student_has_offer_to_learn");
+const string_id SID_OFFER_GIVEN			= new string_id("teaching", "offer_given");
+const string_id SID_OFFER_REFUSED		= new string_id("teaching", "offer_refused");
+const string_id SID_TEACHER_TOO_FAR		= new string_id("teaching", "teacher_too_far");
+const string_id SID_TEACHER_TOO_FAR_TARGET	= new string_id("teaching", "teacher_too_far_target");
+const string_id SID_TEACHER_SKILL_LEARNED	= new string_id("teaching", "teacher_skill_learned");
+const string_id SID_STUDENT_SKILL_LEARNED	= new string_id("teaching", "student_skill_learned");
+const string_id SID_EXPERIENCE_RECEIVED		= new string_id("teaching", "experience_received");
+const string_id SID_LEARNING_FAILED		= new string_id("teaching", "learning_failed");
+const string_id SID_TEACHING_FAILED		= new string_id("teaching", "teaching_failed");
+const string_id SID_NO_TARGET			= new string_id("teaching", "no_target");
+const string_id SID_NO_TEACH_SELF		= new string_id("teaching", "no_teach_self");
+const string_id SID_STUDENT_DEAD		= new string_id("teaching", "student_dead");
+const string_id SID_NO_SKILLS			= new string_id("teaching", "no_skills");
+const string_id SID_NO_SKILLS_FOR_STUDENT	= new string_id("teaching", "no_skills_for_student");
+const string_id SID_NOT_IN_SAME_GROUP		= new string_id("teaching", "not_in_same_group");
+
+const float TEACHING_RANGE		= 10.0f;
+
+/***** TRIGGERS ********************************************************/
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//REMOVED --- May 2007
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	//REMOVED --- May 2007	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogin()
+{
+	
+	if (utils.hasScriptVar(self, VAR_TEACHING))
+		utils.removeScriptVarTree(self, VAR_TEACHING);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgTeachSkillSelected()
+{
+	LOG("LOG_CHANNEL", "player_teaching::msgTeachSkillSelected -- " + params);
+
+	// Self is the teacher.
+
+	if (!utils.hasScriptVar(self, VAR_STUDENT))
+		return SCRIPT_CONTINUE;
+
+	// Get the student and valid skills.
+	obj_id student = utils.getObjIdScriptVar(self, VAR_STUDENT);
+	if ( !isIdValid(student) )
+		return SCRIPT_CONTINUE;
+
+	string[] valid_skills = utils.getStringBatchScriptVar(self, VAR_VALID_SKILLS);
+	if ( valid_skills == null || valid_skills.length == 0 )
+		return SCRIPT_CONTINUE;
+
+	// Clean up objvars
+	utils.removeScriptVarTree(self, VAR_TEACHING);
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel"))
+		return SCRIPT_CONTINUE;
+
+	// Make sure the student is still around.
+	if (!student.isLoaded())
+	{
+		LOG("LOG_CHANNEL", self + " ->Your student must be nearby in order to teach.");
+		sendSystemMessage(self, SID_STUDENT_TOO_FAR);
+		return SCRIPT_CONTINUE;
+	}
+
+	string student_name = getFirstName(student);
+	string teacher_name = getFirstName(self);
+
+	location loc_student = getLocation(student);
+	location loc_teacher = getLocation(self);
+
+	float distance = loc_student.distance(loc_teacher);
+	if (distance > TEACHING_RANGE)
+	{
+		LOG("LOG_CHANNEL", self + " ->You are too far away from " + student_name + " to teach.");
+		prose_package pp = prose.getPackage(SID_STUDENT_TOO_FAR_TARGET, student);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check to make sure that the student doesn't already have an option to learn.
+	if (utils.hasScriptVar(student, VAR_TEACHING))
+	{
+		LOG("LOG_CHANNEL", self + " ->" + student_name + " already has an offer to learn.");
+		prose_package pp = prose.getPackage(SID_STUDENT_HAS_OFFER_TO_LEARN, student);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the selected skill
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+		return SCRIPT_CONTINUE;
+
+	string selected_skill = valid_skills[row_selected];
+
+	if (selected_skill == null)
+	{
+		LOG("LOG_CHANNEL", "player_teaching::msgTeachSkillSelected -- selected skill was null for " + self);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine its costs
+	dictionary xp_cost = getSkillPrerequisiteExperience(selected_skill);
+	LOG("LOG_CHANNEL", "xp_cost ->" + xp_cost);
+	StringBuffer sb = new StringBuffer();
+	// Yank the cost out of the dictionary.
+	java.util.Enumeration e = xp_cost.keys();
+	while (e.hasMoreElements())
+	{
+		string xp_type = (string)(e.nextElement());
+		if (xp_type.length() > 0)
+		{
+			int xp = xp_cost.getInt(xp_type);
+			// capitalize the first letter of the xp_type
+			//xp_type = xp_type.substring(0,1).toUpperCase() + xp_type.substring(1).toLowerCase();
+			string_id xp_type_id = utils.unpackString("@exp_n:" + xp_type);
+			string xp_type_string = localize(xp_type_id);
+			sb.append(xp + " " + xp_type_string);
+		}
+	}
+	string skill_cost = sb.toString();
+	if (skill_cost.length() < 1)
+		skill_cost = "0";
+
+	// Display teach message
+	LOG("LOG_CHANNEL", self + " ->You offer to teach " + student_name + " " + selected_skill + ".");
+	string_id skill_id = utils.unpackString("@skl_n:" + selected_skill);
+	LOG("LOG_CHANNEL", "skill_id ->" + skill_id);
+	prose_package pp = prose.getPackage(SID_OFFER_GIVEN, self, student, skill_id, 0);
+	sendSystemMessageProse(self, pp);
+
+	// Set the selected skill on the student and send him the confirmation ui.
+	utils.setScriptVar(student, VAR_SKILL_TO_LEARN, selected_skill);
+	utils.setScriptVar(student, VAR_TEACHER, self);
+	utils.setScriptVar(student, VAR_SKILL_COST, skill_cost);
+	string selected_skill_string = localize(skill_id);
+	string prompt = teacher_name + " has offered to teach you " + selected_skill_string + " (" + skill_cost + " experience cost.)";
+
+	sui.msgbox(student, student, prompt, sui.YES_NO, "msgTeachSkillConfirmed");
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgTeachSkillConfirmed()
+{
+	// Self is the student.
+
+	LOG("LOG_CHANNEL", "player_teaching::msgTeachSkillConfirmed");
+
+	if (!utils.hasScriptVar(self, VAR_TEACHER))
+		return SCRIPT_CONTINUE;
+
+	// Get the teacher and skill
+	obj_id teacher = utils.getObjIdScriptVar(self, VAR_TEACHER);
+	string selected_skill = utils.getStringScriptVar(self, VAR_SKILL_TO_LEARN);
+	string skill_cost = utils.getStringScriptVar(self, VAR_SKILL_COST);
+
+	// Clean up objvars
+	utils.removeScriptVarTree(self, VAR_TEACHING);
+
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel"))
+	{
+		if (teacher.isLoaded())
+		{
+			LOG("LOG_CHANNEL", teacher + " ->" + getFirstName(self) + " has refused your offer to teach.");
+			prose_package pp = prose.getPackage(SID_OFFER_REFUSED, self);
+			sendSystemMessageProse(teacher, pp);
+		}
+
+		return SCRIPT_CONTINUE;
+	}
+
+	if (!isIdValid(teacher))
+	{
+		LOG("LOG_CHANNEL", "player_teaching::msgTeachSkillConfirmed -- teacher was null for student " + self);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (selected_skill == null)
+	{
+		LOG("LOG_CHANNEL", "player_teaching::msgTeachSkillConfirmed -- selected skill was null for " + teacher + " teaching " + self);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (!teacher.isLoaded())
+	{
+		LOG("LOG_CHANNEL", self + " ->Your teacher must be nearby in order to learn.");
+		sendSystemMessage(self, SID_TEACHER_TOO_FAR);
+		return SCRIPT_CONTINUE;
+	}
+
+	string student_name = getFirstName(self);
+	string teacher_name = getFirstName(teacher);
+
+	location loc_student = getLocation(self);
+	location loc_teacher = getLocation(teacher);
+
+	float distance = loc_student.distance(loc_teacher);
+	if (distance > TEACHING_RANGE)
+	{
+		LOG("LOG_CHANNEL", self + " ->You are too far away from " + teacher_name + " to learn.");
+		prose_package pp = prose.getPackage(SID_TEACHER_TOO_FAR_TARGET, teacher);
+		sendSystemMessageProse(self, pp);
+		utils.removeScriptVarTree(self, VAR_TEACHING);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Try to acquire the skill
+	if (skill.purchaseSkill(self, selected_skill))
+	{
+		string_id skill_id = utils.unpackString("@skl_n:" + selected_skill);
+		LOG("LOG_CHANNEL", "skill_id ->" + skill_id);
+		LOG("LOG_CHANNEL", self + " ->You learn " + selected_skill + " from " + teacher_name + ".");
+		LOG("LOG_CHANNEL", teacher + " ->" + student_name + " learns " + selected_skill + " from you.");
+		prose_package pp = prose.getPackage(SID_STUDENT_SKILL_LEARNED, teacher, skill_id);
+		sendSystemMessageProse(self, pp);
+		pp = prose.getPackage(SID_TEACHER_SKILL_LEARNED, self, skill_id);
+		sendSystemMessageProse(teacher, pp);
+
+		// DISABLED
+		int exp = 0; //getSkillPointCost(selected_skill) * 10;
+		// Grant some experience.
+		if ( isJedi(teacher) && isJedi(self) && skill_cost.equals("0") && selected_skill.startsWith("jedi_") )
+		{
+			exp = 40;
+		}
+		
+		if ( exp > 0 )
+		{	
+
+		}
+	}
+	else
+	{
+		LOG("LOG_CHANNEL", self + " -> Learning failed.");
+		LOG("LOG_CHANNEL", teacher + " -> Teaching failed.");
+		sendSystemMessage(self, SID_LEARNING_FAILED);
+		sendSystemMessage(teacher, SID_TEACHING_FAILED);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** COMMANDHANDLERS *************************************************/
+commandHandler teach()
+{
+	LOG("LOG_CHANNEL", "player_teaching::teach");
+
+	if (utils.hasScriptVar(self, VAR_STUDENT))
+		return SCRIPT_CONTINUE;
+
+	if (!isIdValid(target))
+	{
+		target = getLookAtTarget(self);
+		if (!isIdValid(target))
+		{
+			LOG("LOG_CHANNEL", self + " ->Whom do you want to teach?");
+			sendSystemMessage(self, SID_NO_TARGET);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if (target == self)
+	{
+		LOG("LOG_CHANNEL", self + " ->You cannot teach yourself.");
+		sendSystemMessage(self, SID_NO_TEACH_SELF);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (isDead(target) || isIncapacitated(target))
+	{
+		LOG("LOG_CHANNEL", self + " ->" + getFirstName(target) + " does not feel like being taught right now.");
+		prose_package pp = prose.getPackage(SID_STUDENT_DEAD, target);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	LOG("LOG_CHANNEL", "target ->" + target);
+
+	string teacher_name = getFirstName(self);
+	string target_name = getFirstName(target);
+
+	// Check the distance
+	location loc_teacher = getLocation(self);
+	location loc_student = getLocation(target);
+	float distance = loc_teacher.distance(loc_student);
+
+	if (distance > TEACHING_RANGE)
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be closer in order to teach.");
+		sendSystemMessage(self, SID_STUDENT_TOO_FAR);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check to make sure that the student doesn't already have an option to learn.
+	if (utils.hasScriptVar(target, VAR_TEACHING))
+	{
+		LOG("LOG_CHANNEL", self + " ->" + target_name + " already has an offer to learn.");
+		prose_package pp = prose.getPackage(SID_STUDENT_HAS_OFFER_TO_LEARN, target);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine what skills the teacher has to offer.
+	string[] teacher_skills = getSkillListingForPlayer(self);
+	if (teacher_skills == null)
+	{
+		LOG("LOG_CHANNEL", self + " ->You have no skills to teach.");
+		sendSystemMessage(self, SID_NO_SKILLS);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine what skills the student may learn based on his prereqs and experience.
+	string[] qual_skills = skill.getQualifiedTeachableSkills(target, self);
+	//LOG("LOG_CHANNEL", "qual_skills ->" + qual_skills[0]);
+	if (qual_skills == null)
+	{
+		LOG("LOG_CHANNEL", self + " -> You have no skills that " + target_name + " can currently learn.");
+		prose_package pp = prose.getPackage(SID_NO_SKILLS_FOR_STUDENT, target);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Look for skills in both teacher_skills and qual_skills
+	resizeable string[] valid_skills = new string[0];
+	for (int i = 0; i < qual_skills.length; i++)
+	{
+		int idx = utils.getElementPositionInArray(teacher_skills, qual_skills[i]);
+		if (idx != -1)
+		{
+			// No novice skills or force sensitive skills.
+			if ((qual_skills[i].indexOf("novice")) == -1 && (qual_skills[i].indexOf("force_sensitive")) == -1)
+			{
+				valid_skills = utils.addElement(valid_skills, qual_skills[i]);
+			}
+		}
+	}
+	//LOG("LOG_CHANNEL", "valid_skills ->" + valid_skills.length);
+	if (valid_skills.length < 1)
+	{
+		LOG("LOG_CHANNEL", self + " -> You have no skills that " + target_name + " can currently learn.");
+		prose_package pp = prose.getPackage(SID_NO_SKILLS_FOR_STUDENT, target);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check to see if the target is in the same group as the teacher.
+	if (!group.inSameGroup(self, target))
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be within the same group as " + target_name + " in order to teach.");
+		prose_package pp = prose.getPackage(SID_NOT_IN_SAME_GROUP, target);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Keep track of the valid skills and teacher for the target's selection.
+	utils.setScriptVar(self, VAR_STUDENT, target);
+	utils.setBatchScriptVar(self, VAR_VALID_SKILLS, valid_skills);
+
+	// Convert the valid skills over to string_ids.
+	string[] valid_skills_id = new string[valid_skills.length];
+	for (int i = 0; i < valid_skills.length; i++)
+	{
+		valid_skills_id[i] = "@skl_n:" + valid_skills[i];
+	}
+
+	sui.listbox(self, self, "Select a skill to teach.", sui.OK_CANCEL, "Select Skill", valid_skills_id, "msgTeachSkillSelected");
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/

@@ -1,0 +1,259 @@
+include library.ai_lib;
+include library.utils;
+include library.poi;
+include library.factions;
+
+trigger OnAttach()
+{
+	attachScript( self, "systems.npc_lair.lair_interactivity" );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	if ( hasObjVar( self, "lairDestroyed" ) )
+		messageTo( self, "destroyDisabledLair", null, .5f, false );
+
+	attachScript( self, "systems.npc_lair.lair_interactivity" );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDisabled (obj_id killer)
+{
+	location death = getLocation( self );
+	playClientEffectObj(killer, "clienteffect/combat_explosion_lair_large.cef", self, "");
+	playClientEffectLoc(killer, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+
+	if ( hasObjVar( self, "npc_lair.isCreatureLair" ))
+		spawnBossMonster( self );
+
+
+	setInvulnerable( self, true );
+	setObjVar( self, "lairDestroyed", true );
+	messageTo( self, "destroyDisabledLair", null, .5f, false );
+	obj_id[] enemies = getWhoIsTargetingMe( self );
+	if ( enemies != null && enemies.length > 1 )
+	{
+		for ( int i = 0; i < enemies.length; i++ )
+		{
+			if ( isPlayer( enemies[i] ) )
+			{
+				setTarget( enemies[i], null );
+				setCombatTarget( enemies[i], null );
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+
+}
+
+messageHandler destroyDisabledLair()
+{
+	destroyObject( self );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+
+	int curHP = getHitpoints (self);
+	int maxHP = getMaxHitpoints( self );
+	int smolder = (maxHP - (maxHP/3));
+	int fire = (maxHP/ 3);
+
+	//if the poi is complete, double the damage:
+	if ( poi.isComplete(self) )
+	{
+		if ( curHP > damage )
+			setHitpoints( self, (curHP - damage) );
+	}
+
+
+	obj_id[] attackers = getWhoIsTargetingMe( self );
+	if ( attackers == null || attackers.length == 0 )
+	{
+		//debugSpeakMsg( self, "no one is attacking me" );
+	}
+	else
+	{
+		//debugSpeakMsg( self, "I am being attacked by " + attackers.length + " attacker(s)" );
+		obj_id poiBaseObject = getObjIdObjVar( self, "poi.baseObject" );
+		if ( isIdValid( poiBaseObject ) )
+		{
+			setObjVar( poiBaseObject, "npc_lair.numAttackers", attackers.length );
+		}
+	}
+
+	if (!hasObjVar (self, "playingEffect"))
+	{
+		if (curHP < smolder)
+		{
+			if (curHP < fire)
+			{
+				location death = getLocation (self);
+				// playClientEffectObj(attacker, "clienteffect/lair_hvy_damage_fire.cef" , self, "");
+				// playClientEffectLoc(attacker, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+				setObjVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+			}
+			else
+			{
+				location death = getLocation (self);
+				// playClientEffectObj(attacker, "clienteffect/lair_med_damage_smoke.cef" , self, "");
+				// playClientEffectLoc(attacker, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+				setObjVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+			}
+		}
+	}
+
+
+	if ( hasObjVar( self, "npc_lair.isCreatureLair" ))
+	{
+		spawnWaveOfDefenders( self, curHP );
+		spawnBossMonster( self );
+		callForHealing( self, curHP, maxHP );
+	}
+	sendAlarm( self, attacker );
+
+	return SCRIPT_CONTINUE;
+}
+
+/** This notifies the poiBaseObject to spawn a wave of defenders, if necessary
+ */
+void spawnWaveOfDefenders( obj_id lair, int curHP )
+{
+	int lastWave = getIntObjVar( lair, "npc_lair.waveSpawned" );
+	if ( lastWave > 1 )
+		return;//we've spawned two waves already
+
+	int maxHP = getMaxHitpoints( lair );
+
+	int nextWave = 0;
+	if ( curHP < (maxHP-(maxHP/3)) )
+		nextWave = 2;//less than 2/3 hp's left
+	else if ( curHP < maxHP )
+		nextWave = 1;//less than Max HP's left
+
+	if ( nextWave <= lastWave || nextWave == 0 )
+		return;//we've already spawned this wave, or don't need to spawn a wave yet
+
+	obj_id poiBaseObject = getObjIdObjVar( lair, "poi.baseObject" );
+	if ( isIdValid( poiBaseObject ) )
+	{
+		dictionary parms = new dictionary();
+		parms.put( "spawningFor", lair );
+		messageTo( poiBaseObject, "handleSpawnWaveOfDefenders", parms, 0, false );
+	}
+
+	setObjVar( lair, "npc_lair.waveSpawned", nextWave );
+}
+
+/** Spawns a boss monster, if one is defined for this lair type: */
+void spawnBossMonster( obj_id lair )
+{
+
+	if (!isIdValid(lair))
+		return;
+		
+	if ( hasObjVar( lair, "npc_lair.bossSpawned" ) )
+		return;
+
+	int maxHP = getMaxHitpoints( lair );
+	int curHP = getHitpoints (lair);
+
+	obj_id poiBaseObject = getObjIdObjVar( lair, "poi.baseObject" );
+	if (!isIdValid( poiBaseObject ) )
+		return;
+
+	if (!isDisabled(lair))
+	{
+		string diff = getStringObjVar( poiBaseObject, "spawning.lairDifficulty" );
+		int multiplier = 2;
+		if ( diff.equals( "veryEasy" ) )
+			multiplier = 1;
+		else if ( diff.equals( "easy" ) )
+			multiplier = 2;
+		else if ( diff.equals( "medium" ) )
+			multiplier = 3;
+		else if ( diff.equals( "hard" ) )
+			multiplier = 4;
+		else if ( diff.equals( "veryHard" ) )
+			multiplier = 5;
+
+		if ( curHP > ((maxHP/5)*multiplier) )
+			return;//not time to spawn it yet
+
+	}
+
+	setObjVar( lair, "npc_lair.bossSpawned", true );
+	dictionary parms = new dictionary();
+	parms.put( "npc_lair", lair );
+	messageTo( poiBaseObject, "handleSpawnBossMonster", parms, 0, false );
+}
+
+/*This message handler is just the delay for the client effects.  It makes
+sure that multiple effects aren't playing at the same time and eating up
+the frame rate. */
+messageHandler effectManager ()
+{
+	removeObjVar (self, "playingEffect");
+	return SCRIPT_CONTINUE;
+}
+
+//to do: choke this
+void callForHealing( obj_id lair, int curHP, int maxHP )
+{
+
+	if ( curHP == maxHP )
+		return;
+
+	int lastCall = utils.getIntScriptVar( lair, "npc_lair.lastHealingCall" );
+	if ( lastCall > getGameTime() )
+		return;
+
+	obj_id poiBaseObject = getObjIdObjVar( lair, "poi.baseObject" );
+	if ( isIdValid( poiBaseObject ) )
+	{
+		dictionary params = new dictionary();
+		params.put( "lair", lair );
+		messageTo( poiBaseObject, "handleCallForHealing", params, 1, false );
+	}
+
+	lastCall = getGameTime() + 15;
+	utils.setScriptVar( lair, "npc_lair.lastHealingCall", lastCall );
+}
+
+void sendAlarm( obj_id lair, obj_id attacker )
+{
+	int lastCall = utils.getIntScriptVar( lair, "npc_lair.lastAlarmCall" );
+	if ( lastCall > getGameTime() )
+		return;
+
+	obj_id poiBaseObject = getObjIdObjVar( lair, "poi.baseObject" );
+	if ( isIdValid( poiBaseObject ) )
+	{
+		dictionary params = new dictionary();
+		params.put( "lair", lair );
+		params.put( "target", attacker );
+		messageTo( poiBaseObject, "handleScoutAlarm", params, 1, false );
+	}
+
+	lastCall = getGameTime() + 60;
+	utils.setScriptVar( lair, "npc_lair.lastAlarmCall", lastCall );
+}
+
+void setLairFaction( obj_id lair )
+{
+	obj_id poiBaseObject = getObjIdObjVar( lair, "poi.baseObject" );
+	if ( isIdValid( poiBaseObject ) )
+	{
+		string lairType = getStringObjVar( poiBaseObject, "spawning.lairType" );
+		if ( lairType != null )
+			factions.setFaction( lair, utils.getFactionSubString( lairType ) );
+
+	}
+}
+

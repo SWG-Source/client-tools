@@ -1,0 +1,349 @@
+
+/***** INCLUDES ********************************************************/
+include library.sui;
+include library.utils;
+include library.prose;
+include library.money;
+include library.colors;
+include library.gambling;
+
+/***** INHERITS ********************************************************/
+inherits gambling.base.default_interface;
+
+/***** CONSTANTS *******************************************************/
+
+const int TIMER_BETTING							= 120; //allotted time for betting
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	removeObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	removeObjVar(self, gambling.VAR_GAME_BASE);
+	return SCRIPT_CONTINUE;
+}
+
+/***** HANDLERS ********************************************************/
+messageHandler handlePlayerAdded()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	if ( !hasObjVar(self, gambling.VAR_GAME_BASE) )
+	{
+		startWheelGame(self);
+	}
+
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	if ( players != null && players.length > 0 )
+	{
+		prose_package ppJoinOther = prose.getPackage(gambling.PROSE_PLAYER_JOIN_OTHER, player);
+		for ( int i = 0; i < players.length; i++ )
+		{
+			if ( players[i] != player )
+				sendSystemMessageProse(players[i], ppJoinOther);
+		}
+	}
+	
+	if ( utils.hasScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT) )
+	{
+		if ( players != null && players.length > 1 )
+			sendSystemMessage(player, gambling.SID_PLACE_BETS);
+		
+		resizeable obj_id[] gamePlayers = getResizeableObjIdArrayObjVar(self, gambling.VAR_GAME_PLAYERS_IDS);
+		if ( gamePlayers != null && gamePlayers.length > 0 )
+		{
+			if ( utils.getElementPositionInArray(gamePlayers, player) == -1 )
+			{
+				gamePlayers = utils.addElement(gamePlayers, player);
+				setObjVar(self, gambling.VAR_GAME_PLAYERS_IDS, gamePlayers);
+				
+				showBetUi(self, player);
+			}
+		}
+		
+		int timeLeft = utils.getIntScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT) - getGameTime();
+		prose_package ppBetTime = prose.getPackage(gambling.PROSE_STARTING_IN, timeLeft);
+		sendSystemMessageProse(player, ppBetTime);
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "Please wait a moment for next game to begin.");
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePlayerRemoved()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	string ovpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if ( utils.hasScriptVar(self, ovpath) )
+	{
+		int pid = utils.getIntScriptVar(self, ovpath);
+		sui.closeSUI(player, pid);
+		utils.removeScriptVar(self, ovpath);
+	}
+	
+	if ( !hasObjVar(self, gambling.VAR_TABLE_PLAYERS) )
+	{
+		stopWheelGame(self);
+	}
+	else
+	{
+		obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+		if ( players != null && players.length > 0 )
+		{
+			prose_package ppLeftOther = prose.getPackage(gambling.PROSE_PLAYER_LEAVE_OTHER, player);
+			for ( int i = 0; i < players.length; i++ )
+				sendSystemMessageProse(players[i], ppLeftOther);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetFailed()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	sendSystemMessage(player, gambling.SID_BET_FAILED);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRequestUpdatedUI()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	string ovpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if ( utils.hasScriptVar(self, ovpath) )
+	{
+		int pid = utils.getIntScriptVar(self, ovpath);
+		sui.closeSUI(player, pid);
+	}
+	
+	showBetUi(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetUi()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		queueCommand(player, ##"leaveGame", self, "", COMMAND_PRIORITY_DEFAULT);
+		return SCRIPT_CONTINUE;
+	}
+
+	showBetUi(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetTimer()
+{
+	if ( !utils.hasScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT) )
+		return SCRIPT_CONTINUE;
+	
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_GAME_PLAYERS_IDS);
+	if ( players == null || players.length == 0 )
+		return SCRIPT_CONTINUE;
+		
+	int now = getGameTime();
+	int stamp = utils.getIntScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+	
+	int dstamp = params.getInt("stamp");
+	if ( stamp != dstamp )
+		return SCRIPT_CONTINUE;
+	
+	int diff = stamp - now;
+	
+	if ( diff > 0 )
+	{
+		prose_package ppTimeLeft = prose.getPackage(gambling.PROSE_STARTING_IN, diff);
+		for ( int i = 0; i < players.length; i++ )
+			sendSystemMessageProse(players[i], ppTimeLeft);
+	}
+	
+	if ( diff > 30 )
+	{
+		messageTo(self, "handleBetTimer", params, 30, false);
+	}
+	else if ( diff <= 30 && diff >= 5 )
+	{
+		messageTo(self, "handleBetTimer", params, 5, false);
+	}
+	else
+	{
+		spinWheel(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleGamblingPayout()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int payout = params.getInt("payout");
+	
+	CustomerServiceLog("gambling", getGameTime() + ": (" + player + ") " + getName(player) + " receives wheel payout for " + payout + " from (" + self + ") " + utils.getStringName(self));					
+			
+	//sendSystemMessageTestingOnly(player, "You receive a payout of " + payout + " bank credits");
+	prose_package ppPayout = prose.getPackage(gambling.PROSE_PAYOUT, payout);
+	sendSystemMessageProse(player, ppPayout);
+
+	showFlyText(player, gambling.FLY_WINNER, 1f, colors.RED);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDelayedRestart()
+{
+	startWheelGame(self);
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS ********************************************************/
+void showBetUi(obj_id self, obj_id player)
+{
+	if ( !isIdValid(self) || !isIdValid(player) )
+		return;
+	
+	string gameType = getStringObjVar(self, gambling.VAR_TABLE_TYPE);
+	if ( gameType == null || gameType.equals("") )
+		return;
+	
+	string title = "@gambling/game_n:" + gameType;
+	string prompt = "The following is a summary of your current bets...\n\n";
+	prompt += "Use /bet <amount> <1-36,0,00,red,black,odd,even,high,low> to wager.\n";
+	prompt += "Example:  '/bet 5 black' to wager 5 credits on black\n\n";
+	prompt += "Cash : " + getCashBalance(player) + "\n";
+	prompt += "Bank : " + getBankBalance(player) + "\n";
+	prompt += "Total: " + getTotalMoney(player) + "\n";
+	prompt += "\nNOTE: if you leave the table after placing a bet, all of your outstanding bets will be forfeit.";
+	
+	resizeable string[] entries = new string[0];
+	int total = 0;
+	
+	int playerIdx = gambling.getGamePlayerIndex(self, player);
+	if ( playerIdx == -1 )
+		return;
+	
+	string betVar = gambling.VAR_GAME_PLAYERS + "." + playerIdx + ".bet";
+	if ( hasObjVar(self, betVar) )
+	{
+		obj_var_list ovl = getObjVarList(self, betVar);
+		if ( ovl != null )
+		{
+			int numItems = ovl.getNumItems();
+			for ( int i = 0; i < numItems; i++ )
+			{
+				obj_var ov = ovl.getObjVar(i);
+				string name = ov.getName();
+				int val = ov.getIntData();
+				
+				string entry = name + ":";
+				for ( int x = name.length(); x < 8; x++ )
+					entry += " ";
+				
+				entry += Integer.toString(val);
+				
+				entries = utils.addElement(entries, entry);
+				
+				total += val;
+			}
+			
+			entries = utils.alphabetizeStringArray(entries);
+			
+			entries = utils.addElement(entries, " ");
+		}
+	}
+	
+	entries = utils.addElement(entries, "Total Bet : " + total);
+	
+	int pid = sui.listbox(self, player, prompt, sui.REFRESH_LEAVE_GAME, title, entries, "handleBetUi");
+	if ( pid == -1 )
+	{
+		sendSystemMessageTestingOnly(player, "The wheel was unable to create an interface for you.");
+		return;
+	}
+
+	utils.setScriptVar(self, gambling.VAR_GAME_PLAYERS + "." + player + ".pid", pid);
+}
+
+void startWheelGame(obj_id self)
+{
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	if ( players == null || players.length == 0 )
+		return;
+	
+	setObjVar(self, gambling.VAR_GAME_PLAYERS_IDS, players);
+	
+	int stampTime = getGameTime() + TIMER_BETTING;
+	utils.setScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT, stampTime);
+	
+	for ( int i = 0; i < players.length; i++ )
+	{
+		sendSystemMessage(players[i], gambling.SID_PLACE_BETS);
+		showBetUi(self, players[i]);
+	}
+
+	dictionary d = new dictionary();
+	d.put("stamp", stampTime);
+	messageTo(self, "handleBetTimer", d, 30f, false);
+}
+
+void stopWheelGame(obj_id self)
+{
+	utils.removeScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+	removeObjVar(self, gambling.VAR_GAME_BASE);
+}
+
+void spinWheel(obj_id self)
+{
+	if ( !isIdValid(self) )
+		return;
+	
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_GAME_PLAYERS_IDS);
+	if ( players == null || players.length == 0 )
+		return;
+	
+	utils.removeScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+	
+	for ( int i = 0; i < players.length; i++ )
+		sendSystemMessage(players[i], new string_id(gambling.STF_INTERFACE, "wheel_spin"));
+	
+	dictionary d = new dictionary();
+	d.put("cnt", 3);
+	messageTo(self, "handleWheelSpinning", d, 10f, false);
+}

@@ -1,0 +1,180 @@
+include library.utils;
+include library.sui;
+include library.township;
+include library.trial;
+include library.static_item;
+include library.chat;
+
+const string VENDOR_TABLE_DIRECTORY = "datatables/item/vendor/";
+const string VENDOR_TABLE_OBJVAR = "item.vendor.vendor_table";
+const string VENDOR_CONTAINER_TEMPLATE = "object/tangible/container/vendor/npc_only.iff";
+
+const string OBJECT_FOR_SALE_CASH_COST = "item.object_for_sale.cash_cost";
+const string OBJECT_FOR_SALE_RESOURCE_COST = "item.object_for_sale.resource_cost";
+const string VENDOR_CONTAINER_LIST_OBJVAR = "item.vendor.container_list";
+
+/* These are in utils already
+const int COMMANDO 							= 1;
+const int SMUGGLER 							= 2;
+const int MEDIC 							= 3;
+const int OFFICER 							= 4;
+const int SPY 								= 5;
+const int BOUNTY_HUNTER 					= 6;
+const int FORCE_SENSITIVE 					= 7;
+const int TRADER 							= 8;
+const int ENTERTAINER 						= 9;
+*/
+
+
+// This probably fires before the script is even attached but it's here in the extremely unlikely event the NPC is persisted.
+trigger OnInitialize()
+{
+	messageTo(self, "handleInitializeVendor", null, 10, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	messageTo(self, "handleInitializeVendor", null, 10, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleInitializeVendor()
+{
+	// Bad.
+	if(!hasObjVar(self, VENDOR_TABLE_OBJVAR))
+	{	
+		return SCRIPT_CONTINUE;
+	}
+
+	string vendorTable = VENDOR_TABLE_DIRECTORY + getStringObjVar(self, VENDOR_TABLE_OBJVAR) + ".iff";
+
+	// May have up to 10 containers. 1 per class numbered as above and 0 for no class.
+	obj_id[] containerList = new obj_id[10];
+	obj_id vendorInventory = utils.getInventoryContainer(self);
+
+	int numRowsInTable = dataTableGetNumRows(vendorTable);
+
+	// Also bad.
+	if(numRowsInTable < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check our datatable and make a container for each class if there's at least one item specified.
+	for(int i = 0; i < numRowsInTable; i++)
+	{
+		int reqClass = dataTableGetInt(vendorTable, i, "class");
+
+		// If we're still in a valid range and no container created yet, make one.
+		if(reqClass > -1 && reqClass < containerList.length && !isIdValid(containerList[reqClass]) && !exists(containerList[reqClass]))
+		{
+			containerList[reqClass] = createObjectInInventoryAllowOverload(VENDOR_CONTAINER_TEMPLATE, self);			
+		}
+	}
+
+	// All our containers exist now so go through the list again and create our sell inventory in the correct containers.
+	for(int row = 0; row < numRowsInTable; row++)
+	{
+		int reqClass = dataTableGetInt(vendorTable, row, "class");
+		string item = dataTableGetString(vendorTable, row, "item");
+		int creditCost = dataTableGetInt(vendorTable, row, "cash");
+		int resourceCost = dataTableGetInt(vendorTable, row, "resourceAmount");
+
+		if( reqClass > -1 && reqClass < containerList.length )
+		{
+			for ( int idx = 0; idx < containerList.length; idx++ )
+			{
+				if( isIdValid(containerList[idx]) && exists(containerList[idx]) && ( reqClass == 0 || reqClass == idx) )
+				{
+					obj_id objectForSale = static_item.createNewItemFunction(item, containerList[idx]);
+					setObjVar(objectForSale, OBJECT_FOR_SALE_CASH_COST, creditCost);
+					setObjVar(objectForSale, OBJECT_FOR_SALE_RESOURCE_COST, resourceCost);
+
+					string datatableObjectScript = dataTableGetString(vendorTable, row, "script");
+					if ( datatableObjectScript != null && datatableObjectScript.length() > 0 )
+					{
+						attachScript(objectForSale, datatableObjectScript);
+					}
+					else
+					{
+						attachScript(objectForSale, township.NOVA_ORION_OBJECT_FOR_SALE_SCRIPT);
+					}
+					
+					if ( hasObjVar(self, township.OBJVAR_NOVA_ORION_FACTION) )
+					{
+						string requiredNovaOrionFaction = getStringObjVar(self, township.OBJVAR_NOVA_ORION_FACTION);
+						setObjVar(objectForSale, township.OBJVAR_NOVA_ORION_FACTION, requiredNovaOrionFaction);
+					}
+				}
+			}
+		}
+	}
+
+	setObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR, containerList);
+	chat.chat(self, "I'm open for business");
+
+	return SCRIPT_CONTINUE;
+}
+
+// Obviously it's no longer an SUI but keeping the same handler name so we don't need to screw with the conversations.
+messageHandler showInventorySUI()
+{
+	obj_id player = params.getObjId("player");
+
+	//If we have a hypothetically valid container for our class open that one, otherwise we're opening container 0 (all items)
+	int profession = utils.getPlayerProfession(player);
+
+	if(!hasObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_not_qualified"));
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] containerList = getObjIdArrayObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR);
+	obj_id container = null;
+	
+	if(isIdValid(containerList[profession]) && exists(containerList[profession]))
+	{
+		container = containerList[profession];
+	}
+	else
+	{
+		container = containerList[0];
+
+	}
+
+	// Yeah, something's wrong.
+	if(!isIdValid(container) || !exists(container))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_not_qualified"));
+		return SCRIPT_CONTINUE;
+	}
+
+	queueCommand(player, ##"openContainer", container, "", COMMAND_PRIORITY_DEFAULT);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// This opens the non-class specific buy box.
+messageHandler showNonClassInventory()
+{
+	obj_id player = params.getObjId("player");
+
+	obj_id[] containerList = getObjIdArrayObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR);
+	obj_id container = containerList[0];
+
+	// Cryptic system message GO!	
+	if(!isIdValid(container) || !exists(container))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_not_qualified"));
+		return SCRIPT_CONTINUE;
+	}
+
+	queueCommand(player, ##"openContainer", container, "", COMMAND_PRIORITY_DEFAULT);
+	
+	return SCRIPT_CONTINUE;
+}

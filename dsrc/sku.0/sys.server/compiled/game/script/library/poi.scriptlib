@@ -1,0 +1,1147 @@
+/* -----------------4/15/2002 11:04AM----------------
+ * This is the base script which all POI content scripts
+ * must inherit.
+ * --------------------------------------------------*/
+/* -----------------4/15/2002 10:57AM----------------
+ * Each POI template must specify the following objvar:
+ *
+ * poi.script 		- the name of the content script.
+ * 					- Used by poi.launch to start the main
+ * 					- content script.
+ *
+ * And may specify the following obvars:
+ *
+ * poi.difficulty 	- the difficulty rating of the poi
+ * poi.faction 		- the faction type of the poi, if any
+ * poi.factionValue - the faction value of completing the poi
+ * poi.objective 	- used where a single poi script can
+ *					  have multiple objectives.
+ * --------------------------------------------------*/
+
+include library.create;
+include library.structure;
+include library.utils;
+include library.factions;
+include library.scenario;
+include library.chat;
+
+//completion status:
+const int POI_INCOMPLETE = 0;
+const int POI_SUCCESS = 1;
+const int POI_FAIL = 2;
+
+//difficulty consts
+const int DIFF_UNKNOWN		= -1;
+const int DIFF_VEASY		= 0;
+const int DIFF_EASY			= 1;
+const int DIFF_MEDIUM		= 2;
+const int DIFF_HARD			= 3;
+const int DIFF_VHARD		= 4;
+
+//objvars:
+const string POI_BASE									= "poi";
+
+const string POI_STRING_LIST 							= "poi.stringList";
+const string POI_STRING_LIST_INDEXNAME 					= "poi.stringListIndex";
+
+const string POI_CREDIT_LIST 							= "poi.creditForCompletion";
+const string POI_DENY_LIST 								= "poi.deniedCreditForCompletion";
+
+const string POI_DESTROY_MESSAGE 						= "poi.destroyMessageHandler";
+const string POI_DESTROY_MESSAGE_DELAY 					= "poi.destroyMessageDelay";
+
+const string POI_BASE_OBJECT 							= "poi.baseObject";
+const string POI_NO_MESSAGE_ON_DESTROY 					= "poi.NoMsgOnDestroy";
+
+const string POI_COMPLETED 								= "poi.completed";
+
+//Objvars placed on the main POI object from template data:
+const string POI_DIFFICULTY 							= "poi.difficulty";
+const string POI_FACTION 								= "poi.faction";
+const string POI_FACTION_VALUE 							= "poi.factionValue";
+const string POI_OBJECTIVE 								= "poi.objective";
+
+//scripts:
+const string POI_OBJECT_SCRIPT 							= "theme_park.poi.poi_object";
+
+/* -----------------4/15/2002 2:38PM-----------------
+ * Use this function to create POI elements:
+ * --------------------------------------------------*/
+obj_id createObject( obj_id poiObject, string template, float x, float z )
+{
+	return createObject( poiObject, template, x, z, -1 );
+}
+
+obj_id createObject( obj_id poiObject, string template, float x, float z, int level )
+{
+	PROFILER_START("poi.createObject" + template);
+	if ( poiObject == null || poiObject == obj_id.NULL_ID)
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to create " + template + " because poiObject is NULL!" );
+		PROFILER_STOP("poi.createObject"+ template);
+
+		return null;
+	}
+
+	//debugSpeakMsg( poiObject, "createObject");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+	{
+		PROFILER_STOP("poi.createObject"+ template);
+		return null;
+	}
+
+	location loc = new location( getLocation( poiBaseObject ));
+	loc.x += x;
+	loc.z += z;
+	obj_id element = create.object( template, loc, level );
+	if ( element == null )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to create " + template );
+		PROFILER_STOP("poi.createObject"+ template);
+		return null;
+	}
+	setObjVar( element, POI_BASE_OBJECT, poiBaseObject );
+
+	if ( hasScript( element, POI_OBJECT_SCRIPT ))
+		debugServerConsoleMsg( getSelf(), "WARNING:  " + getName( element ) + " already has the POI OBJECT script attached.  Don't." );
+	else
+		attachScript( element, POI_OBJECT_SCRIPT );
+
+	PROFILER_STOP("poi.createObject"+ template);
+	return element;
+}
+
+obj_id createObject( string template, float x, float z )
+{
+	return createObject( template, x, z, -1 );
+}
+
+obj_id createObject( string template, float x, float z, int level )
+{
+	obj_id poiObject = getSelf();
+	return createObject( poiObject, template, x, z, level );
+}
+
+obj_id createObject( obj_id poiObject, string name, string template, float x, float y )
+{
+	return createObject( poiObject, name, template, x, y, -1 );
+}
+
+obj_id createObject( obj_id poiObject, string name, string template, float x, float y, int level )
+{
+	obj_id element = createObject( poiObject, template, x, y, level );
+	addToStringList( element, name );
+	return element;
+}
+
+obj_id createObject( string name, string template, float x, float y )
+{
+	return createObject( name, template, x, y, -1 );
+}
+
+obj_id createObject( string name, string template, float x, float y, int level )
+{
+	obj_id poiObject = getSelf();
+	return createObject( poiObject, name, template, x, y, level );
+}
+
+obj_id createObject(obj_id poiObject, string strName, location locCenter)
+{
+	return createObject(poiObject, strName, locCenter, -1);
+}
+
+obj_id createObject(obj_id poiObject, string strName, location locCenter, int level)
+{
+	location locHome = getLocation(poiObject);
+
+	float fltX = locCenter.x - locHome.x;
+	float fltZ = locCenter.z - locHome.z;
+	return createObject(poiObject, strName, fltX, fltZ, level);
+}
+
+obj_id createNpc( obj_id poiObject, string type, float x, float z )
+{
+	return createNpc( poiObject, type, x, z, -1 );
+}
+
+obj_id createNpc( obj_id poiObject, string type, float x, float z, int level )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return null;
+
+	location here = getLocation(poiObject);
+	here.x += x;
+	here.z += z;
+
+	obj_id poiNpc = create.object(type, here, level);
+	if ( poiNpc == null )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to create " + type );
+		return null;
+	}
+	setObjVar( poiNpc, POI_BASE_OBJECT, poiBaseObject );
+
+	if ( hasScript( poiNpc, POI_OBJECT_SCRIPT ))
+		debugServerConsoleMsg( getSelf(), "WARNING:  " + getName( poiNpc ) + " already has the POI OBJECT script attached.  Don't." );
+	else
+		attachScript( poiNpc, POI_OBJECT_SCRIPT );
+	return poiNpc;
+}
+
+obj_id createNpc( string type, float x, float z )
+{
+	return createNpc( type, x, z, -1 );
+}
+
+obj_id createNpc( string type, float x, float z, int level )
+{
+	obj_id poiObject = getSelf();
+	return createNpc( poiObject, type, x, z, level );
+}
+
+obj_id createNpc( obj_id poiObject, string ident, string type, float x, float z )
+{
+	return createNpc( poiObject, ident, type, x, z, -1 );
+}
+
+obj_id createNpc( obj_id poiObject, string ident, string type, float x, float z, int level )
+{
+	obj_id poiNpc = createNpc( poiObject, type, x, z, level );
+	addToStringList( poiNpc, ident );
+	return poiNpc;
+}
+
+obj_id createNpc( obj_id poiObject, string ident, string type, location loc )
+{
+	return createNpc( poiObject, ident, type, loc, -1 );
+}
+
+obj_id createNpc( obj_id poiObject, string ident, string type, location loc, int level )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return null;
+
+	obj_id poiNpc = create.object(type, loc, level);
+	if ( poiNpc == null )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to create " + type );
+		return null;
+	}
+	setObjVar( poiNpc, POI_BASE_OBJECT, poiBaseObject );
+
+	if ( hasScript( poiNpc, POI_OBJECT_SCRIPT ))
+		debugServerConsoleMsg( getSelf(), "WARNING:  " + getName( poiNpc ) + " already has the POI OBJECT script attached.  Don't." );
+	else
+		attachScript( poiNpc, POI_OBJECT_SCRIPT );
+	addToStringList( poiNpc, ident );
+	return poiNpc;
+}
+
+obj_id createNpcInStructure( obj_id poiObject, string ident, string type, obj_id structureId, string cellName )
+{
+	return createNpcInStructure( poiObject, ident, type, structureId, cellName, -1 );
+}
+
+obj_id createNpcInStructure( obj_id poiObject, string ident, string type, obj_id structureId, string cellName, int level )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return null;
+
+	location spawnLoc = getGoodLocation(structureId, cellName);
+	obj_id poiNpc = create.object(type, spawnLoc, level);
+	if ( poiNpc == null )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to create " + type );
+		return null;
+	}
+	setObjVar( poiNpc, POI_BASE_OBJECT, poiBaseObject );
+
+	if ( hasScript( poiNpc, POI_OBJECT_SCRIPT ))
+		debugServerConsoleMsg( getSelf(), "WARNING:  " + getName( poiNpc ) + " already has the POI OBJECT script attached.  Don't." );
+	else
+		attachScript( poiNpc, POI_OBJECT_SCRIPT );
+	addToStringList( poiNpc, ident );
+	return poiNpc;
+}
+
+obj_id createNpcInStructure( obj_id poiObject, string ident, string type, obj_id structureId )
+{
+	return createNpcInStructure( poiObject, ident, type, structureId, -1 );
+}
+
+obj_id createNpcInStructure( obj_id poiObject, string ident, string type, obj_id structureId, int level )
+{
+	string cellName = structure.getRandomCell(structureId);
+	if ( cellName == null || cellName.equals("") )
+	{
+		return null;
+	}
+
+	return createNpcInStructure(poiObject, ident, type, structureId, cellName, level);
+}
+
+obj_id createNpc( string ident, string type, float x, float z )
+{
+	return createNpc( ident, type, x, z, -1 );
+}
+
+obj_id createNpc( string ident, string type, float x, float z, int level )
+{
+	obj_id poiObject = getSelf();
+	return createNpc( poiObject, ident, type, x, z, level );
+}
+
+obj_id findObject( obj_id poiObject, string name )
+{
+	//debugSpeakMsg( poiObject, "findObject");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return null;
+
+	return getObjIdObjVar( poiBaseObject, POI_STRING_LIST + "." + name);
+}
+
+obj_id findObject( string name )
+{
+	obj_id poiObject = getSelf();
+	return findObject( poiObject, name );
+}
+
+string findObjectName( obj_id poiObject )
+{
+	return getStringObjVar( poiObject, POI_STRING_LIST_INDEXNAME );
+}
+
+string findObjectName()
+{
+	obj_id poiObject = getSelf();
+	return findObjectName( poiObject );
+}
+
+/* -----------------4/15/2002 6:16PM-----------------
+ * Use this function to cause the object to emit a message to the main POI
+ * script when the object is destroyed
+ * --------------------------------------------------*/
+void setDestroyMessage( obj_id poiObject, string name, string messageHandlerName, int delay)
+{
+	obj_id element = findObject( poiObject, name );
+	if ( element == null )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to locate " + name );
+		return;
+	}
+	setObjVar( element, POI_DESTROY_MESSAGE, messageHandlerName );
+	if ( delay != 0 )
+		setObjVar( element, POI_DESTROY_MESSAGE_DELAY, delay );
+}
+
+void setDestroyMessage( obj_id poiObject, string name, string messageHandlerName)
+{
+	setDestroyMessage( poiObject, name, messageHandlerName, 0);
+}
+
+void setDestroyMessage( string name, string messageHandlerName, int delay )
+{
+	obj_id poiObject = getSelf();
+	setDestroyMessage( poiObject, name, messageHandlerName, delay );
+}
+
+void setDestroyMessage( string name, string messageHandlerName )
+{
+	obj_id poiObject = getSelf();
+	setDestroyMessage( poiObject, name, messageHandlerName, 0 );
+}
+
+void setDestroyMessage( obj_id poiObject, string messageHandlerName, int delay )
+{
+	setObjVar( poiObject, POI_DESTROY_MESSAGE, messageHandlerName);
+	if ( delay != 0 )
+		setObjVar( poiObject, POI_DESTROY_MESSAGE_DELAY, delay );
+}
+
+void setDestroyMessage( obj_id poiObject, string messageHandlerName )
+{
+	setObjVar( poiObject, POI_DESTROY_MESSAGE, messageHandlerName);
+}
+
+void setDestroyMessage( string messageHandlerName, int delay )
+{
+	obj_id poiObject = getSelf();
+	setDestroyMessage( poiObject, messageHandlerName, delay );
+}
+
+void setDestroyMessage( string messageHandlerName )
+{
+	obj_id poiObject = getSelf();
+	setDestroyMessage( poiObject, messageHandlerName, 0 );
+}
+
+/* -----------------4/15/2002 7:00PM-----------------
+ * These functions are used to Grant, Remove and Deny credit for poi completion:
+ * --------------------------------------------------*/
+void grantCredit( obj_id poiObject, obj_id player )
+{
+	//debugSpeakMsg( poiObject, "grantCredit");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	string objVarName = player.toString();
+	if ( isDeniedCredit( poiBaseObject, objVarName ) )
+	{
+		//already has been denied credit, so return
+		return;
+	}
+	if ( isGrantedCredit( poiBaseObject, objVarName ))
+	{
+		//already has credit, so return
+		return;
+	}
+	setObjVar( poiBaseObject, POI_CREDIT_LIST + "." + objVarName, player );
+}
+
+void grantCredit( obj_id player )
+{
+	obj_id poiObject = getSelf();
+	grantCredit( poiObject, player );
+}
+
+void removeCredit( obj_id poiObject, obj_id player )
+{
+	//debugSpeakMsg( poiObject, "removeCredit");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	string objVarName = player.toString();
+	if ( isGrantedCredit( poiBaseObject, objVarName ))
+	{
+		removeObjVar( poiBaseObject, POI_CREDIT_LIST + "." + objVarName );
+	}
+}
+
+void removeCredit( obj_id player )
+{
+	obj_id poiObject = getSelf();
+	removeCredit( poiObject, player );
+}
+
+void denyCredit( obj_id poiObject, obj_id player )
+{
+	removeCredit( poiObject, player );
+	//debugSpeakMsg( poiObject, "denyCredit");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	string objVarName = player.toString();
+	if ( isDeniedCredit( poiBaseObject, objVarName ) )
+	{
+		//already has been denied credit, so return
+		return;
+	}
+	setObjVar( poiBaseObject, POI_DENY_LIST + "." + objVarName, player );
+}
+
+void denyCredit( obj_id player )
+{
+	obj_id poiObject = getSelf();
+	denyCredit( poiObject, player );
+}
+
+boolean isGrantedCredit( obj_id poiObject, obj_id player )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return false;
+
+	string objVarName = player.toString();
+	return isGrantedCredit( poiBaseObject, objVarName );
+}
+
+boolean isGrantedCredit( obj_id player )
+{
+	obj_id poiObject = getSelf();
+	return isGrantedCredit( poiObject, player );
+}
+
+boolean isGrantedCredit( obj_id poiBaseObject, string objVarName )
+{
+	if ( hasObjVar( poiBaseObject, POI_CREDIT_LIST + "." + objVarName ) )
+		return true;
+
+	return false;
+}
+
+boolean isDeniedCredit( obj_id poiObject, obj_id player )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return false;
+
+	string objVarName = player.toString();
+	return isDeniedCredit( poiBaseObject, objVarName );
+}
+
+boolean isDeniedCredit( obj_id player )
+{
+	obj_id poiObject = getSelf();
+	return isDeniedCredit( poiObject, player );
+}
+
+boolean isDeniedCredit( obj_id poiBaseObject, string objVarName )
+{
+	if ( hasObjVar( poiBaseObject, POI_DENY_LIST + "." + objVarName ) )
+		return true;
+
+	return false;
+}
+
+/* -----------------4/15/2002 5:01PM-----------------
+ * These functions are used internally to maintain a string index of POI elements
+ * --------------------------------------------------*/
+void addToStringList( obj_id element, string name )
+{
+	if ( element == null || element == obj_id.NULL_ID )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to add " + name + " to string list" );
+		return;
+	}
+	obj_id poiBaseObject = getBaseObject( element );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	setObjVar( poiBaseObject, POI_STRING_LIST + "." + name, element );
+	setObjVar( element, POI_STRING_LIST_INDEXNAME, name );
+}
+
+void addToStringList( string name )
+{
+	obj_id poiObject = getSelf();
+	addToStringList( poiObject, name );
+}
+
+void removeFromStringList( obj_id element )
+{
+	string name = getStringObjVar( element, POI_STRING_LIST_INDEXNAME);
+	obj_id existingElement = findObject( element, name );
+	if ( existingElement == null || existingElement == obj_id.NULL_ID )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to remove " + element + " from string list" );
+		return;
+	}
+	removeFromStringList( element, name );
+}
+
+void removeFromStringList()
+{
+	obj_id poiObject = getSelf();
+	removeFromStringList( poiObject );
+}
+
+void removeFromStringList( obj_id poiObject, string name )
+{
+	//debugSpeakMsg( poiObject, "removefromstringlist");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	obj_id element = getObjIdObjVar( poiBaseObject, POI_STRING_LIST + "." + name);
+	if ( element == null )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to remove " + name + " from string list" );
+		return;
+	}
+	removeObjVar( poiBaseObject, POI_STRING_LIST + "." + name );
+	removeObjVar( element, POI_STRING_LIST_INDEXNAME );
+}
+
+void removeFromStringList( string name )
+{
+	obj_id poiObject = getSelf();
+	removeFromStringList( poiObject, name );
+}
+
+/* -----------------4/15/2002 5:00PM-----------------
+ * These functions are used internally to maintain a list of POI elements
+ * --------------------------------------------------*/
+void addToMasterList( obj_id poiBaseObject, obj_id elementToAdd )
+{
+	return;
+
+	/** DEPRECATED:  Switching to broadcast clean-up messages:
+	string indexName = POI_MASTER_LIST + "." + elementToAdd.toString();
+	setObjVar( poiBaseObject, indexName, elementToAdd );
+	setObjVar( elementToAdd, POI_MASTER_LIST_INDEXNAME, indexName );
+
+	if ( isObjectPersisted( elementToAdd ))
+	{
+		indexName = POI_PERSISTED_LIST + "." + elementToAdd.toString();
+		setObjVar( poiBaseObject, indexName, elementToAdd );
+	}
+	*/
+}
+
+/* -----------------4/15/2002 2:39PM-----------------
+ * this function is used internally to remove objects from the
+ * string and master lists.
+ * --------------------------------------------------*/
+void removeFromMasterList( obj_id poiBaseObject, obj_id elementToRemove )
+{
+	return;
+	/** DEPRECATED:  Switching to broadcast cleanup messages
+	string indexName = getStringObjVar( elementToRemove, POI_MASTER_LIST_INDEXNAME);
+	if ( indexName == null )
+	{
+		debugServerConsoleMsg( getSelf(), "Error: Unable to remove " + elementToRemove + " from master list" );
+		return;
+	}
+	removeObjVar( poiBaseObject, indexName);
+	*/
+}
+
+boolean isInMasterList( obj_id poiBaseObject, obj_id element )
+{
+	return false;
+	/** DEPRECATED:  Switching to broadcast cleanup messages
+	string indexName = getStringObjVar( element, POI_MASTER_LIST_INDEXNAME);
+	if ( indexName == null )
+		return false;
+
+	return hasObjVar( poiBaseObject, indexName );
+	*/
+}
+
+boolean isInPersistedList( obj_id poiBaseObject, obj_id element )
+{
+	return false;
+	//string indexName = POI_PERSISTED_LIST + "." + element.toString();
+	//return ( hasObjVar( poiBaseObject, indexName ) );
+}
+
+/* -----------------4/15/2002 2:40PM-----------------
+ * This function is mostly used internally to find the poi
+ * base object
+ * --------------------------------------------------*/
+obj_id getBaseObject( obj_id poiObject )
+{
+	if (!isIdValid(poiObject) || !hasObjVar( poiObject, POI_BASE_OBJECT ))
+	{
+		//debugSpeakMsg( poiObject, "Error: unable to locate poi object!" );
+		debugServerConsoleMsg( poiObject, "Error: unable to locate poi object!" );
+		return null;
+	}
+	return getObjIdObjVar( poiObject, POI_BASE_OBJECT );
+}
+
+obj_id getBaseObject()
+{
+	obj_id poiObject = getSelf();
+	return getBaseObject( poiObject );
+}
+
+/* -----------------4/15/2002 2:40PM-----------------
+ * This function is used internally.  It is called when the
+ * base object is destroyed
+ * --------------------------------------------------*/
+void baseObjectDestroyed( obj_id poiBaseObject )
+{
+	setObjVar( poiBaseObject, "ignoreRemoval", true );
+	//debugSpeakMsg( poiBaseObject, "----------------------------------> I AM BEING DESTROYED" );
+
+	dictionary parms = new dictionary();
+	parms.put( "noMessageOnDestroy", 1 );
+	parms.put( "baseObjectUnloading", 0);//I am not unloading, I am being destroyed
+
+	broadcastMessage("cleanUpRoutine", parms);
+
+	/** DEPRACATED: switching to broadcast messages
+	if ( !hasObjVar( poiBaseObject, POI_MASTER_LIST ))
+		return;
+
+	//destroy all the elements of this poi, except those flagged "persistent":
+	obj_var_list elementList = getObjVarList( poiBaseObject, POI_MASTER_LIST);
+	int count = elementList.getNumItems();
+	for ( int i=0; i < count; ++i )
+	{
+		obj_var elementVar = elementList.getObjVar( i );
+		obj_id element = elementVar.getObjIdData();
+		//flag them first, so they don't notify the base object
+		dictionary parms = new dictionary();
+		parms.put( "noMessageOnDestroy", 1 );
+		parms.put( "baseObjectUnloading", 0);//I am not unloading, I am being destroyed
+		messageTo( element, "cleanUpRoutine", parms, 1, false);
+	}
+	*/
+}
+
+/* -----------------4/15/2002 2:41PM-----------------
+ * This function is used internally when a POI element is destroyed
+ * --------------------------------------------------*/
+void objectDestroyed( obj_id element )
+{
+	//If the object is being destroyed by the POI base object
+	// then we don't need to inform the base object when it is
+	// destroyed:
+	if ( hasObjVar( element, POI_NO_MESSAGE_ON_DESTROY ))
+		return;
+
+	//debugSpeakMsg( element, "objectDestroyed");
+	obj_id baseObject = getBaseObject( element );
+	if ( baseObject == null || baseObject == obj_id.NULL_ID )
+		return;
+
+
+	dictionary parms = new dictionary();
+ 	string name = findObjectName( element );
+	if ( name != null )
+		parms.put( "name", name );
+
+	messageTo( baseObject, "objectDestroyed", parms, 0, isObjectPersisted( baseObject) );
+
+}
+
+/* -----------------4/15/2002 7:22PM-----------------
+ * These functions are used to retrieve data from
+ * objvars placed on the main POI object from template:
+ * --------------------------------------------------*/
+string getDifficulty( obj_id poiObject )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return "easy";
+
+	if ( hasObjVar( poiBaseObject, POI_DIFFICULTY ))
+		return getStringObjVar( poiBaseObject, POI_DIFFICULTY );
+
+	//---rationalize ridiculous spawn-system difficulty granularity to 5 levels:---\\
+	int difficulty = getIntObjVar( poiBaseObject, "intDifficulty" );
+	string diff = "easy";
+	if ( difficulty <= 4 )
+		diff = "veryEasy";
+	else if ( difficulty <= 8 )
+		diff = "easy";
+	else if ( difficulty <= 12 )
+		diff = "medium";
+	else if ( difficulty <= 16 )
+		diff = "hard";
+	else
+		diff = "veryHard";
+	//-----------------------------------------------------------------------------//
+	setObjVar( poiBaseObject, POI_DIFFICULTY, diff );
+	return diff;
+
+}
+
+string getDifficulty()
+{
+	obj_id poiObject = getSelf();
+	return getDifficulty( poiObject );
+}
+
+int getIntDifficulty()
+{
+	obj_id poiObject = getSelf();
+	string diff = getDifficulty( poiObject );
+
+	if ( diff.equals("veryEasy") )
+		return DIFF_VEASY;
+	else if ( diff.equals("easy") )
+		return DIFF_EASY;
+	else if ( diff.equals("medium") )
+		return DIFF_MEDIUM;
+	else if ( diff.equals("hard") )
+		return DIFF_HARD;
+	else if ( diff.equals("veryHard") )
+		return DIFF_VHARD;
+	else
+		return DIFF_UNKNOWN;
+}
+
+string getFaction( obj_id poiObject )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return null;
+
+	return getStringObjVar( poiBaseObject, POI_FACTION );
+}
+
+string getFaction()
+{
+	obj_id poiObject = getSelf();
+	return getFaction( poiObject );
+}
+
+float getFactionValue( obj_id poiObject )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return 0.0f;
+
+	return getFloatObjVar( poiBaseObject, POI_FACTION_VALUE );
+}
+
+float getFactionValue()
+{
+	obj_id poiObject = getSelf();
+	return getFactionValue( poiObject );
+}
+
+string getObjective( obj_id poiObject )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return null;
+
+	return  getStringObjVar( poiBaseObject, POI_OBJECTIVE );
+}
+
+string getObjective()
+{
+	obj_id poiObject = getSelf();
+	return getObjective( poiObject );
+}
+
+/* -----------------4/15/2002 8:23PM-----------------
+ * These functions can be used to override the faction-info:
+ * --------------------------------------------------*/
+void setFaction( obj_id poiObject, string faction )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	setObjVar( poiBaseObject, POI_FACTION, faction );
+}
+
+void setFaction( string faction )
+{
+	obj_id poiObject = getSelf();
+	setFaction( poiObject, faction );
+}
+
+void setFactionValue( obj_id poiObject, float factionValue )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	setObjVar( poiBaseObject, POI_FACTION_VALUE, factionValue );
+}
+
+void setFactionValue( float factionValue )
+{
+	obj_id poiObject = getSelf();
+	setFactionValue( poiObject, factionValue );
+}
+
+/* -----------------4/15/2002 7:32PM-----------------
+ * This function flags a POI as "complete", cleans it up, and credits the winners.
+ * --------------------------------------------------*/
+void complete( obj_id poiObject, int status )
+{
+	//debugSpeakMsg( poiObject, "complete/status");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	if ( isComplete( poiBaseObject ) )
+		return;//already flagged complete
+
+	//Award faction standing:
+	switch ( status )
+	{
+		case POI_SUCCESS :
+			//emit SUCCESS message to mission system if necessary
+			awardFactionStanding( poiBaseObject );
+			break;
+		case POI_FAIL :
+			//emit FAIL message to mission system if necessary
+			break;
+	}
+
+	//Notify mission system:
+	sendMissionStatus( poiBaseObject, status );
+	messageTo( poiBaseObject, "cleanUpRoutine", null, 60, false );
+	setObjVar( poiBaseObject, POI_COMPLETED, true );
+}
+
+void complete( int status )
+{
+	obj_id poiObject = getSelf();
+	complete( poiObject, status );
+}
+
+void complete( obj_id poiObject )
+{
+	//debugSpeakMsg( poiObject, "complete");
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return;
+
+	if ( isComplete( poiBaseObject ) )
+		return;//already flagged complete
+
+	sendMissionStatus( poiBaseObject, POI_INCOMPLETE );
+	messageTo( poiBaseObject, "cleanUpRoutine", null, 60, false);
+	setObjVar( poiBaseObject, POI_COMPLETED, true );
+}
+
+void complete()
+{
+	obj_id poiObject = getSelf();
+	complete( poiObject );
+}
+
+//Never call this:  It's called by complete()
+void awardFactionStanding( obj_id poiBaseObject )
+{
+	string faction = getFaction( poiBaseObject );
+	float factionValue = getFactionValue( poiBaseObject );
+	if(faction==null)
+	{
+		return;
+	}
+
+	obj_var_list playerList = getObjVarList( poiBaseObject, POI_CREDIT_LIST);
+
+	if(playerList == null)
+		return;
+
+	int count = playerList.getNumItems();
+	for ( int i=0; i < count; ++i )
+	{
+		obj_var playerVar = playerList.getObjVar( i );
+		obj_id player = utils.stringToObjId( playerVar.getName() );
+		factions.addFactionStanding( player, faction, factionValue );
+	}
+}
+
+//never call this:
+void sendMissionStatus( obj_id poiBaseObject, int status )
+{
+	if ( !hasObjVar( poiBaseObject, "objMission") )
+		 return;
+
+	obj_id objMission = getObjIdObjVar(poiBaseObject, "objMission");
+
+	switch ( status )
+	{
+		case POI_SUCCESS :
+			messageTo(objMission, "destructionSuccess", null, 0, true);
+			break;
+		case POI_INCOMPLETE :
+			messageTo(objMission, "destructionIncomplete", null, 0, true);
+			break;
+		case POI_FAIL :
+			messageTo(objMission, "destructionFail", null, 0, true);
+			break;
+		default :
+			messageTo(objMission, "destructionIncomplete", null, 0, true);
+			break;
+	}
+}
+/* -----------------4/16/2002 4:02PM-----------------
+ * Never call this function directly.  It's invoked by the poi_object
+ * script when the base object is removed from the world.
+ *
+ * All items told to destroy themselves, all POI data is reset
+ * and the POI will recreate itself from scratch when it
+ * re-initializes.
+ *
+ * --------------------------------------------------*/
+void baseObjectRemovedFromWorld( obj_id poiBaseObject )
+{
+	//if the POI has been completed, then just delete it:
+	if ( isComplete( poiBaseObject ) )
+	{
+		destroyObject( poiBaseObject );
+		return;
+	}
+
+	if ( hasObjVar( poiBaseObject, "ignoreRemoval"))
+	{
+		//debugSpeakMsg( poiBaseObject, "----------------------------------> I AM IGNORING MY REMOVAL FROM THE WORLD" );
+		return;
+	}
+
+	//debugSpeakMsg( poiBaseObject, "----------------------------------> I AM BEING REMOVED FROM THE WORLD" );
+
+
+	dictionary parms = new dictionary();
+	parms.put( "noMessageOnDestroy", 1 );
+	parms.put( "baseObjectUnloading", 1);//I am unloading
+	broadcastMessage("cleanUpRoutine", parms);
+
+	/*
+	//destroy all the objects:
+	if ( !hasObjVar( poiBaseObject, POI_MASTER_LIST ))
+	{
+		//debugSpeakMsg( poiBaseObject, "----------------------------------> I HAVE NO OBJECT MASTER LIST" );
+		return;
+	}
+
+	//destroy all the Persisted elements of this poi:
+	obj_var_list elementList = getObjVarList( poiBaseObject, POI_MASTER_LIST);
+	int count = elementList.getNumItems();
+	for ( int i=0; i < count; ++i )
+	{
+		obj_var elementVar = elementList.getObjVar( i );
+		obj_id element = elementVar.getObjIdData();
+
+		//if we can, destroy it, otherwise message it to destroy itself, unless it isn't persisted:
+		if ( exists( element ) )
+		{
+			if (hasObjVar( element, "intPersistent" ))
+				detachScript( element, "theme_park.poi.poi_object" );
+			else
+			{
+				setObjVar( element, POI_NO_MESSAGE_ON_DESTROY, true );
+				if (!destroyObject( element ))
+					messageTo( element, "handleDelayedDestruction", null, 60, isObjectPersisted( element ) );
+			}
+		}
+		else if ( isInPersistedList( poiBaseObject, element ))
+		{
+			//flag them first, so they don't notify the base object
+			dictionary parms = new dictionary();
+			parms.put( "noMessageOnDestroy", 1 );
+			parms.put( "baseObjectUnloading", 1 );//I am unloading, not being destroyed
+			messageTo( element, "cleanUpRoutine", parms, 1, false);
+		}
+	}
+
+	//delete all the info:
+
+	removeObjVar( poiBaseObject, POI_MASTER_LIST );
+	removeObjVar( poiBaseObject, POI_PERSISTED_LIST );
+	*/
+	removeObjVar( poiBaseObject, POI_STRING_LIST );
+
+}
+
+boolean isComplete( obj_id poiObject )
+{
+	obj_id poiBaseObject = getBaseObject( poiObject );
+	if ( !isIdValid( poiBaseObject  ) )
+		return false;
+
+	if ( hasObjVar( poiObject, "npc_lair.target" ) )
+	{
+		obj_id target = getObjIdObjVar( poiObject, "npc_lair.target" );
+		if ( !exists( target ) )
+			return true;
+	}
+
+	return hasObjVar( poiBaseObject, POI_COMPLETED );
+}
+
+boolean isComplete()
+{
+	obj_id poiObject = getSelf();
+	return isComplete( poiObject );
+}
+
+/* -----------------12/27/2002 6:51PM-----------------
+ * Brandon's useful utilities.
+ * --------------------------------------------------*/
+
+// Set a title on a given npc's name.
+// The npc must be a part of the POI.
+boolean setTitle( obj_id npc, string title )
+{
+	// Get reference to base.
+	obj_id poiBaseObject = getBaseObject( npc );
+	if ( poiBaseObject == null || poiBaseObject == obj_id.NULL_ID )
+		return false;
+
+	// Load convo file.
+	string convo = getStringObjVar( poiBaseObject, scenario.VAR_SCENARIO_CONVO );
+	if ( convo == null || convo.equals("") )
+		return false;
+
+	string_id titleid = new string_id( convo, title );
+	string name = getName( npc );
+	setName( npc, getString(titleid) + " " + name );
+
+	return true;
+}
+
+// Returns whether a given npc is the given object tag.
+boolean isNpcTagged( obj_id npc, string tag )
+{
+	obj_id found = findObject( tag );
+	if ( (found == null) || (found == obj_id.NULL_ID) )
+		return false;
+	else if ( found == npc )
+		return true;
+	else
+		return false;
+}
+
+// Say something from our convo file.
+boolean quickSay( obj_id npc, string speech )
+{
+	// Get reference to base.
+	obj_id poiBaseObject = getBaseObject( npc );
+	if ( (poiBaseObject == null) || (poiBaseObject == obj_id.NULL_ID) )
+		return false;
+
+	// Load convo file.
+	string convo = getStringObjVar( poiBaseObject, scenario.VAR_SCENARIO_CONVO );
+	if ( convo.equals( null ) || convo.equals("") )
+		return false;
+
+	// Say something.
+	scenario.sayNoAct( npc, convo, speech );
+
+	return true;
+}
+
+// Say something from our convo file using chat library.
+boolean quickSay( obj_id npc, string chatType, string moodType, string speech )
+{
+	// Get reference to base.
+	obj_id poiBaseObject = getBaseObject( npc );
+	if ( (poiBaseObject == null) || (poiBaseObject == obj_id.NULL_ID) )
+		return false;
+
+	// Load convo file.
+	string convo = getStringObjVar( poiBaseObject, scenario.VAR_SCENARIO_CONVO );
+	if ( convo == null || convo.equals("") )
+		return false;
+
+	// Say something.
+	chat.chat( npc, chatType, moodType, new string_id(convo, speech) );
+
+	return true;
+}
+
+obj_id getRandomMediator( obj_id poiobj )
+{
+	// Get reference to base.
+	obj_id poiBaseObject = getBaseObject( poiobj );
+	if ( (poiBaseObject == null) || (poiBaseObject == obj_id.NULL_ID) )
+		return null;
+
+	int count = getIntObjVar( poiBaseObject, scenario.VAR_MEDIATOR_COUNT );
+	int index = rand( 0, count-1 );
+	return poi.findObject( scenario.MEDIATOR + "_" + index );
+}
+
+obj_id getRandomAntagonist( obj_id poiobj )
+{
+	// Get reference to base.
+	obj_id poiBaseObject = getBaseObject( poiobj );
+	if ( (poiBaseObject == null) || (poiBaseObject == obj_id.NULL_ID) )
+		return null;
+
+	int count = getIntObjVar( poiBaseObject, scenario.VAR_ANTAGONIST_COUNT );
+	int index = rand( 0, count-1 );
+	return poi.findObject( scenario.ANTAGONIST + "_" + index );
+}

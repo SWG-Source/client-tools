@@ -1,0 +1,190 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        stimpack_dispensor
+ * Description:  script that attaches to the stimpack_dispensor droid
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.ai_lib;
+include library.pet_lib;
+include library.healing;
+include library.group;
+include library.consumable;
+include library.sui;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+const string STF_FILE = "pet/droid_modules";
+
+const string SCRIPT_VAR_STIMPACK_LIST  		= "droid_module.stimpack_list";
+const string SCRIPT_VAR_STIMPACK_DROID 		= "droid_module.stimpack_droid";
+const string SCRIPT_VAR_STIMPACK_SUI 		= "droid_module.stimpack_sui";
+
+
+/***** TRIGGERS ********************************************************/
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (isDead(self) || ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	obj_id master = getMaster(self);
+	if (!isIdValid(master))
+		return SCRIPT_CONTINUE;
+
+	if (player == master || group.inSameGroup(master, player))
+	{
+		int mnu = mi.addRootMenu (menu_info_types.SERVER_ITEM_OPTIONS, new string_id(STF_FILE,"request_stimpack"));
+
+		if (hasSkill(player, "science_medic_ability_04"))
+		{
+			mi.addSubMenu(mnu, menu_info_types.SERVER_HEAL_WOUND_HEALTH, new string_id(STF_FILE, "load_stimpack"));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (item != menu_info_types.SERVER_ITEM_OPTIONS && item != menu_info_types.SERVER_HEAL_WOUND_HEALTH)
+		return SCRIPT_CONTINUE;
+
+	if (isDead(self) || ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	if (pet_lib.isLowOnPower(self))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "not_enough_power"));
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id master = getMaster(self);
+	if (!isIdValid(master))
+		return SCRIPT_CONTINUE;
+
+	if (item == menu_info_types.SERVER_ITEM_OPTIONS)
+	{
+		queueCommand(player, ##"requestStimpack", self, "", COMMAND_PRIORITY_DEFAULT);
+	}
+
+	if (item == menu_info_types.SERVER_HEAL_WOUND_HEALTH)
+	{
+		if (!hasSkill(player, "science_medic_ability_04"))
+			return SCRIPT_CONTINUE;
+
+		if (player != getMaster(self) && group.inSameGroup(master, player))
+			return SCRIPT_CONTINUE;
+
+		obj_id inventory = getObjectInSlot(player, "inventory");
+		if (!isIdValid(inventory))
+		{
+			LOG("droid_module", "systems.crafting.droid.modules.stimpack_dispensor.OnObjectMenuSelect -- " + player + "'s inventory is null.");
+			return SCRIPT_CONTINUE;
+		}
+		obj_id[] items = utils.getContents(inventory, false);
+		resizeable obj_id[] stim_a = new obj_id[0];
+		resizeable string[] dsrc = new string[0];
+		if (items != null)
+		{
+			// Find the stimpack_a's
+			for (int i = 0; i < items.length; i++)
+			{
+				//LOG("droid_module", "template ->" + getTemplateName(items[i]));
+				if (getTemplateName(items[i]).equals("object/tangible/medicine/instant_stimpack/stimpack_a.iff"))
+				{
+					stim_a = utils.addElement(stim_a, items[i]);
+
+					int power = getIntObjVar(items[i], "healing.power");
+					int charges = getCount(items[i]);
+					string text = "Power :" + power + "   Charges :" + charges;
+					dsrc = utils.addElement(dsrc, text);
+				}
+			}
+		}
+
+		if (stim_a.length < 1)
+		{
+			sendSystemMessage(player, new string_id(STF_FILE, "no_stimpacks"));
+			return SCRIPT_CONTINUE;
+		}
+
+		utils.setScriptVar(player, SCRIPT_VAR_STIMPACK_LIST, stim_a);
+		utils.setScriptVar(player, SCRIPT_VAR_STIMPACK_DROID, self);
+		if (utils.hasScriptVar(player, SCRIPT_VAR_STIMPACK_SUI))
+			forceCloseSUIPage(utils.getIntScriptVar(player, SCRIPT_VAR_STIMPACK_SUI));
+
+		int pid = sui.listbox(player, player, "Select the stimpack you wish to load into the droid.", sui.OK_CANCEL, "Stimpack Selection", dsrc, "msgStimpackLoaded");
+		utils.setScriptVar(player, SCRIPT_VAR_STIMPACK_SUI, pid);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if (hasObjVar(self, "module_data.stimpack_capacity"))
+	{
+		names[idx] = "stimpack_power";
+		int power = getIntObjVar(self, "module_data.stim_power");
+		int supply = getIntObjVar(self, "module_data.stimpack_supply");
+		int capacity = getIntObjVar(self, "module_data.stimpack_capacity");
+		int speed = getIntObjVar(self, "module_data.stimpack_speed");
+		if (power < 0)
+			power = 0;
+		if (supply < 0)
+			supply = 0;
+
+		attribs[idx] = " " + power;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+		names[idx] = "stimpack_capacity";
+		attribs[idx] = " " + supply + " / " + capacity;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+		names[idx] = "stimpack_speed";
+		attribs[idx] = " " + speed;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgStimpackDispensorRecharged()
+{
+	utils.removeScriptVar(self, "module_data.stimpack_recharging");
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/

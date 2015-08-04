@@ -1,0 +1,299 @@
+/*
+item.instance_reset.script
+Used to reset an instance of the players choice
+Authors: Jesse Benjamin
+*/
+
+//libraries
+include library.instance;
+include library.prose;
+include library.sui;
+include library.utils;
+
+//constants
+
+const string PID_NAME					= "collectionConsume";
+const string SCRIPT_VAR_INSTANCE_LIST			= "instance.list";
+
+const string_id SID_LIST_PROMPT				= new string_id("spam", "instance_reset_list_prompt");
+const string_id SID_LIST_TITLE				= new string_id("spam", "instance_reset_list_title");
+const string_id SID_CONSUME_PROMPT			= new string_id("spam", "instance_reset_consume_prompt");
+const string_id SID_CONSUME_TITLE			= new string_id("spam", "instance_reset_consume_title");
+const string_id SID_CONSUME_ITEM			= new string_id("spam", "reset_instance");
+const string_id SID_NO_INSTANCE_LOCKOUT			= new string_id("spam", "no_instance_lockout");
+const string_id SID_NO_LOCKOUT_FOR_INSTANCE		= new string_id("spam", "no_lockout_for_instance");
+const string_id SID_INSTANCE_WAS_RESET			= new string_id("spam", "instance_was_reset");
+const string_id SID_INSTANCE_GENERIC_ERROR		= new string_id("spam", "instance_generic_error");
+
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+
+	//can only consume if you have it picked up
+	if(utils.isNestedWithinAPlayer(self))
+	{
+		mi.addRootMenu (menu_info_types.ITEM_USE, SID_CONSUME_ITEM);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+
+	if (item == menu_info_types.ITEM_USE  && utils.isNestedWithinAPlayer(self))
+	{
+		//make sure they dont already have a UI up
+		if(sui.hasPid(player, PID_NAME))
+		{
+			int pid = sui.getPid(player, PID_NAME);
+			forceCloseSUIPage(pid);
+		}
+
+		//get list of instances on player
+		obj_var_list varListinstance = getObjVarList(player, instance.PLAYER_INSTANCE);
+
+		//validate list
+		if(varListinstance == null)
+		{
+			sendSystemMessage(player, SID_NO_INSTANCE_LOCKOUT);
+			CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "Player " + getPlayerName(player) + "("+player+") tried to use an instance reset device, but had no instances to reset.");
+			return SCRIPT_CONTINUE;
+		}
+
+		string[] instanceList = varListinstance.getAllObjVarNames();
+
+		//get the names of the instances
+		if(instanceList == null || instanceList.length <= 0)
+		{
+			sendSystemMessage(player, SID_NO_INSTANCE_LOCKOUT);
+			CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "Player " + getPlayerName(player) + "("+player+") tried to use an instance reset device, but had no instances to reset.");
+			return SCRIPT_CONTINUE;
+		}
+
+		//have to localize it for the player
+		string[] localizedList = new string[instanceList.length];
+
+		for(int i = 0; i < localizedList.length; ++i)
+		{
+			localizedList[i] = "@instance:" + instanceList[i];
+		}
+
+		//track the unlocalized version
+		utils.setScriptVar(self, SCRIPT_VAR_INSTANCE_LIST, instanceList);
+
+		//display list to player
+		int pid = sui.listbox(self, player, "@" + SID_LIST_PROMPT, sui.OK_CANCEL, "@" + SID_LIST_TITLE, localizedList, "onInstanceResetItemResponse", true, false);
+		sui.setPid(player, pid, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+
+	return SCRIPT_CONTINUE;
+}
+
+
+//messageHandlers
+
+//handler for the list of instanes to choose from
+messageHandler onInstanceResetItemResponse()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//we need the list or we cannot continue
+	if(!utils.hasScriptVar(self, SCRIPT_VAR_INSTANCE_LIST))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL || idx == -1)
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		return SCRIPT_CONTINUE;
+	}
+	int pageId = params.getInt("pageId");
+
+	//double check that this is the only SUI window open
+	if(!sui.hasPid(player, PID_NAME))
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		return SCRIPT_CONTINUE;
+	}
+
+	int pid = sui.getPid(player, PID_NAME);
+
+	//verify that this UI matches the pid stored on player
+	if(pageId != pid)
+	{
+		forceCloseSUIPage(pageId);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		return SCRIPT_CONTINUE;
+	}
+
+	//check to make sure it hasnt left the players inventory
+	if(!utils.isNestedWithin(self, player))
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "item ("+self+") was not consumed by Player " + getPlayerName(player) + "("+player+") this is because the item was no longer in their inventory.");
+		return SCRIPT_CONTINUE;
+	}
+
+	//get the list of instances off item
+	string[] instanceList = utils.getStringArrayScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+	if(instanceList == null || instanceList.length <= 0)
+		return SCRIPT_CONTINUE;
+
+	//dont need the whole list anymore
+	utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+
+	string instanceSelected = instanceList[idx];
+	if(instanceSelected == null || instanceSelected.length() <= 0)
+		return SCRIPT_CONTINUE;
+
+	//set the name of the instance choses on object
+	utils.setScriptVar(self, SCRIPT_VAR_INSTANCE_LIST, instanceSelected);
+	CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "Player " + getPlayerName(player) + "("+player+") elected to reset the instance timer for "+instanceSelected+".");
+
+	//confirm that they want to reset the timer
+	int newPid = sui.msgbox(self, player, "@" + SID_CONSUME_PROMPT, sui.YES_NO, "@" + SID_CONSUME_TITLE, "handlerConfirmResetInstance");
+	sui.setPid(player, newPid, PID_NAME);
+
+	return SCRIPT_CONTINUE;
+
+}
+
+//handler for confirmation of reseting timer
+messageHandler handlerConfirmResetInstance()
+{
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//without the instance name we cannot do anything
+	if(!utils.hasScriptVar(self, SCRIPT_VAR_INSTANCE_LIST))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL)
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		return SCRIPT_CONTINUE;
+	}
+	int pageId = params.getInt("pageId");
+
+	//double check that this is the only SUI window open
+	if(!sui.hasPid(player, PID_NAME))
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		return SCRIPT_CONTINUE;
+	}
+
+	int pid = sui.getPid(player, PID_NAME);
+
+	//verify this handler is being fired for the pid stored on player
+	if(pageId != pid)
+	{
+		forceCloseSUIPage(pageId);
+		forceCloseSUIPage(pid);
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		return SCRIPT_CONTINUE;
+	}
+
+	//make sure the item is still in the players inventory
+	if(!utils.isNestedWithin(self, player))
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "item ("+self+") was not consumed by Player " + getPlayerName(player) + "("+player+") this is because the item was no longer in their inventory.");
+		return SCRIPT_CONTINUE;
+	}
+
+	//get the name of the instance to remove
+	string instanceToRemove = utils.getStringScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+
+	if(instanceToRemove == null || instanceToRemove.length() <= 0)
+		return SCRIPT_CONTINUE;
+
+	//dont need to store the name anymore
+	utils.removeScriptVar(self, SCRIPT_VAR_INSTANCE_LIST);
+
+	//get all the instance data on the player for the selected instance
+	dictionary instance_data = instance.getLockoutData(player, instanceToRemove);
+
+	//validate the data
+	//if null, they most like dont have a lockout for it
+	if (instance_data == null || instance_data.isEmpty())
+	{
+		sendSystemMessage(player, SID_NO_LOCKOUT_FOR_INSTANCE);
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "item ("+self+") was NOT consumed by Player " + getPlayerName(player) + "("+player+") this is because they were not locked out of "+instanceToRemove+".");
+		return SCRIPT_CONTINUE;
+	}
+
+	int newStartTime = instance_data.getInt("start_time");
+	obj_id instance_id = instance_data.getObjId("instance_id");
+	obj_id owner = instance_data.getObjId("owner");
+	int startTime = instance_data.getInt("start_time");
+	int resetAt = getCalendarTime();
+
+	//set the lockout time to end right now
+	setObjVar(player, instance.PLAYER_INSTANCE+"."+instanceToRemove, ""+resetAt+"_"+instance_id+"_"+owner+"_"+newStartTime);
+
+	//get the instance data one more time
+	//this will clear the objvar ont he player if all is set correctly
+	instance_data = instance.getLockoutData(player, instanceToRemove);
+
+	//if this doesnt come back as a null, then something is wrong and we need to bail out
+	if (instance_data != null && !instance_data.isEmpty())
+	{
+		sendSystemMessage(player, SID_INSTANCE_GENERIC_ERROR);
+		CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "item ("+self+") was NOT consumed by Player " + getPlayerName(player) + "("+player+") for some reason the instance data was not cleared for instance "+instanceToRemove+".");
+		return SCRIPT_CONTINUE;
+	}
+
+	CustomerServiceLog(instance.INSTANCE_DEBUG_LOG, "item ("+self+") was consumed by Player " + getPlayerName(player) + "("+player+") and the lockout timer for instance "+instanceToRemove+" was reset.");
+
+	//tell the player what lockout was reset
+	prose_package pp = new prose_package();
+	prose.setStringId(pp, SID_INSTANCE_WAS_RESET);
+	prose.setTU(pp, "@instance:"+instanceToRemove);
+	sendSystemMessageProse(player, pp);
+
+	//item did its job, time to remove it.
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+
+}

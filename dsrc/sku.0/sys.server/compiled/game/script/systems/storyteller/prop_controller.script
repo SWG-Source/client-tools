@@ -1,0 +1,241 @@
+include library.utils;
+include library.static_item;
+include library.storyteller;
+include library.trial;
+
+trigger OnAttach()
+{
+	setObjVar(self, "storytellerCreationTime", getGameTime());
+	utils.setScriptVar(self, "storytellerOnAttachFired", true);
+	
+	messageTo(self, "startPropSetup", null, 1, false);
+	
+	checkBonusCleanupTime(self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	messageTo(self, "handleStorytellerPropInitialize", null, 5, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleStorytellerPropInitialize()
+{
+	if ( !hasObjVar(self, "eventTeamCleaupOverride") && !utils.hasScriptVar(self, "storytellerOnAttachFired") )
+	{	
+		if ( hasObjVar(self, "storytellerCreationTime") )
+		{
+			int storytellerCreationTime = getIntObjVar(self, "storytellerCreationTime");
+			if ( getGameTime() >= storytellerCreationTime + getStandardCleanupTime(self) )
+			{
+				messageTo(self, "cleanupProp", null, 1, false);
+			}
+			else
+			{
+				messageTo(self, "prepCleanupProp", null, getStandardCleanupTime(self) - ( getGameTime() - storytellerCreationTime ), false);
+			}
+		}
+		else
+		{
+			setObjVar(self, "storytellerCreationTime", getGameTime());
+			messageTo(self, "startPropSetup", null, 1, false);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startPropSetup()
+{
+	setupProp();
+	return SCRIPT_CONTINUE;
+}
+
+void setupProp()
+{
+	obj_id self= getSelf();
+	if ( !hasObjVar(self, "eventTeamCleaupOverride") )
+	{
+		int cleanup_time = getStandardCleanupTime(self);
+		messageTo(self, "prepCleanupProp", null, cleanup_time, false);
+	}
+	return;
+}
+
+int getStandardCleanupTime(obj_id prop_controller)
+{
+	if(hasObjVar(prop_controller, "storytellerCleanUpTime"))
+	{
+		int cleanUpTime = getIntObjVar(prop_controller, "storytellerCleanUpTime");
+		return cleanUpTime;
+	}
+	return storyteller.DEFAULT_PROP_CLEANUP_TIME;
+}
+
+messageHandler cleanupProp()
+{
+	trial.cleanupObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler prepCleanupProp()
+{
+	storyteller.confirmCleanuptime(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id myStorytellerId = getObjIdObjVar(self, "storytellerid");
+	if ( myStorytellerId == player || myStorytellerId == utils.getObjIdScriptVar(player, "storytellerAssistant")  || isGod(player) )
+	{
+		mi.addRootMenu (menu_info_types.SERVER_MENU1, new string_id("storyteller", "destroy_prop"));
+		
+		if ( hasObjVar(self, storyteller.EFFECT_ACTIVE_OBJVAR) )
+		{
+			mi.addRootMenu (menu_info_types.SERVER_MENU2, new string_id("storyteller", "remove_persisted_effect"));
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	obj_id myStorytellerId = getObjIdObjVar(self, "storytellerid");
+	if ( myStorytellerId == player || myStorytellerId == utils.getObjIdScriptVar(player, "storytellerAssistant") || isGod(player) )
+	{
+		if (item == menu_info_types.SERVER_MENU1)
+		{
+			trial.cleanupObject(self);
+		}
+		// remove persisted effect
+		else if ( item == menu_info_types.SERVER_MENU2 )
+		{
+			storyteller.removeStorytellerPersistedEffect(self);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRemoveStorytellerPersistedEffect()
+{
+	storyteller.removeStorytellerPersistedEffect(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+	
+	obj_id myStorytellerId = getObjIdObjVar(self, "storytellerid");
+	if ( (myStorytellerId == player || myStorytellerId == utils.getObjIdScriptVar(player, "storytellerAssistant") || isGod(player)) )
+	{
+		if( hasObjVar(self, "storytellerCreationTime") )
+		{
+			int storytellerCreationTime = getIntObjVar(self, "storytellerCreationTime");
+			int timeRemaining = storytellerCreationTime + getStandardCleanupTime(self) - getGameTime();
+			
+			names[idx] = "storyteller_time_remaining";
+			attribs[idx] = utils.formatTimeVerbose(timeRemaining);
+			idx++;
+			if (idx >= names.length)
+				return SCRIPT_CONTINUE;
+		}
+	}
+	
+	if( hasObjVar(self, "storytellerName") )
+	{
+		string storytellerName = getStringObjVar(self, "storytellerName");
+		if ( storytellerName != null && storytellerName.length() > 0 )
+		{
+			names[idx] = "storyteller_prop_owner";
+			attribs[idx] = storytellerName;
+			idx++;
+			if (idx >= names.length)
+				return SCRIPT_CONTINUE;
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnObjectDisabled (obj_id killer)
+{
+	location death = getLocation( self );
+	playClientEffectObj(killer, "clienteffect/combat_explosion_lair_large.cef", self, "");
+	playClientEffectLoc(killer, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+
+	setInvulnerable( self, true );
+	messageTo( self, "cleanupProp", null, 1f, false );
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+/*
+	int curHP = getHitpoints (self);
+	int maxHP = getMaxHitpoints( self );
+	int smolder = (maxHP/2);
+	int fire = (maxHP/4);
+
+	if (!hasObjVar (self, "playingEffect"))
+	{
+		if (curHP < smolder)
+		{
+			if (curHP < fire)
+			{
+				location death = getLocation (self);
+				playClientEffectObj(attacker, "clienteffect/lair_hvy_damage_fire.cef" , self, "");
+				playClientEffectLoc(attacker, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+				setObjVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+			}
+			else
+			{
+				location death = getLocation (self);
+				playClientEffectObj(attacker, "clienteffect/lair_med_damage_smoke.cef" , self, "");
+				playClientEffectLoc(attacker, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+				setObjVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+			}
+		}
+	}
+*/
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler effectManager ()
+{
+	removeObjVar (self, "playingEffect");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBlueprintElevation()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	storyteller.handleBlueprintObjectElevation(self, params);
+	return SCRIPT_CONTINUE;
+}
+
+void checkBonusCleanupTime(obj_id prop_controller)
+{
+	storyteller.calculatePropBonusExistTime(prop_controller);
+}
+
+//we will only receive a message back from the City Hall if they have the specialization.
+messageHandler st_receivedCityResponse()
+{
+	storyteller.setBonusExistTime(self);
+	return SCRIPT_CONTINUE;
+}

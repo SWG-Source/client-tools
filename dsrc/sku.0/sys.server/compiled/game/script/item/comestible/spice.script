@@ -1,0 +1,237 @@
+
+//------------------------------------------------
+// Include
+//------------------------------------------------
+
+include library.consumable;
+include library.utils;
+include library.metrics;
+include library.healing;
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_SYS_ALREADY_SPICED 		= new string_id("spice/spice", "sys_already_spiced");
+const string EXAM_ATTRIB_MOD				= "attribmods";
+const string EXAM_NONE						= "@consumable:none";
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Convert old new spice to new new spice
+	removeObjVar(self, "spice");
+
+	string template = getTemplateName(self);
+
+	int Fidx = (template.lastIndexOf("spice_") + 6);
+	int Lidx = (template.lastIndexOf(".iff") - 1);
+
+	string name = template.substring(Fidx, Lidx);
+
+	setObjVar(self, "spice.name", name);
+
+	detachScript(self, "item.comestible.spice");
+
+	/*
+	// Convert old spice to new spice
+	if (hasObjVar(self, "spice.attrib_mod"))
+	{
+		attrib_mod[] am = getAttribModArrayObjVar( self, "spice.attrib_mod" );
+		int dur = (int) am[0].getDuration();
+		int[] mods = {0, 0, 0, 0, 0, 0};
+
+		for (int i = 0; i < am.length; i++)
+		{
+			int attrib = am[i].getAttribute();
+			int val = am[i].getValue();
+
+			mods[attrib] = val;
+		}
+
+		removeObjVar(self, "spice.attrib_mod");
+		setObjVar(self, "spice.mods", mods);		// Suppress linting - This is a fixed nine element array
+		setObjVar(self, "spice.duration", dur);
+	}
+	*/
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest( obj_id player, menu_info mi )
+{
+	menu_info_data mid = mi.getMenuItemByType( menu_info_types.ITEM_USE );
+	if ( mid != null )
+	{
+		mid.setServerNotify( true );
+	}
+
+	mid = mi.getMenuItemByType( menu_info_types.EXAMINE );
+	if ( mid != null )
+	{
+		mid.setServerNotify( true );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect( obj_id player, int item )
+{
+	if ( item == menu_info_types.ITEM_USE )
+	{
+		eatSpice( self, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// eatSpice
+//------------------------------------------------
+
+void eatSpice( obj_id self, obj_id player )
+{
+	// Get the attrib mod.
+	int dur = getIntObjVar(self, "spice.duration");
+	int[] mods = getIntArrayObjVar(self, "spice.mods");
+
+	// Fixup for broken spices on TC
+	if (dur == 0)
+		dur = (int) getFloatObjVar(self, "spice.duration");
+
+	// Check to see if we can take it.
+	if (hasAttribModifier(player, "spice"))
+	{
+		sendSystemMessage( player, SID_SYS_ALREADY_SPICED );
+		return;
+	}
+
+	// Parse off the item name.
+	string tname = getTemplateName( self );
+	int pos = tname.indexOf( '_' );
+	string name = tname.substring( pos+1 );
+	name = name.substring( 0, name.indexOf( '.' ) );
+
+	// Send consume message.
+	string_id cmsg = new string_id( "spice/spice", name + "_consume" );
+	sendSystemMessage( player, cmsg );
+
+	// Apply the spice effects.
+	boolean buffIcon = false;
+	for (int i = 0; i < mods.length; i++)
+	{
+		int buffValue = 0;
+		if (mods[i] != 0)
+		{
+			attrib_mod newMod;
+			// buffValue = healing.getBuffAmount(player, i, mods[i]);
+
+			if (!buffIcon)
+			{
+				newMod = new attrib_mod("spice."+name+".up", i, buffValue, dur, 0, 0, true, true, true);
+				buffIcon = true;
+			}
+			else
+			{
+				newMod = new attrib_mod(null, i, buffValue, dur, 0, 0, true, false, false);
+			}
+
+			addAttribModifier(player, newMod);
+
+			// Log buff info
+			metrics.logBuffStatus(player);
+		}
+	}
+
+	float downTimeReduction = 0f;
+	if ( utils.hasScriptVar( player, "food.reduce_spice_downtime.eff" ) )
+	{
+		// Possible food buff mitigation.
+		int eff = utils.getIntScriptVar( player, "food.reduce_spice_downtime.eff" );
+		utils.removeScriptVarTree( player, "food.reduce_spice_downtime" );
+		clearBuffIcon( player, "food.reduce_spice_downtime" );
+		downTimeReduction = 1f - (eff/100f);
+		if ( downTimeReduction > .7f )
+			downTimeReduction = .7f;
+	}
+
+	// Attach spice script.
+	attachScript( player, "player.player_spice" );
+
+	// Save data
+	utils.setScriptVar(player, "spice.name", name);
+	utils.setScriptVar(player, "spice.mods", mods);
+	utils.setScriptVar(player, "spice.duration", dur);
+	utils.setScriptVar(player, "spice.downTimeReduction", downTimeReduction);
+
+	destroyObject( self );
+}
+
+//------------------------------------------------
+// OnGetAttributes
+//------------------------------------------------
+
+trigger OnGetAttributes( obj_id player, string[] names, string[] attribs )
+{
+	int dur = getIntObjVar(self, "spice.duration");
+	int[] mods = getIntArrayObjVar(self, "spice.mods");
+
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+
+	names[idx] = EXAM_ATTRIB_MOD;
+
+	if ( (mods == null) )
+	{
+		attribs[idx] = EXAM_NONE;
+	}
+	else
+	{
+		int numMods = 0;
+
+		int modNum = idx + 1;
+		if (modNum > names.length)
+			return SCRIPT_CONTINUE;
+
+		for ( int i = 0; i < mods.length; i++ )
+		{
+			if (mods[i] == 0)
+				continue;
+
+			string sVal = "";
+
+			if (mods[i] > 0)
+			{
+				sVal = "+";
+			}
+			// sVal += healing.getBuffPercentage(mods[i]);
+
+			names[modNum] = toLower(consumable.STAT_NAME[i]);
+			attribs[modNum] = sVal + "%, " + dur + "s";
+
+			numMods++;
+			modNum++;
+			if (modNum > names.length)
+				break;
+		}
+
+		if (numMods == 0)
+			attribs[idx] = EXAM_NONE;
+		else
+			attribs[idx] = "" + numMods;
+	}
+
+	return SCRIPT_CONTINUE;
+}

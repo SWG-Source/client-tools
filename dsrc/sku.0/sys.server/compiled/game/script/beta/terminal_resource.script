@@ -1,0 +1,417 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        terminal_resource.script
+ * Description:  BETA SCRIPT: resource dispenser
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.resource;
+include library.sui;
+include library.utils;
+include library.prose;
+
+/***** INHERITS ********************************************************/
+
+inherits terminal.base.terminal_add_use;
+
+/***** CONSTANTS *******************************************************/
+
+const int AMT								= 100000;
+
+const string[] RESOURCE_BASE_TYPES = {
+										"creature_resources",
+										"flora_resources",
+										"chemical",
+										"water",
+										"mineral",
+										"gas",
+										"energy",
+										"space_metal",
+										"space_gas",
+										"space_chemical",
+										"space_gem"
+
+									};
+
+const string[] RESOURCE_PLANETS = {
+										"current",
+										"tatooine",
+										"naboo",
+										"corellia",
+										"rori",
+										"talus",
+										"endor",
+										"dantooine",
+										"dathomir",
+										"lok",
+										"yavin4"
+									};
+
+/***** TRIGGERS ********************************************************/
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (!isGod(player) && !hasObjVar(player, "beta.terminal_ok"))
+		return SCRIPT_CONTINUE;
+
+	int use = -1;
+	menu_info_data[] root = mi.getRootMenuItems();
+	for (int i = 0; i < root.length; i++)
+	{
+		if (root[i].getType() == menu_info_types.ITEM_USE)
+			use = root[i].getId();
+	}
+
+	if (use != -1)
+	{
+		mi.addSubMenu(use, menu_info_types.SERVER_MENU1, new string_id("beta", "resource_standard"));
+		mi.addSubMenu(use, menu_info_types.SERVER_MENU2, new string_id("beta", "resource_planet"));
+		mi.addSubMenu(use, menu_info_types.SERVER_MENU3, new string_id("beta", "resource_set_planet"));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (isGod(player) || hasObjVar(player, "beta.terminal_ok"))
+	{
+
+		if (( item == menu_info_types.ITEM_USE ) ||
+			( item == menu_info_types.SERVER_MENU1 ))
+		{
+			string prompt = "Select the desired resource category";
+			string title = "BETA - Resource Dispenser";
+
+			sui.listbox(self, player, prompt, sui.OK_CANCEL, title, RESOURCE_BASE_TYPES, "handleCategorySelection", true, false);
+		}
+		if ( item == menu_info_types.SERVER_MENU2 )
+		{
+			string prompt = "Select the desired planet";
+			string title = "BETA - Resource Dispenser";
+
+			sui.listbox(self, player, prompt, sui.OK_CANCEL, title, RESOURCE_PLANETS, "handlePlanetSelection", true, false);
+		}
+		if ( item == menu_info_types.SERVER_MENU3 )
+		{
+			string prompt = "Select the desired planet";
+			string title = "BETA - Resource Dispenser";
+
+			sui.listbox(self, player, prompt, sui.OK_CANCEL, title, RESOURCE_PLANETS, "handleSetPlanet", true, false);
+		}
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "Only authorized users may access this terminal.");
+		return SCRIPT_CONTINUE;
+	}
+
+}
+
+/***** FUNCTIONS *******************************************************/
+messageHandler handleCategorySelection()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( idx == -1 )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	location loc = getLocation(player);
+	string planet = "current";
+
+	if (utils.hasScriptVar(self, "planet"))
+		planet = utils.getStringScriptVar(self, "planet");
+	else if (hasObjVar(self, "planet"))
+		planet = getStringObjVar(self, "planet");
+
+	if (!planet.equals("current") && !planet.equals("all"))
+		loc = new location (0, 0, 0, planet);
+
+	if (loc == null)
+	{
+		sendSystemMessageTestingOnly(player, "Error retrieving planet data");
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] resourceList = null;
+
+	if (planet.equals("all"))
+		resourceList = buildAllAvailableResourceTree(RESOURCE_BASE_TYPES[idx]);
+	else
+		resourceList = buildAvailableResourceTree(loc, RESOURCE_BASE_TYPES[idx]);
+
+	string prompt = "Select the desired resource category";
+	string title = "BETA - Resource Dispenser";
+
+	sui.listbox(self, player, prompt, sui.OK_CANCEL, title, resourceList, "handleResourceSelection", true, false);
+
+	utils.setScriptVar(self, "resourceList", resourceList);
+
+/*
+	if (planet.equals("all"))
+		planet = "tatooine";
+	if (planet.equals("current"))
+		planet = getLocation(player).area;
+
+	obj_id[] resourceIdList = getAvailablePlanetResources(planet, RESOURCE_BASE_TYPES[idx]);
+	string[] resourceList = buildSortedResourceList(resourceIdList, RESOURCE_BASE_TYPES[idx], 0);
+	string report = createResourcePlanetReport(resourceList, planet, RESOURCE_BASE_TYPES[idx]);
+
+	sui.msgbox(self, player, report, sui.OK_ONLY, "Interplanetary Survey: "+toUpper(planet, 0)+" - "+toUpper(RESOURCE_BASE_TYPES[idx], 0), "emptyHandler");
+*/
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePlanetSelection()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( idx == -1 )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	string planet = RESOURCE_PLANETS[idx];
+
+	utils.setScriptVar(self, "planet", planet);
+
+	string prompt = "Select the desired resource category";
+	string title = "BETA - Resource Dispenser";
+
+	sui.listbox(self, player, prompt, sui.OK_CANCEL, title, RESOURCE_BASE_TYPES, "handleCategorySelection", true, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSetPlanet()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( idx == -1 )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	string planet = RESOURCE_PLANETS[idx];
+
+	setObjVar(self, "planet", planet);
+
+	sendSystemMessageTestingOnly(player, "Planet set to "+planet);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleResourceSelection()
+{
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	int idx = sui.getListboxSelectedRow(params);
+
+	if ( btn == sui.BP_CANCEL )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( idx == -1 )
+	{
+		cleanScriptVars();
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] resourceList = utils.getStringArrayScriptVar(self, "resourceList");
+
+	string resourceName = resourceList[idx].trim();
+	if (resourceName.startsWith("\\#"))
+		resourceName = resourceName.substring(13, resourceName.length()-3);
+
+	obj_id resourceId = getResourceTypeByName(resourceName);
+
+	if (resourceId == null)
+	{
+		resourceId = pickRandomNonDepeletedResource(resourceName);
+	}
+
+	obj_id inv = utils.getInventoryContainer(player);
+	obj_id resourceCrate = createResourceCrate(resourceId, AMT, inv);
+
+	if (resourceCrate == null)
+	{
+		sendSystemMessageTestingOnly(player, "Resource grant failed. It is likely your inventory is full.");
+	}
+	else
+	{
+		resourceName = " \\#pcontrast1 "+getResourceName(resourceId)+"\\#. a type of " + getClassString(getResourceClass(resourceId));
+		prose_package proseSuccess = prose.getPackage(resource.SID_SAMPLE_LOCATED, resourceName, AMT);
+		sendSystemMessageProse(player, proseSuccess);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+string[] buildAvailableResourceTree(location loc, string topParent)
+{
+	resource_density[] resources = requestResourceList(loc, 0.0f, 1.0f, topParent);
+
+	string[] resourceTree = buildSortedResourceTree(resources, topParent, 0);
+
+	return resourceTree;
+}
+
+string[] buildAllAvailableResourceTree(string topParent)
+{
+	resizeable resource_density[] allResources = new resource_density[0];
+
+	for (int i = 1; i < (RESOURCE_PLANETS.length-1); i++)
+	{
+		resource_density[] resources = requestResourceList(new location(0, 0, 0, RESOURCE_PLANETS[i]), 0.0f, 1.0f, topParent);
+
+		allResources = utils.concatArrays(allResources, resources);
+	}
+
+	resource_density[] resources = new resource_density[allResources.size()];
+	allResources.toArray(resources);
+
+	string[] resourceTree = buildSortedResourceTree(resources, topParent, 0);
+
+	return resourceTree;
+}
+
+string[] buildSortedResourceTree(resource_density[] resources, string topParent, int branchLevel)
+{
+	resizeable string[] resourceTree = new string[0];
+
+	if(resources != null)
+	{
+		for (int i = 0; i < resources.length; i++)
+		{
+			if (!isResourceDerivedFrom(resources[i].getResourceType(), topParent))
+				continue;
+
+			string parent = getResourceClass(resources[i].getResourceType());
+			string child = null;
+
+			if (parent == null)
+				continue;
+
+			while (parent != topParent)
+			{
+				child = parent;
+				parent = getResourceParentClass(child);
+			}
+
+			if (child == null)
+				child = "\\#pcontrast1 "+getResourceName(resources[i].getResourceType())+"\\#.";
+
+			for (int j = 0; j < branchLevel; j++)
+			{
+				child = "    " + child;
+			}
+
+
+			if (resourceTree.indexOf(child) == -1)
+			{
+				resourceTree.add(child);
+			}
+		}
+	}
+
+	for (int i = 0; i < resourceTree.size(); i++)
+	{
+		string parent = resourceTree[i].trim();
+		string[] childBranch = buildSortedResourceTree(resources, parent, branchLevel+1);
+
+		for (int j = 0; j < childBranch.length; j++)
+		{
+			resourceTree.add(++i, childBranch[j]);
+		}
+	}
+
+	return resourceTree;
+}
+
+void cleanScriptVars()
+{
+	obj_id self = getSelf();
+	utils.removeScriptVar(self, "resourceList");
+	utils.removeScriptVar(self, "planet");
+}
+
+string getClassString(string className)
+{
+	const string resourceTable = "datatables/resource/resource_tree.iff";
+
+	string classString = "";
+
+	int row = dataTableSearchColumnForString(className, 1, resourceTable);
+	int column = 2;
+	while ((classString == null || classString.length() == 0) && column <= 9)
+	{
+		classString = dataTableGetString(resourceTable, row, column);
+		column++;
+	}
+
+	return classString;
+}
+
+
+

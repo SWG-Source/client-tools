@@ -1,0 +1,241 @@
+/***** INCLUDES ********************************************************/
+
+include library.ai_lib;
+include library.attrib;
+include library.combat;
+include library.pclib;
+include library.turret;
+include library.utils;
+
+inherits systems.combat.combat_base_old;
+
+const string STF					= "xx";
+const string_id takeControlObject			= new string_id(STF, "take_control_object");
+const string_id alreadyInUse				= new string_id(STF, "already_in_use");
+const string controllerTemplate				= "object/tangible/dungeon/mustafar/valley_battlefield/turret_controller_object.iff";
+
+const boolean LOGGING					= false;
+
+
+
+trigger OnAttach()
+{
+	turret.activateTurret(self);
+	doLogging("OnAttach", "Activating Turret");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	turret.activateTurret(self);
+	doLogging("OnInitialize", "Activating Turret");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToOpenContainer(obj_id who)
+{
+	if ( isIdValid(who) && !isGod(who) )
+		return SCRIPT_OVERRIDE;
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if ( isIdValid(transferer) && !isGod(transferer) )
+		return SCRIPT_OVERRIDE;
+
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if ( isIdValid(transferer) && !isGod(transferer) )
+		return SCRIPT_OVERRIDE;
+
+ 	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+	int curHP = getHitpoints (self);
+	if ( curHP < 1 )
+	{
+		explodeTurret( self, attacker );
+		doLogging("OnObjectDamage", "Hitpoints less than 0, destroying self");
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler doFireAction()
+{
+	obj_id player = params.getObjId("player");
+	obj_id controller = params.getObjId("controller");
+	obj_id target = params.getObjId("target");
+	doLogging("doFireAction", "Recieved command to fire: player("+getName(player)+") controller("+controller+") target("+getEncodedName(target)+")");
+
+	doAttack(self, target);
+	return SCRIPT_CONTINUE;
+}
+
+void explodeTurret(obj_id turret)
+{
+	location viewLoc = getLocation(turret);
+	obj_id[] viewers = getPlayerCreaturesInRange(viewLoc, 100);
+	if (viewers == null || viewers.length == 0)
+		return;
+
+	explodeTurret(turret, viewers[0]);
+}
+
+void explodeTurret( obj_id turretId, obj_id killer )
+{
+	location death = getLocation(turretId);
+	playClientEffectLoc(killer, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+	destroyObject(turretId);
+	doLogging("explodeTurret", "Turret has been destroyed");
+
+	if (!utils.hasScriptVar(turretId, "controllerId"))
+	{
+		doLogging("explodeTurret", "Did not have the controllerId ObjVar");
+		return;
+	}
+	obj_id controller = utils.getObjIdScriptVar(turretId, "controllerId");
+	if (!isIdValid(controller))
+	{
+		doLogging("explodeTurret", "Controller ID was not valid");
+		return;
+	}
+	messageTo(controller, "turretDisabled", null, 0, false);
+}
+
+void doAttack(obj_id self, obj_id target)
+{
+
+	int curHP = getHitpoints (self);
+	if ( curHP < 1 )
+	{
+		doLogging("doAttack", "Turret has negative hitpoints, destroying self");
+		explodeTurret(self);
+		return;
+	}
+
+	if (!isIdValid(target) || !canSee(self, target) || isDead(target))
+	{
+		doLogging("doAttack", "isIdValid("+isIdValid(target)+" canSee("+canSee(self, target)+" isDead("+isDead(target)+")");
+		return;
+	}
+	if(!hasObjVar(self, "objWeapon"))
+	{
+		doLogging("doAttack", "hasObjVar(self, objWeapon): "+hasObjVar(self, "objWeapon"));
+		return;
+	}
+
+
+	const float DAMAGE_MODIFIER = 2.0f; // modifier for damage from basic attack
+	// attrib cost mods
+	const float HEALTH_COST_MODIFIER = 0;;
+	const float ACTION_COST_MODIFIER = 0;
+
+	const int BASE_TO_HIT_MODIFIER = 0; // how far off of 75 do we want the base to hit roll
+	const float AMMO_COST_MODIFIER = 1.0f; // modifier for ammo cost
+
+	string[] strTimeMods = {""};
+	string[] strDamageMods = {""};
+	string[] strCostMods = {};
+	string[] strToHitMods= {""};
+
+	string[] strBlockMods = {""};
+	string[] strEvadeMods = {""};
+	string[] strCounterAttackMods = {""};
+
+	// special response information
+	int intBlockMod = 1000; //The larger number makes it more difficult to  block
+	int intEvadeMod = 1000; //The larger number makes it more difficult to  evade
+	int intCounterAttackMod = 1000; //The larger number makes it more difficult to  counter
+
+	int intAttackerEndPosture = POSTURE_NONE;
+	int intDefenderEndPosture = POSTURE_NONE; // DON'T MIX THESE UP!
+
+	string strPlaybackAction = "fire_turret";
+
+	int[] intEffects = {
+				}; // const int's defined in base_class
+	float[] fltEffectDurations = {
+					};
+	int intChanceToApplyEffect= 0; // 1-100 rating for whether we apply a state
+
+	obj_id objWeapon = getObjIdObjVar(self, "objWeapon");
+
+	attacker_data cbtAttackerData = new attacker_data();
+	weapon_data cbtWeaponData = new weapon_data();
+	obj_id[] objDefenders = new obj_id[1];
+	objDefenders[0] = target;
+
+	defender_data[] cbtDefenderData = new defender_data[objDefenders.length]; // ALWAYS AN ARRAY DO NOT EVER CHANGE DO NOT NEVER!
+	if (!getCombatData(self, objDefenders, cbtAttackerData, cbtDefenderData, cbtWeaponData))
+	{
+		doLogging("doAttack", "Failed to get combat data");
+		return;
+	}
+
+	cbtWeaponData = getWeaponData(objWeapon);
+
+	hit_result[] cbtHitData = new hit_result[1];
+	cbtHitData[0] = calculateHit(cbtAttackerData, cbtDefenderData[0], cbtWeaponData);
+
+
+	attacker_results cbtAttackerResults = new attacker_results(); // blank data for attacker information
+	cbtAttackerResults.id = self; // MUST DO THIS!
+
+	defender_results[] cbtDefenderResults = new defender_results[1];
+	cbtDefenderResults[0] = new defender_results();
+
+	cbtAttackerResults.endPosture = -1;
+	debugServerConsoleMsg(self, "posture set");
+	cbtAttackerResults.weapon = objWeapon;
+	debugServerConsoleMsg(self, "weapon");
+	cbtDefenderResults[0].id = target;
+	debugServerConsoleMsg(self, "target");
+	cbtDefenderResults[0].endPosture = getPosture(target);
+	debugServerConsoleMsg(self, "defender posture");
+	if(cbtHitData[0].success)
+	{
+
+		cbtDefenderResults[0].result = COMBAT_RESULT_HIT;
+	}
+	else
+	{
+
+		cbtDefenderResults[0].result = COMBAT_RESULT_MISS;
+	}
+
+	debugServerConsoleMsg(self, "hitdata");
+
+	finalizeDamage(cbtAttackerData.id, cbtWeaponData, cbtDefenderData, cbtHitData, cbtDefenderResults, null); // applies all of the necessary damage
+
+
+	string[] strPlaybackNames = makePlaybackNames("fire_turret", cbtHitData, cbtWeaponData, cbtDefenderResults);
+
+	doCombatResults(strPlaybackNames[0], cbtAttackerResults, cbtDefenderResults);
+
+	string[] strEffects = makeStringArray(1);
+
+
+
+	return;
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING)
+		LOG("logging/turret_operations/"+section, message);
+}
+
+
+
+

@@ -1,0 +1,204 @@
+/**
+ * Title:        combat_simulator_actor
+ * Description:  Actor class for the combat simulator - in each simulation, there are two actors that fight
+ * Usage:        This class should not be instantiated on its own - the combat_simulator_master will create them on its own
+ * Copyright:    Copyright (c) 2005
+ * Company:      Sony Online Entertainment
+ * @author       Vijay Thakkar
+ * @version 1.0
+ */
+
+// NONE OF THIS SHOULD EVER GO TO LIVE - ifdef'd out
+#ifdef DEBUG
+
+include ai.ai_combat;
+include library.utils;
+
+boolean debug = false;
+
+messageHandler prepareForCombat()
+{
+	obj_id enemy = getObjIdObjVar(self, "combat_simulator.enemy");
+
+	faceTo(self, enemy);
+	setState(self, STATE_COMBAT, true);
+	setState(self, STATE_CA_NORMAL, true);
+	setTarget(self, enemy);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startCombat()
+{
+	obj_id enemy = getObjIdObjVar(self, "combat_simulator.enemy");
+	if (debug) debugSpeakMsg(self, "Got message to start combat against " + enemy);
+
+	if (!hasObjVar(self, "combat_simulator.is_creature"))
+		messageTo(self, "queueCommandLoop", null, 0, false);
+	else
+		addHate(self, enemy, 0.0f);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnHearSpeech(obj_id speaker, string text)
+{
+	if (text == "actorsDumpInfo") 
+	{
+		obj_id owner = getObjIdObjVar(self, "combat_simulator.owner");
+		obj_id enemy = getObjIdObjVar(self, "combat_simulator.enemy");
+		string[] queueCommands = getStringArrayObjVar(self, "combat_simulator.queue_commands");
+		if (queueCommands == null)
+			queueCommands = new string[0];
+		int queueCommandIndex = getIntObjVar(self, "combat_simulator.queue_command_index");
+		int numberOfAttacks = getIntObjVar(self, "combat_simulator.number_of_attacks");
+		boolean hasCombatActions = checkForCombatActions(self);
+
+		debugSpeakMsg(self, "Self: " + self + ", Enemy: " + enemy + ", Owner: " + owner + ", NumCommands: " + queueCommands.length + ", Index: " + queueCommandIndex + ", numAttacks " + numberOfAttacks + ", hasCombatActions " + hasCombatActions);
+	}
+	else if (text == "debug on")
+		debug = true;
+	else if (text == "debug off")
+		debug = false;
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	if (debug) debugSpeakMsg(self, "Entered combat");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnExitedCombat()
+{
+	if (debug) debugSpeakMsg(self, "Exited combat");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler queueCommandLoop()
+{
+	// a temporary fix until Adam's success / failure of commands gets in (don't execute command until enough mana is regened, instead of discarding)
+	// this is a 'loop' that will add commands always - takes place of the command loop
+	queueNewCommand(self);
+	messageTo(self, "queueCommandLoop", null, 1.0f, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+void queueNewCommand(obj_id self)
+{
+	if (checkForCombatActions(self))
+		return;
+
+	obj_id enemy = getObjIdObjVar(self, "combat_simulator.enemy");
+	string[] queueCommands = getStringArrayObjVar(self, "combat_simulator.queue_commands");
+	int queueCommandIndex = getIntObjVar(self, "combat_simulator.queue_command_index");
+
+	if (debug) debugSpeakMsg(self, "Queuing command " + queueCommands[queueCommandIndex] + " against " + enemy);
+	if(queueCommand(self, getStringCrc(toLower(queueCommands[queueCommandIndex]).toString()), enemy, "", COMMAND_PRIORITY_NORMAL))
+	{
+		++queueCommandIndex;
+		if (queueCommandIndex >= queueCommands.length)
+			queueCommandIndex = 0;
+	}
+	
+	setObjVar(self, "combat_simulator.queue_command_index", queueCommandIndex);
+
+	return;
+}
+
+trigger OnDefenderCombatAction( obj_id attacker, obj_id weapon, int combatResult )
+{
+	//if (debug) debugSpeakMsg(self, "In defender combat action");
+
+	int numberOfAttacks = getIntObjVar(attacker, "combat_simulator.number_of_attacks");
+	++numberOfAttacks;
+	setObjVar(attacker, "combat_simulator.number_of_attacks", numberOfAttacks);
+
+	if (!hasObjVar(self, "combat_simulator.is_creature"))
+		queueNewCommand(self);
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnChangedPosture(int before, int after)
+{
+	// if we are a creature, let their AI handle standing back up
+	if (hasObjVar(self, "combat_simulator.is_creature"))
+		return SCRIPT_CONTINUE;
+
+	if (after == POSTURE_INCAPACITATED || before != POSTURE_KNOCKED_DOWN)
+		return SCRIPT_CONTINUE;
+
+	//when you get knocked down, stand back up:
+	if (after == POSTURE_KNOCKED_DOWN)
+	{
+		if (debug) debugSpeakMsg(self, "I'm hit! Going down");
+		
+		//if one of these messages isn't already enroute:
+		if ( !(utils.hasScriptVar( self, "standMsgStamp" ) ) )
+		{
+			stop( self );
+			dictionary parms = new dictionary();
+			int standStamp = getGameTime() + rand(1,1000);
+			parms.put( "msgStamp", standStamp );
+			utils.setScriptVar( self, "standMsgStamp", standStamp );
+			messageTo( self, "handleStandFromKnockedDown", parms, 2, false );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated(obj_id killer)
+{
+	if (debug) debugSpeakMsg(self, "I lost - sending notice to owner");
+	obj_id owner = getObjIdObjVar(self, "combat_simulator.owner");
+
+	dictionary params = new dictionary();
+	params.put("winner", killer);
+	messageTo(owner, "endCombat", params, 0, false);
+
+ 	return SCRIPT_CONTINUE;
+}
+
+boolean checkForCombatActions(obj_id objPlayer)
+{
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_melee"))
+	{
+
+		return true;
+	}
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_ranged"))
+	{
+
+		return true;
+	}
+
+	if(queueHasCommandFromGroup(objPlayer, ##"combat_general"))
+	{
+
+		return true;
+	}
+	return false;
+}
+
+messageHandler handleStandFromKnockedDown()
+{
+	if (getPosture(self) == POSTURE_INCAPACITATED)
+		return SCRIPT_CONTINUE;
+
+	int standStamp = utils.getIntScriptVar(self, "standMsgStamp");
+	// check for wrong message
+	if (params.getInt( "msgStamp" ) != standStamp)
+		return SCRIPT_CONTINUE;
+
+	utils.removeScriptVar( self, "standMsgStamp" );
+
+	queueCommand(self, ##"stand", self, "", COMMAND_PRIORITY_FRONT);
+
+	return SCRIPT_CONTINUE;
+}
+
+#endif

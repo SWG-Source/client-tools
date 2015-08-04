@@ -1,0 +1,250 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        temporary_structure.script
+ * Description:  script that handles the temporary player structure
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.player_structure;
+include library.utils;
+include library.sui;
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_TERMINAL_MANAGEMENT_STATUS	 	= new string_id("player_structure", "management_status");
+
+/***** TRIGGERS ********************************************************/
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler OnBuildingComplete()
+{
+	// This is called when the building process is complete.  The message
+	// originated in player_structure.createTemporaryStructure
+	LOG("LOG_CHANNEL", "temporary_structure::msgBuildingComplete");
+
+	string template = params.getString("template");
+	dictionary deed_info = params.getDictionary("deed_info");
+	obj_id owner = params.getObjId("owner");
+	int rot = params.getInt("rotation");
+	int build_time = params.getInt("buildTime");
+	int time_stamp = params.getInt("timestamp");
+	int time = getGameTime();
+	location loc = getLocation(self);
+
+	if (player_structure.isBuildingName(template))
+		loc.y = params.getFloat("placementHeight");
+
+	//LOG("LOG_CHANNEL", "time -> " + time + " timestamp ->" + time_stamp + " buildTime ->" + build_time);
+
+	// Get rid of the old and bring in the new
+	// Can't use player_structure.destroyStructure at this point since the makeshift
+	// temporary structure doesn't have the correct sized template.
+	destroyObject(self);
+	obj_id structure = player_structure.createPlayerStructure(template, owner, loc, rot, deed_info);
+
+	dictionary new_params = new dictionary();
+	new_params.put("structure", self);
+	new_params.put("template", template);
+	messageTo(owner, "OnRemoveStructure", new_params, 0, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgDestroyStructure()
+{
+	player_structure.destroyStructure(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+
+
+trigger OnInitialize ()
+{
+
+	messageTo(self, "validateConstruction", null, 180, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	mi.addRootMenu (menu_info_types.SERVER_TERMINAL_MANAGEMENT_STATUS, SID_TERMINAL_MANAGEMENT_STATUS);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	LOG("LOG_CHANNEL", "temporary_structure::OnObjectMenuSelect");
+	if (item == menu_info_types.SERVER_TERMINAL_MANAGEMENT_STATUS)
+	{
+		LOG("LOG_CHANNEL", "temporary_structure::OnStatus");
+		// Determine % complete
+
+		showConstructionStatus(self, player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** OTHER MESSAGEHANDLERS **************************************************/
+messageHandler statusMenuRefresh()
+{
+	int btn = sui.getIntButtonPressed(params);
+	if ( btn == sui.BP_OK )
+	{
+		obj_id player = sui.getPlayerId(params);
+		if ( isIdValid(player) )
+			showConstructionStatus(self, player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+int showConstructionStatus(obj_id self)
+{
+	return showConstructionStatus( self, null);
+}
+
+
+int showConstructionStatus(obj_id self, obj_id player)
+{
+	int build_time = getIntObjVar(self, player_structure.VAR_DEED_BUILDTIME);
+	int timestamp = getIntObjVar(self, player_structure.VAR_DEED_TIMESTAMP);
+	int current_time = getGameTime();
+	int time_passed = current_time - timestamp;
+	int percent = time_passed * 100 / build_time;
+
+	// Determine time remaining.
+	int time = build_time - time_passed;
+	if (time < 1)
+	{
+		// This shouldn't happen, but if it does, try to force completion of the structure.
+		// Use the fallback objvar data to reconstruct the missing message data.
+		if (restartConstruction(self))
+			sendSystemMessageTestingOnly(player, "Construction process restarted.");
+		else
+		{
+			//if we are down here we have no idea who owns the house or what to make, lets clean us up and generate a less than useful log 
+			sendSystemMessageTestingOnly(player, "Construction restart failed.");
+			CustomerServiceLog("structure", "Building Marker " +self+ "destroyed");
+			destroyObject(self);
+		}
+	}
+	else
+	{
+		int[] conv_time = player_structure.convertSecondsTime(time);
+		string time_str = player_structure.assembleTimeRemaining(conv_time);
+
+		string[] dsrc = new string[4];
+		dsrc[0] = "Owner: " + player_structure.getStructureOwner(self);
+		dsrc[1] = "This structure is " + percent + "% complete";
+		dsrc[2] = "";
+		dsrc[3] = "Time Remaining: " + time_str;
+
+		string title = "Structure Construction Status";
+		string prompt = "Structure Construction Status";
+
+		return sui.listbox(self, player, prompt, sui.REFRESH_CANCEL, title, dsrc, "statusMenuRefresh");
+	}
+
+	return -1;
+}
+
+boolean restartConstruction(obj_id self)
+{
+	if (!isIdValid(self))
+		return false;
+
+	dictionary params = new dictionary();
+	if (hasObjVar(self, player_structure.VAR_TEMP_TEMPLATE))
+		params.put("template", getStringObjVar(self, player_structure.VAR_TEMP_TEMPLATE));
+	else
+		return false;
+
+	if (hasObjVar(self, player_structure.VAR_TEMP_ROTATION))
+		params.put("rotation", getIntObjVar(self, player_structure.VAR_TEMP_ROTATION));
+	else
+		return false;
+
+	if (hasObjVar(self, player_structure.VAR_TEMP_ROTATION))
+		params.put("owner", getObjIdObjVar(self, player_structure.VAR_TEMP_OWNER));
+	else
+		return false;
+
+	if (hasObjVar(self, player_structure.VAR_TEMP_PLACEMENT_HEIGHT))
+		params.put("placementHeight", getFloatObjVar(self, player_structure.VAR_TEMP_PLACEMENT_HEIGHT));
+
+	dictionary deed_info = new dictionary();
+	
+	//deed_info.put("template", getStringObjVar(self, player_structure.VAR_DEED_TEMPLATE));
+	deed_info.put("template", player_structure.getDeedTemplate(self));
+	
+	if (hasObjVar(self, player_structure.VAR_DEED_SCENE))
+		deed_info.put("scene", getStringObjVar(self, player_structure.VAR_DEED_SCENE));
+
+	if (hasObjVar(self, player_structure.VAR_DEED_BUILDTIME))
+		deed_info.put("build_time", getIntObjVar(self, player_structure.VAR_DEED_BUILDTIME));
+	else
+		return false;
+
+	if (hasObjVar(self, player_structure.VAR_TEMP_OWNER_NAME))
+		deed_info.put("owner_name", getStringObjVar(self, player_structure.VAR_TEMP_OWNER_NAME));
+	else
+		return false;
+
+	if ( hasObjVar( self, "cityName" ) )
+		deed_info.put( "cityName", getStringObjVar( self, "cityName" ) );
+
+	params.put("deed_info", deed_info);
+
+	// Restart the construction.
+	int buildtime = getIntObjVar(self, player_structure.VAR_DEED_BUILDTIME);
+	setObjVar(self, player_structure.VAR_DEED_TIMESTAMP, getGameTime());
+
+	messageTo(self, "OnBuildingComplete", params, buildtime, false);
+
+	return true;
+}
+
+
+messageHandler validateConstruction()
+{
+	//lets cleanup the various objects in the world
+	int timestamp = getIntObjVar(self, player_structure.VAR_DEED_TIMESTAMP);
+	//if objvar was munged lets clamp it at 0
+	if(timestamp < 0)
+	{
+		timestamp = 0;
+	}
+	
+	int current_time = getGameTime();
+	int time = current_time - timestamp;
+	//if its been more than 10 minutes destroy
+	if (time > 600 || time < 0 )
+	{
+	
+		obj_id owner = getObjIdObjVar(self, player_structure.VAR_TEMP_OWNER);
+		string template =  getStringObjVar(self, player_structure.VAR_TEMP_TEMPLATE);
+		
+		CustomerServiceLog("structure", "Building Marker destroyed" +self+ "Owned by " +owner+ "House template" +template);
+		destroyObject(self);	
+	}
+	
+	
+	return SCRIPT_CONTINUE;
+}

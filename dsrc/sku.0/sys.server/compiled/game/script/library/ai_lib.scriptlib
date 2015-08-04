@@ -1,0 +1,2145 @@
+include library.beast_lib;
+include library.buff;
+include library.chat;
+include library.combat_consts;
+include library.dot;
+include library.locations;
+include library.pet_lib;
+include library.skill;
+include library.movement;
+
+const float PLAYER_RUN_SPEED = 8f;
+const float AI_MAX_MOVEMENT_SPEED = PLAYER_RUN_SPEED;
+
+const string ALERT_VOLUME_NAME = "alertTriggerVolume";
+const string AGGRO_VOLUME_NAME = "aggroTriggerVolume";
+
+const string MOOD_CALM = "calm";
+const string MOOD_NERVOUS = "nervous";
+const string MOOD_THREATEN = "threaten";
+
+const int BEHAVIOR_WANDER = 0;//zero is always default behavior
+const int BEHAVIOR_SENTINEL = 1;
+const int BEHAVIOR_LOITER = 2;
+const int BEHAVIOR_STOP = 3;
+
+const string DIF_VERY_EASY = "veryEasy";
+const string DIF_EASY = "easy";
+const string DIF_MEDIUM = "medium";
+const string DIF_HARD = "hard";
+const string DIF_VERY_HARD = "veryHard";
+
+const string ALLY_LIST = "allyList";
+
+const string CREATURE_TABLE = "datatables/mob/creatures.iff";
+const string CREATURE_NAME_FILE	= "mob/creature_names";
+
+const string ACTION_ALERT = "alert";
+const string ACTION_THREATEN = "threaten";
+
+const string_id SMUGGLER_SCAN_SUCCESS	= new string_id("base_player","smuggler_scan_success");
+const string_id SMUGGLER_SCAN_FAIL	= new string_id("base_player","smuggler_scan_fail");
+
+const float DEFAULT_FOLLOW_MIN	= 4f;
+const float DEFAULT_FOLLOW_MAX	= 8f;
+
+const string OBJVAR_ATTACKABLE_OVERRIDE = "ai_combat.attackable";
+
+const string SCRIPTVAR_CACHED_PATROL_PATH       = "ai.patrolPath";
+const string SCRIPTVAR_CACHED_PATROL_NAMED_PATH = "ai.patrolNamedPath";
+const string SCRIPTVAR_CACHED_PATROL_TYPE       = "ai.patrolType";
+
+const int PATROL_FLAG_RANDOM = 0x0001;
+const int PATROL_FLAG_FLIP   = 0x0002;
+const int PATROL_FLAG_REPEAT = 0x0004;
+
+const int FORMATION_COLUMN 	= 0;
+const int FORMATION_WEDGE 	= 1;
+const int FORMATION_LINE 	= 2;
+const int FORMATION_BOX 	= 3;
+
+const int DIFFICULTY_NORMAL 	= 0;
+const int DIFFICULTY_ELITE	= 1;
+const int DIFFICULTY_BOSS	= 2;
+
+const string SHARED_HEALTH_LIST 	= "shared_health_list";
+
+boolean isWithinLeash(obj_id ai)
+{
+	const float distanceToHome = getDistance(getLocation(ai), aiGetLeashAnchorLocation(ai));
+	const float leashRadius = aiGetLeashRadius();
+
+	return (distanceToHome <= leashRadius);
+}
+
+void resetAi()
+{
+	const obj_id self = getSelf();
+
+	LOGC(aiLoggingEnabled(self), "debug_ai", ("ai_lib::resetAi() --- BEGIN RESET AI --- self(" + self + ") getName(" + getName(self) + ")"));
+
+	setMovementWalk(self);
+	movement.refresh(self);
+
+	resetCombatTriggerVolumes();
+
+	// The delay in this messageTo is to allow the object to complete creation
+
+	messageTo(self, "resumeDefaultCalmBehavior", null, 1, false);
+
+	LOGC(aiLoggingEnabled(self), "debug_ai", ("ai_lib::resetAi() --- END RESET AI --- self(" + self + ") getName(" + getName(self) + ")"));
+}
+
+void resetCombatTriggerVolumes()
+{
+	const obj_id self = getSelf();
+
+	LOGC(aiLoggingEnabled(self), "debug_ai", ("ai_lib::resetCombatTriggerVolumes() self(" + self + ") getName(" + getName(self) + ")"));
+
+	// Invulnerable AI or non-aggressive animals never need combat trigger volumes
+
+	boolean needsCombatTriggerVolumes = true;
+
+	if (isInvulnerable(self))
+	{
+		needsCombatTriggerVolumes = false;
+	}
+	else if (isAnimal(self) && !aiIsAggressive(self))
+	{
+		needsCombatTriggerVolumes = false;
+	}
+	else if ( isVehicleMine(self) )
+	{
+		needsCombatTriggerVolumes = false;
+	}
+	else if (beast_lib.isBeast(self))
+	{
+		needsCombatTriggerVolumes = false;
+	}
+
+	if (needsCombatTriggerVolumes)
+	{
+		// Create ALERT trigger volume
+		{
+			const boolean promiscuous = true;
+			const float alertRadius = 64.0f;
+			createTriggerVolume(ai_lib.ALERT_VOLUME_NAME, alertRadius, promiscuous);
+		}
+
+		// Create AGGRO trigger volume, AI needs an aggro trigger volume because they could be factionally aggressive towards something
+		{
+			const boolean promiscuous = false;
+			const float aggroRadius = aiGetAggroRadius(self);
+			createTriggerVolume(ai_lib.AGGRO_VOLUME_NAME, aggroRadius, promiscuous);
+		}
+	}
+}
+
+void clearCombatData()
+{
+	const obj_id self = getSelf();
+
+	clearHateList(self);
+	queueClear(self);
+	pclib.clearCombatData(self);
+	movement.removeAllModifiers(self);
+	buff.removeAllBuffs(self);
+	dot.removeAllDots(self);
+	removeTriggerVolume(ai_lib.ALERT_VOLUME_NAME);
+	removeTriggerVolume(ai_lib.AGGRO_VOLUME_NAME);
+}
+
+boolean isInCombat(obj_id ai)
+{
+	return (getState(ai, STATE_COMBAT) == 1);
+}
+
+void setAttackable( obj_id npc, boolean val)
+{
+	if(val)
+		setObjVar(npc, OBJVAR_ATTACKABLE_OVERRIDE, 1);
+	else if(hasObjVar(npc, OBJVAR_ATTACKABLE_OVERRIDE))
+		removeObjVar(npc, OBJVAR_ATTACKABLE_OVERRIDE);
+}
+
+boolean isAttackable( obj_id npc )
+{
+	return hasObjVar(npc, OBJVAR_ATTACKABLE_OVERRIDE);
+}
+
+//obj_id getBehaviorTarget( obj_id npc, int behavior )
+//{
+//	obj_id[] allTargets = getBehaviorTargets( npc, behavior );
+//	obj_id bestTarget = null;
+//
+//	if ( allTargets == null || allTargets.length == 0 )
+//		return null;
+//
+//	for ( int i = 0; i < allTargets.length; i++ )
+//	{
+//		if (isInWorld( allTargets[i] ) && !ai_lib.isAiDead( allTargets[i] ) && getDistance( npc, allTargets[i] ) < combat_engine.getMaxCombatRange() )
+//			 return allTargets[i];
+//	}
+//	//debugSpeakMsg( npc, "all my targets were incapacitated" );
+//	return bestTarget;
+//}
+
+void setMood( obj_id npc, string mood )
+{
+	//debugSpeakMsg( npc, "SETTING MOOD : " + mood );
+
+	obj_id thisNpc = getSelf();
+	if ( thisNpc != npc )
+	{
+		//debugSpeakMsg( npc, "sending a callback" );
+		dictionary parms = new dictionary();
+		parms.put( "animMood", mood );
+		messageTo( npc, "handleAnimationAction", parms, 1, false );
+		return;
+	}
+
+	if ( ai_lib.isAiDead( npc ) )
+	{
+		//debugSpeakMsg( npc, "i am dead" );
+		return;
+	}
+
+	//debugSpeakMsg( npc, "mood: " + mood );
+	if ( mood == MOOD_CALM )
+	{
+		//debugSpeakMsg( npc, "calm" );
+		removeObjVar( npc, "ai.mood" );
+	}
+	else
+	{
+		//debugSpeakMsg( npc, "mood " + mood );
+		setObjVar( npc, "ai.mood", mood );
+	}
+
+	if ( mood == MOOD_THREATEN )
+	{
+		//debugSpeakMsg( npc, "threaten!" );
+		chat.setAngryMood( npc );
+		ai_lib.barkString( npc, "threat" );
+	}
+	else if ( mood == MOOD_NERVOUS )
+	{
+		//debugSpeakMsg( npc, "alert!" );
+		chat.setBadMood( npc );
+		ai_lib.barkString( npc, "alert" );
+	}
+
+	if ( mood == MOOD_CALM && hasObjVar( npc, "ai.defaultCalmMood" ) )
+	{
+		//debugSpeakMsg( npc, "calm and has objvar" );
+		mood = getStringObjVar( npc, "ai.defaultCalmMood" );
+		//debugSpeakMsg( npc, "animood is " + mood);
+	}
+	else
+	{
+		//debugSpeakMsg( npc, "no objvar or not calm so setting mood " + mood );
+	}
+
+	setAnimationMood( npc, mood );
+}
+
+void doAction( obj_id npc, string anim )
+{
+	obj_id thisNpc = getSelf();
+	if ( thisNpc != npc )
+	{
+		dictionary parms = new dictionary();
+		parms.put( "anim", anim );
+		messageTo( npc, "handleAnimationAction", parms, 1, false );
+		return;
+	}
+
+	if ( ai_lib.isAiDead( npc ) )
+		return;
+
+	//debugSpeakMsg( npc, "doing anim " + anim );
+	int npcPosture = getPosture( npc );
+	if ( npcPosture != POSTURE_UPRIGHT )
+	{
+		if ( npcPosture != POSTURE_KNOCKED_DOWN )
+			posture.stand(npc);
+
+		//debugSpeakMsg( npc, "stopping to stand so I can animate" );
+		removeObjVar( npc, "ai.combat.moveMode" );
+	}
+	else
+	{
+		doAnimationAction( npc, anim );
+	}
+}
+
+void setPatrolPath( obj_id npc, string[] waypoints )
+{
+	setPatrolPath(npc, waypoints, 0);
+}
+
+void setPatrolPath( obj_id npc, string[] waypoints, int startPoint )
+{
+	if ( isIdValid(npc) && waypoints != null )
+	{
+		location[] patrolLocs = parseWaypoints( npc, waypoints );
+		if ( patrolLocs != null )
+			setPatrolPath(npc, patrolLocs, startPoint);
+	}
+}
+
+void setPatrolOncePath( obj_id npc, string[] waypoints )
+{
+	setPatrolOncePath(npc, waypoints, 0);
+}
+
+void setPatrolOncePath( obj_id npc, string[] waypoints, int startPoint )
+{
+	if ( isIdValid(npc) && waypoints != null )
+	{
+		location[] patrolLocs = parseWaypoints( npc, waypoints );
+		if ( patrolLocs != null )
+			setPatrolOncePath(npc, patrolLocs, startPoint);
+	}
+}
+
+void setPatrolRandomPath( obj_id npc, string[] waypoints )
+{
+	if ( isIdValid(npc) && waypoints != null )
+	{
+		location[] patrolLocs = parseWaypoints( npc, waypoints );
+		if ( patrolLocs != null )
+			setPatrolRandomPath(npc, patrolLocs);
+	}
+}
+
+void setPatrolRandomOncePath( obj_id npc, string[] waypoints )
+{
+	if ( isIdValid(npc) && waypoints != null )
+	{
+		location[] patrolLocs = parseWaypoints( npc, waypoints );
+		if ( patrolLocs != null )
+			setPatrolRandomOncePath(npc, patrolLocs);
+	}
+}
+
+void setPatrolFlipPath( obj_id npc, string[] waypoints )
+{
+	setPatrolFlipPath(npc, waypoints, 0);
+}
+
+void setPatrolFlipPath( obj_id npc, string[] waypoints, int startPoint )
+{
+	if ( isIdValid(npc) && waypoints != null )
+	{
+		location[] patrolLocs = parseWaypoints( npc, waypoints );
+		if ( patrolLocs != null )
+			setPatrolFlipPath(npc, patrolLocs, startPoint);
+	}
+}
+
+void setPatrolFlipOncePath( obj_id npc, string[] waypoints )
+{
+	setPatrolFlipOncePath(npc, waypoints, 0);
+}
+
+void setPatrolFlipOncePath( obj_id npc, string[] waypoints, int startPoint )
+{
+	if ( isIdValid(npc) && waypoints != null )
+	{
+		location[] patrolLocs = parseWaypoints( npc, waypoints );
+		if ( patrolLocs != null )
+			setPatrolFlipOncePath(npc, patrolLocs, startPoint);
+	}
+}
+
+void setPatrolPath( obj_id npc, location[] patrolLoc )
+{
+	setPatrolPath(npc, patrolLoc, 0);
+}
+
+void setPatrolPath( obj_id npc, location[] patrolLoc, int startPoint )
+{
+	LOGC(aiLoggingEnabled(npc), "debug_ai", ("ai_lib::setPatrolPath() self(" + npc + ") getName(" + getName(npc) + ") patrolLength(" + patrolLoc + ")"));
+
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_REPEAT);
+		patrol(npc, patrolLoc, startPoint);
+	}
+}
+
+void setPatrolOncePath(obj_id npc, location[] patrolLoc)
+{
+	setPatrolOncePath(npc, patrolLoc, 0);
+}
+
+void setPatrolOncePath(obj_id npc, location[] patrolLoc, int startPoint)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, 0);
+		patrolOnce(npc, patrolLoc, startPoint);
+	}
+}
+
+void setPatrolRandomPath(obj_id npc, location[] patrolLoc)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_RANDOM | PATROL_FLAG_REPEAT);
+		patrolRandom(npc, patrolLoc);
+	}
+}
+
+void setPatrolRandomOncePath(obj_id npc, location[] patrolLoc)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_RANDOM);
+		patrolRandomOnce(npc, patrolLoc);
+	}
+}
+
+void setPatrolFlipPath(obj_id npc, location[] patrolLoc)
+{
+	setPatrolFlipPath(npc, patrolLoc, 0);
+}
+
+void setPatrolFlipPath(obj_id npc, location[] patrolLoc, int startPoint)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_FLIP | PATROL_FLAG_REPEAT);
+		patrolFlip(npc, patrolLoc, startPoint);
+	}
+}
+
+void setPatrolFlipOncePath(obj_id npc, location[] patrolLoc)
+{
+	setPatrolFlipOncePath(npc, patrolLoc, 0);
+}
+
+void setPatrolFlipOncePath(obj_id npc, location[] patrolLoc, int startPoint)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_FLIP);
+		patrolFlipOnce(npc, patrolLoc, startPoint);
+	}
+}
+
+void setPatrolNamedPath( obj_id npc, string[] patrolLoc )
+{
+	setPatrolNamedPath(npc, patrolLoc, 0);
+}
+
+void setPatrolNamedPath( obj_id npc, string[] patrolLoc, int startPoint )
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_NAMED_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_REPEAT);
+		patrol(npc, patrolLoc, startPoint);
+	}
+}
+
+void setPatrolOnceNamedPath(obj_id npc, string[] patrolLoc)
+{
+	setPatrolOnceNamedPath(npc, patrolLoc, 0);
+}
+
+void setPatrolOnceNamedPath(obj_id npc, string[] patrolLoc, int startPoint)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_NAMED_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, 0);
+		patrolOnce(npc, patrolLoc, startPoint);
+	}
+}
+
+void setPatrolRandomNamedPath(obj_id npc, string[] patrolLoc)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		if ( !exists(npc) )
+		{
+			LOG("debug_ai", "WARNING: ai_lib.setPatrolRandomNamedPath passed npc id " + npc + " that doesn't exist");
+			return;
+		}
+		else if ( !isGameObjectTypeOf(npc, GOT_creature) )
+		{
+			LOG("debug_ai", "WARNING: ai_lib.setPatrolRandomNamedPath passed npc id " + npc + " that is not a creature. "+
+				"Object template = " + getTemplateName(npc));
+		}
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_NAMED_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_RANDOM | PATROL_FLAG_REPEAT);
+		patrolRandom(npc, patrolLoc);
+	}
+}
+
+void setPatrolRandomOnceNamedPath(obj_id npc, string[] patrolLoc)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_NAMED_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_RANDOM);
+		patrolRandomOnce(npc, patrolLoc);
+	}
+}
+
+void setPatrolFlipNamedPath(obj_id npc, string[] patrolLoc)
+{
+	setPatrolFlipNamedPath(npc, patrolLoc, 0);
+}
+
+void setPatrolFlipNamedPath(obj_id npc, string[] patrolLoc, int startPoint)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_NAMED_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_FLIP | PATROL_FLAG_REPEAT);
+		patrolFlip(npc, patrolLoc, startPoint);
+	}
+}
+
+void setPatrolFlipOnceNamedPath(obj_id npc, string[] patrolLoc)
+{
+	setPatrolFlipOnceNamedPath(npc, patrolLoc, 0);
+}
+
+void setPatrolFlipOnceNamedPath(obj_id npc, string[] patrolLoc, int startPoint)
+{
+	if ( isIdValid(npc) && patrolLoc != null )
+	{
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_NAMED_PATH, patrolLoc);
+		utils.setScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE, PATROL_FLAG_FLIP);
+		patrolFlipOnce(npc, patrolLoc, startPoint);
+	}
+}
+
+void clearPatrolPath(obj_id npc)
+{
+	if ( isIdValid(npc) )
+	{
+		utils.removeScriptVar(npc, SCRIPTVAR_CACHED_PATROL_PATH);
+		utils.removeScriptVar(npc, SCRIPTVAR_CACHED_PATROL_NAMED_PATH);
+		utils.removeScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE);
+	}
+}
+
+void resumePatrol( obj_id npc )
+{
+	LOGC(aiLoggingEnabled(npc), "debug_ai", ("ai_lib::resumePatrol() self(" + npc + ") getName(" + getName(npc) + ")"));
+
+	if ( isIdValid(npc) && aiGetMovementState(npc) != MOVEMENT_PATROL && hasSuspendedMovement(npc) )
+	{
+		resumeMovement(npc);
+	}
+}
+
+boolean canPatrol( obj_id npc )
+{
+	if ( isIdValid(npc) )
+		return utils.hasScriptVar(npc, SCRIPTVAR_CACHED_PATROL_TYPE);
+	return false;
+}
+
+location[] parseWaypoints(obj_id npc, string[] waypoints)
+{
+	if ( !isIdValid(npc) || waypoints != null )
+		return null;
+
+	location baseLoc = aiGetHomeLocation( npc );
+	if ( (baseLoc.x == 0.0f) && (baseLoc.z == 0.0f) )
+	{
+		baseLoc = getLocation( npc );
+		if ( (baseLoc.x == 0.0f ) && (baseLoc.z == 0.0f) )
+		{
+			debugServerConsoleMsg( npc, "*  ERROR: TRYING TO GET LOCATION ON AN NPC NOT INSTANTIATED!  *" );
+			return null;
+		}
+	}
+
+	location[] patrolLocs = new location[waypoints.length];
+
+	location patrolLoc = new location( baseLoc );
+	for ( int i = 0; i < waypoints.length; i++ )
+	{
+		float[] coords = parseWaypoints( waypoints[i] );
+		if ( coords != null && coords.length == 2 )
+		{
+			patrolLoc.x = baseLoc.x + coords[0];
+			patrolLoc.z = baseLoc.z + coords[1];
+		}
+		else
+			debugServerConsoleMsg( npc, "*  ERROR: COULD NOT PARSE WAYPOINT STRING <" + waypoints[i] + "> *" );
+		patrolLocs[i] = patrolLoc;
+	}
+	return patrolLocs;
+}
+
+float[] parseWaypoints(string text)
+{
+	int intIndex = 0;
+	int intI = 0;
+	intIndex = text.indexOf(",");
+	string strText1 = "";
+	string strText2 = "";
+	if(intIndex<0)
+	{
+		return null;
+	}
+	else
+	{
+		while(intI < text.length() )
+		{
+			if (intI < intIndex )
+				strText1 = strText1+text.charAt(intI);
+			else if (intI > intIndex )
+				strText2 = strText2+text.charAt(intI);
+
+			intI = intI+1;
+		}
+	}
+	float[] returnCoords = new float[2];
+	returnCoords[0] = Float.parseFloat(strText1);
+	returnCoords[1] = Float.parseFloat(strText2);
+	return returnCoords;
+}
+
+void setIgnoreCombat( obj_id npc )
+{
+	setWantSawAttackTriggers( npc, false );
+}
+
+/* -----------------8/12/2002 2:33PM-----------------
+ * ai.diction - This objvar specifies which npc reaction stringfile
+ * the npc should use to bark spam.
+ *
+ * If the objvar isn't set then the NPC won't speak.
+ * --------------------------------------------------*/
+
+void barkString( obj_id npc, string text )
+{
+
+	if ( !text.equals("death") )
+	{
+		if ( ai_lib.isAiDead( npc ) )
+			return;
+	}
+
+	if (!hasObjVar( npc, "ai.diction") )
+		return;
+
+	if ( utils.hasScriptVar( npc, "ai.recentlyBarked") )
+	{
+		if ( getGameTime() < utils.getIntScriptVar( npc, "ai.recentlyBarked"))
+			return;
+	}
+
+	if ( !ai_lib.isNpc( npc ) && !pet_lib.isDroidPet( npc ) )
+	{
+		removeObjVar( npc, "ai.diction" );
+		return;
+	}
+
+	//hmm. We should convert diction barks to be directed To a specific player,
+	// use prose packages to say the player's name, and do language checks
+	// for wookiees talking to players. That would be great.
+	if ( getSpecies (npc)==SPECIES_WOOKIEE )
+	{
+		removeObjVar( npc, "ai.diction" );
+		return;
+	}
+
+	utils.setScriptVar( npc, "ai.recentlyBarked", getGameTime()+rand(20,45) );
+
+	location loc = getLocation( npc );
+	if ( locations.isInCity( loc ) )
+	{
+		if ( rand(1,100) != 1 )
+			return;//1/100 chance to spam in town
+	}
+	else
+	{
+		if ( rand( 1,10) != 1 )
+			return;//1/10 chance to spam out of town
+	}
+
+	string diction = getStringObjVar( npc, "ai.diction" );
+	string stringFile = "npc_reaction/" + diction;
+
+	string textString = text + "_" + rand( 1, 16 );
+	string_id speakString = new string_id( stringFile, textString );
+	if ( getString(speakString) == null )
+	{
+		debugServerConsoleMsg( npc, "WARNING: Npc_reaction " + speakString + " - does it exist?" );
+		return;
+	}
+	//debugSpeakMsg( npc, stringFile + ":" + textString );
+	chat.chat( npc,  speakString );
+}
+
+boolean isAnimal( obj_id npc )
+{
+	return isMonster(npc);
+}
+
+boolean isMonster( obj_id npc )
+{
+	int myNiche = aiGetNiche( npc );
+	if ( 	myNiche == NICHE_MONSTER ||
+			myNiche == NICHE_HERBIVORE ||
+			myNiche == NICHE_CARNIVORE ||
+			myNiche == NICHE_PREDATOR  )
+		return true;
+	else
+		return false;
+}
+
+boolean isDroid (obj_id npc)
+{
+	int niche = aiGetNiche(npc);
+	if ( niche == NICHE_DROID)
+		return true;
+	else
+		return false;
+}//end isDroid
+
+boolean isPredator (obj_id npc)
+{
+	int niche = aiGetNiche(npc);
+	if (niche == NICHE_PREDATOR)
+		return true;
+	else
+		return false;
+}//end isPredator
+
+boolean isCarnivore (obj_id npc)
+{
+	int niche = aiGetNiche(npc);
+	if (niche == NICHE_CARNIVORE)
+		return true;
+	else
+		return false;
+}//end isCarnivore
+
+boolean isHerbivore (obj_id npc)
+{
+	int niche = aiGetNiche(npc);
+	if (niche == NICHE_HERBIVORE)
+		return true;
+	else
+		return false;
+}//end isHerbivore
+
+boolean isVehicle (obj_id npc)
+{
+	int niche = aiGetNiche(npc);
+	if (niche == NICHE_VEHICLE)
+		return true;
+	else
+		return false;
+}//end isVehicle
+
+boolean isAndroid (obj_id npc)
+{
+	int niche = aiGetNiche(npc);
+	if (niche == NICHE_ANDROID)
+		return true;
+	else
+		return false;
+}//end isAndroid
+
+boolean isHumanoid(obj_id target)
+{
+	if (isPlayer(target))
+		return true;
+	else
+	{
+		int niche = aiGetNiche(target);
+		if (niche == NICHE_NPC || niche == NICHE_ANDROID)
+			return true;
+	}
+
+	return false;
+}
+
+boolean isNpc( obj_id npc )
+{
+	int myNiche = aiGetNiche( npc );
+	return ( myNiche == NICHE_NPC );
+}
+
+boolean isTurret (obj_id npc)
+{
+	int got = getGameObjectType(npc);
+	if ( isGameObjectTypeOf(got, GOT_installation_turret) )
+		return true;
+	else
+		return false;
+}//end isTurret
+
+void setIgnoreCombat(obj_id npc, boolean b)
+{
+	setWantSawAttackTriggers( npc, b);
+}
+
+void setDefaultCalmBehavior( obj_id npc, int behavior )
+{
+	LOGC(aiLoggingEnabled(npc), "debug_ai", "ai_lib::setDefaultCalmBehavior() self(" + npc + getName(npc) + ") behavior(" + behavior + ")");
+
+	if ( !isIdValid(npc) )
+		return;
+
+	if (behavior == BEHAVIOR_WANDER)
+	{
+		behavior = BEHAVIOR_LOITER;
+	}
+
+	setObjVar(npc, "ai.defaultCalmBehavior", behavior);
+	messageTo(npc, "handleSetDefaultBehavior", null, 1, false);
+}
+
+void greet(obj_id ai, obj_id player)
+{
+	LOGC(aiLoggingEnabled(ai), "debug_ai", "ai_lib::greet() ai(" + ai + ":" + getName(ai) + ") player(" + player + ":" + getName(player) + ")");
+
+	if (isInCombat(ai))
+		return;
+
+	const int reaction = factions.getFactionReaction(ai, player);
+
+	if (reaction < factions.REACTION_NEUTRAL)
+	{
+		chat.setAngryMood(ai );
+		ai_lib.barkString(ai, "hi_mean");
+	}
+	else if (reaction > factions.REACTION_NEUTRAL)
+	{
+		chat.setGoodMood(ai);
+		ai_lib.barkString(ai, "hi_nice");
+	}
+	else
+	{
+		chat.setNeutralMood(ai);
+		ai_lib.barkString(ai, "hi_mid");
+	}
+}
+
+void dismiss(obj_id ai, obj_id player)
+{
+	LOGC(aiLoggingEnabled(ai), "debug_ai", "ai_lib::dismiss() ai(" + ai + ":" + getName(ai) + ") player(" + player + ":" + getName(player) + ")");
+
+	if (isInCombat(ai))
+		return;
+
+	const int reaction = factions.getFactionReaction(ai, player);
+
+	if (reaction < factions.REACTION_NEUTRAL)
+	{
+		chat.setBadMood(ai);
+		ai_lib.barkString(ai, "bye_mean");
+	}
+	else if (reaction > factions.REACTION_NEUTRAL)
+	{
+		chat.setGoodMood(ai);
+		ai_lib.barkString(ai, "bye_nice");
+	}
+	else
+	{
+		chat.setNeutralMood(ai);
+		ai_lib.barkString(ai, "bye_mid");
+	}
+}
+
+//dupe of function call below because all the others start with aiIs, not isAi
+boolean aiIsDead( obj_id npc )
+{
+	return isAiDead( npc );
+}
+
+boolean isAiDead( obj_id npc )
+{
+	if ( !isMob(npc) )
+		return (isDisabled(npc));
+
+	if ( isIncapacitated( npc ))
+	{
+		//debugSpeakMsg( npc, "i am incapacitated" );
+		return true;
+	}
+
+	if (isDead(npc))
+	{
+		//debugSpeakMsg( npc, "so I am dead" );
+		return true;
+	}
+
+	//debugSpeakMsg( npc, "so i am not dead" );
+	return false;
+}
+
+void aiFollow( obj_id npc, obj_id target )
+{
+	aiFollow(npc, target, DEFAULT_FOLLOW_MIN, DEFAULT_FOLLOW_MAX);
+}
+
+void aiFollow(obj_id npc, obj_id target, float min_dist, float max_dist)
+{
+	if(target == npc)
+	{
+		debugServerConsoleMsg( npc, npc + " was told to follow itself");
+		return;
+	}
+
+	if(getPosture( npc ) != POSTURE_UPRIGHT)
+	{
+		posture.stand(npc);
+	}
+
+	setObjVar(npc, "ai.persistantFollowing.target", target);
+
+	if(min_dist < 1f)
+	{
+		min_dist = 1f;
+	}
+
+	if(max_dist < 1f)
+	{
+		max_dist = 1f;
+	}
+
+	if(max_dist <= min_dist)
+	{
+		max_dist = min_dist + 1f;
+	}
+
+
+	setObjVar(npc, "ai.persistantFollowing.min_dist", min_dist);
+	setObjVar(npc, "ai.persistantFollowing.max_dist", max_dist);
+
+	follow(npc, target, min_dist, max_dist);
+}
+
+boolean isFollowing(obj_id npc)
+{
+	if(!isIdValid(npc))
+	{
+		return false;
+	}
+
+	return hasObjVar(npc, "ai.persistantFollowing");
+}
+
+obj_id getFollowTarget(obj_id npc)
+{
+	if(!isIdValid(npc))
+	{
+		return null;
+	}
+
+	return getObjIdObjVar(npc, "ai.persistantFollowing.target");
+}
+
+void resumeFollow(obj_id npc)
+{
+	if(!isIdValid(npc))
+		return;
+
+	obj_id target = getObjIdObjVar(npc, "ai.persistantFollowing.target");
+
+	if(isIdValid(target))
+	{
+		float min_dist = DEFAULT_FOLLOW_MIN;
+
+		if(hasObjVar(npc, "ai.persistantFollowing.min_dist"))
+		{
+			min_dist = getFloatObjVar(npc, "ai.persistantFollowing.min_dist");
+		}
+
+		float max_dist = DEFAULT_FOLLOW_MAX;
+
+		if(hasObjVar(npc, "ai.persistantFollowing.max_dist"))
+		{
+			max_dist = getFloatObjVar(npc, "ai.persistantFollowing.max_dist");
+		}
+
+		aiFollow(npc, target, min_dist, max_dist);
+
+		return;
+	}
+
+	aiStopFollowing(npc);
+}
+
+void aiStopFollowing(obj_id npc)
+{
+	stop(npc);
+	removeObjVar(npc, "ai.persistantFollowing");
+
+	if(getBehavior(npc) <= BEHAVIOR_CALM)
+	{
+		messageTo(npc, "resumeDefaultCalmBehavior", null, 5, false);
+	}
+}
+
+string getMood( obj_id npc )
+{
+	if ( !hasObjVar( npc, "ai.mood" ) )
+		return ai_lib.MOOD_CALM;
+	else
+		return getStringObjVar( npc, "ai.mood" );
+}
+
+void pathNear( obj_id npc, location dest, float range )
+{
+	location startLoc = getLocation( npc );
+	if ( dest.x < startLoc.x )
+		dest.x += range;
+	else
+		dest.x -= range;
+	if ( dest.z < startLoc.z )
+		dest.z += range;
+	else
+		dest.z -= range;
+	pathTo( npc, dest );
+
+}
+
+void followInFormation( obj_id npc, obj_id leader, int formationType, int position )
+{
+	//debugSpeakMsg( npc, "following " + leader );
+
+	if ( npc == leader )
+	{
+		debugServerConsoleMsg( npc, npc + " was told to followInFormation itself" );
+		return;
+	}
+
+	setObjVar( npc, "ai.inFormation", leader );
+	setObjVar( npc, "ai.formationType", formationType );
+	setObjVar( npc, "ai.formationPosition", position );
+	if ( !isInCombat( npc ) )
+	{
+		stop( npc );
+		resumeFormationFollowing( npc );
+	}
+}
+
+void resumeFormationFollowing( obj_id npc )
+{
+
+	//debugSpeakMsg( npc, "resuming following" );
+
+	if ( isInCombat( npc ))
+		return;
+
+	obj_id leader = getObjIdObjVar( npc, "ai.inFormation" );
+	if ( !exists( leader ) || !isInWorld( leader ) || isAiDead( leader ) )
+	{
+		removeObjVar( npc, "ai.inFormation" );
+		return;
+	}
+
+	int formationType = getIntObjVar( npc, "ai.formationType" );
+	int position = getIntObjVar( npc, "ai.formationPosition" );
+	switch ( formationType )
+	{
+		case FORMATION_WEDGE :
+			followInWedgeFormation( npc, leader, position );
+			break;
+		case FORMATION_LINE :
+			followInLineFormation( npc, leader, position );
+			break;
+		case FORMATION_BOX :
+			followInBoxFormation( npc, leader, position );
+			break;
+		default:
+			followInColumnFormation( npc, leader, position );
+			break;
+	}
+}
+
+void followInWedgeFormation( obj_id npc, obj_id leader, int position )
+{
+	if ( npc == leader )
+	{
+		debugServerConsoleMsg( npc, npc + " was told to followInWedgeFormation itself" );
+		return;
+	}
+
+	// L = leader
+	//
+	//           ^
+	//           L
+	//         2   1
+	//       4       3
+	//     6           5
+	// ...               ...
+
+	// Clamp the position to positive integers
+
+	position = Math.max(1, position);
+
+	location offset = new location();
+	const float spacing = getObjectCollisionRadius(leader) * 2.25f;
+	const float x = (spacing * (float)Math.ceil(position / 2.0f));
+	offset.x = (position % 2 == 0) ? -x : x;
+	offset.z = -x;
+
+	follow(npc, leader, offset);
+}
+
+
+void followInBoxFormation( obj_id npc, obj_id leader, int position )
+{
+
+	if ( npc == leader )
+	{
+		debugServerConsoleMsg( npc, npc + " was told to followInLineFormation itself" );
+		return;
+	}
+
+
+	/* 		  POSITIONS:
+
+					0	1	2
+	  				3		4
+					5   6   7
+
+	 								*/
+
+	location offset = new location(0,0,0,"");
+	//set the x:
+	if ( position < 3 )
+	{
+		offset.x += ( position * 3 );
+	}
+	else if ( position == 4 )
+	{
+		offset.x = 6;
+	}
+	else if ( position !=3 )
+	{
+		offset.x += ((position-5)*3);
+	}
+
+	//set the z:
+	if ( position == 3 || position == 4 )
+	{
+		offset.z += 3;
+	}
+	else if ( position > 4 )
+	{
+		offset.z += 6;
+	}
+
+
+
+	if ( position < 1 || position > 7 )
+		follow( npc, leader, rand(15,20), rand(10,18));
+	else
+		follow( npc, leader, offset );
+
+}
+
+void followInLineFormation( obj_id npc, obj_id leader, int position )
+{
+	if ( npc == leader )
+	{
+		debugServerConsoleMsg( npc, npc + " was told to followInLineFormation itself" );
+		return;
+	}
+
+	// L = leader
+	//
+	//           ^
+	// ... 6 4 2 L 1 3 5 ...
+
+	// Clamp the position to positive integers
+
+	position = Math.max(1, position);
+
+	location offset = new location();
+	const float spacing = getObjectCollisionRadius(leader) * 2.25f;
+	const float x = (spacing * (float)Math.ceil(position / 2.0f));
+	offset.x = (position % 2 == 0) ? -x : x;
+
+	follow(npc, leader, offset);
+}
+
+void followInColumnFormation( obj_id npc, obj_id leader, int position )
+{
+
+	if ( npc == leader )
+	{
+		debugServerConsoleMsg( npc, npc + " was told to followInColumnFormation itself" );
+		return;
+	}
+
+	// L = leader
+	//
+	//  ^
+	//  L 1
+	//  2 3
+	//  4 5
+	//  6 7
+	//  8 9
+	//  . .
+	//  . .
+	//  . .
+
+	// Clamp the position to positive integers
+
+	position = Math.max(1, position);
+
+	location offset = new location();
+	const float spacing = getObjectCollisionRadius(leader) * 2.25f;
+	offset.x = (position % 2 == 0) ? 0.0f : spacing;
+	offset.z = -(spacing * (float)Math.ceil((position - 1) / 2.0f));
+
+	follow(npc, leader, offset);
+}
+
+void pathAwayFrom( obj_id npc, obj_id target )
+{
+
+	if ( !isIdValid( npc ) || !isIdValid( target ) )
+	{
+		return;
+	}
+	if ( npc == target )
+	{
+		return;
+	}
+
+	if ( hasObjVar( npc, "ai.pathingAwayFrom"))
+	{
+		obj_id oldTarget = getObjIdObjVar( npc, "ai.pathingAwayFrom" );
+		if ( oldTarget == target )
+			return;
+
+		if ( getDistance( npc, target ) > getDistance( npc, oldTarget ) )
+			return;
+	}
+
+	location myLoc = new location( getLocation( npc ) );
+	location targetLoc = new location( getLocation( target ) );
+	if ( myLoc.x < targetLoc.x )
+		myLoc.x -= rand( 20f, 40f );
+	else
+		myLoc.x += rand( 20f, 40f );
+
+	if ( myLoc.z < targetLoc.z )
+		myLoc.z -= rand( 20f, 40f );
+	else
+		myLoc.z += rand( 20f, 40f );
+
+	setObjVar( npc, "ai.pathingAwayFrom", target );
+	pathTo( npc, myLoc );
+	messageTo( npc, "handleClearPathingFlag", null, 30f, isObjectPersisted( npc ) );
+}
+
+void setLoiterRanges( obj_id npc, float minRange, float maxRange )
+{
+	setObjVar( npc, "ai.loiterMinRange", minRange );
+	setObjVar( npc, "ai.loiterMaxRange", maxRange );
+}
+
+int aiGetSpecies( obj_id npc )
+{
+	return getSpecies( npc );
+}
+
+void setCustomIdleAnimation( obj_id npc, string animationString )
+{
+	setDefaultCalmMood( npc, animationString );
+}
+
+void setDefaultCalmMood( obj_id npc, string mood )
+{
+	//debugSpeakMsg( npc, "setting the default calm mood objvar" );
+	setObjVar( npc, "ai.defaultCalmMood", mood );
+
+	if ( getBehavior(npc) <= BEHAVIOR_CALM )
+	{
+		//debugSpeakMsg( npc, "calm, so setting mood" );
+		setMood( npc, MOOD_CALM );
+	}
+}
+
+int getDefaultCalmBehavior(obj_id ai)
+{
+	int behavior = BEHAVIOR_LOITER;
+	if (hasObjVar(ai, "ai.defaultCalmBehavior"))
+	{
+		behavior = getIntObjVar(ai, "ai.defaultCalmBehavior");
+	}
+
+	return behavior;
+}
+
+void aiPathTo( obj_id npc, location pathLoc )
+{
+	if ( (pathLoc.x == 0.0f) && (pathLoc.z == 0.0f) )
+	{
+		//nope.
+		return;
+	}
+
+	setObjVar( npc, "ai.persistentPathing",  pathLoc );
+	stop( npc );
+	pathTo( npc, pathLoc );
+}
+
+/*
+int aiGetNiche( obj_id npc )
+{
+	if ( isPlayer( npc ) )
+		return getNiche( npc );
+
+	string creatureName = getCreatureName( npc );
+	if ( creatureName != null )
+	{
+		int niche = dataTableGetInt( CREATURE_TABLE, creatureName, "niche" );
+		return niche;
+	}
+	int niche = getNiche( npc );
+	return niche;
+}
+*/
+int aiGetNiche( obj_id npc )
+{
+	if ( isPlayer( npc ) )
+		return NICHE_PC;
+
+	string creatureName = getCreatureName( npc );
+	if ( creatureName != null )
+		return ( dataTableGetInt( CREATURE_TABLE, creatureName, "niche" ) );
+	else
+		return NICHE_NONE;
+}
+
+int aiGetNiche( string creatureName )
+{
+	if ( creatureName == null || creatureName.equals("") )
+		return NICHE_NONE;
+
+	return dataTableGetInt( CREATURE_TABLE, creatureName, "niche" );
+}
+
+
+string getSocialGroup( obj_id npc )
+{
+	string creatureName = getCreatureName(npc);
+
+	if(creatureName != null || !beast_lib.isBeast(npc))
+	{
+		string socialGroup = dataTableGetString( CREATURE_TABLE, creatureName, "socialGroup" );
+		return socialGroup;
+	}
+
+	return null;
+}
+
+boolean isSameSocialGroup( obj_id npc, obj_id target )
+{
+	boolean result = false;
+
+	if(!pet_lib.isPet(npc) && !pet_lib.isPet(target) && !beast_lib.isBeast(npc) && !beast_lib.isBeast(target))
+	{
+		const string npcCreatureName = getCreatureName(npc);
+		const string targetCreatureName = getCreatureName(target);
+
+		if (npcCreatureName != null && targetCreatureName != null)
+		{
+			string mySocialGroup = getSocialGroup(npc);
+			string yourSocialGroup = getSocialGroup(target);
+
+			if (   (mySocialGroup != null)
+				&& (yourSocialGroup != null)
+				&& mySocialGroup.equals(yourSocialGroup))
+			{
+				result = true;
+			}
+		}
+		else if ((factions.getFaction(npc) != null) && (factions.getFaction(target) != null))
+		{
+			string mySocialGroup = factions.getFaction(npc);
+			string yourSocialGroup = factions.getFaction(target);
+
+			if (   (mySocialGroup != null)
+				&& (yourSocialGroup != null)
+				&& mySocialGroup.equals(yourSocialGroup))
+			{
+				result = true;
+			}
+		}
+	}
+
+	return result;
+}
+
+boolean isHerdingCreature( obj_id npc )
+{
+	// Do data checks on server load
+
+	if ( isNpc( npc ) || isPlayer( npc ) || isAndroid(npc))
+		return false;
+
+	string creatureName = getCreatureName( npc );
+	if ( creatureName != null )
+	{
+		boolean isHerding = (dataTableGetInt( CREATURE_TABLE, creatureName, "herd" )==1);
+		return isHerding;
+	}
+	return false;
+}
+
+boolean isStalkingCreature(obj_id ai)
+{
+	// Do data checks on server load
+
+	if (isPlayer(ai) || (aiGetNiche(ai) == NICHE_NPC) || isAndroid(ai))
+		return false;
+	if (hasScript(ai, "ai.pet_advance"))
+		return false;
+
+	return aiIsStalker(ai);
+}
+
+boolean isAggroToward( obj_id npc, obj_id threat )
+{
+	if ( hasScript( npc, "ai.pet_advance" ) )
+		return false;
+
+	// If the threat has the npc on their PEF list and
+	// also does PVP faction checks
+
+	if ( pvpIsEnemy( npc, threat ) )
+	{
+		//debugSpeakMsg( npc, "we are enemies");
+		return true;
+	}
+
+	//creatures in the same social group aren't aggro:
+
+	if ( ai_lib.isSameSocialGroup( npc, threat ))
+		return false;
+
+
+	// In creatures_table.xml, remove references to NICHE_MONSTER and NICHE_PREDATOR
+	//players are considered to be aggro to creatures, not to npcs
+	//if ( isPlayer( npc ) )
+	//{
+	//	//debugSpeakMsg( npc, "you are a player and I am a monster");
+	//	return ( ai_lib.isMonster( threat ) );
+	//}
+
+	// Non-imperial/rebel faction
+
+	int reaction = factions.getFactionReaction( npc, threat );
+
+	if ( reaction == factions.REACTION_NEGATIVE )
+	{
+		//debugSpeakMsg( npc, "reaction is negative");
+		return true;
+	}
+
+	if (!ai_lib.isMonster( npc ) )
+	{
+		if ( ai_lib.isAggro( npc ) )
+		{
+			//I will attack you unless I like you very much:
+			if ( reaction <= factions.REACTION_NEUTRAL )
+			{
+				//debugSpeakMsg( npc, "reaction is worse than neutral");
+				return true;
+			}
+		}
+		return false;// all checks below are for CREATURES only
+	}
+
+	// NON-MONSTERS
+
+	//aggro creatures hate players:
+	if ( isPlayer( threat ) && ai_lib.isAggro( npc ) )
+	{
+		//debugSpeakMsg( npc, "you are a player and I am aggroo");
+		return true;
+	}
+
+	int npcNiche = ai_lib.aiGetNiche( npc );
+	int threatNiche = ai_lib.aiGetNiche( threat );
+
+	//Carnivores and Predators eat herbivores
+	if ( npcNiche == NICHE_CARNIVORE /* || npcNiche == NICHE_PREDATOR */)
+	{
+		if ( threatNiche == NICHE_HERBIVORE )
+	 		return true;
+	}
+
+	return false;
+}
+
+boolean isAggro(obj_id ai)
+{
+	if (isPlayer(ai))
+		return false;
+	if ( hasScript( ai, "ai.pet_advance" ) )
+		return false;
+
+	if ( hasScript( ai, "systems.missions.dynamic.mission_bounty_target"))
+		return false;
+
+	return aiIsAggressive(ai);
+}
+
+boolean isHealingNpc( obj_id npc )
+{
+	if ( isPlayer( npc ) )
+		return false;
+
+	int niche = aiGetNiche( npc );
+	if ( niche != NICHE_NPC || niche != NICHE_ANDROID)
+		return false;
+
+	string creatureName = getCreatureName( npc );
+	if ( creatureName != null )
+	{
+		boolean isHealer = (dataTableGetInt( CREATURE_TABLE, creatureName, "healer" )!=0);
+		return isHealer;
+	}
+	return false;
+}
+
+boolean incapacitateMob(obj_id target)
+{
+	if ( target == null || !isMob(target) )
+	{
+		return false;
+	}
+
+	boolean result = true;
+
+	result &= setHealth(target, -50);
+	result &= setAction(target, -50);
+	result &= setMind(target, -50);
+
+	return result;
+}
+
+boolean isHumanSkeleton( obj_id npc )
+{
+	if ( isPlayer(npc) )
+		return true;
+
+	int speciesNum = ai_lib.aiGetSpecies( npc );
+	if ( speciesNum == -1 )
+	{
+		return false;
+	}
+
+	string skeleton = dataTableGetString("datatables/ai/species.iff", speciesNum, "Skeleton");
+	if ( skeleton == "human" )
+	{
+		return true;
+	}
+	return false;
+}
+
+string getSkeleton(int speciesNum)
+{
+	if ( speciesNum == -1 )
+		return null;
+
+	string skeleton = dataTableGetString("datatables/ai/species.iff", speciesNum, "Skeleton");
+
+	return skeleton;
+}
+
+string getSkeleton(obj_id npc)
+{
+	int speciesNum = ai_lib.aiGetSpecies( npc );
+	LOG("mount", "speciesnum is "+speciesNum);
+	if ( speciesNum == -1 )
+	{
+		return null;
+	}
+	string skeleton = dataTableGetString("datatables/ai/species.iff", speciesNum, "Skeleton");
+	LOG("mount", "skeleton is "+skeleton);
+	return skeleton;
+}
+
+
+void doThreatenAnimation( obj_id npc )
+{
+	if (ai_lib.aiGetNiche( npc )!=NICHE_NPC || !isAndroid(npc))
+	{
+		doAction( npc, ACTION_THREATEN );
+		return;
+	}
+	string anim = ai_lib.ACTION_THREATEN;
+	switch ( rand(0,13))
+	{
+		case 0 :
+			anim = ai_lib.ACTION_THREATEN;
+			break;
+		case 1 :
+			anim = "alert";
+			break;
+		case 2 :
+			anim = "angry";
+			break;
+		case 3 :
+			anim = "gesticulate_wildly";
+			break;
+		case 4 :
+			anim = "greet";
+			break;
+		case 5 :
+			anim = "look_casual";
+			break;
+		case 6 :
+			anim = "look_left";
+			break;
+		case 7 :
+			anim = "look_right";
+			break;
+		case 8 :
+			anim = "point_accusingly";
+			break;
+		case 9 :
+			anim = "pound_fist_chest";
+			break;
+		case 10 :
+			anim = "pound_fist_palm";
+			break;
+		case 11 :
+			anim = "taunt1";
+			break;
+		case 12 :
+			anim = "taunt2";
+			break;
+		case 13 :
+			anim = "taunt3";
+			break;
+	}
+	ai_lib.doAction( npc, anim );
+}
+
+void doVictoryDance( obj_id npc )
+{
+	if (ai_lib.isMonster( npc ))
+	{
+		if ( rand(1,500)==1 )
+		{
+			if ( rand(1,2)==1 )
+				doAnimationAction( npc, "trick_1");
+			else
+				doAnimationAction( npc, "trick_2");
+		}
+		else
+			doAction( npc, "vocalize" );
+		return;
+	}
+
+	string anim = "celebrate";
+	switch ( rand(0,23))
+	{
+		case 0 :
+			anim = "celebrate";
+			break;
+		case 1 :
+			anim = "applause_excited";
+			break;
+		case 2 :
+			anim = "belly_laugh";
+			break;
+		case 3 :
+			anim = "celebrate1";
+			break;
+		case 4 :
+			anim = "coup_de_grace";
+			break;
+		case 5 :
+			anim = "dismiss";
+			break;
+		case 6 :
+			anim = "flex_biceps";
+			break;
+		case 7 :
+			anim = "laugh_pointing";
+			break;
+		case 8 :
+			anim = "point_accusingly";
+			break;
+		case 9 :
+			anim = "pound_fist_chest";
+			break;
+		case 10 :
+			anim = "pound_fist_palm";
+			break;
+		case 11 :
+			anim = "salute1";
+			break;
+		case 12 :
+			anim = "salute2";
+			break;
+		case 13 :
+			anim = "shrug_hands";
+			break;
+		case 14 :
+			anim = "shrug_shoulders";
+			break;
+		case 15 :
+			anim = "smack_self";
+			break;
+		case 16 :
+			anim = "shake_head_disgust";
+			break;
+		case 17 :
+			anim = "snap_finger1";
+			break;
+		case 18 :
+			anim = "snap_finger2";
+			break;
+		case 19 :
+			anim = "tap_head";
+			break;
+		case 20 :
+			anim = "taunt1";
+			break;
+		case 21 :
+			anim = "taunt2";
+			break;
+		case 22 :
+			anim = "taunt3";
+			break;
+		case 23 :
+			anim = "yawn";
+			break;
+		case 24 :
+			anim = "check_wrist_device";
+			break;
+
+	}
+	doAction( npc, anim );
+}
+
+obj_id getLair( obj_id npc )
+{
+	if ( isPlayer(npc) )
+		return null;
+
+	//DO I know whether I have a lair or not?
+	if ( utils.hasScriptVar(npc, "ai.hasLair" ) )
+		return utils.getObjIdScriptVar(npc, "ai.hasLair" );
+
+	obj_id myPOI = getObjIdObjVar( npc, "poi.baseObject" );
+	if ( myPOI == null )
+	{
+		utils.setScriptVar( npc, "ai.noLiar", true );
+		return null;
+	}
+	string buildingType = getStringObjVar( myPOI, "spawning.buildingType" );
+	if ( (buildingType == null || buildingType.equals( "none" )) && !hasObjVar( myPOI, "spawning.target" ))
+	{
+		utils.setScriptVar( npc, "ai.noLair", true );
+		return null;
+	}
+
+	utils.setScriptVar( npc, "ai.hasLair", myPOI );
+	return myPOI;
+}
+
+int aiGetApproachTriggerRange( obj_id npc )
+{
+	return (int)aiGetAggroRadius(npc);
+}
+
+void aiSetPosture( obj_id npc, int newPosture )
+{
+	if ( ( getState( npc, STATE_COMBAT ) != 1 ) )
+	{
+		setPostureClientImmediate(npc, newPosture);
+	}
+	else
+	{
+		attacker_results cbtAnimationResults = new attacker_results();
+		cbtAnimationResults.endPosture = newPosture;
+		cbtAnimationResults.id = npc;
+		doCombatResults("change_posture", cbtAnimationResults, null);
+	}
+}
+
+boolean canSit( obj_id npc )
+{
+	int speciesNum = ai_lib.aiGetSpecies( npc );
+	if ( speciesNum == -1 )
+	{
+		return false;
+	}
+	boolean hasSitAnims = ( dataTableGetInt("datatables/ai/species.iff", speciesNum, "CanSit") == 1 );
+	return hasSitAnims;
+}
+
+boolean canLieDown( obj_id npc )
+{
+	int speciesNum = ai_lib.aiGetSpecies( npc );
+	if ( speciesNum == -1 )
+	{
+		return false;
+	}
+
+	boolean hasLayAnims = ( dataTableGetInt("datatables/ai/species.iff", speciesNum, "CanLieDown") == 1 );
+	return hasLayAnims;
+}
+
+boolean isInSameBuilding(obj_id npc, obj_id target)
+{
+	if(!isIdValid(npc))
+		return false;
+
+	if(!isIdValid(target))
+		return false;
+
+	obj_id npcCell = getLocation( npc ).cell;
+	obj_id targetCell = getLocation( target ).cell;
+	if ( isIdValid( npcCell ) == false && isIdValid( targetCell ) == false )
+		return true;//we're both outside
+	else if ( isIdValid( npcCell ) == false || isIdValid( targetCell ) == false )
+		return false;//one of us is outside
+
+	obj_id npcBldg = getTopMostContainer( npc );
+	obj_id targetBldg = getTopMostContainer( target );
+	if ( npcBldg == targetBldg )
+		return (canSee( npc, target ));//we're in the same building (and can see each other)
+	else
+		return false;//not in the same bldg
+}
+
+string getAttackString( int hash )
+{
+	string outstring = "@combat_effects:";
+
+	if ( hash == 0 )
+		return "@combat_effects:none";
+
+	int[] attacks = dataTableGetIntColumn( "datatables/ai/special_attack.iff", "ATTACK_HASH" );
+	string[] attackstrings = dataTableGetStringColumn( "datatables/ai/special_attack.iff", "ATTACK_STRING" );
+	for ( int i=0; i<attacks.length; i++ )
+	{
+		if ( hash == attacks[i] )
+			return "@combat_effects:"+attackstrings[i];
+	}
+
+	return "@combat_effects:unknown_attack";
+}
+
+string getMilkType( obj_id npc )
+{
+	string creatureName = getCreatureName( npc );
+	if ( creatureName == null )
+		return null;//the default
+	else
+		return dataTableGetString( CREATURE_TABLE, creatureName, "milkType" );
+}
+
+
+
+/*
+Straight chance to dump out based on player underworld skillset
+*/
+boolean checkForSmuggler(obj_id player)
+{
+	//check to make sure player is smuggler
+	if (!hasSkill(player, "class_smuggler_phase1_novice"))
+	{
+		return false;
+	}
+	else
+	{
+		int evadeScan = 0;
+
+		if (hasSkill(player, "class_smuggler_phase1_novice"))
+			evadeScan = evadeScan + 15;
+
+		if (hasSkill(player, "class_smuggler_phase2_03"))
+			evadeScan = evadeScan + 15;
+
+		if (hasSkill(player, "class_smuggler_phase2_novice"))
+			evadeScan = evadeScan + 15;
+
+		if (hasSkill(player, "class_smuggler_phase3_novice"))
+			evadeScan = evadeScan + 15;
+
+		if (hasSkill(player, "class_smuggler_phase4_novice"))
+			evadeScan = evadeScan + 15;
+
+		if (hasSkill(player, "class_smuggler_phase4_master"))
+			evadeScan = evadeScan + 20;
+
+		int roll = rand(1,100);
+
+		//debugSpeakMsg(player, "Your Smuggler Evasion Score is: " + evadeScan);
+		//debugSpeakMsg(player, "The Scan Roll was: " + roll);
+
+		if (roll > evadeScan)
+		{
+			//smuggler is busted
+			sendSystemMessage(player, SMUGGLER_SCAN_FAIL);
+				return false;
+		}
+	}
+
+	//smuggler avoids being caught
+	sendSystemMessage(player, SMUGGLER_SCAN_SUCCESS);
+
+	return true;
+
+
+
+}//end checkForSmuggler
+
+//jedi check for contraband searches
+boolean checkForJedi( obj_id player )
+{
+	if ( !isJedi(player) || isJediState( player, JEDI_STATE_FORCE_SENSITIVE ) )
+		return false;
+
+	int mindTrick = 0;
+
+	if ( isJediState( player, JEDI_STATE_JEDI ) )
+		mindTrick += 40;
+	if ( isJediState( player, JEDI_STATE_FORCE_RANKED_LIGHT ) || isJediState( player, JEDI_STATE_FORCE_RANKED_DARK ) )
+		mindTrick += 20;
+
+	int roll = rand( 1, 100 );
+	if ( roll > mindTrick )
+	{
+		return false;
+	}
+
+	return true;
+}
+
+boolean setupNpc(obj_id npc, boolean conversable, boolean invulnerable)
+{
+	return setupNpc(npc, null, conversable, invulnerable);
+}
+
+boolean setupNpc(obj_id npc, string name, boolean conversable, boolean invulnerable)
+{
+	if (name != null && !name.equals(""))
+		setName(npc, name);
+
+	if (conversable)
+		setCondition(npc, CONDITION_CONVERSABLE);
+
+	setInvulnerable (npc, invulnerable);
+
+	return true;
+}
+
+void establishAgroLink(obj_id subject, float range)
+{
+	string socialGroup = getSocialGroup(subject);
+	obj_id[] creatures = getCreaturesInRange(subject, range);
+	if (creatures == null || creatures.length == 0)
+		return;
+
+	resizeable obj_id[] linkedCreatures = new obj_id[0];
+
+	for (int i=0;i<creatures.length;i++)
+	{
+		if (getSocialGroup(creatures[i]).equals(socialGroup))
+		{
+			utils.addElement(linkedCreatures, creatures[i]);
+		}
+	}
+
+	if (linkedCreatures.length == 0)
+		return;
+
+	obj_id[] creatureList = linkedCreatures;
+	if (creatureList == null || creatureList.length == 0)
+		return;
+
+	utils.setScriptVar(subject, ALLY_LIST, creatureList);
+
+	for (int k=0;k<creatureList.length;k++)
+	{
+		utils.setScriptVar(subject, ALLY_LIST, creatureList);
+	}
+}
+
+void establishAgroLink(obj_id subject, obj_id[] allies)
+{
+	if (allies == null || allies.length == 0)
+		return;
+
+	utils.setScriptVar(subject, ALLY_LIST, allies);
+	for (int i=0;i<allies.length;i++)
+	{
+		utils.setScriptVar(allies[i], ALLY_LIST, allies);
+	}
+}
+
+void triggerAgroLinks(obj_id subject, obj_id attacker)
+{
+	if (!utils.hasScriptVar(subject, ALLY_LIST))
+		return;
+
+	obj_id[] allyList = utils.getObjIdArrayScriptVar(subject, ALLY_LIST);
+
+	if (allyList == null || allyList.length == 0)
+		return;
+
+	for (int i=0;i<allyList.length;i++)
+	{
+		if (isIdValid(allyList[i]) && exists(allyList[i]) && !isDead(allyList[i]))
+		{
+			if(!isInCombat(allyList[i]))
+			{
+				startCombat(allyList[i], attacker);
+			}
+			else
+			{
+				addHate(allyList[i], attacker, 1);
+			}
+
+		}
+	}
+}
+
+void creatureLevelUp(obj_id creature, obj_id victim)
+{
+	showFlyText(creature, new string_id("cbt_spam", "level_up"), 2.5f, colors.CORNFLOWERBLUE);
+	playClientEffectObj(victim, "clienteffect/level_granted.cef", creature, null);
+
+	string creatureName = getCreatureName(creature);
+
+	if ( creatureName.indexOf( "elite_" ) < 1 && creatureName.indexOf( "boss_" ) < 1)
+	{
+		dictionary creatureDict = utils.dataTableGetRow( CREATURE_TABLE, creatureName );
+		create.initializeCreature( creature, creatureName, creatureDict, getLevel(creature)+1 );
+	}
+	return ;
+
+}
+
+boolean mindTrick(obj_id player, obj_id target)
+{
+	int niche = aiGetNiche(target);
+
+	if (vehicle.isVehicle(target) || niche == NICHE_DROID || niche == NICHE_ANDROID || niche == NICHE_VEHICLE || isTurret(target))
+		return false;
+
+	if (!isPlayer(target) && isOnHateList(player, target))
+	{
+		int mt_resist = getEnhancedSkillStatisticModifierUncapped(target, "resistance_mind_trick");
+
+		if (mt_resist >= 100)
+		{
+			showFlyTextPrivate(target, player, new string_id("cbt_spam", "immune"), 1.5f, colors.WHITE);
+			return false;
+		}
+
+		if (rand(1, 100) > mt_resist)
+		{
+			playClientEffectObj(target, "appearance/pt_mind_trick.prt", target, "root");
+			removeHateTarget(target, player);
+			return true;
+		}
+		else
+		{
+			showFlyTextPrivate(target, player, new string_id("cbt_spam", "resist"), 1.5f, colors.WHITE);
+			return false;
+		}
+	}
+
+	return false;
+}
+
+boolean isTauntable(obj_id creature)
+{
+	return !utils.hasScriptVar(creature, "combat.immune.taunt");
+}
+
+void establishSharedHealth(resizeable obj_id[] allies)
+{
+	for (int i=0;i<allies.length;i++)
+	{
+		utils.setScriptVar(allies[i], SHARED_HEALTH_LIST, allies);
+	}
+}
+
+int triggerSharedHealthLink(obj_id self, int totalDamage)
+{
+	if (utils.hasScriptVar(self, ai_lib.SHARED_HEALTH_LIST))
+	{
+		resizeable obj_id[] allies = utils.getResizeableObjIdArrayScriptVar(self, ai_lib.SHARED_HEALTH_LIST);
+		utils.removeScriptVar(self, ai_lib.SHARED_HEALTH_LIST);
+
+		resizeable obj_id[] validList = new obj_id[0];
+
+
+		if (allies == null || allies.length == 0)
+			return totalDamage;
+
+		for(int q=0;q<allies.length;q++)
+		{
+			if (!isIdValid(allies[q]) || !exists(allies[q]) || isDead(allies[q]) || aiIsTethered(allies[q]))
+				continue;
+
+			validList.add(allies[q]);
+		}
+
+		utils.setScriptVar(self, ai_lib.SHARED_HEALTH_LIST, validList);
+
+		if(validList.length < 2)
+		{
+			return totalDamage;
+		}
+
+		int divisor = validList.length;
+
+		int split = Math.round((float)totalDamage / (float)divisor);
+
+		for(int k=0;k<validList.length;k++)
+		{
+			if (validList[k] == self)
+				continue;
+
+			damage(validList[k], DAMAGE_ELEMENTAL_HEAT, HIT_LOCATION_BODY, split);
+		}
+
+		return split;
+
+	}
+
+	return totalDamage;
+}
+
+int getDifficultyClass(obj_id target)
+{
+	if (!isIdValid(target) || !exists(target) || !hasObjVar(target, "difficultyClass"))
+		return -1;
+
+	return getIntObjVar(target, "difficultyClass");
+}
+
+boolean isVehicleMine(obj_id self)
+{
+	return hasScript(self, "theme_park.heroic.echo_base.vehicle_mine");
+}

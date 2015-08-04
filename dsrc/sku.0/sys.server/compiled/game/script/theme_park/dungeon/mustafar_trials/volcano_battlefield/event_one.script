@@ -1,0 +1,252 @@
+include library.ai_lib;
+include library.utils;
+include library.create;
+include library.trial;
+
+
+const string boss					= "som_volcano_one_taskmaster";
+const string guard					= "som_volcano_one_sustainer";
+
+const boolean doLogging					= false;
+
+trigger OnAttach()
+{
+	spawnBoss(self);
+	messageTo(self, "spawnGuards", null, 2, false);
+	setTriggerVolume(self);
+	return SCRIPT_CONTINUE;
+}
+
+void setTriggerVolume(obj_id self)
+{
+	if (!hasTriggerVolume(self, "activateVolume"))
+	{
+		createTriggerVolume("activateVolume", 45, true);
+	}
+
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id breacher)
+{
+	if (isPlayer(breacher))
+	{
+		if (volumeName.equals("activateVolume"))
+		{
+			activateEncounter(self);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+void activateEncounter(obj_id self)
+{
+	obj_id eventBoss = utils.getObjIdScriptVar(self, "eventBoss");
+	setInvulnerable(eventBoss, false);
+	obj_id[] guardList = utils.getObjIdArrayScriptVar(self, "currentGuardList");
+	utils.messageTo(guardList, "activateShield", null, 0, false);
+}
+
+
+void spawnBoss(obj_id self)
+{
+	location here = getLocation(self);
+	obj_id eventBoss = create.object(boss, here);
+	if (!isIdValid(eventBoss))
+	{
+		doLogging("spawnGuards", "Failed to generate boss");
+		return;
+	}
+	
+	setYaw(eventBoss, 0);
+	attachScript(eventBoss,"theme_park.dungeon.mustafar_trials.volcano_battlefield.event_one_boss"); 
+	ai_lib.setDefaultCalmBehavior(eventBoss, ai_lib.BEHAVIOR_SENTINEL);
+	trial.setParent(self, eventBoss, false);
+	utils.setScriptVar(self, "eventBoss", eventBoss);
+	
+}
+
+messageHandler beginGuardCycle()
+{
+	obj_id[] guardList = utils.getObjIdArrayScriptVar(self, "currentGuardList");
+	utils.messageTo(guardList, "healBoss", null, 0, false);
+	messageTo(self, "doGuardAttack", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnGuards()
+{
+	location here = getLocation(self);
+	obj_id event_boss = utils.getObjIdScriptVar(self, "eventBoss");
+	string[] offSet = 
+			{
+				"3:2",
+				"6:4",
+				"9:7",
+				"12:10",
+				"-3:2",
+				"-6:4",
+				"-9:7",
+				"-12:10"
+			};
+	
+	obj_id[] guards = new obj_id[8];	
+	for (int i=0;i<offSet.length;i++)
+	{
+		string[] parse = split(offSet[i],':');
+		float locX = here.x + utils.stringToFloat(parse[0]);
+		float locZ = here.z + utils.stringToFloat(parse[1]);
+		
+		location spawnLoc = new location(locX, here.y, locZ, here.area, here.cell);
+		guards[i] = create.object(guard, spawnLoc);
+		
+		if (isIdValid(guards[i]))
+		{
+			ai_lib.setDefaultCalmBehavior(guards[i], ai_lib.BEHAVIOR_SENTINEL);
+			attachScript(guards[i], "theme_park.dungeon.mustafar_trials.volcano_battlefield.event_one_guard");
+			setYaw(guards[i], 0);
+			setObjVar(guards[i], "boss", event_boss);
+			setObjVar(guards[i], "parent", self);
+			setInvulnerable(guards[i], true);			
+		}
+	}
+				
+	utils.setScriptVar(self, "currentGuardList", guards);
+	utils.setScriptVar(self, "currentAttacker", guards[0]);
+	return SCRIPT_CONTINUE;
+
+}
+
+
+messageHandler doGuardAttack()
+{
+	obj_id currentAttacker = getCurrentAttacker(self);
+	obj_id newAttacker = chooseNewAttacker(self);
+	
+	if (!isIdValid(newAttacker))
+	{
+		doLogging("doGuardAttack", "Unable to get new attacker, guards must be dead");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (isIdValid(currentAttacker))
+		messageTo(currentAttacker, "stopAttack", null, 0, false);
+		
+	messageTo(newAttacker, "beginAttack", null, 0, false);
+	messageTo(self, "doGuardAttack", null, 10, false);
+	
+	
+	return SCRIPT_CONTINUE;
+}
+
+obj_id getCurrentAttacker(obj_id self)
+{
+	if (!utils.hasScriptVar(self, "currentAttacker"))
+		return obj_id.NULL_ID;
+		
+	return utils.getObjIdScriptVar(self, "currentAttacker");
+}
+
+obj_id chooseNewAttacker(obj_id self)
+{
+	obj_id[] guards = utils.getObjIdArrayScriptVar(self, "currentGuardList");
+	obj_id attacker = obj_id.NULL_ID;
+	
+	if (utils.hasScriptVar(self, "currentAttacker"))
+		attacker = utils.getObjIdScriptVar(self, "currentAttacker");
+	
+	if (guards == null || guards.length == 0)
+	{
+		doLogging("chooseNewAttacker", "The guards scriptVar is empty or null");
+		return obj_id.NULL_ID;
+	}
+	
+	resizeable obj_id[] activeGuards = new obj_id[0];
+	
+	for (int i=0;i<guards.length;i++)
+	{
+		if (exists(guards[i]))
+		{
+			utils.addElement(activeGuards, guards[i]);
+		}
+	}
+	
+	if (activeGuards == null || activeGuards.length == 0)
+	{
+		doLogging("chooseNewAttacker", "There are no active guards remaining");
+		return obj_id.NULL_ID;
+	}	
+	
+	obj_id newAttacker = obj_id.NULL_ID;
+	
+	if (activeGuards.length == 1)
+	{
+		newAttacker = activeGuards[0];
+	}
+	else
+	{
+		resizeable obj_id[] nonAttackerGuards = new obj_id[0];
+
+		if (isIdValid(attacker))
+		{
+
+			for (int k=0;k<activeGuards.length;k++)
+			{
+				if (activeGuards[k] != attacker)
+					utils.addElement(nonAttackerGuards, activeGuards[k]);
+			}
+		}
+		else
+		{
+			nonAttackerGuards = activeGuards;
+		}
+
+		if (nonAttackerGuards == null || nonAttackerGuards.length == 0)
+		{
+			doLogging("chooseNewAttacker", "There are more than one guard left but nonAttackerGuards is empty");
+			return obj_id.NULL_ID;
+		}
+		
+		if (nonAttackerGuards.length == 1)
+			newAttacker = nonAttackerGuards[0];
+		else
+			newAttacker = nonAttackerGuards[rand(0, nonAttackerGuards.length -1)];
+	}
+	
+	obj_id[] newGuardList = activeGuards;
+	utils.setScriptVar(self, "currentGuardList", newGuardList);
+	utils.setScriptVar(self, "currentAttacker", newAttacker);
+	return newAttacker;
+}
+
+
+messageHandler eventMobDied()
+{
+	string type = params.getString("type");
+	if (type.equals("boss"))
+	{
+		winEvent(self);
+	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+void winEvent(obj_id self)
+{
+	obj_id top = getObjIdObjVar(self, "parent");
+	if (!isIdValid(top))
+	{
+		doLogging("winEvent", "Parent ID is not valid");
+		return;
+	}
+	
+	
+	messageTo(top, "eventDefeated", null, 0, false);
+}
+
+
+void doLogging(string section, string message)
+{
+	if (doLogging)
+		LOG("travis/event_one/"+section, message);	
+}

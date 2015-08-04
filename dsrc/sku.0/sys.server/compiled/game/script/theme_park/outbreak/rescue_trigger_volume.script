@@ -1,0 +1,203 @@
+include library.create;
+include library.groundquests;
+include library.stealth;
+include library.utils;
+
+const boolean LOGGING_ON			= true; 
+
+const string TRIGGER_NAME_PREFIX 		= "rescue_trigger_";
+const string TRIGGER 				= "meatlump_spy_trigger";
+const string MEATLUMP_ENEMY_SCRIPT		= "creature.dynamic_enemy";
+const string PHRASE_STRING_FILE			= "phrase_string_file";
+const string SPAM_STRING_FILE			= "spam";
+const string SCRIPT_LOG				= "outbreak_trigger";
+const string CLIENT_EFFECT			= "appearance/pt_smoke_puff.prt";
+const string QUEST_STRING			= "quest/outbreak_quest_rescue_0";
+const string QUEST_TASK_NAME			= "spawnSurvivor";
+const string QUEST_SIGNAL			= "survivorHasBeenSpawned";
+const string WAYPOINT_LIST			= "wayPointList";
+const string WAYPOINT_LOCS			= "wayPtLocs";
+
+const float TRIGGER_RADIUS 			= 3f;
+const int RADIUS				= 300;
+
+const string[] MOB_FOR_QUEST			= 
+{
+	"outbreak_rescue_inquisitor",
+	"outbreak_rescue_officer",
+	"outbreak_rescue_prisoner",
+	"outbreak_rescue_scientist",
+	"outbreak_rescue_inquisitor",
+	"outbreak_rescue_inquisitor",
+	"outbreak_rescue_inquisitor",
+	"outbreak_rescue_officer",
+	"outbreak_rescue_officer",
+	"outbreak_rescue_officer",
+	"outbreak_rescue_prisoner",
+	"outbreak_rescue_prisoner",
+	"outbreak_rescue_prisoner",
+	"outbreak_rescue_scientist",
+	"outbreak_rescue_scientist",
+	"outbreak_rescue_scientist"
+};
+
+trigger OnInitialize()
+{
+	//on init add trig volume
+	createTriggerVolume(TRIGGER_NAME_PREFIX + self, TRIGGER_RADIUS, true);
+	messageTo(self, "getAllEscortPathNodes", null, 5, false);	
+	//no attribs because we only want players
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id whoTriggeredMe)
+{
+	if(!isPlayer(whoTriggeredMe))
+		return SCRIPT_CONTINUE;
+	
+	if(!hasObjVar(self, "spawner"))
+		return SCRIPT_CONTINUE;
+
+	if(!hasObjVar(self, WAYPOINT_LIST))
+	{
+		CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Spawner: "+self+" could not find the WAYPOINT LIST OF OBJVARS on self.");	
+
+		return SCRIPT_CONTINUE;	
+	}
+	if(!hasObjVar(self, WAYPOINT_LOCS))
+	{
+		CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Spawner: "+self+" could not find the WAYPOINT LIST OF LOCATIONS on self.");	
+		return SCRIPT_CONTINUE;	
+	}
+	
+	//the spawner number tells the egg when the player is eligible to spawn an enemy.
+	//We see if the player has the quest and the task active. If both of these are
+	//true we spawn the enemy NPC and send a signal to the quest.
+	int spawner = getIntObjVar(self, "spawner");
+		
+	location[] wayPtLocs = getLocationArrayObjVar(self, WAYPOINT_LOCS);
+	if(wayPtLocs == null || wayPtLocs.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Spawner: "+self+" FAILED TO FIND wayPtLocs OBJVAR.");
+		return SCRIPT_CONTINUE;		
+	}
+
+	obj_id[] wayPointList = getObjIdArrayObjVar(self, WAYPOINT_LIST);
+	if(wayPointList == null || wayPointList.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Spawner: "+self+" FAILED TO FIND wayPointList OBJVAR.");
+		return SCRIPT_CONTINUE;		
+	}
+	
+	if(!groundquests.isQuestActive(whoTriggeredMe, QUEST_STRING+spawner))
+		return SCRIPT_CONTINUE;
+
+	CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Ground Quest found for Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ ")" );
+
+	if(!groundquests.isTaskActive(whoTriggeredMe, QUEST_STRING+spawner, QUEST_TASK_NAME))
+		return SCRIPT_CONTINUE;
+	
+	CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Ground Quest Task found for Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ ")" );
+
+	//if player invis, make visible
+	string invis = stealth.getInvisBuff(whoTriggeredMe);
+	if(invis != null)
+		stealth.checkForAndMakeVisibleNoRecourse(self);
+
+	//send the signal and spawn the NPC.
+	CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Sending Ground Quest signal for Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ ")" );
+	groundquests.sendSignal(whoTriggeredMe, QUEST_SIGNAL);
+
+	//the location the mob is spawned will be center of volume
+	//make location a bit more random?
+	
+	location curLoc = utils.getRandomLocationInRing(getLocation(self), 0.01f, 1.0f);
+
+	//spawn the meatlump mob
+	CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Preparing to spawn NPC at: "+curLoc+" for Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ ")" );
+	obj_id mob = create.object(MOB_FOR_QUEST[spawner-1], curLoc);
+	if(!isValidId(mob) || !exists(mob))
+	{
+		CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Mob: "+MOB_FOR_QUEST[spawner-1]+" could not be created!");
+		return SCRIPT_CONTINUE;
+	}
+	CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() Mob: "+MOB_FOR_QUEST[spawner-1]+" WAS SICCESSFULLY CREATED for Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ ")" );
+	
+	//set vars on mob for use by the mob
+	setObjVar(mob, "myEscort", whoTriggeredMe);
+	playClientEffectObj(mob, CLIENT_EFFECT, whoTriggeredMe, "");
+	setObjVar(mob, "clientEffect", CLIENT_EFFECT);
+	setObjVar(mob, WAYPOINT_LIST, wayPointList);
+	setObjVar(mob, WAYPOINT_LOCS, wayPtLocs);
+
+	pathTo(mob,getLocation(whoTriggeredMe));
+	//CLEAN UP THIS MOB IN 60 Seconds if player never initiates conversations
+	messageTo(mob, "cleanUpNpcTimer", null, 60, false);
+	setObjVar(mob, "neverSpokenTo", true);
+	
+	
+	CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.OnTriggerVolumeEntered() NPC spawned "+mob+" for Player: "+getPlayerName(whoTriggeredMe)+" ("+whoTriggeredMe+ "). This NPC is now ready to talk to the player" );
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id whoTriggeredMe)
+{
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler getAllEscortPathNodes()
+{
+	CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.getAllEscortPathNodes() the spawner "+self+" is attempting to get all path nodes for escort quests.");
+
+	int spawner = getIntObjVar(self, "spawner");
+	if(spawner < 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "rescue_trigger_volume.getAllEscortPathNodes() the spawner "+self+" could not find the appropriate spawner integer objvar on self.");
+		return SCRIPT_CONTINUE;
+	}
+
+	CustomerServiceLog("outbreak_themepark", "survivor_pathing.getAllEscortPathNodes() spawner: "+spawner);
+	
+	string creatureType = MOB_FOR_QUEST[spawner-1];
+	if(creatureType == null || creatureType.length() <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.getAllEscortPathNodes() the NPC creature_type was not valid");
+		return SCRIPT_CONTINUE;
+	}
+	
+	CustomerServiceLog("outbreak_themepark", "survivor_pathing.getAllEscortPathNodes() the NPC creature_type is: "+creatureType);
+
+	obj_id[] wayPointList = getAllObjectsWithObjVar(getLocation(self), RADIUS, creatureType);
+	if(wayPointList == null || wayPointList.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() the NPC failed to find any objects within "+RADIUS+" of "+getLocation(self));
+		return SCRIPT_CONTINUE;
+	}
+	
+	location[] wayPtLocs = new location[wayPointList.length];
+	//we need to make absolute sure that the waypoints are in order!!!
+	for(int i = 0; i < wayPointList.length; i++)
+	{
+		int orderNumber = getIntObjVar(wayPointList[i], creatureType) - 1;
+		if(orderNumber < 0)
+		{
+			//CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() the NPC waypoint location was invalid for waypoint: "+wayPointList[i]);
+			continue;
+		}
+		wayPtLocs[orderNumber] = getLocation(wayPointList[i]); 
+	}
+
+	if(wayPtLocs == null || wayPtLocs.length <= 0)
+	{
+		CustomerServiceLog("outbreak_themepark", "survivor_pathing.startSurvivorPathing() unable to get a list of locations for hte NPC");
+		return SCRIPT_CONTINUE;
+	}
+	setObjVar(self, WAYPOINT_LIST, wayPointList);
+	setObjVar(self, WAYPOINT_LOCS, wayPtLocs);
+
+	return SCRIPT_CONTINUE;
+
+}
+

@@ -1,0 +1,363 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        skill_template.scriptlib
+ * Description:  experience type defines and xp-related function library
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+
+include library.utils;
+
+
+/***** CONSTANTS *******************************************************/
+
+
+const float NON_TEMPLATE_XP_RATIO	= 1.0f;
+const float QUEST_XP_RATIO 			= 1.0f;
+
+const string NO_TEMPLATE_STARTING	= "new_character_no_skill";
+
+const string TEMPLATE_TABLE = "datatables/skill_template/skill_template.iff";
+const string ITEM_REWARD_TABLE = "datatables/roadmap/item_rewards.iff";
+
+
+/***** FUNCTIONS **************************************************/
+
+
+string[] getSkillTemplateSkillsByTemplateName(string templateName)
+{
+	if(templateName == null || templateName.length() <= 0)
+		return null;
+
+	string template = dataTableGetString(TEMPLATE_TABLE, templateName, "template");
+	
+	if(template == null || template.equals(""))
+		return null;
+	
+	return split(template, ',');
+}
+
+string[] getSkillTemplateSkills(obj_id player)
+{
+	if (!isIdValid(player))
+		return null;
+
+	string templateName = getSkillTemplate(player);
+	
+	return getSkillTemplateSkillsByTemplateName(templateName);
+}
+
+boolean isValidWorkingSkill(string skillName)
+{
+	if (skillName == null || skillName.equals(""))
+		return false;
+	
+	return true;
+}
+
+string getNextWorkingSkill(obj_id player)
+{
+	if (!isIdValid(player))
+		return null;
+	
+	string[] template = getSkillTemplateSkills(player);
+	if (template == null || template.length == 0)
+		return null;
+
+	string skillName = getWorkingSkill(player);
+	if (!isValidWorkingSkill(skillName))
+	{
+		setWorkingSkill(player, template[0]);
+		return template[0];
+	}
+	
+	int idx = utils.getElementPositionInArray(template, skillName);
+	idx++;
+	
+	if (idx >= template.length)
+		return null;
+	
+	return template[idx];
+}
+
+string getTemplateSkillXpType(obj_id player, boolean verbose)
+{
+	if (!isIdValid(player))
+		return null;
+
+	int loopCount = utils.getIntScriptVar(player, "skillTemplate.loop");
+	loopCount ++;
+	
+	string skillName = getWorkingSkill(player);
+	string skillTemplate = getSkillTemplate(player);
+	
+	if (loopCount > 100)
+	{
+		logScriptDataError("Infinite skill template loop (template="+skillTemplate+" ;working skill="+skillName+")");
+		return null;
+	}
+	
+	if (!isValidWorkingSkill(skillName))
+	{
+		if ((skillName != null && skillName.equals(NO_TEMPLATE_STARTING)) && (skillTemplate == null || skillTemplate.equals("")))
+		{
+			utils.removeScriptVar(player, "skillTemplate.loop");
+			return skillName;
+		}
+		
+		skillName = getNextWorkingSkill(player);
+
+		if (!isValidWorkingSkill(skillName))
+		{
+			if (verbose)
+				sendSystemMessage(player, new string_id("base_player", "skill_template_no_xp_nag"));
+
+			utils.removeScriptVar(player, "skillTemplate.loop");
+			return null;
+		}
+		else
+		{
+			setWorkingSkill(player, skillName);
+		}
+	}
+
+	if (hasSkill(player, skillName))
+	{
+		if (skillTemplate == null || skillTemplate.equals(""))
+		{
+			if (verbose)	
+				sendSystemMessage(player, new string_id("base_player", "skill_template_old_xp_nag"));
+		}
+		else
+		{
+			skillName = getNextWorkingSkill(player);
+			if (isValidWorkingSkill(skillName))
+			{
+				setWorkingSkill(player, skillName);
+				
+				utils.setScriptVar(player, "skillTemplate.loop", loopCount);
+				return getTemplateSkillXpType(player, false);
+			}
+		}
+	}
+
+	string templateCombatXpType = getSkillExperienceType(skillName);
+	
+	if (templateCombatXpType == null || templateCombatXpType.equals(""))
+	{
+		if (earnWorkingSkill(player))
+		{
+			utils.setScriptVar(player, "skillTemplate.loop", loopCount);
+			return getTemplateSkillXpType(player, false);
+		}
+
+		utils.removeScriptVar(player, "skillTemplate.loop");
+		return null; 
+	}
+	
+	utils.removeScriptVar(player, "skillTemplate.loop");
+	return templateCombatXpType;
+}
+
+string getSkillExperienceType(string skillName)
+{
+	dictionary xpReqs = getSkillPrerequisiteExperience(skillName);
+	if (xpReqs == null || xpReqs.isEmpty())
+		return null;
+
+	java.util.Enumeration e = xpReqs.keys();
+	string xpType = (string)(e.nextElement());
+	
+	return xpType;
+}
+
+boolean isQualifiedForWorkingSkill(obj_id player)
+{
+	if (!isIdValid(player))
+		return false;
+	
+	string skillName = getWorkingSkill(player);
+	if (!isValidWorkingSkill(skillName))
+		return false;
+	
+	if (hasSkill(player, skillName))
+		return false;
+	
+	dictionary xpReqs = getSkillPrerequisiteExperience(skillName);
+	if (xpReqs == null || xpReqs.isEmpty())
+		return true;
+	
+	java.util.Enumeration e = xpReqs.keys();
+	string xpType = (string)(e.nextElement());
+	int xpCost = xpReqs.getInt(xpType);
+	if ( getExperiencePoints(player, xpType) < xpCost )
+		return false;
+	
+	return true;
+}
+
+boolean earnWorkingSkill(obj_id player)
+{
+	if (!isIdValid(player))
+		return false;
+	
+	string skillName = getWorkingSkill(player);
+	if (!isValidWorkingSkill(skillName))
+	{
+		return false;
+	}
+
+	if (skill.purchaseSkill(player, skillName))
+	{
+		grantRoadmapItem(player);
+		
+		setWorkingSkill(player, getNextWorkingSkill(player));
+		return true;
+	}
+
+	return false;
+}
+
+void validateWorkingSkill(obj_id player)
+{
+	string[] skillList = getSkillTemplateSkills(player);
+	
+	if (skillList == null || skillList.length == 0)
+		return;
+	
+	for (int i = 0; i < skillList.length; i++)
+	{
+		if (!hasSkill(player, skillList[i]))
+		{
+			setWorkingSkill(player, skillList[i]);
+			break;
+		}
+	}
+}
+
+boolean grantRoadmapItem(obj_id player)
+{
+	string skillName = getWorkingSkill(player);
+	if (!isValidWorkingSkill(skillName))
+		return false;
+
+	string skillTemplate = getSkillTemplate(player);
+	if (skillTemplate == null || skillTemplate.equals(""))
+		return false;
+
+	string itemGrant = getRoadmapItem(player, skillTemplate, skillName);
+	if (itemGrant == null || itemGrant.equals(""))
+		return false;
+
+	string[] items = split(itemGrant, ',');
+	if (items == null || items.length == 0)
+		return false;
+
+
+	resizeable obj_id[] allNewObjectsResizable = new obj_id[0];
+	boolean success = true;
+	for (int i = 0; i < items.length; i++)
+	{
+		obj_id newItem = null;
+		if (items[i].endsWith(".iff"))
+		{
+			newItem = createObjectInInventoryAllowOverload(items[i], player);
+		}
+		else
+		{
+			newItem = static_item.createNewItemFunction(items[i], player);
+		}
+		
+		if (!isIdValid(newItem))
+		{
+			LOG("roadmap", "ERROR - Could not create roadmap item ("+items[i]+")");
+			success = false;
+		}
+		else
+		{
+			utils.addElement(allNewObjectsResizable, newItem);
+		}
+	}
+
+	string_id itemDesc = utils.unpackString(getRoadmapItemDesc(skillTemplate, skillName));
+	prose_package pp = prose.getPackage(new string_id("base_player", "skill_template_item_reward"), itemDesc);
+	sendSystemMessageProse(player, pp);
+	obj_id[] allNewObjects = allNewObjectsResizable;
+	showLootBox(player, allNewObjects);
+
+	return success;
+}
+
+string getRoadmapItemDesc(string skillTemplate, string workingSkill)
+{
+	int row = dataTableSearchColumnForString(skillTemplate, 0, ITEM_REWARD_TABLE);
+	if (row < 0)
+		return null;
+	
+	string[] templateNames = dataTableGetStringColumn(ITEM_REWARD_TABLE, "roadmapTemplateName");
+	string[] templateSkills = dataTableGetStringColumn(ITEM_REWARD_TABLE, "roadmapSkillName");
+	for (int i = row; i < templateSkills.length; i++)
+	{
+		// Stop searching if we are no longer in the required template
+		if (!templateNames[i].equals(skillTemplate))
+			break;
+		
+		if (templateSkills[i].equals(workingSkill))
+		{
+			string itemDesc = dataTableGetString(ITEM_REWARD_TABLE, i, "stringId");
+			
+			if (itemDesc != null && !itemDesc.equals(""))
+				return itemDesc;
+		}
+	}
+	
+	return "";
+}
+
+string getRoadmapItem(obj_id player, string skillTemplate, string workingSkill)
+{
+	int row = dataTableSearchColumnForString(skillTemplate, 0, ITEM_REWARD_TABLE);
+	if (row < 0)
+		return null;
+	
+	string[] templateNames = dataTableGetStringColumn(ITEM_REWARD_TABLE, "roadmapTemplateName");
+	string[] templateSkills = dataTableGetStringColumn(ITEM_REWARD_TABLE, "roadmapSkillName");
+	for (int i = row; i < templateSkills.length; i++)
+	{
+		// Stop searching if we are no longer in the required template
+		if (!templateNames[i].equals(skillTemplate))
+			break;
+		
+		if (templateSkills[i].equals(workingSkill))
+		{
+			string defaultItem = dataTableGetString(ITEM_REWARD_TABLE, i, "itemDefault");
+			
+			int species = getSpecies(player);
+			if (species == SPECIES_WOOKIEE)
+			{
+				string wookieeItem = dataTableGetString(ITEM_REWARD_TABLE, i, "itemWookiee");
+				
+				if (wookieeItem != null && !wookieeItem.equals(""))
+					return wookieeItem;
+			}
+			else if (species == SPECIES_ITHORIAN)
+			{
+				string ithorianItem = dataTableGetString(ITEM_REWARD_TABLE, i, "itemIthorian");
+				
+				if (ithorianItem != null && !ithorianItem.equals(""))
+					return ithorianItem;
+			}
+
+				
+			if (defaultItem != null && !defaultItem.equals(""))
+				return defaultItem;
+		}
+	}
+	
+	return null;
+}

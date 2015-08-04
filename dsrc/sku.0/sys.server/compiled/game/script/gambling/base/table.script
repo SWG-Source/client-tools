@@ -1,0 +1,370 @@
+
+/***** INCLUDES ********************************************************/
+include library.sui;
+include library.utils;
+include library.prose;
+include library.money;
+include library.gambling;
+
+/***** INHERITS ********************************************************/
+inherits gambling.base.default_interface;
+
+/***** CONSTANTS *******************************************************/
+const int TIMER_BETTING						= 60; //allotted time for betting
+const string SCRIPT_VAR_GAME_ACTIVE				= "gambling.game.active";
+
+/***** TRIGGERS ********************************************************/
+trigger OnInitialize()
+{
+	removeObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	removeObjVar(self, gambling.VAR_GAME_BASE);
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** HANDLERS ********************************************************/
+messageHandler handlePlayerAdded()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	if (!utils.hasScriptVar(self, SCRIPT_VAR_GAME_ACTIVE))
+	{
+		obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+		if ( players != null && players.length > 0 )
+		{
+			prose_package ppJoinOther = prose.getPackage(gambling.PROSE_PLAYER_JOIN_OTHER, player);
+			for ( int i = 0; i < players.length; i++ )
+			{
+				if ( players[i] != player )
+					sendSystemMessageProse(players[i], ppJoinOther);
+			}
+
+			if (!utils.hasScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT))
+			{
+				if (players.length >= getIntObjVar(self, gambling.VAR_TABLE_PLAYER_LIMIT_MIN))
+				{
+					startTableBetting(self);
+				}
+			}
+		}
+	
+		if ( utils.hasScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT) )
+		{
+			if ( players != null && players.length > 1 )
+				sendSystemMessage(player, gambling.SID_PLACE_BETS);
+
+			resizeable obj_id[] gamePlayers = getResizeableObjIdArrayObjVar(self, gambling.VAR_GAME_PLAYERS_IDS);
+			if ( gamePlayers != null && gamePlayers.length > 0 )
+			{
+				if ( utils.getElementPositionInArray(gamePlayers, player) == -1 )
+				{
+					gamePlayers = utils.addElement(gamePlayers, player);
+					setObjVar(self, gambling.VAR_GAME_PLAYERS_IDS, gamePlayers);
+
+					//showBetUi(self, player);
+				}
+			}
+
+			int timeLeft = utils.getIntScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT) - getGameTime();
+			prose_package ppBetTime = prose.getPackage(gambling.PROSE_STARTING_IN, timeLeft);
+			sendSystemMessageProse(player, ppBetTime);
+		}
+		else
+		{
+			int players_needed = getIntObjVar(self, gambling.VAR_TABLE_PLAYER_LIMIT_MIN) - players.length;
+			if (players_needed == 1)
+				sendSystemMessageTestingOnly(player, "The game needs 1 more player before it can begin.");
+			else
+				sendSystemMessageTestingOnly(player, "The game needs " + players_needed + " more players before it can begin.");
+		}
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "A game is currently in progress. You must wait until it has ended.");
+	}
+	
+	showBetUi(self, player);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlePlayerRemoved()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	string ovpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if ( utils.hasScriptVar(self, ovpath) )
+	{
+		int pid = utils.getIntScriptVar(self, ovpath);
+		sui.closeSUI(player, pid);
+		utils.removeScriptVar(self, ovpath);
+	}
+	
+	// Remove bets from the table.
+	int player_idx = gambling.getGamePlayerIndex(self, player);
+	string bet_path = gambling.VAR_GAME_PLAYERS + "." + player_idx + ".bet";
+	
+	if (hasObjVar(self, bet_path))
+		removeObjVar(self, bet_path);
+	
+	if ( !hasObjVar(self, gambling.VAR_TABLE_PLAYERS) )
+	{
+		stopTableGame(self);
+	}
+	else
+	{
+		obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+		if ( players != null && players.length > 0 )
+		{
+			prose_package ppLeftOther = prose.getPackage(gambling.PROSE_PLAYER_LEAVE_OTHER, player);
+			for ( int i = 0; i < players.length; i++ )
+				sendSystemMessageProse(players[i], ppLeftOther);
+		}
+		if (players.length < getIntObjVar(self, gambling.VAR_TABLE_PLAYER_LIMIT_MIN))
+		{
+			// If we fall below the minimum amount and the game is not active, stop betting.
+			// If the game is active, the specific game logic should deal with active game players.
+			if (!utils.hasScriptVar(self, SCRIPT_VAR_GAME_ACTIVE))
+			{
+				utils.removeScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+				int players_needed = getIntObjVar(self, gambling.VAR_TABLE_PLAYER_LIMIT_MIN) - players.length;
+				if (players_needed == 1)
+					sendSystemMessageTestingOnly(player, "The game needs 1 more player before it can begin.");
+				else
+					sendSystemMessageTestingOnly(player, "The game needs " + players_needed + " more players before it can begin.");
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetFailed()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	sendSystemMessage(player, gambling.SID_BET_FAILED);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRequestUpdatedUI()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = params.getObjId("player");
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+	
+	string ovpath = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if ( utils.hasScriptVar(self, ovpath) )
+	{
+		int pid = utils.getIntScriptVar(self, ovpath);
+		sui.closeSUI(player, pid);
+	}
+	
+	showBetUi(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetUi()
+{
+	if ( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		queueCommand(player, ##"leaveGame", self, "", COMMAND_PRIORITY_DEFAULT);
+		return SCRIPT_CONTINUE;
+	}
+
+	showBetUi(self, player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBetTimer()
+{
+	if ( !utils.hasScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT) )
+		return SCRIPT_CONTINUE;
+	
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_GAME_PLAYERS_IDS);
+	if ( players == null || players.length == 0 )
+		return SCRIPT_CONTINUE;
+		
+	int now = getGameTime();
+	int stamp = utils.getIntScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+	
+	int dstamp = params.getInt("stamp");
+	if ( stamp != dstamp )
+		return SCRIPT_CONTINUE;
+	
+	int diff = stamp - now;
+	
+	if ( diff > 0 )
+	{
+		prose_package ppTimeLeft = prose.getPackage(gambling.PROSE_STARTING_IN, diff);
+		for ( int i = 0; i < players.length; i++ )
+			sendSystemMessageProse(players[i], ppTimeLeft);
+	}
+	
+	if ( diff > 30 )
+	{
+		messageTo(self, "handleBetTimer", params, 30, false);
+	}
+	else if ( diff <= 30 && diff >= 5 )
+	{
+		messageTo(self, "handleBetTimer", params, 5, false);
+	}
+	else
+	{
+		startTableGame(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** FUNCTIONS ********************************************************/
+void showBetUi(obj_id self, obj_id player)
+{
+	// Add this to your specific table game script.
+}
+
+void startTableBetting(obj_id self)
+{
+	obj_id[] players = getObjIdArrayObjVar(self, gambling.VAR_TABLE_PLAYERS);
+	if ( players == null || players.length == 0 )
+		return;
+
+	setObjVar(self, gambling.VAR_GAME_PLAYERS_IDS, players);
+
+	int stampTime = getGameTime() + TIMER_BETTING;
+	utils.setScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT, stampTime);
+
+	for ( int i = 0; i < players.length; i++ )
+	{
+		sendSystemMessage(players[i], gambling.SID_PLACE_BETS);
+		showBetUi(self, players[i]);
+	}
+
+	dictionary d = new dictionary();
+	d.put("stamp", stampTime);
+	messageTo(self, "handleBetTimer", d, 30f, false);
+	
+	return;
+}
+
+void startTableGame(obj_id self)
+{
+	// Add your own code for the specific table game.
+	return;
+}
+
+void stopTableGame(obj_id self)
+{
+	utils.removeScriptVar(self, gambling.VAR_TABLE_BET_ACCEPT);
+	removeObjVar(self, gambling.VAR_GAME_BASE);
+	
+	return;
+}
+
+boolean updateBetSUI(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+	if (!isIdValid(player))
+		return false;
+	
+	string scriptvar_pid = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if (utils.hasScriptVar(table, scriptvar_pid))
+	{
+		int oldpid = utils.getIntScriptVar(table, scriptvar_pid);
+		sui.closeSUI(player, oldpid);
+
+		utils.removeScriptVar(table, scriptvar_pid);
+	}
+	
+	dictionary d = new dictionary();
+	d.put("player", player);
+	messageTo(table, "handleRequestUpdatedUI", d, 0f, false);
+	
+	return true;
+}
+
+boolean closeBetSUI(obj_id table, obj_id player)
+{
+	if (!isIdValid(table))
+		return false;
+	if (!isIdValid(player))
+		return false;
+	
+	string scriptvar_pid = gambling.VAR_GAME_PLAYERS + "." + player + ".pid";
+	if (utils.hasScriptVar(table, scriptvar_pid))
+	{
+		int oldpid = utils.getIntScriptVar(table, scriptvar_pid);
+		sui.closeSUI(player, oldpid);
+	
+		utils.removeScriptVar(table, scriptvar_pid);
+	}
+	
+	return true;
+}
+
+boolean sendTableMessage(obj_id table, prose_package pp, obj_id ommit_player)
+{
+	if (!isIdValid(table))
+		return false;
+	
+	if (pp == null)
+		return false;
+		
+	obj_id[] players = getObjIdArrayObjVar(table, gambling.VAR_TABLE_PLAYERS);
+	if (players != null)
+	{
+		for (int i = 0; i < players.length; i++)
+		{
+			if (players[i] != ommit_player)
+				sendSystemMessageProse(players[i], pp);
+		}
+	}
+	else
+		return false;
+	
+	return true;
+}
+
+boolean sendTableMessage(obj_id table, prose_package pp)
+{
+	return sendTableMessage(table, pp, null);
+}
+
+boolean sendTableMessage(obj_id table, string_id message, obj_id ommit_player)
+{
+	prose_package pp = prose.getPackage(message, table);
+	return sendTableMessage(table, pp, ommit_player);
+}
+
+boolean sendTableMessage(obj_id table, string_id message)
+{
+	prose_package pp = prose.getPackage(message, table);
+	return sendTableMessage(table, pp, null);
+}

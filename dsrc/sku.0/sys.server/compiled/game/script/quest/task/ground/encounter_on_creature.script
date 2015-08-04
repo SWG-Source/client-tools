@@ -1,0 +1,135 @@
+// This script goes on a creature spawned by the encounter quest task type.
+// It messages the player when the creature is killed.
+
+// ---------------------------------------------------------------------
+
+include ai.ai_combat;
+include library.ai_lib;
+include library.utils;
+include library.groundquests;
+
+// ---------------------------------------------------------------------
+
+const String objvarOnCreatureOwner    = "quest.owner";
+const String objvarOnCreatureQuestCrc = "quest.questCrc";
+const String objvarOnCreatureTaskId   = "quest.taskId";
+const String objvarAttackOnSpawn      = "quest.attackOnSpawn";
+
+const String scriptVarNumAttempts     = "quest.encounterOnCreaturePathCheck";
+
+const String objvarOnCreatureStartLocation         = "quest.startLocation";
+const String objvarOnCreatureStartDistanceToPlayer = "quest.startDistanceToPlayer";
+
+const String taskType = "encounter";
+
+float combatDistance = 64;
+
+// ---------------------------------------------------------------------
+
+trigger OnAttach()
+{
+	obj_id player            = getObjIdObjVar(self, objvarOnCreatureOwner);
+	location currentLocation = getLocation(self);
+	location playerLocation  = getLocation(player);
+	float distanceToPlayer   = currentLocation.distance(playerLocation);
+	setObjVar(self, objvarOnCreatureStartLocation, currentLocation);
+	setObjVar(self, objvarOnCreatureStartDistanceToPlayer, distanceToPlayer);
+
+	dictionary params = new dictionary();
+	messageTo(self, "messageEncounterTaskCheckCreatureDistance", params, 15, false);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler messageEncounterTaskCheckCreatureDistance()
+{
+	obj_id player               = getObjIdObjVar(self, objvarOnCreatureOwner);
+	location currentLocation    = getLocation(self);
+	location playerLocation     = getLocation(player);
+	float distanceToPlayer      = currentLocation.distance(playerLocation);
+	boolean isDead = ai_lib.isAiDead(self);
+	if (isDead)
+		return SCRIPT_CONTINUE; // we're dead, no need to keep checking
+	
+	boolean isConversing = hasCondition(self, CONDITION_CONVERSABLE);
+	
+	int numTries = 0;
+	if (utils.hasScriptVar(self, scriptVarNumAttempts))
+		numTries = utils.getIntScriptVar(self, scriptVarNumAttempts);
+		
+	// only do a teleport if we can't path to the player.
+	if((distanceToPlayer > combatDistance) || distanceToPlayer == -1)
+	{
+		location startLocation      = getLocationObjVar(self, objvarOnCreatureStartLocation);
+		float startDistanceToPlayer = getFloatObjVar(self, objvarOnCreatureStartDistanceToPlayer);
+		if (startDistanceToPlayer < .1f)
+			startDistanceToPlayer = .1f;
+		float distanceTraveled      = startLocation.distance(currentLocation);
+		//warp the creature to the player if 
+			//1: creature is in a different area, or
+			//2: they can't move, or
+			//3: they've gone in the wrong direction, or
+			//4: they haven't moved at least 10% of the distance to the player
+		if((distanceTraveled == 0) || (distanceToPlayer/startDistanceToPlayer > 0.9))
+		{
+			int questCrc = getIntObjVar(self, objvarOnCreatureQuestCrc);
+			int taskId   = getIntObjVar(self, objvarOnCreatureTaskId);
+			groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "messageEncounterTaskCheckCreatureDistance", "[" + self + "] not closing on player [" + player + "], warping to player location.");
+			setLocation(self, playerLocation);
+			if(!isConversing)
+			{
+				startCombat(self, player);
+			}
+			
+			// only teleport once.
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	//re-aggro if necessary
+	if(!isConversing)
+	{
+		startCombat(self, player);
+	}
+
+	setObjVar(self, objvarOnCreatureStartLocation, currentLocation);
+	setObjVar(self, objvarOnCreatureStartDistanceToPlayer, distanceToPlayer);
+	
+	// increase number of tries.  We only want to do this 4 times total.
+	numTries++;
+	utils.setScriptVar(self, scriptVarNumAttempts, numTries);
+	dictionary paramsOut = new dictionary();
+	if( numTries < 4 )
+		messageTo(self, "messageEncounterTaskCheckCreatureDistance", paramsOut, 15, false);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	if(hasObjVar(self, objvarOnCreatureOwner) && hasObjVar(self, objvarOnCreatureQuestCrc) && hasObjVar(self, objvarOnCreatureTaskId))
+	{
+		obj_id player = getObjIdObjVar(self, objvarOnCreatureOwner);
+		int questCrc  = getIntObjVar  (self, objvarOnCreatureQuestCrc);
+		int taskId    = getIntObjVar  (self, objvarOnCreatureTaskId);
+		dictionary params = new dictionary();
+		params.put("source",   self);
+		params.put("questCrc", questCrc);
+		params.put("taskId",   taskId);
+
+		messageTo(player, "messageEncounterTaskCreatureDied", params, 0, false);
+	}
+    return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler messageEncounterCleanup()
+{
+	destroyObject(self);
+    return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------

@@ -1,0 +1,266 @@
+include library.ai_lib;
+include library.buff;
+include library.combat;
+include library.prose;
+include library.trial;
+include library.utils;
+
+const boolean LOGGING					= true;
+
+trigger OnDestroy()
+{
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated(obj_id killer)
+{
+	string name = utils.getStringScriptVar(self, "name");
+	if (name.equals("aurek"))
+		trial.setAurekKilled(self, true);
+
+	if (name.equals("besh"))
+	{
+		trial.setBeshKilled(self, true);
+	}	
+	obj_id top = trial.getTop(self);
+	messageTo(top, "validateAurekBeshKill", trial.getSessionDict(top, "validate_ab_kill"), 0, false);
+	
+	messageTo(self, "destroySelf", null, 5, false);
+ 	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroySelf()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	startEventActions(self);
+	return SCRIPT_CONTINUE;
+}
+
+void startEventActions(obj_id self)
+{
+	//if (!trial.isAurekBeshEngaged(trial.getTop(self)))
+	doLogging("startEventActions", "Have entered combat and am beginning duality");
+	trial.bumpSession(trial.getTop(self), "duality");
+
+	string name = utils.getStringScriptVar(self, "name");
+	if (name != null && name != "" && name.equals("aurek"))
+		messageTo(trial.getTop(self), "startDuality", null, 1.0f, false);
+
+	messageTo(self, "performHealthCheck", trial.getSessionDict(self, "imbalance"), 10.0f, false);
+}
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id weapon, int[] damage)
+{
+	float max = (float)getMaxHealth(self);
+	float current = (float)getHealth(self);
+	float ratio = current/max;
+	
+	string name = utils.getStringScriptVar(self, "name");
+	if (name.equals("aurek"))
+		utils.setScriptVar(trial.getTop(self), trial.AUREK_HEALTH, ratio);
+	else
+		utils.setScriptVar(trial.getTop(self), trial.BESH_HEALTH, ratio);
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	obj_id homeCell = getContainedBy(self);
+	trial.setHp(self, trial.HP_WORKING_AUREK_BESH);
+	utils.setScriptVar(self, "home", homeCell);
+	string name = utils.getStringScriptVar(self, "name");
+	
+	if (name.equals("aurek"))
+		utils.setScriptVar(trial.getTop(self), trial.AUREK_HEALTH, 1.0f);
+	else
+		utils.setScriptVar(trial.getTop(self), trial.BESH_HEALTH, 1.0f);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	obj_id homeCell = utils.getObjIdScriptVar(self, "home");
+	if (homeCell != destContainer)
+	{
+		resetSelf(self);
+		messageTo(self, "removeInvulnerable", null, 10, false);
+		return SCRIPT_CONTINUE;
+	}
+ 	return SCRIPT_CONTINUE;
+}
+
+messageHandler removeInvulnerable()
+{
+	setInvulnerable(self, false);
+	return SCRIPT_CONTINUE;
+}
+
+void resetSelf(obj_id self)
+{
+	int max = getMaxHealth(self);
+	int current = getHealth(self);
+	int toHeal = max - current;
+	addToHealth(self, toHeal);
+	setInvulnerable(self, true);
+	ai_lib.clearCombatData();
+	buff.removeAllBuffs(self);
+	trial.bumpSession(self, "imbalance");
+
+	string name = utils.getStringScriptVar(self, "name");
+	if (name.equals("aurek"))
+		utils.setScriptVar(trial.getTop(self), trial.AUREK_HEALTH, 1.0f);
+	else
+		utils.setScriptVar(trial.getTop(self), trial.BESH_HEALTH, 1.0f);
+}
+
+messageHandler aurek_diminish()
+{
+	if (!utils.hasScriptVar(self, "name") || !utils.getStringScriptVar(self, "name").equals("aurek"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] players = trial.getValidTargetsInCell(trial.getTop(self), "smallroom21");
+	
+	if (players == null || players.length == 0)
+	{
+		doLogging("aurek_diminish", "Players were null or length 0");
+		return SCRIPT_CONTINUE;
+	}	
+	
+	resizeable obj_id[] beshPlayers = new obj_id[0];
+	
+	for (int i=0;i<players.length;i++)
+	{
+		if (buff.hasBuff(players[i], "beshDuality"))
+		{
+			utils.addElement(beshPlayers, players[i]);
+		}
+	}
+	
+	if (beshPlayers == null || beshPlayers.length == 0)
+	{
+		doLogging("aurek_diminish", "There were no besh players, detonating now");
+		utils.messageTo(players, "dualityDetonation", null, 0.0f, false);
+	}
+	else
+	{
+		int damage = beshPlayers.length * 500;
+		prose_package pp = new prose_package();
+		pp.stringId = new string_id("cbt_spam", "duality_detonate_twin");
+		pp.target.set(self);
+		pp.digitInteger = damage;
+
+		for (int k=0;k<beshPlayers.length;k++)
+		{
+			combat.sendCombatSpamMessageProse(beshPlayers[k], self, pp, true, true, false, COMBAT_RESULT_HIT);
+			damage(self, DAMAGE_ELEMENTAL_HEAT, HIT_LOCATION_BODY, damage);
+		}
+		
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler besh_diminish()
+{
+	if (!utils.hasScriptVar(self, "name") || !utils.getStringScriptVar(self, "name").equals("besh"))
+		return SCRIPT_CONTINUE;
+		
+	obj_id[] players = trial.getValidTargetsInCell(trial.getTop(self), "smallroom24");
+	
+	if (players == null || players.length == 0)
+	{
+		doLogging("besh_diminish", "Players were null or length 0");
+		return SCRIPT_CONTINUE;
+	}	
+	
+	resizeable obj_id[] aurekPlayers = new obj_id[0];
+	
+	for (int i=0;i<players.length;i++)
+	{
+		if (buff.hasBuff(players[i], "aurekDuality"))
+		{
+			utils.addElement(aurekPlayers, players[i]);
+		}
+	}
+	
+	if (aurekPlayers == null || aurekPlayers.length == 0)
+	{
+		doLogging("besh_diminish", "There were no aurek players, detonating now");
+		utils.messageTo(players, "dualityDetonation", null, 0.0f, false);
+	}
+	else
+	{
+		int damage = aurekPlayers.length * 8000;
+		prose_package pp = new prose_package();
+		pp.stringId = new string_id("cbt_spam", "duality_detonate_twin");
+		pp.target.set(self);
+		pp.digitInteger = damage;
+
+		for (int k=0;k<aurekPlayers.length;k++)
+		{
+			combat.sendCombatSpamMessageProse(aurekPlayers[k], self, pp, true, true, false, COMBAT_RESULT_HIT);
+			damage(self, DAMAGE_ELEMENTAL_HEAT, DAMAGE_ELEMENTAL_ELECTRICAL, damage);
+		}
+		
+	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler performHealthCheck()
+{
+	if (!trial.verifySession(self, params, "imbalance"))
+	{
+		doLogging("performHealthCheck", "Failed to verify session");	
+		return SCRIPT_CONTINUE;
+	}
+	
+	float aurek_health = utils.getFloatScriptVar(trial.getTop(self), trial.AUREK_HEALTH);
+	float besh_health = utils.getFloatScriptVar(trial.getTop(self), trial.BESH_HEALTH);
+	doLogging("performHealthCheck", "Aurek/Besh Health Levels: "+aurek_health+"/"+besh_health);
+	float difference = Math.abs(aurek_health - besh_health);
+	
+	if (difference > 0.05f)
+	{
+		if (!buff.hasBuff(self, "aurek_besh_imbalance"))
+		{
+			buff.applyBuff(self, "aurek_besh_imbalance");
+			utils.setScriptVar(self, "private_damage_bonus", 4.0f * difference);
+
+			obj_id[] players = trial.getPlayersInCell(trial.getTop(self), getContainedBy(self));
+			if (players != null && players.length > 0)
+				utils.sendSystemMessage(players, trial.WORKING_IMBALANCE_APPLY);
+		}
+	}
+	else
+	{
+		if (buff.hasBuff(self, "aurek_besh_imbalance"))
+		{
+			buff.removeBuff(self, "aurek_besh_imbalance");
+			utils.removeScriptVar(self, "private_damage_bonus");
+
+			obj_id[] players = trial.getPlayersInCell(trial.getTop(self), getContainedBy(self));
+			if (players != null && players.length > 0)
+				utils.sendSystemMessage(players, trial.WORKING_IMBALANCE_FADE);
+		}	
+		
+	}
+	
+	messageTo(self, "performHealthCheck", trial.getSessionDict(self, "imbalance"), 10.0f, false);
+	return SCRIPT_CONTINUE;	
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING || trial.WORKING_LOGGING)
+		LOG("doLogging/aurek_besh/"+section, message);	
+}

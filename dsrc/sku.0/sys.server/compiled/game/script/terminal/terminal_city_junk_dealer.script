@@ -1,0 +1,248 @@
+include library.city;
+include library.money;
+include library.smuggler;
+include library.sui;
+include library.utils;
+
+const string_id SID_MT_REMOVE				= new string_id("city/city", "mt_remove");
+const string_id SID_MT_REMOVED				= new string_id("city/city", "mt_removed");
+const boolean LOGGING_ON				= true;
+const string LOGNAME					= "junk_log";
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Validate our placement.
+ 	city.validateSpecialStructure( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnDestroy
+//------------------------------------------------
+
+trigger OnDestroy()
+{
+	city.removeMissionTerminal( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int city_id = city.checkMayorCity(player, false);
+	//then you're not the mayor.
+	if(city_id != 0)
+	{
+		mi.addRootMenu( menu_info_types.SERVER_MENU1, SID_MT_REMOVE );		
+	}	
+	//sell Menu
+	int mnuSellJunk = mi.addRootMenu(menu_info_types.ITEM_USE, smuggler.MENU_SELL);
+	mi.addRootMenu( menu_info_types.SERVER_MENU2, smuggler.MENU_FLAG_NO_SALE);	
+	if(smuggler.hasBuyBackItems(player))
+	{
+		mi.addRootMenu( menu_info_types.SERVER_MENU3, smuggler.MENU_BUY_BACK);	
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(item == menu_info_types.ITEM_USE)	//sell 1 junk item
+	{
+		dictionary params = new dictionary();
+		params.put("player", player);
+
+		messageTo(self, "startDealing", params, 0.0f, false);
+	}
+	if(item == menu_info_types.SERVER_MENU1)
+	{
+		destroyObject(self);	
+	}
+	if(item == menu_info_types.SERVER_MENU2)
+	{
+		dictionary params = new dictionary();
+		params.put("player", player);
+
+		messageTo(self, "startFlaggingItemsNoSale", params, 0.0f, false);
+	}	
+	if(item == menu_info_types.SERVER_MENU3)
+	{
+		dictionary params = new dictionary();
+		params.put("player", player);
+
+		messageTo(self, "startBuyBack", params, 0.0f, false);
+	}
+	sendDirtyObjectMenuNotification(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startDealing()
+{
+	// Get the obj id of the player we're dealing with
+	obj_id player = params.getObjId("player");
+
+	//range check
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return SCRIPT_CONTINUE;
+
+	// Show that player the sui
+	smuggler.showSellJunkSui(player, self, false, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startBuyBack()
+{
+	// Get the obj id of the player we're dealing with
+	obj_id player = params.getObjId("player");
+
+	//range check
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return SCRIPT_CONTINUE;
+
+	// Show that player the sui
+	smuggler.showBuyBackSui(player, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSellJunkSui()
+{
+	// Get the obj id of the player that hit a button
+	obj_id player = sui.getPlayerId(params);
+
+	// If the player is not valid, quit out
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//range check
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return SCRIPT_CONTINUE;
+
+	utils.setScriptVar(player, "fence", false);			
+	messageTo(player, "handleSellJunkSui", params, 0.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSoldJunk()
+{
+	// If the parameters we've passed don't exist, quit out
+	if(params == null || params.isEmpty())
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the obj id of the player we paid. If they don't exist, quit out
+	obj_id player = params.getObjId(money.DICT_TARGET_ID);
+	if(!isIdValid(player))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//range check
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return SCRIPT_CONTINUE;
+	
+	blog("junk_dealer.handleSoldJunk() - setting fence to false");
+	params.put("fence",false);
+	messageTo(player, "handleSoldJunk", params, 0.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleBuyBackSui()
+{
+	// Get the obj id of the player that hit a button
+	obj_id player = sui.getPlayerId(params);
+
+	// If the player is not valid, quit out
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	//range check
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return SCRIPT_CONTINUE;
+	params.put("dealer",self);
+	messageTo(player, "handleBuyBackSui", params, 0.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleTheBuyBack()
+{
+	if(params == null || params.isEmpty())
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the obj id of the player we paid. If they don't exist, quit out
+	obj_id player = params.getObjId(money.DICT_PLAYER_ID);
+	if(!isIdValid(player))
+	{
+		CustomerServiceLog("Junk_Dealer: ", "terminal_city_junk_dealer.handleTheBuyBack() - Failed to sell back object because player was invalid.");
+		return SCRIPT_CONTINUE;
+	}
+
+	//range check
+	if(utils.outOfRange(self, player, 10.0f, true))
+	{
+		CustomerServiceLog("Junk_Dealer: ", "terminal_city_junk_dealer.handleTheBuyBack() - Player: "+player+" cannot buy back an item because they walked too far from the Junk Dealer: "+self);			
+		return SCRIPT_CONTINUE;
+	}
+	
+	blog("terminal_city_junk_dealer.handleTheBuyBack() - setting fence to false");
+	params.put("dealer",self);
+	messageTo(player, "handleTheBuyBack", params, 0.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler startFlaggingItemsNoSale()
+{
+	// Get the obj id of the player we're dealing with
+	obj_id player = params.getObjId("player");
+
+	//range check
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return SCRIPT_CONTINUE;
+
+	// Show that player the sui
+	smuggler.flagJunkSaleSui(player, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleFlagJunkSui()
+{
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+	// Get the row of the list box that was highlighted, and get the button that was pushed
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return SCRIPT_CONTINUE;
+
+	blog("junk_dealer.handleFlagJunkSui() - sending params to player.");
+	params.put("dealer",self);
+	messageTo(player, "handleFlagJunkSui", params, 0.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+boolean blog(string txt)
+{
+	if(LOGGING_ON)
+	{
+		LOG(LOGNAME, txt);
+	}
+	return true;
+}

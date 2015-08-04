@@ -1,0 +1,991 @@
+
+// bounty_hunter.scriptlib  -- this script contains the guts for the bounty-hunter /checkbounty command among others.	RcT -- 10/25/2005
+
+// ********************************************************************
+//					INCLUDES
+// ********************************************************************
+
+include ai.ai_combat;
+include library.ai_lib;
+include library.anims;
+include library.chat;
+include library.money;
+include library.prose;
+include library.utils;
+
+// ********************************************************************
+//					CONSTS
+// ********************************************************************
+
+const string[] LOW_PAYOUT_COMMS	=
+							{
+								"pp_small_1",
+								"pp_small_2",
+								"pp_small_3",
+								"pp_small_4",
+								"pp_small_5"
+							};
+
+const string[] MEDIUM_PAYOUT_COMMS	=
+							{
+								"pp_normal_1",
+								"pp_normal_2",
+								"pp_normal_3",
+								"pp_normal_4",
+								"pp_normal_5",
+							};
+
+const string[] HIGH_PAYOUT_COMMS	=
+							{
+								"pp_big_1",
+								"pp_big_2",
+								"pp_big_3",
+								"pp_big_4",
+								"pp_big_5"
+							};
+
+const string[] TALKING_COMM_CHARACTER =
+							{
+								"object/mobile/dressed_tatooine_jabba_thug.iff",
+								"object/mobile/dressed_tatooine_jabba_thief.iff",
+								"object/mobile/dressed_tatooine_jabba_henchman.iff",
+								"object/mobile/dressed_tatooine_jabba_enforcer.iff",
+								"object/mobile/ephant_mon.iff",
+								"object/mobile/dressed_tatooine_jabba_assassin.iff"
+							};
+
+
+//This constant is the value is the smallest amount of cash a bounty will be.
+const int BOUNTY_PAYOUT_AMOUNT_MINIMUM		= 50;
+//This constant is the value is the largest amount of cash a bounty will be. Actual random bounty will be up to half this value, modified by various, and then capped at this value.
+const int BOUNTY_PAYOUT_AMOUNT_MAXIMUM		= 2000;
+
+//This constant is a boolean that enables or disables a separate mod to the bounty frequency that rachets up the chance of a bounty if it's been a while since you've had one.
+const boolean BOUNTY_DO_FREQUENCY_ADJUSTER 	= false;
+
+//Barring other mods, this is what percentage of the time you should get a bounty. A value of 25 means you average a 25% chance of getting a bounty. Do NOT use a value of 100 or greater.
+const int BOUNTY_FREQUENCY	 		= 60;
+
+//This constant is a percentage in the form of a float. Zero is median, meaning no adjustment. 50% increase is 0.5f. 25% decrease is -0.25f. Increase the number to increase average bounty size. Decrease the number to decrease average bounty size.
+const float BOUNTY_PAYOUT_ADJUSTER 		= 0f;
+
+//The amount of time in seconds in which the bounty hunter has to kill the target player. After this time, the temporary enemy flag will be removed.
+const float BOUNTY_COLLECT_TIME_LIMIT		= 600.0f;
+
+//This constant is a boolean that enables or disables a separate mod to the bounty amount that is calculated based upon the difference in levels between the player and their target.
+const boolean BOUNTY_DO_LEVEL_ADJUSTER	 	= true;
+
+const int BOUNTY_FLOOD_CONTROL_DELAY		= 60;	//This constant is the amount of time, in seconds, a bounty hunter must wait before they can do another bounty check.
+
+const int BOUNTY_MISSION_TIME_LIMIT		= 259200;
+const int MAX_BOUNTY				= 2000000000;
+const int MAX_BOUNTY_SET			= 1000000;
+const int MIN_BOUNTY_SET			= 20000;
+
+const string CREATURE_TABLE			= "datatables/mob/creatures.iff";
+const string BOUNTY_CHECK_TABLE			= "datatables/missions/bounty/bounty_check.iff";
+const string STF 				= "bounty_hunter";
+const string_id PROSE_NO_BOUNTY_MINUTE		= new string_id(STF, "no_bounties_while");
+const string_id PROSE_NO_BOUNTY_SECONDS		= new string_id(STF, "no_bounties_soon");
+const string_id PROSE_NO_BOUNTY			= new string_id(STF, "prose_no_bounty");
+const string_id NO_BOUNTY_TARGET		= new string_id(STF, "no_bounty_target");
+const string_id NO_BOUNTY_TARGET_ALREADY	= new string_id(STF, "no_bounty_target_already");
+const string_id NO_BOUNTY_PLAYER		= new string_id(STF, "no_bounty_player");
+const string_id BOUNTY_TOO_LOW_LEVEL		= new string_id(STF, "no_bounty_too_low");
+const string_id FUGITIVE			= new string_id(STF, "fugitive");
+const string_id BOUNTY_ALREADY			= new string_id(STF, "bounty_already_issued");
+const string_id BOUNTY_CHECK_PAYMENT		= new string_id(STF, "bounty_check_payment");
+const string_id STF_NO_BOUNTIES			= new string_id(STF, "flood_control");
+const string_id ALREADY_HAVE_TARGET		= new string_id(STF, "already_have_target");
+const string_id ALREADY_BEING_HUNTED		= new string_id(STF, "already_being_hunted");
+const string_id TARGET_COLLECTING_BOUNTY	= new string_id(STF, "target_collecting_bounty");
+const string_id BOUNTY_FAILED_HUNTER		= new string_id(STF, "bounty_failed_hunter");
+const string_id BOUNTY_FAILED_TARGET		= new string_id(STF, "bounty_failed_target");
+const string_id BOUNTY_SUCCESS_HUNTER		= new string_id(STF, "bounty_success_hunter");
+const string_id BOUNTY_SUCCESS_TARGET		= new string_id(STF, "bounty_success_target");
+
+
+
+const boolean CONST_FLAG_DO_LOGGING		= true;
+const int DROID_PROBOT				= 1;
+const int DROID_SEEKER				= 2;
+const int DROID_TRACK_TARGET 			= 1;
+const int DROID_FIND_TARGET 			= 2;
+
+
+// ********************************************************************
+//					FUNCTIONS
+// ********************************************************************
+
+
+void debugLogging(string section, string message)
+{
+	if (CONST_FLAG_DO_LOGGING)
+		LOG("debug/bounty_hunter.scriptlib/"+section, message);
+}
+
+boolean isSpammingBountyCheck(obj_id player, boolean sayProse)
+{
+	if(!isIdValid(player))
+	{
+		return false;
+	}
+
+	if (utils.hasScriptVar(player,"bountyCheckFloodControl"))
+	{
+		int storedTime = utils.getIntScriptVar(player,"bountyCheckFloodControl");
+		int currentTime = getGameTime();
+
+		if(storedTime > currentTime)	//don't spam Jabba with your petty bounty requests. Call back later.
+		{
+			int timeDelta = storedTime - currentTime;
+			string timeScale = "seconds";
+
+			if(sayProse)
+			{
+				if (timeDelta/60>1)
+				{
+					timeDelta = (int)timeDelta/60;
+					timeScale = "minutes";
+					string talkingCharacter = TALKING_COMM_CHARACTER[(rand(0,TALKING_COMM_CHARACTER.length-1))];
+					prose_package pp = new prose_package ();
+					pp.stringId	= PROSE_NO_BOUNTY_MINUTE;
+					pp.digitInteger  = timeDelta;
+					commPlayer(player, player, pp, talkingCharacter);
+				}
+				else
+				{
+					sendSystemMessage(player, PROSE_NO_BOUNTY_SECONDS);
+				}
+			}
+
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+//----------------------------------------------------------------------
+
+boolean canCheckForBounty(obj_id player, obj_id target)	// Check to see if this is something we could attack and collect a bounty on
+{
+	if(isSpammingBountyCheck(player, true))
+	{
+		return false;
+	}
+
+	if(!isIdValid(target))
+	{
+		//must have a valid target
+		debugLogging("//// canCheckForBounty: ", "////>>>> target invalid");
+		return false;
+	}
+
+	// Cannot check for a bounty on yourself
+	if (target == player)
+	{
+		//you can't check for a bounty on yourself.
+		debugLogging("//// canCheckForBounty: ", "////>>>> target is yourself");
+		return false;
+	}
+
+	// Cannot check for a bounty on a dead target
+	if (isDead(target) || isIncapacitated(target))
+	{
+		//you can't check for a bounty on a corpse
+		debugLogging("//// canCheckForBounty: ", "////>>>> target is is dead, or incapped, or not an npc");
+		return false;
+	}
+
+	// Cannot target an item contained by a player
+	obj_id container = getContainedBy(target);
+	if (isPlayer(container))
+	{
+		//You can't check for a bounty on an inventory item.
+		debugLogging("//// canCheckForBounty: ", "////>>>> target is is in a container");
+		return false;
+	}
+
+	if (utils.hasScriptVar(target,"noBountyCheck"))
+	{
+		sendSystemMessage(player, NO_BOUNTY_TARGET);
+		// This target has already been checked for possible bounties.
+		debugLogging("//// canCheckForBounty: ", "////>>>> target has already been checked for bounty");
+		return false;
+	}
+
+	if(isPlayer(target))
+	{
+		/*
+		if(utils.hasScriptVar(player, "bounty.target"))
+		{
+			sendSystemMessage(player, ALREADY_HAVE_TARGET);
+			debugLogging("//// canCheckForbounty: ", "////>>>> you already have a bounty target");
+			return false;
+		}
+
+		if(utils.hasScriptVar(target, "bounty.hunter"))
+		{
+			sendSystemMessage(player, ALREADY_BEING_HUNTED);
+			debugLogging("//// canCheckForbounty: ", "////>>>> someone is already collecting a bounty on that target");
+			return false;
+		}
+
+		if(utils.hasScriptVar(target, "bounty.target"))
+		{
+			sendSystemMessage(player, TARGET_COLLECTING_BOUNTY);
+			debugLogging("//// canCheckForbounty: ", "////>>>> the target is collecting a bounty on someone else");
+			return false;
+		}
+		*/
+
+		sendSystemMessage(player, NO_BOUNTY_PLAYER);
+		debugLogging("//// canCheckForBounty: ", "////>>>> not an npc... !isNpc");
+		return false;
+	}
+	else
+	{
+		if(!ai_lib.isNpc(target))
+		{
+			sendSystemMessage(player, NO_BOUNTY_TARGET);
+			debugLogging("//// canCheckForBounty: ", "////>>>> not an npc... !isNpc");
+			return false;
+		}
+		string targetName = getCreatureName(target);
+		if(utils.dataTableGetInt(CREATURE_TABLE, targetName, "difficultyClass") != 0)
+		{
+			sendSystemMessage(player, NO_BOUNTY_TARGET);
+			debugLogging("//// canCheckForBounty: ", "////>>>> ou can't attack that... elite or boss");
+			return false;
+		}
+		if (!pvpCanAttack(player, target))
+		{
+			sendSystemMessage(player, NO_BOUNTY_TARGET);
+			debugLogging("//// canCheckForBounty: ", "////>>>> ou can't attack that... !pvpCanAttack");
+			//You can't collect a bounty on that.
+			return false;
+		}
+		if (utils.hasScriptVar(target,"bountyCheck"))
+		{
+			obj_id sameBountyHunter = utils.getObjIdScriptVar(target, "bountyCheck");
+			if (sameBountyHunter == player)
+			{
+				sendSystemMessage(player, BOUNTY_ALREADY);
+				// This target has already been checked for possible bounties.
+				debugLogging("//// canCheckForBounty: ", "////>>>> target already has a bounty");
+				return false;
+			}
+		}
+		
+		if (hasObjVar(target,"noBountyCheck"))
+		{
+			sendSystemMessage(player, NO_BOUNTY_TARGET);
+			// This target has been flagged as not able to have a bounty.
+			debugLogging("//// canCheckForBounty: ", "////>>>> target already has a bounty");
+			return false;
+		}
+
+		int targetLevel = getLevel(target);
+		if (targetLevel < 70)
+		{
+			sendSystemMessage(player, BOUNTY_TOO_LOW_LEVEL);
+			// This target is too easy to give you a bounty on.
+			debugLogging("//// canCheckForBounty: ", "////>>>> target is too easy to give you a bounty on");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+//----------------------------------------------------------------------
+
+boolean checkForPresenceOfBounty(obj_id player)
+{
+	return checkForPresenceOfBounty(player, obj_id.NULL_ID);
+}
+
+boolean checkForPresenceOfBounty(obj_id player, obj_id target)
+{
+	debugLogging("//// checkForPresenceOfBounty: ", "////>>>> entered");
+
+	if(isIdValid(target) && isPlayer(target))
+	{
+		// if(hasObjVar(target, "bounty.amount"))
+		//	return true;
+		sendSystemMessage(player, NO_BOUNTY_TARGET);
+	}
+	else
+	{
+		if (!isGod(player))
+		{
+			if(11 > rand(1,100))	// 10% chance of hidden fugitive with bounty.
+			{
+				sendSystemMessage(player, FUGITIVE);
+				return true;
+			}
+			sendSystemMessage(player, NO_BOUNTY_TARGET);
+			return false;
+		}
+		debugSpeakMsg(player, "Bypassing random check due to God mode");
+		sendSystemMessage(player, FUGITIVE);
+		return true;
+	}
+
+	return false;
+}
+
+//----------------------------------------------------------------------
+
+void spawnFugitive (obj_id player, location spawnLoc)
+{
+	string[] fugitive = dataTableGetStringColumnNoDefaults (BOUNTY_CHECK_TABLE, "fugitive");
+	string mob = new string();
+
+	if (dataTableHasColumn (BOUNTY_CHECK_TABLE, "chance"))
+	{
+		int[] weights = dataTableGetIntColumnNoDefaults(BOUNTY_CHECK_TABLE, "chance" );
+		if (weights != null && weights.length > 0)
+		{
+			int total = 0;
+			for (int i = 0; i < weights.length; i++)
+			{
+				total += weights[i];
+			}
+	
+			if (total < 1)
+			{
+				total = 1;
+			}
+	
+			int roll = rand(1, total);
+	
+			int idx = -1;
+			int low_range = 0;
+			for (int j = 0; j < weights.length; j++)
+			{
+				int high_range = low_range + weights[j];
+	
+				if (roll > low_range && roll <= high_range)
+				{
+					idx = j;
+					break;
+				}
+				low_range = high_range;
+			}
+	
+			if (idx >= 0)
+			{
+				if (idx >= fugitive.length)
+					idx = fugitive.length - 1;
+	
+				mob = fugitive[idx];
+				obj_id spawnedFugitive = create.object(mob, spawnLoc);
+				createFugitive (player, spawnedFugitive);
+			}
+			else
+			{
+				return;
+			}
+		}
+		else
+		{
+			int pick = rand (0, fugitive.length-1);
+			mob = fugitive[pick];
+			obj_id spawnedFugitive = create.object(mob, spawnLoc);
+			createFugitive (player, spawnedFugitive);
+		}
+	}
+	else
+	{
+		int pick = rand (0, fugitive.length-1);
+		mob = fugitive[pick];
+		obj_id spawnedFugitive = create.object(mob, spawnLoc);
+		createFugitive (player, spawnedFugitive);
+	}
+
+	return;
+}
+
+//----------------------------------------------------------------------
+
+void createFugitive(obj_id player, obj_id spawnedFugitive,)
+{
+	playMusic(player, spawnedFugitive, "sound/mus_duel_of_the_fates_lcv.snd", 0, false);
+	pvpSetAlignedFaction(spawnedFugitive, ##"bountytarget");
+	pvpSetPermanentPersonalEnemyFlag(spawnedFugitive, player);
+	pvpSetPermanentPersonalEnemyFlag(player, spawnedFugitive);
+	startCombat(spawnedFugitive, player);
+	addHate(spawnedFugitive, player, 1000.0f);
+	//Marking npc so that only the bounty hunter performing the bounty check will get credit for the kill.
+	setObjVar(spawnedFugitive, "soloCollection", player);
+	return;
+}
+	
+//----------------------------------------------------------------------
+
+void payBountyCheckReward (obj_id killer, obj_id target)
+{
+	int payBracket = getIntObjVar(target, "bountyCheckPayBracket");
+	sendSystemMessage(killer, BOUNTY_CHECK_PAYMENT);
+	
+	if (payBracket == 0)
+		CustomerServiceLog("bounty", "Something is wrong. " + killer + " killed an npc that should have been a Bounty Check target but the NPC ( " + target + " ) did not have the obj var for payout set up correctly");
+	if (payBracket == 1)
+		money.bankTo(money.ACCT_BOUNTY, killer, 15000);
+	if (payBracket == 2)
+		money.bankTo(money.ACCT_BOUNTY, killer, 25000);
+	return;
+}
+
+//----------------------------------------------------------------------
+
+/*
+int figureOutBountyAmount(obj_id player, obj_id target)
+{
+	//init the calc values
+	int amount = BOUNTY_PAYOUT_AMOUNT_MINIMUM;
+
+	//roll up the amount of cash
+	amount = (int) (rand(BOUNTY_PAYOUT_AMOUNT_MINIMUM,BOUNTY_PAYOUT_AMOUNT_MAXIMUM/2));
+
+	//figure out the level difference mod, if there is one
+	float bountyMod = 1.0f;
+	if(BOUNTY_DO_LEVEL_ADJUSTER)
+	{
+		int playerLevel = getLevel(player);
+		int bountyLevel = getLevel(target);
+		if (bountyLevel == playerLevel)
+			bountyMod = 0.0f;
+		else if (bountyLevel > playerLevel+10)
+			bountyMod = 0.50f;
+		else if (bountyLevel > playerLevel+5)
+			bountyMod = 0.25f;
+		else if (bountyLevel > playerLevel)
+			bountyMod = 0.15f;
+		else if (bountyLevel < playerLevel-6)
+			bountyMod = -0.75f;
+		else if (bountyLevel < playerLevel-2)
+			bountyMod = -0.5f;
+		else if (bountyLevel < playerLevel)
+			bountyMod = -0.25f;
+	}
+
+	amount = (int)((amount*bountyMod)+amount);
+
+	// obey the adjuster modifier, if there is one
+	if (BOUNTY_PAYOUT_ADJUSTER > 0f)
+		amount = (int)((amount*BOUNTY_PAYOUT_ADJUSTER)+amount);
+
+	// dont bust the min/max's
+	if (amount < BOUNTY_PAYOUT_AMOUNT_MINIMUM)
+		amount = BOUNTY_PAYOUT_AMOUNT_MINIMUM;
+	else if (amount > BOUNTY_PAYOUT_AMOUNT_MAXIMUM)
+		amount = BOUNTY_PAYOUT_AMOUNT_MAXIMUM;
+
+	return amount;
+}
+*/
+//----------------------------------------------------------------------
+
+boolean initiatePlayerBountyCollection(obj_id player, obj_id target, int amount)
+{
+	/*
+
+	string talkingCharacter = TALKING_COMM_CHARACTER[(rand(0,TALKING_COMM_CHARACTER.length-1))];
+
+	prose_package pp = new prose_package ();
+	pp.stringId      = new string_id ("bounty_hunter", "pp_player");
+	pp.target.set (target);
+	pp.digitInteger  = amount;
+
+	commPlayer(player, player, pp, talkingCharacter);
+
+	pp = new prose_package();
+	pp.stringId = new string_id("bounty_hunter", "pp_notify");
+	pp.target.set(player);
+
+	sendSystemMessageProse(target, pp);
+
+	int bounty_id = getGameTime();
+
+	dictionary d = new dictionary();
+	d.put("id", bounty_id);
+	d.put("target", target);
+
+	messageTo(player, "handlePlayerBountyEngagement", d, 0.0f, true);
+
+	d.put("target", player);
+
+	messageTo(target, "handlePlayerBountyEngagement", d, 0.0f, true);
+
+	utils.setScriptVar(player, "bounty.target", target);
+	utils.setScriptVar(player, "bounty.id", bounty_id);
+
+	utils.setScriptVar(target, "bounty.hunter", player);
+	utils.setScriptVar(target, "bounty.id", bounty_id);
+	*/
+
+	return true;
+}
+
+//----------------------------------------------------------------------
+
+boolean offerCommandCheckBounty(obj_id player, obj_id target, int amount)
+{
+	/*
+	string prosePackage = "pp_normal_1";
+	string talkingCharacter = TALKING_COMM_CHARACTER[(rand(0,TALKING_COMM_CHARACTER.length-1))];
+
+	int currentPayoutRange = BOUNTY_PAYOUT_AMOUNT_MAXIMUM - BOUNTY_PAYOUT_AMOUNT_MINIMUM;
+	int lowPayout = (currentPayoutRange/3)+BOUNTY_PAYOUT_AMOUNT_MINIMUM;
+	int medPayout = ((currentPayoutRange/3)*2)+BOUNTY_PAYOUT_AMOUNT_MINIMUM;
+
+	if(amount < lowPayout)
+	{
+		prosePackage = LOW_PAYOUT_COMMS[(rand(0,LOW_PAYOUT_COMMS.length-1))];
+		//low cash. Some attitude.
+	}
+	else if (amount < medPayout)
+	{
+		prosePackage = MEDIUM_PAYOUT_COMMS[(rand(0,MEDIUM_PAYOUT_COMMS.length-1))];
+		talkingCharacter = "object/mobile/bib_fortuna.iff";	// BIB FORTUNA
+		//average cash. No attitude.
+	}
+	else
+	{
+		prosePackage = HIGH_PAYOUT_COMMS[(rand(0,HIGH_PAYOUT_COMMS.length-1))];
+		talkingCharacter = "object/mobile/jabba_the_hutt.iff";		//JABBA
+		//big money. JABBA SPEAKS!
+	}
+
+	prose_package pp = new prose_package ();
+	pp.stringId      = new string_id ("bounty_hunter", prosePackage);
+	pp.target.set (target);
+	pp.digitInteger  = amount;
+	//commPlayer(self, speaker, pp, talkingCharacter);
+	commPlayer(player, player, pp, talkingCharacter);
+
+	utils.setScriptVar(player,"bountyCheckFloodControl",getGameTime()+BOUNTY_FLOOD_CONTROL_DELAY);
+
+	utils.setScriptVar(target,"bountyCheck",1);
+	utils.setScriptVar(player,"currentBounty",target);
+	utils.setScriptVar(player,"currentBountyValue",amount);
+*/
+	return true;
+}
+
+//----------------------------------------------------------------------
+
+void awardBounty(obj_id player, string creatureName,int amount)
+{
+	obj_id storedTarget = utils.getObjIdScriptVar(player,"currentBounty");
+
+	dictionary params = new dictionary();
+	params.put("amount",amount);
+	params.put("creatureName", getEncodedName(storedTarget));
+	money.systemPayout(money.ACCT_BOUNTY_CHECK, player, amount, "handleAwardedBountyCheck", params);
+
+}
+
+void showSetBountySUI(obj_id player, obj_id killer)
+{
+	string prompt = "@bounty_hunter:setbounty_prompt1 ";
+	prompt += getName(killer) + "? ";
+	prompt += "@bounty_hunter:setbounty_prompt2";
+	prompt += " " + getTotalMoney(player);
+
+	string title = "@bounty_hunter:setbounty_title";
+
+	int pid = createSUIPage(sui.SUI_INPUTBOX, player, player, "handleSetBounty");
+
+	sui.setAutosaveProperty(pid, false);
+	sui.setSizeProperty(pid, 300, 325);
+	sui.setLocationProperty(pid, 400, 200);
+
+	setSUIProperty(pid, sui.INPUTBOX_PROMPT, sui.PROP_TEXT, prompt);
+	setSUIProperty(pid, sui.INPUTBOX_TITLE, sui.PROP_TEXT, title);
+
+	sui.inputboxButtonSetup(pid, sui.OK_CANCEL);
+	sui.inputboxStyleSetup(pid, sui.INPUT_NORMAL);
+
+	setSUIProperty(pid, sui.INPUTBOX_INPUT, "MaxLength", "20");
+	setSUIProperty(pid, sui.INPUTBOX_COMBO, "MaxLength", "20");
+
+	subscribeToSUIProperty(pid, sui.INPUTBOX_INPUT, sui.PROP_LOCALTEXT);
+	subscribeToSUIProperty(pid, sui.INPUTBOX_COMBO, sui.PROP_SELECTEDTEXT);
+
+	showSUIPage(pid);
+
+	utils.setScriptVar(player, "setbounty.killer", killer);
+}
+
+void endBountySession(obj_id hunter, obj_id target, boolean hunterWon)
+{
+	/*
+
+	utils.removeScriptVarTree(hunter, "bounty");
+	utils.removeScriptVarTree(target, "bounty");
+
+	if(pvpHasPersonalEnemyFlag(hunter, target))
+		pvpRemovePersonalEnemyFlags(hunter, target);
+
+	if(pvpHasPersonalEnemyFlag(target, hunter))
+		pvpRemovePersonalEnemyFlags(target, hunter);
+
+	if(hunterWon)
+	{
+		int amount = getIntObjVar(target, "bounty.amount");
+
+		dictionary d = new dictionary();
+		d.put("target", target);
+		d.put("bounty", amount);
+
+		money.systemPayout(money.ACCT_BOUNTY, hunter, amount, "handleAwardedPlayerBounty", d);
+	}
+	else
+	{
+		prose_package pp = new prose_package();
+		pp = prose.setStringId(pp, BOUNTY_FAILED_HUNTER);
+		pp = prose.setTT(pp, target);
+
+		sendSystemMessageProse(hunter, pp);
+
+		pp = prose.setStringId(pp, BOUNTY_FAILED_TARGET);
+		pp = prose.setTT(pp, hunter);
+
+		sendSystemMessageProse(target, pp);
+
+		CustomerServiceLog("bounty", "%TU attempted to collect the bounty on %TT, but was defeated", hunter, target);
+	}
+
+	*/
+}
+
+void winBountyMission(obj_id hunter, obj_id target)
+{
+	int bountyValue = 0;
+
+	if(hasObjVar(target, "bounty.amount"))
+		bountyValue = getIntObjVar(target, "bounty.amount");
+
+	dictionary d = new dictionary();
+	d.put("target", target);
+	d.put("bounty", bountyValue);
+
+	money.systemPayout(money.ACCT_BOUNTY, hunter, bountyValue, "handleAwardedPlayerBounty", d);
+
+	float factionAdj = getBountyFactionPointAdjustment(hunter, target);
+	if(factionAdj != 0.0f)
+		factions.addFactionStanding(hunter, factions.getFactionNameByHashCode(pvpGetAlignedFaction(hunter)), factionAdj);
+
+	prose_package pp = new prose_package();
+	pp = prose.setStringId(pp, new string_id("bounty_hunter", "bounty_success_hunter"));
+	pp = prose.setTT(pp, target);
+	pp = prose.setDI(pp, bountyValue);
+
+	sendSystemMessageProse(hunter, pp);
+
+	pp = prose.setStringId(pp, new string_id("bounty_hunter", "bounty_success_target"));
+	pp = prose.setTT(pp, hunter);
+
+	sendSystemMessageProse(target, pp);
+
+	obj_id[] hunters = getJediBounties(target);
+
+	if(hunters != null && hunters.length > 0)
+	{
+		for(int i = 0; i < hunters.length; i++)
+		{
+			if(hunters[i] != hunter)
+				messageTo(hunters[i], "handleBountyMissionIncomplete", d, 0.0f, true);
+		}
+	}
+
+	obj_id mission = getBountyMission(hunter);
+
+	if(isIdValid(mission))
+		endMission(mission);
+
+	// setJediVisibility(target, 0);
+
+	removeObjVar(target, "bounty");
+	setJediBountyValue(target, 0);
+
+	removeAllJediBounties(target);
+}
+
+void loseBountyMission(obj_id hunter, obj_id target)
+{
+	prose_package pp = new prose_package();
+	pp = prose.setStringId(pp, new string_id("bounty_hunter", "bounty_failed_hunter"));
+	pp = prose.setTT(pp, target);
+
+	sendSystemMessageProse(hunter, pp);
+
+	pp = prose.setStringId(pp, new string_id("bounty_hunter", "bounty_failed_target"));
+	pp = prose.setTT(pp, hunter);
+
+	sendSystemMessageProse(target, pp);
+
+	obj_id mission = getBountyMission(hunter);
+
+	if(isIdValid(mission))
+		endMission(mission);
+
+	removeJediBounty(target, hunter);
+
+	CustomerServiceLog("bounty", "%TU was defeated by %TT and failed to collect the bounty on %PT head", hunter, target);
+}
+
+obj_id getBountyMission(obj_id player)
+{
+	return getBountyMission(player, obj_id.NULL_ID);
+}
+
+obj_id getBountyMission(obj_id player, obj_id target)
+{
+	obj_id lastMissionId = null;
+
+	if(isIdValid(player))
+	{
+		obj_id[] missionList = getMissionObjects(player);
+
+		if(missionList != null)
+		{
+			for(int i = 0; i < missionList.length; i++)
+			{
+				string type = getMissionType(missionList[i]);
+
+				if(type.equals("bounty"))
+				{
+					if(isIdValid(target))
+					{
+						if(hasObjVar(missionList[i], "objTarget"))
+						{
+							obj_id missionTarget = getObjIdObjVar(missionList[i], "objTarget");
+
+							if(missionTarget == target)
+								return missionList[i];
+						}
+					}
+					else
+						lastMissionId = missionList[i];
+				}
+			}
+		}
+	}
+
+	return lastMissionId;
+}
+
+boolean hasMaxBountyMissionsOnTarget(obj_id target)
+{
+	obj_id[] hunters = getJediBounties(target);
+
+	if(hunters == null || hunters.length == 0)
+		return false;
+
+	int numHunters = hunters.length;
+
+	string Smax = getConfigSetting("GameServer", "maxJediBounties");
+	int maxHunters = 3;
+
+	if(Smax != null && !Smax.equals(""))
+	{
+		Integer Imax= Integer.getInteger(Smax);
+		if(Imax != null)
+			maxHunters = Imax.intValue();
+	}
+
+	if(numHunters >= maxHunters)
+		return true;
+
+	return false;
+}
+
+float getBountyFactionPointAdjustment(obj_id hunter, obj_id target)
+{
+	float pvpRating = (float)pvp.getCurrentPvPRating(target);
+	float points = 0.0f;
+
+	if((pvpGetAlignedFaction(hunter) != 0) && (pvpGetAlignedFaction(hunter) == pvpGetAlignedFaction(target)))
+	{
+		points = pvpRating / 4.0f;
+		points *= -1.0f;
+	}
+	else if(factions.pvpAreFactionsOpposed(pvpGetAlignedFaction(hunter), pvpGetAlignedFaction(target)))
+	{
+		points = pvpRating / 10.0f;
+	}
+
+	return points;
+}
+
+
+/*
+	thoughts:
+		might want to make bountycheck scriptvars on creatures expire over time. Frustrating to be checking everything and it all keeps coming up is 'already checked'
+		might want award PP to be more interesting
+
+*/
+
+void probeDroidTrackTarget(obj_id player, obj_id droid)
+{
+	int intDroidType = getIntObjVar(droid, "intDroidType");
+	obj_id objBountyMission = getBountyMission(player);
+	obj_id objMission = getBountyMission(player);
+	dictionary dctParams = new dictionary();
+	dctParams.put("objPlayer", player);
+
+	if(!hasCommand(player, "droid_track"))
+	{
+		return;
+	}
+	// we play the fly away animation
+
+	int intState = getIntObjVar(objMission, "intState");
+
+	// The '1' here is a constant defined in systems.mission.base.mission_base to indicate that we have a biosig and are ready to use droids
+	if(intState != 1)
+	{
+		string_id strSpam = new string_id("mission/mission_generic", "bounty_no_signature");
+		sendSystemMessage(player, strSpam);
+		return;
+	}
+
+	if(utils.hasScriptVar(objMission, "intTracking"))
+	{
+		string_id strSpam = new string_id("mission/mission_generic", "bounty_already_tracking");
+		sendSystemMessage(player, strSpam);
+		return;
+	}
+
+	if(hasObjVar(objMission, "objTarget")) // it's a "jedi" mission
+	{
+		// is the jedi online/offline
+		obj_id objTarget = getObjIdObjVar(objMission, "objTarget");
+		
+		if(isIdValid(objTarget))
+		{
+			dictionary dctJediInfo = requestJedi(objTarget);
+			
+			if(dctJediInfo == null)
+			{
+				// target not available.
+				string_id strSpam = new string_id("mission/mission_generic", "jedi_not_online");
+				sendSystemMessage(player, strSpam);
+				return;
+			}
+			else
+			{
+				boolean boolOnline = dctJediInfo.getBoolean("online");
+				if(!boolOnline)
+				{
+					// target not available
+					string_id strSpam = new string_id("mission/mission_generic", "jedi_not_online");
+					sendSystemMessage(player, strSpam);
+					return;
+				}
+			}
+		}
+	}
+
+	setObjVar(droid, "objPlayer", player);
+
+	if(intDroidType == DROID_PROBOT)
+	{
+		bounty_hunter.callProbot(player, droid, objMission);
+	}
+	if(intDroidType == DROID_SEEKER)
+	{
+		location locSpawnLocation = getLocation(player);
+		if(isValidId(locSpawnLocation.cell))
+		{
+			string_id strResponse = new string_id("mission/mission_generic", "not_in_house");
+			sendSystemMessage(player, strResponse);
+			return;		
+		}		
+		if( toLower(locSpawnLocation.area).startsWith("kashyyyk")  || toLower(locSpawnLocation.area).startsWith("mustafar") )
+		{
+			sendSystemMessage(player, new string_id("mission/mission_generic", "no_seek"));
+			return;
+		}
+	
+		utils.setScriptVar(objMission, "intTracking", 1);
+	
+		debugServerConsoleMsg(droid, "seeker");
+		dctParams.put("intDroidType", intDroidType);
+		dctParams.put("objDroid", droid);
+		dctParams.put("intTrackType", DROID_TRACK_TARGET);
+		
+		//saving the information above on the mission in case the NPC tries to spawn in the water.
+
+		setObjVar(objMission, "intDroidType", intDroidType);
+		setObjVar(objMission, "objDroid", droid);
+		setObjVar(objMission, "intTrackType", DROID_TRACK_TARGET);
+
+		if(!hasObjVar(objMission, "intMissionDynamic"))
+		{
+			dctParams.put("playerBounty", 1);
+		}
+
+		location locHeading = getHeading(player);
+
+		locSpawnLocation.x = locSpawnLocation.x + locHeading.x;
+		locSpawnLocation.z = locSpawnLocation.z + locHeading.z;
+
+		obj_id objSeeker = createObject("object/creature/npc/droid/bounty_seeker.iff", locSpawnLocation);
+		messageTo(objSeeker, "takeOff", null, 5, true);
+
+		string_id strSpam = new string_id("mission/mission_generic", "seeker_droid_launched");
+		sendSystemMessage(player, strSpam);
+		messageTo(objMission, "halfwayNotification", dctParams, 40, true);
+		messageTo(objMission, "halfwayNotification", dctParams, 60, true);
+		messageTo(objMission, "findTarget", dctParams, 20, true);
+	
+		//decrement droid
+		int intCount = getCount(droid);
+		intCount = intCount - 1;
+		
+		if(intCount < 0)
+		{
+			destroyObject(droid);
+		}
+		else
+		{
+			setCount(droid, intCount);
+		}
+	}
+
+	return;
+}
+
+boolean callProbot(obj_id player, obj_id droid, obj_id objMission)
+{
+	if(!isValidId(player) || !exists(player))
+		return false;
+	if(!isValidId(droid) || !exists(droid))
+		return false;
+		
+	location currentPlayerLocation = getLocation(player);
+	if(isValidId(currentPlayerLocation.cell))
+	{
+		string_id strResponse = new string_id("mission/mission_generic", "not_in_house");
+		sendSystemMessage(player, strResponse);
+		return false;		
+	}
+
+	dictionary dctParams = new dictionary();
+	dctParams.put("objPlayer", player);	
+	dctParams.put("intDroidType", DROID_PROBOT);
+	dctParams.put("objDroid", droid);
+	dctParams.put("intTrackType", DROID_TRACK_TARGET);
+
+	if(!hasObjVar(objMission, "intMissionDynamic"))
+		dctParams.put("playerBounty", 1);
+
+	messageTo(droid, "droid_Probot_Start", dctParams, 0, true);
+	return true;
+}

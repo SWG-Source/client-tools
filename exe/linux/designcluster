@@ -1,0 +1,244 @@
+#!/bin/bash
+
+CLUSTER_NAME=DesignGalaxy
+CENTRAL_SERVER_ADDRESS=$HOSTNAME
+GAME_SCENE=tatooine.trn
+LOGIN_SERVER_ADDRESS=swo-dev6.station.sony.com
+EXE_DIR=/swo/swg/current/exe/linux
+CENTRAL_PLANET_PORT=44475
+CENTRAL_GAME_PORT=44471
+
+kill_servers()
+{
+	killall CentralServer_r &>/dev/null
+	killall CentralServer_d &>/dev/null
+	killall addr2line &>/dev/null
+}
+
+get_free_port()
+{
+	PORT=(RANDOM + 1024)
+	((PORT=$PORT+1))
+	AVAIL=`netstat -aut|grep $PORT`
+	while [ -n "$AVAIL" ];
+	do
+	{
+		((PORT=RANDOM))
+		AVAIL=`netstat -aut|grep $PORT`
+	};
+	done
+	echo $PORT
+}
+
+run_central()
+{
+	cd $EXE_DIR
+        echo "** Starting CentralServer at " $(date +"%Y%m%d-%k.%M.%S") >> /swo/swg/CentralServer.log
+	./CentralServer_d -- \
+		-s CentralServer \
+		loginServerAddress=$LOGIN_SERVER_ADDRESS \
+		clusterName=$CLUSTER_NAME \
+	        gameServicePort=$CENTRAL_GAME_PORT \
+                planetServicePort=$CENTRAL_PLANET_PORT \
+	        >> /swo/swg/CentralServer.log 2>&1 &
+}
+
+run_connection()
+{
+	cd $EXE_DIR
+        echo "** Starting ConnectionServer at " $(date +"%Y%m%d-%k.%M.%S") >> /swo/swg/ConnectionServer.log
+	./ConnectionServer_d -- \
+		-s ConnectionServer \
+		clusterName=$CLUSTER_NAME \
+		loginServerAddress=$LOGIN_SERVER_ADDRESS \
+	        centralServicePort=44482 \
+                clientServicePort=44483 \
+	        gameServicePort=44484 \
+		>> /swo/swg/ConnectionServer.log 2>&1 &
+}
+
+run_dbprocess()
+{
+	cd $EXE_DIR
+        echo "** Starting DBProcess at " $(date +"%Y%m%d-%k.%M.%S") >> /swo/swg/dbprocess.log
+	./SwgDatabaseServer_d --  \
+		-s dbProcess \
+		centralServerAddress=$CENTRAL_SERVER_ADDRESS \
+	        centralServerPort=$CENTRAL_GAME_PORT \
+		useTemplates=1 \
+		databaseProtocol=OCI \
+		databaseUID=designcluster \
+		databasePWD=changeme \
+		DSN=swodb \
+		>> /swo/swg/SwgDatabaseServer.log 2>&1 &
+}
+
+run_gameserver()
+{
+	cd $EXE_DIR
+    echo "** Starting GameServer at " $(date +"%Y%m%d-%k.%M.%S") >> /swo/swg/SwgGameServer.log
+	./SwgGameServer_d -- @../../exe/shared/servercommon.cfg @combat.cfg \
+		-s GameServer sceneID=tatooine \
+		centralServerAddress=$CENTRAL_SERVER_ADDRESS \
+	        centralServerPort=$CENTRAL_GAME_PORT \
+		groundScene=terrain/$GAME_SCENE \
+		clusterName=$CLUSTER_NAME \
+		useTemplates=1 \
+		javaLibPath=/usr/noScriptsOnBaseServer \
+		scriptPath=../../data/sku.0/sys.server/plt.shared/loc.shared/compiled/game \
+		useRemoteDebugJava=0 \
+		javaDebugPort=0 \
+		-s SharedFoundation \
+		frameRateLimit=4 \
+		warningCallStackDepth=0 \
+		-s SharedDebug \
+		lookupCallStack=1 \
+		>> /swo/swg/SwgGameServer.log 2>&1 &
+}
+
+run_planetserver()
+{
+	cd $EXE_DIR
+	echo "** Starting PlanetServer at " $(date +"%Y%m%d-%k.%M.%S") >> /swo/swg/PlanetServer.log
+	./PlanetServer_d -- \
+		-s PlanetServer sceneID=tatooine \
+		clusterName=$CLUSTER_NAME \
+	        centralServerPort=$CENTRAL_PLANET_PORT \
+		centralServerAddress=$CENTRAL_SERVER_ADDRESS \
+		>> /swo/swg/PlanetServer.log 2>&1 &
+}
+
+fatality()
+{
+	CRASHDIR="/swo/swg/CRASH-"`date +"%Y%m%d-%k.%M.%S"`
+	echo ""
+	echo "**********************************************************************"
+	echo "**      !!FATAL WARNING FATAL WARNING FATAL WARNING FATAL WARNING!!"     
+	echo "**"
+	echo "** $1 "
+	echo "**"
+	echo "** Server is no longer running. It failed to properly start."
+	echo "** If this is an unknown bug, advise the server development team."
+	echo "**"
+	echo "** A crash directory called $CRASHDIR"
+	echo "** is being created, logs and the core file will be placed in "
+	echo "** $CRASHDIR"
+	echo "**"
+	echo "**********************************************************************"
+	echo ""
+	echo -n "Killing servers ..."
+	mkdir $CRASHDIR
+	cp /swo/swg/*.log $CRASHDIR
+	cp /swo/swg/current/exe/linux/core $CRASHDIR
+	kill_servers
+	echo "done."
+	
+}
+
+#-----------------------------------------
+#-- parse options
+#-----------------------------------------
+
+show_usage ()
+{
+
+    echo "Options:"
+    echo "         -h            help"
+    echo "         -s <scene>    scenefile (default: $GAME_SCENE)"
+    echo "         -x <exe dir>  executable dir name (default: $EXE_DIR)"
+    echo "         -n <nbname>   nbname dir (default: $NBNAME)"
+}
+
+while getopts "hs:x:n:" arg
+do
+    case $arg in
+	"s")
+	    GAME_SCENE=$OPTARG
+	    echo "Setting Game Scene to: $GAME_SCENE"
+	    ;;
+	"x")
+	    EXE_DIR=$OPTARG
+	    echo "Setting Executable Dir to: $EXE_DIR"
+	    ;;
+	"h")
+	    show_usage;
+	    ;;
+	*)
+	    show_usage;
+	    ;;
+    esac
+done
+
+#-----------------------------------------
+#-----------------------------------------
+
+echo -n "Killing all servers you own...            "
+kill_servers
+echo "done"
+echo
+echo "Checking database setup..."
+cd /swo/swg/current/exe/linux
+make -f database.mak
+echo
+echo "Port selection:"
+
+echo "  Central Server:    game=$CENTRAL_GAME_SERVICE_PORT planet=$CENTRAL_PLANET_SERVICE_PORT"
+echo "  Connection Server: central=$CONNECTION_CENTRAL_SERVICE_PORT client=$CONNECTION_CLIENT_SERVICE_PORT game=$CONNECTION_GAME_SERVICE_PORT"
+echo ""
+
+echo -n "Starting central server ...               "
+run_central
+echo "done."
+sleep 3
+echo -n "Starting connection server ...            "
+run_connection
+echo "done."
+sleep 2
+echo -n "Starting database process ...             "
+run_dbprocess
+echo "done."
+sleep 2
+echo -n "Starting planet server ...             "
+run_planetserver
+echo "done."
+sleep 2
+echo -n "Starting game server ...                  "
+run_gameserver
+
+# Check for problems during startup
+sleep 2
+#if [ -z "`ps --User $USER | grep centralserver`" ]; then
+#{
+#	fatality "Central Server";
+#}
+#elif [ -z "`ps --User $USER | grep connectionser`" ]; then
+#{
+#	fatality "Connection Server";
+#}
+#elif [ -z "`ps --User $USER | grep dbprocess`" ]; then
+#{
+#	fatality "DB Process";
+#}
+#elif [ -z "`ps --User $USER | grep gameserver`" ]; then
+#{
+#	fatality "Game Server"
+#}
+#else
+#{
+	echo "done"
+	echo ""
+	echo "**********************************************************************"
+	echo "You may now connect to your game cluster [ $CLUSTER_NAME ]."
+	echo "Your client configuration should have an entry "
+	echo "loginServerAddress=$LOGIN_SERVER_ADDRESS "
+	echo ""
+	echo "If you are connecting to a different login server"
+	echo "ensure that servercommon.cfg in your depot reflects the"
+	echo "alternate server address, and that your client config"
+	echo "matches."
+	echo ""
+	echo "Contact Justin Randall or Chris Mayer if you are having trouble"
+	echo "**********************************************************************"
+#}
+#fi
+

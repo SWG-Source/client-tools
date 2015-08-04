@@ -1,0 +1,234 @@
+// ======================================================================
+//
+// instrument.script
+//
+// Copyright 2003 Sony Online Entertainment
+//
+// ======================================================================
+
+include library.performance;
+include library.utils;
+
+// ======================================================================
+
+const string_id SID_PLAY_INSTRUMENT    = new string_id("radial_performance", "play_instrument");
+const string_id SID_STOP_PLAYING       = new string_id("radial_performance", "stop_playing");
+const string_id SID_MUSIC_MUST_UNEQUIP = new string_id("performance", "music_must_unequip");
+const string_id SID_MUSIC_TOO_FAR_AWAY = new string_id("performance", "music_too_far_away");
+
+const float INSTRUMENT_CHECK_TIME = 5.0f;
+const float MAX_INSTRUMENT_DISTANCE = 3.0f;
+
+// ======================================================================
+
+boolean isActiveInstrument(obj_id player)
+{
+	obj_id self = getSelf();
+	// if we don't have a valid audio id, then we can't be the active
+	// instrument as there is no active instrument.
+	if (getInstrumentAudioId(player) == 0)
+		return false;
+
+	// if we have a held instrument, and we're it, then we're active.
+	obj_id obj = getObjectInSlot(player, "hold_r");
+	if (isIdValid(obj) && hasScript(obj, "systems.skills.performance.instrument"))
+		return (obj == getSelf());
+		
+	// if we're in inventory, we can't be the active instrument.
+	if(getFirstParentInWorld(self) == player)
+		return false;
+		
+	// we're in the world, and something's active.
+	// really, we should store the active id, but we don't.  Assume we're active.
+	return true;
+}
+
+// ======================================================================
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (isActiveInstrument(player) && hasScript(player, performance.MUSIC_HEARTBEAT_SCRIPT))
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_STOP_PLAYING);
+	else if (getFirstParentInWorld(self) == player && hasObjVar(self, "instrument.unequippable"))
+		mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("", ""));
+	else if (isActiveInstrument(player) || hasObjVar(self, "instrument.unequippable"))
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_PLAY_INSTRUMENT);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	boolean isActive = isActiveInstrument(player);
+	boolean isInWorld = getFirstParentInWorld(self) != player;
+	boolean isPlaying = hasScript(player, performance.MUSIC_HEARTBEAT_SCRIPT);
+	boolean isUnequippable = hasObjVar(self, "instrument.unequippable");
+	boolean isOwnedByActivatingPlayer = false;
+	if( hasObjVar(self, "instrument.owner") && getObjIdObjVar(self, "instrument.owner") == player)
+	{
+		isOwnedByActivatingPlayer = true;
+	}
+	else if(getOwner(self) == player)
+	{
+		isOwnedByActivatingPlayer = true;
+	}
+	
+	boolean isStatic = self.getValue() < 10000000;
+	
+	if (item == menu_info_types.ITEM_USE)
+	{
+		// if we're playing...
+		if (isPlaying)
+		{
+			queueCommand(player, ##"stopMusic", null, "", COMMAND_PRIORITY_DEFAULT);
+		}
+		// if we're the active instrument, and we're not playing, start playing.
+		else if(isActive && !isPlaying)
+		{
+			// if we're a world instrument, and unequippable, make sure the
+			// player and instrument are in the same place.
+			if(isInWorld && isUnequippable)
+			{
+				// if we're being used by our owner, move to our owner so
+				// they look right.
+				if(isOwnedByActivatingPlayer)
+				{
+					setLocation(self, player);
+					setYaw(self, getYaw(player));
+				}
+				// if we're static, then move the player to the instrument.
+				// *don't* move otherwise, since we don't want you to move
+				// on top of the existing owner.
+				else if(isStatic)
+				{
+					setLocation(player, self);
+					setYaw(player, getYaw(self));				
+				}
+				
+			}			
+			queueCommand(player, ##"startMusic", null, "", COMMAND_PRIORITY_DEFAULT);			
+		}
+		// using an unequippable instrument from inventory - handle dropping a temporary instrument.
+		else if(isUnequippable && !isInWorld)
+		{
+			
+			if (hasObjVar(self, "instrument.placed"))
+			{
+				obj_id oldPlacedObj = getObjIdObjVar(self, "instrument.placed");
+				destroyObject(oldPlacedObj);
+				removeObjVar(self, "instrument.placed");
+			}
+			obj_id newPlacedObj = createObject(getTemplateName(self), getLocation(player));
+			custom_var[] customVars = getAllCustomVars(self);
+			if(customVars != null && customVars.length > 0)
+			{
+				for(int i = 0; i < customVars.length; i++)
+				{
+					ranged_int_custom_var ricv = (ranged_int_custom_var)customVars[i];
+
+					string var = ricv.getVarName();
+					int value = ricv.getValue();
+
+					if(value != 0)
+					{
+						setRangedIntCustomVarValue(newPlacedObj, var, value);
+					}
+
+				}
+			}
+			if (isIdValid(newPlacedObj))
+			{
+				location where = getLocation(newPlacedObj);
+
+				setYaw(newPlacedObj, getYaw(player));
+				setOwner(newPlacedObj, player);
+				setObjVar(newPlacedObj, "instrument.owner", player);
+				setObjVar(self, "instrument.placed", newPlacedObj);
+				utils.setScriptVar(newPlacedObj, "instrument.loc", where);
+
+				messageTo(newPlacedObj, "checkInstrumentCleanup", null, INSTRUMENT_CHECK_TIME, false);
+				messageTo(newPlacedObj, "checkLocation", null, 1, false);
+			}
+		}
+		// we're in the world, but not the active instrument.  Presumably, this is because we're too
+		// far away.  This check just sends a message.
+		else if(getDistance(self, player) > 2.0f)
+		{
+			sendSystemMessage(player, SID_MUSIC_TOO_FAR_AWAY);
+		}
+		// we're not the active instrument, we're not playing, and we're not too far away...
+		// presumably, this is because something else *is* the active instrument, and it is equipped.
+		else
+		{
+			sendSystemMessage(player, SID_MUSIC_MUST_UNEQUIP);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	if (hasObjVar(self, "instrument.owner"))
+	{
+		destroyObject(self);
+		return SCRIPT_OVERRIDE;
+	}
+	//if we have a copy out, we need to remove it.
+	if(hasObjVar(self, "instrument.placed"))
+	{
+		obj_id placedObj = getObjIdObjVar(self, "instrument.placed");
+		destroyObject(placedObj);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkLocation()
+{
+	if (utils.hasScriptVar(self, "instrument.loc"))
+	{
+		location where = getLocationObjVar(self, "instrument.loc");
+
+		if(where != getLocation(self))
+		{
+			if(hasObjVar(self, "instrument.owner"))
+			{
+				obj_id owner = getObjIdObjVar(self, "instrument.owner");
+
+				if(isIdValid(owner) && exists(owner))
+				{
+					setLocation(self, getLocation(owner));
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ======================================================================
+
+messageHandler checkInstrumentCleanup()
+{
+	if (hasObjVar(self, "instrument.owner"))
+	{
+		obj_id owner = getObjIdObjVar(self, "instrument.owner");
+		if (   isIdValid(owner)
+		    && exists(owner)
+		    && getLocation(self).distance(getLocation(owner)) < MAX_INSTRUMENT_DISTANCE
+		    && getContainedBy(owner) == getContainedBy(self))
+		{
+			messageTo(self, "checkInstrumentCleanup", null, INSTRUMENT_CHECK_TIME, false);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+
+// ======================================================================
+

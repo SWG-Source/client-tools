@@ -1,0 +1,449 @@
+//------------------------------------------------
+// destroy_surpriseattack.script
+// Brandon Reinhart
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_quest;
+include library.space_utils;
+include library.space_create;
+include library.space_transition;
+include library.ship_ai;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_REMAINDER_UPDATE		= new string_id( "space/quest", "destroy_remainder_update" );
+const string_id SID_ABANDONED_DESTROY		= new string_id( "space/quest", "destroy_surprise_abandoned" );
+const string_id SID_SURPRISE_ATTACK			= new string_id( "space/quest", "destroy_surprise_attack" );
+
+const string_id WARPOUT_FAILURE				= new string_id( "space/quest", "warpout_failure" );
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_OVERRIDE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Load our attacker data.
+
+	// 11/16/2004: Option for ships to leave after a certain amount of time.
+	setObjVar( self, "leaveEarlyTimer", questInfo.getInt( "leaveEarlyTimer" ) );
+
+	// Determine the types of ships to destroy.
+	string[] ships = dataTableGetStringColumn( qTable, "shipType" );
+	space_quest.cleanArray( self, "shipTypes", ships );
+
+	int[] counts = dataTableGetIntColumn( qTable, "shipCount" );
+	setObjVar( self, "shipCounts", counts );
+
+	// Notify the player of the first objective (if we are already in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	// Test: Disable task 0.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questClearQuestTask( questid, 0, player );
+		questActivateTask( questid, 1, player );
+	}
+
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set us up if we are in the appropriate zone.
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			space_quest.showQuestUpdate( self, SID_ABANDONED_DESTROY );
+			setObjVar( self, "failed", 1 );
+			space_quest.setQuestFailed( player, self, false );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] ships = getStringArrayObjVar( self, "shipTypes" );
+	int[] counts = getIntArrayObjVar( self, "shipCounts" );
+	int count = 0;
+	for ( int i=0; i<ships.length; i++ )
+	{
+		count += counts[i];
+	}
+
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	questSetQuestTaskCounter(player, "spacequest/"+questType+"/"+questName, 1, "quest/groundquests:destroy_counter", 0, count);
+
+	obj_id[] targets = new obj_id[count];
+
+	int squad = ship_ai.squadCreateSquadId();
+
+	// Spawn the attackers.
+	int j = 0;
+	int k = 0;
+	for ( int i=0; i<count; i++ )
+	{
+		transform gloc = getTransform_o2w( space_transition.getContainingShip( player ) );
+
+		// Move the starting spot out in front of us.
+		float dist = rand( 700.f, 800.f );
+		vector n = gloc.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+		gloc = gloc.move_p( n );
+
+		// Flip the starting spot around so its facing us.
+		gloc = gloc.yaw_l( 3.14f );
+
+		// Find a spot on the IJ plane for deviation in a cone shape.
+		vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+		vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+		vector vd = vi.add( vj );
+		gloc = gloc.move_p( vd );
+
+		obj_id newship = space_create.createShipHyperspace( ships[j], gloc );
+		ship_ai.unitSetLeashDistance( newship, 16000 );
+		if ( count > 3 )
+			ship_ai.unitSetSquadId( newship, squad );
+		attachScript( newship, "space.quest_logic.dynamic_ship" );
+		attachScript( newship, "space.quest_logic.destroyduty_ship" );
+		targets[i] = newship;
+		setObjVar( newship, "quest", self );
+		space_quest._addMissionCriticalShip( player, self, newship );
+
+		dictionary outparams = new dictionary();
+		outparams.put( "object", self );
+		space_utils.notifyObject( targets[i], "notifyOnDestroy", outparams );
+
+		// This guy can only be harmed by the player or his group.
+		setObjVar( targets[i], "objMissionOwner", player );
+		ship_ai.unitAddExclusiveAggro( targets[i], player );
+		obj_id playership = space_transition.getContainingShip(player);
+		dictionary dict = new dictionary ();
+		dict.put ("player", space_transition.getContainingShip(player));
+		dict.put ("newship", newship);
+		messageTo (self, "attackPlayerShip", dict, 4.0f, false);
+
+		k++;
+		if ( k > counts[j] )
+		{
+			k = 0;
+			j++;
+		}
+	}
+
+	// Set a formation.
+	if ( count > 3 )
+		ship_ai.squadSetFormationRandom( squad );
+
+	space_quest.showQuestUpdate( self, SID_SURPRISE_ATTACK, count );
+	setObjVar( self, "targets", targets );
+	setObjVar( self, "killcount", count );
+	setObjVar( self, "count", count );
+
+	space_quest._setQuestInProgress( self );
+
+	// Have a leave early timer?
+	int leaveEarlyTimer = getIntObjVar( self, "leaveEarlyTimer" );
+	if ( leaveEarlyTimer > 0 )
+	{
+		messageTo( self, "leaveEarly", params, leaveEarlyTimer, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// leaveEarly
+// Added 11/16/2004
+// Hyperspace the ships out early and count this as a success.
+//------------------------------------------------
+
+messageHandler leaveEarly()
+{
+	// Hyper the remaining ships out and flag us as having won.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Scratch it off our list, if its on our list.
+	obj_id[] targets = getObjIdArrayObjVar( self, "targets" );
+	for ( int i=0; i<targets.length; i++ )
+	{
+		space_quest._removeMissionCriticalShip( player, self, targets[i] );
+	}
+	setObjVar( self, "leaveEarly", 1 );
+	cleanupShips( self );
+
+	// Send a hyper out message.
+	string_id left = new string_id( "spacequest/"+questType+"/"+questName, "leave_early" );
+	sendQuestSystemMessage( player, left );
+
+	// We win.
+	questCompleted( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// shipDestroyed
+//------------------------------------------------
+
+messageHandler shipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	if ( hasObjVar( self, "failed" ) || hasObjVar( self, "leaveEarly" ) )
+		return SCRIPT_CONTINUE;
+
+	if ( hasObjVar( self, "critical_warped" ) )
+	{
+		space_utils.notifyObject( self, "warpoutFailure", null );
+		return SCRIPT_CONTINUE;
+	}
+
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id ship = params.getObjId( "object" );
+
+	// Scratch it off our list, if its on our list.
+	obj_id[] targets = getObjIdArrayObjVar( self, "targets" );
+	int killcount = getIntObjVar( self, "killcount" );
+	int count = getIntObjVar( self, "count" );
+
+	for ( int i=0; i<targets.length; i++ )
+	{
+		if ( ship == targets[i] )
+		{
+			space_quest._removeMissionCriticalShip( player, self, ship );
+			killcount--;
+			setObjVar( self, "killcount", killcount );
+			break;
+		}
+	}
+
+	// Check for a special event.
+	if ( checkSpecialEvent( self, player, (targets.length-killcount) ) )
+		return SCRIPT_CONTINUE;
+
+	if ( killcount == 0 )
+	{
+		// Send mission complete message.
+		string_id complete = new string_id( "spacequest/"+questType+"/"+questName, "complete" );
+		sendQuestSystemMessage( player, complete );
+
+		// We won.
+		questCompleted( self );
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		questSetQuestTaskCounter(player, "spacequest/"+questType+"/"+questName, 1, "quest/groundquests:destroy_counter", count-killcount, count);
+	}
+
+	space_quest.showQuestUpdate( self, SID_REMAINDER_UPDATE, killcount );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// questCompleted
+//------------------------------------------------
+
+void questCompleted( obj_id self )
+{
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestWon( player, self );
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	if ( hasObjVar( self, "noAbort" ) )
+		return SCRIPT_CONTINUE;
+
+	// We aborted the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestAborted( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+
+//------------------------------------------------
+// removeQuest
+//------------------------------------------------
+
+messageHandler removeQuest()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Flag the main quest journal entry as finished.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( (questid != 0) && questIsQuestActive( questid, player ) )
+		questCompleteQuest( questid, player );
+
+	space_quest._removeQuest( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+		setObjVar( self, "failed", 1 );
+		cleanupShips( self );
+		obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+		space_quest.setQuestFailed( player, self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// attackPlayerShip
+//------------------------------------------------
+
+messageHandler attackPlayerShip()
+{
+	obj_id playerShip = params.getObjId ("player");
+	obj_id attackingShip = params.getObjId ("newship");
+	ship_ai.spaceAttack(attackingShip, playerShip);
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanupShips
+//------------------------------------------------
+
+void cleanupShips( obj_id self )
+{
+	// Warp out the attackers.
+	obj_id[] targets = getObjIdArrayObjVar( self, "targets" );
+	if ( targets != null )
+	{
+		for ( int i=0; i<targets.length; i++ )
+		{
+			if ( isIdValid( targets[i] ) && exists( targets[i] ) )
+			{
+				destroyObjectHyperspace( targets[i] );
+			}
+		}
+	}
+}
+
+//------------------------------------------------
+// checkSpecialEvent
+//------------------------------------------------
+
+boolean checkSpecialEvent( obj_id self, obj_id player, int killCount )
+{
+	// Do we have a special event?
+	if ( !hasObjVar( self, space_quest.QUEST_TRIGGER_EVENT ) )
+		return false;
+
+	int triggerEvent = getIntObjVar( self, space_quest.QUEST_TRIGGER_EVENT );
+	int triggerSC = getIntObjVar( self, space_quest.QUEST_TRIGGER_SC );
+	int triggerOn = getIntObjVar( self, space_quest.QUEST_TRIGGER_ON );
+	int triggerDelay = getIntObjVar( self, space_quest.QUEST_TRIGGER_DELAY );
+
+	if ( triggerEvent == 0 )
+		return false;
+	if ( triggerSC != 0 )
+		return false;
+	if ( triggerOn != killCount )
+		return false;
+
+	dictionary params = new dictionary();
+	params.put( "quest", self );
+	messageTo( player, "doSpecialEvent", params, triggerDelay, false );
+
+	return false;
+}
+
+//------------------------------------------------
+// warpoutFailure
+//------------------------------------------------
+
+messageHandler warpoutFailure()
+{
+	if ( hasObjVar( self, "handling_warpout_failure" ) )
+		return SCRIPT_CONTINUE;
+	setObjVar( self, "handling_warpout_failure", 1 );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	sendQuestSystemMessage( player, WARPOUT_FAILURE );
+	space_quest.setQuestFailed( player, self, false );
+
+	return SCRIPT_CONTINUE;
+}

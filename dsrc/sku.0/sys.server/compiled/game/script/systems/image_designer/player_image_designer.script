@@ -1,0 +1,203 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        player_image_designer
+ * Description:  Script that goes on the player for image designing.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.prose;
+include library.utils;
+include library.sui;
+
+/***** CONSTANTS *******************************************************/
+
+const string SCRIPT_IMAGE_DESIGNER_RESPONSE		= "systems.image_designer.image_designer_response";
+const string SCRIPT_HOLO_EMOTE				= "systems.image_designer.holoemote";
+const string SCRIPT_IMAGE_DESIGNER_CANCEL		= "systems.image_designer.image_designer_cancel";
+
+const string VAR_IMAGE_DESIGN_CONFIRM			= "image_designer.confirm";
+const string VAR_IMAGE_DESIGN_LD			= "image_designer.linkdeath";
+const string VAR_IMAGE_DESIGN_TIMER_VALIDATION		= "image_designer.start_time";
+
+const string_id SID_NO_TARGET            	 	= new string_id("image_designer", "no_target");
+const string_id SID_NOT_A_PLAYER         	 	= new string_id("image_designer", "not_a_player");
+const string_id SID_TARGET_DEAD          	 	= new string_id("image_designer", "target_dead");
+const string_id SID_OUT_OF_RANGE         	 	= new string_id("image_designer", "out_of_range");
+const string_id SID_NOT_IN_SAME_GROUP    	 	= new string_id("image_designer", "not_in_same_group");
+const string_id SID_NOT_AN_IMAGE_DESIGNER	 	= new string_id("image_designer", "not_an_image_designer");
+const string_id SID_ILLEGAL_SELECTION	 		= new string_id("image_designer", "illegal_selection");
+const string_id SID_INSUFFICIENT_SKILL	 		= new string_id("image_designer", "insufficient_skill");
+const string_id SID_IMAGE_DESIGN_COMPLETE_DESIGNER	= new string_id("image_designer", "image_design_complete_designer");
+const string_id SID_IMAGE_DESIGN_COMPLETE_TARGET	= new string_id("image_designer", "image_design_complete_target");
+const string_id SID_EXPERIENCE_GRANTED			= new string_id("image_designer", "experience_granted");
+const string_id SID_OUTSTANDING_OFFER			= new string_id("image_designer", "outstanding_offer");
+const string_id SID_ALREADY_IMAGE_DESIGNING		= new string_id("image_designer", "already_image_designing");
+const string_id SID_TARGET_IS_IMAGE_DESIGNING		= new string_id("image_designer", "target_is_image_designing");
+const string_id SID_ALREADY_BEING_IMAGE_DESIGNED	= new string_id("image_designer", "already_being_image_designed");
+
+const float IMAGE_DESIGN_RANGE			= 8.0f;
+
+/***** GLOBALS *********************************************************/
+
+int id_status = 0;
+int id_accept = 0;
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnImageDesignCanceled()
+{
+
+	utils.removeScriptVar(self, VAR_IMAGE_DESIGN_CONFIRM);
+
+	detachScript(self, SCRIPT_IMAGE_DESIGNER_RESPONSE);
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+
+/***** COMMANDHANDLERS *************************************************/
+commandHandler imageDesignRequestStart()
+{
+	LOG("LOG_CHANNEL", "player_image_designer::imageDesignRequestStart");
+
+	// Validate the command.
+	if (!hasCommand(self, "imagedesign"))
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be an image designer to do that.");
+		sendSystemMessage(self, SID_NOT_AN_IMAGE_DESIGNER);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (hasScript(self, SCRIPT_IMAGE_DESIGNER_RESPONSE))
+	{
+		LOG("LOG_CHANNEL", self + " ->You are already performing an image design action.");
+		sendSystemMessage(self, SID_ALREADY_IMAGE_DESIGNING);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id design_target = getIntendedTarget(self);
+
+	if(!isIdValid(design_target) || !isPlayer(design_target))
+	{
+		if(isIdValid(target) && isPlayer(target))
+			design_target = target;
+		else
+			design_target = self;
+	}
+
+	if (!isPlayer(design_target))
+	{
+		sendSystemMessage(self, SID_NOT_A_PLAYER);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (isDead(design_target) || isIncapacitated(design_target))
+	{
+		LOG("LOG_CHANNEL", self + " ->" + getFirstName(design_target) + " needs a lot more than a make over.");
+		prose_package pp = prose.getPackage(SID_TARGET_DEAD, design_target);
+		sendSystemMessageProse(self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (utils.hasScriptVar(design_target, VAR_IMAGE_DESIGN_CONFIRM))
+	{
+		LOG("LOG_CHANNEL", self + " ->" + getFirstName(design_target) + " already has an outstanding image design offer.");
+		prose_package pp = prose.getPackage(SID_OUTSTANDING_OFFER, design_target);
+		sendSystemMessageProse (self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (hasScript(design_target, SCRIPT_IMAGE_DESIGNER_RESPONSE))
+	{
+		LOG("LOG_CHANNEL", self + " ->" + getFirstName(design_target) + " is already Image Designing someone else.");
+		prose_package pp = prose.getPackage(SID_TARGET_IS_IMAGE_DESIGNING, design_target);
+		sendSystemMessageProse (self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if (utils.hasScriptVar(self, VAR_IMAGE_DESIGN_CONFIRM))
+	{
+		LOG("LOG_CHANNEL", self + " ->You cannot initiate an Image Design session while being Image Designed.");
+		prose_package pp = prose.getPackage(SID_ALREADY_BEING_IMAGE_DESIGNED, design_target);
+		sendSystemMessageProse (self, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+
+	float distance = getLocation(self).distance(getLocation(design_target));
+	if (distance > IMAGE_DESIGN_RANGE)
+	{
+		LOG("LOG_CHANNEL", self + " ->You must be closer to your target in order to use your image design abilities.");
+		sendSystemMessage(self, SID_OUT_OF_RANGE);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check to see if the target is in the same group as the image designer.
+	obj_id designer_group  = getGroupObject(self);
+	obj_id target_group = getGroupObject(design_target);
+
+	LOG("LOG_CHANNEL", "designer group ->" + designer_group + " target_group ->" + target_group);
+
+	//if not imagedesigning yourself, ensure that the target is in your group
+	if (design_target != self)
+	{
+		if ( (!isIdValid(designer_group)) || (!isIdValid(target_group)) )
+		{
+			LOG("LOG_CHANNEL", self + " ->You must be within the same group as " + getFirstName(design_target) + " in order to use your image design abilities.");
+			prose_package pp = prose.getPackage(SID_NOT_IN_SAME_GROUP, design_target);
+			sendSystemMessageProse(self, pp);
+			return SCRIPT_CONTINUE;
+		}
+		if (designer_group != target_group)
+		{
+			LOG("LOG_CHANNEL", self + " ->You must be within the same group as " + getFirstName(design_target) + " in order to use your image design abilities.");
+			prose_package pp = prose.getPackage(SID_NOT_IN_SAME_GROUP, design_target);
+			sendSystemMessageProse(self, pp);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Check for an existing Holoemote.
+	String holoEmote = "";
+	if (hasScript(design_target, SCRIPT_HOLO_EMOTE));
+	{
+		holoEmote = utils.getStringObjVar(design_target, "holoemote");
+	}
+
+
+	// check for an ID tent and provide its Obj_Id as the terminalId.
+	obj_id closestTerminal = null;
+	obj_id structure = getTopMostContainer(self);
+	obj_id targetStructure = getTopMostContainer(design_target);
+	if((structure != self) && utils.hasObjVar(structure, "salon"))
+	{
+		if((targetStructure != design_target) && utils.hasObjVar(targetStructure, "salon"))
+		{
+			if (structure == targetStructure)
+			{
+				closestTerminal = structure;
+			}
+		}
+	}
+
+	// Mark the target as being imagedesigned.
+	utils.setScriptVar(design_target, VAR_IMAGE_DESIGN_CONFIRM, design_target);
+
+	// Mark self with target for clean up in case of link death
+	utils.setScriptVar(self, VAR_IMAGE_DESIGN_LD, design_target);
+
+	// Validation complete. Launch the image designer interface.
+	attachScript(self, SCRIPT_IMAGE_DESIGNER_RESPONSE);
+	attachScript(design_target, SCRIPT_IMAGE_DESIGNER_CANCEL);
+
+	imagedesignStart(self, design_target, closestTerminal, holoEmote);
+
+	return SCRIPT_CONTINUE;
+}
+

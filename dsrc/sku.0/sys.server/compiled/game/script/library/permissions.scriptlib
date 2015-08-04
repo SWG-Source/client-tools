@@ -1,0 +1,1127 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        permissions_library.scriptlib
+ * Description:  This is set of utility functions used by the permissions system
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+//OBJ_VAR CONSTANTS
+const string VAR_PERMISSION_BASE        = "permissions_list";
+
+const string VAR_PERMISSION_BANNED      = "permissions_list.banned";
+
+const string VAR_PERMISSION_USERS       = "permissions_list.users";
+const string VAR_PERMISSION_GROUPS      = "permissions_list.groups";
+
+const string VAR_IS_LOCKED              = "isLocked";
+
+const string_id SID_INSUFFICIENT_PERMISSIONS		= new string_id("error_message","insufficient_permissions");
+const string_id SID_NO_OPEN_PERMISSION				= new string_id("error_message", "perm_no_open");
+
+const string_id SID_NO_CORPSE_PERMISSION			= new string_id("error_message", "no_corpse_permission");
+
+//FUNCTION CONSTANTS
+const int PERMISSIONS_ARRAY_SIZE        = 2;	// Never make this zero
+
+const int MAX_GROUPS                    = 7;	// 6 + 1 guest list
+const int MAX_GROUP_MEMBERS             = 32;
+const int MAX_BANNED_MEMBERS            = 32;
+
+//DECLARE PERMISSIONS BITS HERE!
+const int canAdministrate               = 0;
+const int canToggleOnOff                = 1;
+const int canName                       = 2;
+const int canBan                        = 3;
+const int canMove                       = 4;
+const int canMaintain                   = 5;
+const int canRepair                     = 6;
+const int canItemSet                    = 7;
+const int canItemGet                    = 8;
+const int canHopperEmpty                = 9;
+const int canOpen                       = 10;
+const int canLock			= 11;
+const int canReTarget                   = 12;
+
+
+
+//****************** FUNCTIONS *************************************
+/****************************************************************
+ * @brief	creates an obj_var_list and associated data tree
+ *		for the passed group_name
+ *
+ * @param	obj_id	target
+ * @param 	string	group_name
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean createPermissionsGroup(obj_id target, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "createPermissionsGroup: target passed as null");
+		return false;
+	}
+
+	if ( (group_name == null) || (group_name.equals("")) )
+	{
+		debugServerConsoleMsg(target, "deletePermissionsGroup: invalid group name!");
+		return false;
+	}
+
+	if ( toLower(group_name) == "guest" )
+	{
+		debugServerConsoleMsg(target, "createPermissionsGroup: guest is a reserved keyword");
+		debugServerConsoleMsg(target, "createPermissionsGroup: unable to create group named guest");
+		return false;
+	}
+
+	if ( group_name != null && !group_name.equals("") )
+	{
+		string basePath = "permissions_list.groups." + group_name;
+		setObjVarList(target, basePath + ".group_members");
+
+		int[] permissionsArray = new int [PERMISSIONS_ARRAY_SIZE];
+		setObjVar(target, basePath + ".permissions", permissionsArray);			// Suppress linting - We know this array will
+		return true;															// always be at least two elements long
+	}
+
+	debugServerConsoleMsg(target, "createPermissionsGroup: cannot create group where group_name is null");
+	return false;
+}
+
+/****************************************************************
+ * @brief	deletes a permissions group
+ *
+ * @param	obj_id	target
+ * @param 	string	group_name
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean deletePermissionsGroup(obj_id target, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "deletePermissionsGroup: target passed as null");
+		return false;
+	}
+
+	if ( (group_name == null) || (group_name.equals("")) )
+	{
+		debugServerConsoleMsg(target, "deletePermissionsGroup: invalid group name!");
+		return false;
+	}
+
+	if ( toLower(group_name) == "guest" )
+	{
+		debugServerConsoleMsg(target, "deletePermissionsGroup: guest is a reserved keyword");
+		debugServerConsoleMsg(target, "deletePermissionsGroup: unable to delete group guest");
+		return false;
+	}
+
+	if ( group_name != null && !group_name.equals("") )
+	{
+		string groupPath = "permissions_list.groups." + group_name;
+		string memberPath = groupPath + ".group_members";
+
+		if ( !hasObjVar(target, groupPath) )
+		{
+			debugServerConsoleMsg(target, "deletePermissionsGroup: group doesnt exist - exiting...");
+			return true;
+		}
+
+		obj_var_list permissionsGroup = getObjVarList(target, memberPath);
+		if ( permissionsGroup != null )
+		{
+			//remove each group member and update their tally
+			int numEntries = permissionsGroup.getNumItems();
+			if ( numEntries > 0 )
+			{
+				for ( int i = 0; i < numEntries; i++ )
+				{
+					obj_var groupMember = permissionsGroup.getObjVar(i);
+
+					obj_id player = utils.stringToObjId(groupMember.getName());
+
+					boolean litmus = deleteUserFromPermissionsGroup(target, player, group_name);
+					if ( !litmus )
+					{
+						return false;
+					}
+				}
+			}
+		}
+
+		//delete the group
+		removeObjVar(target, groupPath);
+		return true;
+	}
+
+	debugServerConsoleMsg(target, "createPermissionsGroup: cannot create group where group_name is null");
+	return false;
+}
+
+/****************************************************************
+ * @brief	adds a player to a permissions group and updates
+ *		the users running permissions tally
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ * @param	string	player_name
+ * @param	string	group_nam
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean addUserToPermissionsGroup(obj_id target, obj_id player, string player_name, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "addUserToPermissionsGroup: target passed as null");
+		return false;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "addUserToPermissionsGroup: player passed as null");
+		return false;
+	}
+
+	if ( (group_name == null) || (group_name.equals("")) )
+	{
+		debugServerConsoleMsg(target, "addUserToPermissionsGroup: group name passed as null");
+		return false;
+	}
+
+	if ( (player_name == null) || (player_name.equals("")) )
+	{
+		player_name = getName(player);
+	}
+
+	if (( player != null ) && ( player_name != null ) && ( group_name != null ))
+	{
+		string groupPath = "permissions_list.groups." + group_name;
+		int memberCount = groupMemberCount(target, group_name);
+		if ( memberCount < 0 )
+		{
+			return false;
+		}
+
+		if ( (hasObjVar(target, groupPath)) && (memberCount < MAX_GROUP_MEMBERS))
+		{
+			setObjVar(target, groupPath + ".group_members." + toString(player), player_name);
+			return addToUserTally(target, player, group_name);
+		}
+
+		if ( !hasObjVar(target, groupPath) )
+		{
+			debugServerConsoleMsg(target, "addUserToPermissionsGroup: group " + group_name + " does not exist");
+		}
+
+		if ( groupMemberCount(target, group_name) >= MAX_GROUP_MEMBERS )
+		{
+			debugServerConsoleMsg(target, "addUserToPermissionsGroup: group membership has reached max capacity");
+		}
+
+		return false;
+	}
+
+	debugServerConsoleMsg(target, "addUserToPermissionsGroup: function was passed a null variable");
+	return false;
+}
+
+boolean addUserToPermissionsGroup(obj_id target, obj_id player, string group_name)
+{
+	return addUserToPermissionsGroup(target, player, getName(player), group_name);
+}
+
+/****************************************************************
+ * @brief	removes a player to a permissions group and updates
+ *		the users running permissions tally
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ * @param	string	group_name
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean deleteUserFromPermissionsGroup(obj_id target, obj_id player, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: target passed as null");
+		return false;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: player passed as null");
+		return false;
+	}
+
+	if ( (group_name == null) || (group_name.equals("")) )
+	{
+		debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: group_name passed as null");
+		return false;
+	}
+
+	string groupPath = "permissions_list.groups." + group_name;
+	if ( hasObjVar(target, groupPath) )
+	{
+		string playerPath = groupPath + ".group_members." + toString(player);
+		if ( hasObjVar(target, playerPath ))
+		{
+			removeObjVar(target, playerPath);
+			debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: removed user from group");
+			boolean litmus = updateUserTally(target, player);
+			if ( litmus = true )
+			{
+				debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: updated user tally!");
+				return true;
+			}
+			else
+			{
+				debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: failed user update!");
+				return false;
+			}
+		}
+		debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: userId " + toString(player) + " does not exist");
+		return false;
+	}
+
+	debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: group " + group_name + " does not exist");
+	return false;
+}
+
+/****************************************************************
+ * @brief	add target to banned list
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ * @param	string	player_name
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean addUserToBanned(obj_id target, obj_id player, string player_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "addUserToBanned: target passed as null");
+		return false;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "addUserToBanned: player passed as null");
+		return false;
+	}
+
+	if ( (player_name == null) || (player_name.equals("")) )
+	{
+		player_name = getName(player);
+	}
+
+	//remove user from users list and associated groups, if needed
+	if ( hasObjVar(target, "permissions_list.users." + toString(player)) )
+	{
+		removeObjVar(target, "permissions_list.users." + toString(player));
+		obj_var_list groupsList = getObjVarList(target, "permissions_list.groups");
+		if ( groupsList != null )
+		{
+			int numGroups = groupsList.getNumItems();
+			for (int i = 0; i < numGroups; i++)
+			{
+				obj_var tmpGroup = groupsList.getObjVar(i);
+				if ( tmpGroup instanceof script.obj_var_list)
+				{
+					obj_var_list lstGroup = (obj_var_list)tmpGroup;
+					if ( lstGroup.hasObjVar("group_members." + toString(player)) )
+					{
+						string objVarToNuke = "permissions_list.groups." + toString(lstGroup.getName()) + ".group_members." + toString(player);
+						removeObjVar(target, objVarToNuke);
+					}
+				}
+			}
+		}
+	}
+
+	//add user to banned list
+	setObjVar(target, "permissions_list.banned." + toString(player), player_name);
+	return true;
+}
+
+boolean addUserToBanned(obj_id target, obj_id player)
+{
+	return addUserToBanned(target, player, getName(player));
+}
+
+/****************************************************************
+ * @brief	delete target from banned list
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean deleteUserFromBanned(obj_id target, obj_id player)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: target passed as null");
+		return false;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "deleteUserFromPermissionsGroup: target passed as null");
+		return false;
+	}
+
+	if ( hasObjVar(target, "permissions_list.banned." + toString(player)) )
+	{
+		removeObjVar(target, "permissions_list.banned." + toString(player));
+		return true;
+	}
+
+	debugServerConsoleMsg(target, "deleteUserToBanned: player " + toString(player) + " is not on the banned list");
+	return false;
+}
+
+/****************************************************************
+ * @brief	retrieves a permissions intArray for a group
+ *
+ * @param	obj_id	target
+ * @param	string 	group_name
+ *
+ * @return    	intArray of group permissions bits; null on error
+ *****************************************************************/
+int[] getGroupPermissions(obj_id target, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "getGroupPermissions: target passed as null");
+		return null;
+	}
+
+	if ( (group_name == null) || (group_name.equals("")) )
+	{
+		debugServerConsoleMsg(target, "getGroupPermissions: group_name passed as null");
+		return null;
+	}
+
+	string permissionsPath = "permissions_list.groups." + group_name + ".permissions";
+	if ( hasObjVar(target, permissionsPath) )
+	{
+		return getIntArrayObjVar(target, permissionsPath);
+	}
+
+	return null;
+}
+
+
+/****************************************************************
+ * @brief	retrieves a permissions intArray for a group
+ *
+ * @param	obj_id	target
+ * @param	string 	group_name
+ *
+ * @return    	intArray of user permissions bits; null on error
+ *****************************************************************/
+int[] getUserPermissions(obj_id target, obj_id player)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "getUserPermissions: target passed as null");
+		return null;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "getUserPermissions: player passed as null");
+		return null;
+	}
+
+	string permissionsPath = "permissions_list.users." + toString(player);
+	if ( hasObjVar(target, permissionsPath) )
+	{
+		return getIntArrayObjVar(target, permissionsPath);
+	}
+
+	return new int[PERMISSIONS_ARRAY_SIZE];
+}
+
+
+/****************************************************************
+ * @brief	sets a permission bit for a group
+ *
+ * @param	obj_id	target
+ * @param	string 	group_name
+ * @param	int 	idx
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean grantGroupPermission(obj_id target, string group_name, int idx)
+{
+
+  if ( !isIdValid(target) )
+  {
+   debugServerConsoleMsg(target, "grantGroupPermission: target passed as null");
+   return false;
+  }
+
+  if (( idx < 0 ) || (idx > ( utils.BIT_LIST_SIZE * PERMISSIONS_ARRAY_SIZE )))
+  {
+   debugServerConsoleMsg(target, "grantGroupPermission: passed idx is outside the valid range");
+   return false;
+  }
+
+  if ( group_name != null )
+   {
+     string groupPath = "permissions_list.groups." + group_name;
+
+     int[] permissions = new int[PERMISSIONS_ARRAY_SIZE];
+     //debugServerConsoleMsg(target, "grantGroupPermission: accessing permissions on obj_id " + toString(target));
+     //debugServerConsoleMsg(target, "grantGroupPermission: accessing permissions for group " + group_name);
+     permissions = getGroupPermissions( target, group_name );
+
+     if ( permissions != null )
+     {
+          int index = idx / 32;
+          int bitPos = idx % 32;
+          int bitVal = 0;
+
+	 	  //set bit here!!
+	 	  int permissionsValue = utils.setBit(bitVal, bitPos);
+	 	  if ( permissionsValue != 0 )
+	 	  {
+			  permissions[index] |= permissionsValue;
+	 	  }
+	 	  else
+	 	  {
+	 		  debugServerConsoleMsg(target, "grantGroupPermission: error returned from setBit!");
+	 	  }
+
+	 	  if ( permissions != null && permissions.length > 0)		// Zero length array check
+	 	  {
+	 	  	setObjVar(target, groupPath + ".permissions", permissions);
+	 	  }
+	 	  else
+	 	  {
+	 	  	debugServerConsoleMsg(target, "grantGroupPermission: permissions was being set as null in objvar " + groupPath + ".permissions");
+    		return false;
+	 	  }
+
+	 	  //add bit to each members permissions list
+	 	  obj_var_list lstMembers = getObjVarList(target, groupPath + ".group_members");
+		  if ( lstMembers != null )
+		  {
+			  int numMembers = lstMembers.getNumItems();
+
+			  for (int i = 0; i < numMembers; i++)
+			  {
+			   	obj_id player = utils.stringToObjId(lstMembers.getObjVar(i).getName());
+
+			   	addToUserTally(target, player, group_name);
+		  		}
+			}
+		  return true;
+     }
+     debugServerConsoleMsg(target, "grantGroupPermission: permissions was returned by getGroupPermissions as null");
+     return false;
+   }
+ debugServerConsoleMsg(target, "grantGroupPermission: function was passed a null variable");
+ return false;
+}
+
+/****************************************************************
+ * @brief	unsets a permission bit for a group
+ *
+ * @param	obj_id	target
+ * @param	string 	group_name
+ * @param	int 	idx
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean revokeGroupPermission(obj_id target, string group_name, int idx)
+{
+
+  if ( !isIdValid(target) )
+  {
+   debugServerConsoleMsg(target, "revokeGroupPermission: target passed as null");
+   return false;
+  }
+
+  if (( idx < 0 ) || (idx > ( utils.BIT_LIST_SIZE * PERMISSIONS_ARRAY_SIZE )))
+  {
+   debugServerConsoleMsg(target, "revokeGroupPermission: passed idx is outside the valid range");
+   return false;
+  }
+
+  if ( group_name != null )
+   {
+     string groupPath = "permissions_list.groups." + group_name;
+
+     int[] permissions = new int[PERMISSIONS_ARRAY_SIZE];
+     permissions = getGroupPermissions( target, group_name );
+
+     if ( permissions != null && permissions.length > 0)
+     {
+     	int index = idx / 32;
+     	int bitPos = idx % 32;
+
+	 	//REMOVE BIT HERE!
+	 	permissions[index] = utils.clearBit(permissions[index], bitPos);
+	 	if ( permissions[index] == ~0 )
+	 	{
+	 		debugServerConsoleMsg(target, "revokeGroupPermission: error returned from setBit!");
+	 	}
+
+	 	setObjVar(target, "permissions_list.groups." + group_name + ".permissions", permissions);
+
+
+	 	//update each members permissions list
+	 	obj_var_list lstMembers = getObjVarList(target, groupPath + ".group_members");
+		if ( lstMembers != null )
+		{
+			int numMembers = lstMembers.getNumItems();
+
+			for (int i = 0; i < numMembers; i++)
+			{
+				obj_id player = utils.stringToObjId(lstMembers.getObjVar(i).getName());
+
+				updateUserTally(target, player);
+		  	}
+		}
+	  	return true;
+     }
+     debugServerConsoleMsg(target, "revokeGroupPermission: permissions was returned by getGroupPermissions as null");
+     return false;
+   }
+   debugServerConsoleMsg(target, "revokeGroupPermission: function was passed a null variable");
+   return false;
+}
+
+
+/****************************************************************
+ * @brief	checks a permission bit for a group
+ *
+ * @param	obj_id	target
+ * @param	string group_name
+ * @param	int 	idx
+ *
+ * @return    	boolean - true = has permissions, false = no permission/error
+ *****************************************************************/
+boolean checkGroupPermissionIndex(obj_id target, string group_name, int idx)
+{
+
+  if ( !isIdValid(target) )
+  {
+   debugServerConsoleMsg(target, "checkGroupPermissionIndex: target passed as null");
+   return false;
+  }
+
+  if (( idx < 0 ) || (idx > ( utils.BIT_LIST_SIZE * PERMISSIONS_ARRAY_SIZE )))
+  {
+   debugServerConsoleMsg(target, "grantGroupPermission: passed idx is outside the valid range");
+   return false;
+  }
+
+  if ( group_name != null )
+   {
+     int[] permissions = new int[PERMISSIONS_ARRAY_SIZE];
+     permissions = getGroupPermissions( target, group_name );
+
+     if ( permissions != null )
+     {
+          int index = idx / 32;
+          int bitPos = idx % 32;
+
+          return utils.checkBit(permissions[index], bitPos);
+
+     }
+     debugServerConsoleMsg(target, "checkGroupPermissionIndex: permissions were returned by getGroupPermissions as null");
+     return false;
+   }
+ debugServerConsoleMsg(target, "checkGroupPermissionIndex: function was passed a null variable");
+ return false;
+}
+
+/****************************************************************
+ * @brief	checks a permission bit for a user
+ *
+ * @param	obj_id	target
+ * @param	obj_id 	player
+ * @param	int 	idx
+ *
+ * @return    	boolean - true = has permissions, false = no permission/error
+ *****************************************************************/
+boolean checkUserPermissionIndex(obj_id target, obj_id player, int idx)
+{
+
+  if ( !isIdValid(target) )
+  {
+   debugServerConsoleMsg(target, "checkUserPermissionIndex: target passed as null");
+   return false;
+  }
+
+  if (( idx < 0 ) || (idx > ( utils.BIT_LIST_SIZE * PERMISSIONS_ARRAY_SIZE )))
+  {
+   debugServerConsoleMsg(target, "checkUserPermissionIndex: passed idx is outside the valid range");
+   return false;
+  }
+
+  if ( player != null )
+   {
+     int[] permissions = new int[PERMISSIONS_ARRAY_SIZE];
+     permissions = getUserPermissions( target, player );
+
+     if ( permissions != null )
+     {
+          int index = idx / 32;
+          int bitPos = idx % 32;
+
+	  int bitVal = (int)Math.pow(2, bitPos);
+
+	  if ( ( permissions[index] & bitVal ) == bitVal)
+	  {
+		return true;
+	  }
+	  return false;
+     }
+     debugServerConsoleMsg(target, "checkUserPermissionIndex: permissions were returned by getUserPermissions as null");
+     return false;
+   }
+ debugServerConsoleMsg(target, "checkUserPermissionIndex: function was passed a null variable");
+ return false;
+}
+
+/****************************************************************
+ * @brief	overload for check permissions call
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ * @param	int		idx
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean hasPermission(obj_id target, string groupName, int idx)
+{
+	return checkGroupPermissionIndex(target, groupName, idx);
+}
+
+/****************************************************************
+ * @brief	overload for check permissions call
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ * @param	int		idx
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean hasPermission(obj_id target, obj_id player, int idx)
+{
+	if ( isIdValid(player) && isGod(player) )
+		return true;
+
+	return checkUserPermissionIndex(target, player, idx);
+}
+
+/****************************************************************
+ * @brief	updates a users permission list upon being added
+ * 		to a group [PRIVATE] (should not be called directly)
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ * @param	string group_name
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean addToUserTally(obj_id target, obj_id player, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "addToUserTally: target passed as null");
+		return false;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "addToUserTally: player passed as null");
+		return false;
+	}
+
+	if ( (group_name == null) || (group_name.equals("")) )
+	{
+		debugServerConsoleMsg(target, "addToUserTally: group_name passed as null");
+		return false;
+	}
+
+	int[] groupPermissions = new int[PERMISSIONS_ARRAY_SIZE];
+	groupPermissions = getGroupPermissions( target, group_name );
+
+	int[] userPermissions = new int[PERMISSIONS_ARRAY_SIZE];
+	if ( hasObjVar(target, "permissions_list.users." + toString(player)) )
+	{
+		userPermissions = getUserPermissions( target, player );
+	}
+
+	if (( groupPermissions != null ) && ( userPermissions != null ))
+	{
+		for (int i = 0; i < PERMISSIONS_ARRAY_SIZE; i++)
+		{
+			userPermissions[i] |= groupPermissions[i];
+		}
+
+		if(userPermissions.length > 0) {
+
+			setObjVar( target, "permissions_list.users." + toString(player), userPermissions);
+			return true;
+
+		} else {
+
+			return false;
+		}
+	}
+
+	debugServerConsoleMsg(target, "addToUserTally: at least one set of permissions was returned as null");
+	return false;
+}
+
+
+/****************************************************************
+ * @brief	completely recalculates a users running
+ *		permissions tally [PRIVATE] (should not be called directly)
+ *
+ * @param	obj_id	target
+ * @param	obj_id	player
+ *
+ * @return    	boolean - true = success, false = error
+ *****************************************************************/
+boolean updateUserTally(obj_id target, obj_id player)
+{
+	debugServerConsoleMsg(target, "updateUserTally: entering updateUserTally");
+
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "updateUserTally: target passed as null");
+		return false;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "updateUserTally: player passed as null");
+		return false;
+	}
+
+	int[] userPermissions = new int[PERMISSIONS_ARRAY_SIZE];
+
+	if ( hasObjVar(target, "permissions_list.groups" ))
+	{
+		obj_var_list groupsList = getObjVarList(target, "permissions_list.groups");
+
+		int numGroups = 0;
+		if (groupsList != null)
+			numGroups = groupsList.getNumItems();
+
+		if ( numGroups == 0 )
+		{
+			debugServerConsoleMsg(target, "updateUserTally: no groups exist - deleting user!");
+			removeObjVar(target, "permissions_list.users");
+			setObjVarList(target, "permissions_list.users");
+			return true;
+		}
+
+		int inGroup = 0;
+
+		for (int i = 0; i < numGroups; i++)
+		{
+			obj_var tmpGroup = groupsList.getObjVar(i);
+			if ( tmpGroup == null )
+			{
+				debugServerConsoleMsg(target, "updateUserTally: was returned a null obj_var below groups!");
+			}
+
+			if (tmpGroup instanceof script.obj_var_list)
+			{
+				obj_var_list lstGroup = (obj_var_list)tmpGroup;
+				if ( lstGroup.hasObjVar( "group_members." + toString(player) ))
+				{
+					inGroup++;
+					obj_var groupPermissions = lstGroup.getObjVar("permissions");
+					if ( groupPermissions == null )
+					{
+						debugServerConsoleMsg(target, "updateUserTally: a permissions array was returned as null");
+						return false;
+					}
+
+					int[] permissionsArray = new int[PERMISSIONS_ARRAY_SIZE];
+
+					// BELOW COMMENTED OUT FOR DEBUG
+
+					//debugServerConsoleMsg(target, "updateUserTally: attempting to extract group permissions array");
+					//debugServerConsoleMsg(target, "updateUserTally: data type = " + groupPermissions.getData().getClass().getName());
+					permissionsArray = groupPermissions.getIntArrayData();
+
+					// FOLLOWING CALL FOR DEBUG ONLY!
+
+					//permissionsArray = getGroupPermissions(target, lstGroup.getName());
+
+					for (int n = 0; n < PERMISSIONS_ARRAY_SIZE; n++)
+					{
+						userPermissions[n] |= permissionsArray[n];
+						debugServerConsoleMsg(target, "updateUserTally: updated array[" + n + "] for group " + lstGroup.getName());
+					}
+				}
+			}
+		}
+
+		if ( inGroup > 0 && userPermissions.length > 0 )
+		{
+			setObjVar(target, "permissions_list.users." + toString(player), userPermissions);
+		}
+		else
+		{
+			removeObjVar(target, "permissions_list.users." + toString(player));
+		}
+
+		return true;
+	}
+
+	debugServerConsoleMsg(target, "updateUserTally: the target object lacks obj_var permissions_list.groups");
+	return false;
+}
+
+/****************************************************************
+ * @brief	checks the banned list for a playerID
+ *
+ * @param	obj_id	target
+ * @param	obj_id 	player
+ *
+ * @return    	boolean - true = user banned, false = user not banned/error
+ *****************************************************************/
+boolean isBanned(obj_id target, obj_id player)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "checkBannedList: target passed as null");
+		return false;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		debugServerConsoleMsg(target, "checkBannedList: player passed as null");
+		return false;
+	}
+
+	return hasObjVar(target, "permissions_list.banned." + toString(player));
+}
+
+/****************************************************************
+ * @brief	lists the member names of a group
+ *
+ * @param	obj_id	target
+ * @param	string	group_name
+ *
+ * @return    	string[] of member names; null on error
+ *****************************************************************/
+string[] listGroupMemberNames(obj_id target, string group_name)
+{
+  if ( !isIdValid(target) )
+  {
+   debugServerConsoleMsg(target, "listGroupMemberNames: target passed as null");
+   return null;
+  }
+
+  if ( group_name != null )
+   {
+    if ( hasObjVar(target, "permissions_list.groups." + group_name + ".group_members") )
+    {
+     obj_var_list groupMembers = getObjVarList(target, "permissions_list.groups." + group_name + ".group_members");
+     if (groupMembers == null)
+     	return null;
+
+     int numMembers = groupMembers.getNumItems();
+
+     string[] memberNames = new string[numMembers];
+     for (int i = 0; i < numMembers; i++)
+     {
+      memberNames[i] = groupMembers.getObjVar(i).getStringData();
+     }
+     return memberNames;
+    }
+    debugServerConsoleMsg(target, "listGroupMemberNames: members list for specified group does not exist");
+    return null;
+   }
+ debugServerConsoleMsg(target, "listGroupMemberNames: function was passed a null group_name pointer");
+ return null;
+}
+
+
+/****************************************************************
+ * @brief	lists the member ids of a group
+ *
+ * @param	obj_id	target
+ * @param	string	group_name
+ *
+ * @return    	string[] of member ids; null on error
+ *****************************************************************/
+string[] listGroupMemberIds(obj_id target, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "listGroupMemberIds: target passed as null");
+		return null;
+	}
+
+	if ( group_name != null )
+	{
+		if ( hasObjVar(target, "permissions_list.groups." + group_name + ".group_members") )
+		{
+			obj_var_list groupMembers = getObjVarList(target, "permissions_list.groups." + group_name + ".group_members");
+			if ( groupMembers == null )
+			{
+				return null;
+			}
+
+			int numMembers = groupMembers.getNumItems();
+			if ( numMembers == 0 )
+			{
+				debugServerConsoleMsg(target, "obj_id " + toString(target) + " Specified group list is empty!");
+				return null;
+			}
+
+			string[] memberIds = new string[numMembers];
+			for (int i = 0; i < numMembers; i++)
+			{
+				memberIds[i] = groupMembers.getObjVar(i).getName();
+			}
+
+			return memberIds;
+		}
+
+		debugServerConsoleMsg(target, "listGroupMemberIds: members list for specified group does not exist");
+		return null;
+	}
+
+	debugServerConsoleMsg(target, "listGroupMemberIds: function was passed a null group_name pointer");
+	return null;
+}
+
+
+/****************************************************************
+ * @brief	lists the member ids of a group
+ *
+ * @param	obj_id	target
+ * @param	string	group_name
+ *
+ * @return    	string[] of member ids; null on error
+ *****************************************************************/
+string[] listBannedIds(obj_id target)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "listBannedIds: target passed as null");
+		return null;
+	}
+
+	if ( hasObjVar(target, "permissions_list.banned") )
+	{
+		obj_var_list bannedMembers = getObjVarList(target, "permissions_list.banned");
+		if ( bannedMembers == null )
+		{
+			return null;
+		}
+
+		int numMembers = bannedMembers.getNumItems();
+		if ( numMembers == 0 )
+		{
+			debugServerConsoleMsg(target, "obj_id " + toString(target) + " Banned list is empty!");
+			return null;
+		}
+
+		string[] memberIds = new string[numMembers];
+		for (int i = 0; i < numMembers; i++)
+		{
+			memberIds[i] = bannedMembers.getObjVar(i).getName();
+		}
+
+		return memberIds;
+	}
+
+	debugServerConsoleMsg(target, "listBannedIds: object does not have a banned list");
+	return null;
+}
+
+/****************************************************************
+ * @brief	counts the members of a group
+ *
+ * @param	obj_id	target
+ * @param	string	group_name
+ *
+ * @return    	int
+ *****************************************************************/
+int groupMemberCount(obj_id target, string group_name)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "groupMemberCount: target passed as null");
+		return -1;
+	}
+
+	if ( (group_name != null) && (!group_name.equals("")) )
+	{
+		string gPath = "permissions_list.groups." + group_name;
+		if ( hasObjVar(target, gPath) )
+		{
+			 obj_var_list groupMembers = getObjVarList(target, gPath + ".group_members");
+			 if ( groupMembers != null )
+			 {
+			 	return groupMembers.getNumItems();
+			 }
+			 else
+			 {
+				return 0;
+			 }
+		}
+
+		debugServerConsoleMsg(target, "groupMemberCount: objvar list for specified group (" + group_name + ") does not exist");
+		return -1;
+	}
+
+	debugServerConsoleMsg(target, "groupMemberCount: function was passed a null group_name pointer");
+	return -1;
+}
+
+/****************************************************************
+ * @brief	initializes a permissions structure on
+ *              the passed object
+ *
+ * @param	obj_id	target
+ *
+ * @return    	boolean
+ *****************************************************************/
+boolean initializePermissions(obj_id target)
+{
+	if ( !isIdValid(target) )
+	{
+		debugServerConsoleMsg(target, "initializePermissions: target passed as null");
+		return false;
+	}
+
+	string basePath = "permissions_list.groups.guest.";
+	setObjVarList(target, basePath + "group_members");
+
+	int[] permissionsArray = new int[PERMISSIONS_ARRAY_SIZE];
+	setObjVar(target, basePath + "permissions", permissionsArray);			// Suppress linting - We know this array will
+																			// always be at least two elements long
+	setObjVarList(target, "permissions_list.users");
+	setObjVarList(target, "permissions_list.banned");
+
+	return true;
+}

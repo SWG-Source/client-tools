@@ -1,0 +1,407 @@
+
+/***** INCLUDES ********************************************************/
+
+include library.hq;
+include library.xp;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.ai_lib;
+include library.stealth;
+
+inherits faction_perk.hq.objective_object;
+
+/***** CONSTANTS *******************************************************/
+
+const string_id MNU_DNA					= new string_id("hq", "mnu_dna");
+const string_id NO_TAMPER				= new string_id("faction/faction_hq/faction_hq_response", "no_tamper");
+const string_id FAIL_SAFE_ALREADY_OVERRIDDEN = new string_id("faction/faction_hq/faction_hq_response", "fail_safe_already_overridden");
+const string_id OTHER_OBJECTIVES		= new string_id("faction/faction_hq/faction_hq_response", "other_objectives");
+const string_id ONLY_A_BIO_ENGINEER		= new string_id("faction/faction_hq/faction_hq_response", "only_a_bio_engineer");
+const string_id NEW_DNA_SAMPLE			= new string_id("faction/faction_hq/faction_hq_response", "new_dna_sample");
+const string_id NO_SEQUENCE_IN_COMBAT	= new string_id("faction/faction_hq/faction_hq_response", "no_sequence_in_combat");
+const string_id NOT_SAME_ROOM			= new string_id("faction/faction_hq/faction_hq_response", "not_same_room");
+const string_id OVERRIDE_TOO_FAR		= new string_id("faction/faction_hq/faction_hq_response", "override_too_far");
+const string_id STOP_SEQUENCING_OVERRIDDEN = new string_id("faction/faction_hq/faction_hq_response", "stop_sequencing_overridden");
+const string_id SEQUENCING_COMPLETE_OVERRIDE = new string_id("faction/faction_hq/faction_hq_response", "sequencing_complete_override");
+const string_id DNA_MATCHED 			= new string_id("faction/faction_hq/faction_hq_response", "dna_matched");
+const string_id DNA_MATCHED_PLURAL		= new string_id("faction/faction_hq/faction_hq_response", "dna_matched_plural");
+
+const string_id SUI_SEQUENCE_TITLE		= new string_id("faction/faction_hq/faction_hq_response", "sui_sequence_title");
+const string_id SUI_SEQUENCE_TEXT		= new string_id("faction/faction_hq/faction_hq_response", "sui_sequence_text");
+
+const string_id SID_NO_STEALTH				= new string_id("hq", "no_stealth");
+
+
+const int NUM_SEQUENCE					= 23;
+const string VAR_DNA					= "hq.objective.dna";
+
+const string[] NUCLEOTIDES = {
+								"A",
+								"G",
+								"C",
+								"T"
+								};
+
+const string[] PAIRS		= {
+								"AT",
+								"TA",
+								"GC",
+								"CG"
+								};
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnAttach()
+{
+	constructDNAStrand(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int intState = getState(player, STATE_FEIGN_DEATH);
+
+	if (isDead(player) || isIncapacitated(player) || intState > 0)
+		return SCRIPT_CONTINUE;
+
+	if (stealth.hasInvisibleBuff(player))
+	{
+		sendSystemMessage(player, SID_NO_STEALTH);
+		return SCRIPT_CONTINUE;
+	}
+		
+
+	int mnu = mi.addRootMenu(menu_info_types.ITEM_USE, MNU_DNA);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (stealth.hasInvisibleBuff(player))
+	{
+		sendSystemMessage(player, SID_NO_STEALTH);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id structure = getTopMostContainer(self);
+	if ( !isIdValid(structure) )
+		return SCRIPT_CONTINUE;
+
+	int sFac = pvpGetAlignedFaction(structure);
+	int pFac = pvpGetAlignedFaction(player);
+	if ( pvpGetType( player ) == PVPTYPE_NEUTRAL )
+		pFac = 0;
+
+	if ( !pvpAreFactionsOpposed(sFac, pFac) )
+	{
+		sendSystemMessage(player, NO_TAMPER);
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( hasObjVar(self, hq.VAR_IS_DISABLED) )
+	{
+		sendSystemMessage(player, FAIL_SAFE_ALREADY_OVERRIDDEN);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id nextObjective = hq.getNextObjective(structure);
+	if ( nextObjective != self )
+	{
+		obj_id priorObjective = hq.getPriorObjective(structure, self);
+		if ( isIdValid(priorObjective) )
+		{
+			prose_package ppDisableOther = prose.getPackage(hq.PROSE_DISABLE_OTHER, priorObjective, self);
+			sendSystemMessageProse(player, ppDisableOther);
+		}
+		else
+		{
+			sendSystemMessage(player, OTHER_OBJECTIVES);
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( item == menu_info_types.ITEM_USE )
+	{
+		if ( !hasSkill(player, "class_medic_phase1_novice") )
+		{
+			sendSystemMessage(player, ONLY_A_BIO_ENGINEER);
+			return SCRIPT_CONTINUE;
+		}
+
+		startDNASequencing(self, player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+/***** FUNCTIONS *******************************************************/
+string[] constructDNAStrand(obj_id self)
+{	
+	string[] dna = new string[NUM_SEQUENCE];
+	for ( int i = 0; i < dna.length; i++ )
+	{
+		string nucleotide = NUCLEOTIDES[rand(0,NUCLEOTIDES.length-1)];
+		dna[i] = nucleotide;		
+	}
+
+	setObjVar(self, VAR_DNA, dna);
+	return dna;
+}
+
+void startDNASequencing(obj_id self, obj_id player)
+{
+	string scriptvar = "dna." + player;
+	string scriptvar_pid = scriptvar + ".pid";
+	string scriptvar_locks = scriptvar + ".locks";
+
+	if ( utils.hasScriptVar(self, scriptvar_pid) )
+	{
+		int oldpid = utils.getIntScriptVar(self, scriptvar_pid);
+		sui.closeSUI(player, oldpid);
+
+		utils.removeScriptVar(self, scriptvar_pid);
+	}
+
+	if ( !utils.hasScriptVar(self, scriptvar_locks) )
+	{
+		int[] locks = new int[NUM_SEQUENCE];
+		for ( int i = 0; i < locks.length; i++ )
+			locks[i] = 0;
+
+		utils.setScriptVar(self, scriptvar_locks, locks);
+	}
+
+	sendSystemMessage(player, NEW_DNA_SAMPLE);
+
+	dictionary d = new dictionary();
+	d.put("player", player);
+	messageTo(self, "handleSequenceDelay", d, 3f, false);
+}
+
+void doSequencing(obj_id self, obj_id player)
+{
+	if ( ai_lib.isInCombat(player) )
+	{
+		sendSystemMessage(player, NO_SEQUENCE_IN_COMBAT);
+		return;
+	}
+
+	string scriptvar = "dna." + player;
+	string scriptvar_pid = scriptvar + ".pid";
+	string scriptvar_locks = scriptvar + ".locks";
+	string scriptvar_chain = scriptvar + ".chain";
+
+	location here = getLocation(self);
+	location there = getLocation(player);
+
+	if ( here.cell != there.cell )
+	{
+		sendSystemMessage(player, NOT_SAME_ROOM);
+		return;
+	}
+
+	if ( getDistance(here, there) > 15f )
+	{
+		sendSystemMessage(player, OVERRIDE_TOO_FAR);
+		return;
+	}
+
+	string[] dna = getStringArrayObjVar(self, VAR_DNA);
+	if ( dna == null || dna.length == 0 )
+	{
+		dna = constructDNAStrand(self);
+	}
+
+	int[] locks = utils.getIntArrayScriptVar(self, scriptvar_locks);
+	if ( locks == null || locks.length == 0 )
+		return;
+
+	int numLocks = 0;
+	string dnaString = "";
+	resizeable string[] entries = new string[0];
+	for ( int i = 0; i < dna.length; i++ )
+	{
+		if ( locks[i] == 0 )
+		{
+			entries = utils.addElement(entries, dna[i]);
+			dnaString = dnaString + dna[i];
+		}
+		else
+		{
+			numLocks++;
+
+			for ( int n = 0; n < PAIRS.length; n++ )
+			{
+				if ( PAIRS[n].startsWith(dna[i]) )
+				{
+					entries = utils.addElement(entries, "\\#00FF00"+PAIRS[n]+" \\#.");
+					dnaString = dnaString + "\\#00FF00"+dna[i]+"\\#.";
+					break;
+				}
+			}
+		}
+	}
+
+	string chain = utils.getStringScriptVar(self, scriptvar_chain);
+	utils.removeScriptVar(self, scriptvar_chain);
+	if ( chain == null || chain.equals("") )
+	{
+		if ( chain == null )
+			chain = "";
+		
+		int chainlength = 8;
+
+		for ( int i = 0; i < chainlength; i++ )
+			chain += NUCLEOTIDES[rand(0,NUCLEOTIDES.length-1)];
+	}
+
+	prose_package pp = prose.getPackage(SUI_SEQUENCE_TEXT, chain, dnaString, numLocks);
+	string prompt = " \0" + packOutOfBandProsePackage(null, pp);
+
+	int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, utils.packStringId(SUI_SEQUENCE_TITLE), entries, "handleSequencing");
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(self, scriptvar_pid, pid);
+		utils.setScriptVar(self, scriptvar_chain, chain);
+	}
+}
+
+messageHandler handleSequencing()
+{
+	//LOG("hqObjective", "** handleSequencing: now = " + getGameTime() + " ***");
+	obj_id player = sui.getPlayerId(params);
+
+	if (stealth.hasInvisibleBuff(player))
+	{
+		sendSystemMessage(player, SID_NO_STEALTH);
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !isIdValid(player) )
+	{
+		//LOG("hqObjective", "invalid player!");
+		return SCRIPT_CONTINUE;
+	}
+
+	string scriptvar = "dna." + player;
+	string scriptvar_pid = scriptvar + ".pid";
+	string scriptvar_locks = scriptvar + ".locks";
+	string scriptvar_chain = scriptvar + ".chain";
+
+	utils.removeScriptVar(self, scriptvar_pid);
+
+	if ( hasObjVar(self, hq.VAR_IS_DISABLED) )
+	{
+		sendSystemMessage(player, STOP_SEQUENCING_OVERRIDDEN);
+		return SCRIPT_CONTINUE;
+	}
+
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		//LOG("hqObjective", "cancel was pressed...");
+		return SCRIPT_CONTINUE;
+	}
+
+	int newLocks = 0;
+
+	int[] locks = utils.getIntArrayScriptVar(self, scriptvar_locks);
+	if ( locks == null || locks.length == 0 )
+	{
+		//LOG("hqObjective", "locks returned invalid!");
+		return SCRIPT_CONTINUE;
+	}
+
+	int selrow = sui.getListboxSelectedRow(params);
+	if ( selrow > -1 )
+	{
+		string[] dna = getStringArrayObjVar(self, VAR_DNA);
+		if ( dna == null || dna.length == 0 )
+		{
+			constructDNAStrand(self);
+			//LOG("hqObjective", "reconstructing valid DNA strand...");
+			return SCRIPT_CONTINUE;
+		}
+
+		string chain = utils.getStringScriptVar(self, scriptvar_chain);
+		if ( chain == null || chain.equals("") )
+		{
+			//LOG("hqObjective", "reconstructing valid DNA strand...");
+			return SCRIPT_CONTINUE;
+		}
+
+		//LOG("hqObjective", "chain = " + chain);
+		for ( int i = 0; i < chain.length(); i++ )
+		{
+			int idx = selrow + i;
+			//LOG("hqObjective", "idx = " + idx);
+			if ( idx < dna.length )
+			{
+				string nucleotide = chain.substring(i,i+1);
+				//LOG("hqObjective", "chain[" + i +"] = " + nucleotide);
+
+				string pair = dna[idx] + nucleotide;
+				//LOG("hqObjective", "dna[idx] = " + dna[idx]);
+				//LOG("hqObjective", "pair = " + pair);
+				
+				
+				if ( locks[idx] == 0 && utils.getElementPositionInArray(PAIRS, pair) > -1 )
+				{
+					//LOG("hqObjective", "*LOCK: " + pair + " @ idx = " + idx);
+					locks[idx] = 1;
+					newLocks++;
+				}
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		utils.setScriptVar(self, scriptvar_locks, locks);
+	}
+	
+	// "You match " + newLocks + " new sets of nucleotides."
+	prose_package pp = prose.getPackage(DNA_MATCHED_PLURAL, newLocks);
+	if ( newLocks == 1 )
+	{
+		pp = prose.getPackage(DNA_MATCHED, newLocks);
+	}
+	sendSystemMessageProse(player, pp);
+
+	int totalLocks = 0;
+	for ( int i = 0; i < locks.length; i++ )
+	{
+		if ( locks[i] != 0 )
+			totalLocks++;
+	}
+
+	if ( totalLocks == locks.length )
+	{
+		string playerName = getName(player);
+		CustomerServiceLog( "faction_hq", playerName + "(" + player + "), " + "disabled Override Terminal at " + getGameTime() + ".");
+		sendSystemMessage(player, SEQUENCING_COMPLETE_OVERRIDE);
+		hq.disableObjective(self);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	utils.removeScriptVar(self, scriptvar_chain);
+
+	sendSystemMessage(player, NEW_DNA_SAMPLE);
+
+	dictionary d = new dictionary();
+	d.put("player", player);
+	messageTo(self, "handleSequenceDelay", d, 3f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleSequenceDelay()
+{
+	obj_id player = params.getObjId("player");
+	if ( isIdValid(player) )
+		doSequencing(self, player);
+
+	return SCRIPT_CONTINUE;
+}

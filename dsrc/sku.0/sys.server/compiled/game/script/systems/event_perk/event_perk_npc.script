@@ -1,0 +1,263 @@
+include library.player_structure;
+include library.chat;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.ai_lib;
+
+const string_id SID_AREABARKS_ENABLED				= new string_id("event_perk_npc_actor", "areabarks_enabled");
+const string_id SID_AREABARKS_DISABLED				= new string_id("event_perk_npc_actor", "areabarks_disabled");
+const string_id SID_OBSCENE							= new string_id("event_perk_npc_actor", "obscene");
+const string_id SID_ACTOR_CONTROL					= new string_id("event_perk_npc_actor", "actor_control");
+const string_id SID_CUSTOMIZE_VENDOR				= new string_id("event_perk_npc_actor", "customize_actor");
+const string_id SID_VENDOR_AREABARKS_ON				= new string_id("event_perk_npc_actor", "actor_areabarks_on");
+const string_id SID_VENDOR_AREABARKS_OFF			= new string_id("event_perk_npc_actor", "actor_areabarks_off");
+
+const string	TBL_VENDOR_ANIMS					= "datatables/event_perk/npc_actor_anims.iff";
+const string	TBL_VENDOR_MOODS					= "datatables/event_perk/npc_actor_moods.iff";
+
+const string    ALERT_VOLUME_NAME 					= "npcActorTriggerVolume";
+
+trigger OnAttach()
+{
+	setInvulnerable( self, true );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest( obj_id player, menu_info mi )
+{
+	//for easy testing use uncomment this line
+	//setObjVar(self, "event_perk.owner" ,player);
+	obj_id ownerId = getObjIdObjVar( self, "event_perk.owner" );
+	if ( player == ownerId )
+	{
+
+		int menu = mi.addRootMenu( menu_info_types.SERVER_MENU1, SID_ACTOR_CONTROL );
+
+		if ( !hasObjVar( self, "event_perk.areaBarks" ) )
+			mi.addSubMenu( menu, menu_info_types.SERVER_MENU4, SID_VENDOR_AREABARKS_ON );
+		else
+			mi.addSubMenu( menu, menu_info_types.SERVER_MENU4, SID_VENDOR_AREABARKS_OFF );
+	
+		mi.addSubMenu( menu, menu_info_types.SERVER_MENU8, SID_CUSTOMIZE_VENDOR );
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect( obj_id player, int item )
+{
+	obj_id ownerId = getObjIdObjVar( self, "event_perk.owner" );
+
+	if ( player != ownerId ) // Only owner manipulate
+		return SCRIPT_CONTINUE;
+
+	if ( item == menu_info_types.SERVER_MENU4 )
+	{
+
+		// Toggle area barks.
+		if ( hasObjVar( self, "event_perk.areaBarks" ) )
+		{
+			// Turn off area barks.
+			removeObjVar( self, "event_perk.areaBarks" );
+//			removeTriggerVolume( ALERT_VOLUME_NAME );
+			clearCondition(self, CONDITION_CONVERSABLE);
+
+			// Send the player a message.
+			sendSystemMessage( player, SID_AREABARKS_DISABLED );
+		}
+		else
+		{
+
+			// Query about anim type.
+			string[] rawAnims = dataTableGetStringColumn( TBL_VENDOR_ANIMS, 0 );
+			string[] anims = new string[rawAnims.length];
+			for ( int i=0; i<rawAnims.length; i++ )
+			{
+				anims[i] = "@event_perk_npc_actor:"+rawAnims[i];
+			}
+			sui.listbox( self, player, "@event_perk_npc_actor:actor_anim_d", sui.OK_CANCEL, "@event_perk_npc_actor:actor_anim_t", anims, "handleVendorAnimSelect", true);
+		}
+
+		// Refresh menu.
+		sendDirtyObjectMenuNotification( self );
+	}
+	else if (item == menu_info_types.SERVER_MENU8)
+	{
+		string templateName = getTemplateName( self );
+		if ( templateName.indexOf( "ithorian" ) > 0 )
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "event_perk_npc_actor", "wear_no_ithorian" ), null );
+			doAnimationAction( self, "wave_on_dismissing" );
+		}
+		else
+		{
+			// Notify the player on how to customize.
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_CHEERFUL, null, new string_id( "event_perk_npc_actor", "wear_how" ), null );
+			doAnimationAction( self, "slow_down");
+		}
+
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnGiveItem( obj_id item, obj_id player )
+{
+	// Only accept items from our owner.
+	obj_id ownerId = getObjIdObjVar( self, "event_perk.owner" );
+	if ( player != ownerId )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Can't wear anything if we are ithorian.
+
+	string templateName = getTemplateName( self );
+	string itemName = getTemplateName( item );
+
+	if(itemName.startsWith("object/tangible/wearables/robe") )
+	{
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_CHEERFUL, null, new string_id( "event_perk_npc_actor", "wear_no" ), null );
+		doAnimationAction( self, "slow_down");
+		return SCRIPT_CONTINUE;	
+	}
+	else if ( templateName.indexOf( "wookiee" ) == -1 && itemName.indexOf( "wke_" ) > 0 )
+	{
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "event_perk_npc_actor", "wear_no" ), null );
+		doAnimationAction( self, "wave_on_dismissing" );
+		return SCRIPT_CONTINUE;
+	}
+	else if ( templateName.indexOf( "ithorian" ) > 0 )
+	{
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "event_perk_npc_actor", "wear_no" ), null );
+		doAnimationAction( self, "wave_on_dismissing" );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Try to equip the item.
+	if ( equipOverride( item, self ) )
+	{
+		// We got it.
+		if ( isGameObjectTypeOf( item, GOT_weapon ) )
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_HAPPY, null, new string_id( "event_perk_npc_actor", "wear_yes_weapon" ), null );
+		else
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_HAPPY, null, new string_id( "event_perk_npc_actor", "wear_yes" ), null );
+		doAnimationAction( self, "pose_proudly");
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		// Can't wear that.
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_CHEERFUL, null, new string_id( "event_perk_npc_actor", "wear_no" ), null );
+		doAnimationAction( self, "slow_down");
+		return SCRIPT_CONTINUE;
+	}
+}
+
+
+messageHandler handleVendorAnimSelect()
+{
+	// Parse params.
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow( params );
+	if ( idx < 0 ) idx = 0;
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Store the selected anim.
+	string[] rawAnims = dataTableGetStringColumn( TBL_VENDOR_ANIMS, 0 );
+	setObjVar( self, "event_perk.barkAnim", rawAnims[idx] );
+
+	// Query about mood type.
+	string[] rawMoods = dataTableGetStringColumn( TBL_VENDOR_MOODS, 0 );
+	string[] moods = new string[rawMoods.length];
+	for ( int i=0; i<rawMoods.length; i++ )
+	{
+		moods[i] = "@event_perk_npc_actor:"+rawMoods[i];
+	}
+	sui.listbox( self, player, "@event_perk_npc_actor:actor_moods_d", sui.OK_CANCEL, "@event_perk_npc_actor:actor_moods_t", moods, "handleVendorMoodSelect", true );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleVendorMoodSelect()
+{
+	// Parse params.
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow( params );
+	if ( idx < 0 ) idx = 0;
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Store the selected mood.
+	string[] rawMoods = dataTableGetStringColumn( TBL_VENDOR_MOODS, 0 );
+	setObjVar( self, "event_perk.barkMood", rawMoods[idx] );
+
+	//commented out due to player abuse, this blocks the actor from talking
+	sui.inputbox( self, player, "@event_perk_npc_actor:cust_d", sui.OK_CANCEL, "@event_perk_npc_actor:cust_t", sui.INPUT_NORMAL, null, "handleSetCustomBark", null );
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleSetCustomBark()
+{
+	// Parse params.
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	string customBark = sui.getInputBoxText( params );
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// No zero length or obscene barks.
+	if ( (customBark == "") || !isAppropriateText(customBark) )
+	{
+		// Player wants to customize.
+		sendSystemMessage( player, SID_OBSCENE );
+		sui.inputbox( self, player, "@event_perk_npc_actor:cust_d", sui.OK_CANCEL, "@event_perk_npc_actor:cust_t", sui.INPUT_NORMAL, null, "handleSetCustomBark", null );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Chop it and store it.
+	if ( customBark.length() > 140 )
+	{
+		string playerName = getName(player);
+		customBark = customBark.substring( 0, 139 );
+		CustomerServiceLog("EventPerk", "(NPC Actor) Player [" + playerName + "] OID [" +player+"] set a custom bark with the text [" + customBark +"].");
+	}
+	setObjVar( self, "event_perk.customBark", customBark );
+
+	// Turn on area barks.
+	setObjVar( self, "event_perk.areaBarks", 1 );
+//	createTriggerVolume( ALERT_VOLUME_NAME, 10, true );
+	setCondition(self, CONDITION_CONVERSABLE);
+
+	// Send the player a message.
+	sendSystemMessage( player, SID_AREABARKS_ENABLED );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnStartNpcConversation(obj_id speaker)
+{
+	string anim = getStringObjVar( self, "event_perk.barkAnim" );
+	string mood = getStringObjVar( self, "event_perk.barkMood" );
+	string strcat = getStringObjVar( self, "event_perk.barkStrCat" );
+	string custbark = getStringObjVar( self, "event_perk.customBark" );
+	
+	//commented out due to player abuse, this blocks the actor from talking
+	chat._chat(self, speaker, chat.CHAT_SAY, mood, chat.ChatFlag_targetOnly, custbark, null, null);
+	doAnimationAction(self, anim);
+
+	return SCRIPT_CONTINUE;
+}

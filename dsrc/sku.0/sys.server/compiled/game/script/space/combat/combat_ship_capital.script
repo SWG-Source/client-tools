@@ -1,0 +1,652 @@
+include library.space_combat;
+include library.space_crafting;
+include library.pclib;
+include library.utils;
+include library.space_utils;
+include library.space_content;
+include library.ship_ai;
+
+
+inherits space.combat.combat_space_base;
+
+
+const string_id SID_TARGET_DISABLED = new string_id( "space/quest", "target_disabled2" );
+
+const int MAXIMUM_DAMAGE_PHASES = 9;
+
+trigger OnAttach()
+{
+	detachScript(self, "space.combat.combat_ship");
+
+
+	int[] intSlots = getShipChassisSlots(self);
+	for(int intI = 0; intI<intSlots[intI]; intI++)
+	{
+		setShipComponentEfficiencyGeneral(self,intSlots[intI], 1.0f);
+		setShipComponentEfficiencyEnergy(self, intSlots[intI], 1.0f);
+	}
+// set everything targetable that we're going to need, and spawn our waves and stuff
+	string strCapitalShipType = getStringObjVar(self, "strCapitalShipType");
+	if((strCapitalShipType==null)||(strCapitalShipType==""))
+	{
+		debugSpeakMsg(self, "BAD CAPITAL SHIP DEFINED!");
+
+
+	}
+
+	string strFileName = "datatables/space_combat/capital_ships/"+strCapitalShipType+".iff";
+	if(dataTableOpen(strFileName))
+	{
+		setupCapitalShipComponents(self);
+
+	}
+	else
+	{
+		//LOG("space", "NO DATATABLE DEFINED FOR CAPITAL SHIP");
+
+	}
+
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnShipWasHit (obj_id objAttacker, int intWeaponIndex, boolean isMissile, int missileType, int intTargetedComponent, boolean fromPlayerAutoTurret, float hitLocationX_o, float hitLocationY_o, float hitLocationZ_o)
+{
+	if(hasObjVar(self, "intInvincible"))
+	{
+		return SCRIPT_CONTINUE; // cuz i'm INVINICBLELEL!
+	}
+	
+	
+	int intWeaponSlot = intWeaponIndex + ship_chassis_slot_type.SCST_weapon_0;
+
+	if(hasObjVar(self, "intInvincible"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(space_combat.hasDeathFlags(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+
+	obj_id objPilot = getPilotId(objAttacker);
+	
+	// Find out what side of the ship is being hit.
+	transform attackerTransform_w = getTransform_o2w(objAttacker);
+	transform defenderTransform_w = getTransform_o2w(self);
+	vector hitDirection_o = defenderTransform_w.rotateTranslate_p2l(attackerTransform_w.getPosition_p());
+	//-- Determine side, if the attacker position in defender space has a z < 0, the hit was in the back
+	int intSide = 0;
+	if (hitDirection_o.z < 0.f)
+		intSide = 1;
+
+
+	if(!pvpCanAttack(objAttacker, self))
+		return SCRIPT_CONTINUE;
+	pvpAttackPerformed(objAttacker, self);
+
+	
+	float fltDamage = space_combat.getShipWeaponDamage(objAttacker, self, intWeaponSlot, isMissile);
+	if(hasObjVar(self, "gunDamage") && !isMissile)
+	{
+		float damageMod = getFloatObjVar(self, "gunDamage");
+		fltDamage = fltDamage * damageMod;
+	}
+
+	if(hasObjVar(self, "missileDamage") && isMissile)
+	{
+		float damageMod = getFloatObjVar(self, "missileDamage");
+		fltDamage = fltDamage * damageMod;
+	}	
+
+	if(hasObjVar(self, "shieldActive"))
+	{
+		fltDamage = space_combat.doShieldDamage(objAttacker, self, intWeaponSlot, fltDamage, intSide);
+	}
+
+	if(fltDamage>0 && hasObjVar(self, "armorActive"))
+	{
+		fltDamage = space_combat.doArmorDamage(objAttacker, self, intWeaponSlot, fltDamage, intSide);
+	}
+
+	if(!isShipSlotTargetable(self, intTargetedComponent) && space_utils.isPlayerControlledShip(objAttacker))
+	{
+		ship_ai.unitAddDamageTaken(self, objAttacker, .05f);
+		return SCRIPT_CONTINUE;
+	}
+	
+	ship_ai.unitAddDamageTaken(self, objAttacker, fltDamage);
+
+	//-- If any damage is delivered to the ship, alert the player for damage effects.
+	if(fltDamage>0.f)
+	{
+		notifyShipDamage(self, objAttacker, fltDamage);
+	}
+	fltDamage = space_combat.doComponentDamage(objAttacker, self, intWeaponSlot, intTargetedComponent, fltDamage, intSide);
+	checkAndUpdateCapitalShipStatus(self, intTargetedComponent);
+
+	if(fltDamage>0)
+	{
+		// something happened. A component is destroyed, so we have to recheck the status.
+
+		boolean boolDisabled = false; // WE NEED TO REVALIDATE TEH SHIP
+		if(boolDisabled)
+		{
+
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	setCondition( self, CONDITION_ON );
+
+	setupCapitalShipComponents(self);
+
+
+	return SCRIPT_CONTINUE;
+}
+
+int[]  makeComponentsTargetable(obj_id objShip, string[] strComponents)
+{
+	int[] intDamagePhaseComponents = new int[strComponents.length];
+	for(int intI = 0; intI< strComponents.length; intI++)
+	{
+		int intChassisSlot = space_crafting.getComponentSlotInt(strComponents[intI]);
+		if(isShipSlotInstalled(objShip, intChassisSlot))
+		{
+			setShipSlotTargetable(objShip, intChassisSlot, true);
+			intDamagePhaseComponents[intI] = intChassisSlot;
+			//LOG("space", "Making "+strComponents[intI]+" targetable. Slot # is "+intChassisSlot);
+		}
+		else
+		{
+			//LOG("space", "BAD DATA IN DATATABLE FOR "+objShip+" no component of type "+space_crafting.getShipComponentStringType(intDamagePhaseComponents[intI])+" installed");
+		}
+
+	}
+	return intDamagePhaseComponents;
+}
+
+int[]  makeComponentsUntargetable(obj_id objShip, string[] strComponents)
+{
+	int[] intDamagePhaseComponents = new int[strComponents.length];
+	for(int intI = 0; intI< strComponents.length; intI++)
+	{
+		int intChassisSlot = space_crafting.getComponentSlotInt(strComponents[intI]);
+		if(isShipSlotInstalled(objShip, intChassisSlot))
+		{
+			setShipSlotTargetable(objShip, intChassisSlot, false);
+			intDamagePhaseComponents[intI] = intChassisSlot;
+		}
+		else
+		{
+			//LOG("space", "BAD DATA IN DATATABLE FOR "+objShip+" no component of type "+space_crafting.getShipComponentStringType(intDamagePhaseComponents[intI])+" installed");
+		}
+	}
+	return intDamagePhaseComponents;
+
+
+}
+void setupCapitalShipComponents(obj_id objShip)
+{
+
+	int[] intSlots = space_crafting.getShipInstalledSlots(objShip);
+	for(int intI = 0; intI< intSlots.length; intI++)
+	{
+		setShipSlotTargetable(objShip, intSlots[intI], false);
+	}
+
+	string strCapitalShipType = getStringObjVar(objShip, "strCapitalShipType");
+	if(strCapitalShipType==null)
+	{
+		//LOG("space", "NO CAPITAL SHIP TYPE SETUP FOR "+objShip);
+		return;
+	}
+	// setup all of our data.
+	int intDamagePhase = 1;
+	string strFileName = "datatables/space_combat/capital_ships/"+strCapitalShipType+".iff";
+	if(dataTableOpen(strFileName))
+	{
+
+		string[] strComponents = dataTableGetStringColumnNoDefaults(strFileName, "strComponents1");
+		//LOG("space", "Phase 1");
+		int[] intDamagePhaseComponents = makeComponentsTargetable(objShip, strComponents);
+
+		utils.setScriptVar(objShip, "intDamagePhaseComponents", intDamagePhaseComponents);
+		//LOG("space", "Phase 2");
+		strComponents = dataTableGetStringColumnNoDefaults(strFileName, "strAlwaysTargetable");
+		makeComponentsTargetable(objShip, strComponents);
+	}
+	else
+	{
+		//LOG("space", "type "+strCapitalShipType+" has no DATATABLE!");
+	}
+	utils.setScriptVar(objShip, "intDamagePhase", 1);
+
+}
+void checkAndUpdateCapitalShipStatus(obj_id objShip, int intSlot)
+{
+
+	// check the damage percentage
+	//LOG("space", "checking damage values");
+	dictionary dctParams = new dictionary();
+	float fltPercentage = space_crafting.getDamagePercentage(objShip, intSlot);
+
+
+	dctParams.put("fltPercentage", fltPercentage);
+	dctParams.put("intSlot", intSlot);
+
+	if(fltPercentage==0.0f)
+	{
+		space_utils.notifyObject(objShip, "componentDisabled", dctParams);
+	}
+	else if(fltPercentage<0.25f)
+	{
+		space_utils.notifyObject(objShip, "componentDamageUpdate", dctParams);
+
+	}
+	else if(fltPercentage<0.50f)
+	{
+		space_utils.notifyObject(objShip, "componentDamageUpdate", dctParams);
+
+	}
+	else if(fltPercentage<0.75f)
+	{
+		space_utils.notifyObject(objShip, "componentDamageUpdate", dctParams);
+	}
+}
+
+messageHandler componentDamageUpdate()
+{
+	// don't do anything here..
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler componentDisabled()
+{
+	int intSlot = params.getInt("intSlot");
+
+	// check if we're ready to go to phase 2!
+
+	// if criteria, do the below
+
+	//LOG("space", "Disabled IntSlot is "+intSlot);
+	setShipSlotTargetable(self, intSlot, false);
+	resizeable int[] intDamagePhaseComponents = utils.getResizeableIntArrayScriptVar(self, "intDamagePhaseComponents");
+	int intIndex = -1;
+
+	for(int intI = 0; intI< intDamagePhaseComponents.length; intI++)
+	{
+		if(intDamagePhaseComponents[intI]==intSlot)
+		{
+			intIndex = intI;
+			intI = intDamagePhaseComponents.length+1;
+		}
+	}
+	if(intIndex>-1)
+	{
+		// REMOVE IT!
+		utils.removeElementAt(intDamagePhaseComponents, intIndex);
+
+	}
+	if(intDamagePhaseComponents.length==0)
+	{
+		// next phase
+		//LOG("space", "Processing damage phase ");
+		processDamagePhase(self);
+	}
+	else
+	{
+		utils.setScriptVar(self, "intDamagePhaseComponents", intDamagePhaseComponents);
+
+	}
+	
+
+	// and something else
+	return SCRIPT_CONTINUE;
+
+}
+void processDamagePhase(obj_id objShip)
+{
+
+	//LOG("space", "Processing damage phase");
+	string strCapitalShipType = getStringObjVar(objShip, "strCapitalShipType");
+	if(strCapitalShipType==null)
+	{
+		//LOG("space", "NO CAPITAL SHIP TYPE SETUP FOR "+objShip);
+		return;
+	}
+	// setup all of our data.
+	string strFileName = "datatables/space_combat/capital_ships/"+strCapitalShipType+".iff";
+
+	// go to the next phase
+	int intDamagePhase = utils.getIntScriptVar(objShip, "intDamagePhase");
+	// check if on the next phase
+	string[] strOldComponents = dataTableGetStringColumnNoDefaults (strFileName, "strComponents"+intDamagePhase);
+
+	intDamagePhase = intDamagePhase +1;
+
+	string[] strNewComponents= dataTableGetStringColumnNoDefaults(strFileName, "strComponents"+intDamagePhase);
+
+	if((strNewComponents!=null)&&(strNewComponents.length>0))
+	{
+		//LOG("space", "updating damage phase to 2!");
+
+		int[] intDamagePhaseComponents = makeComponentsTargetable(objShip, strNewComponents);
+		makeComponentsUntargetable(objShip, strOldComponents);
+		utils.setScriptVar(objShip, "intDamagePhaseComponents", intDamagePhaseComponents);
+		utils.setScriptVar(objShip, "intDamagePhase", intDamagePhase);
+		return; // next phase complete;
+	}
+	else
+	{
+		// your head asplode
+		// the ship is finished and we do our endgame stuff
+		// we also handle boarding stuff and notification here
+
+		//LOG("space", "Object is exploding");
+		// who blew us up.
+		// was it another npc?
+		//LOG("space", "Target DESTROYED!");
+		space_combat.grantRewardsAndCreditForKills(objShip);
+		space_combat.targetDestroyed(objShip);
+		//LOG("space", "SHIP DESTROYED!");
+
+	}
+
+
+
+
+
+}
+
+trigger OnDestroy()
+{
+	debugSpeakMsg(self, "KABOOM");
+
+	// Notify everyone on our list that we died.
+	obj_id[] notifylist = getObjIdArrayObjVar( self, "destroynotify" );
+	// notifylist will pro bably be null since we do credit for kills differently
+
+
+	if ( notifylist != null )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "object", self );
+		for ( int i=0; i<notifylist.length; i++ )
+		{
+			space_utils.notifyObject( notifylist[i], "shipDestroyed", outparams );
+		}
+	}
+	// Done notifying.
+
+	obj_id objPilot = getPilotId(self);
+	if(!space_utils.isPlayerControlledShip(self))
+	{
+		if(hasObjVar(self, "objParent"))
+		{
+			space_content.notifySpawner(self);
+		}
+
+	}
+	else if (isIdValid(objPilot))
+	{
+		sendSystemMessageTestingOnly(objPilot, "Earth Shattering Kaboom goes here!");
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+messageHandler objectDestroyed()
+{
+	// am i an npc
+	//LOG("space", "Object Destoryed handler going off");
+	obj_id objPilot = getPilotId(self);
+	if(!space_utils.isPlayerControlledShip(self))
+	{
+		//LOG("space", "Invalid pilot id");
+		if(hasObjVar(self, "objParent"))
+		{
+			space_content.notifySpawner(self);
+		}
+		float fltIntensity = rand(0, 1.0f);
+		handleShipDestruction(self, fltIntensity);
+
+	}
+	else
+	{
+		//LOG("space", "Player ship nuked");
+		sendSystemMessageTestingOnly(objPilot, "Earth Shattering Kaboom goes here!");
+		return SCRIPT_CONTINUE;
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// targetDestroyed
+//
+// -> from combat_ship::OnShipWasHit
+// Called when an enemy ship was destroyed.
+//------------------------------------------------
+
+messageHandler targetDestroyed()
+{
+	// This is used for quests.  Forward the destroy message to the pilot.
+	obj_id objPilot = getPilotId( self );
+	if(!space_utils.isPlayerControlledShip(self))
+		return SCRIPT_CONTINUE;
+
+	space_utils.notifyObject( objPilot, "targetDestroyed", params );
+
+	float fltKills = getFloatObjVar(self, "fltKills");
+	float fltPercentage = params.getFloat("fltPercentage");
+
+	fltKills = fltKills + fltPercentage;
+	sendSystemMessageTestingOnly(objPilot, "TARGET KILLED :Percentage of kill was "+fltPercentage+" total kills this session is "+fltKills);
+	setObjVar(self, "fltKills", fltKills);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler targetDisabled()
+{
+	obj_id objDefender = params.getObjId( "objDefender" );
+	// ?
+
+	obj_id objPilot = getPilotId( self );
+	if ( !space_utils.isPlayerControlledShip(self) )
+		return SCRIPT_CONTINUE;
+
+	sendSystemMessage( objPilot, SID_TARGET_DISABLED );
+
+	space_utils.notifyObject( objPilot, "targetDisabled", params );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler megaDamage()
+{
+
+	obj_id objAttacker = params.getObjId("objShip");
+
+	float fltRemainingDamage = space_combat.doChassisDamage(objAttacker, self, 0, 45000000);
+	if(fltRemainingDamage>0)
+	{
+		//LOG("space", "Object is exploding");
+		obj_id objDefenderPilot= getPilotId(self);
+		if(!space_utils.isPlayerControlledShip(self))
+		{
+			space_combat.grantRewardsAndCreditForKills(self);
+			//LOG("space", "returned once");
+			space_combat.targetDestroyed(self);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//LOG("space", "defender pilot is "+getPilotId(self));
+			dictionary dctParams= new dictionary();
+			dctParams.put("objAttacker", objAttacker);
+			dctParams.put("objShip", self);
+			space_utils.notifyObject(objDefenderPilot, "playerShipDestroyed", dctParams);
+			setPosture(objDefenderPilot, POSTURE_INCAPACITATED);
+			pclib.coupDeGrace(objDefenderPilot, objDefenderPilot);
+			// YOU DIED!
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnTryToEquipDroidControlDeviceInShip (obj_id objPlayer, obj_id objControlDevice)
+{
+	// lemme equip the droid!
+	// make sure it's a droid
+	// make sure you own it
+	// make sure it's your ship
+	// etcetera
+	// check certs
+	if(!isIdValid(objControlDevice))
+	{
+		return SCRIPT_CONTINUE;
+
+	}
+	if(space_crafting.isUsableAstromechPet(objControlDevice))
+	{
+		if(space_crafting.isCertifiedForAstromech(objControlDevice, objPlayer))
+		{
+			if(isShipSlotInstalled(self, ship_chassis_slot_type.SCST_droid_interface))
+			{
+
+				if(!isShipComponentDisabled(self, ship_chassis_slot_type.SCST_droid_interface))
+				{
+					sendSystemMessageTestingOnly(self, "Equipping "+objControlDevice+" to "+self);
+					associateDroidControlDeviceWithShip(self, objControlDevice);
+				}
+				else
+				{
+					string_id strSpam = new string_id("space/space_interaction", "droid_interface_disabled");
+					sendSystemMessage(objPlayer, strSpam);
+					sendSystemMessageTestingOnly(objPlayer, "Equipping "+objControlDevice+" to "+self);
+					associateDroidControlDeviceWithShip(self, objControlDevice);
+				}
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				sendSystemMessageTestingOnly(objPlayer, "Equipping "+objControlDevice+" to "+self+", No interface");
+				associateDroidControlDeviceWithShip(self, objControlDevice);
+				string_id strSpam = new string_id("space/space_interaction", "no_droid_command_module");
+				sendSystemMessage(objPlayer, strSpam);
+				return SCRIPT_CONTINUE;
+			}
+		}
+		else
+		{
+			string_id strSpam = new string_id("space/space_interaction", "droid_not_certified");
+			sendSystemMessage(objPlayer, strSpam);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		string_id strSpam = new string_id("space/space_interaction", "not_an_astromech_for_space");
+		sendSystemMessage(objPlayer, strSpam);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnShipComponentUninstalling (obj_id uninstallerId, int intSlot, obj_id targetContainer)
+{
+	// make sure we remove the droid from the slot if they dump the droid controler
+	if(intSlot==ship_component_type.SCT_droid_interface)
+	{
+		obj_id objDroidControlDevice = getDroidControlDeviceForShip(self);
+		if(isIdValid(objDroidControlDevice))
+		{
+			removeDroidControlDeviceFromShip(self);
+		}
+
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+// Called to register objects to receive a message when this ship is destroyed.
+messageHandler notifyOnDestroy()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id obj = params.getObjId( "object" );
+	if ( !isIdValid( obj ) )
+		return SCRIPT_CONTINUE;
+
+	obj_id[] notifyobjs = getObjIdArrayObjVar( self, "destroynotify" );
+	obj_id[] newnotifyobjs = null;
+	if ( notifyobjs == null )
+	{
+		newnotifyobjs = new obj_id[1];
+		newnotifyobjs[0] = obj;
+	}
+	else
+	{
+		newnotifyobjs = new obj_id[notifyobjs.length+1];
+		for ( int i=0; i<notifyobjs.length; i++ )
+		{
+			newnotifyobjs[i] = notifyobjs[i];
+		}
+		newnotifyobjs[notifyobjs.length] = obj;
+	}
+	setObjVar( self, "destroynotify", newnotifyobjs );
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+messageHandler OnShipDisabled()
+{
+	obj_id objAttacker = params.getObjId("objAttacker");
+
+	// Set us to idle behavior and remove AI.
+	if ( hasScript( self, "space.ai.space_ai" ) )
+	{
+		ship_ai.spaceStop( self );
+		detachScript( self, "space.ai.space_ai" );
+
+		// Dispatch self destruct message.
+		dictionary outparams = new dictionary();
+		outparams.put( "attacker", objAttacker );
+		messageTo( self, "selfDestruct", outparams, 12000.f + rand()*60.f, false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler selfDestruct()
+{
+	// Destroy the ship (we want to play the explosion effect!)
+	space_combat.doChassisDamage( params.getObjId( "attacker" ), self, 0, 45000000 );
+	space_combat.targetDestroyed( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler destroySelf()
+{
+	setObjVar(self, "intCleaningUp", 1);
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+
+}

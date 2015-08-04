@@ -1,0 +1,493 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        mediator.script
+ * Description:  mediator object script: POI = factoryliberation
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+/*
+	In the core scenario, the meditor is a farmer forced labor prisoner at some form of illicit factory.
+*/
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.npc;
+include library.ai_lib;
+include library.poi;
+include library.scenario;
+include library.chat;
+include library.utils;
+include library.group;
+include library.badge;
+include library.locations;
+include ai.ai_combat;
+
+//-----------------------------------------------
+// Inherits
+//-----------------------------------------------
+
+inherits poi.base.scenario_actor;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string SCRIPT_CONVERSE				= "npc.converse.npc_converse_menu";
+const string LOG_NAME						= "poiFactoryLiberation Mediator";
+
+// Conversation states.
+const int	CONV_GREET						= 0;
+const int	CONV_INSULT						= 1;
+const int	CONV_MAYBEHELP					= 2;
+const int	CONV_CONSULTMEDIATOR			= 3;
+const int	CONV_NOHELP						= 4;
+const int	CONV_YESHELP					= 5;
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	attachScript( self, SCRIPT_CONVERSE );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnStartNpcConversation
+//------------------------------------------------
+
+trigger OnStartNpcConversation( obj_id speaker )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	// Get base object reference.
+	obj_id poiMaster = poi.getBaseObject(self);
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation ( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Look up our progress.
+	int progress = scenario.getPlayerProgress( speaker );
+
+	// Check to see if we are the leader.
+	boolean isLeader = poi.isNpcTagged( self, scenario.MEDIATOR + "_0" );
+
+	// Check to see if the antagonists have been defeated.
+	boolean antagonistsDead = false;
+	boolean someDead = false;
+	obj_id[] antagonists = scenario.getTeamMembers( "antagonist" );
+	int deadcount = scenario.getDeadTeamMemberCount( poiMaster, "antagonist" );
+	if ( deadcount == antagonists.length )
+		antagonistsDead = true;
+	else if ( deadcount > 0 )
+		someDead = true;
+
+	// Check to see if the speaker has credit.
+	boolean speakerCredit = scenario.hasKillCredit( poiMaster, "antagonist", speaker );
+
+	// Check the wall status.
+	boolean wallHasBeenDestroyed = getBooleanObjVar( poiMaster, "wallHasBeenDestroyed" );
+	boolean wallDamaged = getBooleanObjVar( poiMaster, "wallDamaged" );
+
+	//------------------------------------------------
+	// Minion chatter.
+	//------------------------------------------------
+
+	if ( !isLeader )
+	{
+		// Handle normal minion chatter.
+		minionChatter( self, convo, speaker, poiMaster, antagonistsDead, speakerCredit, someDead, wallHasBeenDestroyed, wallDamaged );
+		return SCRIPT_CONTINUE;
+	}
+
+	//------------------------------------------------
+	// Leader chatter.
+	//------------------------------------------------
+
+	// Msg/response vars.
+	string_id msg = new string_id( convo, "m_greet_0" );
+	resizeable string_id[] responses = new string_id[0];
+
+	// Special conversation states.
+
+	// Check win conditions on leader.
+	if ( scenario.isComplete() )
+	{
+		// We are free!
+		poi.quickSay( self, chat.CHAT_DECREE, chat.MOOD_EXUBERANT, "m_freedom" );
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+	else if ( antagonistsDead )
+	{
+		if ( !wallHasBeenDestroyed )
+		{
+			// Leader says that the wall needs to be destroyed.
+			scenario.say( self, convo, "m_destroywall", false );
+		}
+		else if ( speakerCredit )
+		{
+			// Leader responds to guy who saved us.
+			poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_EXUBERANT, "m_thanks" );
+
+			// Finish the scenario!
+			finishScenario( self, speaker );
+		}
+		else
+		{
+			// This guy didn't save us.
+			scenario.say( self, convo, "m_saved", false );
+		}
+
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+	else if ( wallHasBeenDestroyed )
+	{
+		// The wall is down but the antagonists are still alive.
+		scenario.say( self, convo, "m_killantagonists", false );
+
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+	else if ( someDead )
+	{
+		// Someone is killing the pirates.
+		if ( !speakerCredit )
+			poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_EXUBERANT, "m_somepiratesdead" );
+		else // This guy is helping!
+			poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_EXUBERANT, "m_killingpirates" );
+
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+	else if ( wallDamaged )
+	{
+		// The wall is damaged.
+		scenario.say( self, convo, "m_walldamaged", false );
+
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Choose something to say based on this player's progress.
+	switch ( progress )
+	{
+		// Player has not spoken to the antagonist yet.
+		case CONV_GREET:
+			// Greet the player.
+			msg = new string_id( convo, "m_greet_0" );
+			responses = utils.addElement( responses, new string_id(convo, "r_m_greet_yeshelp") );
+			responses = utils.addElement( responses, new string_id(convo, "r_m_greet_nohelp") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+
+			// Add the player to the scenario.
+			scenario.setPlayerProgress( speaker, CONV_CONSULTMEDIATOR );
+			break;
+
+		// Player spoke to the antagonist.
+		case CONV_INSULT:
+		case CONV_MAYBEHELP:
+			// Greet the player.
+			msg = new string_id( convo, "m_greet_1" );
+			responses = utils.addElement( responses, new string_id(convo, "r_m_greet_yeshelp") );
+			responses = utils.addElement( responses, new string_id(convo, "r_m_greet_nohelp") );
+			npcStartConversation( speaker, self, convo, msg, responses );
+
+			// Update the progress.
+			scenario.setPlayerProgress( speaker, CONV_CONSULTMEDIATOR );
+			break;
+
+		// Player refused to help the mediator.
+		case CONV_NOHELP:
+			poi.quickSay( self, chat.CHAT_HUFF, chat.MOOD_DISGUSTED, "m_disdain" );
+			npcEndConversation( speaker );
+			break;
+
+		// Player will help the mediator.
+		case CONV_YESHELP:
+			scenario.say( self, convo, "m_helpyet", false );
+			npcEndConversation( speaker );
+			break;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// minionChatter
+//------------------------------------------------
+
+void minionChatter( obj_id self, string convo, obj_id speaker, obj_id poiMaster, boolean antagonistsDead, boolean speakerCredit, boolean someDead, boolean wallHasBeenDestroyed, boolean wallDamaged )
+{
+	// Handle minion chatter.
+	if ( antagonistsDead )
+	{
+		if ( !wallHasBeenDestroyed )
+		{
+			// The antagonists are dead, but the wall is still up.
+			scenario.say( self, convo, "m_minion_destroywall", false );
+		}
+		else if ( speakerCredit )
+		{
+			// Thank the speaker, they saved us!
+			poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_EXUBERANT, "m_minion_thanks" );
+		}
+		else
+		{
+			// This guy didn't save us.
+			poi.quickSay( self, chat.CHAT_EXCLAIM, chat.MOOD_EXUBERANT, "m_minion_saved" );
+		}
+	}
+	else
+	{
+		if ( wallHasBeenDestroyed )
+		{
+			// The wall is down but the antagonists are still alive.
+			scenario.say( self, convo, "m_minion_killantagonists", false );
+		}
+		else if ( wallDamaged )
+		{
+			// The wall is damaged.
+			scenario.say( self, convo, "m_minion_walldamaged", false );
+		}
+		else
+		{
+			int idx = rand( 1, 4 );
+			scenario.say( self, convo, "m_minion_" + idx, false );
+		}
+	}
+	npcEndConversation( speaker );
+}
+
+//------------------------------------------------
+// OnNpcConversationResponse
+//------------------------------------------------
+
+trigger OnNpcConversationResponse( string convoName, obj_id speaker, string_id response )
+{
+	// Ignore conversation in combat.
+	if ( ai_lib.isInCombat(self) )
+		return SCRIPT_CONTINUE;
+
+	// Get reference to base.
+	obj_id poiMaster = poi.getBaseObject( self );
+	if ( (poiMaster == null) || (poiMaster == obj_id.NULL_ID) )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get reference to conversation.
+	string convo = scenario.getConvo();
+	if ( convo.equals("") )
+	{
+		npcEndConversation( speaker );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Validate our conversation.
+	if ( !convoName.equals(convo) )
+		return SCRIPT_CONTINUE;
+
+	// Get our progress.
+	int progress = scenario.getPlayerProgress( speaker );
+
+	// Check to see if we are the leader.
+	boolean isLeader = poi.isNpcTagged( self, scenario.MEDIATOR + "_0" );
+
+	// Only the leader chats.
+	if ( !isLeader )
+		return SCRIPT_CONTINUE;
+
+	// Respond to the player's comment.
+	string aId = response.getAsciiId();
+	string_id msg = new string_id();
+	string_id[] responses = new string_id[0];
+
+	// Zero out responses.
+	npcSetConversationResponses( speaker, responses );
+
+	// Player says he can help.
+	if ( ( aId.equals("r_m_greet_yeshelp") ) )
+	{
+		// Make a response.
+		npcSpeak( speaker, new string_id( convo, "m_yeshelp" ) );
+
+		scenario.setPlayerProgress( speaker, CONV_YESHELP );
+	}
+
+	// Player says he cannot help.
+	else if ( ( aId.equals("r_m_greet_nohelp") ) )
+	{
+		// Make a response.
+		npcSpeak( speaker, new string_id( convo, "m_nohelp" ) );
+
+		scenario.setPlayerProgress( speaker, CONV_NOHELP );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// celebrateWallLeader
+//
+// Called on the leader, he'll celebrate the fallen wall.
+//------------------------------------------------
+
+messageHandler celebrateWallLeader()
+{
+	// Celebrate!
+	stop( self );
+	queueCommand( self, ##"social", null, "peptalk", COMMAND_PRIORITY_DEFAULT );
+	messageTo( self, "resumeDefaultCalmBehavior", null, 3, false );
+
+	// Say something encouraging!
+	poi.quickSay( self, chat.CHAT_SHOUT, chat.MOOD_ENCOURAGING, "m_celebratewall" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// celebrateWall
+//
+// Called on the prisoners to celebrate the fallen wall.
+//------------------------------------------------
+
+messageHandler celebrateWall()
+{
+	// Celebrate!
+	stop( self );
+	queueCommand( self, ##"social", null, "cheer", COMMAND_PRIORITY_DEFAULT );
+	messageTo( self, "resumeDefaultCalmBehavior", null, 3, false );
+
+	// Say something encouraging!
+	poi.quickSay( self, chat.CHAT_PROCLAIM, chat.MOOD_ENTHUSIASTIC, "m_minion_celebratewall" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// finishScenario
+//
+// Called when the scenario is finished.
+//------------------------------------------------
+
+void finishScenario( obj_id self, obj_id speaker )
+{
+	// The scenario is complete!
+	obj_id poiMaster = poi.getBaseObject(self);
+	scenario.complete( poiMaster );
+
+	// Reward his group.
+	if ( group.isGroupObject(speaker) )
+	{
+		obj_id[] members = getGroupMemberIds( speaker );
+		if ( (members == null) || (members.length == 0) )
+		{
+		}
+		else
+		{
+			for ( int n = 0; n < members.length; n++ )
+			{
+				if ( !badge.hasBadge( members[n], "poi_factoryliberation" ) )
+					badge.grantBadge( members[n], "poi_factoryliberation" );
+				else
+					badge.notifyHasBadge( members[n], "poi_factoryliberation" );
+			}
+		}
+	}
+	else
+	{
+		if ( !badge.hasBadge( speaker, "poi_factoryliberation" ) )
+			badge.grantBadge( speaker, "poi_factoryliberation" );
+		else
+			badge.notifyHasBadge( speaker, "poi_factoryliberation" );
+	}
+
+	// Tell everyone to celebrate!
+	obj_id[] team = scenario.getTeamMembers( poiMaster, "mediator" );
+	if ( team == null )
+		return;
+	for ( int i=0; i<team.length; i++ )
+	{
+		messageTo( team[i], "celebrateFreedom", null, 0, false );
+	}
+
+	// Now take off after a little bit.
+	messageTo( self, "runForFreedom", null, 10, false );
+}
+
+//------------------------------------------------
+// runForFreedom
+//------------------------------------------------
+
+messageHandler runForFreedom()
+{
+	obj_id poiMaster = poi.getBaseObject(self);
+
+	// Tell everyone to go.
+	poi.quickSay( self, chat.CHAT_PROCLAIM, chat.MOOD_ENTHUSIASTIC, "m_letsgo" );
+
+	// Get a location to run to.
+	location dest = getLocation( self );
+	dest.z += 500;
+	dest.x += 0;
+	dest = locations.getGoodLocationAroundLocation( dest, 10, 10, 50, 50 );
+
+	// Go to it.
+	setMovementRun( self );
+	ai_lib.pathTo( self, dest );
+	setHomeLocation( self, dest );
+
+	// Tell everyone else to go also.
+	obj_id[] team = scenario.getTeamMembers( poiMaster, "mediator" );
+	if ( team == null )
+		return SCRIPT_CONTINUE;
+	for ( int i=0; i<team.length; i++ )
+	{
+		if ( team[i] == self )
+			continue;
+
+		location myDest = locations.getGoodLocationAroundLocation( dest, 1, 1, 10, 10 );
+		setMovementRun( team[i] );
+		ai_lib.pathTo( team[i], myDest );
+		setHomeLocation( team[i], dest );
+	}
+
+	return SCRIPT_CONTINUE;
+}

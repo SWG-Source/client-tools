@@ -1,0 +1,1658 @@
+/**
+ * Copyright (c) ©2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        systems.beast.base_incubator.script
+ * Description:
+ * @author       tblair
+ * @version      $Revision: 0$
+ */
+
+include java.lang.Math;
+include library.beast_lib;
+include library.incubator;
+include library.npe;
+include library.player_structure;
+include library.prose;
+include library.resource;
+include library.sui;
+include library.utils;
+
+
+
+const string_id SID_WHILE_DEAD							= new string_id("player_structure", "while_dead");
+const string_id SID_TERMINAL_MANAGEMENT 					= new string_id("player_structure", "incubator_management");
+const string_id SID_TERMINAL_MANAGEMENT_POWER_REMOVE	 			= new string_id("player_structure", "incubator_power_remove");
+const string_id SID_TERMINAL_MANAGEMENT_POWER_ADD 				= new string_id("player_structure", "incubator_power");
+const string_id SID_TERMINAL_MANAGEMENT_ACTIVATE	 			= new string_id("player_structure", "incubator_activate");
+const string_id SID_TERMINAL_MANAGEMENT_MINIGAME	 			= new string_id("player_structure", "incubator_minigame");
+const string_id SID_TERMINAL_MANAGEMENT_END_CREATION	 			= new string_id("player_structure", "incubator_cancel");
+const string_id SID_TERMINAL_MANAGEMENT_HATCH	 				= new string_id("player_structure", "incubator_hatch");
+const string_id SID_TERMINAL_MANAGEMENT_TIMERCLEAR	 			= new string_id("player_structure", "incubator_clear_cooldown");
+const string_id SID_ACTIVATE_MSG_PROMPT      				        = new string_id("beast", "incubator_activate_text");
+const string_id SID_ACTIVATE_MSG_TITLE 					  	= new string_id("beast", "incubator_activate_title");
+const string_id SID_CLEANSE_MSG_PROMPT      				        = new string_id("beast", "incubator_cleanse_text");
+const string_id SID_HOME_OWNER_CLEANSE_MSG_PROMPT      				= new string_id("beast", "incubator_home_owner_cleanse");
+const string_id SID_CLEANSE_MSG_TITLE           				= new string_id("beast", "incubator_cleanse_title");
+const string_id SID_TERMINAL_OPEN						= new string_id("beast", "incubator_open");
+const string_id SID_CHEATER_TRANSFER						= new string_id("incubator", "cheater_transfer");
+const string_id SID_CHEATER_BAD_ID						= new string_id("incubator", "cheater_bad_id");
+const string_id SID_SESSION_TOO_SOON						= new string_id("incubator", "not_enough_time_since_last_session");
+const string_id SID_NO_REMOVE_DNA						= new string_id("incubator", "station_no_remove_dna");
+const string_id SID_PLACE_DNA							= new string_id("incubator", "place_dna");
+const string_id SID_REMOVE_EGG							= new string_id("incubator", "remove_egg");
+const string_id SID_ONLY_DNA_CAN_ADD						= new string_id("incubator", "only_dna_can_add");
+const string_id SID_STATION_HAS_DNA_ALREADY					= new string_id("incubator", "station_has_dna_already");
+const string_id SID_NO_TRIAL_ACCOUNTS						= new string_id("incubator","no_trial_accounts");
+
+
+trigger OnInitialize()
+{
+	//if we are on the floor of a house start our particle
+	if(utils.isInHouseCellSpace(self))
+	{
+		createTriggerVolume ("particle", 15f, true);
+		messageTo(self, "refreshCurrentParticle", null, 5, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered (string volName, obj_id breecher)
+{
+	if (isPlayer(breecher))
+	{
+		messageTo(self, "refreshCurrentParticle", null, 2, false);
+	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id station = self;
+	
+	//not while dead or incapped
+	if(isDead(player) || isIncapacitated(player) )
+	{
+		sendSystemMessage( player, SID_WHILE_DEAD );
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(isFreeTrialAccount(player))
+	{
+		sendSystemMessage(player, SID_NO_TRIAL_ACCOUNTS);
+		return SCRIPT_CONTINUE;
+	}
+	
+	
+	//if the incubator thinks it belongs to the player we need to cleanup the incubator
+	if( incubator.hasActiveUser(station) && incubator.hasActiveIncubator(player) )
+		incubator.checkIncubatorForMismatch(station, player);	
+	
+	if(beast_lib.isBeastMaster(player) && utils.isInHouseCellSpace(station))
+	{
+		//make sure player is on the admin list of the house we are inside of
+		obj_id structure = getTopMostContainer(station);
+		if (!player_structure.isAdmin(structure, player))
+			return SCRIPT_CONTINUE;
+		
+		int management_root = mi.addRootMenu (menu_info_types.SERVER_MENU1, SID_TERMINAL_MANAGEMENT);
+
+		//removing power
+		if(incubator.validateActiveUser(station, player) && incubator.hasPower(station))
+		{
+			mi.addSubMenu(management_root, menu_info_types.SERVER_MENU2, SID_TERMINAL_MANAGEMENT_POWER_REMOVE);
+		}
+		//make sure we are in the house and the active user is putting power in
+		if(incubator.validateActiveUser(station, player) && utils.hasResourceInInventory(player, resource.RT_ENERGY_GEO))
+		{
+			mi.addSubMenu(management_root, menu_info_types.SERVER_MENU3, SID_TERMINAL_MANAGEMENT_POWER_ADD);
+		}
+		//make sure the station doesnt have an active user and the station/player arent linked
+		if( !incubator.hasActiveUser(station) && !incubator.validateActiveUser(station, player))
+		{
+			mi.addSubMenu(management_root, menu_info_types.SERVER_MENU4, SID_TERMINAL_MANAGEMENT_ACTIVATE);
+		}
+		//if the incubator is ours let us cleanse it if we want to
+		if ( incubator.validateActiveUser(station, player) ) 
+		{
+			mi.addSubMenu(management_root, menu_info_types.SERVER_MENU7, SID_TERMINAL_MANAGEMENT_END_CREATION);
+		}	
+
+		//see if the station is ready for the next minigame session
+		if(	incubator.isSessionEligible(player)		&&
+			incubator.validateActiveUser(station, player)	&&
+			incubator.stationHasDnaInInventory(station)	&&
+			incubator.getCurrentSessionNumber(station) <= 3)
+		{
+			mi.addSubMenu(management_root, menu_info_types.SERVER_MENU5, SID_TERMINAL_MANAGEMENT_MINIGAME);
+		}
+
+		//see if we are ready to turn into egg
+		if(	incubator.isIncubationComplete(station, player)	&&
+			incubator.validateActiveUser(station, player) 	&&
+			!incubator.isReadyToRetrieveEgg(station))
+		{
+			mi.addSubMenu(management_root, menu_info_types.SERVER_MENU6, SID_TERMINAL_MANAGEMENT_HATCH);
+		}
+
+		//see if we are ready to start a new creature, if so display the open option.
+		if( incubator.canOpenInventory(station) && incubator.validateActiveUser(station, player))
+		{
+			mi.addSubMenu(management_root, menu_info_types.ITEM_OPEN, SID_TERMINAL_OPEN);
+		}
+
+		//God Functions as needed
+		if(isGod(player))
+		{
+			mi.addSubMenu(management_root, menu_info_types.SERVER_MENU8, SID_TERMINAL_MANAGEMENT_TIMERCLEAR);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+	//not while dead or incapped
+	if(isDead(player) || isIncapacitated(player) )
+	{
+		sendSystemMessage( player, SID_WHILE_DEAD );
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isFreeTrialAccount(player))
+	{
+		sendSystemMessage(player, SID_NO_TRIAL_ACCOUNTS);
+		return SCRIPT_CONTINUE;
+	}
+
+
+	obj_id station = self;
+
+	if(beast_lib.isBeastMaster(player) && utils.isInHouseCellSpace(station))
+	{
+		//make sure player is on the admin list of the house we are inside of
+		obj_id structure = getTopMostContainer(station);
+		if (!player_structure.isAdmin(structure, player))
+			return SCRIPT_CONTINUE;
+			
+		if (item == menu_info_types.SERVER_MENU1)
+		{
+			//this option doesnt do anything yet
+		}
+		else if (item == menu_info_types.SERVER_MENU2)
+		{
+			//Remove Power
+			if(incubator.validateActiveUser(station, player))
+			{
+				queueCommand(player, ##"removePowerIncubator", station, "", COMMAND_PRIORITY_DEFAULT);
+			}
+		}
+		else if (item == menu_info_types.SERVER_MENU3)
+		{
+			//Add Power
+			if(incubator.validateActiveUser(station, player) )
+			{
+				queueCommand(player, ##"depositPowerIncubator", station, "", COMMAND_PRIORITY_DEFAULT);
+			}
+		}
+		else if (item == menu_info_types.SERVER_MENU4)
+		{
+			//Double check in case the incubator has a player oid on it
+			if(incubator.hasActiveUser(station))
+			{
+				//offer option to cleanup old incubator, other server, not loaded in game?
+				sendSystemMessage(player, new string_id("beast", "incubator_already_active"));
+			}		
+			else
+				int pid = sui.msgbox(station, player, "@" + SID_ACTIVATE_MSG_PROMPT, sui.YES_NO, "@" + SID_ACTIVATE_MSG_TITLE, "handleActivateSui");
+		}	
+		else if (item == menu_info_types.SERVER_MENU5)
+		{
+			if(!incubator.validateActiveUser(station, player))
+				sendSystemMessage(player, new string_id("beast", "incubator_not_yours"));
+			else
+			{	
+				//check to see if they have recently used the GUI
+				//this is to help stop exploting lag to get the GUI twice without having to wait for
+				//the next session
+				if(utils.hasScriptVar(player, incubator.GUI_SCRIPT_VAR) && !isGod(player))
+				{
+					//get last sessions time
+					int lastSessionTime = utils.getIntScriptVar(player, incubator.GUI_SCRIPT_VAR);
+					//get current time
+					int currentTime = getGameTime();
+					//currenTime - lastSessionTime will tell us how long it has been
+					int timeSinceSession = currentTime - lastSessionTime;
+					//if it has been more than at least 3 hours.
+					if(timeSinceSession > incubator.GUI_TIME_TO_REFRESH)
+					{
+						incubator.startSession(station, player);
+					}
+					else
+						sendSystemMessage(player, SID_SESSION_TOO_SOON);
+				}
+				else
+					incubator.startSession(station, player);
+			}
+		}
+		else if (item == menu_info_types.SERVER_MENU6)
+		{
+			if(incubator.isIncubationComplete(station, player))
+			{
+				//TODO::Function to end process,turn into egg, cleanup station
+				obj_id egg = incubator.convertDnaToEgg(station, player);
+				if(isIdNull(egg))
+				{
+					//TODO Add Message
+				}
+			}
+		}
+		else if (item == menu_info_types.SERVER_MENU7)
+		{
+			//remove objvars from player/station
+			if (incubator.validateActiveUser(station, player))
+				int pid = sui.msgbox(station, player, "@" + SID_CLEANSE_MSG_PROMPT, sui.YES_NO, "@" + SID_CLEANSE_MSG_TITLE, "handleCleanseSui");
+			else
+				sendSystemMessage(player, new string_id("beast", "not_active_user"));
+		}
+		else if (item == menu_info_types.SERVER_MENU8  && isGod(player) )
+		{
+			incubator.clearMiniGameCooldown(player);
+			sendSystemMessage(player, new string_id("beast", "incubator_cooldown_reset"));
+		}
+		else if (item == menu_info_types.ITEM_OPEN && incubator.canOpenInventory(station) && !hasObjVar(station, incubator.OBJVAR_EGG_CREATED))
+		{
+			sendSystemMessage(player, SID_PLACE_DNA);
+		}
+		else if (item == menu_info_types.ITEM_OPEN && incubator.canOpenInventory(station) && hasObjVar(station, incubator.OBJVAR_EGG_CREATED))
+		{
+			sendSystemMessage(player, SID_REMOVE_EGG);
+		}
+		
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//if for some reason the incubator is destroyed fire a persisted message to sever the link with the player
+trigger OnDestroy()
+{
+	obj_id player = incubator.getIncubatorActiveUser(self);
+	dictionary params = new dictionary();
+	params.put( "station", self );
+	messageTo(player, "removeIncubatorFromUser", params, 0, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id dest, obj_id transferer)
+{
+	//no incubators in space!!!
+	if(isSpaceScene())
+		return SCRIPT_OVERRIDE;
+		
+	// you are the owner and it is cleansed
+	if(!incubator.hasActiveUser(self) && player_structure.isOwner(getTopMostContainer(transferer), transferer))
+		return SCRIPT_CONTINUE;
+	
+	//owner of the structure may cleanse the incubator
+	if (player_structure.isOwner(getTopMostContainer(transferer), transferer))
+	{
+		int pid = sui.msgbox(self, transferer, "@" + SID_HOME_OWNER_CLEANSE_MSG_PROMPT, sui.YES_NO, "@" + SID_CLEANSE_MSG_TITLE, "handleHomeOwnerCleanseSui");
+		return SCRIPT_OVERRIDE;
+	}
+	//incubators with active users may not be picked up
+	if(incubator.hasActiveUser(self))
+	{
+		sendSystemMessage(transferer, new string_id("beast", "cant_pickup"));
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	obj_id station = self;
+	
+	//we were transferred into a house, start up default particle and adits scriptVar
+	if(utils.isInHouseCellSpace(station))
+	{
+		utils.setScriptVar(station, incubator.PARTICLE_LABEL_SCRIPT_VAR, incubator.PARTICLE_LABEL_DEFAULT);
+		playClientEffectObj(station, incubator.PARTICLE_DEFAULT, station, incubator.PARTICLE_HARDPOINT_TWO, null, incubator.PARTICLE_LABEL_DEFAULT);
+		createTriggerVolume ("particle", 15f, true);
+	}
+	
+	if (utils.isNestedWithinAPlayer(station))
+	{
+		removeTriggerVolume("particle");
+		incubator.stopAllSessionParticles(station);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//Display
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+		
+		
+	//functionality rating
+	if (exists(self) && hasObjVar(self, "crafting.stationMod"))
+	{
+		names[idx] = "stationmod";
+		float attrib = utils.roundFloatByDecimal(getFloatObjVar(self, "crafting.stationMod"));
+		attribs[idx] = "" + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	//quality rating
+	if (exists(self) && hasObjVar(self, "crafting.stationMod_1"))
+	{
+		names[idx] = "stationmod_1";
+		float attrib = utils.roundFloatByDecimal(getFloatObjVar(self, "crafting.stationMod_1"));
+		attribs[idx] = "" + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	
+	//who is our current user
+	if (exists(self) && incubator.hasActiveUser(self))
+	{
+		names[idx] = "active_user";
+		string attrib = getPlayerName( incubator.getIncubatorActiveUser(self) );
+		attribs[idx] = "" + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	
+	if(exists(self) && incubator.hasPower(self))
+	{
+		string resourceName = incubator.getStationPowerName(self);
+
+		names[idx] = "resourceName";
+		attribs[idx] = "" + resourceName;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+	}
+
+	if(exists(self) && incubator.hasPower(self))
+	{
+		int resourceAmount = incubator.getStationPowerAmount(self);
+
+		names[idx] = "resourceAmount";
+		attribs[idx] = "" + resourceAmount;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+	}
+
+	if(exists(self) && incubator.hasPower(self))
+	{
+		int resourceQuality =incubator.getStationPowerQuality(self);
+
+		names[idx] = "resourceQuality";
+		attribs[idx] = "" + resourceQuality;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+	}
+	
+	//what is our current creature template
+	if(exists(self) && hasObjVar(self, incubator.STATION_DNA_CREATURE))
+	{
+		names[idx] = "bm_template";
+		
+		int hashType = getIntObjVar(self, incubator.STATION_STORED_CREATURE_TEMPLATE);
+		
+		string template = getStringObjVar(self, incubator.STATION_DNA_CREATURE);
+		string attrib = "";
+		
+		string_id templateId = new string_id("mob/creature_names", template);
+
+		if(localize(templateId) == null)
+		{
+			template = incubator.getCreatureTypeFromHashTemplate(self);
+			templateId = new string_id("monster_name", template);
+			if(localize(templateId) == null)
+			{
+				templateId = new string_id("mob/creature_names", template);
+			}
+		}
+
+		attrib = localize(templateId);
+		attribs[idx] = "" + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	
+	if(exists(self) && hasObjVar(self, incubator.STATION_STORED_CREATURE_TEMPLATE))
+	{
+		names[idx] = "beast_type";
+
+		int hashType = getIntObjVar(self, incubator.STATION_STORED_CREATURE_TEMPLATE);
+
+		string template = incubator.getCreatureTypeFromHashTemplate(self);	
+		template = beast_lib.stripBmFromType(template);
+		string attrib = "";
+
+		string_id templateId = new string_id("monster_name", template);
+
+		if(localize(templateId) == null)
+			templateId = new string_id("mob/creature_names", template);
+
+		attrib = localize(templateId);
+		attribs[idx] = "" + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	
+	//what are our creatures stats?
+	
+	//display skill bonuses
+	for(int i = 0; i < incubator.ARRAY_SKILLS.length; ++i)
+	{
+		if(hasObjVar(self, incubator.ARRAY_SKILLS[i]))
+		{
+			names[idx] = incubator.SKILL_DISPLAY_NAMES[i];
+			int attrib = getIntObjVar(self, incubator.ARRAY_SKILLS[i]);
+			attribs[idx] = "" + attrib;
+			idx++;
+			if (idx >= names.length)
+				return SCRIPT_CONTINUE;
+		}
+	}
+
+	
+	//get Attribute Bonuses
+	for(int i = 0; i < incubator.ARRAY_ATTRIBUTES.length; ++i)
+	{
+		if(hasObjVar(self, incubator.ARRAY_ATTRIBUTES[i]))
+		{
+			string name = incubator.ATTRIBUTE_DISPLAY_NAMES[i];
+			if(!name.equals("block_value_bonus"))
+			{
+				names[idx] = incubator.ATTRIBUTE_DISPLAY_NAMES[i];
+				float bonusVal = getFloatObjVar(self, incubator.ARRAY_ATTRIBUTES[i]);
+				float attrib = bonusVal * incubator.ATTRIBUTE_DISPLAY_CONVERSION_RATES[i];
+				attrib = utils.roundFloatByDecimal(attrib);
+				attribs[idx] = "" + attrib + "%";
+				idx++;
+				if (idx >= names.length)
+					return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				names[idx] = incubator.ATTRIBUTE_DISPLAY_NAMES[i];
+				float bonusVal = getFloatObjVar(self, incubator.ARRAY_ATTRIBUTES[i]);
+				float attrib = bonusVal * incubator.ATTRIBUTE_DISPLAY_CONVERSION_RATES[i];
+				attrib = utils.roundFloatByDecimal(attrib);
+				attribs[idx] = "" + attrib;
+				idx++;
+				if (idx >= names.length)
+					return SCRIPT_CONTINUE;
+			}
+		}
+	}
+
+	if (beast_lib.isBeastMaster(player))
+	{
+		names[idx] = "time_until_session";
+		int playerTime = (getIntObjVar(player, incubator.NEXT_SESSION));
+		
+		int timeToUse =( playerTime - getGameTime() ); 
+		
+		if (timeToUse <= 0 || playerTime <= 0 )
+		{
+			attribs[idx] = "Ready";
+		}
+		else
+		{
+			attribs[idx] = utils.assembleTimeRemainToUse(timeToUse);
+		}
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//make sure we get the rigt things
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	obj_id station = self;
+	if(isPlayer(transferer))
+	{
+		//lets make sure that we havent already started a session
+		if(!incubator.canOpenInventory(station))
+		{
+			sendSystemMessage(transferer, SID_NO_REMOVE_DNA);
+			return SCRIPT_OVERRIDE;
+		}
+		//lets make sure we are getting a DNA Core
+		string template = getTemplateName(item);
+		if(!template.equals("object/tangible/loot/beast/dna_container.iff"))
+		{
+			sendSystemMessage(transferer, SID_ONLY_DNA_CAN_ADD);//"You can only put DNA in here");
+			return SCRIPT_OVERRIDE;
+		}
+		
+		//check to see if we already have DNA stored
+		//if we have progressed in sessions we dont want to allow adding anything
+		int session = incubator.getCurrentSessionNumber(station);
+		if(session > 1 && !hasObjVar(station, incubator.OBJVAR_EGG_CREATED)) 
+		{
+			sendSystemMessage(transferer, SID_STATION_HAS_DNA_ALREADY);//"This station already has DNA");
+			return SCRIPT_OVERRIDE;
+		}
+	}
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	obj_id station = self;
+
+	//you can still remove it if we havnt started
+	if(!incubator.canOpenInventory(station))
+	{
+		
+		sendSystemMessage(transferer, SID_NO_REMOVE_DNA);
+		return SCRIPT_OVERRIDE;
+	}
+	//if we have progressed in sessions we dont want to allow removal of DNA
+	int session = incubator.getCurrentSessionNumber(station);
+	if(session > 1) 
+	{
+		string template = getTemplateName(item);
+		//removing the egg from the incubator we reset the session to default
+		if(template.equals("object/tangible/item/beast/bm_egg.iff") && hasObjVar(station, incubator.OBJVAR_EGG_CREATED))
+		{
+			//this is an egg, and it is okay at this time to remove it.
+			return SCRIPT_CONTINUE;
+		}
+		sendSystemMessage(transferer, SID_NO_REMOVE_DNA);
+		return SCRIPT_OVERRIDE;
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnLostItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	obj_id station = self;
+	
+	if(!exists(item))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	string template = getTemplateName(item);
+	//removing the egg from the incubator we reset the session to default
+	if(template.equals("object/tangible/item/beast/bm_egg.iff") && hasObjVar(station, incubator.OBJVAR_EGG_CREATED))
+	{
+		setObjVar(station, incubator.ACTIVE_SESSION, 1);
+		messageTo(station, "refreshCurrentParticle", null, 0, false);
+		return SCRIPT_CONTINUE;
+	}
+ 	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleActivateSui()
+{
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+
+	//lets make sure we aren't more than 5 meters away from the incubator before we let them activate it
+	if(!utils.outOfRange(self, player, 5.0f, false))
+	{
+		//lets see if player had an old incubator before we link new one
+		boolean cleanUpOldIncubator = false;
+		obj_id oldIncubator = incubator.getActiveIncubator(player);
+		//player has an old incubator and that incubator is not the one we are about to link to
+		if( incubator.hasActiveIncubator(player) &&  oldIncubator !=self )
+			cleanUpOldIncubator = true;
+
+		//activate the current user
+		if( incubator.setActiveUser(self, player) )
+		{
+			//need to clean up an existing incubator which may/may not be loaded into memory
+			if(cleanUpOldIncubator  && isIdValid(oldIncubator))
+			{
+				//TODO::Awaiting a call from Programming to call DB,force load and clean, for now a persisted messageTo
+				messageTo(oldIncubator, "cleanseOldIncubator", null, 0, true);
+			}
+			
+			npe.commTutorialPlayer(self, player, 13.0f, incubator.SID_COMM_ACTIVATION, incubator.COMM_SFX_ACTIVATE, incubator.COMM_APPEARANCE_ACTIVATE);
+			sendSystemMessage(player, new string_id("beast", "incubator_activated"));
+		}
+		else
+			sendSystemMessage(player, new string_id("beast", "incubator_not_activated"));
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleCleanseSui()
+{
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	obj_id player = sui.getPlayerId(params);
+	
+	//lets make sure we aren't more than 5 meters away from the incubator before we let them cleanse it
+	if(!utils.outOfRange(self, player, 5.0f, false))
+	{
+		//remove the active user
+		if (incubator.removeActiveUser(self, player))
+		{
+			if(incubator.incubatorTotalCleanse(self))
+				sendSystemMessage(player, new string_id("beast", "incubator_cleansed"));
+			else	
+				sendSystemMessage(player, new string_id("beast", "incubator_cleanse_fail"));
+		}
+		else	
+			sendSystemMessage(player, new string_id("beast", "incubator_cleanse_fail"));
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleHomeOwnerCleanseSui()
+{
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+		
+	incubator.incubatorTotalCleanse(self);
+		
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cleanseOldIncubator()
+{
+	incubator.incubatorTotalCleanse(self);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handlerIncubatorSessionUpdate ()
+{
+	if(params.isEmpty() || params == null)
+	{
+		//we didnt get any values
+		
+		// add System message
+		return SCRIPT_CONTINUE;
+	}
+	
+	// create variables for new totals
+	float dpsBonus 			= 0.0f;
+	float armorBonus 		= 0.0f;
+	string newTemplate 		= "";
+	float healthBonus		= 0;
+	
+	float hitChanceBonus 		= 0;
+	float dodgeBonus 		= 0;
+	float glancingBlowBonus 	= 0;
+	float parryBonus 		= 0;
+	float blockChanceBonus 		= 0;
+	float blockValueBonus 		= 0;
+	float criticalHitBonus	 	= 0;
+	float evasionBonus	 	= 0;
+	float evasionRatingBonus	= 0;
+	float strikethroughBonus 	= 0;
+	float strikethroughRatingBonus	= 0;
+	
+	int survivalUpdate 		= 0;
+	int beastialResilienceUpdate 	= 0;
+	int cunningUpdate 		= 0;
+	int intelligenceUpdate 		= 0;
+	int aggressionUpdate 		= 0;
+	int huntersInstinctUpdate	= 0;
+	//get information from GUI
+	obj_id player			= params.getObjId("player");
+	obj_id station			= params.getObjId("station");
+	obj_id slot1Id			= params.getObjId("slot1Id");
+	obj_id slot2Id			= params.getObjId("slot2Id");
+	obj_id slot3Id			= params.getObjId("slot3Id");
+	obj_id slot4Id			= params.getObjId("slot4Id");
+	
+	int survivalSkillIncrement 	= params.getInt("initialPointsSurvival");
+	int beastialSkillIncrement 	= params.getInt("initialPointsBeastialResilience");
+	int cunningSkillIncrement 	= params.getInt("initialPointsCunning");
+	int intelligenceSkillIncrement 	= params.getInt("initialPointsIntelligence");
+	int aggressionSkillIncrement 	= params.getInt("initialPointsAggression");
+	int huntersSkillIncrement 	= params.getInt("initialPointsHuntersInstinct");
+	
+	int survivalTotal 		= params.getInt("totalPointsSurvival");
+	int beastialResilienceTotal 	= params.getInt("totalPointsBeastialResilience");
+	int cunningTotal 		= params.getInt("totalPointsCunning");
+	int intelligenceTotal 		= params.getInt("totalPointsIntelligence");
+	int aggressionTotal 		= params.getInt("totalPointsAggression");
+	int huntersInstinctTotal	= params.getInt("totalPointsHuntersInstinct");
+	
+	int tempGaugeSliderPos 		= params.getInt("temperatureGauge");
+	int nutGaugeSliderPos  		= params.getInt("nutrientGauge");
+	
+	int newCreatureColorIndex       = params.getInt("newCreatureColorIndex");
+	
+	
+	int survivalPointsSpent			= survivalTotal - survivalSkillIncrement;
+	int beastialResiliencePointsSpent	= beastialResilienceTotal - beastialSkillIncrement;
+	int cunningPointsSpent			= cunningTotal - cunningSkillIncrement;
+	int intelligencePointsSpent		= intelligenceTotal - intelligenceSkillIncrement;
+	int aggressionPointsSpent		= aggressionTotal - aggressionSkillIncrement;
+	int huntersInstinctPointsSpent		= huntersInstinctTotal - huntersSkillIncrement;
+
+	
+	
+	float slotOneQuality 		= 0.0f;
+	int slotOneColor 		= 0;
+	if(isIdValid(slot1Id) && exists(slot1Id))
+	{
+		if(incubator.isQualityEnzyme(slot1Id))
+		{
+			slotOneQuality = incubator.getEnzymeQuality(slot1Id);
+			//give converted pet bonus
+			if(incubator.isConvertedPet(station))
+				slotOneQuality += 5.0f;
+		}
+			
+		if(incubator.hasEnzymeColor(slot1Id))
+			slotOneColor = incubator.getEnzyemColor(slot1Id);
+	}
+	
+	int slotTwoRandomStatCount	= 0;
+	String slotTwoStat		= "";
+	int slotTwoColor 		= 0;
+	if(isIdValid(slot2Id) && exists(slot2Id))
+	{
+		if(incubator.isStatEnzyme(slot2Id))
+		{
+			slotTwoRandomStatCount	= incubator.getEnzymeRandomStats(slot2Id);
+			slotTwoStat		= incubator.getEnzymeFreeStat(slot2Id);		
+		}
+		
+		if(incubator.hasEnzymeColor(slot2Id))
+			slotTwoColor = incubator.getEnzyemColor(slot2Id);
+	}
+	
+	float slotThreeQuality 		= 0.0f;
+	int slotThreeColor 		= 0;
+	if(isIdValid(slot3Id) && exists(slot3Id))
+	{
+		if(incubator.isQualityEnzyme(slot3Id))
+		{
+			slotThreeQuality = incubator.getEnzymeQuality(slot3Id);
+			//give converted pet bonus
+			if(incubator.isConvertedPet(station))
+				slotThreeQuality += 5.0f;
+		}
+			
+		if(incubator.hasEnzymeColor(slot3Id))
+			slotThreeColor = incubator.getEnzyemColor(slot3Id);
+	}
+	
+	float slotFourMutagen 		= 0.0f;
+	float slotFourPurity		= 0.0f;
+	string slotFourTrait		= "";
+	if(isIdValid(slot4Id) && exists(slot4Id))
+	{
+		if(incubator.isSkillEnzyme(slot4Id))
+		{
+			slotFourPurity = incubator.getEnzymeSkillPoints(slot4Id);
+			slotFourMutagen = incubator.getEnzyemMutagen(slot4Id);
+			slotFourTrait = incubator.getEnzyemTrait(slot4Id);
+		}
+		
+	}
+	
+	String template			= "";
+	int hashTemplate		= 0;
+	
+	//find out session number.
+	int sessionNumber = incubator.getCurrentSessionNumber(station);
+	
+	if(station != self)
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!incubator.hasPowerForSession(station))
+	{
+		sendSystemMessage(player, incubator.RESOURCE_POWER_NOT_ENOUGH);
+		return SCRIPT_CONTINUE;
+	}
+	
+	//need to destroy all the enzymes, since we have the data we need.
+	if(isIdValid(slot1Id) && exists(slot1Id))
+	{
+		CustomerServiceLog("BeastIncubator: ", "Player " + getFirstName(player) + "(" + player + ") has used Enzyme (" + slot1Id + "), with a quality of " + slotOneQuality + ", in incubation session " + sessionNumber);
+		destroyObject(slot1Id);
+	}
+	if(isIdValid(slot2Id) && exists(slot2Id))
+	{
+		CustomerServiceLog("BeastIncubator: ", "Player " + getFirstName(player) + "(" + player + ") has used Enzyme (" + slot2Id + "), with " + slotTwoRandomStatCount + " random stats and " + slotTwoStat + " free stat, in incubation session " + sessionNumber);
+		destroyObject(slot2Id);
+	}
+	if(isIdValid(slot3Id) && exists(slot3Id))
+	{
+		CustomerServiceLog("BeastIncubator: ", "Player " + getFirstName(player) + "(" + player + ") has used Enzyme (" + slot3Id + "), with a quality of " + slotThreeQuality + ", in incubation session " + sessionNumber);
+		destroyObject(slot3Id);
+	}
+	if(isIdValid(slot4Id) && exists(slot4Id))
+	{
+		CustomerServiceLog("BeastIncubator: ", "Player " + getFirstName(player) + "(" + player + ") has used Enzyme (" + slot4Id + "), with a purity of " + slotFourPurity + " and a mutagen of " + slotFourMutagen + ", in incubation session " + sessionNumber);
+		destroyObject(slot4Id);
+	}
+	
+	if(sessionNumber > 1)
+	{
+		hashTemplate = incubator.getIncubatorCreatureTemplate(station);
+		template = incubator.convertHashTemplateToString(hashTemplate, station);
+	}
+	else
+	{
+		hashTemplate = getIntObjVar(station, incubator.STATION_DNA_CREATURE_TEMPLATE);
+		template = incubator.convertHashTemplateToString(hashTemplate, station);
+	}
+	
+	//begin incrementing values
+	
+	//determine how much armor/dps is gained this session
+	//temp gauge is a scale of 1-10
+	//closer to 1 the more armor, closer to 10 more dps
+	
+	int expertiseBonuse = getEnhancedSkillStatisticModifierUncapped(player, "expertise_bm_incubation_quality");
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your expertiseBonuse is " + expertiseBonuse);
+	}
+	float stationBonus = incubator.getIncubatorQuality(station);
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your stationBonus is " + stationBonus);
+	}
+	int stationPowerQuality = incubator.getStationPowerQuality(station);
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your stationPowerQuality is " + stationPowerQuality);
+	}
+	float powerPercentToMax = (float)stationPowerQuality / (float)incubator.MAX_POWER_QUALITY;
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your powerPercentToMax is " + powerPercentToMax);
+	}
+	float powerBonus = powerPercentToMax * incubator.MAX_BONUS_FOR_POWER_QUALITY;
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your powerBonus is " + powerBonus);
+	}
+	
+	// Bonus from RE skill mod should add a max bonus of 20 to expertiseAndStationQualityBonus
+	// which will result in a max increase to expertiseQualityBonusPercent of 0.2
+	// and a max increase of 1.0 points per session to be used in dps/armor
+	int unmodifiedExoticDpsArmorBonus = getEnhancedSkillStatisticModifierUncapped(player, "bm_incubator_dps_armor");
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your unmodifiedExoticDpsArmorBonus is " + unmodifiedExoticDpsArmorBonus);
+	}
+	if ( unmodifiedExoticDpsArmorBonus > incubator.MAX_RE_EXOTIC_DPS_ARMOR_SKILLMOD )
+		unmodifiedExoticDpsArmorBonus = incubator.MAX_RE_EXOTIC_DPS_ARMOR_SKILLMOD;
+	float exoticDpsArmorBonus = unmodifiedExoticDpsArmorBonus * 2.0f;
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your modified exoticDpsArmorBonus is " + exoticDpsArmorBonus);
+	}
+	
+	float expertiseAndStationQualityBonus = (float)expertiseBonuse + stationBonus + powerBonus + exoticDpsArmorBonus;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") expertiseAndStationQualityBonus = "+ expertiseAndStationQualityBonus);
+	float expertiseQualityBonusPercent = 1.0f;
+	if(expertiseAndStationQualityBonus > 0)
+		expertiseQualityBonusPercent = 1 + (.01f * expertiseAndStationQualityBonus);
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") expertiseQualityBonusPercent = "+ expertiseQualityBonusPercent);
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your expertiseQualityBonusPercent is " + expertiseQualityBonusPercent);
+	}
+	float slotOneQualityWithBonuses = slotOneQuality * expertiseQualityBonusPercent;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") slotOneQualityWithBonuses = "+ slotOneQualityWithBonuses);
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your slotOneQuality is " + slotOneQuality);
+	}
+	
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your slotOneQualityWithBonuses is " + slotOneQualityWithBonuses);
+	}
+	//determine how many points are being added
+	float pointsToArmorOrDps = (slotOneQualityWithBonuses * .01f) * incubator.MAX_POINTS_PER_SESSION_DPS_ARMOR;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") pointsToArmorOrDps = "+ pointsToArmorOrDps);
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your pointsToArmorOrDps is " + pointsToArmorOrDps);
+	}
+	//getDPS Bonuses and set them
+	float percentTowardsDps = tempGaugeSliderPos * incubator.TEMP_SCALE_CONVERSION_TO_PERCENT;
+	float pointsTowardDps = pointsToArmorOrDps * percentTowardsDps;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") pointsTowardDps = "+ pointsTowardDps);
+	if(pointsTowardDps > incubator.MAX_ADJUSTED_POINTS_PER_SESSION_DPS_ARMOR)
+	{
+		pointsTowardDps = incubator.MAX_ADJUSTED_POINTS_PER_SESSION_DPS_ARMOR;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") pointsTowardDps was over max, reseting to max of "+ incubator.MAX_ADJUSTED_POINTS_PER_SESSION_DPS_ARMOR);
+	}
+	
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your pointsTowardDps is " + pointsTowardDps);
+	}
+	
+	//get Armor bonuses and set them
+	float percentTowardsArmor = (incubator.TEMP_SCALE_MAX_RANGE - tempGaugeSliderPos) * incubator.TEMP_SCALE_CONVERSION_TO_PERCENT;
+	float pointsTowardArmor = pointsToArmorOrDps * percentTowardsArmor;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") pointsTowardArmor = "+ pointsTowardArmor);
+	
+	if(pointsTowardArmor > incubator.MAX_ADJUSTED_POINTS_PER_SESSION_DPS_ARMOR)
+	{
+		pointsTowardArmor = incubator.MAX_ADJUSTED_POINTS_PER_SESSION_DPS_ARMOR;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") pointsTowardArmor was over max, reseting to max of "+ incubator.MAX_ADJUSTED_POINTS_PER_SESSION_DPS_ARMOR);
+	}
+
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your pointsTowardArmor is " + pointsTowardArmor);
+	}
+
+	//Added these bonuses to our tracking variable
+	dpsBonus += pointsTowardDps;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") dpsBonus = "+ dpsBonus);
+	armorBonus += pointsTowardArmor;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") armorBonus = "+ armorBonus);
+
+	//gather Stat Bonuses
+	//pair of arrays, one contains attribute names
+	//the other contains attribute bonuses they have a 1 to 1 relationship
+	string[] attributes = incubator.STAT_LIST;
+	float[] attributesUpdateAmount =
+	{
+		0.0f, //hit chance
+		0.0f, //dodge
+		0.0f, //Parry chance
+		0.0f, //glancing blow
+		0.0f, //block chance
+		0.0f, //block value
+		0.0f, //critical hit
+		0.0f, //evasion
+		0.0f, //evasion rataing
+		0.0f, //strikethrough
+		0.0f, //strikethrough rating
+		0.0f  //health
+	};
+
+	//determind how many points are being added
+	expertiseQualityBonusPercent = 1.0f;
+	if(expertiseAndStationQualityBonus > 0)
+		expertiseQualityBonusPercent = 1 + (.01f * expertiseAndStationQualityBonus);
+		
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") expertiseQualityBonusPercent = "+ expertiseQualityBonusPercent);
+		
+	float slotThreeQualityWithBonuses = slotThreeQuality * expertiseQualityBonusPercent;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") slotThreeQualityWithBonuses = "+ slotThreeQualityWithBonuses);
+	float pointsTowardAttrib = (slotThreeQualityWithBonuses * .01f) * incubator.MAX_POINTS_PER_SESSION_ATTRIBUTES;
+	incubator.blog("INCUBATOR", "session("+sessionNumber+") pointsTowardAttrib = "+ pointsTowardAttrib);
+	
+	if(pointsTowardAttrib > incubator.MAX_ADJUSTED_POINTS_PER_SESSION_ATTRIBUTES)
+	{
+		pointsTowardAttrib = incubator.MAX_ADJUSTED_POINTS_PER_SESSION_ATTRIBUTES;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") pointsTowardAttrib was over max, reseting to max of "+ incubator.MAX_ADJUSTED_POINTS_PER_SESSION_ATTRIBUTES);
+	}
+	
+
+	//check to see if we have a free attrib listed
+	if(slotTwoStat != null && !slotTwoStat.equals(""))
+	{
+		//we have a free stat and wee need to update it.
+		for(int i = 0; i < attributes.length; ++i)
+		{
+			if(attributes[i] == slotTwoStat)
+			{
+				attributesUpdateAmount[i] += pointsTowardAttrib;
+				incubator.blog("INCUBATOR", "session("+sessionNumber+") "+attributes[i]+" increasing by "+ attributesUpdateAmount[i]);
+			}
+		}
+	}
+	//get random attrib bonuses
+	if(slotTwoRandomStatCount > 0)
+	{
+		int i = 1;
+		string[] attribUpdated = new string[slotTwoRandomStatCount];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") attribUpdated.length = " + attribUpdated.length);
+		while(i <= slotTwoRandomStatCount) 
+		{
+			int attrib = rand(0, attributes.length -1);
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") attrib = " + attrib);
+			string randomAttrib = attributes[attrib];
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") randomAttrib = " + randomAttrib);
+			if(randomAttrib != slotTwoStat)
+			{
+				for(int j = 0; j < attribUpdated.length; ++j)
+				{
+					incubator.blog("INCUBATOR", "session("+sessionNumber+") attribUpdated.length = " + attribUpdated.length);
+					incubator.blog("INCUBATOR", "session("+sessionNumber+") j = " + j);
+					incubator.blog("INCUBATOR", "session("+sessionNumber+") attribUpdated[j] = "+attribUpdated[j]);
+					if( attribUpdated[j] == null)
+					{
+						incubator.blog("INCUBATOR", "session("+sessionNumber+") attribUpdated[j] was null");
+						attribUpdated[j] = randomAttrib;
+						incubator.blog("INCUBATOR", "session("+sessionNumber+") Attribute Added = "+ attribUpdated[j]);
+						++i;
+						break;
+					}
+					if(randomAttrib == attribUpdated[j])
+						break;
+				}
+			}
+		}
+
+		for(int k = 0; k < attribUpdated.length; ++k)
+		{
+			for( int m = 0; m < attributes.length; ++m)
+			{
+				if(attribUpdated[k] == attributes[m])
+				{
+					attributesUpdateAmount[m] += pointsTowardAttrib;
+					incubator.blog("INCUBATOR", "session("+sessionNumber+") "+attributes[m]+" increasing by "+ attributesUpdateAmount[m]);
+				}
+			}
+		}
+	}
+
+	//determine Bonuses towards skills
+	
+	survivalUpdate 			+= survivalPointsSpent;
+	if(survivalUpdate > incubator.MAX_SESSION_SKILL_INCREMENT)
+	{
+		survivalUpdate = incubator.MAX_SESSION_SKILL_INCREMENT;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") survivalUpdate was larger than max. Setting to max of "+ survivalUpdate);
+	}
+
+	beastialResilienceUpdate 	+= beastialResiliencePointsSpent;
+	if(beastialResilienceUpdate > incubator.MAX_SESSION_SKILL_INCREMENT)
+	{
+		beastialResilienceUpdate = incubator.MAX_SESSION_SKILL_INCREMENT;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") beastialSkillIncrement was larger than max. Setting to max of "+ beastialResilienceUpdate);
+	}
+	
+	cunningUpdate 			+= cunningPointsSpent;
+	if(cunningUpdate > incubator.MAX_SESSION_SKILL_INCREMENT)
+	{
+		cunningUpdate = incubator.MAX_SESSION_SKILL_INCREMENT;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") cunningSkillIncrement was larger than max. Setting to max of "+ cunningUpdate);
+	}
+	
+	intelligenceUpdate 		+= intelligencePointsSpent;
+	if(intelligenceUpdate > incubator.MAX_SESSION_SKILL_INCREMENT)
+	{
+		intelligenceUpdate = incubator.MAX_SESSION_SKILL_INCREMENT;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") intelligenceSkillIncrement was larger than max. Setting to max of "+ intelligenceUpdate);
+	}
+	aggressionUpdate 		+= aggressionPointsSpent;
+	if(aggressionUpdate > incubator.MAX_SESSION_SKILL_INCREMENT)
+	{
+		aggressionUpdate = incubator.MAX_SESSION_SKILL_INCREMENT;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") aggressionSkillIncrement was larger than max. Setting to max of "+ aggressionUpdate);
+	}
+	huntersInstinctUpdate		+= huntersInstinctPointsSpent;
+	if(huntersInstinctUpdate > incubator.MAX_SESSION_SKILL_INCREMENT)
+	{
+		huntersInstinctUpdate = incubator.MAX_SESSION_SKILL_INCREMENT;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") huntersSkillIncrement was larger than max. Setting to max of "+ huntersInstinctUpdate);
+	}
+	
+	
+	//If this is not the first session, then
+	//we need to increment from last session
+	if(sessionNumber > 1)
+	{
+		int previousSession = sessionNumber - 1;
+		//this is not the first session, gather all the data from last session
+		float dpsLastBonus 			= incubator.getFloatBonusLastSession(station, previousSession, "dps");
+		float armorLastBonus 			= incubator.getFloatBonusLastSession(station, previousSession, "armor");
+		string lastTemplate 			= incubator.getTemplateLastSession(station, previousSession);
+		float healthLastBonus 			= incubator.getFloatBonusLastSession(station, previousSession, "health");
+		
+		float hitChanceLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "hit_chance");
+		float dodgeLastBonus	 		= incubator.getFloatBonusLastSession(station, previousSession, "dodge");
+		float glancingBlowLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "glancing_blow");
+		float parryBonusLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "parry_chance");
+		float blockChanceLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "block_chance");
+		float blockValueLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "block_value");
+		float criticalHitLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "critical_hit");
+		float evasionLastBonus			= incubator.getFloatBonusLastSession(station, previousSession, "evasion");
+		float evasionRatingLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "evasion_rating");
+		float strikethroughLastBonus 		= incubator.getFloatBonusLastSession(station, previousSession, "strikethrough");
+		float strikethroughRatingLastBonus	= incubator.getFloatBonusLastSession(station, previousSession, "strikethrough_rating");
+		int survivalLastTotal 			= incubator.getIntBonusLastSession(station, previousSession, "survival");
+		int beastialResilienceLastTotal 	= incubator.getIntBonusLastSession(station, previousSession, "beastialResilience");
+		int cunningLastTotal 			= incubator.getIntBonusLastSession(station, previousSession, "cunning");
+		int intelligenceLastTotal 		= incubator.getIntBonusLastSession(station, previousSession, "intelligence");
+		int aggressionLastTotal 		= incubator.getIntBonusLastSession(station, previousSession, "aggression");
+		int huntersInstinctLastTotal 		= incubator.getIntBonusLastSession(station, previousSession, "huntersInstinct");
+		
+		dpsBonus 			+= dpsLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") dpsBonus = "+ dpsBonus);
+		armorBonus 			+= armorLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") armorBonus = "+ armorBonus);
+		hitChanceBonus 			+= hitChanceLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") hitChanceBonus = "+ hitChanceBonus);
+		dodgeBonus	 		+= dodgeLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") dodgeBonus = "+ dodgeBonus);
+		glancingBlowBonus 		+= glancingBlowLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") glancingBlowBonus = "+ glancingBlowBonus);
+		parryBonus	 		+= parryBonusLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") parryBonus = "+ parryBonus);
+		blockChanceBonus	 	+= blockChanceLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") blockChanceBonus = "+ blockChanceBonus);
+		blockValueBonus	 		+= blockValueLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") blockValueBonus = "+ blockValueBonus);
+		criticalHitBonus 		+= criticalHitLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") criticalHitBonus = "+ criticalHitBonus);
+		evasionBonus	 		+= evasionLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") evasionBonus = "+ evasionBonus);
+		evasionRatingBonus 		+= evasionRatingLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") evasionRatingBonus = "+ evasionRatingBonus);
+		strikethroughBonus 		+= strikethroughLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") strikethroughBonus = "+ strikethroughBonus);
+		strikethroughRatingBonus 	+= strikethroughRatingLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") strikethroughRatingBonus = "+ strikethroughRatingBonus);
+		healthBonus	 		+= healthLastBonus;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") healthBonus = "+ healthBonus);
+		survivalUpdate 			+= survivalLastTotal;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") survivalUpdate = "+ survivalUpdate);
+		beastialResilienceUpdate 	+= beastialResilienceLastTotal;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") beastialResilienceUpdate = "+ beastialResilienceUpdate);
+		cunningUpdate 			+= cunningLastTotal;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") cunningUpdate = "+ cunningUpdate);
+		intelligenceUpdate 		+= intelligenceLastTotal;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") intelligenceUpdate = "+ intelligenceUpdate);
+		aggressionUpdate 		+= aggressionLastTotal;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") aggressionUpdate = "+ aggressionUpdate);
+		huntersInstinctUpdate		+= huntersInstinctLastTotal;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") huntersInstinctUpdate = "+ huntersInstinctUpdate);
+	}
+		
+	
+	//determine if they have gotten a mutation
+	
+	//Quality can help push the random threshold
+	boolean canMutate = incubator.getMutationChance( template, slotOneColor, slotTwoColor, slotThreeColor, station, player);
+	
+	//QA hack to force mutation for them
+	if(hasObjVar(station, "qa.forceMutate") && isGod(player))
+	{
+		canMutate = true;
+	}
+	if(canMutate)
+	{
+		//congrats you get a chance to mutate. Time to calculate what the chance is.
+		//takes into account your enzyme quality, DNA quality, mutagens, and incubator quality
+		
+		// first 3.5 points from dna
+		// second 3.5 from Enzyme Quality
+		// third 3.5 from incubator
+		// fourth 4.5 points from Mutagen
+		// last 0.75 from bm_mutation_chance_increase
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") canMutate = "+ canMutate);
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") can mutate, they have the right color combinations.");
+		float incubatorQuality = incubator.getIncubatorQuality(station);
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") incubator quality is " + incubatorQuality);
+		
+		float dnaQuality = incubator.getIncubatorDnaQuality(station);
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") dna quality is " + dnaQuality);
+		
+		//add the Enzyme qualities together
+		float totalEnzymeQuality = slotOneQuality + slotThreeQuality;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") total Enzyme quality is " + totalEnzymeQuality);
+		
+		//get the average quality
+		float qualityMean = totalEnzymeQuality / 2;//devide by two because that is the number of qualities we are getting the average of.
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") qualityMean = "+ qualityMean);
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") Enzyme quality mean is " + qualityMean);
+		
+		//determine how many points they get for enzyme quality
+		float enzymePercent = qualityMean / incubator.MAX_QUALITY_RANGE;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") Enzyme percent of max was " + enzymePercent);
+		CustomerServiceLog("BeastIncubator: ", "this is calculated by qualityMean(" + qualityMean + ") / incubator.MAX_QUALITY_RANGE(" + incubator.MAX_QUALITY_RANGE + ").");
+		
+		float enzymeBonus = enzymePercent * incubator.MUTATION_BONUS_ENZYME;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") Enzyme bonus is " + enzymeBonus);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by enzymePercent(" + enzymePercent + ") * incubator.MUTATION_BONUS_ENZYME(" + incubator.MUTATION_BONUS_ENZYME + ").");
+		
+		if(isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "enzymeBonus is " + enzymeBonus);
+		}
+		//determine how many points tehy get for DNA quality
+		float dnaPercent = dnaQuality / incubator.MAX_QUALITY_RANGE;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") dna percent of max was " + dnaPercent);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by dnaQuality(" + dnaQuality + ") / incubator.MAX_QUALITY_RANGE(" + incubator.MAX_QUALITY_RANGE + ").");
+		
+		float dnaBonus = dnaPercent * incubator.MUTATION_BONUS_DNA;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") dna bonus " + dnaBonus);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by dnaPercent(" + dnaPercent + ") * incubator.MUTATION_BONUS_DNA(" + incubator.MUTATION_BONUS_DNA + ").");
+
+		if(isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "dnaBonus is " + dnaBonus);
+		}
+		//determine how many points they get for Mutagens		
+		float percentToMutagenCap = slotFourMutagen / incubator.MAX_MUTAGEN_POINTS;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") percent to mutagen cap " + percentToMutagenCap);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by slotFourMutagen(" + slotFourMutagen + ") / incubator.MAX_MUTAGEN_POINTS(" + incubator.MAX_MUTAGEN_POINTS + ").");
+
+		float mutagenBonus = percentToMutagenCap * incubator.MUTATION_BONUS_MUTAGEN;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") mutagen bonus " + mutagenBonus);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by percentToMutagenCap(" + percentToMutagenCap + ") * incubator.MUTATION_BONUS_MUTAGEN(" + incubator.MUTATION_BONUS_MUTAGEN + ").");
+
+		if(isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "mutagenBonus is " + mutagenBonus);
+		}
+		//determine the incubator bonus
+		float incubatorPercent = incubatorQuality / incubator.STATION_QUALITY_MAX;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") incubator percent of max was " + incubatorPercent);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by incubatorQuality(" + incubatorQuality + ") / incubator.STATION_QUALITY_MAX(" + incubator.STATION_QUALITY_MAX + ").");
+
+		float incubatorBonus = incubatorPercent * incubator.MUTATION_BONUS_INCUBATOR;
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") incubator bonus " + incubatorBonus);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by incubatorPercent(" + incubatorPercent + ") * incubator.MUTATION_BONUS_INCUBATOR(" + incubator.MUTATION_BONUS_INCUBATOR + ").");
+
+		if(isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "incubatorBonus is " + incubatorBonus);
+		}
+		
+		// Bonus from RE skill mod bit should add a max bonus of 0.75 to mutationChance with all three max RE buffs (10 pts in the skill mod)
+		int unmodifiedExoticMutationBonus = getEnhancedSkillStatisticModifierUncapped(player, "bm_mutation_chance_increase");
+		if(isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "Your unmodifiedExoticMutationBonus is " + unmodifiedExoticMutationBonus);
+		}
+		if ( unmodifiedExoticMutationBonus > incubator.MAX_RE_EXOTIC_MUTATION_SKILLMOD )
+			unmodifiedExoticMutationBonus = incubator.MAX_RE_EXOTIC_MUTATION_SKILLMOD;
+		float exoticMutationBonus = unmodifiedExoticDpsArmorBonus * 0.075f;
+		if(isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "Your modified exoticMutationBonus is " + exoticMutationBonus);
+		}
+		
+		//add the bonuses to get the mutation chance
+		int mutationChance = Math.round(incubator.BASE_MUTATION_CHANCE + enzymeBonus + dnaBonus + mutagenBonus + incubatorBonus + exoticMutationBonus);
+		CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") mutation chance was " + mutationChance);
+		CustomerServiceLog("BeastIncubator: ", "This is calculated by Math.round(enzymeBonus("+enzymeBonus+") + dnaBonus("+dnaBonus+") + mutagenBonus("+mutagenBonus+") + incubatorBonus("+incubatorBonus+") + exoticMutationBonus("+exoticMutationBonus+")).");
+
+		if(mutationChance > incubator.MUTATION_MAX_INCREASE)
+		{
+			CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") mutation chance was larger than cap, so we are setting it to cap of " + incubator.MUTATION_MAX_INCREASE);
+
+			mutationChance = incubator.MUTATION_MAX_INCREASE;
+		}
+			
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") MutationChance is: " + mutationChance + " = Math.round(" + enzymeBonus + " + " + dnaBonus + " + " + mutagenBonus + " + " + incubatorBonus + " + "+ exoticMutationBonus +")");
+		int chance = rand(1,100);
+		if(isGod(player))
+		{
+			sendSystemMessageTestingOnly(player, "To get a mutation you need to roll less than or equal to your mutation chance.");
+			sendSystemMessageTestingOnly(player, "mutationChance is " + mutationChance);
+			sendSystemMessageTestingOnly(player, "and you rolled an " + chance);
+		}
+		//QA hack to force mutation for them
+		if(hasObjVar(station, "qa.forceMutate") && isGod(player))
+		{
+			CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") has an incubator with the objvar 'qa.forceMutate', so we are setting mutation chance to 100");
+			mutationChance = 100;
+		}
+		if(chance <= mutationChance)
+		{
+			CustomerServiceLog("BeastIncubator: ", "player " + getFirstName(player) + "(" + player + ") is mutating they rolled a " + chance + " when they needed " + mutationChance + " or lower");
+			//congrats you have mutated the creature successfully
+			newTemplate = incubator.getMutatedTemplate(template, sessionNumber, station, player);
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") Mutated::newTemplate = "+ newTemplate);
+			//if template didnt change, we then give the player a small bonus to an attribute
+			if(template.equals(newTemplate))
+			{
+				//gives attribute bonuses to players who mutated but didnt get a new appearance
+				incubator.giveMutationAttributeBonus(station, player, attributesUpdateAmount, attributes);
+			}
+			else
+			{
+				//gives skill point bonuses to players who mutated with new appearance.
+				int[] skillArray =
+				{
+					survivalUpdate,
+					beastialResilienceUpdate,
+					cunningUpdate,
+					intelligenceUpdate,
+					aggressionUpdate,
+					huntersInstinctUpdate
+				};
+				
+				incubator.giveMutationSkillBonus(station, player, skillArray, newTemplate);
+				
+				survivalUpdate			= skillArray[0];
+				beastialResilienceUpdate	= skillArray[1];
+				cunningUpdate			= skillArray[2];
+				intelligenceUpdate		= skillArray[3];
+				aggressionUpdate		= skillArray[4];
+				huntersInstinctUpdate		= skillArray[5];
+			}
+		}
+		else
+		{
+			//no mutation, so template stays
+			newTemplate = template;
+			incubator.blog("INCUBATOR", "session("+sessionNumber+") nonMutated::newTemplate = "+ newTemplate);
+		}
+	}
+	else
+	{
+		//no mutation, so template stays
+		newTemplate = template;
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") canMutate = "+ canMutate);
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") NoChanceMutate::newTemplate = "+ newTemplate);
+	}
+	
+	//update totals for attributes
+	hitChanceBonus 			+= attributesUpdateAmount[0];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") hitChanceBonus = "+ hitChanceBonus);
+	dodgeBonus	 		+= attributesUpdateAmount[1];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") dodgeBonus = "+ dodgeBonus);
+	parryBonus	 		+= attributesUpdateAmount[2];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") parryBonus = "+ parryBonus);
+	glancingBlowBonus 		+= attributesUpdateAmount[3];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") glancingBlowBonus = "+ glancingBlowBonus);
+	blockChanceBonus		+= attributesUpdateAmount[4];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") blockChanceBonus = "+ blockChanceBonus);
+	blockValueBonus			+= attributesUpdateAmount[5];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") blockValueBonus = "+ blockValueBonus);
+	criticalHitBonus 		+= attributesUpdateAmount[6];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") glancingBlowBonus = "+ criticalHitBonus);
+	evasionBonus 			+= attributesUpdateAmount[7];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") evasionBonus = "+ evasionBonus);
+	evasionRatingBonus 		+= attributesUpdateAmount[8];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") evasionRatingBonus = "+ evasionRatingBonus);
+	strikethroughBonus 		+= attributesUpdateAmount[9];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") strikethroughBonus = "+ strikethroughBonus);
+	strikethroughRatingBonus 	+= attributesUpdateAmount[10];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") strikethroughRatingBonus = "+ strikethroughRatingBonus);
+	healthBonus			+= attributesUpdateAmount[11];
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") healthBonus = "+ healthBonus);
+
+
+	//convert newTemplate to Hash version for storing as objvar
+	int row = -1;
+	int lastMutatedSession = incubator.getLastSessionMutated(station);
+	if(lastMutatedSession >= 1)
+	{
+		
+		row = dataTableSearchColumnForString(newTemplate, "mutated_template_" + lastMutatedSession, incubator.DATATABLE_INCUBATOR_TEMPLATES);
+		hashTemplate = dataTableGetInt(incubator.DATATABLE_INCUBATOR_TEMPLATES, row, "hash_mutated_template_" + lastMutatedSession);
+	}
+	else
+	{
+		row = dataTableSearchColumnForString(newTemplate, "initial_template", incubator.DATATABLE_INCUBATOR_TEMPLATES);
+		hashTemplate = dataTableGetInt(incubator.DATATABLE_INCUBATOR_TEMPLATES, row, "hash_initial_template");
+	}
+	
+	if(isGod(player))
+	{
+		sendSystemMessageTestingOnly(player, "Your total dps Bonus = " + dpsBonus);
+		sendSystemMessageTestingOnly(player, "Your total armor Bonus = " + armorBonus);
+		sendSystemMessageTestingOnly(player, "Your total dps+Armor Bonus = " + (dpsBonus + armorBonus) );
+	}
+	
+	//time store all this sesssions variables
+	dictionary dict = new dictionary();
+	
+	dict.put("dpsBonus", 			dpsBonus);
+	dict.put("pointsTowardDps",		pointsTowardDps);
+	dict.put("armorBonus", 			armorBonus);
+	dict.put("pointsTowardArmor", 		pointsTowardArmor);
+	dict.put("newTemplate", 		hashTemplate);
+	dict.put("hitChanceBonus", 		hitChanceBonus);
+	dict.put("hitChanceUpdate", 		attributesUpdateAmount[0]);
+	dict.put("dodgeBonus", 			dodgeBonus);
+	dict.put("dodgeUpdate", 		attributesUpdateAmount[1]);
+	dict.put("parryBonus", 			parryBonus);
+	dict.put("parryChanceUpdate", 		attributesUpdateAmount[2]);
+	dict.put("glancingBlowBonus", 		glancingBlowBonus);
+	dict.put("glancingBlowUpdate", 		attributesUpdateAmount[3]);
+	dict.put("blockChanceBonus", 		blockChanceBonus);
+	dict.put("blockChanceUpdate", 		attributesUpdateAmount[4]);
+	dict.put("blockValueBonus", 		blockValueBonus);
+	dict.put("blockValueUpdate", 		attributesUpdateAmount[5]);
+	dict.put("criticalHitBonus", 		criticalHitBonus);
+	dict.put("criticalHitUpdate", 		attributesUpdateAmount[6]);
+	dict.put("evasionBonus", 		evasionBonus);
+	dict.put("evasionUpdate", 		attributesUpdateAmount[7]);
+	dict.put("evasionRatingBonus", 		evasionRatingBonus);
+	dict.put("evasionRatingUpdate", 	attributesUpdateAmount[8]);
+	dict.put("strikethroughBonus", 		strikethroughBonus);
+	dict.put("strikethroughUpdate", 	attributesUpdateAmount[9]);
+	dict.put("strikethroughRatingBonus", 	strikethroughRatingBonus);
+	dict.put("strikethroughRatingUpdate", 	attributesUpdateAmount[10]);
+	dict.put("healthBonus", 		healthBonus);
+	dict.put("healthUpdate", 		attributesUpdateAmount[11]);
+	dict.put("survivalUpdate", 		survivalUpdate);	
+	dict.put("beastialResilienceUpdate", 	beastialResilienceUpdate);
+	dict.put("cunningUpdate", 		cunningUpdate);
+	dict.put("intelligenceUpdate", 		intelligenceUpdate);
+	dict.put("aggressionUpdate", 		aggressionUpdate);
+	dict.put("huntersInstinctUpdate", 	huntersInstinctUpdate);
+	dict.put("sessionNumber", 		sessionNumber);
+	
+	dict.put("slotOneQuality", 		slotOneQuality);
+	dict.put("slotThreeQuality", 		slotThreeQuality);
+	dict.put("slotTwoRandomStatCount", 	slotTwoRandomStatCount);
+	dict.put("slotFourMutagen", 		slotFourMutagen);
+	dict.put("slotFourPurity", 		slotFourPurity);
+	dict.put("slotFourTrait", 		slotFourTrait);
+	
+	dict.put("survivalSkillIncrement", 	survivalPointsSpent);
+	dict.put("beastialSkillIncrement", 	beastialResiliencePointsSpent);
+	dict.put("cunningSkillIncrement", 	cunningPointsSpent);
+	dict.put("intelligenceSkillIncrement", 	intelligencePointsSpent);
+	dict.put("aggressionSkillIncrement", 	aggressionPointsSpent);
+	dict.put("huntersSkillIncrement", 	huntersInstinctPointsSpent);
+	dict.put("tempGaugeSliderPos", 		tempGaugeSliderPos);
+	dict.put("nutGaugeSliderPos", 		nutGaugeSliderPos);
+	dict.put("slotOneColor", 		slotOneColor);
+	dict.put("slotTwoColor", 		slotTwoColor);
+	dict.put("slotThreeColor", 		slotThreeColor);
+	dict.put("slotTwoStat", 		slotTwoStat);
+
+	dict.put("creatureHueIndex", 		newCreatureColorIndex);
+	
+	boolean updated = incubator.updateSessionVariables(station, dict);
+	
+	if(!updated)
+		incubator.blog("INCUBATOR", "session("+sessionNumber+") Something went wrong, we didnt update right.");
+					
+	//increment session
+	incubator.setNextSessionTime(station, player);
+	incubator.decrementPowerForSession(station);
+	//update scriptVar to help stop exploiting lag
+	int currentTime = getGameTime();
+	utils.setScriptVar(player, incubator.GUI_SCRIPT_VAR, currentTime);
+	
+	incubator.advanceSessionParticle(station);
+	
+	
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ------------------------
+
+trigger OnIncubatorCommitted(
+	obj_id playerId, 
+	obj_id terminalId,
+	obj_id slot1Id,
+	obj_id slot2Id,
+	obj_id slot3Id,
+	obj_id slot4Id,
+	int initialPointsSurvival, 
+	int initialPointsBeastialResilience,
+	int initialPointsCunning,
+	int initialPointsIntelligence,
+	int initialPointsAggression,
+	int initialPointsHuntersInstinct,
+	int totalPointsSurvival,
+	int totalPointsBeastialResilience,
+	int totalPointsCunning,
+	int totalPointsIntelligence,
+	int totalPointsAggression,
+	int totalPointsHuntersInstinct,
+	int temperatureGauge,
+	int nutrientGauge,
+	int newCreatureColorIndex
+)
+{
+	prose_package pp = new prose_package();
+	string playerName = getPlayerName(playerId);
+	pp = prose.setTT(pp, playerName);
+	pp = prose.setStringId(pp, SID_CHEATER_TRANSFER);
+		
+	if(isIdValid(slot1Id) && !utils.isNestedWithin(slot1Id, playerId) && exists(slot1Id))
+	{
+		obj_id newOwner = getContainedBy(slot1Id);
+		CustomerServiceLog("SuspectedCheaterChannel: ", "Player (" + playerId + ") has moved Enzyme (" + slot1Id + ") from their inventory to container (" + newOwner + "). While trying to use it simultaneously in an incubator. Possible cheater.");
+		sendSystemMessageProse(playerId, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isIdValid(slot2Id) && !utils.isNestedWithin(slot2Id, playerId) && exists(slot2Id))
+	{
+		obj_id newOwner = getContainedBy(slot2Id);
+		CustomerServiceLog("SuspectedCheaterChannel: ", "Player (" + playerId + ") has moved Enzyme (" + slot2Id + ") from their inventory to container (" + newOwner + "). While trying to use it simultaneously in an incubator. Possible cheater.");
+		sendSystemMessageProse(playerId, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isIdValid(slot3Id) && !utils.isNestedWithin(slot3Id, playerId) && exists(slot3Id))
+	{
+		obj_id newOwner = getContainedBy(slot3Id);
+		CustomerServiceLog("SuspectedCheaterChannel: ", "Player (" + playerId + ") has moved Enzyme (" + slot3Id + ") from their inventory to container (" + newOwner + "). While trying to use it simultaneously in an incubator. Possible cheater.");
+		sendSystemMessageProse(playerId, pp);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isIdValid(slot4Id) && !utils.isNestedWithin(slot4Id, playerId) && exists(slot4Id))
+	{
+		obj_id newOwner = getContainedBy(slot4Id);
+		CustomerServiceLog("SuspectedCheaterChannel: ", "Player (" + playerId + ") has moved Enzyme (" + slot4Id + ") from their inventory to container (" + newOwner + "). While trying to use it simultaneously in an incubator. Possible cheater.");
+		sendSystemMessageProse(playerId, pp);
+		return SCRIPT_CONTINUE;
+	}
+	
+	//hacking checks
+	
+	obj_id selfActiveUser = obj_id.NULL_ID;
+	obj_id passedTerminalActiveUser = obj_id.NULL_ID;
+	
+	if(incubator.hasActiveUser(self))
+	{
+		selfActiveUser = incubator.getIncubatorActiveUser(self);
+	}
+	
+	if(incubator.hasActiveUser(terminalId))
+	{
+		passedTerminalActiveUser = incubator.getIncubatorActiveUser(terminalId);
+	}
+	
+	if(playerId != selfActiveUser || playerId != passedTerminalActiveUser)
+	{
+		sendSystemMessage(playerId, SID_CHEATER_BAD_ID);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(terminalId != self)
+	{
+		sendSystemMessage(playerId, SID_CHEATER_BAD_ID);
+		return SCRIPT_CONTINUE;
+	}
+	
+	
+	dictionary dict = new dictionary();
+	dict.put("player", playerId);
+	dict.put("station", terminalId);
+	dict.put("slot1Id", slot1Id);
+	dict.put("slot2Id", slot2Id);
+	dict.put("slot3Id", slot3Id);
+	dict.put("slot4Id", slot4Id);
+	
+	dict.put("initialPointsSurvival", initialPointsSurvival);
+	dict.put("initialPointsBeastialResilience", initialPointsBeastialResilience);
+	dict.put("initialPointsCunning", initialPointsCunning);
+	dict.put("initialPointsIntelligence", initialPointsIntelligence);
+	dict.put("initialPointsAggression", initialPointsAggression);
+	dict.put("initialPointsHuntersInstinct", initialPointsHuntersInstinct);
+	
+	dict.put("totalPointsSurvival", totalPointsSurvival);
+	dict.put("totalPointsBeastialResilience", totalPointsBeastialResilience);
+	dict.put("totalPointsCunning", totalPointsCunning);
+	dict.put("totalPointsIntelligence", totalPointsIntelligence);
+	dict.put("totalPointsAggression", totalPointsAggression);
+	dict.put("totalPointsHuntersInstinct", totalPointsHuntersInstinct);
+	
+	dict.put("temperatureGauge", temperatureGauge);
+	dict.put("nutrientGauge", nutrientGauge);
+	dict.put("newCreatureColorIndex", newCreatureColorIndex);
+	
+	messageTo(terminalId, "handlerIncubatorSessionUpdate", dict, 0, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler refreshCurrentParticle()
+{
+	obj_id station = self;
+
+	//get current particle
+	string labelName = incubator.getCurrentSessionParticleLabelName(station);
+	string sessionParticle = incubator.getCurrentSessionParticle(station);
+	string hardPoint = incubator.getCurrentParticleHardpoint(sessionParticle);
+	
+	if((labelName != "" && labelName != null) && 
+	(sessionParticle != "" && sessionParticle != null) &&
+	(hardPoint != "" && hardPoint != null))
+	{
+		//stopClientEffectObjByLabel(station, labelName);
+		incubator.stopAllSessionParticles(station);
+		
+		utils.setScriptVar(station, incubator.PARTICLE_LABEL_SCRIPT_VAR, labelName);
+		playClientEffectObj(station, sessionParticle, station, hardPoint,null, labelName);
+	}
+	
+	return SCRIPT_CONTINUE;
+}

@@ -1,0 +1,388 @@
+include library.ai_lib;
+include ai.ai_combat;
+include library.factions;
+include library.chat;
+include library.attrib;
+include library.utils;
+
+const string ALERT_VOLUME_NAME = "alertTriggerVolume";
+
+const string SOCIAL_VOLUME = "npc_socialization";
+const float SOCIAL_RANGE = 15f;
+
+const string ACTION_ALERT = "alert";
+const string ACTION_THREATEN = "threaten";
+
+const int CONVO_LENGTH = 300;
+
+const string CREATURE_TABLE = "datatables/mob/creatures.iff";
+
+trigger OnAttach()
+{
+	if ( getConfigSetting("GameServer", "disableAITriggerVolumes") == null )
+		createTriggerVolume( SOCIAL_VOLUME, SOCIAL_RANGE, false );
+
+	//set diction:
+	string diction = "townperson";
+	switch ( rand( 1, 3 ))
+	{
+		case 1 :
+			diction = "townperson_fancy";
+			break;
+		case 2 :
+			diction = "townperson_slang";
+			break;
+		case 3 :
+			diction = "townperson";
+			break;
+	}
+	setObjVar( self, "ai.diction", diction );
+
+	//set faction:
+	factions.setFaction( self, "townperson" );
+	switch ( rand( 1,5) )
+	{
+		case 1 :
+			factions.setFaction( self, "ImperialCitizen" );
+			break;
+		case 2 :
+			factions.setFaction( self, "RebelCitizen" );
+			break;
+	}
+
+	attachScript( self, "theme_park.tatooine.city_convo" );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAddedToWorld()
+{
+	utils.removeScriptVar( self, "ai.speaking" );
+	if ( getConfigSetting("GameServer", "disableAITriggerVolumes") == null )
+		createTriggerVolume( SOCIAL_VOLUME, SOCIAL_RANGE, false );
+
+	setAttributeAttained(self, attrib.TOWNSPERSON );
+	setAttributeInterested(self, attrib.TOWNSPERSON );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	if ( hasObjVar( breacher, "gm") )
+		return SCRIPT_CONTINUE;
+
+	//debugSpeakMsg( self, volumeName + " breached by " + breacher );
+	if ( breacher == self )
+		return SCRIPT_CONTINUE;
+
+	if ( isIncapacitated(self) )
+		return SCRIPT_CONTINUE;
+
+	//debugSpeakMsg( self, volumeName + " breached by " + breacher );
+	if ( volumeName == ALERT_VOLUME_NAME )
+	{
+		if ( hasScript( breacher, "ai.townperson") )
+		{
+			//debugSpeakMsg( self, "adding " + breacher  + " to " + SOCIAL_VOLUME );
+			addTriggerVolumeEventSource(SOCIAL_VOLUME, breacher);
+		}
+		return SCRIPT_CONTINUE;
+	}
+	if ( volumeName == SOCIAL_VOLUME )
+	{
+		if ( !isPlayer( breacher) )
+			initiateDialog( self, breacher );
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited( string volumeName, obj_id breacher )
+{
+	//debugSpeakMsg( self, volumeName + " breached by " + breacher );
+	if ( volumeName == ALERT_VOLUME_NAME )
+	{
+		if ( hasScript( breacher, "ai.townperson") )
+		{
+			//debugSpeakMsg( self, "removing " + breacher  + " from " + SOCIAL_VOLUME );
+			removeTriggerVolumeEventSource(SOCIAL_VOLUME, breacher);
+		}
+		return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler cancelFacing()
+{
+	utils.removeScriptVar( self, "ai.speaking" );
+	if ( getBehavior( self ) == BEHAVIOR_CALM )
+		messageTo( self, "resumeDefaultCalmBehavior", null, 5, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+void initiateDialog( obj_id talker, obj_id listener )
+{
+	if ( ai_lib.isInCombat( talker ) || ai_lib.isInCombat( listener ) )
+		return;
+
+	if ( ai_lib.isFollowing(talker) || ai_lib.isFollowing(listener) )
+		return;
+
+	aiUnEquipWeapons(talker);
+	aiUnEquipWeapons(listener);
+
+	if ( utils.hasScriptVar( talker, "ai.speaking") || utils.hasScriptVar( listener, "ai.speaking" ))
+		return;
+
+	if ( getBehavior( talker ) >= BEHAVIOR_THREATEN || getBehavior( listener ) >= BEHAVIOR_THREATEN )
+		return;
+
+	if ( getIntObjVar( listener, "ai.defaultCalmBehavior" ) == ai_lib.BEHAVIOR_SENTINEL ||
+		getIntObjVar( talker, "ai.defaultCalmBehavior" ) == ai_lib.BEHAVIOR_SENTINEL )
+			return;
+
+	utils.setScriptVar( talker, "ai.speaking", listener );
+	utils.setScriptVar( listener, "ai.speaking", talker );
+	stop( talker );
+	stop( listener );
+	faceTo( listener, talker );
+	utils.setScriptVar( talker, "ai.pathingToSocialize", listener );
+	utils.setScriptVar( listener, "ai.pathingToSocialize", talker );
+	location pathToLoc = new location( getLocation( listener ) );
+	location myLoc = getLocation( talker );
+	if ( pathToLoc.x < myLoc.x )
+		pathToLoc.x += 1.5f;
+	else
+		pathToLoc.x -= 1.5f;
+
+	if ( pathToLoc.z < myLoc.z )
+		pathToLoc.z += 1.5f;
+	else
+		pathToLoc.z -= 1.5f;
+	pathTo( talker, pathToLoc );
+}
+
+trigger OnMovePathComplete()
+{
+	if ( !utils.hasScriptVar( self, "ai.pathingToSocialize"))
+		return SCRIPT_CONTINUE;
+
+	obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+	if ( exists(listener) )
+	{
+		faceTo( self, listener);
+		faceTo( listener, self );
+
+		ai_lib.greet( self, listener);
+
+		ai_lib.doAction( self, "conversation_"+getGender(self) );
+		ai_lib.doAction( listener, "conversation_"+getGender(listener) );
+	}
+	messageTo( self, "handleEndSocializing", null, CONVO_LENGTH, isObjectPersisted( self ) );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleEndSocializing()
+{
+	if ( !utils.hasScriptVar( self, "ai.pathingToSocialize"))
+		return SCRIPT_CONTINUE;
+
+	obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+	endSocializing( self, listener );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathNotFound()
+{
+	if ( !utils.hasScriptVar( self, "ai.pathingToSocialize"))
+		return SCRIPT_CONTINUE;
+
+	obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+	endSocializing( self, listener );
+	return SCRIPT_CONTINUE;
+}
+
+void endSocializing( obj_id talker, obj_id listener )
+{
+	if ( getBehavior( talker ) == BEHAVIOR_CALM )
+	{
+		ai_lib.setMood( talker, ai_lib.MOOD_CALM );
+		ai_lib.dismiss( talker, listener );
+		messageTo( talker, "resumeDefaultCalmBehavior", null, 5, false );
+	}
+
+	if ( getBehavior( listener ) == BEHAVIOR_CALM )
+	{
+		ai_lib.setMood( listener, ai_lib.MOOD_CALM );
+		ai_lib.doAction( listener, "wave"+rand(1,2) );
+		messageTo( listener, "resumeDefaultCalmBehavior", null, 8, false );
+	}
+
+	utils.removeScriptVar( talker, "ai.pathingToSocialize" );
+	utils.removeScriptVar( listener, "ai.pathingToSocialize" );
+	utils.removeScriptVar( talker, "ai.speaking" );
+	utils.removeScriptVar( listener, "ai.speaking");
+}
+
+trigger OnBehaviorChange( int newBehavior, int oldBehavior, int[] changeFlags )
+{
+	if ( isIncapacitated(self) )
+		return SCRIPT_CONTINUE;
+
+	//debugSpeakMsg( self, "newbehavior: " + newBehavior );
+
+	if ( newBehavior > oldBehavior )
+	{
+		if ( utils.hasScriptVar( self, "ai.pathingToSocialize") )
+		{
+			obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+			endSocializing( self, listener );
+		}
+		if ( newBehavior >= BEHAVIOR_ALERT && newBehavior < BEHAVIOR_ATTACK )
+		{
+			doAgitateBehavior( self, newBehavior );
+			return SCRIPT_OVERRIDE;//don't do the default AI thing
+		}
+		else
+		{
+		   //debugSpeakMsg( self, newBehavior + " is not between " + BEHAVIOR_ALERT + " and " + BEHAVIOR_ATTACK );
+		}
+		return SCRIPT_CONTINUE;
+	}
+	else if ( newBehavior == BEHAVIOR_CALM )
+	{
+		//debugSpeakMsg( self, "now I am calm again" );
+		if ( utils.hasScriptVar( self, "ai.speaking"))
+		{
+			ai_lib.setMood( self, ai_lib.MOOD_CALM );
+			return SCRIPT_OVERRIDE;
+		}
+		if ( oldBehavior != BEHAVIOR_CALM )
+		{
+			chat.setNeutralMood( self );
+			ai_lib.barkString( self, "calm" );//newly calm and not conversing
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+void doAgitateBehavior( obj_id npc, int behavior )
+{
+	if ( isInvulnerable( npc ) )
+		return;
+
+	//debugSpeakMsg( npc, "doing custom thing" );
+	//obj_id threat = ai_lib.getBehaviorTarget( npc, behavior );
+	//if ( threat == null )
+		return;
+	//else
+	//	setObjVar( npc, "ai.threat", threat );
+	//
+	//switch ( behavior )
+	//{
+	//	case BEHAVIOR_ALERT:
+	//		if (!hasObjVar(npc, "ai.pathingAwayFrom" ))
+	//			stop( npc );
+	//		ai_lib.setMood( npc, ai_lib.MOOD_NERVOUS );
+	//		break;
+	//	case BEHAVIOR_THREATEN:
+	//		faceTo( npc, threat );
+	//		ai_lib.doAction( npc, ACTION_THREATEN );
+	//		ai_lib.setMood( npc, ai_lib.MOOD_THREATEN );
+	//		break;
+	//	case BEHAVIOR_FLEE:
+	//		chat.setBadMood( npc );
+	//		ai_lib.barkString( npc, "flee" );
+	//		ai_lib.setMood( npc, ai_lib.MOOD_NERVOUS );
+	//		setMovementRun( npc );
+	//	   	flee( npc, threat, 5f, 10f );
+	//		break;
+	//	case BEHAVIOR_PANIC:
+	//		chat.setAngryMood( npc );
+	//		ai_lib.barkString( npc, "flee" );
+	//		ai_lib.setMood( npc, ai_lib.MOOD_NERVOUS );
+	//		setMovementRun( npc );
+	//	   	flee( npc, threat, 5f, 10f );
+	//		break;
+ 	//	default :
+	//		//debugSpeakMsg( npc,  "default: " + behavior );
+	//		break;
+	//}
+}
+
+trigger OnTargeted(obj_id attacker )
+{
+	if ( isInvulnerable( self ) )
+		return SCRIPT_OVERRIDE;
+
+	addToMentalStateToward(self, attacker, FEAR, 100f );
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnEnteredCombat()
+{
+	if ( isInvulnerable( self ) )
+		return SCRIPT_OVERRIDE;
+
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	if ( utils.hasScriptVar( self, "ai.speaking") )
+	{
+		obj_id listener = utils.getObjIdScriptVar( self, "ai.speaking" );
+		if ( listener != speaker )
+			endSocializing( self, listener );
+	}
+	utils.setScriptVar( self, "ai.speaking", speaker );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEndNpcConversation(obj_id speaker )
+{
+	utils.removeScriptVar( self, "ai.speaking" );
+	if ( getBehavior(self) == BEHAVIOR_CALM )
+		messageTo( self, "resumeDefaultCalmBehavior", null, 5, false );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler resumeDefaultCalmBehavior()
+{
+	if ( utils.hasScriptVar( self, "ai.speaking" ))
+		return SCRIPT_OVERRIDE;
+
+	if ( getBehavior(self) == BEHAVIOR_CALM )
+	{
+		aiUnEquipWeapons(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSawAttack(obj_id defender, obj_id[] attackers)
+{
+	if ( getConfigSetting("GameServer", "disableAICombat")!=null )
+	{
+		setWantSawAttackTriggers(self, false);
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( ai_lib.isAiDead( self ) || isInvulnerable( self ) )
+	{
+		setWantSawAttackTriggers(self, false);
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( !utils.hasScriptVar( self, "ai.pathingToSocialize"))
+		return SCRIPT_CONTINUE;
+
+	setAnimationMood( self, "nervous" );
+
+	obj_id listener = utils.getObjIdScriptVar( self, "ai.pathingToSocialize");
+	endSocializing( self, listener );
+	return SCRIPT_CONTINUE;
+}

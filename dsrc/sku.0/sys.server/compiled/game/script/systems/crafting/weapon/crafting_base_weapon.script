@@ -1,0 +1,293 @@
+/**
+ * Copyright (c) ©2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        test_crafting_base_weapon.script
+ * Description:  base crafting script used by all weapons
+ * @author       $Author: Reece Thornton & Friends$
+ * @version      $Revision: 0$
+ */
+
+/**
+ * Include Libraries
+ */
+// include anyLibrary;	/** a .scriptlib file */
+include library.utils;
+include library.craftinglib;
+include library.weapons;
+include library.prose;
+include java.lang.Math;
+
+inherits systems.crafting.crafting_base;
+
+/** The version number of this script. */
+const string VERSION = "v1.00.00";
+const float MAX_STAT_INTENSITY = 1.00f;  // weapon stats can be no higher than 100% of what is listed in the weapon master table
+
+/**
+ * Merge the crafting dictionary into the item attributes, and write them to the prototype.
+ *
+ * @param prototype						the prototype object
+ * @param itemAttributes				attributes of the prototype
+ * @param craftingValuesDictionary      dictionary containing component updates to the item attributes
+ **/
+void calcAndSetPrototypeProperties ( obj_id prototype, draft_schematic.attribute[] itemAttributes, dictionary craftingValuesDictionary )
+{
+	// some of the component values need to be inverted before being added to the object's attribs
+	for ( int i = 0; i < itemAttributes.length; ++i )
+	{
+	  	if (itemAttributes[i] == null)
+	  		continue;
+
+		if ( itemAttributes[i].name.getAsciiId().equals("attackSpeed") ||
+			 itemAttributes[i].name.getAsciiId().equals("attackCost"))
+		{
+			itemAttributes[i].currentValue = (itemAttributes[i].minValue + itemAttributes[i].maxValue) - itemAttributes[i].currentValue;
+		}
+	}
+	super.calcAndSetPrototypeProperties ( prototype, itemAttributes, craftingValuesDictionary );
+}
+
+/* -----------------3/4/2002 1:48PM------------------
+ * Function calcAndSetPrototypeProperties
+ *
+ * This function reads in the final item attributes that are about to be written into the manufacturing schematic, looks up modifications to these attributes
+ * due to component-ingredients from the craftingValuesDictionary, sums them, and then writes the final property values to the prototype item.
+ * NOTE: Whatever happens, make sure to cast the attribute array data into the appropriate form before setting the property. The item will want float instead of int for some properties
+ *
+ * @param prototype - this is the obj_id of the prototype object
+ * @param draft_schematic.slot[] itemAttributes - this is the array of all of the item's inital Attributes. These will be updated with the skill-check and resource assembly results.
+ *
+ * @return - this function doesn't return anything, rather, it updates the prototype's property values with the results of the assembly phase
+ * --------------------------------------------------*/
+void calcAndSetPrototypeProperties ( obj_id prototype, draft_schematic.attribute[] itemAttributes)
+{
+	//initialize storage for weapon range data
+	base_class.range_info rangeData = new base_class.range_info();
+
+	// here we go...
+	float curCraftVal = 0;
+	float curMasterVal = 0;
+	float curMaxVal = 0;
+
+	dictionary weaponDat = weapons.getWeaponDat(prototype);
+	if(weaponDat == null)
+	{
+		CustomerServiceLog("weaponsCraftingError", "Unable to load master weapon data for object " + prototype + "(" + getTemplateName(prototype) + "). Aborting crafting process.");
+		return;
+	}
+
+	int damageType = weapons.getDamageType(weaponDat);
+	int elementalType = weapons.getElementalType(weaponDat);
+	int elementalValue = weapons.getElementalValueLow(weaponDat);
+	int accuracy = 0;
+
+	debugServerConsoleMsg(null, "Beginning assembly-phase prototype property setting");
+	for ( int i = 0; i < itemAttributes.length; ++i ) // go through all attributes
+	{
+		//LOG("weapons", "Attribute: " + itemAttributes[i].name.getAsciiId());
+		if ( itemAttributes[i] == null )
+			continue;
+
+		if (!calcAndSetPrototypeProperty ( prototype, itemAttributes[i]))
+		{
+			//load initial object properties, sum them with experimentation results and component mods, then write them back onto the object
+
+			// Minimum Damage
+			if ( itemAttributes[i].name.getAsciiId().equals("minDamage") )
+			{
+				curCraftVal = itemAttributes[i].currentValue;
+				curMasterVal = weapons.getMinDamageHighCap(weaponDat);
+				curMaxVal = (curMasterVal * MAX_STAT_INTENSITY);
+
+				if(curCraftVal > curMaxVal)
+				{
+					notifyStatCapped(curCraftVal, curMaxVal, "Minimum Damage", prototype);
+					curCraftVal = curMaxVal;
+				}
+
+				setWeaponMinDamage(prototype, (int)curCraftVal);
+			}
+
+			// Maximum Damage
+			else if ( itemAttributes[i].name.getAsciiId().equals("maxDamage") )
+			{
+				curCraftVal = itemAttributes[i].currentValue;
+				curMasterVal = weapons.getMaxDamageHighCap(weaponDat);
+				curMaxVal = (curMasterVal * MAX_STAT_INTENSITY);
+
+				if(curCraftVal > curMaxVal)
+				{
+					notifyStatCapped(curCraftVal, curMaxVal, "Maximum Damage", prototype);
+					curCraftVal = curMaxVal;
+				}
+				setWeaponMaxDamage (prototype, (int)curCraftVal);
+			}
+
+			// Attack Speed
+			else if ( itemAttributes[i].name.getAsciiId().equals("attackSpeed") )  // invert when writing to object
+			{
+				curCraftVal = itemAttributes[i].currentValue;
+				curMasterVal = weapons.getSpeedLow(weaponDat);
+				curMaxVal = (float)Math.floor(curMasterVal / MAX_STAT_INTENSITY);
+
+				if(curCraftVal < curMaxVal)
+				{
+					notifyStatCapped(curCraftVal/100.0f, curMaxVal/100.0f, "Attack Speed", prototype);
+					curCraftVal = curMaxVal;
+				}
+				// weapon speed is stored in the schematic template as 10 times the actual value, so we scale it back down here
+				setWeaponAttackSpeed (prototype, curCraftVal / 100.0f);
+			}
+
+			// Wound Chance
+			else if ( itemAttributes[i].name.getAsciiId().equals("woundChance") )
+			{
+				curCraftVal = itemAttributes[i].currentValue;
+				curMasterVal = weapons.getWoundChanceHigh(weaponDat);
+				curMaxVal = (curMasterVal * MAX_STAT_INTENSITY);
+
+				if(curCraftVal > curMaxVal)
+				{
+					notifyStatCapped(curCraftVal, curMaxVal, "Wound Chance", prototype);
+					curCraftVal = curMaxVal;
+				}
+
+				setWeaponWoundChance (prototype, curCraftVal);
+			}
+
+			// Accuracy
+			else if ( itemAttributes[i].name.getAsciiId().equals("accuracy"))
+			{
+				//LOG("weapons", "Accuracy=" + itemAttributes[i].currentValue);
+				curCraftVal = itemAttributes[i].currentValue;
+				
+				accuracy = Math.round(curCraftVal);
+				//LOG("weapons", "Rounded Accuracy=" + accuracy);
+			}
+
+			// Charges
+			else if ( itemAttributes[i].name.getAsciiId().equals("charges"))
+			{
+				setCount( prototype, (int) itemAttributes[i].currentValue );
+			}
+
+			// Attack Cost
+			else if ( itemAttributes[i].name.getAsciiId().equals("attackCost"))	// invert when writing to object
+			{
+				curCraftVal = itemAttributes[i].currentValue;
+				curMasterVal = weapons.getAttackCostLow(weaponDat);
+				curMaxVal = (float)Math.floor(curMasterVal / MAX_STAT_INTENSITY);
+
+				if(curCraftVal < curMaxVal)
+				{
+					notifyStatCapped(curCraftVal, curMaxVal, "Attack Cost", prototype);
+					curCraftVal = curMaxVal;
+				}
+				setWeaponAttackCost(prototype, (int)curCraftVal);
+			}
+
+			// Damage Type
+			else if ( itemAttributes[i].name.getAsciiId().equals("damageType"))
+			{
+				damageType = (int)itemAttributes[i].currentValue;
+			}
+
+			// Elemental Type
+			else if ( itemAttributes[i].name.getAsciiId().equals("elementalType"))
+			{
+				elementalType = (int)itemAttributes[i].currentValue;
+			}
+
+			// Elemental Value
+			else if ( itemAttributes[i].name.getAsciiId().equals("elementalValue") )
+			{
+				curCraftVal = itemAttributes[i].currentValue;
+				curMasterVal = weapons.getElementalValueHigh(weaponDat);
+				curMaxVal = (curMasterVal * MAX_STAT_INTENSITY);
+
+				if(curCraftVal > curMaxVal)
+				{
+					notifyStatCapped(curCraftVal, curMaxVal, "Elemental Value", prototype);
+					curCraftVal = curMaxVal;
+				}
+				elementalValue = (int)curCraftVal;
+			}
+
+			else
+			{
+				debugServerConsoleMsg(null, "Error. Unknown Attribute Read in. Attribute was " + itemAttributes[i].name + ".");
+			}
+		}
+	}
+
+	// Bore us out some new fangled sockets provided we have some minimal skill.
+	obj_id player = getOwner(prototype);
+	int[] mods = getEnhancedSkillStatisticModifiers(player, getExperimentSkillMods());
+	if ( mods != null )
+	{
+		int sockets = 0;
+		int experimentModTotal = 0;
+		for ( int j = 0; j < mods.length; ++j )
+			experimentModTotal += mods[j];
+		if ( experimentModTotal > craftinglib.socketThreshold )
+		{
+
+			int chances = 1 + (experimentModTotal - craftinglib.socketThreshold) / craftinglib.socketDelta;
+			for ( int j = 0; j < chances; ++j )
+			{
+				if ( rand(1, 100) > craftinglib.socketChance )
+					++sockets;
+			}
+			if ( sockets > craftinglib.maxSockets )
+				sockets = craftinglib.maxSockets;
+
+			if ( sockets > 0 )
+				setCondition(prototype, CONDITION_MAGIC_ITEM);
+		}
+
+		setSkillModSockets(prototype, sockets);
+	}
+
+	rangeData.minRange = weapons.getMinRangeDistance(weaponDat);
+	rangeData.maxRange = weapons.getMaxRangeDistance(weaponDat);
+	
+	setObjVar(prototype, "weapon.original_max_range", rangeData.maxRange);
+	
+	setWeaponAccuracy(prototype, accuracy);
+	setWeaponRangeInfo(prototype, rangeData);
+	setWeaponDamageType(prototype, damageType);
+	setWeaponElementalType(prototype, elementalType);
+	setWeaponElementalValue(prototype, elementalValue);
+	weapons.setHeavyWeaponAoeSplashPercent(prototype);
+	//this will ensure the conversion code doesnt mess with new crafted objects
+	setConversionId(prototype,weapons.CONVERSION_VERSION);	
+	weapons.setWeaponData(prototype);
+/************ Useless Comment ***********/
+
+}
+
+void notifyStatCapped(float attemptedValue, float maxValue, string stat, obj_id prototype)
+{
+	obj_id player = utils.getContainingPlayer(getSelf());
+	if(!isIdValid(player) || !exists(player))
+	{
+		return;
+	}
+
+	prose_package pp = new prose_package();
+	pp = prose.setStringId(pp, new string_id("craft_results", "crafting_stat_capped"));
+	pp = prose.setTT(pp, prototype);
+	pp = prose.setTU(pp, stat);
+	pp = prose.setTO(pp, Float.toString(attemptedValue));
+	pp = prose.setDF(pp, maxValue);
+	sendSystemMessageProse(player, pp);
+}
+
+//this will added the conversion objvar to new manufacturing schematics
+trigger OnFinalizeSchematic (obj_id player, obj_id prototype, draft_schematic schematic)
+{
+	setConversionId(self, weapons.CONVERSION_VERSION);
+	setConversionId(prototype, weapons.CONVERSION_VERSION);
+	return SCRIPT_CONTINUE;
+}

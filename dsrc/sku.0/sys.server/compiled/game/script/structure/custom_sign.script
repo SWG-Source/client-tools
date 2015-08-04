@@ -1,0 +1,159 @@
+include library.sui;
+include library.utils;
+include library.player_structure;
+include library.space_utils;
+include library.space_transition;
+
+/***** CONSTS **********************************************************/
+const string SIGN_TYPE			= new string("hangingStanding");
+const string MODIFIED_SIGN		= new string("modifiedSign");
+const string SPAM			= new string("spam");
+const string_id SUI_TITLE		= new string_id(SPAM, "replace_sign_sui");
+const string_id SUI_QUESTION		= new string_id(SPAM, "replace_sign_sui_question");
+const string_id SID_USE 		= new string_id(SPAM, "change_sign");
+const string_id CANT_USE	 	= new string_id(SPAM, "not_sign");
+const string_id CANT_DROP	 	= new string_id(SPAM, "cant_drop_sign");
+/***** FUNCTIONS ********************************************************/
+
+//This script will change the regular house sign for a modified custome one.
+//To make a custom house sign, attach this script and see the item_event_halloween_house_sign entry in item_stats.tab for the objvar setup.
+//Sign template has to be in the object/tangible/sign/player/ folder and begin with house_address_ or shop_sign_
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data data = mi.getMenuItemByType (menu_info_types.SERVER_MENU1);
+	obj_id target = getIntendedTarget(player);
+	obj_id house = utils.getObjIdScriptVar(target, "player_structure.parent");
+	string templateName = getTemplateName(target);
+	if (player_structure.isOwner(house, player))
+	{
+		if (exists(house) && isIdValid(house) && validSign(target, self, house) == true)
+			mi.addRootMenu(menu_info_types.SERVER_MENU1, SID_USE);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	obj_id target = getIntendedTarget(player);
+	obj_id house = utils.getObjIdScriptVar(target, "player_structure.parent");
+	string templateName = getTemplateName(target);
+	if (item == menu_info_types.SERVER_MENU1)
+	{
+		if (exists(house) && isIdValid(house) && validSign(target, self, house) == true)
+		{
+			if (player_structure.isOwner(house, player))
+			{
+
+				string title = utils.packStringId(SUI_TITLE); // Confirm Sign Replacement
+				string prompt = getString(SUI_QUESTION); // Are you sure that you want to replace your sign?
+
+				int pid = sui.msgbox(self, player, prompt, sui.YES_NO, title, "signReplacementSui");
+			}
+		}
+		else
+			sendSystemMessage(player, CANT_USE);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+//Making sure you can't drop the house sign in your house or a POB ship.
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	obj_id newLocationNonPlayer = getTopMostContainer(destContainer);
+	obj_id newLocationPlayer = getContainedBy(destContainer);
+	obj_id ship = space_transition.getContainingShip(destContainer);
+	string templateName ="";
+
+	if(isIdValid(ship))
+	{
+		templateName = getTemplateName(ship);
+	}
+
+	if (isPlayer(newLocationPlayer))
+		return SCRIPT_CONTINUE;
+
+	else if (player_structure.isPlayerStructure(newLocationNonPlayer) || space_utils.isPobType(templateName))
+	{
+		sendSystemMessage(transferer, CANT_DROP);
+		return SCRIPT_OVERRIDE;
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler signReplacementSui()
+{
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	int bp = sui.getIntButtonPressed(params);
+
+	if(bp == sui.BP_CANCEL)
+		return SCRIPT_CONTINUE;
+
+	replaceSign(player, self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+void replaceSign(obj_id player, obj_id sign)
+{
+	obj_id target = getIntendedTarget(player);
+	obj_id house = utils.getObjIdScriptVar(target, "player_structure.parent");
+	string templateName = getTemplateName(target);
+	
+	if (exists(house) && isIdValid(house) && validSign(target, sign, house) == true)
+	{	
+		if (player_structure.isOwner(house, player))
+		{
+			string signType = getStringObjVar(sign, MODIFIED_SIGN);
+			setObjVar(house, player_structure.MODIFIED_HOUSE_SIGN, signType);
+			player_structure.destroyStructureSign(house);
+			player_structure.createStructureSign(house);
+			string customSign = getStringObjVar(sign, player_structure.MODIFIED_HOUSE_SIGN_MODEL);
+			setObjVar(house, player_structure.MODIFIED_HOUSE_SIGN_MODEL, customSign);
+			CustomerServiceLog( "playerStructure", "Player " + player + "replaced his house sign for building " + house + "with a custom sign. Static item name for custome sign was " + customSign);
+			destroyObject(sign);
+		}
+	}
+	else
+		sendSystemMessage(player, CANT_USE);
+}
+
+//Makes sure that the sign is of the same type as the one its trying to replace. This is why naming convention of templates are so important.
+boolean validSign(obj_id target, obj_id self, obj_id structure)
+{
+	string templateName = getTemplateName(target);
+	string structureName = getTemplateName(structure);
+	if (hasObjVar(self, SIGN_TYPE))
+	{
+		//Sign Type 1 = Hanging sign (normal house sign)
+		//Sign Type 2 = Standing sign (shop sign)
+		int signType = getIntObjVar(self, SIGN_TYPE);
+		
+		if (signType == 1)
+		{
+			//We don't allow a hanging sign on a merchant tent.
+			if (structureName.indexOf("merchant_tent") > -1)
+				return false;
+				
+			if (templateName.startsWith("object/tangible/sign/player/house_address"))
+				return true;
+			//We allow cantinas.	
+			if (templateName.startsWith("object/tangible/sign/municipal/municipal_sign_hanging_cantina"))
+				return true;				
+		}
+		
+		if (signType == 2)
+		{
+			if (templateName.startsWith("object/tangible/sign/player/shop_sign"))
+				return true;
+		}
+	}
+	
+	return false;
+}

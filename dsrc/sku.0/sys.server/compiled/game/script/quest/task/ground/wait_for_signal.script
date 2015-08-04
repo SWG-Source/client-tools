@@ -1,0 +1,350 @@
+include library.groundquests;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const String dataTableColumnSignalName = "SIGNAL_NAME";
+
+const String dataTableColumnWaitMarkerCreate = "WAIT_MARKER_CREATE";
+const String dataTableColumnWaitMarkerTemplate = "WAIT_MARKER_TEMPLATE";
+const String dataTableColumnWaitMarkerPlanetName = "WAIT_MARKER_PLANET_NAME";
+const String dataTableColumnWaitMarkerBuilding = "WAIT_MARKER_BUILDING";
+const String dataTableColumnWaitMarkerCellName = "WAIT_MARKER_CELL_NAME";
+const String dataTableColumnWaitMarkerX = "WAIT_MARKER_X";
+const String dataTableColumnWaitMarkerY = "WAIT_MARKER_Y";
+const String dataTableColumnWaitMarkerZ = "WAIT_MARKER_Z";
+const String dataTableColumnNumRequired    = "NUM_REQUIRED";
+
+const String defaultWaitMarkerTemplate = "object/static/structure/general/tutorial_waypoint.iff";
+
+const String waitMarkerVarName = "waitMarker";
+
+const String taskType = "wait_for_signal";
+const String dot = ".";
+
+// ---------------------------------------------------------------------
+
+//fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+
+	groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+
+	createMarker(self, questCrc, taskId);
+	
+	int count = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnNumRequired);
+	
+	if(count > 1)
+	{
+		questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:signals_counter", 0, count);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + " task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is failed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+/** Create markers for all active active task during initialization
+ */
+trigger OnInitialize()
+{
+	groundquests.questOutputDebugLog(taskType, "OnInitialize", "Updating wait markers.");
+
+	updateAllMarkers(self, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+/** Destroy markers for all active active task when the player logs out
+ */
+trigger OnLogout()
+{
+	groundquests.questOutputDebugLog(taskType, "OnLogout", "Updating wait markers.");
+
+	updateAllMarkers(self, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler questSignal()
+{
+	String signalReceived = params.getString("signal");
+
+	LOG("nym_logging","signalReceived: "+signalReceived);
+
+	//get the base objvar for quests, all data is under that
+	String taskObjVarName = groundquests.getTaskTypeObjVar(self, taskType);
+
+	if(taskObjVarName == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	//get the list of quests
+	obj_var_list questList = getObjVarList(self, taskObjVarName);
+
+	if(questList == null)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	int countQuests = questList.getNumItems();
+
+	//for each quest, check each task
+	for(int i = 0; i < countQuests; ++i)
+	{
+		obj_var ov = questList.getObjVar(i);
+		string questName = ov.getName();
+		int questCrc = questGetQuestId(questName);
+
+		String questObjVarName = taskObjVarName + dot + questName;
+
+		if(!hasObjVar(self, questObjVarName))
+		{
+			continue;
+		}
+
+		//get the list of tasks for this quest that are of the right taskType
+		obj_var_list taskList = getObjVarList(self, questObjVarName);
+
+		if(taskList == null)
+		{
+			continue;
+		}
+
+		int countTasks = taskList.getNumItems();
+
+		for(int j = 0; j < countTasks; ++j)
+		{
+			obj_var ov2 = taskList.getObjVar(j);
+			string taskName = ov2.getName();
+			int taskId = utils.stringToInt(taskName);
+
+			String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+			
+			String signalName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnSignalName);
+
+			if(signalName == null || signalName == "")
+			{
+				string errText = 	"SIGNALNAME IS NULL: questCrc: " + questCrc +
+								" - taskId: " + taskId +
+								" - dataTableColumnSignalName: " + dataTableColumnSignalName;
+				logScriptDataError(errText);
+			}
+			else
+			{
+				String[] signalNames = split(signalName, ',');
+
+				for(int k = 0; k < signalNames.length; k++)
+				{
+					if(signalNames[k] == signalReceived)
+					{
+						groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "questSignal", "Signal " + signalNames[k] + " received.");
+						
+						String signalObjvar = baseObjVar + dot + signalReceived + dot + "count";
+						
+						int signalsMaximum = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnNumRequired);
+						int signalsCompleted = getIntObjVar(self, signalObjvar) + 1;
+						
+						setObjVar(self, signalObjvar, signalsCompleted);
+
+						if(signalsMaximum > 1 && signalsCompleted < signalsMaximum)
+						{
+							questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:signals_counter", signalsCompleted, signalsMaximum);
+							play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_INCREMENT_COUNTER);
+						}
+						else
+						{
+							questCompleteTask(questCrc, taskId, self);
+						}
+					}
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	destroyMarker(player, questCrc, taskId);
+
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+void createMarker(obj_id player, int questCrc, int taskId)
+{
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+
+	boolean createWaitMarker = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnWaitMarkerCreate) > 0;
+
+	if (createWaitMarker)
+	{
+		//-- if one was created, destroy it first
+		destroyMarker(player, questCrc, taskId);
+
+		String waitMarkerTemplate = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnWaitMarkerTemplate);
+		String waitMarkerPlanetName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnWaitMarkerPlanetName);
+		String waitMarkerBuilding = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnWaitMarkerBuilding);
+		String waitMarkerCellName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnWaitMarkerCellName);
+		float waitMarkerX = groundquests.getTaskFloatDataEntry(questCrc, taskId, dataTableColumnWaitMarkerX);
+		float waitMarkerY = groundquests.getTaskFloatDataEntry(questCrc, taskId, dataTableColumnWaitMarkerY);
+		float waitMarkerZ = groundquests.getTaskFloatDataEntry(questCrc, taskId, dataTableColumnWaitMarkerZ);
+
+		location waitMarkerLocation;
+
+		//-- interior or exterior?
+		if (waitMarkerCellName.length() != 0)
+		{
+			obj_id buildingObjId;
+
+			//-- a 0 building object id means use the building the player is in
+			if (utils.stringToInt(waitMarkerBuilding) == 0)
+			{
+				buildingObjId = getTopMostContainer(player);
+			}
+			else
+			{
+				buildingObjId = utils.stringToObjId(waitMarkerBuilding);
+			}
+
+			//-- is the building valid?
+			if (!isValidId(buildingObjId))
+			{
+				groundquests.questOutputDebugLog(taskType, "createMarker", "Invalid building!");
+				return;
+			}
+
+			//-- interior locations use the building as the planet (parameter setting is ignored)
+			waitMarkerPlanetName = getLocation(buildingObjId).area;
+
+			obj_id cellObjId = getCellId(buildingObjId, waitMarkerCellName);
+
+			//-- is the cell valid?
+			if (!isValidId(cellObjId))
+			{
+				groundquests.questOutputDebugLog(taskType, "createMarker", "Invalid cell! " + waitMarkerCellName);
+				return;
+			}
+
+			waitMarkerLocation = new location(waitMarkerX, waitMarkerY, waitMarkerZ, waitMarkerPlanetName, cellObjId);
+		}
+		else
+		{
+			waitMarkerLocation = new location(waitMarkerX, waitMarkerY, waitMarkerZ, waitMarkerPlanetName);
+		}
+
+		//-- use default template if none provided
+		if (waitMarkerTemplate.length() == 0)
+		{
+			waitMarkerTemplate = defaultWaitMarkerTemplate;
+		}
+
+		groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "OnTaskActivated",
+			"Creating wait marker [" + waitMarkerTemplate + "] at " + waitMarkerLocation.toString());
+
+		obj_id waitMarker = createObject(waitMarkerTemplate, waitMarkerLocation);
+
+		setObjVar(player, baseObjVar + dot + waitMarkerVarName, waitMarker);
+	}
+}
+
+// ---------------------------------------------------------------------
+
+void destroyMarker(obj_id player, int questCrc, int taskId)
+{
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+	obj_id waitMarker = getObjIdObjVar(player, baseObjVar + dot + waitMarkerVarName);
+
+	if (isIdValid(waitMarker))
+	{
+		groundquests.questOutputDebugInfo(player, questCrc, taskId, taskType, "destroyMarker",
+			"Destroying wait marker: " + waitMarker);
+
+		destroyObject(waitMarker);
+
+		removeObjVar(player, baseObjVar + dot + waitMarkerVarName);
+	}
+}
+
+// ---------------------------------------------------------------------
+
+void updateAllMarkers(obj_id player, boolean create)
+{
+	dictionary tasks = groundquests.getActiveTasksForTaskType(player, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for (int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+
+				if (create)
+					createMarker(player, questCrc, taskId);
+				else
+					destroyMarker(player, questCrc, taskId);
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
+

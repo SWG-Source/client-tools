@@ -1,0 +1,563 @@
+include library.ai_lib;
+include library.buff;
+include library.create;
+include library.house_pet;
+include library.locations;
+include library.player_structure;
+include library.space_transition;
+include library.space_utils;
+include library.utils;
+
+
+//LOGGING
+const boolean LOGGING_ON			= true;
+const string LOGGING_CATEGORY			= "massiff_pet";
+
+/***** CONSTS **********************************************************/
+const string TCG_STR			= new string("tcg");
+
+//laugh and animations
+const string LAUGH		 	= new string("sound/voc_kowakian_laugh.snd");
+const string ANIMATION_1	 	= new string("wave2");
+const string ANIMATION_2	 	= new string("laugh_cackle");
+const string ANIMATION_3	 	= new string("pound_fist_palm");
+const string ANIMATION_4	 	= new string("bow2");
+const string ANIMATION_5	 	= new string("wave1");
+
+//Misc
+const string_id SID_TURN_ON 		= new string_id(TCG_STR, "call_pet");
+const string_id SID_TURN_OFF	 	= new string_id(TCG_STR, "store_pet");
+const string_id SID_FEED 		= new string_id(TCG_STR, "feed_pet");
+
+//Scurrier Snack Options
+const string_id SID_SNACK		= new string_id(TCG_STR, "scurrier_snack");
+
+/***** FUNCTIONS ********************************************************/
+trigger OnDestroy()
+{
+	blog("OnDestroy - init");
+	if(!isValidId(self) || !exists(self))
+		return SCRIPT_CONTINUE;
+		
+	if(!hasObjVar(self, house_pet.PET_HAS_BEEN_CALLED))
+		return SCRIPT_CONTINUE;
+		
+	if(hasObjVar(self, house_pet.CHILD_OBJ_ID))
+	{
+		obj_id oldPet = getObjIdObjVar(self, house_pet.CHILD_OBJ_ID);
+		if(isIdValid(oldPet) && exists(oldPet))
+			destroyObject(oldPet);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+//@TODO: show list of previously fed items.
+//The attribs are used to give players the clues needed
+//to find patterns between food and rewards
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, house_pet.MASSIFF_CURRENT_PHASE))
+	{
+		int currentStatus = getIntObjVar(self, house_pet.MASSIFF_CURRENT_PHASE);
+		if(currentStatus < house_pet.MASSIFF_FED || currentStatus > house_pet.MASSIFF_DEAD) // THE INT CAN BE ZERO BY DESIGN
+		{
+			blog("getSarlaccCollectionColumn currentStatus : "+currentStatus);
+			return SCRIPT_CONTINUE;
+		}
+
+		//Phase Status
+		names[idx] = "status";
+		attribs[idx] = "@obj_attr_n:" + house_pet.MASSIFF_PHASES[currentStatus];
+		idx++;
+
+		if(hasObjVar(self, house_pet.MASSIFF_LAST_FED))
+		{
+			int lastFed = getIntObjVar(self, house_pet.MASSIFF_LAST_FED);
+			if(lastFed < 0) // THE INT CAN BE ZERO BY DESIGN
+				return SCRIPT_CONTINUE;
+
+			//Last Fed
+			names[idx] = "last_fed";
+			attribs[idx] = getCalendarTimeStringLocal(lastFed);
+			idx++;
+
+
+			//Next Feed
+			names[idx] = "next_feed";
+			if(currentStatus == 0)
+				attribs[idx] = getCalendarTimeStringLocal(lastFed + house_pet.getUpdateWeekly(self));
+			else if(currentStatus == 1)
+				attribs[idx] = "Now";
+			else
+				attribs[idx] = "Hopefully Soon";
+
+			idx++;
+
+			//Time Now
+			names[idx] = "time_now";
+			attribs[idx] = getCalendarTimeStringLocal(getCalendarTime());
+			idx++;
+		}
+		else
+		{
+			//Last Fed
+			names[idx] = "last_fed";
+			attribs[idx] = "Never";
+			idx++;
+
+			//Next Feed
+			names[idx] = "next_feed";
+			attribs[idx] = "Hopefully Soon";
+			idx++;
+		}
+	}
+	
+//Scurrier Pet - Snack Game
+	string petType = getTemplateName(self);
+	if((petType.indexOf("scurrier") > -1) && (hasObjVar(self, house_pet.SCURRIER_SNACK_LAST_FED)))
+	{
+		//Last Snack
+		names[idx] = "last_scurrier_snack";
+		int lastSnack = getIntObjVar(self, house_pet.SCURRIER_SNACK_LAST_FED);
+		attribs[idx] = getCalendarTimeStringLocal(lastSnack);
+		idx++;	
+
+		//Next Snack
+		names[idx] = "next_scurrier_snack";
+		int nextSnack = getIntObjVar(self, house_pet.SCURRIER_SNACK_LAST_FED); 
+		attribs[idx] = getCalendarTimeStringLocal(nextSnack + house_pet.SCURRIER_SNACK_DELAY); //3 days
+		idx++;		
+	}
+	
+	if(isValidId(getOwner(self)))
+	{
+		obj_id owner = getOwner(self);
+
+		//Phase Status
+		names[idx] = "owner";
+		attribs[idx] = getPlayerFullName(owner);
+		idx++;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	house_pet.setObjectOwner(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	blog("OnInitialize - init");
+
+	//This library call checks to make 
+	//sure this controller is not in
+	//packed house
+	if(!house_pet.isInAPlayerHouse(self))
+		return SCRIPT_CONTINUE;
+		
+	spawnPetSomewhere(self);
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToBeTransferred(obj_id destContainer, obj_id transferer)
+{
+	blog("OnAboutToBeTransferred - init");
+
+	if(hasObjVar(self, house_pet.PET_HAS_BEEN_CALLED))
+		removeObjVar(self, house_pet.PET_HAS_BEEN_CALLED);
+	
+	if(hasObjVar(self, house_pet.CHILD_OBJ_ID))
+	{
+		obj_id oldPet = getObjIdObjVar(self, house_pet.CHILD_OBJ_ID);	
+		if(isValidId(oldPet) && exists(oldPet))
+			destroyObject(oldPet);
+
+		removeObjVar(self, house_pet.CHILD_OBJ_ID);
+	}
+	
+	if(hasObjVar(self, house_pet.MASSIFF_FOOD_OBJ))
+	{
+		obj_id oldFood = getObjIdObjVar(self, house_pet.MASSIFF_FOOD_OBJ);	
+		if(isValidId(oldFood) && exists(oldFood))
+		{
+			destroyObject(oldFood);
+			removeObjVar(self, house_pet.MASSIFF_FOOD_OBJ);
+		}	
+	}
+	
+	removeObjVar(self, house_pet.MASSIFF_LAST_FED);
+	removeObjVar(self, house_pet.MASSIFF_CURRENT_PHASE);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	blog("OnObjectMenuRequest - init");
+
+	if(!house_pet.isInAPlayerHouse(self))
+		return SCRIPT_CONTINUE;
+	obj_id owner = getOwner(self);
+	if(!isValidId(owner))
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, house_pet.PET_HAS_BEEN_CALLED))
+	{
+		if(player == owner)
+			mi.addRootMenu(menu_info_types.ITEM_USE, SID_TURN_OFF);
+		//If the pet is hungry, anyone can feed him 
+		//that can use an item in the house (ADMIN & OWNER)
+		if(player == owner &&
+		!hasObjVar(self, house_pet.PET_KNOCKED_OUT) && 
+		hasObjVar(self, house_pet.PET_FEEDABLE) && 
+		hasObjVar(self, house_pet.MASSIFF_CURRENT_PHASE) &&
+		getIntObjVar(self, house_pet.MASSIFF_CURRENT_PHASE) >= 1)
+			mi.addRootMenu(menu_info_types.SERVER_MENU1, SID_FEED);	
+			
+//Scurrier Snacks - 
+		if(player == owner &&
+		!hasObjVar(self, house_pet.PET_KNOCKED_OUT) && 
+		hasObjVar(self, house_pet.PET_FEEDABLE) &&
+		hasObjVar(self, house_pet.CHILD_OBJ_ID))
+		{
+			string petType = getTemplateName(getObjIdObjVar(self, house_pet.CHILD_OBJ_ID));
+			if(petType.indexOf("scurrier") > -1)
+			{
+				//get the last snack time
+				int lastFedTime = getIntObjVar(self, house_pet.SCURRIER_SNACK_LAST_FED);
+				int nextSnackTime = lastFedTime + house_pet.SCURRIER_SNACK_DELAY;
+				int currentGameTime = getCalendarTime();
+				//3 days has gone by
+				if((nextSnackTime <= currentGameTime) || !hasObjVar(self, house_pet.SCURRIER_SNACK_LAST_FED))
+				{
+					mi.addRootMenu(menu_info_types.SERVER_MENU2, SID_SNACK);
+				}
+			}
+		}
+	}
+	else if(player == owner)
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_TURN_ON);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	blog("OnObjectMenuSelect - init");
+
+	if(!house_pet.isInAPlayerHouse(self))
+		return SCRIPT_CONTINUE;
+	
+	obj_id owner = getOwner(self);
+	if(!isValidId(owner))
+		return SCRIPT_CONTINUE;
+		
+	if(owner == player && item == menu_info_types.ITEM_USE && !hasObjVar(self, house_pet.PET_HAS_BEEN_CALLED))
+	{
+		spawnPetByOwner(self, player);
+		//----------------REMOVE FOR LIVE
+		//setObjVar(self, house_pet.MASSIFF_FIVE_MIN_UPDATE_RATE, true);
+		//----------------Keep for easy testing/debugging
+		setObjVar(self, house_pet.MASSIFF_CURRENT_PHASE, house_pet.MASSIFF_HUNGRY);
+		
+	}
+	else if(hasObjVar(self, house_pet.PET_HAS_BEEN_CALLED))
+	{
+		if(owner == player && item == menu_info_types.ITEM_USE)
+		{
+			blog("OnObjectMenuSelect - menu_info_types.ITEM_USE");
+		
+			//Store the pet
+			if(hasObjVar(self, house_pet.CHILD_OBJ_ID))
+			{
+				obj_id oldPet = getObjIdObjVar(self, house_pet.CHILD_OBJ_ID);
+
+				if (isValidId(oldPet) && exists(oldPet))
+					destroyObject(oldPet);
+
+				removeObjVar(self, house_pet.CHILD_OBJ_ID);
+				removeObjVar(self, house_pet.MASSIFF_LAST_FED);
+				removeObjVar(self, house_pet.MASSIFF_CURRENT_PHASE);
+
+				if(hasObjVar(self, house_pet.MASSIFF_FOOD_OBJ))
+				{
+					obj_id food = getObjIdObjVar(self, house_pet.MASSIFF_FOOD_OBJ);
+					if(isValidId(food) && exists(food))
+						destroyObject(food);
+					removeObjVar(self, house_pet.MASSIFF_FOOD_OBJ);
+				}
+			}
+			removeObjVar(self, house_pet.PET_HAS_BEEN_CALLED);
+			//removeTriggerVolume("laughAura");
+		}
+		//BEING FED
+		else if(item == menu_info_types.SERVER_MENU1)
+		{
+			blog("OnObjectMenuSelect - menu_info_types.SERVER_MENU1");
+			spawnFoodAtLocation(self, getLocation(self));
+		}
+		else if(item == menu_info_types.SERVER_MENU2)
+		{
+			spawnSnackAtLocation(self, getLocation(self));
+		}
+	}
+	
+	sendDirtyObjectMenuNotification(self);					
+	return SCRIPT_CONTINUE;
+}
+
+boolean spawnPetSomewhere(obj_id controller)
+{
+	if(!isValidId(controller) || !exists(controller))
+		return false;
+
+	if(!house_pet.isInAPlayerHouse(controller))
+		return false;
+
+	if(!hasObjVar(controller, house_pet.CHILD_OBJ_ID))
+		return false;
+		
+	obj_id pet = getObjIdObjVar(controller, house_pet.CHILD_OBJ_ID);
+	if(isValidId(pet) && exists(pet))
+		return false;
+
+	if(!hasObjVar(controller, house_pet.HOUSE_PET_OBJVAR))
+		return false;
+
+	string petCreatureName = getStringObjVar(controller, house_pet.HOUSE_PET_OBJVAR);
+	if(petCreatureName == null || petCreatureName.length() <= 0)
+		return false;
+
+	if(!hasObjVar(controller, house_pet.HOUSE_PET_SCRIPT))
+		return false;
+
+	string petCreatureScript = getStringObjVar(controller, house_pet.HOUSE_PET_SCRIPT);
+	if(petCreatureScript == null || petCreatureScript.length() <= 0)
+		return false;
+		
+	location controllerLoc = getLocation(controller);
+	if(controllerLoc == null)
+		return false;
+
+	blog("controllerLoc "+ controllerLoc);
+		
+	string strCell = getCellName(controllerLoc.cell);
+	if(strCell == null || strCell.equals(""))
+		return false;
+		
+	obj_id objBuilding = getTopMostContainer(controller);
+	if(!isValidId(objBuilding) || !exists(objBuilding))
+		return false;
+		
+	location spawnLoc = getGoodLocation(objBuilding, strCell);  
+	if(spawnLoc == null)
+		return false;
+		
+	blog("spawnLoc "+ spawnLoc);
+	obj_id owner = getOwner(controller);
+	if(!isValidId(owner))
+		return false;
+		
+	obj_id newPet = create.object(petCreatureName, spawnLoc);
+	setOwner(newPet, owner);
+	ai_lib.setDefaultCalmBehavior(newPet, ai_lib.BEHAVIOR_WANDER);
+	setObjVar(controller, house_pet.CHILD_OBJ_ID, newPet);
+	setObjVar(newPet, house_pet.PARENT_OBJ_ID, controller);
+	attachScript(newPet, petCreatureScript);
+	setObjVar(controller, house_pet.PET_HAS_BEEN_CALLED, true);
+	
+	int currentPhase = getIntObjVar(controller, house_pet.MASSIFF_CURRENT_PHASE);
+	if(hasObjVar(controller, house_pet.PET_KNOCKED_OUT) && getBooleanObjVar(controller, house_pet.PET_KNOCKED_OUT))
+	{
+		//Massiff has fallen and can't get up
+		ai_lib.aiSetPosture(newPet, POSTURE_KNOCKED_DOWN);
+		return true;		
+	}
+
+	location pathToLoc = getLocation(controller);
+	pathTo(newPet, pathToLoc);
+	
+	return true;
+}
+
+boolean spawnPetByOwner(obj_id controller, obj_id owner)
+{
+	blog("spawnPetAtLocation - init");
+
+	if(!isValidId(controller) || !exists(controller))
+		return false;
+	if(!isValidId(owner) || !exists(owner))
+		return false;
+	if(!house_pet.isInAPlayerHouse(controller))
+		return false;
+
+	if(hasObjVar(controller, house_pet.CHILD_OBJ_ID))
+	{
+		obj_id oldPet = getObjIdObjVar(controller, house_pet.CHILD_OBJ_ID);
+		if(isValidId(oldPet) && exists(oldPet))
+			return false;
+	}
+
+	if(!hasObjVar(controller, house_pet.HOUSE_PET_OBJVAR))
+		return false;
+
+	string petCreatureName = getStringObjVar(controller, house_pet.HOUSE_PET_OBJVAR);
+	if(petCreatureName == null || petCreatureName.length() <= 0)
+		return false;
+
+	if(!hasObjVar(controller, house_pet.HOUSE_PET_SCRIPT))
+		return false;
+
+	string petCreatureScript = getStringObjVar(controller, house_pet.HOUSE_PET_SCRIPT);
+	if(petCreatureScript == null || petCreatureScript.length() <= 0)
+		return false;
+		
+	location controllerLoc = getLocation(controller);
+	if(controllerLoc == null)
+		return false;
+
+	blog("controllerLoc "+ controllerLoc);
+		
+	string strCell = getCellName(controllerLoc.cell);
+	if(strCell == null || strCell.equals(""))
+		return false;
+		
+	obj_id objBuilding = getTopMostContainer(controller);
+	if(!isValidId(objBuilding) || !exists(objBuilding))
+		return false;
+		
+	location spawnLoc = getGoodLocation(objBuilding, strCell);  
+	if(spawnLoc == null)
+		return false;
+		
+	obj_id pet = create.object(petCreatureName, spawnLoc);
+	setOwner(pet, owner);
+	ai_lib.setDefaultCalmBehavior(pet, ai_lib.BEHAVIOR_WANDER);
+	setObjVar(controller, house_pet.CHILD_OBJ_ID, pet);
+	setObjVar(pet, house_pet.PARENT_OBJ_ID, controller);
+	attachScript(pet, petCreatureScript);
+	setObjVar(controller, house_pet.PET_HAS_BEEN_CALLED, true);
+
+	location pathToLoc = getLocation(controller);
+	pathTo(pet, pathToLoc);
+	
+	messageTo(pet, "findOwner", null, 2, false);
+	messageTo(pet, "startLoitering", null, 30, false);
+	return true;
+}
+
+boolean spawnFoodAtLocation(obj_id controller, location foodLoc)
+{
+	blog("spawnFoodAtLocation - init");
+
+	if(!isValidId(controller) || !exists(controller))
+		return false;
+	if(foodLoc == null)
+		return false;
+
+	blog("spawnFoodAtLocation - initial validation completed");
+		
+	if(!hasObjVar(controller, house_pet.CHILD_OBJ_ID))
+		return false;
+	
+	blog("spawnFoodAtLocation - validating pet");
+
+	obj_id pet = getObjIdObjVar(controller, house_pet.CHILD_OBJ_ID);
+	if(!isValidId(pet) && !exists(pet))
+		return false;
+
+	utils.setScriptVar(pet, house_pet.BEING_FED, true);
+
+	blog("spawnFoodAtLocation - about to create food.");
+
+	//spawn corn feed for the nuna - the massif gets meat!
+	obj_id food = obj_id.NULL_ID;
+	//need to get pet type.
+	string petType = getTemplateName(pet);
+	//determine the food type
+	if(petType.indexOf("massif") > -1)
+	{
+		food = create.object("object/static/item/item_massiff_food.iff", foodLoc);
+		if(!isValidId(food))
+			return false;
+		setObjVar(food, "timer", 10);
+	}
+	if(petType.indexOf("nuna") > -1)
+	{
+		//adjust the nuna food pile - raise it 0.05m
+		foodLoc.y = foodLoc.y + 0.05f;
+		food = create.object("object/static/item/item_nuna_food.iff", foodLoc);
+		if(!isValidId(food))
+			return false;	
+		setObjVar(food, "timer", 10);
+	}
+	if(petType.indexOf("scurrier") > -1)
+	{
+		foodLoc.y = foodLoc.y + 0.04f;
+		food = create.object("object/static/item/item_scurrier_food.iff", foodLoc);
+		if(!isValidId(food))
+			return false;	
+		setObjVar(food, "timer", 20);
+	}
+	
+	setObjVar(controller, house_pet.MASSIFF_FOOD_OBJ, food);
+	blog("spawnFoodAtLocation - food: "+food);
+	setObjVar(pet, house_pet.PET_FOOD_OID, food);
+	
+	messageTo(pet, "feedingTime", null, 2, false);
+	return true;
+}
+
+boolean spawnSnackAtLocation(obj_id controller, location foodLoc)
+{
+	LOG("sissynoid", "Spawning Snack at a location");
+	if(!isValidId(controller) || !exists(controller))
+		return false;
+	if(foodLoc == null)
+		return false;		
+	if(!hasObjVar(controller, house_pet.CHILD_OBJ_ID))
+		return false;
+	obj_id pet = getObjIdObjVar(controller, house_pet.CHILD_OBJ_ID);
+	if(!isValidId(pet) && !exists(pet))
+		return false;
+
+	utils.setScriptVar(pet, house_pet.BEING_FED, true);
+
+	obj_id food = obj_id.NULL_ID;
+	string petType = getTemplateName(pet);
+
+	if(petType.indexOf("scurrier") > -1)
+	{
+		foodLoc.y = foodLoc.y + 0.04f;
+		food = create.object("object/static/item/item_scurrier_food.iff", foodLoc);
+	}
+	else
+	{
+		//you are not a scurrier
+		return false;
+	}
+	
+	setObjVar(controller, house_pet.SCURRIER_SNACK_OBJ, food);
+	setObjVar(food, "timer", 20);
+	setObjVar(pet, house_pet.PET_SNACK_OID, food);
+	
+	messageTo(pet, "snackTime", null, 1, false);
+	return true;
+}
+
+boolean blog(string msg)
+{
+	if(LOGGING_ON && msg != null && !msg.equals(""))
+		LOG(LOGGING_CATEGORY, msg);
+	return true;
+}
+

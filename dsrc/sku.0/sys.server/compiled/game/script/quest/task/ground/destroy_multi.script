@@ -1,0 +1,219 @@
+include library.ai_lib;
+include library.groundquests;
+include library.money;
+include library.prose;
+include library.utils;
+include library.xp;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const String taskType = "destroy_multiple";
+
+const String datatableColumnCount = "COUNT";
+
+const String dot = ".";
+const String objvarCount = "countleft";
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+
+	//gather data for this task type
+	int count = groundquests.getTaskIntDataEntry(questCrc, taskId, datatableColumnCount);
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+	setObjVar(self, baseObjVar + dot + objvarCount, count);
+
+	questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:destroy_counter", 0, count);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler receiveCreditForKill()
+{
+	string killedCreatureType = params.getString( "creatureName" );
+	string killedCreatureSocialGroup = params.getString( "socialGroup" );
+	location creatureLoc = params.getLocation("location");
+	float distance = getDistance(self, creatureLoc);
+
+	if (distance == -1.0f || distance > xp.MAX_DISTANCE)
+		return SCRIPT_CONTINUE;
+
+	//get the base objvar for quests, all data is under that
+	String taskObjVarName = groundquests.getTaskTypeObjVar(self, taskType);
+	if(taskObjVarName != null)
+	{
+		//get the list of quests
+		obj_var_list questList = getObjVarList(self, taskObjVarName);
+		if(questList != null)
+		{
+			int countQuests = questList.getNumItems();
+			//for each quest, check each task
+			for (int i = 0; i < countQuests; ++i)
+			{
+				obj_var ov = questList.getObjVar(i);
+				string questName = ov.getName();
+				int questCrc = questGetQuestId(questName);
+
+				String questObjVarName = taskObjVarName + dot + questName;
+				if(hasObjVar(self, questObjVarName))
+				{
+					//get the list of tasks for this quest that are of the right taskType
+					obj_var_list taskList = getObjVarList(self, questObjVarName);
+					if(taskList != null)
+					{
+						int countTasks = taskList.getNumItems();
+						for (int j = 0; j < countTasks; ++j)
+						{
+							obj_var ov2 = taskList.getObjVar(j);
+							string taskName = ov2.getName();
+							int taskId = utils.stringToInt(taskName);
+
+							//test for the right region if defined
+							String requiredRegion = groundquests.getTaskStringDataEntry(questCrc, taskId, "REQUIRED_REGION");
+							boolean regionAcceptable = groundquests.isInNamedRegion(self, requiredRegion);
+
+							//test if the creature is correct
+							String creatureType = groundquests.getTaskStringDataEntry(questCrc, taskId, "TARGET_SERVER_TEMPLATE");
+							boolean creatureAcceptable = false;
+							if(creatureType != null && killedCreatureType != null && creatureType == killedCreatureType)
+							{
+								creatureAcceptable = true;
+							}
+							string creatureSocialGroup = groundquests.getTaskStringDataEntry(questCrc, taskId, "SOCIAL_GROUP");
+							if(creatureSocialGroup != null && killedCreatureSocialGroup != null && creatureSocialGroup == killedCreatureSocialGroup)
+							{
+								creatureAcceptable = true;
+							}
+
+							if(creatureAcceptable)
+							{
+								if(regionAcceptable)
+								{
+									String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+									String objvarNameCount = baseObjVar + dot + objvarCount;
+									if(hasObjVar(self, objvarNameCount))
+									{
+										int killCount = getIntObjVar(self, objvarNameCount);
+										--killCount;
+										if(killCount < 0)
+											killCount = 0;
+
+										int countMax = groundquests.getTaskIntDataEntry(questCrc, taskId, datatableColumnCount);
+										string_id message = new string_id ("quest/groundquests", "destroy_multiple_success");
+										prose_package pp = prose.getPackage(message, self, self);
+										prose.setDI(pp, killCount);
+										sendSystemMessageProse(self, pp);
+
+										if(killCount <= 0)
+										{
+											questCompleteTask(questCrc, taskId, self);
+										}
+										else
+										{
+											setObjVar(self, objvarNameCount, killCount);
+											questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:destroy_counter", countMax-killCount, countMax);
+											play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_INCREMENT_COUNTER);
+											groundquests.playJournalUpdatedMusic(questCrc, taskId, self);
+											groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "receiveCreditForKill", "Killed a " + killedCreatureType + ", of social group " + killedCreatureSocialGroup + ", " + killCount + " left.");
+										}
+									}
+								}
+								else
+								{
+									groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "receiveCreditForKill", "Killed a " + killedCreatureType + ", of social group " + killedCreatureSocialGroup + ", but not in required region " + requiredRegion + ".");
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+
+	//give money if appropriate
+	int bankCredits = groundquests.getTaskIntDataEntry(questCrc, taskId, "REWARD_CREDITS");
+	if(bankCredits > 0)
+	{
+		money.bankTo(money.ACCT_NEW_PLAYER_QUESTS, self, bankCredits);
+		groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", "Deposited " + bankCredits + " credits into the bank.");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+commandHandler handleClientLogin()
+{
+	dictionary tasks = groundquests.getActiveTasksForTaskType(self, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for(int i = 0; i < tasksForCurrentQuest.length; ++i)
+				{
+				int taskId = tasksForCurrentQuest[i];
+
+							String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+							String objvarNameCount = baseObjVar + dot + objvarCount;
+							if(hasObjVar(self, objvarNameCount))
+							{
+								int killCount = getIntObjVar(self, objvarNameCount);
+								int countMax = groundquests.getTaskIntDataEntry(questCrc, taskId, "COUNT");
+								questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, "quest/groundquests:destroy_counter", countMax-killCount, countMax);
+							}
+						}
+					}
+				}
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+

@@ -1,0 +1,362 @@
+include library.consumable;
+include library.pet_lib;
+include library.sui;
+include library.utils;
+include library.pclib;
+include library.prose;
+include library.healing;
+include java.util.Enumeration;
+
+include library.ai_lib;
+
+
+const string SCRIPTVAR_PID					= "tool.pid";
+const string SCRIPTVAR_PLAYER				= "tool.player";
+const string SCRIPTVAR_TARGET				= "tool.lookattarget";
+const string SCRIPTVAR_LASTCOMMAND			= "tool.lastcommand";
+
+const string STF							= "tool/med_tool";
+
+const string_id MNU_DIAGNOSE				= new string_id(STF, "mnu_diagnose");
+
+const string_id OPT_COLOR_TRIM				= new string_id(STF, "opt_color_trim");
+const string_id OPT_COLOR_FRAME				= new string_id(STF, "opt_color_frame");
+
+const string_id SID_OTHER_PLAYERS_ONLY	   	= new string_id(STF, "other_players_only");
+
+const string_id SID_DO_NOT_HEAL			   	= new string_id(STF, "do_not_heal");
+const string_id SID_MUST_BE_PLAYER_OR_PET	= new string_id(STF, "must_be_player_or_pet");
+
+
+// **********************************************************************************************************************************
+// ********** TRIGGERS **********
+// **********************************************************************************************************************************
+
+
+
+trigger OnAttach()
+{
+	clearTrackingScriptVars(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+// If this object has another dragged on top of it, do this. Do not allow OnReceivedItem to go off if we decide to ScriptOverride
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	string parentDirectory = getTemplateParentDirectory(item);
+	if ( parentDirectory.equals("foraged" ) && (getCount(self) < 99))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_OVERRIDE;
+}
+
+
+// If this object actually receives another item, do this. If the item being dragged on top of the medtool is of the correct type, increment the tool's count
+trigger OnReceivedItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	// If we accepted the item, destroy the item and increment charges by one.
+
+	//int countDelta = 1; //Will the quality of gulped item determines how much the count increases? Not yet.
+
+	int countDelta = foragedItemsMod(item);
+
+	incrementCount(self, countDelta);
+	destroyObject (item);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+
+	if (hasObjVar(self, "medikit.quality"))
+	{
+		names[idx] = "useModifier";
+		int attrib = getIntObjVar(self, "medikit.quality");
+		attribs[idx] = "" + attrib;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+// Populate this item's use menu with the appropriate options.
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if ( !utils.isNestedWithin(self, player) )
+		return SCRIPT_CONTINUE;
+
+	int myPosture = getPosture(self);
+	if ( myPosture == POSTURE_DEAD )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+
+	// if the player can diagnose his 'target' (and if there is one)
+	obj_id lookatTarget = getLookAtTarget(player);
+
+	if ( canDiagnose(player, lookatTarget) )
+	{
+		int mnuDiagnose = mi.addRootMenu(menu_info_types.SERVER_MED_TOOL_DIAGNOSE, MNU_DIAGNOSE);
+	}
+
+	// if the med tool has any charges left, allow the menu_tendwound and menu_tenddamage options to come up
+	int currentCharges = getCount(self);
+  	if ( !(currentCharges < 1))
+	{
+		if (healing.canHealDamage(player, false))
+		{
+			mi.addRootMenu (menu_info_types.SERVER_MED_TOOL_TENDWOUND, new string_id(STF,"menu_tendwound"));
+			mi.addRootMenu (menu_info_types.SERVER_MED_TOOL_TENDDAMAGE, new string_id(STF,"menu_tenddamage"));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( !utils.isNestedWithin(self, player) )
+		return SCRIPT_CONTINUE;
+
+	obj_id lookatTarget = getLookAtTarget(player);
+
+	if ( item == menu_info_types.SERVER_MED_TOOL_DIAGNOSE )			//diagnose the patient's wound levels
+	{
+		queueCommand(player, ##"diagnosePatient", self, lookatTarget.toString(), COMMAND_PRIORITY_DEFAULT);
+		utils.setScriptVar(self, SCRIPTVAR_PLAYER, player);
+		utils.setScriptVar(self, SCRIPTVAR_TARGET, lookatTarget);
+		utils.setScriptVar(self, SCRIPTVAR_LASTCOMMAND, "diagnose");
+	}
+
+	if ( item == menu_info_types.SERVER_MED_TOOL_TENDWOUND )			//Tend a player's wounds
+	{
+		sendSystemMessageTestingOnly(player, "Selected TENDWOUND,  line 144");
+		if ( isIdValid(self) && isIdValid(lookatTarget) )
+		{
+			sendSystemMessageTestingOnly(player, "Check passed isIdValid(self) AND isIdValid(target),  line 147");
+			queueCommand(self, ##"tendWoundsTool", lookatTarget, "no_params", COMMAND_PRIORITY_DEFAULT);
+			utils.setScriptVar(self, SCRIPTVAR_TARGET, lookatTarget);
+			utils.setScriptVar(self, SCRIPTVAR_LASTCOMMAND, "tendwound");
+		}
+	}
+	if ( item == menu_info_types.SERVER_MED_TOOL_TENDDAMAGE )			//Tend a player's damage
+	{
+		sendSystemMessageTestingOnly(player, "Selected TENDDAMAGE, line 155");
+		if ( isIdValid(self) && isIdValid(lookatTarget) )
+		{
+			sendSystemMessageTestingOnly(player, "Check passed isIdValid(self) AND isIdValid(target),  line 158");
+			queueCommand(self, ##"tendDamageTool", lookatTarget, "no_params", COMMAND_PRIORITY_DEFAULT);
+			utils.setScriptVar(self, SCRIPTVAR_TARGET, lookatTarget);
+			utils.setScriptVar(self, SCRIPTVAR_LASTCOMMAND, "tenddamage");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+// **********************************************************************************************************************************
+// ********** COMMAND HANDLERS **********
+// **********************************************************************************************************************************
+
+
+
+commandHandler cmdDiagnosePatient()
+{
+	if ( !isIdValid(self) || !isIdValid(target) )
+		return SCRIPT_CONTINUE;
+
+	obj_id medic = null;
+
+	if (medic != target)
+	{
+		if (getDistance(medic, target) > consumable.MAX_AFFECT_DISTANCE)
+		{
+			  sendSystemMessage(medic, consumable.SID_TARGET_OUT_OF_RANGE);
+			  return SCRIPT_CONTINUE;
+		}
+	}
+
+   	string[] dsrc = new string[NUM_ATTRIBUTES+1];
+   	//int[] attribWound = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+   	for ( int i = 0; i < NUM_ATTRIBUTES; i++ )
+   	{
+   		string attribute_string = healing.attributeToString(i).toLowerCase();
+   		int attribWound = getAttribWound(target, i);
+   		dsrc[i] = attribute_string+"  --  "+attribWound;
+   	}
+	//set up the battle-fatigue display
+   	dsrc[NUM_ATTRIBUTES] = new string_id(STF,"battle_fatigue")+"  --  "+getShockWound(target);
+
+	//string prompt = new string_id(STF,"wounds");		-This doesn't work. Need to figure out how to localize
+	string prompt = "Wounds";
+   	//string title = new string_id(STF,"patients_wounds");		-This doesn't work. Need to figure out how to localize
+   	string title = "Patient's Wounds";
+   	sui.listbox(self, medic, prompt, sui.OK_CANCEL, title, dsrc,"noHandler");
+
+	clearTrackingScriptVars(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+// **********************************************************************************************************************************
+// ********** FUNCTIONS **********
+// **********************************************************************************************************************************
+
+
+boolean canDiagnose(obj_id medic, obj_id target)
+{
+
+	if ((medic!= target)  && (isIdValid(target)))	// if medic isn't the target
+	{
+		if (getDistance(medic, target) > consumable.MAX_AFFECT_DISTANCE)	//if target is out of range
+		{
+			sendSystemMessage(medic, consumable.SID_TARGET_OUT_OF_RANGE);
+		}
+		else	//target is in range for diagnose
+		{
+			if (!pvpCanHelp(medic, target))	//if target isn't an enemy
+			{
+				LOG("LOG_CHANNEL", medic + " ->It would be unwise to help such a patient.");
+				sendSystemMessage(medic, SID_DO_NOT_HEAL);
+			}
+			else
+			{
+				if (!isPlayer(target))	//if the target isn't a player
+		   		{
+		 			//if (!pet_lib.isCreaturePet(target) && !pet_lib.isNpcPet(target))	//if target isn't someone's pet
+		 			if (!isCreaturePet(target) && !pet_lib.isNpcPet(target))	//if target isn't someone's pet
+		   			{
+		   				LOG("LOG_CHANNEL", "Target must be a player or a creature pet in order to tend wounds.");
+		   				sendSystemMessage(medic, SID_MUST_BE_PLAYER_OR_PET);
+		   			}
+		   			else	// if the target IS someone's pet
+		   			{
+		   			 	return true;
+		   			}
+		   		}
+		   		else	// if the target IS a player
+		   		{
+		   		 	return true;
+		   		}
+			}
+		}
+	}
+	return false;
+}
+
+
+
+
+
+
+boolean haveChargedMedTool(obj_id player, obj_id medikitTool)
+{
+	if (( getCount(medikitTool) > 0) && ( utils.isNestedWithin(medikitTool, player) ))
+			return true;
+	else
+			return false;
+}
+
+
+
+void clearTrackingScriptVars(obj_id self)
+{
+	utils.removeScriptVar(self, SCRIPTVAR_PID);
+	utils.removeScriptVar(self, SCRIPTVAR_PLAYER);
+	utils.removeScriptVar(self, SCRIPTVAR_TARGET);
+	utils.removeScriptVar(self, SCRIPTVAR_LASTCOMMAND);
+}
+
+
+string getTemplateParentDirectory(obj_id target)
+{
+	if ( !isIdValid(target) )
+		return null;
+
+	string parentDirectory = null;
+	string fullPath = getTemplateName(target);
+	if ( fullPath != null && !fullPath.equals("") )
+	{
+		string[] tmp = split(fullPath, '/');
+		if ( tmp != null && tmp.length > 0 )
+		{
+			parentDirectory = tmp[tmp.length - 2];
+		}
+	}
+
+	return parentDirectory;
+}
+
+// multi-value charge-up for differing foraged stuff
+int foragedItemsMod(obj_id item)
+{
+	if ( !isIdValid(item) )
+		return 0;
+
+	int health_mod 	= 0;
+	int mind_mod 	= 0;
+	int action_mod 	= 0;
+	int mod_time 	= 0;
+
+	int forageMod = 0;
+
+	if ( hasObjVar(item, "consumable.health_mod" ))
+	{
+		health_mod = getIntObjVar(item, "consumable.health_mod");
+	}
+	if ( hasObjVar(item, "consumable.mind_mod" ))
+	{
+		mind_mod = getIntObjVar(item, "consumable.mind_mod");
+	}
+	if ( hasObjVar(item, "consumable.action_mod" ))
+	{
+		action_mod = getIntObjVar(item, "consumable.mind_mod");
+	}
+	if ( hasObjVar(item, "consumable.mod_time" ))
+	{
+		mod_time = getIntObjVar(item, "consumable.mind_mod");
+	}
+
+	int tempItemModSum = health_mod + mind_mod + action_mod + mod_time;
+
+	if ( tempItemModSum < 400 )
+	{
+		forageMod = 1;
+	}
+	else if ( tempItemModSum < 700 )
+	{
+		forageMod = 2;
+	}
+	else
+	{
+		forageMod = 3;
+	}
+
+	return forageMod;
+}
+
+
+boolean isCreaturePet( obj_id npc )
+{
+	return ( ai_lib.isMonster( npc ) || hasObjVar( npc, "ai.pet" ) );
+}
+

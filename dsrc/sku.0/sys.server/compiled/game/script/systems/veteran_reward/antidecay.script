@@ -1,0 +1,217 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        systems/veteran_reward/antidecay.script
+ * Description:  Let's a player make an insurable item not decay from cloning or use
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+include library.sui;
+include library.utils;
+include library.respec;
+include library.veteran_deprecated;
+
+
+/***** CONSTANTS *******************************************************/
+
+const string OBJVAR_GROUP_REWARDED = "rewarded";
+const string VETERAN_STRING_TABLE = "veteran_new";
+const string VETERAN_CSLOG = "veteran";
+const string NOMOVE_SCRIPT = "item.special.nomove";
+
+// Menu strings
+const string_id SID_APPLY_ANTI_DECAY	= new string_id("ui_radial", "apply_anti_decay");
+const string_id SID_RETRIEVE_ITEMS_FROM_ANTI_DECAY_KIT	= new string_id("ui_radial", "retrieve_items_from_anti_decay_kit");
+
+// Anti Decay Kit strings
+const string_id SID_ERROR_KIT_ALREADY_USED = new string_id(VETERAN_STRING_TABLE, "error_kit_already_used");
+const string_id SID_ERROR_ITEM_NOT_IN_PLAYER_INVENTORY = new string_id(VETERAN_STRING_TABLE, "error_item_not_in_player_inventory");
+const string_id SID_ERROR_KIT_NOT_IN_PLAYER_INVENTORY = new string_id(VETERAN_STRING_TABLE, "error_kit_not_in_player_inventory");
+const string_id SID_ERROR_KIT_ALREADY_HAS_ITEM = new string_id(VETERAN_STRING_TABLE, "error_kit_already_has_item");
+const string_id SID_ERROR_ITEM_NOT_VALID_FOR_ANTI_DECAY = new string_id(VETERAN_STRING_TABLE, "error_item_not_valid_for_anti_decay");
+const string_id SID_ERROR_KIT_HAS_TOO_MANY_ITEMS = new string_id(VETERAN_STRING_TABLE, "error_kit_has_too_many_items");
+const string_id SID_ERROR_ITEM_IS_ALREADY_ANTI_DECAY = new string_id(VETERAN_STRING_TABLE, "error_item_is_already_anti_decay");
+const string_id SID_SUCCESSFULLY_USED_ANTI_DECAY_KIT = new string_id(VETERAN_STRING_TABLE, "successfully_used_anti_decay_kit");
+const string_id SID_FAILED_ITEM_CANNOT_BE_PLACED_IN_INVENTORY = new string_id(VETERAN_STRING_TABLE, "failed_item_cannot_be_placed_in_inventory");
+const string_id SID_FAILED_ITEM_NOT_MADE_ANTI_DECAY = new string_id(VETERAN_STRING_TABLE, "failed_item_not_made_anti_decay");
+const string_id SID_ERROR_KIT_NOT_CONTAINER = new string_id(VETERAN_STRING_TABLE, "error_kit_not_container");
+
+const string_id SID_USE_KIT_CONFIRM_PROMPT_ONE = new string_id(VETERAN_STRING_TABLE, "use_kit_confirm_prompt_one");
+const string_id SID_USE_KIT_CONFIRM_PROMPT_TWO = new string_id(VETERAN_STRING_TABLE, "use_kit_confirm_prompt_two");
+const string_id SID_USE_KIT_CONFIRM_TITLE = new string_id(VETERAN_STRING_TABLE, "use_kit_confirm_title");
+
+// NOTE: ADK has been changed from an Anti-Decay Kit to a single use Profession Restart.
+// These kits should not longer be rewarded, they will slowly leave the economy as they are consumed.
+
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnInitialize()
+{
+	if ( hasObjVar(self, OBJVAR_GROUP_REWARDED) )
+	{
+		messageTo(self, "handleVeteranAntidecayDestroy", null, 5, false);
+	}
+
+	setName(self, "");
+
+	boolean isEmpty = false;
+	// check if anything is in the kit
+	obj_id[] kitContents = getContents(self);
+	if( kitContents == null || kitContents.length < 1 )
+		isEmpty = true;
+
+	obj_id player = utils.getContainingPlayer(self);
+
+	if (!isEmpty && isIdValid(player))
+	{
+		putItemsInKitIntoPlayerInventory(self, player);
+	}
+
+	// little self correction just in case Kit got into a permanent state of being nodrop/notrade
+	if( isEmpty && hasScript(self, NOMOVE_SCRIPT) )
+		detachScript(self, NOMOVE_SCRIPT);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	// verify the kit hasn't already been used
+	if ( hasObjVar(self, OBJVAR_GROUP_REWARDED) )
+	{
+		sendSystemMessage(transferer, SID_ERROR_KIT_ALREADY_USED);
+		messageTo(self, "handleVeteranAntidecayDestroy", null, 5, false);
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if( hasScript(self, NOMOVE_SCRIPT) )
+		detachScript(self, NOMOVE_SCRIPT);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info item)
+{
+	// add a menu option to use the kit
+	item.addRootMenu(menu_info_types.ITEM_USE, null);
+	setName(self, "");
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if( item == menu_info_types.ITEM_USE )
+	{
+		// Make sure kit is empty
+		obj_id[] kitContents = getContents(self);
+		if( kitContents != null && kitContents.length > 0 )
+		{
+			if (!putItemsInKitIntoPlayerInventory(self, player))
+			{
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		// Pop up the Profession selection warning screen
+		if (canManipulate(player, self, false, true, 0, true))
+		{
+			respec.startNpcRespec(player, self, true);
+		}
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// give back any items that might still be inside the Anti Decay Kit.
+// Don't destroy the Anti Decay Kit if items fail to be placed back into the player's inventory.
+trigger OnDestroy()
+{
+	// get the player this kit is on
+	obj_id player = utils.getContainingPlayer(self);
+	// get contents of kit
+	obj_id[] kitContents = getContents(self);
+	// make sure we have a valid player
+	if( isIdValid(player) )
+	{
+		// items are inside that couldn't be placed into inventory
+		if( !putItemsInKitIntoPlayerInventory(self, player) )
+			// don't destroy the kit
+			return SCRIPT_OVERRIDE;
+	}
+
+	// log when kit is destroyed without having been used (probably from Destroy menu option)
+	if( !hasObjVar(self, OBJVAR_GROUP_REWARDED) )
+	{
+		// include player info if it exists
+		if( isIdValid(player) )
+		{
+			CustomerServiceLog(VETERAN_CSLOG, "Anti Decay Kit " + self + " was destroyed by player %TU without being used.", player);
+		}
+		else
+		{
+			CustomerServiceLog(VETERAN_CSLOG, "Anti Decay Kit " + self + " was destroyed without being used. Player unknown.");
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleVeteranAntidecayDestroy()
+{
+	if ( hasObjVar(self, OBJVAR_GROUP_REWARDED) )
+	{
+		obj_id player = utils.getContainingPlayer(self);
+		obj_id[] kitContents = getContents(self);
+		if( isIdValid(player) )
+		{
+			// items are inside that couldn't be placed into inventory
+			if( !putItemsInKitIntoPlayerInventory(self, player) )
+				return SCRIPT_CONTINUE;
+		}
+
+		// kit is empty and ready to be destroyed
+		CustomerServiceLog(VETERAN_CSLOG, "Anti Decay Kit " + self + " is being destroyed after successfully being used.");
+		destroyObject(self);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// return false if items exist inside kit and are not successfully moved to inventory.
+// return true for all other cases.  It is expected that the caller validates kit and player and handles those cases
+boolean putItemsInKitIntoPlayerInventory(obj_id kit, obj_id player)
+{
+	// not a valid kit
+	if( !isIdValid(kit) )
+		return true;
+
+	// not a valid player
+	if( !isIdValid(player) )
+		return true;
+
+	obj_id[] kitContents = getContents(kit);
+
+	// check if kit has items inside
+	if( kitContents != null && kitContents.length>0 )
+	{
+		for (int i = 0; i < kitContents.length; ++i)
+		{
+			if( !utils.putInPlayerInventory(player, kitContents[i]) )
+			{
+				// failed to place item back in player's inventory.
+				sendSystemMessage(player, SID_FAILED_ITEM_CANNOT_BE_PLACED_IN_INVENTORY);
+				return false;
+			}
+		}
+	}
+
+	return true;
+}

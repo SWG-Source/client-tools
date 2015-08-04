@@ -1,0 +1,297 @@
+/**
+ * Copyright (c) ©2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        trap_base.script
+ * Description:  trap base
+ * @author       $Author:$
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.ai_lib;
+include library.callable;
+include library.skill;
+include library.utils;
+include library.xp;
+include library.pet_lib;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_DECODE					= new string_id("treasure_map/treasure_map", "decode");
+const string_id SID_SYS_NOT_READY				= new string_id("trap/trap", "sys_not_ready");
+const string_id SID_SYS_MISS					= new string_id("trap/trap", "sys_miss");
+const string_id SID_SYS_CREATURES_ONLY				= new string_id("trap/trap", "sys_creatures_only");
+const string_id SID_SYS_NO_PETS					= new string_id("trap/trap", "sys_no_pets");
+const string_id SID_ADD_TRAP_TO_DROID				= new string_id("pet/droid_modules", "add_trap_to_droid");
+const string_id SID_NO_TRAP_IN_SPACE = new string_id("space/space_interaction", "no_trap_in_space");
+
+//------------------------------------------------
+// OnGetAttributes
+//------------------------------------------------
+
+trigger OnGetAttributes( obj_id player, string[] names, string[] attribs )
+{
+
+	if (!hasObjVar(self, "droid_trap"))
+	{
+		int idx = utils.getValidAttributeIndex(names);
+		if (idx == -1)
+			return SCRIPT_CONTINUE;
+
+		int count = getCount( self );
+		names[idx] = "quantity";
+		attribs[idx] = Integer.toString( count );
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+
+		int diff = getIntObjVar( self, "trapDiff" );
+		names[idx] = "complexity";
+		attribs[idx] = Integer.toString( diff );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest( obj_id player, menu_info mi )
+{
+	if (!hasObjVar(self, "droid_trap"))
+	{
+		menu_info_data mid = mi.getMenuItemByType( menu_info_types.EXAMINE );
+		if ( mid != null )
+			mid.setServerNotify( true );
+
+		mid = mi.getMenuItemByType( menu_info_types.ITEM_USE );
+		if ( mid != null )
+			mid.setServerNotify( true );
+	}
+
+	if (utils.getTrapDroidId(player) != null && !hasScript(self, "ai.pet"))
+	{
+		int menu = mi.addRootMenu( menu_info_types.SERVER_MENU1, SID_ADD_TRAP_TO_DROID );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect( obj_id player, int item )
+{
+	// Make sure we aren't in space.
+	if (isSpaceScene())
+	{
+		sendSystemMessage(player, SID_NO_TRAP_IN_SPACE);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!hasObjVar(self, "droid_trap"))
+	{
+		// Item was used.
+		if ( item == menu_info_types.ITEM_USE )
+		{
+			int skillMod = getSkillStatMod( player, "trapping" );
+			if ( skillMod <= 0 )
+			{
+				// Insufficient skill to use any trap.
+				string_id trapNoSkill = new string_id( "trap/trap", "trap_no_skill" );
+				sendSystemMessage( player, trapNoSkill );
+				return SCRIPT_OVERRIDE;
+			}
+
+			string strParams = self.toString();
+			obj_id objTarget = getLookAtTarget( player );
+			
+			if(!isIdValid(objTarget))
+			{
+				// need target.
+				return SCRIPT_CONTINUE;
+			}
+			if ( !canSee( player, objTarget ) )
+			{
+				sendSystemMessage( player, new string_id("combat_effects", "cansee_fail") );
+				return SCRIPT_CONTINUE;
+			}
+			if ( !ai_lib.isMonster( objTarget ) || isIncapacitated( objTarget ) || isDead( objTarget ) )
+			{
+				sendSystemMessage( player, SID_SYS_CREATURES_ONLY );
+				return SCRIPT_CONTINUE;
+			}
+			if ( pet_lib.isPet( objTarget ) )
+			{
+				sendSystemMessage( player, SID_SYS_NO_PETS );
+				return SCRIPT_CONTINUE;
+			}
+
+			queueCommand( player, ##"throwTrap", objTarget, strParams, COMMAND_PRIORITY_NORMAL );
+		}
+	}
+
+
+	if(item == menu_info_types.SERVER_MENU1)
+	{
+		dictionary params = new dictionary();
+		params.put("trap", getSelf());
+		params.put("player", player);
+
+		obj_id droid = callable.getCDCallable(utils.getTrapDroidId(player));
+
+		messageTo(droid, "doRadialTrapAdd", params, 1, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// trapUsed
+//------------------------------------------------
+
+void trapUsed( obj_id self )
+{
+	if (hasObjVar(self, "droid_trap"))
+	{
+		droidTrapUsed(self);
+		return;
+	}
+
+	int intUses = getCount( self ) - 1;
+	if( intUses <= 0 )
+	{
+		destroyObject( self );
+	}
+	else
+	{
+		setCount( self, intUses );
+	}
+
+	return;
+}
+
+//------------------------------------------------
+// trapDone
+//------------------------------------------------
+
+messageHandler trapDone()
+{
+	// Clear use state.
+	trapUsed( self );
+
+	// Clear hit count for ae traps.
+	utils.setScriptVar( self, "hits", 0 );
+	utils.setScriptVar( self, "misses", 0 );
+	utils.setScriptVar( self, "grantedXP", 0 );
+
+	return SCRIPT_CONTINUE;
+}
+
+
+//------------------------------------------------
+// trapHit
+//------------------------------------------------
+
+messageHandler trapHit()
+{
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// trapMiss
+//------------------------------------------------
+
+messageHandler trapMiss()
+{
+	// Miss message.
+	int misses = utils.getIntScriptVar( self, "misses" );
+	if ( misses == 0 )
+	{
+		obj_id player = params.getObjId( "player" );
+		sendSystemMessage( player, SID_SYS_MISS );
+	}
+	misses++;
+	utils.setScriptVar( self, "misses", misses );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// grantTrapXP
+//------------------------------------------------
+
+void grantTrapXP( obj_id player, obj_id target, float trapMod )
+{
+	obj_id self = getSelf();
+	
+	// No xp for trapping babies.
+	if ( hasScript( target, "ai.pet_advance" ) )
+	{
+		return;
+	}
+
+	if (!hasObjVar(self, "droid_trap"))
+	{
+		float targetLevel = (float) getLevel( target );
+		int pseudoDamage = (int) (Math.pow( targetLevel, 1.5f ) * 2.2f + 66.f);
+		
+  		if ( pseudoDamage > 2000 )
+  		{
+  			pseudoDamage = 2000;
+  		}
+  		
+		pseudoDamage *= (int) trapMod;
+		xp.updateCombatXpList(target, player, xp.SCOUT, pseudoDamage);
+		return;
+	}
+	else
+	{
+		float targetLevel = (float) getLevel( target );
+		int pseudoDamage = (int) (Math.pow( targetLevel, 1.5f ) * 1f + 66.f);
+		
+  		if ( pseudoDamage > 1000 )
+  		{
+  			pseudoDamage = 1000;
+  		}
+  		
+		pseudoDamage *= (int) trapMod;
+		xp.updateCombatXpList(target, player, xp.SCOUT, pseudoDamage);
+		return;
+	}
+}
+
+void assignTrapEffect(obj_id player, obj_id target, int drainhealth, int drainact, int drainmind)
+{
+	//do attribute drain
+	drainAttributes( target, drainact, drainmind );
+}
+
+void droidTrapUsed( obj_id self )
+{
+	obj_id controlDevice = callable.getCallableCD(self);
+
+	int intUses = getIntObjVar( self, "droid_trap.trap_num.charges" ) - 1;
+	
+	if(intUses <= 0)
+	{
+		detachScript(self, getStringObjVar(self, "droid_trap.trap_num.script"));
+		removeObjVar(self, "droid_trap");
+		removeObjVar(controlDevice, "droid_trap");
+	}
+	else
+	{
+		setObjVar(self, "droid_trap.trap_num.charges", intUses);
+		setObjVar(controlDevice, "droid_trap.trap_num.charges", intUses);
+	}
+
+	return;
+}

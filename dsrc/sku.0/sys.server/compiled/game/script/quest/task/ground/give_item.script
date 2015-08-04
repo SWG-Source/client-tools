@@ -1,0 +1,289 @@
+include library.groundquests;
+include library.prose;
+include library.static_item;
+include library.travel;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const string dataTableNumToGive = "NUM_TO_GIVE";
+const string dataTableItemToGive = "ITEM_TO_GIVE";
+const string dataTableCreateItem = "CREATE_ITEM";
+const string dataTableDestroyItem = "DESTROY_ITEM";
+const string dataTableFailOnLogout = "FAIL_ON_LOGOUT";
+const string dataTableTravelBlock = "TRAVEL_BLOCK";
+const string dataTableTravelBlockAllowLaunch = "TRAVEL_BLOCK_ALLOW_LAUNCH";
+const string dataTableTextType = "TEXT_TYPE";
+
+const string objVarCount = "count";
+const string objVarCreatedItem = "createdItem";
+
+const string taskType = "give_item";
+
+const int textGive = 0;
+const int textDeliver = 1;
+
+// ---------------------------------------------------------------------
+
+//fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+	int count = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableNumToGive);
+	setObjVar (self, baseObjVar + "." + objVarCount, count);
+
+	int textType = Math.max(0, groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableTextType));
+	questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, getCounterText(textType), 0, count);
+
+	boolean createItem = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableCreateItem, false);
+
+	if (createItem)
+	{
+		string itemName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableItemToGive);
+
+		if (itemName != null && itemName.length() > 0)
+		{
+			itemName = split(itemName, ',')[0];
+
+			if (itemName != null && itemName.length() > 0)
+			{
+				obj_id newItem;
+
+				if (static_item.isStaticItem(itemName))
+					newItem = static_item.createNewItemFunction(itemName, self);
+				else
+					newItem = createObjectInInventoryAllowOverload(itemName, self);
+
+				if (isValidId(newItem))
+				{
+					groundquests.sendPlacedInInventorySystemMessage(self, newItem, itemName);
+					CustomerServiceLog("QUEST", self + " given item '" + itemName + "' (" + newItem + ")");
+					setObjVar(self, baseObjVar + "." + objVarCreatedItem, newItem);
+				}
+			}
+		}
+	}
+
+	boolean travelBlock = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableTravelBlock, false);
+
+	if (travelBlock)
+	{
+		boolean allowLaunch = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableTravelBlockAllowLaunch, false);
+		travel.setTravelBlock(self, allowLaunch);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler itemGivenToNpc ()
+{
+	string questName = params.getString ("questName");
+	string taskName = params.getString ("taskName");
+	string itemName = params.getString ("itemName");
+
+	groundquests.questOutputDebugLog(taskType, "giveItem", "start");
+
+	int questCrc = groundquests.getQuestIdFromString (questName);
+	int taskId = groundquests.getTaskId (questCrc, taskName);
+
+	if (questIsTaskActive(questCrc, taskId, self))
+	{
+		string item = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableItemToGive);
+
+		if(item != null && item.length() > 0)
+		{
+			String[] itemsNeeded = split(item, ',');
+			int textType = Math.max(0, groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableTextType));
+
+			for(int i = 0; i < itemsNeeded.length; ++i)
+			{
+
+				if (itemsNeeded[i] != null && itemsNeeded[i].equals(itemName))
+				{
+					String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+					String objvarNameCount = baseObjVar + "." + objVarCount;
+					if(hasObjVar(self, objvarNameCount))
+					{
+						int giveCount = getIntObjVar(self, objvarNameCount);
+						--giveCount;
+						if(giveCount < 0)
+							giveCount = 0;
+
+						int countMax = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableNumToGive);
+						string_id message = new string_id ("quest/groundquests", getMultipleSuccessTextKey(textType));
+						prose_package pp = prose.getPackage(message, self, self);
+						prose.setDI(pp, giveCount);
+						sendSystemMessageProse(self, pp);
+
+						if(giveCount <= 0)
+						{
+							questCompleteTask(questCrc, taskId, self);
+						}
+						else
+						{
+							setObjVar(self, objvarNameCount, giveCount);
+							questSetQuestTaskCounter(self, questGetQuestName(questCrc), taskId, getCounterText(textType), countMax-giveCount, countMax);
+							play2dNonLoopingSound(self, groundquests.MUSIC_QUEST_INCREMENT_COUNTER);
+							groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "itemGivenToNpc", "Gave a " + itemName + ", " + giveCount + " left.");
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + "task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is failed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + "task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	failIfFailOnLogout(self);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnLogout()
+{
+	failIfFailOnLogout(self);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	String baseObjVar = groundquests.setBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+
+	if (hasObjVar(player,  baseObjVar + "." + objVarCreatedItem))
+	{
+		obj_id createdItem = getObjIdObjVar(player, baseObjVar + "." + objVarCreatedItem);
+
+		if (isIdValid(createdItem) && exists(createdItem))
+		{
+			boolean destroyItem = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableDestroyItem, false);
+
+			if (destroyItem)
+			{
+				groundquests.sendRemovedFromInventorySystemMessage(player, createdItem);
+				destroyObject(createdItem);
+				CustomerServiceLog("QUEST", player + " destroyed item (" + createdItem + ")");
+			}
+		}
+	}
+
+	boolean travelBlock = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableTravelBlock, false);
+
+	if (travelBlock)
+		travel.clearTravelBlock(player);
+
+	//clear tracking objvars
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void failIfFailOnLogout(obj_id player)
+{
+	dictionary tasks = groundquests.getActiveTasksForTaskType(player, taskType);
+	if (tasks != null && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for (int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+
+				boolean shouldFailOnLogout = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableFailOnLogout, false);
+
+				if (shouldFailOnLogout)
+				{
+					LOG("QUEST_LOG", "Quest task failed due to log out.");
+					questFailTask(questCrc, taskId, player);
+				}
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
+
+string getCounterText(int textType)
+{
+	switch (textType)
+	{
+	case textDeliver:
+		return "quest/groundquests:deliver_counter";
+	case textGive:
+	default:
+		return "quest/groundquests:give_counter";
+	}
+}
+
+// ---------------------------------------------------------------------
+
+string getMultipleSuccessTextKey(int textType)
+{
+	switch (textType)
+	{
+	case textDeliver:
+		return "deliver_to_npc_multiple_success";
+	case textGive:
+	default:
+		return "give_item_to_npc_multiple_success";
+	}
+}
+
+// ---------------------------------------------------------------------

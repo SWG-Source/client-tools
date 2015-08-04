@@ -1,0 +1,1087 @@
+//------------------------------------------------
+// delivery.script
+// Brandon Reinhart
+//
+// Move to a location, meet a ship, pick up an item,
+// move to another location, meet a ship, drop off the item.
+// With attacks during the transport process.
+//
+//
+// Player flies to pickup rendezvous.
+// Warp in Pickup Ship
+// Player docks.
+// Player receives contents.
+// Player flies to target location.
+// Player is attacked on route.
+// Player reaches target location.
+// Warp in Dropoff Ship
+// Player docks.
+// Player transfers contents.
+//
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_create;
+include library.space_transition;
+include library.space_quest;
+include library.space_utils;
+include library.utils;
+include library.ship_ai;
+include library.prose;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_ABANDONED_MISSION		= new string_id( "space/quest", "mission_abandoned" );
+const string_id SID_TARGETS_REMAINING		= new string_id( "space/quest", "destroy_duty_targets_remaining" );
+
+const string SOUND_SPAWN_ESCORT				= "clienteffect/ui_quest_spawn_escort.cef";
+const string SOUND_SPAWN_WAVE				= "clienteffect/ui_quest_spawn_wave.cef";
+const string SOUND_DESTROYED_WAVE			= "clienteffect/ui_quest_destroyed_wave.cef";
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the type of ship we have to pick up from and deliver to.
+	setObjVar( self, "pickupShip", questInfo.getString("pickupShip") );
+	setObjVar( self, "deliveryShip", questInfo.getString("deliveryShip") );
+
+	// Get our pickup point.
+	setObjVar( self, "pickupPoint", questInfo.getString("pickupPoint") );
+
+	// Get our delivery point.
+	setObjVar( self, "deliveryPoint", questInfo.getString("deliveryPoint") );
+
+	// Get attack info.
+	int numAttackShipLists = questInfo.getInt( "numAttackShipLists" );
+	setObjVar( self, "numAttackShipLists", numAttackShipLists );
+	for ( int i=0; i<numAttackShipLists; i++ )
+	{
+		string[] attackShips = dataTableGetStringColumn( qTable, "attackShips"+(i+1) );
+		space_quest.cleanArray( self, "attackShips"+(i+1), attackShips );
+	}
+	setObjVar( self, "attackPeriod", questInfo.getInt( "attackPeriod" ) );
+	setObjVar( self, "attackListType", questInfo.getInt( "attackListType" ) );
+
+	// Try to notify the player of the first objective (if we are in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	// Add quest journal objectives.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	string questZone = null, point = null;
+	obj_id player = params.getObjId( "player" );
+	java.util.StringTokenizer st;
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Get our pickup zone...
+	string pp_scene = null, pp_destPoint = null;
+	if ( !hasObjVar( self, "delivery_nopickup" ) )
+	{
+		point = getStringObjVar( self, "pickupPoint" );
+		st = new java.util.StringTokenizer( point, ":" );
+		pp_scene = st.nextToken();
+		pp_destPoint = st.nextToken();
+	}
+
+	// Get our delivery zone.
+	point = getStringObjVar( self, "deliveryPoint" );
+	st = new java.util.StringTokenizer( point, ":" );
+	string dp_scene = st.nextToken();
+	string dp_destPoint = st.nextToken();
+
+	boolean rightzone = false;
+	if ( !hasObjVar( self, "delivery_nopickup" ) )
+		rightzone = getCurrentSceneName().startsWith( pp_scene ) || getCurrentSceneName().startsWith( dp_scene );
+	else
+		rightzone = getCurrentSceneName().startsWith( dp_scene );
+	if ( !rightzone )
+	{
+		// We aren't in one of our valid quest zones.
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearMissionWaypoint( self );
+			space_quest.showQuestUpdate( self, SID_ABANDONED_MISSION );
+			space_quest.setQuestFailed( player, self, false );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	string scene = null, destPoint = null;
+	if ( hasObjVar( self, "delivering" ) || hasObjVar( self, "dropoff" ) )
+	{
+		scene = dp_scene;
+		destPoint = dp_destPoint;
+	}
+	else
+	{
+		scene = pp_scene;
+		destPoint = pp_destPoint;
+	}
+
+	if ( getCurrentSceneName().startsWith( scene ) )
+		registerQuestLocation( self, player, destPoint );
+
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// registerQuestLocation
+//------------------------------------------------
+
+void registerQuestLocation( obj_id self, obj_id player, string destNav )
+{
+	obj_id navPoint = space_quest.findQuestLocation(self, player, destNav, "nav");
+
+	if (isIdValid(navPoint))
+	{
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		location loc = getLocation(navPoint);
+		transform wptrans = getTransform_o2w(navPoint);
+
+		string waypoint_prefix = null, wp = null;
+		if ( hasObjVar( self, "delivering" ) )
+		{
+			waypoint_prefix = "Delivery";
+			wp = "d";
+
+			// Add quest journal objectives.
+			int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+			if ( (questid != 0) && hasObjVar( self, "delivery_nopickup" ) )
+			{
+				setObjVar( self, "taskId", 1 );
+				questActivateTask( questid, 1, player );
+			}
+		}
+		else
+		{
+			waypoint_prefix = "Pickup";
+			wp = "p";
+
+			// Add quest journal objectives.
+			int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+			if ( questid != 0 )
+			{
+				setObjVar( self, "taskId", 1 );
+				questActivateTask( questid, 1, player );
+			}
+		}
+
+		// Create a waypoint to this location.
+		obj_id waypoint = getObjIdObjVar( self, "pickup_waypoint" );
+		if ( !isIdValid(waypoint) )
+			waypoint = createWaypointInDatapad( player, loc );
+		if ( isIdValid(waypoint) )
+		{
+			setWaypointVisible( waypoint, true );
+			setWaypointActive( waypoint, true );
+			setWaypointLocation( waypoint, loc );
+			setWaypointName( waypoint, waypoint_prefix+" Rendezvous" );
+			setWaypointColor( waypoint, "space" );
+			setObjVar( self, "pickup_waypoint", waypoint );
+		}
+		setObjVar( self, "pickup_transform", wptrans );
+
+		int taskId = getIntObjVar( self, "taskId" );
+		questSetQuestTaskLocation(player, "spacequest/"+questType+"/"+questName, taskId, loc);
+
+		space_quest._setQuestInProgress( self );
+
+		// Duty target located. A waypoint has been created.
+		string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "found_loc_"+wp );
+		questUpdate( self, foundLocation );
+
+		// Tell the player to register this location as an OnArrived location.
+		string name = questName + ":" + destNav;
+		setObjVar( self, "loc", name );
+		addLocationTarget3d(player, name, loc, space_quest.PATROL_NAV_RADIUS);
+	}
+
+	setObjVar( self, "initialized", 1 );
+
+	messageTo( self, "deliveryNoPickupAttack", null, 10.f, false );
+}
+
+//------------------------------------------------
+// arrivedAtLocation
+//------------------------------------------------
+
+messageHandler arrivedAtLocation()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	string name = params.getString( "name" );
+	obj_id player = params.getObjId( "player" );
+	location loc = params.getLocation( "loc" );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	if ( hasObjVar( self, "delivering" ) )
+	{
+		// Update the quest journal.
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			// A hack because our quest system is based on task indexes, instead of name.
+			if ( hasObjVar( self, "delivery_nopickup" ) )
+			{
+				setObjVar( self, "taskId", 2 );
+				questActivateTask( questid, 2, player );
+				if ( questIsTaskActive( questid, 1, player ) )
+					questCompleteTask( questid, 1, player );
+			}
+			else
+			{
+				setObjVar( self, "taskId", 4 );
+				questActivateTask( questid, 4, player );
+				if ( questIsTaskActive( questid, 3, player ) )
+					questCompleteTask( questid, 3, player );
+			}
+		}
+
+		// Probably the delivery ship?
+		string destNav = getStringObjVar( self, "deliveryPoint" );
+		java.util.StringTokenizer st = new java.util.StringTokenizer( destNav, ":" );
+		string scene = st.nextToken();
+		destNav = st.nextToken();
+		destNav = questName + ":" + destNav;
+		if ( destNav.equals( name ) )
+		{
+			string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "arrived_at_delivery" );
+			questUpdate( self, foundLocation );
+			messageTo( self, "warpDeliveryShipDelay", params, 5 + rand(1,5), false );
+		}
+	}
+	else if ( !hasObjVar( self, "pickup" ) )
+	{
+		// Update the quest journal.
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			setObjVar( self, "taskId", 2 );
+			questActivateTask( questid, 2, player );
+			if ( questIsTaskActive( questid, 1, player ) )
+				questCompleteTask( questid, 1, player );
+		}
+
+		// Probably the delivery ship?
+		string destNav = getStringObjVar( self, "pickupPoint" );
+		java.util.StringTokenizer st = new java.util.StringTokenizer( destNav, ":" );
+		string scene = st.nextToken();
+		destNav = st.nextToken();
+		destNav = questName + ":" + destNav;
+		if ( destNav.equals( name ) )
+		{
+			string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "arrived_at_pickup" );
+			questUpdate( self, foundLocation );
+			messageTo( self, "warpPickupShipDelay", params, 5 + rand(1,5), false );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// warpPickupShipDelay
+//------------------------------------------------
+
+messageHandler warpPickupShipDelay()
+{
+	// See if this location is our start point.
+	string name = params.getString( "name" );
+	obj_id player = params.getObjId( "player" );
+	location loc = params.getLocation( "loc" );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+
+	// We arrived at our pickup location!
+	space_quest._setQuestInProgress( self );
+	setObjVar( self, "pickup", 1 );
+
+	// WARP
+	// Warp in the pickup ship.
+	obj_id ship = warpInShip( self, "pickup" );
+	ship_ai.unitSetLeashDistance( ship, 16000 );
+	attachScript( ship, "space.quest_logic.delivery_ship" );
+	setObjVar( ship, "quest", self );
+	setObjVar( self, "pickup_ship", ship );
+	setObjVar( self, "ship", ship );
+	utils.setScriptVar( ship, "dockable", 1 );
+	setLookAtTarget( player, ship );
+	space_quest._addMissionCriticalShip( player, self, ship );
+	ship_ai.unitSetAttackOrders( ship, ship_ai.ATTACK_ORDERS_HOLD_FIRE );
+	setObjVar( ship, "objMissionOwner", player );
+	ship_ai.unitAddExclusiveAggro( ship, player );
+	obj_id playership = space_transition.getContainingShip(player);
+	ship_ai.unitSetAutoAggroImmuneTime(playership, rand( 3.0f, 6.0f ));
+
+	// Say hi.
+	dictionary oparams = new dictionary();
+	oparams.put( "delivery", false );
+	messageTo( self, "sayHello", oparams, 2.f, false );
+	playClientEffectObj( player, SOUND_SPAWN_ESCORT, player, "" );
+
+	// Get rid of the pickup waypoint.
+	clearMissionWaypoint( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// warpInShip
+//------------------------------------------------
+
+obj_id warpInShip( obj_id self, string var )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string shipType = getStringObjVar( self, var+"Ship" );
+	transform trans = getTransformObjVar( self, "pickup_transform" );
+	transform spawnLoc = space_quest.getRandomPositionInSphere( trans, 100, 200 );
+	return space_create.createShipHyperspace( shipType, spawnLoc );
+}
+
+//------------------------------------------------
+// warpDeliveryShipDelay
+//
+// Go ahead and keep this seperate from warpPickupShipDelay
+// in case I expand this in the future...
+//------------------------------------------------
+
+messageHandler warpDeliveryShipDelay()
+{
+	// See if this location is our start point.
+	string name = params.getString( "name" );
+	obj_id player = params.getObjId( "player" );
+	location loc = params.getLocation( "loc" );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+
+	// We arrived at our pickup location!
+	space_quest._setQuestInProgress( self );
+	removeObjVar( self, "delivering" );
+	setObjVar( self, "dropoff", 1 );
+
+	// WARP
+	// Warp in the pickup ship.
+	obj_id ship = warpInShip( self, "delivery" );
+	ship_ai.unitSetLeashDistance( ship, 16000 );
+	attachScript( ship, "space.quest_logic.delivery_ship" );
+	setObjVar( ship, "quest", self );
+	setObjVar( self, "delivery_ship", ship );
+	setObjVar( self, "ship", ship );
+	utils.setScriptVar( ship, "dockable", 1 );
+	setLookAtTarget( player, ship );
+	space_quest._addMissionCriticalShip( player, self, ship );
+	ship_ai.unitSetAttackOrders( ship, ship_ai.ATTACK_ORDERS_HOLD_FIRE );
+	setObjVar( ship, "objMissionOwner", player );
+	ship_ai.unitAddExclusiveAggro( ship, player );
+
+	// Say hi.
+	dictionary oparams = new dictionary();
+	oparams.put( "delivery", true );
+	messageTo( self, "sayHello", oparams, 2.f, false );
+	playClientEffectObj( player, SOUND_SPAWN_ESCORT, player, "" );
+
+	// Get rid of the pickup waypoint.
+	clearMissionWaypoint( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// sayHello
+//------------------------------------------------
+
+messageHandler sayHello()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string_id hello = null;
+	if ( params.getBoolean( "delivery" ) )
+		hello = new string_id( "spacequest/"+questType+"/"+questName, "hello_d" );
+	else
+		hello = new string_id( "spacequest/"+questType+"/"+questName, "hello_p" );
+	prose_package pp = prose.getPackage( hello, 0 );
+	space_quest.groupTaunt( ship, player, pp );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// dockingStarted
+//------------------------------------------------
+
+messageHandler dockingStarted()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	if ( hasObjVar( self, "pickup" ) )
+	{
+		// The player is docking during the pickup phase.
+		// See if he is docking with the pickup ship.
+		obj_id target = params.getObjId( "target" );
+		obj_id ship = getObjIdObjVar( self, "pickup_ship" );
+
+		if ( target != ship )
+			return SCRIPT_CONTINUE;
+
+		// This is the correct ship, send a message.
+		string_id status_update = new string_id( "spacequest/"+questType+"/"+questName, "docking_started_pickup" );
+		prose_package pp = prose.getPackage( status_update, 0 );
+		space_quest.groupTaunt( ship, player, pp );
+	}
+	else if ( hasObjVar( self, "dropoff" ) )
+	{
+		// The player is docking during the pickup phase.
+		// See if he is docking with the pickup ship.
+		obj_id target = params.getObjId( "target" );
+		obj_id ship = getObjIdObjVar( self, "delivery_ship" );
+
+		if ( target != ship )
+			return SCRIPT_CONTINUE;
+
+		// This is the correct ship, send a message.
+		string_id status_update = new string_id( "spacequest/"+questType+"/"+questName, "docking_started_delivery" );
+		prose_package pp = prose.getPackage( status_update, 0 );
+		space_quest.groupTaunt( ship, player, pp );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// dockingComplete
+//------------------------------------------------
+
+messageHandler dockingComplete()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	if ( hasObjVar( self, "pickup" ) )
+	{
+		// The player is undocking during the pickup phase.
+		// See if he is undocking with the pickup ship.
+		obj_id target = params.getObjId( "target" );
+		obj_id ship = getObjIdObjVar( self, "pickup_ship" );
+
+		if ( target != ship )
+			return SCRIPT_CONTINUE;
+
+		// This is a correct ship.
+		removeObjVar( self, "pickup" );
+		setObjVar( self, "delivering", 1 );
+		utils.removeScriptVar( ship, "dockable" );
+
+		// Send a message.
+		string_id status_update = new string_id( "spacequest/"+questType+"/"+questName, "docking_complete_pickup" );
+		prose_package pp = prose.getPackage( status_update, 0 );
+		space_quest.groupTaunt( ship, player, pp );
+
+		// Have the pickup ship move away and hyperspace out.
+		transform t = getTransform_o2w( ship );
+		transform goalLoc = space_quest.getRandomPositionInSphere( t, 1000, 1200 );
+		ship_ai.unitMoveTo( ship, goalLoc );
+		messageTo( ship, "lightspeedJump", null, 15.f, false );
+
+		// Give us the waypoint to our delivery destination.
+		messageTo( self, "findDeliveryPoint", null, 1.f, false );
+
+		// Update the quest journal.
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			setObjVar( self, "taskId", 3 );
+			questActivateTask( questid, 3, player );
+			if ( questIsTaskActive( questid, 2, player ) )
+				questCompleteTask( questid, 2, player );
+		}
+
+		// Launch the first attack against us.
+		int attackPeriod = getIntObjVar( self, "attackPeriod" );
+		if ( attackPeriod > 0 )
+			messageTo( self, "launchAttack", null, attackPeriod, false );
+	}
+	else if ( hasObjVar( self, "dropoff" ) )
+	{
+		// The player is undocking during the pickup phase.
+		// See if he is undocking with the pickup ship.
+		obj_id target = params.getObjId( "target" );
+		obj_id ship = getObjIdObjVar( self, "delivery_ship" );
+
+		if ( target != ship )
+			return SCRIPT_CONTINUE;
+
+		// This is a correct ship.
+		removeObjVar( self, "dropoff" );
+		utils.removeScriptVar( ship, "dockable" );
+
+		// Send a message.
+		string_id status_update = new string_id( "spacequest/"+questType+"/"+questName, "docking_complete_delivery" );
+		prose_package pp = prose.getPackage( status_update, 0 );
+		space_quest.groupTaunt( ship, player, pp );
+
+		// Update the quest journal.
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			if ( hasObjVar( self, "delivery_nopickup" ) )
+			{
+				if ( questIsTaskActive( questid, 2, player ) )
+					questCompleteTask( questid, 2, player );
+			}
+			else
+			{
+				if ( questIsTaskActive( questid, 4, player ) )
+					questCompleteTask( questid, 4, player );
+			}
+		}
+
+		// Have the pickup ship move away and hyperspace out.
+		transform t = getTransform_o2w( ship );
+		transform goalLoc = space_quest.getRandomPositionInSphere( t, 1000, 1200 );
+		ship_ai.unitMoveTo( ship, goalLoc );
+		messageTo( ship, "lightspeedJump", null, 15.f, false );
+
+		// Quick win for now.
+		messageTo( self, "finishQuest", null, 2.f, false );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// findDeliveryPoint
+//------------------------------------------------
+
+messageHandler findDeliveryPoint()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	dictionary outparams = new dictionary();
+	outparams.put( "player", player );
+	messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// clearMissionWaypoint
+//------------------------------------------------
+
+void clearMissionWaypoint( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id waypoint = getObjIdObjVar( self, "pickup_waypoint" );
+	if ( isIdValid(waypoint) )
+		destroyWaypointInDatapad( waypoint, player );
+	removeObjVar( self, "pickup_waypoint" );
+
+	// Unregister the arrive trigger.
+	dictionary params = new dictionary();
+	string loc = getStringObjVar( self, "loc" );
+	if ( loc != null )
+		removeLocationTarget(player, loc);
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	if ( hasObjVar( self, "noAbort" ) )
+		return SCRIPT_CONTINUE;
+	questAborted( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// questAborted
+//------------------------------------------------
+
+void questAborted( obj_id self )
+{
+	// Clean up transports.
+	cleanUpTransports( self, false );
+
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestAborted( player, self );
+}
+
+//------------------------------------------------
+// questCompleted
+//------------------------------------------------
+
+void questCompleted( obj_id self )
+{
+	// Clean up transports.
+	cleanUpTransports( self, true );
+
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestWon( player, self );
+}
+
+//------------------------------------------------
+// removeQuest
+//------------------------------------------------
+
+messageHandler removeQuest()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Flag the main quest journal entry as finished.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( (questid != 0) && questIsQuestActive( questid, player ) )
+		questCompleteQuest( questid, player );
+
+	// Kill the quest.
+	space_quest._removeQuest( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// finishQuest
+//------------------------------------------------
+
+messageHandler finishQuest()
+{
+	questCompleted( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanUpTransports
+//------------------------------------------------
+
+void cleanUpTransports( obj_id self, boolean keepDelivery )
+{
+	obj_id ship = getObjIdObjVar( self, "pickup_ship" );
+	if ( isIdValid( ship ) && exists( ship ) )
+		destroyObjectHyperspace( ship );
+
+	ship = getObjIdObjVar( self, "delivery_ship" );
+	if ( isIdValid( ship ) && exists( ship ) && !keepDelivery )
+		destroyObjectHyperspace( ship );
+}
+
+//------------------------------------------------
+// questUpdate
+//------------------------------------------------
+
+void questUpdate( obj_id self, string_id update_id )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string_id update_prefix = new string_id( "spacequest/"+questType+"/"+questName, "quest_update" );
+	prose_package pp = prose.getPackage( update_prefix, update_id );
+	space_quest.sendQuestMessage( player, pp );
+}
+
+//------------------------------------------------
+// launchAttack
+//------------------------------------------------
+
+messageHandler launchAttack()
+{
+	// Abort if the ship already arrived or hasn't shown up yet.
+	if ( !hasObjVar( self, "initialized" ) )
+		return SCRIPT_CONTINUE;
+
+	// It's time to launch an attack on the player.
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+
+	// Determine if enough waves are already launched.
+	if ( hasObjVar( self, "wave1" ) && hasObjVar( self, "wave2" ) )
+	{
+		// Both waves are active, so we can't spawn another right now.
+		setObjVar( self, "new_wave_pending", 1 );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the wave number.
+	int wavenum = 0;
+	if ( hasObjVar( self, "wave1" ) )
+		wavenum = 2;
+	else
+		wavenum = 1;
+
+	// Gather the info we need to spawn.
+	int numAttackShipLists = getIntObjVar( self, "numAttackShipLists" );
+	if ( numAttackShipLists == 0 )
+		return SCRIPT_CONTINUE;
+	int attack = getIntObjVar( self, "attackindex" );
+	if ( (attack < 1) || (attack > numAttackShipLists) )
+		attack = 1;
+	setObjVar( self, "attackindex", attack+1 );
+	if ( getIntObjVar( self, "attackListType" ) == 1 )
+		attack = rand( 1, numAttackShipLists );
+	string[] shipList = getStringArrayObjVar( self, "attackShips"+attack );
+	int count = shipList.length;
+
+	int k = 0;
+	obj_id[] targets = null;
+	obj_id[] oldtargets = getObjIdArrayObjVar( self, "targets" );
+	if ( oldtargets == null )
+		targets = new obj_id[count];
+	else
+	{
+		targets = new obj_id[count+oldtargets.length];
+		k = oldtargets.length;
+
+		// Copy old targets into buffer.
+		for ( int i=0; i<oldtargets.length; i++ )
+		{
+			targets[i] = oldtargets[i];
+		}
+	}
+
+	int squad = ship_ai.squadCreateSquadId();
+
+	// Spawn the attackers.
+	int j = 0;
+	for ( int i=k; i<count+k; i++ )
+	{
+		transform gloc = getTransform_o2w( space_transition.getContainingShip( player ) );
+
+		// Move the starting spot out in front of us.
+		float dist = rand( 1000.f, 1200.f );
+		vector n = gloc.getLocalFrameK_p().normalize().multiply( dist ); // Project a point out in front of us.
+		gloc = gloc.move_p( n );
+
+		// Flip the starting spot around so its facing us.
+		gloc = gloc.yaw_l( 3.14f );
+
+		// Find a spot on the IJ plane for deviation in a cone shape.
+		vector vi = gloc.getLocalFrameI_p().normalize().multiply( rand( -150.f, 150.f ) );
+		vector vj = gloc.getLocalFrameJ_p().normalize().multiply( rand( -150.f, 150.f ) );
+		vector vd = vi.add( vj );
+		gloc = gloc.move_p( vd );
+
+		obj_id newship = space_create.createShipHyperspace( shipList[j], gloc );
+		ship_ai.unitSetLeashDistance( newship, 16000 );
+		if ( count > 3 )
+			ship_ai.unitSetSquadId( newship, squad );
+		attachScript( newship, "space.quest_logic.dynamic_ship" );
+		attachScript( newship, "space.quest_logic.destroyduty_ship" );
+		targets[i] = newship;
+		setObjVar( newship, "quest", self );
+		space_quest._addMissionCriticalShip( player, self, newship );
+		setObjVar( newship, "objMissionOwner", player );
+		ship_ai.unitAddExclusiveAggro( newship, player );
+		dictionary dict = new dictionary ();
+		dict.put ("player", space_transition.getContainingShip(player));
+		dict.put ("newship", newship);
+		messageTo (self, "attackPlayerShip", dict, 4.0f, false);
+
+		// Mark the ship with its wave.
+		setObjVar( newship, "wave", wavenum );
+
+		j++;
+		if ( j >= shipList.length )
+			j = 0;
+	}
+
+	// Record this wave count.
+	setObjVar( self, "wave"+wavenum, count );
+
+	// Set a formation.
+	if ( count > 3 )
+		ship_ai.squadSetFormationRandom( squad );
+
+	setObjVar( self, "targets", targets );
+
+	// Notify the player.
+	string_id attack_notify = new string_id( "spacequest/"+questType+"/"+questName, "attack_notify" );
+	space_quest.sendQuestMessage( player, attack_notify );
+	playClientEffectObj( player, SOUND_SPAWN_WAVE, player, "" );
+
+	// Launch another attack.
+	int attackPeriod = getIntObjVar( self, "attackPeriod" );
+	messageTo( self, "launchAttack", null, attackPeriod, false );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// targetDestroyed
+//------------------------------------------------
+
+messageHandler targetDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id deadship = params.getObjId( "ship" );
+	obj_id targets[] = getObjIdArrayObjVar( self, "targets" );
+	int deadships = getIntObjVar( self, "deadships" );
+	boolean launchWave = false;
+	for ( int i=0; i<targets.length; i++ )
+	{
+		if ( deadship == targets[i] )
+		{
+			deadships++;
+			setObjVar( self, "deadships", deadships );
+			space_quest._removeMissionCriticalShip( player, self, deadship );
+
+			// Decrement this wave.
+			int shipswave = getIntObjVar( deadship, "wave" );
+			int wavecount = getIntObjVar( self, "wave"+shipswave );
+			wavecount--;
+			if ( wavecount <= 0 )
+			{
+				// The wave was wiped out.
+				removeObjVar( self, "wave"+shipswave );
+
+				// Launch a new wave if we aren't finished.
+				launchWave = true;
+			}
+			else
+			{
+				// The wave has ships remaining.
+				setObjVar( self, "wave"+shipswave, wavecount );
+			}
+
+			if ( deadships == targets.length )
+			{
+				playClientEffectObj( player, SOUND_DESTROYED_WAVE, player, "" );
+
+				// All attackers have been eliminated.
+				int rewardships = getIntObjVar( self, "rewardships" );
+				rewardships += deadships;
+				setObjVar( self, "rewardships", rewardships );
+
+				removeObjVar( self, "targets" );
+				removeObjVar( self, "deadships" );
+
+				// Notify the player.
+				string_id attack_notify = new string_id( "spacequest/"+questType+"/"+questName, "attack_stopped" );
+				space_quest.sendQuestMessage( player, attack_notify );
+
+				// Increment the count.
+				int attackCount = getIntObjVar( self, "attackCount" );
+				attackCount++;
+				setObjVar( self, "attackCount", attackCount );
+
+				// Check for a special event.
+				checkSpecialEvent( self, player, attackCount );
+
+				return SCRIPT_CONTINUE;
+			}
+
+			break;
+		}
+	}
+	int remaining = targets.length - deadships;
+	prose_package pp = prose.getPackage( SID_TARGETS_REMAINING, remaining );
+	space_quest.sendQuestMessage( player, pp );
+
+	// Should we launch a new wave?
+	if ( launchWave && hasObjVar( self, "new_wave_pending" ) )
+	{
+		// A wave is pending for launch.
+		messageTo( self, "launchAttack", null, 0, false );
+		removeObjVar( self, "new_wave_pending" );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// checkSpecialEvent
+//------------------------------------------------
+
+boolean checkSpecialEvent( obj_id self, obj_id player, int attackCount )
+{
+	// Do we have a special event?
+	if ( !hasObjVar( self, space_quest.QUEST_TRIGGER_EVENT ) )
+		return false;
+
+	int triggerEvent = getIntObjVar( self, space_quest.QUEST_TRIGGER_EVENT );
+	int triggerSC = getIntObjVar( self, space_quest.QUEST_TRIGGER_SC );
+	int triggerOn = getIntObjVar( self, space_quest.QUEST_TRIGGER_ON );
+	int triggerDelay = getIntObjVar( self, space_quest.QUEST_TRIGGER_DELAY );
+
+	if ( triggerEvent == 0 )
+		return false;
+	if ( triggerSC != 0 )
+		return false;
+	if ( triggerOn != attackCount )
+		return false;
+
+	dictionary params = new dictionary();
+	params.put( "quest", self );
+	messageTo( player, "doSpecialEvent", params, triggerDelay, false );
+
+	return false;
+}
+
+//------------------------------------------------
+// deliveryTargetDestroyed
+//------------------------------------------------
+
+messageHandler deliveryTargetDestroyed()
+{
+	obj_id ship = params.getObjId( "ship" );
+	obj_id ship1 = getObjIdObjVar( self, "pickup_ship" );
+	obj_id ship2 = getObjIdObjVar( self, "delivery_ship" );
+
+	if ( (hasObjVar( self, "pickup" ) && (ship == ship1)) ||
+		 (hasObjVar( self, "dropoff" ) && (ship == ship2)) )
+	{
+		// The ship we were supposed to dock with was destroyed.
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		string_id foundLocation = new string_id( "spacequest/"+questType+"/"+questName, "failed_destroyed" );
+		questUpdate( self, foundLocation );
+
+		// Fail the quest.
+		questFailed( self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// questFailed
+//------------------------------------------------
+
+void questFailed( obj_id self )
+{
+	// Clean up transports.
+	cleanUpTransports( self, false );
+
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	space_quest.setQuestFailed( player, self );
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+		questFailed( self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// attackPlayerShip
+//------------------------------------------------
+
+messageHandler attackPlayerShip()
+{
+	obj_id playerShip = params.getObjId ("player");
+	obj_id attackingShip = params.getObjId ("newship");
+	ship_ai.spaceAttack(attackingShip, playerShip);
+
+	return SCRIPT_CONTINUE;
+}

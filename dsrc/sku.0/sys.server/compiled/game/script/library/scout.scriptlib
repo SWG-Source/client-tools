@@ -1,0 +1,392 @@
+/**********************************************************************
+ * Copyright (c)2000-2003 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        scout.scriptlib
+ * Description:  scout powers library
+ * @author       $Author:breinhart$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+include library.utils;
+include library.ai_lib;
+include library.pet_lib;
+include library.combat;
+include ai.ai_combat;
+include library.skill;
+
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_SYS_SCENTMASK_BREAK		= new string_id("skl_use","sys_scentmask_break");
+const string_id SID_SYS_SCENTMASK_BREAK_COMBAT = new string_id("skl_use","sys_scentmask_break_combat");
+const string_id SID_SYS_SCENTMASK_SUCCESS	= new string_id("skl_use","sys_scentmask_success");
+
+const string_id SID_SYS_CONCEAL_NOSKILL		= new string_id("skl_use","sys_conceal_noskill");
+const string_id SID_SYS_CONCEAL_FAIL		= new string_id("skl_use","sys_conceal_fail");
+const string_id SID_SYS_CONCEAL_CANT		= new string_id("skl_use","sys_conceal_cant");
+const string_id SID_SYS_CANT_CONCEAL_OTHER	= new string_id("skl_use","sys_cant_conceal_other");
+const string_id SID_SYS_CONCEAL_NOTPLAYER	= new string_id("skl_use","sys_conceal_notplayer");
+const string_id SID_SYS_TARGET_CONCEALED	= new string_id("skl_use","sys_target_concealed");
+const string_id SID_SYS_CONCEAL_REMOVE		= new string_id("skl_use","sys_conceal_remove");
+const string_id SID_SYS_CONCEAL_NOKIT		= new string_id("skl_use","sys_conceal_nokit");
+const string_id SID_SYS_CONCEAL_SCENTMASKED	= new string_id("skl_use","sys_conceal_scentmasked");
+const string_id SID_SYS_CONCEAL_APPLY		= new string_id("skl_use","sys_conceal_apply");
+const string_id SID_SYS_CONCEAL_DELAY		= new string_id("skl_use","sys_conceal_delay");
+
+const int MASK_BREAK_DELAY					= 60;
+
+/***** FUNCTIONS **************************************************/
+/***** BASE FUNCTIONS ************************************/
+
+/*****************************************************************
+ * @brief	indicates whether a scout is scent masked. has side effects: potentially breaks scent masking
+ *
+ * @param	obj_id	player
+ * @param	obj_id	npc
+ *
+ * @return  boolean; true if masked
+ *****************************************************************/
+boolean isScentMasked( obj_id player, obj_id npc )
+{
+	// Validate vars.
+	if ( !isIdValid( player ) || !isIdValid( npc ) )
+		return false;
+
+	location playerLoc = getLocation( player );
+	location npcLoc = getLocation( npc );
+	if ( playerLoc == null || npcLoc == null )
+		return false;
+
+	if ( isIdValid( playerLoc.cell ) || isIdValid( npcLoc.cell ) )
+	{
+		//if one is inside and the other is outside, or each is in different
+		// cells, then return false:
+		if ( !isIdValid( playerLoc.cell ))
+			return false;
+		else if ( !isIdValid( npcLoc.cell ) )
+			return false;
+		else if ( playerLoc.cell != npcLoc.cell )
+			return false;
+	}
+
+	boolean concealed = utils.hasScriptVar( player, "scentmask.camokit" );
+
+	// Only works on creatures.
+	if ( !concealed && !ai_lib.isMonster( npc ) )
+		return false;
+	// Doesn't work on pets.
+	if ( pet_lib.isPet( npc ) )
+		return false;
+	if ( ai_lib.aiGetNiche( npc ) == NICHE_DROID  || ai_lib.aiGetNiche(npc) == NICHE_ANDROID)
+		return false;
+
+	// Check scent masking state.
+	int scentMasked = getState( player, STATE_MASK_SCENT );
+	if ( scentMasked == 0 )
+	{
+		messageTo(player, "removeScentMaskNoNotify", null, 0, false);
+		return false;
+	}
+	// Check if we are concealed (instead of scent masked).
+	int concealBonus = utils.getIntScriptVar( player, "scentmask.camoquality" );
+	if ( concealed )
+	{
+		// Check to see if we are on the right planet.
+		string camoPlanet = utils.getStringScriptVar( player, "scentmask.camokit" );
+		string thisPlanet = getCurrentSceneName();
+		if (thisPlanet.startsWith("kashyyyk"))
+			thisPlanet = "kashyyyk";
+		if ( camoPlanet != thisPlanet )
+			return false; // The stuff doesn't work here.
+	}
+
+	// Get mask scent skill mod.
+	int maskMod = 0;
+	if ( concealed )
+	{
+		maskMod = concealBonus;
+		if ( maskMod > 0 )
+			maskMod += getEnhancedSkillStatisticModifier( player, "camouflage" ) / 2;
+	}
+	else
+	{
+		maskMod = getEnhancedSkillStatisticModifier( player, "mask_scent" );
+		if ( maskMod > 0 )
+			maskMod = maskMod / 2;
+	}
+	if ( maskMod < 5 )
+		return false;
+
+	// If we made it this far, we know the player is using mask scent (or conceal).
+
+	// Don't break on non-aggro/non-stalking creatures.
+	if ( !ai_lib.isAggro( npc ) && !ai_lib.isStalkingCreature( npc ) )
+		return true;
+
+	// Get the creature level.
+	int level = getLevel(npc);
+	int playerLevel = skill.getGroupLevel(player);
+	if ( (playerLevel - level) >= 10 )
+		return true;//grey-con mobs never break scentmask!
+
+	// Determine the base chance to sneak past a creature.
+	float sneakChance = (100 + maskMod) - level;
+
+	// Apply movement modifiers.
+	int locomotion = getLocomotion( player );
+	if ( locomotion == LOCOMOTION_WALKING )
+		sneakChance -= 5;
+	else if ( locomotion == LOCOMOTION_RUNNING )
+		sneakChance -= 10;
+
+	// Apply posture modifiers.
+	int posture = getPosture( player );
+	if ( posture == POSTURE_PRONE )
+		sneakChance += 15;
+
+	// Penalize the player if the creature level is more than half their skill.
+	if ( level > 2*maskMod )
+		sneakChance -= 20;
+
+	// Cap success.
+	if ( concealed )
+	{
+		if ( sneakChance > 98 )
+			sneakChance = 98;
+	}
+	else
+	{
+		if ( sneakChance > 95 )
+			sneakChance = 95;
+	}
+
+	// NPCs are smart.  Lower the capped chance at success.
+	if ( !ai_lib.isMonster( npc ) )
+		sneakChance -= 5;
+
+	// Roll the dice and see if we pass.
+	int dieRoll = rand( 1, 100 );
+	if ( dieRoll < sneakChance )
+	{
+		// Award some experience.
+		dictionary outparams = new dictionary();
+		if ( concealed )
+		{
+			obj_id conplayer = utils.getObjIdScriptVar( player, "scentmask.camoapply" );
+			if ( isIdValid(conplayer) )
+			{
+				outparams.put( "player", conplayer );
+				outparams.put( "concealed", 1 );
+			}
+			else
+			{
+				string msg = "scout.scriptlib, isScentMasked player " + player + "has no scentmask.camoapply scriptvar";
+				LOG("scout", msg);
+				debugServerConsoleMsg(null, "WARNING: " + msg);
+				// SAJ - I have no idea if this is ok
+				outparams.put( "player", player );
+			}
+		}
+		else
+			outparams.put( "player", player );
+		outparams.put( "creaturediff", level );
+		messageTo( npc, "handleMaskScentSneak", outparams, 0.f, false );
+
+		// Temporarily store this creature's level.
+		utils.setScriptVar( player, "scentmask.creatureDiff", level );
+		utils.setScriptVar( player, "scentmask.time", getGameTime() );
+	}
+	else
+	{
+		breakScentMask( player, false );
+
+		// Check to see if the creature attacks.
+		float dist = utils.getDistance2D( getLocation( player ), getLocation( npc ) );
+		dieRoll = rand( 1, 100 );
+		return false;
+	}
+
+	// We successfully hid from the creature.
+	return true;
+}
+
+void breakScentMask( obj_id player, boolean combat )
+{
+	int maskMod = getEnhancedSkillStatisticModifier( player, "mask_scent" ) / 2;
+	int remaskDelay = 70 - maskMod;
+
+	dictionary params = new dictionary();
+	params.put( "remaskDelay", remaskDelay );
+	messageTo( player, "removeScentMaskNoNotify", params, 0.f, false );
+	if ( combat )
+		sendSystemMessage( player, SID_SYS_SCENTMASK_BREAK_COMBAT );
+	else
+		sendSystemMessage( player, SID_SYS_SCENTMASK_BREAK );
+}
+
+boolean isScentMaskedCheck( obj_id player )
+{
+	// Validate vars.
+	if ( !isIdValid( player ) )
+		return false;
+
+	// Check state.
+	int scentMasked = getState( player, STATE_MASK_SCENT );
+	if ( scentMasked == 0 )
+	{
+		messageTo(player, "removeScentMaskNoNotify", null, 0, false);
+		return false; // Not using the command.
+	}
+	return true;
+}
+
+/*****************************************************************
+ * @brief	returns true if npc is snared
+ *
+ * @param	obj_id	npc
+ *
+ * @return  boolean; true if snared
+ *****************************************************************/
+boolean isSnared( obj_id npc )
+{
+	return hasAttribModifier(npc, "movement.snare");
+}
+
+void conceal( obj_id self, obj_id target )
+{
+	// Check to see if there is a remask delay (from a break).
+	if ( utils.hasScriptVar( self, "remaskDelay" ) )
+	{
+		int delay = utils.getIntScriptVar( self, "remaskDelay" );
+		int timeDiff = getGameTime() - delay;
+		if ( timeDiff >= 0 )
+		{
+			// The delay has passed.
+			utils.removeScriptVar( self, "remaskDelay" );
+		}
+		else
+		{
+			// The delay hasn't passed yet.  (You must wait XX seconds to mask your scent again.)
+			prose_package pp = prose.getPackage( SID_SYS_CONCEAL_DELAY, -timeDiff );
+			sendSystemMessageProse( self, pp );
+			return;
+		}
+	}
+
+	// Check to see if we can conceal.
+	int skillMod = getSkillStatisticModifier( self, "camouflage" ) / 2;
+	if ( skillMod < 1 )
+	{
+		// Any player can use a camo kit to apply a basic level of camouflage.
+		skillMod = 20;
+//		sendSystemMessage( self, SID_SYS_CONCEAL_NOSKILL );
+//		return SCRIPT_CONTINUE;
+	}
+
+	if ( isIdValid( target ) && target != self)
+	{
+		if ( skillMod == 0 )
+		{
+			// Only players with conceal skill can conceal someone else.
+			sendSystemMessage( self, SID_SYS_CANT_CONCEAL_OTHER );
+			return;
+		}
+
+		// Make sure our target is valid.
+		if ( !isPlayer( target ) )
+		{
+			sendSystemMessage( self, SID_SYS_CONCEAL_NOTPLAYER );
+			return;
+		}
+		if ( !pvpCanHelp( self, target ) )
+			return;
+
+		// If our target is scent masked, do nothing.
+		int scentMasked = getState( target, STATE_MASK_SCENT );
+		if (scentMasked == 1 )
+		{
+			sendSystemMessage( self, SID_SYS_TARGET_CONCEALED );
+			return;
+		}
+	}
+	else
+	{
+		// If we are scent masked, remove it.
+		int scentMasked = getState( self, STATE_MASK_SCENT );
+		int count = utils.getIntScriptVar( self, "scentmask.count" );
+		if ( scentMasked == 1 )
+		{
+			dictionary outparams = new dictionary();
+			outparams.put( "count", count );
+			if ( utils.hasScriptVar( self, "scentmask.camokit" ) )
+				messageTo( self, "removeConceal", outparams, 0, false );
+			else
+				sendSystemMessage( self, SID_SYS_CONCEAL_SCENTMASKED );
+			return;
+		}
+	}
+
+	// Check to see if we have a camo kit for this planet.
+	string planetName = getCurrentSceneName();
+	if (planetName.startsWith("kashyyyk"))
+	{
+		planetName = "kashyyyk";
+	}
+
+	obj_id pInv = utils.getInventoryContainer( self );
+	if ( !isIdValid(pInv) )
+		return;
+	obj_id[] contents = getContents( pInv );
+	obj_id kit = null;
+	for ( int i=0; i<contents.length; i++ )
+	{
+		if ( hasObjVar( contents[i], "camokit" ) )
+		{
+			// This is a camo kit.
+			string kitPlanet = getStringObjVar( contents[i], "camokit" );
+			if ( kitPlanet == planetName )
+			{
+				kit = contents[i];
+				break;
+			}
+		}
+	}
+	if ( kit == null )
+	{
+		// We didn't find a camo kit to use.
+		sendSystemMessage( self, SID_SYS_CONCEAL_NOKIT );
+		return;
+	}
+
+	// Consume the camo kit.
+	int count = getCount( kit );
+	if ( count == 1 )
+		destroyObject( kit );
+	else
+	{
+		count--;
+		setCount( kit, count );
+	}
+
+	// Mask Time = 40 Seconds * Skill Mod (camouflage)
+	int maskTime = 40 * skillMod;
+
+	// Tell the target to conceal themselves.
+	dictionary outparams = new dictionary();
+	outparams.put( "planetName", planetName );
+	outparams.put( "maskTime", maskTime );
+	outparams.put( "skillMod", skillMod );
+	outparams.put( "player", self );
+	if ( isIdValid( target ) )
+	{
+		prose_package pp = prose.getPackage( SID_SYS_CONCEAL_APPLY, target );
+		sendSystemMessageProse( self, pp );
+
+		messageTo( target, "concealEnable", outparams, 0.f, false );
+	}
+	else
+		messageTo( self, "concealEnable", outparams, 0.f, false );
+}

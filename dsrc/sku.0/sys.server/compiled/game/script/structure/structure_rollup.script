@@ -1,0 +1,191 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        structure_rollup.script
+ * Description:  script to rollup a structure, placing all the contents in a player's inventory
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.utils;
+include library.player_structure;
+include library.city;
+include library.prose;
+include library.trace;
+include library.vendor_lib;
+
+/***** TRIGGERS ********************************************************/
+trigger OnDoStructureRollup(obj_id player, boolean warnOnly)
+{
+	// Get the structure name and location
+	string structName = player_structure.getStructureName(self);
+	if(structName.length() < 1)
+	{
+		structName = "Structure";
+	}
+	location where = getLocation(self);
+
+	if (warnOnly)
+	{
+		string_id subject = new string_id("player_structure", "structure_purge_warning_subject");
+		string_id body = new string_id("player_structure", "structure_purge_warning_body");
+		prose_package pp = new prose_package ();
+		prose.setStringId(pp, body);
+		prose.setTO(pp, getPlayerFullName(player));
+
+		string body_oob = chatMakePersistentMessageOutOfBandBody(null, pp);
+		string subject_str = "@" + subject.toString();
+		body_oob = chatAppendPersistentMessageWaypointData (body_oob, where.area, where.x, where.z, null, structName );
+
+		string[] admins = player_structure.getAdminListNames(self);
+		for (int i = 0; i < admins.length; ++i)
+		{
+			chatSendPersistentMessage( "Galactic Housing Authority", admins[i], subject_str, null, body_oob );
+		}
+		if ( city.isInCity( self ) )
+		{
+			int cityId = city.getStructureCityId( self );
+			if (cityId != 0)
+			{
+				obj_id mayor = cityGetLeader( cityId );
+				if (mayor != obj_id.NULL_ID) 
+				{
+					chatSendPersistentMessage( "Galactic Housing Authority", mayor, subject_str, null, body_oob );
+				}
+				}
+			}
+		// rename the structure
+		obj_id nameTarget = self;
+		if ( player_structure.isBuilding(nameTarget) )
+		{
+			obj_id sign = getObjIdObjVar(nameTarget, player_structure.VAR_SIGN_ID);
+			if ( isIdValid(sign) )
+				nameTarget = sign;
+	}
+		
+		string abandoned = " \\#FF0000\\(Abandoned)";
+		setName(nameTarget, structName + abandoned);		
+		if ( nameTarget != self )
+		{
+			setObjVar(self, player_structure.VAR_SIGN_NAME, structName + abandoned);
+		}
+	}
+	else
+	{
+		if (player_structure.isBuilding(self))
+		{
+			// eject all players from house
+			obj_id[] players = player_structure.getPlayersInBuilding(self);
+			if (players != null)
+			{
+				for (int i = 0; i < players.length; i++)
+				{
+					expelFromBuilding(players[i]);
+				}
+			}
+
+			// Destroy vendors inside this structure.
+			string[] cells = getCellNames(self);
+			if( cells != null)
+			{
+				for(int i = 0; i < cells.length; i++)
+				{
+					obj_id cellid = getCellId(self, cells[i]);
+					obj_id contents[] = getContents(cellid);
+					if(contents != null)
+					{
+						for(int j=0; j<contents.length; j++)
+						{
+							if(hasCondition(contents[j], CONDITION_VENDOR))
+							{
+								obj_id owner = getObjIdObjVar(contents[j], "vendor_owner");
+								if (!isIdValid(owner))
+									owner = getOwner( contents[j] );
+
+								vendor_lib.finalizePackUp(owner, contents[j], player, player_structure.isAbandoned(self));
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Create a new structure control device
+		obj_id scd = createObject("object/intangible/house/generic_house_control_device.iff", where );
+
+		setName(scd, structName);
+		setOwner(scd, player);
+	
+		// Persist the structure control device		
+		if (!persistObject(scd))
+		{
+			LOG("LOG_CHANNEL", "structure_rollup.OnDoStructureRollup persist SCD failed!");
+			return SCRIPT_CONTINUE;
+		}
+
+		attachScript(scd, "structure.house_control_device");
+
+		// destroy waypoint if it exists
+		if(hasObjVar(self, player_structure.VAR_WAYPOINT_STRUCTURE))
+		{
+			obj_id waypoint = getObjIdObjVar(self, player_structure.VAR_WAYPOINT_STRUCTURE);
+			if(isIdValid(waypoint))
+			{
+				destroyWaypointInDatapad(waypoint, player);
+				removeObjVar(self, player_structure.VAR_WAYPOINT_STRUCTURE);
+			}
+		}
+
+		// Destroy house sign and name the control device whatever the building name was
+		player_structure.destroyStructureSign(self);
+		//player_structure.destroyBaseObjects(self);
+
+		// Remove the structure as the player's residence
+		if ( player_structure.isResidence( self, player ) )
+		{
+			setHouseId( player, obj_id.NULL_ID );
+			removeObjVar( self, player_structure.VAR_RESIDENCE_BUILDING );
+
+			// Also remove the player from his current city.
+			city.removeCitizen( player, self );
+		}
+
+		city.removeStructureFromCity( self );
+
+		// set the template objvar, this is required by the re-placement code
+		string template = getTemplateName(self);
+		player_structure.setDeedTemplate(scd, template);
+		
+		// if the structure is a "lot over limit structure", set objvar to indicate it has been moved to the datapad
+		if (isIdValid(player) && exists(player))
+		{
+			obj_id lotOverlimitStructure = getObjIdObjVar(player, "lotOverlimit.structure_id");
+			if (isIdValid(lotOverlimitStructure) && (lotOverlimitStructure == self))
+			{
+				setObjVar(player, "lotOverlimit.structure_location", "Datapad");
+			}
+		}
+
+		// put the house into the structure control device
+		putIn(self, scd ); 
+
+		// remove the rollup_on_load objvar
+		if(hasObjVar(self, "purge_process.rollup_on_load"))
+		{
+			removeObjVar(self, "purge_process.rollup_on_load");
+			}
+
+		// @TODO - test this code if house purge is enabled
+		const int maxDepth = player_structure.isFactory(self) ? 101 : 1;
+
+		moveToOfflinePlayerDatapadAndUnload(scd, player, maxDepth + 1); // add one for the scd
+		fixLoadWith(self, player, maxDepth);
+
+		trace.log("housepackup", getPlayerFullName(player) + "(" + player + ") had their house rolled up by the purge process (" + self + ", loc " + where.toString() + ") into structure control device " + scd, player, trace.TL_CS_LOG);
+	}
+	
+	return SCRIPT_CONTINUE;
+}

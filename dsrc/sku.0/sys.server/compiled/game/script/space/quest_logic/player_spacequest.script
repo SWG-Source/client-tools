@@ -1,0 +1,843 @@
+//------------------------------------------------
+// player_spacequest.script
+// Brandon Reinhart
+//
+// Handlers for space quests for players.
+// This script should be attached to a player who is doing a space quest.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.factions;
+include library.space_combat;
+include library.space_create;
+include library.space_quest;
+include library.space_utils;
+include library.space_transition;
+include library.ship_ai;
+include library.utils;
+include library.prose;
+include library.group;
+include library.static_item;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_REPORT_CARGO				= new string_id( "space/cargo", "report_cargo" );
+const string_id SID_REPORT_CARGO_GROUP			= new string_id( "space/cargo", "report_cargo_group" );
+const string_id SID_INSPECT_ALREADY				= new string_id( "space/cargo", "inspect_already" );
+const string_id SID_INSPECT_TOO_FAR				= new string_id( "space/cargo", "inspect_too_far" );
+const string_id SID_INSPECTING					= new string_id( "space/cargo", "inspecting" );
+
+const string_id SID_REPORT_TRANSFER				= new string_id( "space/cargo", "report_transfer" );
+const string_id SID_REPORT_TRANSFER_GROUP		= new string_id( "space/cargo", "report_transfer_group" );
+const string_id SID_TRANSFER_ALREADY			= new string_id( "space/cargo", "transfer_already" );
+const string_id SID_TRANSFER_TOO_FAR			= new string_id( "space/cargo", "transfer_too_far" );
+const string_id SID_TRANSFER_NOT_DISABLED		= new string_id( "space/cargo", "transfer_not_disabled" );
+const string_id SID_TRANSFER_NOTHING			= new string_id( "space/cargo", "transfer_nothing" );
+const string_id SID_TRANSFER_CANT				= new string_id( "space/cargo", "transfer_cant" );
+const string_id SID_TRANSFERRING				= new string_id( "space/cargo", "transferring" );
+
+const string_id SID_TARGET_REQUIRED				= new string_id( "space/cargo", "target_required" );
+const string_id SID_CANNOT_DOCK					= new string_id( "space/cargo", "dock_cannot" );
+const string_id SID_DOCKING_ALREADY				= new string_id( "space/cargo", "dock_already" );
+const string_id SID_TARGET_DOCKING_ALREADY		= new string_id( "space/cargo", "dock_target_already" );
+const string_id SID_DOCK_TOO_FAR				= new string_id( "space/cargo", "dock_too_far" );
+const string_id SID_DOCKING						= new string_id( "space/cargo", "dock_started" );
+const string_id SID_DOCK_ACHIEVED				= new string_id( "space/cargo", "dock_achieved" );
+const string_id SID_DOCKING_COMPLETE			= new string_id( "space/cargo", "dock_complete" );
+const string_id SID_DOCKING_GROUP				= new string_id( "space/cargo", "dock_started_group" );
+const string_id SID_DOCKING_COMPLETE_GROUP		= new string_id( "space/cargo", "dock_complete_group" );
+const string_id SID_ABORT_DOCKING				= new string_id( "space/cargo", "dock_abort" );
+
+const string_id SID_NO_TARGET					= new string_id( "space/cargo", "no_target" );
+const string_id SID_NOT_IN_SUUB					= new string_id( "space/cargo", "not_in_suub" );
+
+const string_id LEFT_GROUP_QUEST				= new string_id( "space/quest", "left_group_quest" );
+
+const string	INSPECTION_BEGIN				= "clienteffect/ship_inspect_begin.cef";
+const string	INSPECTION_END					= "clienteffect/ship_inspect_end.cef";
+const string	CARGO_TRANSFER					= "clienteffect/ship_cargo_transfer.cef";
+const string	DOCK_START						= "clienteffect/ship_dock_repair_01.cef";
+const string	DOCK_END						= "clienteffect/ship_dock_repair_02.cef";
+
+//------------------------------------------------
+// OnLogin
+//------------------------------------------------
+
+trigger OnLogin()
+{
+	// Wipe temporary scriptvars.
+	utils.removeScriptVar( self, "inspecting" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id ship = space_transition.getContainingShip( self );
+	if ( isIdValid(ship) )
+	{
+		string strChassisType = getShipChassisType( ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Forward the notification to our quest objects.
+	dictionary outparams = new dictionary();
+	outparams.put( "player", self );
+	space_quest.notifyMissions( self, "initializedQuestPlayer", outparams );
+
+	//------------------------------------------------
+	// Check our delayed mission triggers.
+	string[] delayedTriggers = getStringArrayObjVar( self, "delayedTriggers" );
+	if ( delayedTriggers != null )
+	{
+		int cleanupCount = 0;
+		int[] cleanupTriggers = new int[delayedTriggers.length];
+		for ( int i=0; i<delayedTriggers.length; i++ )
+		{
+			cleanupTriggers[i] = 0;
+			java.util.StringTokenizer st = new java.util.StringTokenizer( delayedTriggers[i], ":" );
+			string questType = st.nextToken();
+			string questName = st.nextToken();
+			string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+			dictionary questInfo = dataTableGetRow( qTable, 0 );
+
+			// Should we remove this from the list?
+			if ( questInfo == null )
+			{
+				cleanupTriggers[i] = 1;
+				cleanupCount++;
+				continue;
+			}
+
+			// Reject it if it isn't the right zone.
+			if ( !getCurrentSceneName().startsWith( questInfo.getString( "questZone" ) ) )
+				continue;
+
+			// Assign this quest after a delay.
+			outparams = new dictionary();
+			outparams.put( "type", questType );
+			outparams.put( "name", questName );
+			messageTo( self, "assignDelayedQuest", outparams, questInfo.getInt( "questDelay" ), false );
+		}
+		if ( delayedTriggers.length - cleanupCount == 0 )
+		{
+			removeObjVar( self, "delayedTriggers" );
+		}
+		else
+		{
+			string[] newTriggers = new string[delayedTriggers.length-cleanupCount];
+			int j = 0;
+			for ( int i=0; i<delayedTriggers.length; i++ )
+			{
+				if ( cleanupTriggers[i] == 1 )
+					continue;
+				newTriggers[j++] = delayedTriggers[i];
+			}
+			setObjVar( self, "delayedTriggers", newTriggers );
+		}
+	}
+	//------------------------------------------------
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnUnloadedFromMemory
+//------------------------------------------------
+
+trigger OnUnloadedFromMemory()
+{
+	space_quest.cleanupOnUnload( self );
+ 	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// targetDestroyed
+//
+// -> from combat_ship::OnShipWasHit
+// Called when an enemy ship was destroyed.
+//------------------------------------------------
+
+messageHandler targetDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Forward the notification to our quest objects.
+	if ( group.isGrouped( self ) )
+	{
+		obj_id gid = getGroupObject( self );
+		obj_id[] members = space_utils.getSpaceGroupMemberIds( gid );
+		if ( members != null )
+		{
+			for ( int i=0; i<members.length; i++ )
+			{
+				space_quest.notifyMissions( members[i], "handleShipDestroyed", params );
+			}
+		}
+	}
+	else
+	{
+		space_quest.notifyMissions( self, "handleShipDestroyed", params );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleAsteroidMined
+//
+// -> from mining_asteroid_dynamic
+// Called when a player extracts resources from an asteroid
+//------------------------------------------------
+
+messageHandler handleAsteroidMined()
+{
+	if ( params == null)
+		return SCRIPT_CONTINUE;
+
+	if ( group.isGrouped(self) )
+	{
+		obj_id gid = getGroupObject( self );
+		obj_id[] members = space_utils.getSpaceGroupMemberIds( gid );
+		if ( members != null )
+		{
+			for ( int i = 0; i < members.length; i++ )
+			{
+				space_quest.notifyMissions( members[i], "asteroidMined", params );
+			}
+		}
+	}
+	else
+	{
+		space_quest.notifyMissions( self, "asteroidMined", params);
+	}
+
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleShipSalvage
+//
+// -> from mining_salvage_hulk
+// Called when a player extracts resources from a salvage hulk
+//------------------------------------------------
+
+messageHandler handleShipSalvage()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+	if ( group.isGrouped(self) )
+	{
+		obj_id gid = getGroupObject( self );
+		obj_id[] members = space_utils.getSpaceGroupMemberIds( gid );
+		if ( members != null )
+		{
+			for ( int i = 0; i < members.length; i++ )
+			{
+				space_quest.notifyMissions( members[i], "asteroidMined", params );
+			}
+		}
+	}
+	else
+	{
+		space_quest.notifyMissions( self, "wasSalvaged", params);
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+
+
+//------------------------------------------------
+// OnArrivedAtLocation
+//
+// We may have arrived at a key quest location.
+// Forward this message to our quest objects.
+//------------------------------------------------
+
+trigger OnArrivedAtLocation( string name )
+{
+	// Forward the notification to our quest objects.
+	dictionary params = new dictionary();
+	params.put( "name", name );
+	params.put( "player", self );
+	space_quest.notifyMissions( self, "arrivedAtLocation", params );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	// Notify our missions that we died.
+	dictionary outparams = new dictionary();
+	outparams.put( "player", self );
+	space_quest.notifyMissions( self, "playerShipDestroyed", outparams );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// doSpecialEvent
+//------------------------------------------------
+
+messageHandler doSpecialEvent()
+{
+	obj_id mobj = params.getObjId( "quest" );
+
+	if ( !exists( mobj ) || !isIdValid(mobj) )
+		return SCRIPT_CONTINUE;
+
+	// Get our special event parameters.
+	string questZone 	= getStringObjVar( mobj, space_quest.QUEST_ZONE );
+	int triggerEvent 	= getIntObjVar( mobj, space_quest.QUEST_TRIGGER_EVENT );
+	if ( triggerEvent == 0 )
+		return SCRIPT_CONTINUE;
+	int triggerSC 		= getIntObjVar( mobj, space_quest.QUEST_TRIGGER_SC );
+	string triggerArg 	= getStringObjVar( mobj, space_quest.QUEST_TRIGGER_ARG );
+	string triggerArg2 	= getStringObjVar( mobj, space_quest.QUEST_TRIGGER_ARG2 );
+	int triggerOn 		= getIntObjVar( mobj, space_quest.QUEST_TRIGGER_ON );
+	int triggerEnds 	= getIntObjVar( mobj, space_quest.QUEST_TRIGGER_ENDS );
+	string questName 	= getStringObjVar( mobj, space_quest.QUEST_NAME );
+	string questType 	= getStringObjVar( mobj, space_quest.QUEST_TYPE );
+
+	// Don't do the special event if we aren't in the zone where event is supposed to take place.
+//	if ( !getCurrentSceneName().startsWith( questZone ) )
+//		return SCRIPT_CONTINUE;
+
+	// Should we remove the quest data?
+	if ( params.getBoolean( "ends" ) || ( triggerEnds == 1 ) )
+		space_utils.notifyObject( mobj, "removeQuest", null );
+
+	// Remove the split objvar.
+	if ( isIdValid( mobj ) && exists( mobj ) )
+		setObjVar(mobj, "pendingSplit", false);
+	
+	switch ( triggerEvent )
+	{
+		case 1: // Split quest.
+			if ( params.getBoolean( "failure" ) && (triggerSC == 3) )
+				splitQuest( self, triggerArg2, triggerOn, questName, questType, true );
+			else
+				splitQuest( self, triggerArg, triggerOn, questName, questType, false );
+			break;
+
+		default:
+			break;
+	}
+
+	// Remove the split objvar.
+	if ( isIdValid( mobj ) && exists( mobj ) )
+		removeObjVar( mobj, "trigger" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// splitQuest
+//------------------------------------------------
+
+void splitQuest( obj_id self, string triggerArg, int triggerOn, string questName, string questType, boolean failure )
+{
+	// Show our alert.
+	if ( failure )
+	{
+		space_quest.showQuestAlert( self, new string_id( "spacequest/"+questType+"/"+questName, "split_quest_alert_fail" ) );
+	}
+	else
+	{
+		space_quest.showQuestAlert( self, new string_id( "spacequest/"+questType+"/"+questName, "split_quest_alert" ) );
+	}
+//	if ( triggerOn == 0 )
+//	{
+		// Play this if we aren't splitting off success or failure.
+		play2dNonLoopingMusic( self, space_quest.MUSIC_QUEST_EVENT );
+//	}
+	space_combat.flightDroidVocalize( space_transition.getContainingShip(self), 3 );
+
+	java.util.StringTokenizer st = new java.util.StringTokenizer( triggerArg, ":" );
+	string newtype = st.nextToken();
+	string newname = st.nextToken();
+	space_quest.grantQuest( self, newtype, newname, true );
+
+	dictionary webster = new dictionary ();
+	webster.put ("splitQuestName", newname);
+	webster.put ("questName", questName);
+	messageTo( self, "groundSpaceSplit", webster, 1, false );
+
+	string groupString = "GROUP:0";
+	if ( group.isGrouped( self ) )
+	{
+		obj_id groupId = getGroupObject( self );
+		int numMembers = getGroupSize( groupId );
+		if ( numMembers > 0 )
+		{
+			groupString = "GROUP:"+numMembers;
+		}
+	}
+	CustomerServiceLog( "space_quest", "QUEST_SPLIT|V1|"+groupString+"|TIME:"+getGameTime()+"|PLAYER:"+self+"|TYPE:"+questType+"|NAME:"+questName+"|ZONE:"+getCurrentSceneName() );
+}
+
+//------------------------------------------------
+// registerDelayedQuest
+//------------------------------------------------
+
+messageHandler registerDelayedQuest()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// We have received a dictionary entry for a delayed quest.
+	string questType = params.getString( space_quest.QUEST_TYPE );
+	string questName = params.getString( space_quest.QUEST_NAME );
+	int delay = params.getInt( space_quest.QUEST_DELAY );
+
+	// Store a start trigger on us.
+	string[] delayedTriggers = getStringArrayObjVar( self, "delayedTriggers" );
+	string[] newTriggers = null;
+	if ( delayedTriggers == null )
+	{
+		newTriggers = new string[1];
+		newTriggers[0] = questType+":"+questName;
+	}
+	else
+	{
+		newTriggers = new string[delayedTriggers.length+1];
+		for ( int i=0; i<delayedTriggers.length; i++ )
+		{
+			if ( delayedTriggers[i].equals( questType+":"+questName ) )
+				return SCRIPT_CONTINUE; // Ignore dupes.
+			newTriggers[i] = delayedTriggers[i];
+		}
+		newTriggers[delayedTriggers.length] = questType+":"+questName;
+	}
+	setObjVar( self, "delayedTriggers", newTriggers );
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( getCurrentSceneName().startsWith( questInfo.getString( "questZone" ) ) )
+	{
+		// If we are already in that zone, assign the quest.
+		// We still want to store the trigger, because if we leave before the trigger happens
+		// we want to receive the quest again next time we come back.
+		dictionary outparams = new dictionary();
+		outparams.put( "type", questType );
+		outparams.put( "name", questName );
+		messageTo( self, "assignDelayedQuest", outparams, questInfo.getInt( "questDelay" ), false );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// assignDelayedQuest
+//------------------------------------------------
+
+messageHandler assignDelayedQuest()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	string questName = params.getString( "name" );
+	string questType = params.getString( "type" );
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+
+	// Are we in the right zone still?
+	if ( !getCurrentSceneName().startsWith( questInfo.getString( "questZone" ) ) )
+		return SCRIPT_CONTINUE;
+
+	// This is probably temporary...
+	// Display a message about the new quest!
+	space_quest.showQuestAlert( self, new string_id( "spacequest/"+questType+"/"+questName, "assigned_delayed" ) );
+
+	// Actually give them the quest.
+	space_quest.grantQuest( self, questType, questName, false, true );
+
+	// Remove it from the list.
+	string[] delayedTriggers = getStringArrayObjVar( self, "delayedTriggers" );
+	if ( delayedTriggers == null )
+		return SCRIPT_CONTINUE;
+	if ( delayedTriggers.length == 1 )
+	{
+		removeObjVar( self, "delayedTriggers" );
+		return SCRIPT_CONTINUE;
+	}
+	string[] newTriggers = new string[delayedTriggers.length-1];
+	int j = 0;
+	for ( int i=0; i<delayedTriggers.length; i++ )
+	{
+		if ( delayedTriggers[i].equals( questType+":"+questName ) )
+			continue;
+
+		newTriggers[j++] = delayedTriggers[i];
+	}
+	setObjVar( self, "delayedTriggers", newTriggers );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// targetDisabled
+//------------------------------------------------
+
+messageHandler targetDisabled()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Forward the notification to our quest objects.
+	space_quest.notifyMissions( self, "handleShipDisabled", params );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// /inspect
+//------------------------------------------------
+
+commandHandler cmdInspect()
+{
+	if ( target == null )
+	{
+		sendQuestSystemMessage( self, SID_NO_TARGET );
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id containing_ship = space_transition.getContainingShip( self );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			sendQuestSystemMessage( self, SID_NOT_IN_SUUB );
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( space_transition.getContainingShip( self ) == null )
+		return SCRIPT_CONTINUE;
+
+	if ( utils.hasScriptVar( self, "inspecting" ) )
+	{
+		sendQuestSystemMessage( self, SID_INSPECT_ALREADY );
+		return SCRIPT_CONTINUE;
+	}
+
+	float dist = getDistance( space_transition.getContainingShip( self ), target );
+	if ( (dist == -1) || (dist > 150) )
+	{
+		sendQuestSystemMessage( self, SID_INSPECT_TOO_FAR );
+		return SCRIPT_CONTINUE;
+	}
+
+	sendQuestSystemMessage( self, SID_INSPECTING );
+
+	utils.setScriptVar( self, "inspecting", target );
+	messageTo( self, "finishInspection", null, 5.f, false );
+	playClientEffectObj( self, INSPECTION_BEGIN, self, "" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// finishInspection
+//------------------------------------------------
+
+messageHandler finishInspection()
+{
+	if ( !utils.hasScriptVar( self, "inspecting" ) )
+		return SCRIPT_CONTINUE;
+
+	playClientEffectObj( self, INSPECTION_END, self, "" );
+	obj_id target = utils.getObjIdScriptVar( self, "inspecting" );
+	if ( hasObjVar( target, "cargo" ) )
+	{
+		string cargo = getStringObjVar( target, "cargo" );
+		string_id cargo_id = new string_id( "space/cargo", cargo );
+		prose_package pp = prose.getPackage( SID_REPORT_CARGO, cargo_id );
+		sendQuestSystemMessage( self, pp );
+		space_quest._groupNotify( self, SID_REPORT_CARGO_GROUP, cargo_id );
+
+		string strShipType = getStringObjVar( target, "ship.shipName" );
+		dictionary outparams = new dictionary();
+		outparams.put( "player", self );
+		outparams.put( "type", strShipType );
+		outparams.put( "cargo", cargo );
+		space_quest.notifyMissions( self, "inspectedShip", outparams );
+
+	}
+	else
+	{
+		string_id cargo_id = new string_id( "space/cargo", "nothing" );
+		prose_package pp = prose.getPackage( SID_REPORT_CARGO, cargo_id );
+		sendQuestSystemMessage( self, pp );
+		space_quest._groupNotify( self, SID_REPORT_CARGO_GROUP, cargo_id );
+	}
+	utils.removeScriptVar( self, "inspecting" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// /dock
+//------------------------------------------------
+
+commandHandler cmdDock()
+{
+	if ( target == null )
+	{
+		sendQuestSystemMessage( self, SID_NO_TARGET );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( space_transition.getContainingShip( self ) == null )
+		return SCRIPT_CONTINUE;
+
+	if ( !space_utils.isShip( target ) )
+		return SCRIPT_CONTINUE;
+
+	string strChassisType = getShipChassisType( space_transition.getContainingShip( self ) );
+	if ( strChassisType.equals( "player_sorosuub_space_yacht" ) )
+	{
+		sendQuestSystemMessage( self, SID_NOT_IN_SUUB );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Pirate Event - If the ship is a piracy target, the player must be the mission owner
+	if(hasObjVar(target, "piracyEventOwner"))
+	{
+		obj_id missionOwner = getObjIdObjVar(target, "piracyEventOwner");
+		if(self != missionOwner)
+		{
+			sendSystemMessage(self, "You cannot dock with this target", null);
+			return SCRIPT_CONTINUE;
+		}
+		
+		// we want to make sure that all the escort ships have been killed before letting the player dock.
+		if(!hasObjVar(target, "escortIdArray"))
+		{
+			CustomerServiceLog("space_piracy","Player "+missionOwner+"'s Piracy Event has encountered a problem. The target ship "+target+" is missing is list of escort ships.");
+			return SCRIPT_CONTINUE;
+		}
+		
+		obj_id[] escortShips = getObjIdArrayObjVar(target,"escortIdArray");
+		for ( int i=0; i<escortShips.length; i++ )
+		{
+			if(isIdValid(escortShips[i]) && exists(escortShips[i]))
+			{
+				sendSystemMessage(self, "You must destroy all escort ships before you can dock.", null);
+				return SCRIPT_CONTINUE;
+			}
+		
+		}
+	}
+	
+	// If we are already docking, abort!
+	if ( utils.hasScriptVar( self, "docking" ) )
+	{
+		sendQuestSystemMessage( self, SID_ABORT_DOCKING );
+		queueCommand( self, ##"undock", null, "", COMMAND_PRIORITY_IMMEDIATE );
+		utils.removeScriptVar( self, "docking" );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Don't dock if the target is already docking.
+	if ( _spaceUnitIsDocked( target ) )
+	{
+		sendQuestSystemMessage( self, SID_TARGET_DOCKING_ALREADY );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Can't dock with a ship that refuses us.
+	boolean cargoTransfer = false;
+	if ( !utils.hasScriptVar( target, "dockable" ) )
+	{
+		// May be able to dock with a disabled ship anyway, though.
+		if ( hasObjVar( target, "isDisabled" ) && canTransferCargo( self, target ) )
+		{
+			// We're going to dock with the ship and try to transfer its cargo.
+			cargoTransfer = true;
+		}
+		else
+		{
+			sendQuestSystemMessage( self, SID_CANNOT_DOCK );
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Is the ship close enough to dock with?
+	float dist = getDistance( space_transition.getContainingShip( self ), target );
+	if ( (dist == -1) || (dist > 150) )
+	{
+		sendQuestSystemMessage( self, SID_DOCK_TOO_FAR );
+		return SCRIPT_CONTINUE;
+	}
+
+	utils.setScriptVar( target, "being_docked", 1 );
+	utils.setScriptVar( self, "docking", 1 );
+	if ( cargoTransfer )
+		utils.setScriptVar( self, "transfer", 1 );
+
+	playClientEffectObj( self, DOCK_START, self, "" );
+
+	sendQuestSystemMessage( self, SID_DOCKING );
+	space_quest._groupNotify( self, SID_DOCKING_GROUP, null );
+
+	ship_ai.unitDock( space_transition.getContainingShip( self ), target, 15.f );
+
+	dictionary outp = new dictionary();
+	outp.put( "target", target );
+	space_quest.notifyMissions( self, "dockingStarted", outp );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// spaceUnitDocked
+//------------------------------------------------
+
+messageHandler spaceUnitDocked()
+{
+	sendQuestSystemMessage( self, SID_DOCK_ACHIEVED );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// spaceUnitUnDocked
+//------------------------------------------------
+
+messageHandler spaceUnitUnDocked()
+{
+	// Notify missions we are done docking.
+	obj_id target = params.getObjId( "target" );
+	dictionary outp = new dictionary();
+	outp.put( "target", target );
+	space_quest.notifyMissions( self, "dockingComplete", outp );
+
+	// Send dock complete message.
+	sendQuestSystemMessage( self, SID_DOCKING_COMPLETE );
+	space_quest._groupNotify( self, SID_DOCKING_COMPLETE_GROUP, null );
+
+	// Handle cargo transfer.
+	if ( utils.hasScriptVar( self, "transfer" ) )
+		finishTransfer( self, target );
+	playClientEffectObj( self, DOCK_END, self, "" );
+
+	// Clear tracking variables.
+	utils.removeScriptVar( target, "being_docked" );
+	utils.removeScriptVar( self, "docking" );
+	utils.removeScriptVar( self, "transfer" );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// canTransferCargo
+//------------------------------------------------
+
+boolean canTransferCargo( obj_id self, obj_id target )
+{
+	if ( !hasObjVar( target, "cargo" ) )
+		return false;
+
+	return true;
+}
+
+//------------------------------------------------
+// finishTransfer
+//------------------------------------------------
+
+void finishTransfer( obj_id self, obj_id target )
+{
+	// See if the ship had transferable cargo.
+	string cargo = getStringObjVar( target, "cargo" );
+	string cargo_type = getStringObjVar( target, "cargo_type" );
+	int[] can_xfer = dataTableGetIntColumn( "datatables/spacequest/inspect_cargo/"+cargo_type+".iff", "canTransfer" );
+	string[] cargo_types = dataTableGetStringColumn( "datatables/spacequest/inspect_cargo/"+cargo_type+".iff", "name" );
+	if ( can_xfer != null )
+	{
+		for ( int i=0; i<can_xfer.length; i++ )
+		{
+			if ( (cargo_types[i] == cargo) && (can_xfer[i] == 1) )
+			{
+				// We can transfer this cargo.
+				string_id cargo_id = new string_id( "space/cargo", cargo );
+				prose_package pp = prose.getPackage( SID_REPORT_TRANSFER, cargo_id );
+				sendQuestSystemMessage( self, pp );
+				space_quest._groupNotify( self, SID_REPORT_TRANSFER_GROUP, cargo_id );
+				removeObjVar( target, "cargo" );
+				
+				//If the cargo is a pirate target cargo we want to handle things diffrently.
+				if(cargo.equals("pirate_cargo"))
+				{
+					int difficulty = getIntObjVar(target, "difficulty");
+					if(difficulty <= 0 || difficulty > 5)
+					{
+						difficulty = 1;
+					}
+					
+					obj_id pInv = utils.getInventoryContainer(self);
+					obj_id item = static_item.createNewItemFunction("item_interdiction_crate_01_01", pInv);
+					setObjVar(item, "difficulty", difficulty);
+					
+					if(utils.isProfession(self, utils.SMUGGLER))
+					{
+						float underworldBonus = 10.f + ((float)difficulty * 10.f);
+						factions.addFactionStanding(self, "underworld", underworldBonus);
+					}
+					
+					CustomerServiceLog("space_piracy","Created 'Crate of Componenets in player "+self+"'s inventory (inventory OID: "+pInv);
+					
+					return;
+				}
+				
+				
+				setObjVar( self, "cargo", cargo );
+
+				string strShipType = getStringObjVar( target, "ship.shipName" );
+				dictionary outparams = new dictionary();
+				outparams.put( "player", self );
+				outparams.put( "cargo", cargo );
+				outparams.put( "type", strShipType );
+				obj_id sourceSpawner = getObjIdObjVar( target, "objParent" );
+				if ( sourceSpawner != null )
+				{
+					string spawner_name = getStringObjVar( sourceSpawner, "strSpawnerName" );
+					if ( spawner_name != null )
+						outparams.put( "spawner", spawner_name );
+				}
+				space_quest.notifyMissions( self, "recoveredCargo", outparams );
+				return;
+			}
+		}
+	}
+
+	sendQuestSystemMessage( self, SID_TRANSFER_CANT );
+}
+
+//------------------------------------------------
+// OnRemovedFromGroup
+//------------------------------------------------
+
+trigger OnRemovedFromGroup( obj_id group )
+{
+	if ( utils.hasScriptVar( self, "group_space_quest" ) )
+	{
+		utils.removeScriptVar( self, "group_space_quest" );
+		sendSystemMessage( self, LEFT_GROUP_QUEST );
+	}
+
+	return SCRIPT_CONTINUE;
+}

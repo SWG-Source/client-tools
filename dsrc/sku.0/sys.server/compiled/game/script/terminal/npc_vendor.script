@@ -1,0 +1,625 @@
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.player_structure;
+include library.chat;
+include library.sui;
+include library.utils;
+include library.prose;
+include library.slots;
+include library.ai_lib;
+include library.dressup;
+include library.smuggler;
+include library.vendor_lib;
+
+/***** LOGGING *******************************************************/
+
+const string LOGGING_CATEGORY			= "vendor";
+const boolean LOGGING_ON			= false;
+
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_ITEM_DROP			= new string_id("ui_radial", "item_drop");
+const string_id SID_DROP_NPC_VENDOR_BUILDING	= new string_id("player_structure", "drop_npc_vendor_building" );
+const string_id SID_DROP_NPC_VENDOR_PERM	= new string_id("player_structure", "drop_npc_vendor_perm" );
+const string_id SID_ITEM_DESTROY                = new string_id("ui_radial", "item_destroy");
+const string_id SID_AREABARKS_ENABLED		= new string_id("player_structure", "areabarks_enabled");
+const string_id SID_AREABARKS_DISABLED		= new string_id("player_structure", "areabarks_disabled");
+const string_id SID_OBSCENE			= new string_id("player_structure", "obscene");
+
+const string	TBL_VENDOR_SUBCATEGORIES	= "datatables/vendor/vendor_map_subcategories.iff";
+const string	TBL_VENDOR_ANIMS		= "datatables/vendor/vendor_areabark_anims.iff";
+const string	TBL_VENDOR_MOODS		= "datatables/vendor/vendor_areabark_moods.iff";
+const string	TBL_VENDOR_STRCATS		= "datatables/vendor/vendor_areabark_strcats.iff";
+
+const string    ALERT_VOLUME_NAME 		= "vendorTriggerVolume";
+
+const string	WKE_CAN_WEAR_PADAWAN_ROBE	= "object/tangible/wearables/robe/robe_jedi_padawan_generic.iff";
+const string	STANDARD_VENDOR_SHIRT		= "object/tangible/wearables/shirt/shirt_s11.iff";
+const string	STANDARD_VENDOR_PANTS		= "object/tangible/wearables/pants/pants_s14.iff";
+const string	STANDARD_VENDOR_SHOES		= "object/tangible/wearables/boots/boots_s14.iff";
+const string	ITH_VENDOR_SHIRT		= "object/tangible/wearables/ithorian/ith_shirt_s05.iff";
+const string	ITH_VENDOR_PANTS		= "object/tangible/wearables/ithorian/ith_pants_s03.iff";
+
+const string 	NON_ENHANCEMENT_BUFF 		= "buff.non_enhancement";
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	removeTriggerVolume( "alertTriggerVolume" );
+	setInvulnerable( self, true );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	// Re-enable area barks.
+	if ( hasObjVar( self, "vendor.areaBarks" ) )
+		createTriggerVolume( ALERT_VOLUME_NAME, 10, true );
+
+	// If we are Ithorian and naked, clothe us.
+	string templateName = getTemplateName( self );
+	if ( !hasObjVar( self, "dressed" ) && (templateName.indexOf( "ithorian" ) > 0) )
+	{
+		// We need clothing.
+		dressup.dressNpc( self, "random_ithorian", true );
+		setObjVar( self, "dressed", 1 );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuRequest
+//------------------------------------------------
+
+trigger OnObjectMenuRequest( obj_id player, menu_info mi )
+{
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( player == ownerId )
+	{
+		// Only show these options if the vendor is placed.
+		obj_id inventory = getObjectInSlot( player, "inventory" );
+		if ( contains( inventory, self ) )
+		{
+			mi.addRootMenu( menu_info_types.ITEM_DESTROY, SID_ITEM_DESTROY );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnObjectMenuSelect
+//------------------------------------------------
+
+trigger OnObjectMenuSelect( obj_id player, int item )
+{
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( player != ownerId ) // Only owner can pick up and drop.
+		return SCRIPT_CONTINUE;
+	int hiringSkillMod = getSkillStatisticModifier(player, "hiring");
+	
+	if ( (item == menu_info_types.SERVER_MENU4) && utils.isProfession(player, utils.TRADER) )
+	{
+		// Toggle area barks.
+		if ( hasObjVar( self, "vendor.areaBarks" ) )
+		{
+			// Turn off area barks.
+			removeObjVar( self, "vendor.areaBarks" );
+			removeTriggerVolume( ALERT_VOLUME_NAME );
+
+			// Send the player a message.
+			sendSystemMessage( player, SID_AREABARKS_DISABLED );
+		}
+		else
+		{
+			// Query about anim type.
+			string[] rawAnims = dataTableGetStringColumnNoDefaults( TBL_VENDOR_ANIMS, 0 );
+			string[] anims = new string[rawAnims.length];
+			for ( int i=0; i<rawAnims.length; i++ )
+			{
+				anims[i] = "@player_structure:"+rawAnims[i];
+			}
+			sui.listbox( self, player, "@player_structure:vendor_anim_d", sui.OK_CANCEL, "@player_structure:vendor_anim_t", anims, "handleVendorAnimSelect", true );
+		}
+
+		// Refresh menu.
+		sendDirtyObjectMenuNotification( self );
+	}
+	
+	else if ( (item == menu_info_types.SERVER_MENU8) && hiringSkillMod >= 90  )
+	{
+		// Notify the player on how to customize.
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_CHEERFUL, null, new string_id( "player_structure", "wear_how" ), null );
+		doAnimationAction( self, "slow_down");
+
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnAboutToBeTransferred
+//------------------------------------------------
+
+trigger OnAboutToBeTransferred( obj_id destContainer, obj_id transferer )
+{
+	if ( hasObjVar( self, "vendor.areaBarks" ) )
+	{
+		removeObjVar( self, "vendor.areaBarks" );
+		removeTriggerVolume( ALERT_VOLUME_NAME );
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnGiveItem
+//------------------------------------------------
+
+trigger OnGiveItem( obj_id item, obj_id player )
+{
+	blog("OnGiveItem init");
+	// Only accept items from our owner.
+	obj_id ownerId = getObjIdObjVar( self, "vendor_owner" );
+	if ( player != ownerId )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string templateName = getTemplateName( self );
+	string itemName = getTemplateName( item );
+	if(templateName == null || templateName.equals(""))
+		return SCRIPT_CONTINUE;
+	else if(itemName == null || itemName.equals(""))
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(item, NON_ENHANCEMENT_BUFF)) //This is a player only appearance object
+	{		
+		//no basic speaking?  Just say no.
+		doAnimationAction(self, "shake_head_no");
+		return SCRIPT_CONTINUE;		
+	}
+
+	//if special vendor cannot be dressed, don't allow the player to give item
+	if(vendor_lib.isSpecialVendor(self) && getIntObjVar(self, "vendor.special_vendor_clothing") == 0) //If the vendor is special and cannot be dressed
+	{
+	
+		if(getIntObjVar(self, "vendor.special_vendor_basic") == 1)
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id("player_structure", "wear_not_special_vendor" ), null );
+			doAnimationAction( self, "wave_finger_warning" );
+			return SCRIPT_CONTINUE;
+		}
+		
+		//no basic speaking?  Just say no.
+		doAnimationAction(self, "shake_head_no");
+		return SCRIPT_CONTINUE;		
+	}
+	
+	if ( templateName.indexOf( "ithorian" ) > -1 )
+	{
+		blog("I am an Ithorian");
+		if ( itemName.indexOf( "ith_" ) > -1 )
+		{
+			blog("I have received an Ithorian wearable!");
+			// We can wear this.
+		}
+		else if(itemName == WKE_CAN_WEAR_PADAWAN_ROBE) //this isn't a wookiee specific robe, it is the padawan robe
+		{
+			// We can wear this.
+		}		
+		else if( !(itemName.indexOf("cybernetic_") > -1))
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "player_structure", "wear_not_ithorian" ), null );
+			doAnimationAction( self, "wave_on_dismissing" );
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( templateName.indexOf( "wookiee" ) > -1 )
+	{
+		if ( (itemName.indexOf( "wke_" ) > -1) || (itemName.indexOf( "armor_kashyyykian_" ) > -1) )
+		{
+			// We can wear this.
+		}
+		else if(itemName == WKE_CAN_WEAR_PADAWAN_ROBE)
+		{
+			// We can wear this.
+		}
+		else if( !(itemName.indexOf("cybernetic_") > -1))
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "player_structure", "wear_not_wookiee" ), null );
+			doAnimationAction( self, "wave_on_dismissing" );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else if ( templateName.indexOf( "ithorian" ) > -1 )
+	{
+		blog("itemName: "+itemName);
+		if ( (itemName.indexOf( "ith_" ) > -1))
+		{
+			// We can wear this.
+		}
+		else if(itemName == WKE_CAN_WEAR_PADAWAN_ROBE) //this isn't a wookiee specific robe, it is the padawan robe
+		{
+			// We can wear this.
+		}
+		else if( !(itemName.indexOf("cybernetic_") > -1))
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "player_structure", "wear_not_wookiee" ), null );
+			doAnimationAction( self, "wave_on_dismissing" );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else	
+	{
+		if ( itemName.indexOf( "wke_" ) > -1 )
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "player_structure", "wear_no_wookiee" ), null );
+			doAnimationAction( self, "wave_on_dismissing" );
+			return SCRIPT_CONTINUE;
+		}
+		else if ( itemName.indexOf( "ith_" ) > -1 )
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "player_structure", "wear_no_ithorian" ), null );
+			doAnimationAction( self, "wave_on_dismissing" );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	//Refuse to wear hats, they make our head disappear
+	if (templateName.indexOf( "ishi_tib" ) > -1 || templateName.indexOf( "aqualish" ) > -1  || templateName.indexOf( "devaronian" ) > -1 || templateName.indexOf( "bith" ) > -1)
+	{
+		if (itemName.startsWith("object/tangible/wearables/hat") || itemName.startsWith("object/tangible/wearables/armor/marauder/armor_marauder_s03_helmet"))
+		{
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "player_structure", "wear_not_ishitib" ), null );
+			doAnimationAction( self, "wave_on_dismissing" );
+			return SCRIPT_CONTINUE;
+		}
+	}
+	// Refuse to wear containers that contain items as the items will be lost.
+	if(utils.isContainer(item) && smuggler.hasItemsInContainer(item))
+	{
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_STUBBORN, null, new string_id( "player_structure", "wear_no_bag_full" ), null );
+		doAnimationAction( self, "wave_on_dismissing" );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Refuse to wear specific bodysuit
+	if(itemName.startsWith("object/tangible/wearables/bodysuit/bodysuit_s06") )
+	{
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_OFFENDED, null, new string_id( "player_structure", "wear_noway" ), null );
+		doAnimationAction( self, "wave_on_dismissing" );
+		return SCRIPT_CONTINUE;
+	}
+
+	blog("OnGiveItem ABOUT TO FORCE CLOTHING");
+
+	messageTo(self, "checkNakedSlots", null, 1, false);
+
+	// Only accept items if our owner's skill mod is high enough.
+	int hiringSkillMod = getSkillStatisticModifier(player, "hiring");
+	if ( hiringSkillMod < 90 )
+	{
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_OFFENDED, null, new string_id( "player_structure", "wear_noway" ), null );
+		doAnimationAction( self, "wave_on_dismissing" );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Try to equip the item.
+	if ( equipOverride( item, self ) )
+	{
+		// We got it.
+		if ( isGameObjectTypeOf( item, GOT_weapon ) )
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_HAPPY, null, new string_id( "player_structure", "wear_yes_weapon" ), null );
+		else
+			chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_HAPPY, null, new string_id( "player_structure", "wear_yes" ), null );
+		doAnimationAction( self, "pose_proudly");
+		return SCRIPT_CONTINUE;
+	}
+	else
+	{
+		// Can't wear that.
+		chat._chat( self, null, chat.CHAT_SAY, chat.MOOD_CHEERFUL, null, new string_id( "player_structure", "wear_no" ), null );
+		doAnimationAction( self, "slow_down");
+		return SCRIPT_CONTINUE;
+	}
+}
+
+//------------------------------------------------
+// handleVendorAnimSelect
+//------------------------------------------------
+
+messageHandler handleVendorAnimSelect()
+{
+	// Parse params.
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow( params );
+	if ( idx < 0 ) idx = 0;
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Store the selected anim.
+	string[] rawAnims = dataTableGetStringColumnNoDefaults( TBL_VENDOR_ANIMS, 0 );
+	setObjVar( self, "vendor.barkAnim", rawAnims[idx] );
+
+	// Query about mood type.
+	string[] rawMoods = dataTableGetStringColumnNoDefaults( TBL_VENDOR_MOODS, 0 );
+	string[] moods = new string[rawMoods.length];
+	for ( int i=0; i<rawMoods.length; i++ )
+	{
+		moods[i] = "@player_structure:"+rawMoods[i];
+	}
+	sui.listbox( self, player, "@player_structure:vendor_moods_d", sui.OK_CANCEL, "@player_structure:vendor_moods_t", moods, "handleVendorMoodSelect", true );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleVendorMoodSelect
+//------------------------------------------------
+
+messageHandler handleVendorMoodSelect()
+{
+	// Parse params.
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow( params );
+	if ( idx < 0 ) idx = 0;
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Store the selected mood.
+	string[] rawMoods = dataTableGetStringColumnNoDefaults( TBL_VENDOR_MOODS, 0 );
+	setObjVar( self, "vendor.barkMood", rawMoods[idx] );
+
+	// Query about string cat type.
+	string[] rawStrCats = dataTableGetStringColumnNoDefaults( TBL_VENDOR_STRCATS, 0 );
+	resizeable string[] strcats = null;
+	for ( int i=0; i<rawStrCats.length; i++ )
+	{
+		strcats = utils.addElement( strcats, "@player_structure:subcat_"+rawStrCats[i] );
+	}
+	// Add custom option if we have enough hiring skill.
+	if ( utils.isProfession( player, utils.TRADER ) )
+		strcats = utils.addElement( strcats, "@player_structure:custom" );
+	sui.listbox( self, player, "@player_structure:vendor_strcats_d", sui.OK_CANCEL, "@player_structure:vendor_strcats_t", strcats, "handleVendorStrCatSelect", true );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleVendorStrCatSelect
+//------------------------------------------------
+
+messageHandler handleVendorStrCatSelect()
+{
+	// Parse params.
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow( params );
+	if ( idx < 0 ) idx = 0;
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// Store the selected strcat.
+	string[] rawStrCatsArray = dataTableGetStringColumnNoDefaults( TBL_VENDOR_STRCATS, 0 );
+	resizeable string[] rawStrCats = rawStrCatsArray;
+	if ( utils.isProfession(player, utils.TRADER) )
+		rawStrCats = utils.addElement( rawStrCats, "custom" );
+	setObjVar( self, "vendor.barkStrCat", rawStrCats[idx] );
+
+	// Check for customize.
+	if ( rawStrCats[idx] == "custom" )
+	{
+		// Player wants to customize.
+		sui.inputbox( self, player, "@player_structure:cust_d", sui.OK_CANCEL, "@player_structure:cust_t", sui.INPUT_NORMAL, null, "handleSetCustomBark", null );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Turn on area barks.
+	removeObjVar( self, "vendor.customBark" );
+	setObjVar( self, "vendor.areaBarks", 1 );
+	createTriggerVolume( ALERT_VOLUME_NAME, 10, true );
+
+	// Send the player a message.
+	sendSystemMessage( player, SID_AREABARKS_ENABLED );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleSetCustomBark
+//------------------------------------------------
+
+messageHandler handleSetCustomBark()
+{
+	// Parse params.
+	obj_id player = sui.getPlayerId(params);
+
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	string customBark = sui.getInputBoxText( params );
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	// No zero length or obscene barks.
+	if ( (customBark == "") || !isAppropriateText(customBark) )
+	{
+		// Player wants to customize.
+		sendSystemMessage( player, SID_OBSCENE );
+		sui.inputbox( self, player, "@player_structure:cust_d", sui.OK_CANCEL, "@player_structure:cust_t", sui.INPUT_NORMAL, null, "handleSetCustomBark", null );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Chop it and store it.
+	if ( customBark.length() > 140 )
+		customBark = customBark.substring( 0, 139 );
+	setObjVar( self, "vendor.customBark", customBark );
+
+	// Turn on area barks.
+	setObjVar( self, "vendor.areaBarks", 1 );
+	createTriggerVolume( ALERT_VOLUME_NAME, 10, true );
+
+	// Send the player a message.
+	sendSystemMessage( player, SID_AREABARKS_ENABLED );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnTriggerVolumeEntered
+//------------------------------------------------
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	if ( hasObjVar( breacher, "gm") )
+		return SCRIPT_OVERRIDE;
+
+	if ( breacher == self )
+		return SCRIPT_OVERRIDE;
+
+	if ( isIncapacitated(self) )
+		return SCRIPT_OVERRIDE;
+
+	if ( !isMob( breacher ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( ai_lib.isMonster( breacher ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( !hasObjVar( self, "vendor.areaBarks" ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( utils.hasScriptVar( self, "bark.alreadyBarked" ) )
+		return SCRIPT_OVERRIDE;
+
+	if ( rand( 1, 3 ) == 1 )
+		return SCRIPT_OVERRIDE;
+
+	if ( volumeName == ALERT_VOLUME_NAME )
+	{
+		// If we have area based vendor barks enabled and the player's skill level is high enough, bark a message.
+
+		// Get our bark settings.
+		string anim = getStringObjVar( self, "vendor.barkAnim" );
+		string mood = getStringObjVar( self, "vendor.barkMood" );
+		string strcat = getStringObjVar( self, "vendor.barkStrCat" );
+		string custbark = getStringObjVar( self, "vendor.customBark" );
+
+		// Bark our area breach string.
+		faceTo( self, breacher );
+		if ( custbark != null )
+		{
+			chat._chat( self, breacher, chat.CHAT_SAY, mood, custbark, null, null );
+		}
+		else
+		{
+			prose_package pp = prose.getPackage( new string_id( "player_structure", "areabark_"+strcat ), breacher );
+			chat.publicChat( self, breacher, chat.CHAT_SAY, mood, pp );
+		}
+		doAnimationAction( self, anim );
+
+		// Mark us so we don't bark too often.
+		utils.setScriptVar( self, "bark.alreadyBarked", 1 );
+		messageTo( self, "resetBarkTimer", null, 60, false );
+
+		return SCRIPT_OVERRIDE;
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// resetBarkTimer
+//------------------------------------------------
+
+messageHandler resetBarkTimer()
+{
+	utils.removeScriptVar( self, "bark.alreadyBarked" );
+	return SCRIPT_CONTINUE;
+}
+
+//Force the vendor to wear something if the slot is not occupied
+messageHandler checkNakedSlots()
+{
+	string templateName = getTemplateName(self);
+	if(templateName == null || templateName.equals(""))
+		return SCRIPT_CONTINUE;
+
+	if(templateName.indexOf("wookiee") > -1)
+		return SCRIPT_CONTINUE;
+
+	if(hasObjVar(self, "vendor.special_vendor_clothing") && getIntObjVar(self, "vendor.special_vendor_clothing") == 0)
+		return SCRIPT_CONTINUE;
+	
+	boolean ithorian = false;
+
+	if(templateName.indexOf("ithorian") > -1)
+	{
+		blog("I am an Ithorian");
+		ithorian = true;
+	}
+
+	blog("OnGiveItem FORCING CLOTHING");
+
+	obj_id currentChest = getObjectInSlot(self, slots.CHEST1);
+	obj_id currentPants = getObjectInSlot(self, slots.PANTS1);
+	obj_id currentShoes = getObjectInSlot(self, slots.SHOES);
+
+	if(!isValidId(currentChest))
+	{
+		blog("OnGiveItem NO CHEST");
+
+		if(ithorian)
+			createObject(ITH_VENDOR_SHIRT, self, slots.CHEST1);
+		else
+			createObject(STANDARD_VENDOR_SHIRT, self, slots.CHEST1);
+
+	}
+	if(!isValidId(currentPants))
+	{
+		blog("OnGiveItem NO PANTS");
+
+		if(ithorian)
+			createObject(ITH_VENDOR_PANTS, self, slots.PANTS1);
+		else
+			createObject(STANDARD_VENDOR_PANTS, self, slots.PANTS1);
+
+	}
+
+	if(!isValidId(currentShoes) && !ithorian)
+	{
+		blog("OnGiveItem NO SHOES");
+
+		createObject(STANDARD_VENDOR_SHOES, self, slots.SHOES);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+//Logging
+boolean blog(string msg)
+{
+	if(LOGGING_ON && msg != null && !msg.equals(""))
+		LOG(LOGGING_CATEGORY, msg);
+	return true;
+}
+

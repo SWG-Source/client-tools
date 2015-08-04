@@ -1,0 +1,526 @@
+include library.sui;
+include library.chat;
+include library.prose;
+include library.money;
+include library.ai_lib;
+include library.utils;
+
+// The location of the datatable that contains the items and prices of relics that are accepted
+const string TBL = "datatables/npc/relic_dealer/relic_geonosian_bio_bunker.iff";
+
+// Names of script vars that will be used to keep track of the sui and relic items
+const string SCRIPTVAR_JUNK_SUI				= "relicdealer.biogenic.sui";
+const string SCRIPTVAR_JUNK_IDS				= "relicdealer.biogenic.ids";
+
+// Name of the script var that is used to keep track of whether an item is in the process of being sold
+const string SCRIPTVAR_SOLD					= "soldAsJunk";
+
+// The sting file that contains all strings used for this relic dealer
+const string STF = "relic_dealer";
+
+// Pre-defined string ids
+const string_id PROSE_NO_BUY				= new string_id(STF, "prose_no_buy");
+const string_id PROSE_NO_BUY_ALL			= new string_id(STF, "prose_no_buy_all");
+
+const string_id PROSE_SOLD_JUNK				= new string_id(STF, "prose_sold_junk");
+const string_id PROSE_NO_SALE				= new string_id(STF, "prose_no_sale");
+
+const string_id PROSE_SOLD_ALL_JUNK			= new string_id(STF, "prose_sold_all_junk");
+const string_id PROSE_NO_ALL_SALE			= new string_id(STF, "prose_no_all_sale");
+
+const string_id PROSE_JUNK_SOLD				= new string_id(STF, "prose_junk_sold");
+
+// Uncomment this when testing this script through the radial menu
+// const string_id MENU_SELL					= new string_id("junk_dealer", "mnu_sell_junk");
+
+const string SELL_TITLE						= "@" + STF + ":sell_title";
+const string SELL_PROMPT					= "@" + STF + ":sell_prompt";
+const string NO_ITEMS_PROMPT				= "@" + STF + ":no_items";
+
+const string BTN_SELL						= "@" + STF + ":btn_sell";
+const string BTN_SELL_ALL					= "@" + STF + ":btn_sell_all";
+
+///////////////////////////////////////////////////////////////////////////
+// Set sentinal behavior and attach conversation script when this script is attached
+trigger OnAttach() {
+
+	ai_lib.setDefaultCalmBehavior(self, ai_lib.BEHAVIOR_SENTINEL);
+	attachScript(self, "conversation.biogenic_herald_dealer");
+
+	return SCRIPT_CONTINUE;
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Uncomment this section when testing this script through the radial menu
+/* trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int mnuSellJunk = mi.addRootMenu(menu_info_types.SERVER_MENU1, MENU_SELL);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.SERVER_MENU1 )		//sell 1 junk item
+	{
+		dictionary params = new dictionary();
+		params.put("player", player);
+
+		messageTo(self, "startDealing", params, 1.0f, false);
+	}
+
+	return SCRIPT_CONTINUE;
+} */
+
+///////////////////////////////////////////////////////////////////////////
+// Gets all the available relic items that are in the player's inventory
+obj_id[] getAllJunkItems(obj_id player) {
+
+	// If the player is not valid, quit out
+	if(!isIdValid(player))
+		return null;
+
+	// Get all the objects in the player's inventory
+	obj_id[] contents = utils.getFilteredPlayerContents(player);
+
+	// If there are contents in the inventory
+	if((contents != null) && (contents.length > 0)) {
+
+		resizeable obj_id[] junk = new obj_id[0];
+
+		// Step through each item in the inventory
+		for(int i = 0; i < contents.length; i++) {
+
+			// Get the template name of the item
+			string template = getTemplateName(contents[i]);
+
+			// If the entry in the datatable exists
+			if((template != null) && (!template.equals(""))) {
+
+				// If the price is at least 1 credit
+				if(dataTableGetInt(TBL, template, "price") >= 0) {
+
+					// Add the item to our list
+					junk = utils.addElement(junk, contents[i]);
+				}
+			}
+		}
+
+		// If we've found at least one relic to buy
+		if((junk != null) && (junk.length > 0)) {
+
+			// Return the list
+			return utils.toStaticObjIdArray(junk);
+		}
+	}
+
+	return null;
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Shows the relic items (if any) in a neat sui list box
+void showSellJunkSui(obj_id player, obj_id target) {
+
+	// If the player and the relic dealer are not valid objects quit out
+	if(!isIdValid(player) || !isIdValid(target))
+		return;
+
+	// If the player already has a dealer sui open
+	if(utils.hasScriptVar(player, SCRIPTVAR_JUNK_SUI)) {
+
+		// Get the PID of the sui and clean the script vars off the player
+		int pidClose = utils.getIntScriptVar(player, SCRIPTVAR_JUNK_SUI);
+		cleanupSellJunkSui(player);
+
+		// Close the sui
+		sui.closeSUI(player, pidClose);
+	}
+
+	// Get all of the relics in the player's inventory
+	obj_id[] junk = getAllJunkItems(player);
+
+	// If there are relics...
+	if(junk != null && junk.length > 0) {
+
+		string[] entries = new string[junk.length];
+
+		// Step through each of the relic items
+		for(int i = 0; i < junk.length; i++) {
+
+			// Get the template name and use it to reference the datatable for the price
+			string template = getTemplateName(junk[i]);
+			int price = dataTableGetInt(TBL, template, "price");
+
+			// Set up the entry for the list box
+			string entry = "[" + price + "] " + getString(getNameStringId(junk[i]));
+
+			// And store it in our list
+			// entries = utils.addElement(entries, entry);
+			entries[i] = entry;
+		}
+
+		// Make sure that we have a list
+		if(entries != null && entries.length > 0) {
+
+			// And make a sui listbox
+			// At this point, the listbox is still hidden so that we can rename the buttons
+			int pid = sui.listbox(target, player, SELL_PROMPT, sui.OK_CANCEL_ALL, SELL_TITLE, entries, "handleSellJunkSui", false, false);
+
+			// debugSpeakMsg(target, "PID is " + pid);
+
+			// If the sui creation was successful
+			if(pid > -1) {
+
+				// Rename some buttons and show the sui
+				setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, BTN_SELL);
+				setSUIProperty(pid, sui.LISTBOX_BTN_OTHER, sui.PROP_TEXT, BTN_SELL_ALL);
+				showSUIPage(pid);
+
+				// Set some script vars on the player
+				utils.setScriptVar(player, SCRIPTVAR_JUNK_SUI, pid);
+				utils.setBatchScriptVar(player, SCRIPTVAR_JUNK_IDS, junk);
+			}
+		}
+
+	// If there are no relics in the player's inventory
+	} else {
+
+		// Display a message box explaining there are no items
+		int msgPid = sui.msgbox(target, player, NO_ITEMS_PROMPT, sui.OK_ONLY, SELL_TITLE, "noHandler");
+
+		// Clean the script vars off of the player
+		cleanupSellJunkSui(player);
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Cleans script vars off of the player when dealing is complete
+void cleanupSellJunkSui(obj_id player) {
+
+	utils.removeScriptVar(player, SCRIPTVAR_JUNK_SUI);
+	utils.removeBatchScriptVar(player, SCRIPTVAR_JUNK_IDS);
+}
+
+///////////////////////////////////////////////////////////////////////////
+// This is the message handler that gets called from the conversation. This method starts the dealing procedure.
+messageHandler startDealing() {
+
+	// Get the obj id of the player we're dealing with
+	obj_id player = params.getObjId("player");
+
+	// Show that player the sui
+	showSellJunkSui(player, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Figure out what to do when the player responds to the sui
+messageHandler handleSellJunkSui() {
+
+	// Get the obj id of the player that hit a button
+	obj_id player = sui.getPlayerId(params);
+
+	// If the player is not valid, quit out
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	// Get the row of the list box that was highlighted, and get the button that was pushed
+	int idx = sui.getListboxSelectedRow(params);
+	int bp = sui.getIntButtonPressed(params);
+
+	// Get the list of relics off of the player
+	obj_id[] junk = utils.getObjIdBatchScriptVar(player, SCRIPTVAR_JUNK_IDS);
+
+	// sendSystemMessageTestingOnly(player, "The button pressed is: " + bp);
+
+	// Clean the script vars off of the player
+	cleanupSellJunkSui(player);
+
+	// If the button pressed was "CANCEL"
+	if(bp == sui.BP_CANCEL) {
+
+		// Go ahead and quit out
+		return SCRIPT_CONTINUE;
+
+	// If the button pressed was "REVERT" (a.k.a. the 'other' button, our 'sell all' button)
+	} else if(bp == sui.BP_REVERT) {
+
+		// Go through the sell all procedure
+		sellAllJunk(player, self);
+
+	// The only other button left is "OK" or our 'sell' button
+	} else {
+
+		// If no row was selected, quit out
+		if(idx < 0)
+			return SCRIPT_CONTINUE;
+
+		// If the list of relics is empty, quit out
+		if((junk == null) || (junk.length == 0)) {
+
+			return SCRIPT_CONTINUE;
+		}
+
+		// If our arithmetic is off, quit out
+		if(idx > junk.length - 1)
+			return SCRIPT_CONTINUE;
+
+		// Go through the sell item procedure
+		sellJunkItem(player, junk[idx], true);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+///////////////////////////////////////////////////////////////////////////
+// The procedure to sell one item from the list box
+void sellJunkItem(obj_id player, obj_id item, boolean reshowSui) {
+
+	// Make sure the player and the item to sell are valid, if not quit out
+	if(!isIdValid(player) || !isIdValid(item))
+		return;
+
+	// If the item is in the process of being sold, let the player know and quit out
+	if(utils.hasScriptVar(item, SCRIPTVAR_SOLD)) {
+
+		prose_package ppSold = prose.getPackage(PROSE_JUNK_SOLD, item);
+		sendSystemMessageProse(player, ppSold);
+		return;
+	}
+
+	obj_id self = getSelf();
+
+	// Fetch the template name and reference the price from the datatable
+	string name = getTemplateName(item);
+	int price = dataTableGetInt(TBL, name, "price");
+
+	// If the price is greater than zero, and the item is not a quest item
+	if(price > 0 && !hasObjVar(item, "quest_item")) {
+
+		// Mark the item as in the process of being sold
+		utils.setScriptVar(item, SCRIPTVAR_SOLD, getGameTime());
+
+		dictionary params = new dictionary();
+		params.put("item",item);
+		params.put("price",price);
+		params.put("reshowSui", reshowSui);
+
+		// Give the player the money and send a "handleSoldJunk" message to ourselves
+		money.systemPayout(money.ACCT_RELIC_DEALER, player, price, "handleSoldJunk", params);
+
+	// if for some reason we can't buy that item
+	} else {
+
+		// Let the player know
+		prose_package ppNoBuy = prose.getPackage(PROSE_NO_BUY, self, item);
+		sendSystemMessageProse(player, ppNoBuy);
+	}
+}
+
+// Wrapper function. If not specified, we default to NOT reshowing the sui
+void sellJunkItem(obj_id player, obj_id item) {
+
+	sellJunkItem(player, item, false);
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Handles the cleanup after one item is sold
+messageHandler handleSoldJunk() {
+
+	// If the parameters we've passed don't exist, quit out
+	if(params == null || params.isEmpty()) {
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the obj id of the item sold. If it doesn't exist, quit out
+	obj_id item = params.getObjId("item");
+	if(!isIdValid(item)) {
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the obj id of the player we paid. If they don't exist, quit out
+	obj_id player = params.getObjId(money.DICT_TARGET_ID);
+	if(!isIdValid(player)) {
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the return code of the money transaction
+	int retCode = params.getInt(money.DICT_CODE);
+
+	// If the transaction failed
+	if(retCode == money.RET_FAIL) {
+
+		// Let the player know
+		prose_package ppNoSale = prose.getPackage(PROSE_NO_SALE, self, item);
+		sendSystemMessageProse(player, ppNoSale);
+
+		// Un-mark the item as in process of being sold. The player can try to sell this item again
+		utils.removeScriptVar(item, SCRIPTVAR_SOLD);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the price we paid for the item
+	int price = params.getInt("price");
+
+	// Let the player know exactly what he or she just did
+	prose_package ppSoldJunk = prose.getPackage(PROSE_SOLD_JUNK, item, price);
+	sendSystemMessageProse(player, ppSoldJunk);
+
+	// Destroy the item out of the player's inventory
+	destroyObject(item);
+
+	// Get whether or not we decided to reshow the sui
+	boolean reshowSui = params.getBoolean("reshowSui");
+
+	// If we want to reshow the sui, show it again with an updated list of items
+	if(reshowSui)
+		showSellJunkSui(player, self);
+
+	return SCRIPT_CONTINUE;
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Go through the procedure of selling all relics in the player's inventory
+void sellAllJunk(obj_id player, obj_id target) {
+
+	// If the player and the dealer are not valid, quit out
+	if(!isIdValid(player) || !isIdValid(target))
+		return;
+
+	// If the player currently has a sui open
+	if(utils.hasScriptVar(player, SCRIPTVAR_JUNK_SUI)) {
+
+		// Get the pid of the sui and clean the script vars off of the player
+		int pidClose = utils.getIntScriptVar(player, SCRIPTVAR_JUNK_SUI);
+		cleanupSellJunkSui(player);
+
+		// Close the sui
+		sui.closeSUI(player, pidClose);
+	}
+
+	// Get all the relics in the player's inventory
+	obj_id[] tmp = getAllJunkItems(player);
+
+	// If there are no relics
+	if(tmp == null || tmp.length == 0) {
+
+		// Let the player know and quit out
+		int msgPid = sui.msgbox(target, player, NO_ITEMS_PROMPT, sui.OK_ONLY, SELL_TITLE, "noHandler");
+		return;
+	}
+
+	// Copy the list of relics
+	resizeable obj_id[] junk = new Vector(Arrays.asList(tmp));
+	resizeable obj_id[] toRemove = new obj_id[0];
+
+	// Double check to make sure there are relics
+	if(junk != null && junk.length > 0) {
+
+		int now = getGameTime();
+
+		int total = 0;
+
+		// Step through each relic in the inventory
+		for(int i = 0; i < junk.length; i++) {
+
+			// If the item is in the process of being sold
+			if(utils.hasScriptVar(junk[i], SCRIPTVAR_SOLD)) {
+
+				// Mark it to be removed from the list of relics
+				toRemove = utils.addElement(toRemove, junk[i]);
+
+			// Otherwise...
+			} else {
+
+				// Get the template name and reference the datatable for the price
+				string template = getTemplateName(junk[i]);
+				int price = dataTableGetInt(TBL, template, "price");
+
+				// Add the price of this item to our total
+				total += price;
+
+				// Mark this item as in the process of being sold
+				utils.setScriptVar(junk[i], SCRIPTVAR_SOLD, now);
+			}
+		}
+
+		// Take out any relics that were marked for removal
+		junk = utils.removeElements(junk, toRemove);
+
+		// If we still have a list of relics to sell...
+		if(total > 0 && junk != null && junk.length > 0) {
+
+			dictionary params = new dictionary();
+			params.put("items", junk);
+			params.put("total", total);
+
+			// Give the player the money and send a "handleSoldAllJunk" message to ourselves
+			money.systemPayout(money.ACCT_RELIC_DEALER, player, total, "handleSoldAllJunk", params);
+
+		// If there are no relics to sell
+		} else {
+
+			// Let the player know
+			prose_package ppNoBuy = prose.getPackage(PROSE_NO_BUY_ALL, target);
+			sendSystemMessageProse(player, ppNoBuy);
+		}
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Handles the cleanup after all the relics are sold
+messageHandler handleSoldAllJunk() {
+
+	// If the parameters that we passed are not there, quit out
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+
+	// Get the list of relics
+	obj_id[] junk = params.getObjIdArray("items");
+
+	// If the list of relics does not exist, quit out
+	if(junk == null || junk.length == 0)
+		return SCRIPT_CONTINUE;
+
+	// Get the obj id of the player that sold us the relics
+	obj_id player = params.getObjId(money.DICT_TARGET_ID);
+
+	// If the player is no longer valid, quit out
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	// Get the return code of the monetary transaction
+	int retCode = params.getInt(money.DICT_CODE);
+
+	// If the transaction failed
+	if(retCode == money.RET_FAIL) {
+
+		// Let the player know
+		prose_package ppNoSale = prose.getPackage(PROSE_NO_ALL_SALE, self);
+		sendSystemMessageProse(player, ppNoSale);
+
+		// Go through and un-mark all of the relics as in the process of being sold. The player can try to re-sell these objects.
+		for(int i = 0; i < junk.length; i++)
+			utils.removeScriptVar(junk[i], SCRIPTVAR_SOLD);
+
+		return SCRIPT_CONTINUE;
+	}
+
+	// Get the total amount of credits all that crap was worth
+	int total = params.getInt("total");
+
+	// Let the player know exactly what he or she just did
+	//sendSystemMessage (player, price + " credits have been deposited in your bank account.", null);
+	prose_package ppSoldJunk = prose.getPackage(PROSE_SOLD_ALL_JUNK, self, total);
+	sendSystemMessageProse(player, ppSoldJunk);
+
+	// Destroy all the objects out of the player's inventory
+	utils.destroyObjects(junk);
+
+	return SCRIPT_CONTINUE;
+}

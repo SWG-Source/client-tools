@@ -1,0 +1,217 @@
+/**
+ * Copyright (c) ©2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        test_crafting_base_weapon.script
+ * Description:  base crafting script used by all weapons
+ * @author       $Author: Reece Thornton & Friends$
+ * @version      $Revision: 0$
+ */
+
+include library.utils;
+include library.craftinglib;
+include library.consumable;
+include library.player_stomach;
+include library.bio_engineer;
+
+include library.debug;
+
+
+inherits systems.crafting.crafting_base;
+
+const string VERSION = "v1.00.00";
+const string FOOD_DATA = "datatables/food/food_data.iff";
+
+void calcAndSetPrototypeProperties ( obj_id prototype, draft_schematic.attribute[] itemAttributes, dictionary craftingValuesDictionary )
+{
+	// some of the component values need to be negated before being added to the object's attribs
+	for ( int i = 0; i < itemAttributes.length; ++i )
+	{
+		if (itemAttributes[i] == null)
+	  		continue;
+
+		if ( itemAttributes[i].name.getAsciiId().equals("filling"))
+		{
+			itemAttributes[i].currentValue = (itemAttributes[i].minValue + itemAttributes[i].maxValue) - itemAttributes[i].currentValue;
+		}
+	}
+	super.calcAndSetPrototypeProperties ( prototype, itemAttributes, craftingValuesDictionary );
+}
+
+void calcAndSetPrototypeProperties( obj_id prototype, draft_schematic.attribute[] itemAttributes )
+{
+	// Get our food datatable index.
+	string template = getTemplateName( prototype );
+	string[] foods = dataTableGetStringColumn( FOOD_DATA, "TEMPLATE" );
+	int food_index = 0;
+	for ( int i=0; i<foods.length; i++ )
+	{
+		if ( template.equals( "object/tangible/" + foods[i] ) )
+		{
+			food_index = i;
+			break;
+		}
+	}
+
+	int quantity = 0;
+	float quantity_bonus = 1.f;
+	int filling = 0;
+	float effectiveness = 1;
+	float duration = 1;
+	int race_restriction = -1;
+	int stomach = 0;
+
+	// Read all of our attributes.
+	for ( int i = 0; i < itemAttributes.length; ++i ) // go through all attributes
+	{
+		if ( itemAttributes[i] == null )
+			continue;
+
+		if ( !calcAndSetPrototypeProperty( prototype, itemAttributes[i]) )
+		{
+			// QUANTITY
+			if ( itemAttributes[i].name.getAsciiId().equals( "quantity" ) )
+			{
+				// Quantity is calculated by multiplying the float version of the quantity attribute times a datatable constant.
+				int quantity_base = (int) itemAttributes[i].currentValue;
+				float quantity_mod = quantity_base / 100.f;
+				int quantity_food = dataTableGetInt( FOOD_DATA, food_index, "QUANTITY" );
+				quantity = (int) ( quantity_mod * quantity_food );
+			}
+
+			// QUANTITY BONUS (Drinks Only)
+			if ( itemAttributes[i].name.getAsciiId().equals( "quantity_bonus" ) )
+			{
+				int quantity_bonus_base = (int) itemAttributes[i].currentValue;
+				switch ( quantity_bonus_base )
+				{
+					case 1:
+						quantity_bonus = 1.f;
+						break;
+					case 2:
+						quantity_bonus = 1.5f;
+						break;
+					case 3:
+						quantity_bonus = 2.25f;
+						break;
+					case 4:
+						quantity_bonus = 3.f;
+						break;
+				}
+			}
+
+			// FILLING
+			if ( itemAttributes[i].name.getAsciiId().equals("filling") )
+			{
+				int filling_base = (int) itemAttributes[i].currentValue;
+				float filling_mod = filling_base / 100.f;
+				int filling_food = dataTableGetInt( FOOD_DATA, food_index, "FILLING" );
+				filling = (int) ( filling_mod * filling_food );
+			}
+
+			// NUTRITION / Effectiveness
+			if ( itemAttributes[i].name.getAsciiId().equals( "nutrition" ) )
+			{
+				int effectiveness_base = (int) itemAttributes[i].currentValue;
+				effectiveness = effectiveness_base / 100.f;
+			}
+
+			// FLAVOR / Duration
+			if ( itemAttributes[i].name.getAsciiId().equals( "flavor" ) )
+			{
+				int duration_base = (int) itemAttributes[i].currentValue;
+				duration = duration_base / 100.f;
+			}
+
+			// RACE RESTRICTION
+			if ( itemAttributes[i].name.getAsciiId().equals( "race_restriction" ) )
+			{
+				race_restriction = (int) itemAttributes[i].currentValue;
+			}
+
+			// STOMACH
+			if ( itemAttributes[i].name.getAsciiId().equals( "stomach" ) )
+			{
+				stomach = (int) itemAttributes[i].currentValue;
+			}
+		}
+	}
+
+	// Fix up quantity with the quantity_bonus.
+	quantity = (int) (quantity*quantity_bonus);
+
+	// Check to see if we have a bonus applied by an additive.
+	obj_id self = getSelf();
+	if ( hasObjVar( self, "crafting_components.additive.add_faction" ) )
+	{
+		// Copy faction alignment to food prototype.
+		setObjVar( prototype, "faction", getIntObjVar( self, "crafting_components.additive.add_faction" ) );
+	}
+	if ( hasObjVar( self, "crafting_components.additive.add_quantity" ) )
+	{
+		// Apply the % increase to our quantity.
+		float quantity_additive_mod = getIntObjVar( self, "crafting_components.additive.add_quantity" ) / 100.f;
+		int new_quantity = (int) (quantity + quantity*quantity_additive_mod);
+		quantity = new_quantity;
+	}
+	if ( hasObjVar( self, "crafting_components.additive.add_filling" ) )
+	{
+		// Apply the % decrease to our filling.
+		int filling_additive_mod = getIntObjVar( self, "crafting_components.additive.add_filling" );
+		filling = (int) (filling - filling*(filling_additive_mod / 100.f));
+		if ( filling <= 0 )
+			filling = 1;
+	}
+	if ( hasObjVar( self, "crafting_components.additive.add_nutrition" ) )
+	{
+		// Apply the % increase to our effectiveness.
+		int nutrition_additive_mod = getIntObjVar( self, "crafting_components.additive.add_nutrition" );
+		effectiveness = effectiveness + effectiveness*(nutrition_additive_mod / 100.f);
+	}
+	if ( hasObjVar( self, "crafting_components.additive.add_flavor" ) )
+	{
+		// Apply the % increase to our duration.
+		int flavor_additive_mod = getIntObjVar( self, "crafting_components.additive.add_flavor" );
+		duration = duration + duration*(flavor_additive_mod / 100.f);
+	}
+
+	// Write out our quantity.
+	setCount( prototype, quantity );
+
+	// Write out our filling.
+	if ( filling > 100 )
+		filling = 100;
+	fillStomach( prototype, filling, stomach );
+
+	// Write out any race restriction.
+	if ( race_restriction != -1 )
+		setObjVar( prototype, "race_restriction", race_restriction );
+
+	string buff_name = dataTableGetString( FOOD_DATA, food_index, "BUFF_NAME" );
+	int pet_only = dataTableGetInt( FOOD_DATA, food_index, "PET_ONLY");
+
+	if ( buff_name == null || buff_name.equals("") )
+	{
+		// This is a component
+		setCount( prototype, 0 );
+		return;
+	}
+	else
+	{
+		// This is a food buff item
+		setObjVar( prototype, "buff_name", buff_name );
+	}
+
+	if(pet_only == 1)
+		setObjVar( prototype, "pet_only", 1);
+
+	setObjVar(prototype, "effectiveness", effectiveness);
+	setObjVar(prototype, "duration", duration);
+}
+
+void fillStomach( obj_id prototype, int filling, int idx )
+{
+	int[] stomach = {0, 0, 0};
+	stomach[idx] = filling;
+	setObjVar( prototype, "filling", stomach );	// Suppress linting - We know this array will always be at least three elements long
+}

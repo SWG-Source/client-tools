@@ -1,0 +1,358 @@
+// ======================================================================
+//
+// terminal.terminal_pob_ship
+//
+// Copyright 2004 Sony Online Entertainment
+//
+// ======================================================================
+
+include library.space_transition;
+include library.utils;
+
+// ======================================================================
+
+const string_id SID_ACTIVATE_FALSE      = new string_id("space/space_terminal", "activate_unencoded");
+const string_id SID_ACTIVATE_WAYPOINT      = new string_id("space/space_terminal", "create_waypoint");
+const string_id SID_ACTIVATE_EVENT     = new string_id("space/space_terminal", "activate_event");
+const string_id SID_NO_USE     = new string_id("space/space_terminal", "no_use");
+
+// ======================================================================
+
+const string[] VALID_REGIONS =
+	{"space_tatooine",
+	"space_corellia",
+	"space_dantooine",
+	"space_dathomir",
+	"space_endor",
+	"space_lok",
+	"space_naboo",
+	"space_yavin4"};
+
+trigger OnDestroy()
+{
+
+	if(!isIdValid(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(hasObjVar(self, "waypoint"))
+	{
+		if(isIdValid(getObjIdObjVar(self, "waypoint")))
+		{
+			obj_id player = utils.getContainingPlayer(self);
+			obj_id waypoint = getObjIdObjVar(self, "waypoint");
+			if(isIdValid(player) && exists(player) && (isIdValid(waypoint)))
+			{
+				destroyWaypointInDatapad(waypoint, player);
+			}
+		}		
+	
+	}
+
+	// Check to see if we have a waypoint listed. If we do, deactivate and destroy.
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if(!isIdValid(player) || !isIdValid(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	boolean isNested = true;
+	// Item must be in players inventory
+	if(!utils.isNestedWithin(self, player))
+	{
+		isNested = false;
+	}
+	
+	boolean readyForEvent = false;
+	if(hasObjVar(self, "region") && hasObjVar(self, "location") && hasObjVar(self, "difficulty"))
+	{
+		if(!isRegionValid(self))
+		{
+			// Item is busted
+			return SCRIPT_CONTINUE;	
+		}
+		readyForEvent = true;
+		
+	}	
+	
+	// Verify that we are in a space ship and that we are in the pilots chair
+	boolean inSpaceShip = false;
+	obj_id ship = space_transition.getContainingShip(player);
+	if(isSpaceScene() && isIdValid(ship))
+	{
+		obj_id pilot = getPilotId(ship);
+
+		if(player == pilot)
+		{
+			inSpaceShip = true;	
+		}
+	}
+	if(isNested == false)
+	{
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_ACTIVATE_FALSE);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(readyForEvent == false)
+	{
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_ACTIVATE_FALSE);
+	}
+
+	if(readyForEvent == true && inSpaceShip == false)
+	{
+		mi.addRootMenu(menu_info_types.ITEM_USE, SID_ACTIVATE_WAYPOINT);
+	}
+
+	if(readyForEvent == true && inSpaceShip == true)
+	{
+
+		if(atLocation(self, player))
+		{
+			mi.addRootMenu(menu_info_types.ITEM_USE, SID_ACTIVATE_EVENT);
+		}
+		
+		else
+		{
+			mi.addRootMenu(menu_info_types.ITEM_USE, SID_ACTIVATE_WAYPOINT);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!isIdValid(player) || !isIdValid(self) || item <= 0)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Item must be in players inventory
+	if(!utils.isNestedWithin(self, player))
+	{
+		sendSystemMessage(player, "The Burst Generator must be used from your inventory.", null);
+		return SCRIPT_CONTINUE;
+	}
+
+	// Verify that we are in a space ship and that we are in the pilots chair
+	boolean inSpaceShip = false;
+	obj_id ship = space_transition.getContainingShip(player);
+	if(isSpaceScene() && isIdValid(ship))
+	{
+		obj_id pilot = getPilotId(ship);
+
+		if(player == pilot)
+		{
+			inSpaceShip = true;	
+		}
+	}
+
+	if(item == menu_info_types.ITEM_USE && !hasObjVar(self, "difficulty"))
+	{
+		sendSystemMessage(player, "You cannot use the Burst Generator until it has been encoded with a convoy flight plan.", null);		
+	}
+	
+	if(item == menu_info_types.ITEM_USE && hasObjVar(self, "difficulty") && !atLocation(self, player))
+	{
+		LOG("mikkel-space","calling create WP");
+		createWaypoint(self, player);
+	}
+
+	if(item == menu_info_types.ITEM_USE && atLocation(self, player))
+	{
+		if(utils.hasScriptVar(player, "interdiction_beacon"))
+		{
+			obj_id oldBeacon = utils.getObjIdScriptVar(self, "interdiction_beacon");
+			if(isIdValid(oldBeacon) && exists(oldBeacon))
+			{
+				return SCRIPT_CONTINUE;
+			}
+			
+			utils.removeScriptVar(self, "interdiction_beacon");
+			
+		}
+		startEvent(self, player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	
+	int idx = utils.getValidAttributeIndex(names);
+
+	if(hasObjVar(self, "difficulty"))
+	{
+		names[idx] = "difficulty";
+		int difficulty = getIntObjVar(self, "difficulty");
+		attribs[idx] = " " + difficulty;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	
+	if(hasObjVar(self, "region"))
+	{
+		
+		names[idx] = "region";
+		string region = getStringObjVar(self, "region");
+		string_id planetName = new string_id("planet_n", region);
+		attribs[idx] = " " + localize(planetName);
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}	
+
+	if(hasObjVar(self, "faction"))
+	{
+		
+		names[idx] = "faction";
+		string faction = getStringObjVar(self, "faction");
+		attribs[idx] = " " + faction;
+		idx++;
+		if (idx >= names.length)
+			return SCRIPT_CONTINUE;
+	}
+	
+	if(idx >= names.length)
+		return SCRIPT_CONTINUE;
+
+	return SCRIPT_CONTINUE;
+}
+
+void createWaypoint(obj_id self, obj_id player)
+{
+	if(!isIdValid(player) || !isIdValid(self))
+	{
+		return;
+	}
+
+	//First we get rid of any existing objvars to avoid filling the players datapad.
+	if(hasObjVar(self, "waypoint"))
+	{
+		obj_id waypoint = getObjIdObjVar(self, "waypoint");
+		if(isIdValid(waypoint))
+		{
+			destroyWaypointInDatapad(waypoint, player);
+		}		
+	
+	}
+	
+	// Get the region off the item
+	string region = getStringObjVar(self, "region");
+	if(region == null || region.length() <= 0 || !isRegionValid(self))
+	{
+		return;
+	}
+
+	location loc = getLocationObjVar(self, "location");
+	obj_id waypoint = createWaypointInDatapad(player, loc);
+	
+	if(isIdValid(waypoint))
+	{
+		setWaypointVisible(waypoint, true);
+		setWaypointActive(waypoint, true);
+		setWaypointName(waypoint, "Interdiction Location");
+		setWaypointColor(waypoint, "space");
+		setObjVar(self, "waypoint", waypoint);
+	}
+
+	return;
+
+}
+
+boolean isRegionValid(obj_id self)
+{
+	if(!isIdValid(self))
+	{
+		return false;
+	}
+
+	string region = getStringObjVar(self, "region");
+	boolean isRegionValid = false;
+	for(int i=0; i<VALID_REGIONS.length; i++)
+	{
+		if(region == VALID_REGIONS[i])
+		{
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+boolean atLocation(obj_id self, obj_id player)
+{
+	if(!isIdValid(player) || !isIdValid(self))
+	{
+		return false;
+	}
+	
+	obj_id ship = space_transition.getContainingShip(player);
+	location eventLoc = getLocationObjVar(self, "location");
+	
+	float fltDistance = getDistance(getLocation(ship), eventLoc);
+	if(fltDistance < 200 && fltDistance >= 0)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+void startEvent(obj_id self, obj_id player)
+{
+	if(!isIdValid(player) || !isIdValid(self))
+	{
+		return;
+	}
+	
+	string region = getStringObjVar(self, "region");
+	if(getCurrentSceneName() == region || !atLocation(self, player))
+	{
+		return;
+	}
+
+	
+	
+	// get the diff off the item
+	int difficulty = getIntObjVar(self, "difficulty");
+	if(difficulty <= 0)
+	{
+		return;
+	}
+	
+	// Method to spawn object in front of player
+	transform gloc = getTransform_o2w(space_transition.getContainingShip(player));
+
+	// Move the starting spot out in front of us.
+	float dist = rand(50.f, 100.f);
+	vector n = gloc.getLocalFrameK_p().normalize().multiply(dist); // Project a point out in front of us.
+	gloc = gloc.move_p(n);
+
+	// Find a spot on the IJ plane for deviation in a cone shape.
+	vector vi = gloc.getLocalFrameI_p().normalize().multiply(rand(-20.f, 20.f));
+	vector vj = gloc.getLocalFrameJ_p().normalize().multiply(rand( -20.f, 20.f));
+	vector vd = vi.add(vj);
+	gloc = gloc.move_p(vd);
+
+	obj_id spaceBeacon = createObject("object/tangible/space/mission_objects/interdiction_beacon.iff", gloc, null);
+
+	setObjVar(spaceBeacon, "player", player);
+	setObjVar(spaceBeacon, "difficulty", difficulty);
+	attachScript(spaceBeacon, "space.quest_logic.piracy");
+	LOG("mikkel-space", "created bacon, OID is: "+spaceBeacon);
+	utils.setScriptVar(player, "interdiction_beacon", spaceBeacon);
+	messageTo(spaceBeacon, "startBeacon", null, 1.f, false);
+	destroyObject(self);
+}

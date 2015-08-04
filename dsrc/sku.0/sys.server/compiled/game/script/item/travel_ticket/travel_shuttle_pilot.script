@@ -1,0 +1,202 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        travel.scriptlib
+ * Description:  library of methods for the traveling system.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.travel;
+include library.player_structure;  // For time conversion
+include library.city;
+include library.groundquests;
+include library.utils;
+include library.sui;
+include library.prose;
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_BOARD_SHUTTLE           = new string_id("travel", "board_shuttle");
+const string_id SID_NEXT_SHUTTLE			= new string_id("travel", "next_shuttle");
+const string_id SID_ON_PET_OR_VEHICLE	    = new string_id("travel/travel", "on_pet_or_vehicle");
+
+const string_id SID_BANNED_TICKET			 = new string_id("city/city", "banned_services");
+const string_id SID_WRONG_STATE			= new string_id("error_message","wrong_state");
+
+const string_id SID_OBTAIN_TRACKING_DATA = new string_id("quest/force_sensitive/fs_crafting", "tracking_data_menu_obtain_data");
+const string_id SID_OBTAIN_DATA_TITLE	 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_title");
+const string_id SID_OBTAIN_DATA_MSG 	 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_msg");
+const string_id SID_OKAY_BUTTOM			 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_purchase_data");
+const string_id SID_CANCEL_BUTTON		 = new string_id ("quest/force_sensitive/fs_crafting", "tracking_data_cancel_button");
+
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	// Remove all of the scripts.  This is a hack until we get the real pilot template.
+	detachScript (self, "ai.ai");
+	detachScript (self, "ai.creature_combat");
+	detachScript (self, "skeleton.humanoid");
+	detachScript (self, "systems.combat.combat_actions");
+	detachScript (self, "systems.combat.credit_for_kills");
+	stop (self);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnUnloadedFromMemory()
+{
+	obj_id starport = travel.getStarportFromTerminal(self);
+	LOG("LOG_CHANNEL", "travel_shuttle_pilot::OnUnloadedFromMemory -- " + self + " from starport " + starport);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	menu_info_data data = mi.getMenuItemByType (menu_info_types.ITEM_USE);
+
+	obj_id starport = travel.getStarportFromTerminal(self);
+	
+	if (data != null)
+		data.setServerNotify (true);
+	else
+	{
+		if (travel.isShuttleAvailable(starport))
+		{
+			mi.addRootMenu (menu_info_types.ITEM_USE, SID_BOARD_SHUTTLE);
+		}
+		else if (travel.qualifiesForGcwTravelPerks(player))
+		{
+			// player qualifies to bypass the shuttle timer
+			mi.addRootMenu (menu_info_types.ITEM_USE, SID_BOARD_SHUTTLE);
+
+			sendSystemMessage(player, "Bypassing the shuttle timer because you are a GCW officer and your faction currently controls the planet.", "");
+		}
+		else
+		{
+			mi.addRootMenu (menu_info_types.ITEM_USE, SID_NEXT_SHUTTLE);
+		}
+	}
+	
+	if ( !travel.isShuttlePort(starport) )
+	{
+		if ( groundquests.isTaskActive(player, "star_destroyer_intro_rebel", "star_destroyer_intro_01") ||
+		groundquests.isTaskActive(player, "star_destroyer_intro_neutral", "star_destroyer_intro_01") )
+		{
+			mi.addRootMenu (menu_info_types.SERVER_ITEM_OPTIONS, SID_OBTAIN_TRACKING_DATA);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (item == menu_info_types.ITEM_USE)
+	{
+
+		if (isIdValid(getMountId(player)))
+		{
+			LOG("LOG_CHANNEL", player + " -> TRAVEL_SHUTTLE_PILOT - OnObjectMenuSelect - USE - You cannot board the shuttle when mounted on a pet/vehicle?");
+			sendSystemMessage(player, SID_ON_PET_OR_VEHICLE);
+			return SCRIPT_CONTINUE;
+		}
+
+		obj_id starport = travel.getStarportFromTerminal(self);
+
+		if ( player_structure.isCivic( starport ) )
+		{
+			// See if we are city banned.
+			int city_id = getCityAtLocation( getLocation(starport), 0 );
+			if ( city.isCityBanned( player, city_id ) )
+			{
+				// Can't buy a ticket.
+				sendSystemMessage( player, SID_BANNED_TICKET );
+				return SCRIPT_CONTINUE;
+			}
+		}
+
+		if (travel.isTravelBlocked(player, false))
+			return SCRIPT_CONTINUE;
+
+		if (travel.isShuttleAvailable(starport))
+		{
+			obj_id shuttle = travel.getShuttleFromStarport(starport);
+			queueCommand(player, ##"boardShuttle", shuttle, "", COMMAND_PRIORITY_DEFAULT);
+		}
+		else if (travel.qualifiesForGcwTravelPerks(player))
+		{
+			// player qualifies to bypass the shuttle timer
+			obj_id shuttle = travel.getShuttleFromStarport(starport);
+			queueCommand(player, ##"boardShuttle", shuttle, "", COMMAND_PRIORITY_DEFAULT);
+
+			sendSystemMessage(player, "Bypassing the shuttle timer because you are a GCW officer and your faction currently controls the planet.", "");
+		}
+		else
+		{
+			int time_stamp = travel.getShuttleTimestamp(starport);
+			int air_time = travel.getAirTime(starport);
+
+			int arrival_time = (air_time - (getGameTime() - time_stamp));
+			if (arrival_time > 0)
+			{
+				string_id strSpam = new string_id("travel/travel", "shuttle_board_delay");	//-new. Localized 7/11/05-rct
+				prose_package pp = prose.getPackage(strSpam, arrival_time);
+				sendSystemMessageProse(player, pp);
+			}
+			else
+			{
+				LOG("LOG_CHANNEL", player + " ->The next shuttle is about to begin boarding.");
+				//sendSystemMessageTestingOnly(player, "The next shuttle is about to begin boarding.");	//- original, BAD, UNLOCALIZED!	
+
+				string_id strSpam = new string_id("travel/travel", "shuttle_begin_boarding");	//-new. Localized 7/11/05-rct
+				sendSystemMessage(player, strSpam);				
+			}
+		}
+	}
+	else if ( item == menu_info_types.SERVER_ITEM_OPTIONS )
+	{
+		if ( groundquests.isTaskActive(player, "star_destroyer_intro_rebel", "star_destroyer_intro_01") ||
+		groundquests.isTaskActive(player, "star_destroyer_intro_neutral", "star_destroyer_intro_01") )
+		{
+			utils.setScriptVar(player, "crafting4.starportDroid", self);
+			
+			string TITLE_MSG = utils.packStringId(SID_OBTAIN_DATA_TITLE);
+			string TEXT_MSG = utils.packStringId(SID_OBTAIN_DATA_MSG);
+			string OK_BUTTON = utils.packStringId(SID_OKAY_BUTTOM);
+			string CANCEL_BUTTON = utils.packStringId(SID_CANCEL_BUTTON);
+
+			// Create the dialog page.
+			int pid = sui.createSUIPage( sui.SUI_MSGBOX, player, player, "handlePurchaseTrackingData" );
+
+			// Add elements text.
+			setSUIProperty(pid, "", "Size", "500,250");
+			setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, TITLE_MSG );
+			setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, TEXT_MSG);
+
+			// Add buttons.
+			sui.msgboxButtonSetup(pid, sui.YES_NO);
+			setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, OK_BUTTON);
+			setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, CANCEL_BUTTON);
+
+			utils.setScriptVar(player, "travel_voucher.travelVoucherSui", pid);
+
+			// Show dialog.
+			sui.showSUIPage( pid );
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/

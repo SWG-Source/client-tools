@@ -1,0 +1,333 @@
+include library.ai_lib;
+include library.chat;
+include library.planetary_map;
+
+const string FACE_TO_VOLUME_NAME = "faceToTriggerVolume";
+const string EVIDENCE_ITEM_SEAN_1 = "object/tangible/loot/quest/sean_questp_ctestimony.iff";
+const string EVIDENCE_ITEM_SEAN_2 = "object/tangible/loot/quest/sean_questp_mdisk.iff";
+const string EVIDENCE_ITEM_SEAN_3 = "object/tangible/loot/quest/sean_questp_htestimony.iff";
+const string EVIDENCE_ITEM_VICTOR_1 = "object/tangible/loot/quest/victor_questp_testimony.iff";
+const string EVIDENCE_ITEM_VICTOR_2 = "object/tangible/loot/quest/victor_questp_jregistry.iff";
+const string EVIDENCE_ITEM_VICTOR_3 = "object/tangible/loot/quest/victor_questp_receipt.iff";
+
+const string VARNAME_ELECTION_STATUS = "strElectionStatus";
+const string VARNAME_ELECTION_WINNER = "strElectionWinner";
+const string VARNAME_ELECTION_NUM = "intElectionNum";
+const string OBJVAR_TATOOINE_CAPITOL = "bestine.tatooineCapitolObjId";
+
+trigger OnAttach()
+{	
+	createTriggerVolume( FACE_TO_VOLUME_NAME, 8.0f, true );
+	
+	// if is an NPC and is the governor, Tour Aryon, setup vote totals.
+	if ( isMob(self) )
+	{
+		string creatureName = ai_lib.getCreatureName(self);
+		if ( creatureName == "tour_aryon" )
+		{
+			messageTo(self, "handleGovernorSetup", null, 9, false);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	// update election status
+	messageTo(self, "handlePoliticianEventNpcSetup", null, 18, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{	
+	createTriggerVolume( FACE_TO_VOLUME_NAME, 8.0f, true );
+	
+	// if is an NPC and is the governor, Tour Aryon, setup vote totals.
+	if ( isMob(self) )
+	{
+		string creatureName = ai_lib.getCreatureName(self);
+		if ( creatureName == "tour_aryon" )
+		{
+			messageTo(self, "handleGovernorSetup", null, 9, false);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	// update election status
+	messageTo(self, "handlePoliticianEventNpcSetup", null, 150, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id breacher )
+{
+	if ( isMob(self) )
+	{
+		if ( isPlayer( breacher ) )
+		{
+			if ( volumeName == FACE_TO_VOLUME_NAME )
+			{
+				if ( !isInNpcConversation(self) )
+				{
+					if ( canSee( self, breacher ) )
+					{
+						faceTo( self, breacher );
+					}
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// ************** Bestine Governor Message Handlers and Triggers
+
+trigger OnGiveItem(obj_id item, obj_id player)
+{
+	if ( isMob(self) )
+	{
+		string creatureName = ai_lib.getCreatureName(self);
+		if ( creatureName == "tour_aryon" )
+		{
+			string itemTemplate = getTemplateName(item);
+			if ( (itemTemplate == EVIDENCE_ITEM_SEAN_1) || (itemTemplate == EVIDENCE_ITEM_SEAN_2) ||
+				(itemTemplate == EVIDENCE_ITEM_SEAN_3) || (itemTemplate == EVIDENCE_ITEM_VICTOR_1) ||
+				(itemTemplate == EVIDENCE_ITEM_VICTOR_2) || (itemTemplate == EVIDENCE_ITEM_VICTOR_3) )
+			{
+				string_id spokenMsg = new string_id ("bestine", "give_governor_item");
+				chat.chat(self, spokenMsg);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// Governor, Tour Aryon, setup - getting vote totals from master object.
+// Only used when the governor is respawned.
+messageHandler handleGovernorSetup()
+{
+	if ( !isMob(self) )
+		return SCRIPT_CONTINUE;
+	
+	string creatureName = ai_lib.getCreatureName(self);
+	if ( creatureName != "tour_aryon" )
+		return SCRIPT_CONTINUE;
+	
+	
+	dictionary msgData = new dictionary();
+	msgData.put( "objRequester", self);
+	obj_id tatooineCapitol = getObjIdObjVar(self, OBJVAR_TATOOINE_CAPITOL);
+	
+	messageTo(tatooineCapitol, "handleGovernorSetupRequest", msgData, 2, false);
+	return SCRIPT_CONTINUE;
+}
+
+// handles the vote totals setup response from the master object.
+// Only used when the governor is respawned.
+messageHandler handleGovernorSetupResponse()
+{
+	clearElectionObjvars(self);
+	
+	// set election objvars.
+	// electionStatus will either be "electionStarted" or "electionEnded"
+	string electionStatus = params.getString(VARNAME_ELECTION_STATUS);
+	string electionStatusObjvar = "bestine." + electionStatus;
+		
+	setObjVar(self, electionStatusObjvar, params.getInt(VARNAME_ELECTION_NUM));
+	setObjVar(self, "bestine.electionWinner", params.getString(VARNAME_ELECTION_WINNER));
+	setObjVar(self, "bestine.votesForSean", params.getInt("intVotesForSean"));
+	setObjVar(self, "bestine.votesForVictor", params.getInt("intVotesForVictor"));
+	
+	int timeNextElectionStarts = params.getInt("timeNextElectionStarts");
+	if ( timeNextElectionStarts > 0 )
+		setObjVar(self, "bestine.timeNextElectionStarts", timeNextElectionStarts);
+	
+	// update the master object with the vote totals every 10 minutes.	
+	messageTo(self, "handleGovernorDataStorage", null, 600, false);
+	return SCRIPT_CONTINUE;
+}
+
+// Sends current vote totals from the governor, Tour Aryon, so that
+// they will be persisted on the master object.
+// Called every 10 minutes (600 seconds) during the election.
+messageHandler handleGovernorDataStorage()
+{
+	if ( hasObjVar(self, "bestine.electionStarted") )
+	{
+		int votesForSean = 0;
+		int votesForVictor = 0;
+		if ( hasObjVar(self, "bestine.votesForSean") )
+			votesForSean = getIntObjVar(self, "bestine.votesForSean");
+			
+		if ( hasObjVar(self, "bestine.votesForVictor") )
+			votesForVictor = getIntObjVar(self, "bestine.votesForVictor");
+		
+		dictionary msgData = new dictionary();
+		msgData.put("objRequester", self);
+		msgData.put("intVotesForSean", votesForSean);
+		msgData.put("intVotesForVictor", votesForVictor);
+		
+		obj_id tatooineCapitol = getObjIdObjVar(self, OBJVAR_TATOOINE_CAPITOL);
+		
+		messageTo(tatooineCapitol, "processGovernorDataStorageRequest", msgData, 1, false);
+		messageTo(self, "handleGovernorDataStorage", null, 600, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleElectionStateChangeGovernorAlert()
+{
+	clearElectionObjvars(self);
+	
+	// get new election status data
+	string electionStatus = params.getString(VARNAME_ELECTION_STATUS);
+	string electionWinner = params.getString(VARNAME_ELECTION_WINNER);
+	int electionNum = params.getInt(VARNAME_ELECTION_NUM);
+	
+	int timeNextElectionStarts = params.getInt("timeNextElectionStarts");
+	if ( timeNextElectionStarts > 0 )
+	{
+		setObjVar(self, "bestine.timeNextElectionStarts", timeNextElectionStarts);
+	}
+	else
+	{
+		if ( hasObjVar(self, "bestine.timeNextElectionStarts" ) )
+			removeObjVar(self, "bestine.timeNextElectionStarts");
+	}
+	
+	dictionary msgData = new dictionary();
+	
+	// if the election has ended, determine the winner.
+	if ( electionStatus == "electionEnded" )
+	{
+		int votesForSean = getIntObjVar(self, "bestine.votesForSean");
+		int votesForVictor = getIntObjVar(self, "bestine.votesForVictor");
+		
+		// Sean Wins!
+		if ( votesForSean > votesForVictor )
+		{
+			electionWinner = "Sean";
+		}
+		
+		// Victor wins!
+		if ( votesForVictor > votesForSean )
+		{
+			electionWinner = "Victor";			
+		}
+		
+		// Drat! A tie!! Um... er... it's a fixed election!!
+		if ( votesForSean == votesForVictor )
+		{
+			int chance = rand(1,2);
+			if ( chance == 1 )
+			{
+				electionWinner = "Sean";
+			}
+			else
+			{
+				electionWinner = "Victor";
+			}
+		}
+		
+		removeObjVar(self, "bestine.votesForSean");
+		removeObjVar(self, "bestine.votesForVictor");
+	}
+	
+	// if the election is beginning, initialize election.
+	if ( electionStatus == "electionStarted" )
+	{
+		messageTo(self, "handleGovernorDataStorage", null, 600, false);
+		
+	}
+	
+	string electionStatusObjvar = "bestine." + electionStatus;
+	setObjVar(self, electionStatusObjvar, electionNum);
+	setObjVar(self, "bestine.electionWinner", electionWinner);
+	
+	msgData.put(VARNAME_ELECTION_WINNER, electionWinner);
+	
+	obj_id tatooineCapitol = getObjIdObjVar(self, OBJVAR_TATOOINE_CAPITOL);	
+	messageTo(tatooineCapitol, "handleSetElectionWinner", msgData, 2, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+// *********** General politician event Message Handlers
+
+// Get current status of the elections when the NPC is respawned.
+messageHandler handlePoliticianEventNpcSetup()
+{
+	if ( hasObjVar(self, OBJVAR_TATOOINE_CAPITOL) )
+	{
+		dictionary msgData = new dictionary();
+		msgData.put( "objRequester", self);
+		obj_id tatooineCapitol = getObjIdObjVar(self, OBJVAR_TATOOINE_CAPITOL);
+		
+		listenToMessage(tatooineCapitol, "handlePoliticianEventStatusResponse");
+		messageTo(tatooineCapitol, "handlePoliticianEventStatusRequest", msgData, 2, false);
+	}
+	else
+	{
+		messageTo(self, "checkForCapitolBuilding", null, 1, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler checkForCapitolBuilding()
+{
+	// The politician event master object is created by the capitol building.
+	map_location tatooineCapitol = planetary_map.findClosestLocation( self, "capitol", "" );
+	obj_id tatooinCapitolObjId = tatooineCapitol.getLocationId();
+	
+	deltadictionary dctScriptVars = self.getScriptVars();
+	int numCapitolChecks = dctScriptVars.getInt("numCapitolChecks");
+	if ( !isIdValid(tatooinCapitolObjId) )
+	{
+		// only check a few times
+		if ( numCapitolChecks < 4)
+		{
+			numCapitolChecks = numCapitolChecks + 1;
+			dctScriptVars.put("numCapitolChecks", numCapitolChecks);
+			messageTo(self, "checkForCapitolBuilding", null, 60, false);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			LOG("DESIGNER_FATAL", "BESTINE POLITICIAN EVENT: Could not find registered capitol building on Tatooine.");
+			return SCRIPT_CONTINUE;
+		}
+	}
+	else
+	{
+		setObjVar(self, OBJVAR_TATOOINE_CAPITOL, tatooinCapitolObjId);
+		messageTo(self, "handlePoliticianEventNpcSetup", null, 1, false);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+// response received about election status.
+messageHandler handlePoliticianEventStatusResponse()
+{
+	clearElectionObjvars(self);
+	
+	// set election objvars.
+	// electionStatus will either be "electionStarted" or "electionEnded"
+	string electionStatus = params.getString(VARNAME_ELECTION_STATUS);
+	string electionStatusObjvar = "bestine." + electionStatus;
+	setObjVar(self, electionStatusObjvar, params.getInt(VARNAME_ELECTION_NUM));
+	setObjVar(self, "bestine.electionWinner", params.getString(VARNAME_ELECTION_WINNER));
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+// ************* Functions
+void clearElectionObjvars(obj_id self)
+{
+	if (hasObjVar(self, "bestine.electionStarted") )
+	removeObjVar(self, "bestine.electionStarted");
+			
+	if (hasObjVar(self, "bestine.electionEnded") )
+	removeObjVar(self, "bestine.electionEnded");
+	
+	if (hasObjVar(self, "bestine.electionWinner") )
+	removeObjVar(self, "bestine.electionWinner");
+	
+	return;
+}

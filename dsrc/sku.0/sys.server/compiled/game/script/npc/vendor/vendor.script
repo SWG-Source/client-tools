@@ -1,0 +1,275 @@
+include library.utils;
+include library.sui;
+include library.trial;
+include library.static_item;
+include library.chat;
+include library.factions;
+
+const string VENDOR_TABLE_DIRECTORY = "datatables/item/vendor/";
+const string VENDOR_TABLE_OBJVAR = "item.vendor.vendor_table";
+const string VENDOR_CONTAINER_TEMPLATE = "object/tangible/container/vendor/npc_only.iff";
+const string OBJECT_FOR_SALE_DEFAULT_SCRIPT = "npc.vendor.object_for_sale";
+const string OBJECT_FOR_SALE_CASH_COST = "item.object_for_sale.cash_cost";
+const string OBJECT_FOR_SALE_TOKEN_COST = "item.object_for_sale.token_cost";
+const string VENDOR_CONTAINER_LIST_OBJVAR = "item.vendor.container_list";
+const string VENDOR_TOKEN_TYPE = "item.token.type";
+
+/* These are in utils already
+const int COMMANDO 							= 1;
+const int SMUGGLER 							= 2;
+const int MEDIC 							= 3;
+const int OFFICER 							= 4;
+const int SPY 								= 5;
+const int BOUNTY_HUNTER 						= 6;
+const int FORCE_SENSITIVE 						= 7;
+const int TRADER 							= 8;
+const int ENTERTAINER 							= 9;
+*/
+//We fake it and treat factions as a class in this script. That means we can't restrict an item by both faction and class unfortunately.
+//WARNING Do not create a vendor that has a table with both faction and class specific items! Either one or the other.
+const int IMPERIAL 							= 10;
+const int REBEL 							= 11;
+
+// This probably fires before the script is even attached but it's here in the extremely unlikely event the NPC is persisted.
+trigger OnInitialize()
+{
+	messageTo(self, "handleInitializeVendor", null, 10, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	messageTo(self, "handleInitializeVendor", null, 10, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler handleInitializeVendor()
+{
+	// Bad.
+	if(!hasObjVar(self, VENDOR_TABLE_OBJVAR))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(isDead(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	string vendorTable = VENDOR_TABLE_DIRECTORY + getStringObjVar(self, VENDOR_TABLE_OBJVAR) + ".iff";
+
+	// May have up to 13 containers. 1 per class numbered as above and 0 for no class. Also, 1 per faction.
+	obj_id[] containerList = new obj_id[12];
+	obj_id vendorInventory = utils.getInventoryContainer(self);
+
+	int numRowsInTable = dataTableGetNumRows(vendorTable);
+
+	// Also bad.
+	if(numRowsInTable < 1)
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	// Check our datatable and make a container for each class if there's at least one item specified.
+	for(int i = 0; i < numRowsInTable; i++)
+	{
+		int reqClass = dataTableGetInt(vendorTable, i, "class");
+		
+		// If we're still in a valid range and no container created yet, make one.
+		if(reqClass > -1 && reqClass < containerList.length && !isIdValid(containerList[reqClass]) && !exists(containerList[reqClass]))
+		{
+			containerList[reqClass] = createObjectInInventoryAllowOverload(VENDOR_CONTAINER_TEMPLATE, self);
+		}
+	}
+	// All our containers exist now so go through the list again and create our sell inventory in the correct containers.
+	for(int row = 0; row < numRowsInTable; row++)
+	{
+		int reqClass = dataTableGetInt(vendorTable, row, "class");
+		string item = dataTableGetString(vendorTable, row, "item");
+		int creditCost = dataTableGetInt(vendorTable, row, "cash");
+		int[] tokenCost = new int[trial.HEROIC_TOKENS.length];
+
+		//If the vendor has a set token type, we're using a custom item (non heroic) for purchasing items. Note that this HAS to be a static item.
+		if (hasObjVar(self, VENDOR_TOKEN_TYPE))
+		{
+			string tokenList = getStringObjVar(self, VENDOR_TOKEN_TYPE);
+			string[] differentTokens = split(tokenList, ',');
+			tokenCost = new int[differentTokens.length];
+		}
+
+		for(int j = 0; j < tokenCost.length; j++)
+		{
+			if ( dataTableHasColumn(vendorTable, "token" + j) )
+				tokenCost[j] = dataTableGetInt(vendorTable, row, "token" + j);
+			else
+				tokenCost[j] = 0;
+		}
+
+		if( reqClass > -1 && reqClass < containerList.length )
+		{
+			for ( int idx = 0; idx < containerList.length; idx++ )
+			{
+				if( isIdValid(containerList[idx]) && exists(containerList[idx]) && ( reqClass == 0 || reqClass == idx) )
+				{
+					obj_id objectForSale = obj_id.NULL_ID;
+					if(static_item.isStaticItem(item))
+					{
+						objectForSale = static_item.createNewItemFunction(item, containerList[idx]);
+					}
+					else
+					{
+						objectForSale = createObjectOverloaded(item, containerList[idx]);
+					}
+					setObjVar(objectForSale, OBJECT_FOR_SALE_CASH_COST, creditCost);
+					setObjVar(objectForSale, OBJECT_FOR_SALE_TOKEN_COST, tokenCost);
+					//Using custom object as token for buying, for example Halloween coin.
+					if (hasObjVar(self, VENDOR_TOKEN_TYPE))
+					{
+						string tokenList = getStringObjVar(self, VENDOR_TOKEN_TYPE);
+						setObjVar(objectForSale, VENDOR_TOKEN_TYPE, tokenList);
+					}
+
+					string datatableObjectScript = dataTableGetString(vendorTable, row, "script");
+					if ( datatableObjectScript != null && datatableObjectScript.length() > 0 )
+					{
+						if ( !hasScript(objectForSale, datatableObjectScript) )
+						{
+							attachScript(objectForSale, datatableObjectScript);
+						}
+					}
+					else
+					{
+						if ( !hasScript(objectForSale, OBJECT_FOR_SALE_DEFAULT_SCRIPT) )
+						{
+							attachScript(objectForSale, OBJECT_FOR_SALE_DEFAULT_SCRIPT);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	setObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR, containerList);
+	chat.chat(self, "I'm open for business");
+
+	//Customer Service Logs
+ 	if(exists(self))
+ 	{
+		string logData = "";
+		if(isMob(self))
+		{
+			string creatureTabName = getCreatureName(self);
+			if(creatureTabName != null && creatureTabName.length() > 0)
+			{
+				string creatureNameLoc = localize(new string_id("mob/creature_names", creatureTabName));
+				if(creatureNameLoc == null)
+				{
+					creatureNameLoc = "Unknown Creature Name";		
+				}
+
+				logData += "CREATURE NAME: ";
+				logData += creatureNameLoc + " ";
+				logData += "CREATURE CODE: ";
+				logData += creatureTabName + " ";	
+			}
+			else
+			{
+				logData += "Basic Creature Name Data Unknown! Template "+getTemplateName(self)+" ";
+			}			
+		}
+		else
+		{
+			logData += "Vendor Template "+getTemplateName(self)+" ";
+		}
+		
+		logData += "Vendor Table: " +vendorTable+ " ";
+		
+		if(hasObjVar(self, VENDOR_TOKEN_TYPE))
+		{
+			string tokenList = getStringObjVar(self, VENDOR_TOKEN_TYPE);
+			logData += "Token List: " +tokenList+ " ";
+		}
+		else
+		{
+			logData += "Token List: No Tokens ";
+		}
+
+		logData += "Location: "+getLocation(self) + " ";
+		
+		CustomerServiceLog("vendor_lite", "Vendor Lite setup completed. Vendor Data: "+logData);
+ 	}
+ 	
+
+	return SCRIPT_CONTINUE;
+}
+
+// Obviously it's no longer an SUI but keeping the same handler name so we don't need to screw with the conversations.
+messageHandler showInventorySUI()
+{
+	obj_id player = params.getObjId("player");
+
+	//If we have a hypothetically valid container for our class/faction open that one, otherwise we're opening container 0 (all items)
+	int profession = utils.getPlayerProfession(player);
+
+	if (factions.isImperial(player))
+		profession = IMPERIAL;
+
+	if (factions.isRebel(player))
+		profession = REBEL;
+
+	if(!hasObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_not_qualified"));
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] containerList = getObjIdArrayObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR);
+	obj_id container = null;
+
+	if(isIdValid(containerList[profession]) && exists(containerList[profession]))
+	{
+		container = containerList[profession];
+	}
+	else
+	{
+		container = containerList[0];
+		//Making another check if there's a list for the players class even if they are rebel or imperial.
+		//This means you CAN'T have both a faction container table and a class specific table on one vendor.
+		profession = utils.getPlayerProfession(player);
+		if(isIdValid(containerList[profession]) && exists(containerList[profession]))
+			container = containerList[profession];
+	}
+	// Yeah, something's wrong.
+	if(!isIdValid(container) || !exists(container))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_not_qualified"));
+		return SCRIPT_CONTINUE;
+	}
+
+	queueCommand(player, ##"openContainer", container, "", COMMAND_PRIORITY_DEFAULT);
+
+	return SCRIPT_CONTINUE;
+}
+
+// This opens the non-class specific buy box.
+messageHandler showNonClassInventory()
+{
+	obj_id player = params.getObjId("player");
+
+	obj_id[] containerList = getObjIdArrayObjVar(self, VENDOR_CONTAINER_LIST_OBJVAR);
+	obj_id container = containerList[0];
+
+	// Cryptic system message GO!
+	if(!isIdValid(container) || !exists(container))
+	{
+		sendSystemMessage(player, new string_id("set_bonus", "vendor_not_qualified"));
+		return SCRIPT_CONTINUE;
+	}
+
+	queueCommand(player, ##"openContainer", container, "", COMMAND_PRIORITY_DEFAULT);
+
+	return SCRIPT_CONTINUE;
+}

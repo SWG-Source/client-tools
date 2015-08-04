@@ -1,0 +1,409 @@
+/********************************************************************************************
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ ********************************************************************************************
+ * Title:        minefield_util.scriptlib
+ * Description:  Provides all scripts creating minefields global adjuster variables and all
+ *               major functionality for the creation and manipulation of minefields.
+ *
+ * @author       $Author: Matthew Kwid$
+ * @version      $Revision: $
+ *
+ ********************************************************************************************
+
+/***** FUNCTIONS *****************************************************************************
+boolean setMarkerData(obj_id marker)
+boolean buildMineField(obj_id marker)
+boolean explodeMine(obj_id player, int mineNumber, obj_id marker)
+boolean dealDamage(obj_id player, obj_id marker)
+void damageAdjuster(obj_id[] creatures, obj_id whoDoneIt, float damageRadius, int damage)
+void animateCreatureDamage(obj_id creature)
+void removeBreacherScripts(obj_id marker)
+boolean cleanUpBlastEffects(obj_id marker)
+
+/***** INCLUDES *****************************************************************************/
+include library.anims;
+include library.combat;
+
+/***** INHERITS *****************************************************************************/
+
+/***** CONSTANTS ****************************************************************************/
+ const float WARNING_BUFFER        = 16f; //the distance from the minefield which the player will see warning signals
+ const float MINE_ACTION_RADIUS    = 1.4f;//if you are within this radius the mine will explode
+ const float TIME_DELAY            = 8f;  //the amount of time in seconds that it takes the user to build a minefield
+ const float DESTROY_DELAY         = 12f;  //float - the amount of seconds before the minefield is destroyed upon last mine detonation
+ const int   WARNING_COUNT         = 10;   //the amount of warning effects that will fire when player enters minefield volume
+
+/***** DEFAULT CONSTANTS PRIOR TO SKILL INTEGRATION *****************************************/
+ const int   WIDTH_OF_FIELD        = 8;   //this can removed and the appropriate skill level could be
+ const int   LENGTH_OF_FIELD       = 8;	  //used to determine the area of the minefield
+ const int   MINE_DAMAGE           = 5;   //amount of damage mine will inflict
+ const int   NUMBER_OF_MINES       = 5;   //can be removed to allow appropriate skill level to determine the number of mines placed.
+ const int   AMOUNT_OWNER_CAN_MAKE = 4;   //the amount of minefields a player can make
+ const float MINE_DAMAGE_RADIUS    = 6f;  //if you are within this raduis of detonated mine, you will be damaged
+
+ /***** obj_var player data ***********************************************************************/
+ const string VAR_AMOUNT_OWNER_CAN_MAKE  = "amount_owner_can_make";  //int - amount of minefields owner can make
+ const string VAR_BREACHED_LIST          = "breached_list";          //obj_id[] - the marker obj_ids for the minefields that they are within
+ const string VAR_OWNED_LIST             = "owned_list";             //obj_id[] - the marker ids for the minefields the player owns
+ const string VAR_IS_CREATING            = "is_creating";            //boolean - whether the player is in the process of creating a minefield
+ const string VAR_IS_DESTROYING          = "is_destroying";          //boolean - whether the player is in the process of destroying a minefield
+ const string VAR_IS_KNEELING            = "is_kneeling";            //boolean - whether the player has been kneeling during the minefield creation process
+ const string VAR_MARKER_CREATED         = "marker_created";         //obj_id - marker obj_id to allow player to destroy the marker object in OnChangedPosture
+ const string VAR_OK_FOR_MESSAGE         = "ok_for_message";          //boolean - ok for the create or destroy messages to fire
+ const string VAR_PLAYER_IS_ANIMATING    = "player_is_animating";    //boolean - if the player is in a knocked down animation
+
+  /***** obj_var marker data ***********************************************************************/
+ const string VAR_IS_RANDOMLY_BUILT      = "is_randomly_built";      //boolean - specifies if the mines are to be placed randomly
+ const string VAR_IS_MARKER				 = "is_marker";				 //boolean - allows minefield_owner script to know that the invisible object is a minefield marker
+ const string VAR_IS_ACTIVATED           = "is_activated";           //boolean - if the minefield is activated and should detonate mines
+ const string VAR_IS_BUILT               = "is_built";               //boolean - if the minefield is built it should not be rebuilt in createMinefield()
+ const string VAR_OWNER                  = "minefield_owner";        //obj_id - the person that created the minefield
+ const string VAR_MINE_LOCATIONS         = "mine_locations";         //location[] - all locations where a player would encounter a mine
+ const string VAR_ACTIVE_MINE_COUNT      = "active_mine_count";      //int - the number of mines left to detonate
+ const string VAR_NUMBER_OF_MINES        = "number_of_mines";        //int - the amount of mines player is allowed to plant
+ const string VAR_MINE_DAMAGE            = "mine_damage";            //int - the amount of damage a mine will inflict
+ const string VAR_MINES_DETECTED         = "mines_detected";         //boolean - whether or not the mines have been detected
+ const string VAR_MINE_DAMAGE_RADIUS     = "mine_damage_radius";     //float - the amount of damage a mine will inflict
+ const string VAR_BLAST                  = "blast_blast_effect";     //obj_id - tracks the particle effects for clean up in destroyMineField()
+ const string VAR_MINE_OBJECTS           = "mine_objects";           //obj_id[] - tracks the mine objects placed for removal
+ const string VAR_WARNING_EFFECTS        = "blast_smoke_effect";     //obj_id[] - tracks obj_ids of smoke effects for cleanup
+ const string VAR_WARNING_COUNT          = "warning_count";          //int - the amount of smoke effects the player sees when warned of a minefield
+ const string VAR_LENGTH_OF_FIELD        = "length_of_field";        //int - the length of the minefield player is allowed to create
+ const string VAR_WIDTH_OF_FIELD         = "width_of_field";         //int - the width of the minefield player is allowed to create
+ const string VAR_WARNING_RADIUS         = "warning_radius";         //float - the size of the warning trigger volume
+ const string VAR_WARNING_EFFECTS_ACTIVE = "waring_effects_active";  //boolean - tracks if the warning effects need to go off
+ const string LAST_BOMB_LOCATION_NAME    = "last_bomb_location_name"; //string - tracks the last bomb detonated so that only one gets set off at a time
+ const string MINEFIELD_VOLUME_NAME      = "minefield_warning_area_volume";  //the trigger volume that surrounds the minefield to warn players
+ const string MARKER_OBJ_TEMPLATE        = "object/static/item/item_invisible.iff"; //invisible marker object
+ const string MINE_OBJ_TEMPLATE          = "object/weapon/mine/wp_mine_anti_vehicle.iff"; //the mines that will be shown to the players with detect mine
+
+ /***** script names ***********************************************************************/
+ const string MINEFIELD_SCRIPT          = "structures.general.military.minefields.minefield";
+ const string MINEFIELD_OWNER_SCRIPT    = "structures.general.military.minefields.minefield_owner";
+ const string MINEFIELD_BREACHER_SCRIPT = "structures.general.military.minefields.minefield_breacher";
+ const string BLAST_PARTICLE_TEMPLATE   = "object/static/particle/particle_sm_explosion.iff";
+ const string WARNING_PARTICLE_TEMPLATE = "object/static/particle/particle_mine_warning.iff";
+
+ /********************************************************************************************
+ * @brief setMarkerData puts all the data needed to run a minefield for a player on an invisible
+ *        minefield marker.  This function is called early on in the minefield creation process
+ *        and allows for skill specific code to change the parameters of the minefield being built.
+ *
+ * @param obj_id  marker
+ *
+ * @return isCreated
+*********************************************************************************************/
+ boolean setMarkerData(obj_id marker)
+ {
+ 	boolean isSet = false;
+
+	//***************************************************************************************************************
+	// ** SKILL SPECIFIC LOGIC GOES HERE AND RE-ASSIGNS THE DEFAULT CONST PARAMS BELOW PRIOR TO CREATING A MINEFIELD:
+	//***************************************************************************************************************
+
+	isSet = setObjVar(marker, VAR_IS_MARKER, true);  //makes sure that the invisible objects found in the world are actually minefield markers
+	isSet = setObjVar(marker, VAR_NUMBER_OF_MINES, NUMBER_OF_MINES );
+	isSet = setObjVar(marker, VAR_LENGTH_OF_FIELD, LENGTH_OF_FIELD);
+	isSet = setObjVar(marker, VAR_WIDTH_OF_FIELD, WIDTH_OF_FIELD);
+	isSet = setObjVar(marker, VAR_AMOUNT_OWNER_CAN_MAKE, AMOUNT_OWNER_CAN_MAKE);
+	isSet = setObjVar(marker, VAR_ACTIVE_MINE_COUNT, NUMBER_OF_MINES);
+	isSet = setObjVar(marker, VAR_MINE_DAMAGE, MINE_DAMAGE);
+	isSet = setObjVar(marker, VAR_MINE_DAMAGE_RADIUS, MINE_DAMAGE_RADIUS);
+	isSet = setObjVar(marker, VAR_WARNING_COUNT, WARNING_COUNT);
+
+	float radius = getFloatObjVar(marker, VAR_WIDTH_OF_FIELD) + WARNING_BUFFER;
+	isSet = setObjVar(marker, VAR_WARNING_RADIUS, radius);
+
+	#ifdef DEBUG
+		if(isSet)
+			debugSpeakMsg(marker, "###############ALL data on marker was set successfully#################");
+		else
+			debugSpeakMsg(marker, "###############ERROR: some data on the minefield marker was not set correctly#################");
+	#endif
+
+	return isSet;
+
+ }//setMarkerData
+
+/********************************************************************************************
+ * @brief buildMineField creates an 8x8 lot around the player that will server as the minefield
+ *        after verifying that the location of the player is a valid location for a minefield and
+ *        will create all mine locations
+ *
+ * @param obj_id  player
+ *
+ * @return isCreated
+*********************************************************************************************/
+boolean buildMineField(obj_id marker)
+{
+	debugSpeakMsg(marker, "#############attempting to lay down mines#################");
+
+	int numberOfMines   = getIntObjVar(marker,VAR_NUMBER_OF_MINES);
+	int width           = getIntObjVar(marker,VAR_WIDTH_OF_FIELD);
+	int length          = getIntObjVar(marker,VAR_LENGTH_OF_FIELD);
+	boolean isCreated   = false;
+    location markerLoc  = getLocation(marker);
+	location upperLeft  = new location(markerLoc.x - (width/2), markerLoc.y, markerLoc.z + (length/2), "upperLeft");
+	location lowerRight = new location(markerLoc.x + (width/2), markerLoc.y, markerLoc.z - (length/2), "lowerRight");
+
+ 	//debugSpeakMsg(marker, "My location is: " + markerLoc.toString());
+    //debugSpeakMsg(marker, "upper left is: " + upperLeft.toString());
+	//debugSpeakMsg(marker, "lower right is: " + lowerRight.toString());
+
+	isCreated = setObjVar(marker, LAST_BOMB_LOCATION_NAME, "default_name");        //so that OnArrivedAtLocation does not create multiple explosions
+
+	location[] mineLocations = new location[numberOfMines];
+
+	if(mineLocations.length == 0) {		// Zero length array check
+
+		return false;
+	}
+
+	if(getBooleanObjVar(marker,VAR_IS_RANDOMLY_BUILT))
+	{
+		// creating random location inside the minfield to place the mines
+		for(int i=0; i < numberOfMines; ++i)
+			mineLocations[i] = new location(((float)rand((int)upperLeft.x, (int)lowerRight.x)), markerLoc.y, ((float)rand((int)lowerRight.z, (int)upperLeft.z)), markerLoc.area);
+
+		// set mine location data on the marker object
+		isCreated = setObjVar(marker, VAR_MINE_LOCATIONS, mineLocations);
+	}
+	else
+	{
+		// creating specific locations inside the minfield to place the mines
+		int totalLength   = 2 * length;
+		float separation  = (float)totalLength / (float)numberOfMines;
+		float mineSpot    = markerLoc.x - length;
+
+		for(int i=0; i < numberOfMines; ++i)
+		{
+			mineLocations[i] = new location(mineSpot, markerLoc.y, markerLoc.z, markerLoc.area);
+			mineSpot += separation;
+		}
+
+		// set mine location data on the marker object
+		isCreated = setObjVar(marker, VAR_MINE_LOCATIONS, mineLocations);
+	}
+
+	return isCreated;
+
+}//createMineLocations
+
+/********************************************************************************************
+ * @brief explodeMine creates an explosion particle effect where the mine was detonated and
+ *        decrements the number of active mines left on the minefield.
+ *
+ * @param obj_id  player
+ * @param obj_id  mineNumber
+ *
+ * @return isCreated
+*********************************************************************************************/
+boolean explodeMine(obj_id player, int mineNumber, obj_id marker)
+{
+	boolean hasExploded      = false;
+	string particleTemplate  = BLAST_PARTICLE_TEMPLATE;
+	location[] mineLocations = getLocationArrayObjVar(marker, minefield_util.VAR_MINE_LOCATIONS);
+	debugSpeakMsg(player, "########Particle should fire at this location " + mineLocations[mineNumber].toString() + "###########");
+
+	// create the blast where the mine is located
+	obj_id blast  = createObject(particleTemplate, mineLocations[mineNumber]);
+	hasExploded   = setObjVar(marker, VAR_BLAST + marker.toString() + mineNumber, blast);
+	debugSpeakMsg(player, "############Blast ID: " + blast.toString() + "##################");
+
+	int mineCount = getIntObjVar(marker, VAR_ACTIVE_MINE_COUNT);
+	debugSpeakMsg(player, "#####I EXPLODED MINE #" + mineNumber + " and there are " + mineCount + " mines left##############");
+
+	// destroy the mine object that was just detonated
+	obj_id[] mineObjects = getObjIdArrayObjVar(marker, minefield_util.VAR_MINE_OBJECTS);
+	obj_id thisMine      = mineObjects[mineNumber];
+	destroyObject(thisMine);
+
+	string_id msg = new string_id("cbt_spam", "detonation_message_single");
+	combat.sendCombatSpamMessage(player, msg);
+	sendSystemMessage(player, msg);
+
+	return hasExploded;
+
+}//explodeMine
+
+/********************************************************************************************
+ * @brief dealDamage delegates damage to the creature that stepped on the mine it also finds
+ *        all creates located in the mine damage radius to for damage calculation by calling
+ *        damageAdjuster().
+ *
+ * @param obj_id  player
+ *
+ * @return damageDealt
+*********************************************************************************************/
+boolean dealDamage(obj_id player, obj_id marker)
+{
+	boolean damageDealt = false;
+	location detLoc     = getLocation(player);
+	int mineDamage      = getIntObjVar(marker, VAR_MINE_DAMAGE);
+	float damageRadius  = getFloatObjVar(marker, VAR_MINE_DAMAGE_RADIUS);
+	obj_id[] creatures  = getCreaturesInRange(player, damageRadius);
+
+	// deal damage to the creature who stepped on mine
+    int health = getHealth(player);
+	debugSpeakMsg(player, "#####" + player + " health before: " + health + "##############");
+	health -= mineDamage;
+	setHealth(player, health);
+	debugSpeakMsg(player, "#####" + player + " health after: " + health + "##############");
+
+	obj_id owner = getObjIdObjVar(marker, VAR_OWNER);
+
+	// deal damage to creatures that are near the detonation
+   	damageAdjuster(creatures, player, damageRadius, mineDamage, owner);
+
+	debugSpeakMsg(player, "#########ANIMATION STATUS in dealDamage(): " + getBooleanObjVar(player, minefield_util.VAR_PLAYER_IS_ANIMATING) + "##########");
+
+	if(!getBooleanObjVar(player, minefield_util.VAR_PLAYER_IS_ANIMATING))
+	{
+		setObjVar(player, minefield_util.VAR_PLAYER_IS_ANIMATING, true);
+		//animatePlayerDamage(player);
+	}
+
+	return damageDealt;
+
+}//dealDamage
+
+/********************************************************************************************
+ * @brief damageAdjuster calculates the damage to inflict on all creatures within the mine
+ *        damage radius and then inflicts the damage.  It determines a creature's percent
+ *        damage according to how close to the explosion they were.
+ *
+ * @param obj_id[] creatures
+ * @param obj_id whoDoneIt
+ * @param float damageRadius
+ * @param int damage
+ *
+ * @return
+*********************************************************************************************/
+void damageAdjuster(obj_id[] creatures, obj_id whoDoneIt, float damageRadius, int damage, obj_id owner)
+{
+	for(int i=0; i < creatures.length; ++i)
+	{
+		float distance = getDistance(creatures[i], whoDoneIt);
+		debugSpeakMsg(whoDoneIt, "#####" + creatures[i] + " Distance from detonator: " + distance + "##############");
+
+		// if the creature is withing the damage radius and is a PVP enemy to the owner they get hurt
+		if(creatures[i] != whoDoneIt && distance < damageRadius && pvpIsEnemy(owner, creatures[i]))
+		{
+			// figure out what percentage of damage all creatures near the explosion should receive
+			float percentDamage = 1 - (distance / damageRadius);
+			debugSpeakMsg(creatures[i], "#####" + creatures[i] + " Percent Damage: " + percentDamage + "##############");
+
+    		int health = getHealth(creatures[i]);
+			health -= damage * percentDamage;
+			setHealth(creatures[i], health);
+
+			string_id msg = new string_id("cbt_spam", "damage_message_single");
+			combat.sendCombatSpamMessage(creatures[i], msg);
+			sendSystemMessage(creatures[i], msg);
+
+			//if(isPlayer(creatures[i]))
+			   //	animateCreatureDamage(creatures[i]);
+		}
+	}
+
+}//damageAdjuster
+
+/********************************************************************************************
+ * @brief animateCreatureDamage is where the creature/player will do an animation when they
+ *        are receiving damage from the mine explosion
+ *
+ * @param obj_id creature
+ *
+ * @return
+*********************************************************************************************/
+void animatePlayerDamage(obj_id player)
+{
+	debugSpeakMsg(player, "#########ANIMATION STATUS in animatePlayerDamage(): " + getBooleanObjVar(player, minefield_util.VAR_PLAYER_IS_ANIMATING) + "##########");
+
+	attacker_results cbtAnimationResults = new attacker_results();
+	cbtAnimationResults.endPosture = POSTURE_KNOCKED_DOWN;
+	cbtAnimationResults.id = player;
+	doCombatResults("change_posture", cbtAnimationResults, null);
+
+}//animatePlayerDamage
+
+/********************************************************************************************
+ * @brief removeBreacherScripts removes all the scripts that had been attached to players/creatures
+ *        when they breached the warning area trigger volume.  This is done upon minefield
+ *        destruction.
+ *
+ * @param obj_id marker
+ *
+ * @return
+*********************************************************************************************/
+void removeBreacherScripts(obj_id marker)
+{
+	float warningRadius = getFloatObjVar(marker, minefield_util.VAR_WARNING_RADIUS);
+	obj_id[] creatures  = getCreaturesInRange(marker, warningRadius);
+
+   	for(int i=0; creatures != null && i < creatures.length; ++i)
+	{
+		obj_id[] breachedList = getObjIdArrayObjVar(creatures[i], VAR_BREACHED_LIST);
+
+		if(breachedList.length > 0)  // if this creature is within more than one minefield, do not detach their breacher script
+			continue;
+
+		if(isPlayer(creatures[i]) || isMob(creatures[i]))
+			detachScript(creatures[i], minefield_util.MINEFIELD_BREACHER_SCRIPT);
+	}
+
+}//removeBreacherScripts
+
+/********************************************************************************************
+ * @brief cleanUpBlastEffects removes any blast particle effects that may be on the screen and
+ *        may be removed from script once appropriate one shot particle effects are implemented for mine
+ *        explosions.
+ *
+ * @param obj_id marker
+ *
+ * @return
+*********************************************************************************************/
+boolean cleanUpBlastEffects(obj_id marker)
+{
+	boolean isClean       = false;
+	int blastRemovedCount = 0;
+	int mineCount         = minefield_util.NUMBER_OF_MINES;
+
+	debugSpeakMsg(marker, "###############Attempting to destory all remaining particle objects##################" + mineCount);
+
+	//destroying all blast particle effects for cleanup
+	for(int i=0; i < mineCount; ++i)
+	{
+		obj_id particleObj = getObjIdObjVar(marker, minefield_util.VAR_BLAST + marker.toString() + i);
+		if(particleObj != null)
+		{
+			isClean = destroyObject(particleObj);
+			++blastRemovedCount;
+		}
+	}
+	debugSpeakMsg(marker, "################" + blastRemovedCount + " particle objects were destroyed################");
+
+	return isClean;
+
+}//cleanUpBlastEffects
+ //
+/********************************************************************************************
+ * @brief numberOfMinesDetected will do a check on the player entering the minefield whether or
+ *        not they have the skill to detect the mines and how many they are able to detect
+ *
+ * @param obj_id player
+ *
+ * @return mineCount
+*********************************************************************************************/
+int numberOfMinesDetected(obj_id player)
+{
+	int mineCount = NUMBER_OF_MINES;
+
+	//********************************************
+	// DO MINE DETECTION SKILL CHECK HERE
+	// *******************************************
+
+	return mineCount;
+
+}//haveDetectedMines

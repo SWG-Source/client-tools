@@ -1,0 +1,204 @@
+//----------------------------------------------------------
+// vcd_ping_response.script
+//
+// This script is attached to a VCD.  It is setup to respond
+// to a ping initiated by the vehicle_ping.script attached
+// to a vehicle.  If the VCD fails to respond to a certain
+// number of ping requests or if the VCD does not think the
+// pinging vehicle should exist, the vehicle will destroy
+// itself, dismounting any players prior to destruction.
+//----------------------------------------------------------
+
+include library.callable;
+include library.utils;
+
+//----------------------------------------------------------
+
+const string VCDPING_MESSAGE_VCD_ID_NAME     = "vcdId";
+const string VCDPING_MESSAGE_VEHICLE_ID_NAME = "vehicleId";
+const string VCDPING_MESSAGE_MESSAGE_ID_NAME = "messageId";
+const string VCDPING_MESSAGE_RIDER_ID_NAME   = "riderId";
+
+const string VCDPING_VEHICLE_MESSAGEHANDLER_POSITIVE_ACK_NAME = "handlePositiveAcknowledgementFromVcd";
+const string VCDPING_VEHICLE_MESSAGEHANDLER_NEGATIVE_ACK_NAME = "handleNegativeAcknowledgementFromVcd";
+const string VCDPING_VEHICLE_MESSAGEHANDLER_PACK_REQUEST_NAME = "handlePackRequest";
+
+const boolean debug = false;
+
+//----------------------------------------------------------
+
+trigger OnAttach()
+{
+	if (debug)
+		LOG("vcdping-debug", "vcd_ping_response.OnAttach(): self=[" + self + "] entered");
+
+	if (debug)
+		LOG("vcdping-debug", "vcd_ping_response.OnAttach(): self=[" + self + "] exited");
+
+	return SCRIPT_CONTINUE;
+}
+
+//---------------------------------------------------------
+/**
+ * This handles the message sent by vehicle_ping.script's vehiclePingCallback messageHandler.
+ *
+ * The purpose of this messageHandler is to check whether the
+ * pinging vehicle should exist and respond with the results
+ * to that vehicle.
+ */
+
+messageHandler handleVehiclePing()
+{
+	//-- Retrieve message parameters.
+	const obj_id pingVehicleId = params.getObjId(VCDPING_MESSAGE_VEHICLE_ID_NAME);
+	const obj_id riderId = params.getObjId(VCDPING_MESSAGE_RIDER_ID_NAME);
+	const int pingMessageNumber = params.getInt(VCDPING_MESSAGE_MESSAGE_ID_NAME);
+	
+	//-- Check which vehicle we think should be out in the world.
+	obj_id currentVehicleId = callable.getCDCallable(self);
+ 
+	if (isIdValid(currentVehicleId))
+	{
+		if (pingVehicleId == currentVehicleId)
+		{
+			//-- VCD is controlling a vehicle and it matches the vehicle doing the ping.  Send positive acknowledgement.
+			sendPositiveAcknowledgement(self, pingVehicleId, pingMessageNumber);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//-- VCD is controlling a vehicle but received a ping from a
+			// different vehicle.  This indicates that the vehicle doing the
+			// ping should not be out.
+			
+			// -TRF- remove the block that adjusts the VCD's idea of the current vehicle
+			// once we have our bugs worked out.
+		
+			//-- The ping vehicle is not the VCD's expected vehicle.  For now,
+			// if there is a rider and that rider is the person holding the
+			// VCD, allow them to stay on board.
+			if (isIdValid(riderId) && isRiderOkayForVcd(self, riderId))
+			{
+				//-- Reset the VCD's idea of the current vehicle.  This is a hack and should be removed.
+				LOG("vcd-bug", "VCD id=[" + self + "]: received ping from vehicle id=[" + pingVehicleId + "] with rider id=[" + riderId + "]: VCD thinks vehicle id=[" + currentVehicleId + "] is out.  Reassigning VCD vehicle due to on-board rider and packing vehicle id=[" + currentVehicleId + "].");
+			
+				// Destroy the vehicle that the VCD thinks is current since it is not what the VCD holder is riding.
+				messageTo(currentVehicleId, VCDPING_VEHICLE_MESSAGEHANDLER_PACK_REQUEST_NAME, null, 1, false);
+
+				// Reset our idea of the current vehicle to the one that is pinging us with the VCD owner on it.
+				callable.setCDCallable(self, pingVehicleId);
+
+				// Now the nasty part: tell the vehicle "you're cool!" when it really wasn't.
+				sendPositiveAcknowledgement(self, pingVehicleId, pingMessageNumber);
+			}
+			else
+			{
+				// Send the nack.
+				sendNegativeAcknowledgement(self, pingVehicleId, pingMessageNumber, "VCD does not expect vehicle=[" + pingVehicleId + "] to be the called vehicle.  It thinks vehicle=[" + currentVehicleId + "] is called.");
+			}
+		}
+	}
+	else
+	{
+		//-- VCD does not think it should be controlling a vehicle but
+		// just received a ping from a vehicle.  This indicates that the
+		// vehicle doing the ping should not be out.
+		
+		// -TRF- remove the block that adjusts the VCD's idea of the
+		// current vehicle once we have our bugs worked
+		// out.
+		
+		// No vehicle should be in the world.  For now, if there is a rider and that
+		// rider is the person holding the VCD, allow them to stay on board.
+		if (isIdValid(riderId) && isRiderOkayForVcd(self, riderId))
+		{
+			//-- Reset the VCD's idea of the current vehicle.  This is a hack and should be removed.
+			LOG("vcd-bug", "VCD id=[" + self + "]: received ping from vehicle id=[" + pingVehicleId + "] with rider id=[" + riderId + "]: VCD thinks no vehicle is out.  Reassigning VCD vehicle due to on-board rider.");
+			
+			// Reset our idea of the current vehicle to the one that is pinging us with the VCD owner on it.
+			callable.setCDCallable(self, pingVehicleId);
+
+			// Now the nasty part: tell the vehicle "you're cool!" when it really wasn't.
+			sendPositiveAcknowledgement(self, pingVehicleId, pingMessageNumber);
+		}
+		else
+		{
+			// Send negative ack.
+			sendNegativeAcknowledgement(self, pingVehicleId, pingMessageNumber, "VCD does not expecting its vehicle to exist");
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//---------------------------------------------------------
+
+dictionary createResponseDictionary(obj_id vcdId, int messageNumber)
+{
+	//-- Create and populate the dictionary.
+	dictionary messageData = new dictionary();
+	messageData.put(VCDPING_MESSAGE_VCD_ID_NAME, vcdId);
+	messageData.put(VCDPING_MESSAGE_MESSAGE_ID_NAME, messageNumber);
+	
+	return messageData;
+}
+
+//---------------------------------------------------------
+
+void sendPositiveAcknowledgement(obj_id vcdId, obj_id vehicleId, int messageNumber)
+{
+	//-- Create the response dictionary.
+	dictionary messageData = createResponseDictionary(vcdId, messageNumber);
+
+	//-- Send message.
+	if (debug)
+		LOG("vcdping-debug", "vcd_ping_response.sendPositiveAcknowledgement(): vcdId=[" + vcdId + "], vehicleId=[" + vehicleId + "], messageNumber=[" + messageNumber + "]: sending positive ack now.");
+
+	messageTo(vehicleId, VCDPING_VEHICLE_MESSAGEHANDLER_POSITIVE_ACK_NAME, messageData, 1, false);
+}
+
+//---------------------------------------------------------
+
+void sendNegativeAcknowledgement(obj_id vcdId, obj_id vehicleId, int messageNumber, string reason)
+{
+	//-- Create the response dictionary.
+	dictionary messageData = createResponseDictionary(vcdId, messageNumber);
+
+	//-- Send message.
+	LOG("vcdping-vcd", "vcd_ping_response.sendNegativeAcknowledgement(): vcdId=[" + vcdId + "], vehicleId=[" + vehicleId + "], messageNumber=[" + messageNumber + "]: sending negative ack now: reason=[" + reason + "].");
+	messageTo(vehicleId, VCDPING_VEHICLE_MESSAGEHANDLER_NEGATIVE_ACK_NAME, messageData, 1, false);
+}
+
+//---------------------------------------------------------
+/**
+ * Determine whether the specified rider is valid for riding on a vehicle coming from the specified VCD.
+ *
+ * For now we will check if the vcd is ultimately contained by the rider.
+ *
+ * @return true if the vcd is held by the rider; false otherwise.
+ */
+
+boolean isRiderOkayForVcd(obj_id vcdId, obj_id riderId)
+{
+	// Validate args.
+	if (!isIdValid(vcdId) || !isIdValid(riderId))
+		return false;
+
+	// Go up the containment chain of the vcd.  If one of the containers
+	// is the rider, we're good.
+	for (obj_id testObjectId = getContainedBy(vcdId); isIdValid(testObjectId); testObjectId = getContainedBy(testObjectId))
+	{
+		if (testObjectId == riderId)
+		{
+			// One of the container parents of the vcd is the rider we're checking.
+			// This rider is fine to be riding on this vehicle.
+			return true;
+		}
+	}
+
+	// We didn't find the rider in the vcd's containment chain.  This means the
+	// rider is not holding this VCD.  The rider should not be on the vehicle.
+	return false;
+}
+
+//---------------------------------------------------------

@@ -1,0 +1,934 @@
+/**
+ * Copyright (C)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        scriptlib
+ * Description:  A library containing public general utility functions.
+ * @author       $Author: rpalacio $
+ * @version      $Revision: #13 $
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.groundquests;
+include library.space_quest;
+include library.utils;
+include java.util.Enumeration;
+include java.util.HashSet;
+include java.util.Vector;
+include java.util.StringTokenizer;
+
+/***** CONSTANTS *******************************************************/
+//SCRIPTS
+const string SCRIPT_CMD					= "gm.cmd";
+const string SCRIPT_HANDLER				= "gm.handler";
+
+//KEYWORDS
+const string KEYWORD_SELF				= "-self";
+const string KEYWORD_TARGET				= "-target";
+const string KEYWORD_OVERRIDE			= "-override";
+
+const string KEYWORD_ID					= "-id:";
+
+const string KEYWORD_ADHOC				= "-adhoc";
+
+const string KEYWORD_PARSE				= "-parse";
+
+//SCRIPTVARS
+const string SCRIPTVAR_MESSAGE_COUNT				= "gm.msgcount";
+
+const string SCRIPTVAR_SHOWFACTION_PID				= "gm.showFaction.pid";
+
+const string SCRIPTVAR_SEARCHCORPSE_PID				= "gm.searchCorpse.pid";
+const string SCRIPTVAR_SEARCHCORPSE_TARGET			= "gm.searchCorpse.target";
+
+const string SCRIPTVAR_WIPEITEMS_PID				= "gm.wipeItems.pid";
+const string SCRIPTVAR_WIPEITEMS_TARGET				= "gm.wipeItems.target";
+
+const string SCRIPTVAR_SHOWEXPERIENCE_PID			= "gm.showExperience.pid";
+
+const string SCRIPTVAR_SETHUE_PID					= "gm.setHue.pid";
+const string SCRIPTVAR_SETHUE_TARGET				= "gm.setHue.target";
+const string SCRIPTVAR_SETHUE_DATA					= "gm.setHue.data";
+
+const string SCRIPTVAR_MONEY_PID					= "gm.money.pid";
+
+const string INSTANCE_AUTH						= "gm.instance.override_authorization";
+
+//HANDLERS
+const string HANDLER_CONFIRM_WIPE					= "confirmWipeItems";
+
+const string HANDLER_HUE_VAR_UI						= "handleHueVarUI";
+
+//MONEY ACTIONS
+const int MA_NONE									= 0;
+const int MA_WITHDRAW								= 1;
+const int MA_TO_ACCT								= 2;
+
+const string HANDLER_MONEY_PASS						= "handleMoneyPass";
+const string HANDLER_MONEY_FAIL						= "handleMoneyFail";
+
+// PLAYER STATE STRINGS
+const string[] PLAYER_STATE_NAMES					= {					// This array must match state defines in base_class.java
+														"Cover",
+														"Combat",
+														"Peace",
+														"Aiming",
+														"Meditate",
+														"Berserk",
+														"Feign Death",
+														"Unsed State",
+														"Unsed State",
+														"Unsed State",
+														"Tumbling",
+														"Rallied",
+														"Stunned",
+														"Blinded",
+														"Dizzy",
+														"Intimidated",
+														"Immobilized",
+														"Frozen",
+														"Swimming",
+														"Sitting",
+														"Crafting",
+														"Unsed State",
+														"Masked Scent",
+														"Poisoned",
+														"Bleeding",
+														"Diseased",
+														"On Fire"
+													};
+
+const string[] ROADMAP_SKILL_OPTIONS 			  = {
+														"Select Roadmap",
+														"Earn Current Skill",
+														"Set Roadmap Progression"
+											  	    };
+
+/***** FUNCTIONS *******************************************************/
+/***** GENERAL *******************************************************/
+string removeKeyword(string params, string keyword)
+{
+	if ( params == null || params.equals("") || keyword == null || keyword.equals("") )
+		return "";
+
+	if ( params.equalsIgnoreCase(keyword) )
+		return "";
+
+	int idx = toLower(params).indexOf(keyword);
+	if ( idx > -1 )
+	{
+		string ret = "";
+
+		StringTokenizer st = new StringTokenizer(params);
+		while ( st.hasMoreTokens() )
+		{
+			string tmp = st.nextToken();
+			if ( !toLower(tmp).equals(keyword) )
+				ret += " " + tmp;
+		}
+
+		if ( ret == null || ret.equals("") )
+			return "";
+
+		return ret.trim();
+	}
+
+	return params;
+}
+
+dictionary parseTarget(string params, obj_id target, string cmd)
+{
+	obj_id self = getSelf();
+	string tmpParams = params;
+	obj_id tmpTarget = target;
+
+	//debugSpeakMsg(self, "searching for keyword: -target");
+	if ( tmpParams.indexOf(KEYWORD_SELF) > -1 )
+	{
+		tmpParams = removeKeyword(tmpParams, KEYWORD_SELF);
+		tmpTarget = self;
+	}
+	else if ( tmpParams.indexOf(KEYWORD_TARGET) > -1 )
+	{
+		tmpParams = removeKeyword(tmpParams, KEYWORD_TARGET);
+		if ( !isIdValid(tmpTarget) )
+			tmpTarget = self;
+	}
+	else
+	{
+		//debugSpeakMsg(self, "searching for keyword: -id");
+		if ( tmpParams.indexOf(KEYWORD_ID) > -1 )
+		{
+			//debugSpeakMsg(self, "attempting to parse id...");
+			dictionary d = parseObjId(tmpParams);
+
+			obj_id oid = d.getObjId("oid");
+			//debugSpeakMsg(self, "parsed id = " + oid);
+			if ( isIdValid(oid) )
+			{
+				tmpTarget = oid;
+			}
+			else
+			{
+				sendSystemMessageTestingOnly(self, "[" + cmd + "] Unable to parse a valid object id!");
+				return null;
+			}
+
+			tmpParams = d.getString("params");
+		}
+		else
+		{
+			tmpTarget = self;
+		}
+	}
+
+	if ( isIdValid(tmpTarget) )
+	{
+		//target = tmpTarget;
+		//params = tmpParams;
+
+		dictionary ret = new dictionary();
+		ret.put("oid", tmpTarget);
+		ret.put("params", tmpParams);
+
+		return ret;
+	}
+
+	return new dictionary();
+}
+
+dictionary parseObjId(string params)
+{
+	dictionary ret = new dictionary();
+	if ( params == null || params.equals("") )
+		return ret;
+
+	int idx = params.indexOf(gm.KEYWORD_ID);
+	if ( idx == -1 )
+		return ret;
+
+	string retString = "";
+	obj_id retId = null;
+
+	StringTokenizer st = new StringTokenizer(params);
+	while ( st.hasMoreTokens() )
+	{
+		string arg = st.nextToken();
+		if ( arg.startsWith(KEYWORD_ID) )
+		{
+			string sId = arg.substring(KEYWORD_ID.length());
+			retId = utils.stringToObjId(sId);
+		}
+		else
+		{
+			retString += arg + " ";
+		}
+	}
+
+	if ( isIdValid(retId) )
+	{
+		ret.put("oid", retId);
+		ret.put("params", retString.trim());
+	}
+
+	return ret;
+}
+
+/***** HANDLER SCRIPT RELATED ********************************************/
+void attachHandlerScript(obj_id player)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || !isGod(player) )
+		return;
+
+	if ( !hasScript(player, SCRIPT_HANDLER) )
+	{
+		attachScript(player, SCRIPT_HANDLER);
+		utils.setScriptVar(player, SCRIPTVAR_MESSAGE_COUNT, 1);
+	}
+	else
+	{
+		int cnt = utils.getIntScriptVar(player, SCRIPTVAR_MESSAGE_COUNT);
+		cnt++;
+		utils.setScriptVar(player, SCRIPTVAR_MESSAGE_COUNT, cnt);
+	}
+}
+
+void decrementMessageCount(obj_id player)
+{
+	if ( !isIdValid(player) || !isPlayer(player) || !isGod(player) )
+		return;
+
+	int cnt = utils.getIntScriptVar(player, SCRIPTVAR_MESSAGE_COUNT);
+	cnt--;
+
+	if ( cnt < 1 )
+	{
+		utils.removeScriptVar(player, SCRIPTVAR_MESSAGE_COUNT);
+		detachScript(player, SCRIPT_HANDLER);
+	}
+	else
+	{
+		utils.setScriptVar(player, SCRIPTVAR_MESSAGE_COUNT, cnt);
+	}
+}
+
+/***** SET HUE *******************************************************/
+void showSetHueVarUI(obj_id player, obj_id target, dictionary palColData)
+{
+	if ( !isIdValid(player) || !isIdValid(target) || palColData == null || palColData.isEmpty() )
+		return;
+
+	if ( utils.hasScriptVar(player, SCRIPTVAR_SETHUE_PID) )
+	{
+		int oldpid = utils.getIntScriptVar(player, SCRIPTVAR_SETHUE_PID);
+		forceCloseSUIPage(oldpid);
+
+		cleanupSetHueScriptVars(player);
+	}
+
+	resizeable string[] entries = new string[0];
+	resizeable string[] dta = new string[0];
+	Enumeration keys = palColData.keys();
+	while ( keys.hasMoreElements() )
+	{
+		string key = (String)keys.nextElement();
+		int val = palColData.getInt(key);
+
+		entries = utils.addElement(entries, key + " (value: " + val + ")");
+		dta = utils.addElement(dta, key);
+	}
+
+	if ( entries != null && entries.length > 0 )
+	{
+		string title = "Select Hue Variable";
+		string prompt = "Select the hue variable that you would like to alter and press OK.";
+		int pid = sui.listbox(player, player, prompt, sui.OK_CANCEL, title, entries, HANDLER_HUE_VAR_UI);
+		if ( pid > -1 )
+		{
+			utils.setScriptVar(player, SCRIPTVAR_SETHUE_PID, pid);
+			utils.setScriptVar(player, SCRIPTVAR_SETHUE_TARGET, target);
+			utils.setScriptVar(player, SCRIPTVAR_SETHUE_DATA, dta);
+
+			attachHandlerScript(player);
+			return;
+		}
+	}
+
+	sendSystemMessageTestingOnly(player, "/setHue: unable to create hue variable ui!");
+}
+
+void showSetHueColorUI(obj_id player, obj_id target, string varPath)
+{
+	if ( !isIdValid(player) || !isIdValid(target) || varPath == null || varPath.equals("") )
+		return;
+
+	if ( utils.hasScriptVar(player, SCRIPTVAR_SETHUE_PID) )
+	{
+		int oldpid = utils.getIntScriptVar(player, SCRIPTVAR_SETHUE_PID);
+		forceCloseSUIPage(oldpid);
+
+		cleanupSetHueScriptVars(player);
+	}
+
+	int pid = sui.colorize(player, player, target, varPath, "handleHueColorUI");
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(player, SCRIPTVAR_SETHUE_PID, pid);
+		utils.setScriptVar(player, SCRIPTVAR_SETHUE_TARGET, target);
+		utils.setScriptVar(player, SCRIPTVAR_SETHUE_DATA, varPath);
+
+		attachHandlerScript(player);
+		return;
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "/setHue: unable to create colorize ui!");
+	}
+}
+
+void cleanupSetHueScriptVars(obj_id player)
+{
+	utils.removeScriptVar(player, SCRIPTVAR_SETHUE_PID);
+	utils.removeScriptVar(player, SCRIPTVAR_SETHUE_TARGET);
+	utils.removeScriptVar(player, SCRIPTVAR_SETHUE_DATA);
+}
+
+/***** MONEY *******************************************************/
+void showMoneyStatus(obj_id player, obj_id target)
+{
+	if ( !isIdValid(player) || !isIdValid(target) )
+		return;
+
+	if ( utils.hasScriptVar(player, SCRIPTVAR_MONEY_PID) )
+	{
+		int oldpid = utils.getIntScriptVar(player, SCRIPTVAR_MONEY_PID);
+		forceCloseSUIPage(oldpid);
+
+		utils.removeScriptVar(player, SCRIPTVAR_MONEY_PID);
+	}
+
+	string title = "FINANCIAL REPORT";
+	string prompt = "Financial Status Information for player:\n(" + target + ")" + utils.getStringName(target);
+	prompt += "\n\nNOTE: THIS INFORMATION IS NOT REAL-TIME UPDATED! TIME: " + getGameTime();
+
+	resizeable string[] entries = new string[0];
+
+	int cash = getCashBalance(target);
+	entries = utils.addElement(entries, "Cash: " + cash);
+
+	int bank = getBankBalance(target);
+	entries = utils.addElement(entries, "Bank: " + bank);
+
+	int total = getTotalMoney(target);
+	entries = utils.addElement(entries, "Total: " + total);
+
+	if ( entries != null && entries.length > 0 )
+	{
+		int pid = sui.listbox(player, prompt, title, entries, "cleanupMoneyStatus");
+		if ( pid > -1 )
+		{
+			utils.setScriptVar(player, SCRIPTVAR_MONEY_PID, pid);
+			attachHandlerScript(player);
+		}
+	}
+}
+
+boolean setBalance(obj_id player, int type, string sAmt)
+{
+	if ( !isIdValid(player) || sAmt.equals("") )
+		return false;
+
+	string var = "";
+	int bal = 0;
+	switch(type)
+	{
+		case money.MT_CASH:
+			bal = getCashBalance(player);
+			break;
+
+		case money.MT_BANK:
+			bal = getBankBalance(player);
+			break;
+
+		default:
+			return false;
+	}
+
+	int setType = -1;
+	int amt = -1;
+	if ( sAmt.startsWith("+") )
+	{
+		if ( sAmt.endsWith("+") )
+			return false;
+
+		setType = 1; //add
+		amt = utils.stringToInt(sAmt.substring(1));
+	}
+	else if ( sAmt.startsWith("-") )
+	{
+		if ( sAmt.endsWith("-") )
+			return false;
+
+		setType = 2; //subtract
+		amt = utils.stringToInt(sAmt.substring(1));
+	}
+	else
+	{
+		amt = utils.stringToInt(sAmt);
+		int delta = amt - bal;
+		if ( delta > 0 )
+		{
+			//give credits
+			setType = 1;
+			amt = delta;
+		}
+		else if ( delta < 0 )
+		{
+			//remove credits
+			setType = 2;
+			amt = -delta;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	if ( amt < 0 )
+		return false;
+
+	dictionary d = new dictionary();
+	d.put(money.DICT_PLAYER_ID, player);
+	d.put(money.DICT_AMOUNT, amt);
+
+	switch(setType)
+	{
+		case 1:
+			if ( type == money.MT_CASH )
+			{
+				d.put("nextAction", MA_WITHDRAW);
+			}
+
+			transferBankCreditsFromNamedAccount(money.ACCT_CUSTOMER_SERVICE, player, amt, HANDLER_MONEY_PASS, HANDLER_MONEY_FAIL, d);
+			break;
+
+		case 2:
+			if ( type == money.MT_CASH )
+			{
+				d.put("nextAction", MA_TO_ACCT);
+				depositCashToBank(player, amt, HANDLER_MONEY_PASS, HANDLER_MONEY_FAIL, d);
+			}
+			else
+			{
+				transferBankCreditsToNamedAccount(player, money.ACCT_CUSTOMER_SERVICE, amt, HANDLER_MONEY_PASS, HANDLER_MONEY_FAIL, d);
+			}
+			break;
+
+		default:
+			return false;
+	}
+
+	attachHandlerScript(getSelf());
+	return true;
+}
+
+/***** FACTION *******************************************************/
+void showFactionInformation(obj_id player, obj_id target)
+{
+	if ( !isIdValid(player) || !isIdValid(target) )
+		return;
+
+	if ( utils.hasScriptVar(player, gm.SCRIPTVAR_SHOWFACTION_PID) )
+	{
+		int oldPid = utils.getIntScriptVar(player, SCRIPTVAR_SHOWFACTION_PID);
+		forceCloseSUIPage(oldPid);
+
+		utils.removeScriptVar(player, SCRIPTVAR_SHOWFACTION_PID);
+	}
+
+	string name = utils.getStringName(target);
+	if ( name == null || name.equals("") )
+		name = getName(target);
+
+	string title = "FACTION INFORMATION";
+	string prompt = "Faction Status Information for target:\n(" + target + ")" + name;
+	prompt += "\n\nNOTE: THIS INFORMATION IS NOT REAL-TIME UPDATED! TIME: " + getGameTime();
+
+	resizeable string[] entries = new string[0];
+
+	string factionName = factions.getFaction(target);
+	if ( factionName == null || factionName.equals("") )
+		factionName = factions.getFactionNameByHashCode(pvpGetAlignedFaction(target));
+
+	entries = utils.addElement(entries, "FACTION: " + factionName);
+	entries = utils.addElement(entries, "DECLARED?: " + factions.isDeclared(target));
+
+	if ( isPlayer(target) )
+		entries = utils.addElement(entries, "RANK: " + pvpGetCurrentGcwRank(target));
+
+	string[] enemyFlags = pvpGetEnemyFlags(target);
+	if ( enemyFlags == null || enemyFlags.length == 0 )
+	{
+		entries = utils.addElement(entries, "ENEMY FLAGS: none");
+	}
+	else
+	{
+		entries = utils.addElement(entries, "ENEMY FLAGS:");
+		for ( int i = 0; i < enemyFlags.length; i++ )
+		{
+			string[] efData = split(enemyFlags[i], ' ');
+			string efaction = factions.getFactionNameByHashCode(utils.stringToInt(efData[1]));
+			entries = utils.addElement(entries, " - id:" + efData[0] + " f:" + efaction + " expires: " + efData[2]);
+		}
+	}
+
+	boolean hasStandings = false;
+	if ( hasObjVar(target, factions.FACTION) )
+	{
+		obj_var_list ovl = getObjVarList(target, factions.FACTION);
+		if ( ovl != null )
+		{
+			int numItems = ovl.getNumItems();
+			if ( numItems > 0 )
+			{
+				entries = utils.addElement(entries, "FACTION STANDINGS:");
+				for ( int i = 0; i < numItems; i++ )
+				{
+					obj_var ov = ovl.getObjVar(i);
+					string fname = ov.getName();
+					float val = ov.getFloatData();
+					entries = utils.addElement(entries, " - " + fname + ": " + val);
+					hasStandings = true;
+				}
+			}
+		}
+	}
+
+	if ( !hasStandings )
+		entries = utils.addElement(entries, "FACTION STANDINGS: none");
+
+	int pid = sui.listbox(player, player, prompt, sui.OK_ONLY, title, entries, "cleanupShowFaction");
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(player, SCRIPTVAR_SHOWFACTION_PID, pid);
+		attachHandlerScript(player);
+	}
+}
+
+
+/***** PLAYER STATES *******************************************************/
+void showSetPlayerStateUI(obj_id player)
+{
+	obj_id self = getSelf();
+
+	if (utils.hasScriptVar(player, "setPlayerStateGM.pid"))
+	{
+		int old_pid = utils.getIntScriptVar(player, "setPlayerStateGM.pid");
+		sui.closeSUI(player, old_pid);
+		utils.removeScriptVarTree(player, "setPlayerStateGM");
+	}
+
+	string[] stateList = getPlayerState(player);
+
+	string title = "CS Player State Tool";
+	string prompt = "Select a state and choose OK to toggle it.  Choose CANCEL or OK with no selection to quit.\n\n**** WARNING **** \nUse with extreme caution invalid state settings can break the game!!";
+	int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, stateList, "handleSetPlayerStateUI");
+
+	utils.setScriptVar(self, "setPlayerStateGM.pid", pid);
+}
+
+string[] getPlayerState(obj_id player)
+{
+	resizeable string[] stateList = new string[0];
+
+	for (int i = 0; i < STATE_NUMBER_OF_STATES; i++)
+	{
+		int curState = getState(player, i);
+
+		string stateEntry = PLAYER_STATE_NAMES[i];
+
+		int tabCount = 2 - (stateEntry.length() / 15);
+		for (int j = 0; j < tabCount; j++)
+		{
+			stateEntry += "\t";
+		}
+
+		if (curState == 1)
+			stateEntry += "* ON  *";
+		else
+			stateEntry += "* OFF *";
+
+		stateList = utils.addElement(stateList, stateEntry);
+	}
+
+	return stateList;
+}
+
+void cmdResetJedi(obj_id player)
+{
+	if (isIdNull(player))
+	{
+		sendSystemMessage(getSelf(), "This command can only be used on players. Please target a player and try again.", null);
+		return;
+	}
+
+	if (hasObjVar (player, "jedi.converted"))
+	{
+		removeObjVar (player, "jedi.converted");
+		if (hasObjVar (player, "jedi.reverted"))
+		{
+			int numReverts = getIntObjVar (player, "jedi.reverted");
+			numReverts = numReverts + 1;
+			setObjVar (player, "jedi.reverted", numReverts);
+		}
+		else
+		{
+			setObjVar (player, "jedi.reverted", 1);
+		}
+	}
+
+	setObjVar (player, "jedi.usingSui", 1);
+	attachScript (player, "player.player_jedi_conversion");
+	return;
+}
+
+string[] getRoadmapList()
+{
+	// This info is in a client datatable (datatables/roadmap/client_roadmap_data.tab)
+	// It's too much of a pain to migrate the table to shared right now so make sure the data stays in sync
+	// or migrate it and read from the datatable
+
+	string[] roadmapList = {
+							"smuggler_1a",
+							"bounty_hunter_1a",
+							"officer_1a",
+							"commando_1a",
+							"force_sensitive_1a",
+							"medic_1a",
+							"spy_1a",
+							"entertainer_1a",
+							"trader_0a",
+							"trader_0b",
+							"trader_0c",
+							"trader_0d"
+						};
+	return roadmapList;
+}
+
+string[] convertRoadmapNames(string[] list)
+{
+	string[] newList = new string[list.length];
+
+	for (int i = 0; i < newList.length; i++)
+	{
+		char branch = list[i].charAt(list[i].length()-1);
+		branch -= 49;
+
+		string roadmapName = "@ui_roadmap:title_"+list[i].substring(0, list[i].lastIndexOf('_'));
+		string branchName = "@ui_roadmap:track_title_"+list[i].substring(0, list[i].lastIndexOf('_'))+"_"+branch;
+
+		newList[i] = roadmapName;
+
+		if(list[i].startsWith("trader"))
+			newList[i] += " - " + branchName;
+	}
+
+	return newList;
+}
+
+string[] convertSkillListNames(string[] skillList)
+{
+	for (int i = 0; i < skillList.length; i++)
+	{
+		skillList[i] = "@skl_n:" + skillList[i];
+	}
+
+	return skillList;
+}
+
+//Show Quest Function that copiles a list of both active and completed quests
+string[] getAllQuests(obj_id player)
+{
+	if (!isIdNull(player))
+	{
+		string[] allActive = getAllActiveQuests(player);
+		string[] allComplete = getAllCompletedQuests(player);
+		Vector allQuestStringsCombined = new Vector();
+
+		if (allActive != null)
+		{
+			allQuestStringsCombined.add("All Active Quests");
+			for (int i = 0; i < allActive.length; i++)
+			{
+				allQuestStringsCombined.add(allActive[i]);
+			}
+		}
+
+		if (allComplete != null)
+		{
+			allQuestStringsCombined.add("\nAll Completed Quests");
+			for (int i = 0; i < allComplete.length; i++)
+			{
+				allQuestStringsCombined.add("*" + allComplete[i]);
+			}
+		}
+		if (allActive == null && allComplete == null)
+		{
+			allQuestStringsCombined.add("No Active or Completed Quests to Display.");
+		}
+		else
+		{
+			if (allQuestStringsCombined.size() > 0)
+			{
+				string[] allQuests = new string[allQuestStringsCombined.size()];
+				allQuestStringsCombined.toArray(allQuests);
+				return allQuests;
+			}
+		}
+	}
+	return null;
+}
+
+//Function that gets all active quests (both ground and space)
+//Function also grabs the quest title string and returns both the quest and title.
+string[] getAllActiveQuests(obj_id player)
+{
+	int[] activeQuestIds = questGetAllActiveQuestIds(player);
+	if (activeQuestIds.length > -1)
+	{
+		HashSet allQuestStringsFound = new HashSet();
+		string activeQuestString = "";
+
+		for (int i = 0; i < activeQuestIds.length; i++)
+		{
+			activeQuestString = questGetQuestName(activeQuestIds[i]);
+			if (activeQuestString != "")
+			{
+				if (activeQuestString.indexOf("quest/") == 0)
+				{
+					string groundCodeAndTitle = getGroundQuestStringAndTitle(player, activeQuestString);
+					allQuestStringsFound.add(groundCodeAndTitle);
+
+				}
+				else if (activeQuestString.indexOf("spacequest/") == 0)
+				{
+					string spaceCodeAndTitle = getSpaceQuestStringAndTitle(player, activeQuestString);
+					allQuestStringsFound.add(spaceCodeAndTitle);
+				}
+			}
+		}
+		if (allQuestStringsFound.size() > 0)
+		{
+			string[] allActiveQuests = new string[allQuestStringsFound.size()];
+			allQuestStringsFound.toArray(allActiveQuests);
+			Arrays.sort(allActiveQuests);
+			return allActiveQuests;
+		}
+	}
+	return null;
+}
+
+//Function that gets all completed quests (both ground and space)
+//Function also grabs the quest title string and returns both the quest and title.
+string[] getAllCompletedQuests(obj_id player)
+{
+	int[] completedQuestIds = questGetAllCompletedQuestIds(player);
+
+	if (completedQuestIds.length > -1)
+	{
+		HashSet allQuestStringsFound = new HashSet();
+		string completedQuestString = "";
+
+		for (int i = 0; i < completedQuestIds.length; i++)
+		{
+			completedQuestString = questGetQuestName(completedQuestIds[i]);
+			if (completedQuestString != "")
+			{
+				if (completedQuestString.indexOf("quest/") == 0)
+				{
+					string groundCodeAndTitle = getGroundQuestStringAndTitle(player, completedQuestString);
+					allQuestStringsFound.add(groundCodeAndTitle);
+
+				}
+				else if (completedQuestString.indexOf("spacequest/") == 0)
+				{
+					string spaceCodeAndTitle = getSpaceQuestStringAndTitle(player, completedQuestString);
+					allQuestStringsFound.add(spaceCodeAndTitle);
+				}
+			}
+		}
+		if (allQuestStringsFound.size() > 0)
+		{
+			string[] allCompletedQuests = new string[allQuestStringsFound.size()];
+			allQuestStringsFound.toArray(allCompletedQuests);
+			Arrays.sort(allCompletedQuests);
+			return allCompletedQuests;
+		}
+	}
+	return null;
+}
+
+//Function that creates an Editable SUI for the Show Quest functionality
+void createCustomUI(obj_id self, string uiTitle, string combinedString)
+{
+	int page = createSUIPage("/Script.messageBox", self, self);
+
+	setSUIProperty(page, "Prompt.lblPrompt", "LocalText", combinedString);
+	setSUIProperty(page, "bg.caption.lblTitle", "Text", uiTitle);
+	setSUIProperty(page, "Prompt.lblPrompt", "Editable", "true");
+	setSUIProperty(page, "Prompt.lblPrompt", "GetsInput", "true");
+	setSUIProperty(page, "btnCancel", "Visible", "true");
+	setSUIProperty(page, "btnRevert", "Visible", "false");
+	setSUIProperty(page, "btnOk", "Visible", "false");
+
+	showSUIPage(page);
+	flushSUIPage(page);
+}
+
+
+//**************** createCustomUI **************************************************
+// Creates a Editable SUI that can display a large amount of data by default
+// Accepts a string which is dsplayed in the edit box/area of SUI
+// Used specifically for the csDumpTarget Command (cmdCsDumpTarget).
+//*********************************************************************************
+
+void createDumpTargetUI(obj_id self, string combinedString)
+{
+
+	string uiTitle = "Target Data";
+	int page = createSUIPage("/Script.messageBox", self, self);
+
+	setSUIProperty(page, "Prompt.lblPrompt", "LocalText", combinedString);
+	setSUIProperty(page, "bg.caption.lblTitle", "Text", uiTitle);
+	setSUIProperty(page, "Prompt.lblPrompt", "Editable", "true");
+	setSUIProperty(page, "Prompt.lblPrompt", "GetsInput", "true");
+	setSUIProperty(page, "btnCancel", "Visible", "true");
+	setSUIProperty(page, "btnRevert", "Visible", "false");
+	setSUIProperty(page, "btnOk", sui.PROP_TEXT, "Create File");
+	//If tester hits ok button renamed to Create File, send to message handler
+	subscribeToSUIEvent(page, sui_event_type.SET_onClosedOk, "%button0%", "exportCsDumpFile");
+	subscribeToSUIEvent(page, sui_event_type.SET_onClosedCancel, "%button0%", "exportCsDumpFile");
+
+	showSUIPage(page);
+	flushSUIPage(page);
+}
+
+
+//Clears a quest if the quest is valid
+void forceClearQuest(obj_id player, string questName)
+{
+	if (groundquests.isQuestActive(player, questName) || groundquests.hasCompletedQuest(player, questName))
+	{
+		groundquests.clearQuest(player, questName);
+		sendSystemMessageTestingOnly(player, "Clear Quest function completed.  The quest removed was " + questName);
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "Either the player doesn't have this quest or the quest string was incorrect. Space Quests cannot be cleared using this command.");
+	}
+}
+
+//Clears a quest, then grants the quest if the quest is active/completed
+void forceRegrantQuest(obj_id player, string questName)
+{
+	if (groundquests.isQuestActive(player, questName) || groundquests.hasCompletedQuest(player, questName))
+	{
+		groundquests.clearQuest(player, questName);
+		groundquests.requestGrantQuest(player, questName, true);
+		sendSystemMessageTestingOnly(player, "Regrant Quest function completed.");
+	}
+	else
+	{
+		sendSystemMessageTestingOnly(player, "Either the player doesn't have this quest or the quest string was incorrect. Space Quests cannot be cleared and granted using this command.");
+	}
+}
+
+//Retrieves the displayed Quest Title for the quest and combines it with the code string fro display
+string getGroundQuestStringAndTitle(obj_id player, string questString)
+{
+	//Capture the Ground Quest String and return it
+	string localizeThis = questString.substring(6);
+	string questStringLoc = "quest/ground/" + localizeThis;
+	string questTitle = localize(new string_id(questStringLoc, "journal_entry_title"));
+	return questString + " - " + questTitle;
+}
+
+//Retrieves the displayed Quest Title for the quest and combines it with the code string fro display
+string getSpaceQuestStringAndTitle(obj_id player, string questString)
+{
+	//Capture the Space Quest String and return it
+	int firstSlash = questString.indexOf("/");
+	int lastSlash = questString.lastIndexOf("/");
+	string questType = questString.substring(firstSlash+1, lastSlash);
+	string spaceQuestString = questString.substring(lastSlash+1);
+	string questStringLoc = "spacequest/" + questType+ "/" + spaceQuestString;
+	string questTitle = localize(new string_id(questStringLoc, "title"));
+	return spaceQuestString + " - " + questTitle;
+}
+
+
+boolean isInstanceAuthorized(obj_id subject)
+{
+	return utils.hasScriptVar(subject, INSTANCE_AUTH);
+}

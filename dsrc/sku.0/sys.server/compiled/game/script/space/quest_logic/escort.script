@@ -1,0 +1,255 @@
+//------------------------------------------------
+// escort.script
+// Brandon Reinhart
+//
+// Protect <ship_type> as it paths through <n> points.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_create;
+include library.space_quest;
+include library.space_utils;
+include library.space_transition;
+include library.utils;
+include library.ship_ai;
+include library.prose;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits space.quest_logic.escort_duty;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string_id SID_ABANDONED_ESCORT	= new string_id( "space/quest", "escort_abandoned" );
+
+const int TRIGGER_OVERRIDE		= -99;
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	// Set us up if we are in the appropriate zone.
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearMissionWaypoint( self );
+			space_quest.showQuestUpdate( self, SID_ABANDONED_ESCORT );
+			space_quest.setQuestFailed( player, self, false );
+		}
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( hasObjVar( self, "initialized" ) )
+		return SCRIPT_OVERRIDE;
+
+	string[] escortPoints = getStringArrayObjVar( self, "escortPoints" );
+	if ( escortPoints == null )
+		return SCRIPT_OVERRIDE;
+	string destPoint = escortPoints[0];
+
+	// Check to see if that nav is on this planet.
+	java.util.StringTokenizer st = new java.util.StringTokenizer( destPoint, ":" );
+	string scene = st.nextToken();
+	destPoint = st.nextToken();
+
+	if ( getCurrentSceneName().startsWith( scene ) )
+		registerEscortLocation( self, player, destPoint );
+
+	// Update the quest journal.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 1, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// escortComplete
+//------------------------------------------------
+
+messageHandler escortComplete()
+{
+	if ( params == null )
+		return SCRIPT_OVERRIDE;
+
+	obj_id ship = params.getObjId( "ship" );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Warp the ship out.
+	messageTo( ship, "missionAbort", null, 2.f, false ); // Delayed so we can send a taunt message.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int reasons = getIntObjVar( self, "numResponses" );
+	string_id bye = new string_id( "spacequest/"+questType+"/"+questName, "goodbye_" + rand( 1, reasons ) );
+	prose_package pp = prose.getPackage( bye, 0 );
+	space_quest.groupTaunt( ship, player, pp );
+	string_id complete = new string_id( "spacequest/"+questType+"/"+questName, "complete" );
+	dutyUpdate( self, complete );
+	removeObjVar( self, "ship" );
+	removeObjVar( self, "escorting" );
+	removeObjVar( self, "initialized" );
+	checkSpecialEvent(self, player, TRIGGER_OVERRIDE, false);
+
+	// Warp out any remaining targets.
+	obj_id[] targets = getObjIdArrayObjVar( self, "targets" );
+	if ( targets != null )
+	{
+		for ( int i=0; i<targets.length; i++ )
+		{
+			if ( isIdValid( targets[i] ) )
+				destroyObjectHyperspace( targets[i] );
+		}
+		removeObjVar( self, "targets" );
+	}
+	removeObjVar( self, "deadships" );
+
+	// Update the quest journal.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( questIsTaskActive( questid, 2, player ) )
+			questCompleteTask( questid, 2, player );
+	}
+
+	// Mark us as won.
+	if ( !hasObjVar( self, space_quest.QUEST_DUTY ) && hasObjVar( self, "destroyIsSuccess" ) )
+	{
+		questFailed( self, true );
+	}
+	else
+	{
+		questCompleted( self );
+	}
+
+	return SCRIPT_OVERRIDE;
+}
+
+//------------------------------------------------
+// dutyUpdate
+//------------------------------------------------
+
+void dutyUpdate( obj_id self, string_id update_id )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string_id update_prefix = new string_id( "spacequest/"+questType+"/"+questName, "quest_update" );
+	prose_package pp = prose.getPackage( update_prefix, update_id );
+	space_quest.sendQuestMessage( player, pp );
+}
+
+//------------------------------------------------
+// checkSpecialEvent
+//------------------------------------------------
+
+boolean checkSpecialEvent( obj_id self, obj_id player, int attackCount)
+{
+	return checkSpecialEvent(self, player, attackCount, true);
+}
+
+boolean checkSpecialEvent( obj_id self, obj_id player, int attackCount , boolean useDelay)
+{
+	string BOOL_SPECIAL_TRIGGERED = "eventAlreadyTriggered";
+	// Do we have a special event?
+	if ( !hasObjVar( self, space_quest.QUEST_TRIGGER_EVENT ) )
+		return false;
+		
+	if (getBooleanObjVar(self, BOOL_SPECIAL_TRIGGERED) == true)
+		return false;//This even has already happened.
+
+	int triggerEvent = getIntObjVar( self, space_quest.QUEST_TRIGGER_EVENT );
+	int triggerSC = getIntObjVar( self, space_quest.QUEST_TRIGGER_SC );
+	int triggerOn = getIntObjVar( self, space_quest.QUEST_TRIGGER_ON );
+	int triggerDelay = 0;
+	if (useDelay)
+		triggerDelay = getIntObjVar( self, space_quest.QUEST_TRIGGER_DELAY );
+		
+	if ( triggerEvent == 0 )
+		return false;
+	if ( triggerSC != 0 )
+		return false;
+	if ( triggerOn != attackCount && triggerOn != TRIGGER_OVERRIDE)
+		return false;
+
+	dictionary params = new dictionary();
+	params.put( "quest", self );
+	messageTo( player, "doSpecialEvent", params, triggerDelay, false );
+	setObjVar(self,BOOL_SPECIAL_TRIGGERED, true);
+
+	return false;
+}
+
+//------------------------------------------------
+// questAborted
+//------------------------------------------------
+
+void questAborted( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Clear the mission waypoint.
+	clearMissionWaypoint( self );
+
+	// We finished the quest!
+	space_quest.setQuestAborted( player, self );
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	if ( hasObjVar( self, "noAbort" ) )
+		return SCRIPT_CONTINUE;
+
+	// We aborted the mission, warp the escort ship out.
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id ship = getObjIdObjVar( self, "ship" );
+	if ( isIdValid( ship ) && (ship != null) && exists( ship ) )
+	{
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		string_id abort = new string_id( "spacequest/"+questType+"/"+questName, "abort" );
+		prose_package pp = prose.getPackage( abort, 0 );
+		space_quest.groupTaunt( ship, player, pp );
+		messageTo( ship, "missionAbort", null, 2.f, false );
+	}
+
+	questAborted( self );
+
+	return SCRIPT_OVERRIDE;
+}

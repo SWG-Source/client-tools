@@ -1,0 +1,634 @@
+// ALL MINI VEHICLE SCRIPTS
+// structure/mini_vehicle_control.script
+// creature/mini_vehicle.script
+// terminal/mini_vehicle_terminal.script
+
+include library.ai_lib;
+include library.sui;
+include library.utils;
+include library.player_structure;
+
+const int MAX_WAYPOINTS	= 20;
+
+//variable constants
+const string OBJVAR_VEHICLE_PATROL_POINTS 		= "vehicle.patrolPoints";
+const string OBJVAR_VEHICLE_PATROL_LOOP 		= "vehicle.patrol_loop";
+const string OBJVAR_VEHICLE_PATROL_ONCE 		= "vehicle.patrol_once";
+const string VEHICLE_MOVING 				= "vehicle.moving";
+const string VEHICLE_SETTING_PATROL			= "vehicle.settingPatrol";
+const string SCRIPTVAR_VEHICLE_HELP_MENU		= "vehicle.helpmenu";
+const string TERMINAL_VEHICLE_ID 			= "vehicle.id";
+
+//Pet Menu Strings
+const string MENU_FILE 					= "pet/pet_menu";
+const string_id SYS_PATROL_ADDED 			= new string_id(MENU_FILE,"patrol_added");
+const string_id SYS_PATROL_REMOVED 			= new string_id(MENU_FILE,"patrol_removed");
+const string_id SETPATROLPOINT 				= new string_id(MENU_FILE,"menu_set_patrol_point");
+const string_id CLEARPOINTS 				= new string_id(MENU_FILE,"menu_clear_patrol_points");
+const string_id CLEAR_LAST 				= new string_id(MENU_FILE,"patrol_clear_last");
+const string_id PROGRAM 				= new string_id(MENU_FILE,"vehicle_options");
+const string_id HELP 					= new string_id(MENU_FILE,"mini_vehicle_menu_help");
+const string_id PATROL_OPTIONS 				= new string_id(MENU_FILE,"patrol_setting");
+const string_id PATROL 					= new string_id(MENU_FILE,"menu_patrol");
+const string_id ONCE 					= new string_id(MENU_FILE,"patrol_once");
+const string_id LOOP 					= new string_id(MENU_FILE,"patrol_loop");
+const string_id MINI_VEHICLE_NOT_OWNER			= new string_id(MENU_FILE,"mini_vehicle_not_owner");
+const string_id MINI_VEHICLE_NO_WAYPOINTS		= new string_id(MENU_FILE,"mini_vehicle_no_waypoints");
+const string_id MINI_VEHICLE_MAX_WAYPOINTS		= new string_id(MENU_FILE,"mini_vehicle_max_waypoints");
+const string_id MINI_VEHICLE_NOT_IN_HOUSE		= new string_id(MENU_FILE,"mini_vehicle_not_in_house");
+const string_id MINI_VEHICLE_WAYPOINTS_NOT_CLEAR	= new string_id(MENU_FILE,"mini_vehicle_waypoints_not_cleared");
+
+
+//------------------------------------------------
+//triggers
+//------------------------------------------------
+trigger OnDestroy()
+{
+	obj_id vehicle = self;
+	if (!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(self, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;
+
+	obj_id house = getObjIdObjVar(vehicle, "house");
+	if(isValidId(house) && exists(house))
+	{
+		removeObjVar(house, "mini_vehicle.vehicle");
+		if(hasScript(house, "structure.mini_vehicle_control"))
+			detachScript(house, "structure.mini_vehicle_control");
+	}
+	removeObjVar(terminal, TERMINAL_VEHICLE_ID);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMovePathComplete()
+{
+	obj_id vehicle = self;
+	if (!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+	utils.removeScriptVar(vehicle, VEHICLE_MOVING);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnMoveMoving()
+{
+	obj_id vehicle = self;
+	if (!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+	utils.setScriptVar(vehicle, VEHICLE_MOVING, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	obj_id vehicle = self;
+	if (!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+	messageTo(vehicle, "initializeVehicleVariables", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id vehicle = self;
+	if(!isIdValid(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal) || !exists(terminal))
+	{
+		destroyObject(vehicle);
+	}
+	if(utils.isNestedWithinAPlayer(vehicle))
+	{
+		messageTo(terminal, "destroyVehicle", null, 1, false);
+		return SCRIPT_CONTINUE;
+	}
+	mi.addRootMenu(menu_info_types.ITEM_ACTIVATE, PATROL);
+	mi.addRootMenu(menu_info_types.SERVER_MENU1, HELP);
+
+	int mnuProgram = mi.addRootMenu(menu_info_types.SERVER_MENU2, PATROL_OPTIONS);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU3, SETPATROLPOINT);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU4, CLEARPOINTS);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU5, CLEAR_LAST);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU6, ONCE);
+		mi.addSubMenu(mnuProgram, menu_info_types.SERVER_MENU7, LOOP);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	obj_id vehicle = self;
+	if(!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;
+
+	if(utils.isNestedWithinAPlayer(vehicle))
+	{
+		messageTo(terminal, "destroyVehicle", null, 1, false);
+		return SCRIPT_CONTINUE;
+	}
+	//Make sure this is the owner
+	if(player != getObjIdObjVar(terminal, "biolink.id"))
+	{
+		//convert this to string id
+		sendSystemMessage(player, MINI_VEHICLE_NOT_OWNER);
+		return SCRIPT_CONTINUE;
+	}
+
+	sendDirtyObjectMenuNotification(vehicle);
+
+	if (item == menu_info_types.SERVER_MENU1)
+	{
+		createHelpDialog(vehicle, player);
+	}
+	if (item == menu_info_types.SERVER_MENU2)
+	{
+		//nothing
+	}
+	if (item == menu_info_types.SERVER_MENU3)
+	{
+		doSetPatrolPoint(vehicle, player);
+	}
+	if (item == menu_info_types.SERVER_MENU4)
+	{
+		doClearPatrolPoints(vehicle, player);
+	}
+	if (item == menu_info_types.SERVER_MENU5)
+	{
+		removeLastPatrolPoint(vehicle, player);
+	}
+	if (item == menu_info_types.SERVER_MENU6)
+	{
+		setPatrolOnce(vehicle, player, terminal);
+	}
+	if (item == menu_info_types.SERVER_MENU7)
+	{
+		setPatrolLoop(vehicle, player, terminal);
+	}
+	if (item == menu_info_types.ITEM_ACTIVATE)
+	{
+		if(utils.hasScriptVar(vehicle, VEHICLE_MOVING) && !utils.hasScriptVar(vehicle, VEHICLE_SETTING_PATROL))
+		{
+			stop(vehicle);
+			utils.removeScriptVar(vehicle, VEHICLE_MOVING);
+		}
+		else
+		{
+			doPatrol(vehicle, player);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//messageHandlers
+//------------------------------------------------
+
+
+//This is called on init to get the terminal user's OID
+messageHandler getUserOidSetFirstPoint()
+{
+	obj_id vehicle = self;
+	if (!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id player = getObjIdObjVar(vehicle, "user");
+	if (!isValidId(player))
+		return SCRIPT_CONTINUE;
+
+	doSetPatrolPoint(vehicle, player);
+	return SCRIPT_CONTINUE;
+}
+
+//forget the patrol points, go to start
+//this isn't used becuase the vehicle can get stuck
+messageHandler pathDirectlyToStart()
+{
+	obj_id vehicle = self;
+	if(!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;
+
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS);
+	if (patrolLoc != null)
+	{
+		stop(vehicle);
+		pathTo(vehicle, patrolLoc[0]);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//This makes the vehicle retrace it's patrol path
+messageHandler fromLastPointGoBackToStart()
+{
+	obj_id vehicle = self;
+	if(!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;
+
+	//move to terminal
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS);
+	if (patrolLoc != null)
+	{
+		int patrolLength = patrolLoc.length;
+		location[] temp = new location[patrolLength];
+		for(int i = 0; i < patrolLength; ++i)
+		{
+			temp[i] = patrolLoc[(patrolLength-1)-i];
+		}
+		//retrace steps without ruining original patrol
+		patrolOnce(vehicle, temp);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleActivateVehicle()
+{
+	obj_id vehicle = self;
+	if(!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id player = getObjIdObjVar(vehicle, "user");
+	doPatrol(vehicle);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDeactivateVehicle()
+{
+	obj_id vehicle = self;
+	if(!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id player = getObjIdObjVar(vehicle, "user");
+	//keep this comment in case we can get the vehicle to retrace steps
+	//messageTo(vehicle, "pathDirectlyToStart", null, 1, false);
+	stop(vehicle);
+	if(utils.hasScriptVar(vehicle, VEHICLE_MOVING))
+		utils.removeScriptVar(vehicle, VEHICLE_MOVING);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+messageHandler initializeVehicleVariables()
+{
+	obj_id vehicle = self;
+	obj_id house = getTopMostContainer(self);
+
+	if(!isIdValid(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;
+
+	if(!isIdValid(house) || !player_structure.isBuilding(house) || utils.isNestedWithinAPlayer(vehicle))
+	{
+		messageTo(terminal, "destroyVehicle", null, 1, false);
+		return SCRIPT_CONTINUE;
+	}
+	setObjVar(vehicle, "house", house);
+
+	//dont overwrite the location list if one already exists
+	if(!hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS))
+		messageTo(vehicle, "getUserOidSetFirstPoint", null, 1, false);
+
+	//Attach the listener to the house here
+	if(!hasScript(house, "structure.mini_vehicle_control"))
+	{
+		attachScript(house, "structure.mini_vehicle_control");
+	}
+	//The house needs to know who the vehicle is
+	if(!hasObjVar(house, "mini_vehicle.vehicle"))
+		setObjVar(house, "mini_vehicle.vehicle", vehicle);
+
+	listenToMessage(house, "handleActivateVehicle");
+	listenToMessage(house, "handleDeactivateVehicle");
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// handleDialogInput
+// This function handles the player's selection on the SUI message box
+// If the player selects Test Patrol the doPatrol function is called
+// If the player selects CLOSE or X the UI is closed
+//------------------------------------------------
+messageHandler handleDialogInput()
+{
+	obj_id vehicle = self;
+	if(!isValidId(vehicle))
+	{
+		if(utils.hasScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU))
+			utils.removeScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU);
+		return SCRIPT_CONTINUE;
+	}
+	// Determine which button was pressed.
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player))
+	{
+		if(utils.hasScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU))
+			utils.removeScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU);
+		return SCRIPT_CONTINUE;
+	}
+	int bp = sui.getIntButtonPressed(params);
+	switch (bp)
+	{
+		case sui.BP_OK:		// "Test"
+			doPatrol(vehicle, player);
+			return SCRIPT_CONTINUE;
+
+		case sui.BP_CANCEL: 	// "Close"
+			if(utils.hasScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU))
+				utils.removeScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU);
+
+			return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+//Functions
+//------------------------------------------------
+
+//Kicks off the patrol if vehicle was asleep
+boolean doPatrol(obj_id vehicle)
+{
+	if(!isValidId(vehicle))
+		return false;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return false;
+
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS);
+	if (patrolLoc == null)
+		return false;
+
+	if (hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_LOOP))
+	{
+		ai_lib.setPatrolPath(vehicle, patrolLoc);
+		return true;
+	}
+	else
+	{
+		patrolOnce(vehicle, patrolLoc);
+		messageTo(vehicle, "fromLastPointGoBackToStart", null, 120, false);
+		return true;
+	}
+}
+
+//Overloaded function used when player interacting with UI or vehicle
+boolean doPatrol(obj_id vehicle, obj_id player)
+{
+	if(!isValidId(vehicle) || !isValidId(player))
+		return false;
+
+	if(utils.hasScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU))
+		utils.removeScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU);
+
+	if(utils.hasScriptVar(vehicle, VEHICLE_SETTING_PATROL))
+	{
+		utils.removeScriptVar(vehicle, VEHICLE_SETTING_PATROL);
+	}
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return false;
+
+	if (!hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS))
+	{
+		sendSystemMessage(player, MINI_VEHICLE_NO_WAYPOINTS);
+		return false;
+	}
+
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS);
+	if (patrolLoc == null)
+		return false;
+
+	if (hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_LOOP))
+	{
+		ai_lib.setPatrolPath(vehicle, patrolLoc);
+		return true;
+	}
+	else
+	{
+		patrolOnce(vehicle, patrolLoc);
+		messageTo(vehicle, "fromLastPointGoBackToStart", null, 120, false);
+		return true;
+	}
+}
+
+void doSetPatrolPoint(obj_id vehicle, obj_id player)
+{
+	if(!isValidId(vehicle) || !isValidId(player))
+		return;
+
+	if(utils.hasScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU))
+		utils.removeScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU);
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return;
+
+	if(!utils.hasScriptVar(vehicle, VEHICLE_SETTING_PATROL))
+	{
+		utils.setScriptVar(vehicle, VEHICLE_SETTING_PATROL, true);
+	}
+	location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS);
+	if ( patrolLoc == null )
+	{
+		patrolLoc = new location[1];
+	}
+	else if (patrolLoc.length < MAX_WAYPOINTS)
+	{
+		location[] temp = new location[patrolLoc.length + 1];
+		for (int i = 0; i < patrolLoc.length; ++i)
+			temp[i] = patrolLoc[i];
+		patrolLoc = temp;
+	}
+	else
+	{
+		sendSystemMessage(player, MINI_VEHICLE_MAX_WAYPOINTS);
+		return;
+	}
+
+	location playerLoc = getLocation(player);
+	if(!isValidId(playerLoc.cell))
+	{
+		sendSystemMessage(player, MINI_VEHICLE_NOT_IN_HOUSE);
+		return;
+	}
+	patrolLoc[patrolLoc.length - 1] = playerLoc;
+	//SET THE LOCATION ARRAY ON THE TERMINAL
+	setObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS, patrolLoc);
+
+	sendSystemMessage(player, SYS_PATROL_ADDED);
+	sendConsoleMessage(player, "Patrol points left: "+(MAX_WAYPOINTS - patrolLoc.length));
+
+	//Move the vehicle to the player as a courtesy so they can make it patrol all over.
+	pathTo(vehicle, playerLoc);
+}
+
+void doClearPatrolPoints(obj_id vehicle, obj_id player)
+{
+	if(!isValidId(vehicle) || !isValidId(player))
+		return;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return;
+
+	if (hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS))
+	{
+		removeObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS);
+		sendSystemMessage(player, SYS_PATROL_REMOVED);
+
+		ai_lib.clearPatrolPath(vehicle);
+		stop(vehicle);
+		messageTo( vehicle, "resumeDefaultCalmBehavior", null, 1, false );
+	}
+	else
+	{
+		sendSystemMessage(player, MINI_VEHICLE_WAYPOINTS_NOT_CLEAR);
+	}
+}
+
+void removeLastPatrolPoint(obj_id vehicle, obj_id player)
+{
+	if(!isValidId(vehicle) || !isValidId(player))
+		return;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return;
+
+	if (hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS))
+	{
+		location[] patrolLoc = getLocationArrayObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS);
+		if ( patrolLoc == null )
+		{
+			sendSystemMessage(player, MINI_VEHICLE_WAYPOINTS_NOT_CLEAR);
+		}
+		else if (patrolLoc.length > 0)
+		{
+			location[] temp = new location[patrolLoc.length-1];
+			for (int i = 0; i < patrolLoc.length-1; ++i)
+				temp[i] = patrolLoc[i];
+			patrolLoc = temp;
+			setObjVar(terminal, OBJVAR_VEHICLE_PATROL_POINTS, patrolLoc);
+			sendSystemMessage(player, SYS_PATROL_ADDED);
+			sendConsoleMessage(player, "Patrol points left: "+(MAX_WAYPOINTS - patrolLoc.length));
+		}
+
+		location playerLoc = getLocation(player);
+		//Move the vehicle to the player as a courtesy so they can make it patrol all over.
+		if(isValidId(playerLoc.cell))
+		{
+			pathTo(vehicle, playerLoc);
+			return;
+		}
+	}
+}
+
+boolean setPatrolLoop(obj_id vehicle, obj_id player, obj_id terminal)
+{
+	if(!isValidId(vehicle) || !isValidId(player))
+		return false;
+
+	if(!isValidId(terminal) || !isValidId(terminal))
+		return false;
+
+	if (!hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_LOOP))
+	{
+		setObjVar(terminal, OBJVAR_VEHICLE_PATROL_LOOP, true);
+		if (hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_ONCE))
+			removeObjVar(terminal, OBJVAR_VEHICLE_PATROL_ONCE);
+		sendConsoleMessage(player, "Patrol loop setting applied.");
+		if(utils.hasScriptVar(vehicle, VEHICLE_MOVING))
+		{
+			stop(vehicle);
+			doPatrol(vehicle, player);
+		}
+
+		return true;
+	}
+	return false;
+}
+
+boolean setPatrolOnce(obj_id vehicle, obj_id player, obj_id terminal)
+{
+	if (!hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_ONCE))
+	{
+		setObjVar(terminal, OBJVAR_VEHICLE_PATROL_ONCE, true);
+		if (hasObjVar(terminal, OBJVAR_VEHICLE_PATROL_LOOP))
+			removeObjVar(terminal, OBJVAR_VEHICLE_PATROL_LOOP);
+		sendConsoleMessage(player, "Patrol once only setting applied.");
+		if(utils.hasScriptVar(vehicle, VEHICLE_MOVING))
+		{
+			stop(vehicle);
+			doPatrol(vehicle, player);
+		}
+		return true;
+	}
+	return false;
+}
+
+//------------------------------------------------
+// createDialog
+// This fucntion creates the SUI message box with the basic instructions.
+// It also has a button for the user to test their points.
+//------------------------------------------------
+int createHelpDialog(obj_id vehicle, obj_id player)
+{
+	if(utils.hasScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU))
+		return -1;
+
+	if (!isIdValid(player))
+	{
+		return -1;
+	}
+	if (!isIdValid(vehicle))
+	{
+		return -1;
+	}
+
+	int pid = sui.msgbox( vehicle, player, utils.packStringId(new string_id("sui", "mini_vehicle_sui_text")), sui.OK_CANCEL, utils.packStringId(new string_id( "sui", "mini_vehicle_sui_title")), "handleDialogInput" );
+
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, utils.packStringId(new string_id( "sui", "close")));
+	sui.setSUIProperty( pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, utils.packStringId(new string_id( "sui", "mini_vehicle_sui_test_button")));
+
+	flushSUIPage(pid);
+
+	utils.setScriptVar(vehicle, SCRIPTVAR_VEHICLE_HELP_MENU, true);
+	return pid;
+}
+
+messageHandler OnPack()
+{
+	obj_id vehicle = self;
+	if(!isValidId(vehicle))
+		return SCRIPT_CONTINUE;
+
+	obj_id terminal = getObjIdObjVar(vehicle, "terminal");
+	if(!isValidId(terminal))
+		return SCRIPT_CONTINUE;
+
+	messageTo(terminal, "destroyVehicle", null, 1, false);
+
+	return SCRIPT_CONTINUE;
+}

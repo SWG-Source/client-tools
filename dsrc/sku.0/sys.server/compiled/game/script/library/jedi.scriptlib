@@ -1,0 +1,3103 @@
+include library.armor;
+include library.factions;
+include library.utils;
+include library.skill;
+include library.money;
+include library.player_version;
+include library.buff;
+include library.combat;
+include library.group;
+include library.stealth;
+
+const string JEDI_ACTIONS_FILE = "datatables/jedi/jedi_actions.iff";
+const string JEDI_RANK_DATA = "datatables/jedi/jedi_rank_data.iff";
+const string JEDI_CRYSTAL_COLOR_TABLE = "datatables/jedi/crystal_color_damage.iff";
+
+const string TEMPLATE_FORCE_CRYSTAL      = "object/tangible/component/weapon/lightsaber/lightsaber_module_force_crystal.iff";
+const string TEMPLATE_KRAYT_DRAGON_PEARL = "object/tangible/component/weapon/lightsaber/lightsaber_module_krayt_dragon_pearl.iff";
+
+const string JEDI_CLOAK_LIGHT_HOOD_UP		= "item_jedi_robe_06_03";
+const string JEDI_CLOAK_DARK_HOOD_UP		= "item_jedi_robe_06_04";
+const string JEDI_CLOAK_LIGHT_HOOD_DOWN		= "item_jedi_robe_06_05";
+const string JEDI_CLOAK_DARK_HOOD_DOWN		= "item_jedi_robe_06_06";
+const string JEDI_STANCE			= "fs_buff_def_1_1";
+const string JEDI_FOCUS				= "fs_buff_ca_1";
+
+
+const int JEDI_NEUTRAL = 0;
+const int JEDI_LIGHT_SIDE = 1;
+const int JEDI_DARK_SIDE = 2;
+const int BOUNTY_VISIBILITY_THRESHHOLD = 2000; // visiblity of this value and you get bountied
+const int NO_BOUNTY_VISIBLITY_THRESHOLD = 500; // drop below this and we clear your misison
+
+const int JEDI_DEATH_DECAY_TIME					= 7*24*60*60; // 1 week
+const int BOUNTY_SPLOIT_INTERVAL  				= 60*24*3; // every 3 days
+const int MAX_JEDI_DEATHS_PADAWAN				= 3;
+const int MAX_JEDI_DEATHS_KNIGHT				= 4;
+const int MAX_JEDI_DEATHS_MASTER				= 5;
+
+const int MAX_CRYSTAL_COUNT					= 6;
+
+
+const string VAR_JEDI_RESTART					= "jedi_restart";
+const string VAR_JEDI_DEATHS_OLD				= "jedi.deaths";
+const string VAR_JEDI_DEATHS					= "jedi.deathCount";
+const string VAR_JEDI_SKILL_LOSS				= "jedi.skillLoss";
+const string VAR_JEDI_LAST_DEATH				= "jedi.lastDeath";
+const string VAR_JEDI_SKILL						= "jedi.skill_required";
+
+const string VAR_SABER_BASE						= "jedi.saber";
+const string VAR_SABER_DEFAULT_STATS			= VAR_SABER_BASE + ".base_stats";
+
+const string VAR_CRYSTAL_BASE					= "jedi.crystal";
+const string VAR_CRYSTAL_STATS					= VAR_CRYSTAL_BASE + ".stats";
+const string VAR_CRYSTAL_OWNER					= VAR_CRYSTAL_BASE + ".owner";
+const string VAR_CRYSTAL_OWNER_ID				= VAR_CRYSTAL_BASE + ".owner.id";
+const string VAR_CRYSTAL_OWNER_NAME				= VAR_CRYSTAL_BASE + ".owner.name";
+
+const string VAR_MIN_DMG						= "min_dmg";
+
+const string VAR_MAX_DMG						= "max_dmg";
+const string VAR_SPEED							= "speed";
+const string VAR_WOUND							= "wound";
+const string VAR_ATTACK_COST                    = "attack_cost";
+const string VAR_ACCURACY                       = "accuracy";
+const string VAR_RADIUS							= "damage";
+const string VAR_FORCE							= "force";
+const string VAR_COLOR							= "color";
+const string VAR_LEVEL							= "level";
+const string VAR_HP								= "hp";
+const string VAR_HP_MAX							= "hpMax";
+const string VAR_ELEMENTAL_DAM_TYPE				= "e_damage_type";
+const string VAR_ELEMENTAL_DAM_AMNT				= "e_damage_amount";
+const string VAR_SHADER							= "shader";
+const string VAR_QUALITY						= "quality";
+
+
+const int CRYSTAL_POOR							= 0;
+const int CRYSTAL_FAIR							= 1;
+const int CRYSTAL_GOOD							= 2;
+const int CRYSTAL_QUALITY						= 3;
+const int CRYSTAL_SELECT						= 4;
+const int CRYSTAL_PREMIUM						= 5;
+const int CRYSTAL_FLAWLESS						= 6;
+const int MIN_CRYSTAL_TUNE_PLAYER_LEVEL			= 20;
+
+const int MIN_NON_FR_JEDI_BOUNTY	=	25000;
+const int PER_JEDI_SKILL_PT_COST	=	1000;   // every BOUNT_SPLOIT_INTERVAL the jedi is worth this much per jedi skill point spent
+const int MIN_FR_JEDI_BOUNTY		=	50000;  // FRS Jedi of level 1+ are worth this much
+const int PER_FORCE_RANK_COST		= 	100000; // 100k per rank in the FRS
+
+const string_id SID_REGEN_TEMPORARILY_REDUCED			= new string_id( "jedi_spam", "regen_temporarily_reduced");
+const string_id SID_UNABLE_TO_RETURN_PEARLS_INVENTORY	= new string_id( "jedi_spam", "unable_to_return_pearls_inventory");
+const string_id SID_MAKE_SURE_INVENTORY_SPACE_AVAILABLE	= new string_id( "jedi_spam", "make_sure_inventory_space_available");
+const string_id SID_WILL_ATTEMPT_NEXT_TIME				= new string_id( "jedi_spam", "will_attempt_next_time");
+const string_id SID_ALL_PEARLS_RESTORED					= new string_id( "jedi_spam", "all_pearls_restored");
+const string_id SID_LOST_JEDI_XP						= new string_id( "jedi_spam", "lost_jedi_xp");
+
+
+// SHARED JEDI FUNCTIONS LIVE HERE
+const string[] JEDI_ENEMY_FACTIONS = {factions.FACTION_IMPERIAL};
+const string[] JEDI_NEUTRAL_FACTIONS = {factions.FACTION_NEUTRAL};
+
+const float ENEMY_VISIBILITY_MULTIPLIER = 1.0f; // full value of action is registered if performed publicly;
+const float NEUTRAL_VISIBILITY_MULTIPLIER = 0.5f; // partial value if performed publicly
+
+int getJediActionVisibilityValue(obj_id objPlayer, int intActionVisibility, int intActionRange)
+{
+	// this gets the "public" appearance value for this action
+	float fltActionRange = (float) intActionRange;
+	float fltBaseVisibility = (float)intActionVisibility;
+	float fltActualVisibility = 0;
+	obj_id[] objNPCs = getNPCsInRange(objPlayer, fltActionRange);
+	obj_id[] objPlayers = getPlayerCreaturesInRange(objPlayer, fltActionRange);
+	if((objNPCs!=null)&&(objNPCs.length>0))
+	{
+		//LOG("jedi", "npcs found was "+objNPCs.length);
+		for(int intI = 0; intI<objNPCs.length; intI++)
+		{
+			if(ai_lib.isNpc( objNPCs[intI])|| ai_lib.isAndroid(objNPCs[intI]))
+			{
+
+				string strFaction = factions.getFaction(objNPCs[intI]);
+				if(strFaction!=null)
+				{
+					int intIndex = utils.getElementPositionInArray(JEDI_ENEMY_FACTIONS, strFaction);
+					if(intIndex>-1)
+					{
+						float fltTempVisibility = fltBaseVisibility * ENEMY_VISIBILITY_MULTIPLIER;
+						// EEEVIL!;
+						if (fltTempVisibility > fltActualVisibility)
+							fltActualVisibility = fltTempVisibility;
+					}
+					else
+					{
+						float fltTempVisibility = fltBaseVisibility *NEUTRAL_VISIBILITY_MULTIPLIER;
+						// neutral
+						if (fltTempVisibility > fltActualVisibility)
+							fltActualVisibility = fltTempVisibility;
+					}
+				}
+				else
+				{
+					float fltTempVisibility = fltBaseVisibility * 0.25f;
+					if (fltTempVisibility > fltActualVisibility)
+						fltActualVisibility = fltTempVisibility;
+				}
+			}
+		}
+	}
+	else
+	{
+		//LOG("jedi", "No npc's");
+	}
+
+	if (objPlayers != null && objPlayers.length>0)
+	{
+		for(int intI = 0; intI<objPlayers.length; intI++)
+		{
+			if(
+				(!group.inSameGroup(objPlayer, objPlayers[intI])) &&
+				(objPlayers[intI]!=objPlayer) &&
+				(!isGod(objPlayers[intI]))
+			  )
+			{
+				if(factions.pvpDoAllowedAttackCheck(objPlayer, objPlayers[intI]))
+				{
+					fltActualVisibility += (fltBaseVisibility * ENEMY_VISIBILITY_MULTIPLIER);
+					// EEEVIL!;
+				}
+				else if (factions.isNeutral(objPlayers[intI]))
+				{
+					fltActualVisibility += (fltBaseVisibility * NEUTRAL_VISIBILITY_MULTIPLIER);
+					// neutral
+				}
+				else
+				{
+					fltActualVisibility += (fltBaseVisibility * 0.25f);
+				}
+			}
+		}
+	}
+	else
+	{
+		//LOG("jedi", "No players");
+	}
+
+	int intActualVisibility = (int)fltActualVisibility;
+	//LOG("jedi", "returning "+intActualVisibility);
+
+	return intActualVisibility;
+}
+
+void jediActionPerformed(obj_id objPlayer, int intActionVisibility, int intActionRadius) // increments objvars, handles a bunch of other notifiactaions
+{
+	//if (!isPlayer (objPlayer))		// UNCOMMENT THIS TO RE-ENABLE THE JEDI VISIBILITY STUFF  --  RcT - 10/11/05
+		return;
+	/*
+	int intRealVisibility = getJediActionVisibilityValue(objPlayer, intActionVisibility, intActionRadius);
+	int intNewVisibility = getJediVisibility(objPlayer);
+	intNewVisibility = intNewVisibility + intRealVisibility;
+	if (hasObjVar(objPlayer, "jedi.intVisibilityTime"))
+	{
+		int intTime = getGameTime();
+
+		int intOldTime = 0;
+
+		if (!utils.checkConfigFlag("ScriptFlags","noJediVisibilityDelay"))
+			intOldTime = getIntObjVar(objPlayer, "jedi.intVisibilityTime");
+
+		int intDifference = intTime - intOldTime;
+		if (intDifference > 0)
+		{
+			// timestamp goes away
+			int intOldVisibility = getIntObjVar(objPlayer, "jedi.intOldVisibility");
+			removeObjVar(objPlayer, "jedi.intVisibilityTime");
+			removeObjVar(objPlayer, "jedi.intOldVisibility");
+			intNewVisibility += intOldVisibility;
+		}
+		else
+		{
+			int intOldVisibility = getIntObjVar(objPlayer, "jedi.intOldVisibility");
+			intOldVisibility = intOldVisibility + intNewVisibility;
+			setObjVar(objPlayer, "jedi.intOldVisibility", intOldVisibility); // we stre the visibility increase
+			return;
+		}
+	}
+
+	// make sure the Jedi's visibility doesn't go above the cap
+	String capString = getConfigSetting("GameServer", "jediVisibilityCap");
+	if ( capString != null )
+	{
+		int visibilityCap = Integer.parseInt(capString);
+		if ( visibilityCap > 0 )
+		{
+			if ( intNewVisibility > visibilityCap )
+			{
+				CustomerServiceLog("Jedi", "Capping Jedi player %TU visibility from " + intNewVisibility +
+					" to " + visibilityCap + " for Jedi action", objPlayer);
+				intNewVisibility = visibilityCap;
+			}
+		}
+		else
+			CustomerServiceLog("Jedi", "WARNING: config setting [GameServer] jediVisibilityCap <= 0");
+	}
+	else
+		CustomerServiceLog("Jedi", "WARNING: config setting [GameServer] jediVisibilityCap does not exist");
+
+	setJediVisibility(objPlayer, intNewVisibility);
+	*/
+}
+
+void setJediVisibilityTimeStamp(obj_id self)
+{
+	const int JEDI_BOUNTY_TIMER = 60*60*24*7; // 1 week until you get misions.
+	int intTimeStamp = getGameTime();
+	intTimeStamp = intTimeStamp + JEDI_BOUNTY_TIMER;
+	setObjVar(self, "jedi.intVisibilityTime", intTimeStamp);
+}
+
+void checkJediPenalties(obj_id objPlayer, int intVisiblity)
+{
+	if(intVisiblity<NO_BOUNTY_VISIBLITY_THRESHOLD)
+	{
+		// ALL MISSIONS INCOMPLETE! WOOH
+		clearJediBounties(objPlayer);
+	}
+	return; // nothing going on right now.
+}
+
+void doJediTEF(obj_id objPlayer)
+{
+	string strTest = factions.getFaction(objPlayer);
+	if(strTest==null)
+	{
+		return;
+	}
+
+	string strImperial = factions.FACTION_IMPERIAL;
+	string strRebel = factions.FACTION_REBEL;
+
+	if(strTest==strRebel)
+	{
+		pvpSetFactionEnemyFlag(objPlayer, ##"imperial"); // imperials are full of hate now
+	}
+	else if(strTest==strImperial)
+	{
+		pvpSetFactionEnemyFlag(objPlayer, ##"rebel"); // rebels are full of hate now
+	}
+	else
+	{
+		pvpSetFactionEnemyFlag(objPlayer, ##"imperial"); // imperials are full of hate now
+	}
+}
+
+
+void clearJediBounties(obj_id objPlayer)
+{
+	obj_id[] hunters = getJediBounties(objPlayer);
+	if ( hunters != null )
+	{
+		dictionary params = new dictionary();
+		params.put("target", objPlayer);
+		for (int i = 0; i < hunters.length; i++)
+		{
+			if ( isIdValid(hunters[i]) )
+			{
+				messageTo(hunters[i], "bountyIncomplete", params, 1.0f, true);
+			}
+		}
+		removeAllJediBounties(objPlayer);
+	}
+}
+
+boolean hasForcePower(obj_id objPlayer, int intForcePowerCost)
+{
+	int intCurrentPower = getForcePower(objPlayer);
+	if ((intCurrentPower - intForcePowerCost > 0)||(!isPlayer(objPlayer)))
+	{
+		return true;
+	}
+	else
+	{
+		string_id strSpam = new string_id("jedi_spam", "no_force_power");
+		sendSystemMessage(objPlayer, strSpam);
+
+		return false;
+	}
+}
+
+boolean drainForcePower(obj_id objPlayer, int intForcePowerCost)
+{
+	return drainForcePower(objPlayer, intForcePowerCost, true);
+}
+boolean drainForcePower(obj_id objPlayer, int intForcePowerCost, boolean verbose)
+{
+	if(utils.checkConfigFlag("ScriptFlags","e3Demo"))
+	{
+		intForcePowerCost = 0;
+	}
+	int intCurrentPower = getForcePower(objPlayer);
+	if (intCurrentPower - intForcePowerCost >= 0)
+	{
+		int intActualCost = -1 * intForcePowerCost;
+		alterForcePower(objPlayer, intActualCost);
+		return true;
+	}
+	else
+	{
+		if (verbose)
+		{
+			string_id strSpam = new string_id("jedi_spam", "no_force_power");
+			sendSystemMessage(objPlayer, strSpam);
+		}
+		return false;
+	}
+}
+
+void grantJediXP(obj_id objPlayer, int intForcePowerCost)
+{
+	location locTest =getLocation(objPlayer);
+	obj_id objBuilding = getTopMostContainer(objPlayer);
+	if(isIdValid(objBuilding))
+	{
+		if(hasScript(objBuilding, "structure.permanent_structure"))
+		{
+			return; // inside a player structure, no xp for you
+		}
+	}
+
+	// Disabled xp grants for saber and power usage.  All jedi xp must now come from kills.
+	//xp.grant(objPlayer, xp.JEDI_GENERAL, intForcePowerCost);
+}
+
+
+void doJediNonCombatAnimation(obj_id objPlayer, obj_id objTarget, dictionary dctJediInfo)
+{
+	if(objTarget!=null)
+	{
+		// targeted animation
+	}
+	else
+	{
+		// non targeted animation ??
+	}
+}
+
+boolean isJediTrainerForPlayer(obj_id objPlayer, obj_id objNPC)
+{
+	if(!isJedi(objPlayer))
+	{
+		return false;
+	}
+
+	location locTrainerLocation = getLocationObjVar(objPlayer, "jedi.locTrainerLocation");
+	if(locTrainerLocation==null)
+	{
+		return false;
+	}
+
+	location locNPCLocation = getWorldLocation(objNPC);
+	locNPCLocation.y = 0;
+	locTrainerLocation.y = 0;
+
+	float fltDistance = getDistance(locTrainerLocation, locNPCLocation);
+	if (fltDistance != -1 && fltDistance < 3)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+boolean isLightsaber(obj_id objWeapon)
+{
+	return isLightsaber(getWeaponType(objWeapon));
+}
+
+boolean isLightsaber(int intWeaponType)
+{
+	switch(intWeaponType)
+	{
+		case WEAPON_TYPE_WT_1HAND_LIGHTSABER: return true;
+		case WEAPON_TYPE_WT_2HAND_LIGHTSABER: return true;
+		case WEAPON_TYPE_WT_POLEARM_LIGHTSABER: return true;
+	}
+	return false;
+}
+
+int getJediAlignment(obj_id objJedi)
+{
+	return getSkillStatisticModifier(objJedi, "private_jedi_alignment");
+}
+
+float getJediAlignmentModifier(obj_id objPlayer, dictionary dctJediInfo)
+{
+	//////////////////////////////////////////////////////////////////////////////////////////
+	//  Rewrite this to use new Jadi Rank System
+	//////////////////////////////////////////////////////////////////////////////////////////
+
+//	int intAlignment = getJediAlignment(objPlayer);
+//	if(intAlignment==JEDI_NEUTRAL)
+//	{
+//		return 1.0f;
+//	}
+//	if(intAlignment==JEDI_LIGHT_SIDE)
+//	{
+//		return dctJediInfo.getFloat("fltLightSide");
+//	}
+//	else if(intAlignment==JEDI_DARK_SIDE)
+//	{
+//		return dctJediInfo.getFloat("fltDarkSide");
+//	}
+	return 1.0f; // fucked up alignment.. it's not 1, it's not 0, and it's not 2. So it's something other than thsoe
+}
+
+int modifyForcePower(obj_id objPlayer, int intForcePowerToDrain, dictionary dctJediInfo)
+{
+	//////////////////////////////////////////////////////////////////////////////////////////
+	//  Rewrite this to use new Jadi Rank System
+	//////////////////////////////////////////////////////////////////////////////////////////
+
+	float fltAlignmentModifier = getJediAlignmentModifier(objPlayer, dctJediInfo);
+
+	// modify the force cost, and the damage of the move.
+	float fltForcePower = (float)intForcePowerToDrain;
+	fltForcePower = fltForcePower - (fltForcePower * (1.0f - fltAlignmentModifier));
+	intForcePowerToDrain = (int)fltForcePower;
+
+	return intForcePowerToDrain;
+}
+
+float getJediActionTime(obj_id player, dictionary actionData)
+{
+	float timeDelay = actionData.getFloat("baseTimeMod");
+
+	int rankMod = getEnhancedSkillStatisticModifier(player, "dark_jedi_power");
+	if (rankMod > 0)
+	{
+		timeDelay += rankMod * actionData.getFloat("darkTimeBonus");
+	}
+	else
+	{
+		rankMod = getEnhancedSkillStatisticModifier(player, "light_jedi_power");
+
+		if (rankMod > 0)
+			timeDelay += rankMod * actionData.getFloat("lightTimeBonus");
+	}
+
+	return timeDelay;
+}
+
+float getJediDamageModifier(obj_id player, dictionary actionData)
+{
+	float damageMod = actionData.getFloat("baseDamageMod");
+
+	int rankMod = getEnhancedSkillStatisticModifier(player, "dark_jedi_power");
+	if (rankMod > 0)
+	{
+		damageMod += rankMod * actionData.getFloat("darkDamageMod");
+	}
+	else
+	{
+		rankMod = getEnhancedSkillStatisticModifier(player, "light_jedi_power");
+
+		if (rankMod > 0)
+			damageMod += rankMod * actionData.getFloat("lightDamageMod");
+	}
+
+	return damageMod;
+}
+
+void recalculateForcePower(obj_id player)
+{
+	int maxPower = getSkillStatisticModifier(player, "jedi_force_power_max");
+
+	//get base force regen skill
+	int baseRegenRate = getSkillStatisticModifier(player, "jedi_force_power_regen");
+
+	//get modified force regen skill
+	int modRegenRate = (getEnhancedSkillStatisticModifier(player, "jedi_force_power_regen") - baseRegenRate);
+
+	//cap skill tapes at 15 for Jedi regen, very dangerous skill mod, capping it here
+	if (modRegenRate > 15)
+		modRegenRate = 15;
+
+	baseRegenRate = baseRegenRate + modRegenRate;
+
+	float regenRate = (float)baseRegenRate;
+
+	regenRate = regenRate / 10f;
+
+	// Add Force Rank Bonus
+	if (hasSkill(player, "force_rank_light_novice"))
+	{
+		int force_power = getSkillStatisticModifier(player, "force_power_light");
+		int force_control = getSkillStatisticModifier(player, "force_control_light");
+		int force_manipulation = getSkillStatisticModifier(player, "force_manipulation_light");
+
+		maxPower += (force_power + force_control) * 10;
+		regenRate += (force_control + force_manipulation) / 100f;
+	}
+	else if (hasSkill(player, "force_rank_dark_novice"))
+	{
+		int force_power = getSkillStatisticModifier(player, "force_power_dark");
+		int force_control = getSkillStatisticModifier(player, "force_control_dark");
+		int force_manipulation = getSkillStatisticModifier(player, "force_manipulation_dark");
+
+		maxPower += (force_power + force_control) * 10;
+		regenRate += (force_control + force_manipulation) / 100f;
+	}
+
+	// Apply Force Meditate bonus
+	int meditateRate = 1;
+	if (hasObjVar(player, "jedi.meditate"))
+		meditateRate = getIntObjVar(player, "jedi.meditate");
+	regenRate *= meditateRate;
+
+	// Get regen penalty from regainConciousness
+	int regenPenalty = utils.getIntScriptVar(player, "jedi.regenPenalty");
+	if (regenPenalty < 1) regenPenalty = 1;
+	regenRate /= (float)regenPenalty;
+
+	// Set power & regen rate
+	setMaxForcePower(player, maxPower);
+	setForcePowerRegenRate(player, regenRate);
+
+	return;
+}
+
+boolean postponeGrantJedi()
+{
+	string enabled = toLower(getConfigSetting("GameServer", "postponeJediGrant"));
+	if (enabled == null)
+		return false;
+
+	if (enabled.equals("true") || enabled.equals("1"))
+		return true;
+
+	return false;
+}
+
+/////////////////////////////////////////////////
+// Jedi Non-Combat Abilities
+/////////////////////////////////////////////////
+
+
+boolean doNonCombatActionPrecheck(obj_id player, obj_id target, dictionary actionData)
+{
+	int forceCost = actionData.getInt("intJediPowerCost");
+	float range	= actionData.getFloat("fltRange");
+	float actionTime = actionData.getInt("fltActionTime");
+
+	if (isIdValid(player) && isIdValid(target) && exists(target))
+	{
+		if (player != target)
+		{
+			float dist = getDistance(target, player);
+
+			if (dist > range)
+			{
+				// system message
+				//LOG("jedi", "Distance is "+dist+" and range is "+range);
+				sendSystemMessage(player, new string_id("cbt_spam", "out_of_range_single"));
+				return false;
+			}
+		}
+	}
+	else
+	{
+		return false;
+	}
+
+	forceCost = jedi.getModifiedForceCost(player, forceCost, actionData.getString("actionName")); // modifies force power cost based on light/darkside
+	actionData.put("intJediPowerCost", forceCost);
+
+	if(!jedi.hasForcePower(player, forceCost))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+obj_id getCorrectFriendlyTarget(obj_id player, obj_id target, dictionary actionData)
+{
+	float range = actionData.getFloat("fltRange");
+
+	if (range < 0)
+	{
+		//LOG("jedi", "returning "+player);
+		return player; // -1 or more means target the player
+	}
+
+	obj_id newTarget = null;
+
+	if (!isIdValid(target))
+	{
+		newTarget = player;
+	}
+	else
+	{
+		if(!factions.pvpDoAllowedHelpCheck(player, target))
+		{
+			newTarget = getLookAtTarget(player);
+		}
+		else
+		{
+			newTarget = target;
+		}
+	}
+
+	// PvP enemies & dead people are not valid targets
+	if (!factions.pvpDoAllowedHelpCheck(player, newTarget) || isDead(newTarget))
+	{
+		sendSystemMessage(player, new string_id("jedi_spam", "no_help_target"));
+		return null;
+	}
+
+	// Cannot help a target who is in a Dark Jedi duel
+	if  (player != newTarget && (isIdValid(newTarget) && utils.hasScriptVar(newTarget, "noBeneficialJediHelp")))
+	{
+		sendSystemMessage(player, new string_id("jedi_spam", "no_help_target"));
+		return null;
+	}
+
+	// Check LOS
+	if (newTarget != player && !canSee(player, newTarget))
+	{
+		showFlyTextPrivate(player, player, new string_id("combat_effects", "cant_see"), 1.5f, colors.MEDIUMTURQUOISE);
+		return null;
+	}
+
+	return newTarget;
+}
+
+void playJediActionEffect(obj_id objPlayer, obj_id objTarget, dictionary actionData)
+{
+	playJediActionEffect(objPlayer, objTarget, actionData, false);
+}
+
+void playJediActionEffect(obj_id objPlayer, obj_id objTarget, dictionary actionData, boolean labelEffect)
+{
+	string combatAnim = actionData.getString("combatActionAnimation");
+	string selfAnim = actionData.getString("selfActionAnimation");
+	string clientEffect = actionData.getString("clientEffectFile");
+
+	if(objTarget==objPlayer)
+	{
+		if (selfAnim != null && selfAnim != "")
+			doAnimationAction(objPlayer, selfAnim);
+
+		if (clientEffect != null && clientEffect != "")
+		{
+			if (labelEffect)
+				playClientEffectObj(objPlayer, clientEffect, objPlayer, "", null, actionData.getString("actionName"));
+			else
+				playClientEffectObj(objPlayer, clientEffect, objPlayer, "");
+		}
+
+		return;
+	}
+	else
+	{
+		if (combatAnim != null && combatAnim != "")
+		{
+			defender_results[] cbtDefenderResults = new defender_results[1];
+			cbtDefenderResults[0] = new defender_results(); // data struct newing
+			attacker_results cbtAttackerResults = new attacker_results();
+
+			cbtDefenderResults[0].id = objTarget;
+			cbtDefenderResults[0].endPosture = getPosture(objTarget);
+			cbtDefenderResults[0].result = COMBAT_RESULT_HIT;
+			cbtAttackerResults.id = objPlayer;
+			cbtAttackerResults.weapon = null;
+			doCombatResults(combatAnim, cbtAttackerResults, cbtDefenderResults);
+		}
+
+		if (clientEffect != null && clientEffect != "")
+		{
+			dictionary dctParams = new dictionary();
+			dctParams.put("strEffect", clientEffect);
+			dctParams.put("objTarget", objTarget);
+			dctParams.put("labelEffect", labelEffect);
+			//LOG("jedi", "sendiig message to "+objTarget);
+			messageTo(objTarget, "playDelayedClientEffect", dctParams, 8f, false);
+		}
+	}
+
+	return;
+}
+
+boolean performJediBuffCommand(obj_id player, obj_id target, dictionary actionData)
+{
+	string actionName = actionData.getString("actionName");
+	string buffName = actionData.getString("buffName");
+	LOG("jedi", "performJediBuffCommand::buff name ("+buffName+")");
+
+	if (!buffName.startsWith("avoidIncap"))
+	{
+		if (actionData.getInt("toggleBuff") == 1)
+		{
+			// Check for another buff of the same group
+			if(buff.hasBuff(target, buffName))
+			{
+				buff.removeBuff(target, buffName);
+				sendSystemMessage(player, new string_id("jedi_spam", "remove_"+actionName));
+				return false;
+			}
+		}
+
+		if (!buff.canApplyBuff(target, buffName))
+		{
+			LOG("jedi", "1:performJediBuffCommand::buff already present - aborting");
+			sendSystemMessage(player, new string_id("jedi_spam", "force_buff_present"));
+			return false;
+		}
+	}
+	else  // determine new buff name so player can stack avoid incap
+	{
+		const int MAX_STACK = 5;
+		string newBuffName = "";
+
+		for (int i = 1; i < MAX_STACK+1; i++)
+		{
+			newBuffName = buffName + "_" + i;
+
+			if (!buff.hasBuff(target, newBuffName))
+			{
+				// found empty buffName slot
+				buffName = newBuffName;
+				break;
+			}
+			else
+			{
+				if (i == MAX_STACK)
+				{
+					// Max number of buffs already on
+					LOG("jedi", "2:performJediBuffCommand::buff already present - aborting");
+					sendSystemMessage(player, new string_id("jedi_spam", "force_buff_present"));
+
+					return false;
+				}
+			}
+		}
+	}
+
+	// Check for healing buff
+	int minHeal = actionData.getInt("intMinHealthHeal");
+	int maxHeal = actionData.getInt("intMaxHealthHeal");
+	int duration = (int)actionData.getFloat("buffDuration");
+
+	if (minHeal > 0 && maxHeal > 0 && buff.hasBuff(target, buffName))
+	{
+		sendSystemMessage(player, new string_id("jedi_spam", "force_buff_present"));
+		return false;
+	}
+
+	// Apply the buff
+	if (buff.applyBuff(target, buffName))
+	{
+		if (minHeal > 0 && maxHeal > 0)
+		{
+			healing.startHealOverTime(target, duration, 4, rand(minHeal, maxHeal));
+		}
+
+		sendSystemMessage(player, new string_id("jedi_spam", "apply_"+actionName));
+
+		playJediActionEffect(player, target, actionData, true);
+		if(!buffName.equals("invis_forceCloak"))
+		{
+			stealth.testInvisNonCombatAction(player, target);
+		}
+	}
+
+	return true;
+}
+
+boolean doBuffAction(obj_id self, obj_id target, string actionName)
+{
+	// Make sure we are not wearing armor
+	int armorCount = utils.getIntScriptVar(self, armor.SCRIPTVAR_ARMOR_COUNT);
+	if (armorCount > 0)
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "not_with_armor"));
+		return false;
+	}
+
+	//make sure we are not mezzed
+	if(buff.isParalyzed(self))
+	{
+		return false;
+	}
+
+	actionName = combat.getBestAction(self, actionName);
+	dictionary actionData = dataTableGetRow(JEDI_ACTIONS_FILE, actionName);
+
+	if (actionData == null)
+	{
+		LOG("DESIGNER_FATAL","Buff Action "+actionName+" has no entry in the jedi actions datatable");
+		return false;
+	}
+
+	target = getCorrectFriendlyTarget(self, target, actionData);
+	if (!isIdValid(target))
+		return false;
+
+	if (!doNonCombatActionPrecheck(self, target, actionData))
+		return false;
+
+	int forceCost = actionData.getInt("intJediPowerCost");
+	if(!jedi.hasForcePower(self, forceCost))
+		return false;
+
+	// Load the weapon data
+	weapon_data weaponData = new weapon_data();
+	weaponData = getWeaponData(getCurrentWeapon(self));
+
+	int[] actionCost = combat.getActionCost(self, weaponData, actionData);
+	if(!combat.canDrainCombatActionAttributes(self, actionCost))
+		return false;
+
+	// Perform buff action
+	if(performJediBuffCommand(self, target, actionData))
+	{
+		jedi.drainForcePower(self, forceCost);
+		combat.drainCombatActionAttributes(self, actionCost);
+
+		// Increment visilbility
+		int visValue = actionData.getInt("intVisibilityValue");
+		int visRange = actionData.getInt("intVisibilityRange");
+		jedi.jediActionPerformed(self, visValue, visRange);
+
+		// Grant Jedi XP
+		int xpOverride = actionData.getInt("xpOverride");
+		if (xpOverride < 0)
+			xpOverride = forceCost;
+		jedi.grantJediXP(self, xpOverride);
+	}
+	else
+	{
+		return false;
+	}
+
+	return true;
+}
+
+boolean doForceRun(obj_id self, obj_id target, string actionName)
+{
+	// Make sure we are not wearing armor
+	int armorCount = utils.getIntScriptVar(self, armor.SCRIPTVAR_ARMOR_COUNT);
+	if (armorCount > 0)
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "not_with_armor"));
+		return false;
+	}
+
+	actionName = combat.getBestAction(self, actionName);
+	dictionary actionData = dataTableGetRow(JEDI_ACTIONS_FILE, actionName);
+
+	if (actionData == null)
+	{
+		LOG("DESIGNER_FATAL","Action "+actionName+" has no entry in the jedi actions datatable");
+		return false;
+	}
+
+	target = getCorrectFriendlyTarget(self, target, actionData);
+	if (!isIdValid(target))
+		return false;
+
+	if (!doNonCombatActionPrecheck(self, target, actionData))
+		return false;
+
+	int forceCost = actionData.getInt("intJediPowerCost");
+	if(!jedi.hasForcePower(self, forceCost))
+		return false;
+
+	// Load the weapon data
+	weapon_data weaponData = new weapon_data();
+	weaponData = getWeaponData(getCurrentWeapon(self));
+
+	int[] actionCost = combat.getActionCost(self, weaponData, actionData);
+	if(!combat.canDrainCombatActionAttributes(self, actionCost))
+		return false;
+
+	string buffName = actionData.getString("buffName");
+
+	if(!buff.canApplyBuff(self, buffName))
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "force_run_wont_stack"));
+		return false;
+	}
+
+	// Perform buff action
+	if(doBuffAction(self, target, actionName))
+	{
+		combat.drainCombatActionAttributes(self, actionCost);
+		jedi.drainForcePower(self, forceCost);
+		messageTo(self, "handleForceRunCost", null, 10, true);
+
+	}
+	else
+	{
+		return false;
+	}
+
+	return true;
+}
+
+boolean regainConsciousness(obj_id self, obj_id target, string actionName)
+{
+	actionName = combat.getBestAction(self, actionName);
+	dictionary actionData = dataTableGetRow(JEDI_ACTIONS_FILE, actionName);
+	if (actionData == null)
+	{
+		LOG("DESIGNER_FATAL","Action "+actionName+" has no entry in the jedi actions datatable");
+		return false;
+	}
+
+	target = self;
+	if (!isIdValid(target))
+		return false;
+
+	if (!doNonCombatActionPrecheck(self, target, actionData))
+		return false;
+
+	int forceCost = actionData.getInt("intJediPowerCost");
+	if(!jedi.drainForcePower(self, forceCost))
+		return false;
+
+
+	pclib.clearEffectsForDeath(self);
+
+	// Heal enough to recap
+	setAttrib(self, HEALTH, 200);
+
+	int regenPenalty = utils.getIntScriptVar(self, "jedi.regenPenalty");
+	if (regenPenalty < 1) regenPenalty = 1;
+	regenPenalty *= 2;
+	utils.setScriptVar(self, "jedi.regenPenalty", regenPenalty);
+
+	recalculateForcePower(self);
+
+	messageTo(self, "clearRegenPenalty", null, 30*60, false);
+	messageTo(self, "handlePlayerResuscitated", null, 0, true);
+
+	sendSystemMessage(self, SID_REGEN_TEMPORARILY_REDUCED);
+
+	// Increment visilbility
+	int visValue = actionData.getInt("intVisibilityValue");
+	int visRange = actionData.getInt("intVisibilityRange");
+	jedi.jediActionPerformed(self, visValue, visRange);
+
+	playJediActionEffect(self, target, actionData);
+
+	// Grant Jedi XP
+	int xpOverride = actionData.getInt("xpOverride");
+	if (xpOverride < 0)
+		xpOverride = forceCost;
+	jedi.grantJediXP(self, xpOverride);
+
+	// Jedi General XP penalty pre CU
+	//jediDeathExperienceLoss(self, 0.25f);
+
+	return true;
+}
+
+boolean transferForce(obj_id self, obj_id target, string actionName)
+{
+	// Make sure we are not wearing armor
+	int armorCount = utils.getIntScriptVar(self, armor.SCRIPTVAR_ARMOR_COUNT);
+	if (armorCount > 0)
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "not_with_armor"));
+		return false;
+	}
+
+	//make sure we are not mezzed
+	if(buff.isParalyzed(self))
+	{
+		return false;
+	}
+
+	actionName = combat.getBestAction(self, actionName);
+	dictionary actionData = dataTableGetRow(JEDI_ACTIONS_FILE, actionName);
+
+	if (actionData == null)
+		return false;
+
+	target = getCorrectFriendlyTarget(self, target, actionData);
+	if (!isIdValid(target))
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "not_this_target"));
+		return false;
+	}
+
+	if (target == self || !isPlayer(target) || !isJedi(target))
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "not_this_target"));
+		return false;
+	}
+
+	if (!doNonCombatActionPrecheck(self, target, actionData))
+		return false;
+
+	int forceCost = actionData.getInt("intJediPowerCost");
+	if(!jedi.drainForcePower(self, forceCost))
+		return false;
+
+	// Load the weapon data
+	weapon_data weaponData = new weapon_data();
+	weaponData = getWeaponData(getCurrentWeapon(self));
+
+	int[] actionCost = combat.getActionCost(self, weaponData, actionData);
+	if(!combat.canDrainCombatActionAttributes(self, actionCost))
+		return false;
+
+	// Transfer Force Power
+	//int targetPower = getForcePower(target);
+	int targetPower = rand(actionData.getInt("minForceHeal"), actionData.getInt("maxForceHeal"));
+	alterForcePower(target, targetPower);
+	combat.drainCombatActionAttributes(self, actionCost);
+
+	// Send combat spam
+	prose_package pp = new prose_package();
+	pp.stringId = new string_id("cbt_spam", "forcetransfer_hit");
+	pp.actor.set(self);
+	pp.target.set(target);
+	pp.digitInteger = targetPower;
+	combat.sendCombatSpamMessageProse(self, target, pp, true, true, false);
+
+	// Increment visilbility
+	int visValue = actionData.getInt("intVisibilityValue");
+	int visRange = actionData.getInt("intVisibilityRange");
+	jedi.jediActionPerformed(self, visValue, visRange);
+
+	// Add Hate
+	healing._addMedicalHate(self, target, targetPower);
+
+	playJediActionEffect(self, target, actionData);
+
+	// Grant Jedi XP
+	int xpOverride = actionData.getInt("xpOverride");
+	if (xpOverride < 0)
+		xpOverride = forceCost;
+	jedi.grantJediXP(self, xpOverride);
+
+	return true;
+}
+
+boolean channelForce(obj_id self, obj_id target, string actionName)
+{
+	// Make sure we are not wearing armor
+	int armorCount = utils.getIntScriptVar(self, armor.SCRIPTVAR_ARMOR_COUNT);
+	if (armorCount > 0)
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "not_with_armor"));
+		return false;
+	}
+
+	//make sure we are not mezzed
+	if(buff.isParalyzed(self))
+	{
+		return false;
+	}
+
+	actionName = combat.getBestAction(self, actionName);
+	dictionary actionData = dataTableGetRow(JEDI_ACTIONS_FILE, actionName);
+
+	if (actionData == null)
+		return false;
+
+	target = getCorrectFriendlyTarget(self, target, actionData);
+	if (!isIdValid(target))
+		return false;
+
+	if (!doNonCombatActionPrecheck(self, target, actionData))
+		return false;
+
+	// Read HAM cost & validate
+	int minHealth = actionData.getInt("intMinHealthHeal");
+	int maxHealth = actionData.getInt("intMaxHealthHeal");
+	int minAction = (int)(getMaxAttrib(self, ACTION) * (actionData.getInt("intMinActionHeal") / 100f));
+	int maxAction = (int)(getMaxAttrib(self, ACTION) * (actionData.getInt("intMaxActionHeal") / 100f));
+
+	attribute[] curAttribs = getAttribs(self);
+	if (curAttribs[HEALTH].getValue() < maxHealth ||
+		!combat.canDrainCombatActionAttributes(self, new int[] {0, maxAction, 0}))
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "channel_ham_too_low"));
+		return false;
+	}
+
+	int forceCost = actionData.getInt("intJediPowerCost");
+	if(!jedi.drainForcePower(self, forceCost))
+		return false;
+
+	// Channel Force Power
+	//int newPower = getForcePower(self);
+	int newPower = rand(actionData.getInt("minForceHeal"), actionData.getInt("maxForceHeal"));
+	alterForcePower(self, newPower);
+
+	// Add HAM attrib mod
+ 	float duration = actionData.getFloat("buffDuration") * 60;
+	addAttribModifier(self, HEALTH, (rand(minHealth, maxHealth) * -1), 0, 0, duration);
+	combat.drainCombatActionAttributes(self, new int[] {0, rand(minAction, maxAction), 0});
+
+	// Increment visilbility
+	int visValue = actionData.getInt("intVisibilityValue");
+	int visRange = actionData.getInt("intVisibilityRange");
+	jedi.jediActionPerformed(self, visValue, visRange);
+
+	playJediActionEffect(self, target, actionData);
+
+	// Grant Jedi XP
+	int xpOverride = actionData.getInt("xpOverride");
+	if (xpOverride < 0)
+		xpOverride = forceCost;
+	jedi.grantJediXP(self, xpOverride);
+
+	return true;
+}
+
+boolean forceMeditate(obj_id self, string actionName)
+{
+	// Make sure we are not wearing armor
+	int armorCount = utils.getIntScriptVar(self, armor.SCRIPTVAR_ARMOR_COUNT);
+	if (armorCount > 0)
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "not_with_armor"));
+		return false;
+	}
+
+	//make sure we are not mezzed
+	if(buff.isParalyzed(self))
+	{
+		return false;
+	}
+
+	actionName = combat.getBestAction(self, actionName);
+	dictionary actionData = dataTableGetRow(JEDI_ACTIONS_FILE, actionName);
+
+	if (actionData == null)
+		return false;
+
+	if (!doNonCombatActionPrecheck(self, self, actionData))
+		return false;
+
+	int forceCost = actionData.getInt("intJediPowerCost");
+	if(!jedi.drainForcePower(self, forceCost))
+		return false;
+
+	// Load the weapon data
+	weapon_data weaponData = new weapon_data();
+	weaponData = getWeaponData(getCurrentWeapon(self));
+
+	int[] actionCost = combat.getActionCost(self, weaponData, actionData);
+	if(!combat.canDrainCombatActionAttributes(self, actionCost))
+		return false;
+
+	//make sure we aren't in TKA Meditate
+	if (getState(self,STATE_MEDITATE) == 1)
+	{
+		sendSystemMessage(self, new string_id("jedi_spam", "already_in_meditative_state"));
+		return false;
+	}
+
+	// Start Force Meditate
+	setState(self, STATE_MEDITATE, true);
+	chat.setTempAnimationMood(self, "meditating");
+	buff.applyBuff(self, "forceMeditate");
+	combat.drainCombatActionAttributes(self, actionCost);
+
+	int meditateRate = actionData.getInt("maxForceHeal");
+	setObjVar(self, "jedi.meditate", meditateRate);
+	recalculateForcePower(self);
+
+	// Increment visilbility
+	int visValue = actionData.getInt("intVisibilityValue");
+	int visRange = actionData.getInt("intVisibilityRange");
+	jedi.jediActionPerformed(self, visValue, visRange);
+
+	playJediActionEffect(self, self, actionData);
+	messageTo(self, "forceMeditateEffect", null, 5, false);
+
+	// Grant Jedi XP
+	int xpOverride = actionData.getInt("xpOverride");
+	if (xpOverride < 0)
+		xpOverride = forceCost;
+	jedi.grantJediXP(self, xpOverride);
+
+	return true;
+}
+
+void stopForceMeditate(obj_id self)
+{
+	if (getState(self, STATE_MEDITATE) == 1)
+	{
+		setState(self, STATE_MEDITATE, false);
+		chat.resetTempAnimationMood(self);
+	}
+
+	stopClientEffectObjByLabel(self, "forceMeditate");
+	removeObjVar(self, "jedi.meditate");
+	buff.removeBuff(self, "forceMeditate");
+
+	recalculateForcePower(self);
+}
+
+void applyFeedbackDamage(obj_id player, obj_id target, float damage)
+{
+	// Apply Force Shield
+	damage *= 1.0f -(combat.convertProtectionToPercent(jedi.applyForceShield(target, (int)damage)));
+
+
+	// Apply Force Defenses
+	int defense = getEnhancedSkillStatisticModifier(target, "force_defense");
+	if (defense > 0)
+		damage = damage * (1f / (1f + (defense / 100f)));
+
+	if (damage < 1)
+		return;
+
+	addAttribModifier(target, HEALTH, (int)damage * -1, 0f, 0f, MOD_POOL);
+
+	prose_package pp = new prose_package();
+	pp.stringId = new string_id("cbt_spam", "forcefeedback_hit");
+	pp.actor.set(player);
+	pp.target.set(target);
+	pp.digitInteger = (int)damage;
+	combat.sendCombatSpamMessageProse(player, target, pp, true, true, true, COMBAT_RESULT_HIT);
+}
+
+int applyForceShield(obj_id defender, int damage)
+{
+	// Make sure we are not wearing armor
+	int armorCount = utils.getIntScriptVar(defender, armor.SCRIPTVAR_ARMOR_COUNT);
+	if (armorCount > 0)
+		return 0;
+
+	dictionary actionData = null;
+
+	if (buff.hasBuff(defender, "forceShield"))
+		actionData = dataTableGetRow(JEDI_ACTIONS_FILE, "forceShield");
+	else if (buff.hasBuff(defender, "forceShield_1"))
+		actionData = dataTableGetRow(JEDI_ACTIONS_FILE, "forceShield_1");
+	else if (buff.hasBuff(defender, "forceProtection"))
+		actionData = dataTableGetRow(JEDI_ACTIONS_FILE, "forceProtection");
+
+	float forceShield = 0;
+	if (actionData != null)
+	{
+		forceShield = getEnhancedSkillStatisticModifier(defender, "force_shield") * 100f;
+
+		int forceCost = (int)(damage * getModifiedExtraForceCost(defender, actionData.getFloat("extraForceCost"), actionData.getString("actionName")));
+
+		if (!jedi.drainForcePower(defender, forceCost)) // not enough power
+		{
+			buff.removeBuff(defender, actionData.getString("actionName"));
+		}
+		else
+		{
+		//	prose_package pp = new prose_package();
+		//	pp.stringId = new string_id("cbt_spam", "forceshield_hit");
+		//	pp.actor.set(defender);
+			//pp.digitInteger = protection;
+		//	combat.sendCombatSpamMessageProse(defender, pp, COMBAT_RESULT_HIT);
+
+			playClientEffectObj(defender, "clienteffect/pl_force_shield_hit.cef", defender, "");
+		}
+	}
+
+	return (int)forceShield;
+}
+
+int applyForceArmor(obj_id defender, int damage)
+{
+	// Make sure we are not wearing armor
+	int armorCount = utils.getIntScriptVar(defender, armor.SCRIPTVAR_ARMOR_COUNT);
+	if (armorCount > 0)
+		return 0;
+
+	dictionary actionData = null;
+
+	if (buff.hasBuff(defender, "forceArmor"))
+		actionData = dataTableGetRow(JEDI_ACTIONS_FILE, "forceArmor");
+	else if (buff.hasBuff(defender, "forceArmor_1"))
+		actionData = dataTableGetRow(JEDI_ACTIONS_FILE, "forceArmor_1");
+	else if (buff.hasBuff(defender, "forceProtection"))
+		actionData = dataTableGetRow(JEDI_ACTIONS_FILE, "forceProtection");
+
+	float forceArmor = 0;
+	if (actionData != null)
+	{
+		forceArmor = getEnhancedSkillStatisticModifier(defender, "force_armor") * 100f;
+
+		//sendSystemMessageTestingOnly(defender, "forcearmor is = " +forceArmor);
+
+		int forceCost = (int)(damage * getModifiedExtraForceCost(defender, actionData.getFloat("extraForceCost"), actionData.getString("actionName")));
+
+		if (!jedi.drainForcePower(defender, forceCost)) // not enough power
+		{
+			buff.removeBuff(defender, actionData.getString("actionName"));
+		}
+		else
+		{
+		//	prose_package pp = new prose_package();
+		//	pp.stringId = new string_id("cbt_spam", "forcearmor_hit");
+		//	pp.actor.set(defender);
+			//pp.digitInteger = protection;
+		//	combat.sendCombatSpamMessageProse(defender, pp, COMBAT_RESULT_HIT);
+			playClientEffectObj(defender, "clienteffect/pl_force_armor_hit.cef", defender, "");
+		}
+	}
+
+	return (int)forceArmor;
+}
+
+void performJediReactiveDefense(obj_id attacker, obj_id defender, weapon_data weaponData, hit_result hitData, dictionary actionData)
+{
+	// Check for Force Absorb on target
+	if (weaponData.weaponType == combat.WEAPON_TYPE_FORCE_POWER && getEnhancedSkillStatisticModifier(defender, "force_absorb") > 0)
+	{
+		float forceAbsorb = 0f;
+		if (buff.hasBuff(defender, "forceAbsorb"))
+		{
+			forceAbsorb = getModifiedExtraForceCost(defender, dataTableGetFloat(JEDI_ACTIONS_FILE, "forceAbsorb", "extraForceCost"), "forceAbsorb");
+		}
+		else
+		{
+			forceAbsorb = getModifiedExtraForceCost(defender, dataTableGetFloat(JEDI_ACTIONS_FILE, "forceAbsorb_1", "extraForceCost"), "forceAbsorb_1");
+		}
+		int forceCost = combat.getForceCost(attacker, weaponData, actionData);
+		forceAbsorb *= forceCost;
+
+		alterForcePower(defender, (int)forceAbsorb);
+		prose_package pp = new prose_package();
+		pp.stringId = new string_id("cbt_spam", "forceabsorb_hit");
+		pp.actor.set(defender);
+		pp.digitInteger = (int)forceAbsorb;
+		combat.sendCombatSpamMessageProse(defender, pp, COMBAT_RESULT_HIT);
+
+		// Play anim
+		dictionary data = new dictionary();
+		data.put("effect", "clienteffect/pl_force_absorb_hit.cef");
+		data.put("target", defender);
+
+		messageTo(attacker, "playDelayedClientEffect", data, 1, false);
+	}
+
+	// Check for Force Feedback on target
+	if (weaponData.weaponType == combat.WEAPON_TYPE_FORCE_POWER && getEnhancedSkillStatisticModifier(defender, "force_feedback") > 0)
+	{
+		float forceFeedback = getEnhancedSkillStatisticModifier(defender, "force_feedback") / 100f;
+		float feedbackDamage = forceFeedback * hitData.damage;
+
+		jedi.applyFeedbackDamage(defender, attacker, feedbackDamage);
+
+		// Play anim
+		dictionary data = new dictionary();
+		data.put("effect", "clienteffect/pl_force_feedback_hit.cef");
+		data.put("target", attacker);
+
+		messageTo(attacker, "playDelayedClientEffect", data, 1, false);
+	}
+}
+
+boolean isAvoidIncap(obj_id player)
+{
+	if (buff.hasBuff(player, "avoidIncapacitation")) return true;
+	if (buff.hasBuff(player, "avoidIncapacitation_1")) return true;
+	if (buff.hasBuff(player, "avoidIncapacitation_2")) return true;
+	if (buff.hasBuff(player, "avoidIncapacitation_3")) return true;
+	if (buff.hasBuff(player, "avoidIncapacitation_4")) return true;
+	if (buff.hasBuff(player, "avoidIncapacitation_5")) return true;
+
+	return false;
+}
+
+/////////////////////////////////////////////////
+// Force Rank Power Modification
+/////////////////////////////////////////////////
+
+int getModifiedForceCost(obj_id self, int baseForce, string actionName)
+{
+	int row = dataTableSearchColumnForString(actionName, 0, JEDI_RANK_DATA);
+	if (row != -1)
+	{
+		if (hasSkill(self, "force_rank_light_novice"))
+		{
+			int force_manipulation = getSkillStatisticModifier(self, "force_manipulation_light");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "forceModLight");
+
+			return baseForce + (int)((force_manipulation * rank_mod) + 0.5);
+		}
+		else if (hasSkill(self, "force_rank_dark_novice"))
+		{
+			int force_manipulation = getSkillStatisticModifier(self, "force_manipulation_dark");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "forceModDark");
+
+			return baseForce + (int)((force_manipulation * rank_mod) + 0.5);
+		}
+	}
+
+	return baseForce;
+}
+
+int getModifiedMinDamage(obj_id self, int baseDamage, string actionName)
+{
+	int row = dataTableSearchColumnForString(actionName, 0, JEDI_RANK_DATA);
+	if (row != -1)
+	{
+		if (hasSkill(self, "force_rank_light_novice"))
+		{
+			int force_power = getSkillStatisticModifier(self, "force_power_light");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "minDmgModLight");
+
+			return baseDamage + (int)((force_power * rank_mod) + 0.5);
+		}
+		else if (hasSkill(self, "force_rank_dark_novice"))
+		{
+			int force_power = getSkillStatisticModifier(self, "force_power_dark");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "minDmgModDark");
+
+			return baseDamage + (int)((force_power * rank_mod) + 0.5);
+		}
+	}
+
+	return baseDamage;
+}
+
+int getModifiedMaxDamage(obj_id self, int baseDamage, string actionName)
+{
+	int row = dataTableSearchColumnForString(actionName, 0, JEDI_RANK_DATA);
+	if (row != -1)
+	{
+		if (hasSkill(self, "force_rank_light_novice"))
+		{
+			int force_power = getSkillStatisticModifier(self, "force_power_light");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "maxDmgModLight");
+
+			return baseDamage + (int)((force_power * rank_mod) + 0.5);
+		}
+		else if (hasSkill(self, "force_rank_dark_novice"))
+		{
+			int force_power = getSkillStatisticModifier(self, "force_power_dark");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "maxDmgModDark");
+
+			return baseDamage + (int)((force_power * rank_mod) + 0.5);
+		}
+	}
+
+	return baseDamage;
+}
+
+float getModifiedActionSpeed(obj_id self, float baseSpeed, string actionName)
+{
+	int row = dataTableSearchColumnForString(actionName, 0, JEDI_RANK_DATA);
+	if (row != -1)
+	{
+		if (hasSkill(self, "force_rank_light_novice"))
+		{
+			int force_control = getSkillStatisticModifier(self, "force_control_light");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "delayModLight");
+
+			return baseSpeed + (force_control * rank_mod);
+		}
+		else if (hasSkill(self, "force_rank_dark_novice"))
+		{
+			int force_control = getSkillStatisticModifier(self, "force_control_dark");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "delayModDark");
+
+			return baseSpeed + (force_control * rank_mod);
+		}
+	}
+
+	return baseSpeed;
+}
+
+float getModifiedExtraForceCost(obj_id self, float baseForce, string actionName)
+{
+	int row = dataTableSearchColumnForString(actionName, 0, JEDI_RANK_DATA);
+	if (row != -1)
+	{
+		if (hasSkill(self, "force_rank_light_novice"))
+		{
+			int force_control = getSkillStatisticModifier(self, "force_control_light");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "extraForceModLight");
+
+			return baseForce + (force_control * rank_mod);
+		}
+		else if (hasSkill(self, "force_rank_dark_novice"))
+		{
+			int force_control = getSkillStatisticModifier(self, "force_control_dark");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "extraForceModDark");
+
+			return baseForce + (force_control * rank_mod);
+		}
+	}
+
+	return baseForce;
+}
+
+int getModifiedBuffAmount(obj_id self, int baseAmount, int modNum, string actionName)
+{
+	int row = dataTableSearchColumnForString(actionName, 0, JEDI_RANK_DATA);
+	if (row != -1)
+	{
+		if (hasSkill(self, "force_rank_light_novice"))
+		{
+			int force_control = getSkillStatisticModifier(self, "force_control_light");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "buffModLight"+modNum);
+
+			return baseAmount + (int)((force_control * rank_mod) + 0.5);
+		}
+		else if (hasSkill(self, "force_rank_dark_novice"))
+		{
+			int force_control = getSkillStatisticModifier(self, "force_control_dark");
+			float rank_mod = dataTableGetFloat(JEDI_RANK_DATA, row, "buffModDark"+modNum);
+
+			return baseAmount + (int)((force_control * rank_mod) + 0.5);
+		}
+	}
+
+	return baseAmount;
+}
+
+
+void jediSaberPearlRestore(obj_id player)
+{
+	// This function checks to see if there was a recorded pearl loss from saber deconstruction and restores accordingly
+
+	string serverName = toLower(getConfigSetting("CentralServer", "clusterName"));
+	string restoreTable = "datatables/jedi/saber_pearl_fix/"+serverName+".iff";
+
+	int row = dataTableSearchColumnForString(player.toString(), 0, restoreTable);
+
+	if (row > -1  && !hasObjVar(player, "jedi.restoredPearls"))
+	{
+		CustomerServiceLog("jedi_saber", "%TU - saber pearl restoration: Restoring lost pearls.", player);
+
+		int count = dataTableGetNumColumns(restoreTable) - 1;
+
+		int[] pearls = new int[count];
+		int numPearls = 0;
+
+		for (int i = 0; i < count; i++)
+		{
+			pearls[i] = dataTableGetInt(restoreTable, row, i+1);
+
+			if (pearls[i] <= 0) break;
+
+			numPearls++;
+		}
+
+		CustomerServiceLog("jedi_saber", "%TU - saber pearl restoration: "+numPearls+" pearls to be restored.", player);
+
+		obj_id inventory = utils.getInventoryContainer(player);
+		int invSpace = getVolumeFree(inventory);
+
+		if (invSpace < numPearls)
+		{
+			CustomerServiceLog("jedi_saber", "%TU - saber pearl restoration: Unable to restore pearls due to insufficient inventory space.", player);
+
+			sendSystemMessage(player, SID_UNABLE_TO_RETURN_PEARLS_INVENTORY);
+			prose_package ppInvAvail = prose.getPackage(SID_MAKE_SURE_INVENTORY_SPACE_AVAILABLE);
+			prose.setDI(ppInvAvail, numPearls);
+			sendSystemMessageProse(player, ppInvAvail);
+			sendSystemMessage(player, SID_WILL_ATTEMPT_NEXT_TIME);
+
+			return;
+		}
+
+		for (int i = 0; i < numPearls; i++)
+		{
+			obj_id pearl = createObject(TEMPLATE_KRAYT_DRAGON_PEARL, inventory, "");
+
+			if (pearl == null)
+			{
+				CustomerServiceLog("jedi_saber", "%TU - saber pearl restoration: ERROR: Level " + pearls[i] + " Pearl unable to be created.", player);
+			}
+			else
+			{
+				CustomerServiceLog("jedi_saber", "%TU - saber pearl restoration: Pearl Level set to " + pearls[i] + " for Pearl " + pearl + ".", player);
+				setObjVar(pearl, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_LEVEL, pearls[i]);
+			}
+		}
+
+		CustomerServiceLog("jedi_saber", "%TU - saber pearl restoration:, completed restoring all pearls.", player);
+
+		setObjVar(player, "jedi.restoredPearls", 1);
+
+		sendSystemMessage(player, SID_ALL_PEARLS_RESTORED);
+	}
+}
+
+/////////////////////////////////////////////////
+// Jedi Death System
+/////////////////////////////////////////////////
+
+int getMaxJediDeaths(obj_id objPlayer)
+{
+	if (hasSkill(objPlayer, "jedi_light_side_master_novice") || hasSkill(objPlayer, "jedi_dark_side_master_novice"))
+		return MAX_JEDI_DEATHS_MASTER;
+
+	if (hasSkill(objPlayer, "jedi_light_side_journeyman_novice") || hasSkill(objPlayer, "jedi_dark_side_journeyman_novice"))
+		return MAX_JEDI_DEATHS_KNIGHT;
+
+	return MAX_JEDI_DEATHS_PADAWAN;
+}
+
+/////////////////////////////////
+// Jedi Permadeath - Removed
+/////////////////////////////////
+/*
+void jediRestart(obj_id player)
+{
+	// Clear Jedi Visibility
+	setJediVisibility(player, 0);
+
+	// Wipe remaining Jedi ObjVars
+	removeObjVar(player, "jedi");
+
+	setJediVisibilityTimeStamp(player); // reset bounty timestamp
+	// Remove outstanding Bounties
+	clearJediBounties(player);
+
+	// Revoke Skills & Experince
+	revokeJediSkills(player);
+	revokeExperience(player);
+
+	// Clear Inventory
+	wipeInventory(player);
+
+	// Remove restart objvar
+	removeObjVar(player, "jedi_restart");
+
+	// Assign New Skill Trainer
+	messageTo(player, "findNewTrainer", null, 1, true);
+}
+
+void revokeJediSkills(obj_id objPlayer)
+{
+	string[] skillList = getSkillListingForPlayer(objPlayer);
+
+	int count = 0;
+	while (skillList != null && count < 15)
+	{
+		skillList = player_version.orderSkillListForRevoke(skillList);
+
+		if ( (skillList != null) && (skillList.length > 0) )
+		{
+			//for ( int n = 0;n<skillList.length;n++)
+			//{
+			//	LOG("player_version", "revokeList #"+n+" = "+skillList[n]);
+			//}
+			for ( int x = 0; x < skillList.length; x++ )
+			{
+				//LOG("playerVersion","	attempting to revoke skill: " + skillList[x]);
+				CustomerServiceLog("JediFinalDeath","revokeJediSkills(): ("+objPlayer+") "+getName(objPlayer)+" has revoked skill '"+skillList[x]+"'");
+				revokeSkill(objPlayer, skillList[x]);
+			}
+		}
+
+		skillList = getSkillListingForPlayer(objPlayer);
+		count++;
+	}
+
+	if (hasScript(objPlayer, "player.species_innate"))
+	{
+		detachScript(objPlayer, "player.species_innate");
+		attachScript(objPlayer, "player.species_innate");
+	}
+
+	grantSkill(objPlayer, "jedi_padawan_novice");
+	recalculateForcePower(objPlayer);
+}
+
+const string[] jediXpList =
+	{	"jedi_general",
+		"combat_meleespecialize_onehandlightsaber",
+		"combat_meleespecialize_twohandlightsaber",
+		"combat_meleespecialize_polearmlightsaber" };
+
+void revokeExperience(obj_id objPlayer)
+{
+	if(objPlayer == null || !isIdValid(objPlayer))
+		return;
+
+	string xpList[] = xp.getXpTypes(objPlayer);
+	if (xpList != null && xpList.length > 0)
+	{
+		for (int i = 0; i < xpList.length; i++)
+		{
+			int xpAmount = getExperiencePoints(objPlayer, xpList[i]);
+			if (xpAmount > 0)
+				grantExperiencePoints(objPlayer, xpList[i],  -xpAmount);
+		}
+	}
+
+	for (int i = 0; i < jediXpList.length; i++)
+	{
+		int xpAmount = getExperiencePoints(objPlayer, jediXpList[i]);
+		if (xpAmount > 0)
+			grantExperiencePoints(objPlayer, jediXpList[i],  -xpAmount);
+	}
+}
+
+void wipeInventory(obj_id objPlayer)
+{
+	// Wipe Equipment and Inventory
+	obj_id[] invList = getInventoryAndEquipment(objPlayer);
+
+	if (invList != null && invList.length > 0)
+	{
+		for (int i = 0; i < invList.length; i++)
+		{
+			if (isIdValid(invList[i]))
+			{
+				CustomerServiceLog("JediFinalDeath","wipeInventory(): ("+objPlayer+") "+getName(objPlayer)+" has lost item ("+invList[i]+") '"+getName(invList[i])+"'");
+				destroyObject(invList[i]);
+			}
+		}
+	}
+
+	// Wipe bank
+	obj_id bankId = getObjectInSlot(objPlayer, utils.SLOT_BANK);
+	if (isIdValid(bankId))
+	{
+		obj_id[] bankList = getContents(bankId);
+		if ( bankList != null && bankList.length > 0)
+		{
+			for ( int i = 0; i < bankList.length; ++i )
+			{
+				if ( isIdValid(bankList[i]) )
+				{
+					CustomerServiceLog("JediFinalDeath","wipeInventory(): ("+objPlayer+") "+getName(objPlayer)+" has lost item ("+bankList[i]+") '"+getName(bankList[i])+"'");
+					destroyObject(bankList[i]);
+				}
+			}
+		}
+	}
+
+	// Wipe credits
+	money.clearTotalPlayerCredits(objPlayer, money.ACCT_JEDI_DEATH);
+
+	// Recreate starting equipment
+	createStartingEquipment(objPlayer);
+}
+
+const string[] COLLECTOR_EDITION_ITEMS	=
+	{ 	"object/tangible/wearables/goggles/goggles_s01.iff",
+		"object/tangible/wearables/goggles/goggles_s02.iff",
+		"object/tangible/wearables/goggles/goggles_s03.iff" };
+
+const string[][] STARTING_CLOTHES =
+	{
+// human_male
+// zabrak_male
+// bothan_male
+// moncal_male
+// rodian_male
+// twilek_male
+// ithorian_male
+// sullustan_male
+		{	"object/tangible/wearables/shirt/shirt_s14.iff",
+			"object/tangible/wearables/jacket/jacket_s16.iff",
+			"object/tangible/wearables/pants/pants_s14.iff",
+			"object/tangible/wearables/boots/boots_s05.iff" },
+
+// human_female
+// zabrak_female
+// bothan_female
+// rodian_female
+// twilek_female
+// ithorian_female
+// sullustan_female
+		{	"object/tangible/wearables/shirt/shirt_s27.iff",
+			"object/tangible/wearables/pants/pants_s07.iff",
+			"object/tangible/wearables/boots/boots_s05.iff",
+			"object/tangible/wearables/gloves/gloves_s03.iff" },
+
+// moncal_female
+		{	"object/tangible/wearables/shirt/shirt_s27.iff",
+			"object/tangible/wearables/pants/pants_s07.iff",
+			"object/tangible/wearables/boots/boots_s05.iff",
+			"object/tangible/wearables/gloves/gloves_s02.iff" },
+// trandoshan_male
+		{	"object/tangible/wearables/shirt/shirt_s14.iff",
+			"object/tangible/wearables/jacket/jacket_s16.iff",
+			"object/tangible/wearables/pants/pants_s14.iff" },
+
+// trandoshan_female
+		{	"object/tangible/wearables/shirt/shirt_s27.iff",
+			"object/tangible/wearables/pants/pants_s07.iff",
+			"object/tangible/wearables/gloves/gloves_s03.iff", }};
+
+
+void createStartingEquipment(obj_id objPlayer)
+{
+	obj_id playerInv = utils.getInventoryContainer(objPlayer);
+
+	// Starting clothes
+	int gender = getGender(objPlayer);
+	int species = getSpecies(objPlayer);
+	int idx = -1;
+	if (gender == GENDER_MALE)
+	{
+		if (species == SPECIES_HUMAN || species == SPECIES_ZABRAK || species == SPECIES_BOTHAN ||
+			species == SPECIES_MON_CALAMARI || species == SPECIES_RODIAN || species == SPECIES_TWILEK ||
+			species == SPECIES_ITHORIAN || species == SPECIES_SULLUSTAN)
+		{
+			idx = 0;
+		}
+
+		if (species == SPECIES_TRANDOSHAN)
+		{
+			idx = 3;
+		}
+	}
+	else
+	{
+		if (species == SPECIES_HUMAN || species == SPECIES_ZABRAK || species == SPECIES_BOTHAN ||
+			species == SPECIES_RODIAN || species == SPECIES_TWILEK || species == SPECIES_ITHORIAN ||
+			species == SPECIES_SULLUSTAN)
+		{
+			idx = 1;
+		}
+
+		if (species == SPECIES_MON_CALAMARI)
+		{
+			idx = 2;
+		}
+
+		if (species == SPECIES_TRANDOSHAN)
+		{
+			idx = 4;
+		}
+	}
+	if ( idx >= 0 )
+	{
+		for ( int i = 0; i < STARTING_CLOTHES[idx].length; i++ )
+		{
+			obj_id newItem = createObject( STARTING_CLOTHES[idx][i], playerInv, "" );
+			if ( isIdValid( newItem) )
+			{
+				equip(newItem, playerInv);
+			}
+		}
+	}
+
+	// Starting equipment
+	string[] items = dataTableGetStringColumnNoDefaults( "datatables/equipment/newbie_equipment.iff", "jedi_padawan" );
+	if ( items != null && items.length > 0 )
+	{
+		for ( int i = 0; i < items.length; i++ )
+		{
+			obj_id newItem = createObject( items[i], playerInv, "" );
+			if ( isIdValid( newItem) )
+			{
+				pclib.autoInsureItem(newItem);
+			}
+		}
+	}
+
+	//collector's edition:
+	if ( features.isCollectorEdition( objPlayer ) )
+	{
+		for ( int i = 0; i < COLLECTOR_EDITION_ITEMS.length; i++ )
+		{
+			obj_id newItem = createObject( COLLECTOR_EDITION_ITEMS[i], playerInv, "" );
+			if ( isIdValid( newItem ) )
+			{
+				setObjVar( newItem, "notrade", true );
+			}
+		}
+	}
+}
+*/
+
+////////////////////////////////////////
+// Jedi Death Skill Loss - Removed
+////////////////////////////////////////
+/*
+string[] getRevokeSkills(string[] skillList)
+{
+	resizeable string[] revokeList = new Vector();
+
+	for (int i = 0; i < skillList.length; i++)
+	{
+		revokeList.add(skillList[i]);
+	}
+
+	for (int i = 0; i < skillList.length; i++)
+	{
+		string[] reqList = getSkillPrerequisiteSkills(skillList[i]);
+
+		for (int j = 0; j < reqList.length; j++)
+		{
+			int idx = utils.getElementPositionInArray(revokeList, reqList[j]);
+			if (idx != -1)
+			{
+				revokeList = utils.removeElementAt(revokeList, idx);
+			}
+		}
+	}
+
+	for (int i = 0; i < revokeList.size(); i++)
+	{
+		if (!revokeList[i].startsWith("jedi_"))
+		{
+			revokeList = utils.removeElementAt(revokeList, i);
+			i--;
+		}
+	}
+
+	string[] retArray = new string[revokeList.size()];
+	revokeList.toArray(retArray);
+
+	return retArray;
+}
+
+void handleSkillLoss(obj_id self)
+{
+	string[] skillList = getSkillListingForPlayer(self);
+	string[] revokeList = getRevokeSkills(skillList);
+
+	if (isGod(self))
+	{
+		for (int i = 0; i < revokeList.length; i++)
+		{
+			LOG ("jedi_death", "Possible skill to revoke - " + revokeList[i]);
+		}
+	}
+
+	if (revokeList.length == 1)
+	{
+		if (revokeList[0].equals("jedi_padawan_novice"))
+		{
+			return;
+		}
+	}
+
+	int idx = rand(0, revokeList.length - 1);
+
+	string_id msg = new string_id("jedi_spam", "jedi_death_skill_loss");
+	string_id skillName = new string_id("skl_n",revokeList[idx]);
+	prose_package proseMsg = prose.getPackage(msg, skillName);
+	sendSystemMessageProse(self, proseMsg);
+
+	CustomerServiceLog("jedi_death","Jedi %TU has died: Skill lost = "+revokeList[idx]+"("+localize(skillName)+")", self);
+
+	setObjVar(self, VAR_JEDI_RESTART, 1);
+	revokeSkill(self, revokeList[idx]);
+	recalculateForcePower(self);
+	removeObjVar(self, VAR_JEDI_RESTART);
+}
+
+int getSkillLossThreshold(int deathCount, int deathBuffer)
+{
+	// This shouldn't happen, but just in case.
+	if (deathCount <= deathBuffer)
+		return 99999;
+
+	// Calculate number of deaths past buffer based on skill level and death count until skill loss
+	int threshold = 6 - deathBuffer;
+	int temp = deathCount - deathBuffer;
+
+	while (temp >= threshold)
+	{
+		temp -= threshold;
+		threshold --;
+
+		if (threshold < 1)
+		{
+			threshold = 1;
+			break;
+		}
+	}
+
+	return threshold;
+}
+
+void handleJediDeath(obj_id self)
+{
+	checkDeathCount(self);
+
+	int jediDeaths = getIntObjVar(self, VAR_JEDI_DEATHS);
+	int deathBuffer = getMaxJediDeaths(self);
+
+	jediDeaths++;
+	setObjVar(self, VAR_JEDI_DEATHS, jediDeaths);
+	setObjVar(self, VAR_JEDI_LAST_DEATH, getGameTime());
+
+	messageTo(self, "handleJediDeathCount", null, 0, false);
+
+	// Do nothing if still within the buffer
+	if (jediDeaths <= deathBuffer)
+	{
+		CustomerServiceLog("jedi_death","Jedi %TU has died: DeathCount = "+jediDeaths+", DeathBuffer = "+deathBuffer+"; DeathCount within buffer, no skill loss.", self);
+		return;
+	}
+	else
+	{
+		CustomerServiceLog("jedi_death","Jedi %TU has died: DeathCount = "+jediDeaths+", DeathBuffer = "+deathBuffer+"; DeathCount over buffer, possible skill loss.", self);
+	}
+
+	// Find out how many deaths past buffer we have and how many we are allowed till skill loss
+	int count = getIntObjVar(self, VAR_JEDI_SKILL_LOSS);
+	int threshold = getSkillLossThreshold(jediDeaths, deathBuffer);
+
+	count++;
+
+	if (count >= threshold)
+	{
+		CustomerServiceLog("jedi_death","Jedi %TU has died: SkillLossCount = "+count+", SkillLossThreshold = "+threshold+"; DeathCount hit skill loss threshold, skill will be lost.", self);
+		count = 0;
+		handleSkillLoss(self);
+	}
+	else
+	{
+		CustomerServiceLog("jedi_death","Jedi %TU has died: SkillLossCount = "+count+", SkillLossThreshold = "+threshold+"; DeathCount below skill loss threshold, no skill loss.", self);
+	}
+
+	setObjVar(self, VAR_JEDI_SKILL_LOSS, count);
+}
+
+void checkDeathCount(obj_id self)
+{
+	// Error check jedi death count
+	if (isJedi(self))
+	{
+		if (hasObjVar(self, VAR_JEDI_DEATHS_OLD))
+			removeObjVar(self, VAR_JEDI_DEATHS_OLD);
+
+		int lastDeath = getIntObjVar(self, jedi.VAR_JEDI_LAST_DEATH);
+		if (getGameTime() > lastDeath + JEDI_DEATH_DECAY_TIME)
+		{
+			removeObjVar(self, VAR_JEDI_DEATHS);
+			removeObjVar(self, VAR_JEDI_LAST_DEATH);
+		}
+	}
+}
+*/
+
+void jediDeathExperienceLoss(obj_id player)
+{
+	jediDeathExperienceLoss(player, 1f);
+}
+
+void jediDeathExperienceLoss(obj_id player, float modifier)
+{
+	const int		JEDI_MIN_XP_CAP = -10000000;
+	const float		XP_LOSS_PERCENTAGE = -0.05f;
+	const string[]	JEDI_XP_TYPES = { "jedi_general" };
+
+	for (int i = 0; i < JEDI_XP_TYPES.length; i++)
+	{
+		int xpCap = getExperienceCap(player, JEDI_XP_TYPES[i]);
+
+		int xpLoss = (int)(xpCap * XP_LOSS_PERCENTAGE * modifier);
+
+		// Cap the minimum xp amount
+		int curXp = getExperiencePoints(player, "jedi_general");
+		if (curXp + xpLoss < JEDI_MIN_XP_CAP)
+			xpLoss = JEDI_MIN_XP_CAP - curXp;
+
+		grantExperiencePoints(player, JEDI_XP_TYPES[i], xpLoss);
+		prose_package ppLostXP = prose.getPackage(SID_LOST_JEDI_XP);
+		prose.setDI(ppLostXP, xpLoss);
+		sendSystemMessageProse(player, ppLostXP);
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+// New Saber functions
+/////////////////////////////////////////////////////////////////////////////////////////
+
+float getSaberForceCost(obj_id saber)
+{
+	float forceCost = 0;
+
+	if (hasObjVar(saber, VAR_SABER_BASE))
+		forceCost = getFloatObjVar(saber, VAR_SABER_BASE + "." + VAR_FORCE);
+	else
+		forceCost = getFloatObjVar(saber, "crafting_components.forceCost");
+
+	if (forceCost < 2) forceCost = 2;
+
+	return forceCost;
+}
+
+boolean isCrystalTuned(obj_id crystal)
+{
+	if(!isIdValid(crystal) || !exists(crystal))
+		return false;
+	if (hasObjVar(crystal, VAR_CRYSTAL_OWNER))
+		return true;
+
+	return false;
+	//return true;  // for debugging
+}
+
+boolean isCrystalOwner(obj_id player, obj_id crystal)
+{
+	if (!isCrystalTuned(crystal))
+		return false;
+
+	obj_id owner = getObjIdObjVar(crystal, VAR_CRYSTAL_OWNER_ID);
+	if (owner == player)
+		return true;
+
+	return false;
+	//return true;  // for debugging
+}
+
+boolean doesCrystalMatchSaber(obj_id saber, obj_id crystal)
+{
+	if (!isCrystalTuned(crystal))
+		return false;
+
+	obj_id saberOwner = getCrafter(saber);
+	if (static_item.isStaticItem(saber));
+			saberOwner = utils.getContainingPlayer(saber);
+	obj_id owner = getObjIdObjVar(crystal, VAR_CRYSTAL_OWNER_ID);
+	if (owner == saberOwner)
+		return true;
+
+	return false;
+	//return true;  // for debugging
+}
+
+void resetSaberStats(obj_id saber)
+{
+	if (!hasObjVar(saber, VAR_SABER_DEFAULT_STATS))
+		return;
+
+	initSaberBaseStats(saber);
+
+	obj_id inv = getObjectInSlot(saber, "saber_inv");
+	obj_id[] contents = getContents(inv);
+
+	if (contents == null || contents.length == 0)
+		return;
+
+	for (int i = 0; i < contents.length; i++)
+	{
+		if (!isDisabled(contents[i]))
+			addCrystalStats(saber, contents[i]);
+	}
+}
+
+void initSaberBaseStats(obj_id saber)
+{
+	int minDmg = getIntObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_MIN_DMG);
+	int maxDmg = getIntObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_MAX_DMG);
+
+	setWeaponMinDamage(saber, minDmg);
+	setWeaponMaxDamage(saber, maxDmg);
+
+	float speed = getFloatObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_SPEED);
+	setWeaponAttackSpeed(saber, speed);
+
+	float wound = getFloatObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_WOUND);
+	setWeaponWoundChance(saber, wound);
+
+	float radius = getFloatObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_RADIUS);
+	setWeaponDamageRadius(saber, radius);
+
+	int attackCost	= getIntObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_ATTACK_COST);
+	setWeaponAttackCost(saber, attackCost);
+
+	//float force = getFloatObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_FORCE);
+	//setObjVar(saber, VAR_SABER_BASE + "." + VAR_FORCE, force);
+
+	int eDamageType = getIntObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_ELEMENTAL_DAM_TYPE);
+	setWeaponElementalType(saber, eDamageType);
+
+	int eDamageAmount = getIntObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_ELEMENTAL_DAM_AMNT);
+	setWeaponElementalValue(saber, eDamageAmount);
+}
+
+void setSaberColorCrystalDamage(obj_id saber)
+{
+	int color = getIntObjVar (saber, VAR_SABER_BASE + "." + VAR_COLOR);
+
+	int colorRow = dataTableSearchColumnForInt(color, "color", JEDI_CRYSTAL_COLOR_TABLE);
+	if(color == 31 || colorRow < 0)
+	{
+		setWeaponElementalType(saber, DAMAGE_NONE);
+		setWeaponElementalValue(saber, 0);
+		return;
+	}
+
+	int damageType = dataTableGetInt(JEDI_CRYSTAL_COLOR_TABLE, colorRow, "elemental_type");
+	float damageAmt = dataTableGetFloat(JEDI_CRYSTAL_COLOR_TABLE, colorRow, "damage_amount");
+
+	setWeaponElementalType(saber, damageType);
+	setWeaponElementalValue(saber, (int)((getWeaponMaxDamage(saber) * damageAmt) +1));
+}
+
+void setSaberColor(obj_id saber, int color, int shader)
+{
+	string varName = "private/index_color_blade";
+	custom_var myVar = getCustomVarByName(saber, varName);
+	if (myVar != null && myVar.isPalColor())
+	{
+		palcolor_custom_var pcVar = (palcolor_custom_var)myVar;
+
+		if (pcVar != null)
+		{
+			pcVar.setValue(color);
+			setObjVar (saber, VAR_SABER_BASE + "." + VAR_COLOR, color);
+		}
+	}
+	//set the shader objvar if this value is 0 we have a standard saber shader, 1 is equal to the lava shader
+	string shaderName = "private/alternate_shader_blade";
+	custom_var shaderVar = getCustomVarByName(saber, shaderName);
+	if (shaderVar != null)
+	{
+		ranged_int_custom_var riVar = (ranged_int_custom_var)shaderVar;
+
+		if (riVar != null)
+		{
+			riVar.setValue(shader);
+			setObjVar(saber, VAR_SABER_BASE + "." + VAR_SHADER, shader);
+		}
+	}
+}
+
+
+void addCrystalStats(obj_id saber, obj_id crystal)
+{
+	obj_var_list ovl = getObjVarList(crystal, VAR_CRYSTAL_STATS);
+
+	if(ovl != null)
+	{
+		int numItems = ovl.getNumItems();
+		for ( int i = 0; i < numItems; i++ )
+		{
+			obj_var ov  = ovl.getObjVar(i);
+			string name = ov.getName();
+
+			LOG("saber_test", "Processing Crystal Stat: "+name);
+
+			if (name.equals(VAR_MIN_DMG))
+			{
+				int minDmg = getWeaponMinDamage(saber);
+				LOG ("saber_test", "Old Min Damage = " + minDmg);
+				minDmg += getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_MIN_DMG);
+				LOG ("saber_test", "New Min Damage = " + minDmg);
+				if (!setWeaponMinDamage(saber, minDmg))
+					LOG ("saber_test", "ERROR: Failed Setting Min Damage");
+			}
+			else if (name.equals(VAR_MAX_DMG))
+			{
+				int maxDmg = getWeaponMaxDamage(saber);
+				maxDmg += getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_MAX_DMG);
+				setWeaponMaxDamage(saber, maxDmg);
+			}
+			else if (name.equals(VAR_SPEED))
+			{
+				float speed = getWeaponAttackSpeed(saber);
+				speed += getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_SPEED);
+				setWeaponAttackSpeed(saber, speed);
+			}
+
+			else if (name.equals(VAR_WOUND))
+			{
+				float wound = getWeaponWoundChance(saber);
+				wound += getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_WOUND);
+				setWeaponWoundChance(saber, wound);
+			}
+			else if (name.equals(VAR_RADIUS))
+			{
+				float radius = getWeaponDamageRadius(saber);
+				radius += getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_RADIUS);
+				setWeaponDamageRadius(saber, radius);
+			}
+
+			else if (name.equals(VAR_ATTACK_COST))
+			{
+				int cost = getWeaponAttackCost(saber);
+				cost += getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_ATTACK_COST);
+				setWeaponAttackCost(saber, cost);
+			}
+			else if (name.equals(VAR_FORCE))
+			{
+				float force = getFloatObjVar(saber, VAR_SABER_BASE + "." + VAR_FORCE);
+				force += getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_FORCE);
+				setObjVar(saber, VAR_SABER_BASE + "." + VAR_FORCE, force);
+			}
+			else if (name.equals(VAR_COLOR))
+			{
+				int color = getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_COLOR);
+				int shader = getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_SHADER);
+				setSaberColor(saber, color, shader);
+			}
+		}
+	}
+
+	// Validate Dmg Stats
+	int minDmg = getWeaponMinDamage(saber);
+	int maxDmg = getWeaponMaxDamage(saber);
+
+	if ((minDmg - 10) >= maxDmg)
+	{
+		minDmg = maxDmg - 10;
+		setWeaponMinDamage(saber, minDmg);
+	}
+
+	// Update the elemental damage
+	setSaberColorCrystalDamage(saber);
+	//update scriptvars
+	weapons.setWeaponData(saber);
+}
+
+void removeCrystalStats(obj_id saber, obj_id crystal)
+{
+	obj_var_list ovl = getObjVarList(crystal, VAR_CRYSTAL_STATS);
+
+	if(ovl != null)
+	{
+		int numItems = ovl.getNumItems();
+		for ( int i = 0; i < numItems; i++ )
+		{
+			obj_var ov  = ovl.getObjVar(i);
+			string name = ov.getName();
+
+			LOG("saber_test", "Processing Crystal Stat: "+name);
+
+			if (name.equals(VAR_MIN_DMG))
+			{
+				int minDmg = getWeaponMinDamage(saber);
+				LOG ("saber_test", "Old Min Damage = " + minDmg);
+				minDmg -= getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_MIN_DMG);
+				LOG ("saber_test", "New Min Damage = " + minDmg);
+				if (!setWeaponMinDamage(saber, minDmg))
+					LOG ("saber_test", "ERROR: Failed Setting Min Damage");
+			}
+			else if (name.equals(VAR_MAX_DMG))
+			{
+				int maxDmg = getWeaponMaxDamage(saber);
+				LOG ("saber_test", "Old Max Damage = " + maxDmg);
+				maxDmg -= getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_MAX_DMG);
+				LOG ("saber_test", "New Max Damage = " + maxDmg);
+				if (!setWeaponMaxDamage(saber, maxDmg))
+					LOG ("saber_test", "ERROR: Failed Setting Max Damage");
+			}
+			else if (name.equals(VAR_SPEED))
+			{
+				float speed = getWeaponAttackSpeed(saber);
+				LOG ("saber_test", "Old Speed = " + speed);
+				speed -= getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_SPEED);
+				LOG ("saber_test", "New Speed = " + speed);
+				if (!setWeaponAttackSpeed(saber, speed))
+					LOG ("saber_test", "ERROR: Failed Setting Speed");
+			}
+
+			else if (name.equals(VAR_WOUND))
+			{
+				float wound = getWeaponWoundChance(saber);
+				LOG ("saber_test", "Old Wound = " + wound);
+				wound -= getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_WOUND);
+				LOG ("saber_test", "New Wound = " + wound);
+				if (!setWeaponWoundChance(saber, wound))
+					LOG ("saber_test", "ERROR: Failed Setting Wound");
+			}
+			else if (name.equals(VAR_RADIUS))
+			{
+				float radius = getWeaponDamageRadius(saber);
+				LOG ("saber_test", "Old Radius = " + radius);
+				radius -= getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_RADIUS);
+				LOG ("saber_test", "New Radius = " + radius);
+				if (!setWeaponDamageRadius(saber, radius))
+					LOG ("saber_test", "ERROR: Failed Setting Radius");
+			}
+			else if (name.equals(VAR_ATTACK_COST))
+			{
+				int cost = getWeaponAttackCost(saber);
+				LOG ("saber_test", "Old Attack Cost = " + cost);
+				cost -= getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_ATTACK_COST);
+				LOG ("saber_test", "New Attack Cost = " + cost);
+				if (!setWeaponAttackCost(saber, cost))
+					LOG ("saber_test", "ERROR: Failed Setting Attack Cost");
+			}
+			else if (name.equals(VAR_FORCE))
+			{
+				float force = getFloatObjVar(saber, VAR_SABER_BASE + "." + VAR_FORCE);
+				force -= getFloatObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_FORCE);
+				setObjVar(saber, VAR_SABER_BASE + "." + VAR_FORCE, force);
+			}
+			else if (name.equals(VAR_COLOR))
+			{
+				int color = getIntObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_COLOR);
+				int shader = getIntObjVar(saber, VAR_SABER_DEFAULT_STATS + "." + VAR_SHADER);
+				setSaberColor(saber, color, shader);
+				removeObjVar(saber, VAR_SABER_BASE + "." + VAR_COLOR);
+				removeObjVar(saber, VAR_SABER_BASE + "." + VAR_SHADER);
+			}
+		}
+	}
+
+	// Update the elemental damage
+	setSaberColorCrystalDamage(saber);
+	//update scriptvars
+	weapons.setWeaponData(saber);
+}
+
+boolean isColorCrystal(obj_id crystal)
+{
+	return (hasObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_COLOR));
+}
+
+boolean hasColorCrystal(obj_id saber)
+{
+	return (hasObjVar(saber, VAR_SABER_BASE + "." + VAR_COLOR));
+}
+
+boolean validateCrystalCount(obj_id saber)
+{
+	obj_id inv = getObjectInSlot(saber, "saber_inv");
+	obj_id[] contents = getContents(inv);
+
+	return (contents.length <= MAX_CRYSTAL_COUNT);
+}
+
+int getCrystalQuality(int level)
+{
+	// Poor =20-39
+	if (level < 40)
+		return CRYSTAL_POOR;
+	// Fair =40-69
+	else if (level < 70)
+		return CRYSTAL_FAIR;
+	// Good = 70-99
+	else if (level < 100)
+		return CRYSTAL_GOOD;
+	// Quality = 100-139
+	else if (level < 140)
+		return CRYSTAL_QUALITY;
+	// Select  =  140-219
+	else if (level < 220)
+		return CRYSTAL_SELECT;
+	// Premium  = 220-329
+	else if (level < 330)
+		return CRYSTAL_PREMIUM;
+	// Flawless =330+
+	else
+		return CRYSTAL_FLAWLESS;
+}
+
+int getStaticCrystalQuality(int level)
+{
+	switch(level)
+	{
+		case 0:
+			return CRYSTAL_POOR;
+		case 1:
+			return CRYSTAL_FAIR;
+		case 2:
+			return CRYSTAL_GOOD;
+		case 3:
+			return CRYSTAL_QUALITY;
+		case 4:
+			return CRYSTAL_SELECT;
+		case 5:
+			return CRYSTAL_PREMIUM;
+		case 6:
+			return CRYSTAL_FLAWLESS;
+		default:
+			break;
+	}
+	return CRYSTAL_GOOD;
+}
+
+// !!!!! ------>>>>>> this method causes the inventory to be overloaded no matter how full it is.
+// !!!!! ------>>>>>> this method is not to be used except for one time only crystal gives, like for a quest
+// !!!!! ------>>>>>> where the item creation can absolutely not fail and will only occur once per player or so
+boolean forceCreateColorCrystal(obj_id player, int color)
+{
+	obj_id crystal = createObjectInInventoryAllowOverload(TEMPLATE_FORCE_CRYSTAL, player);
+	setAsColorCrystal(crystal, color);
+	return isIdValid(crystal);
+}
+
+boolean createColorCrystal(obj_id inventory, int color)
+{
+	obj_id crystal = static_item.createNewItemFunction(mapOldColorToNewColor(color), inventory);
+	return isIdValid(crystal);
+}
+
+boolean createPowerCrystal(obj_id inventory, int level)
+{
+	obj_id crystal = static_item.createNewItemFunction(mapOldPowerCrystalLevelToNew(level), inventory);
+	return isIdValid(crystal);
+}
+
+// used by CTS
+void setAsColorCrystal(obj_id crystal, int color, int hp, int hpMax)
+{
+	if (isIdValid(crystal))
+	{
+		setAsColorCrystal(crystal, color);
+		setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_HP, hp);
+		setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_HP_MAX, hpMax);
+	}
+}
+
+void setAsColorCrystal(obj_id crystal, int color)
+{
+	if (isIdValid(crystal))
+	{
+		custom_var myVar = getCustomVarByName(crystal, "private/index_color_1");
+		if (myVar != null && myVar.isPalColor())
+		{
+			palcolor_custom_var pcVar = (palcolor_custom_var)myVar;
+			pcVar.setValue(color);
+		}
+
+		setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_COLOR, color);
+		setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_LEVEL, -1);
+	}
+}
+
+// used by CTS
+void setAsPowerCrystal(obj_id crystal, int level, int hp, int hpMax)
+{
+	if (isIdValid(crystal))
+	{
+		setAsPowerCrystal(crystal, level);
+		setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_HP, hp);
+		setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_HP_MAX, hpMax);
+	}
+}
+
+void setAsPowerCrystal(obj_id crystal, int level)
+{
+	if (isIdValid(crystal))
+	{
+		custom_var myVar = getCustomVarByName(crystal, "private/index_color_1");
+
+		// Guard because Krayt Dragon Pearls do not have a color.
+		if (myVar != null && myVar.isPalColor())
+		{
+			palcolor_custom_var pcVar = (palcolor_custom_var)myVar;
+			pcVar.setValue(31);
+
+			setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_COLOR, -1);
+		}
+
+		setObjVar(crystal, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_LEVEL, level);
+	}
+}
+
+boolean checkRobePermission (obj_id player)
+{
+
+	if ( !isIdValid(player) || !isPlayer(player) )
+	{
+		LOG("jedi", "library.jedi.robeRemove -- player is invalid");
+		return false;
+	}
+
+
+	// Place Robe into inventory if no longer high enough to use.
+	obj_id[] items = getContents(player);
+
+	if (items == null)
+	{
+		LOG("jedi", "library.jedi.robeRemove -- " + player + "'s contents are null.");
+		return false;
+	}
+
+	for (int i = 0; i < items.length; i++)
+	{
+
+		if (hasObjVar(items[i], VAR_JEDI_SKILL))
+		{
+			string jediSkill = getStringObjVar(items[i], VAR_JEDI_SKILL);
+			if (!hasSkill(player, jediSkill))
+			{
+				obj_id inv = getObjectInSlot(player, "inventory");
+				putInOverloaded(items[i], inv);
+			}
+		}
+	}
+	return true;
+}
+
+void setupJediTrainer(obj_id self)
+{
+	const string[] TRAINER_TYPES = { "trainer_brawler", "trainer_artisan", "trainer_scout", "trainer_marksman", "trainer_entertainer", "trainer_medic"};
+
+	location locTest = getLocation(self);
+	if(locTest.area.equals("tutorial"))
+	{
+		return;
+	}
+	string strPrimaryCategory = "trainer";
+	string strSecondaryCategory = TRAINER_TYPES[rand(0, TRAINER_TYPES.length-1)];
+	map_location[] rawMapLocations = getPlanetaryMapLocations(strPrimaryCategory, strSecondaryCategory);
+
+	// Filter out locations in player cities.
+	resizeable map_location[] mapLocations = new map_location[0];
+	location testloc = new location();
+	for ( int i=0; i<rawMapLocations.length; i++ )
+	{
+		testloc.x = rawMapLocations[i].getX();
+		testloc.z = rawMapLocations[i].getY();
+		testloc.area = getLocation(self).area;
+		if ( getCityAtLocation( testloc, 0 ) > 0 )
+			continue;
+		mapLocations = utils.addElement( mapLocations, rawMapLocations[i] );
+	}
+
+	if((mapLocations==null)||(mapLocations.length==0))
+	{
+		locTest = getLocation(self);
+		LOG("DESIGNER_FATAL", "JEDI : For planet "+locTest.area+", primary category : "+strPrimaryCategory+" and secondary category "+strSecondaryCategory+" No planetary map location was found");
+		return;
+	}
+
+	int intRoll = rand(0, mapLocations.length-1);
+	location locHome = getLocation(self);
+	locTest = new location();
+	locTest.x = mapLocations[intRoll].getX();
+	locTest.z = mapLocations[intRoll].getY();
+	locTest.area = locHome.area;
+	setObjVar(self, "jedi.locTrainerLocation", locTest);
+	return;
+
+}
+
+void clickyCombatPearlFix (obj_id item)
+
+{
+	float damage = 0.0f;
+	string template = getTemplateName(item);
+	string itemName = "";
+	boolean tunedCrystal = isCrystalTuned(item);
+
+	if (hasObjVar(item, "crafting_components"))
+		damage = getFloatObjVar(item, "crafting_components.minDamage");
+	else
+		damage = (getIntObjVar(item, VAR_CRYSTAL_STATS + "." + VAR_MAX_DMG));
+
+
+	//turn old pearls into static items
+	if (template.endsWith("krayt_dragon_pearl.iff"))
+	{
+		//if the pearl is tuned convert it to a static item
+		if (tunedCrystal)
+		{
+			obj_id owner = getObjIdObjVar(item, VAR_CRYSTAL_OWNER_ID);
+			if (damage < 20)
+				itemName = "item_krayt_pearl_04_04";
+			else if (damage < 30 )
+				itemName = "item_krayt_pearl_04_05";
+			else if (damage < 40 )
+				itemName = "item_krayt_pearl_04_06";
+			else if (damage < 50 )
+				itemName = "item_krayt_pearl_04_08";
+			else if (damage < 60 )
+				itemName = "item_krayt_pearl_04_09";
+			else if (damage < 70 )
+				itemName = "item_krayt_pearl_04_11";
+			else if (damage < 80 )
+				itemName = "item_krayt_pearl_04_13";
+			else if (damage < 90)
+				itemName = "item_krayt_pearl_04_14";
+			else if (damage < 100)
+				itemName = "item_krayt_pearl_04_15";
+			else if (damage < 110)
+				itemName = "item_krayt_pearl_04_16";
+			else if (damage < 120)
+				itemName = "item_krayt_pearl_04_17";
+			else if (damage >= 120)
+				itemName = "item_krayt_pearl_04_18";
+
+			jediComponentStatSetter(owner, item, itemName);
+			CustomerServiceLog("jedi_saber", "Converting Old Tuned Pearl ("+item+") - Damage:"+damage+" - to a new Static Item Pearl - "+itemName);
+			return;
+		}
+		//if the pearl is untuned, this also covers pre pub 9 conversions if any still happen to be around
+		else
+		{
+			int level = getIntObjVar(item, VAR_CRYSTAL_STATS + "." + VAR_LEVEL);
+			if (level > 0)
+			{
+				if (level < 20)
+					itemName = "item_krayt_pearl_04_02";
+				else if (level < 40)
+					itemName = "item_krayt_pearl_04_04";
+				else if (level < 60)
+					itemName = "item_krayt_pearl_04_05";
+				else if (level < 80)
+					itemName = "item_krayt_pearl_04_06";
+				else if (level < 100)
+					itemName = "item_krayt_pearl_04_07";
+				else if (level < 120)
+					itemName = "item_krayt_pearl_04_10";
+				else if (level < 150)
+					itemName = "item_krayt_pearl_04_13";
+				else if (level < 200)
+					itemName = "item_krayt_pearl_04_14";
+				else if (level < 250)
+					itemName = "item_krayt_pearl_04_16";
+				else if (level < 330)
+					itemName = "item_krayt_pearl_04_17";
+				else if (level >= 330)
+					itemName = "item_krayt_pearl_04_18";
+
+				jediComponentStatSetter(null, item, itemName);
+				CustomerServiceLog("jedi_saber", "Converting Old Untuned Pearl ("+item+") - Level:"+level+" - to a new Static Item Pearl - "+itemName);
+				return;
+			}
+			else
+			//no level
+			{
+				itemName = "item_krayt_pearl_04_09";
+				jediComponentStatSetter(null, item, itemName);
+				CustomerServiceLog("jedi_saber", "Converting Old Untuned Pearl Missing Level ("+item+") - Level:"+level+" - to a new Static Item Pearl - "+itemName);
+				return;
+			}
+		}
+	}
+	//old twin force crystals, these only ever became color crystals
+	else if (template.endsWith("lance_module_force_crystal.iff"))
+	{
+		//turn into static color crystal
+		int color = getIntObjVar(item, VAR_CRYSTAL_STATS + "." + VAR_COLOR);
+		string colorName = mapOldColorToNewColor(item);
+
+		if (tunedCrystal)
+		{
+			obj_id owner = getObjIdObjVar(item, VAR_CRYSTAL_OWNER_ID);
+			jediComponentStatSetter(owner, item, colorName);
+			CustomerServiceLog("jedi_saber", "Converting Old Tuned Lance Color Crystal ("+item+") - OLD COLOR:"+color+" - to a new Static Item Color Crystal - "+colorName);
+			return;
+		}
+		else
+		{
+			jediComponentStatSetter(null, item, colorName);
+			CustomerServiceLog("jedi_saber", "Converting Old Untuned Lance Color Crystal ("+item+") - OLD COLOR:"+color+" - to a new Static Item Color Crystal - "+colorName);
+			return;
+		}
+	}
+	//old power or color crystal
+	else if (template.endsWith("lightsaber_module_force_crystal.iff"))
+	{
+		//see if we are color or power
+		if(hasObjVar(item, VAR_CRYSTAL_STATS + "." + VAR_COLOR))
+		{
+			int color = getIntObjVar(item, VAR_CRYSTAL_STATS + "." + VAR_COLOR);
+			string colorName = mapOldColorToNewColor(item);
+
+			if (tunedCrystal)
+			{
+				obj_id owner = getObjIdObjVar(item, VAR_CRYSTAL_OWNER_ID);
+				jediComponentStatSetter(owner, item, colorName);
+				CustomerServiceLog("jedi_saber", "Converting Old Tuned Color Crystal ("+item+") - OLD COLOR:"+color+" - to a new Static Item Color Crystal - "+colorName);
+				return;
+			}
+			else
+			{
+				jediComponentStatSetter(null, item, colorName);
+				CustomerServiceLog("jedi_saber", "Converting Old Untuned Color Crystal ("+item+") - OLD COLOR:"+color+" - to a new Static Item Color Crystal - "+colorName);
+				return;
+			}
+		}
+		//if we are not a color crystal we must be a power crystal
+		else
+		{
+			if (tunedCrystal)
+			{
+				obj_id owner = getObjIdObjVar(item, VAR_CRYSTAL_OWNER_ID);
+				if (damage < 20)
+					itemName = "item_power_crystal_04_04";
+				else if (damage < 30 )
+					itemName = "item_power_crystal_04_05";
+				else if (damage < 40 )
+					itemName = "item_power_crystal_04_06";
+				else if (damage < 50)
+					itemName = "item_power_crystal_04_08";
+				else if (damage < 60)
+					itemName = "item_power_crystal_04_09";
+				else if (damage < 70)
+					itemName = "item_power_crystal_04_11";
+				else if (damage < 80)
+					itemName = "item_power_crystal_04_13";
+				else if (damage < 90)
+					itemName = "item_power_crystal_04_14";
+				else if (damage < 100)
+					itemName = "item_power_crystal_04_15";
+				else if (damage < 110)
+					itemName = "item_power_crystal_04_16";
+				else if (damage < 120)
+					itemName = "item_power_crystal_04_17";
+				else if (damage >= 120)
+					itemName = "item_power_crystal_04_18";
+
+				jediComponentStatSetter(owner, item, itemName);
+				CustomerServiceLog("jedi_saber", "Converting Old Tuned Power Crystal ("+item+") - Damage:"+damage+" - to a new Static Item Power Crystal - "+itemName);
+				return;
+			}
+			else
+			{
+				int level = getIntObjVar(item, VAR_CRYSTAL_STATS + "." + VAR_LEVEL);
+				if (level > 0)
+				{
+					itemName = mapOldPowerCrystalLevelToNew(level);
+					jediComponentStatSetter(null, item, itemName);
+					CustomerServiceLog("jedi_saber", "Converting Old Untuned Power Crystal ("+item+") - Level:"+level+" - to a new Static Item Crystal - "+itemName);
+					return;
+				}
+				else
+				//no level meaning very old crystal pre pub 9ish
+				{
+					itemName = "item_power_crystal_04_09";
+					jediComponentStatSetter(null, item, itemName);
+					CustomerServiceLog("jedi_saber", "Converting Old Untuned Power Crystal Missing Level ("+item+") - Level:"+level+" - to a new Static Item Crystal - "+itemName);
+					return;
+				}
+			}
+		}
+	}
+
+	return;
+
+}
+
+//this sets the stats of an old tuned Pearl into a static item tuned to that player
+void jediComponentStatSetter(obj_id owner , obj_id item, string itemName)
+{
+	if ( itemName != null && itemName != "" )
+	{
+		removeAllObjVars(item);
+		//catch all in case the above does not
+		removeObjVar(item, jedi.VAR_CRYSTAL_STATS);
+		detachAllScripts(item);
+		setStaticItemName(item, itemName);
+		dictionary itemData = static_item.getMasterItemDictionary(itemName);
+		setStaticItemVersion(item, itemData.getInt("version"));
+		setObjVar(item, jedi.VAR_CRYSTAL_STATS + "." + jedi.VAR_LEVEL, -1);
+		attachScript(item, "item.static_item_base");
+
+		if(owner != null)
+		{
+			setObjVar(item,VAR_CRYSTAL_OWNER_ID, owner);
+			setObjVar(item, jedi.VAR_CRYSTAL_OWNER_NAME, getName(owner));
+		}
+		LOG("jedi_saber", "Converted old Pearl or Crystal to " +itemName);
+
+		//we need to initialize ourself now as a static item
+		static_item.initializeObject(item, itemData);
+	}
+	else
+		CustomerServiceLog("jedi_saber", "Could not convert item("+item+") Bad itemName passed in" +itemName);
+
+	return;
+}
+
+string mapOldColorToNewColor(obj_id item)
+{
+	return mapOldColorToNewColor(getIntObjVar(item, VAR_CRYSTAL_STATS + "." + VAR_COLOR));
+}
+
+string mapOldColorToNewColor(int color)
+{
+	string colorMap[] = {
+						"item_color_crystal_02_00",
+						"item_color_crystal_02_01",
+						"item_color_crystal_02_02",
+						"item_color_crystal_02_03",
+						"item_color_crystal_02_04",
+						"item_color_crystal_02_05",
+						"item_color_crystal_02_06",
+						"item_color_crystal_02_07",
+						"item_color_crystal_02_08",
+						"item_color_crystal_02_09",
+						"item_color_crystal_02_10",
+						"item_color_crystal_02_11",
+						"item_color_crystal_02_12",
+						"item_color_crystal_02_13",
+						"item_color_crystal_02_14",
+						"item_color_crystal_02_15",
+						"item_color_crystal_02_16",
+						"item_color_crystal_02_17",
+						"item_color_crystal_02_18",
+						"item_color_crystal_02_19",
+						"item_color_crystal_02_20",
+						"item_color_crystal_02_21",
+						"item_color_crystal_02_22",
+						"item_color_crystal_02_23",
+						"item_color_crystal_02_24",
+						"item_color_crystal_02_25",
+						"item_color_crystal_02_26",
+						"item_color_crystal_02_27",
+						"item_color_crystal_02_28",
+						"item_color_crystal_02_29",
+						"item_color_crystal_02_30",
+						"item_color_crystal_02_00"
+					};
+	return colorMap[color];
+}
+
+string mapOldPowerCrystalLevelToNew(int level)
+{
+	if (level < 40)
+		return "item_power_crystal_04_03";
+	else if (level < 60)
+		return  "item_power_crystal_04_04";
+	else if (level < 80)
+		return  "item_power_crystal_04_06";
+	else if (level < 100)
+		return  "item_power_crystal_04_07";
+	else if (level < 120)
+		return  "item_power_crystal_04_08";
+	else if (level < 140)
+		return  "item_power_crystal_04_09";
+	else if (level < 150)
+		return  "item_power_crystal_04_11";
+	else if (level < 200)
+		return  "item_power_crystal_04_15";
+	else if (level < 250)
+		return  "item_power_crystal_04_16";
+	else if (level < 330)
+		return  "item_power_crystal_04_17";
+	else if (level >= 330)
+		return "item_power_crystal_04_18";
+	else
+		return  "item_power_crystal_04_13";
+}
+
+void initializeCrystal(obj_id crystal, int level)
+{
+
+	// check if crystal has a preset level
+	if (hasObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_LEVEL))
+	{
+		LOG("jedi", "level already set, initializing");
+		level = getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_LEVEL);
+	}
+
+	LOG("jedi", "Current Crystal level = "+level);
+	setObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_LEVEL, level);
+
+	if (hasObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_HP)
+		&& hasObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_HP_MAX))
+	{
+		LOG("jedi", "hp already set, initializing");
+
+		int hp = getIntObjVar(crystal,VAR_CRYSTAL_STATS + "." + VAR_HP);
+		setInvulnerableHitpoints(crystal, hp);
+		removeObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_HP);
+
+		int hpMax = getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_HP_MAX);
+		setMaxHitpoints(crystal, hpMax);
+		removeObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_HP_MAX);
+	}
+	else
+	{
+		// Initialize hp
+		const int min = 650;
+		const int max = 1250;
+
+		int range = max - min - level;
+		if (range < 0) { range = 0; level = max - min; }
+
+		int hp = min + level + rand(0, range);
+
+		setMaxHitpoints(crystal, hp);
+		setInvulnerableHitpoints(crystal, hp);
+	}
+
+	string template = getTemplateName(crystal);
+	if (template.endsWith("module_force_crystal.iff"))
+	{
+		int color = rand(0, 11);
+		if (hasObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_COLOR))
+			color = getIntObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_COLOR);
+
+		boolean setColor = true;
+
+		if (color == -1)
+		{
+			setColor = false;
+			removeObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_COLOR);
+		}
+
+		if (setColor && rand(25, 100) > level)
+		{
+			setObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_COLOR, color);
+			setObjVar(crystal, VAR_CRYSTAL_STATS + "." + VAR_LEVEL, -1);
+
+			custom_var myVar = getCustomVarByName(crystal, "private/index_color_1");
+			if  (myVar.isPalColor())
+			{
+				palcolor_custom_var pcVar = (palcolor_custom_var)myVar;
+				pcVar.setValue(color);
+			}
+		}
+		else
+		{
+			custom_var myVar = getCustomVarByName(crystal, "private/index_color_1");
+			if  (myVar.isPalColor())
+			{
+				palcolor_custom_var pcVar = (palcolor_custom_var)myVar;
+				pcVar.setValue(31);
+			}
+		}
+	}
+}
+
+
+
+//helper function to determine if someone is Force Sensitive
+boolean isForceSensitive(obj_id player)
+{
+	string classTemplate = getSkillTemplate(player);
+	if ( classTemplate != null && classTemplate.startsWith("force"))
+	{
+		return true;
+	}
+	return false;
+}
+
+//helper function to determine if a Force Sensitive mets a set of level requirements passed in
+boolean isForceSensitiveLevelRequired(obj_id player, int requiredLevel)
+{
+	int playerLevel= getLevel(player);
+	if(isForceSensitive(player) && playerLevel >= requiredLevel)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+//do they have any ultra cloak
+boolean hasAnyUltraCloak(obj_id player)
+{
+	if(utils.playerHasStaticItemInBankOrInventory(player, JEDI_CLOAK_LIGHT_HOOD_UP))
+		return true;
+	if(utils.playerHasStaticItemInBankOrInventory(player, JEDI_CLOAK_DARK_HOOD_UP))
+		return true;
+	if(utils.playerHasStaticItemInBankOrInventory(player, JEDI_CLOAK_LIGHT_HOOD_DOWN))
+		return true;
+	if(utils.playerHasStaticItemInBankOrInventory(player, JEDI_CLOAK_DARK_HOOD_DOWN))
+		return true;
+		
+	// Appearance Inventory checks.
+	if(utils.playerHasStaticItemInAppearanceInventory(player, JEDI_CLOAK_LIGHT_HOOD_UP))
+		return true;
+	if(utils.playerHasStaticItemInAppearanceInventory(player, JEDI_CLOAK_DARK_HOOD_UP))
+		return true;
+	if(utils.playerHasStaticItemInAppearanceInventory(player, JEDI_CLOAK_LIGHT_HOOD_DOWN))
+		return true;
+	if(utils.playerHasStaticItemInAppearanceInventory(player, JEDI_CLOAK_DARK_HOOD_DOWN))
+		return true;
+		
+	return false;
+}

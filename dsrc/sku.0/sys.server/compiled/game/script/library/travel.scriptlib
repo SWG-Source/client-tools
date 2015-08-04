@@ -1,0 +1,1865 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        travel.scriptlib
+ * Description:  library of methods for the traveling system.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.city;
+include library.instance;
+include library.performance;
+include library.sui;
+include library.utils;
+
+include java.lang.Math;
+
+/***** CONSTANTS *******************************************************/
+
+// Datatables
+const string STARPORT_DATATABLE				= "datatables/structure/municipal/starport.iff";
+const string DATATABLE_COL_STRUCTURE			= "STRUCTURE";
+const string DATATABLE_COL_ARRIVAL_X			= "ARRIVAL_X";
+const string DATATABLE_COL_ARRIVAL_Y			= "ARRIVAL_Y";
+const string DATATABLE_COL_ARRIVAL_Z			= "ARRIVAL_Z";
+const string DATATABLE_COL_ARRIVAL_CELL			= "ARRIVAL_CELL";
+const string DATATABLE_COL_GROUND_TIME			= "GROUND_TIME";
+const string DATATABLE_COL_AIR_TIME			= "AIR_TIME";
+const string DATATABLE_COL_IS_SHUTTLEPORT		= "IS_SHUTTLEPORT";
+const string DATATABLE_COL_VERSION			= "VERSION";
+const string DATATABLE_COL_OBJECT			= "OBJECT";
+const string DATATABLE_COL_X				= "X";
+const string DATATABLE_COL_Y				= "Y";
+const string DATATABLE_COL_Z				= "Z";
+const string DATATABLE_COL_CELL				= "CELL";
+const string DATATABLE_COL_HEADING			= "HEADING";
+const string DATATABLE_COL_IS_TERMINAL			= "IS_TERMINAL";
+const string DATATABLE_COL_IS_TRANSPORT			= "IS_TRANSPORT";
+const string DATATABLE_COL_IS_PILOT			= "IS_PILOT";
+
+// Scripts
+const string SCRIPT_STARPORT				= "structure.municipal.starport";
+const string SCRIPT_TERMINAL				= "terminal.terminal_travel";
+const string SCRIPT_SHUTTLE				= "item.travel_ticket.travel_shuttle";
+const string SCRIPT_SHUTTLE_PILOT			= "item.travel_ticket.travel_shuttle_pilot";
+
+// Templates
+const string BASE_TRAVEL_TICKET				= "object/tangible/travel/travel_ticket/base/base_travel_ticket.iff";
+
+const string TRAVEL_COUPON_TEMPLATE			= "object/tangible/item/new_player/new_player_travel_coupon.iff";
+
+// System values
+const float MAXIMUM_SHUTTLE_DISTANCE			= 25.0f;
+const float MAXIMUM_TERMINAL_DISTANCE			= 15.0f;
+const float MIN_RANDOM_DISTANCE				= 2.0f;
+const float MAX_RANDOM_DISTANCE				= 5.0f;
+const int CURRENT_VERSION				= 3;
+
+// Objvars ----
+// For starports
+const string VAR_TRAVEL					= "travel";
+const string VAR_TRAVEL_POINT_NAME			= "travel.point_name";
+const string VAR_ARRIVAL_LOCATION			= "travel.arrival_location";
+const string VAR_TRAVEL_COST				= "travel.cost";
+const string VAR_BASE_OBJECT				= "travel.base_object";
+const string VAR_GROUND_TIME				= "travel.ground_time";
+const string VAR_AIR_TIME				= "travel.air_time";
+const string VAR_IS_SHUTTLEPORT				= "travel.is_shuttleport";
+const string VAR_SHUTTLE_AVAILABLE			= "travel.shuttle_available";
+const string SCRIPTVAR_SHUTTLE_AVAILABLE_COUNT = "travel.shuttle_available_count";
+const string VAR_SHUTTLE_TIMESTAMP			= "travel.shuttle_timestamp";
+const string VAR_VERSION				= "travel.version";
+
+// For terminals/shuttles
+const string VAR_STARPORT				= "travel.starport";
+
+// For tickets
+const string VAR_DEPARTURE_PLANET			= "travel.ticket.departure_planet";
+const string VAR_ARRIVAL_PLANET				= "travel.ticket.arrival_planet";
+const string VAR_DEPARTURE_POINT			= "travel.ticket.departure_point";
+const string VAR_ARRIVAL_POINT				= "travel.ticket.arrival_point";
+const string VAR_STARPORT_ORIGIN			= "travel.ticket.starport_origin";
+
+// For players
+const string VAR_VALID_TICKETS				= "travel.valid_tickets";
+const string VAR_BOARDING_SHUTTLE			= "travel.boarding_shuttle";
+const string VAR_PURCHASING_TICKET			= "travel.purchasing_ticket";
+const string SCRIPT_VAR_TERMINAL	    		= "travel.ticket_terminal";
+
+const string_id SID_MUSTAFAR_UNAUTHORIZED		 = new string_id("travel", "mustafar_unauthorized");
+const string_id SID_KASHYYYK_UNAUTHORIZED		 = new string_id("travel", "kashyyyk_unauthorized");
+
+const int TRAVEL_BLOCK_ALLOW_LAUNCH = 1;
+
+/***** TRIGGERS ********************************************************/
+
+
+/***** MESSAGEHANDLERS *************************************************/
+
+
+/***** MESSAGEHANDLERS *************************************************/
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/
+
+
+/***********************************************************************
+ * @brief	sets up the starport for travel
+ *
+ * @param	obj_id structure
+ * @param	string travel_point 	travel point name
+ * @param	travel_cost		cost to travel to this point
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean initializeStarport( obj_id structure, string travel_point, int travel_cost, boolean civic )
+{
+	LOG("LOG_CHANNEL", "structure ->" + structure + " travel ->" + travel_point + " cost ->" + travel_cost);
+
+	if (structure == null || structure == obj_id.NULL_ID)
+		return false;
+
+	// determine the structure's position in the starport database
+	int num_items = dataTableGetNumRows(STARPORT_DATATABLE);
+	string template = getTemplateName(structure);
+	int idx = getStarportTableIndex(template);
+	LOG("LOG_CHANNEL", "idx ->" + idx);
+
+	if (idx == -1)
+		return false;
+
+	// Determine the arrival location
+	string planet = getCurrentSceneName();
+	dictionary row = dataTableGetRow(STARPORT_DATATABLE, idx);
+	float arrival_x = row.getFloat(DATATABLE_COL_ARRIVAL_X);
+	float arrival_y = row.getFloat(DATATABLE_COL_ARRIVAL_Y);
+	float arrival_z = row.getFloat(DATATABLE_COL_ARRIVAL_Z);
+	string arrival_cell = row.getString(DATATABLE_COL_ARRIVAL_CELL);
+	int ground_time = row.getInt(DATATABLE_COL_GROUND_TIME);
+	int air_time = row.getInt(DATATABLE_COL_AIR_TIME);
+	int is_shuttleport = row.getInt(DATATABLE_COL_IS_SHUTTLEPORT);
+
+	//LOG("LOG_CHANNEL", "ground_time ->" + ground_time + " air_time ->" + air_time);
+
+	location arrival_loc;
+	if (arrival_cell.equals("WORLD_DELTA"))
+	{
+		// Coordinates have been specified in delta coordinates from the structure's loc.
+		location s_loc = getLocation(structure);
+		// Transform location based on the structures rotation.
+		float s_yaw = getYaw(structure);
+		if (s_yaw < 0.0f)
+			s_yaw = s_yaw + 360.0f;
+
+		int rotation = (int)(s_yaw + 1) / 90;
+		//LOG("LOG_CHANNEL", "rotation ->" + rotation + " X/Z:" + arrival_x + "/" + arrival_z);
+		//float[] transform = transformDeltaWorldCoord(arrival_x, arrival_z, rotation);
+		float[] transform = transformDeltaWorldYaw(structure, arrival_x, arrival_z);
+		arrival_x = transform[0];
+		arrival_z = transform[1];
+		//LOG("LOG_CHANNEL", "X/Z Transform:" + arrival_x + "/" + arrival_z);
+
+		arrival_loc = new location(s_loc.x - arrival_x, s_loc.y - arrival_y, s_loc.z - arrival_z, planet, obj_id.NULL_ID);
+	}
+	else
+	{
+		// Coordinates have been specified in the structure's coordinate system.
+		obj_id cell_id = getCellId(structure, arrival_cell);
+		if (cell_id == null || cell_id == obj_id.NULL_ID )
+		{
+			//LOG("LOG_CHANNEL", "Unable to find valid cell name for " + structure);
+			return false;
+		}
+
+		arrival_loc = new location(arrival_x, arrival_y, arrival_z, planet, cell_id);
+	}
+
+	//LOG("LOG_CHANNEL", "arrival_loc ->" + arrival_loc);
+
+	// Set up the structure's objvars
+	setObjVar(structure, VAR_GROUND_TIME, ground_time);
+	setObjVar(structure, VAR_AIR_TIME, air_time);
+	setObjVar(structure, VAR_SHUTTLE_AVAILABLE, 1);
+	setObjVar(structure, VAR_SHUTTLE_TIMESTAMP, getGameTime());
+	setObjVar(structure, VAR_VERSION, CURRENT_VERSION);
+	if (is_shuttleport > 0)
+		setObjVar(structure, VAR_IS_SHUTTLEPORT, is_shuttleport);
+	else if (hasObjVar(structure, VAR_IS_SHUTTLEPORT))
+		removeObjVar(structure, VAR_IS_SHUTTLEPORT);
+
+	// Set up the structure's travel point
+	setStarportTravelPoint( structure, travel_point, arrival_loc, travel_cost, civic );
+
+	// If the structure has pre-existing base objects, delete them.
+	if (hasObjVar(structure, VAR_BASE_OBJECT))
+		destroyBaseObjects(structure);
+
+	// Create the structure's terminals and transports.
+	if (num_items > idx + 1)
+	{
+
+		// Determine the yaw of the structure in 90 degree units for
+		// transformation of DELTA_WORLD objects.
+		float s_yaw = getYaw(structure);
+		if (s_yaw < 0.0f)
+			s_yaw = s_yaw + 360.0f;
+
+		int rotation = (int)(s_yaw + 1) / 90;
+		//LOG("LOG_CHANNEL", "(" + structure + ")" + "rotation ->" + rotation);
+
+		// Look for objects immediately after the structure template name
+		resizeable obj_id[] object_list = new obj_id[0];
+		for (int i = idx + 1; i < num_items; i++)
+		{
+			string struct_temp = dataTableGetString(STARPORT_DATATABLE, i, DATATABLE_COL_STRUCTURE);
+			// There are no more objects if the next template is reached
+			if (struct_temp.length() > 0)
+				break;
+
+			dictionary object_row = dataTableGetRow(STARPORT_DATATABLE, i);
+			string obj_template = object_row.getString(DATATABLE_COL_OBJECT);
+			float x = object_row.getFloat(DATATABLE_COL_X);
+			float y = object_row.getFloat(DATATABLE_COL_Y);
+			float z = object_row.getFloat(DATATABLE_COL_Z);
+			string cell = object_row.getString(DATATABLE_COL_CELL);
+			float heading = object_row.getFloat(DATATABLE_COL_HEADING);
+			int is_terminal = object_row.getInt(DATATABLE_COL_IS_TERMINAL);
+			int is_transport = object_row.getInt(DATATABLE_COL_IS_TRANSPORT);
+			int is_pilot = object_row.getInt(DATATABLE_COL_IS_PILOT);
+
+			// Determine the object's location and create it
+			location obj_loc;
+			obj_id object;
+
+			if (cell.equals("WORLD_DELTA"))
+			{
+				//float[] delta_trans = transformDeltaWorldCoord(x, z, rotation);
+				float[] delta_trans = transformDeltaWorldYaw(structure, x, z);
+				x = delta_trans[0];
+				z = delta_trans[1];
+				//LOG("LOG_CHANNEL", "obj_loc X/Z ->" + x + "/" + z);
+
+				// Now transform the heading of the object.
+				//heading = heading + (float)(rotation * 90);
+				heading = heading + s_yaw;
+				if (heading > 360)
+					heading = heading - 360;
+
+				location s_loc = getLocation(structure);
+				obj_loc = new location(s_loc.x - x, s_loc.y - y, s_loc.z - z, planet, obj_id.NULL_ID);
+				//LOG("LOG_CHANNEL", "obj_loc ->" + obj_loc);
+				object = createObject(obj_template, obj_loc);
+			}
+			else
+			{
+				obj_id cell_id = getCellId(structure, cell);
+				if ( cell_id == null || cell_id == obj_id.NULL_ID )
+				{
+					//LOG("LOG_CHANNEL", "Unable to find valid cell name for " + obj_template);
+					continue;
+				}
+				obj_loc = new location(x, y, z, planet, cell_id);
+
+				object = createObjectInCell(obj_template, structure, cell, obj_loc);
+
+				//LOG("LOG_CHANNEL", "object ->" + object);
+			}
+			if (obj_loc == null)
+				LOG("LOG_CHANNEL", "Unable to create " + obj_template);
+			else
+			{
+				if (heading != 0.0f);
+				{
+					setYaw(object, heading);
+					object_list = utils.addElement(object_list, object);
+				}
+
+				if (is_terminal == 1)
+				{
+					setObjVar(object, VAR_STARPORT, structure);
+					//attachScript(object, SCRIPT_TERMINAL);
+				}
+
+				if (is_transport == 1)
+				{
+					setObjVar(object, VAR_STARPORT, structure);
+					attachScript(object, SCRIPT_SHUTTLE);
+				}
+
+				if (is_pilot == 1)
+				{
+					setObjVar(object, VAR_STARPORT, structure);
+					attachScript(object, SCRIPT_SHUTTLE_PILOT);
+				}
+
+				//persistObject(object);
+			}
+
+			// Store the list of created objects on the structure
+			if (object_list.length > 0)
+			{
+				setObjVar(structure, VAR_BASE_OBJECT, object_list);
+			}
+		}
+	}
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	returns the travel point name of the specified structure
+ *
+ * @param	obj_id structure
+ *
+ * @return 	string; null if failed
+ ***********************************************************************/
+string getTravelPointName(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+		return null;
+
+	// If this is player city shuttleport, then the travel point name is the city name.
+	// If the travel cost is <= 0, there is no travel point here.
+	if (player_structure.isCivic(structure))
+	{
+		int cityId = getCityAtLocation(getLocation(structure), 0);
+		if (cityId != 0 && cityGetTravelCost(cityId) > 0)
+			return cityGetName(cityId);
+		return null;
+	}
+
+	if (hasObjVar(structure, VAR_TRAVEL_POINT_NAME))
+		return getStringObjVar(structure, VAR_TRAVEL_POINT_NAME);
+	else
+		return null;
+}
+
+/***********************************************************************
+ * @brief	returns the location where the player arrives.
+ *
+ * @param	obj_id structure
+ *
+ * @return 	location 	 null if failed
+ ***********************************************************************/
+location getArrivalLocation(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+		return null;
+
+	if (hasObjVar(structure, VAR_ARRIVAL_LOCATION))
+		return getLocationObjVar(structure, VAR_ARRIVAL_LOCATION);
+	else
+		return null;
+}
+
+/***********************************************************************
+ * @brief	returns the point to point cost of the structure
+ *
+ * @param	obj_id structure
+ *
+ * @return 	int 	 -1 if failed
+ ***********************************************************************/
+int getTravelCost(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+		return -1;
+
+	if (hasObjVar(structure, VAR_TRAVEL_COST))
+		return getIntObjVar(structure, VAR_TRAVEL_COST);
+	else
+		return -1;
+}
+
+/***********************************************************************
+ * @brief	returns the ground time of a starport
+ *
+ * @param	obj_id structure
+ *
+ * @return 	int 	 -1 if failed
+ ***********************************************************************/
+int getGroundTime(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+			return -1;
+
+	if (hasObjVar(structure, VAR_GROUND_TIME))
+		return getIntObjVar(structure, VAR_GROUND_TIME);
+	else
+		return -1;
+}
+
+/***********************************************************************
+ * @brief	returns the air time of a starport
+ *
+ * @param	obj_id structure
+ *
+ * @return 	int 	 -1 if failed
+ ***********************************************************************/
+int getAirTime(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+			return -1;
+
+	if (hasObjVar(structure, VAR_AIR_TIME))
+		return getIntObjVar(structure, VAR_AIR_TIME);
+	else
+		return -1;
+}
+
+/***********************************************************************
+ * @brief	returns the shuttle timestamp of a structure
+ *
+ * @param	obj_id structure
+ *
+ * @return 	int 	 -1 if failed
+ ***********************************************************************/
+int getShuttleTimestamp(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+			return -1;
+
+	if (hasObjVar(structure, VAR_SHUTTLE_TIMESTAMP))
+		return getIntObjVar(structure, VAR_SHUTTLE_TIMESTAMP);
+	else
+		return -1;
+}
+
+/***********************************************************************
+ * @brief	returns the travel base objects of a structure
+ *
+ * @param	obj_id structure
+ *
+ * @return 	obj_id[]
+ ***********************************************************************/
+obj_id[] getBaseObjects(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+		return null;
+
+	if (hasObjVar(structure, VAR_BASE_OBJECT))
+		return getObjIdArrayObjVar(structure, VAR_BASE_OBJECT);
+	else
+		return null;
+}
+
+/***********************************************************************
+ * @brief	returns a ticket's departure planet
+ *
+ * @param	obj_id ticket
+ *
+ * @return 	string 	 null if failed
+ ***********************************************************************/
+string getTicketDeparturePlanet(obj_id ticket)
+{
+	if (ticket == null || ticket == obj_id.NULL_ID)
+		return null;
+
+	if (hasObjVar(ticket, VAR_DEPARTURE_PLANET))
+		return getStringObjVar(ticket, VAR_DEPARTURE_PLANET);
+	else
+		return null;
+}
+
+/***********************************************************************
+ * @brief	returns a ticket's departure point
+ *
+ * @param	obj_id ticket
+ *
+ * @return 	string 	 null if failed
+ ***********************************************************************/
+string getTicketDeparturePoint(obj_id ticket)
+{
+	if (ticket == null || ticket == obj_id.NULL_ID)
+		return null;
+
+	if (hasObjVar(ticket, VAR_DEPARTURE_POINT))
+		return getStringObjVar(ticket, VAR_DEPARTURE_POINT);
+	else
+		return null;
+}
+
+/***********************************************************************
+ * @brief	returns a ticket's arrival planet
+ *
+ * @param	obj_id ticket
+ *
+ * @return 	string 	 null if failed
+ ***********************************************************************/
+string getTicketArrivalPlanet(obj_id ticket)
+{
+	if (ticket == null || ticket == obj_id.NULL_ID)
+		return null;
+
+	if (hasObjVar(ticket, VAR_ARRIVAL_PLANET))
+		return getStringObjVar(ticket, VAR_ARRIVAL_PLANET);
+	else
+		return null;
+}
+
+/***********************************************************************
+ * @brief	returns a ticket's departure planet
+ *
+ * @param	obj_id ticket
+ *
+ * @return 	string 	 null if failed
+ ***********************************************************************/
+string getTicketArrivalPoint(obj_id ticket)
+{
+	if (ticket == null || ticket == obj_id.NULL_ID)
+		return null;
+
+	if (hasObjVar(ticket, VAR_ARRIVAL_POINT))
+		return getStringObjVar(ticket, VAR_ARRIVAL_POINT);
+	else
+		return null;
+}
+
+/***********************************************************************
+ * @brief	returns the starport version
+ *
+ * @param	obj_id starport
+ *
+ * @return 	int		-1 if error. 0 if no version found
+ ***********************************************************************/
+int getStarportVersion(obj_id starport)
+{
+	if (starport == null || starport == obj_id.NULL_ID)
+		return -1;
+
+	if (hasObjVar(starport, VAR_VERSION))
+		return getIntObjVar(starport, VAR_VERSION);
+	else
+		return 0;
+}
+
+/***********************************************************************
+ * @brief	determines the specified template's position in the starport
+ *		datatable
+ *
+ * @param	string template		template of the starport
+ *
+ * @return 	int 	 -1 if failed
+ ***********************************************************************/
+int getStarportTableIndex(string template)
+{
+	int idx = -1;
+
+	int numItems = dataTableGetNumRows(STARPORT_DATATABLE);
+	for (int i = 0; i < numItems; i++)
+	{
+		string starportTemplate = dataTableGetString(STARPORT_DATATABLE, i, DATATABLE_COL_STRUCTURE);
+	 	if (starportTemplate.equals(template))
+	 	{
+	 		idx = i;
+	 		break;
+	 	}
+	}
+	return idx;
+}
+
+/***********************************************************************
+ * @brief	determines whether or not an object a valid ticket
+ *
+ * @param	obj_id object
+ * @param	string depart_planet	the name of the planet where the ticket is used
+ * @param       string depart_point	the name of the point where the ticket is used
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isTravelTicketValid(obj_id object, string depart_planet, string depart_point)
+{
+	if (object == null || object == obj_id.NULL_ID)
+		return false;
+
+	if (hasObjVar(object, VAR_DEPARTURE_PLANET))
+	{
+		string ticket_planet = getTicketDeparturePlanet(object);
+		string ticket_point = getTicketDeparturePoint(object);
+
+		if (!ticket_planet.equals(depart_planet))
+			return false;
+
+		if (!ticket_point.equals(depart_point))
+			return false;
+
+		return true;
+	}
+	else
+		return false;
+}
+
+/***********************************************************************
+ * @brief	determines whether or not the structure is a shuttleport
+ *
+ * @param	obj_id structure
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isShuttlePort(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+		return false;
+
+	if (hasObjVar(structure, VAR_IS_SHUTTLEPORT))
+		return true;
+	else
+		return false;
+}
+
+/***********************************************************************
+ * @brief	determines whether or not an object is a travel shuttle
+ *
+ * @param	obj_id object
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isTravelShuttle(obj_id object)
+{
+	if (object == null || object == obj_id.NULL_ID)
+		return false;
+
+	if (hasScript(object, SCRIPT_SHUTTLE))
+		return true;
+	else
+		return false;
+}
+
+/***********************************************************************
+ * @brief	determines whether or not an object is a travel shuttle pilot
+ *
+ * @param	obj_id object
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isTravelShuttlePilot(obj_id object)
+{
+	if (object == null || object == obj_id.NULL_ID)
+		return false;
+
+	if (hasScript(object, SCRIPT_SHUTTLE_PILOT))
+		return true;
+	else
+		return false;
+}
+
+/***********************************************************************
+ * @brief	determines whether or not a shuttle is available for
+ *		the specified starport
+ *
+ * @param	obj_id starport
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isShuttleAvailable(obj_id starport)
+{
+	if (starport == null || starport == obj_id.NULL_ID)
+		return false;
+
+	int available = getIntObjVar(starport, VAR_SHUTTLE_AVAILABLE);
+
+	if (available == 1)
+		return true;
+	else
+		return false;
+}
+
+/***********************************************************************
+ ***********************************************************************/
+boolean qualifiesForGcwTravelPerks(obj_id player)
+{
+	if (!isIdValid(player))
+		return false;
+
+	// travel perk is available only for GCW officer rank if the GCW score
+	// for the planet is at least 70% controlled by the player's faction
+	const int faction = pvpGetAlignedFaction(player);
+	if (faction == 0)
+		return false;
+
+	if (pvpGetCurrentGcwRank(player) < 7)
+		return false;
+
+	const int imperialScore = getGcwGroupImperialScorePercentile(getCurrentSceneName());
+	if (##"imperial" == faction)
+		return (imperialScore >= 70);
+	else if (##"rebel" == faction)
+		return (imperialScore <= 30);
+
+	return false;
+}
+
+/***********************************************************************
+ ***********************************************************************/
+boolean restrictedByGcwTravelRestrictions(obj_id player)
+{
+	if (!isIdValid(player))
+		return false;
+
+	// travel restriction only applies to GCW officer rank if the GCW score
+	// for the planet is at least 70% controlled by the opposing faction
+	const int faction = pvpGetAlignedFaction(player);
+	if (faction == 0)
+		return false;
+
+	if (pvpGetCurrentGcwRank(player) < 7)
+		return false;
+
+	const int imperialScore = getGcwGroupImperialScorePercentile(getCurrentSceneName());
+	if (##"imperial" == faction)
+		return (imperialScore <= 30);
+	else if (##"rebel" == faction)
+		return (imperialScore >= 70);
+
+	return false;
+}
+
+/***********************************************************************
+ ***********************************************************************/
+int getGcwTravelRestrictionsSurcharge(obj_id player, string departPlanet, string arrivePlanet)
+{
+	if (!isIdValid(player))
+		return 0;
+
+	// travel restriction surcharge only applies to GCW officer rank if the
+	// GCW score for either the departure or arrival planet is at least 71%
+	// controlled by the opposing faction, whichever is greater
+	const int faction = pvpGetAlignedFaction(player);
+	if (faction == 0)
+		return 0;
+
+	if (pvpGetCurrentGcwRank(player) < 7)
+		return 0;
+
+	const int imperialScoreDepartPlanet = getGcwGroupImperialScorePercentile(departPlanet);
+	const int imperialScoreArrivePlanet = getGcwGroupImperialScorePercentile(arrivePlanet);	
+	if (##"imperial" == faction)
+	{
+		const int largerRebelScore = Math.max(100 - imperialScoreDepartPlanet, 100 - imperialScoreArrivePlanet);
+		if (largerRebelScore > 70)
+			return (largerRebelScore - 70) * 500; // 500 credits for each % above 70
+	}
+	else if (##"rebel" == faction)
+	{
+		const int largerImperialScore = Math.max(imperialScoreDepartPlanet, imperialScoreArrivePlanet);
+		if (largerImperialScore > 70)
+			return (largerImperialScore - 70) * 500; // 500 credits for each % above 70
+	}
+
+	return 0;
+}
+
+/***********************************************************************
+ * if the planet is at least 70% controlled by the opposing faction, only
+ * 1 starport will be available for incoming and outgoing inter-planetary
+ * travel; this function returns that 1 starport that is available, or
+ * null if all starports are available; the 1 starport that is available
+ * is the one that is most controlled by the losing faction
+ ***********************************************************************/
+string getGcwTravelRestrictionsAvailableStarport(obj_id player, string planet)
+{
+	if (!isIdValid(player))
+		return null;
+
+	if ((planet == null) || (planet.length() <= 0))
+		return null;
+
+	// travel restriction only applies to GCW officer rank if the GCW score
+	// for the planet is at least 70% controlled by the opposing faction
+	const int faction = pvpGetAlignedFaction(player);
+	if (faction == 0)
+		return null;
+
+	if (pvpGetCurrentGcwRank(player) < 7)
+		return null;
+
+	const int imperialScore = getGcwGroupImperialScorePercentile(planet);
+	if (((##"imperial" == faction) && (imperialScore <= 30)) ||
+		((##"rebel" == faction) && (imperialScore >= 70)))
+	{
+		string availableStarport = null;
+		int highestScore = -1;
+		
+		String[] planetTravelPoints = getPlanetTravelPoints(planet);
+		if ((planetTravelPoints != null) && (planetTravelPoints.length > 0))
+		{
+			int numStarport = 0;
+			for (int i = 0; i < planetTravelPoints.length; ++i)
+			{
+				if (getPlanetTravelPointInterplanetary(planet, planetTravelPoints[i]))
+				{
+					++numStarport;
+				
+					int score = 50;
+					String gcwContestedRegion = getPlanetTravelPointGcwContestedRegion(planet, planetTravelPoints[i]);
+					if ((gcwContestedRegion != null) && (gcwContestedRegion.length() > 0))
+					{
+						score = getGcwImperialScorePercentile(gcwContestedRegion);
+						
+						if (##"rebel" == faction)
+							score = 100 - score;
+					}
+
+					if (score > highestScore)
+					{
+						availableStarport = planetTravelPoints[i];
+						highestScore = score;
+					}
+				}
+			}
+
+			// planet only has 1 starport
+			if (numStarport <= 1)
+				return null;
+		}
+
+		return availableStarport;
+	}
+
+	return null;
+}
+
+/***********************************************************************
+ * @brief	gets a shuttle within range of the player.
+ *
+ * @param	obj_id player
+ * @param	obj_id shuttle
+ *
+ * @return 	boolean
+ ***********************************************************************/
+obj_id getTravelShuttle(obj_id player)
+{
+	if (player == null || player == obj_id.NULL_ID)
+		return null;
+
+	location loc = getLocation(player);
+	obj_id[] items = getObjectsInRange(loc, MAXIMUM_SHUTTLE_DISTANCE);
+	for (int i = 0; i < items.length; i++)
+	{
+		if (isTravelShuttle(items[i]))
+			return items[i];
+	}
+
+	return null;
+}
+
+/***********************************************************************
+ * @brief	checks to see if the player is within boarding range
+ *		of the shuttle.
+ *
+ * @param	obj_id player
+ * @param	obj_id shuttle
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isInShuttleBoardingRange(obj_id player, obj_id shuttle)
+{
+	if (player == null || player == obj_id.NULL_ID)
+		return false;
+
+	if (shuttle == null || shuttle == obj_id.NULL_ID)
+		return false;
+
+	location loc_player = getLocation(player);
+	location loc_shuttle = getLocation(shuttle);
+	float distance = loc_player.distance(loc_shuttle);
+	//LOG("LOG_CHANNEL", "distance ->" + distance + " max ->" + MAXIMUM_SHUTTLE_DISTANCE);
+	if (distance < 0)
+		return false;
+
+	if (distance > MAXIMUM_SHUTTLE_DISTANCE)
+		return false;
+	else
+		return true;
+}
+
+/***********************************************************************
+ * @brief	determines whether or not a given route is valid
+ *
+ * @param	string planet1		departure planet
+ * @param	string point1		departure point
+ * @param	string planet2		arrival planet
+ * @param	string point2		arrival point
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean isValidRoute(string planet1, string point1, string planet2, string point2)
+{
+	// If the any cost is zero, the route is not valid.
+	int planet_cost = getPlanetTravelCost (planet1, planet2);
+	if (planet_cost == 0)
+		return false;
+
+	int point_cost1 = getPlanetTravelPointCost(planet1, point1);
+	if (point_cost1 == 0)
+		return false;
+
+	int point_cost2 = getPlanetTravelPointCost(planet2, point2);
+	if (point_cost2 == 0)
+		return false;
+
+	// Check to make certain that planetary routes are only from starport to starport.
+	if (!planet1.equals(planet2))
+	{
+		boolean starport1 = getPlanetTravelPointInterplanetary (planet1, point1);
+		boolean starport2 = getPlanetTravelPointInterplanetary (planet2, point2);
+		LOG("LOG_CHANNEL", "starport1 ->" + starport1 + " starport2 ->" + starport2);
+		if (!starport1 || !starport2)
+			return false;
+	}
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	returns the star port with which the travel terminal is
+ *		associated.
+ *
+ * @param	obj_id terminal
+ *
+ * @return 	obj_id 		starport
+ ***********************************************************************/
+obj_id getStarportFromTerminal(obj_id terminal)
+{
+	if (terminal == null || terminal == obj_id.NULL_ID)
+		return null;
+
+	if (hasObjVar(terminal, VAR_STARPORT))
+		return getObjIdObjVar(terminal, VAR_STARPORT);
+	else
+		return null;
+}
+
+
+/***********************************************************************
+ * @brief	returns a shuttle associated with the starport
+ *
+ * @param	obj_id starport
+ *
+ * @return 	obj_id 		shuttle
+ ***********************************************************************/
+obj_id getShuttleFromStarport(obj_id starport)
+{
+	obj_id[] starport_objects = travel.getBaseObjects(starport);
+	obj_id shuttle = obj_id.NULL_ID;
+	if (starport_objects != null)
+	{
+		for (int i = 0; i < starport_objects.length; i++)
+		{
+			if (travel.isTravelShuttle(starport_objects[i]))
+			{
+				shuttle = starport_objects[i];
+				break;
+			}
+		}
+	}
+
+	if (shuttle == obj_id.NULL_ID)
+		return null;
+	else
+		return shuttle;
+}
+
+/***********************************************************************
+ * @brief	toggles shuttle availability
+ *
+ * @param	obj_id starport
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean setShuttleAvailability(obj_id starport)
+{
+	if (starport == null || starport == obj_id.NULL_ID)
+		return false;
+
+	if (hasObjVar(starport, VAR_SHUTTLE_AVAILABLE))
+	{
+		int available = getIntObjVar(starport, VAR_SHUTTLE_AVAILABLE);
+
+		if (available == 1)
+		{
+			setObjVar(starport, VAR_SHUTTLE_AVAILABLE, 0);
+
+			int shuttleAvailableCount = 0;
+			if (utils.hasScriptVar(starport, SCRIPTVAR_SHUTTLE_AVAILABLE_COUNT))
+			{
+				shuttleAvailableCount = utils.getIntScriptVar(starport, SCRIPTVAR_SHUTTLE_AVAILABLE_COUNT);			
+			}
+
+			++shuttleAvailableCount;
+			utils.setScriptVar(starport, SCRIPTVAR_SHUTTLE_AVAILABLE_COUNT, shuttleAvailableCount);
+		}
+		else
+		{
+			setObjVar(starport, VAR_SHUTTLE_AVAILABLE, 1);
+		}
+
+		setObjVar(starport, VAR_SHUTTLE_TIMESTAMP, getGameTime());
+		return true;
+	}
+	else
+		return false;
+}
+
+/***********************************************************************
+ * @brief	sets the travel point of the specified starport
+ *
+ * @param	obj_id structure     	starport
+ * @param	string travel_point 	travel point name
+ * @param	location arrival	location where the player arrives
+ * @param	travel_cost		cost to travel to this point
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean setStarportTravelPoint( obj_id structure, string travel_point, location arrival_loc, int travel_cost, boolean civic )
+{
+	string planet = getCurrentSceneName();
+	//LOG("LOG_CHANNEL", "setStarport ---- planet ->" + planet + " travel_point ->" + travel_point + " structure ->" + structure);
+	//LOG("LOG_CHANNEL", "setStarportTravelPoint: " + arrival_loc);
+
+	if (structure == null || structure == obj_id.NULL_ID)
+		return false;
+
+	if (travel_point == null || travel_point.length() < 1)
+		return false;
+
+	if (arrival_loc == null)
+		return false;
+
+	if (travel_cost < 0)
+		return false;
+
+	// Shuttleports can't do interplanetary travel.
+	boolean interplanetary;
+	if (isShuttlePort(structure))
+		interplanetary = false;
+	else
+		interplanetary = true;
+
+	//LOG("LOG_CHANNEL", "travel::setStarportTravelPoint -- " + interplanetary);
+
+	boolean setup = false;
+	if ( civic )
+	{
+		setup = city.addStarport( structure, arrival_loc, travel_cost, interplanetary );
+	}
+	else
+	{
+		// this is either an NPC starport, NPC shuttleport, or a PC camp shuttle beacon
+		int type = TPT_NPC_Shuttleport;
+		if (interplanetary)
+		{
+			type = TPT_NPC_Starport;
+		}
+		else
+		{
+			string template = getTemplateName(structure);
+			if ((template != null) && (template.equals("object/tangible/camp/camp_shuttle_beacon.iff")))
+				type = TPT_PC_CampShuttleBeacon;
+			else if ((template != null) && (template.equals("object/tangible/gcw/static_base/invisible_beacon.iff")))
+				type = TPT_NPC_StaticBaseBeacon;
+		}
+
+		setup = addPlanetTravelPoint( planet, travel_point, arrival_loc, travel_cost, interplanetary, type);
+	}
+
+	if ( setup )
+	{
+		if (!hasObjVar(structure, VAR_TRAVEL_POINT_NAME))
+			setObjVar(structure, VAR_TRAVEL_POINT_NAME, travel_point);
+		if (!hasObjVar(structure, VAR_ARRIVAL_LOCATION))
+			setObjVar(structure, VAR_ARRIVAL_LOCATION, arrival_loc);
+		if (!hasObjVar(structure, VAR_TRAVEL_COST))
+			setObjVar(structure, VAR_TRAVEL_COST, travel_cost);
+
+		return true;
+	}
+	else
+		return false;
+}
+
+/***********************************************************************
+ * @brief	removes the structure's travel point
+ *
+ * @param	obj_id structure
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean removeTravelPoint(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+		return false;
+
+	string planet = getCurrentSceneName();
+	string travel_point = "";
+	if (hasObjVar(structure, VAR_TRAVEL_POINT_NAME))
+		travel_point = getStringObjVar(structure, VAR_TRAVEL_POINT_NAME);
+	else
+		return false;
+
+	if (removePlanetTravelPoint(planet, travel_point))
+	{
+		removeObjVar(structure, VAR_TRAVEL);
+		return true;
+	}
+	else
+		return false;
+}
+
+/***********************************************************************
+ * @brief	destroys the structure's base objects
+ *
+ * @param	obj_id structure
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean destroyBaseObjects(obj_id structure)
+{
+	if (structure == null || structure == obj_id.NULL_ID)
+		return false;
+
+	obj_id[] base_objects = getBaseObjects(structure);
+	if (base_objects != null)
+	{
+		for (int i = 0; i < base_objects.length; i++)
+		{
+			if (isIdValid(base_objects[i]))
+			{
+				//LOG("LOG_CHANNEL", "Destroying " + base_objects[i]);
+				destroyObject(base_objects[i]);
+			}
+		}
+	}
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	Calculates the cost and deducts the credits for a ticket purchase
+ *
+ * @param	obj_id player		player making the purchase
+ * @param	string planet1		starting planet
+ * @param	string point1		starting point
+ * @param	string planet2		destination planet
+ * @param	string point2		destination point
+ * @param	boolean roundtrip	whether or not this is a roundtrip purchase.
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean purchaseTicket( obj_id player, string planet1, string point1, string planet2, string point2, boolean roundtrip, obj_id starport )
+{
+	LOG("LOG_CHANNEL", "travel::purchaseTicket");
+
+	if (player == null || player == obj_id.NULL_ID)
+		return false;
+
+	if (utils.hasScriptVar(player, VAR_PURCHASING_TICKET))
+	{
+		LOG("LOG_CHANNEL", player + " ->You already have an outstanding ticket purchase request. Please wait for it to complete.");
+		sui.msgbox(player, new string_id("travel", "purchase_pending"));
+		return false;
+	}
+
+	if (planet2 == "mustafar")
+	{
+		if( !features.hasMustafarExpansionRetail( player ))
+		{
+			sendSystemMessage(player, SID_MUSTAFAR_UNAUTHORIZED);
+			return false;
+		}
+	}
+
+	if (planet2 == "kashyyyk_main")
+		{
+			if( !features.hasEpisode3Expansion( player ))
+			{
+				sendSystemMessage(player, SID_KASHYYYK_UNAUTHORIZED);
+				return false;
+			}
+	}
+
+	if (planet1.equals(planet2))
+	{
+		if (point1.equals(point2))
+		{
+			LOG("LOG_CHANNEL", player + " ->Your destination cannot be the same as your current location.");
+			sui.msgbox(player, new string_id("travel", "same_spot"));
+			return false;
+		}
+	}
+	else
+	{
+		// Make sure that this ticket is being purchased at a starport and not a shuttleport.
+		// Shuttleports can only give tickets for destinations on the same planet.
+		if (!getPlanetTravelPointInterplanetary (planet1, point1))
+		{
+			LOG("LOG_CHANNEL", player + " ->Shuttleports do not offer interplanetary transportation.");
+			sui.msgbox(player, new string_id("travel", "shuttle_interplanet_fail"));
+			return false;
+		}
+	}
+
+	// Can't buy a ticket to a city you're banned from travel to.
+	int city_id = findCityByName( point2 );
+	if ( city.isCityBanned( player, city_id ) )
+	{
+		sendSystemMessage( player, new string_id( "city/city", "banned_buy_ticket" ) );
+		return false;
+	}
+
+	// Find the planet to planet cost
+	int planet_cost = getPlanetTravelCost (planet1, planet2);
+	if (planet_cost == 0)
+	{
+		LOG("LOG_CHANNEL", player + " ->Your planetary route is not valid.");
+		sui.msgbox(player, new string_id("travel", "route_invalid"));
+		return false;
+	}
+
+	// Find the point to point costs
+	int point_cost1 = getPlanetTravelPointCost(planet1, point1);
+	if (point_cost1 == 0)
+	{
+		LOG("LOG_CHANNEL", player + " ->Your departure location is not valid.");
+		sui.msgbox(player, new string_id("travel", "departure_invalid"));
+		return false;
+	}
+	int point_cost2 = getPlanetTravelPointCost(planet2, point2);
+	if (point_cost2 == 0)
+	{
+		LOG("LOG_CHANNEL", player + " ->Your destination is not valid.");
+		sui.msgbox(player, new string_id("travel", "destination_invalid"));
+		return false;
+	}
+
+	int total_cost = planet_cost + point_cost1 + point_cost2;
+
+	if (roundtrip)
+		total_cost = total_cost * 2;
+
+	LOG("LOG_CHANNEL", "total_cost ->" + total_cost + "   " + planet_cost + "/" + point_cost1 + "/" + point_cost2);
+
+	boolean hasTravelVoucher = false;
+	boolean hasEnoughMoney = true;
+	if ( utils.playerHasItemByTemplate(player, TRAVEL_COUPON_TEMPLATE) )
+	{
+		hasTravelVoucher = true;
+	}
+
+	// Make the player pay
+	// Get the player's balances
+	int total_money = getTotalMoney(player);
+	int cash = getCashBalance(player);
+	int bank = getBankBalance(player);
+	if (total_money < total_cost )
+	{
+		hasEnoughMoney = false;
+		if ( !hasTravelVoucher  )
+		{
+			LOG("LOG_CHANNEL", player + " ->You do not have sufficient funds for that.");
+			sui.msgbox(player, new string_id("travel", "no_cash"));
+			return false;
+		}
+	}
+
+	obj_id inv = getObjectInSlot(player, "inventory");
+	if (inv == null || inv == obj_id.NULL_ID)
+	{
+		LOG("LOG_CHANNEL", "player_dispenser::msgMedicinePurchaseSelected -- can't find inventory for " + player);
+		return false;
+	}
+
+	int free_space = getVolumeFree(inv);
+	if (free_space < 1)
+	{
+		sui.msgbox(player, new string_id("travel", "inv_full"));
+		return false;
+	}
+	if (roundtrip)
+	{
+		// Roundtrip tickets take up 2 space.
+		if (free_space < 2)
+		{
+			sui.msgbox(player, new string_id("travel", "inv_full"));
+			return false;
+		}
+	}
+
+	int city_fee = 0;
+	if ( player_structure.isCivic( starport ) )
+	{
+		city_id = getCityAtLocation( getLocation(starport), 0 );
+		city_fee = cityGetTravelCost( city_id );
+		total_cost -= city_fee;
+	}
+
+	// We don't create the ticket at this point.  We wait until we get back a successful bank transaction
+	dictionary params = new dictionary();
+	params.put("player_id", player);
+	params.put("account_name", money.ACCT_TRAVEL);
+	params.put("amount", total_cost);
+	params.put("planet1", planet1);
+	params.put("point1", point1);
+	params.put("planet2", planet2);
+	params.put("point2", point2);
+	params.put("roundtrip", roundtrip);
+
+	// new player travel coupon... good for a free ticket
+	if ( hasTravelVoucher )
+	{
+		obj_id travel_coupon = utils.getItemPlayerHasByTemplate(player, TRAVEL_COUPON_TEMPLATE);
+		if ( isIdValid(travel_coupon) )
+		{
+			if ( hasObjVar(travel_coupon, "owner") )
+			{
+				obj_id owner = getObjIdObjVar(travel_coupon, "owner");
+				if ( isIdValid(owner) )
+				{
+					if ( player == owner )
+					{
+						if ( utils.hasScriptVar(player, "travel_voucher.travelVoucherSui") )
+						{
+							int oldSui = utils.getIntScriptVar(player, "travel_voucher.travelVoucherSui");
+							utils.removeScriptVar(player, "travel_voucher.travelVoucherSui");
+							if ( oldSui > -1 )
+							{
+								forceCloseSUIPage(oldSui);
+							}
+						}
+
+						params.put("city_fee", city_fee);
+						params.put("starport", starport);
+						params.put("travel_coupon", travel_coupon);
+						params.put("hasEnoughMoney", hasEnoughMoney);
+						utils.setScriptVar(player, "travelTicketDict", params);
+
+						// sui - decide whether or not to use the coupon
+						string_id titleMsg = new string_id ("new_player", "travel_coupon");
+						string_id textMsgPurchaseOption = new string_id ("new_player", "travel_coupon_use_text_option");
+						string_id textMsgNoMoney = new string_id ("new_player", "travel_coupon_use_text_no_money");
+						string_id okButton = new string_id ("new_player", "travel_coupon_use_coupon_button");
+						string_id cancelButtonPay = new string_id ("new_player", "travel_coupon_pay_credits_button");
+						string_id cancelButtonCancel = new string_id ("new_player", "travel_coupon_cancel_button");
+
+						string TITLE_MSG = utils.packStringId(titleMsg);
+						string TEXT_MSG = utils.packStringId(textMsgPurchaseOption) + " " + total_cost;
+						string OK_BUTTON = utils.packStringId(okButton);
+						string CANCEL_BUTTON = utils.packStringId(cancelButtonPay);
+						if ( !hasEnoughMoney )
+						{
+							TEXT_MSG = utils.packStringId(textMsgNoMoney);
+							CANCEL_BUTTON = utils.packStringId(cancelButtonCancel);
+						}
+
+						// Create the dialog page.
+						int pid = sui.createSUIPage( sui.SUI_MSGBOX, player, player, "msgUseTravelCouponSui" );
+
+						// Add elements text.
+						setSUIProperty(pid, "", "Size", "500,200");
+						setSUIProperty(pid, sui.MSGBOX_TITLE, sui.PROP_TEXT, TITLE_MSG );
+						setSUIProperty(pid, sui.MSGBOX_PROMPT, sui.PROP_TEXT, TEXT_MSG);
+
+						// Add buttons.
+						sui.msgboxButtonSetup(pid, sui.YES_NO);
+						setSUIProperty(pid, sui.MSGBOX_BTN_OK, sui.PROP_TEXT, OK_BUTTON);
+						setSUIProperty(pid, sui.MSGBOX_BTN_CANCEL, sui.PROP_TEXT, CANCEL_BUTTON);
+
+						utils.setScriptVar(player, "travel_voucher.travelVoucherSui", pid);
+
+						// Show dialog.
+						sui.showSUIPage( pid );
+						return false;
+					}
+					else
+					{
+						string custLogMsg = "New Player Rewards: %TU tried to use a travel voucher but isn't the owner. Rightful owner is %TT";
+						CustomerServiceLog("NEW_PLAYER_QUESTS", custLogMsg, player, owner);
+
+						if ( isGod(player) )
+						{
+							sendSystemMessage(player, new string_id("travel", "not_voucher_owner"));
+							if ( !hasEnoughMoney )
+								return false;
+						}
+					}
+				}
+			}
+			else
+			{
+				string custLogMsg = "New Player Rewards: %TU tried to use a travel voucher but the voucher is invalid - does not have an owner.";
+				CustomerServiceLog("NEW_PLAYER_QUESTS", custLogMsg, player);
+
+				if ( isGod(player) )
+				{
+					sendSystemMessage(player, new string_id("travel", "not_voucher_valid"));
+					if ( !hasEnoughMoney )
+						return false;
+				}
+			}
+		}
+	}
+
+	if ( money.pay(player, money.ACCT_TRAVEL, total_cost, "msgTicketPaymentComplete", params, true) )
+	{
+		params.put("amount", city_fee);
+		if ( (city_fee > 0) && !money.pay( player, city.getCityHall(starport), city_fee, "msgCityTicketPaymentComplete", params, true ) )
+			return false;
+
+		LOG("LOG_CHANNEL", "Deducting " + total_cost);
+
+		// Set the players purchase pending scriptvar
+		utils.setScriptVar(player, VAR_PURCHASING_TICKET, 1);
+		return true;
+	}
+	else
+		return false;
+}
+
+void showTravelVoucherSui()
+{
+
+}
+
+/***********************************************************************
+ * @brief	Creates a ticket(s) based on the specified params and
+ *		places it in the player's inventory
+ *
+ * @param	obj_id player		player to get the tickets
+ * @param	string planet1		starting planet
+ * @param	string point1		starting point
+ * @param	string planet2		destination planet
+ * @param	string point2		destination point
+ * @param	boolean roundtrip	whether or not this is a roundtrip purchase.
+ *					In this case, two are created.
+ *
+ * @return 	obj_id[]		Ticket(s) created.
+ ***********************************************************************/
+obj_id[] createTicket(obj_id player, string planet1, string point1, string planet2, string point2, boolean roundtrip)
+{
+	if (player == null || player == obj_id.NULL_ID)
+		return null;
+
+	obj_id ticket;
+	obj_id inv = getObjectInSlot(player, "inventory");
+	if (inv == null)
+	{
+		LOG("LOG_CHANNEL", "player_travel::createTicket -- Unable to get an inventory slot!");
+		sendSystemMessage(player, new string_id("travel", "no_room_for_ticket"));
+		ticket = createObject(BASE_TRAVEL_TICKET, getLocation(player));
+	}
+	else
+		ticket = createObject(BASE_TRAVEL_TICKET, inv, "");
+
+	if (ticket == null)
+	{
+		LOG("LOG_CHANNEL", "player_travel::createTicket -- Unable to create ticket.");
+		return null;
+	}
+
+	// Set up the tickets objvars
+	setObjVar(ticket, VAR_DEPARTURE_PLANET, planet1);
+	setObjVar(ticket, VAR_DEPARTURE_POINT, point1);
+	setObjVar(ticket, VAR_ARRIVAL_PLANET, planet2);
+	setObjVar(ticket, VAR_ARRIVAL_POINT, point2);
+
+	obj_id[] tickets = null;
+	if (roundtrip)
+		tickets = new obj_id[2];
+	else
+		tickets = new obj_id[1];
+	tickets[0] = ticket;
+
+	if (roundtrip)
+	{
+		// Create the return ticket.
+		// We've already checked for inventory space before payment. We're pass the point
+		// of no return in the unlikely event that the player manages to fill his inventory
+		// in the couple seconds it takes for the payment message to complete. Therefore,
+		// overload it just in case.
+		obj_id return_ticket = createObjectOverloaded(BASE_TRAVEL_TICKET, inv);
+		if (ticket == null)
+		{
+			LOG("LOG_CHANNEL", "player_travel::OnPurchaseTicket -- Unable to create return ticket.");
+			return null;
+		}
+		setObjVar(return_ticket, VAR_DEPARTURE_PLANET, planet2);
+		setObjVar(return_ticket, VAR_DEPARTURE_POINT, point2);
+		setObjVar(return_ticket, VAR_ARRIVAL_PLANET, planet1);
+		setObjVar(return_ticket, VAR_ARRIVAL_POINT, point1);
+
+		tickets[1] = return_ticket;
+	}
+
+	return tickets;
+}
+
+
+/***********************************************************************
+ * @brief	Transports the player to the specified travel point
+ *
+ * @param	obj_id player
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean movePlayerToDestination(obj_id player, string planet, string point)
+{
+	return movePlayerToDestination(player, planet, point, false);
+}
+
+boolean movePlayerToDestination(obj_id player, string planet, string point, boolean groupPickupPointTravel)
+{
+	if (!isIdValid(player))
+	{
+		LOG("LOG_CHANNEL", "travel::movePlayerToDestination -- player is not valid");
+		return false;
+	}
+	if (planet == null)
+	{
+		LOG("LOG_CHANNEL", "travel::movePlayerToDestination -- planet is null");
+		return false;
+	}
+	if (point == null)
+	{
+		LOG("LOG_CHANNEL", "travel::movePlayerToDestination -- point is null");
+		return false;
+	}
+
+	// for group pickup point travel, these checks have already been done elsewhere	
+	if (!groupPickupPointTravel)
+	{
+		// fail-safe check to ensure that players blocked cannot travel (at this point if a ticket was used it is lost)
+		if (isTravelBlocked(player, false))
+			return false;
+
+		if (planet == "mustafar")
+		{
+			if( !features.hasMustafarExpansionRetail( player ))
+			{
+				sendSystemMessage(player, SID_MUSTAFAR_UNAUTHORIZED);
+				return false;
+			}
+
+		}
+
+		if (planet == "kashyyyk_main")
+		{
+			if( !features.hasEpisode3Expansion( player ))
+			{
+				sendSystemMessage(player, SID_KASHYYYK_UNAUTHORIZED);
+				return false;
+			}
+
+		}
+	}
+
+	location loc = getPlanetTravelPointLocation(planet, point);
+	LOG("LOG_CHANNEL", "travel::movePlayerToDestination -- location ->" + loc);
+	if (loc == null)
+	{
+		LOG("LOG_CHANNEL", "travel::movePlayerToDestination -- location is null");
+		return false;
+	}
+
+	// randomize the location slightly
+	location arrival = utils.getRandomAwayLocation(loc, MIN_RANDOM_DISTANCE, MAX_RANDOM_DISTANCE);
+
+	if (arrival.cell == null || arrival.cell == obj_id.NULL_ID)
+	{
+		setLookAtTarget(player, null);
+		int numbuff = buff.getBuffOnTargetFromGroup(player, "vr_familiar");
+		if (buff.hasBuff(player, numbuff))
+		{
+			buff.removeBuff(player, numbuff);
+		}
+		
+		// If this is an entertainer with Hologram images clean them up
+		if (utils.hasScriptVar(player, "currentHolo"))
+		{
+			performance.holographicCleanup(player);
+		}	
+
+		if (groupPickupPointTravel)
+			warpPlayer(player, planet, arrival.x, arrival.y, arrival.z, null, 0.0f, 0.0f, 0.0f);
+		else
+			warpPlayer(player, planet, arrival.x, arrival.y, arrival.z, null, 0.0f, 0.0f, 0.0f, "msgTravelComplete");
+	}
+	else
+	{
+		LOG("LOG_CHANNEL", "travel::movePlayerToDestination -- travel point: " + planet + ", " + point + " has a cell arrival location.  This is not supported.");
+		// warpPlayer(player, planet, 0.0f, 0.0f, 0.0f, arrival.cell, arrival.x, arrival.y, arrival.z);
+	}
+
+	return true;
+}
+
+/***********************************************************************
+ * @brief	Provides rotation transformation of delta_world coordinates
+ *		without the need for an origin
+ *
+ * @param	float X			X delta_world coordinate
+ * @param	float Z			Z delta_world coordinate
+ *					to rotate.
+ * @param	rotation		rotation of the structure in units of 90
+ *					degrees (0 = 0, 1 = 90, 2 = 180, etc.)
+ *
+ * @return	float[]			transformed delta_world coords {X, Z}
+ ***********************************************************************/
+float[] transformDeltaWorldCoord(float X, float Z, int rotation)
+{
+	float x = X;
+	float z = Z;
+
+	switch(rotation)
+	{
+		case 0:
+			break;
+		case 1:
+			X = z;
+			Z = -x;
+			break;
+		case 2:
+			Z = -z;
+			X = -x;
+			break;
+		case 3:
+			X = -z;
+			Z = x;
+			break;
+	}
+
+	float[] delta_world = {X, Z};
+
+	return delta_world;
+}
+
+/***********************************************************************
+ * @brief	Provides rotation transformation of delta_world coordinates
+ *		about an object.
+ *
+ * @param	obj_id object
+ * @param	float X			X delta_world coordinate
+ * @param	float Z			Z delta_world coordinate
+ *					to rotate.
+ *
+ * @return	float[]			transformed delta_world coords {X, Z}
+ ***********************************************************************/
+float[] transformDeltaWorldYaw(obj_id object, float x, float z)
+{
+	if (!isIdValid(object))
+		return null;
+
+	float yaw = getYaw(object);
+
+	float yaw_radians = (float)Math.toRadians(yaw);
+	float X = (x * (float)Math.cos(yaw_radians)) + (z * (float)Math.sin(yaw_radians));
+	float Z = (z * (float)Math.cos(yaw_radians)) - (x * (float)Math.sin(yaw_radians));
+
+	//LOG("LOG_CHANNEL", "object -> " + object + " yaw ->" + yaw + " transform ->" + X + "/" + Z);
+
+	float[] delta_world = {X, Z};
+	return delta_world;
+}
+
+boolean testBoardShuttle(obj_id player, obj_id shuttle)
+{
+	string planet = getCurrentSceneName();
+	obj_id starport = getStarportFromTerminal(shuttle);
+	if (starport == null)
+	{
+		LOG("LOG_CHANNEL", "player.player_travel::OnBoardShuttle -- Unable to find the starport for " + shuttle);
+	}
+
+	string depart_point = getTravelPointName(starport);
+
+	// Look through the player's inventory for valid tickets
+	resizeable string[] dsrc = new string[0];
+	obj_id inventory = getObjectInSlot(player, "inventory");
+	obj_id[] inv_contents = utils.getContents(inventory, false);
+
+	for (int i = 0; i < inv_contents.length; i++)
+	{
+		if (isTravelTicketValid(inv_contents[i], planet, depart_point))
+		{
+			string ticket_planet = getTicketArrivalPlanet(inv_contents[i]);
+			string ticket_point = getTicketArrivalPoint(inv_contents[i]);
+
+			// Make first letter of planet name upper case.
+			ticket_planet = ticket_planet.substring(0,1).toUpperCase() + ticket_planet.substring(1).toLowerCase();
+
+			dsrc = utils.addElement(dsrc, ticket_planet + " -- " + ticket_point);
+		}
+	}
+
+	if (dsrc.length < 1)
+	{
+		LOG("LOG_CHANNEL", player + " ->You do not have a ticket to board this shuttle.");
+		sendSystemMessage(player, new string_id("travel", "no_ticket_for_shuttle"));
+		return false;
+	}
+	else
+	{
+		string_id sd = new string_id("travel", "select_destination");
+		string txt = utils.packStringId(sd);
+		sui.listbox(player, player, txt, sui.OK_CANCEL, txt, dsrc, "msgBoardShuttle");
+		return true;
+	}
+}
+
+/***********************************************************************
+ * @brief	attempts to retrieve a listing of valid starports/shuttleports
+ *			for the specified planet
+ *
+ * @param	string	planet		desired planet
+ * @param	boolean	isStarport	true=starports;false=shuttleports
+ *
+ * @return	string[] 	list of port "names"; null on error
+ ***********************************************************************/
+Vector getFilteredPortLocationsForPlanet(string planet, boolean isStarport)
+{
+	if ( planet == null || planet.equals("") )
+		return null;
+
+	string[] allPts = getPlanetTravelPoints(planet);
+	if ( allPts == null || allPts.length == 0 )
+		return null;
+
+	resizeable string[] ret = new string[0];
+	for ( int i = 0; i < allPts.length; i++ )
+	{
+		if ( getPlanetTravelPointInterplanetary(planet, allPts[i]) == isStarport )
+			ret = utils.addElement(ret, allPts[i]);
+	}
+
+	return ret;
+}
+
+string[] getStarportsForPlanet(string planet)
+{
+	return utils.toStaticStringArray(getFilteredPortLocationsForPlanet(planet, true));
+}
+
+string[] getStarportsForPlanet()
+{
+	return getStarportsForPlanet(getCurrentSceneName());
+}
+
+string[] getShuttleportsForPlanet(string planet)
+{
+	return utils.toStaticStringArray(getFilteredPortLocationsForPlanet(planet, false));
+}
+
+string[] getShuttleportsForPlanet()
+{
+	return getShuttleportsForPlanet(getCurrentSceneName());
+}
+
+
+
+/***********************************************************************
+ * @brief	Calculates the cost and deducts the credits for a ticket purchase
+ *
+ * @param	obj_id player		player making the purchase
+ * @param	string planet1		starting planet
+ * @param	string point1		starting point
+ * @param	string planet2		destination planet
+ * @param	string point2		destination point
+ * @param	boolean roundtrip	whether or not this is a roundtrip purchase.
+ *
+ * @return 	boolean
+ ***********************************************************************/
+boolean instantTravel( obj_id player, string planet1, string point1, string planet2, string point2, boolean roundtrip, obj_id starport )
+{
+	LOG("LOG_CHANNEL", "travel::instantTravel");
+
+	if (player == null || player == obj_id.NULL_ID)
+		return false;
+
+	if (utils.hasScriptVar(player, VAR_PURCHASING_TICKET))
+	{
+		LOG("LOG_CHANNEL", player + " ->You already have an outstanding ticket purchase request. Please wait for it to complete.");
+		sui.msgbox(player, new string_id("travel", "travel_pending"));
+		return false;
+	}
+
+/*
+	if (planet1.equals(planet2))
+	{
+		if (point1.equals(point2))
+		{
+			LOG("LOG_CHANNEL", player + " ->Your destination cannot be the same as your current location.");
+			sui.msgbox(player, new string_id("travel", "same_spot"));
+			return false;
+		}
+	}
+	else
+	{	*/
+		// Make sure that this ticket is being purchased at a starport and not a shuttleport.
+		// Shuttleports can only give tickets for destinations on the same planet.
+		//if (!getPlanetTravelPointInterplanetary (planet1, point1))
+		if (planet1 != planet2)
+		{
+			LOG("LOG_CHANNEL", player + " ->Shuttleports do not offer interplanetary transportation.");
+			sui.msgbox(player, new string_id("travel", "instant_interplanet_fail"));
+			return false;
+		}
+	//}
+
+	// Can't buy a ticket to a city you're banned from travel to.
+	int city_id = findCityByName( point2 );
+	if ( city.isCityBanned( player, city_id ) )
+	{
+		sendSystemMessage( player, new string_id( "travel", "banned_travel" ) );
+		return false;
+	}
+
+	if(callable.hasAnyCallable(player))
+	{
+		sendSystemMessage(player, new string_id("beast", "beast_cant_travel"));
+		return false;
+	}
+
+	if (movePlayerToDestination(player, planet2, point2))
+		return true;
+
+	return false;
+}
+
+boolean isTravelBlocked(obj_id player, boolean isLaunch)
+{
+	boolean blocked = false;
+
+	if (utils.hasScriptVar(player, "travelBlock"))
+		blocked = true;
+
+	if (isLaunch && utils.getIntScriptVar(player, "travelBlock") == TRAVEL_BLOCK_ALLOW_LAUNCH)
+		blocked = false;
+
+	if(instance.isInInstanceArea(player) && trial.getTop(player) == player)
+		blocked = true;
+
+	if(blocked)
+	{
+		sendSystemMessage(player, new string_id("travel", "blocked_by_authorities"));
+	}
+	
+	return blocked;
+}
+
+void setTravelBlock(obj_id player, boolean allowLaunch)
+{
+	int travelBlockValue = allowLaunch ? TRAVEL_BLOCK_ALLOW_LAUNCH : 0;
+
+	utils.setScriptVar(player, "travelBlock", travelBlockValue);
+}
+
+void clearTravelBlock(obj_id player)
+{
+	if (utils.hasScriptVar(player, "travelBlock"))
+		utils.removeScriptVar(player, "travelBlock");
+}

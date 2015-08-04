@@ -1,0 +1,284 @@
+include library.create;
+include library.utils;
+include library.player_structure;
+include library.sui;
+include library.static_item;
+include library.buff;
+include library.chat;
+include library.ai_lib;
+include library.beast_lib;
+include library.factions;
+include library.vehicle;
+include library.event_perk;
+include java.util.Enumeration;
+
+/***** TRIGGERS ********************************************************/
+
+trigger OnLogin()
+{
+	if (costumeBuffExists(self) == false)
+		detachScript(self, "event.halloween.trick_or_treater");
+	//Checking if player should still be locked out.
+	if (buff.hasBuff(self, "event_halloween_coin_limit"))
+	{
+		if (event_perk.newDayOrNot(self) == true)
+		{
+			buff.removeBuff(self, "event_halloween_coin_limit");
+		}
+	}
+
+	if (event_perk.newDayOrNot(self) == true)
+	{
+		//player has the counter
+		if (hasObjVar(self, event_perk.COUNTER))
+		{
+			//We remove the counter so that the player can start over collecting coins.
+			removeObjVar(self, event_perk.COUNTER);
+		}
+		if (hasObjVar(self, event_perk.COUNTER_RESTARTTIME))
+		{
+			removeObjVar(self, event_perk.COUNTER_RESTARTTIME);
+		}
+		//double check and remove the limit objvar
+		if (hasObjVar(self, event_perk.COUNTER_TIMESTAMP))
+		{
+			removeObjVar(self, event_perk.COUNTER_TIMESTAMP);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	//Checking if player should still be locked out.
+	if (buff.hasBuff(self, "event_halloween_coin_limit"))
+	{
+		if (event_perk.newDayOrNot(self) == true)
+		{
+			buff.removeBuff(self, "event_halloween_coin_limit");
+		}
+	}
+	if (event_perk.newDayOrNot(self) == true)
+	{
+		//player has the counter
+		if (hasObjVar(self, event_perk.COUNTER))
+		{
+			//We remove the counter so that the player can start over collecting coins.
+			removeObjVar(self, event_perk.COUNTER);
+		}
+		if (hasObjVar(self, event_perk.COUNTER_RESTARTTIME))
+		{
+			removeObjVar(self, event_perk.COUNTER_RESTARTTIME);
+		}
+		//double check and remove the limit objvar
+		if (hasObjVar(self, event_perk.COUNTER_TIMESTAMP))
+		{
+			removeObjVar(self, event_perk.COUNTER_TIMESTAMP);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	if (costumeBuffExists(self) == false)
+		detachScript(self, "event.halloween.trick_or_treater");
+
+	return SCRIPT_CONTINUE;
+}
+
+//Starting the trick or treat process.
+trigger OnHearSpeech(obj_id speaker, string text)
+{
+	if (speaker == self)
+	{
+		if (isGod(speaker))
+		{
+			if (text.equals("setDailyLimitTwoMinutes"))
+			{
+				sendSystemMessageTestingOnly(self, "The daily limit will get reset 2 minutes from now");
+				int now = getCalendarTime();
+				int secondsUntil = 120;
+				int then = now + secondsUntil;
+				setObjVar(self, event_perk.COUNTER_RESTARTTIME, then);
+				if (hasObjVar(self, event_perk.COUNTER_TIMESTAMP))
+					setObjVar(self, event_perk.COUNTER_TIMESTAMP, then);
+			}
+		}
+
+		if (costumeBuffExists(self) == false)
+		{
+			detachScript(self, "event.halloween.trick_or_treater");
+			return SCRIPT_CONTINUE;
+		}
+
+		if (toLower(text).indexOf("trick or treat") > -1)
+		{
+			location speakerLocation = getLocation(speaker);
+			//Making sure that the player is in one of the cities celebrating Halloween.
+			if (isInCity(speakerLocation))
+			{
+				obj_id target = getIntendedTarget(self);
+				
+				//Making sure that the player is within 10m of the npc.
+				float distance = utils.getDistance2D(getLocation(self), getLocation(target));
+				if (distance > 11.0f)
+					return SCRIPT_CONTINUE;
+				//Can't trick or treat while afk.
+				if (!isPlayerActive(speaker))
+					return SCRIPT_CONTINUE;
+				//Can't trick or treat while stealthed.
+				int stealth = buff.getBuffOnTargetFromGroup(self, "invisibility");
+
+				if(stealth != 0)
+				{
+					sendSystemMessage(speaker, event_perk.STEALTHED);
+					return SCRIPT_CONTINUE;
+				}
+
+				if (vehicle.isVehicle(target))
+					return SCRIPT_CONTINUE;
+
+				//Making sure target is not dead.
+				if (isDead(target))
+					return SCRIPT_CONTINUE;
+
+				//Don't allow you to trick or treat player pets.
+				if (beast_lib.isBeast(target))
+					return SCRIPT_CONTINUE;
+
+				//Don't allow you to trick or NPCs playing dead.
+				if(hasScript(target, "theme_park.outbreak_prolog.dead_npc_script"))
+					return SCRIPT_CONTINUE;
+
+				//Trick or treating the Galactic Moon Festival Vendor.
+				string targetName = getCreatureName(target);
+				if (targetName.equals("halloween_vendor"))
+				{
+					sendSystemMessage(self, event_perk.ZOZ);
+					return SCRIPT_CONTINUE;
+				}
+
+				//NPC's marked as a celebrity will not participate.
+				if (hasObjVar(target, "celebrity"))
+				{
+					sendSystemMessage(self, event_perk.STATIC_NPC);
+					return SCRIPT_CONTINUE;
+				}
+
+				//Checking if the player has received his daily max amount of halloween coins.
+				if (event_perk.timeStampCheck(self) == false)
+					return SCRIPT_CONTINUE;
+
+				int myNiche = ai_lib.aiGetNiche( target );
+				//Making sure the target is an npc, that it's not a celebrity and that it hasn't just been tricked or treated.
+				if (myNiche == 5 || ai_lib.isNpc(target) || myNiche == 10 || ai_lib.isAndroid(target))
+				{
+					//Making sure that the target is not a static npc. Buffs applied to static npc's don't function properly.
+					if (isCreatureStatic(target))
+					{
+						sendSystemMessage(self, event_perk.STATIC_NPC);
+						return SCRIPT_CONTINUE;
+					}					
+					
+					string template = getTemplateName(target);
+					int mobile = template.indexOf("object/mobile/");
+					if (mobile > -1 && !hasObjVar(target, "hologram_performer"))
+					{
+						//Making sure player and NPC is not in combat.
+						if (!ai_lib.isInCombat(self) || !ai_lib.isInCombat(target))
+						{
+							int currentTime = getGameTime();
+							int newLockOutTime = currentTime + event_perk.LOCKOUT_LENGTH;
+							//NPC already on the players lockout list?
+							if (utils.hasScriptVar(self, event_perk.LIST_VAR+"."+target))
+							{
+								int lockoutTime = utils.getIntScriptVar(self, event_perk.LIST_VAR+"."+target);
+								//Has it been more than the lockout timer since the player was here last?
+								if (currentTime > lockoutTime)
+								{
+									utils.setScriptVar(self, event_perk.LIST_VAR+"."+target, newLockOutTime);
+									event_perk.handlePayout(self, target);
+								}
+								else
+									chat.chat(target, self, chat.CHAT_SAY, event_perk.TOO_SOON, chat.ChatFlag_targetOnly); 
+							}
+							else
+							{
+								utils.setScriptVar(self, event_perk.LIST_VAR+"."+target, newLockOutTime);
+								event_perk.handlePayout(self, target);
+							}
+						}
+					}
+				}
+				else
+					return SCRIPT_CONTINUE;
+
+				string path = event_perk.LIST_VAR;
+				if (utils.hasScriptVarTree(self, path))
+				{
+					int time = getGameTime();
+					deltadictionary vars = self.getScriptVars();
+					Enumeration keys = vars.keys();
+					while (keys.hasMoreElements())
+					{
+						string key = (string)(keys.nextElement());
+						if (key.startsWith(event_perk.LIST_VAR + "."))
+						{
+							int data = vars.getInt(key);
+							if (data < time)
+								vars.remove(key);
+						}
+					}
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean isInCity(location here)
+{
+	region[] regionsHere = getRegionsAtPoint(here);
+	if ( regionsHere != null && regionsHere.length > 0 )
+	{
+		for ( int i = 0; i < regionsHere.length; i++ )
+		{
+			region testRegion = regionsHere[i];
+			string regionName = testRegion.getName();
+
+			if (regionName.endsWith("mos_eisley"))
+			{
+				return true;
+			}
+			if (regionName.endsWith("moenia"))
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+boolean costumeBuffExists(obj_id player)
+{
+	if (buff.hasBuff(player, "event_halloween_costume_jawa"))
+		return true;
+
+	if (buff.hasBuff(player, "event_halloween_costume_droid"))
+		return true;
+
+	if (buff.hasBuff(player, "event_halloween_costume_kowakian"))
+		return true;
+
+	if (buff.hasBuff(player, "event_halloween_costume_hutt_female"))
+		return true;
+
+	if (buff.hasBuff(player, "event_halloween_costume_toydarian"))
+		return true;
+
+	else
+		return false;
+}

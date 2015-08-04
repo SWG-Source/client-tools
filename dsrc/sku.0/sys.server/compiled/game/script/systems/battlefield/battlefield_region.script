@@ -1,0 +1,659 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        battlefield_region.script
+ * Description:  Attaches to the battlefield master object to manage the region.
+ *		 Self refers to the master object and not the region. Use
+ *		 battlefield.getRegionIdFromMasterObject(master_object) to get that.
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.battlefield;
+include library.factions;
+include library.player_structure;  // For time parsing
+include library.sui;
+include library.utils;
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_BATTLEFIELD_STATUS           = new string_id("battlefield", "status");
+const string_id SID_GAME_STATUS  	         = new string_id("battlefield", "game_status");
+
+const string VAR_TIME_WARNING_LEVEL		 = "battlefield.game.time_warning_level";
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	LOG("LOG_CHANNEL", "battlefield_region::OnAttach");
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	LOG("LOG_CHANNEL", "battlefield_region::OnInitialize -- " + self);
+	messageTo(self, "msgInitializeRegion", null, 0.0f, true);
+
+	if (hasObjVar(self, battlefield.VAR_BATTLEFIELD))
+	{
+		// Server config check
+		string config = getConfigSetting("GameServer", "disableBattlefields");
+		if (config != null)
+		{
+			if (config.equals("true"))
+			{
+				battlefield.endBattlefield(self, false);
+				return SCRIPT_CONTINUE;
+			}
+		}
+		
+		
+		// Version check
+		int version = battlefield.getBattlefieldVersion(self);
+		LOG("LOG_CHANNEL", "version ->" + version + "  current_version ->" + battlefield.CURRENT_VERSION);
+		if (version == -1)
+		{
+			// End the game
+			battlefield.endBattlefield(self);
+
+			if (battlefield.updateBattlefieldData(self, null))
+				setObjVar(self, battlefield.VAR_VERSION, battlefield.CURRENT_VERSION);
+			else
+				LOG("LOG_CHANNEL", "battlefield.battlefield_region::OnInitialize -- Unable to update " + self);
+		}
+		else if (version < battlefield.CURRENT_VERSION)
+		{
+			// End the game
+			battlefield.endBattlefield(self);
+
+			if (battlefield.updateBattlefieldData(self, null))
+				setObjVar(self, battlefield.VAR_VERSION, battlefield.CURRENT_VERSION);
+			else
+				LOG("LOG_CHANNEL", "battlefield.battlefield_region::OnInitialize -- Unable to update " + self);
+		}
+		
+		// Reset the battlefield for a new game.
+		battlefield.endBattlefield(self);
+		battlefield.updateBattlefieldData(self, null);
+
+		// Restart the game timer.
+		//if (battlefield.isBattlefieldActive(self))
+		//{
+			//LOG("LOG_CHANNEL", "battlefield_region::OnInitialize -- restarting game pulse for " + self);
+			//messageTo(self, "msgGameTimePulse", null, (int)battlefield.GAME_TIME_PULSE, false);
+		//}
+	}
+	/*
+	else
+	{
+		int next_game = battlefield.getNextGameTime(self);
+		int current_time = getGameTime();
+		int time_remaining = next_game - current_time;
+		if (time_remaining < 0)
+			time_remaining = 0;
+
+		LOG("LOG_CHANNEL", "battlefield_region::OnInitialize -- sending start message in " + time_remaining);
+		messageTo(self, "msgStartGame", null, time_remaining, false);
+	}
+	*/
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string triggerVolumeName, obj_id breacher)
+{
+	LOG("LOG_CHANNEL", "battlefield_region::OnTriggerVolumeEntered -- " + triggerVolumeName + "(" + breacher + ")");
+
+	if (!isPlayer(breacher))
+		return SCRIPT_CONTINUE;
+
+	// At the outer perimeter only the players that were not already in the battle may cross.
+	if (triggerVolumeName.equals(battlefield.STRING_TRIG_OUTER_PERIMETER))
+	{
+		//Attach the battlefield script
+		if (!hasScript(breacher, battlefield.SCRIPT_PLAYER_BATTLEFIELD))
+			attachScript(breacher, battlefield.SCRIPT_PLAYER_BATTLEFIELD);
+
+		if (battlefield.isBattlefieldActive(self))
+		{
+			LOG("LOG_CHANNEL", "battlefield_region::OnTriggerVolumeEntered -- battlefield active");
+			if (battlefield.canJoinBattlefield(self, breacher, true))
+			{
+				LOG("LOG_CHANNEL", "battlefield_region::OnTriggerVolumeEntered -- can join");
+				// If the player has this objvar, he's already gotten a prompt to select a faction.
+				if (!hasObjVar(breacher, battlefield.VAR_BATTLEFIELD_TO_ENTER))
+				{
+					int faction_id = pvpGetAlignedFaction(breacher);
+					string faction = factions.getFactionNameByHashCode(faction_id);
+					LOG("LOG_CHANNEL", "faction_id ->" + faction_id + " faction ->" + faction);
+					if (faction == null)
+					{
+						// Give player the option of joining.
+						string[] factions_allowed = battlefield.getFactionsAllowed(self);
+						if (!battlefield.hasSelectFactionSui(breacher))
+						{
+							//string prompt = "You are about to enter an active battlefield.  You must select a faction with which to ally yourself for the duration of the battle.";
+							//sui.listbox(breacher, breacher, prompt, sui.OK_CANCEL, "Select Faction", factions_allowed, "msgBattlefieldFactionSelected");
+							LOG("LOG_CHANNEL", "!!!!!!!battlefield_region::OnTriggerVolumeEntered -- sui active for " + breacher);
+							dictionary d = new dictionary();
+							d.put("master_object", self);
+							messageTo(breacher, "msgSelectFactionPrompt", d, 0.0f, false);
+						}
+						// Keep track of the battlefield which the player has been prompted to enter.
+					}
+					else
+					{
+						// If the player is of a declared faction, he must join that one.
+						if (battlefield.isFactionAllowed(self, faction))
+						{
+							if (battlefield.isFactionRemaining(self, faction))
+							{
+								if (!battlefield.hasSelectFactionSui(breacher))
+								{
+									dictionary d = new dictionary();
+									d.put("master_object", self);
+									d.put("faction", faction);
+									messageTo(breacher, "msgVerifyFactionPrompt", d, 0.0f, false);
+								}
+							}
+							else
+							{
+								LOG("LOG_CHANNEL", breacher + " ->Your faction has been eliminated from the battle. You must wait until the next battle to join.");
+								sendSystemMessageTestingOnly(breacher, "Your faction has been eliminated from the battle. You must wait until the next battle to join.");
+								return SCRIPT_CONTINUE;
+							}
+						}
+						else
+						{
+							LOG("LOG_CHANNEL", breacher + " ->Your faction is not permitted within this battlefield.");
+							sendSystemMessageTestingOnly(breacher, "Your faction is not permitted within this battlefield.");
+							return SCRIPT_CONTINUE;
+						}
+					}
+					setObjVar(breacher, battlefield.VAR_BATTLEFIELD_TO_ENTER, self);
+				}
+			}
+			else
+			{
+				// Make sure the player can actually leave the battlefield. This stops the occasional case
+				// when the player breaches the outer perimeter before the confine to trigger kicks in, causing
+				// a ping pong effect into and out of the battlefield.
+				if (battlefield.canExitBattlefield(self, breacher, false))
+				{
+					//LOG("LOG_CHANNEL", breacher + " ->You must wait for the current battle to end before reentering.");
+					//sendSystemMessageTestingOnly(breacher, "You must wait for the current battle to end before reentering.");
+					expelFromTriggerVolume(self, battlefield.STRING_TRIG_OUTER_PERIMETER, breacher);
+				}
+			}
+		}
+	}
+
+	// At the battlefield boundary, only players who have joined the battle may cross.
+	if (triggerVolumeName.equals(battlefield.STRING_TRIG_BOUNDARY))
+	{
+		// Keep track of all players within the the battlefield boundary.
+		battlefield.addPlayerToPlayerList(breacher, self);
+
+		if (battlefield.isBattlefieldActive(self))
+		{
+			if (!battlefield.canEnterBattlefield(self, breacher))
+			{
+				setObjVar(breacher, battlefield.VAR_BATTLEFIELD_TO_ENTER, self);
+				int faction_id = pvpGetAlignedFaction(breacher);
+				string faction = factions.getFactionNameByHashCode(faction_id);
+	
+				if (faction == null)
+				{
+					LOG("LOG_CHANNEL", breacher + " ->A battle is in progress here. You must ally yourself with a faction before you may enter.");
+					sendSystemMessageTestingOnly(breacher, "A battle is in progress here. You must ally yourself with a faction before you may enter.");
+					if (!battlefield.hasSelectFactionSui(breacher))
+					{
+						//string[] factions_allowed = battlefield.getFactionsAllowed(self);
+						//string prompt = "You are about to enter an active battlefield.  You must select a faction with which to ally yourself for the duration of the battle.";
+						//sui.listbox(breacher, breacher, prompt, sui.OK_CANCEL, "Select Faction", factions_allowed, "msgBattlefieldFactionSelected");
+						dictionary d = new dictionary();
+						d.put("master_object", self);
+						messageTo(breacher, "msgSelectFactionPrompt", d, 0.0f, false);
+					}
+				}
+				else
+				{
+					if (battlefield.isFactionAllowed(self, faction))
+					{
+						if (battlefield.isFactionRemaining(self, faction))
+						{
+							if (!battlefield.hasSelectFactionSui(breacher))
+							{
+								dictionary d = new dictionary();
+								d.put("master_object", self);
+								d.put("faction", faction);
+								messageTo(breacher, "msgVerifyFactionPrompt", d, 0.0f, false);
+							}
+						}
+						else
+						{
+							LOG("LOG_CHANNEL", breacher + " ->Your faction has been eliminated from the battle. You must wait until the next battle to join.");
+							sendSystemMessageTestingOnly(breacher, "Your faction has been eliminated from the battle. You must wait until the next battle to join.");
+							return SCRIPT_CONTINUE;
+						}
+					}
+					else
+					{
+						LOG("LOG_CHANNEL", breacher + " ->Your faction is not permitted within this battlefield.");
+						sendSystemMessageTestingOnly(breacher, "Your faction is not permitted within this battlefield.");
+						return SCRIPT_CONTINUE;
+					}
+				}
+				expelFromTriggerVolume(self, battlefield.STRING_TRIG_BOUNDARY, breacher);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string triggerVolumeName, obj_id breacher)
+{
+	LOG("LOG_CHANNEL", "battlefield_region::OnTriggerVolumeExited -- " + triggerVolumeName + "(" + breacher + ")");
+
+	if (!isMob(breacher))
+		return SCRIPT_CONTINUE;
+
+	boolean expelled = false;
+	if (hasObjVar(breacher, battlefield.VAR_EXPELLED))
+	{
+		expelled = true;
+		removeObjVar(breacher, battlefield.VAR_EXPELLED);
+	}
+
+	if (triggerVolumeName.equals(battlefield.STRING_TRIG_BOUNDARY))
+	{
+		// If the breacher is battlefield constructed, destroy it,
+		if (!isPlayer(breacher))
+		{
+			if (battlefield.isBattlefieldConstructed(breacher))
+			{
+				battlefield.removeBattlefieldObject(self, breacher);
+			}
+
+			return SCRIPT_CONTINUE;
+		}
+
+		// Remove the player from the list of those within the boundary
+		battlefield.removePlayerFromPlayerList(breacher, self);
+
+		if (battlefield.isBattlefieldActive(self) && !battlefield.canJoinBattlefield(self, breacher) && !expelled)
+		{
+			if (battlefield.canExitBattlefield(self, breacher, true))
+			{
+				LOG("LOG_CHANNEL", breacher + " ->You are about to leave the battlefield. If you do so, you will be unable to return until the current battle is over.");
+				sendSystemMessageTestingOnly(breacher, "You are about to leave the battlefield. If you do so, you will be unable to return until the current battle is over.");
+			}
+			else
+			{
+				// Messaging handled by canExitBattlefield.
+				confineToTriggerVolume(self, battlefield.STRING_TRIG_BOUNDARY, breacher);
+			}
+		}
+	}
+
+	if (triggerVolumeName.equals(battlefield.STRING_TRIG_OUTER_PERIMETER))
+	{
+		if (!isPlayer(breacher))
+			return SCRIPT_CONTINUE;
+
+		// Remove any battlefield only faction items.
+		battlefield.removeFactionItems(breacher);
+
+		if (hasObjVar(self, battlefield.VAR_BATTLEFIELD_TO_ENTER))
+			removeObjVar(self, battlefield.VAR_BATTLEFIELD_TO_ENTER);
+
+		obj_id bf_entered = battlefield.getBattlefieldEntered(breacher);
+		if (bf_entered == null)
+		{
+			// Remove the battlefield script
+			if (hasScript(breacher, battlefield.SCRIPT_PLAYER_BATTLEFIELD))
+			{
+				dictionary params = new dictionary();
+				params.put("master_object", self);
+				messageTo(breacher, "msgRemoveBattlefieldScript", params, 0.0f, true);
+			}
+		}
+
+		// Send a message to remove the player from the battlefield chatroom.
+		//dictionary params = new dictionary();
+		//string chat_room = battlefield.getChatRoomNameAllFactions(self);
+		//params.put("chat_room", chat_room);
+		//messageTo(breacher, "msgExitBattlefieldChat", params, 0.0f, true);
+
+		if (battlefield.isBattlefieldActive(self) && !battlefield.canJoinBattlefield(self, breacher))
+		{
+			// Mark the time which the player left.
+			setObjVar(breacher, battlefield.VAR_TIME_EXITED, getGameTime());
+
+			if (!expelled)
+			{
+				LOG("LOG_CHANNEL", breacher + " ->You have left the battlefield.");
+				sendSystemMessageTestingOnly(breacher, "You have left the battlefield.");
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	int battlefield_root = mi.addRootMenu (menu_info_types.SERVER_TRAVEL_OPTIONS, SID_BATTLEFIELD_STATUS);
+	mi.addSubMenu(battlefield_root, menu_info_types.SERVER_BAZAAR_OPTIONS, SID_GAME_STATUS);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (item == menu_info_types.SERVER_TRAVEL_OPTIONS)
+	{
+		LOG("LOG_CHANNEL", "battlefield_region::OnBattlefieldStatus");
+
+		queueCommand(player, ##"battlefieldStatus", null, "", COMMAND_PRIORITY_DEFAULT);
+
+	}
+
+	if (item == menu_info_types.SERVER_BAZAAR_OPTIONS)
+	{
+		queueCommand(player, ##"battlefieldStatus", null, "game", COMMAND_PRIORITY_DEFAULT);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgInitializeRegion()
+{
+	LOG("LOG_CHANNEL", "battlefield_region::msgInitializeRegion -- " + params);
+
+	if (!hasObjVar(self, battlefield.VAR_BATTLEFIELD))
+	{
+		LOG("LOG_CHANNEL", "battlefield::msgInitializeRegion -- Initializing new battlefield " + self);
+		// The battlefield master object has not had its objvars initialized for the first time.
+		// Do that now.
+
+		if (params.containsKey("region_name"))
+		{
+//			obj_id bf_id = params.getObjId("region_id");
+			string regionPlanet = params.getString("region_planet");
+			string regionName = params.getString("region_name");
+			region bf = getRegion(regionPlanet, regionName);
+			setObjVar(self, battlefield.VAR_NAME, regionName);
+
+			LOG("LOG_CHANNEL", "bf ->" + bf);
+
+			// Set objvars
+			battlefield.updateBattlefieldData(self, bf);
+
+			// Mark off the region
+//			battlefield.markBattlefield(bf);
+
+			// Start the first game in motion.
+			int restart_min = battlefield.getGameRestartMinimum(self);
+			int restart_max = battlefield.getGameRestartMaximum(self);
+			int start_time = rand(restart_min, restart_max);
+			setObjVar(self, battlefield.VAR_NEXT_GAME, getGameTime() + start_time);
+			messageTo(self, "msgStartGame", null, (float)start_time, false);
+		}
+		else
+		{
+			LOG("LOG_CHANNEL", "battlefield::msgInitializeRegion -- Unable to find the region for " + self);
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	// Create the boundary trigger volume if needed
+	if (!hasTriggerVolume(self, battlefield.STRING_TRIG_BOUNDARY))
+	{
+		float radius = battlefield.getBattlefieldExtent(self);
+		createTriggerVolume(battlefield.STRING_TRIG_BOUNDARY, radius, true);
+		createTriggerVolume(battlefield.STRING_TRIG_OUTER_PERIMETER, radius + battlefield.OUTER_PERIMETER_WIDTH, true);
+
+		LOG("LOG_CHANNEL", "Boundary trigger created -- " + radius);
+	}
+
+	// Create the battlefield chat room and team chat rooms
+	string chat_room_all = battlefield.getChatRoomNameAllFactions(self);
+	string name = battlefield.getBattlefieldName(self);
+	LOG("LOG_CHANNEL", "battlefield_region::msgInitializeRegion -- creating chatroom " + chat_room_all);
+	chatCreateRoom(true, chat_room_all, name);
+
+	// Create a chat room for each faction team
+	string[] allowed_factions = battlefield.getFactionsAllowed(self);
+	if (allowed_factions != null)
+	{
+		// No need for faction chat rooms if there's only one player faction.
+		if (allowed_factions.length > 1)
+		{
+			for (int i = 0; i < allowed_factions.length; i++)
+				chatCreateRoom(true, battlefield.getChatRoomNameFaction(self, allowed_factions[i]), name + "-" + allowed_factions[i]);
+		}
+	}
+	else
+		LOG("LOG_CHANNEL", "battlefield_region::msgInitializeRegion -- factions_allowed is null." + chat_room_all);
+	
+	// Chat room hack. Create everything again a moment later.
+	messageTo(self, "msgCreateBattlefieldChat", null, 10.0f, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgStartGame()
+{
+	LOG("LOG_CHANNEL", "battlefield_region::msgStartGame");
+
+	battlefield.startBattlefield(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgGameTimePulse()
+{
+	//LOG("LOG_CHANNEL", "battlefield_region::msgGameTimePulse");
+
+	// Decrement the game timer
+	int timer_set = battlefield.setGameTimer(self, false);
+
+	if (timer_set > 0)
+	{
+		// Increase buildpoints
+		string[] factions_allowed = battlefield.getFactionsAllowed(self);
+		if (factions_allowed != null)
+		{
+			for (int i = 0; i < factions_allowed.length; i++)
+			{
+				// For now we just give back 1 per pulse. Change when we have rules for
+				// territory capture.
+				battlefield.incrementFactionBuildPoints(self, factions_allowed[i], 2);
+			}
+		}
+
+		// Send a time remaining message.
+		int warning_level = 0;
+		int[] warning_times = {3600, 1800, 900, 600, 300, 60, 30, 10};
+
+		if (hasObjVar(self, VAR_TIME_WARNING_LEVEL))
+			warning_level = getIntObjVar(self, VAR_TIME_WARNING_LEVEL);
+
+		if (warning_level < warning_times.length)
+		{
+			int warning_time = warning_times[warning_level];
+			//LOG("LOG_CHANNEL", "warning_level ->" + warning_level + " timer ->" + timer_set);
+
+			if (timer_set < warning_time)
+			{
+				if (battlefield.getGameDuration(self) > warning_time)
+				{
+					if (warning_time > 0)
+					{
+						int[] time_conv = player_structure.convertSecondsTime(warning_time);
+						string time_str = player_structure.assembleTimeRemaining(time_conv);
+						battlefield.sendBattlefieldMessage(self, "Time Remaining: " + time_str);
+					}
+				}
+
+				warning_level++;
+				setObjVar(self, VAR_TIME_WARNING_LEVEL, warning_level);
+			}
+		}
+
+		// Send the next game time pulse
+		messageTo(self, "msgGameTimePulse", null, (int)battlefield.GAME_TIME_PULSE, false);
+
+		// Send a message for the specific game script
+		dictionary new_params = new dictionary();
+		new_params.put("time", timer_set);
+		messageTo(self, "msgGameScriptPulse", new_params, 0.0f, false);
+	}
+	else
+	{
+		// If 0 or less, the game is over or there is an error.  Allow the specific game script to take it from here.
+		messageTo(self, "msgTimeExpired", null, 0.0f, true);
+		//battlefield.endBattlefield(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgAddPlayerToBattlefield()
+{
+	// Mark the player has having entered the battlefield. We do this a few seconds after the fact to
+	// prevent the player from being caught by trigger confinement during the move to the starting location.
+	obj_id player = params.getObjId("player");
+	if (isIdValid(player))
+		battlefield.setBattlefieldEntered(player, self);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgBattlefieldKill()
+{
+
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgCreateBattlefieldChat()
+{
+	// This is a hack until the chat server can handle creating recursive chat rooms in succession.
+	// Create the battlefield chat room and team chat rooms
+	string chat_room_all = battlefield.getChatRoomNameAllFactions(self);
+	string name = battlefield.getBattlefieldName(self);
+	LOG("LOG_CHANNEL", "battlefield_region::msgInitializeRegion -- creating chatroom " + chat_room_all);
+	chatCreateRoom(true, chat_room_all, name);
+
+	// Create a chat room for each faction team
+	string[] allowed_factions = battlefield.getFactionsAllowed(self);
+	if (allowed_factions != null)
+	{
+		// No need for faction chat rooms if there's only one player faction.
+		if (allowed_factions.length > 1)
+		{
+			for (int i = 0; i < allowed_factions.length; i++)
+				chatCreateRoom(true, battlefield.getChatRoomNameFaction(self, allowed_factions[i]), name + "-" + allowed_factions[i]);
+		}
+	}
+	else
+		LOG("LOG_CHANNEL", "battlefield_region::msgInitializeRegion -- factions_allowed is null." + chat_room_all);
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgGameStatHistory()
+{
+	// Displays the stat history of the previous game.
+	obj_id player = params.getObjId("player");
+	if (player == null || !player.isLoaded())
+		return SCRIPT_CONTINUE;
+	
+	resizeable string[] dsrc = new string[0];
+	if (!hasObjVar(self, battlefield.VAR_STAT_ROOT))
+		dsrc = utils.addElement(dsrc, "No previous battle data available.");
+	else
+	{
+		string type = getStringObjVar(self, battlefield.VAR_STAT_TYPE);
+		if (type == null)
+			dsrc = utils.addElement(dsrc, "No previous battle data available.");
+		else if (type == "Destroy")
+		{
+			int total_time = getIntObjVar(self, battlefield.VAR_STAT_TIME);
+			int[] convert_time = player_structure.convertSecondsTime(total_time);
+			string time_str = player_structure.assembleTimeRemaining(convert_time);
+			dsrc = utils.addElement(dsrc, "Total Time: " + time_str);
+			string winner = getStringObjVar(self, battlefield.VAR_STAT_WINNER);
+			if (winner != null && winner != "NONE")
+				dsrc = utils.addElement(dsrc, "Winning Faction: " + winner);
+			else
+				dsrc = utils.addElement(dsrc, "Winning Faction: None");
+
+			obj_id[] participants = battlefield.getParticipantsOnBattlefield(self);
+			dsrc = utils.addElement(dsrc, "Number of Participants: " + participants.length);
+			dsrc = utils.addElement(dsrc, "Kills/Deaths");
+			string[] factions_allowed = battlefield.getAllFactionsAllowed(self);
+			if (factions_allowed != null)
+			{
+				for (int i = 0; i < factions_allowed.length; i++)
+				{
+					dsrc = utils.addElement(dsrc, "   " + factions_allowed[i]);
+
+					int kills = getIntObjVar(self, battlefield.VAR_STAT_KILLS + factions_allowed[i]);
+					int deaths = getIntObjVar(self, battlefield.VAR_STAT_DEATHS + factions_allowed[i]);
+					dsrc = utils.addElement(dsrc, "      " + "Kills: " + kills);
+					dsrc = utils.addElement(dsrc, "      " + "Deaths: " + deaths);
+				}
+			}
+		}
+		else if (type == "Assault")
+		{
+			int total_time = getIntObjVar(self, battlefield.VAR_STAT_TIME);
+			int[] convert_time = player_structure.convertSecondsTime(total_time);
+			string time_str = player_structure.assembleTimeRemaining(convert_time);
+			dsrc = utils.addElement(dsrc, "Total Time: " + time_str);
+			string winner = getStringObjVar(self, battlefield.VAR_STAT_WINNER);
+			string[] player_faction = battlefield.getFactionsAllowed(self);
+			if (winner != null && winner != "AI")
+				dsrc = utils.addElement(dsrc, "Result: " + player_faction[0] + " win");
+			else
+				dsrc = utils.addElement(dsrc, "Result: " + player_faction[0] + " loss");
+
+			obj_id[] participants = battlefield.getParticipantsOnBattlefield(self);
+			dsrc = utils.addElement(dsrc, "Number of participants: " + participants.length);
+			dsrc = utils.addElement(dsrc, "Kills/Deaths");
+			string[] factions_allowed = battlefield.getAllFactionsAllowed(self);
+			if (factions_allowed != null)
+			{
+				for (int i = 0; i < factions_allowed.length; i++)
+				{
+					dsrc = utils.addElement(dsrc, "   " + factions_allowed[i]);
+
+					int kills = getIntObjVar(self, battlefield.VAR_STAT_KILLS + factions_allowed[i]);
+					int deaths = getIntObjVar(self, battlefield.VAR_STAT_DEATHS + factions_allowed[i]);
+					dsrc = utils.addElement(dsrc, "      " + "Kills: " + kills);
+					dsrc = utils.addElement(dsrc, "      " + "Deaths: " + deaths);
+				}
+			}
+		}
+		else
+			dsrc = utils.addElement(dsrc, "No previous battle data available.");
+	}
+	
+	sui.listbox(player, "Previous Battle Statistics", "Objective: Destroy", dsrc);
+	
+	return SCRIPT_CONTINUE;
+}
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *************************************************/

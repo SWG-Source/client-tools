@@ -1,0 +1,587 @@
+include library.ai_lib;
+include library.chat;
+include library.colors;
+include library.combat;
+include library.combat_consts;
+include library.dot;
+include library.factions;
+include library.group;
+include library.locations;
+include library.pet_lib;
+include library.pet_lib;
+include library.posture;
+include library.scout;
+include library.utils;
+
+// @TODO: Remove me
+void doAttack(obj_id ai, obj_id target)
+{
+	LOGC(aiLoggingEnabled(ai), "debug_ai", "ai_combat::doAttack() ai(" + ai + ")");
+
+	startCombat(ai, target);
+}
+
+// @TODO: Remove me
+void attackBestTarget(obj_id ai, obj_id target)
+{
+	LOGC(aiLoggingEnabled(ai), "debug_ai", "ai_combat::attackBestTarget() ai(" + ai + ")");
+
+	startCombat(ai, target);
+}
+
+// @TODO: Remove me
+void equipRangedWeapon(obj_id ai)
+{
+	LOGC(aiLoggingEnabled(ai), "debug_ai", "ai_combat::equipRangedWeapon() ai(" + ai + ")");
+
+	aiEquipPrimaryWeapon(ai);
+}
+
+// @TODO: Remove me
+void equipMeleeWeapon(obj_id ai)
+{
+	LOGC(aiLoggingEnabled(ai), "debug_ai", "ai_combat::equipMeleeWeapon() ai(" + ai + ")");
+
+	aiEquipPrimaryWeapon(ai);
+}
+
+boolean goodFaction( obj_id npc, obj_id target )
+{
+
+	PROFILER_START("goodFaction");
+	if ( !pvpCanAttack( npc, target ) )
+	{
+		PROFILER_STOP("goodFaction");
+		return true;
+	}
+	if ( isPlayer(target) )
+	{
+		PROFILER_STOP("goodFaction");
+		return false;
+	}
+	else
+	{
+		string npcFaction = factions.getFaction(npc);
+		string targetFaction = factions.getFaction(target);
+		if (npcFaction != null && targetFaction != null)
+		{
+			if ( npcFaction.equals(targetFaction))
+			{
+				PROFILER_STOP("goodFaction");
+				return true;
+			}
+		}
+	}
+
+	if ( factions.getFactionReaction( npc, target )==factions.REACTION_POSITIVE )
+	{
+		PROFILER_STOP("goodFaction");
+		return true;
+	}
+
+	PROFILER_STOP("goodFaction");
+	return false;
+}
+
+boolean isGoodTarget( obj_id npc, obj_id target )
+{
+	if ( !isIdValid(target) )
+	{
+		return false;
+	}
+
+	if ( ai_lib.isAiDead( target ) )
+	{
+		//if this is a player, we want to know if/when he recapacitates:
+		if ( isPlayer( target )  )
+		{
+			listenToMessage(target, "handleSawRecapacitation");
+			//but if I am a persisted object, I'll quit listening after a bit:
+			if ( isObjectPersisted(npc) )
+			{
+				dictionary parms = new dictionary();
+				parms.put( "player", target );
+				messageTo( npc, "handleStopListening", parms, 1200, false );
+			}
+		}
+
+		//debugSpeakMsg( npc, "too far to shoot");
+		return false;
+	}
+
+	if ( !exists( target ) || getDistance( npc, target ) > combat_engine.getMaxCombatRange() || !isInWorld( target ) )
+	{
+		//debugSpeakMsg( npc, "too far to shoot");
+		return false;
+	}
+
+	if ( pet_lib.isPet(npc) && pet_lib.isMyPet( npc, target ))
+	{
+		return false;
+	}
+
+	if ( goodFaction( npc, target ) || target == npc )
+	{
+		//debugSpeakMsg( npc, "same faction");
+		return false;
+	}
+
+	//I'm inside, he's outside, NPCs can't follow each other properly
+	if ( !isPlayer(target) )
+	{
+		obj_id myCell = ( getLocation(npc)).cell;
+		if ( isIdValid(myCell))
+		{
+			obj_id defenderCell = ( getLocation(target) ).cell;
+			if ( !isIdValid(defenderCell))
+			{
+				//debugSpeakMsg( npc, "i am inside and he is outside" );
+				return false;
+			}
+		}
+	}
+
+	if ( !pvpCanAttack(npc,target))
+	{
+		debugSpeakMsg( npc, "pvpCannotAttack");
+		return false;
+	}
+
+	return true;
+}
+
+void moveRandom( obj_id npc, obj_id target )
+{
+	if ( isIndoors( npc ))
+		return;//never do this indoors
+
+	obj_id weapon = getCurrentWeapon( npc );
+	int weaponType = getWeaponType( weapon);
+	int weaponCat = combat.getWeaponCategory( weaponType );
+	if ( weaponCat != combat.RANGED_WEAPON )
+	{
+		PROFILER_STOP("moveRandom");
+		return;
+	}
+
+	int currentPosture = getPosture( npc );
+	if ( currentPosture == POSTURE_KNOCKED_DOWN )
+	{
+		removeObjVar( npc, "ai.combat.moveMode" );
+		PROFILER_STOP("moveRandom");
+		return;
+	}
+	else if ( currentPosture != POSTURE_UPRIGHT )
+	{
+		//debugSpeakMsg( npc, "stopping to stand so I can move randomly" );
+		stop( npc );
+		posture.stand(npc);
+		setObjVar( npc, "ai.combat.moveMode", ai_combat_movement.MOVEMODE_PREPARING_TO_STAND );
+		PROFILER_STOP("moveRandom");
+		return;
+	}
+
+	location npcLoc = new location( getLocation( npc ) );
+	location targetLoc = getLocation( target );
+
+	if ( targetLoc.x > npcLoc.x )
+		npcLoc.x -= rand( 5, 15 );
+	else
+		npcLoc.x += rand( 5, 15 );
+
+	if ( targetLoc.z > npcLoc.z )
+		npcLoc.z -= rand( 5, 15 );
+	else
+		npcLoc.z += rand( 5, 15 );
+
+	setObjVar( npc, "ai.combat.moveMode", ai_combat_movement.MOVEMODE_RANDOM );
+	messageTo( npc, "handleMoveRandomClear", null, 30, false );
+	PROFILER_START("pathTo");
+	pathTo( npc, npcLoc );
+	PROFILER_STOP("pathTo");
+	PROFILER_STOP("moveRandom");
+}
+
+//void aiThrowGrenade( obj_id npc, obj_id target )
+//{
+//	int niche = ai_lib.aiGetNiche( npc );
+//	if ( niche != NICHE_NPC )
+//	{
+//		removeObjVar( npc, "ai.grenade" );
+//		removeObjVar( npc, "ai.grenadeType" );
+//		return;
+//	}
+//	obj_id grenade = getObjIdObjVar( npc, "ai.grenade" );
+//	if ( grenade == null )
+//	{
+//		removeObjVar( npc, "ai.grenade" );
+//		removeObjVar( npc, "ai.grenadeType" );
+//		return;
+//	}
+//	string parms = grenade.toString();
+//	queueCommand(npc, ##"throwGrenade", target , parms, COMMAND_PRIORITY_FRONT);
+//}
+
+void setCombatLocation( obj_id npc )
+{
+	setObjVar( npc, "ai.combat.combatStartLoc", getLocation( npc ));
+}
+
+location getCombatLocation( obj_id npc )
+{
+	return getLocationObjVar( npc, "ai.combat.combatStartLoc");
+}
+
+boolean attackInCircleFormation( obj_id npc, obj_id target )
+{
+	//debugSpeakMsg( npc, "1" );
+	//if ( isRooted( npc ) )
+	//{
+	//	//debugSpeakMsg( npc, "i am rooted" );
+	//	return false;
+	//}
+	//debugSpeakMsg( npc, "2" );
+	if (!hasObjVar( npc, "ai.inFormation") && ( !hasObjVar( npc, "ai.combat.tempFormationCombat" )))
+	{
+		//debugSpeakMsg( npc, "i am not in a formation" );
+		return false;
+	}
+
+	/*
+		  4	1 5
+		2	x	0
+		  6	3 7
+	 */
+	//debugSpeakMsg( npc, "3" );
+	if (hasObjVar( npc, "ai.combat.noRangedWeapon"))
+	{
+		//debugSpeakMsg( npc, "i have no ranged weapon" );
+		return false;
+	}
+
+	//debugSpeakMsg( npc, "4" );
+	//if you're in Melee combat but your opponent is not targetting you
+	// then equip a ranged weapon and get back in formation:
+	obj_id weapon = getCurrentWeapon( npc );
+	int weaponType = getWeaponType( weapon);
+	int weaponCat = combat.getWeaponCategory( weaponType );
+	if ( weaponCat != combat.RANGED_WEAPON )
+	{
+		if ( getHateTarget( target ) != npc )
+		{
+			//debugSpeakMsg( npc, "xx: 100" );
+			//unequipWeapon( npc );
+		}
+	}
+
+	weapon = getCurrentWeapon( npc );
+	float maxRange = getMaxRange( weapon )/2.0f;
+	float offset = 20.0f;
+	if ( maxRange < 20.0f )
+		offset = maxRange;
+
+	//debugSpeakMsg( npc, "best distance is " + offset );
+
+	swarm(npc, target, offset);
+
+	setObjVar( npc, "ai.combat.moveMode", ai_combat_movement.MOVEMODE_FOLLOW_FORMATION );
+	//debugSpeakMsg( npc, "i am now in formation!" );
+	return true;
+}
+
+boolean hasRangedWeapon( obj_id npc )
+{
+	obj_id weapon = getCurrentWeapon( npc );
+	int weaponType = getWeaponType( weapon);
+	int weaponCat = combat.getWeaponCategory( weaponType );
+	return ( weaponCat == combat.RANGED_WEAPON );
+}
+
+void aiCombatFlee( obj_id npc, obj_id target, float minRange, float maxRange )
+{
+	if (!isIdValid( npc ) || !exists( npc ) )
+		return;
+
+	if ( !isIdValid( target ) || !exists( npc ) )
+		return;
+
+	location myLoc = new location ( getLocation( npc ) );
+	if ( myLoc == null )
+		return;
+
+	if ( isIdValid( myLoc.cell ))
+		return;
+
+	location destLoc = new location( myLoc );
+	location targetLoc = new location( getLocation( target ));
+	if ( targetLoc == null )
+		return;
+
+	if ( targetLoc.x < destLoc.x )
+		destLoc.x+= rand(minRange,maxRange);
+	else
+		destLoc.x-= rand(minRange,maxRange);
+	if ( targetLoc.z < destLoc.z )
+		destLoc.z+= rand(minRange,maxRange);
+	else
+		destLoc.z-= rand(minRange,maxRange);
+
+	pathTo( npc, destLoc );
+}
+
+boolean switchToFormationCombat( obj_id npc, obj_id target )
+{
+	if ( hasObjVar( npc, "ai.combat.tempFormationCombat" ))
+		return true;
+
+	if ( !isPlayer( target ) )
+		return false;//NPCs really suck when they try this on each other
+
+	int combatRound = utils.getIntScriptVar( npc, "aiCombatRoundCounter" );
+	if ( combatRound < 5 )
+	{
+		//debugSpeakMsg( npc, "waiting..." );
+		return false;//don't make this check for at least 5 rounds:
+	}
+	else if ( combatRound > 10 )
+	{
+		//debugSpeakMsg( npc, "not checking any more" );
+		return false;//stop checking after 10 rounds
+	}
+
+	// Decide whether to switch:
+	obj_id[] attackerList = getWhoIsTargetingMe( target );
+	if ( attackerList == null || attackerList.length < 2 )
+		return false;
+
+	int niche = ai_lib.aiGetNiche(npc);
+	if ( niche != NICHE_DROID )
+	{
+		chat.setAngryMood( npc );
+		ai_lib.barkString( npc, "assist" );//droid slang variants dont have this
+	}
+
+	for ( int i = 0; i < attackerList.length; i++ )
+	{
+		//flag them all, including me!
+		if ( !isPlayer( attackerList[i] ) )
+		{
+			removeObjVar( attackerList[i], "ai.combat.moveMode" );
+			setObjVar( attackerList[i], "ai.combat.tempFormationCombat", i );
+		}
+	}
+	return true;
+}
+
+boolean doHealing( obj_id npc, obj_id target )
+{
+	utils.setScriptVar( npc, "ai.nextHeal", (getGameTime()+20) );
+	//obj_id yourTarget = getHateTarget( target );
+	//if ( yourTarget == npc )
+	//	return false;// I'm busy being shot
+
+	obj_id[] myFriends = getWhoIsTargetingMe( target );
+	if ( myFriends == null || myFriends.length == 0 )
+		return false;// There's no way this could possible happen
+
+	//choose someone to heal:
+
+	obj_id healTarget = getHealTarget( npc, myFriends );
+	if ( !isIdValid( healTarget ))
+		return false;
+
+	if ( healTarget == npc )
+	{
+		//debugSpeakMsg( npc, "i heal myself!");
+		executeHealingMove( npc, npc );
+	}
+	else if ( getDistance( npc, healTarget ) > 2.0f )
+	{
+		//debugSpeakMsg( npc, "i heal " + getName(healTarget));
+		//debugSpeakMsg( npc, "not close enough, so I follow healTarget" );
+		setObjVar( npc, "ai.combat.ignoreCombat", true );
+		utils.setScriptVar( npc, "ai.combat.pathingToHeal", healTarget );
+		follow( npc, healTarget, 1, 1.5f );
+		setObjVar( npc, "ai.combat.moveMode", ai_combat_movement.MOVEMODE_MOVING_TO_HEAL );
+	}
+	return true;
+}
+
+obj_id getHealTarget( obj_id npc, obj_id[] myFriends )
+{
+	for ( int i = 0; i < myFriends.length; i++ )
+	{
+		if ( getDistance( npc, myFriends[i] ) < 60.0f )
+		{
+			int healthDamage = getAttribDamage(myFriends[i], HEALTH);
+			if ( healthDamage < (getMaxAttrib( myFriends[i], HEALTH )/2) )
+				healthDamage = 0;
+
+			int actionDamage = getAttribDamage(myFriends[i], ACTION);
+			if ( actionDamage < (getMaxAttrib( myFriends[i], ACTION )/2) )
+				actionDamage = 0;
+
+			if ( healthDamage != 0 || actionDamage != 0 )
+			{
+				return myFriends[i];//you're wounded so I'll heal you
+			}
+		}
+	}
+	return null;//found no one to heal
+}
+
+void executeHealingMove( obj_id npc, obj_id target )
+{
+	if (!isIdValid(npc) || ai_lib.aiIsDead(npc))
+		return;
+
+	if ( (!isIdValid( target )) || ai_lib.aiIsDead(target) )
+	{
+		//debugSpeakMsg( npc, "stopping because healing target is gone" );
+		removeObjVar( npc, "ai.combat.ignoreCombat" );
+		utils.removeScriptVar( npc, "ai.combat.pathingToHeal" );
+		stop(npc);
+		removeObjVar( npc, "ai.combat.moveMode" );
+		return;
+	}
+	//debugSpeakMsg( npc, "stopping to execute healing move" );
+	removeObjVar( npc, "ai.combat.moveMode" );
+	stop(npc);
+	utils.removeScriptVar( npc, "ai.combat.pathingToHeal" );
+	utils.setScriptVar( npc, "ai.nextHeal", (getGameTime()+20) );
+
+	if ( ai_lib.aiIsDead( target ) || ai_lib.aiIsDead(npc) )
+	{
+		//debugSpeakMsg( npc, "stopping because healing target is dead" );
+		stop(npc);
+		removeObjVar( npc, "ai.combat.ignoreCombat" );
+		utils.removeScriptVar( npc, "ai.combat.pathingToHeal" );
+		return;
+	}
+
+	if ( getDistance( npc, target ) > 2.0f )
+	{
+		setObjVar( npc, "ai.combat.ignoreCombat", true );
+		utils.setScriptVar( npc, "ai.combat.pathingToHeal", target );
+		setObjVar( npc, "ai.combat.moveMode", ai_combat_movement.MOVEMODE_MOVING_TO_HEAL );
+		follow( npc, target, 1, 2 );
+		return;
+	}
+
+	//debugSpeakMsg( npc, "healing " + getName( target ) );
+
+	removeObjVar( npc, "ai.combat.ignoreCombat" );
+
+	if ( target == npc )
+	{
+		doAnimationAction( npc, "heal_self" );
+	}
+	else
+	{
+		//faceTo(npc,target);
+		doAnimationAction( npc, "heal_other" );
+	}
+
+	location loc = getLocation( target );
+	obj_id[] players = getAllPlayers(loc, 45.0f);
+	if (players != null)
+	{
+		for (int i = 0; i < players.length; i++)
+		{
+			playClientEffectLoc(players[i], "clienteffect/healing_healdamage.cef" , loc, 0);
+		}
+	}
+
+	int healthDamage = getAttribDamage(target, HEALTH);
+	int actionDamage = getAttribDamage(target, ACTION);
+
+	int healAmt = (ai_lib.getLevel( npc ) * 20);
+	if ( healAmt < healthDamage )
+		addToAttrib(target, HEALTH, healAmt);
+	else
+		setAttrib(target, HEALTH, getMaxAttrib( target, HEALTH ));
+
+	if ( healAmt < actionDamage )
+		addToAttrib(target, ACTION, healAmt);
+	else
+		setAttrib(target, ACTION, getMaxAttrib( target, ACTION ));
+
+	utils.setScriptVar( npc, "ai.combat.movePause", 2 );
+}
+
+boolean fleeFromHouse( obj_id npc, obj_id target )
+{
+
+	if ( !isIdValid(npc) || !isIdValid( target ) )
+		return false;
+
+	if ( pet_lib.isPet(npc) )
+		return false;//pets don't do this
+
+	location myLoc = getLocation( npc );
+	if ( myLoc == null )
+		return false;
+
+	location yourLoc = getLocation( target );
+	if ( yourLoc == null )
+		return false;
+
+	obj_id myCell = myLoc.cell;
+	obj_id yourCell = yourLoc.cell;
+	if (isIdValid( myCell )==false && isIdValid( yourCell ) )
+	{
+		//debugSpeakMsg( npc, "I am outside and you are inside" );
+
+		int niche = ai_lib.aiGetNiche( npc );
+		if ( niche == NICHE_NPC || niche == NICHE_DROID || niche == NICHE_ANDROID)
+		{
+			if (permissionsIsAllowed(yourCell, npc))
+				return false;//npcs and droids will follow into the building, if they can
+		}
+
+		//ai_combat.fleeFromCombat( npc, target );
+		pathTo( npc, aiGetHomeLocation( npc ));
+
+		setAttrib( npc, HEALTH, getUnmodifiedMaxAttrib( npc, HEALTH ) );
+		setAttrib( npc, ACTION, getUnmodifiedMaxAttrib( npc, ACTION ) );
+
+		if ( isPlayer( target ) )
+		{
+			if ( getHateTarget(target)==npc);
+				queueCommand( target, ##"peace", npc, "", COMMAND_PRIORITY_IMMEDIATE);
+		}
+		return true;
+	}
+	return false;
+}
+
+boolean doInteriorPathFinding( obj_id npc, obj_id target )
+{
+	location npcLoc = getLocation( npc );
+	if (!isIdValid( npcLoc.cell ))
+		return false;//outdoors, so do the normal shit
+
+	return ( getDistance( npc, target ) > 6.0f );//too far away to trust the
+												 // can-see check, so
+}
+
+boolean isIndoors( obj_id npc )
+{
+	location npcLoc = getLocation( npc );
+	return (isIdValid( npcLoc.cell ));
+}
+
+boolean isInCombat(obj_id ai)
+{
+	boolean result = (getState(ai, STATE_COMBAT) == 1);
+
+	if (!result)
+	{
+		deltadictionary dict = ai.getScriptVars();
+
+		result = (dict.getObjVar("ai.combat.pendingCombat") != null);
+	}
+
+	return result;
+}
+

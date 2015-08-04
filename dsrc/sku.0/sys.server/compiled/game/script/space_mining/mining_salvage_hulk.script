@@ -1,0 +1,251 @@
+
+include library.combat;
+include library.sui;
+include library.quests;
+include library.ai_lib;
+include library.money;
+include library.chat;
+include library.pclib;
+include library.vehicle;
+include library.ship_ai;
+include library.utils;
+include library.space_utils;
+include library.space_combat;
+const int MAX_RESOURCE = 1000000;
+
+
+trigger OnAttach()
+{
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnShipInternalDamageOverTimeRemoved(int chassisSlot, float damageRate, float damageThreshold)
+{
+	obj_id pilot = space_utils.getPilotForRealsies(self);
+
+	if (pilot != null)
+	{
+		sendSystemMessageTestingOnly(pilot, "jwatson_ship IDOT removed slot=" + chassisSlot + ", damageRate=" + damageRate + ", threshold=" + damageThreshold);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnShipWasHit (obj_id attacker, int weaponIndex, boolean isMissile, int missileType, int chassisSlot, boolean isPlayerAutoTurret, float hitLocationX_o, float hitLocationY_o, float hitLocationZ_o)
+{
+	obj_id attackingPilot = space_utils.getPilotForRealsies(attacker);
+
+	string strAsteroidType = getStringObjVar(self, "strAsteroidType");
+
+	int intWeaponSlot = weaponIndex + ship_chassis_slot_type.SCST_weapon_0;
+
+	int weaponCrc = getShipComponentCrc(attacker, weaponIndex + ship_chassis_slot_type.SCST_weapon_first);
+	location attackingLocation = getLocation(attacker);
+	vector attackingPosition_w = new vector(attackingLocation.x, attackingLocation.y, attackingLocation.z);
+
+	transform selfTransform = getTransform_o2w(self);
+
+	if (getShipComponentDescriptorWeaponIsTractor(weaponCrc))
+	{
+		//float fltDamage = space_combat.getShipWeaponDamage(attacker, self, intWeaponSlot);
+		//fltDamage = fltDamage/100;
+
+		float fltDamage = 3.0f;
+
+		int maxHitpoints = getMaxHitpoints(self);
+		int oldHitpoints = getHitpoints(self);
+
+		setHitpoints(self, oldHitpoints - (int)fltDamage);
+
+		//sendSystemMessageTestingOnly(attackingPilot, "Did " + fltDamage + "damage to the ship,  Has " + getHitpoints(self) + " hitpoints left");
+
+		int newHitpoints = getHitpoints(self);
+
+		int resourceAmt = oldHitpoints - newHitpoints;
+
+		giveResourceReward(self, attacker, resourceAmt);
+
+		dictionary d = new dictionary();
+		d.put("resourceAmt", resourceAmt);
+		d.put("player", attackingPilot);
+		d.put("resourceType", strAsteroidType);
+		messageTo(attackingPilot, "handleShipSalvage", d, 0, false);
+
+		if (newHitpoints <= 0)
+		{
+			//sendSystemMessageTestingOnly(attackingPilot, "*** asteroid dynamic DESTROYED");
+			handleShipDestruction(self, 1.0f);
+		}
+		else
+		{
+			vector hitLocation_o = new vector(hitLocationX_o, hitLocationY_o, hitLocationZ_o);
+			notifyShipHit(self, attackingPosition_w, hitLocation_o, ship_hit_type.HT_chassis, 0.5f, 1.0f);
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+
+}
+
+void giveResourceReward(obj_id objAsteroid , obj_id objAttacker, int intAmount)
+{
+
+	// get their inventory container
+	string strAsteroidType = getStringObjVar(objAsteroid, "strAsteroidType");
+	obj_id objPilot = space_utils.getPilotForRealsies(objAttacker);
+	obj_id objContainer = null;
+	if(space_utils.isShipWithInterior(objAttacker))
+	{
+		objContainer = getObjIdObjVar(objAttacker, "objLootBox");
+	}
+	else
+	{
+		objPilot = space_utils.getPilotForRealsies(objAttacker);
+		if(!isIdValid(objPilot))
+		{
+			return;
+		}
+		objContainer = utils.getInventoryContainer(objPilot);
+	}
+	if(!isIdValid(objContainer))
+	{
+		LOG("space", "null loot container");
+		return;
+	}
+
+
+	string strResourceType = getResourceType(strAsteroidType);
+
+	obj_id[] objResourceIds = getResourceTypes(strResourceType);
+	obj_id objResourceId  = null;
+	if((objResourceIds!=null)&&(objResourceIds.length>0))
+	{
+		objResourceId = objResourceIds[rand(0, objResourceIds.length-1)];
+	}
+	if(!isIdValid(objResourceId))
+	{
+		sendSystemMessageTestingOnly(objPilot, "No resources, bucko!");
+	}
+
+	obj_id objStack = getResourceStack(objContainer, objResourceId);
+	if(isIdValid(objStack))
+	{
+		int intCount = getResourceContainerQuantity(objStack);
+		intCount += intAmount;
+		if(intCount>MAX_RESOURCE)
+		{
+			// add the diff
+			intCount = intCount - MAX_RESOURCE;
+			sendSystemMessageTestingOnly(objPilot, "Add the Diff!  " + intCount);
+			// add the diff
+			intAmount = intAmount - intCount;
+			addResourceToContainer(objStack, objResourceId , intAmount, null);
+			objStack = null;
+		}
+		else
+		{
+			// increment the count
+			addResourceToContainer(objStack, objResourceId, intAmount, null);
+			sendSystemMessageTestingOnly(objPilot, "Incrementing count!");
+		}
+	}
+
+	else
+	{
+		// make a new stack and set the count
+		objStack = createResourceCrate(objResourceId, intAmount, objContainer);
+		if (objStack == null)
+		{
+			//sendSystemMessageTestingOnly(player, "Full Inventory");
+		}
+	}
+	return;
+}
+
+obj_id getResourceStack(obj_id objContainer, obj_id objResource)
+{
+
+	if(!isIdValid(objContainer))
+	{
+		return null;
+	}
+	obj_id[] objContents= getContents(objContainer);
+	if(objContents==null)
+	{
+		return null;
+	}
+
+	for ( int intI= 0; intI< objContents.length; intI++)
+	{
+		obj_id objType  = getResourceContainerResourceType(objContents[intI]);
+		if(objType==objResource)
+		{
+
+			int intCount = getResourceContainerQuantity(objContents[intI]);
+			if(intCount<MAX_RESOURCE)
+			{
+				return objContents[intI];
+			}
+		}
+	}
+	return null;
+}
+
+string getResourceType(string strAsteroidType)
+{
+	if (strAsteroidType == "iron")
+	{
+		return "space_metal_iron";
+	}
+	else if (strAsteroidType == "carbonaceous")
+	{
+		return "space_metal_carbonaceous";
+	}
+	else if (strAsteroidType == "silicaceous")
+	{
+		return "space_metal_silicaceous";
+	}
+	else if (strAsteroidType == "ice")
+	{
+		return "space_metal_ice";
+	}
+	else if (strAsteroidType =="obsidian")
+	{
+		return "space_metal_obsidian";
+	}
+	else if (strAsteroidType =="diamond")
+	{
+		return "space_gem_diamond";
+	}
+	else if (strAsteroidType =="crystal")
+	{
+		return "space_gem_crystal";
+	}
+	else if (strAsteroidType =="petrochem")
+	{
+		return "space_chemical_petrochem";
+	}
+	else if (strAsteroidType =="acid")
+	{
+		return "space_chemical_acid";
+	}
+	else if (strAsteroidType =="cyanomethanic")
+	{
+		return "space_chemical_cyanomethanic";
+	}
+	else if (strAsteroidType =="sulfuric")
+	{
+		return "space_chemical_sulfuric";
+	}
+	else if (strAsteroidType =="methane")
+	{
+		return "space_gas_methane";
+	}
+	else if (strAsteroidType =="organometallic")
+	{
+		return "space_gas_organometallic";
+	}
+
+	return null;
+}

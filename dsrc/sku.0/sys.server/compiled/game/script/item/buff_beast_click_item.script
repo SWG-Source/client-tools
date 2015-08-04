@@ -1,0 +1,223 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        buff_beast_click_item.script
+ * Description:  This script handles the clicking of a buff from a static object, all the data should be contained in Objvars on the item
+ * @author       Various
+ * @version      1.*
+ */
+
+/***** INCLUDES ********************************************************/
+
+
+include library.beast_lib;
+include library.buff;
+include library.static_item;
+include library.prose;
+include library.utils;
+
+
+/***** CONSTANTS *******************************************************/
+const string_id SID_NOT_YET				= new string_id("base_player", "not_yet");
+const string_id SID_NOT_LINKED				= new string_id("base_player", "not_linked");
+const string_id SID_NOT_LINKED_TO_HOLDER		= new string_id("base_player", "not_linked_to_holder");
+const string_id BUFF_APPLIED				= new string_id("base_player", "buff_applied");
+const string_id SID_ITEM_NOT_IN_INVENTORY		= new string_id("base_player", "not_in_your_inventory");
+const string_id SID_MUST_BIO_LINK_FROM_INVENTORY	= new string_id("base_player", "must_biolink_to_use_from_inventory");
+const string_id SID_BIOLINK_OTHER_PLAYER 		= new string_id("base_player", "wrong_player_per_biolink");
+const string_id SID_NO_USE_WHILE_DEAD	 		= new string_id("player_structure", "while_dead");
+
+const string_id BUFF_REMOVED				= new string_id("base_player", "buff_removed");
+const string_id SID_BEAST_DEAD				= new string_id("base_player", "beast_buff_beast_dead");
+const string_id SID_BUFF_NOT_OWNER 			= new string_id("base_player", "beast_buff_not_owner");
+const string_id SID_ITEM_LEVEL_TOO_LOW		= new string_id("base_player", "beast_buff_level_too_low");
+const string_id CANT_APPLY_BUFF				= new string_id("base_player", "beast_buff_cant_apply_buff");
+const string_id SID_NO_ACTIVE_BEAST 		= new string_id("base_player", "beast_buff_no_active_beast");
+
+const string OWNER_OID 					= "owner";
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{	
+	if (canManipulate(player, self, true, true, 15, true))
+	{
+		if (utils.isNestedWithinAPlayer(self))
+		{
+			menu_info_data mid = mi.getMenuItemByType(menu_info_types.ITEM_USE);
+			if ( mid != null )
+				mid.setServerNotify(true);
+			else
+				mi.addRootMenu(menu_info_types.ITEM_USE, new string_id("ui_radial", "item_use"));
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(utils.getContainingPlayer(self) != player )
+		return SCRIPT_CONTINUE;
+	
+	//some objects may require biolink.  If the biolink is pending, we don't need to continue.
+	obj_id biolink = getBioLink(self);
+	if (isValidId(biolink) && biolink == utils.OBJ_ID_BIO_LINK_PENDING)
+	{
+		sendSystemMessage(player, SID_MUST_BIO_LINK_FROM_INVENTORY);	
+		return SCRIPT_CONTINUE;
+	}
+
+	//some objects may have a biolink and be traded. Verify that the biolink and the player are same obj.
+	if (isValidId(biolink) && biolink != player)
+	{
+		sendSystemMessage(player, SID_BIOLINK_OTHER_PLAYER);	
+		return SCRIPT_CONTINUE;
+	}
+	else if(hasObjVar(self, OWNER_OID))
+	{
+		//in a case where only certain owners can consume/use the object but the object
+		//is not biolinked in conventional ways
+		if(player != getObjIdObjVar(self, OWNER_OID))
+		{
+			sendSystemMessage(player, SID_BUFF_NOT_OWNER);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	//congrats! You clicked on the USE option, lets see if you pass all the checks
+	if( item == menu_info_types.ITEM_USE)
+	{
+		if(isIncapacitated(player) || isDead(player))
+		{
+			sendSystemMessage(player, SID_NO_USE_WHILE_DEAD);
+			return SCRIPT_CONTINUE;
+		}
+		//check to see if we have bio link script
+		if(hasScript(self, "item.armor.biolink_item_non_faction"))
+		{
+			//bio link check
+			obj_id bioLinked = getBioLink(self);
+			if (bioLinked == null || bioLinked == utils.OBJ_ID_BIO_LINK_PENDING)
+			{
+				sendSystemMessage(player, SID_NOT_LINKED);
+				return SCRIPT_CONTINUE;
+			//make sure the bio link is to user
+			}
+			if(bioLinked != player)
+			{
+				sendSystemMessage(player, SID_NOT_LINKED_TO_HOLDER);
+				return SCRIPT_CONTINUE;
+			}	
+		}
+		string itemName = getStaticItemName(self);
+		if ( itemName == null || itemName == "" )
+		{
+			CustomerServiceLog("buff", "buff_click_item object self: "+self+" Name: "+getName(self)+" had an invalid static item name. Buff object is bailing out early as a result.");
+			sendSystemMessage(player, "buff_click_item object self: "+self+" Name: "+getName(self)+" had an invalid static item name", "");
+			return SCRIPT_CONTINUE;
+		}
+
+		dictionary itemData = new dictionary();
+		itemData = dataTableGetRow(static_item.ITEM_STAT_BALANCE_TABLE, itemName);
+		if ( itemData == null)
+		{
+			CustomerServiceLog("buff", "buff_click_item object self: "+self+" Name: "+getName(self)+" had invalid item data and as a result the buff object is bailing out early.");
+			sendSystemMessage(player, "buff_click_item object self: "+self+" Name: "+getName(self)+" had invalid item data", "");
+			return SCRIPT_CONTINUE;
+		}
+		
+		if ( !beast_lib.hasActiveBeast(player) )
+		{
+			sendSystemMessage(player, SID_NO_ACTIVE_BEAST);
+			return SCRIPT_CONTINUE;
+		}
+		obj_id activeBeast = beast_lib.getBeastOnPlayer(player);
+		if ( !isIdValid(activeBeast) )
+		{
+			sendSystemMessage(player, SID_NO_ACTIVE_BEAST);
+			return SCRIPT_CONTINUE;
+		}
+		if( isIncapacitated(activeBeast) || isDead(activeBeast) )
+		{
+			sendSystemMessage(player, SID_BEAST_DEAD);
+			return SCRIPT_CONTINUE;
+		}
+		
+		string buffName = itemData.getString("buff_name");
+		string coolDownGroup = itemData.getString("cool_down_group");
+		string clientEffect = itemData.getString("client_effect");
+		string clientAnimation = itemData.getString("client_animation");
+		int reuseTime = itemData.getInt("reuse_time");
+		int requiredLevel = itemData.getInt("required_level_for_effect");
+
+		string varName = "clickItem." + coolDownGroup;
+		//this should return 0 if they don't have the Objvar at all
+		int buffTime = getIntObjVar(player, varName);
+		
+		int beastLevel = getLevel(activeBeast);
+		
+		if ( buff.hasBuff(activeBeast, buffName) )
+		{
+			buff.removeBuff(activeBeast, buffName);
+			sendSystemMessage(player, BUFF_REMOVED);
+			return SCRIPT_CONTINUE;
+		}
+
+		//make sure they meet the level requirements
+		if(static_item.validateLevelRequired(activeBeast, requiredLevel))
+		{
+			if(getGameTime() > buffTime || getGameTime() < buffTime && isGod(player))
+			{		
+				if (buff.canApplyBuff(activeBeast, buffName))
+				{
+					//allert the god mode tester only if the timer is involved.
+					if(getGameTime() < buffTime && isGod(player))
+						sendSystemMessage(player, "The Buff was applied because you were in god mode.", null);
+						
+					CustomerServiceLog("buff", "buff_click_item object self: "+self+" Static Item Name: "+itemName+" providing buff: "+buffName+" being used by player: "+player+" Name: "+getName(player)+" on their beast: "+activeBeast+" of beast level: "+beastLevel);
+					
+					sendSystemMessage(player, BUFF_APPLIED);
+					
+					utils.setScriptVar(activeBeast, beast_lib.getBeastBuffItemVar(buffName), self);
+					buff.applyBuff(activeBeast, player, buffName);
+					
+					//we store the objvar on the player, and clean them up in base player oninitialize
+					setObjVar(player, varName, (getGameTime() + (reuseTime)));
+					//applies the psuedo item timer, make sure object template is in cooldown group in client /datatables/timer/template_command_mapping.tab 
+
+					sendCooldownGroupTimingOnly(player, getStringCrc(coolDownGroup.toLowerCase()), reuseTime);
+
+					//play an animation and effect
+					doAnimationAction(activeBeast, clientAnimation);
+					playClientEffectObj(activeBeast, clientEffect, player, "");
+
+					//check to see if it is a charged item and if so decrement counter by 1
+					if(getCount(self) > 0)
+					{
+						CustomerServiceLog("buff", "buff_click_item object self: "+self+" Static Item Name: "+itemName+" providing buff: "+buffName+" being used by player: "+player+" Name: "+getName(player)+" on their beast: "+activeBeast+". Object is being decremented by ONE.");					
+						static_item.decrementStaticItem(self);
+					}			
+				}
+				else
+				{
+					sendSystemMessage(player, CANT_APPLY_BUFF);
+					return SCRIPT_CONTINUE;
+				}	
+			}
+			else
+			{
+				//send them a message on how long before they can use again
+				int timeDiff = buffTime - getGameTime();
+				prose_package pp = prose.getPackage( SID_NOT_YET, timeDiff );
+				sendSystemMessageProse( player, pp );
+				return SCRIPT_CONTINUE;
+			}
+		}
+		else
+		{
+			sendSystemMessage(player, SID_ITEM_LEVEL_TOO_LOW);
+		}	
+	}
+		
+	return SCRIPT_CONTINUE;
+}

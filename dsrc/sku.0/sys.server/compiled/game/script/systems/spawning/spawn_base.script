@@ -1,0 +1,979 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        spawn_base.script
+ * Description:  This is the base set of functions for the spawn system
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+include library.skill;
+include library.city;
+include library.regions;
+include library.locations;
+include library.battlefield;
+include library.utils;
+include library.create;
+include library.group;
+include library.gcw;
+include library.ai_lib;
+include library.vehicle;
+
+const int SPAWN_HEARBEAT_SPAWN_EVENT		= 5;
+
+const int SPAWN_PLAYER_DELAY_MIN		= 30;
+const int SPAWN_PLAYER_DELAY_MAX		= 60;	// delay for spawn_player spawn events
+
+const int SPAWN_DISTANCE_MIN			= 12;	// for use until we get findvalidlocation
+const int SPAWN_DISTANCE_MAX			= 32;
+
+const int SPAWN_CHECK_DISTANCE			= 64;	// you must move X meters before you get more spawns after the limit
+const int SPAWN_CHECK_LIMIT			= 15;	// you get X creatures!
+
+const int SPAWN_TEMPLATE_CHECK_DISTANCE		= 128;
+const int SPAWN_CHECK_TEMPLATE_LIMIT		= 14;	// 14 templates allowed in an area
+const int SPAWN_THEATER_CHECK_DISTANCE		= 200;
+
+const int SPAWN_CHECK_THEATER_LIMIT		= 1;
+
+const int EXTERIOR_SPAWN_CHANCE			= 50;	// chance of spawning something outside of a structure
+
+// TESTING CONSTANTS
+const int EXTERIOR_MAX_NPC			= 10;
+const int INTERIOR_MAX_NPC			= 10;
+const int EXTERIOR_MIN_NPC			= 4;
+const int INTERIOR_MIN_NPC			= 4;
+const int PLAYER_TO_NPC_RATIO			= 1;	// for every 1 player, we decrease our max and min by 1
+
+// END TESTING CONSTANTS;
+
+public boolean boolFastSpawnEnabled		= false;
+
+const int MAXIMUM_SPAWNING_RUN_TIME_RULES	= 200;
+const float CREATURES_TO_PLAYERS_RATIO		= 20;
+
+const string[] INVALID_SPAWNING_AREAS           = { "tutorial" };
+
+/**
+@brief this function takes the obj_id of the player, and the obj_id of the master spawn object.  It will eventually take a region object id, which will contain the necessary
+spawn list information. Using this information, it culls out any templates at their max, as well as checks agains the global spawn count. It then returns a dictionary with two elements
+The first is an array of template id's, and the second element is the number of elements in the array. This is because we don't have any sort of dynamically resizable arrays
+Eventually this function will also handle all culling based on player difficulty  and factional data.
+@param obj_id objPlayer
+@param obj_id objMasterSpawner
+@return dictionary Contains string array strSpawnTypes, and intSpawnListSize
+*/
+int[] getValidSpawn(dictionary dctPlayerStats)
+{
+	if(dctPlayerStats == null)
+		return null;
+
+	boolean boolTheatersAllowed = dctPlayerStats.getBoolean("boolTheatersAllowed");
+
+	string strRegionName = dctPlayerStats.getString("strRegionName");
+	string strPlanet = dctPlayerStats.getString("strPlanet");
+	region rgnSpawnRegion = getRegion(strPlanet, strRegionName);
+	obj_id objPlayer = dctPlayerStats.getObjId("objPlayer");
+
+	if(rgnSpawnRegion == null)
+		return null;
+
+	string strRegion = regions.translateGeoToString(rgnSpawnRegion.getGeographicalType());
+
+	if(strRegion == null || strRegion.equals(""))
+		return null;
+
+	string strFileName = "";
+
+	if(strRegion == "fictional")
+	{
+		if((strRegionName == null || strRegionName.equals("")) || (strPlanet == null || strPlanet.equals("")))
+			return null;
+
+		strFileName = getFictionalRegionFileName(strPlanet, strRegionName);
+	}
+	else if(strRegion == "overload")
+	{
+		if(strRegionName == null || strRegionName.equals(""))
+			return null;
+
+		strFileName = getOverLoadRegionFileName(strRegionName);
+	}
+	else
+	{
+		if(strPlanet == null || strPlanet.equals(""))
+			return null;
+
+		strFileName = "datatables/spawning/spawn_lists/" + strPlanet + "/" + strPlanet + "_" + strRegion + ".iff";
+	}
+	
+	if(strFileName == null)
+		return null;
+
+
+	string[] strTemplates = dataTableGetStringColumn(strFileName, "strTemplate");
+	int[] intMinDifficulties = dataTableGetIntColumn(strFileName, "intMinDifficulty");
+	int[] intMaxDifficulties = dataTableGetIntColumn(strFileName, "intMaxDifficulty");
+	int[] intGcwFactions = null;
+	int[] intGcwThresholds = null;
+	int[] intGcwScoreTypes = null;
+	string[] strGcwSpecificRegions = null;
+	
+	if(dataTableHasColumn(strFileName, "intGCWFaction"))
+	{
+		intGcwFactions = dataTableGetIntColumn(strFileName, "intGCWFaction");	
+		intGcwThresholds = dataTableGetIntColumn(strFileName, "intGCWThreshold");
+		intGcwScoreTypes = dataTableGetIntColumn(strFileName, "intGCWScoreType");
+		strGcwSpecificRegions = dataTableGetStringColumn(strFileName, "strGCWSpecificRegion");	
+	}
+
+	boolean checkGCWStats = true;
+
+	if(strTemplates == null || strTemplates.length == 0 || intMinDifficulties == null || intMaxDifficulties == null)
+	{
+		LOG("spawning", "Invalid spawn template, or min/max difficulty values are invalid. Filename = " + strFileName);
+
+		return null;
+	}
+	
+	location currentLoc = getLocation(objPlayer);
+	
+	if(intGcwFactions == null || intGcwThresholds == null || intGcwScoreTypes == null)
+	{
+		checkGCWStats = false;
+	}
+
+	resizeable int[] validTemplateIndices = new int[0];
+	
+	if(validTemplateIndices == null)
+		return null;
+	
+	for(int i = 0; i < strTemplates.length; ++i)
+	{
+		int intMinDifficulty = intMinDifficulties[i];
+		int intMaxDifficulty = intMaxDifficulties[i];
+		
+		if(checkGCWStats)
+		{
+			int intGcwFaction = intGcwFactions[i];
+			int intGcwThreshold = intGcwThresholds[i];
+			int intGcwScoreType = intGcwScoreTypes[i];
+			string strSpecificRegion = strGcwSpecificRegions == null || strGcwSpecificRegions.length == 0 ? "" : strGcwSpecificRegions[i];
+			
+			if(!checkGalacticCivilWarStandings(intGcwFaction, intGcwThreshold, intGcwScoreType, strSpecificRegion, currentLoc))
+				continue;
+		}
+
+		// we now check the difficulty rating and factional ranks.
+		if(checkDifficulty(intMinDifficulty, intMaxDifficulty, dctPlayerStats))
+		{
+			// Skip any theaters we shouldn't be spawning.
+			if(!boolTheatersAllowed && strTemplates[i].indexOf("theater") > 0)
+				continue;
+				
+			validTemplateIndices = utils.addElement(validTemplateIndices, i);
+		}	
+	}
+
+	return validTemplateIndices;
+}
+
+boolean checkDifficulty(int intMinTemplateDifficulty, int intMaxTemplateDifficulty, dictionary dctPlayerStats)
+{
+	return true;
+}
+
+int getPlayerSpawnDiffibculty(obj_id objPlayer)
+{
+	obj_id objGroup = getGroupObject(objPlayer);
+
+	if(!isIdValid(objGroup))
+	{
+		int intPlayerLevel = getLevel(objPlayer);
+
+		////LOG("difficulty", "intPlayerLevel is "+intPlayerLevel);
+		return intPlayerLevel;
+	}
+	else
+	{
+		int intGroupLevel = skill.getGroupLevel(objPlayer);
+
+		////LOG("difficulty", "intGroupLevel is "+intGroupLevel);
+		return intGroupLevel;
+	}
+}
+
+obj_id createTemplate(location locSpawnLocation, dictionary params, obj_id objPlayer)
+{
+
+	// we'll spawn in 3 quadrants?
+
+	string strRegionName = params.getString("strRegionName");
+	string strPlanet = params.getString("strPlanet");
+
+	////LOG("spawning", "strRegionName is "+strRegionName);
+	////LOG("spawning", "StrPlanet is "+strPlanet);
+	region rgnSpawnRegion = getRegion(strPlanet, strRegionName);
+
+	if(rgnSpawnRegion == null)
+	{
+		////LOG("spawning", "NULL REGION FOR PLANET "+strPlanet+" and region anme "+strRegionName);
+		return null;
+
+	}
+	int intIndex = params.getInt("intIndex");	// where in teh datatable is this template.
+	int intPlayerDifficulty = params.getInt("intPlayerDifficulty");
+	int intNumToSpawn = params.getInt("intNumToSpawn");	// for herds/lairs
+	string strTemplateToSpawn = params.getString("strTemplateToSpawn");	// for herds/lairs
+	string strTemplate = params.getString("strTemplate");	// what we create.. technically not a template anymore
+	int intMinDifficulty = params.getInt("intMinDifficulty");
+	int intMaxDifficulty = params.getInt("intMaxDifficulty");
+	string strLairType = params.getString("strLairType");
+	string strBuildingType = params.getString("strBuildingType");
+
+// we maintain 2 ways to spawn shit
+
+// one is the old way, usuing the majority of the above data. the new way uses strLairType and buildingTYpe.. lairType isn't blank
+// then we use thew new spawn functionality.
+// we still plunk down the templates and crap.
+
+	obj_id objCreatedTemplate = createObject(strTemplate, locSpawnLocation);
+
+	////LOG("spawning", objPlayer+" created templante "+strTemplate+" at location +"+locSpawnLocation);
+	if(isIdValid(objCreatedTemplate))
+	{
+		////LOG("spawning", objPlayer+ " checking if player is grouped");
+		if(group.isGrouped(objPlayer))
+		{
+			////LOG("spawning", objPlayer+ " player is grouped");
+
+			obj_id objGroup = getGroupObject(objPlayer);
+
+			if(isIdValid(objGroup))
+			{
+				////LOG("spawning", objPlayer+ "i got a group obect");
+				int intGroupSize = getGroupSize(objGroup);
+
+				setObjVar(objCreatedTemplate, "spawning.intGroupSize", intGroupSize);
+			}
+		}
+
+		////LOG("spawn_base", objPlayer+ " Created obj_id of "+objCreatedTemplate.toString());
+
+		attachScript(objCreatedTemplate, "systems.spawning.spawn_template");
+
+		////LOG("spawn_base", objPlayer+ " set all my obhjvars on the created object");
+		if(strLairType != "")
+		{		// new functionality
+			////LOG("spawning", objPlayer+" strLairType is "+strLairType);
+			// the template has been made.. so lets go to town on it
+			setObjVar(objCreatedTemplate, "spawning.intDifficultyLevel", intPlayerDifficulty);
+			// we need to calculate the size of the thing
+
+			string strDifficulty = create.getLairDifficulty(intMinDifficulty, intMaxDifficulty, intPlayerDifficulty);
+
+			setObjVar(objCreatedTemplate, "spawning.lairDifficulty", strDifficulty);
+			setObjVar(objCreatedTemplate, "spawning.lairType", strLairType);
+			setObjVar(objCreatedTemplate, "spawning.buildingTrackingType", strBuildingType);
+			if(strBuildingType != "")
+			{
+				setObjVar(objCreatedTemplate, "spawning.buildingType", strBuildingType);
+			}
+
+			////LOG("spawning", objPlayer+" i set all my objvars");
+
+			obj_id groupObject = getGroupObject(objPlayer);
+
+			if(isIdValid(groupObject))
+				setObjVar(objCreatedTemplate, "spawning.groupSize", getPCGroupSize(groupObject));
+			else
+				setObjVar(objCreatedTemplate, "spawning.groupSize", 1);
+		}
+		else
+		{
+			////LOG("spawning", objPlayer+" OLD DEPRACATED CODE PATH");
+
+			if(strTemplate.indexOf("lair") > 0)
+			{
+
+				setObjVar(objCreatedTemplate, "numToSpawn", intNumToSpawn);
+
+				if(strTemplateToSpawn != "" && strTemplateToSpawn != null)
+				{
+					setObjVar(objCreatedTemplate, "creatureTemplate", strTemplateToSpawn);
+				}
+			}
+
+
+			if(strTemplate.indexOf("herd") > 0)
+			{
+
+				setObjVar(objCreatedTemplate, "numToSpawn", intNumToSpawn);
+
+				if((strTemplateToSpawn != "") && (strTemplateToSpawn != null))
+				{
+					setObjVar(objCreatedTemplate, "creatureTemplate", strTemplateToSpawn);
+				}
+			}
+		}
+
+		dictionary dctParams = new dictionary();
+
+		////LOG("spawn_message", objPlayer+" Spawn_Setup_Complete being sent to the created object");
+		messageTo(objCreatedTemplate, "handle_Spawn_Setup_Complete", dctParams, 0, false);
+		dctParams.put("strTemplate", strTemplate);
+		dctParams.put("strRegionName", strRegionName);
+		dctParams.put("strPlanet", strPlanet);
+		dctParams.put("strLairType", strLairType);
+		dctParams.put("strBuildingType", strBuildingType);
+		// we'll need planetary setup soon
+		////LOG("spawn_message", objPlayer+ " template_Created being sent to the master spawner");
+	}
+	else
+	{
+		return null;
+	}
+
+	return objCreatedTemplate;
+	// template created, and all tracking values incremented.
+}
+
+dictionary chooseWeightedSpawnTemplate(int[] intDataIndex, string strRegionName, string strPlanetName, region rgnRegion)
+{
+	string strFileName;
+
+	if(strRegionName == "fictional")
+	{
+		string strRegionFullName = rgnRegion.getName();
+
+		strFileName = getFictionalRegionFileName(strPlanetName, strRegionFullName);
+	}
+	else if(strRegionName == "overload")
+	{
+		strFileName = getOverLoadRegionFileName(strRegionName);
+	}
+	else
+	{
+		strFileName = "datatables/spawning/spawn_lists/" + strPlanetName + "/" + strPlanetName + "_" + strRegionName + ".iff";
+	}
+
+	dictionary dctRegion = new dictionary();
+
+	string[] strTemplates = dataTableGetStringColumn(strFileName, "strTemplate");
+	int[] intSpawnLimits = dataTableGetIntColumn(strFileName, "intSpawnLimit");
+	int[] intMinDifficulties = dataTableGetIntColumn(strFileName, "intMinDifficulty");
+	int[] intMaxDifficulties = dataTableGetIntColumn(strFileName, "intMaxDifficulty");
+	int[] intWeightings = dataTableGetIntColumn(strFileName, "intWeighting");
+	int[] intSizes = dataTableGetIntColumn(strFileName, "intSize");
+	int[] intNumToSpawns = dataTableGetIntColumn(strFileName, "intNumToSpawn");	// for lairs/herds
+
+	string[] strTemplatesToSpawn = dataTableGetStringColumn(strFileName, "strTemplateToSpawn");	// for herds, and sometimes lairs
+	string[] strLairTypes = dataTableGetStringColumn(strFileName, "strLairType");
+	string[] strBuildingTypes = dataTableGetStringColumn(strFileName, "strBuildingType");	// for new creation routines
+
+	int selectedIndex = 0;
+
+	if(intDataIndex.length != 1) // More than one available option
+	{
+		// Do weighted selection
+		int weightingGrandTotal = 0;
+		for(int i = 0; i < intDataIndex.length; ++i)
+			weightingGrandTotal += intWeightings[intDataIndex[i]];
+
+		int randomValue = rand(0, weightingGrandTotal - 1);
+		int previousChance = 0;
+		for(int i = 0; i < intDataIndex.length; ++i)
+		{
+			int currentChance = previousChance + intWeightings[intDataIndex[i]];
+			if(randomValue >= previousChance && randomValue < currentChance)
+			{
+				selectedIndex = i;
+				break;
+			}
+
+			previousChance = currentChance;
+		}
+	}
+
+	// Grab the selected template info and pass it back.
+	int intIndex = intDataIndex[selectedIndex];
+
+	dictionary dctSpawnInformation = new dictionary();
+
+	dctSpawnInformation.put("intIndex", intIndex);
+	
+	dctSpawnInformation.put("strTemplate", strTemplates[intIndex]);
+	dctSpawnInformation.put("intMinDifficulty", intMinDifficulties[intIndex]);
+	dctSpawnInformation.put("intMaxDifficulty", intMaxDifficulties[intIndex]);
+	dctSpawnInformation.put("intSize", intSizes[intIndex]);
+	dctSpawnInformation.put("intNumToSpawn", intNumToSpawns[intIndex]);
+	dctSpawnInformation.put("strLairType", strLairTypes[intIndex]);
+	dctSpawnInformation.put("strBuildingType", strBuildingTypes[intIndex]);
+	dctSpawnInformation.put("strTemplateToSpawn", strTemplatesToSpawn[intIndex]);
+
+
+	return dctSpawnInformation;
+
+}
+
+void sendSpawnSpam(obj_id objPlayer, boolean boolLogFailures, boolean boolVerboseMode, string strSpam)
+{
+	if(boolLogFailures)
+	{
+		////LOG("spawning", strSpam);
+	}
+
+	if(boolVerboseMode && isIdValid(objPlayer))
+	{
+		deltadictionary dctScriptVars = objPlayer.getScriptVars();
+		int intLastSpamTime = dctScriptVars.getInt("intLastSpamTime");
+		int intCurrentTime = getGameTime();
+		int intDifference = intCurrentTime - intLastSpamTime;
+
+		if(intDifference > 5)
+		{
+			dctScriptVars.put("intLastSpamTime", intCurrentTime);
+			sendSystemMessageTestingOnly(objPlayer, strSpam);
+		}
+	}
+
+	return;
+}
+
+boolean getVerboseMode(obj_id objPlayer)
+{
+	if(hasObjVar(objPlayer, "spawning.verboseMode"))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+boolean checkTemplatesInRange(obj_id objPlayer, location locHome, boolean boolCheckForTheaters, string strObjectType)	// boolean for finding a REAL spawn location as oppposed to around the playre
+{
+	boolean boolLogFailures = checkSpawnLogFailures();
+	boolean boolVerboseMode = getVerboseMode(objPlayer);
+
+	const int SPAWN_TEMPLATE_CHECK_DISTANCE = 128;
+	const int SPAWN_CHECK_TEMPLATE_LIMIT = 140;	// 14 templates allowed in an area
+	const int SPAWN_THEATER_CHECK_DISTANCE = 200;
+
+	const int SPAWN_CHECK_THEATER_LIMIT = 1;
+
+	return true;
+}
+
+boolean canSpawn(obj_id objPlayer, location locSpawnLocation, boolean boolCheckForTheaters, string strObjectType)
+{
+	boolean boolLogFailures = checkSpawnLogFailures();
+	boolean boolVerboseMode = getVerboseMode(objPlayer);
+
+	if(!isSpawningAllowed(locSpawnLocation))
+	{
+		return false;
+	}
+
+	////LOG("spawning", "canspawn check");
+
+	const int intServerSpawnLimit = getServerSpawnLimit();
+
+	const int intNumCreatures = utils.getNumCreaturesForSpawnLimit();
+	const int intNumPlayers = getNumPlayers();
+
+	// we need to maintain a 7 to 1 ratio (we don't seem to be doing what this comment suggests - MB 12/03/2009)
+
+	if(intNumPlayers > 0)
+	{
+		if(intServerSpawnLimit > 0)
+		{
+			if(intNumCreatures > intServerSpawnLimit)
+			{
+				return false;
+			}
+		}
+		else
+		{
+			if(intNumCreatures > 5000)
+			{
+				return false;
+			}
+		}
+	}
+
+	location locCurrentLocation = getLocation(objPlayer);
+
+	if(locCurrentLocation.area == "tutorial")
+	{
+		return false;
+	}
+
+	if(city.isInCity(locCurrentLocation))
+	{
+		return false;
+	}
+
+	region[] rgnCities = getRegionsWithMunicipalAtPoint(locCurrentLocation, regions.MUNI_TRUE);
+
+	// in a city
+	if(rgnCities != null)
+	{
+		// LOG("spawn_base", "In a city returning false from canspawn");
+
+		return false;
+	}
+
+	region rgnBattlefield = battlefield.getBattlefield(locCurrentLocation);
+
+	if(rgnBattlefield != null)
+	{
+		// LOG("spawn_base", "In a battlefield returning false from canspawn");
+
+		return false;
+	}
+
+	rgnCities = getRegionsWithGeographicalAtPoint(locCurrentLocation, regions.GEO_CITY);
+
+	// in a city
+	if(rgnCities != null)
+	{
+		// LOG("spawn_base", "In a city returning false from canspawn");
+
+		return false;
+	}
+
+	obj_id objMasterSpawner = getPlanetByName(locCurrentLocation.area);
+
+	if(hasObjVar(objMasterSpawner, "boolSpawnerIsOn"))
+	{
+		boolean boolSpawnerIsOn;
+
+		boolSpawnerIsOn = getBooleanObjVar(objMasterSpawner, "boolSpawnerIsOn");
+
+		// is it set to on?
+		if(boolSpawnerIsOn == false)
+		{
+			// LOG("spawn_base", "Spawner is off. returning false from canspawn");
+
+			return boolSpawnerIsOn;
+		}
+	}
+
+	if(locCurrentLocation.cell != obj_id.NULL_ID)
+	{
+		// LOG("spawn_base", "In a cell returning false from canspawn");
+
+		return false;
+	}
+	
+	if(hasObjVar(objPlayer, "spawning.locSpawnLocation"))
+	{
+		// check quantitities
+		int intSpawnedTemplates = 0;
+
+		if(hasObjVar(objPlayer, "spawning.intSpawnedTemplates"))
+		{
+			intSpawnedTemplates = getIntObjVar(objPlayer, "spawning.intSpawnedTemplates");	// how many we spawned in the current area
+			////LOG("player_spawner", objPlayer + "'s intSpawnedTemplates is "+intSpawnedTemplates);
+		}
+
+		if(intSpawnedTemplates >= SPAWN_CHECK_LIMIT)
+		{
+			// greater than.. check our location
+
+			location locLastSpawnLocation = getLocationObjVar(objPlayer, "spawning.locSpawnLocation");
+			float fltDistance = utils.getDistance(locLastSpawnLocation, locCurrentLocation);
+
+			if(fltDistance < SPAWN_CHECK_DISTANCE)
+			{
+				return false;
+			}
+		}
+	}
+
+	if(locSpawnLocation != null)
+	{
+		if(city.isInCity(locSpawnLocation))
+		{
+			// LOG("spawn_base", "city.isInCity(locSpawnLocation) In a city returning false from canspawn");
+			return false;
+		}
+
+		rgnCities = getRegionsWithMunicipalAtPoint(locSpawnLocation, regions.MUNI_TRUE);
+
+		// in a city
+		if(rgnCities != null)
+		{
+			// LOG("spawn_base", "regions.MUNI_TRUE In a city returning false from canspawn");
+			return false;
+		}
+
+		rgnCities = getRegionsWithGeographicalAtPoint(locSpawnLocation, regions.GEO_CITY);
+
+		// in a city
+		if(rgnCities != null)
+		{
+			// LOG("spawn_base", "regions.GEO_CITY In a city returning false from canspawn");
+			return false;
+		}
+
+		rgnBattlefield = battlefield.getBattlefield(locSpawnLocation);
+
+		if(rgnBattlefield != null)
+		{
+			// LOG("spawn_base", "battlefield.getBattlefield In a city returning false from canspawn");
+			return false;
+		}
+		
+	}
+
+	return true;
+}
+
+region getSpawnRegion(obj_id objPlayer)
+{
+	location locTest = getLocation(objPlayer);
+	string strPlanet = locTest.area;
+
+	region[] rgnRegionList = getRegionsWithSpawnableAtPoint(locTest, regions.SPAWN_TRUE);
+	//region[]  rgnRegionList = getRegionsWithGeographicalAtPoint(getLocation(objPlayer), regions.GEO_FICTIONAL);
+	if(rgnRegionList == null)
+	{
+		rgnRegionList = getRegionsWithSpawnableAtPoint(locTest, regions.SPAWN_DEFAULT);
+	}
+
+	if(rgnRegionList == null)
+	{
+		////LOG("DESIGNER_FATAL","************************************SPAWN ERROR****************************************************");
+		////LOG("DESIGNER_FATAL", "region list is empty. This is a critical spawn system failure!");
+		////LOG("DESIGNER_FATAL", "Location was "+getLocation(objPlayer));
+		////LOG("DESIGNER_FATAL","************************************SPAWN ERROR****************************************************");
+		return null;
+	}
+
+	region rgnSpawnRegion = locations.getSmallestRegion(rgnRegionList);
+	string strTestPlanet = rgnSpawnRegion.getPlanetName();
+
+	if(strTestPlanet != strPlanet)
+	{
+		////LOG("DESIGNER_FATAL", "For location "+locTest+" we got a bad set of regions");
+		////LOG("DESIGNER_FATAL", "Player planet is "+strPlanet+" and region planet is "+strTestPlanet);
+	}
+
+	if(rgnSpawnRegion == null)
+		return null;
+
+	if(rand(1, 100) > 50)
+	{
+		region rgnOverloadRegion = null;
+
+		region[] rgnOverloadRegions = getRegionsWithGeographicalAtPoint(locTest, regions.GEO_OVERLOAD);
+		if((rgnOverloadRegions != null) && (rgnOverloadRegions.length > 0))
+		{
+			rgnOverloadRegion = rgnOverloadRegions[rand(0, rgnOverloadRegions.length - 1)];
+		}
+
+		if(rgnOverloadRegion != null)
+			return rgnOverloadRegion;
+	}
+
+	return rgnSpawnRegion;
+}
+
+void preLoadSpawnDataTables(obj_id objMasterSpawner)
+{
+	return;
+}
+
+boolean checkSpawnLogFailures()
+{
+	string strConfigSetting = getConfigSetting("GameServer", "fastSpawn");
+
+	if(strConfigSetting == null)
+	{
+		return false;
+	}
+
+	if(strConfigSetting == "true")
+	{
+		return true;
+
+	}
+
+	return false;
+}
+
+boolean isSpawningAllowed(location locTest)
+{
+	if(locTest == null || locTest.area == null)
+		return false;
+
+	for(int i = 0; i < INVALID_SPAWNING_AREAS.length; ++i)
+	{
+		if(locTest.area == INVALID_SPAWNING_AREAS[i])
+			return false;
+	}
+	
+	return true;
+}
+
+string getFictionalRegionFileName(string strPlanet, string strFullName)
+{
+	string_id strId = utils.unpackString(strFullName);
+	string strRegionName = strId.getAsciiId();
+	string strTableName = "datatables/spawning/spawn_lists/" + strPlanet + "/" + strRegionName + ".iff";
+
+	return strTableName;
+}
+
+string getOverLoadRegionFileName(string strRegionName)
+{
+	int intIndex = strRegionName.indexOf("-");	// name is filaname-obj_id
+
+	if(intIndex < 0)
+	{
+
+		////LOG("DESIGNER_FATAL", "region name "+strRegionName+" is an overload region wiht a bad name");
+		return "";
+
+	}
+	string strFileName = strRegionName.substring(0, intIndex);
+	string strTableName = "datatables/spawning/spawn_lists/spawn_overloads/" + strFileName + ".iff";
+
+	////LOG("spawning", "GOT FILENAME OF "+strTableName);
+	return strTableName;
+}
+
+void doSpawnEvent(dictionary params)
+{
+// this is our baseline spawn event handlet
+// it should parse through passed params, and pick something from the "spawn list" off of the region object.
+	if(params == null)
+	{
+		return;
+	}
+	
+	obj_id objPlayer = params.getObjId("objPlayer");
+
+	if(!isIdValid(objPlayer))
+		return;
+
+	int intPlayerDifficulty = params.getInt("intDifficulty");	// player spawn stats
+	string strRegionName = params.getString("strRegionName");
+	string strPlanet = params.getString("strPlanet");
+
+	if(strRegionName == null || strRegionName.length() < 1)
+	{
+		return;
+	}
+
+	if(strPlanet == null || strPlanet.length() < 1)
+	{
+		return;
+	}
+
+	region rgnSpawnRegion = getRegion(strPlanet, strRegionName);
+
+	if(rgnSpawnRegion == null)
+	{
+		LOG("spawning", objPlayer + " GETREGION RETURNED NULL FOR " + strRegionName + " and planet " + strPlanet);
+		return;
+	}
+
+	int[] validSpawnIndices = getValidSpawn(params);
+
+	if(validSpawnIndices == null || validSpawnIndices.length == 0)
+	{
+		LOG("DESIGNER_FATAL", "for dictionary " + params.toString() + " objvarids is null");
+		LOG("spawn", "for dictionary " + params.toString() + " objvarids is null");
+		return;
+	}
+
+
+	// we've got a full spawn list. Now we need to figure out the weighting for it.
+	string strRegionType = regions.translateGeoToString(rgnSpawnRegion.getGeographicalType());
+
+	if(strRegionType == null || strRegionType.length() < 1)
+	{
+		return;
+	}
+
+	dictionary dctSpawnInformation = new dictionary();
+	dctSpawnInformation = chooseWeightedSpawnTemplate(validSpawnIndices, strRegionType, strPlanet, rgnSpawnRegion);
+
+	if(dctSpawnInformation == null)
+	{
+		return;
+	}
+
+
+	dctSpawnInformation.put("intPlayerDifficulty", intPlayerDifficulty);
+	dctSpawnInformation.put("strRegionName", strRegionName);
+	dctSpawnInformation.put("strPlanet", strPlanet);
+
+	doSpawnTemplate(objPlayer, dctSpawnInformation);
+
+}
+
+void doSpawnTemplate(obj_id self, dictionary params)
+{
+	
+	string strTemplate = params.getString("strTemplate");
+
+	int intIndex = params.getInt("intIndex");
+	int intMinDifficulty = params.getInt("intMinDifficulty");
+	int intMaxDifficulty = params.getInt("intMaxDifficulty");
+	int intSize = params.getInt("intSize");
+	int intNumToSpawn = params.getInt("intNumToSpawn");
+
+	string strLairType = params.getString("strLairType");
+	string strBuildingType = params.getString("strBuildingType");
+	string strTemplateToSpawn = params.getString("strBuildingType");
+	string strRegionName = params.getString("strRegionName");
+	string strPlanet = params.getString("strPlanet");
+	int intPlayerDifficulty = params.getInt("intPlayerDifficulty");
+
+	dictionary dctParams = new dictionary();
+
+	// This is a test location hack
+	// we're going to use a min/max that are much smaller/larger based on the type of template
+	location locSpawnLocation = getLocation(self);
+
+	if(canSpawn(self, locSpawnLocation, true, strLairType))
+	{
+		dctParams.put("intMinDifficulty", intMinDifficulty);
+		dctParams.put("intMaxDifficulty", intMaxDifficulty);
+		dctParams.put("strLairType", strLairType);
+
+		dctParams.put("strBuildingType", strBuildingType);
+		dctParams.put("strRegionName", strRegionName);
+		dctParams.put("strPlanet", strPlanet);
+		dctParams.put("intIndex", intIndex);
+		dctParams.put("intPlayerDifficulty", intPlayerDifficulty);
+		dctParams.put("intNumToSpawn", intNumToSpawn);
+		dctParams.put("strTemplateToSpawn", strTemplateToSpawn);
+		dctParams.put("strTemplate", strTemplate);
+		float fltSize = getLocationSize((float) intSize);
+
+		utils.setScriptVar(self, "dctSpawnInfo", dctParams);	// for storage. Next good location uses this.
+		requestLocation(self, "spawnLocation", locSpawnLocation, 100.0f, fltSize, true, false);
+	}
+
+	return;
+}
+
+trigger OnLocationReceived(string strId, obj_id objObject, location locSpawnLocation, float fltRadius)
+{
+	if(strId.equals("spawnLocation"))
+	{
+		if(!isIdValid(objObject))
+		{
+			return SCRIPT_CONTINUE; // bad object
+		}
+
+		dictionary dctSpawnInfo = utils.getDictionaryScriptVar(self, "dctSpawnInfo");
+
+		if(dctSpawnInfo == null)
+		{
+			////LOG("spawning", "No spawn information");
+			return SCRIPT_CONTINUE;
+		}
+
+		obj_id objCreatedTemplate = createTemplate(locSpawnLocation, dctSpawnInfo, self);
+
+		setObjVar(objCreatedTemplate, "objLocationReservation", objObject);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+float getLocationSize(float fltLocation)
+{
+	if(fltLocation < 32f)
+	{
+		return 32f;
+	}
+	else if(fltLocation >= 32 && fltLocation <= 48)
+	{
+		return 48f;
+	}
+	else if(fltLocation >= 48 && fltLocation <= 64)
+	{
+		return 64f;
+
+	}
+	else if(fltLocation >= 64 && fltLocation <= 80)
+	{
+		return 80f;
+	}
+	else
+	{
+		return 96f;
+	}
+}
+
+boolean isGalaticCivilWarWinner(int faction, int threshold, int imperialScore)
+{
+	if(faction == 1 && threshold < imperialScore) // Imperial
+		return true;
+	else if (faction == 2 && threshold < (100 - imperialScore)) // Rebel
+		return true;
+		
+	return false;	
+}
+
+boolean checkGalacticCivilWarStandings(int gcwFaction, int gcwThreshold, int gcwScoreType, String gcwSpecificRegion, location loc)
+{
+	if(gcwFaction > 0 && gcwThreshold > 0)
+	{	
+		if(gcwScoreType == 0) // Based on Planet Score.
+		{
+			int ImperialScore = getGcwGroupImperialScorePercentile(toLower(getCurrentSceneName()));
+			return isGalaticCivilWarWinner(gcwFaction, gcwThreshold, ImperialScore);
+		}
+		else if (gcwScoreType == 1) // Based on the first GCW region we find at this location.
+		{
+			int ImperialScore = 0;
+			region[] allRegions = getRegionsAtPoint(loc);
+			if(allRegions != null && allRegions.length > 0)
+			{
+				for(int iter = 0; iter < allRegions.length; ++iter)
+				{
+					region gcwRegion = allRegions[iter];
+					if(gcwRegion.getName().startsWith("gcw"))
+					{
+						ImperialScore = getGcwImperialScorePercentile(toLower(gcwRegion.getName()));
+						break;
+					}
+				}
+			}
+			else
+			{
+				return false;
+			}
+
+			return isGalaticCivilWarWinner(gcwFaction, gcwThreshold, ImperialScore);
+		}
+		else if (gcwScoreType == 2) // Based on a specific region specified by a designer.
+		{
+			if(gcwSpecificRegion == null || gcwSpecificRegion == "")
+			{
+				LOG("GCWSpawnError", "Invalid Specific region specified");
+				return false;
+			}
+
+			int ImperialScore = getGcwImperialScorePercentile(toLower(gcwSpecificRegion));
+
+			return isGalaticCivilWarWinner(gcwFaction, gcwThreshold, ImperialScore);				
+
+		}
+		else
+		{
+			return false;
+		}
+
+	}
+	
+	return true;
+}

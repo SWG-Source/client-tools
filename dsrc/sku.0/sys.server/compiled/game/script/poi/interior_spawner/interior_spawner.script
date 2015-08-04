@@ -1,0 +1,458 @@
+include library.utils;
+include library.ai_lib;
+include library.create;
+include library.locations;
+
+const string TABLE_BEGIN			= "datatables/spawning/poi_spawner/";
+const string TYPE				= "TYPE";
+const string POP				= "POP";
+const string RADIUS				= "RADIUS";
+const string DELAY				= "DELAY";
+const string SCRIPTS				= "SCRIPTS";
+const string SENTINEL				= "SENTINEL";
+const string PLANET_LEVEL			= "PLANET_LEVEL";
+const string SCRIPTVAR_CREATIONS		= "myCreations";
+const string SCRIPTVAR_TIMERS			= "respawnTimes";
+const string SCRIPTVAR_LAST_LEVEL		= "lastLevel";
+
+const float CAP_SPAWN_TIME			= 86400.0f; // 1 day
+
+void checkFactionalSpawners(obj_id self)
+{
+	obj_id objContainer = getTopMostContainer(self); // am i in a building?
+	location locTest = getLocation(self);
+	if(objContainer!=self)
+	{
+		locTest = getLocation(objContainer);
+	}
+	obj_id[] objParents = getAllObjectsWithScript(locTest, 250, "systems.gcw.factional_dungeon_parent");
+	if(objParents!=null)
+	{
+		if(objParents.length>0)
+		{
+			dictionary dctParams = new dictionary();
+			dctParams.put("objSpawner", self);
+			messageTo(objParents[0], "validateSpawner", dctParams, 1, false);
+		}
+	}
+}
+
+trigger OnInitialize()
+{
+	checkFactionalSpawners(self);
+
+	createTriggerVolume("spawnNpcs", 100.0f, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volName, obj_id who)
+{
+	if(isIdValid(who) && exists(who) && isPlayer(who) && volName.equals("spawnNpcs"))
+	{
+		messageTo(self, "spawnNpcs", null, 0, false);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//message handler from mob when it dies
+messageHandler interiorNpcDied()
+{
+	obj_id deadNpc = params.getObjId ("object");
+
+	//do we have the scriptvar?
+	if (!utils.hasScriptVar (self, SCRIPTVAR_CREATIONS))
+	{
+		//this shouldnt happen, data got munged
+		CustomerServiceLog ("SPAWNER_OVERLOAD", "Spawner " + self + " tried to spawn a replacement for " + deadNpc + " but I don't have a list!");
+		return SCRIPT_CONTINUE;
+	}
+
+	//get the list of mobs for the spawner
+	obj_id[] spawnedList = utils.getObjIdArrayScriptVar (self, SCRIPTVAR_CREATIONS);
+	//get their spawn timers
+	int[] npcRespawnTimes = utils.getIntArrayScriptVar(self, SCRIPTVAR_TIMERS);
+	
+	//loop thru the list of mobs
+	for(int i = 0; i < spawnedList.length; ++i)
+	{
+		//check if this mob is the one that died
+		if(spawnedList[i] == deadNpc)
+		{
+			//get the respawn time from the table
+			int tableDelay = (int)getDelay(self);
+			//get the current time
+			int curTime = getGameTime();
+			//add the two to get the time for respawn
+			int delayTime = curTime + tableDelay;
+			//store the respawn time
+			npcRespawnTimes[i] = delayTime;
+			//set the id to null for this element in the list
+			spawnedList[i] = obj_id.NULL_ID;
+		}
+	}
+	//store our updated respawn times
+	utils.setScriptVar(self, SCRIPTVAR_TIMERS, npcRespawnTimes);	
+	//get the delay till we respawn
+	float delay = getDelay(self);
+	//send a messageTo to spawn when time is up
+	messageTo (self, "spawnNpcs", null, delay, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnNpcs ()
+{
+	//get our data
+	location here = getLocation (self);
+	string planet = here.area;
+	string table = TABLE_BEGIN + planet + ".iff";
+	string spawner = "" + self;
+	dictionary row = dataTableGetRow(table, spawner);
+	
+	string npcType = getType (row, self);
+	//validate
+	if (row == null)
+	{
+		LOG("POI_SPAWNER", "Spawner " + self + " had a null dictionary entry in datatable " + table );
+		return SCRIPT_CONTINUE;
+	}
+	
+	//what is our max pop?
+	int max = getMaxPop(row, self);
+	
+	int lastLevel = 0;
+	if( utils.hasScriptVar(self, SCRIPTVAR_LAST_LEVEL) )
+		lastLevel = utils.getIntScriptVar(self, SCRIPTVAR_LAST_LEVEL);
+	
+	//intialize our lists
+	obj_id[] npcList = new obj_id[max];
+	int[] npcRespawnTimes = new int[max];
+	
+	//if we have a list of mobs already, lets use that list.
+	//Otherwise, we need to make a list (usually on server restart)
+	if(!utils.hasScriptVar(self, SCRIPTVAR_CREATIONS))
+	{
+		
+		//loop until we have created our max
+		for (int x = 0; x < max; ++x)
+		{
+			//create our mob
+			int level = getRandomPlanetCreatureLevel(self, npcType, lastLevel, here, row);
+			lastLevel = level;
+			
+			obj_id npc = spawnMob(self, max, level, here, row);
+			if(!isIdValid(npc))
+			{
+				LOG("POI_SPAWNER", "Spawner " + self + " failed to create mob" );
+				return SCRIPT_CONTINUE;
+			}
+			npcList[x] = npc;
+			npcRespawnTimes[x] = getGameTime();
+		}
+		//set our spawner list and respawn times
+		utils.setScriptVar(self, SCRIPTVAR_CREATIONS, npcList);
+		utils.setScriptVar(self, SCRIPTVAR_TIMERS, npcRespawnTimes);
+	}
+	else
+	{	
+		//get the respawn times and npc list objids
+		npcList = utils.getObjIdArrayScriptVar(self, SCRIPTVAR_CREATIONS);
+		npcRespawnTimes = utils.getIntArrayScriptVar(self, SCRIPTVAR_TIMERS);
+		
+		//lists need to be the same length
+		if(npcList.length != npcRespawnTimes.length)
+		{
+			LOG("POI_SPAWNER", "Spawner " + self + " Spawn list and timer list dont match." );
+			return SCRIPT_CONTINUE;
+		}
+		
+		//loop thru our list
+		//intialize last level
+		for(int i = 0; i < npcList.length; ++i)
+		{
+			//if we dont have a valid Id, most likely this one has died
+			//and needs a respawn
+			if(!isIdValid(npcList[i]) || !exists(npcList[i]))
+			{
+				//get this mobs respawn time
+				int validCreateTime = npcRespawnTimes[i];
+				//Verify that we have waited long enough since last death
+				if(getGameTime() < validCreateTime)
+				{
+					//hasnt been long enough, lets try again later.
+					int delayTime = (int)getDelay(self);
+					delayTime = delayTime / 2;
+					messageTo (self, "spawnNpcs", null, delayTime, false);
+					return SCRIPT_CONTINUE;
+				}
+				//lets create a new one
+				int level = getRandomPlanetCreatureLevel(self, npcType, lastLevel, here, row);
+				lastLevel = level;
+				
+				obj_id npc = spawnMob(self, max, level, here, row);
+				
+				//store its objId
+				npcList[i] = npc;
+				//store its new respawn time
+				npcRespawnTimes[i] = getGameTime();
+			}
+		}
+	}
+	
+	utils.setScriptVar(self, SCRIPTVAR_LAST_LEVEL, lastLevel);
+	return SCRIPT_CONTINUE;
+}
+
+void npcScriptAttacher ( obj_id creature, string scriptList)
+{
+	if ( scriptList == null || scriptList == "" )
+		return;
+
+	string[] scriptArray = split(scriptList, ',' );
+	for ( int i = 0; i < scriptArray.length; i++ )
+	{
+		attachScript( creature, scriptArray[i] );
+	}
+}
+
+string getType (dictionary row, obj_id self)
+{
+	if (row == null)
+	{
+		return "thug";
+	}
+
+	string type = row.getString(TYPE);
+	if (type == null || type == "")
+	{
+		type = "thug";
+	}
+	return type;
+}
+
+float getDelay(obj_id self)
+{
+	location here = getLocation(self);
+	string planet = here.area;
+	string table = TABLE_BEGIN + planet + ".iff";
+	string spawner = ""+self;
+
+	dictionary row = dataTableGetRow(table, spawner);
+
+	if (row == null)
+	{
+		LOG("POI_SPAWNER", "Spawner " + self + " had a null dictionary entry in datatable " + table );
+		return  120.0f;
+	}
+	
+	float delay = row.getFloat(DELAY);
+	
+	if (delay <= 0.0f || delay >= CAP_SPAWN_TIME)
+	{
+		delay = 120.0f;
+	}
+	
+	return delay;
+}
+
+int getCurrentPop(obj_id self)
+{
+	int current = 0;
+	if (utils.hasScriptVar(self, SCRIPTVAR_CREATIONS))
+	{
+		resizeable obj_id[] npcList = utils.getResizeableObjIdArrayScriptVar (self, SCRIPTVAR_CREATIONS);
+		if (npcList != null)
+		{
+			utils.removeScriptVar (self, SCRIPTVAR_CREATIONS);
+			current = npcList.length;
+		}
+	}
+	return current;
+}
+
+boolean isNpcSentinel(dictionary row, obj_id self)
+{
+	int isSentinel = 0;
+
+	if ( row.containsKey(SENTINEL) )
+		isSentinel = row.getInt(SENTINEL);
+
+
+	if ( isSentinel > 0 )
+		return true;
+
+	return false;
+}
+
+int getMaxPop (dictionary row, obj_id self)
+{
+	int pop = row.getInt (POP);
+
+	if (pop == 0)
+	{
+		pop = 5;
+	}
+	return pop;
+}
+
+float getRadius (dictionary row, obj_id self, int max)
+{
+	if (row == null)
+	{
+		return 1.5f;
+	}
+	float radius = row.getFloat (RADIUS);
+	if (radius < 0)
+	{
+		radius = 1.5f;
+	}
+	if(max > 1 && radius == 0)
+		radius = 1.5f;
+	return radius;
+}
+
+string getScripts (dictionary row, obj_id self)
+{
+	if (row == null)
+	{
+		return "";
+	}
+	string scripts = row.getString(SCRIPTS);
+	return scripts;
+}
+
+boolean usePlanetLevel(dictionary row, obj_id self)
+{
+	if(row == null)
+	{
+		return false;
+	}
+	
+	int useLevel = row.getInt(PLANET_LEVEL);
+
+	return (useLevel == 1);
+}
+
+
+obj_id spawnMob(obj_id spawner, int max, int level, location here, dictionary row)
+{
+	//validate passed in values
+	if(!isIdValid(spawner) || !exists(spawner))
+	{
+		return obj_id.NULL_ID;
+	}
+	
+	if(max <= 0)
+	{
+		return obj_id.NULL_ID;
+	}
+	
+	if(row == null || row.isEmpty())
+	{
+		return obj_id.NULL_ID;
+	}
+
+		
+	//get our data
+	string npcType = getType (row, spawner);
+	float radius = getRadius (row, spawner, max);
+	string scripts = getScripts (row, spawner);
+
+	//randomize our radius
+	if ( radius > 0 )
+	{
+		float newX = rand ((radius*(-1f)), radius);
+		float newZ = rand ((radius*(-1f)), radius);
+
+		here.x = here.x + newX;
+		here.z = here.z + newZ;
+	}
+	
+	//create our mob
+	obj_id npc = create.object(npcType, here, level);
+
+	
+	//add death messageTo
+	create.addDestroyMessage (npc, "interiorNpcDied", 3, spawner);
+	
+	//set Yaw
+	float spawnerYaw = getYaw(spawner);
+	setYaw(npc, spawnerYaw);
+
+	//set behavior
+	if ( isNpcSentinel(row, spawner) )
+	{
+		setObjVar (npc, "SENTINEL", 1);
+		ai_lib.setDefaultCalmBehavior(npc, ai_lib.BEHAVIOR_SENTINEL);
+	}
+	else
+	{
+		setObjVar (npc, "LOITER", 1);
+		ai_lib.setDefaultCalmBehavior(npc, ai_lib.BEHAVIOR_LOITER);
+	}
+	
+	//add any scripts needed
+	if (scripts != null && scripts != "")
+	{
+		npcScriptAttacher (npc, scripts);
+	}
+	//return our mob
+	return npc;
+}
+
+int getRandomPlanetCreatureLevel(obj_id spawner, string npcType, int lastLevel, location here, dictionary row)
+{
+	// get planet level range
+	int minLevel = locations.getMinDifficultyForPlanet(here.area);
+	int maxLevel = locations.getMaxDifficultyForPlanet(here.area);
+
+	utils.setScriptVar(spawner, "testing_planetMinLevel", minLevel);
+	utils.setScriptVar(spawner, "testing_planetMaxLevel", maxLevel);
+	utils.setScriptVar(spawner, "testing_here.area", here.area);
+	
+	int level = minLevel;
+	
+	//get creature data
+	dictionary creatureDict = utils.dataTableGetRow(create.CREATURE_TABLE, npcType);
+
+	//dynamic level for planet
+	if( creatureDict != null )
+	{
+		int baseLevel = creatureDict.getInt("BaseLevel");
+		level = baseLevel;
+
+		if( usePlanetLevel(row, spawner) )
+		{
+			if ( minLevel > 0 && maxLevel > 0 )
+			{
+				if ( level < minLevel || level > maxLevel )
+				{
+					if ( level < minLevel )
+					{
+						level = minLevel;
+					}
+					else if ( level > maxLevel )
+					{
+						level = maxLevel;
+					}
+
+					CustomerServiceLog ("interior_spawner_level", "Spawner " + spawner + " tried to spawn a creature whose base level from creatures.tab ("+ baseLevel +") was outside of the planet's range ("+ minLevel +" to "+ maxLevel +").");
+				}
+			}
+		}
+	}
+
+	//validate level
+	if( level < 1 )
+	{
+		level = 1;
+	}
+
+	/*if( level > 90 )
+	{
+		level = 90;
+	}*/
+	
+	return level;
+}

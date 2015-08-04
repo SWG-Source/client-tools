@@ -1,0 +1,277 @@
+include library.callable;
+include library.space_dungeon;
+include library.sui;
+include library.utils;
+include library.pclib;
+include library.colors_hex;
+include library.pet_lib;
+include library.vehicle;
+include library.transition;
+
+const float distanceMax							= 6.0f;
+const string dataTable							= "datatables/travel/zone_transition.iff";
+const string STF							= "travel/zone_transition";
+
+//Population constants
+const int LIGHT								= 20;
+const int MEDIUM							= 40;
+const int HEAVY								= 60;
+const int FULL								= 80;
+
+const string_id LIGHT_STRING						= new string_id (STF, "population_light");
+const string_id	MEDIUM_STRING						= new string_id (STF, "population_medium");
+const string_id HEAVY_STRING						= new string_id (STF, "population_heavy");
+const string_id FULL_STRING						= new string_id (STF, "population_full");
+
+const string_id zone_unavailable					= new string_id (STF, "zone_unavailable");
+const string_id bad_zone_data						= new string_id (STF, "bad_zone_data");
+const string_id invalid_travel						= new string_id (STF, "invalid_travel");
+
+
+const boolean doLogging							= false;
+
+//--------------------For the temporary speaker hack-------------------
+trigger OnAttach()
+{
+	if (hasScript(self, "item.microphone_and_speaker.speaker"))
+		detachScript(self, "item.microphone_and_speaker.speaker");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	if (hasScript(self, "item.microphone_and_speaker.speaker"))
+		detachScript(self, "item.microphone_and_speaker.speaker");
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info item)
+{
+	//Yanked distance check
+	//if (getDistance(player, self) > distanceMax)
+	//	return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+	{
+		item.addRootMenu(menu_info_types.ITEM_USE, transition.getZoneTransitionString(self));
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if ( item == menu_info_types.ITEM_USE)
+	{
+		utils.dismountRiderJetpackCheck(player);
+		transition.zonePlayer(self, player);
+		utils.dismountRiderJetpackCheck(player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnClusterWideDataResponse(string manage_name, string name, int request_id, string[] element_name_list, dictionary[] data, int lock_key)
+{
+	string transit = getStringObjVar(self, "zoneLine");
+	resizeable obj_id[] building_ids = new obj_id[0];
+	resizeable int[] zone_population = new int[0];
+
+	string destination = dataTableGetString(dataTable, transit, "destination");
+	string[] parse = split(destination, ':');
+
+
+	for (int i = 0; i < data.length; i++)
+	{
+		dictionary dungeon = data[i];
+		building_ids = utils.addElement(building_ids, dungeon.getObjId("building_id"));
+		zone_population = utils.addElement(zone_population, dungeon.getInt("population"));
+	}
+
+	if (parse.length < 1 || data.length < 1)
+	{
+		obj_id player = utils.getObjIdScriptVar(self, "playerId");
+		sendSystemMessage(player, zone_unavailable);
+		releaseClusterWideDataLock(manage_name, lock_key);
+		return SCRIPT_CONTINUE;
+	}
+
+	doLogging("OnCWDResponse", "transit, destination, parse[0], parse[1], parse[2]");
+	doLogging("OnCWDResponse", transit+", "+destination+", "+parse[0]+", "+parse[1]+", "+parse[2]);
+	doLogging("OnCWDResponse", "building_ids[0] = "+building_ids[0]);
+
+	releaseClusterWideDataLock(manage_name, lock_key);
+	handleListBoxZoneSelect(self, parse, building_ids, zone_population);
+	return SCRIPT_CONTINUE;
+}
+
+void handleListBoxZoneSelect(obj_id self, string[] parsedList, resizeable obj_id[] building_ids, resizeable int[] zone_population)
+{
+	obj_id player = utils.getObjIdScriptVar(self, "playerId");
+	string[] zoneList = new string[building_ids.length];
+	int k = 1;
+	for(int i = 0;i<building_ids.length;i++)
+	{
+		zoneList[i] = "@"+transition.getZoneTransitionString(getSelf()) +" "+k+" - "+getColorCodedPopIndex(building_ids[i], zone_population[i]);
+		k++;
+	}
+
+	if (building_ids != null && building_ids.length > 0)
+	{
+		for (int q = 0;q<building_ids.length;q++)
+			doLogging("handleListBoxZoneSelect", "building_ids["+q+"] = "+building_ids[q]);
+	}
+	
+	utils.setScriptVar(player, "zoneTransition", parsedList);
+	utils.setScriptVar(player, "building_ids", building_ids);
+	
+	if ( zoneList.length == 1 )
+	{
+		dictionary webster = new dictionary();
+		webster.put("player", player);
+		webster.put(sui.LISTBOX_LIST + "." + sui.PROP_SELECTEDROW, "0");
+		messageTo(self, "handleSelectDestinationZone", webster, 1, false);
+		
+		utils.setScriptVar(player, "suiListPage", -1);
+	}
+	else
+	{
+		int pid = sui.listbox(self, player, "Select Zone Instance", zoneList, "handleSelectDestinationZone");
+		showSUIPage(pid);
+
+		utils.setScriptVar(player, "suiListPage", pid);
+	}
+}
+
+string getColorCodedPopIndex(obj_id controller, int population)
+{
+	if (population < HEAVY)
+	{
+		if (population < MEDIUM)
+		{
+			if (population < LIGHT)
+			{
+				return  "\\"+colors_hex.LIMEGREEN+"Light"+"\\#";
+			}
+			return "\\"+colors_hex.WHITE+"Medium"+"\\#";
+		}
+		return "\\"+colors_hex.YELLOW+"Heavy"+"\\#";
+	}
+	return "\\"+colors_hex.RED+"Full"+"\\#";
+
+}
+
+messageHandler handleSelectDestinationZone()
+{
+	obj_id player = sui.getPlayerId(params);
+	int idx = sui.getListboxSelectedRow(params);
+	int sui_id = utils.getIntScriptVar(player, "suiListPage");
+
+	doLogging("handleSelectDestinationZone", "Player("+player+") selected row("+idx+")");
+
+	if (idx == -1)
+	{
+		doLogging("handleSelectDestinationZone", "Zone select was empty(-1)");
+		return SCRIPT_CONTINUE;
+	}
+
+
+	string[] parsed_list = utils.getStringArrayScriptVar(player, "zoneTransition");
+	resizeable obj_id[] building_ids = utils.getResizeableObjIdArrayScriptVar(player, "building_ids");
+
+	string world = parsed_list[2];
+	string cell = parsed_list[3];
+	float locX = utils.stringToFloat(parsed_list[4]);
+	float locY = utils.stringToFloat(parsed_list[5]);
+	float locZ = utils.stringToFloat(parsed_list[6]);
+
+	transition.cleanupTempAccessFlag(player);
+	space_dungeon.setInstanceControllerIdOnPlayer(player, building_ids[idx]);
+	doLogging("handleSelectDestinationZone", "Warping player to object("+building_ids[idx]+")");
+	doLogging("handleSelectDestinationZone", "Warp data from table: World/Cell/LocX/LocY/LocZ");
+	doLogging("handleSelectDestinationZone", world+"/"+cell+"/"+locX+"/"+locY+"/"+locZ);
+
+	if (cell.equals("nocell"))
+	{
+		dictionary dict = new dictionary();
+		dict.put("return_address", self);
+		dict.put("player", player);
+		doLogging("handleSelectDestinationZone", "Params put self and player: "+self+", "+player);
+		messageTo(building_ids[idx], "getTargetCoordinates", dict, 1, false);
+	}
+	else
+	{
+		callable.storeCallables(player);
+		utils.dismountRiderJetpackCheck(player);
+		warpPlayer(player, world, locX, locY, locZ, building_ids[idx], cell, locX, locY, locZ);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler recievedTargetCoordinates()
+{
+	location parent = params.getLocation("location");
+	obj_id player = params.getObjId("player");
+	string[] parsed_list = utils.getStringArrayScriptVar(player, "zoneTransition");
+	string world = parsed_list[2];
+	float locX = utils.stringToFloat(parsed_list[4]);
+	float locY = utils.stringToFloat(parsed_list[5]);
+	float locZ = utils.stringToFloat(parsed_list[6]);
+
+	locX += parent.x;
+	locY += parent.y;
+	locZ += parent.z;
+
+	//pet_lib.doDismountNow(player, false);
+	callable.storeCallables(player);
+	utils.dismountRiderJetpackCheck(player);
+	warpPlayer(player, world, locX, locY, locZ, null, locX, locY, locZ);
+	return SCRIPT_CONTINUE;
+}
+
+
+void doLogging(string section, string message)
+{
+	if (doLogging)
+		LOG("debug/zone_transition/"+section, message);
+}
+
+//-----------------------Hacks for running this script on an NPC----------------
+messageHandler handleZoneTransitionRequest()
+{
+	obj_id player = params.getObjId("player");
+	boolean returnToKachirhoGate = params.getBoolean("zoneIn");
+
+	if (returnToKachirhoGate)
+	{
+		string levelWarp = "empty";
+		levelWarp = params.getString("destination");
+		LOG("debug", "levelWarp was: "+levelWarp);
+		if (levelWarp.equals("empty") || levelWarp == null)
+		{
+			string startingLoc = getStringObjVar(self, "startingLocation");
+			string destination = dataTableGetString(dataTable, startingLoc, "destination");
+			string[] parse = split(destination, ':');
+			transition.doZoneToWorld(player, parse);
+		}
+		else
+		{
+			string destination = dataTableGetString(dataTable, levelWarp, "destination");
+			string[] parse = split(destination, ':');
+			LOG("debug", "parsing location to warp offset to pass");
+			LOG("debug", parse[0]+", "+parse[1]+", "+parse[2]+", "+parse[3]);
+			transition.doZoneToWorld(player, parse);
+		}
+	}
+	else
+	{
+		transition.zonePlayer(self, player);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+//----------------------End npc hack--------------------------------------------

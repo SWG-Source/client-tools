@@ -1,0 +1,218 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        ai_corpse_inventory.script
+ * Description:  ai corpse inventory script: to handle transactions with mob inventory
+ * @author       $Author:$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+include library.sui;
+include library.prose;
+include library.spam;
+include library.utils;
+include library.group;
+include library.corpse;
+include library.permissions;
+include library.loot;
+
+/***** INHERITS ********************************************************/
+
+/***** CONSTANTS *******************************************************/
+
+/***** TRIGGER *********************************************************/
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if ( isPlayer(transferer) )
+	{
+		sendSystemMessage(transferer, corpse.SID_REMOVE_ONLY_CORPSE);
+		return SCRIPT_OVERRIDE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	obj_id lootingPlayer = transferer;
+	if (!isIdValid(lootingPlayer) || !isPlayer(lootingPlayer))
+	{
+		lootingPlayer = getContainedBy(destContainer);
+	}
+	
+	if ( isPlayer(lootingPlayer) )
+	{
+		obj_id corpseId = getContainedBy(self);
+		if ( corpseId == null )
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		if (hasObjVar (item, "pickupable"))
+		{
+			obj_id winningPlayer = getObjIdObjVar (item, "pickupable");
+			if (winningPlayer == lootingPlayer)
+			{
+				removeObjVar (item, "unpickable");
+				return SCRIPT_CONTINUE;
+			}
+			string_id noLoot = new string_id (group.GROUP_STF, "no_loot_permission");
+			sendSystemMessage (lootingPlayer, noLoot);
+			return SCRIPT_OVERRIDE;
+		}
+
+		if ( corpse.hasLootPermissions(corpseId, lootingPlayer) )
+		{
+			if (loot.isCashLootItem(item))
+			{
+				int cash = getIntObjVar(item, "loot.cashAmount");
+
+				dictionary data = new dictionary();
+				data.put(corpse.DICT_COINS, cash);
+				data.put(corpse.DICT_CORPSE_ID, corpseId);
+
+				messageTo(lootingPlayer, "handleRequestCoinLoot", data, 0, false);
+
+				destroyObject(item);
+				return SCRIPT_OVERRIDE;
+			}
+			
+			if (group.isGrouped (lootingPlayer))
+			{
+				obj_id team = getGroupObject(lootingPlayer);
+				int lootRule = getGroupLootRule (team);
+
+				if (lootRule == 3)
+				{
+					lootingPlayer = loot.chooseRandomLootPlayerFromGroup (self, lootingPlayer);
+				}
+				else if (lootRule == 1)
+				{
+					// somehow were transfering when not the master looter
+					if (!loot.isMasterLooter (lootingPlayer, true))
+					{
+						return SCRIPT_OVERRIDE;
+					}
+				}
+
+				if (loot.doGroupLooting (corpseId, lootingPlayer, item))
+				{
+					if (canPutIn(item, utils.getInventoryContainer(lootingPlayer)) != 0)
+					{
+						loot.sendGroupLootSystemMessage (item, lootingPlayer, group.GROUP_STF, "full_inventory");
+						return SCRIPT_OVERRIDE;
+					}
+				}
+				else
+				{
+					return SCRIPT_OVERRIDE;
+				}
+			}
+			CustomerServiceLog("Loot", "(" + lootingPlayer + ") " + getName(lootingPlayer) + " is attempting to remove (" + item + ") " + getName(item) + " from (" + self + ")" + getName(self) + " to " + destContainer);
+		}
+		else
+		{
+			sendSystemMessage(lootingPlayer, permissions.SID_INSUFFICIENT_PERMISSIONS);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLostItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if ( !isIdValid(transferer) )
+		return SCRIPT_CONTINUE;
+
+	if ( isPlayer(transferer) )
+	{
+		CustomerServiceLog("Loot", "(" + transferer + ") " + getName(transferer) + " has transferred (" + item + ") " + getName(item) + " from (" + self + ")" + getName(self) + " to " + destContainer);
+
+		obj_id gid = getGroupObject(transferer);
+		if ( isIdValid(gid) )
+		{
+			group.notifyItemLoot(gid, transferer, getContainedBy(self), item);
+		 	return SCRIPT_CONTINUE;
+		}
+
+		prose_package pp = new prose_package();
+		string_id lootMsg = new string_id ("loot_n", "solo_looted");
+		//"You looted %TO from the corpse."
+		pp = prose.setStringId(pp, lootMsg);
+		pp = prose.setTO(pp, item);
+		sendSystemMessageProse(transferer, pp);
+	}
+
+	obj_id[] itemsLeft = getContents(self);
+	if ( (itemsLeft == null) || (itemsLeft.length == 0) )
+	{
+		obj_id corpseId = getContainedBy(self);
+		if (isIdValid(corpseId))
+		{
+			corpse.clearLootMeParticle(corpseId);
+		}
+	}
+
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnOpenedContainer(obj_id whoOpenedMe)
+{
+	obj_id corpseId = getContainedBy(self);
+	if ( corpseId == null )
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	if ( corpse.hasLootPermissions(corpseId, whoOpenedMe) )
+	{
+		corpse.openAICorpse(whoOpenedMe, corpseId);
+
+		int cnt = utils.getIntScriptVar(self, "openCount");
+		cnt++;
+		utils.setScriptVar(self, "openCount", cnt);
+
+
+		utils.setScriptVar(corpseId, "lootTimestamp", getGameTime());
+		
+		return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_OVERRIDE;
+}
+
+trigger OnClosedContainer(obj_id whoClosedMe)
+{
+	int cnt = utils.getIntScriptVar(self, "openCount");
+	cnt--;
+	if ( cnt > 0 )
+	{
+		utils.setScriptVar(self, "openCount", cnt);
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id[] itemsLeft = getContents(self);
+	if ( (itemsLeft == null) || (itemsLeft.length == 0) )
+	{
+		obj_id corpseId = getContainedBy(self);
+		if ( corpseId == null )
+		{
+			return SCRIPT_CONTINUE;
+		}
+
+		if ( !hasObjVar(self, corpse.VAR_HAS_RESOURCE) )
+		{
+			messageTo(corpseId, corpse.HANDLER_CORPSE_EMPTY, null, 0, true);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS **************************************************/
+
+
+/***** FUNCTIONS ********************************************************/
+
+

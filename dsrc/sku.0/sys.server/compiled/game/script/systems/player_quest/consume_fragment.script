@@ -1,0 +1,163 @@
+//----------------------------------------------------------
+//libraries
+include library.collection;
+include library.groundquests;
+include library.pgc_quests;
+include library.static_item;
+include library.storyteller;
+include library.sui;
+include library.utils;
+
+//----------------------------------------------------------
+//constants
+
+const string PID_NAME			= "chronicleFragmentReconstruct";
+
+//----------------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	//can only consume if you have it picked up
+	if( utils.isNestedWithinAPlayer(self) && getCount(self) >= 10 )
+	{
+		mi.addRootMenu (menu_info_types.SERVER_MENU11, new string_id("saga_system", "fragment_recontruct"));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	sendDirtyObjectMenuNotification(self);
+	if (  utils.isNestedWithinAPlayer(self) )
+	{
+		if ( item == menu_info_types.SERVER_MENU11 )
+		{
+			if ( getCount(self) >= 10 )
+			{
+				//getUiConsumeMessageBox(self, player, "fragment_reconstruct_item_prompt", "fragment_reconstruct_item_title", "handlerSuiFragmentReconstruct");
+				reconstructFragment(player, self);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+	
+	if( exists(self) )
+	{
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+boolean getUiConsumeMessageBox(obj_id self, obj_id player, string prompt, string title, string handler)
+{
+	if( !isValidId(self) || !isValidId(player) )
+	{
+		return false;
+	}
+	
+	string_id prompt_sid = new string_id("saga_system", prompt);
+	string_id title_sid = new string_id("saga_system", title);
+	int pid = sui.msgbox(self, player, "@" + prompt_sid, sui.YES_NO, "@" + title_sid, handler);
+	sui.setPid(player, pid, PID_NAME);
+
+	return true;
+}
+
+messageHandler handlerSuiFragmentReconstruct()
+{
+	//check params
+	if( params == null || params.isEmpty() )
+		return SCRIPT_CONTINUE;
+	
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	
+	if( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+
+	if( !sui.hasPid(player, PID_NAME) )
+		return SCRIPT_CONTINUE;
+
+	if( !utils.isNestedWithin(self, player) )
+	{
+		sui.removePid(player, PID_NAME);
+		return SCRIPT_CONTINUE;
+	}
+	
+	reconstructFragment(player, self);
+	return SCRIPT_CONTINUE;
+}
+	
+void reconstructFragment(obj_id player, obj_id self)
+{
+	if( !utils.isNestedWithin(self, player) )
+	{
+		return;
+	}
+	
+	obj_id playerInventory = utils.getInventoryContainer(player);
+	int relicQualitySkillmod = getEnhancedSkillStatisticModifierUncapped(player, pgc_quests.PGC_SKILLMOD_RELIC_QUALITY);
+	
+	resizeable string[] relicReferences = new string[0];
+		
+	int num_items = dataTableGetNumRows(storyteller.STORYTELLER_DATATABLE);
+	for (int i = 0; i < num_items; i++)
+	{
+		dictionary row = dataTableGetRow(storyteller.STORYTELLER_DATATABLE, i);
+		if ( row != null && !row.isEmpty() )
+		{
+			int relic_tier = row.getInt("relic_tier");
+			if ( relic_tier > 0 && relicQualitySkillmod >= relic_tier )
+			{
+				string row_lootCategory = row.getString("relicLootCatergory");
+				if ( row_lootCategory.indexOf("no_loot") < 0 )
+				{
+					string token_reference = row.getString("name");
+					relicReferences = utils.addElement(relicReferences, token_reference);
+				}
+			}
+		}
+	}
+	
+	int relicMasterySkillmod = getEnhancedSkillStatisticModifierUncapped(player, pgc_quests.PGC_SKILLMOD_RELIC_MASTERY);
+	
+	string relicName = relicReferences[rand(0, relicReferences.length-1)];
+	int relicCount = 1;
+	if ( relicQualitySkillmod > 0 )
+	{
+		relicCount += rand(1,relicQualitySkillmod);
+	}
+	obj_id relic = static_item.createNewItemFunction(relicName, playerInventory, relicCount);
+	pgc_quests.sendPlacedInInventorySystemMessage(player, relic);
+	
+	// CS Log
+	pgc_quests.logRelic(player, obj_id.NULL_ID, "Player reconstructed some fragments into a chronicle relic and received "+relicCount+" x "+relicName+"("+relic+")");
+	
+	incrementCount(self, -10);
+	if ( getCount(self) <= 0 )
+	{
+		destroyObject(self);
+	}
+	
+	sui.removePid(player, PID_NAME);
+	return;
+}
+

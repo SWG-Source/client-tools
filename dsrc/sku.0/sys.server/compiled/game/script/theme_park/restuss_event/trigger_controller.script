@@ -1,0 +1,160 @@
+include library.ai_lib;
+include library.utils;
+include library.trial;
+include library.create;
+include library.restuss_event;
+include library.factions;
+
+const boolean LOGGING					= true;
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id whoTriggeredMe)
+{
+	if (!isDesiredTargetType(whoTriggeredMe))
+		return SCRIPT_CONTINUE;
+		
+	if (!canTriggerFire(self))
+		return SCRIPT_CONTINUE;
+	
+	executeTrigger(self, whoTriggeredMe);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler triggerSetup()
+{
+	createTriggerVolume(params.getString("name"), utils.stringToFloat(params.getString("size")), true);
+	setName(self, params.getString("name"));
+	setObjVar(self, restuss_event.TRIGGER_NAME, params.getString("name"));
+	setObjVar(self, restuss_event.TRIGGER_INTEREST, params.getString("triggerInterest"));
+	setObjVar(self, restuss_event.TRIGGER_OCCURANCE, utils.stringToInt(params.getString("occurance")));
+	setObjVar(self, restuss_event.TRIGGER_DELAY, utils.stringToFloat(params.getString("triggerDelay")));
+	setObjVar(self, restuss_event.TRIGGER_TYPE, params.getString("triggerType"));
+	return SCRIPT_CONTINUE;
+}
+
+boolean isDesiredTargetType(obj_id target)
+{
+	string targetType = getStringObjVar(getSelf(), restuss_event.TRIGGER_INTEREST);
+
+	if (isIncapacitated(target) && isDead(target))
+		return false;
+		
+	if (targetType.equals("omni"))
+		return true;
+		
+	if (targetType.startsWith("player"))
+		return isPlayer(target);
+		
+	if (targetType.equals("npc"))
+		return ai_lib.isNpc(target);
+		
+	if (targetType.startsWith("faction"))
+	{
+		string[] factionParse = split(targetType, '-');
+		if (factionParse == null || factionParse.length < 2)
+		{
+			doLogging("isDesiredTargetType", "Faction Parse was null or less than 2 entries in length");
+			return false;
+		}
+		
+		string specified = "omni";
+		if (factionParse.length == 3)
+			specified = factionParse[1];	
+		
+		
+		if (isPlayer(target) && (specified.equals("omni") || specified.equals("player")))
+		{
+			if (factionParse[2].equals("rebel"))
+				return factions.isRebel(target) && !factions.isOnLeave(target);
+
+			if (factionParse[2].equals("imperial"))
+				return factions.isImperial(target) && !factions.isOnLeave(target);
+
+			if (factionParse[2].equals("neutral"))
+				return factions.isNeutral(target);
+		}
+		else if (!isPlayer(target) && (specified.equals("omni") || specified.equals("npc")))
+		{
+			//string creature = getStringObjVar(target, "ai.creatureBaseName");
+			//string socialGroup = dataTableGetString("datatables/mob/creatures.iff", creature, "socialGroup");
+			string socialGroup = getStringObjVar(target, "socialGroup");
+			if (socialGroup != null && !socialGroup.equals(""))
+			{
+				if (factionParse[2].equals(socialGroup))
+					return true;
+			}
+		}	
+		
+	}
+		
+	return false;	
+}
+
+
+boolean canTriggerFire(obj_id self)
+{
+	int occurance = getIntObjVar(self, restuss_event.TRIGGER_OCCURANCE);
+	if (occurance == -1)//Once
+	{
+		if (utils.hasScriptVar(self, "trigger.lastFire"))
+			return false;
+		else
+		{
+			utils.setScriptVar(self, "trigger.lastFire", getGameTime());
+			return true;
+		}
+	}
+	
+	if (occurance == 0)//As many times as you want
+		return true;
+		
+	if (!utils.hasScriptVar(self, "trigger.lastFire"))//We are looking for time delays, and this is the first trip
+	{
+		utils.setScriptVar(self, "trigger.lastFire", getGameTime());
+		return true;
+	}
+	
+	int lastFire = utils.getIntScriptVar(self, "trigger.lastFire");
+	
+	if (getGameTime() - lastFire >= occurance)//The passage of time between this trip and the last fire is greater than the occurance.
+	{
+		utils.setScriptVar(self, "trigger.lastFire", getGameTime());
+		return true;
+	}
+		
+	return false;	
+}
+
+void executeTrigger(obj_id self, obj_id perp)
+{
+	obj_id parent = trial.getParent(self);
+	dictionary dict = trial.getSessionDict(parent);
+	dict.put("triggerName", getStringObjVar(self, restuss_event.TRIGGER_NAME));
+	dict.put("triggerType", getStringObjVar(self,restuss_event.TRIGGER_TYPE));
+	dict.put("perp", perp);
+	float triggerDelay = getFloatObjVar(self, restuss_event.TRIGGER_DELAY);
+	string triggerType = getStringObjVar(self, restuss_event.TRIGGER_TYPE);
+	
+	if (triggerType.equals("triggerId"))
+		messageTo(parent, "triggerFired", dict, triggerDelay, false);
+	if (triggerType.equals("signalMaster"))
+		messageTo(parent, dict.getString("triggerName"), dict, triggerDelay, false);
+	if (triggerType.equals("targetMessage"))
+	{
+		messageTo(parent, "sendProxySignal", dict, triggerDelay, false);
+	}
+	
+	if (triggerType.equals("taskId"))
+	{
+		dict = trial.getSessionDict(trial.getParent(self), "wfc_signal");
+		dict.put("waitForComplete", getStringObjVar(self, restuss_event.TRIGGER_NAME));
+	
+		messageTo(trial.getParent(self), "waitForComplete", dict, 0.0f, false);
+	}
+		
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING)
+		LOG("doLogging/trigger_controller/"+section, message);	
+}

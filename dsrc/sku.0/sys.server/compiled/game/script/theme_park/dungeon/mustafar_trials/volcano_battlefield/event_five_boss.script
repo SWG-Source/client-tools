@@ -1,0 +1,456 @@
+include library.ai_lib;
+include library.utils;
+include library.create;
+include library.buff;
+include library.dot;
+include library.combat;
+include library.prose;
+include library.trial;
+
+const string GUARD					= "som_volcano_five_septipod";
+const string MIDGUARD					= "som_volcano_five_midguard";
+
+const int SWITCH_RECAST					= 18;
+const int DISTRACTION_RECAST				= 24;
+const int DEBUFF_RECAST					= 30;
+
+
+const boolean LOGGING					= false;
+
+
+trigger OnAttach()
+{
+	trial.bumpSession(self);
+	trial.setHp(self, trial.HP_VOLCANO_FIVE_BOSS);
+	setInvulnerable(self, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnIncapacitated(obj_id killer)
+{
+	trial.bumpSession(self);
+	obj_id parent = trial.getParent(self);
+	
+	dictionary dict = new dictionary();
+	dict.put("type", "boss");
+	if (isIdValid(parent))
+		messageTo(parent, "eventMobDied", dict, 0, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	startEventActions(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnExitedCombat()
+{
+	if (!isDead(self))
+		verifyHealthReset(self);
+		
+	endEventActions(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLostTarget(obj_id oldTarget)
+{
+	messageTo(self, "applyDistraction", trial.getSessionDict(self), 3, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler activate()
+{
+	setInvulnerable(self, false);
+	return SCRIPT_CONTINUE;
+}
+
+void startEventActions(obj_id self)
+{
+	messageTo(self, "doAEBurst", trial.getSessionDict(self), 4, false);
+	messageTo(self, "switchTarget", trial.getSessionDict(self), 24, false);
+	messageTo(self, "applyDistraction", trial.getSessionDict(self), 3, false);
+}
+
+void endEventActions(obj_id self)
+{
+	trial.bumpSession(self);	
+}
+
+
+trigger OnCreatureDamaged(obj_id attacker, obj_id weapon, int[] damage)
+{
+	float max = (float)getMaxHealth(self);
+	float current = (float)getHealth(self);
+	float ratio = current/max;
+	if (ratio <= 0.8)
+	{
+		if (ratio <= 0.6)
+		{
+			if (ratio <= 0.5)
+			{
+				if (ratio <= 0.4)
+				{
+					if (ratio <= 0.2)
+					{
+						spawnTrioAdd(self, 20);
+						return SCRIPT_CONTINUE;
+					}
+					spawnTrioAdd(self, 40);
+					return SCRIPT_CONTINUE;
+				}
+				spawnMidGuard(self);
+				return SCRIPT_CONTINUE;
+			}
+			spawnTrioAdd(self, 60);
+			return SCRIPT_CONTINUE;
+		}
+		spawnTrioAdd(self, 80);
+		return SCRIPT_CONTINUE;
+	}
+	return SCRIPT_CONTINUE;
+}
+
+void verifyHealthReset(obj_id self)
+{
+	if (isInvulnerable(self))
+	{
+		doLogging("verifyHealthReset", "Out of combat due to invulnerability, do not remove triggers");
+		return;
+	}
+	else
+	{
+		doLogging("verifyHealthReset", "I am out of combat and not invulnerable, heal and remove triggers");
+		int max = getMaxHealth(self);
+		int current = getHealth(self);
+		int toHeal = max - current;
+		addToHealth(self, toHeal);
+		string[] healthObjVar = {"spawned80","spawned60","spawnedMidguard","spawned40","spawned20", "deadMidguard"};
+		utils.removeObjVarList(self, healthObjVar);
+		clearAllAdds(self);
+		ai_lib.clearCombatData();
+		setInvulnerable(self,true);
+	}
+}
+
+messageHandler eventMobDied()
+{
+	string type = params.getString("type");
+	if (type.equals("trio"))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	else if (type.equals("midguard"))
+	{
+		int count = 0;
+		if (hasObjVar(self, "deadMidguard"))
+			count = getIntObjVar(self, "deadMidguard");
+	
+		count += 1;
+		
+		if (count == 6)
+		{
+			resumeAttack(self);
+			return SCRIPT_CONTINUE;
+		}
+		
+		setObjVar(self, "deadMidguard", count);
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+	
+}
+
+void resumeAttack(obj_id self)
+{
+	setInvulnerable(self, false);
+	obj_id[] players = trial.getValidTargetsInRadius(self, 200.0f);
+	if (players == null || players.length == 0)
+	{
+		verifyHealthReset(self);
+		return;
+	}
+	
+	obj_id toAttack = trial.getClosest(self, players);
+	startCombat(self, toAttack);
+}
+
+void clearAllAdds(obj_id self)
+{
+	obj_id[] objects = trial.getChildrenInRange(self, self, 200.0f);
+	if (objects == null || objects.length == 0)
+	{
+		doLogging("clearAllAdds", "There are no objects in range");
+		return;
+	}
+	
+	for (int i=0;i<objects.length;i++)
+	{
+		trial.cleanupNpc(objects[i]);
+	}
+}
+
+void spawnTrioAdd(obj_id self, int value)
+{
+	string spawned = "spawned"+Integer.toString(value);
+	if (!hasObjVar(self, spawned))
+	{
+		messageTo(self, "spawnTrioAdd", null, 0, false);
+		setObjVar(self, spawned, true);
+		return;
+	}
+}
+
+void spawnMidGuard(obj_id self)
+{
+	if (!hasObjVar(self, "spawnedMidguard"))
+	{
+		setInvulnerable(self, true);
+		clearHateList(self);
+		stopCombat(self);
+		setObjVar(self, "spawnedMidguard", true);
+		messageTo(self, "spawnMidGuard", null, 5, false);
+		return;
+	}
+}
+
+messageHandler applyDistraction()
+{
+	if (!trial.verifySession(self, params))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id target = getTarget(self);
+	buff.applyBuff(target, "distraction");
+	messageTo(self, "applyDistraction", trial.getSessionDict(self), DISTRACTION_RECAST, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnTrioAdd()
+{
+	location[] spawnLocs = getAddSpawnLocations(self, 400, "trioAddSpawn");
+	obj_id[] players = trial.getValidTargetsInRadius(self, 150.0f);
+	boolean notify = true;
+	
+	if (players == null || players.length == 0)
+	{
+		notify = false;
+	}
+	
+	if (spawnLocs == null || spawnLocs.length == 0)
+	{
+		doLogging("spawnTrioAdd", "Could not find a valid spawn location");
+		return SCRIPT_CONTINUE;
+	}
+	
+	for (int k=0;k<spawnLocs.length;k++)
+	{
+		obj_id beetle = create.object(GUARD, spawnLocs[k]);
+
+		if (!isIdValid(beetle))
+		{
+			doLogging("spawnTrioAdd", "Attemplted to create beetle but failed");
+			return SCRIPT_CONTINUE;
+		}
+		setYaw(beetle, rand(0, 360));
+		attachScript(beetle, "theme_park.dungeon.mustafar_trials.volcano_battlefield.event_five_guard");
+		trial.setParent(self, beetle, false);
+	}
+	
+	
+	if (notify)
+	{
+		prose_package pp = prose.getPackage(trial.VOLCANO_OPP_ADD_NOTIFY, self);
+	
+		for (int i=0;i<players.length;i++)
+		{
+			sendSystemMessageProse(players[i], pp);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler spawnMidGuard()
+{
+	location[] spawnLocs = getAddSpawnLocations(self, 400 , "midguardSpawn");
+	obj_id[] players = trial.getValidTargetsInRadius(self, 150.0f);
+	boolean notify = true;
+	
+	if (players == null || players.length == 0)
+	{
+		notify = false;
+	}
+	
+	if (spawnLocs == null || spawnLocs.length == 0)
+	{
+		doLogging("spawnTrioAdd", "Could not find a valid spawn location");
+		return SCRIPT_CONTINUE;
+	}
+	
+	for (int k=0;k<spawnLocs.length;k++)
+	{
+		obj_id beetle = create.object(MIDGUARD, spawnLocs[k]);
+
+		if (!isIdValid(beetle))
+		{
+			doLogging("spawnTrioAdd", "Attemplted to create beetle but failed");
+			return SCRIPT_CONTINUE;
+		}
+		setYaw(beetle, rand(0, 360));
+		attachScript(beetle, "theme_park.dungeon.mustafar_trials.volcano_battlefield.event_five_midguard");
+		trial.setParent(self, beetle, false);
+	}
+	
+	if (notify)
+	{
+		prose_package pp = prose.getPackage(trial.VOLCANO_OPP_MIDGUARD, self);
+	
+		for (int i=0;i<players.length;i++)
+		{
+			sendSystemMessageProse(players[i], pp);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+location[] getAddSpawnLocations(obj_id self, float range, string type)
+{
+	obj_id[] objects = getObjectsInRange(self, range);
+	
+	if (objects == null || objects.length == 0)
+	{
+		doLogging("getTrioSpawnLocations", "There were no objects in range");
+		return null;
+	}
+	
+	resizeable location[] validLoc = new location[0];
+		
+	for (int i=0;i<objects.length;i++)
+	{
+		if (hasObjVar(objects[i], type))
+			utils.addElement(validLoc, getLocation(objects[i]));
+	}
+	
+	if (validLoc == null || validLoc.length == 0)
+	{
+		doLogging("getAddSpawnLocations", "The specified spawn locations could not be found");
+		return null;
+	}
+	
+	location[] goodLoc = validLoc;
+	
+	return goodLoc;
+}
+
+string[] getDebuffEffects(obj_id self)
+{
+	
+	string[] hamTypes ={"bio_etheric_shock","torpor","vacuity"};
+	string[] debuffTypes ={"lethargy","wavering","toxic_dissolution"};
+	string[] skillTypes ={"obfuscation","confusion","corrosion"};
+
+	string hamType = getAEType(self, "debuff.ham", hamTypes);
+	string debuffType = getAEType(self, "debuff.debuff", debuffTypes);
+	string skillType = getAEType(self, "debuff.skill", skillTypes);
+
+	string[] returnTypes = {hamType, debuffType, skillType};
+	return returnTypes;
+}
+
+string getAEType(obj_id self, string tracking, string[] choices)
+{
+
+	int idx = 0;
+	if (utils.hasScriptVar(self, tracking))
+		idx = utils.getIntScriptVar(self, tracking);
+		
+			
+	string nextDebuff = choices[idx];
+	idx += 1;
+
+	if (idx > choices.length -1)
+		idx = 0;
+		
+	utils.setScriptVar(self, tracking, idx);
+	
+	return nextDebuff;	
+}
+	
+
+messageHandler doAEBurst()
+{
+	if (!trial.verifySession(self, params))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	string[] effects = getDebuffEffects(self);
+	
+	applyAEDebuffs(self, effects);
+	
+	messageTo(self, "doAEBurst", trial.getSessionDict(self), DEBUFF_RECAST, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+void applyAEDebuffs(obj_id self, string[] effects)
+{
+	obj_id[] players = trial.getValidTargetsInRadius(self, 400.0f);
+	
+	if (players == null || players.length == 0)
+	{
+		doLogging("applyAEDebuffs", "Could find no valid players to afflict");
+		return;
+	}
+	
+	for (int i=0;i<players.length;i++)
+	{
+		for (int k=0;k<effects.length;k++)
+		{
+			buff.applyBuff(players[i], effects[k]);
+		}
+	}
+}
+
+messageHandler switchTarget()
+{
+	
+	if(!trial.verifySession(self, params))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] enemies = getHateList(self);
+	
+	if (enemies == null || enemies.length == 0)
+	{
+		doLogging("switchTarget", "I dont' hate anyone");
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (enemies.length == 1)
+	{
+		messageTo(self, "switchTarget", trial.getSessionDict(self), SWITCH_RECAST, false);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id target = getTarget(self);
+	buff.applyBuff(target, "enfeeble");
+	setHate(self, target, 1f);
+	
+	messageTo(self, "switchTarget", trial.getSessionDict(self), SWITCH_RECAST, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+void doLogging(string section, string message)
+{
+	if (LOGGING || trial.VOLCANO_LOGGING)
+		LOG("logging/event_five_boss/"+section, message);	
+}

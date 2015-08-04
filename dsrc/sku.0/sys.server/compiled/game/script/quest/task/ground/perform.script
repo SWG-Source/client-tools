@@ -1,0 +1,359 @@
+// ======================================================================
+
+include library.groundquests;
+include library.performance;
+include library.utils;
+
+// ----------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ----------------------------------------------------------------------
+
+//-- data table columns
+const String dataTableColumnPerformBuilding = "PERFORM_BUILDING";
+const String dataTableColumnPerformCellname = "PERFORM_CELLNAME";
+const String dataTableColumnPerformDuration = "PERFORM_DURATION";
+const String dataTableColumnPerformType = "PERFORM_TYPE";
+const String dataTableColumnVisible = "IS_VISIBLE";
+
+//-- object variables
+const String performEndTimeVarName = "performEndTime";
+const String performCurrentlyPerformingVarName = "performCurrentlyPerforming";
+
+//-- task info
+const String taskType = "perform";
+const String dot = ".";
+
+// ----------------------------------------------------------------------
+
+//fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+
+	groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+	clearPerformObjVars(self, questCrc, taskId);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + " task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+//fires when the task is cleared
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnLogout()
+{
+	groundquests.questOutputDebugLog(taskType, "OnLogout", "start");
+
+	playerStoppedPerforming(self, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	playerStoppedPerforming(self, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+commandHandler handleClientLogin()
+{
+	groundquests.questOutputDebugLog(taskType, "handleClientLogin", "start");
+
+	dictionary tasks = groundquests.getActiveTasksForTaskType(self, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for (int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+
+				groundquests.questOutputDebugLog(taskType, "handleClientLogin", "Processing task " + taskId);
+
+				String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+				boolean isCurrentlyPerforming = getBooleanObjVar(self, baseObjVar + dot + performCurrentlyPerformingVarName);
+				boolean isVisible = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnVisible) != 0;
+			   
+				//-- only set a timer on the client for visible timers if the player is still performing
+				if (!isCurrentlyPerforming || !isVisible)
+					continue;
+
+				int endTime = getIntObjVar(self, baseObjVar + dot + performEndTimeVarName);
+
+				groundquests.questOutputDebugLog(taskType, "handleClientLogin", "Updating client journal timer: " + endTime);
+
+				questSetQuestTaskTimer(self, questGetQuestName(questCrc), taskId, "quest/groundquests:timer_timertext", endTime);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler startPerform()
+{
+	groundquests.questOutputDebugLog(taskType, "startPerform", "start");
+
+	dictionary tasks = groundquests.getActiveTasksForTaskType(self, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for (int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+
+				groundquests.questOutputDebugLog(taskType, "startPerform", "Processing task " + taskId);
+
+				String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+			   
+				int desiredPerformType = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnPerformType);
+				int currentPerformType = params.getInt(groundquests.PERFORM_TYPE);
+				boolean rightType = desiredPerformType == 0 || desiredPerformType == currentPerformType;
+
+				if (!rightType)
+				{
+					clearPerformObjVars(self, questCrc, taskId);
+					continue;
+				}
+
+				boolean rightLocation = true;
+
+				String cellname = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnPerformCellname);
+
+				//-- if a cellname is specified in the quest, use that to determine right location
+				if (cellname != null && cellname.length() != 0)
+				{
+					location playerLocation = getLocation(self);
+					rightLocation = getCellName(playerLocation.cell).equals(cellname);
+				}
+				else
+				{
+					String building = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnPerformBuilding);
+	
+					if (utils.stringToInt(building) != 0)
+					{
+						obj_id buildingObjId = utils.stringToObjId(building);
+						
+						rightLocation = performance.isInRightBuilding(self, buildingObjId);
+					}
+				}
+
+				if (!rightLocation)
+				{
+					clearPerformObjVars(self, questCrc, taskId);
+					continue;
+				}
+
+				int performDuration = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnPerformDuration);
+
+				if (performDuration <= 0)
+				{
+					groundquests.questOutputDebugLog(taskType, "startPerform", "performDuration invalid, set to 10 seconds");
+					performDuration = 10;
+				}
+
+				int performEndTime = performDuration + performGetTime(self);
+
+				groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "Setting performance end time to " + performEndTime + " seconds.");
+
+				setObjVar(self, baseObjVar + dot + performEndTimeVarName, performEndTime);
+				setObjVar(self, baseObjVar + dot + performCurrentlyPerformingVarName, true);
+
+				sendCheckPerformanceComplete(self, questCrc, taskId, performDuration);
+
+				//-- only set a timer on the client for visible timers	
+				int isVisible = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnVisible);
+				if(isVisible != 0)
+					questSetQuestTaskTimer(self, questGetQuestName(questCrc), taskId, "quest/groundquests:timer_timertext", performEndTime);
+			}
+		}
+	}
+
+	groundquests.questOutputDebugLog(taskType, "startPerform", "end");
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler stopPerform()
+{
+	groundquests.questOutputDebugLog(taskType, "stopPerform", "start");
+
+	playerStoppedPerforming(self, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler CheckPerformanceComplete()
+{
+	groundquests.questOutputDebugLog(taskType, "CheckPerformanceComplete", "start");
+
+	int questCrc = params.getInt("questcrc");
+	int taskId   = params.getInt("taskid");
+
+	if (questIsTaskActive(questCrc, taskId, self))
+	{
+		groundquests.questOutputDebugLog(taskType, "CheckPerformanceComplete", "quest task is active");
+
+		String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+
+		boolean isCurrentlyPerforming = getBooleanObjVar(self, baseObjVar + dot + performCurrentlyPerformingVarName);
+
+		if (isCurrentlyPerforming)
+		{
+			int endTime = getIntObjVar(self, baseObjVar + dot + performEndTimeVarName);
+			int remainingTime = endTime - performGetTime(self);
+
+			groundquests.questOutputDebugLog(taskType, "CheckPerformanceComplete", "endTime = " + endTime);
+
+			if (endTime > 0 && remainingTime <= 1)
+			{
+				questCompleteTask(questCrc, taskId, self);
+			}
+			else
+			{
+				groundquests.questOutputDebugLog(taskType, "CheckPerformanceComplete", "not finished yet");
+				sendCheckPerformanceComplete(self, questCrc, taskId, remainingTime);
+			}
+		}
+		else
+		{
+			groundquests.questOutputDebugLog(taskType, "CheckPerformanceComplete", "player currently not performing");
+		}
+	}
+
+	groundquests.questOutputDebugLog(taskType, "CheckPerformanceComplete", "end");
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+void clearPerformObjVars(obj_id player, int questCrc, int taskId)
+{
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+
+	setObjVar(player, baseObjVar + dot + performEndTimeVarName, 0);
+	setObjVar(player, baseObjVar + dot + performCurrentlyPerformingVarName, false);
+}
+
+// ----------------------------------------------------------------------
+
+void playerStoppedPerforming(obj_id player, boolean updateQuestTimer)
+{
+	//-- run through every active task of this type clear the perform object vars
+	dictionary tasks = groundquests.getActiveTasksForTaskType(player, taskType);
+	if ((tasks != null) && !tasks.isEmpty())
+	{
+		java.util.Enumeration keys = tasks.keys();
+		while (keys.hasMoreElements())
+		{
+			String questCrcString = (string)keys.nextElement();
+			int questCrc = utils.stringToInt(questCrcString);
+
+			int[] tasksForCurrentQuest = tasks.getIntArray(questCrcString);
+
+			for (int i = 0; i < tasksForCurrentQuest.length; ++i)
+			{
+				int taskId = tasksForCurrentQuest[i];
+
+				clearPerformObjVars(player, questCrc, taskId);
+
+				boolean isVisible = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnVisible) != 0;
+				if (updateQuestTimer && isVisible)
+					questSetQuestTaskTimer(player, questGetQuestName(questCrc), taskId, "quest/groundquests:timer_timertext", performGetTime(player));
+			}
+		}
+	}
+}
+
+// ----------------------------------------------------------------------
+
+int performGetTime(obj_id player)
+{
+	return getPlayerPlayedTime(player);
+}
+
+// ----------------------------------------------------------------------
+
+void sendCheckPerformanceComplete(obj_id player, int questCrc, int taskId, int delay)
+{
+	groundquests.questOutputDebugLog(taskType, "sendCheckPerformanceComplete", "sending check message for delay [" + delay + "]");
+
+	dictionary params = new dictionary();
+	params.put("questcrc", questCrc);
+	params.put("taskid", taskId);
+
+	messageTo(player, "CheckPerformanceComplete", params, delay, false);
+}
+
+// ----------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ======================================================================

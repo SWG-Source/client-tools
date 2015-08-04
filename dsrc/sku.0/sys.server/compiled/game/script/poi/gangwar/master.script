@@ -1,0 +1,418 @@
+/**
+ * Copyright (c) ©2000,2001 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        master.script
+ * Description:  master poi object script: POI = gangwar
+ * @author       $Author: breinhart $
+ * @version      $Revision: #1 $
+ */
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.poi;
+include library.scenario;
+include library.ai_lib;
+
+//------------------------------------------------
+// Inherits
+//------------------------------------------------
+
+inherits theme_park.poi.base;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+const string SCENARIO_NAME					= "gangwar";
+
+const string LOG_NAME						= "poiGangWar Master";
+
+const string BASE_PATH						= "poi." + SCENARIO_NAME;
+
+const string SCRIPT_ANTAGONIST				= BASE_PATH + ".antagonist";
+const string SCRIPT_MEDIATOR				= BASE_PATH + ".mediator";
+
+const string TBL							= "datatables/poi/" + SCENARIO_NAME + "/setup.iff";
+
+const string MEDIATOR_THUG_TYPE				= "MEDIATOR_THUG_TYPE";
+const string MEDIATOR_LEADER_TYPE			= "MEDIATOR_LEADER_TYPE";
+const string MEDIATOR_BEAST_TYPE			= "MEDIATOR_BEAST_TYPE";
+const string MEDIATOR_COUNT					= "MEDIATOR_COUNT";
+
+const string ANTAGONIST_THUG_TYPE			= "ANTAGONIST_THUG_TYPE";
+const string ANTAGONIST_LEADER_TYPE			= "ANTAGONIST_LEADER_TYPE";
+const string ANTAGONIST_BEAST_TYPE			= "ANTAGONIST_BEAST_TYPE";
+const string ANTAGONIST_COUNT				= "ANTAGONIST_COUNT";
+
+const string TAUNTS							= "TAUNTS";
+
+const int	 DEFAULT_ANTAGONIST_COUNT		= 1;
+
+const int	 mediatorCoordsX[]				= { -13,  -12,  -5,  3 };
+const int	 mediatorCoordsZ[]				= { 0, -15,  13,  -15 };
+
+const int	 MAX_DIFF						= 70;
+
+const string joyEmotes[] = { "cheer", "applaud", "laugh", "yes", "glow" };
+
+//------------------------------------------------
+// Methods
+//------------------------------------------------
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	if ( !scenario.initScenario( self, TBL ) )
+		scenario.cleanup( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnInitialize
+//------------------------------------------------
+
+trigger OnInitialize()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// OnUnloadedFromMemory
+//------------------------------------------------
+
+trigger OnUnloadedFromMemory()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// cleanupScenario
+//------------------------------------------------
+
+messageHandler cleanupScenario()
+{
+	scenario.cleanup( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// destroySelf
+//------------------------------------------------
+
+messageHandler destroySelf()
+{
+	destroyObject( self );
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initScenario
+//
+// Called by message from OnAttach.
+// This calls all methods necessary to set up the POI.
+//------------------------------------------------
+
+messageHandler initScenario()
+{
+	// Validate parameters.
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		scenario.cleanup(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Environment Setup
+	*/
+
+	// Get our mediator types.
+	setObjVar( self, MEDIATOR_THUG_TYPE, 	params.getString( MEDIATOR_THUG_TYPE ) );
+	setObjVar( self, MEDIATOR_LEADER_TYPE, 	params.getString( MEDIATOR_LEADER_TYPE ) );
+	setObjVar( self, MEDIATOR_BEAST_TYPE, 	params.getString( MEDIATOR_BEAST_TYPE ) );
+	setObjVar( self, MEDIATOR_COUNT, 		params.getInt( MEDIATOR_COUNT ) );
+
+	// Get our antagonist type.
+	setObjVar( self, ANTAGONIST_THUG_TYPE, 	params.getString( ANTAGONIST_THUG_TYPE ) );
+	setObjVar( self, ANTAGONIST_LEADER_TYPE,params.getString( ANTAGONIST_LEADER_TYPE ) );
+	setObjVar( self, ANTAGONIST_BEAST_TYPE, params.getString( ANTAGONIST_BEAST_TYPE ) );
+	setObjVar( self, ANTAGONIST_COUNT, 		params.getInt( ANTAGONIST_COUNT ) );
+
+	// Are we using taunts?
+	setObjVar( self, TAUNTS, params.getString( TAUNTS ) );
+
+	// Create teams.
+	scenario.createTeam( self, "mediator", self.toString() + "_mediator" );
+	scenario.createTeam( self, "antagonist", self.toString() + "_antagonist" );
+
+	/*
+	Spawn Antagonist
+	*/
+
+	if ( !createAntagonist( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !createAntagonistMinions( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	/*
+	Spawn Mediators
+	*/
+
+	if ( !createMediator( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( !createMediatorMinions( self ) )
+	{
+		scenario.cleanup( self );
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// createAntagonist
+//------------------------------------------------
+
+boolean createAntagonist( obj_id self )
+{
+	// Spawn the scenario antagonist.
+	string type = getStringObjVar( self, ANTAGONIST_LEADER_TYPE );
+	string ident = "antagonist_0";
+	location loc = getLocation( self );
+	obj_id antagonist = scenario.createTeamNpc( self, "antagonist", type, ident, loc );
+	if ( (antagonist == null) || (antagonist == obj_id.NULL_ID) )
+		return false;
+
+	// Assign initial behavior to the antagonist.
+	ai_lib.setDefaultCalmBehavior( antagonist, ai_lib.BEHAVIOR_SENTINEL );
+	attachScript( antagonist, SCRIPT_ANTAGONIST );
+
+	// TEST: Weapon code.
+	setObjVar( antagonist, "ai.rangedOnly", true );
+
+	return true;
+}
+
+//------------------------------------------------
+// createAntagonistMinions
+//
+// Creates the rest of the antagonist group.
+//------------------------------------------------
+
+boolean createAntagonistMinions( obj_id self )
+{
+	location baseloc = getLocation( self );
+	string type = getStringObjVar( self, ANTAGONIST_THUG_TYPE );
+	string beasttype = getStringObjVar( self, ANTAGONIST_BEAST_TYPE );
+	if ( !type.equals("") )
+	{
+		for ( int i = 0; i < 4; i++ )
+		{
+			string ident = "antagonist_" + (i + 1);
+
+			float zdelta = -2;
+			if ( i==0 )
+				zdelta = -5;
+			else if ( (i==1) || (i==4) )
+				zdelta = -1;
+			float xdelta = -5 + i*2;
+			location loiterloc = new location( baseloc );
+			loiterloc.x += xdelta;
+			loiterloc.z += zdelta;
+
+			obj_id antagonist;
+			if ( (i==2) && !beasttype.equals("none") )
+				antagonist = scenario.createTeamNpc( self, "antagonist", beasttype, ident, loiterloc );
+			else
+				antagonist = scenario.createTeamNpc( self, "antagonist", type, ident, loiterloc );
+			if ( (antagonist == null) || (antagonist == obj_id.NULL_ID) )
+			{
+				LOG( LOG_NAME, "Couldn't create antagonist minion." );
+			}
+			else
+			{
+				ai_lib.setDefaultCalmBehavior( antagonist, ai_lib.BEHAVIOR_SENTINEL );
+				attachScript( antagonist, SCRIPT_ANTAGONIST );
+
+				// TEST: Weapon code.
+				setObjVar( antagonist, "ai.rangedOnly", true );
+
+				if ( i==0 )
+					setObjVar( antagonist, "ai.grenadeType", "object/weapon/ranged/grenade/grenade_fragmentation" );
+			}
+		}
+	}
+
+	return true;
+}
+
+//------------------------------------------------
+// createMediator
+//------------------------------------------------
+
+boolean createMediator( obj_id self )
+{
+	// Spawn the scenario mediator (prisoner leader).
+	string type = getStringObjVar( self, MEDIATOR_LEADER_TYPE );
+	string ident = "mediator_0";
+	location loc = getLocation( self );
+	loc.z += 4;
+	obj_id mediator = scenario.createTeamNpc( self, "mediator", type, ident, loc );
+	if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+		return false;
+
+	// Assign initial behavior to the mediator.
+	setYaw( mediator, 180 );
+	ai_lib.setDefaultCalmBehavior( mediator, ai_lib.BEHAVIOR_SENTINEL );
+	attachScript( mediator, SCRIPT_MEDIATOR );
+
+	// TEST: Weapon code.
+	setObjVar( mediator, "ai.rangedOnly", true );
+
+	return true;
+}
+
+//------------------------------------------------
+// createMediatorMinions
+//
+// Creates the rest of the mediator group.
+//------------------------------------------------
+
+boolean createMediatorMinions( obj_id self )
+{
+	location baseloc = getLocation( self );
+	string type = getStringObjVar( self, MEDIATOR_THUG_TYPE );
+	string beasttype = getStringObjVar( self, MEDIATOR_BEAST_TYPE );
+	if ( !type.equals("") )
+	{
+		int count = getIntObjVar( self, MEDIATOR_COUNT );
+		for ( int i = 0; i < count; i++ )
+		{
+			string ident = "mediator_" + (i + 1);
+
+			float xdelta = -5 + i*2;
+			float zdelta = 6;
+			if ( i==0 )
+				zdelta = 9;
+			else if ( (i==1) || (i==4) )
+				zdelta = 5;
+			location loiterloc = new location( baseloc );
+			loiterloc.x += xdelta;
+			loiterloc.z += zdelta;
+
+			obj_id mediator;
+			if ( (i==4) && !beasttype.equals("none") )
+				mediator = scenario.createTeamNpc( self, "mediator", beasttype, ident, loiterloc );
+			else
+				mediator = scenario.createTeamNpc( self, "mediator", type, ident, loiterloc );
+			if ( (mediator == null) || (mediator == obj_id.NULL_ID) )
+			{
+				LOG( LOG_NAME, "Couldn't create mediator minion." );
+			}
+			else
+			{
+				setYaw( mediator, 180 );
+				ai_lib.setDefaultCalmBehavior( mediator, ai_lib.BEHAVIOR_SENTINEL );
+				attachScript( mediator, SCRIPT_MEDIATOR );
+
+				// TEST: Weapon code.
+				setObjVar( mediator, "ai.rangedOnly", true );
+
+				if ( i==0 )
+					setObjVar( mediator, "ai.grenadeType", "object/weapon/ranged/grenade/grenade_fragmentation" );
+			}
+		}
+	}
+
+	return true;
+}
+
+//------------------------------------------------
+// handleActorDeath
+//------------------------------------------------
+
+messageHandler handleActorDeath()
+{
+	// Get antagonists
+	obj_id[] antagonists = scenario.getTeamMembers( "antagonist" );
+	if ( antagonists == null )
+		return SCRIPT_CONTINUE;
+
+	// Get mediators.
+	obj_id[] mediators = scenario.getTeamMembers( "mediator" );
+	if ( mediators == null )
+		return SCRIPT_CONTINUE;
+
+	// Are all antagonists dead?
+	int deadcount = scenario.getDeadTeamMemberCount( self, "antagonist" );
+	if ( (deadcount+1) == antagonists.length )
+	{
+		// All antagonists are dead.
+		celebrateVictory( mediators, "m_victory" );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Are all mediators dead?
+	deadcount = scenario.getDeadTeamMemberCount( self, "mediator" );
+	if ( (deadcount+1) == mediators.length )
+	{
+		// Everyone is dead.
+		celebrateVictory( antagonists, "a_victory" );
+		return SCRIPT_CONTINUE;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// celebrateVictory
+//------------------------------------------------
+
+void celebrateVictory( obj_id[] team, string comment )
+{
+	int j = 0;
+	for ( int i=0; i<team.length; i++ )
+	{
+		if ( isIncapacitated( team[i] ) || isDead( team[i] ) )
+			continue;
+
+		string skeleton = dataTableGetString("datatables/ai/species.iff", ai_lib.aiGetSpecies( team[i] ), "Skeleton");
+		if ( skeleton != "human" )
+			continue;
+
+		// Celebrate.
+		ai_lib.setDefaultCalmBehavior( team[i], ai_lib.BEHAVIOR_WANDER );
+		stop( team[i] );
+		int whichsocial = rand( 0, 4 );
+		queueCommand( team[i], ##"social", null, joyEmotes[whichsocial], COMMAND_PRIORITY_DEFAULT );
+		messageTo( team[i], "resumeDefaultCalmBehavior", null, 3, false );
+
+		// Leader say somethin.
+		if ( j == 0 )
+			poi.quickSay( team[i], comment );
+		j++;
+	}
+}
+
+
+
+

@@ -1,0 +1,1879 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        skill.scriptlib
+ * Description:  skill defines and skill-related function library
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+include library.prose;
+include library.utils;
+include library.list;
+include library.jedi;
+include library.combat;
+include library.pclib;
+include library.space_flags;
+include library.buff;
+
+/***** CONSTANTS *******************************************************/
+//general defines
+const string DELIM_RANGE						= "..";
+
+//SKILL TRAINER SCRIPTVARS
+const string SCRIPTVAR_SKILLS						= "trainer.skills";
+const string SCRIPTVAR_JEDI_SKILLS					= "trainer.jedi_skills";
+
+//SKILL TEMPLATE DEFINES
+const string DATATABLE_SKILL_TEMPLATE					= "datatables/skill_template/skill_template.iff";
+const string DATATABLE_RACIAL_STATS					= "datatables/skill/racial_stats.iff";
+const string DATATABLE_EXPERTISE					= "datatables/expertise/expertise.iff";
+
+const string DATATABLE_TEMPLATE						= "TEMPLATE";
+const string DATATABLE_BASE_SKILLS					= "BASE_SKILLS";
+const string DATATABLE_INHERITS_LIST					= "INHERITS_TEMPLATES";
+const string DATATABLE_RECURSE						= "RECURSE";
+
+//SKILL TEMPLATE NAME DEFINES
+
+const string PLAYER_BASE                        			= "player_base";
+const string PLAYER_BETA                        			= "player_beta";
+
+//SKILLMOD CHECK DEFINES
+const string DICT_CODE							= "code";
+const string DICT_DELTA 						= "delta";
+const string DICT_DELTA_SCALE						= "deltaScale";
+const string DICT_DELTA_PERCENT						= "deltaPercent";
+
+const int CODE_FAIL							= 0;
+const int CODE_PASS							= 1;
+
+const int CODE_ERROR							= -1;
+const int CODE_INSUFFICIENT_SKILL					= -2;
+
+//Skill Tiers
+const int PHASE_ONE							= 1;
+const int PHASE_TWO							= 2;
+const int PHASE_THREE							= 3;
+const int PHASE_FOUR							= 4;
+
+// Stat things
+const int HEALTH_POINTS_PER_STAMINA 					= 2;
+const int HEALTH_POINTS_PER_CONSTITUTION 				= 8;
+
+const int ACTION_POINTS_PER_STAMINA 					= 8;
+const int ACTION_POINTS_PER_CONSTITUTION 				= 2;
+
+const int NUM_STATS							= 6;
+
+// Difficulty calculation consts
+
+const string[] WEAPON_TYPES = {"unarmed", "polearm", "sword1h", "sword2h", "rifle", "carbine", "pistol"};
+const string[] MOD_TYPES = {"accuracy", "speed", "damage"};
+
+//SKILL GRANT DEFINES
+const string DICT_SKILLNAME						= "skillName";
+const string HANDLER_SKILL_GRANTED					= "skillGranted";
+
+// Jedi strings
+const string JEDI_SKILL_REQUIREMENTS_DATATABLE 				= "datatables/jedi/jedi_skill_requirements.iff";
+
+//SOUND FILES
+const string DEFAULT_SKILL_GRANT_SOUND					= "sound/music_acq_bountyhunter.snd";
+
+//STRING IDS
+const string_id PROSE_NSF_SKILL_PTS					= new string_id("base_player","prose_nsf_skill_pts");
+const string_id PROSE_BAD_SPECIES					= new string_id("base_player","prose_bad_species");
+
+const string TBL_SKILL							= "datatables/skill/skills.iff";
+
+const string SKILL_N   							= "skl_n";
+const string CONVOFILE							= "skill_teacher";
+const string_id PROSE_SKILL_LEARNED 					= new string_id(CONVOFILE, "prose_skill_learned");
+const string_id PROSE_TRAIN_FAILED 					= new string_id(CONVOFILE, "prose_train_failed");
+const string_id SID_EXPERTISE_WRONG_PROFESSION				= new string_id("spam", "expertise_wrong_profession");
+
+
+/***** FUNCTIONS **************************************************/
+/***** GENERAL SKILL FUNCTIONS ************************************/
+/*****************************************************************
+ * @brief	attempts to purchas a skill based on prereqs
+ *
+ * @param	obj_id  player
+ * @param	string  skillName
+ *
+ * @return  sboolean
+ *****************************************************************/
+boolean grant(obj_id target, string skillName)
+{
+	if ( grantSkillToPlayer(target, skillName) )
+	{
+		dictionary d = new dictionary();
+		d.put(DICT_SKILLNAME, skillName);
+
+		messageTo(target, HANDLER_SKILL_GRANTED, d, 0, true);
+		return true;
+	}
+
+	boolean litmus = grantSkill(target, skillName);
+
+	return litmus;
+}
+
+/*****************************************************************
+ * @brief	attempts to purchas a skill based on prereqs
+ *
+ * @param	obj_id  player
+ * @param	string  skillName
+ *
+ * @return  sboolean
+ *****************************************************************/
+boolean grantSkillToPlayer(obj_id player, string skillName)
+{
+	if ( !isIdValid(player) || ( !isPlayer(player) ) || skillName == null || skillName.equals("") )
+	{
+		return false;
+	}
+
+	string_id sid_skillName = new string_id("skl_n",skillName);
+
+	string dtSpeciesReq = dataTableGetString("datatables/skill/skills.iff",skillName,"SPECIES_REQUIRED");
+	if ( dtSpeciesReq != null && !dtSpeciesReq.equals("") )
+	{
+		dictionary species = getSkillPrerequisiteSpecies(skillName);
+		int speciesId = getSpecies(player);
+		string speciesName = utils.getPlayerSpeciesName(speciesId);
+		//debugSpeakMsg(player,"my species = " + speciesId + " -> " + speciesName);
+		boolean allowSpecies = species.getBoolean(speciesName);
+		//debugSpeakMsg(player,"allow species = " + allowSpecies);
+		if ( !allowSpecies )
+		{
+			string_id sid_species = new string_id("species",speciesName);
+			prose_package ppBadSpecies = prose.getPackage(PROSE_BAD_SPECIES, sid_species, sid_skillName);
+			sendSystemMessageProse(player, ppBadSpecies);
+			return false;
+		}
+	}
+
+	if ( grantSkill(player, skillName) )
+	{
+		//if ( !isJedi(player) )
+		//	checkForJediAbility(player, skillName, 15);
+
+		string soundFile = DEFAULT_SKILL_GRANT_SOUND;
+
+		if ( skillName.startsWith("combat_") )
+		{
+			soundFile = DEFAULT_SKILL_GRANT_SOUND;
+		}
+		else if ( utils.isProfession(player, utils.TRADER) )
+		{
+			soundFile = "sound/music_acq_academic.snd";
+		}
+		else if ( skillName.startsWith("outdoors_") )
+		{
+			if ( skillName.startsWith("outdoors_miner_") || skillName.startsWith("outdoors_farmer_") )
+			{
+				soundFile = "sound/music_acq_academic.snd";
+			}
+			else
+			{
+				soundFile = DEFAULT_SKILL_GRANT_SOUND;
+			}
+		}
+		else if ( skillName.startsWith("science_") )
+		{
+			soundFile = "sound/music_acq_healer.snd";
+		}
+		else if ( skillName.startsWith("social_") )
+		{
+			soundFile = "sound/music_acq_thespian.snd";
+		}
+		else if ( skillName.startsWith("pilot_neutral") )
+		{
+			if ( space_flags.isSpaceTrack( player, space_flags.PRIVATEER_TATOOINE ) )
+				soundFile = soundFile = "sound/music_themequest_acc_criminal.snd";
+			else
+				soundFile = soundFile = "sound/music_themequest_acc_general.snd";
+		}
+		else if ( skillName.startsWith("pilot_rebel") )
+		{
+			soundFile = "sound/music_themequest_acc_rebel.snd";
+		}
+		else if ( skillName.startsWith("pilot_imperial") )
+		{
+			soundFile = "sound/music_themequest_acc_imperial.snd";
+		}
+
+		//debugSpeakMsg(player, "skill grant soundfile = " + soundFile);
+		if ( soundFile.equals("") )
+		{
+			playMusic(player, DEFAULT_SKILL_GRANT_SOUND);
+		}
+		else
+		{
+			playMusic(player, soundFile);
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+
+/*****************************************************************
+ * @brief	attempts to purchas a skill based on prereqs
+ *
+ * @param	obj_id  player
+ * @param	string  skillName
+ *
+ * @return  sboolean
+ *****************************************************************/
+boolean purchaseSkill(obj_id player, string skillName)
+{
+	if ( !isIdValid(player) || ( !isPlayer(player) ) || skillName == null || skillName.equals("") )
+	{
+		return false;
+	}
+
+	boolean hasSkills = hasRequiredSkillsForSkillPurchase(player, skillName);
+	boolean hasXp = hasRequiredXpForSkillPurchase(player, skillName);
+	boolean alreadyHasSkill = hasSkill(player, skillName);
+
+	if (hasSkills && hasXp && !alreadyHasSkill)
+	{
+		//Here we call the noisy one for pilot skills, so the player gets a system message:
+		boolean skillGrantSuccessful = false;
+		if ( skillName.startsWith("pilot_") )
+			skillGrantSuccessful = noisyGrantSkill( player, skillName );//grant and send the system message, too
+		else
+			skillGrantSuccessful = grantSkillToPlayer(player, skillName);//other skills send messages via the trainers, for some fucking reason
+
+		if ( skillGrantSuccessful )
+		{
+			if ( deductXpCostForSkillPurchase(player, skillName) )
+			{
+				// Trigger Holocron event-Skill Purchased
+				dictionary holocronParams = new dictionary();
+				holocronParams.put("eventName","TrainedSkillBox");
+				messageTo(player, "handleHolocronEvent", holocronParams, 0, false);
+				return true;
+			}
+			else
+			{
+				revokeSkill(player, skillName);
+				//debugSpeakMsg(player, "unable to deduct xp for skill purchase!");
+				CustomerServiceLog("Skill","skill.purchaseSkill(): ("+player+") "+getName(player)+" was unable to pay xp costs and had skill '"+skillName+"' revoked during purchase");
+				return false;
+			}
+		}
+		//debugSpeakMsg(player, "unable to grant the skill!");
+		return false;
+	}
+	return false;
+}
+
+/*****************************************************************
+ * @brief	determines if the player has proper skills for skill purchase
+ *
+ * @param	obj_id  player
+ * @param	string  skillName
+ *
+ * @return  boolean
+ *****************************************************************/
+boolean hasRequiredSkillsForSkillPurchase(obj_id player, string skillName)
+{
+	if ( !isIdValid(player) || ( !isPlayer(player) ) || skillName == null || skillName.equals("") )
+	{
+		return false;
+	}
+
+	string[] pSkills = getSkillListingForPlayer(player);
+	string[] skillReqs = getSkillPrerequisiteSkills(skillName);
+
+	if ( skillReqs == null )
+	{
+		return true;
+	}
+
+	if ( pSkills == null )
+	{
+		//since skillReqs has elements at this point
+		return false;
+	}
+
+	//both arrays have elements!
+	return utils.isSubset(pSkills, skillReqs);
+}
+
+/*****************************************************************
+ * @brief	determines if the player has sufficient xp for skill purchase
+ *
+ * @param	obj_id  player
+ * @param	string  skillName
+ *
+ * @return  boolean
+ *****************************************************************/
+boolean hasRequiredXpForSkillPurchase(obj_id player, string skillName)
+{
+	if ( !isIdValid(player) || ( !isPlayer(player) ) || skillName == null || skillName.equals("") )
+	{
+		return false;
+	}
+
+	dictionary xpReqs = getSkillPrerequisiteExperience(skillName);
+	if ( (xpReqs == null) || (xpReqs.isEmpty()) )
+	{
+		return true;
+	}
+
+	boolean qualifies = true;
+
+	java.util.Enumeration e = xpReqs.keys();
+	while ( e.hasMoreElements() )
+	{
+		string xpType = (string)(e.nextElement());
+		int xpCost = xpReqs.getInt(xpType);
+		if ( getExperiencePoints(player, xpType) < xpCost )
+		{
+			qualifies = false;
+		}
+	}
+
+	return qualifies;
+}
+
+/*****************************************************************
+ * @brief	deducts appropriate xp for skill purchase
+ *
+ * @param	obj_id  player
+ * @param	string  skillName
+ *
+ * @return  sboolean
+ *****************************************************************/
+boolean deductXpCostForSkillPurchase(obj_id player, string skillName)
+{
+	if ( !isIdValid(player) || ( !isPlayer(player) ) || skillName == null || skillName.equals("") )
+	{
+		return false;
+	}
+
+	dictionary xpReqs = getSkillPrerequisiteExperience(skillName);
+	if ( (xpReqs == null) || (xpReqs.isEmpty()) )
+	{
+		return true;
+	}
+
+	boolean qualifies = true;
+
+	java.util.Enumeration e = xpReqs.keys();
+	while ( e.hasMoreElements() )
+	{
+		string xpType = (string)(e.nextElement());
+		int xpCost = xpReqs.getInt(xpType);
+		if ( xpCost != 0 )
+		{
+			if ( getExperiencePoints(player, xpType) < xpCost )
+			{
+				qualifies = false;
+			}
+			else
+			{
+				//debugSpeakMsg(player, "deducting xp: " + xpType + " - " + xpCost);
+				qualifies &= (grantExperiencePoints(player, xpType, -xpCost) != XP_ERROR);
+			}
+		}
+	}
+
+	return qualifies;
+}
+
+
+
+/*****************************************************************
+ * @brief	collects and returns an array of all unique skills
+ *			required by the specified skill
+ *
+ * @param	string  skillName
+ *
+ * @return  string[]; null on error
+ *****************************************************************/
+string[] getAllRequiredSkills(string skillName)
+{
+	if ( skillName == null || skillName.equals("") )
+	{
+		return null;
+	}
+
+	string[] reqs = getSkillPrerequisiteSkills(skillName);
+	if ( (reqs == null) || (reqs.length == 0) )
+	{
+		return null;
+	}
+
+	resizeable string[] ret = reqs;
+
+	for ( int i = 0; i < reqs.length; i++ )
+	{
+		string[] tmp = getAllRequiredSkills(reqs[i]);
+		if ( (tmp == null) || (tmp.length == 0) )
+		{
+		}
+		else
+		{
+			for ( int n = 0; n < tmp.length; n++ )
+			{
+				int pos = utils.getElementPositionInArray(ret, tmp[n]);
+				if ( pos == -1 )
+				{
+					ret = utils.addElement(ret, tmp[n]);
+					//LOG("getAllRequiredSkills", "adding req: " + tmp[n]);
+				}
+			}
+		}
+		/*else
+		{
+			//LOG("getAllRequiredSkills", " - no reqs for " + reqs[i]);
+		}*/
+	}
+	return ret;
+}
+
+/***** SKILL ASSIGNMENT FUNCTIONS *********************************/
+/*****************************************************************
+ * @brief	function to assign a creature a skill template
+ *
+ * @param	obj_id	target
+ * @param	string	template
+ *
+ * @return	boolean
+ *****************************************************************/
+boolean assignSkillTemplate(obj_id target, string template)
+{
+	if ( !isIdValid(target) || (!isMob(target)) || template == null || template.equals("") )
+	{
+		return false;
+	}
+
+
+	if ( dataTableOpen(DATATABLE_SKILL_TEMPLATE) )
+	{
+		string[] templates = dataTableGetStringColumn(DATATABLE_SKILL_TEMPLATE, DATATABLE_TEMPLATE);
+		if ( (templates == null) || (templates.length == 0) )
+		{
+			return false;
+		}
+
+		for ( int i = 0; i < templates.length; i++ )
+		{
+			if ( toLower(templates[i]).equals(toLower(template)) )
+			{
+				string skill_list = dataTableGetString(DATATABLE_SKILL_TEMPLATE, i, DATATABLE_BASE_SKILLS);
+				if ( skill_list.startsWith("\"") )
+				{
+					skill_list = skill_list.substring(1);
+				}
+
+				if ( skill_list.endsWith("\"") )
+				{
+					skill_list = skill_list.substring(0, skill_list.length() - 1);
+				}
+				//debugSpeakMsg(target, "skill_list = " + skill_list);
+
+				if ( !skill_list.equals("") )
+				{
+					int recurseIntVal = dataTableGetInt(DATATABLE_SKILL_TEMPLATE, i, DATATABLE_RECURSE);
+					boolean recurse = false;
+
+					switch (recurseIntVal)
+					{
+						case 0:
+							break;
+
+						case 1:
+							recurse = true;
+							break;
+
+						default:
+							break;
+					}
+
+					//debugSpeakMsg(target, "recurseIntVal = " + recurseIntVal);
+					//debugSpeakMsg(target, "recurse = " + recurse);
+
+					boolean litmus = true;
+					java.util.StringTokenizer skills = new java.util.StringTokenizer(toLower(skill_list),",");
+					while ( skills.hasMoreTokens() )
+					{
+						string skillName = skills.nextToken();
+						//debugSpeakMsg(target, "receiving skill: " + skillName);
+						litmus &= grantSkill(target, skillName);
+						if ( recurse )
+						{
+							//debugSpeakMsg(target, "recursing skill = " + skillName);
+							string[] reqs = getAllRequiredSkills(skillName);
+							if ( (reqs == null) || (reqs.length == 0) )
+							{
+								//debugSpeakMsg(target, "no required skills for skill: " + skillName);
+							}
+							else
+							{
+								for ( int n = 0; n < reqs.length; n++ )
+								{
+									//debugSpeakMsg(target, "recursive required skill apply: " + reqs[n]);
+									litmus &= grantSkill(target, reqs[n]);
+								}
+							}
+						}
+					}
+
+					string inherits_list = dataTableGetString(DATATABLE_SKILL_TEMPLATE, i, DATATABLE_INHERITS_LIST);
+					if ( (inherits_list != null) && (!inherits_list.equals("")) )
+					{
+						java.util.StringTokenizer inheritTokens = new java.util.StringTokenizer(toLower(inherits_list),",");
+						while ( inheritTokens.hasMoreTokens() )
+						{
+							string inheritTemplate = inheritTokens.nextToken();
+							if ( !inheritTemplate.equals("") )
+							{
+								litmus &= assignSkillTemplate(target, inheritTemplate);
+							}
+						}
+					}
+
+					return litmus;
+				}
+			}
+		}
+
+	}
+
+	return false;
+}
+
+/*****************************************************************
+ * @brief	revokes all skills on the target creature
+ *
+ * @param	obj_id	target
+ *
+ * @return	boolean
+ *****************************************************************/
+boolean revokeAllSkills(obj_id target)
+{
+	if ( !isIdValid(target) || (!isMob(target)) )
+	{
+		return false;
+	}
+
+	string skills[] = getSkillListingForPlayer(target);
+	if ( (skills == null) || (skills.length == 0) )
+	{
+		return false;
+	}
+
+	for ( int i = 0; i < skills.length; i++ )
+	{
+		revokeSkill(target, skills[i]);
+		CustomerServiceLog("Skill","skill.revokeAllSkills(): ("+target+") "+getName(target)+" is having all skills revoked!");
+	}
+	return true;
+}
+
+void revokeAllProfessionSkills(obj_id player)
+{
+	string[] skillList = getSkillListingForPlayer(player);
+	int attempts = skillList.length;
+
+	if ((skillList != null) && (skillList.length != 0))
+	{
+		while(skillList.length > 0 && attempts > 0)
+		{
+			for (int i = 0; i < skillList.length; i++)
+			{
+				string skillName = skillList[i];
+				if (!skillName.startsWith ("species_")&&  //don't revoke species skills
+				!skillName.startsWith("social_language_")&&
+				!skillName.startsWith("social_politician_") &&
+				!skillName.startsWith("utility_")&&
+				!skillName.startsWith("common_")&&
+				!skillName.startsWith("demo_")&&
+				!skillName.startsWith("force_title_")&&
+				!skillName.startsWith("force_sensitive_")&&
+				!skillName.startsWith("combat_melee_basic")&&
+				!skillName.startsWith("pilot_")&&
+				!skillName.startsWith("internal_expertise_") &&
+				!skillName.startsWith("combat_ranged_weapon_basic")&&
+				!skillName.equals("expertise"))
+				{
+					revokeSkillSilent(player, skillName);
+				}
+			}
+
+			// The new skill list is the remaining skills.
+			skillList = getSkillListingForPlayer(player);
+
+			// Prevent data from creating an infinite loop.
+			--attempts;
+		}
+	}
+}
+
+/***** SKILL TEACHER FUNCTIONS ***********************************/
+/*****************************************************************
+ * @brief	returns skills that the target qualifies to learn
+ *			based on skill reqs only
+ *
+ * @param	obj_id	target
+ * @param	obj_id	teacher
+ *
+ * @return	string[]; null on error
+ *****************************************************************/
+string[] getTeachableSkills(obj_id target, obj_id teacher)
+{
+	return null;
+
+	/*
+	if ( !isIdValid(target) || (!isMob(target)) || !isIdValid(teacher) )
+	{
+		return null;
+	}
+
+	//NEWBIE HALL HACK:
+	if ( hasObjVar( target, "newbie.hasSkill" ) && !hasObjVar( target, "newbie.trained"))
+	{
+		string skillName = getStringObjVar( target, "newbie.hasSkill" );
+		string[] retSkills = new string[1];
+		retSkills[0] = skillName;
+		return retSkills;
+	}
+
+
+	string[] targetSkills = getSkillListingForPlayer(target);
+	if ( (targetSkills == null) || (targetSkills.length == 0) )
+	{
+		//debugSpeakMsg(teacher, getName(target) + "'s skill list is null!");
+		return null;
+	}
+
+	string[] delta = null;
+	if ( isPlayer(teacher) )
+	{
+		//debugSpeakMsg(teacher, "getTeachableSkills: calling deltaPlayerTeacherSkills..." );
+		delta = deltaPlayerTeacherSkills(target, teacher);
+	}
+	else
+	{
+		//debugSpeakMsg(teacher, "getTeachableSkills: calling deltaTeacherSkills..." );
+		delta = deltaTeacherSkills(target, teacher);
+	}
+
+	if ( (delta == null) || (delta.length == 0) )
+	{
+		//debugSpeakMsg(teacher, "getTeachableSkills: delta = null or length = 0");
+		return null;
+	}
+
+	//debugSpeakMsg(teacher, "delta.length = " + delta.length);
+
+	resizeable string[] teachableSkills = new string[0];
+	for ( int i = 0; i < delta.length; i++ )
+	{
+		string[] reqs = getSkillPrerequisiteSkills(delta[i]);
+		if ( utils.isSubset(targetSkills, reqs) || reqs == null || reqs.length == 0 )
+		{
+			if ( delta[i].startsWith("species_") )
+			{
+
+			}
+			else if ( delta[i].equals("social_language_lekku") )
+			{
+
+			}
+			else if ( delta[i].equals("demo_combat") )
+			{
+
+			}
+			else if ( delta[i].startsWith("force_rank") )
+			{
+
+			}
+			else if ( delta[i].startsWith("expertise") )
+			{
+
+			}
+			else if ( delta[i].startsWith("force_title") )
+			{
+
+			}
+			else if ( delta[i].startsWith( "pilot_" ) )
+			{
+				//you can't teach pilot skills.
+			}
+			else if ( delta[i].startsWith( "social_language_hutt" ) )
+			{
+				//you can't teach the Huttese language.  It is earned via quest.
+			}
+			//else if ( delta[i].startsWith("force_sensitive") )
+			//{
+			//
+			//}
+			// Don't allow a Jedi to start the light path if they are already on the dark path
+			else if ( delta[i].equals("jedi_light_side_journeyman_novice") && hasSkill(target, "jedi_dark_side_journeyman_novice") )
+			{
+			}
+			// Don't allow a Jedi to start the dark path if they are already on the light path
+			else if ( delta[i].equals("jedi_dark_side_journeyman_novice") && hasSkill(target, "jedi_light_side_journeyman_novice") )
+			{
+			}
+			else
+			{
+				teachableSkills = utils.addElement(teachableSkills, delta[i]);
+			}
+		}
+	}
+
+	if ( (teachableSkills == null) || (teachableSkills.length == 0) )
+	{
+		return null;
+	}
+
+	return teachableSkills;
+	*/
+}
+
+/*****************************************************************
+ * @brief	returns skills that the target qualifies to learn
+ *			based on skill reqs AND xp reqs
+ *
+ * @param	obj_id	target
+ * @param	obj_id	teacher
+ *
+ * @return	string[]; null on error
+ *****************************************************************/
+string[] getQualifiedTeachableSkills(obj_id target, obj_id teacher)
+{
+	//debugSpeakMsg( teacher, "Unf" );
+	if ( !isIdValid(target) || (!isMob(target)) || (isIdNull(teacher)) || (!isMob(teacher)) )
+	{
+		return null;
+	}
+
+	string[] teachableSkills = getTeachableSkills(target, teacher);
+	if ( teachableSkills == null )
+	{
+		//debugSpeakMsg(teacher, "No teachable skills");
+		return null;
+	}
+
+	resizeable string[] qualifiedSkills = new string[0];
+	for ( int i = 0; i < teachableSkills.length; i++ )
+	{
+		//debugSpeakMsg(teacher, "Checking skill: " + teachableSkills[i]);
+		boolean qualifies = true;
+		dictionary d = getSkillPrerequisiteExperience(teachableSkills[i]);
+		if ( d == null || d.isEmpty())
+		{
+			//debugSpeakMsg(teacher, "No requisite experience for skill = " + teachableSkills[i]);
+		}
+		else
+		{
+			java.util.Enumeration keys = d.keys();
+			int n = 0;
+			while (keys.hasMoreElements())
+			{
+				Object o = keys.nextElement();
+				if ( o instanceof string )
+				{
+					string xpType = (string)o;
+
+					int xpCost = d.getInt(xpType);
+					int playerXP = getExperiencePoints(target, xpType);
+					//debugSpeakMsg(teacher, "[" + n + "] " + xpType + ": playerXP (" + playerXP + ") -> xpCost (" + xpCost + ")");
+					if ( playerXP >= xpCost )
+					{
+						//qualifies here!
+					}
+					else
+					{
+						qualifies = false;
+					}
+				}
+				else
+				{
+					//debugSpeakMsg(teacher, "error parsing dictionary key data!");
+					return null;
+				}
+			}
+		}
+
+		// Check to make certain that the skill is not a species only skill.
+		dictionary species = getSkillPrerequisiteSpecies(teachableSkills[i]);
+		if (species != null && !d.isEmpty() )
+		{
+			java.util.Enumeration species_keys = species.keys();
+			while (species_keys.hasMoreElements())
+			{
+				Object o = species_keys.nextElement();
+				if ( o instanceof string )
+				{
+					string key = (string)o;
+					if (species.getBoolean(key))
+						qualifies = false;
+				}
+			}
+		}
+
+		// If the trainer is the force sensitive trainer, make sure that the player has unlocked the skill.
+		//LOG("quest", "skill ->" + teachableSkills[i]);
+		string trainer_type = getStringObjVar(teacher, "trainer");
+		if (trainer_type != null && trainer_type.equals("trainer_fs"))
+		{
+			if (qualifies)
+			{
+				//LOG("quest", "... qualifies");
+				if (fs_quests.isVillageEligible(target))
+				{
+					//LOG("quest", "...... village eligible");
+
+					string branch = fs_quests.getBranchFromSkill(teachableSkills[i]);
+					if (!fs_quests.hasUnlockedBranch(target, branch))
+						qualifies = false;
+					//else
+					//	LOG("quest", "............ has unlocked");
+				}
+				else
+					qualifies = false;
+			}
+		}
+
+		//NEWBIE HALL HACK:
+		if ( hasObjVar( target, "newbie.hasSkill" ) && !hasObjVar( target,"newbie.trained" ))
+		{
+			string skillName = getStringObjVar( target, "newbie.hasSkill" );
+
+			//debugSpeakMsg( target, "i have " + skillName );
+			//debugSpeakMsg( teacher, "i teach " + teachableSkills[i] );
+			if ( skillName.equals( teachableSkills[i] ))
+				qualifies = true;
+		}
+
+		if ( qualifies )
+		{
+			qualifiedSkills = utils.addElement(qualifiedSkills, teachableSkills[i]);
+		}
+	}
+
+	if ( (qualifiedSkills != null) && (qualifiedSkills.length > 0) )
+	{
+		return qualifiedSkills;
+	}
+	return null;
+}
+
+/*****************************************************************
+ * @brief	returns the skills that the teacher has but the target
+ *			does not
+ *
+ * @param	obj_id	target
+ * @param	obj_id	teacher
+ *
+ * @return	string[]; null on error
+ *****************************************************************/
+string[] deltaTeacherSkills(obj_id target, obj_id teacher)
+{
+	if ( !isIdValid(target) || !isIdValid(teacher) )
+	{
+		obj_id self = getSelf();
+		//debugSpeakMsg(self, "deltaTeacherSkills: passed invalid param...");
+		return null;
+	}
+
+	if ( isPlayer(teacher) )
+		return deltaPlayerTeacherSkills(target, teacher);
+
+	string[] targetSkills = getSkillListingForPlayer(target);
+	string[] teacherSkills = getTeacherSkills(teacher, target);
+	if ( targetSkills == null || teacherSkills == null )
+		return null;
+
+
+	resizeable string[] delta = new string[0];
+
+	for ( int i =0; i < teacherSkills.length; i++ )
+	{
+		if ( utils.getElementPositionInArray(targetSkills, teacherSkills[i]) == -1 )
+		{
+			delta = utils.addElement(delta, teacherSkills[i]);
+		}
+	}
+
+	if ( (delta != null) && (delta.length != 0) )
+	{
+		return delta;
+	}
+
+	//debugSpeakMsg(teacher, "deltaTeacherSkills: skill delta error... returning null");
+	return null;
+}
+
+string[] getTeacherSkills(obj_id teacher, obj_id target)
+{
+	if ( !isIdValid(teacher) || !isIdValid(target) )
+		return null;
+
+	if ( !jedi.isJediTrainerForPlayer(target, teacher) )
+	{
+		return utils.getStringBatchScriptVar(teacher, SCRIPTVAR_SKILLS);
+	}
+	else
+	{
+		return utils.getStringBatchScriptVar(teacher, SCRIPTVAR_JEDI_SKILLS);
+	}
+}
+
+/*****************************************************************
+ * @brief	returns the skills that the teacher has but the target
+ *			does not
+ *
+ * @param	obj_id	target
+ * @param	obj_id	teacher
+ *
+ * @return	string[]; null on error
+ *****************************************************************/
+string[] deltaPlayerTeacherSkills(obj_id target, obj_id teacher)
+{
+	if ( !isIdValid(target) || !isIdValid(teacher) )
+		return null;
+
+	if ( !isPlayer(teacher) )
+		return deltaTeacherSkills(target, teacher);
+
+	string[] targetSkills = getSkillListingForPlayer(target);
+	string[] teacherSkills = getSkillListingForPlayer(teacher);
+	if ( (targetSkills == null) || (teacherSkills == null) )
+	{
+		return null;
+	}
+
+	resizeable string[] delta = new string[0];
+
+	for ( int i =0; i < teacherSkills.length; i++ )
+	{
+		if ( utils.getElementPositionInArray(targetSkills, teacherSkills[i]) == -1 )
+		{
+			delta = utils.addElement(delta, teacherSkills[i]);
+		}
+	}
+
+	if ( (delta != null) && (delta.length != 0) )
+	{
+		return delta;
+	}
+
+	//debugSpeakMsg(teacher, "deltaPlayerTeacherSkills: skill delta error... returning null");
+	return null;
+}
+
+/***** SKILL CHECK FUNCTIONS ************************************/
+/*****************************************************************
+ * @brief	wrapper for doing skill checks
+ *
+ * @param	obj_id  target
+ * @param	string  skillmod
+ * @param	string  scale
+ *
+ * @return  int; -1 on error
+ *****************************************************************/
+int check(obj_id target, string skillmod, string scale)
+{
+	if ( !isIdValid(target) || (skillmod.equals("")) )
+	{
+		//bad args
+		return -1;
+	}
+
+	dictionary params = skillModCheck(target, skillmod, scale);
+	int retCode = params.getInt(DICT_CODE);
+
+	if ( retCode < 0 )
+	{
+		//there was an error in the skillModCheck - dump out of function
+		return -1;
+	}
+
+	int deltaPercent = params.getInt(DICT_DELTA_PERCENT);
+	if ( (retCode == CODE_PASS) && (deltaPercent >= 0) )	//success
+	{
+		//award XP
+	}
+	return deltaPercent;
+}
+
+/*****************************************************************
+ * @brief	performs a skillModCheck for the specified target & skillmod
+ *			on the specified scale and returns the delta, deltaScale,
+ *			and deltaPercent
+ *
+ * @param	obj_id  target
+ * @param	string  skillmod
+ * @param	string  scale
+ *
+ * @return  dictionary
+ *****************************************************************/
+dictionary skillModCheck(obj_id target, string skillmod, string scale)
+{
+	dictionary ret = new dictionary();
+
+	if ( !isIdValid(target) || (skillmod.equals("")) )
+	{
+		ret.put(DICT_CODE, CODE_ERROR);
+		return ret;
+	}
+
+	int modmin = 1;
+	int modmax = 100;
+
+	int scaleIdx = scale.indexOf(DELIM_RANGE);
+
+	if ( scale.equals("") )
+	{
+		//do nothing
+	}
+	else if ( scaleIdx > 0 )
+	{
+		java.util.StringTokenizer rng = new java.util.StringTokenizer(scale, DELIM_RANGE);
+		string smin = "";
+		string smax = "";
+
+		if ( rng.countTokens() == 2 )
+		{
+			smin = rng.nextToken();
+			smax = rng.nextToken();
+		}
+		else
+		{
+			ret.put(DICT_CODE, CODE_ERROR);
+			return ret;
+		}
+
+		modmin = utils.stringToInt(smin);
+		modmax = utils.stringToInt(smax);
+	}
+	else
+	{
+		//try to parse scale as max
+		modmax = utils.stringToInt(scale);
+	}
+
+	if ( (modmin < 0) || (modmax <= 0) || (modmin >= modmax) )
+	{
+		//malformed scale data
+		ret.put(DICT_CODE, CODE_ERROR);
+		return ret;
+	}
+
+	int modval = getSkillStatMod(target, skillmod);
+
+	if ( modval < modmin )
+	{
+		//insufficient skill!
+		ret.put(DICT_CODE, CODE_INSUFFICIENT_SKILL);
+		return ret;
+	}
+
+	int deltaScale = modmax - modmin;
+
+	int roll = rand(modmin, modmax);
+
+	int delta = modval - roll;
+	int deltaPercent = (int)((delta/deltaScale)*100);
+
+	if ( delta >= 0 )
+	{
+		//success
+		ret.put(DICT_CODE, CODE_PASS);
+	}
+	else
+	{
+		//fail
+		ret.put(DICT_CODE, CODE_FAIL);
+	}
+
+	ret.put(DICT_DELTA, delta);
+	ret.put(DICT_DELTA_SCALE, deltaScale);
+	ret.put(DICT_DELTA_PERCENT, deltaPercent);
+
+	return ret;
+}
+
+int getGroupLevel(obj_id objPlayer)
+{
+	obj_id objGroup = getGroupObject(objPlayer);
+	if (isIdValid(objGroup))
+		return getGroupObjectLevel(objGroup);
+	return getLevel(objPlayer);
+}
+
+/**
+ * Checks if a skill a player just got causes their Jedi slot to open.
+ */
+void checkForJediAbility(obj_id objPlayer, string strSkill, int intDelay)
+{
+	// see if the Jedi system is enabled
+	if ( !getEnableNewJediTracking() )
+	{
+		LOG("jedi", "System disabled");
+		return;
+	}
+
+	// Jedi should never call this function.  CS is seeing them show up in the logs
+	if (isJedi(objPlayer))
+		return;
+
+	// if we have the jedi.timestamp objvar, then we are definitely supposed to be a Jedi
+	//
+	if (hasObjVar(objPlayer, "jedi.timeStamp"))
+	{
+		// make sure we don't have the skill requirements objvar
+		removeObjVar(objPlayer, pclib.OBJVAR_JEDI_SKILL_REQUIREMENTS);
+		return;
+	}
+
+	resizeable string[] strSkillsNeeded = getResizeableStringArrayObjVar(objPlayer, pclib.OBJVAR_JEDI_SKILL_REQUIREMENTS);
+	if(strSkillsNeeded==null)
+	{
+		if(!hasJediSlot(objPlayer))
+		{
+			if(!hasObjVar(objPlayer, "jedi.timeStamp"))
+			{
+				if (!hasObjVar(objPlayer, "jedi.postponeGrant"))
+				{
+					// you're fucked
+					CustomerServiceLog("jedi", "CATASTROPHIC JEDI FAILURE, DATA IS MUNGED ON "+objPlayer);
+				}
+			}
+		}
+		LOG("jedi", "no array");
+		// already jedi qualified, so go away
+		return;
+	}
+
+	if (strSkillsNeeded.length == 0)
+	{
+		// Not a Jedi, but was qualified already
+		LOG("jedi", "Array is 0?");
+		return;
+	}
+
+	int intElement = utils.getElementPositionInArray(strSkillsNeeded, strSkill);
+	LOG("jedi", "checking for "+strSkill+" intIndex is "+intElement);
+	if (intElement != -1)
+		strSkillsNeeded = utils.removeElementAt(strSkillsNeeded, intElement);
+
+	updateJediSkillRequirements(objPlayer, strSkillsNeeded);
+}
+
+/**
+ * Updates the list of skills we need to become a Jedi, and starts the Jedi process if we have met all our requirements.
+ */
+void updateJediSkillRequirements(obj_id player, resizeable string[] skillsNeeded)
+{
+	if ( !isIdValid(player) || isJedi(player) || skillsNeeded == null )
+		return;
+
+	if ( skillsNeeded.length > 0 )
+	{
+		setObjVar(player, pclib.OBJVAR_JEDI_SKILL_REQUIREMENTS, skillsNeeded);
+		if (skillsNeeded.length <= 4)
+			CustomerServiceLog("jedi", "CLOSE_PLAYER: " + getFirstName(player) + " (" + player + ") needs " + skillsNeeded.length + " more skills to activate their FS slot.");
+		else if (skillsNeeded.length <= 6)
+			CustomerServiceLog("jedi", getFirstName(player) + " (" + player + ") needs " + skillsNeeded.length + " more skills to activate their FS slot.");
+	}
+	else
+	{
+		removeObjVar(player, pclib.OBJVAR_JEDI_SKILL_REQUIREMENTS);
+		setObjVar(player, "jedi.timeStamp", 0);
+		messageTo(player, "makeJedi", null, 0.1f, false);
+	}
+}
+
+/**
+ * Sets the skills that a player will need to open up their Jedi slot.
+ */
+void setJediSkills(obj_id objPlayer)
+{
+	if ( !isJedi(objPlayer) && !hasJediSlot(objPlayer) && !hasObjVar(objPlayer, pclib.OBJVAR_JEDI_SKILL_REQUIREMENTS))
+	{
+		// one shot!
+		int numRequired = 0;
+		string[] strSkills = dataTableGetStringColumn(JEDI_SKILL_REQUIREMENTS_DATATABLE, "strSkillList");
+		numRequired = dataTableGetInt(JEDI_SKILL_REQUIREMENTS_DATATABLE, 0, "intNumRequired");
+		debugServerConsoleMsg(null, "intNumRequired is " + numRequired);
+
+		if (numRequired > strSkills.length)
+		{
+			debugServerConsoleMsg(null, "NO JEDI ENABLED, SKILLS REQUIRED GREATER THAN SKILLS IN LIST!");
+			return;
+		}
+
+		int numAvailable = strSkills.length;
+		string[] strSkillsNeeded = new string[numRequired];
+		for (int i = 0; i < numRequired; ++i)
+		{
+			int randomNumber = rand(0, numAvailable - 1);
+			strSkillsNeeded[i] = strSkills[randomNumber];
+			// move remaining available skills down the list
+			for ( int j = randomNumber; j < numAvailable - 1; ++j )
+			{
+				strSkills[j] = strSkills[j+1];
+			}
+			strSkills[--numAvailable] = null;
+		}
+
+		if(strSkillsNeeded.length > 0) {
+
+			setObjVar(objPlayer, pclib.OBJVAR_JEDI_SKILL_REQUIREMENTS, strSkillsNeeded);
+
+		} else {
+
+			CustomerServiceLog("jedi", "Failed to set jedi required skills for %TU", objPlayer);
+		}
+	}
+}
+
+void fixTerrainNegotiationMods(obj_id player)
+{
+	if (hasObjVar(player, "_notskill.mods.slope_move"))
+	{
+		int mod = getIntObjVar(player, "_notskill.mods.slope_move");
+
+		applySkillStatisticModifier(player, "slope_move", -mod);
+	}
+}
+
+boolean noisyGrantSkill( obj_id player, string skillName )
+{
+	if ( grantSkillToPlayer( player, skillName ) )
+	{
+		prose_package pp = prose.getPackage(PROSE_SKILL_LEARNED, new string_id(SKILL_N, skillName));
+		sendSystemMessageProse(player, pp);
+		return true;
+	}
+	else
+	{
+		prose_package pp = prose.getPackage(PROSE_TRAIN_FAILED, new string_id(SKILL_N, skillName));
+		sendSystemMessageProse(player, pp);
+		return false;
+	}
+}
+
+
+
+
+void doPlayerLeveling(obj_id objPlayer, int intOldLevel, int intNewLevel)
+{
+	int levelDelta = intNewLevel - intOldLevel;
+
+	// Only play special effects if you leveled up for reals, identified by gaining exactly 1 level.
+	// On loading you get leveled up from -1 to your actual level.
+	if(levelDelta == 1)
+	{
+		showFlyText(objPlayer, new string_id("cbt_spam", "level_up"), 2.5f, colors.CORNFLOWERBLUE);
+		playClientEffectObj(objPlayer, "clienteffect/level_granted.cef", objPlayer, null);
+	}
+
+	newbieTutorialHighlightUIElement (objPlayer, "/GroundHUD.MFDStatus.vsp.role.targetLevel", 5.0f);
+
+	// now we do cool shit
+	// what level
+	setPlayerStatsForLevel(objPlayer, intNewLevel);
+	return;
+}
+
+void setPlayerStatsForLevel(obj_id objPlayer, int intLevel)
+{
+
+	//LOG("base_player - OnInitialize", "setPlayerStatsForLevel: LEVEL "+intLevel);
+	if(intLevel < 1)
+	{
+		LOG("skill.scriptlib", "getPlayerStatForLevel BAD level");
+		return;
+	}
+
+	string strProfession = getProfessionName(getSkillTemplate(objPlayer));
+
+	player_levels.level_data stats = player_levels.getPlayerLevelData(strProfession, intLevel);
+
+	if(stats == null)
+	{
+		LOG("skill.scriptlib", "setPlayerStatsForLevel stats == null");
+		return;
+	}
+
+	//LOG("base_player - OnInitialize", "setPlayerStatsForLevel: PROFESION "+strProfession);
+	if((strProfession!=null)&&(strProfession!=""))
+	{
+		int intStat = getPlayerStatForLevel(objPlayer, intLevel, "luck");
+		if(intStat>=0)
+		{
+			int oldStat = getSkillStatMod(objPlayer, "luck");
+			applySkillStatisticModifier( objPlayer, "luck", -oldStat);
+			applySkillStatisticModifier( objPlayer, "luck", intStat);
+		}
+
+		intStat = getPlayerStatForLevel(objPlayer, intLevel, "precision");
+		if(intStat>=0)
+		{
+			// ranged combat state
+			int oldStat = getSkillStatMod(objPlayer, "precision");
+			applySkillStatisticModifier( objPlayer, "precision", -oldStat);
+			applySkillStatisticModifier( objPlayer, "precision", intStat);
+		}
+
+		intStat = getPlayerStatForLevel(objPlayer, intLevel, "strength");
+		if(intStat>=0)
+		{
+			// melee combat stat
+			int oldStat = getSkillStatMod(objPlayer, "strength");
+			applySkillStatisticModifier( objPlayer, "strength", -oldStat);
+			applySkillStatisticModifier( objPlayer, "strength", intStat);
+		}
+
+		intStat = getPlayerStatForLevel(objPlayer, intLevel, "constitution");
+		if(intStat>=0)
+		{
+			// modifier, change applicable pools please
+			int oldStat = getSkillStatMod(objPlayer, "constitution");
+			applySkillStatisticModifier( objPlayer, "constitution", -oldStat);
+			applySkillStatisticModifier( objPlayer, "constitution", intStat);
+		}
+
+		intStat = getPlayerStatForLevel(objPlayer, intLevel, "stamina");
+		if(intStat>=0)
+		{
+			// modifier, change applicable pools please
+			int oldStat = getSkillStatMod(objPlayer, "stamina");
+			applySkillStatisticModifier( objPlayer, "stamina", -oldStat);
+			applySkillStatisticModifier( objPlayer, "stamina", intStat);
+		}
+
+		intStat = getPlayerStatForLevel(objPlayer, intLevel, "agility");
+		if(intStat>=0)
+		{
+			int oldStat = getSkillStatMod(objPlayer, "agility");
+			applySkillStatisticModifier( objPlayer, "agility", -oldStat);
+			applySkillStatisticModifier( objPlayer, "agility", intStat);
+		}
+
+		intStat = getPlayerStatForLevel(objPlayer, intLevel, "health");
+		if(intStat>=0)
+		{
+			setMaxAttrib(objPlayer, HEALTH, intStat);
+
+		}
+		float fltStat = stats.health_regen;
+		if(fltStat>=0)
+		{
+			setRegenRate(objPlayer, HEALTH, fltStat);
+		}
+
+		intStat = getPlayerStatForLevel(objPlayer, intLevel, "action");
+		if(intStat>=0)
+		{
+			setMaxAttrib(objPlayer, ACTION, intStat);
+		}
+		fltStat = stats.action_regen;
+		if(fltStat>=0)
+		{
+			setRegenRate(objPlayer, ACTION, fltStat);
+		}
+
+		recalcPlayerPools(objPlayer, true);
+	}
+	return;
+}
+
+int getPlayerStatForLevel(obj_id player, int intLevel, string statString)
+{
+	int intStat = 0;
+
+	if(intLevel < 1 || intLevel > 90)
+	{
+		LOG("skill.scriptlib", "getPlayerStatForLevel BAD level");
+		return 0;
+	}
+
+	int playerRace = getSpecies(player);
+	string strProfession = getProfessionName(getSkillTemplate(player));
+
+	player_levels.level_data stats = player_levels.getPlayerLevelData(strProfession, intLevel);
+
+	if(stats == null)
+	{
+		LOG("skill.scriptlib", "setPlayerStatsForLevel stats == null");
+		return 0;
+	}
+
+	// Set new races int value so they work with the datatable. Ithorian = 33(8), sullustan = 49(9).
+	if(playerRace > 7)
+	{
+		if(playerRace == 33)
+			playerRace = 8;
+
+		else if(playerRace == 49)
+			playerRace = 9;
+
+		else
+		{
+			sendSystemMessageTestingOnly(player, "Unknown race, defaulting to human");
+			LOG("npe", "library.skill - getPlayerStatForLevel invalid race, using human defaults");
+			playerRace = 0;
+		}
+	}
+
+	int racialStatColumnReference = (playerRace * NUM_STATS);
+//sendSystemMessageTestingOnly(player, "playerRace = " + playerRace);
+
+	if(statString.equals("luck"))
+	{
+		intStat = stats.luck;
+		intStat += dataTableGetInt(DATATABLE_RACIAL_STATS, intLevel-1, racialStatColumnReference + 1);
+		return intStat;
+	}
+
+	if(statString.equals("precision"))
+	{
+		intStat = stats.precision;
+		intStat += dataTableGetInt(DATATABLE_RACIAL_STATS, intLevel-1, racialStatColumnReference + 2);
+		return intStat;
+	}
+
+	if(statString.equals("strength"))
+	{
+		intStat = stats.strength;
+		intStat += dataTableGetInt(DATATABLE_RACIAL_STATS, intLevel-1, racialStatColumnReference + 3);
+		return intStat;
+	}
+
+	if(statString.equals("constitution"))
+	{
+		intStat = stats.constitution;
+		intStat += dataTableGetInt(DATATABLE_RACIAL_STATS, intLevel-1, racialStatColumnReference + 4);
+		return intStat;
+	}
+	if(statString.equals("stamina"))
+	{
+		intStat = stats.stamina;
+		intStat += dataTableGetInt(DATATABLE_RACIAL_STATS, intLevel-1, racialStatColumnReference + 5);
+		return intStat;
+	}
+	if(statString.equals("agility"))
+	{
+		intStat = stats.agility;
+		intStat += dataTableGetInt(DATATABLE_RACIAL_STATS, intLevel-1, racialStatColumnReference + 6);
+		return intStat;
+	}
+	if(statString.equals("health"))
+	{
+		intStat = stats.health;
+		return intStat;
+	}
+	if(statString.equals("action"))
+	{
+		intStat = stats.action;
+		return intStat;
+	}
+	return intStat;
+}
+
+// Sends a system message for each stat that increased.
+void sendlevelUpStatChangeSystemMessages(obj_id player, int oldCombatLevel, int newCombatLevel)
+{
+	if(!isPlayer(player))
+	{
+		return;
+	}
+
+	if(newCombatLevel < 1 || newCombatLevel > 90)
+	{
+		return;
+	}
+
+	// onCombatLevelChanged fires EVERYTIME YOU LOAD so only do this if you gained 1 level.
+	// Clearly we need an onCombatLevelChangedForReals trigger.
+	int levelDelta = newCombatLevel - oldCombatLevel;
+
+
+	if(levelDelta != 1)
+	{
+		return;
+	}
+
+	string[] statStrings = 	{	"luck",
+					"precision",
+					"strength",
+					"constitution",
+					"stamina",
+					"agility",
+				};
+
+	for(int i = 0; i < statStrings.length; i++)
+	{
+		int currentStat = getPlayerStatForLevel(player, newCombatLevel, statStrings[i]);
+		int lastStat = getPlayerStatForLevel(player, oldCombatLevel, statStrings[i]);
+		int statDelta = currentStat - lastStat;
+
+		if(statDelta > 0)
+		{
+			prose_package ppStatGainSpam = new prose_package();
+			ppStatGainSpam.stringId = new string_id("spam","level_up_stat_gain_"+i);
+			ppStatGainSpam.digitInteger = statDelta;
+			sendSystemMessageProse(player, ppStatGainSpam);
+		}
+	}
+
+	// Determine and display actual change in health and action including CON and STA mods.
+	int currentCon = getPlayerStatForLevel(player, newCombatLevel, "constitution");
+	int lastCon = getPlayerStatForLevel(player, oldCombatLevel, "constitution");
+	int currentSta = getPlayerStatForLevel(player, newCombatLevel, "stamina");
+	int lastSta = getPlayerStatForLevel(player, oldCombatLevel, "stamina");
+	int currentHealth = getPlayerStatForLevel(player, newCombatLevel, "health");
+	int lastHealth = getPlayerStatForLevel(player, oldCombatLevel, "health");
+	int currentAction = getPlayerStatForLevel(player, newCombatLevel, "action");
+	int lastAction = getPlayerStatForLevel(player, oldCombatLevel, "action");
+
+	int forRealsHealthCurrent = currentHealth + (currentCon * HEALTH_POINTS_PER_CONSTITUTION) + (currentSta * HEALTH_POINTS_PER_STAMINA);
+	int forRealsHealthLast = lastHealth + (lastCon * HEALTH_POINTS_PER_CONSTITUTION) + (lastSta * HEALTH_POINTS_PER_STAMINA);
+	int forRealsActionCurrent = currentAction + (currentCon * ACTION_POINTS_PER_CONSTITUTION) + (currentSta * ACTION_POINTS_PER_STAMINA);
+	int forRealsActionLast = lastAction + (lastCon * ACTION_POINTS_PER_CONSTITUTION) + (lastSta * ACTION_POINTS_PER_STAMINA);
+
+	int healthDelta = forRealsHealthCurrent - forRealsHealthLast;
+	int actionDelta = forRealsActionCurrent - forRealsActionLast;
+
+	if(healthDelta > 0)
+	{
+		prose_package ppStatGainSpam = new prose_package();
+		ppStatGainSpam.stringId = new string_id("spam","level_up_stat_gain_6");
+		ppStatGainSpam.digitInteger = healthDelta;
+		sendSystemMessageProse(player, ppStatGainSpam);
+	}
+
+	if(actionDelta > 0)
+	{
+		prose_package ppStatGainSpam = new prose_package();
+		ppStatGainSpam.stringId = new string_id("spam","level_up_stat_gain_7");
+		ppStatGainSpam.digitInteger = actionDelta;
+		sendSystemMessageProse(player, ppStatGainSpam);
+	}
+
+
+	return;
+}
+
+string getProfessionName(string strTemplate)
+{
+	player_levels.skill_template_data professionData = player_levels.getSkillTemplateData(strTemplate);
+
+	if(professionData == null)
+	{
+		return null;
+	}
+
+	return professionData.strClassName;
+}
+
+void recalcPlayerPools(obj_id objPlayer, boolean boolHealEverything)
+{
+// FIX WOUNDS
+// get health from datatable
+	//get action from datatable
+	// get skill mod for con
+	// get skill mod for stam
+	// calculate additions
+	// set max health
+	// set max action
+
+// CON is 80/20 health/action
+// Stamina is 80/20 action/health
+
+	if(!isPlayer(objPlayer))
+	{
+		return;
+	}
+
+	int intLevel = getLevel(objPlayer);
+
+	if(intLevel < 0)
+	{
+		intLevel = 1;
+	}
+	else
+	{
+		if(intLevel > 90)
+		{
+			intLevel = 90;
+		}
+	}
+
+	string strProfession = getProfessionName(getSkillTemplate(objPlayer));
+
+	if(strProfession != null && strProfession.length() > 0)
+	{
+		player_levels.level_data stats = player_levels.getPlayerLevelData(strProfession, intLevel);
+
+		if(stats == null)
+		{
+			LOG("skill.scriptlib", "recalcPlayerPools stats == null");
+			return;
+		}
+
+		int intBaseHealth = stats.health;
+		int intBaseAction = stats.action;
+
+		//sendSystemMessageTestingOnly(objPlayer, "profession is "+strProfession);
+
+		int intConstitution =  getSkillStatisticModifier(objPlayer, "constitution");
+		int intStamina = getSkillStatisticModifier(objPlayer, "stamina");
+
+		intConstitution +=  getEnhancedSkillStatisticModifierUncapped(objPlayer, "constitution_modified");
+		intStamina += getEnhancedSkillStatisticModifierUncapped(objPlayer, "stamina_modified");
+
+		//sendSystemMessageTestingOnly(objPlayer, "Con is "+intConstitution);
+		//sendSystemMessageTestingOnly(objPlayer, "Stamina is "+intStamina);
+		//sendSystemMessageTestingOnly(objPlayer, "intBaseHealth1 is "+intBaseHealth);
+		//sendSystemMessageTestingOnly(objPlayer, "intBaseAction1 is "+intBaseAction);
+
+		intBaseHealth = intBaseHealth + (HEALTH_POINTS_PER_CONSTITUTION * intConstitution);
+		intBaseHealth = intBaseHealth + (HEALTH_POINTS_PER_STAMINA * intStamina);
+
+		intBaseAction = intBaseAction + (ACTION_POINTS_PER_STAMINA * intStamina);
+		intBaseAction = intBaseAction + (ACTION_POINTS_PER_CONSTITUTION * intConstitution);
+
+		//sendSystemMessageTestingOnly(objPlayer, "intBaseHealth2 is "+intBaseHealth);
+		//sendSystemMessageTestingOnly(objPlayer, "intBaseAction2 is "+intBaseAction);
+
+		setMaxAttrib(objPlayer, ACTION, intBaseAction);
+		setMaxAttrib(objPlayer, HEALTH, intBaseHealth);
+
+		int[] myBuffs = buff.getAllBuffs(objPlayer);
+
+		for(int i = 0; i < myBuffs.length; i++)
+		{
+			string thisBuffEffect = buff.getEffectParam(myBuffs[i], 1);
+			float thisBuffValue = buff.getEffectValue(myBuffs[i], 1);
+
+			if(thisBuffEffect != null && thisBuffValue < 0 && thisBuffEffect.equals("healthPercent"))
+			{
+				boolHealEverything = false;
+				break;
+			}
+		}
+
+		if(boolHealEverything)
+		{
+			setAttrib(objPlayer, ACTION, getMaxAttrib(objPlayer, ACTION));
+			setAttrib(objPlayer, HEALTH, getMaxAttrib(objPlayer, HEALTH));
+		}
+	}
+
+	return;
+}
+
+void grantAllPoliticianSkills( obj_id player )
+{
+	string[] skillNames = { 	"social_politician_novice",
+						"social_politician_fiscal_01",
+						"social_politician_fiscal_02",
+						"social_politician_fiscal_03",
+						"social_politician_fiscal_04",
+						"social_politician_martial_01",
+						"social_politician_martial_02",
+						"social_politician_martial_03",
+						"social_politician_martial_04",
+						"social_politician_civic_01",
+						"social_politician_civic_02",
+						"social_politician_civic_03",
+						"social_politician_civic_04",
+						"social_politician_urban_01",
+						"social_politician_urban_02",
+						"social_politician_urban_03",
+						"social_politician_urban_04",
+						"social_politician_master" };
+
+	//set this to suppress skillUp particle effects
+	setObjVar( player, "clickRespec.granting", true );
+	for ( int i = 0; i < skillNames.length; i++ )
+	{
+		if (!hasSkill(player, skillNames[i]) )
+			grantSkill( player, skillNames[i] );
+	}
+	removeObjVar( player, "clickRespec.granting");
+}
+
+/*********************************************************
+* Checks for the existance of a profession skill based on the
+* wheel of fun. Existance of a phase skill will deterine tier
+*
+* obj_id player
+*
+* return string
+*********************************************************/
+int getProfessionPhase(obj_id player)
+{
+	string[] phaseFourSkills = {
+					"class_forcesensitive_phase4_novice",
+					"class_bountyhunter_phase4_novice",
+					"class_smuggler_phase4_novice",
+					"class_commando_phase4_novice",
+					"class_officer_phase4_novice",
+					"class_spy_phase4_novice",
+					"class_medic_phase4_novice",
+					"class_entertainer_phase4_novice",
+					"class_domestics_phase4_novice",
+					"class_structures_phase4_novice",
+					"class_munitions_phase4_novice",
+					"class_engineering_phase4_novice"
+				};
+
+	string[] phaseThreeSkills = {
+					"class_forcesensitive_phase3_novice",
+					"class_bountyhunter_phase3_novice",
+					"class_smuggler_phase3_novice",
+					"class_commando_phase3_novice",
+					"class_officer_phase3_novice",
+					"class_spy_phase3_novice",
+					"class_medic_phase3_novice",
+					"class_entertainer_phase3_novice",
+					"class_domestics_phase3_novice",
+					"class_structures_phase3_novice",
+					"class_munitions_phase3_novice",
+					"class_engineering_phase3_novice"
+				};
+
+	string[] phaseTwoSkills = {
+					"class_forcesensitive_phase2_novice",
+					"class_bountyhunter_phase2_novice",
+					"class_smuggler_phase2_novice",
+					"class_commando_phase2_novice",
+					"class_officer_phase2_novice",
+					"class_spy_phase2_novice",
+					"class_medic_phase2_novice",
+					"class_entertainer_phase2_novice",
+					"class_domestics_phase2_novice",
+					"class_structures_phase2_novice",
+					"class_munitions_phase2_novice",
+					"class_engineering_phase2_novice"
+				};
+
+
+	for (int i=0;i<phaseFourSkills.length;i++)
+	{
+		if (hasSkill(player, phaseFourSkills[i]))
+			return PHASE_FOUR;
+	}
+
+	for (int i=0;i<phaseThreeSkills.length;i++)
+	{
+		if (hasSkill(player, phaseThreeSkills[i]))
+			return PHASE_THREE;
+	}
+
+	for (int i=0;i<phaseTwoSkills.length;i++)
+	{
+		if (hasSkill(player, phaseTwoSkills[i]))
+			return PHASE_TWO;
+	}
+
+	return PHASE_ONE;
+}
+
+//used to make sure the player has the correct expertise skills for thier profession
+boolean validateExpertise(obj_id player)
+{
+	if(!isIdValid(player) || !exists(player))
+		return false;
+
+
+	//get all the expertise skills for player
+	string[] expertiseSkills = expertise.getExpertiseAllocation(player);
+
+	if(expertiseSkills == null || expertiseSkills.length <= 0)
+		return false;
+
+	string skillTemplate = getSkillTemplate(player);
+	string profession = getProfessionName(skillTemplate);
+	boolean isTrader = false;
+
+	//if you are a trader, we need to determine what kind
+	if(profession.equals("trader"))
+	{
+		isTrader = true;
+		//domestics
+		if(skillTemplate.equals("trader_0a"))
+			profession = "trader_dom";
+
+		//structure
+		if(skillTemplate.equals("trader_0b"))
+			profession = "trader_struct";
+
+		//munitions
+		if(skillTemplate.equals("trader_0c"))
+			profession = "trader_mun";
+
+		//engineering
+		if(skillTemplate.equals("trader_0d"))
+			profession = "trader_eng";
+
+	}
+
+	//loop thru expertise skills
+	for(int i = 0; i < expertiseSkills.length; ++i)
+	{
+		//find the row for this skill
+		int row = dataTableSearchColumnForString(expertiseSkills[i], "NAME", DATATABLE_EXPERTISE);
+		//validate row
+		if(row < 0)
+		{
+			continue;
+		}
+
+		//get the required prof for this expertise
+		string reqProf = dataTableGetString(DATATABLE_EXPERTISE, row, "REQ_PROF");
+
+		//check to see if you are the correct profession
+		if(!reqProf.equals(profession))
+		{
+			//if you are a trader, see if this expertise is available to all traders
+			if(reqProf.equals("trader") && isTrader)
+			{
+				continue;
+			}
+
+			//verify if this expertise if available to all professions
+			else if(reqProf.equals("all"))
+			{
+				continue;
+			}
+
+			//if you are here, you have a skill that your profession isnt supposed to have
+			//reset all expertises and log cheater channel
+			else
+			{
+				//Busted character, possible exploiter
+				//clear all expertise and log
+				sendSystemMessage(player, SID_EXPERTISE_WRONG_PROFESSION);
+				//respec
+				utils.fullExpertiseReset(player, false);
+
+				CustomerServiceLog("SuspectedCheaterChannel: ", "DualProfessionCheat: Player " + getFirstName(player) + "(" + player + ") has an expertise that is not for thier profession. All expertises have been revoked.");
+				CustomerServiceLog("SuspectedCheaterChannel: ", "DualProfessionCheat: Player " + getFirstName(player) + "(" + player + ")'s profession is " + profession + " and the skill they have is " + expertiseSkills[i] + ".");
+				return false;
+			}
+		}
+	}
+	return true;
+}

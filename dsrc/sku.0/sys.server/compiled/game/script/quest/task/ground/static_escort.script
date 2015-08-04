@@ -1,0 +1,263 @@
+include ai.ai_combat;
+include library.ai_lib;
+include library.quests;
+include library.create;
+include library.groundquests;
+include library.locations;
+include library.prose;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const String dataTableColumnServerTemplate      = "SERVER_TEMPLATE";
+const String dataTableColumnMovementType        = "MOVEMENT_TYPE";
+const String dataTableColumnMaxAllowedDistance  = "MAX_ALLOWED_ESCORT_DISTANCE";
+const String dataTableColumnPathToPointPre      = "PATH_TO_POINT_POINT_";
+const String dataTableColumnLocationXPre        = "LOCATION_X_POINT_";
+const String dataTableColumnLocationYPre        = "LOCATION_Y_POINT_";
+const String dataTableColumnLocationZPre        = "LOCATION_Z_POINT_";
+
+//objvars on player
+const String objvarEscortTarget       = "target";
+const String objvarBeenWarnedDistance = "beenWarned";
+
+//objvars on escort target
+const String scriptNameEscortOnTarget = "quest.task.ground.static_escort_on_target";
+const String objvarOnCreatureOwner    = "quest.static_escort.owner";
+const String objvarOnCreatureQuestCrc = "quest.static_escort.questCrc";
+const String objvarOnCreatureTaskId   = "quest.static_escort.taskId";
+const String objvarPathToPoint        = "quest.static_escort.pathToPoint";
+
+const String taskType = "static_escort";
+const String dot = ".";
+
+const float escortDistanceTimeCheck = 10;
+
+// ---------------------------------------------------------------------
+
+//fires when this task is added to the player
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+		
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+
+	//gather data for this task
+	String serverTemplate      = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnServerTemplate);
+	String movementType        = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnMovementType);
+
+	int pointIndex = 1;
+
+	obj_id escortTarget = groundquests.getPendingStaticEscortTarget(self);
+	groundquests.clearPendingStaticEscortTarget(self);
+	if(escortTarget == null)
+	{
+		groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "Could not get static escort target for this player from objvar, did you call groundquests.setPendingStaticEscortTarget(player, escortTarget) first?");
+		questCompleteTask(questCrc, taskId, self);
+	}
+
+	attachScript(escortTarget, scriptNameEscortOnTarget);
+	dictionary params = new dictionary();
+	messageTo(escortTarget, "messageStartStaticEscort", params, 0, false);
+
+//TODO don't do this
+	detachScript(escortTarget, "ai.ai");
+
+	setObjVar(escortTarget, objvarOnCreatureOwner, self);
+	setObjVar(escortTarget, objvarOnCreatureQuestCrc, questCrc);
+	setObjVar(escortTarget, objvarOnCreatureTaskId, taskId);
+	setObjVar(escortTarget, objvarPathToPoint, pointIndex);
+	setObjVar(self, baseObjVar + dot + objvarEscortTarget, escortTarget);
+
+	//get the first point, path to it
+	int useFirstPoint = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnPathToPointPre + pointIndex);
+	if(useFirstPoint == 0)
+	{
+		groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "The first escort point is flagged as unused, so autocomplete the task");
+		questCompleteTask(questCrc, taskId, self);
+	}
+	else
+	{
+		String xLoc = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnLocationXPre + pointIndex);
+		String yLoc = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnLocationYPre + pointIndex);
+		String zLoc = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnLocationZPre + pointIndex);
+		location escortPoint = new location(utils.stringToFloat(xLoc), utils.stringToFloat(yLoc), utils.stringToFloat(zLoc), getCurrentSceneName());
+		pathTo(escortTarget, escortPoint);
+		groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", "pathing to new point " + escortPoint.x + ", " + escortPoint.y + ", " + escortPoint.z);
+	}
+	
+	//set up first distance check pulse
+	dictionary distanceCheckParams = new dictionary();
+	distanceCheckParams.put("player", self);
+	distanceCheckParams.put("escortTarget", escortTarget);
+	distanceCheckParams.put("questCrc", questCrc);
+	distanceCheckParams.put("taskId", taskId);
+	messageTo(self, "messageStaticEscortCheckDistance", distanceCheckParams, escortDistanceTimeCheck, false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler messageStaticEscortCheckDistance()
+{
+	obj_id player       = params.getObjId("player");
+	obj_id escortTarget = params.getObjId("escortTarget");
+	int questCrc        = params.getInt  ("questCrc");
+	int taskId          = params.getInt  ("taskId");
+
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+	if(isEscortNearby(questCrc, taskId, player, escortTarget))
+	{
+		if(hasObjVar(player, baseObjVar + objvarBeenWarnedDistance))
+			removeObjVar(player, baseObjVar + objvarBeenWarnedDistance);
+	}
+	else
+	{
+		failEscortDistanceCheck(player, questCrc, taskId, escortTarget);
+	}
+
+	//send message for next pulse
+	//this is not an infinite loop because it checks distance each time, and fails the task if the distance check fails twice in a row
+	messageTo(self, "messageStaticEscortCheckDistance", params, escortDistanceTimeCheck, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler messageEscortTaskCreatureDied()
+{
+	obj_id deadCreature = params.getObjId("source");
+	int questCrc        = params.getInt  ("questCrc");
+	int taskId          = params.getInt  ("taskId");
+
+	String baseObjVar = groundquests.getBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+	obj_id escortTarget = getObjIdObjVar(self, baseObjVar + dot + objvarEscortTarget);
+	if(escortTarget == deadCreature)
+	{
+		groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "messageEscortTaskCreatureDied", "[" + deadCreature + "] being tracked for a static_escort has died.");
+		questFailTask(questCrc, taskId, self);
+	}	
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+boolean isEscortNearby(int questCrc, int taskId, obj_id player, obj_id escortTarget)
+{
+	boolean result = false;
+	if(isIdValid(player) && isIdValid(escortTarget))
+	{
+		int maxEscortDistance = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMaxAllowedDistance);
+		result = getDistance(player, escortTarget) <= maxEscortDistance;
+	}
+	return result;
+}
+
+// ---------------------------------------------------------------------
+
+void failEscortDistanceCheck(obj_id player, int questCrc, int taskId, obj_id escortTarget)
+{
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+	if(!hasObjVar(player, baseObjVar + objvarBeenWarnedDistance))
+	{
+		//set objvar and warn player
+		setObjVar(player, baseObjVar + objvarBeenWarnedDistance, "true");
+		
+		string_id message = new string_id ("quest/groundquests", "static_escort_distance_warning");
+		prose_package pp = prose.getPackage(message, player, player, 0);
+		prose.setDF(pp, escortDistanceTimeCheck);
+		sendSystemMessageProse(player, pp);
+	}
+	else
+	{
+		string_id message = new string_id ("quest/groundquests", "static_escort_failed_due_to_distance");
+		prose_package pp = prose.getPackage(message, player, player, 0);
+		sendSystemMessageProse(player, pp);
+		
+		questFailTask(questCrc, taskId, player);
+	}
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is completed
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + " task completed.");
+
+	cleanup(self, questCrc, taskId);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is failed
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+
+	cleanup(self, questCrc, taskId);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+//fires when the task is cleared
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+
+	cleanup(self, questCrc, taskId);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id player, int questCrc, int taskId)
+{
+	// destroy the escort target
+	String baseObjVar = groundquests.getBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+	String escortTargetObjVarName = baseObjVar + dot + objvarEscortTarget;
+
+	obj_id escortTarget = getObjIdObjVar(player, escortTargetObjVarName);
+	if(escortTarget != null)
+	{
+		dictionary params = new dictionary();
+		messageTo(escortTarget, "messageResetStaticEscortTarget", params, 0, false);
+	}
+
+	groundquests.clearBaseObjVar(player, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnLogout()
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//make sure the base objvar is removed
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------

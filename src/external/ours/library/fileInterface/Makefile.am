@@ -1,0 +1,6 @@
+AUTOMAKE_OPTIONS=foreign
+SUBDIRS=src .
+lib_LTLIBRARIES=libfileInterface.la
+libfileInterface_la_LIBADD=src/shared/libfileInterfaceshared.la
+libfileInterface_la_SOURCES=src/shared/FirstFileInterface.h
+libfileInterface_la_LDFLAGS=-avoid-version

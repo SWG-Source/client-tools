@@ -1,0 +1,2211 @@
+include library.ai_lib;
+include library.city;
+include library.beast_lib;
+include library.instance;
+include library.pet_lib;
+include library.player_structure;
+include library.space_utils;
+include library.utils;
+
+const string STORYTELLER_DATATABLE = "datatables/item/master_item/storyteller_item.iff";
+const string STATIC_ITEM_DATATABLE = "datatables/item/master_item/master_item.iff";
+
+const string THEATER_MODE = "theater_mode";
+
+const string EFFECT_TOKEN_NAME	= "storytellerEffectName";
+const string EFFECT_ACTIVE_OBJVAR	= "storytellerPersistedEffectActive";
+
+const string STORYTELLER_THEATER_CONTROL_SCRIPT	= "systems.storyteller.theater_controller";
+const string STORYTELLER_PROP_CONTROL_SCRIPT	= "systems.storyteller.prop_controller";
+const string STORYTELLER_NPC_CONTROL_SCRIPT		= "systems.storyteller.npc_controller";
+
+const string STORYTELLER_DAILY_COUNT_OBJVAR			= "storytellerToken.dailyCount";
+const string STORYTELLER_DAILY_COUNT_RESET			= "storytellerToken.dailyResetTime";
+
+const string STORYTELLER_OBJECT_OBJVAR			= "storytellerid";
+
+const int BLUEPRINT_MAX_NUM_OBJECTS			= 200;
+const float BLUEPRINT_DEFAULT_RADIUS		= 100.0f;
+const string BLUEPRINT_OBJECTS_OBJVAR		= "blueprintObjects";
+const string BLUEPRINT_AUTHOR_OBJVAR		= "blueprintAuthor";
+const string BLUEPRINT_AUTHOR_NAME_OBJVAR	= "blueprintAuthorName";
+const string BLUEPRINT_DECRIPTION_OBJVAR	= "blueprintDescription";
+
+const int BLUEPRINT_CREATE_CYCLE_MAX		= 30;
+const int BLUEPRINT_CREATE_CYCLE_LOOP		= 25;
+
+const int BLUEPRINT_VERSION_NUM				= 1;
+const string BLUEPRINT_VERSION_OBJVAR		= "blueprintVersion";
+
+const int BLUEPRINT_TOKEN_LOADED			= 1;
+const int BLUEPRINT_TOKEN_NEEDED			= 0;
+
+const int PROP = 0;
+const int STATIC_EFFECT = 1;
+const int IMMEDIATE_EFFECT = 2;
+const int COMBAT_NPC = 3;
+const int FLAVOR_NPC = 4;
+const int OTHER = 5;
+const int COSTUME = 6;
+const int THEATER = 7;
+
+const int DEFAULT_PROP_CLEANUP_TIME = 16*60*60;//16 hours
+const int DEFAULT_NPC_CLEANUP_TIME = 16*60*60;//16 hours
+
+const string VAR_AUTODECLINE_STORY_INVITES	= "decline_story_invites";
+
+
+int getTokenType (obj_id token)
+{
+	return dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type");
+}
+
+int getTokenType (string tokenName)
+{
+	return dataTableGetInt(STORYTELLER_DATATABLE, tokenName, "type");
+}
+
+boolean isProp(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") == PROP);
+}
+
+boolean isAnyNpc(obj_id token)
+{
+	return (isFlavorNpc(token) || isCombatNpc(token));
+}
+
+boolean isFlavorNpc(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") == FLAVOR_NPC);
+}
+
+boolean isFlavorNpc(string tokenName)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, tokenName, "type") == FLAVOR_NPC);
+}
+
+boolean isCombatNpc(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") == COMBAT_NPC);
+}
+
+boolean isAnyEffect(string st_effect_token)
+{
+	return (isStaticEffect(st_effect_token) || isImmediateEffect(st_effect_token));
+}
+boolean isAnyEffect(obj_id token)
+{
+	return (isStaticEffect(token) || isImmediateEffect(token));
+}
+
+boolean isStaticEffect(string st_effect_token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, st_effect_token, "type") == STATIC_EFFECT);
+}
+
+boolean isStaticEffect(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") == STATIC_EFFECT);
+}
+
+boolean isImmediateEffect(string st_effect_token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, st_effect_token, "type") == IMMEDIATE_EFFECT);
+}
+
+boolean isImmediateEffect(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") == IMMEDIATE_EFFECT);
+}
+
+boolean isTheater(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") == THEATER);
+}
+
+boolean isOther(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") == OTHER);
+}
+
+boolean isAnyStorytellerItem(obj_id token)
+{
+	return (dataTableGetInt(STORYTELLER_DATATABLE, getStaticItemName(token), "type") != -1);
+}
+
+string getEffectName(string st_effect_name)
+{
+	return dataTableGetString(STORYTELLER_DATATABLE, st_effect_name, "template_name");
+}
+
+string getNpcTemplate(obj_id token)
+{
+	return dataTableGetString(STORYTELLER_DATATABLE, getStaticItemName(token), "template_name");
+}
+
+string getNpcTemplate(string tokenName)
+{
+	return dataTableGetString(STORYTELLER_DATATABLE, tokenName, "template_name");
+}
+
+float getTheaterBuildoutRadius(obj_id theater)
+{
+	return dataTableGetFloat(STORYTELLER_DATATABLE, getStaticItemName(theater), "buildout_radius");
+}
+
+obj_id createTheaterObject(obj_id token, boolean inBuildout)
+{
+	obj_id player = getTopMostContainer(token);
+	if (!isPlayer(player))
+		return null;
+
+	float yaw = getYaw(player);
+	return createTheaterObject(token, inBuildout, getLocation(player), yaw);
+
+}
+
+obj_id createTheaterObject(obj_id token, boolean inBuildout, location createLoc, float yaw)
+{
+	string itemName = getStaticItemName(token);
+	dictionary dict = new dictionary();
+
+	int row = dataTableSearchColumnForString( itemName , "name", storyteller.STORYTELLER_DATATABLE);
+	if (row == -1)
+		return null;
+
+	dict = dataTableGetRow(storyteller.STORYTELLER_DATATABLE, itemName);
+	string template = dict.getString("template_name");
+	string objVarString = dict.getString("objvar");
+	string scriptString = dict.getString("scripts");
+
+
+
+	obj_id theater = create.object(template, createLoc);
+	setYaw(theater, yaw);
+
+	if (!isIdValid(theater))
+		return null;
+
+	static_item.setObjVarString(theater, objVarString);
+	static_item.setScriptString(theater, scriptString);
+	setStaticItemName(theater, getStaticItemName(token));
+	setObjVar(theater, storyteller.THEATER_MODE, inBuildout);
+	attachScript(theater, STORYTELLER_THEATER_CONTROL_SCRIPT);
+	destroyObject(token);
+	return theater;
+
+}
+
+obj_id createPropObject(obj_id token, boolean inBuildout)
+{
+	obj_id player = utils.getContainingPlayer(token);
+	if (!isIdValid(player))
+		return null;
+
+	float yaw = getYaw(player);
+	return createPropObject(token, player, inBuildout, getLocation(player), yaw);
+}
+
+obj_id createPropObject(obj_id token, obj_id player, boolean inBuildout, location createLoc, float yaw)
+{
+	obj_id prop = null;
+	
+	if ( canDeployStorytellerToken(player, createLoc, token) )
+	{
+		string itemName = getStaticItemName(token);
+		dictionary dict = new dictionary();
+		dictionary dict_m = new dictionary();
+		int row = dataTableSearchColumnForString( itemName , "name", STORYTELLER_DATATABLE);
+		if (row == -1)
+			return null;
+
+		dict = dataTableGetRow(STORYTELLER_DATATABLE, itemName);
+		string template = dict.getString("template_name");
+		string objVarString = dict.getString("objvar");
+		string scriptString = dict.getString("scripts");
+		dict_m = dataTableGetRow(STATIC_ITEM_DATATABLE, itemName);
+		string finalName = dict_m.getString("string_name");
+
+		prop = create.object(template, createLoc);
+		if ( isIdValid(prop) )
+		{		
+			setYaw(prop, yaw);
+			setInvulnerable(prop, true);
+
+			static_item.setObjVarString(prop, objVarString);
+			static_item.setScriptString(prop, scriptString);
+			setStaticItemName(prop, getStaticItemName(token));
+
+			if ( utils.hasScriptVar(player, "storytellerAssistant") )
+			{
+				obj_id storytellerId = utils.getObjIdScriptVar(player, "storytellerAssistant");
+				string storytellerName = utils.getStringScriptVar(player, "storytellerAssistantName");
+				setObjVar(prop, "storytellerid", storytellerId);
+				setObjVar(prop, "storytellerName", storytellerName);
+				
+			}
+			else
+			{
+				setObjVar(prop, "storytellerid", player);
+				setObjVar(prop, "storytellerName", getName(player));
+			}
+			
+			setObjVar(prop, "storytellerCreationLoc", createLoc);
+			setObjVar(prop, "storytellerTokenName", itemName);
+			
+			attachScript(prop, STORYTELLER_PROP_CONTROL_SCRIPT);
+			setName(prop, finalName);
+			
+			handleTokenUsage(token);
+			
+			string logMsg = "("+player+")"+getName(player)+" is deploying a prop storyteller token: "+getStaticItemName(token)+" at "+createLoc;
+			CustomerServiceLog("storyteller", logMsg);
+		}
+	}
+	return prop;
+
+}
+
+obj_id createPropObjectNoToken(string tokenName, obj_id player, boolean inBuildout, location createLoc, float yaw)
+{
+	obj_id prop = null;
+	
+	if ( canDeployStorytellerToken(player, createLoc, tokenName) )
+	{
+		dictionary dict = new dictionary();
+		dictionary dict_m = new dictionary();
+		int row = dataTableSearchColumnForString( tokenName , "name", STORYTELLER_DATATABLE);
+		if (row == -1)
+			return null;
+
+		dict = dataTableGetRow(STORYTELLER_DATATABLE, tokenName);
+		string template = dict.getString("template_name");
+		string objVarString = dict.getString("objvar");
+		string scriptString = dict.getString("scripts");
+		dict_m = dataTableGetRow(STATIC_ITEM_DATATABLE, tokenName);
+		string finalName = dict_m.getString("string_name");
+
+		prop = create.object(template, createLoc);
+		if ( isIdValid(prop) )
+		{		
+			setYaw(prop, yaw);
+			setInvulnerable(prop, true);
+
+			static_item.setObjVarString(prop, objVarString);
+			static_item.setScriptString(prop, scriptString);
+			setStaticItemName(prop, tokenName);
+
+			if ( utils.hasScriptVar(player, "storytellerAssistant") )
+			{
+				obj_id storytellerId = utils.getObjIdScriptVar(player, "storytellerAssistant");
+				string storytellerName = utils.getStringScriptVar(player, "storytellerAssistantName");
+				setObjVar(prop, "storytellerid", storytellerId);
+				setObjVar(prop, "storytellerName", storytellerName);
+				
+			}
+			else
+			{
+				setObjVar(prop, "storytellerid", player);
+				setObjVar(prop, "storytellerName", getName(player));
+			}
+			
+			setObjVar(prop, "storytellerCreationLoc", createLoc);
+			setObjVar(prop, "storytellerTokenName", tokenName);
+			
+			attachScript(prop, STORYTELLER_PROP_CONTROL_SCRIPT);
+			setName(prop, finalName);
+			
+			string logMsg = "("+player+")"+getName(player)+" is deploying a prop storyteller token: "+tokenName+" at "+createLoc;
+			CustomerServiceLog("storyteller", logMsg);
+		}
+	}
+	return prop;
+
+}
+
+obj_id createNpcAtLocation(obj_id token)
+{
+	obj_id player = utils.getContainingPlayer(token);
+	float yaw = getYaw(player);
+	return createNpcAtLocation(token, player, getLocation(player), yaw);
+}
+
+obj_id createNpcAtLocation(obj_id token, obj_id player, location createLoc, float yaw)
+{
+	obj_id npc = null;
+	
+	if ( canDeployStorytellerToken(player, createLoc, token) )
+	{
+		string toCreate = storyteller.getNpcTemplate(token);
+
+		npc = create.object(toCreate, createLoc);
+		if ( isIdValid(npc) )
+		{
+			if ( utils.hasScriptVar(player, "storytellerAssistant") )
+			{
+				obj_id storytellerId = utils.getObjIdScriptVar(player, "storytellerAssistant");
+				string storytellerName = utils.getStringScriptVar(player, "storytellerAssistantName");
+				setObjVar(npc, "storytellerid", storytellerId);
+				setObjVar(npc, "storytellerName", storytellerName);
+			}
+			else
+			{
+				setObjVar(npc, "storytellerid", player);
+				setObjVar(npc, "storytellerName", getName(player));
+			}
+			
+			setObjVar(npc, "storytellerCreationLoc", createLoc);
+			setObjVar(npc, "storytellerTokenName", getStaticItemName(token));
+			
+			setYaw(npc, yaw);
+
+			setStaticItemName(npc, getStaticItemName(token));
+
+			if (storyteller.isFlavorNpc(token))
+				setInvulnerable(npc, true);
+
+			ai_lib.setDefaultCalmBehavior(npc, ai_lib.BEHAVIOR_SENTINEL);
+			
+			if ( hasObjVar(token, "storytellerNpcCombatLevel") )
+			{
+				int storytellerNpcCombatLevel = getIntObjVar(token, "storytellerNpcCombatLevel");
+				if (storytellerNpcCombatLevel < 1 || storytellerNpcCombatLevel > 90)
+				{
+					storytellerNpcCombatLevel = 1;
+				}
+				dictionary creatureDict = utils.dataTableGetRow(create.CREATURE_TABLE, toCreate);
+				if ( creatureDict != null )
+				{
+					create.initializeCreature(npc, toCreate, creatureDict, storytellerNpcCombatLevel);
+				}
+			}
+			
+			attachScript(npc, STORYTELLER_NPC_CONTROL_SCRIPT);
+			
+			string logMsg = "("+player+")"+getName(player)+" is deploying an npc storyteller token: "+getStaticItemName(token)+" at "+createLoc;
+			CustomerServiceLog("storyteller", logMsg);
+		}
+	}
+	return npc;
+}
+
+obj_id createNpcAtLocationNoToken(string tokenName, obj_id player, location createLoc, float yaw)
+{
+	return createNpcAtLocationNoToken(tokenName, player, createLoc, yaw, 0);
+}
+
+obj_id createNpcAtLocationNoToken(string tokenName, obj_id player, location createLoc, float yaw, int combatLevel)
+{
+	return createNpcAtLocationNoToken(tokenName, player, createLoc, yaw, combatLevel, 0);
+}
+
+obj_id createNpcAtLocationNoToken(string tokenName, obj_id player, location createLoc, float yaw, int combatLevel, int difficulty)
+{	obj_id npc = null;
+	
+	if ( canDeployStorytellerToken(player, createLoc, tokenName) )
+	{
+		string toCreate = storyteller.getNpcTemplate(tokenName);
+
+		npc = create.object(toCreate, createLoc);
+		if ( isIdValid(npc) )
+		{
+			if ( utils.hasScriptVar(player, "storytellerAssistant") )
+			{
+				obj_id storytellerId = utils.getObjIdScriptVar(player, "storytellerAssistant");
+				string storytellerName = utils.getStringScriptVar(player, "storytellerAssistantName");
+				setObjVar(npc, "storytellerid", storytellerId);
+				setObjVar(npc, "storytellerName", storytellerName);
+			}
+			else
+			{
+				setObjVar(npc, "storytellerid", player);
+				setObjVar(npc, "storytellerName", getName(player));
+			}
+			
+			setObjVar(npc, "storytellerCreationLoc", createLoc);
+			setObjVar(npc, "storytellerTokenName", tokenName);
+			
+			setYaw(npc, yaw);
+
+			setStaticItemName(npc, tokenName);
+
+			if (storyteller.isFlavorNpc(tokenName))
+				setInvulnerable(npc, true);
+
+			ai_lib.setDefaultCalmBehavior(npc, ai_lib.BEHAVIOR_SENTINEL);
+			
+			if ( combatLevel > 0 )
+			{
+				if ( combatLevel > 90)
+					combatLevel = 90;
+				
+				dictionary creatureDict = utils.dataTableGetRow(create.CREATURE_TABLE, toCreate);
+				if ( creatureDict != null )
+				{
+					creatureDict.put("difficultyClass", difficulty);
+					create.initializeCreature(npc, toCreate, creatureDict, combatLevel);
+					setNpcDifficulty(npc, difficulty);
+				}
+			}
+			
+			attachScript(npc, STORYTELLER_NPC_CONTROL_SCRIPT);
+			
+			string logMsg = "("+player+")"+getName(player)+" is deploying an npc storyteller token: "+tokenName+" at "+createLoc;
+			CustomerServiceLog("storyteller", logMsg);
+		}
+	}
+	return npc;
+}
+
+boolean isStorytellerNpc(obj_id npc)
+{
+	return hasObjVar(npc, "storytellerid");
+}
+
+boolean isStorytellerObject(obj_id object)
+{
+	return hasObjVar(object, "storytellerid");
+}
+
+void removeStorytellerPersistedEffect(obj_id self)
+{
+	obj_id[] players =  getPlayerCreaturesInRange(getLocation(self), 165.0f);
+	if (players != null || players.length > 0)
+	{
+		stopClientEffectObjByLabel(players, self, "storyteller_persisted_effect", false);
+		removeObjVar(self, storyteller.EFFECT_ACTIVE_OBJVAR);
+		removeTriggerVolume("storytellerPersistedEffect");
+	}
+	
+	return;
+}
+
+boolean allowTokenPlacementInInteriors(obj_id token)
+{
+	return allowTokenPlacementInInteriors(getStaticItemName(token));
+}
+
+boolean allowTokenPlacementInInteriors(string tokenName)
+{
+	int allowInInteriors = dataTableGetInt(STORYTELLER_DATATABLE, tokenName, "allow_interior");
+	return allowInInteriors == 1;
+}
+
+obj_id getStorytellerBeingAssisted(obj_id player)
+{
+	obj_id storytellerBeingAssisted = null;
+	
+	if ( utils.hasScriptVar(player, "storytellerAssistant"))
+	{
+		storytellerBeingAssisted = utils.getObjIdScriptVar(player, "storytellerAssistant");
+	}
+	
+	return storytellerBeingAssisted;
+}
+
+location rotateLocationXZ(location locOrigin, location locPoint, float fltAngle)
+{
+	float dx = locPoint.x - locOrigin.x;
+	float dz = locPoint.z - locOrigin.z;
+
+	float fltRadians = (float)Math.toRadians(fltAngle);
+	float fltC = (float)Math.cos(fltRadians);
+	float fltS = (float) Math.sin(fltRadians);
+	
+	location locNewOffset = locOrigin;
+
+	locNewOffset.x += (dx * fltC) + (dz * fltS);
+	locNewOffset.y = locPoint.y;
+	locNewOffset.z += -(dx * fltS) + (dz * fltC);
+
+	return locNewOffset;
+}
+
+//***********************************************************************
+// Daily Usage (daily_uses column in storyteller_item.tab)
+// if -1, the token may be used without limit (this is pretty much just for event team tokens)
+// if 0, the token expends charges and is destroyed when all uses are expended
+// if > 0, the token is never destroyed, but has a limited number of uses per day as defined by daily_uses
+int getTokenDailyUsageAmount(obj_id token)
+{
+	return getTokenDailyUsageAmount(getStaticItemName(token));
+}
+
+int getTokenDailyUsageAmount(string tokenName)
+{
+	return dataTableGetInt(STORYTELLER_DATATABLE, tokenName, "daily_uses");
+}
+
+boolean isTokenFlaggedWithDailyUsage(obj_id token)
+{
+	return isTokenFlaggedWithDailyUsage(getStaticItemName(token));
+}
+
+boolean isTokenFlaggedWithDailyUsage(string tokenName)
+{
+	int dailyUses = getTokenDailyUsageAmount(tokenName);
+	if ( dailyUses > 0 )
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+int getTokenDailyUsesAvailable(obj_id token)
+{
+	int num = 0;
+	if ( isTokenFlaggedWithDailyUsage(getStaticItemName(token)) )
+	{
+		int dailyUses = getTokenDailyUsageAmount(token);
+		if ( dailyUses < 0 )
+		{
+			num = 9999;
+		}
+		else if ( hasObjVar(token, STORYTELLER_DAILY_COUNT_OBJVAR) )
+		{
+			int usedUses = getIntObjVar(token, STORYTELLER_DAILY_COUNT_OBJVAR);
+			num = dailyUses - usedUses;
+		}
+		else
+		{
+			num = dailyUses;
+		}
+	}
+	
+	return num;
+}
+
+boolean hasTokenUsesAvailable(obj_id token)
+{
+	int num = 0;
+	if ( isTokenFlaggedWithDailyUsage(getStaticItemName(token)) )
+	{
+		num = getTokenDailyUsesAvailable(token);
+		if ( num > 0 )
+		{
+			return true;
+		}
+	}
+	else
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+void handleTokenUsage(obj_id token)
+{
+	int dailyUses = getTokenDailyUsageAmount(token);
+	if ( dailyUses == 0 )
+	{
+		decrementCount(token);
+	}
+	else if ( dailyUses > 0 )
+	{
+		int dailyCount = 1;
+		if ( hasObjVar(token, STORYTELLER_DAILY_COUNT_OBJVAR) )
+		{
+			dailyCount = getIntObjVar(token, STORYTELLER_DAILY_COUNT_OBJVAR) + 1;
+		}
+		
+		setObjVar(token, STORYTELLER_DAILY_COUNT_OBJVAR, dailyCount);
+		sendDirtyAttributesNotification(token);
+	}
+	
+	return;
+}
+
+void resetTokenDailyCount(obj_id token)
+{
+	if ( isTokenFlaggedWithDailyUsage(token) )
+	{
+		if ( !hasObjVar(token, storyteller.STORYTELLER_DAILY_COUNT_RESET) )
+		{
+			setTokenDailyCountResetTime(token);
+		}
+		else
+		{
+			int currentTime = getCalendarTime();
+			int alarmTime = getIntObjVar(token, storyteller.STORYTELLER_DAILY_COUNT_RESET);
+			if ( currentTime >= alarmTime )
+			{
+				setTokenDailyCountResetTime(token);
+				
+				if ( hasObjVar(token, STORYTELLER_DAILY_COUNT_OBJVAR) )
+				{
+					removeObjVar(token, STORYTELLER_DAILY_COUNT_OBJVAR);
+				}
+			}
+		}
+	}
+	return;
+}
+
+void setTokenDailyCountResetTime(obj_id token)
+{
+	int currentTime = getCalendarTime();
+	int timeUntilAlarm = createDailyAlarmClock(token, "storytellerEffectTokenDailyAlarm", null, 4, 0, 0);
+	int alarmStamp = currentTime + timeUntilAlarm;
+	setObjVar(token, storyteller.STORYTELLER_DAILY_COUNT_RESET, alarmStamp);
+	return;
+}
+
+//***********************************************************************
+boolean canDeployStorytellerToken(obj_id player, location here, obj_id token)
+{
+	if ( !storyteller.hasTokenUsesAvailable(token) )
+	{
+		sendSystemMessage(player, new string_id("storyteller", "placement_daily_uses_expended"));
+		return false;
+	}
+	
+	return canDeployStorytellerToken(player, here, getStaticItemName(token));
+}
+
+boolean canDeployStorytellerToken(obj_id player, location here, string tokenName)
+{
+	if( !isIdValid(player) || here == null )
+	{
+		return false;
+	}
+
+	// God mode override to allow event team to place storyteller items with more freedom
+	if ( isGod(player) )
+	{		
+		string logMsg = "("+player+")"+getName(player)+" is using GodMode override to deploy or movea storyteller object: "+tokenName+" at "+here;
+		CustomerServiceLog("storyteller", logMsg);
+		
+		if ( !utils.hasScriptVar(player, "storyteller.godModeStopOverrideMessages") )
+		{
+			sendSystemMessage(player, new string_id("storyteller", "placement_god_mode"));
+		}
+		return true;
+	}
+	
+	if( isFreeTrialAccount(player) )
+	{
+		sendSystemMessage(player, new string_id("storyteller", "placement_no_trial_accounts"));
+		return false;
+	}
+	
+	obj_id myCell = here.cell;
+	obj_id myContainer = getTopMostContainer(myCell);
+	obj_id storytellerBeingAssisted = getStorytellerBeingAssisted(player);
+	if ( !isIdValid(storytellerBeingAssisted) )
+	{
+		storytellerBeingAssisted = player;
+	}
+	
+	// At this point in time, storyteller objects are not allowed in any instances.
+	if ( instance.isInInstanceArea(player) )
+	{
+		sendSystemMessage(player, new string_id("storyteller", "placement_not_in_this_location"));
+		return false;
+	}
+	 
+	// *************************************************
+	// SPACE
+	// block all storyteller object placement in space
+	// unless the object is flagged as allowed in interiors and is in a player pob ship
+	string planet = here.area;
+	if( planet.startsWith("space_") )
+	{
+		if ( isIdValid(myCell) && allowTokenPlacementInInteriors(tokenName) )
+		{
+			obj_id owner= getOwner(myContainer);
+			if ( !isIdValid(owner) || owner != player || owner != storytellerBeingAssisted )
+			{
+				sendSystemMessage(player, new string_id("storyteller", "placement_not_ship_owner"));
+				return false;
+			}
+			
+			if ( getState(player, STATE_SHIP_INTERIOR) != 1 || space_utils.isInStation(player) )
+			{
+				sendSystemMessage(player, new string_id("storyteller", "placement_not_in_station"));
+				return false;
+			}
+		}
+		else
+		{
+			sendSystemMessage(player, new string_id("storyteller", "placement_not_in_space"));
+			return false;
+		}
+	}
+	// *************************************************
+	else
+	{	
+		// *************************************************
+		// INTERIORS - inside of a pob
+		// block storyteller object placement inside of buildings 
+		// unless the object is flagged as allowed in interiors
+		if( isIdValid(myCell) )
+		{
+			if ( !allowTokenPlacementInInteriors(tokenName) )
+			{
+				sendSystemMessage(player, new string_id("storyteller", "placement_not_in_a_building"));
+				return false;
+			}
+			else
+			{
+				if ( !player_structure.isAdmin(myContainer, player) && !player_structure.isAdmin(myContainer, storytellerBeingAssisted) )
+				{
+					sendSystemMessage(player, new string_id("storyteller", "placement_not_building_admin"));
+					return false;
+				}
+			}
+		}
+		// *************************************************
+		// Not inside of a building
+		else
+		{
+			// block storyteller object placement on adventure planets
+			if ( planet.equals("mustafar") || planet.startsWith("kashyyyk") )
+			{
+				sendSystemMessage(player, new string_id("storyteller", "placement_not_on_blocked_planet"));
+				return false;
+			}
+
+			// block storyteller object placement in nobuild regions
+			region[] rgnTest = getRegionsWithBuildableAtPoint(here, regions.BUILD_FALSE );
+			if ( rgnTest != null )
+			{
+				// There are regions at this location with buildable set to true.
+				sendSystemMessage(player, new string_id("storyteller", "placement_not_in_municipal_zone"));
+				return false;
+			}
+
+			// block storyteller object placement in storyteller blocking regions 
+			// (any regions with "storytellerblocked" in its name)
+			if ( isInStorytellerBlockedRegion(here) )
+			{
+				sendSystemMessage(player, new string_id("storyteller", "placement_not_in_this_location"));
+				return false;
+			}
+			
+			// block storyteller object placement on player structure roofs and balconies
+			// unless the object is flagged as allowed in interiors
+			obj_id whatAmIStandingOn = getStandingOn(player);
+			if( isIdValid(whatAmIStandingOn) && player_structure.isBuilding(whatAmIStandingOn) )
+			{
+				sendSystemMessage(player, new string_id("storyteller", "placement_not_on_a_building"));
+				return false;
+			}
+
+			// city or outpost
+			// if you are inside of a cell, permission checks have already been made.
+			if( locations.isInMissionCity(here) )
+			{
+				int city_id = getCityAtLocation(here, 0);
+
+				// It's an NPC city
+				if(city_id == 0)
+				{
+					sendSystemMessage(player, new string_id("storyteller", "placement_not_in_municipal_zone"));
+					return false;
+				}
+
+				// Zoning rights for player city		
+				if ( cityExists(city_id) && city.isCityZoned(city_id) && isIdValid(player))
+				{
+					if(!city.hasStorytellerZoningRights(player, city_id))
+					{
+						sendSystemMessage(player, new string_id("storyteller", "placement_no_zoning_rights"));
+						return false;
+					}	
+				}
+			}
+		}
+	}
+	return true;
+}
+
+boolean isInStorytellerBlockedRegion(location here)
+{
+	region[] regionsHere = getRegionsAtPoint(here);
+	if ( regionsHere != null && regionsHere.length > 0 )
+	{
+		for ( int i = 0; i < regionsHere.length; i++ )
+		{
+			region testRegion = regionsHere[i];
+			string regionName = testRegion.getName();
+
+			int nameCheck = regionName.indexOf("storytellerblocked");
+			if ( nameCheck > -1 )
+			{
+				return true;
+			}
+		}
+	}
+	
+	return false;
+}
+
+boolean allowedToSeeStorytellerObject(obj_id object, obj_id player)
+{	
+	obj_id storyteller = getObjIdObjVar(object, "storytellerid");
+	if ( isIdValid(storyteller) )
+	{
+		if (allowedToUseStorytellerObject(object, player)  )
+		{
+			return true;
+		}
+		
+		if ( utils.hasScriptVar(player, "storytellerid") )
+		{
+			obj_id playersStoryteller = utils.getObjIdScriptVar(player, "storytellerid");
+			if ( isIdValid(playersStoryteller) && storyteller == playersStoryteller )
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+boolean allowedToUseStorytellerObject(obj_id object, obj_id player)
+{
+	obj_id storyteller = getObjIdObjVar(object, "storytellerid");
+	if ( isIdValid(storyteller) )
+	{
+		if ( storyteller == player  )
+		{
+			return true;
+		}
+		else if ( utils.hasScriptVar(player, "storytellerAssistant") )
+		{
+			obj_id whoAmIAssisting = utils.getObjIdScriptVar(player, "storytellerAssistant");
+			if ( isIdValid(whoAmIAssisting) && storyteller == whoAmIAssisting )
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+boolean inSameStory(obj_id target1, obj_id target2)
+{
+	obj_id storyteller_id_1 = obj_id.NULL_ID;
+	obj_id storyteller_id_2 = obj_id.NULL_ID;
+	if ( utils.hasScriptVar(target1, "storytellerid") )
+	{
+		storyteller_id_1 = utils.getObjIdScriptVar(target1, "storytellerid");
+	}
+	if ( utils.hasScriptVar(target2, "storytellerid") )
+	{
+		storyteller_id_2 = utils.getObjIdScriptVar(target2, "storytellerid");
+	}
+	
+	// if the storyteller_id of both players is the same, they are in the same story
+	//
+	// OR if the storyteller_id of one player is equal to the obj_id of the other player, 
+	// then that player is in the other player's story
+	if ( isIdValid(storyteller_id_1) && isIdValid(storyteller_id_2) )
+	{
+		if ( storyteller_id_1 == storyteller_id_2 )
+		{
+			return true;
+		}
+	}
+	else if ( isIdValid(storyteller_id_1) && storyteller_id_1 == target2 )
+	{
+		return true;
+	}
+	else if ( isIdValid(storyteller_id_2) && storyteller_id_2 == target1 )
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+void showStorytellerEffectsInAreaToPlayer(obj_id player, obj_id storytellerPlayer)
+{
+	obj_id[] storytellerObjects = getAllObjectsWithObjVar(getLocation(player), 165.0f, "storytellerid");
+	if ( storytellerObjects != null && storytellerObjects.length > 0 )
+	{
+		for ( int i = 0; i < storytellerObjects.length; i++ )
+		{
+			obj_id object = storytellerObjects[i];
+			obj_id myStoryteller = getObjIdObjVar(object, "storytellerid");
+			if ( isIdValid(myStoryteller) )
+			{
+				if ( myStoryteller == storytellerPlayer )
+				{
+					if ( hasObjVar(object, storyteller.EFFECT_ACTIVE_OBJVAR) && hasObjVar(object, storyteller.EFFECT_TOKEN_NAME) )
+					{
+						string storytellerTokenName = getStringObjVar(object, storyteller.EFFECT_TOKEN_NAME);
+						location here = getLocation(object);
+						string effectName = storyteller.getEffectName(storytellerTokenName);
+						
+						obj_id[] playerInStory = { player };
+						playClientEffectObj(playerInStory, effectName, object, "", null, "storyteller_persisted_effect");
+					}
+				}
+			}
+		}
+	}
+	return;
+}
+
+void stopStorytellerEffectsInAreaToPlayer(obj_id player, obj_id storytellerPlayer)
+{
+	obj_id[] storytellerObjects = getAllObjectsWithObjVar(getLocation(player), 165.0f, "storytellerid");
+	if ( storytellerObjects != null && storytellerObjects.length > 0 )
+	{
+		for ( int i = 0; i < storytellerObjects.length; i++ )
+		{
+			obj_id object = storytellerObjects[i];
+			obj_id myStoryteller = getObjIdObjVar(object, "storytellerid");
+			if ( isIdValid(myStoryteller) )
+			{
+				if ( myStoryteller == storytellerPlayer )
+				{
+					if ( hasObjVar(object, storyteller.EFFECT_ACTIVE_OBJVAR) && hasObjVar(object, storyteller.EFFECT_TOKEN_NAME) )
+					{
+						string storytellerTokenName = getStringObjVar(object, storyteller.EFFECT_TOKEN_NAME);
+						location here = getLocation(object);
+						string effectName = storyteller.getEffectName(storytellerTokenName);
+						stopClientEffectObjByLabel(player, object, "storyteller_persisted_effect", false);
+					}
+				}
+			}
+		}
+	}
+	return;
+}
+
+/***************************************************************************/
+
+// Storyteller Blueprint functions
+
+string[] recordBlueprintData(obj_id blueprint, obj_id[] storytellerObjects, obj_id player)
+{
+	resizeable string[] blueprintString = new string[0];
+	
+	// Find storyteller objects that belong to the player and are valid to be saved in their blueprint
+	resizeable obj_id[] validStorytellerObjects = new obj_id[0];
+	for ( int i=0; i < storytellerObjects.length; i++ )
+	{
+		obj_id object = storytellerObjects[i];
+		obj_id objectOwner = getObjIdObjVar(object, "storytellerid");
+		
+		if ( !isIdValid(objectOwner) || objectOwner != player )
+		{
+			continue;
+		}
+		
+		if ( hasObjVar(object, storyteller.BLUEPRINT_AUTHOR_OBJVAR) )
+		{
+			obj_id blueprintAuthor = getObjIdObjVar(object, storyteller.BLUEPRINT_AUTHOR_OBJVAR);
+			if ( !isIdValid( blueprintAuthor ) || blueprintAuthor != player )
+			{
+				continue;
+			}
+		}
+
+		string tokenName = getStaticItemName(object);
+		if ( tokenName == null || tokenName.length() < 1 )
+		{
+			continue;
+		}
+		
+		string[] excludedTokens = { "st_fn_storyteller_vendor" };
+		boolean isExcludedToken = false;
+		for ( int q=0; q<excludedTokens.length; q++ )
+		{
+			if ( tokenName.equals(excludedTokens[q]) || storyteller.getTokenType(tokenName) == storyteller.OTHER )
+			{
+				isExcludedToken = true;
+			}
+		}
+		if ( isExcludedToken )
+		{
+			continue;
+		}
+		
+		utils.addElement(validStorytellerObjects, object);
+	}
+	
+	if ( validStorytellerObjects == null || validStorytellerObjects.length < 1 )
+	{
+		return blueprintString;
+	}
+	
+	// Find the center location of the valid objects to use as a reference point for thier position
+	location centerLoc = new location();
+	float maxX = -99999.0f;
+	float maxZ = -99999.0f;
+	float minX = 99999.0f;
+	float minZ = 99999.0f;
+	for ( int j=0; j < validStorytellerObjects.length; j++ )
+	{
+		obj_id object = validStorytellerObjects[j];
+		obj_id objectOwner = getObjIdObjVar(object, "storytellerid");
+		
+		if ( !isIdValid(objectOwner) || objectOwner != player )
+		{
+			continue;
+		}
+		
+		location objLoc = getLocation(object);
+		if ( objLoc.x > maxX )
+			maxX = objLoc.x;
+
+		if ( objLoc.z > maxZ )
+			maxZ = objLoc.z;
+
+		if ( objLoc.x < minX )
+			minX = objLoc.x;
+
+		if ( objLoc.z < minZ )
+			minZ = objLoc.z;
+	}
+	centerLoc = new location(maxX - ((maxX - minX)/2), 0.0f, maxZ - ((maxZ - minZ)/2));
+
+	// Find the relative position of each valid object
+	for ( int i=0; i < validStorytellerObjects.length; i++ )
+	{
+		obj_id validStoryObject = validStorytellerObjects[i];
+		string tokenName = getStaticItemName(validStoryObject);
+		
+		location playerLoc = getLocation(player);
+		float playerYaw = getYaw(player);
+		
+		location objLoc = getLocation(validStoryObject);
+		float objYaw = getYaw(validStoryObject);
+		
+		if ( playerYaw != 0 )
+		{
+			objLoc = storyteller.rotateSavedBlueprintDataXZ(playerLoc, objLoc, playerYaw);
+		}
+		
+		float yawDiff = playerYaw - objYaw;
+		
+		float terrainHeight = objLoc.y;
+		location creationLoc = getLocationObjVar(validStoryObject, "storytellerCreationLoc");
+		if ( creationLoc != null )
+		{
+			terrainHeight = creationLoc.y;
+		}
+		
+		float locX = objLoc.x - playerLoc.x;
+		float locY = objLoc.y - terrainHeight;
+		float locZ = objLoc.z - playerLoc.z;
+		
+		// locY should never have a negative value. Storyteller objects cannot be moved below the terrain.
+		// So the only reason it would be negative is if both getElevation() and getHeightAtLocation() failed.
+		if ( locY < 0.001f )
+		{
+			locY = 0.0f;
+		}
+		
+		int combatLevel = 0;
+		int difficulty = 0;
+		if ( isMob(validStoryObject) )
+		{
+			combatLevel = getLevel(validStoryObject);
+			difficulty = getIntObjVar(validStoryObject, "difficultyClass");
+		}
+		
+		string effect = "none";
+		if ( hasObjVar(validStoryObject, storyteller.EFFECT_ACTIVE_OBJVAR) && hasObjVar(validStoryObject, storyteller.EFFECT_TOKEN_NAME) )
+		{
+			effect = getStringObjVar(validStoryObject, storyteller.EFFECT_TOKEN_NAME);
+			
+			// The effect token is saved in reference to the object it plays on. 
+			// This entry is simply to track that an effect token is required and has/hasn't been loaded.
+			string effectEntry = buildBlueprintObjectData(storyteller.BLUEPRINT_TOKEN_NEEDED, effect, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, "none");
+			utils.addElement(blueprintString, effectEntry);
+		}
+
+		string newEntry = buildBlueprintObjectData(storyteller.BLUEPRINT_TOKEN_NEEDED, tokenName, locX, locY, locZ, yawDiff, combatLevel, difficulty, effect);
+
+		utils.addElement(blueprintString, newEntry);
+		
+		if ( blueprintString.length >= BLUEPRINT_MAX_NUM_OBJECTS )
+		{
+			break;
+		}
+	}
+	
+	return blueprintString;
+}
+
+location rotateSavedBlueprintDataXZ(location locOrigin, location locPoint, float fltAngle)
+{
+	float dx = locPoint.x - locOrigin.x;
+	float dz = locPoint.z - locOrigin.z;
+
+	float fltRadians = (float)Math.toRadians(fltAngle);
+	float fltC = (float)Math.cos(fltRadians);
+	float fltS = (float) Math.sin(fltRadians);
+	
+	location locNewOffset = locOrigin;
+
+	locNewOffset.x += -(dx * fltC) + (dz * fltS);
+	locNewOffset.y = locPoint.y;
+	locNewOffset.z += (dx * fltS) + (dz * fltC);
+
+	return locNewOffset;
+}
+
+string changeBlueprintItemTokenStatus(int tokenStatus, string objectData)
+{
+	return buildBlueprintObjectData(tokenStatus, getBlueprintItemName(objectData), getBlueprintItemLocX(objectData), getBlueprintItemLocY(objectData), getBlueprintItemLocZ(objectData), getBlueprintItemYaw(objectData), getBlueprintItemCombatLevel(objectData), getBlueprintItemDifficulty(objectData), getBlueprintItemEffect(objectData));
+}
+
+string buildBlueprintObjectData(int tokenLoaded, string tokenName, float locX, float locY, float locZ, float yaw, int combatLevel, int difficulty, string effect)
+{
+	return tokenLoaded+"~"+tokenName+"~"+locX+"~"+locY+"~"+locZ+"~"+yaw+"~"+combatLevel+"~"+difficulty+"~"+effect;
+}
+
+int getBlueprintObjectDataSize(string blueprintObjectData)
+{
+	string[] parse = split(blueprintObjectData, '~');
+	return parse.length;
+}
+
+int getRequiredBlueprintDataSize()
+{
+	string blueprintDataTest = buildBlueprintObjectData(BLUEPRINT_TOKEN_NEEDED, "test_only", 0.0f,0.0f, 0.0f, 0.0f, 0, 0, "none");
+	return getBlueprintObjectDataSize(blueprintDataTest);
+}
+
+boolean validateBlueprintData(string blueprintObjectData)
+{
+	if ( getBlueprintObjectDataSize(blueprintObjectData) == getRequiredBlueprintDataSize() )
+	{
+		return true;
+	}
+	return false;
+}
+
+obj_id createBlueprintObject(string objectData, obj_id blueprintController, obj_id player, location targetLoc, float targetYaw)
+{
+	obj_id blueprintObject = obj_id.NULL_ID;
+	
+	string tokenName = getBlueprintItemName(objectData);
+	location atLoc = getBlueprintObjectLocation(objectData, targetLoc);
+	float yawDiff = getBlueprintItemYaw(objectData);
+
+	int combatLevel = getBlueprintItemCombatLevel(objectData);
+	int difficulty = getBlueprintItemDifficulty(objectData);
+	string effect = getBlueprintItemEffect(objectData);
+
+	if ( targetYaw != 0 )
+	{
+		atLoc = storyteller.rotateSavedBlueprintDataXZ(targetLoc, atLoc, targetYaw);
+	}
+	float newYaw = targetYaw - yawDiff;
+
+	int tokenType = storyteller.getTokenType(tokenName);
+	switch(tokenType)
+	{
+		case storyteller.PROP:
+			blueprintObject = storyteller.createPropObjectNoToken(tokenName, player, false, atLoc, newYaw);
+			break;
+		case storyteller.COMBAT_NPC:
+			blueprintObject = storyteller.createNpcAtLocationNoToken(tokenName, player, atLoc, newYaw, combatLevel, difficulty);					
+			break;
+		case storyteller.FLAVOR_NPC:
+			blueprintObject = storyteller.createNpcAtLocationNoToken(tokenName, player, atLoc, newYaw, combatLevel, difficulty);
+			break;
+		case storyteller.STATIC_EFFECT:
+			// The effect token is saved in reference to the object it plays on. 
+			// This entry is simply to track that an effect token is required and has/hasn't been loaded.
+			break;
+	}
+	
+	if ( isValidId(blueprintObject) )
+		{
+			// save obj_id of the blueprint author
+			if ( hasObjVar(blueprintController, storyteller.BLUEPRINT_AUTHOR_OBJVAR) )
+			{
+				obj_id blueprintAuthor = getObjIdObjVar(blueprintController, storyteller.BLUEPRINT_AUTHOR_OBJVAR);
+				if ( isIdValid(blueprintAuthor) )
+				{
+					setObjVar(blueprintObject, storyteller.BLUEPRINT_AUTHOR_OBJVAR, blueprintAuthor);
+				}
+			}
+
+			// if a persisted effect is being used on the object, play it
+			if ( effect.length() > 0 && !effect.equals("none") )
+			{
+				setObjVar(blueprintObject, storyteller.EFFECT_TOKEN_NAME, effect);
+				if ( hasScript(blueprintObject, "systems.storyteller.effect_controller") )
+				{
+					messageTo(blueprintObject, "handlePlayNewStorytellerEffect", null, 1, false);
+				}
+				else
+				{
+					attachScript(blueprintObject, "systems.storyteller.effect_controller");
+				}
+			}
+			
+			dictionary webster = new dictionary();
+			webster.put("yOffset", getBlueprintItemLocY(objectData));
+			webster.put("player", player);
+			messageTo(blueprintObject, "handleBlueprintElevation", webster, 0.25f, false);
+		}
+	
+	if ( isGod(player) )
+	{
+		utils.setScriptVar(player, "storyteller.godModeStopOverrideMessages", true);
+	}
+	
+	return blueprintObject;
+}
+
+void handleBlueprintObjectElevation(obj_id blueprintObject, dictionary params)
+{
+	if ( params != null || !params.isEmpty() )
+	{
+		float yOffset = params.getFloat("yOffset");
+		obj_id player = params.getObjId("player");
+
+		location here = getLocation(blueprintObject);
+		setObjVar(blueprintObject, "storytellerCreationLoc", here);
+
+		location newElevationLoc = new location(here.x, here.y + yOffset, here.z);
+		setLocation(blueprintObject, newElevationLoc);
+	}
+	
+	return;
+}
+
+location getBlueprintObjectLocation(string spawnString, location centerLoc)
+{
+	float locX = centerLoc.x + getBlueprintItemLocX(spawnString);
+	float locZ = centerLoc.z + getBlueprintItemLocZ(spawnString);
+	
+	// sending an incorrect elevation at this point. It will be corrected later during the creation process.
+	float locY = centerLoc.y;
+
+	return new location(locX, locY, locZ, centerLoc.area, null);
+}
+
+boolean isBlueprintTokenLoaded(string spawnString)
+{
+	string[] parse = split(spawnString, '~');
+	
+	if ( utils.stringToInt(parse[0]) == 1 )
+		return true;
+	
+	return false;
+}
+
+string getBlueprintItemName(string spawnString)
+{
+	string[] parse = split(spawnString, '~');
+	return parse[1];
+}
+
+float getBlueprintItemLocX(string spawnString)
+{
+	string[] parse = split(spawnString, '~');	
+	return utils.stringToFloat(parse[2]);
+}
+
+float getBlueprintItemLocY(string spawnString)
+{
+	string[] parse = split(spawnString, '~');	
+	return utils.stringToFloat(parse[3]);
+}
+
+float getBlueprintItemLocZ(string spawnString)
+{
+	string[] parse = split(spawnString, '~');	
+	return utils.stringToFloat(parse[4]);
+}
+
+float getBlueprintItemYaw(string spawnString)
+{
+	string[] parse = split(spawnString, '~');
+	return utils.stringToFloat(parse[5]);
+}
+
+int getBlueprintItemCombatLevel(string spawnString)
+{
+	string[] parse = split(spawnString, '~');
+	return utils.stringToInt(parse[6]);
+}
+
+int getBlueprintItemDifficulty(string spawnString)
+{
+	string[] parse = split(spawnString, '~');
+	return utils.stringToInt(parse[7]);
+}
+
+string getBlueprintItemEffect(string spawnString)
+{
+	string[] parse = split(spawnString, '~');
+	return parse[8];
+}
+
+void blueprintParseConversion(obj_id blueprint)
+{
+	// CTS uses | when packing objvars, so blueprint data cannot use | when recording
+	// blueprint object data in its  data objvar. This function will convert previously existing blueprints 
+	// away from splitting their data with | and reset their data to use ~
+	
+	string[] blueprintObjects = utils.getStringBatchObjVar(blueprint, storyteller.BLUEPRINT_OBJECTS_OBJVAR);
+	if ( blueprintObjects == null || blueprintObjects.length == 0 )
+	{
+		// no blueprint found so no need to convert it.
+		return;
+	}
+	
+	boolean conversionWasRequired = false;
+	
+	for (int i=0; i < blueprintObjects.length; i++)
+	{
+		string objectData = blueprintObjects[i];
+		string[] oldParse = split(objectData, '|');
+		if ( oldParse.length > 1 )
+		{
+			int tokenLoaded = utils.stringToInt(oldParse[0]);
+			string tokenName = oldParse[1];
+			float locX = utils.stringToFloat(oldParse[2]);
+			float locY = utils.stringToFloat(oldParse[3]);
+			float locZ = utils.stringToFloat(oldParse[4]);
+			float yaw = utils.stringToFloat(oldParse[5]);
+			int combatLevel = utils.stringToInt(oldParse[6]);
+			int difficulty = utils.stringToInt(oldParse[7]);
+			string effect = oldParse[8];
+			
+			string convertedObjectData = buildBlueprintObjectData(tokenLoaded, tokenName, locX, locY, locZ, yaw, combatLevel, difficulty, effect);
+			blueprintObjects[i] = convertedObjectData;
+			
+			conversionWasRequired = true;
+		}
+	}
+	
+	if ( conversionWasRequired )
+	{
+		utils.setBatchObjVar(blueprint, storyteller.BLUEPRINT_OBJECTS_OBJVAR, blueprintObjects);
+	}
+	
+	return;
+}
+
+/***************************************************************************/
+
+// Auto-decline Storyteller Invites
+boolean doIAutoDeclineStorytellerInvites(obj_id player)
+{
+	// is auto-declining all storyteller invites
+	if ( hasObjVar(player, storyteller.VAR_AUTODECLINE_STORY_INVITES) )
+	{
+		return true;
+	}
+	
+	// is in a battlefield
+	if ( utils.hasScriptVar(player, "battlefield.active") )
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+// Storyteller Assistant Invite
+int storyAssistantSui(obj_id storytellerPlayer, string storytellerName, obj_id player)
+{	
+	string title = utils.packStringId(new string_id("storyteller", "assistant_title"));
+	prose_package pp = prose.getPackage(new string_id("storyteller", "assistant_invite"));
+	prose.setTO(pp, storytellerName);
+	string msg = "\0" + packOutOfBandProsePackage(null, pp);
+	int pid = sui.msgbox(storytellerPlayer, player, msg, 2, title, sui.YES_NO, "storyAssistantHandler");
+	
+	return pid;
+}
+
+void storyAssistantAcepted(obj_id storytellerPlayer, string storytellerName, obj_id player)
+{
+	string_id message = new string_id ("storyteller", "assistant_player_name");
+	prose_package pp = prose.getPackage(message, player, player);
+	prose.setTO(pp, storytellerName);
+	sendSystemMessageProse(player, pp);
+	
+	dictionary webster = new dictionary();
+	webster.put("assistantPlayerName", getName(player));
+	messageTo(storytellerPlayer, "handleStorytellerAssistantHasBeenAdded", webster, 0, false);
+	
+	utils.setScriptVar(player, "storytellerAssistant", storytellerPlayer);
+	utils.setScriptVar(player, "storytellerAssistantName", storytellerName);
+	return;
+}
+
+// Storyteller Assistant Removal
+void storyPlayerRemoveAssistant(obj_id storytellerPlayer, string storytellerName, obj_id player)
+{
+	string_id message = new string_id ("storyteller", "assistant_removed_player");
+	prose_package pp = prose.getPackage(message, player, player);
+	prose.setTO(pp, storytellerName);
+	sendSystemMessageProse(player, pp);
+	
+	utils.removeScriptVar(player, "storytellerAssistant");
+	utils.removeScriptVar(player, "storytellerAssistant");
+	
+	dictionary webster = new dictionary();
+	webster.put("removedPlayerName", getName(player));
+	messageTo(storytellerPlayer, "handleStorytellerAssistantHasBeenRemoved", webster, 0, false);
+	return;
+}
+
+// Storyteller Invite to Story
+int storyInviteSui(obj_id storytellerPlayer, string storytellerName, obj_id player)
+{	
+	string title = utils.packStringId(new string_id("storyteller", "sui_invite_title"));
+	prose_package pp = prose.getPackage(new string_id("storyteller", "sui_invite_body"));
+	prose.setTO(pp, storytellerName);
+	string msg = "\0" + packOutOfBandProsePackage(null, pp);
+	int pid = sui.msgbox(storytellerPlayer, player, msg, 2, title, sui.YES_NO, "storyInviteHandler");
+	
+	return pid;
+}
+
+void storyInviteAcepted(obj_id storytellerPlayer, string storytellerName, obj_id player, obj_id storytellerAssistant)
+{
+	string_id message = new string_id ("storyteller", "player_invited_name");
+	prose_package pp = prose.getPackage(message, player, player);
+	prose.setTO(pp, storytellerName);
+	sendSystemMessageProse(player, pp);
+	
+	dictionary webster = new dictionary();
+	webster.put("addedPlayerName", getName(player));
+	webster.put("storytellerName", storytellerName);
+	
+	if ( isIdValid(storytellerAssistant) )
+	{
+		messageTo(storytellerAssistant, "handleStorytellerPlayerHasBeenAdded", webster, 0, false);
+	}
+	else
+	{
+		messageTo(storytellerPlayer, "handleStorytellerPlayerHasBeenAdded", webster, 0, false);
+	}
+	
+	utils.setScriptVar(player, "storytellerid", storytellerPlayer);
+	utils.setScriptVar(player, "storytellerName", storytellerName);
+
+	showStorytellerEffectsInAreaToPlayer(player, storytellerPlayer);
+	
+	return;
+}
+
+// Storyteller Removal from Story
+void storyPlayerRemovedFromStory(obj_id storytellerPlayer, string storytellerName, obj_id player)
+{
+	string_id message = new string_id ("storyteller", "removed_from_story");
+	prose_package pp = prose.getPackage(message, player, player);
+	prose.setTO(pp, storytellerName);
+	sendSystemMessageProse(player, pp);
+	
+	utils.removeScriptVar(player, "storytellerid");
+	utils.removeScriptVar(player, "storytellerName");
+	
+	dictionary webster = new dictionary();
+	webster.put("removedPlayerName", getName(player));
+	messageTo(storytellerPlayer, "handleStorytellerPlayerHasBeenRemoved", webster, 0, false);
+	return;
+}
+
+/***************************************************************************/
+
+boolean storytellerCombatCheck(obj_id attacker, obj_id target)
+{	
+	// storyteller combat is a player or his pet/beast fighting an npc.
+	// Completely pve, so find out which is the player and which is the npc.
+	
+	if (!isIdValid(attacker) || !exists(attacker) || !isIdValid(target) || !exists(target))
+		return false;
+		
+	obj_id storyPlayer = null;
+	obj_id storyNpc = null;
+	
+	if ( isPlayer(attacker) )
+	{
+		// pvp is not effected by storytelling
+		if ( isPlayer(target) )
+		{
+			return true;
+		}
+		else
+		{
+			storyPlayer = attacker;
+			storyNpc = target;
+		}
+	}
+	else if ( isPlayer(target) )
+	{
+		storyPlayer = target;
+		storyNpc = attacker;
+	}
+	// neither attacker or target are players at this point, but is either a player controlled pet or beast?
+	else if ( pet_lib.isPet(attacker) || beast_lib.isBeast(attacker) )
+	{
+		// pets fighting pets is pvp and not effected by storytelling
+		if ( pet_lib.isPet(target) || beast_lib.isBeast(target) )
+		{
+			return true;
+		}
+		else
+		{
+			storyPlayer = getMaster(attacker);
+			storyNpc = target;
+		}
+	}
+	else if ( pet_lib.isPet(target) || beast_lib.isBeast(target) )
+	{
+		storyPlayer = getMaster(target);
+		storyNpc = attacker;
+	}
+	
+	// check for remote egg used for area of effect and delayed attacks
+	// or destructible objects
+	else if ( !isMob(attacker) )
+	{
+		if ( hasScript(attacker, "systems.combat.combat_delayed_tracker") )
+		{
+			storyPlayer = utils.getObjIdScriptVar(attacker, "objOwner");
+			storyNpc = target;
+		}
+		else
+		{
+			storyNpc = attacker;
+			storyPlayer = target;
+		}
+	}
+	else if ( !isMob(target) )
+	{
+		if ( hasScript(target, "systems.combat.combat_delayed_tracker") )
+		{
+			storyPlayer = utils.getObjIdScriptVar(target, "objOwner");
+			storyNpc = attacker;
+		}
+		else
+		{
+			storyNpc = target;
+			storyPlayer = attacker;
+		}
+	}
+	// if both attacker and target are mobs, but neither are pets, beasts or players,
+	// then check to see if they can assist.
+	// Storyteller mobs can only assist against other storyteller mobs
+	else if ( hasObjVar(attacker, "storytellerid") || hasObjVar(target, "storytellerid") )
+	{
+		if ( hasObjVar(attacker, "storytellerid") && hasObjVar(target, "storytellerid")  )
+		{
+			obj_id attackerNpcStoryteller = getObjIdObjVar(attacker, "storytellerid");
+			obj_id targetNpcStoryteller = getObjIdObjVar(target, "storytellerid");
+			
+			if ( attackerNpcStoryteller == targetNpcStoryteller )
+			{
+				return true;
+			}
+			else
+			{
+				return false;
+			}
+		}
+		else
+		{
+			return false;
+		}
+	}
+	
+	// check to see
+	if ( isIdValid(storyPlayer) && isIdValid(storyNpc) )
+	{
+		if ( hasObjVar(storyNpc, "storytellerid") )
+		{
+			if ( utils.hasScriptVar(storyPlayer, "storytellerid") )
+			{
+				obj_id playerStorytellerId = utils.getObjIdScriptVar(storyPlayer, "storytellerid");
+				obj_id npcStorytellerId = getObjIdObjVar(storyNpc, "storytellerid");
+				if ( isIdValid(playerStorytellerId) && isIdValid(npcStorytellerId) && playerStorytellerId == npcStorytellerId )
+				{ 
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			else
+			{
+				return false;
+			}
+		}
+	}
+ 	
+	return true;
+}
+
+/***** Storyteller Vendor functions *************************************************/
+
+boolean displayAvailableStorytellerTokenTypes(obj_id player, obj_id storytellerVendor)
+{
+	if ( getDistance(storytellerVendor, player) > 10.0f )
+	{
+		return false;
+	}
+	
+	string title = utils.packStringId(new string_id("storyteller", "token_purchase_type_title"));
+	string prompt = utils.packStringId(new string_id("storyteller","token_purchase_type_prompt"));
+	
+	int pid = sui.listbox(storytellerVendor, player, prompt, sui.OK_CANCEL, title, getTokenTypeNamesArray(), "msgStorytellerTokenTypeSelected");
+
+	if ( pid > -1 )
+	{
+		string scriptvar_path = "storytellerVendor." + player;
+		utils.setScriptVar(storytellerVendor, scriptvar_path + ".pid", pid);
+		return true;
+	}
+	
+	return false;
+}
+
+string[] getTokenTypeNamesArray()
+{
+	const string[] sid_storytellerTokenTypes = {"token_type_prop", 
+												"token_type_persisted_effect", 
+												"token_type_immediate_effect", 
+												"token_type_combat_npc", 
+												"token_type_flavor_npc",
+												"token_type_other",
+												"token_type_costume"};
+	
+	resizeable string[] storytellerTokenTypes = new string[0];
+	
+	for ( int i=0; i < sid_storytellerTokenTypes.length; i++ )
+	{
+		string tokenType = utils.packStringId(new string_id("storyteller", sid_storytellerTokenTypes[i]));
+		storytellerTokenTypes = utils.addElement(storytellerTokenTypes, tokenType);
+	}
+	
+	return storytellerTokenTypes;
+}
+
+
+boolean displayStorytellerTokenPurchaseSUI(obj_id player, int tokenType, obj_id storytellerVendor)
+{
+	if ( !isIdValid(player) || !isIdValid(storytellerVendor) )
+	{
+		return false;
+	}
+	
+	if ( getDistance(storytellerVendor, player) > 10.0f )
+	{
+		return false;
+	}
+
+	string scriptvar_path = "storytellerVendor." + player;
+	if ( utils.hasScriptVar(storytellerVendor, scriptvar_path + ".pid") )
+	{
+		int oldpid = utils.getIntScriptVar(storytellerVendor, scriptvar_path + ".pid");
+		sui.closeSUI(player, oldpid);
+
+		utils.removeScriptVar(storytellerVendor, scriptvar_path + ".pid");
+		utils.removeBatchScriptVar(storytellerVendor, scriptvar_path + ".tokenReferences");
+		utils.removeBatchScriptVar(storytellerVendor, scriptvar_path + ".tokens");
+		utils.removeScriptVar(storytellerVendor, scriptvar_path + ".tokenType");
+	}
+	
+	resizeable string[] tokenReferences = new string[0];
+		
+	int num_items = dataTableGetNumRows(STORYTELLER_DATATABLE);
+	for (int i = 0; i < num_items; i++)
+	{
+		dictionary row = dataTableGetRow(STORYTELLER_DATATABLE, i);
+		if ( row != null && !row.isEmpty() )
+		{
+			int row_tokenType = row.getInt("type");
+			
+			if ( row_tokenType == tokenType )
+			{				
+				string token_reference = row.getString("name");
+				int cost = row.getInt("cost");
+				
+				if ( cost > 0 )
+				{
+					tokenReferences = utils.addElement(tokenReferences, token_reference);
+				}
+			}
+		}
+	}
+	
+	string[] tokenTypeNames = getTokenTypeNamesArray();
+
+	if (tokenReferences == null || tokenReferences.length < 1)
+	{
+		// There are no items available for the selected token type, so show the type selection sui 		
+		storyteller.displayAvailableStorytellerTokenTypes(player, storytellerVendor);
+		
+		prose_package pp = prose.getPackage(new string_id("storyteller", "token_purchase_none_of_type"), tokenTypeNames[tokenType]);
+		sendSystemMessageProse(player, pp);
+		return false;
+	}
+
+	string prompt = getString(new string_id("storyteller","token_purchase_select_token"));
+	
+	string[] alphabetizedTokenReferences = getAlphabetizedTokenList(utils.toStaticStringArray(tokenReferences), tokenType);
+	string[] alphabetizedTokens = getTokenNamesList(alphabetizedTokenReferences, tokenType, player);
+
+	string myHandler = "msgStorytellerTokenPurchaseSelected";	
+	int pid = sui.listbox(storytellerVendor, player, prompt, sui.OK_CANCEL_REFRESH, tokenTypeNames[tokenType], alphabetizedTokens, myHandler, false, false);
+	if ( pid > -1 )
+	{
+		sui.listboxUseOtherButton(pid, "Back");
+		sui.showSUIPage(pid);
+		
+		utils.setScriptVar(storytellerVendor, scriptvar_path + ".pid", pid);
+		utils.setBatchScriptVar(storytellerVendor, scriptvar_path + ".tokenReferences", alphabetizedTokenReferences);
+		utils.setBatchScriptVar(storytellerVendor, scriptvar_path + ".tokens", alphabetizedTokens);
+		utils.setScriptVar(storytellerVendor, scriptvar_path + ".tokenType", tokenType);
+		return true;
+	}
+
+	return false;
+}
+
+string[] getAlphabetizedTokenList(string[] tokenReferences, int tokenType)
+{
+	string[] namesColonTokens = new string[tokenReferences.length];
+	
+	for ( int i = 0; i < tokenReferences.length; i++ )
+	{
+		string temp = getString(new string_id("static_item_n", tokenReferences[i]))+ "|" + tokenReferences[i];
+		namesColonTokens[i] = temp;
+	}
+
+	Arrays.sort(namesColonTokens);
+
+	string[] finalList = new string[namesColonTokens.length];
+	for ( int j = 0; j < namesColonTokens.length; j++ )
+	{
+		string[] splitText = split(namesColonTokens[j], '|');
+		finalList[j] = splitText[1];
+	}
+	
+	if ( tokenType == COSTUME )
+	{
+		// Mad, insane hackery...please just look away
+		string[] tempList = new string[finalList.length];
+		utils.copyArray(finalList, tempList);
+		
+		finalList[0] = "item_costume_kit";
+		int nextFinalListSlot = 1;
+		for ( int k = 0; k < tempList.length; k++ )
+		{
+			string ref = tempList[k];
+			if ( !ref.equals("item_costume_kit") )
+			{
+				finalList[nextFinalListSlot] = ref;
+				++nextFinalListSlot;
+			}
+		}
+	}
+	
+	return finalList;
+}
+
+string[] getTokenNamesList(string[] tokenReferences, int tokenType, obj_id player)
+{
+	string[] tokenNamesList = new string[tokenReferences.length];
+	
+	for ( int i = 0; i < tokenReferences.length; i++ )
+	{
+		string token = tokenReferences[i];
+		
+		dictionary row = dataTableGetRow(STORYTELLER_DATATABLE, token);
+		if ( row != null && !row.isEmpty() )
+		{
+			int cost = row.getInt("cost");
+			string tokenName = utils.packStringId(new string_id("static_item_n", token));
+			
+			if ( tokenType == COMBAT_NPC || tokenType == FLAVOR_NPC )
+			{
+				tokenName = tokenName + " (Cost: " + cost + " per npc)";
+			}
+			else if ( tokenType == PROP )
+			{
+				tokenName = tokenName + " (Cost: " + cost + " per prop)";
+			}
+			else if ( tokenType == COSTUME )
+			{
+				if ( token.equals("item_costume_kit") )
+				{
+					tokenName = tokenName + " (Cost: " + cost + " per holoshroud)";
+				}
+				else
+				{
+					// if the item is a costume that you alreqady know, list it in red text
+					dictionary itemData = new dictionary();
+					itemData = dataTableGetRow(static_item.ITEM_STAT_BALANCE_TABLE, token);
+					if ( itemData != null && !itemData.isEmpty() )
+					{
+						string costumeName = itemData.getString("buff_name");
+						if ( hasSkill(player, costumeName) )
+						{
+							string tokenText = utils.packStringId(new string_id("static_item_n", token));
+
+							string_id contrastText_sid = new string_id("storyteller","costume_already_known");
+							prose_package pp = prose.getPackage(contrastText_sid);
+							prose.setTO(pp, tokenText);
+							prose.setDI(pp, cost);
+
+							tokenName = "\0" + packOutOfBandProsePackage(null, pp);
+						}
+						else
+						{
+							tokenName = tokenName + " (Cost: " + cost + ")";
+						}
+					}
+				}
+			}
+			else
+			{
+				tokenName = tokenName + " (Cost: " + cost + ")";
+			}
+			
+			tokenNamesList[i] = tokenName;
+		}
+		else
+		{
+			// this should never happen, but just in case
+			tokenNamesList[i] = utils.packStringId(new string_id("storyteller", "unknown_token")) + " : " + token;
+		}
+	}
+	
+	return tokenNamesList;
+}
+
+void storytellerTokenPurchased(dictionary params, obj_id storytellerVendor)
+{
+	if ( params == null || params.isEmpty() )
+	{
+		return;
+	}
+
+	obj_id player = sui.getPlayerId(params);
+	if ( !isIdValid(player) )
+	{
+		return;
+	}
+
+	if ( getDistance(storytellerVendor, player) > 10.0f )
+	{
+		return;
+	}
+
+	string scriptvar_path = "storytellerVendor." + player;
+	if ( !utils.hasScriptVar(storytellerVendor, scriptvar_path + ".pid") )
+	{
+		return;
+	}
+	
+	int oldPid = utils.getIntScriptVar(storytellerVendor, scriptvar_path + ".pid");
+	string[] tokenReferences = utils.getStringBatchScriptVar(storytellerVendor, scriptvar_path + ".tokenReferences");
+	string[] tokens = utils.getStringBatchScriptVar(storytellerVendor, scriptvar_path + ".tokens");
+	int tokenType = utils.getIntScriptVar(storytellerVendor, scriptvar_path + ".tokenType");
+	
+	utils.removeScriptVar(storytellerVendor, scriptvar_path + ".pid");
+	utils.removeBatchScriptVar(storytellerVendor, scriptvar_path + ".tokenReferences");
+	utils.removeBatchScriptVar(storytellerVendor, scriptvar_path + ".tokens");
+	utils.removeScriptVar(storytellerVendor, scriptvar_path + ".tokenType");
+
+
+	if ( tokenReferences == null || tokenReferences.length == 0 )
+	{
+		LOG("LOG_CHANNEL", "storyteller::storytellerTokenPurchased -- the token reference list is null.");
+		return;
+	}
+
+	int button = sui.getIntButtonPressed(params);
+	if ( button == sui.BP_CANCEL )
+	{
+		return;
+	}
+		
+	if ( button == sui.BP_REVERT )
+	{
+		// Go back the Token Type Selection list
+		storyteller.displayAvailableStorytellerTokenTypes(player, storytellerVendor);
+		return;
+	}
+	
+	int token_selected = sui.getListboxSelectedRow(params);
+	if (token_selected < 0)
+		return;
+
+	if (token_selected >= tokenReferences.length)
+		return;
+
+	// Get the selected item.
+	string token_reference = tokenReferences[token_selected];
+	if (token_reference == null)
+	{
+		LOG("LOG_CHANNEL", "storyteller::storytellerTokenPurchased -- the item template selected by " + storytellerVendor + " is null.");
+		return;
+	}
+
+	// Get token data for the selected item.
+	int tokenIdx = dataTableSearchColumnForString(token_reference, "name", STORYTELLER_DATATABLE);
+	if (tokenIdx == -1)
+	{
+		LOG("LOG_CHANNEL", "storyteller::storytellerTokenPurchased -- cannot find " + token_reference + " in the storyteller token datatable.");
+		return;
+	}
+	
+	// Get static item data for the selected item.
+	int staticIdx = dataTableSearchColumnForString(token_reference, "name", STORYTELLER_DATATABLE);
+	if (staticIdx == -1)
+	{
+		LOG("LOG_CHANNEL", "storyteller::storytellerTokenPurchased -- cannot find " + token_reference + " in the static item datatable.");
+		return;
+	}
+		
+	dictionary tokenData = dataTableGetRow(STORYTELLER_DATATABLE, tokenIdx);
+	int cost = tokenData.getInt("cost");
+	string tokenName = utils.packStringId(new string_id("static_item_n", token_reference));
+	int maxCharges = tokenData.getInt("max_charges");
+	
+	if ( requestNumCharges(tokenType, token_reference) && maxCharges > 1 )
+	{		
+		string prompt = getString(new string_id("storyteller","token_how_many_charges")) + maxCharges;
+		int pid = sui.inputbox(storytellerVendor, player, prompt, sui.OK_CANCEL, tokenName, sui.INPUT_NORMAL, null, "msgStorytellerChargesSelected");
+		if ( pid > -1 )
+		{
+			sui.showSUIPage(pid);
+
+			utils.setScriptVar(storytellerVendor, scriptvar_path + ".pid", pid);
+			utils.setScriptVar(storytellerVendor, scriptvar_path + ".tokenChosen", token_reference);
+			utils.setScriptVar(storytellerVendor, scriptvar_path + ".tokenType", tokenType);
+			return;
+		}
+	}
+	
+	givePurchasedToken(storytellerVendor, player, token_reference, tokenName, cost, 0);
+		
+	storyteller.displayStorytellerTokenPurchaseSUI(player, tokenType, storytellerVendor);
+	return;
+}
+
+boolean requestNumCharges(int tokenType, string token_reference)
+{
+	if ( tokenType == COMBAT_NPC )
+		return true;
+		
+	if ( tokenType == FLAVOR_NPC )
+		return true;
+		
+	if ( tokenType == PROP )
+		return true;
+	
+	// standard holoshroud
+	// if more special case tokens needs to be added, change this to an array to be checked against
+	if ( token_reference.equals("item_costume_kit") )
+		return true;
+		
+	return false;
+}
+
+void storytellerSellTokenWithCharges(dictionary params, obj_id storytellerVendor)
+{
+	obj_id player = sui.getPlayerId(params);
+	int btn = sui.getIntButtonPressed(params);
+	string text = sui.getInputBoxText(params);
+	int numCharges = utils.stringToInt(text);
+	
+	string scriptvar_path = "storytellerVendor." + player;
+	
+	string token_reference = utils.getStringScriptVar(storytellerVendor, scriptvar_path + ".tokenChosen");
+	int tokenType = utils.getIntScriptVar(storytellerVendor, scriptvar_path + ".tokenType");
+	
+	string tokenName = utils.packStringId(new string_id("static_item_n", token_reference));
+	
+	dictionary tokenData = dataTableGetRow(STORYTELLER_DATATABLE, token_reference);
+	int cost = tokenData.getInt("cost");
+	int maxCharges = tokenData.getInt("max_charges");
+	
+	if ( btn == sui.BP_CANCEL )
+	{
+		storyteller.displayStorytellerTokenPurchaseSUI(player, tokenType, storytellerVendor);
+		return;
+	}
+
+	if (numCharges < 1 || numCharges > maxCharges)
+	{
+		string_id message = new string_id ("storyteller", "token_num_charges_invalid");
+		prose_package pp = prose.getPackage(message, player, player);
+		prose.setDI(pp, maxCharges);
+		sendSystemMessageProse(player, pp);
+		
+		string prompt = getString(new string_id("storyteller","token_how_many_charges")) + maxCharges;
+		int pid = sui.inputbox(storytellerVendor, player, prompt, sui.OK_CANCEL, tokenName, sui.INPUT_NORMAL, null, "msgStorytellerChargesSelected");
+		if ( pid > -1 )
+		{
+			sui.showSUIPage(pid);
+
+			utils.setScriptVar(storytellerVendor, scriptvar_path + ".pid", pid);
+			utils.setScriptVar(storytellerVendor, scriptvar_path + ".tokenChosen", token_reference);
+			utils.setScriptVar(storytellerVendor, scriptvar_path + ".tokenType", tokenType);
+		}
+	}
+	else
+	{		
+		givePurchasedToken(storytellerVendor, player, token_reference, tokenName, cost*numCharges, numCharges);
+		
+		storyteller.displayStorytellerTokenPurchaseSUI(player, tokenType, storytellerVendor);
+	}
+
+	return;
+}
+
+void givePurchasedToken(obj_id storytellerVendor, obj_id player, string tokenReference, string tokenName, int cost, int numCharges)
+{
+	obj_id inv = getObjectInSlot(player, "inventory");
+	if ( !isIdValid(inv) )
+	{
+		LOG("LOG_CHANNEL", "storyteller::storytellerTokenPurchased --  " + player + "'s inventory object is null.");
+		return;
+	}
+
+	// Check player for required credits
+	if ( !money.hasFunds(player, money.MT_TOTAL, cost) )
+	{
+		prose_package pp = prose.getPackage(new string_id("storyteller", "token_purchase_not_enough_credits"), tokenName);
+		sendSystemMessageProse(player, pp);
+	}
+	else
+	{
+		// Check for inventory space.
+		int free_space = getVolumeFree(inv);
+		if (free_space < 1)
+		{
+			sendSystemMessage(player, faction_perk.SID_INVENTORY_FULL);
+			//factions.addFactionStanding(player, faction, cost);
+			return;
+		}
+
+		// Pay the costs
+		utils.moneyOutMetric(player, "STORYTELLER_TOKENS", cost);
+		money.requestPayment(player, storytellerVendor, cost, "pass_fail", null, true);
+
+		CustomerServiceLog("storyteller", "(" + player + ")" + getName(player) + " is attempting to purchase item: " + tokenReference);
+		CustomerServiceLog("storyteller", "(" + player + ")" + getName(player) + "'s purchase cost: " + cost);
+
+		// Create the item. 
+		// Check if it's a static item, if so create with that function instead.
+		obj_id item = static_item.createNewItemFunction(tokenReference, inv);
+
+		if ( !isIdValid(item) )
+		{
+			LOG("LOG_CHANNEL", "storyteller::storytellerTokenPurchased --  unable to create " + tokenReference + " for " + storytellerVendor);
+			//factions.addFactionStanding(player, faction, cost);
+			CustomerServiceLog("storyteller", "(" + player + ")" + getName(player) + "'s purchase of " + tokenReference + " has failed!");
+			return;
+		}
+		
+		if ( numCharges > 0 )
+		{
+			setCount(item, numCharges);
+		}
+
+		CustomerServiceLog("storyteller", "(" + player + ")" + getName(player) + " has purchased (" + item + ")" + getName(item));
+		logBalance("storyteller;" + getGameTime() + ";item;" + tokenReference + ";" + cost);
+
+		// Send the completion message.
+		prose_package pp = prose.getPackage(new string_id("storyteller", "token_purchase_complete"), player, item);
+		sendSystemMessageProse(player, pp);
+	}
+	
+	return;
+}
+
+/***** END Storyteller Vendor functions *************************************************/
+/***************************************************************************/
+
+//Confirms the proper amount of time has passed before destroying a storyteller object.
+//this is used in case there is a delayed response from a City when checking for a
+//city specialization (which increases exist time by 12 hours)
+void confirmCleanuptime(obj_id object)
+{
+	//initialize variables
+	int storytellerCreationTime = 0;
+	int existTime = 0;
+	//creation time.
+	if(hasObjVar(object, "storytellerCreationTime"))
+		storytellerCreationTime = getIntObjVar(object, "storytellerCreationTime");
+	//length of time it should exist in the world(in seconds)
+	if(hasObjVar(object, "storytellerCleanUpTime"))
+		existTime = getIntObjVar(object, "storytellerCleanUpTime");
+
+	if(storytellerCreationTime + existTime > getGameTime())
+	{
+		int timeRemaining = storytellerCreationTime + existTime - getGameTime();
+		//we are not ready to clean up yet - send a new MessageTo with the actual cleanup Time.
+		messageTo(object, "prepCleanupProp", null, timeRemaining, false);
+		return;
+	}
+	trial.cleanupObject(object);
+}
+
+//City Specialization increases exist time by 12 hours.
+void setBonusExistTime(obj_id self)
+{
+	if(hasObjVar(self, "storytellerCleanUpTime"))
+	{
+		//add bonus time (12 hours) for the specialization
+		int cleanUpTime = getIntObjVar(self, "storytellerCleanUpTime");
+		cleanUpTime += 43200;
+		setObjVar(self, "storytellerCleanUpTime", cleanUpTime);
+	}
+}
+
+//determines if a ST Prop is in a city and messages city to check specialization status
+void calculatePropBonusExistTime(obj_id object)
+{
+	//if we are in a city, we get bonus time
+	int cleanUpTime = DEFAULT_PROP_CLEANUP_TIME;
+	int city_id = getCityAtLocation(getLocation(object), 0);
+	if(city_id > 0)
+	{
+		//we are in a city
+		cleanUpTime += 28800; //give them an extra 8 hours.
+		//message the City Hall to see if a Specialization increases time.
+		obj_id cityHall = cityGetCityHall(city_id);
+		
+		dictionary outparams = new dictionary();
+		outparams.put("queryObject", object);
+		messageTo(cityHall, "st_citySpecBonusCheck", outparams, 0.0f, false);		
+	}
+	setObjVar(object, "storytellerCleanUpTime", cleanUpTime);
+}
+
+//determines if a ST NPC is in a city and messages city to check specialization status
+void calculateNpcBonusExistTime(obj_id object)
+{
+	//if we are in a city, we get bonus time
+	int cleanUpTime = DEFAULT_NPC_CLEANUP_TIME;
+	int city_id = getCityAtLocation(getLocation(object), 0);
+	if(city_id > 0)
+	{
+		//we are in a city
+		cleanUpTime += 28800; //give them an extra 8 hours.
+		//message the City Hall to see if a Specialization increases time.
+		obj_id cityHall = cityGetCityHall(city_id);
+		
+		dictionary outparams = new dictionary();
+		outparams.put("queryObject", object);
+		messageTo(cityHall, "st_citySpecBonusCheck", outparams, 0.0f, false);		
+	}
+	setObjVar(object, "storytellerCleanUpTime", cleanUpTime);
+}
+
+/***************************************************************************/

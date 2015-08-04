@@ -1,0 +1,228 @@
+
+include library.buff;
+include library.callable;
+include library.utils;
+include library.vehicle;
+include library.pet_lib;
+include library.jedi;
+include library.combat;
+include library.performance;
+
+inherits systems.combat.combat_base;
+
+
+trigger OnExitedCombat()
+{
+	combat.clearCombatDebuffs(self);
+
+	// GET RID OF ANY LINGERING BATTLE FATIGUE
+	int fatigue = getShockWound(self);
+	if(fatigue > 0)
+	{
+		setShockWound(self, 0);
+	}
+
+	setState(self, STATE_PEACE, false);
+	obj_id objMount = getMountId(self);
+
+	if(isIdValid(objMount))
+	{
+		obj_id objControlDevice = callable.getCallableCD(objMount);
+
+		if(!pet_lib.isGalloping(objMount))
+		{
+			// set normal move rate
+			pet_lib.setMountedMovementRate(self, objMount);
+		}
+		else
+		{
+			// set the burst run rate (which is the same as an unmounted move rate)
+			pet_lib.setUnmountedMovementRate(self, objMount);
+		}
+	}
+
+	utils.setScriptVar( self, pet_lib.COMBAT_ENDED, getGameTime() );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnEnteredCombat()
+{
+	// Clear glowie state
+	if (utils.hasScriptVar(self, "holoMessageTime"))
+	{
+		performance.holographicCleanup(self);
+	}
+	
+	// Stop all Performances now
+	if(hasScript(self, performance.DANCE_HEARTBEAT_SCRIPT) || (hasScript(self, performance.MUSIC_HEARTBEAT_SCRIPT)) )
+	{
+		performance.stopDance(self);
+		performance.stopPlaying(self);
+		performance.stopEntertainingPlayer(self);
+	}	
+	if (getState(self, STATE_GLOWING_JEDI) > 0)
+	{
+		setState(self, STATE_GLOWING_JEDI, false);
+	}
+
+	combat.doCombatDebuffs(self);
+
+	if(vehicle.isRidingVehicle(self))
+		return SCRIPT_CONTINUE;
+
+	obj_id objL = getObjectInSlot(self, "hold_l");
+	obj_id objR = getObjectInSlot(self, "hold_r");
+
+	if(isIdValid(objL) && (getGameObjectType(objL) == GOT_misc_instrument))
+	{
+		obj_id inv = utils.getInventoryContainer(self);
+		putInOverloaded(objL, inv);
+	}
+
+	if(isIdValid(objR) && (getGameObjectType(objR) == GOT_misc_instrument))
+	{
+		obj_id inv = utils.getInventoryContainer(self);
+		putInOverloaded(objR, inv);
+	}
+
+	obj_id objMount = getMountId(self);
+	if(isIdValid(objMount))
+	{
+		if(!pet_lib.isGalloping(objMount))
+		{
+			pet_lib.setMountCombatMoveSpeed(self, objMount);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+
+
+}
+commandHandler combatModeCheck()
+{
+
+	obj_id objTarget = getTarget(self);
+	if(isIdValid(objTarget))
+	{
+		sendSystemMessageTestingOnly(self, "target is "+objTarget);
+	}
+
+
+
+	obj_id[] objEnemies = getWhoIsTargetingMe(self);
+	for(int intI = 0; intI<objEnemies.length; intI++)
+	{
+		sendSystemMessageTestingOnly(self, "Enemy "+intI+" is "+objEnemies[intI]);
+		if(isIdValid(objEnemies[intI]))
+		{
+			sendSystemMessageTestingOnly(self, "Enemy is at "+getLocation(objEnemies[intI]));
+		}
+		else
+		{
+			sendSystemMessageTestingOnly(self, "Enemy isn't a valid id");
+		}
+
+
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+
+trigger OnDefenderCombatAction( obj_id objAttacker, obj_id objWeapon, int intCombatResult )
+{
+
+	if(vehicle.isRidingVehicle(self))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	if (getPosture(self) == POSTURE_SITTING)
+	{
+		queueCommand(self, ##"stand", null, "", COMMAND_PRIORITY_FRONT); // STAND UP
+		return SCRIPT_CONTINUE;
+	}
+
+	// Riposte
+	if((intCombatResult == COMBAT_RESULT_EVADE || intCombatResult == COMBAT_RESULT_MISS) && buff.isInStance(self))
+	{
+		int riposte = (int)getSkillStatisticModifier(self, "expertise_stance_riposte");
+
+		// Proc a riposte
+		if(riposte > 0 && riposte > rand(0,99))
+		{
+			queueCommand(self, ##"fs_riposte", objAttacker, "", COMMAND_PRIORITY_DEFAULT);
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+
+}
+
+trigger OnAboutToReceiveItem(obj_id objContainer, obj_id objTransferer, obj_id objItem)
+{
+	if(isWeapon(objItem))
+	{
+		if(jedi.isLightsaber(getWeaponType(objItem)))
+		{
+			if(!utils.isProfession(self, utils.FORCE_SENSITIVE))
+			{
+				string_id strSpam = new string_id("jedi_spam", "no_equip_lightsaber");
+				sendSystemMessage(self, strSpam);
+				return SCRIPT_OVERRIDE;
+			}
+			else
+			{
+				if(!jedi.hasColorCrystal(objItem))
+				{
+					string_id strSpam = new string_id("jedi_spam", "lightsaber_no_color");
+					sendSystemMessage(self, strSpam);
+					return SCRIPT_OVERRIDE;
+				}
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnReceivedItem(obj_id objSrcContainer, obj_id objTransferer, obj_id objItem)
+{
+	if(isWeapon(objItem))
+	{
+		int weaponType = getWeaponType(objItem);
+		
+		if (weaponType != WEAPON_TYPE_LIGHT_RIFLE)
+		{
+			int onslaughtBuff = buff.getBuffOnTargetFromGroup(self, "bh_relentless_onslaught");
+			if(onslaughtBuff !=0)
+				buff.removeBuff(self, onslaughtBuff);
+		}
+
+		if(!combat.hasCertification(self, objItem))
+		{
+			string_id strSpam = new string_id("combat_effects", "no_proficiency");
+			sendSystemMessage(objTransferer, strSpam);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	if(hasSkill(self, "expertise_of_last_words_1") )
+		buff.applyBuff(self, "exclude_self_exclusive_proxy_of_last_words");
+
+ 	return SCRIPT_CONTINUE;
+}
+
+
+commandHandler target()
+{
+	if(isIdValid(target))
+	{
+		setLookAtTarget(self, target);
+
+	}
+	return SCRIPT_CONTINUE;
+}

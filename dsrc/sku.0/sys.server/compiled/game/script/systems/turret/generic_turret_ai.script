@@ -1,0 +1,682 @@
+// generic turret that works against any valuid targets
+
+include library.ai_lib;
+include library.attrib;
+include library.combat;
+include library.list;
+include library.pet_lib;
+include library.pclib;
+include library.player_structure;
+include library.turret;
+include library.utils;
+include library.xp;
+
+inherits systems.combat.combat_base_old;
+
+/***** CONSTANTS *******************************************************/
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	turret.activateTurret(self);
+	if ( getHitpoints(self) < 1 )
+		setHitpoints(self, 1);
+
+	setObjVar(self, turret.VAR_IS_GENERIC, true);
+	utils.setScriptVar(self, "ai.level", 100);
+	setTurretAttributes(self);
+	setWantSawAttackTriggers( self, true );
+
+	if( hasObjVar(self, "objWeapon") )
+	{
+		obj_id wpn = getObjIdObjVar(self, "objWeapon");
+		if ( !isIdValid(wpn) )
+		{
+			removeObjVar(self, "objWeapon");
+			turret.createWeapon(self);
+		}
+		else
+		{
+			if ( !utils.isNestedWithin(wpn, self) )
+			{
+				removeObjVar(self, "objWeapon");
+				turret.createWeapon(self);
+			}
+		}
+	}
+	else
+	{
+		turret.createWeapon(self);
+	}
+
+	ai_lib.setAttackable(self, true);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+
+	if ( getHitpoints(self) < 1 )
+		setHitpoints(self, 1);
+
+	setObjVar(self, turret.VAR_IS_GENERIC, true);
+	utils.setScriptVar(self, "ai.level", 100);
+	setTurretAttributes(self);
+	setWantSawAttackTriggers( self, true );
+
+	if( hasObjVar(self, "objWeapon") )
+	{
+		obj_id wpn = getObjIdObjVar(self, "objWeapon");
+		if ( !isIdValid(wpn) )
+		{
+			removeObjVar(self, "objWeapon");
+			turret.createWeapon(self);
+		}
+		else
+		{
+			if ( !utils.isNestedWithin(wpn, self) )
+			{
+				removeObjVar(self, "objWeapon");
+				turret.createWeapon(self);
+			}
+		}
+	}
+	else
+	{
+		turret.createWeapon(self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+void setTurretAttributes(obj_id self)
+{
+	if ( hasTriggerVolume(self, turret.ALERT_VOLUME_NAME) )
+		removeTriggerVolume(turret.ALERT_VOLUME_NAME);
+
+	if ( hasTriggerVolume(self, turret.VOL_TOO_CLOSE) )
+		removeTriggerVolume(turret.VOL_TOO_CLOSE);
+
+	clearAttributeInterested(self, attrib.ALL);
+	setAttributeInterested( self, attrib.ALL );
+
+	createTriggerVolume( turret.ALERT_VOLUME_NAME, turret.TURRET_RANGE, true );
+}
+
+trigger OnRemovingFromWorld()
+{
+	// seems silly but this was throwing exceptions when being deleted sometimes
+	if(!isIdValid(self) || !exists(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( hasObjVar( self, "lair.deadLair" ))
+		destroyObject( self );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToOpenContainer(obj_id who)
+{
+	if ( isIdValid(who) && !isGod(who) )
+		return SCRIPT_OVERRIDE;
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToLoseItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	if ( isIdValid(transferer) && !isGod(transferer) )
+		return SCRIPT_OVERRIDE;
+
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnAboutToReceiveItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	if ( isIdValid(transferer) && !isGod(transferer) )
+		return SCRIPT_OVERRIDE;
+
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered( string volumeName, obj_id who )
+{
+	//debugSpeakMsg(self, "Volume entered: " + volumeName);
+	if (!isIdValid(who))
+		return SCRIPT_CONTINUE;
+
+	int curHP = getHitpoints (self);
+	if ( curHP < 1 )
+	{
+		explodeTurret( self, who);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(!turret.canGenericTurretAttackTarget(who))
+	{
+		//debugSpeakMsg(who, "cannot attack this PVP target");
+		return SCRIPT_CONTINUE;
+	}
+
+	if ( volumeName.equals( turret.ALERT_VOLUME_NAME ) && who != self )
+	{
+		//debugSpeakMsg(who, "breached by " + who);
+		turret.addTarget(self, who);
+	}
+	else if ( volumeName.equals( turret.VOL_TOO_CLOSE ) && who != self )
+	{
+		turret.removeTarget(self, who);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited( string volumeName, obj_id who )
+{
+	if ( volumeName.equals( turret.ALERT_VOLUME_NAME ) && who != self )
+	{
+		turret.removeTarget(self, who);
+		if (turret.isEngaged(self))
+			{
+				obj_id target = utils.getObjIdScriptVar(self, turret.SCRIPTVAR_ENGAGED);
+				if (target == who)
+				{
+					turret.disengage(self);
+				}
+			}
+	}
+	else if ( volumeName.equals( turret.VOL_TOO_CLOSE ) && who != self )
+	{
+		//debugSpeakMsg(who, "breached by " + who);
+		turret.addTarget(self, who);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectDamaged(obj_id attacker, obj_id weapon, int damage)
+{
+	int curHP = getHitpoints (self);
+	if ( curHP < 1 )
+	{
+		explodeTurret( self, attacker );
+		return SCRIPT_CONTINUE;
+	}
+
+	turret.addTarget(self, attacker);
+
+	if (!utils.hasScriptVar (self, "playingEffect"))
+	{
+		int smolder = 2000;
+		int fire = 1000;
+
+		if (curHP < smolder)
+		{
+			if (curHP < fire)
+			{
+				location death = getLocation (self);
+				playClientEffectLoc(attacker, "clienteffect/lair_hvy_damage_fire.cef" , death, 0);
+				utils.setScriptVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+			}
+			else
+			{
+				location death = getLocation (self);
+				playClientEffectLoc(attacker, "clienteffect/lair_med_damage_smoke.cef" , death, 0);
+				utils.setScriptVar (self, "playingEffect", 1);
+				messageTo (self, "effectManager", null, 15, true);
+			}
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnSawAttack(obj_id defender, obj_id[] attackers)
+{
+	if ( getConfigSetting("GameServer", "disableAICombat")!=null )
+	{
+		setWantSawAttackTriggers(self, false);
+		return SCRIPT_CONTINUE;
+	}
+
+	int numAtt = attackers.length;
+	for ( int i = 0; i < numAtt; i++ )
+	{
+		obj_id attacker = attackers[i];
+		if(turret.canGenericTurretAttackTarget(attacker))
+		{
+			turret.addTarget(self, attacker);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** FUNCTIONS *******************************************************/
+
+
+
+obj_id getGoodTurretTarget()
+{
+	obj_id self = getSelf();
+
+	if ( !utils.hasScriptVar(self, turret.SCRIPTVAR_TARGETS) )
+	{
+		return null;
+	}
+
+	//remove incapacitated targets:
+	obj_id[] old_targets = utils.getObjIdBatchScriptVar(self, turret.SCRIPTVAR_TARGETS);
+	if ( (old_targets == null) || (old_targets.length == 0) )
+	{
+		utils.removeBatchScriptVar(self, turret.SCRIPTVAR_TARGETS);
+		return null;
+	}
+
+	obj_id[] good_targets = cullInvalidTargets(self, old_targets);
+	obj_id[] targets = removeIncapacitatedTargets( self, old_targets );
+
+	//if all my targets are incapacitated or dead or out of range:
+	if ( targets.length == 0 )
+	{
+		//reload the list of targets:
+		targets = good_targets;
+		//find an incapacitated one and kill him:
+		for ( int i = 0; i < targets.length; i++ )
+		{
+			if ( isIncapacitated( targets[i] ) && !isDead( targets[i] ) && getDistance(self, targets[i]) <= turret.TURRET_RANGE && !pet_lib.isPet(targets[i]))
+			{
+				pclib.coupDeGrace(targets[i], self);
+			}
+		}
+
+		//they must all be dead or out of range:
+		return obj_id.NULL_ID;
+	}
+
+	if(utils.hasScriptVar(self, xp.VAR_ATTACKER_LIST) )
+	{
+		resizeable obj_id[] attackerList = utils.getResizeableObjIdBatchScriptVar(self, xp.VAR_ATTACKER_LIST);
+		if ( attackerList != null && attackerList.length > 0 )
+		{
+			obj_var[] ovs = new obj_var[attackerList.length];
+			for ( int i = 0; i < attackerList.length; i++ )
+			{
+				string scriptVarPath = xp.VAR_ATTACKER_LIST + "." + attackerList[i] + ".damage";
+				ovs[i] = new obj_var(attackerList.elementAt(i).toString(), utils.getIntScriptVar(self, scriptVarPath));
+			}
+
+			ovs = list.quickSort(0, ovs.length-1, ovs);
+			if ( (ovs != null) && (ovs.length > 0) )
+			{
+				for ( int i = 0; i < ovs.length; i++ )
+				{
+					string ovName = ovs[i].getName();
+					obj_id tmp = utils.stringToObjId(ovName);
+					if ( isIdValid(tmp) )
+					{
+						if ( utils.getElementPositionInArray(targets, tmp) > -1 )
+						{
+							if ( canSee(self, tmp) )
+								return tmp;
+						}
+					}
+				}
+			}
+		}
+	}
+
+
+	//pick one at random:
+	int idx = rand(0,targets.length-1);
+	if (!turret.canGenericTurretAttackTarget(targets[idx]))
+	{
+		turret.removeTarget(self, targets[idx]);
+		return self;
+	}
+
+	return targets[idx];
+}
+
+obj_id[] cullInvalidTargets(obj_id self, obj_id[] old_targets)
+{
+	if ( old_targets == null || old_targets.length == 0 )
+		return null;
+
+	resizeable obj_id[] toRemove = new obj_id[0];
+	for ( int i = 0; i < old_targets.length; i++ )
+	{
+		if ( !turret.canGenericTurretAttackTarget(old_targets[i]) || getDistance(self, old_targets[i]) > turret.TURRET_RANGE )
+			toRemove = utils.addElement(toRemove, old_targets[i]);
+	}
+
+	if ( toRemove != null && toRemove.length > 0 )
+	{
+		resizeable obj_id[] targets = new Vector(Arrays.asList(old_targets));
+		targets = utils.removeElements(targets, toRemove);
+		return targets;
+	}
+
+	return old_targets;
+}
+
+//return a list of targets that are neither dead nor incapacitated nor out of range:
+obj_id[] removeIncapacitatedTargets( obj_id self, obj_id[] targets )
+{
+	if ( !isIdValid(self) || (targets == null) || (targets.length == 0) )
+		return null;
+
+	resizeable obj_id[] newTargets = new obj_id[0];
+	for ( int i = 0; i < targets.length; i++ )
+	{
+		if (!ai_lib.isAiDead(targets[i]) && getDistance(self, targets[i]) <= turret.TURRET_RANGE )
+			newTargets = utils.addElement( newTargets, targets[i] );
+	}
+
+	return newTargets;
+}
+
+void explodeTurret( obj_id turretid, obj_id killer )
+{
+	obj_id[] enemies = getWhoIsTargetingMe( turretid );
+	if ( enemies != null )
+	{
+		for ( int i = 0; i < enemies.length; i++ )
+		{
+			queueClearCommandsFromGroup(enemies[i], ##"combat_general");
+			queueClearCommandsFromGroup(enemies[i], ##"combat_melee");
+			queueClearCommandsFromGroup(enemies[i], ##"combat_ranged");
+			setTarget( enemies[i], null );
+		}
+	}
+
+	location death = getLocation(turretid);
+	playClientEffectLoc(killer, "clienteffect/combat_explosion_lair_large.cef", death, 0);
+
+	if ( hasObjVar(turretid, player_structure.VAR_PLAYER_STRUCTURE) )
+	{
+		turret.deactivateTurret(turretid);
+		player_structure.destroyStructure(turretid, false);
+	}
+	else
+	{
+		turret.deactivateTurret(turretid);
+		messageTo(turretid, "handleDestroyTurret", null, 2, false);
+	}
+
+	messageTo(turretid, "handleDestroyTurret", null, 10f, false);
+}
+
+/***********************************************************************
+ * @brief	performs an attach from the turret to the target
+ *
+ * @return 	void
+ ***********************************************************************/
+float doAttack()
+{
+	//LOG("turret","*** doAttack(): entered...");
+	obj_id self = getSelf();
+
+	if ( !turret.isActive(self) )
+	{
+		return -1.0f;
+	}
+
+	int curHP = getHitpoints (self);
+	if ( curHP < 1 )
+	{
+		messageTo(self, "handleDestroyTurret", null, 2, false);
+		return -1.0f;
+	}
+
+
+	obj_id target = utils.getObjIdScriptVar(self, turret.SCRIPTVAR_ENGAGED);
+	if ( !isIdValid(target) || !target.isLoaded() || (ai_lib.isAiDead(target)) || !canSee(self, target) )
+	{
+		obj_id tmptarget = getGoodTurretTarget();
+		//LOG("turret","doAttack:returned getGoodTurretTarget = " + target);
+		if ( tmptarget == null )
+		{
+			//LOG("turret","doAttack: unable to locate a valid target... sleeping...");
+			return -2.0f;
+		}
+		else if ( tmptarget == obj_id.NULL_ID )
+		{
+			//LOG("turret","doAttack: unable to locate a valid NON-INCAP target... waiting...");
+			return 5.0f;
+		}
+		else if ( tmptarget == self )
+		{
+			return 1f;
+		}
+		else if ( tmptarget == target )
+		{
+			return 2f;
+		}
+
+		target = tmptarget;
+		turret.engageTarget(self, target);
+	}
+
+	return doAttack(target);
+}
+
+float doAttack(obj_id target)
+{
+	//LOG("turret","*** doAttack(target): entered...");
+	obj_id self = getSelf();
+
+	if ( !isIdValid(self) || !isIdValid(target) )
+	{
+		//LOG("turret","doAttack(target): invalid params!!");
+		return -1.0f;
+	}
+
+	int curHP = getHitpoints (self);
+	if ( curHP < 1 )
+	{
+		messageTo(self, "handleDestroyTurret", null, 2, false);
+		return -1.0f;
+	}
+
+	//waitasec (or 5) - if we have no weapon yet.
+	if(!hasObjVar(self, "objWeapon"))
+	{
+		//LOG("turret","doAttack(target): unable to locate weapon objvar!!");
+		return -1.0f;
+	}
+
+	if ( !canSee(self, target) )
+	{
+		//LOG("turret","doAttack(target): turret(" + self + ") unable see target(" + target + ")!!");
+		obj_id tmptarget = getGoodTurretTarget();
+		if ( isIdValid(tmptarget) && tmptarget != target )
+		{
+			target = tmptarget;
+			turret.engageTarget(self, target);
+		}
+		else
+		{
+			return 1.5f;
+		}
+	}
+
+	if ( !turret.canGenericTurretAttackTarget(target) )
+	{
+		//LOG("turret","doAttack(target): turret(" + self + ") targetting invalid target(" + target + ")!!");
+		turret.removeTarget(self, target);
+		return 1.5f;
+	}
+
+	messageTo(self, "reconfirmTarget", null, 5, false);
+
+	const float DAMAGE_MODIFIER = 2.0f; // modifier for damage from basic attack
+	// attrib cost mods
+	const float HEALTH_COST_MODIFIER = 0;;
+	const float ACTION_COST_MODIFIER = 0;
+
+	const int BASE_TO_HIT_MODIFIER = 0; // how far off of 75 do we want the base to hit roll
+	const float AMMO_COST_MODIFIER = 1.0f; // modifier for ammo cost
+
+	string[] strTimeMods = {""};
+	string[] strDamageMods = {""};
+	string[] strCostMods = {};
+	string[] strToHitMods= {""};
+
+	string[] strBlockMods = {""};
+	string[] strEvadeMods = {""};
+	string[] strCounterAttackMods = {""};
+
+	// special response information
+	int intBlockMod = 1000; //The larger number makes it more difficult to  block
+	int intEvadeMod = 1000; //The larger number makes it more difficult to  evade
+	int intCounterAttackMod = 1000; //The larger number makes it more difficult to  counter
+
+	int intAttackerEndPosture = POSTURE_NONE;
+	int intDefenderEndPosture = POSTURE_NONE; // DON'T MIX THESE UP!
+
+	string strPlaybackAction = "fire_turret";
+
+	int[] intEffects = {
+				}; // const int's defined in base_class
+	float[] fltEffectDurations = {
+					};
+	int intChanceToApplyEffect= 0; // 1-100 rating for whether we apply a state
+
+	obj_id objWeapon = getObjIdObjVar(self, "objWeapon");
+	//LOG("combat_spam", "weapon is "+objWeapon);
+
+	attacker_data cbtAttackerData = new attacker_data();
+	weapon_data cbtWeaponData = new weapon_data();
+	obj_id[] objDefenders = new obj_id[1];
+	objDefenders[0] = target;
+
+	defender_data[] cbtDefenderData = new defender_data[objDefenders.length]; // ALWAYS AN ARRAY DO NOT EVER CHANGE DO NOT NEVER!
+	if (!getCombatData(self, objDefenders, cbtAttackerData, cbtDefenderData, cbtWeaponData))
+	{
+		//LOG("Combat", "WARNING: turret_ai.doAttack call to getCombatData returned false");
+		return -1.0f;
+	}
+
+	// begin giant hack!
+	//LOG("turret_spam", "objWeapon is "+objWeapon);
+	cbtWeaponData = getWeaponData(objWeapon);
+
+	hit_result[] cbtHitData = new hit_result[1];
+	cbtHitData[0] = calculateHit(cbtAttackerData, cbtDefenderData[0], cbtWeaponData);
+
+	//LOG("combat_spam","Got hit engine results!");
+
+	attacker_results cbtAttackerResults = new attacker_results(); // blank data for attacker information
+	cbtAttackerResults.id = self; // MUST DO THIS!
+
+	defender_results[] cbtDefenderResults = new defender_results[1];
+	cbtDefenderResults[0] = new defender_results();
+
+	// pass by reference below, so be careful
+	//LOG("combat_spam","Setting Combat Results!");
+	//setDefenderCombatResults(cbtAttackerData, cbtAttackerResults, cbtHitData, cbtDefenderData, cbtDefenderResults, strBlockMods, intBlockMod, strEvadeMods, intEvadeMod, strCounterAttackMods, intCounterAttackMod, true); // sorry this function sucks so much
+	cbtAttackerResults.endPosture = -1;
+	debugServerConsoleMsg(self, "posture set");
+	cbtAttackerResults.weapon = objWeapon;
+	debugServerConsoleMsg(self, "weapon");
+	//LOG("combat_spam", "My target is now "+target);
+	cbtDefenderResults[0].id = target;
+	debugServerConsoleMsg(self, "target");
+	cbtDefenderResults[0].endPosture = getPosture(target);
+	debugServerConsoleMsg(self, "defender posture");
+	if(cbtHitData[0].success)
+	{
+
+		cbtDefenderResults[0].result = COMBAT_RESULT_HIT;
+	}
+	else
+	{
+
+		cbtDefenderResults[0].result = COMBAT_RESULT_MISS;
+	}
+
+	debugServerConsoleMsg(self, "hitdata");
+	finalizeDamage(cbtAttackerData.id, cbtWeaponData, cbtDefenderData, cbtHitData, cbtDefenderResults, null); // applies all of the necessary damage
+	string[] strPlaybackNames = makePlaybackNames("fire_turret", cbtHitData, cbtWeaponData, cbtDefenderResults);
+
+	doCombatResults(strPlaybackNames[0], cbtAttackerResults, cbtDefenderResults);
+
+	combat.doBasicCombatSpam("shoot", cbtAttackerResults, cbtDefenderResults, cbtHitData);
+
+	return cbtWeaponData.attackSpeed;
+}
+
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler handleTurretAttack()
+{
+	//LOG("turret", "HANDLE TURRET ATTACK");
+	if ( !turret.isActive(self) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	float delay = doAttack();
+	if ( delay > 0f )
+	{
+		messageTo( self, "handleTurretAttack", null, delay, false );
+	}
+	else
+	{
+		utils.removeScriptVar(self, turret.SCRIPTVAR_ENGAGED);
+		utils.removeScriptVar( self, "ai.combat.isInCombat");
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/*This message handler is just the delay for the client effects.  It makes
+sure that multiple effects aren't playing at the same time and eating up
+the frame rate. */
+messageHandler effectManager ()
+{
+	utils.removeScriptVar (self, "playingEffect");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler expireLair()
+{
+	destroyObject( self );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler enemyDecloaked()
+{
+	//LOG("turret","enemy decloaked entered...");
+	if ( (params == null) || (params.isEmpty()) )
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	obj_id target = params.getObjId("target");
+	if ( isIdValid(target) )
+	{
+		if ( getDistance(self, target) <= turret.TURRET_RANGE )
+		{
+			turret.addTarget(self, target);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDestroyTurret()
+{
+	destroyObject(self);
+	return SCRIPT_CONTINUE;
+}
+

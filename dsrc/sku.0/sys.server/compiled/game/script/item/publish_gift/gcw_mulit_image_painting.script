@@ -1,0 +1,445 @@
+include library.factions;
+include library.hue;
+include library.player_structure;
+include library.static_item;
+include library.sui;
+include library.utils;
+
+const string CUST_TEXTURE_VAR =  "/private/index_texture_1";
+
+const string SUI_MENU_PID = "gcw_painting_controls_pid";
+
+const string PAINTING_CUR_MODE_OBJVAR = "gcw_painting_current_mode";
+const string PAINTING_CUR_CYCLE_VAR = "gcw_painting_current_cycle";
+
+const int PAINTING_TEXTURE_INDEX_REBEL		= 0;
+const int PAINTING_TEXTURE_INDEX_IMPERIAL	= 1;
+
+const int CYCLE_MIN_INTERVAL	= 150;
+const int CYCLE_MAX_INTERVAL	= 300;
+
+
+const int MODE_REBEL_PAINTING		= 0;
+const int MODE_IMPERIAL_PAINTING	= 1;
+const int MODE_CYCLE_PAINTINGS		= 2;
+const int MODE_PLANETARY_CONTROL	= 3;
+const int MODE_GALACTIC_CONTROL		= 4;
+
+const string[] MODE_OPTIONS = 	{	"Rebel Painting",
+									"Imperial Painting",
+									"Cycle Paintings",
+									"Reflect Planetary Control",
+									"Reflect Galactic Control"
+								};
+
+
+trigger OnAttach()
+{
+	messageTo(self, "handleOnAttachSetup", null, 4, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleOnAttachSetup()
+{
+	obj_id player = utils.getContainingPlayer(self);
+	if ( isIdValid(player) )
+	{
+		int initialTexture = getStartTexture(self, player);
+		hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, initialTexture);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	if ( checkLocation(self) )
+	{
+		int paintingMode = 2;
+		if ( hasObjVar(self, PAINTING_CUR_MODE_OBJVAR) )
+		{
+			int modeObjVar = getIntObjVar(self, PAINTING_CUR_MODE_OBJVAR);
+			if ( modeObjVar >= 0 && modeObjVar < MODE_OPTIONS.length )
+			{
+				paintingMode = modeObjVar;
+			}
+		}
+		setupPaintingMode(self, obj_id.NULL_ID, paintingMode);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	int idx = utils.getValidAttributeIndex(names);
+
+	if( idx == -1 )
+		return SCRIPT_CONTINUE;
+
+	if( !exists(self) )
+		return SCRIPT_CONTINUE;
+
+	if ( canUsePainting(self, player) )
+	{
+		int paintingMode = 2;
+		if ( hasObjVar(self, PAINTING_CUR_MODE_OBJVAR) )
+		{
+			int modeObjVar = getIntObjVar(self, PAINTING_CUR_MODE_OBJVAR);
+			if ( modeObjVar >= 0 && modeObjVar < MODE_OPTIONS.length )
+			{
+				paintingMode = modeObjVar;
+			}
+		}
+		string paintingModeName = MODE_OPTIONS[paintingMode];
+
+		names[idx] = "gcw_loyalty_painting_current_setting";
+		attribs[idx] = paintingModeName;
+		idx++;
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+
+	if( checkLocation(self) )
+	{
+		if ( canUsePainting(self, player) )
+		{
+			int menu = mi.addRootMenu(menu_info_types.SERVER_MENU8, new string_id("reward_sys", "painting_menu_controls"));
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if( item == menu_info_types.SERVER_MENU8 && isIdValid(player) )
+	{
+		if ( canUsePainting(self, player) )
+		{
+			if( !checkLocation(self) )
+			{
+				sendSystemMessage(player, new string_id("reward_sys", "painting_not_in_house"));
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				showControlMenu(self, player);
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+boolean canUsePainting(obj_id painting, obj_id player)
+{
+	obj_id paintingOwner = getOwner(painting);
+	if ( isIdValid(paintingOwner) && paintingOwner == player )
+		return true;
+		
+	if (  isGod(player) )
+		return true;
+	
+	return false;
+}
+
+// This method ensures that the player is inside a player structure
+boolean checkLocation(obj_id item)
+{
+	if( !isIdValid(item) )
+	{
+		return false;
+	}
+
+	if( !utils.isInHouseCellSpace(item) )
+	{
+		return false;
+	}
+	
+	if( !utils.isNestedWithinAPlayer(item) )
+	{
+		obj_id house = getTopMostContainer(item);
+		if( isIdValid(house) && player_structure.isBuilding(house) )
+		{
+			location here = getLocation(item);
+			if ( isIdValid(here.cell) && getContainedBy(item) == here.cell )
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void showControlMenu(obj_id self, obj_id player)
+{
+	closeOldWindow(self);
+	string prompt = "@reward_sys:painting_controls_prompt";
+	string title = "@reward_sys:painting_controls_title";
+	
+	string[] tempModeOptionsArray = new string[MODE_OPTIONS.length];
+	utils.copyArray(MODE_OPTIONS, tempModeOptionsArray);
+	if ( hasObjVar(self, PAINTING_CUR_MODE_OBJVAR) )
+	{
+		int paintingMode = getIntObjVar(self, PAINTING_CUR_MODE_OBJVAR);
+		if ( paintingMode >= 0 && paintingMode < MODE_OPTIONS.length )
+		{
+			tempModeOptionsArray[paintingMode] += "\\#0099FF - Current Mode";
+		}
+	}
+	
+	int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, title, tempModeOptionsArray, "paintingControlsHandler", false, false);
+	
+	int messageBoxSizeWidth = 484;
+	int messageBoxSizeHeight = 312;
+	sui.setSizeProperty(pid, messageBoxSizeWidth, messageBoxSizeHeight);
+	
+	sui.showSUIPage(pid);
+	utils.setScriptVar(self, SUI_MENU_PID, pid);
+}
+
+void closeOldWindow(obj_id self)
+{
+	if ( utils.hasScriptVar(self, SUI_MENU_PID))
+	{
+		int oldpid = utils.getIntScriptVar(self, SUI_MENU_PID);
+		forceCloseSUIPage(oldpid);
+		utils.removeScriptVar(self, SUI_MENU_PID);
+	}
+}
+
+messageHandler paintingControlsHandler()
+{
+	int button = sui.getIntButtonPressed(params);
+	obj_id player = sui.getPlayerId(params);
+	int modeChoice = sui.getListboxSelectedRow(params);
+	
+	if( button == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+	if( !isIdValid(player) )
+		return SCRIPT_CONTINUE;
+		
+	location here = getLocation(self);
+	if ( !isIdValid(here.cell) || getContainedBy(player) != here.cell )
+	{
+		sendSystemMessage(player, new string_id("reward_sys", "painting_not_same_cell"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	setupPaintingMode(self, player, modeChoice);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ***********************************************************
+
+void setupPaintingMode(obj_id self, obj_id player, int modeChoice)
+{
+	if ( hasObjVar(self, PAINTING_CUR_CYCLE_VAR) )
+	{
+		removeObjVar(self, PAINTING_CUR_CYCLE_VAR);
+	}
+
+	switch (modeChoice)
+	{
+		case 0:
+			setToRebelPaintingMode(self, player);
+			break;
+		case 1:
+			setToImperialPaintingMode(self, player);
+			break;
+		case 2:
+			setToCyclingPaintingMode(self, player);
+			break;
+		case 3:
+			setToPlanetaryControlPaintingMode(self, player);
+			break;
+		case 4:
+			setToGalacticControlPaintingMode(self, player);
+			break;
+		default:
+			setToCyclingPaintingMode(self, player);
+			break;
+	}
+}
+
+void setToRebelPaintingMode(obj_id self, obj_id player)
+{
+	hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, PAINTING_TEXTURE_INDEX_REBEL);
+	
+	setObjVar(self, PAINTING_CUR_MODE_OBJVAR, MODE_REBEL_PAINTING);
+	
+	if ( isIdValid(player) )
+		sendSystemMessage(player, new string_id("reward_sys", "painting_set_to_rebel"));
+}
+
+void setToImperialPaintingMode(obj_id self, obj_id player)
+{
+	hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, PAINTING_TEXTURE_INDEX_IMPERIAL);
+	
+	setObjVar(self, PAINTING_CUR_MODE_OBJVAR, MODE_IMPERIAL_PAINTING);
+	
+	if ( isIdValid(player) )
+		sendSystemMessage(player, new string_id("reward_sys", "painting_set_to_imperial"));
+}
+
+void setToCyclingPaintingMode(obj_id self, obj_id player)
+{
+	int startTexture = getStartTexture(self, player);
+	setObjVar(self, PAINTING_CUR_CYCLE_VAR, startTexture);
+	
+	hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, startTexture);
+	
+	if ( !hasMessageTo(self, "cyclingPaintingHandler") )
+	{
+		messageTo(self, "cyclingPaintingHandler", null, rand(CYCLE_MIN_INTERVAL, CYCLE_MAX_INTERVAL), false);
+	}
+	
+	setObjVar(self, PAINTING_CUR_MODE_OBJVAR, MODE_CYCLE_PAINTINGS);
+	
+	if ( isIdValid(player) )
+		sendSystemMessage(player, new string_id("reward_sys", "painting_set_to_cycle"));
+}
+
+void setToPlanetaryControlPaintingMode(obj_id self, obj_id player)
+{
+	int startTexture = getPlanetaryControlTexture(self, player);
+	setObjVar(self, PAINTING_CUR_CYCLE_VAR, startTexture);
+	
+	hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, startTexture);
+
+	if ( !hasMessageTo(self, "gcwFactionControlPaintingHandler") )
+	{
+		messageTo(self, "gcwFactionControlPaintingHandler", null, CYCLE_MIN_INTERVAL, false);
+	}
+	
+	setObjVar(self, PAINTING_CUR_MODE_OBJVAR, MODE_PLANETARY_CONTROL);
+	
+	if ( isIdValid(player) )
+		sendSystemMessage(player, new string_id("reward_sys", "painting_set_to_planet_control"));
+}
+
+void setToGalacticControlPaintingMode(obj_id self, obj_id player)
+{
+	int startTexture = getGcwControlTexture(self, player, "galaxy");
+	setObjVar(self, PAINTING_CUR_CYCLE_VAR, startTexture);
+	
+	hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, startTexture);
+
+	if ( !hasMessageTo(self, "gcwFactionControlPaintingHandler") )
+	{
+		messageTo(self, "gcwFactionControlPaintingHandler", null, CYCLE_MIN_INTERVAL, false);
+	}
+	
+	setObjVar(self, PAINTING_CUR_MODE_OBJVAR, MODE_GALACTIC_CONTROL);
+	
+	if ( isIdValid(player) )
+		sendSystemMessage(player, new string_id("reward_sys", "painting_set_to_galactic_control"));
+}	
+
+// ***********************************************************
+
+int getStartTexture(obj_id self, obj_id player)
+{
+	int startingTexture = rand(PAINTING_TEXTURE_INDEX_REBEL, PAINTING_TEXTURE_INDEX_IMPERIAL);
+	if ( hasObjVar(self, PAINTING_CUR_CYCLE_VAR) )
+	{
+		startingTexture = getIntObjVar(self, PAINTING_CUR_CYCLE_VAR);
+	}
+	
+	if ( isIdValid(player) )
+	{
+		if ( factions.isRebel(player) )
+			startingTexture = PAINTING_TEXTURE_INDEX_REBEL;
+		else if ( factions.isImperial(player) )
+			startingTexture = PAINTING_TEXTURE_INDEX_IMPERIAL;
+	}
+	
+	return startingTexture;
+}
+
+int getPlanetaryControlTexture(obj_id self, obj_id player)
+{	
+	location here = getLocation(self);
+	string planet = here.area;
+	if ( planet.startsWith("space") )
+	{
+		string[] parse = split(planet, '_');
+		if ( parse.length >= 2 )
+		{
+			planet = parse[1];
+		}
+	}
+	return getGcwControlTexture(self, player, planet);
+}
+
+int getGcwControlTexture(obj_id self, obj_id player, string category)
+{
+	// random default texture
+	int texture = getStartTexture(self, player);
+	
+	int imperialPercentControl = getGcwGroupImperialScorePercentile(category);
+	if ( imperialPercentControl > 50 )
+		texture = PAINTING_TEXTURE_INDEX_IMPERIAL;
+	else if ( imperialPercentControl < 50 )
+		texture = PAINTING_TEXTURE_INDEX_REBEL;
+		
+	return texture;
+}
+
+messageHandler cyclingPaintingHandler()
+{
+	if ( checkLocation(self) )
+	{
+		int paintingMode = getIntObjVar(self, PAINTING_CUR_MODE_OBJVAR);
+		if ( paintingMode == MODE_CYCLE_PAINTINGS )
+		{
+			int newCycle = 0;
+			int curCycle = getIntObjVar(self, PAINTING_CUR_CYCLE_VAR);
+			if ( curCycle == 0 )
+				newCycle = 1;
+
+			hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, newCycle);
+			setObjVar(self, PAINTING_CUR_CYCLE_VAR, newCycle);
+
+			if ( !hasMessageTo(self, "cyclingPaintingHandler") )
+			{
+				messageTo(self, "cyclingPaintingHandler", null, rand(CYCLE_MIN_INTERVAL, CYCLE_MAX_INTERVAL), false);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler gcwFactionControlPaintingHandler()
+{
+	if ( checkLocation(self) )
+	{
+		int paintingMode = getIntObjVar(self, PAINTING_CUR_MODE_OBJVAR);
+		if ( paintingMode == MODE_PLANETARY_CONTROL || paintingMode == MODE_GALACTIC_CONTROL  )
+		{
+			if ( paintingMode == MODE_PLANETARY_CONTROL )
+			{
+				int planetaryTexture = getPlanetaryControlTexture(self, obj_id.NULL_ID);
+				hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, planetaryTexture);
+			}
+			else if ( paintingMode == MODE_GALACTIC_CONTROL )
+			{
+				int galacticTexture = getGcwControlTexture(self, obj_id.NULL_ID, "galaxy");
+				hue.setRangedIntCustomVar(self, CUST_TEXTURE_VAR, galacticTexture);
+			}
+
+			if ( !hasMessageTo(self, "gcwFactionControlPaintingHandler") )
+			{
+				messageTo(self, "gcwFactionControlPaintingHandler", null, CYCLE_MIN_INTERVAL, false);
+			}
+		}
+	}
+	return SCRIPT_CONTINUE;
+}

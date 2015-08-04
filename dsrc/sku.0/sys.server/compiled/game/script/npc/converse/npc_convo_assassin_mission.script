@@ -1,0 +1,282 @@
+include library.ai_lib;
+include library.chat;
+include library.factions;
+include library.skill;
+include library.utils;
+include library.money;
+inherits systems.missions.base.mission_dynamic_base;
+
+const string BASE_CONVO = "missions/assassin_mission_npc_convo";
+const string ASSASSIN_MISSION_DEVICE = "object/tangible/mission/assassin_missions_device.iff";
+const int DEVICE_LOC_FEE = 119;
+
+trigger OnInitialize()
+{
+ 	removeTriggerVolume( "alertTriggerVolume" );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info item)
+{
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	removeTriggerVolume( "alertTriggerVolume" );
+	attachScript (self, "npc.converse.npc_converse_menu");
+	
+	/*DAN - need any of this?
+	if(!hasObjVar(self, "mission.strMissionTypes"))
+	{
+		string[] strMissionTypes = new string[1];
+		strMissionTypes[0] = NPC_NONPERSISTENT_MISSION_OBJVAR_NAMES[rand(0, NPC_NONPERSISTENT_MISSION_OBJVAR_NAMES.length-1)];
+		setObjVar(self, "mission.strMissionTypes", strMissionTypes);
+	}
+	if(!hasObjVar(self, "mission.intMinDifficulty"))
+	{
+		int intMinDifficulty = rand(1, 2);
+		setObjVar(self, "mission.intMinDifficulty", intMinDifficulty);
+	}
+	if(!hasObjVar(self, "mission.intMaxDifficulty"))
+	{
+		int intMaxDifficulty = rand(20, 30);
+		setObjVar(self, "mission.intMaxDifficulty", intMaxDifficulty);		
+	}*/
+	
+	
+	stop(self);
+	attachScript(self, "systems.missions.base.mission_npc");
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	// Is the player or NPC in combat?
+	if (ai_lib.isInCombat(self) || ai_lib.isInCombat(speaker))
+	{
+		return SCRIPT_OVERRIDE;
+	}
+
+	// Does the player already have enough missions?
+	obj_id[] objMissionArray = getMissionObjects(speaker);
+	if(objMissionArray!=null)
+	{
+		if(objMissionArray.length>=MAX_MISSIONS )
+		{
+			string_id greeting = new string_id ("mission/mission_generic", "npc_on_other_mission");
+			chat.chat(self, greeting);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	
+	int greetingChoice = rand (1,3);
+	if (hasObjVar (self, "greetingChoice"))
+	{
+		greetingChoice = getIntObjVar (self, "greetingChoice");
+	}
+	else
+	{
+		setObjVar (self, "greetingChoice", greetingChoice);
+	}
+	
+	// type can be neutral, Imperial, or Rebel.
+	string type = getMissionGiverType(self);
+	string playerFaction = factions.getFaction(speaker);
+	
+	// If NPC is Imperial or Rebel, don't give a mission unless the player is of the same faciton.
+	if ( type != "neutral" )
+	{
+		if ( !playerFaction.equals(type) )
+		{
+			string_id notInFaction = new string_id(BASE_CONVO, type + "_npc_cannot_offer" );
+			chat.chat (self, notInFaction);
+			return SCRIPT_OVERRIDE;
+		}
+	}
+	// If the NPC is neutral, don't give a mission to Imperial or Rebel players.
+	else if ( playerFaction.equals("Imperial") || playerFaction.equals("Rebel") )
+	{
+		string_id notNeutral= new string_id(BASE_CONVO, type + "_npc_cannot_offer" );
+		chat.chat (self, notNeutral);
+		return SCRIPT_OVERRIDE;
+	}
+	
+	
+	// Initial NPC greeting - type (imperial, rebel, or neutral) and a random greeting choice
+	string_id greeting = new string_id (BASE_CONVO, type + "_npc_greet_" + greetingChoice);
+
+	string_id responseChoices[] = new string_id [2];
+	// Player response of basically "Give me a mission!"
+	responseChoices[0] = new string_id (BASE_CONVO, "player_job_request");
+	// Player response based on initial NPC greeting
+	responseChoices[1] = new string_id (BASE_CONVO, type + "_player__1_" + greetingChoice);
+	
+	npcStartConversation (speaker, self, "assassin_mission", greeting, responseChoices);
+
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnNpcConversationResponse (string convo, obj_id player, string_id response)
+{
+
+	string type = getMissionGiverType(self);
+
+	int greetingChoice = getIntObjVar (self, "greetingChoice");
+	string_id responseChoices[] = new string_id [2];
+
+	// Player responds to the initial greeting by asking for work.
+	if ( response.getAsciiId().equals("player_job_request") )
+ 	{
+		if ( utils.playerHasItemByTemplate(player, ASSASSIN_MISSION_DEVICE) )
+		{
+			// Player has the device, so confirm that they want the job.
+			string_id message = new string_id (BASE_CONVO, type + "_npc_job_offer_" + greetingChoice);
+			npcSpeak(player, message);
+			
+			responseChoices[0] = new string_id (BASE_CONVO, "player_job_accept"); // I'll take it!
+			responseChoices[1] = new string_id (BASE_CONVO, "player_job_refuse"); // No thanks.
+			npcSetConversationResponses(player, responseChoices);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{	
+			// Player does not have the device, so tell them to get lost.
+			string_id message = new string_id (BASE_CONVO, type + "_npc_no_device_response");
+			npcSpeak(player, message);
+			
+			responseChoices[0] = new string_id (BASE_CONVO, "player_device_query"); // What device?
+			responseChoices[1] = new string_id (BASE_CONVO, "player_farewell"); // I'll be going
+			npcSetConversationResponses(player, responseChoices);
+			return SCRIPT_CONTINUE;
+	 	}
+	 }
+	
+	// Player responds to the initial greeting by asking the NPC a question
+ 	if ( response.getAsciiId().equals(type + "_player_line_1_" + greetingChoice) ) // initial response
+ 	{
+ 		// NPC responds to player question
+ 		string_id message = new string_id (BASE_CONVO, type + "_npc_response_1_" + greetingChoice);
+ 		npcSpeak(player, message);
+ 		
+ 		responseChoices[0] = new string_id (BASE_CONVO, type + "_player_line_2_" + greetingChoice); // Another player question
+		responseChoices[1] = new string_id (BASE_CONVO, "player_job_request" + greetingChoice); // Request a job
+		npcSetConversationResponses(player, responseChoices);
+ 		return SCRIPT_CONTINUE;
+	}
+	
+	// Player offered info on where to find someone who can help them get a tracking device
+	if ( response.getAsciiId().equals("player_device_query"))
+	{
+		string_id message = new string_id (BASE_CONVO, type + "_npc_device_description");
+		npcSpeak(player, message);
+		
+		responseChoices[0] = new string_id (BASE_CONVO, "player_device_interest"); // Player is interested in the device?
+		responseChoices[1] = new string_id (BASE_CONVO, "player_farewell"); // I'll be going
+		npcSetConversationResponses(player, responseChoices);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Player told they must pay for the info
+	if ( response.getAsciiId().equals("player_device_description"))
+	{
+		string_id message = new string_id (BASE_CONVO, type + "_npc_device_location_fee");
+		npcSpeak(player, message);
+		
+		responseChoices[0] = new string_id (BASE_CONVO, "player_device_pay_fee"); // Player will pay the fee
+		responseChoices[1] = new string_id (BASE_CONVO, "player_farewell"); // I'll be going
+		npcSetConversationResponses(player, responseChoices);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// Player will pay the fee
+	if ( response.getAsciiId().equals("player_device_location_fee"))
+	{
+		if ( money.hasFunds(player, money.MT_TOTAL, DEVICE_LOC_FEE) )
+		{	
+			// Player has the credits
+			money.bankTo(player, self, DEVICE_LOC_FEE);
+			// set waypoiny to nearest gadget specialist NPC
+			string_id message = new string_id (BASE_CONVO, type + "_npc_device_location_fee");
+			npcSpeak(player, message);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			// Player doesn't have enough credits
+			string_id message = new string_id (BASE_CONVO, type + "_npc_end_convo_no_credits");
+			npcSpeak(player, message);
+			npcEndConversation(player);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	
+	// Player accepts the job.
+	if(response.getAsciiId().equals("npc_job_accept"))
+	{
+		// Do they alreadyt have an assassin mission
+		obj_id objMission = getAssignedNPCMission(self, player);
+		if(objMission!=null)
+		{
+			string_id strResponse = new string_id("mission/mission_generic", "npc_job_request_already_have");
+			npcSpeak(player, strResponse);
+			npcEndConversation(player);
+			return SCRIPT_CONTINUE; // NO MISSIONS FOR YOU!
+		}
+		
+		
+		// DAN - Give Mission Here
+		string_id strResponse = new string_id(BASE_CONVO, type + "_npc_give_job_response");
+		npcEndConversation (player);
+		chat.chat(self, strResponse);
+	}
+	
+	// Player turns down the job.
+	if(response.getAsciiId().equals("npc_job_refuse"))
+	{
+		string_id strResponse = new string_id(BASE_CONVO, type + "_npc_turned_down_response");
+		npcEndConversation (player);
+		chat.chat(self, strResponse);
+	}
+	
+	// Player asks a second question.
+	if ( response.getAsciiId().equals(type + "_player_line_2_" + greetingChoice))
+	{
+
+		string_id message = new string_id (BASE_CONVO, type + "_npc_end_convo_get_lost_" + greetingChoice);//
+		npcSpeak(player, message);
+		npcEndConversation (player);
+		return SCRIPT_CONTINUE;
+	}
+	
+	// For player_farewell or any other responses that fall through for whatever reason
+	string_id message = new string_id (BASE_CONVO, type + "_npc_farewell_" + rand(1,3));//
+	npcSpeak(player, message);
+	npcEndConversation (player);
+	return SCRIPT_CONTINUE;
+}
+
+
+string getMissionGiverType (obj_id self)
+{
+	string type = "neutral";
+	const string npc_type = getCreatureName(self);
+
+	if (npc_type != null)
+	{
+		// get cretures.tab creatureName to identify the type of assassin recruiter
+		if ( npc_type == "assassin_mission_recruiter_imperial" )
+		{
+			type = "Imperial";
+		}
+		else if ( npc_type == "assassin_mission_recruiter_rebel" )
+		{
+			type = "Rebel";
+		}
+	}
+	return type;
+}	
+
+

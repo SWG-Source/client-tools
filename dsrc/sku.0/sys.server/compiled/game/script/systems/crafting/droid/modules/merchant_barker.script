@@ -1,0 +1,383 @@
+/**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        merchant_barker
+ * Description:  Handled the functionality of droid merchant barkers
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.ai_lib;
+include library.callable;
+include library.chat;
+include library.sui;
+include library.pet_lib;
+include library.utils;
+include ai.pet;
+
+
+/***** CONSTANTS *******************************************************/
+const string STF_FILE = "pet/droid_modules";
+
+const string SCRIPT_VAR_BARKING_ON 		= "module.barking_on";
+const string SCRIPT_VAR_RECORDING_ON 		= "module.recording_on";
+const string SCRIPT_VAR_WAYPOINT_SUI		= "module.waypoint_sui";
+const string SCRIPT_VAR_WAYPOINT_LIST		= "module.waypoint_list";
+
+const string VAR_MERCHANT_BARKER		= "module_data.merchant_barker";
+const string VAR_BARK_MESSAGE			= "module_data.bark_message";
+const string VAR_BARK_WAYPOINT_LOC		= "module_data.bark_waypoint_loc";
+const string VAR_BARK_WAYPOINT_NAME		= "module_data.bark_waypoint_name";
+const string_id SID_NO_FREE_TRIAL		= new string_id ("base_player", "no_free_trial_barker");;
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	createTriggerVolume(pet.BARK_TRIGGER_VOLUME, pet.BARK_RANGE, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (isDead(self) || ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+	
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+
+	int mnu = mi.addRootMenu (menu_info_types.SERVER_MENU1, new string_id(STF_FILE,"merchant_barker"));
+	if (player == getMaster(self))
+	{
+		if (hasCommand(player, "ad_fees_1"))
+		{
+			mi.addSubMenu(mnu, menu_info_types.SERVER_MENU2, new string_id(STF_FILE, "record_message"));
+			mi.addSubMenu(mnu, menu_info_types.SERVER_MENU3, new string_id(STF_FILE, "store_waypoint"));
+			mi.addSubMenu(mnu, menu_info_types.SERVER_MENU4, new string_id(STF_FILE, "barker_on_off"));
+		}
+	}
+		
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (item != menu_info_types.SERVER_MENU1 && item != menu_info_types.SERVER_MENU2 && item != menu_info_types.SERVER_MENU3 && item != menu_info_types.SERVER_MENU4)
+		return SCRIPT_CONTINUE;
+	
+	if (isDead(self) || ai_lib.aiIsDead(self))
+		return SCRIPT_CONTINUE;
+	
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+	
+	if (isDead(player) || isIncapacitated(player))
+		return SCRIPT_CONTINUE;
+	
+	if (pet_lib.isLowOnPower(self))
+	{
+		sendSystemMessage(player, new string_id(STF_FILE, "not_enough_power"));
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (item == menu_info_types.SERVER_MENU1)
+	{
+
+		if (hasObjVar(self, VAR_BARK_WAYPOINT_NAME))
+		{
+			// create a waypoint for the player.
+			string name = getStringObjVar(self, VAR_BARK_WAYPOINT_NAME);
+			location loc = getLocationObjVar(self, VAR_BARK_WAYPOINT_LOC);
+			//LOG("droid_module", "name ->" + name + " loc ->" + loc);
+			if (name == null)
+			{
+				LOG("droid_module", "merchant_barker.OnObjectMenuSelect -- waypoint name is null for " + self);
+				return SCRIPT_CONTINUE;
+			}
+			if (loc == null)
+			{
+				LOG("droid_module", "merchant_barker.OnObjectMenuSelect -- location is null for " + self);
+				return SCRIPT_CONTINUE;
+			}
+			
+			// Create the waypoint.
+			obj_id datapad = utils.getPlayerDatapad(player);
+			
+			if(!isIdValid(datapad))
+			{
+				LOG("droid_module", "merchant_barker.OnObjectMenuSelect -- the datapad for " + self + " is null.");
+				return SCRIPT_CONTINUE;
+			}
+			
+			if (getVolumeFree(datapad) < 1)
+			{
+				sendSystemMessage(player, new string_id(STF_FILE, "not_space_in_datapad"));
+				return SCRIPT_CONTINUE;
+			}
+			
+			obj_id waypoint = createWaypointInDatapad(player, loc);
+			setWaypointName(waypoint, name);
+			
+			//string message = getStringObjVar(self, VAR_BARK_MESSAGE);
+			//if (message == null)
+			//	message = localize(new string_id(STF_FILE, "barker_message_body"));
+				
+			//string oob = chatMakePersistentMessageOutOfBandBody(null, new string_id(STF_FILE, "barker_message_body"));
+			//chatAppendPersistentMessageWaypointData (oob, loc.area, loc.x, loc.z, new string_id(STF_FILE, "barker_message_body"), localize(new string_id(STF_FILE, "barker_message_sub")));
+			//chatSendPersistentMessage(getName(self), getChatName(player), localize(new string_id(STF_FILE, "barker_message_sub")), message, oob);
+			
+			sendSystemMessage(player, new string_id(STF_FILE, "waypoint_sent"));
+		}
+		else
+			sendSystemMessage(player, new string_id(STF_FILE, "no_waypoint"));
+		
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (player == getMaster(self))
+	{
+		if (hasCommand(player, "ad_fees_1"))
+		{	
+			if (item == menu_info_types.SERVER_MENU2)
+			{
+				if (isFreeTrialAccount(player))
+				{
+					sendSystemMessage(player, SID_NO_FREE_TRIAL);
+					return SCRIPT_CONTINUE;
+				}
+
+				// Record a message.
+				if (utils.hasScriptVar(self, SCRIPT_VAR_RECORDING_ON))
+				{
+					sendSystemMessage(player, new string_id(STF_FILE, "recording_message_off"));
+					utils.removeScriptVar(self, SCRIPT_VAR_RECORDING_ON);
+				}
+				else
+				{
+					sendSystemMessage(player, new string_id(STF_FILE, "recording_message_on"));
+					utils.setScriptVar(self, SCRIPT_VAR_RECORDING_ON, 1);
+				}
+			}
+			if (item == menu_info_types.SERVER_MENU3)
+			{
+				if (isFreeTrialAccount(player))
+				{
+					sendSystemMessage(player, SID_NO_FREE_TRIAL);
+					return SCRIPT_CONTINUE;
+				}
+				
+				// Set up a waypoint
+				obj_id waypoints[]  = getWaypointsInDatapad(player);
+				if (waypoints != null && waypoints.length > 0)
+				{
+					if (utils.hasScriptVar(player, SCRIPT_VAR_WAYPOINT_SUI))
+						forceCloseSUIPage(utils.getIntScriptVar(player, SCRIPT_VAR_WAYPOINT_SUI));
+						
+					string[] waypoint_names = new string[waypoints.length];
+					for (int i = 0; i < waypoint_names.length; i++)
+						waypoint_names[i] = getWaypointName(waypoints[i]);
+					
+					string prompt = "@" + STF_FILE + ":select_waypoint";
+					int pid = sui.listbox(self, player, prompt, sui.OK_CANCEL, prompt, waypoint_names, "msgDroidWaypointSelected");
+					utils.setScriptVar(player, SCRIPT_VAR_WAYPOINT_SUI, pid);
+					utils.setScriptVar(self, SCRIPT_VAR_WAYPOINT_LIST, waypoints);
+				}
+				else
+					sendSystemMessage(player, new string_id(STF_FILE, "no_waypoints_in_datapad"));
+							
+			}
+			if (item == menu_info_types.SERVER_MENU4)
+			{
+				if (isFreeTrialAccount(player))
+				{
+					sendSystemMessage(player, SID_NO_FREE_TRIAL);
+					return SCRIPT_CONTINUE;
+				}
+
+				// Turn barker on/off
+				if (!utils.hasScriptVar(self, SCRIPT_VAR_BARKING_ON))
+				{
+					if (!hasObjVar(self, VAR_BARK_MESSAGE))
+					{
+						sendSystemMessage(player, new string_id(STF_FILE, "no_message_to_bark"));
+					}
+					else
+					{
+						sendSystemMessage(player, new string_id(STF_FILE, "barking_on"));
+						utils.setScriptVar(self, SCRIPT_VAR_BARKING_ON, getGameTime());
+						messageTo(self, "msgMerchantBark", null, 10.0f, false);
+					}
+				}
+				else
+				{
+					sendSystemMessage(player, new string_id(STF_FILE, "barking_off"));
+					utils.removeScriptVar(self, SCRIPT_VAR_BARKING_ON);
+				}
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnHearSpeech(obj_id player, String message)
+{
+	//LOG("droid_module", "systems.crafting.droid.modules.merchant_barker -- player: " + player + " messsage:" + message);
+	
+	if (ai_lib.isAiDead(self))
+		return SCRIPT_CONTINUE;
+	
+	if (!utils.hasScriptVar(self, SCRIPT_VAR_RECORDING_ON))
+		return SCRIPT_CONTINUE;
+
+	if (player == getMaster(self))
+	{
+		if (message.length() > 128)
+		{
+			sendSystemMessage(player, new string_id(STF_FILE, "message_too_long"));
+			return SCRIPT_CONTINUE;
+		}
+		
+		obj_id pet_control = callable.getCallableCD(self);
+		if (!isIdValid(pet_control))
+		{
+			LOG("droid_module", "merchant_barker.OnHearSpeech -- pet control device is invalid for droid " + self);
+			return SCRIPT_CONTINUE;
+		}
+		
+		setObjVar(self, VAR_BARK_MESSAGE, message);
+		setObjVar(pet_control, VAR_BARK_MESSAGE, message);
+		utils.removeScriptVar(self, SCRIPT_VAR_RECORDING_ON);
+		sendSystemMessage(player, new string_id(STF_FILE, "message_saved"));
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler msgMerchantBark()
+{
+	//LOG("droid_module", "msgMerchantBark -- " + params);
+	if (ai_lib.isAiDead(self))
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_BARKING_ON);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (pet_lib.isLowOnPower(self))
+	{
+		utils.removeScriptVar(self, SCRIPT_VAR_BARKING_ON);		
+		return SCRIPT_CONTINUE;
+	}
+	
+	
+	if (utils.hasScriptVar(self, SCRIPT_VAR_BARKING_ON))
+	{
+		if (hasObjVar(self, VAR_BARK_MESSAGE))
+		{
+			string message = getStringObjVar(self, VAR_BARK_MESSAGE);
+			if (message != null)
+			{
+				chat.chat(self, message);
+				utils.setScriptVar(self, pet.CAN_BARK, pet.FALSE);
+				messageTo(self, "msgResetCanBark", null, pet.BARK_DELAY, false);
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgResetCanBark()
+{
+	utils.setScriptVar(self, pet.CAN_BARK, pet.TRUE);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgDroidWaypointSelected()
+{
+	if (ai_lib.isAiDead(self))
+		return SCRIPT_CONTINUE;
+		
+	obj_id player = getMaster(self);
+	if (!isIdValid(player))
+	{
+		LOG("droid_module", "merchant_barker.msgDroidWaypointSelected -- player is invalid");
+		return SCRIPT_CONTINUE;
+	}
+	if (!player.isAuthoritative())
+		return SCRIPT_CONTINUE;
+	
+	utils.removeScriptVar(player, SCRIPT_VAR_WAYPOINT_SUI);
+	
+	obj_id[] waypoints;
+	if (utils.hasScriptVar(self, SCRIPT_VAR_WAYPOINT_LIST))
+	{
+		waypoints = utils.getObjIdArrayScriptVar(self, SCRIPT_VAR_WAYPOINT_LIST);
+		utils.removeScriptVar(self, SCRIPT_VAR_WAYPOINT_LIST);
+	}
+	else
+	{
+		LOG("droid_module", "merchant_barker.msgDroidWaypointSelected -- can't find waypoint list.");
+		return SCRIPT_CONTINUE;
+	}
+	
+	string button = params.getString("buttonPressed");
+	if (button.equals("Cancel") || button.equals("No"))
+		return SCRIPT_CONTINUE;
+	
+	int row_selected = sui.getListboxSelectedRow(params);
+	if (row_selected == -1)
+		return SCRIPT_CONTINUE;
+	
+	if (row_selected >= waypoints.length)
+		return SCRIPT_CONTINUE;
+	
+	obj_id selected_waypoint = waypoints[row_selected];
+	LOG("droid_module", "merchant_barker.msgDroidWaypointSelected -- selected_waypoint:" + selected_waypoint + " row ->" + row_selected);
+	if (!isIdValid(selected_waypoint))
+	{
+		LOG("droid_module", "merchant_barker.msgDroidWaypointSelected -- selected_waypoint is not valid for " + player + ".");
+		return SCRIPT_CONTINUE;
+	}
+	
+	location waypoint_loc = getWaypointLocation(selected_waypoint);
+	if (waypoint_loc == null)
+	{
+		LOG("droid_module", "merchant_barker.msgDroidWaypointSelected -- location is null for waypoint " + selected_waypoint);
+		return SCRIPT_CONTINUE;
+	}
+	string waypoint_name = getWaypointName(selected_waypoint);
+	
+	// Write the new waypoint data to the droid and the control device.
+	obj_id pet_control = callable.getCallableCD(self);
+	
+	if(!isIdValid(pet_control))
+	{
+		LOG("droid_module", "merchant_barker.msgDroidWaypointSelected -- pet control device is invalid for droid " + self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	setObjVar(self, VAR_BARK_WAYPOINT_LOC, waypoint_loc);
+	setObjVar(pet_control, VAR_BARK_WAYPOINT_LOC, waypoint_loc);
+	setObjVar(self, VAR_BARK_WAYPOINT_NAME, waypoint_name);
+	setObjVar(pet_control, VAR_BARK_WAYPOINT_NAME, waypoint_name);
+	
+	sendSystemMessage(player, new string_id(STF_FILE, "waypoint_set"));
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+
+/***** FUNCTIONS *******************************************************/

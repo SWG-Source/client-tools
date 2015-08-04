@@ -1,0 +1,917 @@
+ /**********************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        scriptlib
+ * Description:  base player script library
+ * @author       $Author:$
+ * @version      $Revision:$
+ **********************************************************************/
+
+/***** INCLUDES ********************************************************/
+
+include library.battlefield;
+include library.instance;
+include library.pclib;
+include library.regions;
+include library.space_dungeon;
+
+/***** CONSTANTS *******************************************************/
+
+const string SCRIPT_CLONING_FACILITY                = "structure.municipal.cloning_facility";
+const string SCRVAR_CLONE_COUPON					= "clone_coupon";
+
+// Clone facility datatable
+const string DATATABLE_CLONE_SPAWN                  = "datatables/structure/municipal/cloning_facility_respawn.iff";
+
+const string COL_SPAWN_STRUCTURE                    = "STRUCTURE";
+const string COL_SPAWN_X                            = "X";
+const string COL_SPAWN_Y                            = "Y";
+const string COL_SPAWN_Z                            = "Z";
+const string COL_SPAWN_CELLNAME                     = "CELL";
+
+// Cloning datatables
+const string DATATABLE_CLONE_MAPPING				= "datatables/cloning/clone_mapping.iff";
+const string DATATABLE_CLONING_COST					= "datatables/cloning/clone_cost.iff";
+
+// Error messages
+const string_id SID_BIND_SUCCESSFUL                 = new string_id("base_player","clone_success");
+const string_id SID_BAD_CLONE_LOCATION              = new string_id("error_message","bad_clone_location");
+const string_id SID_NO_CLONING_FACILITIES           = new string_id("error_message","no_cloning_facilities");
+const string_id SID_RESPAWN_CURRENT_LOCATION        = new string_id("error_message","respawn_current_location");
+const string_id SID_RESPAWN_CLOSEST_FACILITY        = new string_id("error_message","respawn_closest_facility");
+const string_id SID_RESPAWN_JEDI_FAILED				= new string_id("error_message","respawn_jedi_failed");
+
+const string_id SID_NSF_CLONE						= new string_id("error_message","nsf_clone");
+const string_id SID_NSF_CLONE1						= new string_id("error_message","nsf_clone1");
+
+//cloning facility register constants
+const string VAR_PLANET_CLONE_ID					= "cloningFacilities.id";  		//obj_id[]
+const string VAR_PLANET_CLONE_NAME					= "cloningFacilities.name";		//string[]
+const string VAR_PLANET_CLONE_AREA					= "cloningFacilities.area";		//string[]
+const string VAR_PLANET_CLONE_AREA_ID				= "cloningFacilities.areaId";	//obj_id[]
+const string VAR_PLANET_CLONE_LOC					= "cloningFacilities.loc"; 		//location[]
+const string VAR_PLANET_CLONE_RESPAWN				= "cloningFacilities.respawn";  //location[]
+const string VAR_PLANET_CLONE_TYPE					= "cloningFacilities.type"; 	//int[]
+
+const int CLONE_TYPE_STANDARD						= 0;
+const int CLONE_TYPE_PLAYER_CITY					= 1;
+const int CLONE_TYPE_JEDI_ONLY						= 2;
+const int CLONE_TYPE_LIGHT_JEDI_ONLY				= 3;
+const int CLONE_TYPE_DARK_JEDI_ONLY					= 4;
+const int CLONE_TYPE_RESTRICTED						= 5;
+const int CLONE_TYPE_FACTION_IMPERIAL				= 6;
+const int CLONE_TYPE_FACTION_REBEL					= 7;
+const int CLONE_TYPE_PVP_REGION_ADVANCED_IMPERIAL	= 8;
+const int CLONE_TYPE_PVP_REGION_ADVANCED_REBEL		= 9;
+const int CLONE_TYPE_CAMP							= 10;
+const int CLONE_TYPE_PRIVATE_INSTANCE					= 11;
+
+// Registered bind location
+const string VAR_BIND_BASE                          = "bind";
+const string VAR_BIND_FACILITY                      = "bind.facility";
+const string VAR_BIND_LOCATION                      = "bind.location";
+const string VAR_BIND_SPAWN_LOC						= "bind.spawn";
+const string VAR_BIND_CITY_NAME                     = "bind.city_name";
+
+const string VAR_BIND_FACILITY_TEMPLATE             = "bind.facility_template";  // deprecated
+const string VAR_BIND_FACILITY_CELL                 = "bind.cell"; // deprecated
+
+//DEATH-CLONE CONSTANTS
+const int CLONE_COST_BASE							= 1000;	//base clone cost for send to bind...
+const int CLONE_DAMAGE_LOW							= 2;
+const int CLONE_DAMAGE_HIGH							= 10;
+
+const float DEFAULT_REPAIR_RATIO					= 10.0f;
+
+
+/***** BASE FUNCTIONS **************************************************/
+
+// Return a dictionary of SceneName & Buildout Area pairs for areas that be cloned at when dying in the defined scene/buildout area
+dictionary getCloningAreas(string planet, string area)
+{
+	dictionary data = new dictionary();
+	string[] sceneNames = dataTableGetStringColumn(DATATABLE_CLONE_MAPPING, "clone_scene");
+	string[] areaNames = dataTableGetStringColumn(DATATABLE_CLONE_MAPPING, "clone_area");
+
+	int idx = 0;
+	for (int i = 0; i < sceneNames.length; i++)
+	{
+		if (sceneNames[i] == planet)
+		{
+			string cloneScene = dataTableGetString(DATATABLE_CLONE_MAPPING, i, "scene");
+			string cloneArea = dataTableGetString(DATATABLE_CLONE_MAPPING, i, "area");
+			if (cloneArea == null) cloneArea = "";
+			if (areaNames[i] == null || areaNames[i] == "" || areaNames[i] == area)
+			{
+				data.put("scene_"+idx, cloneScene);
+				data.put("area_"+idx, cloneArea);
+				idx++;
+			}
+		}
+	}
+
+	return data;
+}
+
+location getCloneSpawnLocation(obj_id facility)
+{
+	return getCloneSpawnLocation(getLocation(facility), facility);
+}
+
+location getCloneSpawnLocation(location baseLoc, obj_id facility)
+{
+	string facilityTemplate = getTemplateName(facility);
+	if ( facilityTemplate == null )
+	{
+		LOG("DESIGNER_FATAL", "WARNING: getCloneSpawnLocation(1) no template for facility " + facility);
+	 	return null;
+	}
+
+	dictionary facilityData = new dictionary();
+
+	if ( dataTableOpen(DATATABLE_CLONE_SPAWN) )
+	{
+	 	string[] templates = dataTableGetStringColumn(DATATABLE_CLONE_SPAWN, COL_SPAWN_STRUCTURE);
+	 	int pos = utils.getElementPositionInArray(templates, facilityTemplate);
+	 	if ( pos > -1 )
+	 	{
+	 		facilityData = dataTableGetRow(DATATABLE_CLONE_SPAWN, pos);
+		}
+		else
+			return null;
+	}
+	else
+		return null;
+
+
+	return getCloneSpawnLocation(baseLoc, facilityData);
+}
+
+location getCloneSpawnLocation(location baseLoc, dictionary facilityData)
+{
+	float x = facilityData.getFloat(COL_SPAWN_X);
+	float y = facilityData.getFloat(COL_SPAWN_Y);
+	float z = facilityData.getFloat(COL_SPAWN_Z);
+	string cellName = facilityData.getString(COL_SPAWN_CELLNAME);
+	if (cellName == null || cellName == "" || cellName == "none")
+	{
+		x += baseLoc.x;
+		y += baseLoc.y;
+		z += baseLoc.z;
+
+		return new location(x, y, z, baseLoc.area);
+	}
+	else
+	{
+		obj_id cloner = getTopMostContainer(getSelf());
+		if(!isIdValid(cloner) || !exists(cloner))
+			cloner = getSelf();
+		obj_id cellId = getCellId(cloner, cellName);
+		if ( cellId != null )
+		{
+			return new location(x, y, z, baseLoc.area, cellId);
+		}
+	}
+
+	return null;
+}
+
+string getSpawnCellName(obj_id facility)
+{
+	return getSpawnCellName(getTemplateName(facility));
+}
+
+string getSpawnCellName(string facilityTemplate)
+{
+	 if ( facilityTemplate == null )
+	 	return null;
+
+	 if ( dataTableOpen(DATATABLE_CLONE_SPAWN) )
+	 {
+	 	string[] templates = dataTableGetStringColumn(DATATABLE_CLONE_SPAWN, COL_SPAWN_STRUCTURE);
+
+	 	int pos = utils.getElementPositionInArray(templates, facilityTemplate);
+	 	if ( pos > -1 )
+	 	{
+			dictionary d = dataTableGetRow(DATATABLE_CLONE_SPAWN, pos);
+	 		return d.getString(COL_SPAWN_CELLNAME);
+	 	}
+	 	else
+	 	{
+	 		//have no idea where I am supposed to spawn because the template is not in the datatable
+			debugServerConsoleMsg(null, "WARNING: getCloneSpawnLocation cannot find template " + facilityTemplate +
+				" in datatable " + DATATABLE_CLONE_SPAWN);
+	 		return null;
+	 	}
+	 }
+	 else
+	 {
+	 	//datatable open failed
+		debugServerConsoleMsg(null, "WARNING: getCloneSpawnLocation cannot find datatable " + DATATABLE_CLONE_SPAWN);
+		return null;
+	 }
+}
+
+string getCloneFacilityName(obj_id facility)
+{
+	string planetName = getCurrentSceneName();
+	obj_id planet = getPlanetByName(planetName);
+
+	obj_id[]   idList        = utils.getObjIdArrayScriptVar(planet, cloninglib.VAR_PLANET_CLONE_ID);
+	string[]   nameList      = utils.getStringArrayScriptVar(planet, cloninglib.VAR_PLANET_CLONE_NAME);
+
+	int pos = utils.getElementPositionInArray(idList, facility);
+	if (pos >= 0)
+	{
+		return nameList[pos];
+	}
+
+	return "@base_player:clone_location_unknown";
+}
+
+boolean canUseBindFacility(string planet, string area)
+{
+	dictionary data = new dictionary();
+	string[] sceneNames = dataTableGetStringColumn(DATATABLE_CLONE_MAPPING, "clone_scene");
+	string[] areaNames = dataTableGetStringColumn(DATATABLE_CLONE_MAPPING, "clone_area");
+
+	int idx = 0;
+	for (int i = 0; i < sceneNames.length; i++)
+	{
+		if (sceneNames[i] == planet)
+		{
+			if (areaNames[i] == null || areaNames[i] == "" || areaNames[i] == area)
+			{
+				int restrict = dataTableGetInt(DATATABLE_CLONE_MAPPING, i, "restrict_bind_facility");
+
+				if (restrict != 0)
+					return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+/***** BIND FUNCTIONS **************************************************/
+
+boolean requestBind(obj_id player, obj_id terminal)
+{
+	if (!isIdValid(player))
+	{
+		return false;
+	}
+
+	if ( utils.hasScriptVar(player, SCRVAR_CLONE_COUPON) )
+	{
+		dictionary webster = new dictionary();
+		webster.put(money.DICT_PLAYER_ID, player);
+		messageTo(terminal, "handleRequestedClone", webster, 1, false);
+		return true;
+	}
+
+	int cost = getRegisterCloneCost(player);
+	int total = getTotalMoney(player);
+
+	obj_id facility = structure.getContainingBuilding(player);
+
+	if(!isIdValid(facility) || !hasScript(facility, cloninglib.SCRIPT_CLONING_FACILITY))
+	{
+		sendSystemMessage(player, cloninglib.SID_BAD_CLONE_LOCATION);
+		return false;
+	}
+
+	if ( verifyFundsForCloning(player) )
+	{
+		return money.pay(player, terminal, cost, "handleRequestedClone", null, true);
+	}
+
+	return false;
+}
+
+boolean setBind(obj_id player, obj_id cloningFacility)
+{
+	if ( (player == null) || (!isPlayer(player)) )
+	{
+		return false;
+	}
+
+	if (!isIdValid(cloningFacility) || !hasScript(cloningFacility, SCRIPT_CLONING_FACILITY))
+	{
+		sendSystemMessage(player, SID_BAD_CLONE_LOCATION);
+		return false;
+	}
+
+	// we have to save the cloning facility's location on the player, as it may not exist on the server
+	// where the player is when they die
+	location cloneLoc = getLocation(cloningFacility);
+	location spawnLoc = getCloneSpawnLocation(cloningFacility);
+	string cloneName = getCloneFacilityName(cloningFacility);
+
+	setObjVar(player, VAR_BIND_FACILITY, cloningFacility);
+	setObjVar(player, VAR_BIND_CITY_NAME, cloneName);
+	setObjVar(player, VAR_BIND_LOCATION, cloneLoc);
+	setObjVar(player, VAR_BIND_SPAWN_LOC, spawnLoc);
+
+	sendSystemMessage(player, SID_BIND_SUCCESSFUL);
+
+	return true;
+}
+
+boolean verifyFundsForCloning(obj_id player)
+{
+	if ( !isIdValid(player) )
+		return false;
+
+	int cost = getRegisterCloneCost(player);
+	int total = getTotalMoney(player);
+
+	if ( total < cost )
+	{
+		int diff = cost - total;
+		if ( diff == 1 )
+			sendSystemMessage(player, SID_NSF_CLONE1);
+		else
+		{
+			prose_package ppNsf = prose.getPackage(SID_NSF_CLONE, diff);
+			sendSystemMessageProse(player, ppNsf);
+		}
+		return false;
+	}
+	else
+	{
+		return true;
+	}
+}
+
+int getRegisterCloneCost(obj_id player)
+{
+	location playerLoc = getWorldLocation(player);
+
+	string planetName = playerLoc.area;
+	string areaName = getBuildoutAreaName(playerLoc.x, playerLoc.z);
+	string cityName = planetary_map.getCityRegionName(playerLoc);
+
+	if (cityName != null && cityName.startsWith("@"))
+	{
+		string_id sidCity = utils.unpackString(cityName);
+
+		if (sidCity != null)
+			cityName = sidCity.getAsciiId();
+	}
+
+	int cost = CLONE_COST_BASE;
+	int row = -1;
+
+	// First look for city cost definition
+	if (cityName != null)
+	{
+		row = dataTableSearchColumnForString(cityName, 0, DATATABLE_CLONING_COST);
+		if (row > -1)
+		{
+			cost = dataTableGetInt(DATATABLE_CLONING_COST, row, "clone_cost");
+			return cost;
+		}
+	}
+
+	// No city, look for area definition
+	if (areaName != null)
+	{
+		row = dataTableSearchColumnForString(areaName, 0, DATATABLE_CLONING_COST);
+		if (row > -1)
+		{
+			cost = dataTableGetInt(DATATABLE_CLONING_COST, row, "clone_cost");
+			return cost;
+		}
+	}
+
+	// Finally look for planet definition
+	if (planetName != null)
+	{
+		row = dataTableSearchColumnForString(planetName, 0, DATATABLE_CLONING_COST);
+		if (row > -1)
+		{
+			cost = dataTableGetInt(DATATABLE_CLONING_COST, row, "clone_cost");
+			return cost;
+		}
+	}
+
+	// All else fails return base cost
+	return cost;
+}
+
+/***** CLONE FACILITY FUNCTIONS **************************************************/
+
+Vector getAvailableCloningFacilities(obj_id player)
+{
+	if (!isIdValid(player) || !isPlayer(player))
+	{
+		return null;
+	}
+
+	location playerLoc = pclib.getEffectiveDeathLocation(player);
+
+	string planetName = playerLoc.area;
+	if ( planetName == null )
+		return null;
+
+	obj_id planet = getPlanetByName(planetName);
+	if ( !isIdValid(planet) )
+		return null;
+
+	float x = playerLoc.x;
+	float z = playerLoc.z;
+
+	obj_id container = getTopMostContainer(player);
+	location worldLoc = getWorldLocation(container);
+	string area = getBuildoutAreaName(worldLoc.x, worldLoc.z);
+	if (area == null) area = "";
+
+	resizeable obj_id[]   idList        = utils.getResizeableObjIdArrayScriptVar(planet, VAR_PLANET_CLONE_ID);
+	resizeable string[]   nameList      = utils.getResizeableStringArrayScriptVar(planet, VAR_PLANET_CLONE_NAME);
+	resizeable string[]   areaList      = utils.getResizeableStringArrayScriptVar(planet, VAR_PLANET_CLONE_AREA);
+	resizeable obj_id[]   areaIdList    = utils.getResizeableObjIdArrayScriptVar(planet, VAR_PLANET_CLONE_AREA_ID);
+	resizeable location[] locList       = utils.getResizeableLocationArrayScriptVar(planet, VAR_PLANET_CLONE_LOC);
+	resizeable location[] respawnList   = utils.getResizeableLocationArrayScriptVar(planet, VAR_PLANET_CLONE_RESPAWN);
+	resizeable int[]      cloneTypeList = utils.getResizeableIntArrayScriptVar(planet, VAR_PLANET_CLONE_TYPE);
+
+	if (idList == null || nameList == null || areaList == null || areaIdList == null || locList == null || respawnList == null || cloneTypeList == null ||
+		idList.length == 0 || nameList.length == 0 || areaList.length == 0 || areaIdList.length == 0 || locList.length == 0 || respawnList.length == 0 || cloneTypeList.length == 0)
+	{
+		sendSystemMessage(player, SID_NO_CLONING_FACILITIES);
+		return null;
+	}
+
+	Vector facilityList = new Vector();
+	obj_id registeredFacility = getObjIdObjVar(player, VAR_BIND_FACILITY);
+
+	obj_id playerFacility = null;
+	string playerFacilityName = null;
+	location playerFacilityLoc = null;
+	location playerFacilitySpawnLoc = null;
+	float playerCityDist = Float.MAX_VALUE;
+
+	obj_id factionFacility = null;
+	string factionFacilityName = null;
+	location factionFacilityLoc = null;
+	location factionFacilitySpawnLoc = null;
+	float factionFacilityDist = Float.MAX_VALUE;
+
+	obj_id pvpAdvancedFacility = null;
+	string pvpAdvancedFacilityName = null;
+	location pvpAdvancedFacilityLoc = null;
+	location pvpAdvancedFacilitySpawnLoc = null;
+	float pvpAdvancedFacilityDist = Float.MAX_VALUE;
+
+	obj_id playerCamp = null;
+	string playerCampName = null;
+	location playerCampLoc = null;
+	location playerCampSpawnLoc = null;
+	float playerCampDist = 500f;
+
+	obj_id instance_controller = instance.getAreaInstanceController(player);
+
+	obj_id playerPob = space_dungeon.getDungeonIdForPlayer(player);
+
+	if (!isIdValid(playerPob)) playerPob = getTopMostContainer(player);
+	if (playerPob == player) playerPob = obj_id.NULL_ID;
+
+	for (int i = 0; i < idList.length; i++)
+	{
+		// Make sure there isn't a shorter vector length
+		if(idList.length <= i || nameList.length <= i || areaList.length <= i || areaIdList.length <= i || locList.length <= i || respawnList.length <= i || cloneTypeList.length <= i)
+		{
+			break;
+		}
+
+		// Skip facility if they are not globally available or in the player's area
+		if (areaList[i] != null && area != null)
+		{
+			if (!areaList[i].equals("") && areaList[i] != area)
+			{
+				continue;
+			}
+
+			if (isIdValid(playerPob) && isIdValid(areaIdList[i]) && playerPob != areaIdList[i])
+			{
+				continue;
+			}
+		}
+
+		if(!isIdValid(idList[i]))
+			continue;
+
+		float dist = getDistance(worldLoc, locList[i]);
+		if (dist == -1) dist = Float.MAX_VALUE;
+
+		// Registered loc is handled independantly, do not add.
+		if (idList[i] == registeredFacility)
+		{
+			// Force registered locations to the top of the list
+			dist = -1;
+		}
+
+		region[] deathLocRegions = new region[0];
+
+		// Validate the facility type and add if available
+		switch (cloneTypeList[i])
+		{
+			case CLONE_TYPE_STANDARD:
+				facilityList = addAvailableCloningFacility(facilityList, idList[i], locList[i], respawnList[i], nameList[i], dist);
+				break;
+
+			case CLONE_TYPE_PLAYER_CITY:
+				if (dist < playerCityDist && !city.isCityBanned(player, idList[i]))
+				{
+					playerFacility = idList[i];
+					playerFacilityName = nameList[i];
+					playerFacilityLoc = locList[i];
+					playerFacilitySpawnLoc = respawnList[i];
+					playerCityDist = dist;
+				}
+				break;
+
+			case CLONE_TYPE_JEDI_ONLY:
+				if (isJedi(player))
+				{
+					facilityList = addAvailableCloningFacility(facilityList, idList[i], locList[i], respawnList[i], nameList[i], dist);
+				}
+				break;
+
+			case CLONE_TYPE_LIGHT_JEDI_ONLY:
+				if (isJedi(player) && hasSkill(player, "force_rank_light_novice"))
+				{
+					facilityList = addAvailableCloningFacility(facilityList, idList[i], locList[i], respawnList[i], nameList[i], dist);
+				}
+				break;
+
+			case CLONE_TYPE_DARK_JEDI_ONLY:
+				if (isJedi(player) && hasSkill(player, "force_rank_dark_novice"))
+				{
+					facilityList = addAvailableCloningFacility(facilityList, idList[i], locList[i], respawnList[i], nameList[i], dist);
+				}
+				break;
+			case CLONE_TYPE_RESTRICTED:
+				if (isIdValid(playerPob) && playerPob == areaIdList[i])
+				{
+					facilityList = addAvailableCloningFacility(facilityList, idList[i], locList[i], respawnList[i], nameList[i], dist);
+				}
+				break;
+
+			case CLONE_TYPE_FACTION_IMPERIAL:
+				if (factions.isImperial(player))
+				{
+					if (dist < factionFacilityDist)
+					{
+						factionFacility = idList[i];
+						factionFacilityName = nameList[i];
+						factionFacilityLoc = locList[i];
+						factionFacilitySpawnLoc = respawnList[i];
+						factionFacilityDist = dist;
+					}
+				}
+				break;
+			case CLONE_TYPE_FACTION_REBEL:
+				if (factions.isRebel(player))
+				{
+					if (dist < factionFacilityDist)
+					{
+						factionFacility = idList[i];
+						factionFacilityName = nameList[i];
+						factionFacilityLoc = locList[i];
+						factionFacilitySpawnLoc = respawnList[i];
+						factionFacilityDist = dist;
+					}
+				}
+			case CLONE_TYPE_PVP_REGION_ADVANCED_IMPERIAL:
+				if(!factions.isImperial(player))
+					break;
+
+				deathLocRegions = getRegionsWithPvPAtPoint(worldLoc, regions.PVP_REGION_TYPE_ADVANCED);
+
+				if(deathLocRegions == null || deathLocRegions.length == 0)
+					break;
+
+				if (dist < pvpAdvancedFacilityDist)
+				{
+					pvpAdvancedFacility = idList[i];
+					pvpAdvancedFacilityName = nameList[i];
+					pvpAdvancedFacilityLoc = locList[i];
+					pvpAdvancedFacilitySpawnLoc = respawnList[i];
+					pvpAdvancedFacilityDist = dist;
+				}
+
+				break;
+			case CLONE_TYPE_PVP_REGION_ADVANCED_REBEL:
+				if(!factions.isRebel(player))
+					break;
+
+				deathLocRegions = getRegionsWithPvPAtPoint(worldLoc, regions.PVP_REGION_TYPE_ADVANCED);
+
+				if(deathLocRegions == null || deathLocRegions.length == 0)
+					break;
+
+				if (dist < pvpAdvancedFacilityDist)
+				{
+					pvpAdvancedFacility = idList[i];
+					pvpAdvancedFacilityName = nameList[i];
+					pvpAdvancedFacilityLoc = locList[i];
+					pvpAdvancedFacilitySpawnLoc = respawnList[i];
+					pvpAdvancedFacilityDist = dist;
+				}
+
+				break;
+			case CLONE_TYPE_CAMP:
+				if (dist < playerCampDist)
+				{
+					playerCamp = idList[i];
+					playerCampName = nameList[i];
+					playerCampLoc = locList[i];
+					playerCampSpawnLoc = respawnList[i];
+					playerCampDist = dist;
+				}
+
+				break;
+			case CLONE_TYPE_PRIVATE_INSTANCE:
+				if (idList[i] == instance_controller)
+				{
+					facilityList = addAvailableCloningFacility(facilityList, idList[i], locList[i], respawnList[i], nameList[i], dist);
+				}
+				break;
+			default:
+				break;
+		}
+	}
+
+	// Add single available player city
+	if (playerFacility != null)
+	{
+		facilityList = addAvailableCloningFacility(facilityList, playerFacility, playerFacilityLoc, playerFacilitySpawnLoc, playerFacilityName, playerCityDist);
+	}
+
+	// Add a single available faction facility
+	if (factionFacility != null)
+	{
+		facilityList = addAvailableCloningFacility(facilityList, factionFacility, factionFacilityLoc, factionFacilitySpawnLoc, factionFacilityName, factionFacilityDist);
+	}
+
+	if (pvpAdvancedFacility != null)
+	{
+		facilityList = addAvailableCloningFacility(facilityList, pvpAdvancedFacility, pvpAdvancedFacilityLoc, pvpAdvancedFacilitySpawnLoc, pvpAdvancedFacilityName, pvpAdvancedFacilityDist);
+	}
+
+	if (playerCamp != null)
+	{
+		facilityList = addAvailableCloningFacility(facilityList, playerCamp, playerCampLoc, playerCampSpawnLoc, playerCampName, playerCampDist);
+	}
+
+	return facilityList;
+}
+
+Vector addAvailableCloningFacility(Vector facilityList, obj_id facility, location facilityLoc, location spawnLoc, string name, float dist)
+{
+	dictionary facilityData = new dictionary();
+	facilityData.put("faciltyId", facility);
+	facilityData.put("cloneName", name);
+	facilityData.put("facilityLoc", facilityLoc);
+	facilityData.put("spawnLoc", spawnLoc);
+	facilityData.put("distance", dist);
+
+	if (facilityList.size() < 1)
+	{
+		facilityList.add(facilityData);
+	}
+	else
+	{
+		for (int i = 0; i < facilityList.size(); i++)
+		{
+			dictionary compareData = (dictionary)(facilityList.get(i));
+			float compareDist = compareData.getFloat("distance");
+
+			if (dist < compareDist)
+			{
+				facilityList.add(i, facilityData);
+				break;
+			}
+
+			if (i == facilityList.size() - 1)
+			{
+				facilityList.add(facilityData);
+				break;
+			}
+		}
+	}
+
+	return facilityList;
+}
+
+/***** CLONING DAMAGE FUNCTIONS **************************************************/
+
+boolean isDamagedOnClone(obj_id player, obj_id item)
+{
+ 	if ( !isIdValid(player) || !isIdValid(item) )
+ 		return false;
+
+ 	if ( pclib.isContainedByPlayer(player, item) && !isUninsurable(item) )
+ 	{
+ 		if ( isDamagedOnCloneGOT(getGameObjectType(item)) )
+ 	 		return true;
+ 	}
+
+ 	return false;
+}
+
+boolean isDamagedOnCloneGOT(int got)
+{
+	if (isGameObjectTypeOf(got, GOT_armor)   || isGameObjectTypeOf(got, GOT_clothing) ||
+		isGameObjectTypeOf(got, GOT_weapon)  || isGameObjectTypeOf(got, GOT_tool) ||
+		isGameObjectTypeOf(got, GOT_jewelry) || isGameObjectTypeOf(got, GOT_cybernetic))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+void damageItemsOnClone(obj_id player, int damage)
+{
+	if (!isIdValid(player))
+		return;
+
+	float percent = damage / 100f;
+
+	obj_id[] eq = getInventoryAndEquipment(player);
+
+	if (eq == null || eq.length == 0)
+		return;
+
+	for (int i = 0; i < eq.length; i++)
+	{
+		if (isIdValid(eq[i]) && !isAutoInsured(eq[i]) && isDamagedOnCloneGOT(getGameObjectType(eq[i])))
+		{
+			pclib.damageAndDecayItem(eq[i], percent);
+		}
+	}
+}
+
+
+/***** REPAIR FUNCTIONS **************************************************/
+
+obj_id[] getAllRepairItems(obj_id player)
+{
+	resizeable obj_id[] repairList = new obj_id[0];
+	obj_id[] eq = getInventoryAndEquipment(player);
+
+	if (eq == null || eq.length == 0)
+		return null;
+
+	for (int i = 0; i < eq.length; i++)
+	{
+		int damage = getItemDamageAmount(eq[i]);
+
+		if (damage > 0)
+			repairList = utils.addElement(repairList, eq[i]);
+	}
+
+	return repairList;
+}
+
+int getItemRepairCost(obj_id item)
+{
+	int repairAmount = getItemDamageAmount(item);
+
+	if (repairAmount < 1)
+		return 0;
+
+	float repairRatio = getItemRepairRatio(item);
+
+	int repairCost = (int)(repairAmount * repairRatio);
+
+	return repairCost;
+}
+
+int getTotalRepairCost(obj_id player)
+{
+	obj_id[] repairList = getAllRepairItems(player);
+	return getTotalRepairCost(player, repairList);
+}
+
+int getTotalRepairCost(obj_id player, obj_id[] repairList)
+{
+	if (repairList == null || repairList.length == 0)
+		return 0;
+
+	int totalCost = 0;
+	for (int i = 0; i < repairList.length; i++)
+	{
+		int cost = getItemRepairCost(repairList[i]);
+
+		if (cost > 0)
+			totalCost += cost;
+	}
+
+	return totalCost;
+}
+
+int[] getItemRepairCostList(obj_id player, obj_id[] list)
+{
+	int[] costList = new int[list.length];
+
+	for (int i = 0; i < list.length; i++)
+	{
+		costList[i] = getItemRepairCost(list[i]);
+	}
+
+	return costList;
+}
+
+int getItemDamageAmount(obj_id item)
+{
+	int maxHp = getMaxHitpoints(item);
+	int curHp = getHitpoints(item);
+	int damage = maxHp - curHp;
+
+	return damage;
+}
+
+float getStaticItemRepairModifier(obj_id item)
+{
+	// Determine cost modifer based on item tier and recommended level
+	return 1f;
+}
+
+float getItemRepairRatio(obj_id item)
+{
+	float staticItemModifier = 1.0f;
+
+	if (static_item.isStaticItem(item))
+		staticItemModifier = getStaticItemRepairModifier(item);
+
+	int got = getGameObjectType(item);
+	string template = getTemplateName(item);
+	string gotType = getGameObjectTypeName(got);
+	string gotParent = getGameObjectTypeName(got & 0xffffff00);
+
+	// First look for template cost definition
+	int row = dataTableSearchColumnForString(template, 0, "datatables/cloning/repair_costs.iff");
+	if (row == -1)
+	{
+		// No template defined, look for GOT definition
+		row = dataTableSearchColumnForString(gotType, 0, "datatables/cloning/repair_costs.iff");
+	}
+	if (row == -1)
+	{
+		// GOT not found, look for parent GOT definition
+		row = dataTableSearchColumnForString(gotParent, 0, "datatables/cloning/repair_costs.iff");
+	}
+	if (row == -1)
+	{
+		// No cost definition found, use default
+		return DEFAULT_REPAIR_RATIO;
+	}
+
+	float repairRatio = 1.0f;
+
+	if (static_item.isStaticItem(item))
+	{
+		repairRatio = dataTableGetFloat("datatables/cloning/repair_costs.iff", row, "staticItemCost");
+		repairRatio *= staticItemModifier;
+	}
+	else
+	{
+		repairRatio = dataTableGetFloat("datatables/cloning/repair_costs.iff", row, "standardItemCost");
+	}
+
+	return repairRatio;
+}
+
+boolean payRepairFee(obj_id player, obj_id terminal, int cost)
+{
+	int playerMoney = getTotalMoney(player);
+	if (playerMoney < cost)
+	{
+		sendSystemMessage(player, new string_id("error_message", "insufficient_funds"));
+		return false;
+	}
+
+	dictionary data = new dictionary();
+	data.put(money.DICT_OTHER, getGameTime());
+
+	return money.pay(player, terminal, cost, "handlePayRepairSuccess", data, true);
+}
+
+void repairItems(obj_id player, obj_id[] repairList)
+{
+	if (!isIdValid(player))
+		return;
+
+	if (repairList == null || repairList.length == 0)
+		return;
+
+	for (int i = 0; i < repairList.length; i++)
+	{
+		int maxHp = getMaxHitpoints(repairList[i]);
+		setInvulnerableHitpoints(repairList[i], maxHp);
+	}
+}

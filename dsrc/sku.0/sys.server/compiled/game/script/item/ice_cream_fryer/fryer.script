@@ -1,0 +1,645 @@
+// republic_assembly_tool.script  -- this script sits on a tool with an inventory. When you feed it items that match a table and hit 'assemble' it will try to give you a new item.
+// this script borrows heavily from a test script written by DRubenfield
+
+// ********************************************************************
+//					INCLUDES
+// ********************************************************************
+
+include java.util.HashSet;
+include library.collection;
+include library.create;
+include library.prose;
+include library.static_item;
+include library.sui;
+include library.utils;
+
+// ********************************************************************
+//					CONSTS
+// ********************************************************************
+
+const int NO_DECAY 			= 100;
+const int MAX_DECAY			= 6;
+const int BASIC_BUFF_ROWS		= 3; //the first number of rows only give a player a generic buff
+
+const string ITEM_COMBINATION_TABLE	= "datatables/item/ice_cream_fryer/fryer_components.iff";
+
+const string STRING_FILE 		= "dispenser";
+const string_id SID_BIOLINK_NEEDED	= new string_id(STRING_FILE,"biolink_needed");
+const string_id SID_ACTIVATE		= new string_id(STRING_FILE, "fry");
+const string_id SID_NOT_OWNER		= new string_id(STRING_FILE,"not_owner");
+const string_id SID_FRYER_FAILURE 	= new string_id(STRING_FILE,"fryer_failure");
+const string_id SID_FRYER_SUCCESS 	= new string_id(STRING_FILE,"fryer_successful");
+const string_id SID_FRYER_BROKEN 	= new string_id(STRING_FILE,"fryer_broken");
+const string_id SID_FRYER_REPAIRED 	= new string_id(STRING_FILE,"fryer_repaired");
+const string_id SID_NO_TOOL_FRYER	= new string_id(STRING_FILE,"no_tool_fryer");
+
+const string OWNER_OID 			= "owner";
+const string DECAY 			= "decay";
+const string FORAGE_BUFF		= "item_ice_cream_buff_forage_buff_01_01";
+const string PID_NAME 			= "fryer_repair";
+const int DOMESTICS_ONLY_BUFF		= 7;
+
+
+// ********************************************************************
+//					TRIGGERS
+// ********************************************************************
+
+trigger OnReceivedItem(obj_id srcContainer, obj_id transferer, obj_id item)
+{
+	//if a repair tool, fix
+	if(getTemplateName(item).startsWith("object/tangible/component/food/component_fryer_repair_tool.iff"))
+	{
+		CustomerServiceLog("ice_cream_fryer", "Ice Cream Fryer Container "+srcContainer+" has received a repair tool from "+ transferer);
+	
+		repairFryerPopup(self, item, transferer);
+		return SCRIPT_CONTINUE;		
+	}	
+	// every time we get an item we increment our current content's crc total.
+	double ingredientCRC = 0;
+	if(utils.hasScriptVar(self,"ingredientCRC"));
+	{
+		ingredientCRC = utils.getDoubleScriptVar(self, "ingredientCRC");
+		blog("OnReceivedItem - found a pre-existing CRC. It was: " + ingredientCRC);
+	}
+
+	ingredientCRC  = ingredientCRC  + getStringCrc(getTemplateName(item));
+
+	blog("OnReceivedItem - calculating a new CRC. New item was: "+getStringCrc(getTemplateName(item))+" and new total is: "+ingredientCRC);
+	CustomerServiceLog("ice_cream_fryer", "Ice Cream Fryer Container "+srcContainer+" has a combined crc of "+ ingredientCRC);
+
+	utils.setScriptVar(self, "ingredientCRC", ingredientCRC);
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnLostItem(obj_id destContainer, obj_id transferer, obj_id item)
+{
+	// every time we lose an item we decrement our crc.
+	blog("OnLostItem - entered");
+	CustomerServiceLog("ice_cream_fryer", "Ice Cream Fryer has lost item "+item+" as it was transferred to container: " +destContainer+ " by "+transferer);
+
+	double ingredientCRC = utils.getDoubleScriptVar(self, "ingredientCRC");
+	ingredientCRC  = ingredientCRC  - getStringCrc(getTemplateName(item));
+
+	if(ingredientCRC < 0)
+		utils.setScriptVar(self, "ingredientCRC", 0);
+	else
+		utils.setScriptVar(self, "ingredientCRC", ingredientCRC);
+
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	obj_id fryer = self;
+	
+	//this needs to be called regardless of where the fryer is located
+	//or if the fryer is biolinked
+	if(!hasObjVar(fryer, collection.ICE_CREAM_BUFF_ARRAY[2]))
+		if(!burnRandomRecipes(fryer))
+		{
+			CustomerServiceLog("ice_cream_fryer", "Ice Cream Fryer has failed to receive recipes when player " +player+ " attempted to interact with it for the first time.");		
+			blog("burnRandomRecipes - FAILED");
+			return SCRIPT_CONTINUE;
+		}	//the player can't take this object on a dungeon run, they have to use
+	//it in their house.
+	if(utils.isNestedWithin(fryer, player))
+		return SCRIPT_CONTINUE;
+	
+	//give the fry option only when placed in a house.
+	if(utils.isInHouseCellSpace(fryer))
+		mi.addRootMenu(menu_info_types.SERVER_MENU1, SID_ACTIVATE);
+	
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	blog("OnObjectMenuSelect - entered");
+	obj_id fryer = self;
+
+	obj_id biolink = getBioLink(fryer);
+	
+	//Make sure the terminal is BioLinked.  
+	if(!isValidId(biolink) || biolink == utils.OBJ_ID_BIO_LINK_PENDING)
+	{
+		blog("activateFryer - FRYER BIOLINK PENDING");
+		sendSystemMessage(player, SID_BIOLINK_NEEDED);
+		return SCRIPT_CONTINUE;	
+	}
+	else if(biolink != player)
+	{
+		CustomerServiceLog("ice_cream_fryer", "Player not biolinked "+ player+ " to Ice Cream Fryer Container "+fryer+" but player still attempted to use fryer object.");	
+		sendSystemMessage(player, SID_NOT_OWNER);
+		return SCRIPT_CONTINUE;	
+	}	
+
+	//this needs to be called regardless of where the fryer is located
+	//or if the fryer is biolinked
+	if(!hasObjVar(fryer, collection.ICE_CREAM_BUFF_ARRAY[2]))
+		if(!burnRandomRecipes(fryer))
+		{
+			blog("burnRandomRecipes - FAILED");
+			CustomerServiceLog("ice_cream_fryer", "Horrible failure with "+fryer+" -- THE RECIPES FAILED TO BURN TO FYRER OBJECT. Player involved: " + player);
+			return SCRIPT_CONTINUE;
+		}
+
+	if (utils.isNestedWithin(fryer, player))
+		return SCRIPT_CONTINUE;
+	
+	if (item == menu_info_types.SERVER_MENU1)
+	{	
+		obj_id clients[] = new obj_id[1];
+		clients[0] = player;
+
+		blog("OnObjectMenuSelect - chose menu option 1");
+		// assemble!
+		blog("OnObjectMenuSelect - activating the assembly tool");
+		obj_id newItem = activateFryer(self, player);
+		if(isIdValid(newItem))
+		{
+			playClientEffectObj(clients, "sound/item_som_jenha_tar_cube_combine.snd", player, "");
+			sendSystemMessage(player,SID_FRYER_SUCCESS);
+			CustomerServiceLog("ice_cream_fryer", "Fryer: "+fryer+" assembled consumable for player: " + player);
+			decayFryer(fryer, player);			
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			blog("OnObjectMenuSelect - obj_id we got back was invalid: "+newItem);			
+			playClientEffectObj(clients, "sound/item_electronics_break.snd", player, "");			
+			sendSystemMessage(player, SID_FRYER_FAILURE);
+			CustomerServiceLog("ice_cream_fryer", "Fryer: "+fryer+" failed to assemble consumable for player: " + player +". Probably because the player failed to use the correct components.");			
+			decayFryer(fryer, player);
+			return SCRIPT_CONTINUE;
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	//We don't want to give any info to the player. It is a secret on purpose
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+		
+	int currentStatus = getIntObjVar(self, DECAY);
+	
+	names[idx] = "fryer_status";
+	attribs[idx] = ""+currentStatus+"%";
+	idx++;
+
+	return SCRIPT_CONTINUE;
+}
+
+
+// ********************************************************************
+//					FUNCTIONS
+// ********************************************************************
+
+
+//----------------------------------------------------------------------
+//Main function that handles the actual frying process
+//----------------------------------------------------------------------
+
+obj_id activateFryer(obj_id fryer, obj_id objPlayer)
+{
+	blog("activateFryer - entered");
+	obj_id biolink = getBioLink(fryer);
+	
+	//Make sure the terminal is BioLinked.  
+	if(!isValidId(biolink) || biolink == utils.OBJ_ID_BIO_LINK_PENDING)
+	{
+		blog("activateFryer - FRYER BIOLINK PENDING");
+		sendSystemMessage(objPlayer, SID_BIOLINK_NEEDED);
+		return null;	
+	}	
+	//Make sure the user is the owner. We dont want to do anything
+	//if some jackass is using it in a public house.
+	else if(biolink != objPlayer)
+	{
+		sendSystemMessage(objPlayer, SID_NOT_OWNER);
+		return null;	
+	}
+	
+	int currentStatus = getIntObjVar(fryer, DECAY);
+	if(currentStatus <= 0)
+	{
+		sendSystemMessage(objPlayer, SID_FRYER_BROKEN);
+		blog("activateFryer - FRYER BROKEN");
+		return null;
+	}
+	
+	double ingredientCRC = calcCurrentContentsCRC(fryer);
+	if(ingredientCRC==0)
+	{
+		blog("activateFryer - no ingredientCRC. Returning null");
+		decayFryer(fryer, objPlayer);
+		return null;
+	}
+
+	// the crc is the total we're using for calcs.
+	if(!utils.hasScriptVar(fryer, "itemCRCs"))
+	{
+		blog("activateFryer - made the crc table and stored it");
+		utils.setScriptVar(fryer, "itemCRCs", makeItemCRCArray());	// make the crc and set it as a scriptvar
+	}
+
+
+	double[] itemCRCs = utils.getDoubleArrayScriptVar(fryer, "itemCRCs");
+	CustomerServiceLog("ice_cream_fryer", "Fryer: "+fryer+" is about to assemble. Primary verifications complete. Searching all recipes for match. Player: " + objPlayer);
+	
+	// we compare the total of the crcs of the items in the tool to the total of the crc's of the items in the datatable
+	for(int i = 0; i < itemCRCs.length; i++)
+	{
+		blog("activateFryer - looping through stored CRC array. This is loop number: "+i+" and there will be a total of around: "+itemCRCs.length);
+
+		if(itemCRCs[i]!=ingredientCRC)
+			continue;
+			
+		blog("activateFryer - Found a match in loop # "+i);
+		blog("activateFryer - CRC FOUND # "+itemCRCs[i]);
+		blog("activateFryer - CRC LOOKING FOR "+ingredientCRC);
+
+
+		dictionary correctRow = dataTableGetRow(ITEM_COMBINATION_TABLE, i);
+		obj_id contents[] = getContents(fryer);
+
+		obj_id generatedItem = createEdible(fryer, objPlayer, i);
+		if(!isIdValid(generatedItem))
+			return null;
+			
+		CustomerServiceLog("ice_cream_fryer", "%TU has created an ice cream buff (id: " + generatedItem + ")", objPlayer);
+
+		for(int j = 0; j< contents.length; j++)
+		{
+			blog("activateFryer - Going through each thing in the assembly tool. this is loop #: ->: "+j);
+
+			if(getCount(contents[j]) > 1 && contents[j] != generatedItem)
+			{
+				decrementCount(contents[j]);
+			}
+			else if(contents[j] != generatedItem)
+			{
+				blog("activateFryer - found something that doesn't match the obj_id of the new item. Destroying it");
+				destroyObject(contents[j]);
+				// if item creation fails, this exceptions, so no cleanup
+			}
+
+		}
+		//the object is actually created in the player inventory then moved to fryer.
+		putInOverloaded(generatedItem, fryer);
+
+		//Make sure the item doesn't put the owner oid on the object if
+		//it is the domestic buff
+		if(!hasObjVar(generatedItem, collection.FRYER_BUFF_TYPE) && getIntObjVar(generatedItem, collection.FRYER_BUFF_TYPE) != collection.ICE_CREAM_DOMESTICS_ONLY)
+		{
+			setObjVar(generatedItem, OWNER_OID, objPlayer);
+		}
+		return generatedItem;
+	}
+	return obj_id.NULL_ID;
+}
+
+//----------------------------------------------------------------------
+//Makes an array of CRCs so that the appropriate object is created...
+//or not if player places random crap in the fryer
+//----------------------------------------------------------------------
+double[] makeItemCRCArray()		
+{
+	blog("makeItemCRCArray - entered");
+	int numRows = dataTableGetNumRows(ITEM_COMBINATION_TABLE);
+	blog("makeItemCRCArray - there are this many rows in the table -> "+numRows);
+
+	double[] crcs = new double[numRows];
+
+	for(int i = 0; i<numRows; i++)
+	{
+		blog("makeItemCRCArray - reading in row number:  "+i);
+
+		dictionary currentRow = dataTableGetRow(ITEM_COMBINATION_TABLE, i);
+		for (int j = 1; j <=4; j++)
+		{
+			string currentObject = currentRow.getString("item"+j);
+			blog("makeItemCRCArray - currentObject is: "+currentObject+" it is item# "+j);
+			int currentItemCRC = getStringCrc(currentObject);
+			crcs[i]+= currentItemCRC;
+		}
+	}
+	return crcs;
+}
+
+obj_id createEdible(obj_id fryer, obj_id player, int row)
+{
+	if(!isValidId(fryer) || !isValidId(player))
+		return obj_id.NULL_ID;
+
+	obj_id generatedItem = obj_id.NULL_ID;
+	
+	//first we check if this is a buff from the first rows of the table
+	//if so, we set the buff and return it real fast.
+	if(row < BASIC_BUFF_ROWS)
+	{
+		CustomerServiceLog("ice_cream_fryer", "%TU has created a FORAGE buff consumable using fryer: " +fryer, player);
+		generatedItem = static_item.createNewItemFunction(FORAGE_BUFF, player);
+		boolean success = setFourthIngredient(fryer, generatedItem, row);
+		blog("setBuffTypeOnEdible - SETTING BUFF ON EDIBLE TO HARVEST BUFF: ");
+		return generatedItem;
+	}
+
+	//we loop through each of the buffs in a list (except for the first 2) and 
+	//compare it to the row passed to this function.  If the row and the value of the objvar match
+	//we set the int val of the buff.
+	for(int i = 2; i < (collection.ICE_CREAM_BUFF_ARRAY.length); i++)
+	{
+		string loopStr = getStringObjVar(fryer, collection.ICE_CREAM_BUFF_ARRAY[i]);
+		blog("setBuffTypeOnEdible - Grabbing Int Val off of Fryer for: "+collection.ICE_CREAM_BUFF_ARRAY[i]+" STRING value is: "+loopStr);
+		int loopInt = utils.stringToInt(loopStr);
+		blog("setBuffTypeOnEdible - Grabbing Int Val off of Fryer for: "+collection.ICE_CREAM_BUFF_ARRAY[i]+" INT value is: "+loopInt);
+		blog("setBuffTypeOnEdible - ROW: "+row+" loopInt: "+loopInt);
+		if(loopInt == row)
+		{
+			string currentBuff = collection.ICE_CREAM_BUFF_ARRAY[i];
+			string domesticBuff = collection.ICE_CREAM_BUFF_ARRAY[DOMESTICS_ONLY_BUFF];
+			
+			if(currentBuff != domesticBuff)
+			{
+				CustomerServiceLog("ice_cream_fryer", "%TU has created a " +currentBuff+ " consumable using fryer: " +fryer, player);
+				blog("setBuffTypeOnEdible - The player created a buff edible. Set a buff type: "+i);
+				generatedItem = static_item.createNewItemFunction(currentBuff, player);
+				boolean success = setFourthIngredient(fryer, generatedItem, row);
+				return generatedItem;
+			}
+			else
+			{
+				//if the player has found the domestics trader buff and they are a domestics trader
+				//all the buff to be crafted.  Else, give the bad ice cream.
+				blog("setBuffTypeOnEdible - The player getSkillTemplate: "+getSkillTemplate(player));
+				if(getSkillTemplate(player).startsWith("trader_0a"))
+				{
+					CustomerServiceLog("ice_cream_fryer", "%TU has created a TRADER buff consumable using fryer: " +fryer, player);
+					blog("setBuffTypeOnEdible - DOMESTICS BUFF BEING CREATED: "+i);
+					generatedItem = static_item.createNewItemFunction(currentBuff, player);
+					setObjVar(generatedItem, collection.FRYER_BUFF_TYPE, collection.ICE_CREAM_DOMESTICS_ONLY);
+					boolean success = setFourthIngredient(fryer, generatedItem, row);
+					return generatedItem;				
+				}
+				blog("setBuffTypeOnEdible - DOMESTICS BUFF FAILED: ");
+			}
+		}
+	}
+	
+	CustomerServiceLog("ice_cream_fryer", "%TU has created a DEBUFF consumable using fryer: " +fryer, player);
+	boolean success = setFourthIngredient(fryer, generatedItem, row);
+	generatedItem = static_item.createNewItemFunction(collection.ICE_CREAM_BUFF_ARRAY[0], player);
+	return generatedItem;
+}
+
+boolean setFourthIngredient(obj_id fryer, obj_id generatedItem, int row)
+{
+	if(!isValidId(fryer) || !isValidId(generatedItem))
+		return false;
+		
+	dictionary dic = dataTableGetRow(ITEM_COMBINATION_TABLE, row);
+	blog("setBuffTypeOnEdible - getting Dictionary "+dic);
+
+	string fourthComponent = dic.getString("item4");
+	blog("setBuffTypeOnEdible - burning fourthComponent "+fourthComponent);
+	setObjVar(generatedItem, "special_ingredient", fourthComponent);	
+	return true;
+}
+
+string[] getRandomRowNumbersWithoutDuplicates(obj_id fryer)
+{
+	if(!isValidId(fryer))
+		return null;
+		
+	int datatableLength = dataTableGetNumRows(ITEM_COMBINATION_TABLE);
+	HashSet randomRows = new HashSet();
+
+	while (randomRows.size() < (collection.ICE_CREAM_BUFF_ARRAY.length - 2))
+	{	
+		int randomNum = rand(BASIC_BUFF_ROWS, datatableLength);
+		randomRows.add(""+randomNum);
+		blog("getRandomRowNumbersWithoutDuplicates - adding this to hash: "+randomNum);
+	}
+
+	string[] allNumbers = new string[randomRows.size()];
+	randomRows.toArray(allNumbers);
+	blog("getRandomRowNumbersWithoutDuplicates - sending list of random numbers with length of: "+allNumbers.length);
+	
+	return allNumbers;
+}
+
+//----------------------------------------------------------------------
+//provides the row of the table for the recipe
+//provides the fourth component template
+//----------------------------------------------------------------------
+boolean burnRandomRecipes(obj_id fryer)		
+{
+	if(!isValidId(fryer))
+		return false;
+		
+	//set fryer to full strength
+	setObjVar(fryer, DECAY, NO_DECAY);
+
+	string[] uniqueRandomRowNumbers = getRandomRowNumbersWithoutDuplicates(fryer);
+	if(uniqueRandomRowNumbers == null)
+		return false;
+	else if((collection.ICE_CREAM_BUFF_ARRAY.length - 2) != uniqueRandomRowNumbers.length)
+	{
+		CustomerServiceLog("ice_cream_fryer", "A player has attempted to get random recipes but the random generation failed. Please notify development regarding fryer: " +fryer);
+		return false;
+	}
+	blog("burnRandomRecipes - Received  uniqueRandomRowNumbers.length: "+uniqueRandomRowNumbers.length);
+
+	//The +2 is to skip the debuf penalty and the forage buff in the array
+	for(int i = 0; i< uniqueRandomRowNumbers.length; i++)
+	{
+		string uniqueRow = uniqueRandomRowNumbers[i];
+		int uniqueRowInt = utils.stringToInt(uniqueRow);
+		if(uniqueRowInt < 0)
+		{
+			blog("burnRandomRecipes - FAILED to convert string var into integer: "+uniqueRow);
+			return false;
+		}
+		
+		blog("burnRandomRecipes - burning ICE_CREAM_BUFF_ARRAY "+collection.ICE_CREAM_BUFF_ARRAY[i+2]+" with row: "+uniqueRow);
+		setObjVar(fryer, collection.ICE_CREAM_BUFF_ARRAY[i+2], uniqueRow);
+
+		blog("burnRandomRecipes - burning uniqueRandomRowNumbers[i] "+uniqueRow);
+/*
+//comment this section out when we go live
+		dictionary dic = dataTableGetRow(ITEM_COMBINATION_TABLE, uniqueRowInt);
+		blog("burnRandomRecipes - burning Dictionary "+dic);
+
+		string fourthComponent = dic.getString("item4");
+		blog("burnRandomRecipes - burning fourthComponent "+fourthComponent);
+		setObjVar(fryer, collection.ICE_CREAM_BUFF_ARRAY[i+2]+"_component", fourthComponent);
+//end comment this section out when we go live
+*/
+	}
+	
+	return true;
+}
+
+//----------------------------------------------------------------------
+// Calculates all the contents of the fryer
+//----------------------------------------------------------------------
+double calcCurrentContentsCRC(obj_id fryer)
+{
+	if(!isValidId(fryer))
+		return 0;
+		
+	blog("calcCurrentContentsCRC - entered");
+	double ingredientCRC = 0;
+
+	obj_id contents[] = getContents(fryer);
+	blog("calcCurrentContentsCRC - Got contents of the assembly tool. There are this many things: ->: "+contents.length);
+	for(int i = 0; i< contents.length; i++)
+	{
+		ingredientCRC += getStringCrc(getTemplateName(contents[i]));
+		blog("calcCurrentContentsCRC - Loop Number:  "+i+" and current ingredient CRC total is: "+ingredientCRC);
+	}
+	return ingredientCRC;
+}
+
+boolean decayFryer(obj_id fryer, obj_id user)
+{
+	if(!isValidId(fryer))
+		return false;
+
+	obj_id biolink = getBioLink(fryer);
+	//Make sure the terminal is BioLinked before decay.  
+	if(!isValidId(biolink) || biolink == utils.OBJ_ID_BIO_LINK_PENDING)
+		return false;
+		
+	//Make sure the user is the owner. We dont want to decay
+	//if some jackass is using it in a public house.
+	if(biolink != user)
+		return false;	
+	
+	int newDecay = 0;
+	int currentStatus = getIntObjVar(fryer, DECAY);
+	if(currentStatus > 0)
+	{
+		int decayAmount = rand(0, MAX_DECAY);
+		if(decayAmount == 0)
+			return true;
+		
+		
+		if(decayAmount > currentStatus)
+		{
+			setObjVar(fryer, DECAY, 0);
+			blog("decayFryer - DECAY SET TO ZERO");
+			CustomerServiceLog("ice_cream_fryer", "%TU has damaged the fryer to 0. fryer: " +fryer, user);
+			return true;
+		}
+		
+		newDecay = currentStatus - decayAmount;	
+		if(newDecay > 0)
+		{
+			setObjVar(fryer, DECAY, newDecay);
+			CustomerServiceLog("ice_cream_fryer", "%TU has damaged the fryer to "+newDecay+". fryer: " +fryer, user);
+			
+			blog("decayFryer - DECAY SET TO: "+newDecay);
+			return true;
+		}
+	}
+	if(currentStatus < 0)
+	{
+		CustomerServiceLog("ice_cream_fryer", "%TU has managed to damage the fryer to a negative number. Setting the fryer to 0. fryer: " +fryer, user);
+		setObjVar(fryer, DECAY, 0);
+	}	
+	return false;
+}
+
+boolean repairFryerPopup(obj_id fryer, obj_id repairTool, obj_id player)
+{
+	if(!isValidId(fryer) || !isValidId(repairTool) || !isValidId(player) )
+		return false;
+
+	if(sui.hasPid(player, PID_NAME))
+	{
+		int pid = sui.getPid(player, PID_NAME);
+		forceCloseSUIPage(pid);
+	}
+	
+	utils.setScriptVar(fryer, "repairTool", repairTool);
+	int pid = sui.msgbox(fryer, player, "Selecting YES will repair the fryer. Selecting NO will cancel the operation.", sui.YES_NO, "Repair?", "repairFryer");
+	sui.setPid(player, pid, PID_NAME);
+
+	return true;
+}
+
+//----------------------------------------------------------------------
+// Message Handlers
+//----------------------------------------------------------------------
+
+messageHandler repairFryer()
+{
+	//set collectionItem to self
+	obj_id fryer = self;
+	
+	//check params
+	if(params == null || params.isEmpty())
+		return SCRIPT_CONTINUE;
+	
+	//get players id
+	obj_id player = sui.getPlayerId(params);
+	
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	if(!sui.hasPid(player, PID_NAME))
+		return SCRIPT_CONTINUE;
+
+	if(!utils.hasScriptVar(fryer, "repairTool"))
+		return SCRIPT_CONTINUE;
+
+	//get button pressed
+	int bp = sui.getIntButtonPressed(params);
+	
+	//if they pressed cancel then we bail out and do nothing
+	if ( bp == sui.BP_CANCEL )
+	{
+		sui.removePid(player, PID_NAME);
+		utils.removeScriptVar(fryer, "repairTool");
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id repairTool = utils.getObjIdScriptVar(fryer, "repairTool");
+	if(!isIdValid(repairTool))
+		return SCRIPT_CONTINUE;
+	
+	obj_id toolContainer = getContainedBy(repairTool);
+	if(toolContainer != fryer)
+	{
+		sendSystemMessage(player, SID_NO_TOOL_FRYER);
+		return SCRIPT_CONTINUE;
+	}
+
+	CustomerServiceLog("ice_cream_fryer", "Fryer Repaired: " +fryer);
+	
+	//set fryer to full strength
+	setObjVar(fryer, DECAY, NO_DECAY);
+	sendSystemMessage(player, SID_FRYER_REPAIRED);
+	destroyObject(repairTool);
+	return SCRIPT_CONTINUE;
+}
+
+//----------------------------------------------------------------------
+// For logging
+//----------------------------------------------------------------------
+boolean blog(string message)
+{
+	//LOG("fryer_log", message);
+	return true;
+}

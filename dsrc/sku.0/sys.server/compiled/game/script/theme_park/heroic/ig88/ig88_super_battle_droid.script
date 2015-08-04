@@ -1,0 +1,236 @@
+include library.ai_lib;
+include library.chat;
+include library.hue;
+include library.trial;
+include library.utils;
+
+
+obj_id getRocketTarget(obj_id self)
+{
+	obj_id dungeon = getTopMostContainer(self);
+	obj_id target = null;
+
+//	debugSpeakMsg(self, "Acquiring rocket target...");
+
+	if(!isIdValid(self) || !isIdValid(dungeon))
+	{
+		return null;
+	}
+
+	// Get a new target
+	obj_id[] targets = trial.getNonStealthedTargetsInCell(dungeon, "r1");
+
+	if(targets == null || targets.length <= 0)
+	{
+		dictionary sessionDict = new dictionary();
+
+		messageTo(dungeon, "ig88_failed", sessionDict, 0, false);
+		
+		return null;
+	}
+
+	target = targets[rand(0, targets.length - 1)];
+	
+	if(!isIdValid(target))
+	{
+//		debugSpeakMsg(self, "I couldn't find a valid target.");
+		return null;
+	}
+	
+//	debugSpeakMsg(self, "rocket target: " + target + " game time: " + getGameTime());
+	
+	return target;
+}
+
+void findNextTarget(obj_id self)
+{
+	if(!isIdValid(self) || ai_lib.isDead(self) || utils.hasScriptVar(self, "flameThrowerUnequipped"))
+	{
+		return;
+	}
+
+	obj_id dungeon = getTopMostContainer(self);
+	obj_id target = null;
+
+//	debugSpeakMsg(self, "Acquiring target...");
+
+	if(!isIdValid(dungeon))
+	{
+//		debugSpeakMsg(self, "Can't find targets due to not being in a cell.");
+		return;
+	}
+	
+	location pathToPoint = null;
+	string whichSuper = getStringObjVar(self, "spawn_id");
+	boolean firstSuperDroid = false;
+	
+	if(whichSuper != null && whichSuper.length() > 0)
+	{
+		if(whichSuper.equals("super_battle_droid1"))
+		{
+			pathToPoint = new location(5, 0, 10, getLocation(self).area, getLocation(self).cell);
+			firstSuperDroid = true;
+		}
+		else
+		{
+			pathToPoint = new location(-5, 0, 10, getLocation(self).area, getLocation(self).cell);
+		}
+	}
+	
+	if(pathToPoint == null)
+	{
+		return;
+	}
+	
+	if(utils.getDistance2D(pathToPoint, getLocation(self)) > 2)
+	{
+//		debugSpeakMsg(self, "Pathing to point..." + pathToPoint);
+		
+		setHomeLocation(self, pathToPoint);
+		
+		pathTo(self, pathToPoint);
+		
+		return;
+	}
+
+	// At this point, the super battle droid should be at the correct waypoint and ready to start combat.
+	setMovementPercent(self, 0.0f);
+	setObjVar(self, "forceNoMovement", 1);
+
+	if(isInvulnerable(self))
+	{
+		setInvulnerable(self, false);
+		
+		setMaxAttrib(self, HEALTH, getMaxAttrib(self, HEALTH) * 2);
+		setAttrib(self, HEALTH, getMaxAttrib(self, HEALTH) * 2);
+		
+		dictionary sessionDict = new dictionary();
+		messageTo(self, "findRocketTarget", sessionDict, rand(1, 3), false);
+	}
+
+	// Get a new target
+	obj_id[] targets = trial.getObjectsInDungeonWithObjVar(dungeon, "spawn_id");
+
+	if(targets == null || targets.length <= 0)
+	{
+		return;
+	}
+
+	for(int i = 0; i < targets.length; i++)
+	{
+		string checkSpawn = getStringObjVar(targets[i], "spawn_id");
+		
+		// Shoot at the correct mouse droid.
+		if(firstSuperDroid && checkSpawn.equals("mouse_droid1"))
+		{
+//			debugSpeakMsg(self, "Targeting mouse_droid1...");
+			target = targets[i];
+			break;
+		}
+		
+		if(!firstSuperDroid && checkSpawn.equals("mouse_droid2"))
+		{
+//			debugSpeakMsg(self, "Targeting mouse_droid2...");
+			target = targets[i];
+			break;
+		}
+	}
+	
+	if(!isIdValid(target))
+	{
+		return;
+	}
+
+	if((float)getAttrib(self, ACTION) / (float)getMaxAttrib(self, ACTION) < 0.1f)
+	{
+		destroyMouseDroids(dungeon);
+		return;
+	}
+
+//	debugSpeakMsg(self, "Acquiring target..." + getName(primaryWeapon) + " current: " + getName(creatureWeapon));
+
+	// Attack target
+	setHate(self, target, 1000000);
+}
+
+void destroyMouseDroids(obj_id dungeon)
+{
+	obj_id[] targets = trial.getObjectsInDungeonWithObjVar(dungeon, "spawn_id");
+
+	if(targets == null || targets.length <= 0)
+	{
+		return;
+	}
+
+	for(int i = 0; i < targets.length; i++)
+	{
+		string checkSpawn = getStringObjVar(targets[i], "spawn_id");
+
+		// Check if any super battle droids are still alive to make sure the encounter is still active or over.
+		if(checkSpawn.equals("mouse_droid1") || checkSpawn.equals("mouse_droid2"))
+		{
+			destroyObject(targets[i]);
+		}
+	}
+}
+
+messageHandler findTarget()
+{
+	if(!isIdValid(self))
+		return SCRIPT_CONTINUE;
+
+//	debugSpeakMsg(self, "findTarget attempt");
+
+	dictionary sessionDict = new dictionary();
+
+	messageTo(self, "findTarget", sessionDict, 1, false);
+
+	findNextTarget(self);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler findRocketTarget()
+{
+	if(!isIdValid(self))
+		return SCRIPT_CONTINUE;
+
+	obj_id target = getRocketTarget(self);
+	
+	// Launch at the target found.
+	if(isIdValid(target))
+	{
+//		debugSpeakMsg(self, "Launch fighters!  Launch launch launch fighters!");
+//		queueCommand(self, ##"ig88_rocket_launch", target, "", COMMAND_PRIORITY_DEFAULT);
+		
+		setObjVar(self, "ai.combat.oneShotAction", "ig88_rocket_launch");
+	}
+
+	// Schedule the next launch
+	dictionary sessionDict = new dictionary();
+	messageTo(self, "findRocketTarget", sessionDict, 1 + rand(1, 2), false);
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	dictionary sessionDict = new dictionary();
+
+	messageTo(self, "colorize", sessionDict, 0.25f, false); // A 0 delay messageTo was not firing, but a 0.25f does and does not round up to 1 second delay.
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler colorize()
+{
+	if(!isIdValid(self))
+		return SCRIPT_CONTINUE;
+
+	// Set up its good looks...
+	hue.setColor(self, hue.INDEX_1, 9); // Light pink
+	hue.setColor(self, hue.INDEX_2, 14); // Dark red
+	hue.setTexture(self, 1, 9); // Striped
+
+	return SCRIPT_CONTINUE;
+}

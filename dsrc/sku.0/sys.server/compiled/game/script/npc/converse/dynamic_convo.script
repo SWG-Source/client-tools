@@ -1,0 +1,700 @@
+include library.factions;
+include library.chat;
+include library.utils;
+include library.ai_lib;
+//include library.locations;
+//include library.money;
+//include library.quests;
+
+
+const string_id	GIVE_ITEM_SUCCESS		= new string_id("system_msg", "give_item_success");
+const string_id	GIVE_ITEM_FAILURE		= new string_id("system_msg", "give_item_failure");
+const string_id	SCHEMATIC_GRANTED		= new string_id("system_msg", "schematic_granted");
+
+// Defines for response action types
+const int 		SPEAK					= 0;
+const int 		ADD						= 1;
+const int 		REMOVE					= 2;
+const int 		BRANCH					= 3;
+const int 		END						= 4;
+const int 		SET_OBJVAR				= 5;
+const int 		REMOVE_OBJVAR			= 6;
+const int 		MESSAGE_PLAYER			= 7;
+const int 		MESSAGE_NPC				= 8;
+const int		GIVE_ITEM				= 9;
+const int		GRANT_SCHEMATIC			= 10;
+const int		REWARD_FACTION			= 11;
+
+const string[]	actionList 				= {
+											"speak",			// SPEAK
+											"add",				// ADD
+											"remove",			// REMOVE
+											"branch",			// BRANCH
+											"end",				// END
+											"setObjvar",		// SET_OBJVAR
+											"removeObjvar",		// REMOVE_OBJVAR
+											"messagePlayer",	// MESSAGE_PLAYER
+											"messageNpc",		// MESSAGE_NPC
+											"giveItem",			// GIVE_ITEM
+											"grantSchematic",	// REWARD_FACTION
+											"rewardFaction"		// REWARD_FACTION
+										};
+
+// Defines for condition checks
+const int		HAS_OBJVAR				= 0;
+const int		NOT_HAS_OBJVAR			= 1;
+const int 		EQUAL					= 2;
+const int 		NOT_EQUAL				= 3;
+const int 		LESS_THAN				= 4;
+const int 		GREATER_THAN			= 5;
+const int 		LESS_THAN_OR_EQUAL		= 6;
+const int 		GREATER_THAN_OR_EQUAL	= 7;
+const int 		BETWEEN					= 8;
+
+const string[]	conditionList		 	= {
+											"**",	// HAS_OBJVAR
+											"!*",	// NOT_HAS_OBJVAR
+											"==",	// EQUAL
+											"!=",	// NOT_EQUAL
+											"<",	// LESS_THAN
+											">",	// GREATER_THAN
+											"<=",	// LESS_THAN_OR_EQUAL
+											">=",	// GREATER_THAN_OR_EQUAL
+											"><"	// BETWEEN
+										};
+
+// Defines for PvP Faction checks
+const int		NEUTRAL					= 0;
+const int		REBEL					= 1;
+const int		REBEL_OVERT				= 2;
+const int		REBEL_COVERT			= 3;
+const int		IMPERIAL				= 4;
+const int		IMPERIAL_OVERT			= 5;
+const int		IMPERIAL_COVERT			= 6;
+
+const string[]	pvpFactionList		 	= {
+											"Neutral",			// NEUTRAL
+											"Rebel",			// REBEL
+											"RebelOvert",		// REBEL_OVERT
+											"RebelCovert",		// REBEL_COVERT
+											"Imperial",			// IMPERIAL
+											"ImperialOvert",	// IMPERIAL_OVERT
+											"ImperialCovert"	// IMPERIAL_COVERT
+										};
+
+
+
+
+trigger OnAttach()
+{
+	attachScript (self, "npc.converse.npc_converse_menu");
+	ai_lib.setDefaultCalmBehavior( self, ai_lib.BEHAVIOR_SENTINEL );
+	return SCRIPT_CONTINUE;
+}
+
+
+trigger OnStartNpcConversation (obj_id speaker)
+{
+	if (ai_lib.isInCombat(self) || ai_lib.isInCombat(speaker))
+		return SCRIPT_OVERRIDE;
+	
+	string datatable = getStringObjVar (self, "convo_table");
+	datatable = "datatables/convo/" + datatable + ".iff";
+
+	string[] convoType = dataTableGetStringColumn(datatable, "convoType");
+	dictionary entry = null;
+	int dialogRow = 0;
+	
+	for (int i = 0; i < convoType.length; i++)
+	{
+		if (convoType[i].equals("dialogStart"))
+		{
+			entry = dataTableGetRow(datatable, i);
+			dialogRow = i;
+			
+			if (isGated(entry, speaker))
+			{
+				entry = null;
+				continue;
+			}
+			else
+				break;
+		}
+	}
+	
+	if (entry == null)
+	{
+		LOG ("dynamic_convo", "ERROR: No opening dialog entry found in convo datatable!!");
+		return SCRIPT_OVERRIDE;
+	}
+
+	string dialogEntry = entry.getString("convoEntry");
+	LOG ("dynamic_convo", "Dialog entry '" + dialogEntry + "' found");
+	string[] convoParent = dataTableGetStringColumn(datatable, "convoParent");
+	string[] convoEntry = dataTableGetStringColumn(datatable, "convoEntry");
+
+	string_id openDialog = new string_id(entry.getString("convoFile"), entry.getString("convoText"));
+	
+	// Find all the responses for this dialog entry
+	resizeable string_id[] dialogResponse = new string_id[0];
+	
+	for (int i = 0; i < convoParent.length; i++)
+	{
+		if (convoParent[i] != null && convoParent[i].equals(dialogEntry))
+		{
+			entry = dataTableGetRow(datatable, i);
+			
+			if (!entry.getString("convoType").equals("response"))
+			{
+				LOG("dynamic_convo", "WARNING: Parent defined for non-response entry!!  Skipping entry.");
+				continue;
+			}
+			
+			if (isGated(entry, speaker))
+				continue;
+			
+			string_id response = new string_id(entry.getString("convoFile"), entry.getString("convoText"));
+			dialogResponse = utils.addElement(dialogResponse, response);
+			LOG ("dynamic_convo", "Added response '" + entry.getString("convoEntry") + "' to dialog.");
+		}
+	}
+
+	// Execute the actions defined for this dialog
+	for (int j = dialogRow+1; j < convoEntry.length; j++)
+	{
+		if (convoEntry[j].equals(dialogEntry))
+		{
+			entry = dataTableGetRow(datatable, j);
+
+			if (!entry.getString("convoType").equals("dialogAction"))
+			{
+				LOG("dynamic_convo", "WARNING: Duplicate dialog entry not defined as dialogAction!!  Skipping entry.");
+				continue;
+			}
+
+			if (isGated(entry, speaker))
+				continue;
+
+			executeAction(entry, speaker, self);
+		}
+		else
+			break;
+	}
+
+	if (dialogResponse.length == 0)
+	{
+		chat.chat(self, openDialog);
+		return SCRIPT_OVERRIDE;
+	}
+	
+	npcStartConversation (speaker, self, "dynamicConvo", openDialog, dialogResponse);
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnNpcConversationResponse (string convo, obj_id player, string_id response)
+{
+	if (!convo.equals("dynamicConvo"))
+		return SCRIPT_CONTINUE;
+	
+	string datatable = getStringObjVar (self, "convo_table");
+	datatable = "datatables/convo/" + datatable + ".iff";
+
+	string[] convoFile = dataTableGetStringColumn(datatable, "convoFile");
+	string[] convoText = dataTableGetStringColumn(datatable, "convoText");
+	dictionary entry = null;
+	
+	for (int i = 0; i < convoText.length; i++)
+	{
+		if (response.getAsciiId().equals(convoText[i]) && response.getTable().equals(convoFile[i]))
+		{
+			entry = dataTableGetRow(datatable, i);
+			
+			//executeAction(entry, player, self);
+			
+			string responseEntry = entry.getString("convoEntry");
+			string[] convoEntry = dataTableGetStringColumn(datatable, "convoEntry");
+			
+			for (int j = i+1; j < convoEntry.length; j++)
+			{
+				if (convoEntry[j].equals(responseEntry))
+				{
+					entry = dataTableGetRow(datatable, j);
+					
+					if (!entry.getString("convoType").equals("responseAction"))
+					{
+						LOG("dynamic_convo", "WARNING: Duplicate response entry not defined as responseAction!!  Skipping entry.");
+						continue;
+					}
+
+					if (isGated(entry, player))
+						continue;
+					
+					executeAction(entry, player, self);
+				}
+				else
+					break;
+			}
+		}
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+void executeAction(dictionary entry, obj_id player, obj_id npc)
+{
+	string action = entry.getString("action");
+	string data1 = entry.getString("data1");
+	int data2 = entry.getInt("data2");
+
+	string_id message = null;
+	string_id response = null;
+	dictionary params = new dictionary();
+	
+	
+	// Actions to add:  Give Item, play animation, set mood.
+	switch(getActionId(action))
+	{
+		case SPEAK:
+			message = new string_id(entry.getString("convoFile"), entry.getString("convoText"));
+			npcSpeak(player, message);
+			break;
+		
+		case ADD:
+			response = getResponseEntry(npc, data1);
+			if (response == null)
+			{
+				LOG("dynamic_convo", "WARNING: No response entry found to add!!");
+				break;
+			}
+			npcAddConversationResponse(player, response);
+			break;
+		
+		case REMOVE:
+			response = getResponseEntry(npc, data1);
+			if (response == null)
+			{
+				LOG("dynamic_convo", "WARNING: No response entry found to remove!!");
+				break;
+			}
+			npcRemoveConversationResponse(player, response);
+			break;
+		
+		case BRANCH:
+			startNewConvoBranch(npc, player, data1);
+			break;
+		
+		case END:
+			npcEndConversation(player);
+			break;
+		
+		case SET_OBJVAR:
+			setObjVar(player, data1, data2);
+			break;
+		
+		case REMOVE_OBJVAR:
+			removeObjVar(player, data1);
+			break;
+		
+		case MESSAGE_PLAYER:
+			params.put("player", player);
+			params.put("npc", npc);
+			params.put("value", data2);
+			messageTo(player, data1, params, 0, false);
+			break;
+		
+		case MESSAGE_NPC:
+			params.put("player", player);
+			params.put("npc", npc);
+			params.put("value", data2);
+			messageTo(npc, data1, params, 0, false);
+			break;
+		
+		case GIVE_ITEM:
+			obj_id inventory = getObjectInSlot(player, "inventory");				
+			obj_id object = createObject(data1, inventory, "");
+
+			if (!isIdValid(object))
+			{
+				sendSystemMessage(player, GIVE_ITEM_FAILURE);
+			}				
+			else
+			{
+				sendSystemMessage(player, GIVE_ITEM_SUCCESS);
+			}
+			break;
+		
+		case GRANT_SCHEMATIC:
+			grantSchematic(player, data1);
+			sendSystemMessage(player, SCHEMATIC_GRANTED);
+			break;
+		
+		case REWARD_FACTION:
+			factions.awardFactionStanding(player, data1, data2);
+			break;
+
+		default:
+			LOG ("dynamic_convo", "WARNING: Unknown response action defined!!");
+			break;
+	}	
+}
+
+void startNewConvoBranch(obj_id npc, obj_id player, string dialogEntry)
+{
+	string datatable = getStringObjVar (npc, "convo_table");
+	datatable = "datatables/convo/" + datatable + ".iff";
+
+	string[] convoEntry = dataTableGetStringColumn(datatable, "convoEntry");
+	dictionary entry = null;
+	
+	for (int i = 0; i < convoEntry.length; i++)
+	{
+		if (convoEntry[i].equals(dialogEntry))
+		{
+			entry = dataTableGetRow(datatable, i);
+			
+			if (isGated(entry, player))
+				continue;
+		}
+	}
+	
+	if (entry == null)
+	{
+		LOG ("dynamic_convo", "ERROR: No branching dialog entry found in convo datatable!!");
+		npcEndConversation(player);
+		return;
+	}
+
+	string_id branchDialog = new string_id(entry.getString("convoFile"), entry.getString("convoText"));
+	
+	// Find all the responses for this dialog entry
+	string[] convoParent = dataTableGetStringColumn(datatable, "convoParent");
+	
+	resizeable string_id[] dialogResponse = new string_id[0];
+	
+	for (int i = 0; i < convoParent.length; i++)
+	{
+		if (convoParent[i] != null && convoParent[i].equals(dialogEntry))
+		{
+			entry = dataTableGetRow(datatable, i);
+			
+			if (!entry.getString("convoType").equals("response"))
+			{
+				LOG("dynamic_convo", "WARNING: Parent defined for non-response entry!!  Skipping entry.");
+				continue;
+			}
+			
+			if (isGated(entry, player))
+				continue;
+			
+			string_id response = new string_id(entry.getString("convoFile"), entry.getString("convoText"));
+			dialogResponse = utils.addElement(dialogResponse, response);
+		}
+	}
+
+	npcSpeak(player, branchDialog);
+
+	if (dialogResponse.length == 0)
+	{
+		npcEndConversation(player);
+	}
+	
+	npcSetConversationResponses(player, dialogResponse);
+}
+
+string_id getResponseEntry(obj_id npc, string responseEntry)
+{
+	string datatable = getStringObjVar (npc, "convo_table");
+	datatable = "datatables/convo/" + datatable + ".iff";
+
+	string[] convoEntry = dataTableGetStringColumn(datatable, "convoEntry");
+	dictionary entry = null;
+	
+	for (int i = 0; i < convoEntry.length; i++)
+	{
+		if (convoEntry[i].equals(responseEntry))
+		{
+			entry = dataTableGetRow(datatable, i);
+			
+			if (!entry.getString("convoType").equals("response"))
+			{
+				LOG("dynamic_convo", "WARNING: Non-response entry found!!  Skipping entry.");
+				continue;
+			}
+			
+			string_id response = new string_id(entry.getString("convoFile"), entry.getString("convoText"));
+			
+			return response;
+		}
+	}
+
+	return null;	
+}
+
+boolean isGated(dictionary entry, obj_id player)
+{
+	boolean gated = false;
+	
+	// Check objvar gates
+	string gatingObjvar = entry.getString("gatingObjvar");
+	
+	if (gatingObjvar != null && !gatingObjvar.equals(""))
+	{
+		boolean hasObjvar = false;
+		int playerObjvar = 0;
+		
+		if (hasObjVar(player, gatingObjvar))
+		{
+			hasObjvar = true;
+			playerObjvar = getIntObjVar(player, gatingObjvar);
+		}
+		
+		string condition = entry.getString("gatingObjvarCondition");
+		int value1 = entry.getInt("gatingObjvarValue1");
+		int value2 = entry.getInt("gatingObjvarValue2");
+		
+		boolean gatedObjvar = true;
+		switch (getConditionId(condition))
+		{
+			case HAS_OBJVAR:
+				if (hasObjvar)
+					gatedObjvar = false;
+				break;
+			
+			case NOT_HAS_OBJVAR:
+				if (!hasObjvar)
+					gatedObjvar = false;
+				break;
+			
+			case EQUAL:
+				LOG ("dynamic_convo", "Gating on HAS_OBJVAR");
+				if (hasObjvar && playerObjvar == value1)
+					gatedObjvar = false;
+				break;
+			
+			case NOT_EQUAL:
+				if (hasObjvar && playerObjvar != value1)
+					gatedObjvar = false;
+				break;
+			
+			case LESS_THAN:
+				if (hasObjvar && playerObjvar < value1)
+					gatedObjvar = false;
+				break;
+			
+			case GREATER_THAN:
+				if (hasObjvar && playerObjvar > value1)
+					gatedObjvar = false;
+				break;
+			
+			case LESS_THAN_OR_EQUAL:
+				if (hasObjvar && playerObjvar <= value1)
+					gatedObjvar = false;
+				break;
+			
+			case GREATER_THAN_OR_EQUAL:
+				if (hasObjvar && playerObjvar >= value1)
+					gatedObjvar = false;
+				break;
+			
+			case BETWEEN:
+				if (hasObjvar && playerObjvar > value1 && playerObjvar < value2)
+					gatedObjvar = false;
+				break;
+			
+			default :
+				LOG ("dynamic_convo", "WARNING: Unknown Objvar gating condition!!");
+				break;
+		}
+		
+		//debugSpeakMsg(player, "Objvar gating = " + gatedObjvar);
+		gated |= gatedObjvar;
+	}
+	
+	// Check faction gates
+	string gatingFaction = entry.getString("gatingFaction");
+
+	if (gatingFaction != null && !gatingFaction.equals(""))
+	{
+		float playerFaction = factions.getFactionStanding(player, gatingFaction);
+		
+		string condition = entry.getString("gatingFactionCondition");
+		float value1 = entry.getFloat("gatingFactionValue1");
+		float value2 = entry.getFloat("gatingFactionValue2");
+
+		boolean gatedFaction = true;
+		switch (getConditionId(condition))
+		{
+			case EQUAL:
+				if (playerFaction == value1)
+					gatedFaction = false;
+				break;
+			
+			case NOT_EQUAL:
+				if (playerFaction != value1)
+					gatedFaction = false;
+				break;
+			
+			case LESS_THAN:
+				if (playerFaction < value1)
+					gatedFaction = false;
+				break;
+			
+			case GREATER_THAN:
+				if (playerFaction > value1)
+					gatedFaction = false;
+				break;
+			
+			case LESS_THAN_OR_EQUAL:
+				if (playerFaction <= value1)
+					gatedFaction = false;
+				break;
+			
+			case GREATER_THAN_OR_EQUAL:
+				if (playerFaction >= value1)
+					gatedFaction = false;
+				break;
+			
+			case BETWEEN:
+				if (playerFaction > value1 && playerFaction < value2)
+					gatedFaction = false;
+				break;
+			
+			default :
+				LOG ("dynamic_convo", "WARNING: Unknown Faction gating condition!!");
+				break;
+		}
+		
+		//debugSpeakMsg(player, "Faction gating = " + gatedFaction);
+		gated |= gatedFaction;
+	}
+	
+	// Check object gates
+	string gatingObject = entry.getString("gatingObject");
+
+	if (gatingObject != null && !gatingObject.equals(""))
+	{
+		boolean destroyItem = (entry.getInt("destroyGatingObject") != 0);
+
+		boolean gatedItem = true;
+		if (hasItem(player, gatingObject, destroyItem))
+			gatedItem = false;
+		
+		//debugSpeakMsg(player, "Item gating = " + gatedItem);
+		gated |= gatedItem;
+	}
+	
+	// Check PVP Faction Gates
+	string gatingPvpFaction = entry.getString("gatingPvpFaction");
+
+	if (gatingPvpFaction != null && !gatingPvpFaction.equals(""))
+	{
+		string playerFaction = factions.getFaction(player);
+		if (playerFaction == null) playerFaction = "none";
+		boolean gatedPvpFaction = true;
+		switch (getPvpFactionId(gatingPvpFaction))
+		{
+			case NEUTRAL:
+				if (factions.isNeutral(player))
+					gatedPvpFaction = false;
+				break;
+			
+			case REBEL:
+				if (playerFaction.equals("Rebel"))
+					gatedPvpFaction = false;
+				break;
+			
+			case REBEL_OVERT:
+				if (playerFaction.equals("Rebel") && factions.isDeclared(player))
+					gatedPvpFaction = false;
+				break;
+			
+			case REBEL_COVERT:
+				if (playerFaction.equals("Rebel") && factions.isCovert(player) && !factions.isDeclared(player))
+					gatedPvpFaction = false;
+				break;
+			
+			case IMPERIAL:
+				if (playerFaction.equals("Imperial"))
+					gatedPvpFaction = false;
+				break;
+			
+			case IMPERIAL_OVERT:
+				if (playerFaction.equals("Imperial") && factions.isDeclared(player))
+					gatedPvpFaction = false;
+				break;
+			
+			case IMPERIAL_COVERT:
+				if (playerFaction.equals("Imperial") && factions.isCovert(player) && !factions.isDeclared(player))
+					gatedPvpFaction = false;
+				break;
+			
+			default :
+				LOG ("dynamic_convo", "WARNING: Unknown gating PVP Faction!!");
+				break;
+		}
+		
+//		debugSpeakMsg (player, "Faction = " + factions.getFaction(player) + 
+//							 "; Overt Status = " + factions.isDeclared(player) + 
+//							 "; Covert Status = " + (factions.isCovert(player) && !factions.isDeclared(player)));
+
+		//debugSpeakMsg(player, "PvP gating = " + gatedPvpFaction);
+		gated |= gatedPvpFaction;
+	}
+	
+	//debugSpeakMsg(player, "Dialog gated = " + gated);
+	return gated;
+}
+
+int getConditionId(string condition)
+{
+	for (int i = 0; i < conditionList.length; i++)
+	{
+		if (condition.equals(conditionList[i]))
+			return i;
+	}
+	
+	return -1;
+}
+
+int getActionId(string action)
+{
+	for (int i = 0; i < actionList.length; i++)
+	{
+		if (action.equals(actionList[i]))
+			return i;
+	}
+	
+	return -1;
+}
+
+int getPvpFactionId(string pvpFaction)
+{
+	for (int i = 0; i < pvpFactionList.length; i++)
+	{
+		if (pvpFaction.equals(pvpFactionList[i]))
+			return i;
+	}
+	
+	return -1;
+}
+
+boolean hasItem (obj_id player, string template, boolean destroyItem)
+{
+	obj_id playerInv = utils.getInventoryContainer(player);
+		
+	obj_id[] contents = utils.getContents(playerInv, true);
+	for ( int i = 0; i < contents.length; i++ )
+	{
+		string itemInInventory = getTemplateName (contents[i]);
+		if (itemInInventory == template)
+		{
+			if (destroyItem)
+				destroyObject(contents[i]);
+			
+			return true;
+		}
+	}
+
+	return false;
+}

@@ -1,0 +1,721 @@
+//libraries
+include library.ai_lib;
+include library.callable;
+include library.pet_lib;
+include library.utils;
+include library.xp;
+include library.prose;
+include library.permissions;
+include library.corpse;
+include library.sui;
+include library.skill;
+include library.resource;
+include library.group;
+include library.combat;
+
+//const 
+const string STF 						= "pet/droid_modules";
+const string AUTO_HARVEST 					= "droidAutoHarvest";
+const float MAX_HARVEST_DISTANCE 				= 256f;
+const string DATATABLE						= "datatables/mob/creatures.iff";
+
+const string HARVEST_INTEREST 					= "droid.harvestInterest";
+const int INTEREST_MEAT 					= corpse.CCR_MEAT;
+const int INTEREST_HIDE 					= corpse.CCR_HIDE;
+const int INTEREST_BONE 					= corpse.CCR_BONE;
+const int INTEREST_RANDOM					= -1;
+const string MEAT						= "meatType";
+const string HIDE						= "hideType";
+const string BONE						= "boneType";
+
+const string OWNER						= "droidMove.owner";
+const string TARGET						= "droidMove.target";
+const string HARVEST						= "droidMove.harvestInterest";
+
+//const menu options
+const string_id SID_HARVEST_OPTIONS				= new string_id(STF, "harvest_options");
+const string_id SID_TARGET_HARVEST				= new string_id(STF, "program_target_harvest");
+const string_id SID_TOGGLE_AUTO_HARVEST				= new string_id(STF, "toggle_auto_harvest");
+const string_id SID_SET_HARVEST_INTEREST			= new string_id(STF, "set_harvest_interest");
+const string_id SID_AUTO_HARVEST_ON				= new string_id(STF, "auto_harvest_on");
+const string_id SID_AUTO_HARVEST_OFF				= new string_id(STF, "auto_harvest_off");
+
+//const system messages
+const string_id SID_INVALID_HARVEST_TARGET  			= new string_id(STF, "invalid_harvest_target");
+const string_id SID_ENABLE_AUTO_HARVEST				= new string_id(STF, "auto_harvest_enabled");
+const string_id SID_DISABLE_AUTO_HARVEST			= new string_id(STF, "auto_harvest_disabled");
+const string_id SID_ALREADY_HARVESTED				= new string_id(STF, "already_harvested");
+const string_id SID_CANNOT_ACCESS_CORPSE			= new string_id(STF, "cannot_access_corpse");
+const string_id SID_NO_RESOURCES_TO_HARVEST			= new string_id(STF, "no_resources_to_harvest");
+const string_id SID_TARGET_TYPE_NOT_FOUND			= new string_id(STF, "target_type_not_found");
+const string_id SID_CORPSE_TOO_FAR				= new string_id(STF, "corpse_too_far");
+const string_id SID_DROID_HARVEST_MESSAGE			= new string_id(STF, "droid_harvest");
+const string_id SID_INTEREST_SET_RANDOM				= new string_id(STF, "interest_set_random");
+const string_id SID_INTEREST_SET_HIDE				= new string_id(STF, "interest_set_hide");
+const string_id SID_INTEREST_SET_BONE				= new string_id(STF, "interest_set_bone");
+const string_id SID_INTEREST_SET_MEAT				= new string_id(STF, "interest_set_meat");
+
+
+
+
+//const sui menu options
+const string_id SID_SET_INTEREST_RANDOM				= new string_id(STF, "set_interest_random");
+const string_id SID_SET_INTEREST_MEAT				= new string_id(STF, "set_interest_meat");
+const string_id SID_SET_INTEREST_HIDE				= new string_id(STF, "set_interest_hide");
+const string_id SID_SET_INTEREST_BONE				= new string_id(STF, "set_interest_bone");
+const string_id SET_INTEREST_SUI_D				= new string_id(STF, "set_interest_d");
+const string_id SET_INTEREST_SUI_T				= new string_id(STF, "set_interest_t");
+
+
+trigger OnAttach()
+{
+	
+	obj_id controlDevice = callable.getCallableCD(self);
+	
+	if(!isIdValid(controlDevice))
+	{
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(hasObjVar(controlDevice, HARVEST_INTEREST))
+	{
+		copyObjVar(controlDevice, self, HARVEST_INTEREST);
+	}
+		
+	if(hasObjVar(controlDevice, AUTO_HARVEST))
+	{
+		copyObjVar(controlDevice, self, AUTO_HARVEST);
+	}
+		
+	return SCRIPT_CONTINUE;
+		
+
+}//end OnAttach
+
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (isDead(self) || ai_lib.aiIsDead(player))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	
+	if (player == getMaster(self))
+	{
+		if (true)//hasSkill(player, "outdoors_scout_novice"))
+		{
+						
+			int menu = mi.addRootMenu( menu_info_types.SERVER_HARVEST_CORPSE, SID_HARVEST_OPTIONS );
+			mi.addSubMenu( menu, menu_info_types.ELEVATOR_UP, SID_TARGET_HARVEST );
+			mi.addSubMenu( menu, menu_info_types.CITY_CITIZENS, SID_SET_HARVEST_INTEREST);
+			mi.addSubMenu(menu, menu_info_types.ELEVATOR_DOWN, SID_TOGGLE_AUTO_HARVEST);
+
+		}
+	}
+		
+	return SCRIPT_CONTINUE;
+}//end OnObjectMenuRequest
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if (isDead(self) || ai_lib.aiIsDead(player))
+		return SCRIPT_CONTINUE;
+
+	if (!isMob(self))
+		return SCRIPT_CONTINUE;
+
+	if (pet_lib.isLowOnPower(self))
+	{
+		sendSystemMessage(player, new string_id(STF, "not_enough_power"));
+		return SCRIPT_CONTINUE;
+	}
+		
+
+	if ( item == menu_info_types.ELEVATOR_UP )
+	{
+		pet_lib.prepToLearn( self, pet_lib.COMMAND_TARGET_HARVEST );
+	}
+	else if(item == menu_info_types.CITY_CITIZENS)
+	{
+		setHarvestInterest(self, player);
+	}
+	
+	else if(item == menu_info_types.ELEVATOR_DOWN)
+	{
+		toggleAutoHarvest(self);
+	}
+	
+	return SCRIPT_CONTINUE;
+}//end OnObjectMenuSelect
+
+
+messageHandler doTargetHarvest()
+{
+
+	setOnHarvestRun(self, true);
+	obj_id droid = params.getObjId( "droid" );
+	obj_id player = params.getObjId( "player" );
+	obj_id target = params.getObjId("target");	
+
+	if (pet_lib.isLowOnPower(self))
+	{
+		sendSystemMessage(player, new string_id(STF, "not_enough_power"));
+		setOnHarvestRun(droid, false);
+		return SCRIPT_CONTINUE;
+	}
+
+
+	if (player != getMaster(self))
+		return SCRIPT_CONTINUE;
+		
+	if (!isIdValid(target) || !target.isLoaded())
+	{
+		setOnHarvestRun(droid, false);
+		sendSystemMessage(player, SID_INVALID_HARVEST_TARGET);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if (utils.hasScriptVar(target, "harvestedBy." + player))
+	{
+		setOnHarvestRun(droid, false);
+		sendSystemMessage(player, SID_ALREADY_HARVESTED);
+		return SCRIPT_CONTINUE;
+	}
+
+	boolean canOpen = false;
+	if ( hasObjVar(target, permissions.VAR_PERMISSION_BASE) )
+	{
+		setOnHarvestRun(droid, false);
+		canOpen = permissions.hasPermission(target, player, permissions.canOpen);
+	}
+	
+	if (false)//!canOpen )
+	{
+		sendSystemMessageTestingOnly(player, "Cannot access corpse "+getName(target));
+		sendSystemMessage(player, SID_CANNOT_ACCESS_CORPSE);
+		return SCRIPT_CONTINUE;
+	}
+
+
+	if (!hasObjVar(target, corpse.VAR_HAS_RESOURCE) )
+	{
+		setOnHarvestRun(droid, false);
+		sendSystemMessage(player, SID_NO_RESOURCES_TO_HARVEST);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int harvestInterest = INTEREST_RANDOM;
+	if (hasObjVar(droid, HARVEST_INTEREST))
+		harvestInterest = getIntObjVar(droid, HARVEST_INTEREST);
+	else
+		setObjVar(droid, HARVEST_INTEREST, harvestInterest);
+		
+
+	location targetLoc = getLocation(target);
+	location currentLoc = getLocation(player);
+	
+
+	if (getDistance(targetLoc, currentLoc) > MAX_HARVEST_DISTANCE)
+	{
+		setOnHarvestRun(droid, false);
+		sendSystemMessage(player, SID_CORPSE_TOO_FAR);
+		return SCRIPT_CONTINUE;
+	}
+
+
+
+	utils.setScriptVar(droid, TARGET, target);
+	utils.setScriptVar(droid, OWNER, player);
+	utils.setScriptVar(droid, HARVEST, harvestInterest);
+	setMovementRun(droid);
+	pathTo(droid, targetLoc);
+
+	return SCRIPT_CONTINUE;
+}//end doTargetHarvest
+
+trigger OnExitedCombat()
+{
+	messageTo(self, "runHarvestRoutineOverride", null, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler runHarvestRoutineOverride()
+{
+	setOnHarvestRun(self, false);
+	messageTo(self, "runHarvestRoutine", null, 1.0f, false);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler runHarvestRoutine()
+{
+	if(!autoHarvestEnabled(self) || onHarvestRun(self) || ai_lib.isInCombat(self) || pet_lib.isLowOnPower(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if(utils.hasScriptVar(self, pet_lib.DROID_HARVEST_ARRAY))
+	{
+		resizeable obj_id[] toHarvest = utils.getResizeableObjIdArrayScriptVar(self, pet_lib.DROID_HARVEST_ARRAY);
+		utils.removeScriptVar(self, pet_lib.DROID_HARVEST_ARRAY);
+
+		if(toHarvest == null || toHarvest.length == 0)
+		{
+			//doLogging("xx", "toHarvest was null or length 0");
+			return SCRIPT_CONTINUE;
+		}
+
+		while(0 < toHarvest.length)
+		{
+			if(isIdValid(toHarvest[0]) && exists(toHarvest[0]) && 
+				canSee(self, toHarvest[0]) && 
+				hasObjVar(toHarvest[0], corpse.VAR_HAS_RESOURCE) && 
+				!utils.hasScriptVar(toHarvest[0], "harvestedBy." + getMaster(self)))
+			{
+				dictionary dict = new dictionary();
+				dict.put("droid", self);
+				dict.put("player", pet_lib.getMaster(self));
+				dict.put("target", toHarvest[0]);
+				utils.removeElement(toHarvest, toHarvest[0]);
+
+				messageTo(self, "doTargetHarvest", dict, 0.0f, false);
+				break;
+			}
+
+			utils.removeElement(toHarvest, toHarvest[0]);
+		}
+
+		if(toHarvest != null && toHarvest.length > 0)
+		{
+			utils.setScriptVar(self, pet_lib.DROID_HARVEST_ARRAY, toHarvest);
+		}
+		else
+		{
+			utils.removeScriptVar(self, pet_lib.DROID_HARVEST_ARRAY);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean onHarvestRun(obj_id droid)
+{
+	return utils.hasScriptVar(droid, "droid_harvest.isActive") ? utils.getBooleanScriptVar(droid, "droid_harvest.isActive") : false;
+}
+
+void setOnHarvestRun(obj_id droid, boolean state)
+{
+	utils.setScriptVar(droid, "droid_harvest.isActive", state);
+}
+
+trigger OnMovePathComplete()
+{
+
+	obj_id droid = getSelf();
+	if (!utils.hasScriptVar(droid, TARGET) || !utils.hasScriptVar(droid, OWNER))
+		return SCRIPT_CONTINUE;
+	obj_id player = utils.getObjIdScriptVar(droid, OWNER);
+	obj_id target = utils.getObjIdScriptVar(droid, TARGET);
+
+	if(!isIdValid(player) || !isIdValid(target))
+	{
+		setOnHarvestRun(droid, false);
+		return SCRIPT_CONTINUE;
+	}
+	int harvestInterest = INTEREST_RANDOM;
+	if (utils.hasScriptVar(droid, HARVEST))
+		harvestInterest = utils.getIntScriptVar(droid, HARVEST);
+	
+	
+	if (!hasObjVar(target, corpse.VAR_HAS_RESOURCE))
+	{
+		setOnHarvestRun(self, false);
+		return SCRIPT_CONTINUE;
+	}	
+	int[] hasResource = getIntArrayObjVar(target, corpse.VAR_HAS_RESOURCE);
+	if (hasResource.length == 0)
+	{
+		setOnHarvestRun(droid, false);
+		return SCRIPT_CONTINUE;
+	}
+	if (!harvestRandom(droid, player, target, harvestInterest, hasResource))
+	{
+		if (hasResource[INTEREST_MEAT] > 0 && harvestInterest == INTEREST_MEAT)
+		{
+			harvestCreature(droid, player, target, INTEREST_MEAT);
+		}
+		else if (hasResource[INTEREST_HIDE] > 0 && harvestInterest == INTEREST_HIDE)
+		{
+			harvestCreature(droid, player, target, INTEREST_HIDE);
+		}
+		else if (hasResource[INTEREST_BONE] > 0 && harvestInterest == INTEREST_BONE)
+		{
+			harvestCreature(droid, player, target, INTEREST_BONE);
+		}
+		else
+		{
+			sendSystemMessage(player, SID_TARGET_TYPE_NOT_FOUND);
+		}
+	}
+
+	utils.removeScriptVar(droid, OWNER);
+	utils.removeScriptVar(droid, TARGET);
+	if (utils.hasScriptVar(droid, pet_lib.DROID_HARVEST_ARRAY) && autoHarvestEnabled(droid))
+	{
+		setOnHarvestRun(droid, false);
+		messageTo(self, "runHarvestRoutine", null, 0.0f, false);
+	}
+	else
+	{
+		setOnHarvestRun(droid, false);
+		ai_lib.aiFollow(droid, player);
+	}
+	//messageTo(droid, "resumeDefaultCalmBehavior", null, 3, false);
+
+	return SCRIPT_CONTINUE;
+}//end OnMovePathComplete
+
+
+void setHarvestInterest( obj_id self, obj_id player)
+{
+	string[] harvestInterest = new string[4];
+	harvestInterest[0] = "@"+ SID_SET_INTEREST_RANDOM;
+	harvestInterest[1] = "@"+ SID_SET_INTEREST_MEAT;
+	harvestInterest[2] = "@"+ SID_SET_INTEREST_HIDE;
+	harvestInterest[3] = "@"+ SID_SET_INTEREST_BONE;
+	sui.listbox(self, player, "@"+ SET_INTEREST_SUI_D, sui.OK_CANCEL, "@"+ SET_INTEREST_SUI_T, harvestInterest, "handleSetHarvestInterest", true);
+
+}//end setHarvestInterest
+
+messageHandler handleSetHarvestInterest()
+{
+	int idx = sui.getListboxSelectedRow( params );
+	obj_id player = sui.getPlayerId( params );
+	if ( idx < 0 ) 
+		idx = 0;
+	if (idx == 0)
+	{
+		sendSystemMessage(player, SID_INTEREST_SET_RANDOM);
+		idx = INTEREST_RANDOM;
+	}
+	if (idx == 1)
+	{
+		sendSystemMessage(player, SID_INTEREST_SET_MEAT);
+		idx = INTEREST_MEAT;
+	}
+	if (idx == 2)
+	{
+		sendSystemMessage(player, SID_INTEREST_SET_HIDE);
+		idx = INTEREST_HIDE;
+	}
+	if (idx == 3)
+	{
+		sendSystemMessage(player, SID_INTEREST_SET_BONE);
+		idx = INTEREST_BONE;
+	}	
+	int btn = sui.getIntButtonPressed( params );
+	if ( btn == sui.BP_CANCEL )
+		return SCRIPT_CONTINUE;
+
+
+	setObjVar( self, HARVEST_INTEREST, idx );
+	
+	obj_id controlDevice = callable.getCallableCD(self);
+	copyObjVar(self, controlDevice, HARVEST_INTEREST);
+
+	return SCRIPT_CONTINUE;
+}//end handleSetHarvestInterest
+
+void toggleAutoHarvest(obj_id droid)
+{
+	boolean autoHarvest = autoHarvestEnabled(droid);
+	
+	if (autoHarvest)
+	{
+		sendSystemMessage(getMaster(droid), SID_DISABLE_AUTO_HARVEST);
+		setObjVar(droid, AUTO_HARVEST, false);
+	}
+	else
+	{
+		sendSystemMessage(getMaster(droid), SID_ENABLE_AUTO_HARVEST);
+		setObjVar(droid, AUTO_HARVEST, true);
+	}
+	
+	obj_id controlDevice = callable.getCallableCD(droid);
+	copyObjVar(droid, controlDevice, AUTO_HARVEST);
+}
+
+boolean autoHarvestEnabled(obj_id self)
+{
+	return hasObjVar(self, AUTO_HARVEST) ? getBooleanObjVar(self, AUTO_HARVEST) : false;
+}
+
+boolean harvestRandom(obj_id droid, obj_id player, obj_id corpse, int interest, int[] hasResource)
+{
+	if (interest != INTEREST_RANDOM)
+	{
+		return false;
+	}
+	
+		
+	
+	int[] randType = new int[3];
+	int i = -1;
+	
+	if (hasResource[INTEREST_MEAT] > 0 )
+	{
+		i++;
+		randType[i] = INTEREST_MEAT;
+	}
+	
+	if (hasResource[INTEREST_HIDE] > 0 )
+	{
+		i++;
+		randType[i] = INTEREST_HIDE;	
+	}
+	
+	if (hasResource[INTEREST_BONE] > 0 )
+	{
+		i++;
+		randType[i] = INTEREST_BONE;
+	}
+
+	if (i == -1)
+	{
+		//sendSystemMessageTestingOnly(player, "Randtype was empty.");
+		return false;
+	}
+	
+	int j = rand(0,i);
+	int type = randType[j];	
+	
+	if (!harvestCreature(droid, player, corpse, type))
+	{
+		//sendSystemMessageTestingOnly(player, "Error with random resource extraction");
+		return false;
+	}
+	
+	return true;
+	
+
+}//end harvestRandom
+
+
+boolean harvestCreature(obj_id droid, obj_id player, obj_id target, int interest)
+{
+
+	
+	if(!isIdValid(player) || !isIdValid(target))
+	{
+		setOnHarvestRun(droid, false);
+
+		return false;
+	}
+
+	
+	if ( !hasObjVar(target, corpse.VAR_HAS_RESOURCE) )
+	{
+		setOnHarvestRun(droid, false);
+
+		return false;
+	}
+	
+	if ( utils.hasScriptVar( target, "harvestedBy." + player ) )
+	{
+		setOnHarvestRun(droid, false);
+
+		return false;
+	}
+	
+	if ( getDistance(getLocation(droid), getLocation(target)) > MAX_HARVEST_DISTANCE )
+	{
+		setOnHarvestRun(droid, false);
+
+		return false;
+	}
+	
+	utils.setScriptVar( target, "harvestedBy." + player, 1 );
+	
+	string mobType = ai_lib.getCreatureName(target);
+		
+	int droidSklMod = 0;
+	if (hasObjVar(droid, "module_data.harvest_power"))
+	{
+		droidSklMod = getIntObjVar(droid, "module_data.harvest_power");
+		droidSklMod = calculateDroidBonus(droidSklMod);
+	}
+	
+	int playerSklMod = getSkillStatMod( player, "creature_harvesting" );
+	int sklMod = playerSklMod + droidSklMod;
+
+	float bonusHarvest = sklMod / 100.0f;
+	float skillEfficiency = ((sklMod * 10f) + 500f) / 2000f;
+
+	doLogging("xx", "droid skill mod: "+droidSklMod+" player skill mod: "+playerSklMod+" calculated sklMod: "+ sklMod);
+	
+	if (sklMod < 1)
+		sklMod = 1;
+	
+		
+	
+	obj_id pInv = utils.getInventoryContainer(player);
+	obj_id cInv = utils.getInventoryContainer(target);
+	obj_id dInv = utils.getDroidInventoryContainer(droid);
+	obj_id tInv = pInv;
+	
+	if (isIdValid(dInv) && getFilledVolume(dInv) < getTotalVolume(dInv))
+		tInv = dInv;
+		
+		
+	if(!isIdValid(pInv) || !isIdValid(cInv))
+	{
+		setOnHarvestRun(droid, false);
+
+		return false;
+	}
+
+	boolean baby = false;
+	if ( hasScript( target, "ai.pet_advance" ) )
+		baby = true;
+
+	int harvestXP = 0;
+	int successCount = 0;
+	int amt = 0;
+	string choice = null;
+	string qtyChoice = null;
+	if (interest == INTEREST_MEAT)
+	{
+		choice = dataTableGetString(DATATABLE, mobType, MEAT);
+		qtyChoice = "meat";
+	}
+	else if(interest == INTEREST_HIDE)
+	{
+		choice = dataTableGetString(DATATABLE, mobType, HIDE);
+		qtyChoice = "hide";
+	}	
+	else if(interest == INTEREST_BONE)
+	{
+		choice = dataTableGetString(DATATABLE, mobType, BONE);
+		qtyChoice = "bone";
+	}
+	if (choice == null)
+		return false;
+
+  	amt = (int) (Math.pow( ai_lib.getLevel( target ), 1.69 ) * 0.4f + 2.f);
+	if ( amt < 1 )
+		amt = 1;
+	if ( amt > 700 )
+		amt = 700;
+
+	amt += amt * bonusHarvest;
+	amt = (int)(amt*skillEfficiency);
+	
+	if ( baby )
+		amt *= 0.1;
+
+	if (group.isGrouped(player))
+	{
+		boolean petsOnly = true;
+		obj_id[] groupMembers = getGroupMemberIds(getGroupObject(player));
+		for (int i=0; i < groupMembers.length; i++)
+		{
+			if (!hasScript(groupMembers[i], "ai.pet") && groupMembers[i] != player)
+			{
+				petsOnly = false;
+			}
+		}
+		
+		if (petsOnly == false)
+		{
+			amt *= 1.2;
+		}
+	}
+	
+
+	if ( amt <= 0 )
+		amt = 1;
+	
+	string sceneName = getCurrentSceneName();
+	string rsrcMapTable = "datatables/creature_resource/resource_scene_map.iff";
+	string correctedPlanetName = dataTableGetString(rsrcMapTable, sceneName, 1);
+
+	if ( correctedPlanetName == null || correctedPlanetName == "" )
+	{
+		correctedPlanetName = "tatooine";
+	}
+	string type = choice + "_" + correctedPlanetName;
+	//sendSystemMessageTestingOnly(player, type);
+	int actualAmount = 0;
+	boolean check = false;
+	
+	if ( amt > 0 )
+	{
+		actualAmount = corpse.extractCorpseResource( type, amt, getLocation(target), tInv, cInv, 1 );
+		if ( actualAmount > 0 )
+		{
+			harvestXP = utils.getIntScriptVar(target, "corpse.harvestXP."+player);
+			check = true;
+		}
+	}
+	
+	if (check == true)
+	{
+		type = resource.getResourceName( type );
+		string msg = null;
+		prose_package pp = null;
+		pp = prose.getPackage( SID_DROID_HARVEST_MESSAGE, null, type, null, null, null, null, null, null, null, actualAmount, 0.f );
+		sendSystemMessageProse( player, pp );
+
+
+
+		//if ( harvestXP > 0 )
+		//	xp.grantCombatStyleXp( player, xp.SCOUT, harvestXP );
+	}
+
+	messageTo(target, corpse.HANDLER_CORPSE_EMPTY, null, 1f, isObjectPersisted(target));
+	
+	return true;
+
+}//end harvestCreature
+
+int calculateDroidBonus(int droidSkillMod)
+{
+	double remainder = 0;
+	double bonusSkill = 0.0f;
+	double mod = (double)droidSkillMod;
+	
+	double tier1 = 33;
+	double tier2 = 47;
+	double tier3= 50;
+	
+	if (droidSkillMod > tier1)
+	{
+		remainder = droidSkillMod - tier1;
+		bonusSkill = 20.0f;
+	}
+	else
+		return (int)(20.0f * (droidSkillMod/tier1));
+	
+	if (remainder > tier2)
+	{
+		remainder = remainder - tier2;
+		bonusSkill = 25.0f;
+	}
+	else
+		return (int)(15.0f + (5.0f * (remainder / tier2)));
+		
+	if (remainder == tier3)
+	{
+		bonusSkill = 25.0f;
+	}
+	else
+		return (int)(25.0f+(5.0f*(remainder / tier3)));
+	
+	return (int)bonusSkill;	
+}
+
+void doLogging(string section, string message)
+{
+	LOG("doLogging/harvest_module/"+section, message);
+}

@@ -1,0 +1,588 @@
+// ======================================================================
+//
+// active_dance.script
+//
+// Copyright 2002 Sony Online Entertainment
+//
+// ======================================================================
+
+include library.colors;
+include library.groundquests;
+include library.performance;
+include library.sui;
+include library.utils;
+include library.xp;
+
+// ======================================================================
+
+trigger OnAttach()
+{
+	//-- notify the quest system the player has started juggling
+	groundquests.questStartJuggle(self);
+
+	performance.checkAndIncrementEntertainerMissions(self, "dancer");
+	queueCommand(self, ##"showDanceVisuals", null, "1", COMMAND_PRIORITY_IMMEDIATE);
+	setObjVar(self, performance.VAR_PERFORM_FLOURISH, false);
+	setObjVar(self, performance.VAR_PERFORM_SEQUENCE, 0);
+	setObjVar(self, performance.VAR_PERFORM_APPLAUSE_COUNT, 0);
+	setObjVar(self, performance.VAR_PERFORM_FLOURISH_COUNT, 0);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	//-- notify the quest system the player has stopped juggling
+	groundquests.questStopPerforming(self);
+
+	performance.stopEntertainerMissionTracking(self, "dancer");
+	queueCommand(self, ##"showDanceVisuals", null, "0", COMMAND_PRIORITY_IMMEDIATE);
+	setPerformanceType(self, 0);
+	removeObjVar(self, performance.VAR_PERFORM);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	detachScript(self, performance.JUGGLE_HEARTBEAT_SCRIPT);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnChangedPosture(int before, int after)
+{
+	if (after != POSTURE_SKILL_ANIMATING)
+		performance.stopJuggling(self);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnEnteredCombat()
+{
+	performance.stopJuggling(self);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+trigger OnSawEmote(obj_id actor, string emote)
+{
+	//LOG ("entertainer_applause", "OnSawEmote: Entered");
+	int applause = 0;
+
+	for (int i = 0; i < performance.APPLAUSE_POSTIVE.length; i++)
+	{
+		if (emote.equals(performance.APPLAUSE_POSTIVE[i]))
+		{
+			//LOG ("entertainer_applause", "One possitive emote recognized");
+			applause = 1;
+			break;
+		}
+	}
+
+	if (applause == 0)
+	{
+		for (int i = 0; i < performance.APPLAUSE_NEGATIVE.length; i++)
+		{
+			if (emote.equals(performance.APPLAUSE_NEGATIVE[i]))
+			{
+				//LOG ("entertainer_applause", "One negative emote recognized");
+				applause = -1;
+				break;
+			}
+		}
+	}
+
+	if (applause == 0)
+		return SCRIPT_CONTINUE;
+
+	int band_size = 1;
+	obj_id[] band_members = new obj_id[20];
+	band_members[0] = self;
+
+	obj_id group = getGroupObject(self);
+	if (isIdValid(group))
+	{
+		obj_id[] members = getGroupMemberIds(group);
+		for (int i = 0; i < members.length; ++i)
+		{
+			if (members[i] != actor &&
+				(hasScript(members[i], performance.JUGGLE_HEARTBEAT_SCRIPT) || hasScript(members[i], performance.MUSIC_HEARTBEAT_SCRIPT)))
+			{
+				band_members[band_size] = members[i];
+				++band_size;
+			}
+		}
+	}
+
+	boolean audience_member = false;
+	obj_id listen_target = getPerformanceListenTarget(actor);
+	obj_id watch_target = getPerformanceWatchTarget(actor);
+
+	for (int i = 0; i < band_size; i++)
+	{
+		if (actor == band_members[i])
+			applause = 0;
+
+		if (listen_target == band_members[i])
+			audience_member = true;
+
+		if (watch_target == band_members[i])
+			audience_member = true;
+	}
+
+	if ((audience_member) && (applause != 0))
+	{
+		int applause_count = getIntObjVar(self, performance.VAR_PERFORM_APPLAUSE_COUNT);
+		applause_count += applause;
+
+		if (applause_count > performance.PERFORM_XP_APPLAUSE_MAX) applause_count = performance.PERFORM_XP_APPLAUSE_MAX;
+		if (applause_count < 0) applause_count = 0;
+
+		setObjVar(self, performance.VAR_PERFORM_APPLAUSE_COUNT, applause_count);
+		//LOG ("entertainer_applause", "Valid Audience member, recording emote.  New emote count = " + applause_count);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ======================================================================
+
+messageHandler OnPulse()
+{
+	if (!hasObjVar(self, performance.VAR_PERFORM_SEQUENCE))
+		return SCRIPT_CONTINUE;
+
+	int sequence = getIntObjVar(self, performance.VAR_PERFORM_SEQUENCE);
+	if (params.getInt("sequence") != sequence)
+		return SCRIPT_CONTINUE;
+
+	performance.checkAndIncrementEntertainerMissions(self, "dancer");
+
+	if (performance.applyPerformanceActionCost(self, 1.0f))
+	{
+		//Do some healing.
+		performance.performanceHeal(self, performance.PERFORMANCE_TYPE_JUGGLE, 1.0f);
+
+		//Inspiration
+		performance.inspire(self, performance.PERFORMANCE_TYPE_DANCE);
+
+		int flourishNum = getIntObjVar(self, performance.VAR_PERFORM_FLOURISH_COUNT);
+		int xpAmt = performance.calcPerformanceXp(self);
+
+		int entXpAmt = 0;
+		if(flourishNum > 0)
+			entXpAmt = (int)((float)xpAmt * 0.5f);
+
+		// Grant performance xp
+		xp.grantSocialStyleXp(self, xp.JUGGLING, xpAmt);
+
+		++sequence;
+		setObjVar(self, performance.VAR_PERFORM_SEQUENCE, sequence);
+		params.put("sequence", sequence);
+		messageTo(self, "OnPulse", params, performance.PERFORMANCE_HEARTBEAT_TIME, false);
+	}
+	else
+	{
+		performance.performanceMessageToSelf(self, null, performance.SID_JUGGLE_TOO_TIRED);
+		performance.stopJuggling(self);
+ 	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// -------------------------------------------------------------------------
+
+messageHandler OnFlourish()
+{
+	// params has a performanceIndex (row+1 in the performance datatable)
+	// params has a flourishIndex (0 for pause, 1 or 2 for real flourishes)
+	int flourishIndex = params.getInt("flourishIndex");
+	float mistakeChance = params.getFloat("mistakeChance");
+	int check = rand(0,100);
+
+	LOG ("perofrmance_dance", "Mistake Check: " + check + " / " + mistakeChance);
+	if (check < mistakeChance)
+		doAnimationAction(self, "mistake");
+	else
+		doAnimationAction(self, "skill_action_"+flourishIndex);
+
+	performance.performanceTargetedBuffFlourish(self, performance.PERFORMANCE_TYPE_JUGGLE, 1.0f);
+
+	return SCRIPT_CONTINUE;
+}
+
+// -------------------------------------------------------------------------
+
+messageHandler OnClearFlourish()
+{
+	setObjVar(self, performance.VAR_PERFORM_FLOURISH, 0);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler OnEffect()
+{
+
+	int effectId = params.getInt("effectId");
+	int effectLevel = params.getInt("effectLevel");
+
+	string effectFilename = "";
+	string_id effectString = null;
+
+	int action = getAttrib(self, ACTION);
+	int cost = performance.getEffectActionCost(effectId, effectLevel);
+
+	if (action > cost)
+	{
+		// pay the action cost for the effect
+		drainAttributes(self, cost, 0);
+
+		// find the name of the client effect file to be played
+		switch(effectId)
+		{
+			// Spot Light
+			case performance.PERFORMANCE_EFFECT_SPOT_LIGHT:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_SPOT_LIGHT_1;
+						effectString = performance.SID_EFFECT_PERFORM_SPOT_LIGHT;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_SPOT_LIGHT_2;
+						effectString = performance.SID_EFFECT_PERFORM_SPOT_LIGHT;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_SPOT_LIGHT_3;
+						effectString = performance.SID_EFFECT_PERFORM_SPOT_LIGHT;
+						break;
+				}
+				break;
+
+			// Colored Lights
+			case performance.PERFORMANCE_EFFECT_COLOR_LIGHTS:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_COLOR_LIGHTS_1;
+						effectString = performance.SID_EFFECT_PERFORM_COLOR_LIGHTS;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_COLOR_LIGHTS_2;
+						effectString = performance.SID_EFFECT_PERFORM_COLOR_LIGHTS;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_COLOR_LIGHTS_3;
+						effectString = performance.SID_EFFECT_PERFORM_COLOR_LIGHTS;
+						break;
+				}
+				break;
+
+			// Dazzle
+			case performance.PERFORMANCE_EFFECT_DAZZLE:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_DAZZLE_1;
+						effectString = performance.SID_EFFECT_PERFORM_DAZZLE;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_DAZZLE_2;
+						effectString = performance.SID_EFFECT_PERFORM_DAZZLE;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_DAZZLE_3;
+						effectString = performance.SID_EFFECT_PERFORM_DAZZLE;
+						break;
+				}
+				break;
+
+			// Distract
+			case performance.PERFORMANCE_EFFECT_DISTRACT:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_DISTRACT_1;
+						effectString = performance.SID_EFFECT_PERFORM_DISTRACT;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_DISTRACT_2;
+						effectString = performance.SID_EFFECT_PERFORM_DISTRACT;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_DISTRACT_3;
+						effectString = performance.SID_EFFECT_PERFORM_DISTRACT;
+						break;
+				}
+				break;
+
+			// Smoke Bomb
+			case performance.PERFORMANCE_EFFECT_SMOKE_BOMB:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_SMOKE_BOMB_1;
+						effectString = performance.SID_EFFECT_PERFORM_SMOKE_BOMB;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_SMOKE_BOMB_2;
+						effectString = performance.SID_EFFECT_PERFORM_SMOKE_BOMB;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_SMOKE_BOMB_3;
+						effectString = performance.SID_EFFECT_PERFORM_SMOKE_BOMB;
+						break;
+				}
+				break;
+
+			// Fire Jets
+			case performance.PERFORMANCE_EFFECT_FIRE_JETS:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_FIRE_JETS_1;
+						effectString = performance.SID_EFFECT_PERFORM_FIRE_JETS;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_FIRE_JETS_2;
+						effectString = performance.SID_EFFECT_PERFORM_FIRE_JETS;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_FIRE_JETS_3;
+						effectString = performance.SID_EFFECT_PERFORM_FIRE_JETS;
+						break;
+				}
+				break;
+
+			// Ventriloquism
+			case performance.PERFORMANCE_EFFECT_VENTRILOQUISM:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_VENTRILOQUISM_1;
+						effectString = performance.SID_EFFECT_PERFORM_VENTRILOQUISM;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_VENTRILOQUISM_2;
+						effectString = performance.SID_EFFECT_PERFORM_VENTRILOQUISM;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_VENTRILOQUISM_3;
+						effectString = performance.SID_EFFECT_PERFORM_VENTRILOQUISM;
+						break;
+				}
+				break;
+
+			// Center Stage
+			case performance.PERFORMANCE_EFFECT_CENTER_STAGE:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_CENTER_STAGE;
+						effectString = performance.SID_EFFECT_PERFORM_CENTER_STAGE;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_CENTER_STAGE;
+						effectString = performance.SID_EFFECT_PERFORM_CENTER_STAGE;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_CENTER_STAGE;
+						effectString = performance.SID_EFFECT_PERFORM_CENTER_STAGE;
+						break;
+				}
+				break;
+
+			// Color Swirl
+			case performance.PERFORMANCE_EFFECT_COLOR_SWIRL:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_COLOR_SWIRL;
+						effectString = performance.SID_EFFECT_PERFORM_COLOR_SWIRL;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_COLOR_SWIRL;
+						effectString = performance.SID_EFFECT_PERFORM_COLOR_SWIRL;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_COLOR_SWIRL;
+						effectString = performance.SID_EFFECT_PERFORM_COLOR_SWIRL;
+						break;
+				}
+				break;
+
+			// Dance Floor
+			case performance.PERFORMANCE_EFFECT_DANCE_FLOOR:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_DANCE_FLOOR;
+						effectString = performance.SID_EFFECT_PERFORM_DANCE_FLOOR;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_DANCE_FLOOR;
+						effectString = performance.SID_EFFECT_PERFORM_DANCE_FLOOR;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_DANCE_FLOOR;
+						effectString = performance.SID_EFFECT_PERFORM_DANCE_FLOOR;
+						break;
+				}
+				break;
+
+			// Featured Solo
+			case performance.PERFORMANCE_EFFECT_FEATURED_SOLO:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_FEATURED_SOLO;
+						effectString = performance.SID_EFFECT_PERFORM_FEATURED_SOLO;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_FEATURED_SOLO;
+						effectString = performance.SID_EFFECT_PERFORM_FEATURED_SOLO;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_FEATURED_SOLO;
+						effectString = performance.SID_EFFECT_PERFORM_FEATURED_SOLO;
+						break;
+				}
+				break;
+
+			// Fire Jets 2
+			case performance.PERFORMANCE_EFFECT_FIRE_JETS2:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_FIRE_JETS2;
+						effectString = performance.SID_EFFECT_PERFORM_FIRE_JETS_2;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_FIRE_JETS2;
+						effectString = performance.SID_EFFECT_PERFORM_FIRE_JETS_2;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_FIRE_JETS2;
+						effectString = performance.SID_EFFECT_PERFORM_FIRE_JETS_2;
+						break;
+				}
+				break;
+
+			// Laser Show
+			case performance.PERFORMANCE_EFFECT_LASER_SHOW:
+				switch (effectLevel)
+				{
+					case 1:
+						effectFilename = performance.EFFECT_LASER_SHOW;
+						effectString = performance.SID_EFFECT_PERFORM_LASER_SHOW;
+						break;
+					case 2:
+						effectFilename = performance.EFFECT_LASER_SHOW;
+						effectString = performance.SID_EFFECT_PERFORM_LASER_SHOW;
+						break;
+					case 3:
+						effectFilename = performance.EFFECT_LASER_SHOW;
+						effectString = performance.SID_EFFECT_PERFORM_LASER_SHOW;
+						break;
+				}
+				break;
+		}
+
+		// find out what type of target this effect needs
+		int targetType = performance.getEffectTargetType(effectId, effectLevel);
+
+		// play the effect based on the target type
+		switch (targetType)
+		{
+			// Stationary effect
+			case 1:
+				performance.playEffectLoc(self, getLocation(self), effectFilename, effectString);
+				break;
+
+			// Targeted effect
+			case 2:
+				obj_id target = getLookAtTarget(self);
+
+				if (isIdValid(target))
+				{
+					performance.playEffectTarget(self, target, effectFilename, effectString);
+				}
+				else
+				{
+					performance.performanceMessageToSelf(self, null, performance.SID_EFFECT_NEED_TARGET);
+				}
+
+				break;
+
+			// Self-only effect
+			case 3:
+			default:
+				performance.playEffectTarget(self, self, effectFilename, effectString);
+				break;
+		}
+	}
+	else
+	{
+		performance.performanceMessageToSelf(self, null, performance.SID_EFFECT_TOO_TIRED);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// -------------------------------------------------------------------------
+
+messageHandler OnClearEffect()
+{
+	setObjVar(self, performance.VAR_PERFORM_EFFECT, 0);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler OnPerformanceEnd()
+{
+	detachScript(self, performance.JUGGLE_HEARTBEAT_SCRIPT);
+	return SCRIPT_CONTINUE;
+}
+
+// ======================================================================
+
+messageHandler handleInspireMenu()
+{
+	string[] list = utils.getStringArrayScriptVar(self, performance.VAR_BUFF_LIST);
+	obj_id target = utils.getObjIdScriptVar(self, performance.VAR_BUFF_TARGET);
+
+	utils.removeScriptVar(self, performance.VAR_BUFF_LIST);
+	utils.removeScriptVar(self, performance.VAR_BUFF_TARGET);
+	utils.removeScriptVar(self, performance.VAR_BUFF_SUI);
+
+	int btn = sui.getIntButtonPressed(params);
+
+	if(btn == sui.BP_CANCEL)
+		return SCRIPT_CONTINUE;
+
+	if(!isIdValid(target))
+		return SCRIPT_CONTINUE;
+
+	if(list == null || list.length == 0)
+		return SCRIPT_CONTINUE;
+
+	int idx = sui.getListboxSelectedRow(params);
+
+	if(idx < 0)
+		return SCRIPT_CONTINUE;
+
+	showFlyTextPrivate(target, target, new string_id("performance", list[idx]), 0.66f, colors.LIGHTPINK);
+	showFlyTextPrivate(target, self, new string_id("performance", list[idx]), 0.66f, colors.LIGHTPINK);
+
+	utils.setScriptVar(target, performance.VAR_BUFF_TYPE, list[idx]);
+
+	return SCRIPT_CONTINUE;
+}

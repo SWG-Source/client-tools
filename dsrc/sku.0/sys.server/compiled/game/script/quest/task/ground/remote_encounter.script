@@ -1,0 +1,585 @@
+// =====================================================================
+//
+// remote_encounter.script
+// copyright, Sony Online Entertainment
+//
+// =====================================================================
+
+include ai.ai_combat;
+include library.ai_lib;
+include library.create;
+include library.groundquests;
+include library.locations;
+include library.prose;
+include library.utils;
+
+// ---------------------------------------------------------------------
+
+inherits quest.task.ground.base_task;
+
+// ---------------------------------------------------------------------
+
+const String taskType = "remote_encounter";
+
+//-- name of the remote object to spawn
+const String dataTableColumnCreatureName = "CREATURE_NAME";
+
+//-- optional field to allow the scene choice to be fixed
+const String dataTableColumnEncounterSceneName = "ENCOUNTER_SCENE_NAME";
+
+//-- min/max difficulty to use to select random scene to spawn encounter
+const String dataTableColumnMinDifficulty = "MIN_DIFFICULTY";
+const String dataTableColumnMaxDifficulty = "MAX_DIFFICULTY";
+
+//-- whether or not the encounter should be in space
+const String dataTableColumnInSpace = "IN_SPACE";
+
+//-- duration in seconds of the encounter
+const String dataTableColumnEncounterDuration = "ENCOUNTER_DURATION";
+
+//-- whether or not to show the timer in the journal
+const String dataTableColumnVisible = "IS_VISIBLE";
+
+//-- system message with planet name (must have a %TO which will be replaced by the planet)
+const String dataTableColumnEncounterWhereMessage = "ENCOUNTER_WHERE_MESSAGE";
+
+//-- system message sent to player when the quest item is used
+const String dataTableColumnItemUsedSystemMessage = "ITEM_USED_SYSTEM_MESSAGE";
+
+//-- script validation
+const String dataTableColumnAttachScript = "ATTACH_SCRIPT";
+const String remoteEncounterScriptName = "quest.task.ground.remote_encounter";
+
+//-- variable and parameter name qualifiers
+const String MISSION_CRITICAL_ADD_OBJECTS = "addObjects";
+const String MISSION_CRITICAL_REMOVE_OBJECTS = "removeObjects";
+const String QUEST_CRC = "questCrc";
+const String TASK_ID = "taskId";
+const String REMOTE_OBJECT_ID = "remoteObjectId";
+
+//-- message handlers
+const String MESSAGE_SEND_QUEST_SYSTEM_MESSAGE = "messageSendQuestSystemMessage";
+const String MESSAGE_UPDATE_MISSION_CIRTICAL_OBJECTS = "messageUpdateMissionCriticalObjects";
+const String REMOTE_ENCOUNTER_CLEANUP = "remoteEncounterCleanup";
+const String REMOTE_ENCOUNTER_CREATURE_DIED = "remoteEncounterCreatureDied";
+const String REMOTE_ENCOUNTER_CREATURE_ESCAPED = "remoteEncounterCreatureEscaped";
+const String REMOTE_ENCOUNTER_ESCAPE = "remoteEncounterEscape";
+const String REMOTE_ENCOUNTER_FAILSAFE_TIMEOUT = "remoteEncounterFailsafeTimeout";
+const String REMOTE_ENCOUNTER_SIGNALED = "remoteEncounterSignaled";
+
+//-- scene difficulty data table for remote scene determination
+const String dataTableSceneDifficulty = "datatables/quest/ground/scene_difficulty.iff";
+
+//-- failsafe timer
+const int FAILSAFE_TIMEOUT = 5*60;
+
+//-- script for remote spawned creature
+const String REMOTE_ENCOUNTER_CREATURE_SCRIPT = "quest.task.ground.util.remote_encounter_creature";
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskActivated(int questCrc, int taskId)
+{
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskActivated", taskType + " task activated.");
+		
+	String baseObjVar = groundquests.setBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+
+	//-- request remote object objection
+	int requestId = remoteCreate();
+
+	setQuestCrcScriptVar(self, requestId, questCrc);
+	setTaskIdScriptVar(self, requestId, taskId);
+
+	dictionary params = new dictionary();
+	params.put(QUEST_CRC, questCrc);
+	params.put(TASK_ID, taskId);
+
+	int encounterDuration = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnEncounterDuration);
+
+	//-- failsafe timer to make sure the quest task fails
+	messageTo(self, REMOTE_ENCOUNTER_FAILSAFE_TIMEOUT, params, encounterDuration + FAILSAFE_TIMEOUT, false);
+
+	//-- only set a timer on the client for visible timers	
+	int isVisible = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnVisible);
+	if (isVisible != 0)
+	{
+		float playerPlayedTimeWhenTimerEnds = (float)getPlayerPlayedTime(self) + encounterDuration;
+		questSetQuestTaskTimer(self, questGetQuestName(questCrc), taskId, "quest/groundquests:timer_timertext",
+			(int)playerPlayedTimeWhenTimerEnds);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskCompleted(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCompleted", taskType + " task completed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskFailed(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskFailed", taskType + " task failed.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnTaskCleared(int questCrc, int taskId)
+{
+	cleanup(self, questCrc, taskId);
+	groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "OnTaskCleared", taskType + " task cleared.");
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnLogout()
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnDetach()
+{
+	removeObjVar(self, groundquests.getTaskTypeObjVar(self, taskType));
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+trigger OnInitialize()
+{
+	groundquests.failAllActiveTasksOfType(self, taskType);
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler remoteEncounterFailsafeTimeout()
+{
+	log("remoteEncounterFailsafeTimeout");
+
+	int questCrc = params.getInt(QUEST_CRC);
+	int taskId   = params.getInt(TASK_ID);
+
+	if (questIsTaskActive(questCrc, taskId, self))
+	{
+		logError("Failsafe timeout caused quest to fail!");
+		questFailTask(questCrc, taskId, self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler questItemUsed()
+{
+	log("questItemUsed");
+
+	int questCrc = params.getInt(QUEST_CRC);
+	int taskId   = params.getInt(TASK_ID);
+
+	//-- need to check that there is an active task and it is a remote encounter
+	//--   as future quest tasks can implement this message handler.
+	if (questIsTaskActive(questCrc, taskId, self) && isRemoteEncounter(questCrc, taskId))
+	{
+		groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "questItemUsed", "Quest item used. Sending message to remote object.");
+
+		//-- send a message to the remote object
+		messageToRemote(self, questCrc, taskId, REMOTE_ENCOUNTER_SIGNALED);
+
+		int isVisible = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnVisible);
+		if (isVisible != 0)
+		{
+			string itemUsedSystemMessage = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnItemUsedSystemMessage);
+			string_id itemUsedSystemMessageId = utils.unpackString(itemUsedSystemMessage);
+			sendQuestSystemMessage(self, itemUsedSystemMessageId);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ----------------------------------------------------------------------
+
+messageHandler createRemoteObjectResponse()
+{
+	int questCrc = params.getInt(QUEST_CRC);
+	int taskId   = params.getInt(TASK_ID);
+
+	if (questIsTaskActive(questCrc, taskId, self))
+	{
+		obj_id remoteObject = params.getObjId(REMOTE_OBJECT);
+
+		if (isValidId(remoteObject))
+		{
+			//-- store the object id
+			setRemoteObjectScriptVar(self, questCrc, taskId, remoteObject);
+
+			setRemoteObjectAsMissionCriticalToGroup(self, remoteObject);
+
+			String sceneName = params.getString(SCENE_NAME);
+			float x = params.getFloat(X);
+			float y = params.getFloat(Y);
+			float z = params.getFloat(Z);
+
+			//-- debugging
+			groundquests.questOutputDebugInfo(self, questCrc, taskId, taskType, "createRemoteObjectResponse",
+				"Remote Object created in " + sceneName + " at [" + x + "," + y + "," + z + "]");
+
+			sendEncounterWhereMessageToGroup(self, questCrc, taskId, sceneName);
+		}
+		else
+		{
+			//-- failed to create object, fail the task
+			questFailTask(questCrc, taskId, self);
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler remoteEncounterCreatureDied()
+{
+	int questCrc = params.getInt(QUEST_CRC);
+	int taskId   = params.getInt(TASK_ID);
+
+	if(questIsTaskActive(questCrc, taskId, self))
+	{
+		//-- you win!
+		questCompleteTask(questCrc, taskId, self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+messageHandler remoteEncounterCreatureEscaped()
+{
+	int questCrc = params.getInt(QUEST_CRC);
+	int taskId   = params.getInt(TASK_ID);
+
+	if(questIsTaskActive(questCrc, taskId, self))
+	{
+		//-- you failed!
+		questFailTask(questCrc, taskId, self);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+// ---------------------------------------------------------------------
+
+String getQuestCrcVarName(int id)
+{
+	return taskType + "." + QUEST_CRC + "." + id;
+}
+
+// ---------------------------------------------------------------------
+
+String getTaskIdVarName(int id)
+{
+	return taskType + "." + TASK_ID + "." + id;
+}
+
+// ---------------------------------------------------------------------
+
+String getRemoteObjectVarName(int questCrc, int taskId)
+{
+	return taskType + "." + REMOTE_OBJECT_ID + "." + questCrc + "." + taskId;
+}
+
+// ---------------------------------------------------------------------
+
+int getQuestCrcScriptVar(obj_id self, int id)
+{
+	return utils.getIntScriptVar(self, getQuestCrcVarName(id));
+}
+
+// ---------------------------------------------------------------------
+
+int getTaskIdScriptVar(obj_id self, int id)
+{
+	return utils.getIntScriptVar(self, getTaskIdVarName(id));
+}
+
+// ---------------------------------------------------------------------
+
+obj_id getRemoteObjectScriptVar(obj_id self, int questCrc, int taskId)
+{
+	return utils.getObjIdScriptVar(self, getRemoteObjectVarName(questCrc, taskId));
+}
+
+// ---------------------------------------------------------------------
+
+void setQuestCrcScriptVar(obj_id self, int id, int questCrc)
+{
+	utils.setScriptVar(self, getQuestCrcVarName(id), questCrc);
+}
+
+// ---------------------------------------------------------------------
+
+void setTaskIdScriptVar(obj_id self, int id, int taskId)
+{
+	utils.setScriptVar(self, getTaskIdVarName(id), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+void setRemoteObjectScriptVar(obj_id self, int questCrc, int taskId, obj_id objectId)
+{
+	utils.setScriptVar(self, getRemoteObjectVarName(questCrc, taskId), objectId);
+}
+
+// ---------------------------------------------------------------------
+
+boolean hasValidScriptVars(obj_id self, int id)
+{
+	return 	utils.hasScriptVar(self, getQuestCrcVarName(id)) &&
+		utils.hasScriptVar(self, getTaskIdVarName(id));
+}
+
+// ---------------------------------------------------------------------
+
+void cleanup(obj_id self, int questCrc, int taskId)
+{
+	//-- clean up the remote object
+	messageToRemote(self, questCrc, taskId, REMOTE_ENCOUNTER_CLEANUP);
+
+	//-- update mission critical objects
+	obj_id remoteObject = getRemoteObjectScriptVar(self, questCrc, taskId);
+	if (isValidId(remoteObject))
+		removeRemoteObjectFromMissionCriticalToGroup(self, remoteObject);
+
+	utils.removeScriptVar(self, getRemoteObjectVarName(questCrc, taskId));
+
+	groundquests.clearBaseObjVar(self, taskType, questGetQuestName(questCrc), taskId);
+}
+
+// ---------------------------------------------------------------------
+
+void messageToRemote(obj_id self, int questCrc, int taskId, string message)
+{
+	obj_id remoteObject = getRemoteObjectScriptVar(self, questCrc, taskId);
+
+	if (isValidId(remoteObject))
+	{
+		messageTo(remoteObject, message, null, 0, false);
+	}
+}
+
+// ---------------------------------------------------------------------
+
+dictionary getRemoteCreateParams(obj_id self, int requestId)
+{
+	dictionary createParams = new dictionary();
+
+	int questCrc = getQuestCrcScriptVar(self, requestId);
+	int taskId = getTaskIdScriptVar(self, requestId);
+
+	String creatureName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnCreatureName);
+
+	createParams.put(REQUESTER, self);
+	createParams.put(OBJECT_NAME, creatureName);
+	createParams.put(USE_RANDOM_LOCATION, true);
+	createParams.put(ATTACH_SCRIPTS, REMOTE_ENCOUNTER_CREATURE_SCRIPT);
+
+	//-- add quest/task data that will be echoed back in subsequent messages
+	createParams.put(QUEST_CRC, questCrc);
+	createParams.put(TASK_ID, taskId);
+
+	return createParams;
+}
+
+// ---------------------------------------------------------------------
+
+void removeRemoteCreateScriptVars(obj_id self, int requestId)
+{
+	super.removeRemoteCreateScriptVars(self, requestId);
+
+	utils.removeScriptVar(self, getQuestCrcVarName(requestId));
+	utils.removeScriptVar(self, getTaskIdVarName(requestId));
+}
+
+// ---------------------------------------------------------------------
+
+boolean hasValidCreateScriptVars(obj_id self, int requestId)
+{
+	int questCrc = getQuestCrcScriptVar(self, requestId);
+	int taskId = getTaskIdScriptVar(self, requestId);
+
+	if (!questIsTaskActive(questCrc, taskId, self))
+		return false;
+
+	return hasValidScriptVars(self, requestId);
+}
+
+// ---------------------------------------------------------------------
+
+obj_id getRemoteObjectCreator(obj_id self, int requestId, String[] elementNameList, dictionary[] dictionaryList)
+{
+	int questCrc = getQuestCrcScriptVar(self, requestId);
+	int taskId = getTaskIdScriptVar(self, requestId);
+
+	int minDifficulty = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMinDifficulty);
+	int maxDifficulty = groundquests.getTaskIntDataEntry(questCrc, taskId, dataTableColumnMaxDifficulty);
+	boolean inSpace = groundquests.getTaskBoolDataEntry(questCrc, taskId, dataTableColumnInSpace, true);
+
+	//-- first check if a specific scene is requested, and if it's avaliable use it
+	String encounterSceneName = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnEncounterSceneName);
+
+	if (encounterSceneName != null && encounterSceneName.length() > 0)
+	{
+		for (int i=0; i<elementNameList.length; ++i)
+		{
+			if (encounterSceneName.equals(elementNameList[i]))
+			{
+				log("getRemoteObjectCreator - using specific scene: " + encounterSceneName);
+				return dictionaryList[i].getObjId(CREATOR);
+			}
+		}
+	}
+
+	//-- given a list of all the registered remote creators, pick one based on the requirements of the quest
+	resizeable obj_id[] remoteCreatorsSpace = new obj_id[0];
+	resizeable obj_id[] remoteCreatorsSpaceDifficulty = new obj_id[0];
+
+	for (int i=0; i<dictionaryList.length; ++i)
+	{
+		obj_id creator = dictionaryList[i].getObjId(CREATOR);
+		boolean creatorInSpace = dictionaryList[i].getBoolean(IN_SPACE);
+		int difficultyRow = dataTableSearchColumnForString(elementNameList[i], "SCENE_NAME", dataTableSceneDifficulty);
+		int difficulty = dataTableGetInt(dataTableSceneDifficulty, difficultyRow, "DIFFICULTY");
+
+		if (creatorInSpace == inSpace)
+		{
+			//-- add ids that meet the space or not space requirement
+			remoteCreatorsSpace = utils.addElement(remoteCreatorsSpace, creator);
+
+			if (difficulty >= minDifficulty && difficulty <= maxDifficulty)
+			{
+				//-- add ids that meet the space and difficulty requirement
+				remoteCreatorsSpaceDifficulty = utils.addElement(remoteCreatorsSpaceDifficulty, creator);
+			}
+		}
+	}
+
+	//-- try to find a creator that meets both requirements
+	int size = remoteCreatorsSpaceDifficulty.size();
+	if (size > 0)
+	{
+		return remoteCreatorsSpaceDifficulty[rand(0, size-1)];
+	}
+
+	//-- fallback to just the space requirement
+	size = remoteCreatorsSpace.size();
+	if (size > 0)
+	{
+		return remoteCreatorsSpace[rand(0, size-1)];
+	}
+
+	//-- big trouble
+	logError("Failed to find remote creator!");
+	questFailTask(questCrc, taskId, self);
+
+	return null;
+}
+
+// ---------------------------------------------------------------------
+
+void setRemoteObjectAsMissionCriticalToGroup(obj_id self, obj_id remoteObject)
+{
+	dictionary params = new dictionary();
+	obj_id[] addObjects = new obj_id[1];
+
+	addObjects[0] = remoteObject;
+	params.put(MISSION_CRITICAL_ADD_OBJECTS, addObjects);
+
+	sendMessageToGroup(self, params, MESSAGE_UPDATE_MISSION_CIRTICAL_OBJECTS);
+}
+
+// ---------------------------------------------------------------------
+
+void removeRemoteObjectFromMissionCriticalToGroup(obj_id self, obj_id remoteObject)
+{
+	dictionary params = new dictionary();
+	obj_id[] removeObjects = new obj_id[1];
+
+	removeObjects[0] = remoteObject;
+	params.put(MISSION_CRITICAL_REMOVE_OBJECTS, removeObjects);
+
+	sendMessageToGroup(self, params, MESSAGE_UPDATE_MISSION_CIRTICAL_OBJECTS);
+}
+
+// ---------------------------------------------------------------------
+
+void sendEncounterWhereMessageToGroup(obj_id self, int questCrc, int taskId, String sceneName)
+{
+	String encounterWhereMessage = groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnEncounterWhereMessage);
+
+	string_id encounterWhereMessageId = utils.unpackString(encounterWhereMessage);
+	string_id planetId = new string_id("planet_n", sceneName);
+
+	dictionary params = new dictionary();
+	params.put("sid", encounterWhereMessageId);
+	params.put("to", planetId);
+
+	sendMessageToGroup(self, params, MESSAGE_SEND_QUEST_SYSTEM_MESSAGE);
+}
+
+// ---------------------------------------------------------------------
+
+void sendMessageToGroup(obj_id self, dictionary params, String message)
+{
+	obj_id groupObj = getGroupObject(self);
+
+	if (isIdValid(groupObj))
+	{
+		obj_id[] groupMembers = getGroupMemberIds(groupObj);
+		int numGroupMembers = groupMembers.length;
+
+		for (int i = 0; i < numGroupMembers; i++)
+		{
+			obj_id groupMember = groupMembers[i];
+			if (isIdValid(groupMember))
+			{
+				messageTo(groupMember, message, params, 0, false);
+			}
+		}
+	}
+	else
+	{
+		messageTo(self, message, params, 0, false);
+	}
+}
+
+// ---------------------------------------------------------------------
+
+boolean isRemoteEncounter(int questCrc, int taskId)
+{
+	//-- TODO: Find a better way to check the quest task type.
+	return groundquests.getTaskStringDataEntry(questCrc, taskId, dataTableColumnAttachScript).equals(remoteEncounterScriptName);
+}
+
+// =====================================================================

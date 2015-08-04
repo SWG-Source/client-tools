@@ -1,0 +1,310 @@
+include library.loot;
+include library.utils;
+include library.sui;
+include library.static_item;
+include library.structure;
+
+const boolean BLOGGING_ON			= false;
+const string BLOGGING_CATEGORY			= "auto_stack";
+
+trigger OnAttach()
+{
+	//restackIt( self );
+	messageTo(self, "msgStackItem", null, 1, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTransferred(obj_id sourceContainer, obj_id destContainer, obj_id transferer)
+{
+	// Don't call "restack" if we're being moved from a top level cell object into the top level player
+	// inventory, so that the item decorative position/orientation can be restored if that is what the
+	// player is picking up the item for; if the player still want to stack the item, he can do it manually
+	if (isIdValid(sourceContainer) && isIdValid(destContainer))
+	{
+		string templateNameSourceContainer = getTemplateName(sourceContainer);
+		string templateNameDestContainer = getTemplateName(destContainer);
+		if ((templateNameSourceContainer != null) && (templateNameDestContainer != null) && templateNameSourceContainer.equals(structure.TEMPLATE_CELL) && templateNameDestContainer.equals("object/tangible/inventory/character_inventory.iff"))
+			return SCRIPT_CONTINUE;
+	}
+
+	// Don't call "restack" if we're in a factory crate. This causes wierdness.
+	if ( getGameObjectType(destContainer) != GOT_misc_factory_crate )
+	{
+		blog("Sending Stack messageTo msgStackItem");
+		messageTo(self, "msgStackItem", null, 1, false);
+		//restackIt( self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+	if (!canRestack(self))
+	{
+		return SCRIPT_CONTINUE;
+	}
+
+	if (getCount(self) > 1 )
+	{
+		mi.addRootMenu (menu_info_types.SERVER_MENU49, new string_id("autostack","unstack"));
+		menu_info_data mid = mi.getMenuItemByType(menu_info_types.SERVER_MENU49);
+		if(mid == null)
+			return SCRIPT_CONTINUE;
+		else
+			mid.setServerNotify(true);
+	}
+
+	mi.addRootMenu (menu_info_types.SERVER_MENU50, new string_id("autostack","stack"));
+	menu_info_data mid = mi.getMenuItemByType(menu_info_types.SERVER_MENU50);
+	if(mid == null)
+		 return SCRIPT_CONTINUE;
+	else
+		mid.setServerNotify(true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(!canRestack(self))
+		return SCRIPT_CONTINUE;
+	
+	//the unstack it:
+	if (getCount(self) > 1 )
+	{
+		if(item == menu_info_types.SERVER_MENU49)
+		{
+			unstackIt(self, player);
+		}
+	}
+
+	if(item == menu_info_types.SERVER_MENU50)
+	{
+		utils.removeScriptVar( player, "autostack.ignoreitems");
+		restackIt( self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+            int free = getFirstFreeIndex(names);
+            if (free == -1)
+            {
+            	return SCRIPT_CONTINUE;
+            }
+            int numInStack = getCount(self);             
+            names[free] = "num_in_stack"; // data\sku.0\sys.shared\built\game\string\en\obj_attr_n.stf
+            attribs[free] = "" + numInStack;
+            return SCRIPT_CONTINUE;
+}
+
+
+boolean canRestack(obj_id self)
+{
+	blog("canRestack init");	
+	if(isInSecureTrade(self))
+	{
+		blog("isInSecureTrade");
+		return false;//Do not restack in a secure trade.
+	}
+
+	obj_id containerObject = utils.getContainingPlayer(self);
+	if(!isIdValid(containerObject))
+	{
+		if(!isContainerValidForStacking(self))
+			return false;
+
+		blog("containerObject is okay to use");			
+		containerObject = getContainedBy(self);
+	}
+	
+
+	blog("containerObject is valid");			
+	return true;//we're golden!
+}
+
+void restackIt(obj_id self)
+{
+	blog("restackIt init");
+
+	if(!isIdValid(self) || !exists(self))
+		return;
+	
+	blog("restackIt validation complete");
+	
+	if(isInSecureTrade(self)) //Do not restack in a secure trade.
+		return;
+
+	blog("restackIt - not isInSecureTrade");
+
+	obj_id containerObject = utils.getContainingPlayer(self);
+	if(!isIdValid(containerObject))
+	{
+		blog("restackIt - not a player container");
+		if(!isContainerValidForStacking(self))
+			return;
+		
+		blog("restackIt - containerObject = getContainedBy");
+		containerObject = getContainedBy(self);
+	}
+	
+	blog("restackIt - containerObject = valid");
+	if(utils.hasScriptVar(containerObject, "autostack.ignoreitems"))
+		return;
+	obj_id item = loot.findItemToStack(self);
+
+	if(isIdValid(item) && !isInSecureTrade(item))
+	{
+		if(utils.hasScriptVar(self, "unstacking") || utils.hasScriptVar(item, "unstacking"))
+			return;
+
+		if(item!=self)
+		{
+			loot.stackItem(self, item);
+			if (!hasScript(item, "object.autostack"))
+				attachScript(item, "object.autostack");
+		}
+	}
+}
+
+void unstackIt( obj_id self, obj_id player )
+{
+	if (!isInSecureTrade(self)) //Do not restack in a secure trade.
+	{
+		if ( getCount( self ) == 2 )
+		{
+			createNewStack( player, self, 1, 2);
+			utils.setScriptVar(self, "unstacking", 1);
+			messageTo(self, "clearUnstackingScriptVar", null, 3, false);
+			
+		}
+		else
+		{
+			sui.inputbox(self, player, "@autostack:stacksize", "msgUnstackItem");
+		}
+	}
+}
+
+messageHandler msgStackItem()
+{
+	blog("msgStackItem init");
+	restackIt( self );
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler clearUnstackingScriptVar()
+{
+	utils.removeScriptVar(self, "unstacking");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler msgUnstackItem()
+{
+	obj_id player = sui.getPlayerId(params);
+	if(!canRestack(self))
+		return SCRIPT_CONTINUE;
+
+	string amount_str = sui.getInputBoxText(params);
+	if ( amount_str == null || amount_str == "" )
+	{
+		//sendSystemMessage( player, new string_id( "autostack", "invalid" ));
+		return SCRIPT_CONTINUE;
+	}
+
+	int oldStackSize = getCount( self );
+	int newStackSize = utils.stringToInt(amount_str);//will return a -1
+	if ( newStackSize == 0 )
+	{
+		sendSystemMessage( player, new string_id( "autostack", "zero_size" ));
+		return SCRIPT_CONTINUE;
+	}
+	else if ( newStackSize < 0 )
+	{
+		sendSystemMessage( player, new string_id( "autostack", "number_format_wrong" ));
+		return SCRIPT_CONTINUE;
+	}
+	else if ( newStackSize > oldStackSize )
+	{
+		sendSystemMessage( player, new string_id( "autostack", "too_big" ));
+		return SCRIPT_CONTINUE;
+	}
+	else if ( newStackSize == oldStackSize )
+	{
+		return SCRIPT_CONTINUE;//if they're the same size then we're done.
+	}
+
+	createNewStack( player, self, newStackSize, oldStackSize );
+	utils.setScriptVar(self, "unstacking", 1);
+	messageTo(self, "clearUnstackingScriptVar", null, 3, false);
+
+	return SCRIPT_CONTINUE;
+}
+
+void createNewStack( obj_id player, obj_id item, int newStackSize, int oldStackSize )
+{
+	obj_id container = getContainedBy(item);
+	if (!isIdValid(container))
+	{
+		sendSystemMessage( player, new string_id( "autostack", "bad_container" ));
+		return ;
+	}
+
+	if (getVolumeFree(container) <= 0)
+	{
+		sendSystemMessage( player, new string_id( "autostack", "full_container" ));
+		return;
+	}
+
+	utils.setScriptVar( player, "autostack.ignoreitems", true );
+	
+	obj_id newItem = null;
+	
+	if(static_item.isStaticItem (item))
+		newItem = static_item.createNewItemFunction( getStaticItemName(item), container);
+	else
+		newItem = createObject( item, container, "" );
+		
+	if ( !isIdValid( newItem ) )
+	{
+		sendSystemMessage( player, new string_id( "autostack", "unknown_failure" ));
+		utils.removeScriptVar( player, "autostack.ignoreitems");
+		return;
+	}
+	setCount( item, (oldStackSize - newStackSize) );
+	setCount( newItem, newStackSize );
+	utils.removeScriptVar( player, "autostack.ignoreitems");
+}
+
+boolean isContainerValidForStacking(obj_id self)
+{
+	if(!isValidId(self) || !exists(self))
+		return false;
+	
+	string containerTemplate = getTemplateName(getContainedBy(self));
+	blog("isContainerValidForStacking containerTemplate: "+containerTemplate);			
+
+	if(isGameObjectTypeOf(getContainedBy(self), GOT_misc_container_wearable))//backpack or other player wearable is ok.
+		return true;
+	else if(isGameObjectTypeOf(getContainedBy(self), GOT_misc_container))//furniture is cool, other specialty containers = bad
+	{
+		if(containerTemplate.startsWith("object/tangible/furniture/") || containerTemplate.startsWith("object/tangible/poi/object/"))
+			return true;//Furniture and poi objects are cool	
+		//all else isn't.
+		return false;
+	}
+	return false;
+}
+
+boolean blog(string msg)
+{	
+	if(!BLOGGING_ON)
+		return false;	
+	else if(msg == null || msg.equals(""))
+		return false;
+
+	LOG(BLOGGING_CATEGORY, msg);
+
+	return true;
+}

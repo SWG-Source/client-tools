@@ -1,0 +1,948 @@
+/**********************************************************************
+ * Copyright (c)2008 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        sarlacc_mini_game.script
+ * Description:  Handles the functionality for the minigame
+ * @author       Jeff Haskell
+ * @version      120391239843713
+ **********************************************************************/
+
+// ********************************************************************
+//					INCLUDES
+// ********************************************************************
+include java.util.HashSet;
+include library.collection;
+include library.house_pet;
+include library.smuggler;
+include library.static_item;
+include library.sui;
+include library.utils;
+
+// ********************************************************************
+//					LOGGING
+// ********************************************************************
+const boolean BLOGGING_ON 				= true;
+const string BLOG_CATEGORY				= "sarlacc";
+
+// ********************************************************************
+//					CONST
+// ********************************************************************
+const string_id SID_MENU_FEED				= new string_id("sarlacc_minigame", "mnu_feed");
+const string_id SID_MENU_REWARD				= new string_id("sarlacc_minigame", "mnu_reward");
+const string_id SID_SIFT_SARLACC_BOX			= new string_id("sarlacc_minigame", "must_sift_sarlacc_box");
+const string_id SID_SARLACC_FED				= new string_id("sarlacc_minigame", "sarlacc_fed");
+const string_id SID_FOUND_REWARD			= new string_id("sarlacc_minigame", "sifted_reward");
+const string_id SID_SARLACC_NOTHING_FOUND		= new string_id("sarlacc_minigame", "no_junk_inventory");
+
+const string FEED_TITLE					= "@sarlacc_minigame:edible_title";
+const string FEED_PROMPT				= "@sarlacc_minigame:edible_prompt";
+const string BTN_SELL					= "@sarlacc_minigame:btn_feed";
+
+const string SOUND_BURP					= "sound/sarlacc_burp.snd";
+const string SOUND_EAT					= "sound/sarlacc_eating.snd";
+const string SOUND_SIFT					= "sound/sarlacc_drawer_open.snd";
+const string SOUND_CUTE					= "sound/sarlacc_cute.snd";
+const string SOUND_BREATHING				= "sound/sarlacc_breathing.snd";
+
+const string ANIMATON_GROWL				= "vocalize";
+const string ANIMATON_FEED				= "eat";
+
+// ********************************************************************
+//					TRIGGERS
+// ********************************************************************
+
+trigger OnDestroy()
+{
+	house_pet.stopPlayingMusic(self);
+ 	return SCRIPT_CONTINUE;
+}
+
+trigger OnAttach()
+{
+	messageTo(self, "checkTriggerVolume", null, 2, false);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuRequest(obj_id player, menu_info mi)
+{
+
+	if(utils.isNestedWithin(self, player))
+	{
+		house_pet.cleanUpHousePet(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if(!hasObjVar(self, house_pet.PARENT_OBJ_ID))
+	{
+		house_pet.cleanUpHousePet(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id controller = getObjIdObjVar(self, house_pet.PARENT_OBJ_ID);
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		house_pet.cleanUpHousePet(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	messageTo(self, "checkCurrentBaseLocation", null, 0, false);
+
+	if(player != getOwner(controller))
+		return SCRIPT_CONTINUE;
+
+	//dont show sifting unless reward available.
+	if(hasObjVar(controller, house_pet.SARLACC_REWARD_AVAILABLE))
+	{
+		mi.addRootMenu(menu_info_types.SERVER_MENU2, SID_MENU_REWARD);
+		return SCRIPT_CONTINUE;
+	}
+	//don't show menu until hungry and only if no sifting
+	else if(getIntObjVar(controller, house_pet.SARLACC_CURRENT_PHASE) >= house_pet.SARLACC_HUNGRY)
+	{
+		mi.addRootMenu(menu_info_types.SERVER_MENU1, SID_MENU_FEED);
+		return SCRIPT_CONTINUE;		
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnObjectMenuSelect(obj_id player, int item)
+{
+	if(utils.isNestedWithin(self, player))
+		return SCRIPT_CONTINUE;
+
+	obj_id controller = getObjIdObjVar(self, house_pet.PARENT_OBJ_ID);
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		house_pet.cleanUpHousePet(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(player != getOwner(controller))
+		return SCRIPT_CONTINUE;
+	
+	if(item == menu_info_types.SERVER_MENU1)
+	{
+		if(getIntObjVar(controller, house_pet.SARLACC_CURRENT_PHASE) < house_pet.SARLACC_HUNGRY)
+			return SCRIPT_CONTINUE;
+		
+		//gets the player's inventory and 
+		//grabs list of junk items
+		getEdibleContents(player, controller, self);
+	}
+	else if(item == menu_info_types.SERVER_MENU2)
+	{
+		//does all the random functionality 
+		//to get the collectible
+		getPlayerReward(player, controller);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+//@TODO: show list of previously fed items.
+//The attribs are used to give players the clues needed
+//to find patterns between food and rewards
+trigger OnGetAttributes(obj_id player, string[] names, string[] attribs)
+{
+	obj_id controller = getObjIdObjVar(self, house_pet.PARENT_OBJ_ID);
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		house_pet.cleanUpHousePet(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	int idx = utils.getValidAttributeIndex(names);
+	if (idx == -1)
+		return SCRIPT_CONTINUE;
+	
+	if(hasObjVar(controller, house_pet.SARLACC_CURRENT_PHASE))
+	{
+		int currentStatus = getIntObjVar(controller, house_pet.SARLACC_CURRENT_PHASE);
+		if(currentStatus < house_pet.SARLACC_FED || currentStatus > house_pet.SARLACC_DEATH) // THE INT CAN BE ZERO BY DESIGN
+		{
+			blog("getSarlaccCollectionColumn currentStatus : "+currentStatus);		
+			return SCRIPT_CONTINUE;
+		}
+		
+		//Phase Status	
+		names[idx] = "status";
+		attribs[idx] = "@obj_attr_n:" + house_pet.SARLACC_PHASES[currentStatus];
+		idx++;
+	
+		if(hasObjVar(controller, house_pet.SARLACC_LAST_FED))
+		{
+			int lastFed = getIntObjVar(controller, house_pet.SARLACC_LAST_FED);
+			if(lastFed < 0) // THE INT CAN BE ZERO BY DESIGN
+				return SCRIPT_CONTINUE;
+
+			//Last Fed	
+			names[idx] = "last_fed";
+			attribs[idx] = getCalendarTimeStringLocal(lastFed);
+			idx++;
+			
+			if(isGod(player))
+			{
+				//Next Feed	
+				names[idx] = "next_feed";
+				if(currentStatus == 0)
+					attribs[idx] = getCalendarTimeStringLocal(lastFed + house_pet.getUpdateWeekly(controller));
+				else if(currentStatus == 1)
+					attribs[idx] = "Now";
+				else
+					attribs[idx] = "Hopefully Soon";
+
+				idx++;
+
+				//Time Now	
+				names[idx] = "time_now";
+				attribs[idx] = getCalendarTimeStringLocal(getGameTime());
+				idx++;
+			}
+		}
+		else
+		{
+			//Last Fed	
+			names[idx] = "last_fed";
+			attribs[idx] = "Never";
+			idx++;
+
+			//Next Feed	
+			names[idx] = "next_feed";
+			attribs[idx] = "Hopefully Soon";
+			idx++;		
+		}
+	}
+	
+	if(hasObjVar(controller, house_pet.SARLACC_BORN))
+	{
+		int birthDay = getIntObjVar(controller, house_pet.SARLACC_BORN);
+		if(birthDay <= 0)
+			return SCRIPT_CONTINUE;
+	
+		//Phase Status	
+		names[idx] = "born";
+		attribs[idx] = getCalendarTimeStringLocal(birthDay);
+		idx++;
+	}
+
+	if(isValidId(getOwner(controller)))
+	{
+		obj_id owner = getOwner(controller);
+	
+		//Phase Status	
+		names[idx] = "owner";
+		attribs[idx] = getPlayerFullName(owner);
+		idx++;
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeEntered(string volumeName, obj_id breacher)
+{
+	if(!isValidId(self) || !exists(self)) //manages deletions
+		return SCRIPT_CONTINUE;	
+		
+	if(!isIdValid(breacher) || !isPlayer(breacher))
+		return SCRIPT_CONTINUE;
+
+	if(utils.hasScriptVar(breacher, "breathe"))
+		if(utils.getObjIdScriptVar(breacher, "breathe") == self)
+			return SCRIPT_CONTINUE;
+	
+	utils.setScriptVar(breacher, "breathe", self);
+	
+	obj_id controller = getObjIdObjVar(self, house_pet.PARENT_OBJ_ID);
+	if(!isIdValid(controller) || !exists(controller))
+	{
+		house_pet.cleanUpHousePet(self);
+		return SCRIPT_CONTINUE;
+	}
+
+	if(breacher == getOwner(controller))
+	{
+		dictionary params = new dictionary();
+		params.put("player", breacher);
+		messageTo(self, "playCute", params, 0, false);
+	}
+	
+	messageTo(self, "breathing", null, 0, false);
+	playClientEffectObj(breacher, SOUND_BREATHING, self, "", new transform(), house_pet.PET_SOUND_LABEL);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnTriggerVolumeExited(string volumeName, obj_id breacher)
+{
+	if(!isValidId(self) || !exists(self)) //manages deletions
+		return SCRIPT_CONTINUE;	
+		
+	if(!isIdValid(breacher) || !isPlayer(breacher))
+		return SCRIPT_CONTINUE;
+	stopClientEffectObjByLabel(breacher, self, house_pet.PET_SOUND_LABEL);
+	
+	return SCRIPT_CONTINUE;
+}
+
+// ********************************************************************
+//					HANDLERS
+// ********************************************************************
+
+//Figure out what to do when the player responds to the sui
+//list of junk/collectibles in their inventory. 
+messageHandler handleSarlaccEatSui()
+{
+	if(!isValidId(self) || !exists(self)) //manages deletions
+		return SCRIPT_CONTINUE;	
+		
+	blog("handleSarlaccEatSui - Init");
+
+	// Get the obj id of the player that hit a button
+	obj_id player = sui.getPlayerId(params);
+	// If the player is not valid, quit out
+	if(!isIdValid(player))
+		return SCRIPT_CONTINUE;
+
+	// Get the row of the list box that was highlighted, and get the button that was pushed
+	int idx = sui.getListboxSelectedRow(params);
+	int bp = sui.getIntButtonPressed(params);
+	if(idx < 0)
+	{
+		cleanupSui(player);
+		return SCRIPT_CONTINUE;
+	}
+
+	// If the button pressed was "CANCEL"
+	if(bp == sui.BP_CANCEL)
+	{
+		cleanupSui(player);
+		return SCRIPT_CONTINUE;
+	}
+	// The only other button left is "OK" or our 'sell' button
+	else
+	{
+		// Get the list of edibles off of the player
+		obj_id[] junkFood = utils.getObjIdBatchScriptVar(player, house_pet.EDIBLES_IDS);
+		// If the list of relics is empty, quit out
+		if((junkFood == null) || (junkFood.length == 0))
+		{
+			cleanupSui(player);
+			return SCRIPT_CONTINUE;
+		}
+
+		// If our arithmetic is off, quit out
+		if(idx > junkFood.length - 1)
+		{
+			cleanupSui(player);
+			return SCRIPT_CONTINUE;
+		}
+
+		// Go through the sell item procedure
+		if(!eatJunkItem(self, player, junkFood[idx]))
+		{
+			CustomerServiceLog("sarlacc_minigame: ", 
+			"Player (" + getPlayerName(player) + " OID: " + player + ") FAILED TO FEED sarlacc: "
+			+self+" item (" + getName(junkFood[idx]) + " OID: " + junkFood[idx] + ").");
+		}
+	}
+	cleanupSui(player);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler playBurp()
+{
+	if(!isValidId(self) || !exists(self)) //manages deletions
+		return SCRIPT_CONTINUE;	
+		
+	if(params == null || params.equals(""))
+		return SCRIPT_CONTINUE;	
+
+	obj_id player = sui.getPlayerId(params);
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;	
+		
+	//-------------------------------
+	//Play sound
+	//-------------------------------
+	play2dNonLoopingSound(player, SOUND_BURP);
+	//-------------------------------
+	//Play animation
+	//-------------------------------	
+	doAnimationAction(self, ANIMATON_GROWL);
+	return SCRIPT_CONTINUE;			
+}
+
+messageHandler playCute()
+{
+	if(!isValidId(self) || !exists(self)) //manages deletions
+		return SCRIPT_CONTINUE;	
+		
+	if(params == null || params.equals(""))
+		return SCRIPT_CONTINUE;	
+
+	obj_id player = params.getObjId("player");
+	if(!isValidId(player) || !exists(player))
+		return SCRIPT_CONTINUE;	
+		
+	//-------------------------------
+	//Play sound
+	//-------------------------------
+	play2dNonLoopingSound(player, SOUND_CUTE);
+	//-------------------------------
+	//Play animation
+	//-------------------------------	
+	doAnimationAction(self, ANIMATON_GROWL);
+	return SCRIPT_CONTINUE;			
+}
+
+messageHandler checkTriggerVolume()
+{
+	if(!isValidId(self) || !exists(self)) //manages deletions
+		return SCRIPT_CONTINUE;	
+		
+	if(!hasTriggerVolume(self, house_pet.PET_TRIG_VOLUME))
+	{
+		float range = 2f;
+		createTriggerVolume(house_pet.PET_TRIG_VOLUME, range, true); 
+		setObjVar(self, house_pet.MUSIC_RANGE, range);
+	}
+
+	return SCRIPT_CONTINUE;			
+}
+
+
+//----------------------------updateSarlaccPet()----------------------------
+//
+//We need to check how many days/weeks since the last time the 
+//player initialized/fed the sarlacc. If the feeding phase has changed
+//we need to update the current feeding phase. If the phase has 
+//not changed, we should bail out. If the feeding phase has completed
+//a complete cycle, we need to set the reward.
+//
+//--------------------------------------------------------------------------
+
+messageHandler updateSarlaccPet()
+{
+	if(!isValidId(self) || !exists(self)) //manages deletions
+		return SCRIPT_CONTINUE;	
+		
+	obj_id controller = getObjIdObjVar(self, house_pet.PARENT_OBJ_ID);
+	if(!isIdValid(controller) || !exists(controller))
+		return SCRIPT_CONTINUE;
+	blog("updateSarlaccPet - RECEIVED MESSAGE TO - Current phase: "+getIntObjVar(controller, house_pet.SARLACC_CURRENT_PHASE)+" time: "+getGameTime());
+
+	if(!house_pet.validateNpcPlacementInStructure(self))
+	{
+		house_pet.cleanUpHousePet(controller, self);
+		return SCRIPT_CONTINUE;
+	}
+	if(!hasObjVar(controller, house_pet.SARLACC_CURRENT_PHASE))
+	{
+		blog("updateSarlaccPet - no phase for sarlacc");
+		return SCRIPT_CONTINUE;
+	}
+	if(!hasObjVar(controller, house_pet.SARLACC_FEEDING_ITERATION))
+	{
+		blog("updateSarlaccPet - no feeding iteration for sarlacc");
+		return SCRIPT_CONTINUE;
+	}
+	
+	blog("updateSarlaccPet - Is in structure");
+
+	int currentGameTime = getGameTime();
+	int updateWeek = house_pet.getUpdateWeekly(controller);
+	int updateDay = house_pet.getUpdateDaily(controller);
+	
+	int lastFed = getIntObjVar(controller, house_pet.SARLACC_LAST_FED);
+
+	blog("updateSarlaccPet - lastFed: "+lastFed);
+	if(currentGameTime < (lastFed + updateWeek))
+	{
+		blog("updateSarlaccPet - Last Fed Timer: "+(lastFed + updateWeek)+" currentGameTime: "+currentGameTime);
+	
+		if(hasMessageTo(self, "updateSarlaccPet"))
+			return SCRIPT_CONTINUE;
+
+		int later = ((lastFed + updateWeek) - currentGameTime);
+		blog("updateSarlaccPet - messageTo in : "+later);
+		if(later > 1)
+		{
+			blog("updateSarlaccPet - TOO SOOOOON messageTo in : "+later);		
+			messageTo(self, "updateSarlaccPet", null, later, false);
+		}
+		else
+		{
+			blog("updateSarlaccPet - WRONG messageTo, Resending in : "+updateDay);		
+			messageTo(self, "updateSarlaccPet", null, updateDay, false);
+		}	
+		return SCRIPT_CONTINUE;
+	}
+
+	//another messageTo is on it's way, drop this one
+	if(hasMessageTo(self, "updateSarlaccPet"))
+		return SCRIPT_CONTINUE;
+
+	blog("updateSarlaccPet - Is in structure");
+	
+	int currentIteration = getIntObjVar(controller, house_pet.SARLACC_FEEDING_ITERATION);
+	int currentPhase = getIntObjVar(controller, house_pet.SARLACC_CURRENT_PHASE);
+
+	if(currentPhase < house_pet.SARLACC_FED)
+	{
+		blog("updateSarlaccPet - currentPhase WAS -1");
+		currentPhase = house_pet.SARLACC_FED;
+	}
+	
+	currentPhase++;
+	
+	if(currentPhase >= house_pet.SARLACC_DEATH)
+		setObjVar(controller, house_pet.SARLACC_CURRENT_PHASE, house_pet.SARLACC_DEATH);
+	else
+		setObjVar(controller, house_pet.SARLACC_CURRENT_PHASE, currentPhase);
+
+	if(currentPhase == house_pet.SARLACC_DEATH)
+	{
+		blog("updateSarlaccPet - SARLACC DEAD!!!!!!!!");
+		if(!hasMessageTo(self, "updateSarlaccPet"))
+		{
+			blog("updateSarlaccPet - SARLACC_DEATH messageTo");
+			messageTo(self, "updateSarlaccPet", null, updateWeek, false);
+		}
+		return SCRIPT_CONTINUE;
+	}
+	else if(currentPhase == house_pet.SARLACC_STARVING)
+	{
+		blog("updateSarlaccPet - SARLACC STARVING!!!!!!!!");
+		setObjVar(controller, house_pet.SARLACC_FEEDING_ITERATION, 0);
+		removeObjVar(controller, house_pet.SARLACC_FEED_ARRAY);		
+		if(!hasMessageTo(self, "updateSarlaccPet"))
+		{
+			blog("updateSarlaccPet - SARLACC_STARVING messageTo");
+			messageTo(self, "updateSarlaccPet", null, updateWeek, false);
+		}
+		return SCRIPT_CONTINUE;		
+	}
+	//make the reward radial available
+	else if(getIntObjVar(controller, house_pet.SARLACC_FEEDING_ITERATION) >= house_pet.SARLACC_PHASE_WEEKS)
+	{
+		blog("updateSarlaccPet - ITERATION DONE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");	
+		string collectionCol = getSarlaccCollectionColumn(controller);
+		if(collectionCol == null || collectionCol.equals(""))
+		{
+			//@TODO: ADD CUSTOMER SERVICE LOGGING
+			blog("updateSarlaccPet - getSarlaccCollectionColumn FAILED!");
+			collectionCol = "generic_collectible"; //default
+		}
+
+		blog("updateSarlaccPet - getSarlaccCollectionColumn: "+collectionCol);
+		
+		//reset feeding iteration
+		setObjVar(controller, house_pet.SARLACC_FEEDING_ITERATION, 0);
+		//remove array list from feeding
+		removeObjVar(controller, house_pet.SARLACC_FEED_ARRAY);
+		//set the radial to allow a sift
+		setObjVar(controller, house_pet.SARLACC_REWARD_AVAILABLE, true);
+		//set the column string
+		setObjVar(controller, house_pet.SARLACC_REWARD_COLUMN, collectionCol);
+	}
+	
+	if(!hasMessageTo(self, "updateSarlaccPet"))
+	{
+		messageTo(self, "updateSarlaccPet", null, updateWeek, false);
+		blog("updateSarlaccPet - messageTo end in one week");
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+
+// ********************************************************************
+//					FUNCTIONS
+// ********************************************************************
+
+//Gets all the junk/collectibles in player inventory
+//displays SUI list box of items.
+boolean getEdibleContents(obj_id player, obj_id controller, obj_id sarlacc)
+{
+	blog("getEdibleContents - Init");
+	if(!isValidId(player) || !exists(player))
+		return false;
+	if(!isValidId(controller) || !exists(controller))
+		return false;
+	if(!isValidId(sarlacc) || !exists(sarlacc))
+		return false;
+
+	//already fed
+	if(getIntObjVar(controller, house_pet.SARLACC_CURRENT_PHASE) < house_pet.SARLACC_HUNGRY)
+		return false;
+
+	//Must sift litter box first!
+	if(getBooleanObjVar(controller, house_pet.SARLACC_REWARD_AVAILABLE))
+	{
+		sendSystemMessage(player, SID_SIFT_SARLACC_BOX);
+		return false;
+	}
+	blog("getEdibleContents - About to create array of junk");
+	
+	if(!checkPlayerInventoryForSarlaccFood(player))
+	{
+		sendSystemMessage(player, SID_SARLACC_NOTHING_FOUND);
+		return false;		
+	}
+
+	blog("getEdibleContents - Player has junk");
+	
+	obj_id[] edibleItems = smuggler.getAllJunkItems(player);
+	if(edibleItems == null && edibleItems.length <= 0)
+		return false;
+
+	string[] edibleMenu = new string[edibleItems.length];
+
+	for(int i = 0; i < edibleItems.length; i++)
+	{
+		// Set up the entry for the list box
+		string name = getAssignedName(edibleItems[i]);
+		if(name.equals("") || name == null)
+		{
+			name = getString(getNameStringId(edibleItems[i]));
+		}
+		edibleMenu[i] = name;
+	}
+
+	if(edibleMenu == null && edibleMenu.length <= 0)
+		return false;
+
+	int pid = sui.listbox(sarlacc, player, FEED_PROMPT, sui.YES_NO, FEED_TITLE, edibleMenu, "handleSarlaccEatSui", false, false);
+
+	// If the sui creation was successful
+	if(pid > -1)
+	{
+		// Rename some buttons and show the sui
+		setSUIProperty(pid, sui.LISTBOX_BTN_OK, sui.PROP_TEXT, BTN_SELL);
+		//setSUIProperty(pid, sui.LISTBOX_BTN_OTHER, sui.PROP_TEXT, BTN_SELL_ALL);
+		showSUIPage(pid);
+
+		// Set some script vars on the player
+		utils.setScriptVar(player, house_pet.EDIBLES_SUI, pid);
+		utils.setBatchScriptVar(player, house_pet.EDIBLES_IDS, edibleItems);
+	}
+	return true;
+}
+
+// Function processes the item fed to sarlacc
+boolean eatJunkItem(obj_id self, obj_id player, obj_id item)
+{
+	blog("eatJunkItem - Init");
+	// Make sure the player and the item to sell are valid, if not quit out
+	if(!isIdValid(self) || !exists(self))
+		return false;
+	if(!isIdValid(player) || !exists(player))
+		return false;
+	if(!isIdValid(item) || !exists(item))
+		return false;
+	//range check
+	if (utils.outOfRange(self, player, 10.0f, true))
+		return false;
+
+	//do one last validation to ensure nothing strange has gone on with the item
+	if(!validateItemForSarlacc(player, item))
+		return false;
+
+	obj_id controller = getObjIdObjVar(self, house_pet.PARENT_OBJ_ID);
+	if(!isIdValid(controller) || !exists(controller))
+		return false;
+	
+	string playerName = getName(player);
+	string itemName = getEncodedName(item);
+	CustomerServiceLog("sarlacc_minigame: ", "Player (" + playerName + " OID: " + player + ") fed sarlacc item (" + itemName + " OID: " + item + ").");
+				
+	string templateName = getTemplateName(item);
+	if(templateName == null || templateName.equals(""))
+		return false;
+			
+	if(!hasObjVar(controller, house_pet.SARLACC_FEED_ARRAY))
+	{	
+		blog("Received Item - Created new feed list");		
+		string[] feedingList = new string[1];	
+		feedingList[0] = templateName;
+		setObjVar(controller, house_pet.SARLACC_FEED_ARRAY, feedingList);
+	}
+	else
+	{
+		string[] feedingList = getStringArrayObjVar(controller, house_pet.SARLACC_FEED_ARRAY);
+		if(feedingList == null || feedingList.length <= 0)
+		{
+			blog("Received Item - ERROR -NO PREVIOUS feedingList found, making new.");
+			string[] newList = new string[1];	
+			newList[0] = templateName;
+			setObjVar(controller, house_pet.SARLACC_FEED_ARRAY, newList);		
+		}
+		else if(feedingList.length > 0 && feedingList.length < 4)
+		{
+			blog("Received Item - ARRAY COPY!!!!!!!!!!!!!!!!!!!!!!!!");				
+			blog("Received Item - feedingList.length "+feedingList.length);				
+			string[] newList = new string[feedingList.length+1];
+			System.arraycopy(feedingList, 0, newList, 0, feedingList.length);
+			newList[newList.length-1] = templateName;
+			blog("Received Item - newList.length "+newList.length); 
+			setObjVar(controller, house_pet.SARLACC_FEED_ARRAY, newList);
+		}
+	}
+	//-------------------------------
+	//Incr and set the feed iteration
+	//this is the only incr for 
+	//the iteration
+	//-------------------------------
+	int currentIteration = getIntObjVar(controller, house_pet.SARLACC_FEEDING_ITERATION);
+	currentIteration++;
+	setObjVar(controller, house_pet.SARLACC_FEEDING_ITERATION, currentIteration);
+	
+	//-------------------------------
+	//Set the Sarlacc to Fed
+	//-------------------------------	
+	blog("Received Item - setting phase fed and setting time fed");		
+	setObjVar(controller, house_pet.SARLACC_CURRENT_PHASE, house_pet.SARLACC_FED);
+
+	//-------------------------------
+	//Play sound
+	//-------------------------------
+	play2dNonLoopingSound(player, SOUND_EAT);
+	//-------------------------------
+	//Play animation
+	//-------------------------------	
+	doAnimationAction(self, ANIMATON_FEED);
+	
+	//-------------------------------
+	//destroy item or decrement stack
+	//and send message to player
+	//-------------------------------		
+	decrementCount(item);
+	sendSystemMessage(player, SID_SARLACC_FED);
+
+	//-------------------------------
+	//Set the Sarlacc Feed time to 
+	//now
+ 	//-------------------------------		
+	blog("Received Item - end, current phase: "+getIntObjVar(controller, house_pet.SARLACC_CURRENT_PHASE));
+	setObjVar(controller, house_pet.SARLACC_LAST_FED, getGameTime());
+	
+	if(!hasMessageTo(self, "updateSarlaccPet"))
+	{
+		blog("Received Item - first feeding kicks off the messageTo");
+		messageTo(self, "updateSarlaccPet", null, house_pet.getUpdateWeekly(controller), false);
+	}
+	dictionary params = new dictionary();
+	params.put("player", player);
+	messageTo(self, "playBurp", params, 3, false);
+	return true;
+}
+
+//make sure the item is still in players inventory, is not a container with objects in it and not equipped
+//call this when generating the Sell Sui and validate when the sell button is actually clicked.
+boolean validateItemForSarlacc(obj_id player, obj_id item)
+{
+	if(utils.getContainingPlayer(item) != (player))
+		return false;
+	if(smuggler.hasItemsInContainer(item))
+		return false;
+	if(utils.isEquipped(item))
+		return false;
+	if(hasObjVar(item, "quest_item"))
+		return false;
+	return true;
+}
+
+//HashSets are used to remove duplicates from lists.
+string getSarlaccCollectionColumn(obj_id controller)
+{
+	blog("getSarlaccCollectionColumn - Init");
+	if(!isValidId(controller) || !exists(controller))
+		return null;
+
+	blog("getSarlaccCollectionColumn - initial validation ok");
+	
+	if(!hasObjVar(controller, house_pet.SARLACC_FEED_ARRAY))
+		return null;
+
+	blog("getSarlaccCollectionColumn - array of feed exists");
+	
+	string[] foodList = getStringArrayObjVar(controller, house_pet.SARLACC_FEED_ARRAY);
+	if(foodList == null || foodList.length < house_pet.SARLACC_PHASE_WEEKS)
+	{
+		blog("getSarlaccCollectionColumn - foodList.length: "+foodList.length);
+		return null;
+	}
+	blog("getSarlaccCollectionColumn - foodList[0]: "+foodList[0]);
+	blog("getSarlaccCollectionColumn - foodList[1]: "+foodList[1]);
+	blog("getSarlaccCollectionColumn - foodList[2]: "+foodList[2]);
+	blog("getSarlaccCollectionColumn - foodList[3]: "+foodList[3]);
+		
+	//create a hashSet, split each entry in the array, put the elements in hashset
+	HashSet allEdibles = new HashSet();
+
+	for(int i = 0; i < foodList.length-1; i++)
+	{
+		if(foodList[i] == null || foodList.equals(""))
+			continue;
+		
+		allEdibles.add(foodList[i]);
+	}
+	
+	if(allEdibles.isEmpty())
+	{
+		blog("getSarlaccCollectionColumn - severe issue with feed array");	
+		return null;
+	}
+	
+	blog("getSarlaccCollectionColumn - allEdibles.size(): "+allEdibles.size());
+	string[] templateArray = new string[allEdibles.size()];
+	allEdibles.toArray(templateArray);
+	if(templateArray == null || templateArray.length <= 0)
+	{
+		blog("getSarlaccCollectionColumn - severe issue with hashset conversion of feed array");	
+		return null;
+	}
+	blog("getSarlaccCollectionColumn - templateArray.length: "+templateArray.length);
+
+	if(templateArray.length == 1)
+	{
+		int lootRow = dataTableSearchColumnForString(templateArray[0], "item", house_pet.SARLACC_CTS_CRC_TABLE);
+		if(lootRow < 0)
+		{
+			blog("getSarlaccCollectionColumn - lootRow: "+lootRow);		
+			return "generic_collectible"; //default
+		}
+		
+		//string dataTableGetString(String table, int row, String column)
+		string lootColumn = dataTableGetString(house_pet.SARLACC_CTS_CRC_TABLE, lootRow, "collectible_cols");
+		blog("getSarlaccCollectionColumn - lootColumn: "+lootColumn);
+		if(lootColumn == null || lootColumn.equals(""))
+		{
+			return "generic_collectible"; //default
+		}
+		else
+		{
+			string[] possibleCols = split(lootColumn,',');
+			if(possibleCols == null || possibleCols.length <= 0)
+				return "generic_collectible"; //default
+			else if(possibleCols.length == 1)
+				return possibleCols[0];
+			else
+				return possibleCols[rand(0,possibleCols.length-1)];
+		}
+	}
+	else
+	{
+		string randTemplate = templateArray[rand(0, templateArray.length-1)];
+		int lootRow = dataTableSearchColumnForString(randTemplate, "item", house_pet.SARLACC_CTS_CRC_TABLE);
+		//create a hashSet, split each entry in the array, put the elements in hashset
+		string lootColumn = dataTableGetString(house_pet.SARLACC_CTS_CRC_TABLE, lootRow, "collectible_cols");
+		blog("getSarlaccCollectionColumn - lootColumn: "+lootColumn);
+		if(lootColumn == null || lootColumn.equals(""))
+		{
+			return "generic_collectible"; //default
+		}
+		else
+		{
+			string[] possibleCols = split(lootColumn,',');
+			if(possibleCols == null || possibleCols.length <= 0)
+				return "generic_collectible"; //default
+			else if(possibleCols.length == 1)
+				return possibleCols[0];
+			else
+				return possibleCols[rand(0,possibleCols.length-1)];
+		}
+	}
+}
+
+boolean getPlayerReward(obj_id owner, obj_id controller)
+{
+	if(!isValidId(owner) || !exists(owner))
+		return false;
+	if(!isValidId(controller) || !exists(controller))
+		return false;
+
+	obj_id playerInventory = utils.getInventoryContainer(owner);
+	if(!isValidId(playerInventory) || !exists(playerInventory))
+		return false;
+
+	if(!hasObjVar(controller,house_pet.SARLACC_REWARD_COLUMN))
+		return false;
+	
+	string rewardCol = getStringObjVar(controller, house_pet.SARLACC_REWARD_COLUMN);
+	if(rewardCol == null || rewardCol.equals(""))
+		return false;
+
+	blog("rewardPlayer - getRandomCollectionItem for col: "+rewardCol);
+
+	//-------------------------------
+	//Play sound
+	//-------------------------------
+	play2dNonLoopingSound(owner, SOUND_SIFT);
+			
+	if(!collection.getRandomCollectionItem(owner, playerInventory, house_pet.SARLACC_LOOT_TABLE, rewardCol))
+		blog("rewardPlayer - severe issue with getRandomCollectionItem for col: "+rewardCol);
+
+	removeObjVar(controller, house_pet.SARLACC_REWARD_AVAILABLE);
+	removeObjVar(controller, house_pet.SARLACC_REWARD_COLUMN);
+	sendSystemMessage(owner, SID_FOUND_REWARD);
+	blog("rewardPlayer - REWARD GIVEN");
+	
+	return true;
+}
+
+boolean checkPlayerInventoryForSarlaccFood(obj_id player)
+{
+	if(!isValidId(player) || !exists(player))
+		return false;
+
+	obj_id inventory = utils.getInventoryContainer(player);
+	if(!isIdValid(inventory) || !exists(inventory))
+		return false;
+		
+	obj_id[] contents = utils.getContents(inventory, true);
+	if(contents == null || contents.length <= 0)
+		return false;
+	
+	for(int x = 0; x < contents.length; x++)
+	{
+		//check to see if we are a volume container
+		if(!validateItemForSarlacc(player, contents[x]))
+			continue;
+		//we DONT want noTrade items that mistakenly have a value or 
+		//anything equipped
+		if(hasObjVar(contents[x], "noTrade") || utils.isEquipped(contents[x]))
+			continue;
+
+		if(isCrafted(contents[x]))
+			continue;
+			
+		if(static_item.getStaticObjectValue(getStaticItemName(contents[x])) > 0)
+			return true;
+
+		string itemTemplate = getTemplateName(contents[x]);
+		if(dataTableSearchColumnForString(itemTemplate, "items", smuggler.TBL) > -1)
+			return true;
+		
+	}
+	return false;
+}
+
+///////////////////////////////////////////////////////////////////////////
+// Cleans script vars off of the player when dealing is complete
+void cleanupSui(obj_id player)
+{
+	utils.removeScriptVar(player, house_pet.EDIBLES_SUI);
+	utils.removeBatchScriptVar(player, house_pet.EDIBLES_IDS);
+}
+
+//----------------------------------------------------------------------
+// For logging
+//----------------------------------------------------------------------
+
+boolean blog(string msg)
+{
+	if(BLOGGING_ON)
+		LOG(BLOG_CATEGORY, msg);
+	return true;
+}

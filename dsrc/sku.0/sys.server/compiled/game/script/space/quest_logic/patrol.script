@@ -1,0 +1,499 @@
+//------------------------------------------------
+// patrol.script
+// Brandon Reinhart
+//
+// Move through <x> nav points.
+// Optional Goal: Destroy enemy ace while looping patrol.
+//------------------------------------------------
+
+//------------------------------------------------
+// Includes
+//------------------------------------------------
+
+include library.space_quest;
+include library.space_utils;
+include library.space_transition;
+include library.prose;
+
+//------------------------------------------------
+// Constants
+//------------------------------------------------
+
+// Strings
+const string_id SID_NEW_WAYPOINT		= new string_id( "space/quest", "patrol_new_waypoint" );
+const string_id SID_WAYPOINT_ARRIVED	= new string_id( "space/quest", "patrol_waypoint_arrived" );
+const string_id SID_CIRCUIT_COMPLETE	= new string_id( "space/quest", "patrol_circuit_complete" );
+const string_id SID_TARGET_ELIMINATED	= new string_id( "space/quest", "patrol_target_eliminated" );
+const string_id SID_ABANDONED_PATROL	= new string_id( "space/quest", "patrol_abandoned" );
+
+//------------------------------------------------
+// OnAttach
+//------------------------------------------------
+
+trigger OnAttach()
+{
+	// Set up quest specific objvars.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	if ( (questName == null) || (questType == null) )
+	{
+		// Failed to find basic quest info.
+		return SCRIPT_CONTINUE;
+	}
+
+	string qTable = "datatables/spacequest/"+questType+"/"+questName+".iff";
+	dictionary questInfo = dataTableGetRow( qTable, 0 );
+	if ( questInfo == null )
+	{
+		// Failed to find quest info.
+		sendSystemMessageTestingOnly( player, "Debug: Failed to open quest table "+qTable );
+		return SCRIPT_CONTINUE;
+	}
+
+	// Determine the types of ships to destroy.
+	string[] navPoints = dataTableGetStringColumn( qTable, "navPoints" );
+	space_quest.cleanArray( self, "navPoints", navPoints );
+	setObjVar( self, "currentNavPoint", 0 );
+
+	// Store lap info.
+	setObjVar( self, "laps", questInfo.getInt( "laps" ) );
+	setObjVar( self, "currentLap", 1 );
+
+	// Store special target info.
+	string specTarget = questInfo.getString( "specialTarget" );
+	if ( (specTarget != null) && !specTarget.equals( "none" ) && !specTarget.equals( "" ) )
+		setObjVar( self, "specialTarget", specTarget );
+
+	if (questInfo.containsKey("navRadius"))
+		setObjVar(self, "navRadius", questInfo.getInt("navRadius"));
+
+	// Notify the player of the first objective (if we are already in the quest zone).
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	if ( getCurrentSceneName().startsWith( questZone ) )
+	{
+		dictionary outparams = new dictionary();
+		outparams.put( "player", player );
+		messageTo( self, "initializedQuestPlayer", outparams, 1.f, false );
+	}
+
+	// Add quest journal objectives.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		questActivateTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// initializedQuestPlayer
+//------------------------------------------------
+
+messageHandler initializedQuestPlayer()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Set us up if we are in the appropriate zone.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	string questZone = getStringObjVar( self, space_quest.QUEST_ZONE );
+	obj_id player = params.getObjId( "player" );
+
+	// Do not initialize quests if we are in a yacht.
+	obj_id containing_ship = space_transition.getContainingShip( player );
+	if ( isIdValid( containing_ship ) )
+	{
+		string strChassisType = getShipChassisType( containing_ship );
+		if ( (strChassisType != null) && strChassisType.equals( "player_sorosuub_space_yacht" ) )
+		{
+			return SCRIPT_CONTINUE;
+		}
+	}
+
+	if ( !getCurrentSceneName().startsWith( questZone ) )
+	{
+		if ( space_quest.isQuestInProgress( self ) )
+		{
+			clearPatrolWaypoints( self );
+			space_quest.showQuestUpdate( self, SID_ABANDONED_PATROL );
+			space_quest.setQuestFailed( player, self, false );
+		}
+		return SCRIPT_CONTINUE;
+	}
+
+	string[] navPoints = getStringArrayObjVar( self, "navPoints" );
+	if ( navPoints == null )
+		return SCRIPT_CONTINUE;
+	int currentNav = getIntObjVar( self, "currentNavPoint" );
+	string destNav = navPoints[currentNav]; // add bounds check here.
+
+	// Check to see if that nav is on this planet.
+	java.util.StringTokenizer st = new java.util.StringTokenizer( destNav, ":" );
+	string scene = st.nextToken();
+	destNav = st.nextToken();
+
+	if ( getCurrentSceneName().startsWith( scene ) )
+		registerPatrolWaypoint( self, player, destNav );
+
+	// Update the quest journal.
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( questid != 0 )
+	{
+		if ( hasObjVar( self, "specialTarget" ) )
+			questActivateTask( questid, 1, player );
+		questActivateTask( questid, 2, player );
+		if ( questIsTaskActive( questid, 0, player ) )
+			questCompleteTask( questid, 0, player );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// registerPatrolWaypoint
+//------------------------------------------------
+
+void registerPatrolWaypoint( obj_id self, obj_id player, string destNav )
+{
+	obj_id navPoint = space_quest.findQuestLocation(self, player, destNav, "nav");
+
+	if (isIdValid(navPoint))
+	{
+		location loc = getLocation(navPoint);
+
+		// Create a waypoint to this location.
+		obj_id waypoint = getObjIdObjVar( self, "patrol_waypoint" );
+
+		if ( !isIdValid(waypoint) )
+			waypoint = createWaypointInDatapad( player, loc );
+		if ( isIdValid(waypoint) )
+		{
+			setWaypointVisible( waypoint, true );
+			setWaypointActive( waypoint, true );
+			setWaypointLocation( waypoint, loc );
+			setWaypointName( waypoint, "Patrol Waypoint" );
+			setWaypointColor( waypoint, "space" );
+			setObjVar( self, "patrol_waypoint", waypoint );
+		}
+
+		// Setup the dynamic waypoint for this quest task
+		int currentNav = getIntObjVar( self, "currentNavPoint" );
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		questSetQuestTaskLocation(player, "spacequest/"+questType+"/"+questName, 2 + currentNav, loc);
+
+		space_quest.showQuestUpdate( self, SID_NEW_WAYPOINT );
+
+		// Tell the player to register this location as an OnArrived location.
+		setObjVar(self, "loc", destNav);
+
+		if (hasObjVar(self, "navRadius"))
+			addLocationTarget3d(player, destNav, loc, getIntObjVar(self, "navRadius"));
+		else
+			addLocationTarget3d(player, destNav, loc, space_quest.PATROL_NAV_RADIUS);
+	}
+}
+
+//------------------------------------------------
+// arrivedAtLocation
+//------------------------------------------------
+
+messageHandler arrivedAtLocation()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// See if this location is on our list!
+	string name = params.getString( "name" );
+	obj_id player = params.getObjId( "player" );
+
+	string[] navPoints = getStringArrayObjVar( self, "navPoints" );
+	int currentNav = getIntObjVar( self, "currentNavPoint" );
+	string destNav = navPoints[currentNav]; // add bounds check here.
+
+	java.util.StringTokenizer st = new java.util.StringTokenizer( destNav, ":" );
+	string scene = st.nextToken();
+	destNav = st.nextToken();
+
+	st = new java.util.StringTokenizer( navPoints[0], ":" );
+	scene = st.nextToken();
+	string navzero = st.nextToken();
+
+	if ( destNav.equals( name ) )
+	{
+		// Mark as in progress.
+		space_quest.showQuestUpdate( self, SID_WAYPOINT_ARRIVED );
+		space_quest._setQuestInProgress( self, true );
+
+		// We arrived at our desired location!
+		currentNav++;
+		setObjVar( self, "currentNavPoint", currentNav );
+
+		// Update the quest journal.
+		string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+		string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			if ( questIsTaskActive( questid, 1+currentNav, player ) )
+				questCompleteTask( questid, 1+currentNav, player );
+		}
+
+		// Check for a special event.
+		checkSpecialEvent( self, player, currentNav ); 
+
+		if ( currentNav == navPoints.length )
+		{
+			// This was the last point, check laps.
+			int laps = getIntObjVar( self, "laps" );
+			int curLap = getIntObjVar( self, "currentLap" );
+			if ( curLap >= laps )
+			{
+				// We completed our laps (if we had any).
+				// Now check if our special target is destroyed.
+				if ( hasObjVar( self, "specialTarget" ) )
+				{
+					// We have to kill a special target to win.
+					if ( !hasObjVar( self, "specialTargetDestroyed" ) )
+					{
+						setObjVar( self, "patrolComplete", 1 );
+						setObjVar( self, "currentNavPoint", 0 );
+						registerPatrolWaypoint( self, player, navzero );
+						return SCRIPT_CONTINUE;
+					}
+				}
+				
+				if (!hasPendingSplit(self))
+					questCompleted( self );
+				else
+					messageTo(self, "handleDelayedQuestComplete", null, 10, false);
+				
+				return SCRIPT_CONTINUE;
+			}
+			else
+			{
+				prose_package pp = prose.getPackage( SID_CIRCUIT_COMPLETE, (laps-curLap) );
+				space_quest.sendQuestMessage( player, pp );
+
+				// We need to do another lap.
+				setObjVar( self, "currentNavPoint", 0 );
+				registerPatrolWaypoint( self, player, navzero );
+				setObjVar( self, "currentLap", (curLap+1) );
+			}
+		}
+		else
+		{
+			st = new java.util.StringTokenizer( navPoints[currentNav], ":" );
+			scene = st.nextToken(); destNav = st.nextToken();
+
+			// Register the next one.
+			registerPatrolWaypoint( self, player, destNav );
+		}
+
+		if ( questid != 0 )
+		{
+			questActivateTask( questid, 2+currentNav, player );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+boolean hasPendingSplit(obj_id self)
+{
+	if (hasObjVar(self, "pendingSplit"))
+		return getBooleanObjVar(self, "pendingSplit");
+	
+	setObjVar(self, "pendingSplit", false);
+	return false;
+}
+
+void setPendingSplit(obj_id self, boolean state)
+{
+	setObjVar(self, "pendingSplit", state);
+}
+
+messageHandler handleDelayedQuestComplete()
+{
+	if (hasPendingSplit(self))
+		messageTo(self, "handleDelayedQuestComplete", null, 10, false);
+	else
+		questCompleted(self);
+		
+	return SCRIPT_CONTINUE;
+}
+
+
+//------------------------------------------------
+// questCompleted
+//------------------------------------------------
+
+void questCompleted( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Remove the waypoint.
+	clearPatrolWaypoints( self );
+
+	// We finished the quest!
+	space_quest.setQuestWon( player, self );
+}
+
+//------------------------------------------------
+// handleShipDestroyed
+//
+// Handled in patrol quests that use a search & destroy special target.
+//------------------------------------------------
+
+messageHandler handleShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	if ( !hasObjVar( self, "specialTarget" ) )
+		return SCRIPT_CONTINUE;
+	if ( hasObjVar( self, "specialTargetDestroyed" ) )
+		return SCRIPT_CONTINUE;
+
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+
+	// Get the type of ship that was destroyed and compare to our target.
+	string killType = params.getString( "strShipType" );
+	string specTarget = getStringObjVar( self, "specialTarget" );
+	if ( specTarget.equals( killType ) )
+	{
+		setObjVar( self, "specialTargetDestroyed", 1 );
+
+		// Update the quest journal.
+		int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+		if ( questid != 0 )
+		{
+			if ( questIsTaskActive( questid, 1, player ) )
+				questCompleteTask( questid, 1, player );
+		}
+
+		if ( !hasObjVar( self, "patrolComplete" ) )
+		{
+			space_quest.showQuestUpdate( self, SID_TARGET_ELIMINATED );
+		}
+		else
+		{
+			// We finished our patrol and destroyed our target.  YOURE WINNER!
+			questCompleted( self );
+		}
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// abortMission
+//------------------------------------------------
+
+messageHandler abortMission()
+{
+	if ( hasObjVar( self, "noAbort" ) )
+		return SCRIPT_CONTINUE;
+
+	// We aborted the quest!
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	clearPatrolWaypoints( self );
+	space_quest.setQuestAborted( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// playerShipDestroyed
+//------------------------------------------------
+
+messageHandler playerShipDestroyed()
+{
+	if ( params == null )
+		return SCRIPT_CONTINUE;
+
+	// Fail if we are "in progress."
+	if ( hasObjVar( self, "in_progress" ) )
+	{
+		obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+		clearPatrolWaypoints( self );
+		space_quest.setQuestFailed( player, self );
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// removeQuest
+//------------------------------------------------
+
+messageHandler removeQuest()
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	clearPatrolWaypoints( self );
+
+	// Flag the main quest journal entry as finished.
+	string questName = getStringObjVar( self, space_quest.QUEST_NAME );
+	string questType = getStringObjVar( self, space_quest.QUEST_TYPE );
+	int questid = questGetQuestId( "spacequest/"+questType+"/"+questName );
+	if ( (questid != 0) && questIsQuestActive( questid, player ) )
+		questCompleteQuest( questid, player );
+
+	space_quest._removeQuest( player, self );
+
+	return SCRIPT_CONTINUE;
+}
+
+//------------------------------------------------
+// clearTargetWaypoints
+//------------------------------------------------
+
+void clearPatrolWaypoints( obj_id self )
+{
+	obj_id player = getObjIdObjVar( self, space_quest.QUEST_OWNER );
+	obj_id waypoint = getObjIdObjVar( self, "patrol_waypoint" );
+	if (isIdValid(waypoint) )
+		destroyWaypointInDatapad( waypoint, player );
+
+	// Unregister the arrive trigger.
+	dictionary params = new dictionary();
+	string loc = getStringObjVar( self, "loc" );
+	if ( loc != null )
+		removeLocationTarget(player, loc);
+}
+
+//------------------------------------------------
+// checkSpecialEvent
+//------------------------------------------------
+
+boolean checkSpecialEvent( obj_id self, obj_id player, int currentNav )
+{
+	// Do we have a special event?
+	if ( !hasObjVar( self, space_quest.QUEST_TRIGGER_EVENT ) )
+		return false;
+
+	int triggerEvent = getIntObjVar( self, space_quest.QUEST_TRIGGER_EVENT );
+	int triggerSC = getIntObjVar( self, space_quest.QUEST_TRIGGER_SC );
+	int triggerOn = getIntObjVar( self, space_quest.QUEST_TRIGGER_ON );
+	int triggerDelay = getIntObjVar( self, space_quest.QUEST_TRIGGER_DELAY );
+
+	if ( triggerEvent == 0 )
+		return false;
+	if ( triggerSC != 0 )
+		return false;
+	if ( triggerOn != currentNav )
+		return false;
+
+	setPendingSplit(self, true);
+	
+	dictionary params = new dictionary();
+	params.put( "quest", self );
+	messageTo( player, "doSpecialEvent", params, triggerDelay, false );
+
+	return false;
+}

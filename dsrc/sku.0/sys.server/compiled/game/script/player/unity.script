@@ -1,0 +1,407 @@
+/**
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        magic_eight_ball.script
+ * DesCRiption:  when examined displays a special message randomly picked
+ * 				 from 50 predefined messages
+ * @author       $AutHor: Matthew Kwid$
+ * @version      $Revision:$
+ */
+
+/***** INCLUDES ********************************************************/
+
+include library.sui;
+include library.utils;
+include library.prose;
+include library.marriage;
+include library.static_item;
+
+/***** INCLUDES ********************************************************/
+
+/***** CONSTANTS *******************************************************/
+
+const string_id SID_SUI_PROPOSE_PROMPT	= new string_id("unity", "sui_propose_prompt");
+const string_id SID_SUI_RING_SPEC		= new string_id("unity", "sui_ring_spec");
+const string_id SID_SUI_RING_EQUIP		= new string_id("unity", "sui_ring_equip");
+
+/***** TRIGGERS ********************************************************/
+trigger OnAttach()
+{
+	messageTo(self, marriage.HANDLER_PROPOSAL_EXPIRE, null, marriage.PROPOSAL_TIME, true);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSAL_TARGET) )
+	{
+		if ( getPosture(self) == POSTURE_CROUCHED )
+			queueCommand(self, ##"stand", null, "", COMMAND_PRIORITY_DEFAULT);
+			
+		marriage.cleanupProposal(self);
+	}
+	
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSEDTO_TARGET) )
+	{
+		marriage.cleanupProposedTo(self);
+		marriage.cleanupAcceptance(self);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnLogout()
+{
+	obj_id target = null;
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSAL_TARGET) )
+	{
+		target = utils.getObjIdScriptVar(self, marriage.VAR_PROPOSAL_TARGET);
+	}
+	
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSEDTO_TARGET) )
+	{
+		target = utils.getObjIdScriptVar(self, marriage.VAR_PROPOSEDTO_TARGET);
+	}
+	
+	if ( isIdValid(target) )
+		messageTo(target, marriage.HANDLER_PROPOSAL_EXPIRE, null, 0, true);
+	
+	messageTo(self, marriage.HANDLER_PROPOSAL_EXPIRE, null, 0, true);
+	return SCRIPT_CONTINUE;
+}
+
+/***** MESSAGEHANDLERS *************************************************/
+messageHandler handleProposedTo()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		detachScript(self, marriage.SCRIPT_UNITY);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id proposer = params.getObjId("proposer");
+	if ( !isIdValid(proposer) )
+	{
+		detachScript(self, marriage.SCRIPT_UNITY);
+		return SCRIPT_CONTINUE;
+	}
+	
+	string proposerName = params.getString("proposerName");
+	if ( proposerName == null || proposerName.equals("") )
+	{
+		detachScript(self, marriage.SCRIPT_UNITY);
+		return SCRIPT_CONTINUE;
+	}
+	
+	
+	utils.setScriptVar(self, marriage.VAR_PROPOSEDTO_TARGET, proposer);
+	utils.setScriptVar(self, marriage.VAR_PROPOSEDTO_NAME, proposerName);
+	
+	prose_package ppPropose = prose.getPackage(SID_SUI_PROPOSE_PROMPT);
+	prose.setTT(ppPropose, proposerName);
+	string prompt = " \0" + packOutOfBandProsePackage(null, ppPropose);
+	string title = "@" + marriage.STF + ":accept_title";
+	int pid = sui.msgbox(self, self, prompt, sui.YES_NO, title, "handleProposalSui");
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(self, marriage.VAR_ACCEPT_SUI, pid);
+	}
+	else
+	{
+		detachScript(self, marriage.SCRIPT_UNITY);
+		detachScript(proposer, marriage.SCRIPT_UNITY);
+	}
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleProposalSui()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		marriage.declineProposal(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		marriage.declineProposal(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] rings = marriage.getRings(self);
+	if ( rings == null || rings.length == 0 )
+	{
+		marriage.cannotAccept(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	//query for ring to offer
+	resizeable string[] entries = new string[0];
+	for ( int i = 0; i < rings.length; i++ )
+	{
+		string entry = null;
+		
+		if(static_item.isStaticItem(rings[i]))
+			if (!static_item.canEquip(self, rings[i]))
+				continue;
+				
+		prose_package ppSpec = prose.getPackage(SID_SUI_RING_EQUIP);
+		prose.setTT(ppSpec, getNameStringId(rings[i]));
+		entry = " \0" + packOutOfBandProsePackage(null, ppSpec);
+		
+		entries = utils.addElement(entries, entry);
+	}
+	
+	string prompt = "@" + marriage.STF + ":ring_prompt";
+	string title = "@" + marriage.STF + ":ring_title";
+	int pid = sui.listbox(self, self, prompt, sui.OK_CANCEL, title, entries, "handleRingSelectionSui");
+	if ( pid > -1 )
+	{
+		utils.setScriptVar(self, marriage.VAR_ACCEPT_SUI, pid);
+		utils.setBatchScriptVar(self, marriage.VAR_ACCEPT_SUI_OPTIONS, rings);
+	}
+	else
+	{
+		obj_id proposer = utils.getObjIdScriptVar(self, marriage.VAR_PROPOSEDTO_TARGET);
+		if ( isIdValid(proposer) )
+			messageTo(proposer, marriage.HANDLER_PROPOSAL_EXPIRE, null, 0, true);
+
+		messageTo(self, marriage.HANDLER_PROPOSAL_EXPIRE, null, 0, true);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRingSelectionSui()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		marriage.declineProposal(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int bp = sui.getIntButtonPressed(params);
+	if ( bp == sui.BP_CANCEL )
+	{
+		marriage.declineProposal(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	int idx = sui.getListboxSelectedRow(params);
+	if ( idx == -1 )
+	{
+		marriage.declineProposal(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] rings = marriage.getRings(self);
+	if ( rings == null || rings.length == 0 )
+	{
+		marriage.cannotAccept(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id[] ringOptions = utils.getObjIdBatchScriptVar(self, marriage.VAR_ACCEPT_SUI_OPTIONS);
+	if ( ringOptions == null || ringOptions.length == 0 )
+	{
+		marriage.cannotAccept(self);
+		return SCRIPT_CONTINUE;
+	}
+	
+	if ( idx >= ringOptions.length )
+	{
+		marriage.cannotAccept(self);
+		return SCRIPT_CONTINUE;	
+	}
+	
+	obj_id retRing = ringOptions[idx];
+	if ( utils.getElementPositionInArray(rings, retRing) == -1 )
+	{
+		marriage.cannotAccept(self);
+		return SCRIPT_CONTINUE;	
+	}
+	
+	obj_id proposer = utils.getObjIdScriptVar(self, marriage.VAR_PROPOSEDTO_TARGET);
+	if ( !isIdValid(proposer) )
+		messageTo(self, marriage.HANDLER_PROPOSAL_EXPIRE, null, 0, true);
+		
+	//message to proposer with acceptance
+	marriage.cleanupAcceptance(self);
+	
+	utils.setScriptVar(self, marriage.VAR_ACCEPT_RING, retRing);
+	
+	////debugSpeakMsg(self, "Attempting to wed...");
+	marriage.wed(proposer, self);
+	return SCRIPT_CONTINUE;
+}
+
+
+/*messageHandler handleProposalAccepted()
+{
+	if ( params == null || params.isEmpty() )
+	{
+		obj_id target = utils.getObjIdScriptVar(self, marriage.VAR_PROPOSAL_TARGET);
+		if ( isIdValid(target) )
+		{
+			messageTo(target, marriage.HANDLER_PROPOSAL_EXPIRE, null, 0, true);
+		}
+		
+		messageTo(self, marriage.HANDLER_PROPOSAL_EXPIRE, null, 0, true);
+		return SCRIPT_CONTINUE;
+	}
+	
+	obj_id target = params.getObjId("target");
+	if ( isIdValid(target) )
+		marriage.wed(self, target);
+	
+	return SCRIPT_CONTINUE;
+}*/
+
+messageHandler handleProposalExpire()
+{
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSAL_TARGET) )
+	{
+		string proposee = utils.getStringScriptVar(self, marriage.VAR_PROPOSAL_NAME);
+		if ( proposee != null && !proposee.equals("") )
+		{
+			//sendSystemMessageTestingOnly(self, "Your unity proposal to " + proposee + " has expired.");
+			prose_package ppExpirePlayer = prose.getPackage(marriage.PROSE_EXPIRE_PLAYER, proposee);
+			sendSystemMessageProse(self, ppExpirePlayer);
+		}
+		else
+		{
+			//sendSystemMessageTestingOnly(self, "Your unity proposal has expired.");
+			sendSystemMessage(self, marriage.SID_EXPIRED_PLAYER);
+		}
+	}
+	
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSEDTO_TARGET) )
+	{
+		string proposer = utils.getStringScriptVar(self, marriage.VAR_PROPOSEDTO_NAME);
+		if ( proposer != null && !proposer.equals("") )
+		{
+			//sendSystemMessageTestingOnly(self, "The unity proposal from " + proposer + " has expired.");
+			prose_package ppExpireTarget = prose.getPackage(marriage.PROSE_EXPIRE_TARGET, proposer);
+			sendSystemMessageProse(self, ppExpireTarget);
+		}
+		else
+		{
+			//sendSystemMessageTestingOnly(self, "The unity proposal has expired.");
+			sendSystemMessage(self, marriage.SID_EXPIRED_TARGET);
+		}
+	}
+	
+	detachScript(self, marriage.SCRIPT_UNITY);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleAcceptFail()
+{
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSAL_TARGET) )
+	{
+		string proposee = utils.getStringScriptVar(self, marriage.VAR_PROPOSAL_NAME);
+		if ( proposee != null && !proposee.equals("") )
+		{
+			prose_package ppAcceptFail = prose.getPackage(marriage.PROSE_ACCEPT_FAIL, proposee);
+			sendSystemMessageProse(self, ppAcceptFail);
+		}
+		else
+		{
+			sendSystemMessage(self, marriage.SID_ACCEPT_FAIL);
+		}
+	}
+
+	detachScript(self, marriage.SCRIPT_UNITY);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleProposalDeclined()
+{
+	if ( utils.hasScriptVar(self, marriage.VAR_PROPOSAL_TARGET) )
+	{
+		string proposee = utils.getStringScriptVar(self, marriage.VAR_PROPOSAL_NAME);
+		if ( proposee != null && !proposee.equals("") )
+		{
+			prose_package ppDeclined = prose.getPackage(marriage.PROSE_DECLINED, proposee);
+			sendSystemMessageProse(self, ppDeclined);
+		}
+		else
+		{
+			sendSystemMessage(self, marriage.SID_DECLINED);
+		}
+	}
+
+	detachScript(self, marriage.SCRIPT_UNITY);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRingExchange()
+{
+	//debugSpeakMsg(self,"Entered handleRingExchange...");
+	obj_id other = params.getObjId("other");
+	obj_id ring = params.getObjId("ring");
+	obj_id inv = params.getObjId("inv");
+	if ( isIdValid(other) && isIdValid(ring) && isIdValid(inv) )
+	{
+		putInOverloaded(ring, inv);
+		
+		params.put("other",self);
+		params.remove("inv");
+		
+		prose_package ppExchangeRings = prose.getPackage(marriage.SID_YOU_EXCHANGE_RINGS);
+		prose.setTT(ppExchangeRings, getAssignedName(other));
+		sendSystemMessageProse(self, ppExchangeRings);
+		messageTo(other, marriage.HANDLER_RING_SETUP, params, 1, false);
+	}
+	else
+	{
+		marriage.weddingError(self);
+	}
+	
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleRingSetup()
+{
+	//debugSpeakMsg(self,"Entered handleRingSetup...");
+	obj_id spouse = params.getObjId("other");
+	obj_id ring = params.getObjId("ring");
+	if ( isIdValid(ring) && isIdValid(spouse) )
+	{
+		obj_id inv = utils.getInventoryContainer(self);
+		obj_id ring_l = getObjectInSlot(self, "ring_l");
+		if ( isIdValid(inv) && isIdValid(ring_l) )
+			putInOverloaded(ring_l, inv);
+		
+		/*obj_id ring_r = getObjectInSlot(self, "ring_r");
+		if ( isIdValid(inv) && isIdValid(ring_r) )
+			putInOverloaded(ring_r, inv);*/
+		
+		if ( equip(ring, self, "ring_l") )
+		{
+			attachScript(ring, marriage.SCRIPT_RING_UNITY);
+			
+			string spouseName = getAssignedName(spouse);
+			
+			setObjVar(self, marriage.VAR_SPOUSE_ID, spouse);
+			setObjVar(self, marriage.VAR_SPOUSE_NAME, spouseName);
+			setObjVar(self, marriage.VAR_RING, ring);
+			
+			prose_package pp = prose.getPackage(marriage.PROSE_WED_COMPLETE, spouse);
+			sendSystemMessageProse(self, pp);
+
+			detachScript(self, marriage.SCRIPT_UNITY);
+			return SCRIPT_CONTINUE;
+		}
+		else
+		{
+			//debugSpeakMsg(self,"unable to equip ring!");
+		}
+	}
+
+	marriage.weddingError(self);
+	return SCRIPT_CONTINUE;
+}

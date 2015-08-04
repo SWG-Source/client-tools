@@ -1,0 +1,246 @@
+/********************************************************************************************************************************************
+ * Copyright (c)2000-2002 Sony Online Entertainment Inc.
+ * All Rights Reserved
+ *
+ * Title:        quest\task\patrol.script
+ * Description:  Patrol Quest Task. Reads from Quest Data Table and creates a Patrol route of 8 points
+ *				 around a location of a given radius. (modified code of "go_to_location.script")
+ * @author       Benjamin Norris
+ * @version      $Revision:$
+ **********************************************************************/
+
+
+/***** INCLUDES ********************************************************/
+include library.locations;
+include library.quests;
+include library.utils;
+include library.create;
+include library.fs_dyn_village;
+
+/***** CONSTANTS *******************************************************/
+const boolean DEBUGGING = false;
+
+const string[] ENEMY_LIST = {	"shadow_mercenary",
+								"shadow_thug",
+								"shadow_pirate",
+								"shadow_outlaw"};
+/***** MESSAGEHANDLERS *************************************************/
+
+messageHandler msgQuestAbortPhaseChange()
+{
+	detachScript(self, "quest.force_sensitive.fs_patrol_spawns1");
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleDontKillPatrolFSNpc()
+{
+	setObjVar(self, "quest.fs_patrol.current_patrol", false);
+	string_id messageId = new string_id ("quest/force_sensitive/fs_patrol", "failed_killed_dont_kill_npc");
+	sendSystemMessage (self, messageId);
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleKillPatrolFSNpc()
+{
+	if (hasObjVar(self, "quest.fs_patrol.number_of_enemies"));
+	{
+		int numberOfEnemies = getIntObjVar(self, "quest.fs_patrol.number_of_enemies");
+		numberOfEnemies--;
+		if (numberOfEnemies<=0)
+			setObjVar(self, "quest.fs_patrol.current_patrol_point", true);
+		setObjVar(self, "quest.fs_patrol.number_of_enemies", numberOfEnemies);
+	}
+	return SCRIPT_CONTINUE;
+}
+
+
+
+/***** COMMANDHANDLERS *************************************************/
+
+/***** FUNCTIONS *******************************************************/
+void spawnStuff (int numberOfEnemies, location startLocation, string questName, obj_id player)
+{
+	setObjVar(player, "quest.fs_patrol.number_of_enemies", numberOfEnemies);
+	for (int i = 0; i < numberOfEnemies; i++)
+	{
+		int offsetx = rand(-6, 6);
+		int offsetz = rand(-6, 6);
+		int npcType = 2;
+		if (numberOfEnemies > 3) npcType = rand (0,2);
+		if (numberOfEnemies < 3) npcType = rand (2,3);
+		location spawnSpot = startLocation;
+		spawnSpot.x += offsetx;
+		spawnSpot.z += offsetz;
+		obj_id spawn = create.object( ENEMY_LIST[npcType], spawnSpot);
+		setObjVar(spawn, "quest.fs_patrol.spawned_for", player);
+		if (numberOfEnemies <= 3)
+			attachScript(spawn, "systems.fs_quest.patrol.fs_killable_npc");
+		else
+			attachScript(spawn, "systems.fs_quest.patrol.fs_dont_kill_npc");
+	}
+}
+
+void cleanUpStuff (obj_id player)
+{
+	string questName = "fs_patrol_quest_";
+	if (!quests.isComplete("fs_patrol_quest_10",player))
+		sendSystemMessage(player, new string_id("fs_quest_village", "combat_quest_failed_timeout"));
+	//if (quests.isComplete("fs_patrol_quest_10",player) && !quests.isComplete("fs_patrol_quest_20",player))
+	//	sendSystemMessage(self, new string_id("fs_quest_village", "combat_quest_finish_timeout"));
+	for (int j = 1; j <21;j++)
+	{
+		if (!quests.isComplete("fs_patrol_quest_10",player))
+		{
+			clearCompletedQuest(player,quests.getQuestId(questName+j));
+			quests.deactivate(questName+j,player);
+		}
+		else if (quests.isComplete("fs_patrol_quest_10",player) && !quests.isComplete("fs_patrol_quest_20",player))
+		{
+			if (j>10)
+			{
+				clearCompletedQuest(player,quests.getQuestId(questName+j));
+				quests.deactivate(questName+j,player);
+			}
+		}
+
+		for (int i = 0; i < 8; i++)
+		{
+			if (hasObjVar(player, "quest." + questName + j + ".waypoint" + i))
+			{
+				obj_id waypoint = getObjIdObjVar(player, "quest." + questName + j + ".waypoint" + i);
+				if(isIdValid(waypoint))
+				{
+					destroyWaypointInDatapad(waypoint, player);
+				}
+				removeObjVar (player, "quest." + questName + j + ".waypoint" + i);
+				removeObjVar(player, "quest." + questName + j + ".waypointcount");
+			}
+		}
+	}
+	if (!quests.isComplete("fs_patrol_quest_10",player))
+	{
+		clearCompletedQuest(player,quests.getQuestId(questName+"start"));
+		quests.deactivate(questName+"start",player);
+	}
+	else
+	{
+		quests.complete(questName+"finish",player,true);
+	}
+	if (hasScript(player,"quest.task.patrol"))
+		detachScript(player,"quest.task.patrol");
+	removeObjVar(player,"quest.fs_patrol");
+	if (DEBUGGING) sendSystemMessageTestingOnly(player, "Cleanup Done");
+}
+/***** TRIGGERS ********************************************************/
+trigger OnDeath(obj_id killer, obj_id corpseId)
+{
+	setObjVar(self, "quest.fs_patrol.current_patrol", false);
+	string_id messageId = new string_id ("quest/force_sensitive/fs_patrol", "failed_death");
+	sendSystemMessage (self, messageId);
+	return SCRIPT_CONTINUE;
+
+}
+trigger OnArrivedAtLocation(string locationName)
+{
+	if (DEBUGGING)
+				sendSystemMessageTestingOnly(self, "Trigger 2");
+	string[] tokens = split(locationName, '.');
+	string questName = "";
+	int waypointNumber = -1;
+	if(tokens.length > 0)
+	{
+		String s = tokens[0];
+		if(!Character.isDigit(s.charAt(0)))
+		{
+			questName = tokens[0];
+			if(tokens.length > 2)
+			{
+				String wpNum = tokens[2];
+				if(Character.isDigit(wpNum.charAt(0)))
+				{
+					waypointNumber = utils.stringToInt(tokens[2]);
+					if (DEBUGGING)
+						sendSystemMessageTestingOnly(self, "wptoken done");
+				}
+			}
+		}
+	}
+
+	if(quests.isActive(questName, self) && waypointNumber != -1)
+	{
+		if (hasObjVar(self, "quest." + questName + ".waypoint" + waypointNumber))
+		{
+			if (hasObjVar(self, "quest.fs_patrol.current_patrol_point"))
+			{
+				if (!getBooleanObjVar(self, "quest.fs_patrol.current_patrol_point"))
+				{
+					setObjVar(self, "quest.fs_patrol.current_patrol", false);
+					string_id messageId = new string_id ("quest/force_sensitive/fs_patrol", "failed_previous_point");
+					sendSystemMessage (self, messageId);
+				}
+			}
+
+			obj_id wp = getObjIdObjVar(self, "quest." + questName + ".waypoint" + waypointNumber);
+			location startLocation = getWaypointLocation(wp);
+			int waypointCount = 0;
+			if (hasObjVar(self, "quest." + questName + ".waypointcount"))
+			{
+				waypointCount = getIntObjVar(self, "quest." + questName + ".waypointcount");
+			}
+
+			int chance = rand(1,100);
+			obj_id[] objects = getObjectsInRange(startLocation, 64.0f);
+			int iter;
+			for(iter = 0; iter < objects.length; ++iter)
+			{
+				if (hasObjVar(objects[iter], "quest.fs_patrol.spawned_for"))
+				{
+					chance = 1;
+					break;
+				}
+			}
+
+			if (chance >=80)
+			{
+				//setObjVar(player, "quest.fs_patrol.current_patrol", true);
+				setObjVar(self, "quest.fs_patrol.current_patrol_point", false);
+				int numberOfEnemies = rand(1,3);
+				string_id messageId = new string_id ("quest/force_sensitive/fs_patrol", "small_group"+numberOfEnemies);
+				sendSystemMessage (self, messageId);
+				spawnStuff (numberOfEnemies, startLocation, questName,self);
+			}
+			else if (chance >= 75 && chance <80)
+			{
+				setObjVar(self, "quest.fs_patrol.current_patrol_point", true);
+				int numberOfEnemies = rand(5,8);
+				string_id messageId = new string_id ("quest/force_sensitive/fs_patrol", "large_group"+numberOfEnemies);
+				sendSystemMessage (self, messageId);
+				spawnStuff (numberOfEnemies, startLocation, questName,self);
+			}
+			else
+			{
+				string_id messageId = new string_id ("quest/force_sensitive/fs_patrol", "no_objective");
+				setObjVar(self, "quest.fs_patrol.current_patrol_point", true);
+				sendSystemMessage (self, messageId);
+				if (hasObjVar(self, "quest." + questName + ".waypoint" + waypointNumber))
+				{
+					dictionary params = new dictionary();
+					params.put ("waypointNumber", waypointNumber);
+					params.put ("questName", questName);
+					messageTo(self, "handleDestroyWaypoint", params, 3.0f,false);
+				}
+			}
+		}
+
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnDetach()
+{
+	if (DEBUGGING) sendSystemMessageTestingOnly(self, "Detach Trigger Fire");
+	cleanUpStuff(self);
+	return SCRIPT_CONTINUE;
+}
+
+/**** PRIVATE FUNCTIONS ************************************************/

@@ -1,0 +1,177 @@
+include library.ship_ai;
+include library.space_utils;
+include library.utils;
+include library.attrib;
+include library.space_combat;
+
+include transform;
+include vector;
+
+
+//------TRIGGERS---------
+
+trigger OnAttach()
+{
+	setupShip( self );
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnInitialize()
+{
+	setupShip(self);
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnShipWasHit (obj_id attacker, int weaponIndex, boolean isMissile, int missileType, int intSlot, boolean fromPlayerAutoTurret, float hitLocationX_o, float hitLocationY_o, float hitLocationZ_o)
+{
+	////LOG("space_debug_ai", "OnShipWasHit self: " + self + " attacker: " + attacker);
+
+	//No more often than once per 10 seconds, send a broadcast message
+	// with the attacker's obj_id.  Anyone guarding Self will be
+	// listening for this message, and will respond in handleGuardedTargetHit
+	int lastBroadcast = utils.getIntScriptVar( self , "ship.lastHitBroadcast" );
+	int timeNow = getGameTime();
+	if ( ( lastBroadcast + 10 ) > timeNow )
+		return SCRIPT_CONTINUE;//it's too soon to broadcast another got-hit
+
+	utils.setScriptVar( self, "ship.lastHitBroadcast", timeNow );
+	dictionary parms = new dictionary();
+	parms.put( "attacker", attacker );
+	broadcastMessage( "handleGuardedTargetHit", parms );
+
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnShipIsHitting (obj_id target, int weaponIndex, int intSlot)
+{
+	////LOG("space_debug_ai", "OnShipHitting self: " + self + " target: " + target);
+
+	//if this ship is dead, then stop attacking it.
+	// spaceStopAttack() will automatically put the smackdown
+	// on the next target in the queue, if any:
+	// (it would be cleaner if the ship combat script would call this when the
+	// target gets blowed up, but a double-check doesn't hurt here - someone
+	// else might have blown it up while this ship was shooting it)
+	if ( ship_ai.isShipDead( target ) )
+		ship_ai.spaceStopAttack( self, target );
+
+	return SCRIPT_CONTINUE;
+}
+
+/*OnShipBehaviorChanged (obj_id target, int oldBehavior, int newBehavior)
+ *
+ * Code behaviors - oldBehavior, newBehavior:
+ *
+*/
+
+trigger OnShipBehaviorChanged (int oldBehavior, int newBehavior)
+{
+	return SCRIPT_CONTINUE;
+}
+
+//------FUNctions---------------
+
+void setupShip( obj_id ship )
+{
+	////LOG("space_debug_ai", "setupShip ship: " + ship);
+
+	if ( utils.hasScriptVar(ship,"ship.setupComplete") )
+		return;
+
+	if ( ship_ai.isShipAggro( ship ) )
+		setCondition( ship, CONDITION_AGGRESSIVE );
+
+	//flag ship so other ships can see it:
+	setAttributeAttained( ship, attrib.SPACE_SHIP );
+	utils.setScriptVar(ship, "ship.setupComplete", true);
+}
+
+trigger OnArrivedAtLocation(string strName)
+{
+	////LOG("space_debug_ai", "OnArrivedAtLocation strName: " + strName);
+	//LOG("space", "ARRIVED AT LOCATION, name is "+strName+ "I am "+getTemplateName(self)+" and parent is "+getObjIdObjVar(self, "objParent"));
+
+	if(strName=="spawnerArrival")
+	{
+		if(hasObjVar(self, "objDockingStation"))
+		{
+			/// DOCK AT YE OLDE SPACE STATIOn
+			obj_id objStation = getObjIdObjVar(self, "objDockingStation");
+			//LOG("space", "Docking "+self+" at "+objStation);
+			ship_ai.unitDock(self, objStation);
+			//dictionary dctParams = new dictionary();
+			//dctParams.put("objShip", self);
+			//space_utils.notifyObject(objStation, "objectDocked", dctParams);
+		}
+		else if(hasObjVar(self, "objAttackTarget"))
+		{
+			//LOG("space", "HAS ATTACK TARGET");
+			obj_id objAttackTarget = getObjIdObjVar(self, "objAttackTarget");
+			ship_ai.unitAddDamageTaken(self, objAttackTarget, 100f);
+
+
+		}
+		else
+		{
+			// corridor arrival, warp out unless i'm fighting with someon.
+			setObjVar(self, "intHyperspacing", 1);
+			//LOG("space", "DESTROYING OBJECTS3");
+			destroyObjectHyperspace(self);
+			//space_content.notifySpawner(self);
+		}
+	}
+	if(strName=="leaderSpawnerArrival")
+	{
+		obj_id[] objMembers= ship_ai.squadGetUnitList(ship_ai.unitGetSquadId(self));
+
+		if(hasObjVar(self, "objAttackTarget"))
+		{
+			obj_id objAttackTarget = getObjIdObjVar(self, "objAttackTarget");
+			for(int intI = 0; intI< objMembers.length; intI++)
+			{
+				//LOG("space", "HAS ATTACK TARGET2");
+				ship_ai.unitAddDamageTaken(objMembers[intI], objAttackTarget, 100f);
+				// MAKE THEM MAAAD
+			}
+		}
+		else
+		{
+			for(int intI  = 0; intI< objMembers.length; intI++)
+			{
+
+				if(objMembers[intI]!=self)
+				{
+
+					setObjVar(objMembers[intI], "intCleaningUp", 1);
+					setObjVar(objMembers[intI], "intHyperspacing", 1);
+					destroyObjectHyperspace(objMembers[intI]);
+					//LOG("space", "DESTROYING OBJECTS, "+objMembers[intI]);
+				}
+			}
+			setObjVar(self, "intHyperspacing", 1);
+			//LOG("space", "DESTROYING OBJECTS2, hyperspacing out "+self);
+			destroyObjectHyperspace(self);
+		}
+	}
+	return SCRIPT_CONTINUE;
+}
+
+trigger OnSpaceUnitDocked(obj_id objStation)
+{
+	dictionary dctParams = new dictionary();
+	dctParams.put("objShip", self);
+	space_utils.notifyObject(objStation, "objectDocked", dctParams);
+
+	return SCRIPT_CONTINUE;
+}
+
+messageHandler handleUnitIncreaseHate()
+{
+	obj_id unitToHate = params.getObjId( "unitToHate");
+	float amountToHate = params.getFloat( "amountToHate" );
+	float hateDelay = params.getFloat( "hateDelay" );
+	int maxRecursions = params.getInt( "maxRecursions" );
+	ship_ai.unitIncreaseHate( self, unitToHate, amountToHate, hateDelay, maxRecursions );
+	return SCRIPT_CONTINUE;
+}
+
