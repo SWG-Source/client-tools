@@ -2114,6 +2114,8 @@ void verifyUpdateRanges (const char* const filename)
 		delete appearance;
 		objectTemplate->releaseReference ();
 	}
+	
+	fclose(infile);
 }
 
 #include <deque>

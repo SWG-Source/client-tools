@@ -180,9 +180,14 @@ int File::readLine(char *buffer, int bufferSize)
 int File::print(const char *format, ...)
 {
 	NOT_NULL(m_fp);
+	int resultChars = 0;
 
 	va_list argptr;
 	va_start(argptr, format);
 
-	return vfprintf(m_fp, format, argptr);
+	resultChars = vfprintf(m_fp, format, argptr);
+	
+	va_end(argptr);
+
+	return resultChars;
 }	// File::print

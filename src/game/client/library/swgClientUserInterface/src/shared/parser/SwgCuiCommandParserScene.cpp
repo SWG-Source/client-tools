@@ -691,6 +691,7 @@ static void PlayAnimation (const SwgCuiCommandParserScene::StringVector_t & argv
 				messageBuffer[sizeof(messageBuffer) - 1] = '\0';
 
 				result = Unicode::narrowToWide(messageBuffer);
+				fclose(indirectionFile);
 				return;
 			}
 		}

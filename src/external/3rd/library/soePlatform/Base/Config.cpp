@@ -27,6 +27,7 @@ bool CConfig::LoadFile(char * file)
 	if (fp == NULL || fp == (FILE *)-1)
 	{
 		//fprintf(stderr,"Failed to open config file %s!",file);
+		fclose(fp);
 		return false;
 	}
 

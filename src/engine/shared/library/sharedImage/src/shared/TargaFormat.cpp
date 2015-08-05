@@ -1198,6 +1198,7 @@ bool TargaFormat::saveImage(const Image &image, const char *filename)
    if (numWritten != 1)
    {
 		DEBUG_WARNING(true, ("Targa header not written successfully.\n"));
+		fclose(f);
       return false;
    }
 	//------------------------------------------
