@@ -386,6 +386,7 @@ BOOL SwgClientSetupApp::InitInstance()
 		CString anotherStr;
 		VERIFY(anotherStr.LoadString(IDS_ANOTHER_INSTANCE));
 		MessageBox(NULL, anotherStr, NULL, MB_OK | MB_ICONSTOP);
+		CloseHandle(semaphore);
 		return FALSE;
 	}
 	
