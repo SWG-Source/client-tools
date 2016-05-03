@@ -349,7 +349,7 @@ void CellObject::getObjectInfo(std::map<std::string, std::map<std::string, Unico
 
 bool CellObject::getAccessAllowed() const
 {
-	return m_isPublic.get() && m_accessAllowed;
+	return (m_isPublic.get() && m_accessAllowed) || m_accessAllowed;
 }
 
 // ----------------------------------------------------------------------
