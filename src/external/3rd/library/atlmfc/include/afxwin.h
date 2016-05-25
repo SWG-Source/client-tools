@@ -58,7 +58,7 @@ AFX_INLINE short APIENTRY GetFileTitle(LPCTSTR lpszFile, LPTSTR lpszTitle, WORD 
 
 #if (_WIN32_WINNT >= 0x501)
 #include <uxtheme.h>
-#include <tmschema.h>
+#include <vssym32.h>
 #endif	// (_WIN32_WINNT >= 0x501)
 
 #ifdef _AFX_MINREBUILD
