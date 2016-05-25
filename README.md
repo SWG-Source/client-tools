@@ -5,7 +5,7 @@ This repo is only for building the clients and tools.
 ## Branches:
 
 * **master** - currently builds using Visual Studio 2013. Uses the old stlport.
-* **vs2015**-stlconversion - Current "work in progress" for building on Visual Studio 2015, which includes it's own, complete STL implementation.
+* **vs2015-stlconversion** - Current "work in progress" for building on Visual Studio 2015, which includes it's own, complete STL implementation.
 * **msvc-stl-conversion** - old attempt at using VS2013 STL. May or may not be useful for reference, but likely not useful for building.
 
 ## Visual Studio
