@@ -76,7 +76,7 @@ namespace DPVS
 	public:
 		enum
 		{
-			ret = sizeof(Helper(t).ret) == sizeof_ret_true
+			ret = sizeof(&Helper(&t).ret) == sizeof_ret_true
 		};
 	};
 	
