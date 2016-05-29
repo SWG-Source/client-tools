@@ -849,7 +849,6 @@ void CuiPreferences::install ()
 
 	REGISTER_OPTION(playerCameraHeight);
 
-	REGISTER_OPTION(autoLootChronicleRelics);
 	REGISTER_OPTION(autoLootCorpses);
 
 	REGISTER_OPTION(speakerVolume);
