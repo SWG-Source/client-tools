@@ -400,6 +400,7 @@ namespace
 
 	float ms_playerCameraHeight = 1.4f;
 
+	bool ms_autoLootChronicleRelics = false;
 	bool ms_autoLootCorpses = false;
 
 	float ms_speakerVolume = 0.5f;
@@ -849,6 +850,7 @@ void CuiPreferences::install ()
 
 	REGISTER_OPTION(playerCameraHeight);
 
+	REGISTER_OPTION(autoLootChronicleRelics);
 	REGISTER_OPTION(autoLootCorpses);
 
 	REGISTER_OPTION(speakerVolume);
@@ -3527,6 +3529,20 @@ void CuiPreferences::setShowAppearanceInventory(bool show)
 bool CuiPreferences::getShowAppearanceInventory()
 {
 	return ms_showAppearanceInventory;
+}
+
+//----------------------------------------------------------------------
+
+bool CuiPreferences::getLootChronRelics()
+{
+	return ms_autoLootChronicleRelics;
+}
+
+//----------------------------------------------------------------------
+
+void CuiPreferences::setLootChronRelics(bool loot)
+{
+	ms_autoLootChronicleRelics = loot;
 }
 
 //----------------------------------------------------------------------

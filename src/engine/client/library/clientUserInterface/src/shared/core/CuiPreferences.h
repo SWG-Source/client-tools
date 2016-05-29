@@ -562,6 +562,9 @@ public:
 	static bool getShowAppearanceInventory();
 	static void setShowAppearanceInventory(bool show);
 
+	static bool getLootChronRelics();
+	static void setLootChronRelics(bool loot);
+	
 	static bool getAutoLootCorpses();
 	static void setAutoLootCorpses(bool loot);
 
