@@ -142,9 +142,6 @@ SwgCuiOptBase ("SwgCuiOptMisc", page)
 	getCodeDataObject(TUIComboBox, combobox, "currencyFormat");
 	registerComboBox  (*combobox, onComboCurrencyFormatSet, onComboCurrencyFormatGet, getDefaultCurrencyFormat);
 
-	getCodeDataObject(TUICheckbox, checkbox, "checkAutoLootChronicleRelics");
-	registerCheckbox(*checkbox, CuiPreferences::setLootChronRelics, CuiPreferences::getLootChronRelics, SwgCuiOptBase::getFalse);
-	
 	getCodeDataObject(TUICheckbox, checkbox, "checkAutoLootCorpses");
 	registerCheckbox (*checkbox, CuiPreferences::setAutoLootCorpses, CuiPreferences::getAutoLootCorpses, SwgCuiOptBase::getFalse);
 
