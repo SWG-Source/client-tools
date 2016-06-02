@@ -90,22 +90,20 @@ void ConfigSharedFoundation::install (const Defaults &defaults)
 
 	KEY_BOOL(demoMode,                        defaults.demoMode);
 
-#if defined (WIN32) && PRODUCTION == 1
-	// In production builds, force our frame rate limit to be the application defined limit
-	ms_frameRateLimit = defaults.frameRateLimit;
-#else
-	KEY_FLOAT(frameRateLimit,                 defaults.frameRateLimit);
-#endif
+	ms_frameRateLimit = 144.f;
+	ms_minFrameRate = 30.f;
 
-	KEY_FLOAT(minFrameRate,                   1.0f);
+	KEY_FLOAT(frameRateLimit,                 144.f);
+
+	KEY_FLOAT(minFrameRate,                   30.f);
 
 	KEY_BOOL(useRemoteDebug,                  false);
 	KEY_INT(defaultRemoteDebugPort,           4445);
 
 	KEY_BOOL(profilerExpandAllBranches,       false);
-	KEY_BOOL(memoryManagerReportAllocations,  true);
-	KEY_BOOL(memoryManagerReportOnOutOfMemory,    true);
-	KEY_BOOL(useMemoryBlockManager,               true);
+	KEY_BOOL(memoryManagerReportAllocations, true);
+	KEY_BOOL(memoryManagerReportOnOutOfMemory, true);
+	KEY_BOOL(useMemoryBlockManager, true);
 	KEY_BOOL(memoryBlockManagerDebugDumpOnRemove, false);
 
 	KEY_INT(fatalCallStackDepth,              c_defaultFatalCallStackDepth);

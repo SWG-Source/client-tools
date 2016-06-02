@@ -34,11 +34,7 @@
 #include <fcntl.h>
 #include <new>
 
-#ifdef _WIN32
 #define DISABLE_MEMORY_MANAGER 0
-#else
-#define DISABLE_MEMORY_MANAGER 0
-#endif
 
 //lint -e826 // Suspicious pointer-to-pointer conversion (area too small)
 
@@ -48,47 +44,12 @@
 // 
 #define DISABLED                0
 
-#if PRODUCTION
 
-	#define DO_TRACK               0
-	#define DO_SCALAR              0
-	#define DO_GUARDS              0
-	#define DO_INITIALIZE_FILLS    0
-	#define DO_FREE_FILLS          0
-
-#else
-
-	#if DEBUG_LEVEL == DEBUG_LEVEL_DEBUG
-
-		#define DO_TRACK             1
-		#define DO_SCALAR            1
-		#define DO_GUARDS            1
-		#define DO_INITIALIZE_FILLS  1
-		#define DO_FREE_FILLS        1
-
-	#elif DEBUG_LEVEL == DEBUG_LEVEL_OPTIMIZED
-
-		#define DO_TRACK             1
-		#define DO_SCALAR            1
-		#define DO_GUARDS            1
-		#define DO_INITIALIZE_FILLS  1
-		#define DO_FREE_FILLS        1
-
-	#elif DEBUG_LEVEL == DEBUG_LEVEL_RELEASE
-
-		#define DO_TRACK             0
-		#define DO_SCALAR            0
-		#define DO_GUARDS            0
-		#define DO_INITIALIZE_FILLS  0
-		#define DO_FREE_FILLS        0
-
-	#else
-
-		#error unknown DEBUG_LEVEL
-
-	#endif
-
-#endif
+#define DO_TRACK               0
+#define DO_SCALAR              0
+#define DO_GUARDS              0
+#define DO_INITIALIZE_FILLS    0
+#define DO_FREE_FILLS          0
 
 #ifdef PLATFORM_LINUX
 	#undef DO_TRACK
@@ -2102,7 +2063,7 @@ void  MemoryManager::setLimit(int, bool, bool)
 
 int MemoryManager::getLimit()
 {
-	return 768;
+	return 3072;
 }
 
 // ----------------------------------------------------------------------
