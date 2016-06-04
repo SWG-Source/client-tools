@@ -1,6 +1,0 @@
-AUTOMAKE_OPTIONS=foreign
-SUBDIRS=src .
-lib_LTLIBRARIES=liblocalization.la
-liblocalization_la_LIBADD=src/shared/liblocalizationshared.la
-liblocalization_la_SOURCES=src/shared/FirstLocalization.h
-liblocalization_la_LDFLAGS=-avoid-version

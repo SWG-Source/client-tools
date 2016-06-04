@@ -158,8 +158,10 @@ int ClientMain(
 	data.commandLine               = lpCmdLine;
 	data.configFile                = "client.cfg";
 	data.clockUsesSleep            = true;
+	data.frameRateLimit            = 144.f;
+#if PRODUCTION
 	data.demoMode                  = true;
-
+#endif
 	if (ApplicationVersion::isPublishBuild() || ApplicationVersion::isBootlegBuild())
 		data.writeMiniDumps          = true;
 	SetupSharedFoundation::install (data);
@@ -182,17 +184,21 @@ int ClientMain(
 	else
 	{
 		{
-			// enable them all!!!
 			uint32 gameFeatures = ConfigFile::getKeyInt("Station",  "gameFeatures", 0) & ~ConfigFile::getKeyInt("ClientGame", "gameBitsToClear", 0);
 			// hack to set retail if beta or preorder
-			gameFeatures |= ClientGameFeature::SpaceExpansionRetail;
+			if (ConfigFile::getKeyBool("ClientGame",  "setJtlRetailIfBetaIsSet", 0))
+			{
+				if (gameFeatures & (ClientGameFeature::SpaceExpansionBeta | ClientGameFeature::SpaceExpansionPreOrder))
+					gameFeatures |= ClientGameFeature::SpaceExpansionRetail;
+			}
 
 			//-- set ep3 retail if beta or preorder
-			gameFeatures |= ClientGameFeature::Episode3ExpansionRetail;
+			if (gameFeatures & (ClientGameFeature::Episode3PreorderDownload))
+				gameFeatures |= ClientGameFeature::Episode3ExpansionRetail;
 
 			//-- set Obiwan retail if beta or preorder
-			gameFeatures |= ClientGameFeature::TrialsOfObiwanRetail;
-
+			if (gameFeatures & ClientGameFeature::TrialsOfObiwanPreorder)
+				gameFeatures |= ClientGameFeature::TrialsOfObiwanRetail;
 			Game::setGameFeatureBits(gameFeatures);
 			Game::setSubscriptionFeatureBits(ConfigFile::getKeyInt("Station",  "subscriptionFeatures", 0));
 			Game::setExternalCommandHandler(externalCommandHandler);
@@ -209,12 +215,16 @@ int ClientMain(
 
 		//-- file
 		{
-			// just enable all sku's
+			// figure out what skus we need to support in the tree file system
 			uint32 skuBits = 0;
-			skuBits |= BINARY1(0001);
-			skuBits |= BINARY1(0010);
-			skuBits |= BINARY1(0100);
-			skuBits |= BINARY1(1000);
+			if ((Game::getGameFeatureBits() & ClientGameFeature::Base) != 0)
+				skuBits |= BINARY1(0001);
+			if ((Game::getGameFeatureBits() & ClientGameFeature::SpaceExpansionRetail) != 0)
+				skuBits |= BINARY1(0010);
+			if ((Game::getGameFeatureBits() & ClientGameFeature::Episode3ExpansionRetail) != 0)
+				skuBits |= BINARY1(0100);
+			if ((Game::getGameFeatureBits() & ClientGameFeature::TrialsOfObiwanRetail) != 0)
+				skuBits |= BINARY1(1000);
 
 			SetupSharedFile::install(true, skuBits);
 		}
@@ -374,6 +384,12 @@ int ClientMain(
 			CuiChatHistory::save();
 			CurrentUserOptionManager::save ();
 			LocalMachineOptionManager::save ();
+
+			// -- if player is a trial or rental player, launch the conversion web page
+			if ((Game::getSubscriptionFeatureBits() & ClientSubscriptionFeature::Base) == 0)
+			{
+				Game::externalCommand("npe_continue");
+			}
 		}
 	}
 

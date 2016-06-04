@@ -1,8 +1,0 @@
-AUTOMAKE_OPTIONS=foreign
-SUBDIRS=core .
-noinst_LTLIBRARIES=libTemplateDefinitionCompilershared.la
-libTemplateDefinitionCompilershared_la_SOURCES=core/FirstTemplateDefinitionCompiler.h
-libTemplateDefinitionCompilershared_la_LIBADD=core/libTemplateDefinitionCompilersharedcore.la
-
-
-include $(engine_dir)/../make_include/engine.include

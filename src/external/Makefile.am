@@ -1,2 +1,0 @@
-AUTOMAKE_OPTIONS=foreign
-SUBDIRS=3rd ours .
