@@ -337,7 +337,7 @@ template <class _CharT, class _Traits, class _Alloc> __size_type__
 basic_string<_CharT,_Traits,_Alloc> ::find(const _CharT* __s, size_type __pos, size_type __n) const 
 {
   if (__pos + __n > size())
-    return npos;
+    return (size_t) npos;
   else {
     const const_pointer __result =
       _STLP_STD::search((const _CharT*)this->_M_start + __pos, (const _CharT*)this->_M_finish, 

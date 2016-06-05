@@ -36,7 +36,7 @@
 
 namespace browserNamespace
 {
-	std::string s_homePage = "www.StarWarsGalaxies.com";
+	std::string s_homePage = "beta.stellabellum.net";
 }
 
 using namespace browserNamespace;

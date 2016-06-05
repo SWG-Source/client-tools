@@ -907,13 +907,6 @@ bool VertexSorterX ( Vector const & A, Vector const & B )
 
 void BuildConvexHull ( VertexList const & verts, VertexList & outPoly )
 {
-	VertexList sortedVerts = verts;
-
-	std::sort(sortedVerts.begin(),sortedVerts.end(),VertexSorterX);
-
-	int count = verts.size();
-
-	//BuildConvexHull( sortedVerts.begin(), count, outPoly );
 }
 
 // ----------------------------------------------------------------------

@@ -164,11 +164,11 @@ private:
   // that this must be large enough to preserve
   // alignment.
   static size_t _STLP_CALL __extra_before_chunk() {
-    return (long)__extra_before/sizeof(value_type)+
+    return (size_t)((long)__extra_before/sizeof(value_type))+
       (size_t)((long)__extra_before%sizeof(value_type)>0);
   }
   static size_t _STLP_CALL __extra_after_chunk() {
-    return (long)__extra_after/sizeof(value_type)+
+    return (size_t)((long)__extra_after/sizeof(value_type))+
       (size_t)((long)__extra_after%sizeof(value_type)>0);
   }
 public:
