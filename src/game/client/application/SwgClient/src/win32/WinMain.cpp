@@ -50,21 +50,30 @@ static bool SetUserSelectedMemoryManagerTarget()
 static void SetDefaultMemoryManagerTargetSize()
 {
 	int megabytes = 0;
-	MEMORYSTATUS memoryStatus;
-	GlobalMemoryStatus (&memoryStatus);
-	megabytes = ((memoryStatus.dwTotalPhys / 4) * 3) / (1024 * 1024);
+	MEMORYSTATUSEX memoryStatus;
+	megabytes = memoryStatus.ullTotalPhys / 1048576;
 
-	// clamp it between 250 and 2000 MB in production, 750 in dev environments
-	if (megabytes < 250)
-		megabytes = 250;
-#if PRODUCTION == 0
-	if (megabytes > 750)
-		megabytes = 750;
-#else
-	if (megabytes > 2000)
-		megabytes = 2000;
-#endif
-
+	// clamp it between 250 and 2048MB
+	if (megabytes >= 2040)
+	{
+		megabytes = 2048;
+	}
+	else if (megabytes >= 1020)
+	{
+		megabytes = 1024;
+	}
+	else if (megabytes <= 760)
+	{
+		megabytes = 768;
+	}
+	else if (megabytes <= 250)
+	{
+		megabytes = 256;
+	}
+	else
+	{
+		megabytes = 768;
+	}
 
 	MemoryManager::setLimit(megabytes, false, false);
 }
