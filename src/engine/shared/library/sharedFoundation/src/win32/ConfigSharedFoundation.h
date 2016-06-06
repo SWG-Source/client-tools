@@ -21,6 +21,7 @@ public:
 		int  screenWidth;
 		bool windowed;
 		real frameRateLimit;
+		real minFrameRate;
 		bool demoMode;
 		bool verboseWarnings;
 	};

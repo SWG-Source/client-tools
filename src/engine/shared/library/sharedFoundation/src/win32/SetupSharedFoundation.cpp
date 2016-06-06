@@ -223,6 +223,7 @@ void SetupSharedFoundation::install(const Data &data)
 	{
 		ConfigSharedFoundation::Defaults defaults;
 		defaults.frameRateLimit = data.frameRateLimit;
+		defaults.minFrameRate = data.minFrameRate;
 		defaults.demoMode       = data.demoMode;
 		defaults.verboseWarnings = data.verboseWarnings;
 		ConfigSharedFoundation::install(defaults);
@@ -338,6 +339,7 @@ void SetupSharedFoundation::Data::setupGameDefaults()
 	productRegistryKey                       = NULL;
 
 	frameRateLimit                           = CONST_REAL(0);
+	minFrameRate							 = CONST_REAL(0);
 
 	lostFocusCallback                        = NULL;
 
@@ -370,6 +372,7 @@ void SetupSharedFoundation::Data::setupConsoleDefaults()
 	productRegistryKey                       = NULL;
 
 	frameRateLimit                           = CONST_REAL(0);
+	minFrameRate							 = CONST_REAL(0);
 
 	lostFocusCallback                        = NULL;
 
@@ -402,6 +405,7 @@ void SetupSharedFoundation::Data::setupMfcDefaults()
 	productRegistryKey                       = NULL;
 
 	frameRateLimit                           = CONST_REAL(0);
+	minFrameRate							 = CONST_REAL(0);
 
 	demoMode                                 = false;
 	verboseWarnings                          = false;

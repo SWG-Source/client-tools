@@ -90,12 +90,8 @@ void ConfigSharedFoundation::install (const Defaults &defaults)
 
 	KEY_BOOL(demoMode,                        defaults.demoMode);
 
-	ms_frameRateLimit = 144.f;
-	ms_minFrameRate = 30.f;
-
-	KEY_FLOAT(frameRateLimit,                 144.f);
-
-	KEY_FLOAT(minFrameRate,                   30.f);
+	KEY_FLOAT(frameRateLimit,				  defaults.frameRateLimit);
+	KEY_FLOAT(minFrameRate,					  defaults.minFrameRate);
 
 	KEY_BOOL(useRemoteDebug,                  false);
 	KEY_INT(defaultRemoteDebugPort,           4445);

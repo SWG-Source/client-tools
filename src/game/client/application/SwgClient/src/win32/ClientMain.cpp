@@ -158,20 +158,24 @@ int ClientMain(
 	data.commandLine               = lpCmdLine;
 	data.configFile                = "client.cfg";
 	data.clockUsesSleep            = true;
-	data.frameRateLimit            = 144.f;
+	data.minFrameRate			   = 1.f;
+	data.frameRateLimit			   = 144.f;
 #if PRODUCTION
 	data.demoMode                  = true;
 #endif
 	if (ApplicationVersion::isPublishBuild() || ApplicationVersion::isBootlegBuild())
-		data.writeMiniDumps          = true;
-	SetupSharedFoundation::install (data);
+	{
+		data.writeMiniDumps = true;
+	}
+
+	SetupSharedFoundation::install(data);
 
 	REPORT_LOG(true, ("ClientMain: Command Line = \"%s\"\n", lpCmdLine));
 	REPORT_LOG (true, ("ClientMain: Memory size = %i MB\n", MemoryManager::getLimit()));
 
 	// check for any config file entries
 	if (ConfigFile::isEmpty())
-		FATAL(true, ("Config file not specified"));
+		FATAL(true, ("Config file not specified"));	
 
 	InstallTimer::checkConfigFile();
 

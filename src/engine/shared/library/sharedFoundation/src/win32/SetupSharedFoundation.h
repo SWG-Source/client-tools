@@ -48,7 +48,7 @@ public:
 		const char     *productRegistryKey;
 
 		real            frameRateLimit;
-
+		real			minFrameRate;
 
 		bool            demoMode;
 
