@@ -109,9 +109,6 @@ public:
 	static void                convertTimeToGMT(const time_t &time, tm &zulu);
 	static time_t              convertGMTToTime(const tm &zulu);
 
-	static bool                isMultiprocessor();
-	static int                 getProcessorCount();
-
 	static void                buildRelativePath(const char *baseDirectory, const char *targetPathname, std::string &relativePath);
 	static bool                getAbsolutePath(const char *relativePath, char *absolutePath, int absolutePathBufferSize);
 

@@ -18,7 +18,6 @@
 #include "sharedFoundation/Clock.h"
 #include "sharedFoundation/ConfigFile.h"
 #include "sharedFoundation/ConfigSharedFoundation.h"
-#include "sharedFoundation/CrashReportInformation.h"
 #include "sharedFoundation/ExitChain.h"
 #include "sharedFoundation/FloatingPointUnit.h"
 #include "sharedFoundation/Production.h"
@@ -80,7 +79,6 @@ namespace OsNamespace
 	Os::IMEHookFunction                           ms_IMEHookFunction;
 	Os::QueueKeyDownHookFunction                  ms_queueKeyDownHookFunction;
 
-	int                                           ms_processorCount;
 	int                                           ms_debugKeyIndex;
 	int                                           ms_SystemMouseCursorPositionX;
 	int                                           ms_SystemMouseCursorPositionY;
@@ -245,106 +243,6 @@ void Os::installCommon()
 	// switch into single-precision floating point mode
 	FloatingPointUnit::install();
 
-	// get the amount of memory
-	MEMORYSTATUS memoryStatus;
-	GlobalMemoryStatus(&memoryStatus);
-	CrashReportInformation::addStaticText("Ram: %dmb\n", memoryStatus.dwTotalPhys / (1024 * 1024));
-
-	// log the os information
-	{
-		OSVERSIONINFO versionInfo;
-		Zero(versionInfo);
-		versionInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-		GetVersionEx(&versionInfo);
-		CrashReportInformation::addStaticText("Os1: %d.%d.%d\n", versionInfo.dwMajorVersion, versionInfo.dwMinorVersion, versionInfo.dwBuildNumber);
-
-		char const * os = "Unknown";
-
-		char CDECL pwine_get_version;
-		HMODULE hntdll = GetModuleHandle("ntdll.dll");
-
-		switch (versionInfo.dwMajorVersion) {
-			case 4:
-				switch (versionInfo.dwMinorVersion){
-					case 10:
-						os = "Windows 98";
-						break;
-					case 90:
-						os = "Windows ME";
-						break;
-				}
-				break;
-			case 5:
-				switch (versionInfo.dwMinorVersion) {
-					case 0:
-						os = "Windows 2000";
-						break;
-					case 1:
-						os = "Windows XP";
-						break;
-					case 2:
-						os = "Windows 2003";
-						break;
-				}
-				break;
-			case 6:
-				switch (versionInfo.dwMinorVersion){
-					case 0:
-						os = "Windows Vista";
-						break;
-					case 1:
-						os = "Windows 7";
-						break;
-					case 2:
-						os = "Windows 8";
-						break;
-					case 3:
-						os = "Windows 8.1";
-						break;
-				}
-				break;
-			case 10:
-				os = "Windows 10";
-				break;
-		}
-
-		//detect WINE
-		if (hntdll)
-		{
-			pwine_get_version = (char)GetProcAddress(hntdll, "wine_get_version");
-			if (pwine_get_version)
-			{
-				os = strcat("Wine ", &pwine_get_version);
-			}
-		}
-
-		CrashReportInformation::addStaticText("Os2: %s %s\n", os, versionInfo.szCSDVersion);
-	}
-
-	// get the number of processors
-	SYSTEM_INFO si;
-	GetSystemInfo(&si);
-	ms_processorCount = static_cast<int>(si.dwNumberOfProcessors);
-	REPORT_LOG (ConfigSharedFoundation::getVerboseHardwareLogging(), ("Processor Count: %i\n", ms_processorCount));
-	CrashReportInformation::addStaticText("NumProc: %d\n", ms_processorCount);
-
-	{
-		HKEY key;
-		LONG result = RegOpenKeyEx (HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_EXECUTE, &key);
-
-		if (result == ERROR_SUCCESS) 
-		{
-			DWORD data; 
-			DWORD type = REG_DWORD;
-			DWORD size = sizeof (data);
-			result = RegQueryValueEx (key, "~MHz", NULL, &type, reinterpret_cast<LPBYTE> (&data), &size);
-			if ((result == ERROR_SUCCESS) && (size > 0))
-				REPORT_LOG (ConfigSharedFoundation::getVerboseHardwareLogging(), ("Processor Speed: %i MHz\n", data));
-
-			RegCloseKey (key);
-		}
-	}
-
 	if (!GetKeyboardLayoutName(ms_keyboardLayout))
 		ms_keyboardLayout[0] = '\0';
 
@@ -493,30 +391,6 @@ int Os::getNumberOfUpdates()
 bool Os::wasFocusLost()
 {
 	return ms_wasFocusLost;
-}
-
-// ----------------------------------------------------------------------
-/**
- * Return a flag indicating whether we are running a multiprocessor machine or not.
- *
- * @return True if the machine has more than one processor, false if not.
- */
-
-bool Os::isMultiprocessor()
-{
-	return ms_processorCount > 1;
-}
-
-// ----------------------------------------------------------------------
-/**
- * Return the number of processors.
- *
- * @return The number of processors in the machine.
- */
-
-int Os::getProcessorCount()
-{
-	return ms_processorCount;
 }
 
 // ----------------------------------------------------------------------
@@ -1662,10 +1536,7 @@ bool Os::isFocused()
 bool Os::launchBrowser(std::string const & website)
 {
 	std::string URL("http://");
-	if (strncmp(URL.c_str(), website.c_str(),7)!=0)
-		URL+=website;
-	else
-		URL=website;
+	URL=website;
 	int result = reinterpret_cast<int>(ShellExecute(NULL, "open", URL.c_str(), NULL, NULL, SW_SHOWNORMAL));
 	return (result > 32);
 }
