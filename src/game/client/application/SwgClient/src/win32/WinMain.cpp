@@ -49,35 +49,18 @@ static bool SetUserSelectedMemoryManagerTarget()
 
 static void SetDefaultMemoryManagerTargetSize()
 {
-	int megabytes = 0;
+	// just use all available up to 2048gb, else ALL available, since we're 99% guranteed to be on a modern machine
 	MEMORYSTATUSEX memoryStatus = { sizeof memoryStatus };
-	megabytes = memoryStatus.ullTotalPhys / 1048576;
+	GlobalMemoryStatusEx(&memoryStatus);
+	int ramMB = (memoryStatus.ullTotalPhys / 1048576);
 
-	// clamp it between 250 and 2048MB
-	if (megabytes >= 2040)
-	{
-		megabytes = 2048;
-	}
-	else if (megabytes >= 1020)
-	{
-		megabytes = 1024;
-	}
-	else if (megabytes <= 760)
-	{
-		megabytes = 768;
-	}
-	else if (megabytes <= 250)
-	{
-		megabytes = 256;
-	}
-	else
-	{
-		megabytes = 768;
+	// without PAE enabled 2048 is the max we can do
+	if (ramMB >= 2048){
+		ramMB = 2048;
 	}
 
-	MemoryManager::setLimit(megabytes, false, false);
+	MemoryManager::setLimit(ramMB, false, false);
 }
-
 
 void externalCommandHandler(const char* command)
 {
@@ -88,13 +71,6 @@ void externalCommandHandler(const char* command)
 
 		Unicode::String url;
 
-		/*
-		if ((Game::getSubscriptionFeatureBits() & ClientSubscriptionFeature::NPENagForRental) != 0)
-		{
-			url = rentalNagId.localize();
-		}
-		else 
-		*/
 		if ((Game::getSubscriptionFeatureBits() & ClientSubscriptionFeature::NPENagForTrial) != 0)
 		{
 			url = trialNagId.localize();
