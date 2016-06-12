@@ -294,37 +294,53 @@ void ClientMachine::install ()
 #endif
 	}
 
-	//-- detect os
+	//-- maybe detect os
 	{
-		OSVERSIONINFO versionInfo;
-		versionInfo.dwOSVersionInfoSize = sizeof (OSVERSIONINFO);
-		GetVersionEx (&versionInfo);
+		ms_os = _T("Unknown");
 
-		ms_os = _T("Unsupported");
+		// the BS below is because screwing around with the manifest is a huge pain in the ass
+		// and the manifest method of "enabling" version checks for 8.1 and above doesn't work 
+		// screw you microsoft, screw you
+		LONG	lresult;
+		HKEY	NewKey;
 
-		if (versionInfo.dwMajorVersion == 4 && versionInfo.dwMinorVersion == 10)
-			ms_os = _T("Windows 98");
-		else
-			if (versionInfo.dwMajorVersion == 4 && versionInfo.dwMinorVersion == 90)
-				ms_os = _T("Windows Me");
-			else
-				if (versionInfo.dwMajorVersion == 5 && versionInfo.dwMinorVersion == 0)
-					ms_os = _T("Windows 2000");
-				else
-					if (versionInfo.dwMajorVersion == 5 && versionInfo.dwMinorVersion == 1)
-						ms_os = _T("Windows XP");
-					else
-						if (versionInfo.dwMajorVersion == 5 && versionInfo.dwMinorVersion == 2)
-							ms_os = _T("Windows Server 2003");
-						else
-							if (versionInfo.dwMajorVersion == 6 && versionInfo.dwMinorVersion == 0)
-								ms_os = _T("Windows Vista");
+		#define WINDOZE_VERSION "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+		lresult = RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T(WINDOZE_VERSION),
+			0, KEY_EXECUTE, &NewKey);
 
-		if (ms_os != _T("Unsupported"))
+		if (ERROR_SUCCESS == lresult)
 		{
-			ms_os += _T(" ");
-			ms_os += versionInfo.szCSDVersion;
+			TCHAR szKeyValue[100];
+			DWORD dwType;
+			DWORD dwSize;
+
+			dwType = REG_SZ; dwSize = 100;
+			memset(szKeyValue, 0, 100);
+			lresult = RegQueryValueEx(NewKey, _T("ProductName"), NULL, &dwType, (LPBYTE)szKeyValue, &dwSize);
+
+			if ((lresult == ERROR_SUCCESS) && (dwSize > 0))
+			{
+				CString prodName = szKeyValue;
+				prodName.TrimLeft();
+				prodName.TrimRight();
+
+				ms_os = prodName;
+			}
 		}
+
+		// check for wine
+		char CDECL pwine_get_version;
+		HMODULE hntdll = GetModuleHandle(L"ntdll.dll");
+
+		if (hntdll)
+		{
+			pwine_get_version = (char)GetProcAddress(hntdll, "wine_get_version");
+			if (pwine_get_version)
+			{
+				ms_os = _T("Wine");
+			}
+		}
+
 	}
 
 	//-- detect directdraw
