@@ -859,7 +859,7 @@ CString const ClientMachine::getHardwareInformationString ()
 	buffer += '\n';
 	result += buffer;
 
-	buffer.Format (_T("Physical Memory Size: %i MB"), getPhysicalMemorySize ());
+	buffer.Format (_T("Physical Memory Size: %i GB"), getPhysicalMemorySize ());
 	buffer += '\n';
 	result += buffer;
 
