@@ -214,13 +214,9 @@ void ClientMachine::install ()
 {
 	//-- detect memory
 	{
-		MEMORYSTATUS memoryStatus;
-		GlobalMemoryStatus (&memoryStatus);
-		ms_physicalMemorySize = memoryStatus.dwTotalPhys / (1024 * 1024);
-
-#if defined(_DEBUG) && DEBUGGING_OPTIONS
-		ms_physicalMemorySize = ms_debugPhysicalMemorySize;
-#endif
+		MEMORYSTATUSEX memoryStatus = { sizeof memoryStatus };
+		GlobalMemoryStatusEx(&memoryStatus);
+		ms_physicalMemorySize = (memoryStatus.ullTotalPhys / 1048576);
 	}
 
 	//-- detect cpu
@@ -352,7 +348,7 @@ void ClientMachine::install ()
 			memset (&caps, 0, sizeof (DDCAPS));
 			caps.dwSize = sizeof (DDCAPS);
 			if (SUCCEEDED  (directDraw->GetCaps (&caps, 0)))
-				ms_videoMemorySize = caps.dwVidMemTotal / (1024 * 1024);
+				ms_videoMemorySize = caps.dwVidMemTotal / 1048576;
 
 			directDraw->Release ();
 			directDraw = 0;
@@ -410,20 +406,10 @@ void ClientMachine::install ()
 				for (int i = 0; i < numberOfDisplayModes; ++i)
 				{
 					hresult = direct3d->EnumAdapterModes (D3DADAPTER_DEFAULT, D3DFMT_X8R8G8B8, i, &displayMode);
-#ifdef _DEBUG
-					temp.Format (_T("D3DDISPLAYMODE: width=%d height=%d refresh=%d format=%d\n"), displayMode.Width, displayMode.Height, displayMode.RefreshRate, displayMode.Format);
-					OutputDebugString (temp);
-#endif
 
-					//Disable modes above 1280x1024 with 64MB, and modes above 1024x768 with 32MB
-					if ((ms_videoMemorySize < 32) && ((displayMode.Width > 1024) || (displayMode.Height > 768)))
-						continue;
-
-					if ((ms_videoMemorySize < 64) && ((displayMode.Width > 1280) || (displayMode.Height > 1024)))
-						continue;
-
-					if (displayMode.Width >= 1024 && displayMode.Height >= 720 && displayMode.RefreshRate >= 57 && displayMode.RefreshRate <= 75)
-						ms_displayModeList.push_back (displayMode);
+					if (displayMode.Width >= 1024 && displayMode.Height >= 720 && displayMode.RefreshRate >= 57) {
+						ms_displayModeList.push_back(displayMode);
+					}
 				}
 			}
 
@@ -449,76 +435,6 @@ void ClientMachine::install ()
 		UNICODE_AIL_MSS_version(text, sizeof(text) / sizeof(TCHAR));
 		ms_soundVersion = text;
 		query3dProviders (ms_soundProviderList);
-	}
-
-	//-- detect cd / dvd
-	{
-		// get all the drive letters in the system
-		wchar_t drives[4096];
-		int drivesWritten = GetLogicalDriveStrings(sizeof(drives), drives);
-		if (drivesWritten > 0 && drivesWritten <= sizeof(drives))
-		{
-			// iterate over all the drives in the system
-			for (wchar_t const * currentDrive = drives; *currentDrive; currentDrive += wcslen(currentDrive) + 1)
-			{
-				// see if the drive is CD or DVD based
-				if (GetDriveType(currentDrive) == DRIVE_CDROM)
-				{
-					// Get a handle to the device
-					wchar_t createFileBuffer[256];
-					_stprintf(createFileBuffer, _T("\\\\.\\%c:"), currentDrive[0]);
-					HANDLE handle = CreateFile(createFileBuffer, 0, 0, NULL, OPEN_EXISTING, 0, 0);
-					if (handle != INVALID_HANDLE_VALUE)
-					{
-						// Check its media types
-						wchar_t buffer[32 * 1024];
-						DWORD written = 0;
-						if (DeviceIoControl(handle, IOCTL_STORAGE_GET_MEDIA_TYPES_EX, NULL, 0, buffer, sizeof(buffer), &written, 0) && written > 0 && written <= sizeof(buffer))
-						{
-							GET_MEDIA_TYPES const * const mediaTypes = reinterpret_cast<GET_MEDIA_TYPES const *>(buffer);
-
-							if (mediaTypes->DeviceType == FILE_DEVICE_CD_ROM)
-							{
-								++ms_numberOfCdDrives;
-							}
-							else if (mediaTypes->DeviceType == FILE_DEVICE_DVD)
-							{
-								++ms_numberOfDvdDrives;
-							}
-						}
-
-						CloseHandle(handle);
-					}
-				}
-			}
-		}
-	}
-
-	{
-		CRegKey regKey;
-		if (regKey.Open (HKEY_LOCAL_MACHINE, _T("Software\\microsoft\\windows\\currentversion\\app paths\\StarWarsGalaxies")) == ERROR_SUCCESS)
-		{
-			DWORD value = 0;
-			if (regKey.QueryValue (value, _T("SoeBits")) == ERROR_SUCCESS)
-			{
-				switch (value)
-				{
-					case 0:
-						ms_bitsStatus = _T("unavailable");
-						break;
-					case 1:
-						ms_bitsStatus = _T("enabled");
-						break;
-					case 2:
-						ms_bitsStatus = _T("disabled");
-						break;
-					default:
-						ms_bitsStatus = _T("invalid");
-						break;
-						
-				}
-			}
-		}
 	}
 
 	//-- detect .NET framework
@@ -982,7 +898,7 @@ CString const ClientMachine::getHardwareInformationString ()
 	result += getDeviceDriverVersionText ();
 	result += '\n';
 
-	buffer.Format (_T("Video Memory Size: %i MB"), getVideoMemorySize ());
+	buffer.Format (_T("Video Memory Size: %i GB"), getVideoMemorySize ());
 	buffer += '\n';
 	result += buffer;
 

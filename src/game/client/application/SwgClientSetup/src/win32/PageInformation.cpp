@@ -181,13 +181,16 @@ VERIFY(m_lblNumProcessors.LoadString(IDS_INFO_NUM_PROCESSORS));
 	CString MB;
 	VERIFY(MB.LoadString(IDS_MB));
 
+	CString GB;
+	VERIFY(GB.LoadString(IDS_GB));
+
 	CString Mhz;
 	VERIFY(Mhz.LoadString(IDS_Mhz));
 
 	CString Unknown;
 	VERIFY(Unknown.LoadString(IDS_UNKNOWN));
 
-	m_physicalMemorySize.Format (_T("%i %s"), ClientMachine::getPhysicalMemorySize(), MB);
+	m_physicalMemorySize.Format (_T("%i %s"), (ClientMachine::getPhysicalMemorySize()/1024+1), GB);
 
 	m_numberOfProcessors.Format (_T("%i physical, %i logical"), ClientMachine::getNumberOfPhysicalProcessors (), ClientMachine::getNumberOfLogicalProcessors ());
 
@@ -208,7 +211,7 @@ VERIFY(m_lblNumProcessors.LoadString(IDS_INFO_NUM_PROCESSORS));
 
 	m_videoDriverVersion = ClientMachine::getDeviceDriverVersionText ();
 
-	m_videoMemorySize.Format (_T("%i %s"), ClientMachine::getVideoMemorySize (), MB);
+	m_videoMemorySize.Format (_T("%i %s"), (ClientMachine::getVideoMemorySize ()/1024+1), GB);
 
 	if (ClientMachine::getVertexShaderMajorVersion () != 0)
 		m_vertexShaderVersion.Format (_T("%i.%i"), ClientMachine::getVertexShaderMajorVersion (), ClientMachine::getVertexShaderMinorVersion ());

@@ -21,25 +21,6 @@ static char THIS_FILE[] = __FILE__;
 
 // ======================================================================
 
-static int DetermineMemoryManagerSize ()
-{
-	MEMORYSTATUS memoryStatus;
-	GlobalMemoryStatus (&memoryStatus);
-
-	//-- memory status returns bytes
-	const int numberOfMegabytes = (memoryStatus.dwTotalPhys / 4) * 3;
-
-	if (numberOfMegabytes > 2000 * 1024 * 1024)
-		return 2000 * 1024 * 1024;
-
-	if (numberOfMegabytes < 250 * 1024 * 1024)
-		return 250 * 1024 * 1024;
-
-	return numberOfMegabytes;
-}
-
-// ======================================================================
-
 IMPLEMENT_DYNCREATE(PageAdvanced, CPropertyPage)
 
 PageAdvanced::PageAdvanced() : CPropertyPage(PageAdvanced::IDD)
@@ -48,7 +29,6 @@ PageAdvanced::PageAdvanced() : CPropertyPage(PageAdvanced::IDD)
 	m_disableWorldPreloading = FALSE;
 	m_skipL0Characters = FALSE;
 	m_skipL0Meshes = FALSE;
-	m_gameMemorySize = _T("");
 	m_disableTextureBaking = FALSE;
 	m_disableFileCaching = FALSE;
 	m_disableAsynchronousLoader = FALSE;
@@ -60,8 +40,6 @@ PageAdvanced::PageAdvanced() : CPropertyPage(PageAdvanced::IDD)
 	m_lblDisableTextureBaking = _T("");
 	m_lblDisableFileCaching = _T("");
 	m_lblDisableAsynchronousLoader = _T("");
-	m_lblGameMemorySize = _T("");
-	m_lblGameMemoryInfo = _T("");
 
 	//}}AFX_DATA_INIT
 }
@@ -78,7 +56,6 @@ void PageAdvanced::DoDataExchange(CDataExchange* pDX)
 	DDX_Check(pDX, IDC_CHECK_DISABLEWORLDPRELOADING, m_disableWorldPreloading);
 	DDX_Check(pDX, IDC_CHECK_SKIPL0CHARACTERS, m_skipL0Characters);
 	DDX_Check(pDX, IDC_CHECK_SKIPL0MESHES, m_skipL0Meshes);
-	DDX_Text(pDX, IDC_STATIC_GAMEMEMORY, m_gameMemorySize);
 	DDX_Check(pDX, IDC_CHECK_DISABLETEXTUREBAKING, m_disableTextureBaking);
 	DDX_Check(pDX, IDC_CHECK_DISABLEFILECACHING, m_disableFileCaching);
 	DDX_Check(pDX, IDC_CHECK_DISABLEASYNCHRONOUSLOADER, m_disableAsynchronousLoader);
@@ -90,8 +67,6 @@ void PageAdvanced::DoDataExchange(CDataExchange* pDX)
 	DDX_Text(pDX, IDC_CHECK_DISABLETEXTUREBAKING, m_lblDisableTextureBaking);
 	DDX_Text(pDX, IDC_CHECK_DISABLEFILECACHING, m_lblDisableFileCaching);
 	DDX_Text(pDX, IDC_CHECK_DISABLEASYNCHRONOUSLOADER, m_lblDisableAsynchronousLoader);
-	DDX_Text(pDX, IDC_LBL_ADVANCED_GAME_MEMORY_SIZE, m_lblGameMemorySize);
-	DDX_Text(pDX, IDC_LBL_ADVANCED_GAME_MEMORY_INFO, m_lblGameMemoryInfo);
 
 	//}}AFX_DATA_MAP
 }
@@ -119,8 +94,6 @@ void PageAdvanced::initializeDialog()
 	VERIFY(m_lblDisableTextureBaking.LoadString(IDS_ADVANCED_DISABLE_TEXTURE_BAKING));
 	VERIFY(m_lblDisableFileCaching.LoadString(IDS_ADVANCED_DISABLE_FILE_CACHING));
 	VERIFY(m_lblDisableAsynchronousLoader.LoadString(IDS_ADVANCED_DISABLE_ASYNCHRONOUS_LOADER));
-	VERIFY(m_lblGameMemorySize.LoadString(IDS_ADVANCED_GAME_MEMORY_SIZE));
-	VERIFY(m_lblGameMemoryInfo.LoadString(IDS_ADVANCED_GAME_MEMORY_INFO));
 	
 	// TODO: Add extra initialization here
 	m_disableWorldPreloading = Options::getDisableWorldPreloading ();
@@ -129,9 +102,6 @@ void PageAdvanced::initializeDialog()
 	m_disableTextureBaking = Options::getDisableTextureBaking ();
 	m_disableFileCaching = Options::getDisableFileCaching ();
 	m_disableAsynchronousLoader = Options::getDisableAsynchronousLoader ();
-
-	const int size = DetermineMemoryManagerSize ();
-	m_gameMemorySize.Format (_T("%i MB"), size / (1024 * 1024));
 
 	if (ClientMachine::getPhysicalMemorySize() < 260)
 	{

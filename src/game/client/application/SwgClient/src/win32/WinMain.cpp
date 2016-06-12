@@ -50,7 +50,7 @@ static bool SetUserSelectedMemoryManagerTarget()
 static void SetDefaultMemoryManagerTargetSize()
 {
 	int megabytes = 0;
-	MEMORYSTATUSEX memoryStatus;
+	MEMORYSTATUSEX memoryStatus = { sizeof memoryStatus };
 	megabytes = memoryStatus.ullTotalPhys / 1048576;
 
 	// clamp it between 250 and 2048MB

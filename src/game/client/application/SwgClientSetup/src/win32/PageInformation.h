@@ -75,6 +75,8 @@ protected:
 
 private:
 	void initializeDialog();
+public:
+	afx_msg void OnStnClickedStaticPhysical();
 };
 
 // ======================================================================
