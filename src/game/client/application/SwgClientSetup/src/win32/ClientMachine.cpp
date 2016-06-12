@@ -12,7 +12,6 @@
 
 #include "DxDiagnostic.h"
 #include "Resource.h"
-#include "CPUCount.h"
 
 #include <atlbase.h>
 #include <d3d9.h>
@@ -221,20 +220,10 @@ void ClientMachine::install ()
 
 	//-- detect cpu
 	{
-		unsigned char physicalProcessors = 0;
-		unsigned char logicalProcessors = 0;
-		if (CPUCount(&logicalProcessors, &physicalProcessors))
-		{
-			ms_numberOfPhysicalProcessors = physicalProcessors;
-			ms_numberOfLogicalProcessors = logicalProcessors;
-		}
-		else
-		{
-			SYSTEM_INFO systemInfo;
-			GetSystemInfo (&systemInfo);
-			ms_numberOfPhysicalProcessors = systemInfo.dwNumberOfProcessors;
-			ms_numberOfLogicalProcessors = systemInfo.dwNumberOfProcessors;
-		}
+		SYSTEM_INFO systemInfo;
+		GetSystemInfo (&systemInfo);
+		ms_numberOfPhysicalProcessors = systemInfo.dwNumberOfProcessors;
+		ms_numberOfLogicalProcessors = systemInfo.dwNumberOfProcessors;
 
 		LONG	lresult;
 		HKEY	NewKey;
