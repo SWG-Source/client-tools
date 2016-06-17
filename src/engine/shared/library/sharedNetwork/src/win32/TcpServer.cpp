@@ -27,7 +27,7 @@ m_service(service)
 	if(p)
 	{
 		static int entry = p->p_proto;
-		m_handle = WSASocket(AF_INET, SOCK_STREAM, entry, NULL, 0, WSA_FLAG_OVERLAPPED);
+		m_handle = WSASocketW(AF_INET, SOCK_STREAM, entry, NULL, 0, WSA_FLAG_OVERLAPPED);
 		if(m_handle != INVALID_SOCKET)
 		{
 			m_localIOCP = CreateIoCompletionPort(reinterpret_cast<HANDLE>(m_handle), 0, 0, 0);

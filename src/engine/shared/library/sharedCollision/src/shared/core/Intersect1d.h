@@ -16,102 +16,98 @@ class Range;
 
 namespace Intersect1d
 {
+	// ----------------------------------------------------------------------
+	// Static intersection
 
-// ----------------------------------------------------------------------
-// Static intersection
-
-inline Range IntersectRanges ( Range const & A, Range const & B )
-{
-	return Range( std::max(A.getMin(),B.getMin()), 
-	              std::min(A.getMax(),B.getMax()) );
-}
-
-inline Range IntersectRanges ( Range const & A, Range const & B, Range const & C )
-{
-	return Range( std::max(std::max(A.getMin(),B.getMin()),C.getMin()),
-	              std::min(std::min(A.getMax(),B.getMax()),C.getMax()) );
-
-}
-
-// ----------------------------------------------------------------------
-// Temporal intersect tests
-
-// A value P is changing with velocity V
-// Find the range of time for which P is less/greater than R
-
-inline Range IntersectFloatLess ( float P, float V, float R )
-{
-	if(V == 0)
+	inline Range IntersectRanges(Range const& A, Range const& B)
 	{
-		if(P < R) return Range::inf;
-		else      return Range::empty;
+		return Range(std::max(A.getMin(), B.getMin()),
+		                std::min(A.getMax(), B.getMax()));
 	}
 
-	float t = (R - P) / V;
-
-	if(V < 0) return Range(t,REAL_MAX);
-	else      return Range(-REAL_MAX,t);
-}
-
-inline Range IntersectFloatGreater ( float P, float V, float R )
-{
-	if(V == 0)
+	inline Range IntersectRanges(Range const& A, Range const& B, Range const& C)
 	{
-		if(P > R) return Range::inf;
-		else      return Range::empty;
+		return Range(std::max(std::max(A.getMin(), B.getMin()), C.getMin()),
+		                std::min(std::min(A.getMax(), B.getMax()), C.getMax()));
 	}
 
-	float t = (R - P) / V;
+	// ----------------------------------------------------------------------
+	// Temporal intersect tests
 
-	if(V > 0) return Range(t,REAL_MAX);
-	else      return Range(-REAL_MAX,t);
-}
+	// A value P is changing with velocity V
+	// Find the range of time for which P is less/greater than R
 
-// ----------
-
-inline Range IntersectFloatFloat ( real A, real V, real B )
-{
-	if(V == 0)
+	inline Range IntersectFloatLess(float P, float V, float R)
 	{
-		if(A == B)	return Range::inf;      //lint !e777 // testing floats for equality
-		else		return Range::empty;
+		if (V == 0)
+		{
+			if (P < R) return Range::inf;
+			else return Range::empty;
+		}
+
+		float t = (R - P) / V;
+
+		if (V < 0) return Range(t, REAL_MAX);
+		else return Range(-REAL_MAX, t);
 	}
 
-	float t = (B - A) / V;
+	inline Range IntersectFloatGreater(float P, float V, float R)
+	{
+		if (V == 0)
+		{
+			if (P > R) return Range::inf;
+			else return Range::empty;
+		}
 
-	return Range(t,t);
-}
+		float t = (R - P) / V;
 
-// A value P is moving with velocity V.
-// Find the range of time for which P overlaps the range R.
+		if (V > 0) return Range(t, REAL_MAX);
+		else return Range(-REAL_MAX, t);
+	}
 
-inline Range IntersectFloatRange ( float A, real V, Range const & R )
-{
-	Range timeMin = IntersectFloatGreater(A,V,R.getMin());
-	Range timeMax = IntersectFloatLess(A,V,R.getMax());
+	// ----------
 
-	return IntersectRanges(timeMin,timeMax);
-}
+	inline Range IntersectFloatFloat(real A, real V, real B)
+	{
+		if (V == 0)
+		{
+			if (A == B) return Range::inf; //lint !e777 // testing floats for equality
+			else return Range::empty;
+		}
 
-inline Range IntersectRangeFloat ( Range const & A, float V, float B )
-{ 
-	return IntersectFloatRange(B,-V,A); 
-}
+		float t = (B - A) / V;
 
-// A range P is moving with velocity V.
-// Find the range of time for which P overlaps the range R.
+		return Range(t, t);
+	}
 
-inline Range IntersectRangeRange ( Range const & A, real V, Range const & B )
-{
-	Range timeMin = IntersectFloatGreater(A.getMax(),V,B.getMin());
-	Range timeMax = IntersectFloatLess(A.getMin(),V,B.getMax());
+	// A value P is moving with velocity V.
+	// Find the range of time for which P overlaps the range R.
 
-	return IntersectRanges(timeMin,timeMax);
-}
+	inline Range IntersectFloatRange(float A, real V, Range const& R)
+	{
+		Range timeMin = IntersectFloatGreater(A, V, R.getMin());
+		Range timeMax = IntersectFloatLess(A, V, R.getMax());
 
-// ----------------------------------------------------------------------
+		return IntersectRanges(timeMin, timeMax);
+	}
 
+	inline Range IntersectRangeFloat(Range const& A, float V, float B)
+	{
+		return IntersectFloatRange(B, -V, A);
+	}
+
+	// A range P is moving with velocity V.
+	// Find the range of time for which P overlaps the range R.
+
+	inline Range IntersectRangeRange(Range const& A, real V, Range const& B)
+	{
+		Range timeMin = IntersectFloatGreater(A.getMax(), V, B.getMin());
+		Range timeMax = IntersectFloatLess(A.getMin(), V, B.getMax());
+
+		return IntersectRanges(timeMin, timeMax);
+	}
+
+	// ----------------------------------------------------------------------
 } // namespace Intersect1d
 
 #endif
-

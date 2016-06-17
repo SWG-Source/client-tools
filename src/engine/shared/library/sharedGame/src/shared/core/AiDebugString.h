@@ -102,6 +102,5 @@ private:
 };
 
 // ======================================================================
-
 #endif // _DEBUG
 #endif // INCLUDED_AiDebugString_H

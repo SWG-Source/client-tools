@@ -905,6 +905,10 @@ bool VertexSorterX ( Vector const & A, Vector const & B )
 	return A.x < B.x;
 }
 
+void BuildConvexHull ( VertexList const & verts, VertexList & outPoly )
+{
+}
+
 // ----------------------------------------------------------------------
 // 3-d exit test
 

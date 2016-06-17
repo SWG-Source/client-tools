@@ -127,7 +127,7 @@ void Debug::print(const char* format, ... )
 
 	va_list		argptr;
 	va_start	(argptr, format);
-	vsprintf	(string, format, argptr);
+	vsprintf_s	(string, format, argptr);
 	va_end		(argptr);
 
 #if defined (DPVS_DEBUG)

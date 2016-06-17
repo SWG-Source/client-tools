@@ -5,6 +5,7 @@
 //
 //======================================================================
 
+__declspec(dllexport) void getRidOfLNK4221(){}
 #include "sharedGame/FirstSharedGame.h"
 #include "sharedGame/ShipHitEffectsManager.h"
 

@@ -54,7 +54,7 @@ m_rawTCP( false )
 	if (p)
 	{
 		static int entry = p->p_proto;
-		m_socket = WSASocket (AF_INET, SOCK_STREAM, entry, NULL, 0, WSA_FLAG_OVERLAPPED);
+		m_socket = WSASocketW (AF_INET, SOCK_STREAM, entry, NULL, 0, WSA_FLAG_OVERLAPPED);
 		char optval = 1;
 		setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 		setsockopt(m_socket, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval));
@@ -91,7 +91,7 @@ m_rawTCP( false )
 	if (p)
 	{
 		static int entry = p->p_proto;
-		m_socket = WSASocket (AF_INET, SOCK_STREAM, entry, NULL, 0, WSA_FLAG_OVERLAPPED);
+		m_socket = WSASocketW (AF_INET, SOCK_STREAM, entry, NULL, 0, WSA_FLAG_OVERLAPPED);
 		if (m_socket != INVALID_SOCKET)
 		{
 			int nameLen = sizeof (struct sockaddr_in);
