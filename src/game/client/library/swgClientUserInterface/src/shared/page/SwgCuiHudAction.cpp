@@ -97,7 +97,6 @@
 #include "swgClientUserInterface/SwgCuiLootBox.h"
 #include "swgClientUserInterface/SwgCuiMediatorTypes.h"
 #include "swgClientUserInterface/SwgCuiMissionBrowser.h"
-#include "swgClientUserInterface/SwgCuiNpeContinuation.h"
 #include "swgClientUserInterface/SwgCuiPlayerQuestConversation.h"
 #include "swgClientUserInterface/SwgCuiQuestAcceptance.h"
 #include "swgClientUserInterface/SwgCuiQuestBuilder.h"

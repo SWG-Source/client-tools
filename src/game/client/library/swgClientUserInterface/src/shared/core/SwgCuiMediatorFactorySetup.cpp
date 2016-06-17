@@ -93,7 +93,6 @@
 #include "swgClientUserInterface/SwgCuiMissionDetails.h"
 #include "swgClientUserInterface/SwgCuiNetStatus.h"
 #include "swgClientUserInterface/SwgCuiNews.h"
-#include "swgClientUserInterface/SwgCuiNpeContinuation.h"
 #include "swgClientUserInterface/SwgCuiOpt.h"
 #include "swgClientUserInterface/SwgCuiPersistentMessageBrowser.h"
 #include "swgClientUserInterface/SwgCuiPersistentMessageComposer.h"
@@ -251,7 +250,6 @@ void SwgCuiMediatorFactorySetup::install ()
 	MAKE_SWG_CTOR_WS (DpsMeter,                       "/pda.dpsMeter");
 	MAKE_SWG_CTOR_WS (Roadmap,                        "/pda.Roadmap");
 	MAKE_SWG_CTOR_WS (LootBox,                        "/pda.lootbox");
-	MAKE_SWG_CTOR_WS (NpeContinuation,                "/pda.ShellBeach");
 	MAKE_SWG_CTOR_WS (KillMeter,                      "/pda.KillMeter");
 	MAKE_SWG_CTOR_WS (BuffBuilderBuffer,              "/pda.BuffBuilder.buffer");
 	MAKE_SWG_CTOR_WS (BuffBuilderBuffee,              "/pda.BuffBuilder.buffee");

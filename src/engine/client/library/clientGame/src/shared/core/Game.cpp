@@ -15,7 +15,6 @@
 #include "clientAudio/Sound2.h"
 #include "clientAudio/SoundTemplate.h"
 #include "clientAudio/SoundTemplateList.h"
-#include "clientAudio/SwgAudioCapture.h"
 #include "clientDirectInput/DirectInput.h"
 #include "clientGame/AuctionManagerClient.h"
 #include "clientGame/CellObject.h"
@@ -263,7 +262,7 @@ namespace GameNamespace
 		{
 			if (m_deferred)
 			{
-				endDeferredCreation();
+				MultiPlayerSceneCreator::endDeferredCreation();
 			}
 			delete [] m_templateName;
 		}
@@ -1659,7 +1658,7 @@ void Game::_getCutSceneFromTerrainFilename(char *o_name, const char *terrainFile
 
 	std::string sceneId = Game::getSceneIdFromTerrainFilename(terrainFileName);
 	const BuildoutArea *buildoutArea = SharedBuildoutAreaManager::findBuildoutAreaAtPosition(sceneId.c_str(), startPosition.x, startPosition.z, false);
-	const char *cutScene=0;
+	const char *cutScene;
 	if (buildoutArea)
 	{
 		cutScene=CutScene::lookupCutScene(buildoutArea->areaName.c_str());

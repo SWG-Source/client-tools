@@ -388,12 +388,6 @@ int ClientMain(
 			CuiChatHistory::save();
 			CurrentUserOptionManager::save ();
 			LocalMachineOptionManager::save ();
-
-			// -- if player is a trial or rental player, launch the conversion web page
-			if ((Game::getSubscriptionFeatureBits() & ClientSubscriptionFeature::Base) == 0)
-			{
-				Game::externalCommand("npe_continue");
-			}
 		}
 	}
 

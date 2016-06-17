@@ -69,32 +69,29 @@ static void SetDefaultMemoryManagerTargetSize()
 
 void externalCommandHandler(const char* command)
 {
-	if (strcmp(command, "npe_continue") == 0)
+	const StringId trialNagId("client", "npe_nag_url_trial");
+	const StringId rentalNagId("client", "npe_nag_url_rental");
+
+	Unicode::String url;
+
+	if ((Game::getSubscriptionFeatureBits() & ClientSubscriptionFeature::NPENagForTrial) != 0)
 	{
-		const StringId trialNagId("client", "npe_nag_url_trial");
-		const StringId rentalNagId("client", "npe_nag_url_rental");
+		url = trialNagId.localize();
+	}
 
-		Unicode::String url;
+	if (!url.empty())
+	{
+		Unicode::NarrowString url8 = Unicode::wideToNarrow( url );
 
-		if ((Game::getSubscriptionFeatureBits() & ClientSubscriptionFeature::NPENagForTrial) != 0)
+		HINSTANCE result = ShellExecute(NULL, "open", url8.c_str(), NULL, NULL, SW_SHOWNORMAL);
+
+		if (reinterpret_cast<int>(result) < 32) //Pulled straight from MSDN -ARH
 		{
-			url = trialNagId.localize();
+			WARNING(true, ("could not launch external application (%d)", reinterpret_cast<int>(result)));
 		}
-
-		if (!url.empty())
+		else
 		{
-			Unicode::NarrowString url8 = Unicode::wideToNarrow( url );
-
-			HINSTANCE result = ShellExecute(NULL, "open", url8.c_str(), NULL, NULL, SW_SHOWNORMAL);
-
-			if (reinterpret_cast<int>(result) < 32) //Pulled straight from MSDN -ARH
-			{
-				WARNING(true, ("could not launch external application (%d)", reinterpret_cast<int>(result)));
-			}
-			else
-			{
-				Game::quit();
-			}
+			Game::quit();
 		}
 	}
 }
