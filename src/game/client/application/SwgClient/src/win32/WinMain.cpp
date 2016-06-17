@@ -49,14 +49,19 @@ static bool SetUserSelectedMemoryManagerTarget()
 
 static void SetDefaultMemoryManagerTargetSize()
 {
-	// just use all available up to 2048gb, else ALL available, since we're 99% guranteed to be on a modern machine
+	// we use 75% of the available ram, up to 1536mb in the case of 2gb (32 bit without PAE limit)
 	MEMORYSTATUSEX memoryStatus = { sizeof memoryStatus };
 	GlobalMemoryStatusEx(&memoryStatus);
 	int ramMB = (memoryStatus.ullTotalPhys / 1048576);
 
-	// without PAE enabled 2048 is the max we can do
-	if (ramMB >= 2048){
-		ramMB = 2048;
+	// without PAE enabled 2048 is the max we can do, but SWG crashes if we give it all the RAM sometimes
+	if (ramMB >= 2048)
+	{
+		ramMB = 1536;
+	}
+	else 
+	{
+		ramMB = (ramMB * .75);
 	}
 
 	MemoryManager::setLimit(ramMB, false, false);
