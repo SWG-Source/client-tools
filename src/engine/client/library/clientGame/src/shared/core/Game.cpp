@@ -151,7 +151,7 @@
 
 #include <cstdio>
 
-#if PRODUCTION == 0
+#if 0
 #include "clientGraphics/SwgVideoCapture.h"
 #endif // PRODUCTION
 
@@ -761,7 +761,7 @@ void Game::install(Application const application)
 		ms_application = application;
 
 
-#if PRODUCTION == 0
+#if 0
 		if ((application == A_particleEditor || application == A_animationEditor)
 			&& !ConfigFile::getKeyBool("ClientTools","loadHud",false)
 		)
@@ -851,7 +851,7 @@ void Game::install(Application const application)
 		else
 #endif // _DEBUG
 		{
-#if PRODUCTION == 0
+#if 0
 			if (application == A_particleEditor || application == A_animationEditor)
 			{
 				ExitChain::add(Game::cleanupScene, "Game::cleanupScene");
@@ -928,7 +928,7 @@ void Game::install(Application const application)
 				LookAtTransformModifier::setAllowLookAtTargetFunction(allowLookAtTarget);
 				CharacterLodManager::setManageLodCallback(manageCharacterLodCallback);
 
-#if PRODUCTION == 0
+#if 0
 				//-- Tell these classes how to get the current camera for debug purposes.
 				LookAtTransformModifier::setGetCameraFunction(Game::getConstCamera);
 				TargetPitchTransformModifier::setGetCameraFunction(Game::getConstCamera);
@@ -1003,7 +1003,7 @@ void Game::cleanupScene(void)
 
 void Game::quit()
 {
-#if PRODUCTION == 0
+#if 0
 	Graphics::pixSetMarker(L"Quit");
 	PixCounter::disable();
 #endif
@@ -1066,7 +1066,7 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 	bool result;
 	float elapsedTime = 0.0f;
 
-#if PRODUCTION == 0
+#if 0
 	VTune::beginFrame();
 #endif
 
@@ -1101,7 +1101,7 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 		ms_bytesAllocated[4] = MemoryManager::getCurrentNumberOfBytesAllocated();
 		sprintf(ms_bytesAllocatedBuffer, "BytesAllocated: %lu %lu %lu %lu %lu\n", ms_bytesAllocated[0], ms_bytesAllocated[1], ms_bytesAllocated[2], ms_bytesAllocated[3], ms_bytesAllocated[4]);
 
-#if PRODUCTION == 0
+#if 0
 		NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "debug");
 		DebugMonitor::clearScreen();
 		DebugFlags::callReportRoutines();
@@ -1230,7 +1230,7 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 				IGNORE_RETURN(Graphics::present());
 		}
 
-#if PRODUCTION == 0
+#if 0
 		// this is here to be consistent with the behavior when PIX is running, since the polling will happen when Graphics::present() is called
 		PixCounter::update();
 #endif
@@ -1432,7 +1432,7 @@ void Game::_setScene(Scene* newScene)
 		WARNING (ms_sceneId.empty (), ("Game::setScene with empty sceneId"));
 	}
 
-#if PRODUCTION == 0
+#if 0
 	// update the sceneId in the FileManifest (also done more specifically in groundscene to get buildout info)
 	// however, we get updates to a null string here to tell us that we are transitioning to a new scene
 	if (FileManifest::shouldUpdateManifest())
@@ -2676,7 +2676,7 @@ float Game::getRadarRange()
 
 Game::SceneType Game::getHudSceneType()
 {
-#if PRODUCTION == 0
+#if 0
 	if (ms_useSpaceHudOnly)
 	{
 		return ST_space;
@@ -3009,7 +3009,7 @@ std::string Game::calculateNonInstanceSceneId(std::string const & scene)
 
 // ---------------------------------------------------------------------
 
-#if PRODUCTION == 0
+#if 0
 void Game::videoCaptureConfig(int resolution, int seconds, int quality, const char* filename)
 {
 	VideoCapture::install(); // Installs SoeUtilMemoryAdapter on first call
@@ -3019,7 +3019,7 @@ void Game::videoCaptureConfig(int resolution, int seconds, int quality, const ch
 
 // ---------------------------------------------------------------------
 
-#if PRODUCTION == 0
+#if 0
 class VideoCaptureCallback : public VideoCapture::SingleUse::ICallback
 {
 public:
@@ -3054,7 +3054,7 @@ void Game::videoCaptureStart()
 
 // ---------------------------------------------------------------------
 
-#if PRODUCTION == 0
+#if 0
 void Game::videoCaptureStop()
 {
 	VideoCapture::SingleUse::stop();

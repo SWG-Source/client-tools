@@ -40,7 +40,7 @@
 #include <list>
 #include <map>
 
-#if PRODUCTION == 0
+#if 0
 #include "clientAudio/SwgAudioCapture.h"
 #endif // PRODUCTION
 
@@ -5405,7 +5405,7 @@ void Audio::silenceNonBufferedMusic(bool silence)
 }
 
 //-----------------------------------------------------------------------------
-#if PRODUCTION == 0
+#if 0
 bool Audio::getAudioCaptureConfig(int& samplesPerSec, int& bitsPerSample, int& channels)
 {
 	if(!s_digitalDevice2d)
@@ -5426,7 +5426,7 @@ bool Audio::getAudioCaptureConfig(int& samplesPerSec, int& bitsPerSample, int& c
 #endif // PRODUCTION
 
 //-----------------------------------------------------------------------------
-#if PRODUCTION == 0
+#if 0
 bool Audio::startAudioCapture(AudioCapture::ICallback* pCallback)
 {
 	if(!s_audioFilterProvider)
@@ -5456,7 +5456,7 @@ bool Audio::startAudioCapture(AudioCapture::ICallback* pCallback)
 #endif // PRODUCTION
 
 //-----------------------------------------------------------------------------
-#if PRODUCTION == 0
+#if 0
 void Audio::stopAudioCapture()
 {
 	// NOTE: s_audioFilterProvider is just an index and need not be reset
