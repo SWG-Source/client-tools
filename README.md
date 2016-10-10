@@ -5,8 +5,7 @@ This repo is only for building the clients and tools.
 ## Branches:
 
 * **master** - currently builds using Visual Studio 2013. Uses the old stlport.
-* **vs2015-stlconversion** - Current "work in progress" for building on Visual Studio 2015, which includes it's own, complete STL implementation.
-* **msvc-stl-conversion** - old attempt at using VS2013 STL. May or may not be useful for reference, but likely not useful for building.
+* **stdlib** - Current "work in progress" for building on Visual Studio 2015, which includes it's own, complete STL implementation.
 
 ## Visual Studio
 
@@ -20,7 +19,7 @@ The same goes for the other projects but they are hit and miss as far as being w
 
 ## Known Issues
 
-* For the debug build, and possibly the optimized versions, you will get linker errors about libmozilla - if you alter the project settings you can disable this from killing the output of an exe, as libmozilla is only needed for the ingame browser.
+* For the debug build, and possibly the optimized versions, you will get linker errors about libmozilla, and in release, possibly Vivox - if you alter the project settings you can disable this from killing the output of an exe, as libmozilla is only needed for the ingame browser.
 
 * Other linker errors sometimes throw, you have to work on these case by case. Please pull request any changes you make.
 
