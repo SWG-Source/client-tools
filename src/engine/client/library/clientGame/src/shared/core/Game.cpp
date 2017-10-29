@@ -143,7 +143,9 @@
 #include "sharedUtility/LocalMachineOptionManager.h"
 #include "swgSharedNetworkMessages/MessageQueueCombatAction.h"
 #include "swgSharedUtility/Postures.def"
+#if DEBUG=0
 #include "libMozilla/libMozilla.h"
+#endif
 
 #include "LocalizationManager.h"
 #include "LocalizedStringTable.h"

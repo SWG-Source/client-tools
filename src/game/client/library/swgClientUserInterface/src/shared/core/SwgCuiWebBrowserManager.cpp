@@ -11,7 +11,11 @@
 #include "clientGame/Game.h"
 #include "clientUserInterface/CuiMediator.h"
 #include "clientUserInterface/CuiWorkspace.h"
+
+#if DEBUG=0
 #include "libMozilla/libMozilla.h"
+#endif
+
 #include "sharedFoundation/Os.h"
 #include "sharedFoundation/Timer.h"
 #include "swgClientUserInterface/SwgCuiWebBrowserWidget.h"
@@ -52,6 +56,7 @@ using namespace SwgCuiWebBrowserManagerNamespace;
 
 void SwgCuiWebBrowserManager::install()
 {
+#if DEBUG=0
 	DEBUG_FATAL(s_installed, ("SwgCuiWebBrowserManager already installed.\n"));
 	
 	s_installed = true;
@@ -63,10 +68,12 @@ void SwgCuiWebBrowserManager::install()
 	libMozilla::setUserAgent("StarWarsGalaxies");
 	libMozilla::enableMemoryCache(true);
 	libMozilla::enableDiskCache(true, 50 * 1024);
+#endif
 }
 
 void SwgCuiWebBrowserManager::remove()
 {
+#if DEBUG=0
 	DEBUG_FATAL(!s_installed, ("SwgCuiWebBrowserManager not installed. Failed Remove.\n"));
 	s_installed = false;
 
@@ -83,12 +90,12 @@ void SwgCuiWebBrowserManager::remove()
 	}
 
 	s_Widget = NULL;
-
+#endif
 }
 
 void SwgCuiWebBrowserManager::update(float deltaTimeSecs)
 {
-
+#if DEBUG=0
 	// Update Mozilla
 	libMozilla::update();
 
@@ -125,10 +132,12 @@ void SwgCuiWebBrowserManager::update(float deltaTimeSecs)
 		s_postData.clear();
 		s_postDataLength = 0;
 	}
+#endif
 }
 
 void SwgCuiWebBrowserManager::createWebBrowserPage(bool useHomePage)
 {
+#if DEBUG=0
 	bool isValidPage = Game::isSpace() ? (s_type == WBT_Space) : (s_type == WBT_Ground);
 	
 	if(s_Window && isValidPage)
@@ -243,19 +252,22 @@ void SwgCuiWebBrowserManager::createWebBrowserPage(bool useHomePage)
 	browserWindow->activate();
 	browserWindow->setEnabled(true);
 	workspace->focusMediator(*browserWindow, true);
-	
+#endif	
 }
 
 void SwgCuiWebBrowserManager::debugOutput()
 {
+#if DEBUG=0
 	if(s_Widget)
 		s_Widget->debugOutput();
+#endif
 }
 
 void SwgCuiWebBrowserManager::setURL(std::string url, bool clearCachedURL, char const * postData, int postDataLength)
 {
-	if(s_URL.empty() || clearCachedURL )
-	{
+#if DEBUG=0
+        if(s_URL.empty() || clearCachedURL ) 
+		{
 		s_URL = url;
 
 		if(postData)
@@ -266,34 +278,44 @@ void SwgCuiWebBrowserManager::setURL(std::string url, bool clearCachedURL, char 
 
 		s_timer.reset();
 	}
-
+#endif
 }
 
 void SwgCuiWebBrowserManager::navigateForward()
 {
+#if DEBUG=0
 	if(s_Widget)
 		s_Widget->NavigateForward();
+#endif
 }
 
 void SwgCuiWebBrowserManager::navigateBack()
 {
+#if DEBUG=0
 	if(s_Widget)
 		s_Widget->NavigateBack();
+#endif
 }
 
 void SwgCuiWebBrowserManager::navigateStop()
 {
+#if DEBUG=0
 	if(s_Widget)
 		s_Widget->NavigateStop();
+#endif
 }
 
 void SwgCuiWebBrowserManager::refreshPage()
 {
+#if DEBUG=0
 	if(s_Widget)
 		s_Widget->RefreshPage();
+#endif
 }
 
 void SwgCuiWebBrowserManager::setHomePage(std::string const & home)
 {
+#if DEBUG=0
 	s_homePage = home;
+#endif
 }

@@ -79,7 +79,10 @@
 #include "swgClientUserInterface/SwgCuiG15Lcd.h"
 #include "swgClientUserInterface/SwgCuiManager.h"
 #include "swgSharedNetworkMessages/SetupSwgSharedNetworkMessages.h"
+
+#if DEBUG=0
 #include "libMozilla/libMozilla.h"
+#endif 
 
 #include "Resource.h"
 
@@ -127,7 +130,7 @@ int ClientMain(
 	HINSTANCE hPrevInstance,  // handle to previous instance
 	LPSTR     lpCmdLine,      // pointer to command line
 	int       nCmdShow        // show state of window
-	)
+)
 {
 	UNREF(hPrevInstance);
 	UNREF(nCmdShow);
@@ -144,24 +147,24 @@ int ClientMain(
 	char clientWindowName[128] = "Star Wars Galaxies";
 
 #if PRODUCTION != 1
-	snprintf(clientWindowName, sizeof(clientWindowName), "SwgClient (%s.%s)", Branch().getBranchName().c_str(), ApplicationVersion::getPublicVersion() );
+	snprintf(clientWindowName, sizeof(clientWindowName), "SwgClient (%s.%s)", Branch().getBranchName().c_str(), ApplicationVersion::getPublicVersion());
 	clientWindowName[sizeof(clientWindowName) - 1] = '\0';
 #endif
 
 
 	//-- foundation
 	SetupSharedFoundation::Data data(SetupSharedFoundation::Data::D_game);
-	data.windowName                = clientWindowName;
-	data.windowNormalIcon          = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
-	data.windowSmallIcon           = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON2));
-	data.hInstance                 = hInstance;
-	data.commandLine               = lpCmdLine;
-	data.configFile                = "client.cfg";
-	data.clockUsesSleep            = true;
-	data.minFrameRate			   = 1.f;
-	data.frameRateLimit			   = 144.f;
+	data.windowName = clientWindowName;
+	data.windowNormalIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
+	data.windowSmallIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON2));
+	data.hInstance = hInstance;
+	data.commandLine = lpCmdLine;
+	data.configFile = "client.cfg";
+	data.clockUsesSleep = true;
+	data.minFrameRate = 1.f;
+	data.frameRateLimit = 144.f;
 #if PRODUCTION
-	data.demoMode                  = true;
+	data.demoMode = true;
 #endif
 	if (ApplicationVersion::isPublishBuild() || ApplicationVersion::isBootlegBuild())
 	{
@@ -171,11 +174,11 @@ int ClientMain(
 	SetupSharedFoundation::install(data);
 
 	REPORT_LOG(true, ("ClientMain: Command Line = \"%s\"\n", lpCmdLine));
-	REPORT_LOG (true, ("ClientMain: Memory size = %i MB\n", MemoryManager::getLimit()));
+	REPORT_LOG(true, ("ClientMain: Memory size = %i MB\n", MemoryManager::getLimit()));
 
 	// check for any config file entries
 	if (ConfigFile::isEmpty())
-		FATAL(true, ("Config file not specified"));	
+		FATAL(true, ("Config file not specified"));
 
 	InstallTimer::checkConfigFile();
 
@@ -188,9 +191,9 @@ int ClientMain(
 	else
 	{
 		{
-			uint32 gameFeatures = ConfigFile::getKeyInt("Station",  "gameFeatures", 0) & ~ConfigFile::getKeyInt("ClientGame", "gameBitsToClear", 0);
+			uint32 gameFeatures = ConfigFile::getKeyInt("Station", "gameFeatures", 0) & ~ConfigFile::getKeyInt("ClientGame", "gameBitsToClear", 0);
 			// hack to set retail if beta or preorder
-			if (ConfigFile::getKeyBool("ClientGame",  "setJtlRetailIfBetaIsSet", 0))
+			if (ConfigFile::getKeyBool("ClientGame", "setJtlRetailIfBetaIsSet", 0))
 			{
 				if (gameFeatures & (ClientGameFeature::SpaceExpansionBeta | ClientGameFeature::SpaceExpansionPreOrder))
 					gameFeatures |= ClientGameFeature::SpaceExpansionRetail;
@@ -204,7 +207,7 @@ int ClientMain(
 			if (gameFeatures & ClientGameFeature::TrialsOfObiwanPreorder)
 				gameFeatures |= ClientGameFeature::TrialsOfObiwanRetail;
 			Game::setGameFeatureBits(gameFeatures);
-			Game::setSubscriptionFeatureBits(ConfigFile::getKeyInt("Station",  "subscriptionFeatures", 0));
+			Game::setSubscriptionFeatureBits(ConfigFile::getKeyInt("Station", "subscriptionFeatures", 0));
 			Game::setExternalCommandHandler(externalCommandHandler);
 		}
 
@@ -240,9 +243,9 @@ int ClientMain(
 
 		//-- utility
 		SetupSharedUtility::Data setupUtilityData;
-		SetupSharedUtility::setupGameData (setupUtilityData);
+		SetupSharedUtility::setupGameData(setupUtilityData);
 		setupUtilityData.m_allowFileCaching = true;
-		SetupSharedUtility::install (setupUtilityData);
+		SetupSharedUtility::install(setupUtilityData);
 
 		//-- random
 		SetupSharedRandom::install(static_cast<uint32>(time(NULL)));
@@ -251,8 +254,8 @@ int ClientMain(
 
 		//-- image
 		SetupSharedImage::Data setupImageData;
-		SetupSharedImage::setupDefaultData (setupImageData);
-		SetupSharedImage::install (setupImageData);
+		SetupSharedImage::setupDefaultData(setupImageData);
+		SetupSharedImage::install(setupImageData);
 
 		//-- network
 		SetupSharedNetwork::SetupData  networkSetupData;
@@ -264,30 +267,30 @@ int ClientMain(
 
 		//-- object
 		SetupSharedObject::Data setupObjectData;
-		SetupSharedObject::setupDefaultGameData (setupObjectData);
+		SetupSharedObject::setupDefaultGameData(setupObjectData);
 		setupObjectData.useTimedAppearanceTemplates = true;
 		// we want the SlotIdManager initialized, and we need the associated hardpoint names loaded.
 		SetupSharedObject::addSlotIdManagerData(setupObjectData, true);
 		// we want CustomizationData support on the client.
 		SetupSharedObject::addCustomizationSupportData(setupObjectData);
 		SetupSharedObject::addMovementTableData(setupObjectData);
-		SetupSharedObject::install (setupObjectData);
+		SetupSharedObject::install(setupObjectData);
 
 		//-- game
 		SetupSharedGame::Data setupSharedGameData;
 
-		setupSharedGameData.setUseGameScheduler (true);
-		setupSharedGameData.setUseMountValidScaleRangeTable (true);
+		setupSharedGameData.setUseGameScheduler(true);
+		setupSharedGameData.setUseMountValidScaleRangeTable(true);
 		setupSharedGameData.m_debugBadStringsFunc = CuiManager::debugBadStringIdsFunc;
-		SetupSharedGame::install (setupSharedGameData);
+		SetupSharedGame::install(setupSharedGameData);
 
 		CommoditiesAdvancedSearchAttribute::install();
 		SwgCuiAuctionFilter::buildAttributeFilterDisplayString(); // must be called after CommoditiesAdvancedSearchAttribute::install()
 
 		//-- terrain
 		SetupSharedTerrain::Data setupSharedTerrainData;
-		SetupSharedTerrain::setupGameData (setupSharedTerrainData);
-		SetupSharedTerrain::install (setupSharedTerrainData);
+		SetupSharedTerrain::setupGameData(setupSharedTerrainData);
+		SetupSharedTerrain::install(setupSharedTerrainData);
 
 		//-- SharedXml
 		SetupSharedXml::install();
@@ -298,28 +301,29 @@ int ClientMain(
 		//-- setup client
 
 		//-- audio
-		SetupClientAudio::install ();
+		SetupClientAudio::install();
 
 		//-- graphics
 		SetupClientGraphics::Data setupGraphicsData;
-		setupGraphicsData.screenWidth  = 1024;
+		setupGraphicsData.screenWidth = 1024;
 		setupGraphicsData.screenHeight = 768;
 		setupGraphicsData.alphaBufferBitDepth = 0;
-		SetupClientGraphics::setupDefaultGameData (setupGraphicsData);
+		SetupClientGraphics::setupDefaultGameData(setupGraphicsData);
 
 
+#if DEBUG=0
 		// Mozilla
 		// We want to use the Mozilla that's shipped with the game, not whatever's on the system
-		char szCWD[ _MAX_PATH + 1 ];
-		GetCurrentDirectory( _MAX_PATH, szCWD );
-		std::string sPath( szCWD );
+		char szCWD[_MAX_PATH + 1];
+		GetCurrentDirectory(_MAX_PATH, szCWD);
+		std::string sPath(szCWD);
 		sPath += "\\mozilla";
-		if(!libMozilla::init(Os::getWindow(), sPath.c_str()))
+		if (!libMozilla::init(Os::getWindow(), sPath.c_str()))
 		{
 			DEBUG_FATAL(true, ("Mozilla init failed.\n"));
 		}
 
-		if (SetupClientGraphics::install (setupGraphicsData))
+		if (SetupClientGraphics::install(setupGraphicsData))
 		{
 			VideoList::install(Audio::getMilesDigitalDriver());
 
@@ -332,32 +336,32 @@ int ClientMain(
 
 			//-- object
 			SetupClientObject::Data setupClientObjectData;
-			SetupClientObject::setupGameData (setupClientObjectData);
-			SetupClientObject::install (setupClientObjectData);
+			SetupClientObject::setupGameData(setupClientObjectData);
+			SetupClientObject::install(setupClientObjectData);
 
 			//-- animation and skeletal animation
-			SetupClientAnimation::install ();
+			SetupClientAnimation::install();
 
 			SetupClientSkeletalAnimation::Data  saData;
 			SetupClientSkeletalAnimation::setupGameData(saData);
-			SetupClientSkeletalAnimation::install (saData);
+			SetupClientSkeletalAnimation::install(saData);
 
 			//-- texture renderer
-			SetupClientTextureRenderer::install ();
+			SetupClientTextureRenderer::install();
 
 			//-- terrain
-			SetupClientTerrain::install ();
+			SetupClientTerrain::install();
 
 			//-- particle system
-			SetupClientParticle::install ();
+			SetupClientParticle::install();
 
 			//-- game
 			SetupClientGame::Data data;
-			SetupClientGame::setupGameData (data);
-			SetupClientGame::install (data);
+			SetupClientGame::setupGameData(data);
+			SetupClientGame::install(data);
 
-			CuiManager::setImplementationInstallFunctions (SwgCuiManager::install, SwgCuiManager::remove, SwgCuiManager::update);
-			CuiManager::setImplementationTestFunction     (SwgCuiManager::test);
+			CuiManager::setImplementationInstallFunctions(SwgCuiManager::install, SwgCuiManager::remove, SwgCuiManager::update);
+			CuiManager::setImplementationTestFunction(SwgCuiManager::test);
 
 			SetupClientBugReporting::install();
 
@@ -386,20 +390,20 @@ int ClientMain(
 			}
 			CuiSettings::save();
 			CuiChatHistory::save();
-			CurrentUserOptionManager::save ();
-			LocalMachineOptionManager::save ();
+			CurrentUserOptionManager::save();
+			LocalMachineOptionManager::save();
 		}
 	}
 
-	SetupSharedFoundation::remove ();
-	SetupSharedThread::remove ();
+	SetupSharedFoundation::remove();
+	SetupSharedThread::remove();
 
 	libMozilla::release();
 
 	if (semaphore)
 		CloseHandle(semaphore);
-
+# endif
 	return 0;
+	}
 }
-
 // ======================================================================
