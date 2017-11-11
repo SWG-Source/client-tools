@@ -1,0 +1,1 @@
+#include "../../src/shared/LightningAppearance_LightningBolt.h"

@@ -1,0 +1,14 @@
+
+#define POPULATION		0
+#define NABOO_COUNT		100
+#define NABOO_ZONES		200
+#define NABOO_PROCESS	300
+#define NABOO_TIMES		400
+
+
+#define ZANDAR_COUNT	500
+#define ZANDAR_ZONES	600
+#define ZANDAR_PROCESS	700
+#define ZANDAR_TIMES	800
+#define UPTIMES			1000
+
