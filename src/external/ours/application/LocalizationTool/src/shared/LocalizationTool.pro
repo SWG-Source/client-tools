@@ -1,0 +1,9 @@
+TARGET	= LocalizationTool
+IMAGEFILE	= images.cpp
+PROJECTNAME	= LocalizationTool
+FORMS	= ui_EditingWidget.ui ui_ListWidget.ui ui_ImportWidget.ui ui_ExportWidget.ui 
+TEMPLATE	=app
+CONFIG	+= qt warn_on release
+DBFILE	= LocalizationTool.db
+LANGUAGE	= C++
+CPP_ALWAYS_CREATE_SOURCE	= TRUE
