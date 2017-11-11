@@ -1,0 +1,1 @@
+#include "../../src/shared/objectTemplate/ClientPlayerQuestObjectTemplate.h"
