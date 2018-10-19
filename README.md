@@ -9,7 +9,7 @@ This repo is only for building the clients and tools.
 
 ## Visual Studio
 
-Visual Studio Community for most, if not all versions, is free for 90 days, after which you may need to do something slightly illegal, unless you have DreamSpark: https://www.visualstudio.com/en-us/downloads/download-visual-studio-vs.aspx
+Visual Studio Community for most, if not all versions, is free for 90 days, after which you may need to do something else, unless you have DreamSpark: https://www.visualstudio.com/en-us/downloads/download-visual-studio-vs.aspx
 
 ## Building
 
