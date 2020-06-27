@@ -122,7 +122,7 @@ m_submenuButton(0),
 m_shipDetailsButton(0),
 m_homePortButton(0),
 m_myCollectionsButton(0),
-m_tcgButton(0),
+//m_tcgButton(0),
 m_appearanceButton(0),
 m_questBuilderButton(0),
 m_gcwInfoButton(0),
@@ -157,7 +157,7 @@ m_opacityCallback      (0)
 	getCodeDataObject (TUIButton,     m_shipDetailsButton,       "buttonShipDetails",    true);
 	getCodeDataObject (TUIButton,     m_homePortButton,          "buttonHomePort",       true);
 	getCodeDataObject (TUIButton,     m_myCollectionsButton,     "buttonMyCollections");
-	getCodeDataObject (TUIButton,     m_tcgButton,               "buttonTcg");
+	//getCodeDataObject (TUIButton,     m_tcgButton,               "buttonTcg");
 	getCodeDataObject (TUIButton,     m_appearanceButton,        "buttonAppearance");
 	getCodeDataObject (TUIButton,     m_questBuilderButton,		 "buttonQuestBuilder");
 	getCodeDataObject (TUIButton,     m_gcwInfoButton,           "buttonGCW");
@@ -188,7 +188,7 @@ m_opacityCallback      (0)
 	registerMediatorObject (*m_serviceButton,        true);
 	registerMediatorObject (*m_submenuButton,        true);
 	registerMediatorObject (*m_myCollectionsButton,  true);
-	registerMediatorObject (*m_tcgButton,            true);
+	//registerMediatorObject (*m_tcgButton,            true);
 	registerMediatorObject (*m_appearanceButton,     true);
 	registerMediatorObject (*m_questBuilderButton,   true);
 	registerMediatorObject (*m_gcwInfoButton,        true);
@@ -204,7 +204,7 @@ m_opacityCallback      (0)
 
 	registerMediatorObject (getPage (), true);
 
-	for (int buttonStates = 0; buttonStates < MaxButtonStates; ++buttonStates) 
+	for (int buttonStates = 0; buttonStates < MaxButtonStates; ++buttonStates)
 	{
 		m_buttonImages[buttonStates] = NULL;
 
@@ -241,7 +241,7 @@ SwgCuiButtonBar::~SwgCuiButtonBar                ()
 	m_journalButtonEffector = 0;
 	m_homePortButton        = 0;
 
-	for (int buttonStates = 0; buttonStates < MaxButtonStates; ++buttonStates) 
+	for (int buttonStates = 0; buttonStates < MaxButtonStates; ++buttonStates)
 	{
 		m_buttonImages[buttonStates] = NULL;
 	}
@@ -288,7 +288,7 @@ void SwgCuiButtonBar::turnOffInventoryEffector()
 	m_inventoryButton->SetColor (UIColor::white);
 	m_inventoryButton->SetBackgroundColor (UIColor::white);
 	m_inventoryButton->SetBackgroundTint (UIColor::white);
-	m_effectingInventoryFull = false;					
+	m_effectingInventoryFull = false;
 }
 
 //----------------------------------------------------------------------
@@ -418,7 +418,7 @@ void SwgCuiButtonBar::update (float deltaTimeSecs)
 			if (!squelchedAndOrLotsOverLimitSpamStr.empty())
 				CuiTextManager::showSystemStatusString(squelchedAndOrLotsOverLimitSpamStr);
 
-			turnOffInventoryEffector();			
+			turnOffInventoryEffector();
 			return;
 		}
 	}
@@ -427,7 +427,7 @@ void SwgCuiButtonBar::update (float deltaTimeSecs)
 		turnOffInventoryEffector();
 		return;
 	}
-	
+
 	if (m_effectingNewMail)
 	{
 		if (!hasNewMail)
@@ -446,7 +446,7 @@ void SwgCuiButtonBar::update (float deltaTimeSecs)
 	{
 		if (!inventoryFull)
 		{
-			turnOffInventoryEffector();				
+			turnOffInventoryEffector();
 		}
 	}
 	else if (inventoryFull)
@@ -466,7 +466,7 @@ void SwgCuiButtonBar::updateMenuPosition()
 		return;
 	UIPoint menuButtonLoc = m_menuButtonPage->GetLocation();
 	if((menuButtonLoc.x != m_menuButtonRestLoc.x) || (menuButtonLoc.y != m_menuButtonRestLoc.y))
-	{	
+	{
 		UIPoint menuButtonDelta = menuButtonLoc - m_menuButtonRestLoc;
 		UIPoint topLoc = getPage().GetLocation();
 		topLoc += menuButtonDelta;
@@ -534,7 +534,7 @@ void SwgCuiButtonBar::updateMenuHighlight()
 bool SwgCuiButtonBar::OnMessage (UIWidget * context, const UIMessage & msg)
 {
 	NOT_NULL (context);
-	
+
 	if (context == &getPage ())
 	{
 		if(msg.Type == UIMessage::LeftMouseUp || msg.Type == UIMessage::LeftMouseDown)
@@ -558,10 +558,10 @@ bool SwgCuiButtonBar::OnMessage (UIWidget * context, const UIMessage & msg)
 			UIBaseObject::UIObjectList::iterator buttonListI;
 			parent->GetChildren(childList);
 			buttonListI = childList.begin();
-			if(buttonListI == childList.end()) 
+			if(buttonListI == childList.end())
 				return true;
 			++buttonListI;
-			if(buttonListI == childList.end()) 
+			if(buttonListI == childList.end())
 				return true;
 			UIBaseObject *button = (*buttonListI);
 			if(!button->IsA(TUIButton))
@@ -584,20 +584,20 @@ bool SwgCuiButtonBar::OnMessage (UIWidget * context, const UIMessage & msg)
 void SwgCuiButtonBar::toggleMenu()
 {
 	if(m_buttonsComposite->IsVisible())
-	{			
+	{
 		m_menuButtonPage->SetOpacity(CuiPreferences::getCommandButtonOpacity());
 		m_mouseoverPage->SetVisible(false);
-		m_buttonsComposite->SetVisible(false);			
-	
+		m_buttonsComposite->SetVisible(false);
+
 		CuiManager::requestPointer (false);
-		
+
 	}
 	else
 	{
 		getPage().SetGetsInput(true);
 		m_menuButtonPage->SetOpacity(1.0f);
 		m_buttonsComposite->SetGetsInput(true);
-		m_buttonsComposite->SetVisible(true);			
+		m_buttonsComposite->SetVisible(true);
 		m_mouseoverPage->SetVisible(true);
 
 		//Only show the roadmap and expertise options if the correct conditions are met.
@@ -609,7 +609,7 @@ void SwgCuiButtonBar::toggleMenu()
 			m_roadmapButton->GetParentWidget()->SetVisible(false);
 		}
 		else
-		{			
+		{
 			if(m_roadmapButton)
 			{
 				if (RoadmapManager::playerIsOnRoadmap())
@@ -625,7 +625,7 @@ void SwgCuiButtonBar::toggleMenu()
 			if(m_expertiseButton)
 			{
 				if (ClientExpertiseManager::hasExpertiseTrees() && ClientExpertiseManager::getExpertisePointsTotalForPlayer() > 0)
-				{				
+				{
 					m_expertiseButton->GetParentWidget()->SetVisible(true);
 					++m_numberButtons;
 				}
@@ -683,7 +683,7 @@ void SwgCuiButtonBar::OnButtonPressed   (UIWidget * context)
 		{
 			m_mouseoverPage->SetVisible(false);
 			m_buttonsComposite->SetVisible(false);
-			
+
 			CuiManager::requestPointer (false);
 		}
 
@@ -717,14 +717,14 @@ void SwgCuiButtonBar::OnPopupMenuSelection (UIWidget * context)
 	if (sel == pop_horizontal)
 	{
 		const UISize & size_max = getPage ().GetMaximumSize ();
-		const UISize & size_min = getPage ().GetMinimumSize ();		
+		const UISize & size_min = getPage ().GetMinimumSize ();
 		getPage ().SetSize (UISize (size_max.x, size_min.y));
 		CuiSoundManager::play (CuiSounds::increment_big);
 	}
 	else if (sel == pop_vertical)
 	{
 		const UISize & size_max = getPage ().GetMaximumSize ();
-		const UISize & size_min = getPage ().GetMinimumSize ();		
+		const UISize & size_min = getPage ().GetMinimumSize ();
 		getPage ().SetSize (UISize (size_min.x, size_max.y));
 
 		CuiSoundManager::play (CuiSounds::increment_big);
@@ -833,11 +833,11 @@ void SwgCuiButtonBar::OnHoverIn( UIWidget *Context )
 void SwgCuiButtonBar::updateSkinnedImageState()
 {
 	int const stateIndex = static_cast<int>(m_hoverState) + static_cast<int>(m_buttonsComposite->IsVisible()) * 2;
-	for (int buttonStates = 0; buttonStates < MaxButtonStates; ++buttonStates) 
+	for (int buttonStates = 0; buttonStates < MaxButtonStates; ++buttonStates)
 	{
 		if (m_buttonImages[buttonStates])
 		{
-			if (Game::isHudSceneTypeSpace()) 
+			if (Game::isHudSceneTypeSpace())
 			{
 				m_buttonImages[buttonStates]->SetVisible(false);
 			}

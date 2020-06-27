@@ -257,7 +257,7 @@ namespace CuiActions
 	MAKE_ACTION(collections);
 	MAKE_ACTION(myCollections);
 	MAKE_ACTION(sendSavedPlayerInterestsToServer);
-	MAKE_ACTION(tcg);
+	//MAKE_ACTION(tcg);
 	MAKE_ACTION(appearanceTab);
 	MAKE_ACTION(questBuilder);
 	MAKE_ACTION(rating);

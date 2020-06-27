@@ -284,7 +284,7 @@ m_toggleDownTimeNames          (0.0f)
 	CuiActionManager::addAction(CuiActions::sendSavedPlayerInterestsToServer, this, false);
 	CuiActionManager::addAction (SwgCuiActions::toggleVoiceFlyBar, this, false);
 
-	CuiActionManager::addAction (CuiActions::tcg, this, false);
+	//CuiActionManager::addAction (CuiActions::tcg, this, false);
 
 	CuiActionManager::addAction (CuiActions::appearanceTab, this, false);
 
@@ -1592,22 +1592,22 @@ bool  SwgCuiHudAction::performAction (const std::string & id, const Unicode::Str
 	{
 		CuiMediatorFactory::toggleInWorkspace(CuiMediatorTypes::WS_VoiceActiveSpeakers);
 	}
-	else if (id == CuiActions::tcg)
-	{
-		SwgCuiTcgWindow * tcgWindow = safe_cast<SwgCuiTcgWindow * >(CuiMediatorFactory::getInWorkspace(CuiMediatorTypes::WS_TcgWindow, false, false, false));
+	//else if (id == CuiActions::tcg)
+	//{
+		//SwgCuiTcgWindow * tcgWindow = safe_cast<SwgCuiTcgWindow * >(CuiMediatorFactory::getInWorkspace(CuiMediatorTypes::WS_TcgWindow, false, false, false));
+	
+		//if (tcgWindow && tcgWindow->isActive())
+		//{
+			//CuiMediatorFactory::deactivateInWorkspace(CuiMediatorTypes::WS_TcgWindow);
+		//}
+		//else
+		//{
+			//SwgCuiTcgManager::setLoginInfo(GameNetwork::getUserName().c_str(), CuiLoginManager::getSessionIdKey(true));
+			//SwgCuiTcgManager::launch();
 
-		if (tcgWindow && tcgWindow->isActive())
-		{
-			CuiMediatorFactory::deactivateInWorkspace(CuiMediatorTypes::WS_TcgWindow);
-		}
-		else
-		{
-			SwgCuiTcgManager::setLoginInfo(GameNetwork::getUserName().c_str(), CuiLoginManager::getSessionIdKey(true));
-			SwgCuiTcgManager::launch();
-
-			tcgWindow = safe_cast<SwgCuiTcgWindow * >(CuiMediatorFactory::activateInWorkspace(CuiMediatorTypes::WS_TcgWindow, false, false));
-		}
-	}
+			//tcgWindow = safe_cast<SwgCuiTcgWindow * >(CuiMediatorFactory::activateInWorkspace(CuiMediatorTypes::WS_TcgWindow, false, false));
+		//}
+	//}
 	else if (id == CuiActions::appearanceTab)
 	{
 		CuiMediatorFactory::toggleInWorkspace(CuiMediatorTypes::WS_AppearanceTab);

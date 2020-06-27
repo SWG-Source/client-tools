@@ -36,7 +36,7 @@ public:
 
 	bool                OnMessage (UIWidget * context, const UIMessage & msg);
 	void                OnPopupMenuSelection (UIWidget * context);
-	void                OnButtonPressed   (UIWidget * context);	
+	void                OnButtonPressed   (UIWidget * context);
 	virtual void        OnHoverIn(UIWidget * Context);
 	virtual void        OnHoverOut(UIWidget * Context);
 
@@ -56,10 +56,10 @@ private:
 	                    SwgCuiButtonBar              (const SwgCuiButtonBar &);
 	SwgCuiButtonBar &   operator=                    (const SwgCuiButtonBar &);
 
-	
+
 	void                turnOffInventoryEffector     ();
 	void enableJournalEffector(bool isEnabled);
-	void updateJournalEffector();	
+	void updateJournalEffector();
 	void updateExpertiseEffector();
 	void updateMenuPosition();
 	void updateMenuEffector();
@@ -67,7 +67,7 @@ private:
 
 	void updateSkinnedImageState();
 
-	
+
 private:
 
 	enum { MaxButtonStates = 4 };
@@ -88,7 +88,7 @@ private:
 	UIButton *           m_shipDetailsButton;
 	UIButton *           m_homePortButton;
 	UIButton *           m_myCollectionsButton;
-	UIButton *           m_tcgButton;
+	//UIButton *           m_tcgButton;
 	UIButton *           m_appearanceButton;
 	UIButton *			 m_questBuilderButton;
 	UIButton *           m_gcwInfoButton;
@@ -98,7 +98,7 @@ private:
 	UIEffector *         m_effectorMenu;
 	UIEffector *         m_effectorExpertise;
 	UIEffector *         m_journalButtonEffector;
-	
+
 
 	bool                 m_effectingNewMail;
 	bool                 m_effectingInventoryFull;

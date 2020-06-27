@@ -231,7 +231,7 @@ namespace CommandCppFuncsNamespace
 	void commandFuncEmptyMail              (Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const & params);
 	void commandFuncTargetPilot            (Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const & params);
 	void commandFuncEditBiography          (Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const & params);
-	
+
 
 	void commandFuncEcho                   (Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const & params);
 	void commandFuncMacro                  (Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const & params);
@@ -267,7 +267,7 @@ namespace CommandCppFuncsNamespace
 	void commandFuncVoiceInvite(Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const & params);
 	void commandFuncVoiceKick(Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const & params);
 
-	void commandFuncTcg(Command const & command, NetworkId const & , NetworkId const & target, Unicode::String const &);
+	//void commandFuncTcg(Command const & command, NetworkId const & , NetworkId const & target, Unicode::String const &);
 
 	void commandFuncToggleOutOfCharacter(Command const & command, NetworkId const & actor, NetworkId const & target, Unicode::String const &);
 
@@ -406,7 +406,7 @@ void CommandCppFuncsNamespace::commandFuncEquipAppearance(Command const & comman
 	UNREF(command);
 	UNREF(actor);
 	UNREF(params);
-	
+
 	if(Game::getPlayerObject())
 	{
 		Object * const targetObject = NetworkIdManager::getObjectById(target);
@@ -437,7 +437,7 @@ void CommandCppFuncsNamespace::commandFuncEquipAppearance(Command const & comman
 			return;
 		}
 	}
-	
+
 	if(PlayerObject::isAdmin())
 	{
 		CuiInventoryManager::equipAppearanceItem(target);
@@ -456,7 +456,7 @@ void CommandCppFuncsNamespace::commandFuncUnequipAppearance(Command const & comm
 void CommandCppFuncsNamespace::commandFuncFindControllers(Command const & , NetworkId const & , NetworkId const & , Unicode::String const &)
 {
 	int totalJoysticks = DirectInput::getNumberOfJoysticksAvailable();
-	
+
 	DirectInput::reaquireJoystick();
 
 	if(totalJoysticks < DirectInput::getNumberOfJoysticksAvailable())
@@ -695,7 +695,7 @@ void CommandCppFuncsNamespace::commandFuncSitClient (Command const &, NetworkId 
 		targetObject = dynamic_cast<TangibleObject *>(findClientObjectFromParam (params));
 	}
 	else if (targetId.isValid ())
-		targetObject = dynamic_cast<TangibleObject *>(NetworkIdManager::getObjectById (targetId));	
+		targetObject = dynamic_cast<TangibleObject *>(NetworkIdManager::getObjectById (targetId));
 
 	// Get the look-at target.
 	NetworkId  chairNetworkId;
@@ -828,7 +828,7 @@ void CommandCppFuncsNamespace::commandFuncJumpClient (Command const & command, N
 		if(!hardpointName.empty() && hardpointName.find("passenger") != std::string::npos)
 			return;
 
-		actorObject = actorObject->getMountedCreature(); 
+		actorObject = actorObject->getMountedCreature();
 	}
 
 	// @todo determine if these checks should be done in ClientCommandQueue for all client_only cppHook commands
@@ -1871,7 +1871,7 @@ void CommandCppFuncsNamespace::commandFuncEditBiography(Command const & , Networ
 
 		CreatureObject const * const creatureObject = getCreatureOrPilot(editTarget);
 		PlayerObject const * const playerObject = creatureObject ? creatureObject->getPlayerObject() : NULL;
-		if (playerObject) 
+		if (playerObject)
 		{
 			Game::debugPrintUi("Requesting player biography...");
 			CuiActionManager::performAction(CuiActions::editBiography, Unicode::narrowToWide(editTarget.getValueString()));
@@ -1975,7 +1975,7 @@ void CommandCppFuncsNamespace::commandFuncDumpPausedCommands                  (C
 		CuiChatRoomManager::sendPrelocalizedChat(dumpedResult);
 	}
 	else
-		CuiChatRoomManager::sendPrelocalizedChat (CuiStringIdsCommand::no_paused_commands.localize());		
+		CuiChatRoomManager::sendPrelocalizedChat (CuiStringIdsCommand::no_paused_commands.localize());
 }
 
 //----------------------------------------------------------------------
@@ -2180,7 +2180,7 @@ void CommandCppFuncsNamespace::commandFuncMatchSpeed(Command const & , NetworkId
 
 	if (targetShip == NULL)
 	{
-		CuiChatRoomManager::sendPrelocalizedChat (CuiStringIdsCommand::no_ship_targetted.localize());		
+		CuiChatRoomManager::sendPrelocalizedChat (CuiStringIdsCommand::no_ship_targetted.localize());
 		return;
 	}
 
@@ -2450,10 +2450,10 @@ void CommandCppFuncsNamespace::commandFuncVoiceKick(Command const &, NetworkId c
 
 //----------------------------------------------------------------------
 
-void CommandCppFuncsNamespace::commandFuncTcg(Command const & , NetworkId const & , NetworkId const & , Unicode::String const & params)
-{
-	CuiActionManager::performAction(CuiActions::tcg, params);
-}
+//void CommandCppFuncsNamespace::commandFuncTcg(Command const & , NetworkId const & , NetworkId const & , Unicode::String const & params)
+//{
+//	CuiActionManager::performAction(CuiActions::tcg, params);
+//}
 
 //----------------------------------------------------------------------
 
@@ -2638,7 +2638,7 @@ void CommandCppFuncs::install()
 	CommandTable::addCppFunction("voiceInvite", commandFuncVoiceInvite);
 	CommandTable::addCppFunction("voiceKick", commandFuncVoiceKick);
 
-	CommandTable::addCppFunction("tcg", commandFuncTcg);
+	//CommandTable::addCppFunction("tcg", commandFuncTcg);
 
 	CommandTable::addCppFunction("equipAppearance", commandFuncEquipAppearance);
 	CommandTable::addCppFunction("unequipAppearance", commandFuncUnequipAppearance);
@@ -2658,4 +2658,3 @@ void CommandCppFuncs::remove()
 }
 
 // ======================================================================
-
