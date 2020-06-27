@@ -80,9 +80,9 @@
 #include "swgClientUserInterface/SwgCuiManager.h"
 #include "swgSharedNetworkMessages/SetupSwgSharedNetworkMessages.h"
 
-#if DEBUG=0
+
 #include "libMozilla/libMozilla.h"
-#endif 
+
 
 #include "Resource.h"
 
@@ -311,7 +311,7 @@ int ClientMain(
 		SetupClientGraphics::setupDefaultGameData(setupGraphicsData);
 
 
-#if DEBUG=0
+
 		// Mozilla
 		// We want to use the Mozilla that's shipped with the game, not whatever's on the system
 		char szCWD[_MAX_PATH + 1];
@@ -402,8 +402,7 @@ int ClientMain(
 
 	if (semaphore)
 		CloseHandle(semaphore);
-# endif
 	return 0;
-	}
+
 }
 // ======================================================================
