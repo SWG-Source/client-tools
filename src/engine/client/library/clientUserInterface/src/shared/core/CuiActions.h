@@ -200,7 +200,6 @@ namespace CuiActions
 	MAKE_ACTION(questHelper);
 	MAKE_ACTION(roadmap);
 	MAKE_ACTION(expertise);
-	MAKE_ACTION(ticketSubmission);
 	MAKE_ACTION(harassmentMessage);             // displayed right before the normal harassment form
 	MAKE_ACTION(harassmentMessageFromKBSearch); // displayed before a ticket submittal from a 'Community Standards' category search
 	MAKE_ACTION(droidCommand);

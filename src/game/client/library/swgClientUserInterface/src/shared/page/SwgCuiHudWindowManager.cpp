@@ -97,7 +97,6 @@
 #include "swgClientUserInterface/SwgCuiSystemMessage.h"
 #include "swgClientUserInterface/SwgCuiTargets.h"
 #include "swgClientUserInterface/SwgCuiTicketPurchase.h"
-#include "swgClientUserInterface/SwgCuiTicketSubmission.h"
 #include "swgClientUserInterface/SwgCuiToolbar.h"
 #include "swgClientUserInterface/SwgCuiTrade.h"
 #include "swgSharedNetworkMessages/ConsentRequestMessage.h"
@@ -133,7 +132,7 @@ namespace SwgCuiHudWindowManagerNamespace
 	const std::string cms_newbieTutorialRequestOpenHolocron        ("openHolocron");
 	const std::string cms_newbieTutorialRequestCloseHolocron       ("closeHolocron");
 
-	bool ms_spaceChatVisible = true;	
+	bool ms_spaceChatVisible = true;
 }
 
 using namespace SwgCuiHudWindowManagerNamespace;
@@ -141,9 +140,9 @@ using namespace SwgCuiHudWindowManagerNamespace;
 //----------------------------------------------------------------------
 
 SwgCuiHudWindowManager::ItemRequestInfo::ItemRequestInfo (const ClientObject * _containerObject, const std::string & _slotName, bool _newWindow) :
-container (), 
-slotName  (_slotName), 
-newWindow (_newWindow) 
+container (),
+slotName  (_slotName),
+newWindow (_newWindow)
 {
 	if (_containerObject)
 		container = CachedNetworkId (*_containerObject);
@@ -183,10 +182,10 @@ m_doubleToolbarPage(0),
 m_singleToolbar(0),
 m_doubleToolbar(0)
 {
-	
+
 	{
 		UIPage * mediatorPage = 0;
-		
+
 		//-----------------------------------------------------------------
 		{
 			hud.getCodeDataObject (TUIPage,     mediatorPage,           "SystemMessage");
@@ -196,7 +195,7 @@ m_doubleToolbar(0)
 			sysMessage->activate         ();
 			m_workspace->addMediator     (*sysMessage);
 		} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
-		
+
 		//-----------------------------------------------------------------
 		{
 			hud.getCodeDataObject (TUIPage,     mediatorPage,           "SystemMessageNoob");
@@ -206,7 +205,7 @@ m_doubleToolbar(0)
 			sysMessageNoob->activate         ();
 			m_workspace->addMediator     (*sysMessageNoob);
 		} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
-		
+
 		//-----------------------------------------------------------------
 		{
 			hud.getCodeDataObject (TUIPage,     m_singleToolbarPage,    "Toolbar");
@@ -247,7 +246,7 @@ m_doubleToolbar(0)
 			m_highlightMediator->activate ();
 			m_workspace->addMediator (*m_highlightMediator);
 		}
-		
+
 		//-----------------------------------------------------------------
 		{
 			hud.getCodeDataObject (TUIPage,     mediatorPage,           "ButtonBar");
@@ -259,7 +258,7 @@ m_doubleToolbar(0)
 			m_buttonBar->activate ();
 			m_workspace->addMediator (*m_buttonBar);
 		}
-		
+
 		//----------------------------------------------------------------------
 		{
 			hud.getCodeDataObject (TUIPage,     mediatorPage,           "incap");
@@ -269,7 +268,7 @@ m_doubleToolbar(0)
 			incap->setStickyVisible (true);
 			m_workspace->addMediator (*incap);
 		} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
-		
+
 		//-----------------------------------------------------------------
 		{
 			hud.getCodeDataObject (TUIPage,     mediatorPage,           "ChatWindow");
@@ -314,7 +313,7 @@ m_doubleToolbar(0)
 	if (CuiPreferences::getDpsMeterEnabled() && !Game::isHudSceneTypeSpace())
 		CuiMediatorFactory::activateInWorkspace (CuiMediatorTypes::WS_DpsMeter);
 
-	CuiIMEManager::GetCuiIMEManager()->SetIMEIndicator(Game::isHudSceneTypeSpace() ? CuiMediatorTypes::WS_IMEIndicatorSpace : CuiMediatorTypes::WS_IMEIndicator);	
+	CuiIMEManager::GetCuiIMEManager()->SetIMEIndicator(Game::isHudSceneTypeSpace() ? CuiMediatorTypes::WS_IMEIndicatorSpace : CuiMediatorTypes::WS_IMEIndicator);
 
 	if (CuiPreferences::getVoiceShowFlybar())
 		CuiMediatorFactory::activateInWorkspace(CuiMediatorTypes::WS_VoiceFlyBar);
@@ -337,7 +336,7 @@ SwgCuiHudWindowManager::~SwgCuiHudWindowManager ()
 	if (m_workspace != NULL)
 	{
 		m_workspace->setEffectors(0, 0);
-		
+
 		if (m_chatWindowMediator != NULL)
 		{
 			m_workspace->removeMediator (*m_chatWindowMediator);
@@ -434,7 +433,7 @@ SwgCuiHudWindowManager::~SwgCuiHudWindowManager ()
 		m_doubleToolbar->release();
 		m_doubleToolbar = 0;
 	}
-	
+
 	m_workspace      = 0;
 	m_blinkingMediator = 0;
 }
@@ -492,7 +491,7 @@ void SwgCuiHudWindowManager::handlePerformDeactivate ()
 {
 	if (!m_WindowManagerActive)
 		return;
-	
+
 	disconnectFromMessage (Game::Messages::SCENE_CHANGED);
 	disconnectFromMessage (ResourceHarvesterActivatePageMessage::MESSAGE_TYPE);
 	disconnectFromMessage (UnnamedMessages::ConnectionServerConnectionClosed);
@@ -524,17 +523,17 @@ void SwgCuiHudWindowManager::handlePerformDeactivate ()
 //----------------------------------------------------------------------
 
 void SwgCuiHudWindowManager::receiveMessage(const MessageDispatch::Emitter & , const MessageDispatch::MessageBase & message)
-{	
+{
 
 	//----------------------------------------------------------------------
- 
+
 	if (message.isType (Game::Messages::SCENE_CHANGED))
 	{
 		if (m_mfdStatusMediator != NULL)
 		{
 			m_mfdStatusMediator->setTarget (dynamic_cast<TangibleObject *>(Game::getPlayer ()));
 		}
-		CuiIMEManager::GetCuiIMEManager()->SetIMEIndicator(Game::isHudSceneTypeSpace() ? CuiMediatorTypes::WS_IMEIndicatorSpace : CuiMediatorTypes::WS_IMEIndicator);	
+		CuiIMEManager::GetCuiIMEManager()->SetIMEIndicator(Game::isHudSceneTypeSpace() ? CuiMediatorTypes::WS_IMEIndicatorSpace : CuiMediatorTypes::WS_IMEIndicator);
 	}
 
 	//----------------------------------------------------------------------
@@ -701,7 +700,7 @@ void SwgCuiHudWindowManager::receiveMessage(const MessageDispatch::Emitter & , c
 		Archive::ReadIterator ri = NON_NULL (safe_cast<const GameNetworkMessage*> (&message))->getByteStream ().begin ();
 		const NewbieTutorialHighlightUIElement newbieTutorialHighlightUIElement (ri);
 
-		const std::string & widgetPath = newbieTutorialHighlightUIElement.getWidgetPath();	
+		const std::string & widgetPath = newbieTutorialHighlightUIElement.getWidgetPath();
 		if(_strnicmp(widgetPath.c_str(), "/GroundHUD.ButtonBar.buttonsComposite", 37) == 0)
 		{
 			if(m_buttonBar)
@@ -809,7 +808,7 @@ void SwgCuiHudWindowManager::toggleInventory (ClientObject * container)
 		m_inventory = NON_NULL (createInventory (container, std::string (), true));
 		m_inventory->fetch ();
 	}
-	
+
 	if (m_inventory->isActive ())
 	{
 		m_inventory->deactivate ();
@@ -887,33 +886,6 @@ void SwgCuiHudWindowManager::toggleService ()
 
 //----------------------------------------------------------------------
 
-void SwgCuiHudWindowManager::spawnTicketSubmission ()
-{
-	CuiMediator * mediator = m_workspace->findMediatorByType (typeid (SwgCuiTicketSubmission));
-
-	if (mediator)
-	{
-		if (!mediator->isActive ())
-		{
-			mediator->activate ();
-			m_workspace->focusMediator (*mediator, true);
-			mediator->setEnabled (true);
-		}
-	}
-	else
-	{
-		SwgCuiTicketSubmission * const ticketSubmission = SwgCuiTicketSubmission::createInto (&m_workspace->getPage ());
-		ticketSubmission->setSettingsAutoSizeLocation (true, true);
-		ticketSubmission->getPage ().Center ();
-		m_workspace->addMediator (*ticketSubmission);
-		ticketSubmission->activate ();
-		m_workspace->focusMediator (*ticketSubmission, true);
-		ticketSubmission->setEnabled (true);
-	}
-}
-
-//----------------------------------------------------------------------
-
 void SwgCuiHudWindowManager::spawnHarassmentMessage ()
 {
 	SwgCuiHarassmentMessage * mediator = safe_cast<SwgCuiHarassmentMessage *>(m_workspace->findMediatorByType (typeid (SwgCuiHarassmentMessage)));
@@ -965,7 +937,7 @@ void SwgCuiHudWindowManager::spawnHarassmentMessageFromKBSearch ()
 void SwgCuiHudWindowManager::spawnCharacterSheet (CreatureObject *creatureToExamine)
 {
 	CuiMediator * mediator = m_workspace->findMediatorByType (typeid (SwgCuiCharacterSheet));
-		
+
 	if (mediator)
 	{
 		SwgCuiCharacterSheet *cs = dynamic_cast<SwgCuiCharacterSheet*>(mediator);
@@ -1078,7 +1050,7 @@ void SwgCuiHudWindowManager::spawnNewMacro (const Unicode::String& params)
 void SwgCuiHudWindowManager::spawnMissionDetails ()
 {
 	CuiMediator * const mediator = m_workspace->findMediatorByType (typeid (SwgCuiMissionDetails));
-		
+
 	if (mediator)
 	{
 		toggleMediator (*mediator);
@@ -1135,7 +1107,7 @@ void SwgCuiHudWindowManager::spawnCustomizationWindow(NetworkId const & objectId
 void SwgCuiHudWindowManager::spawnRatingWindow(std::string const & windowTitle, std::string const & windowText)
 {
 	SwgCuiRating * const mediator = safe_cast<SwgCuiRating * const>(CuiMediatorFactory::activateInWorkspace (CuiMediatorTypes::WS_Rating));
-	
+
 	mediator->setWindowTitle(windowTitle);
 	mediator->setWindowDescription(windowText);
 }
@@ -1244,7 +1216,7 @@ void SwgCuiHudWindowManager::onTradeRequested (const NetworkId & other)
 void SwgCuiHudWindowManager::onTradeRequestDenied                  (const NetworkId & recipient)
 {
 	const CachedNetworkId id (recipient);
-	
+
 	const ClientObject * const obj = safe_cast<ClientObject *>(id.getObject ());
 
 	Unicode::String result;
@@ -1262,7 +1234,7 @@ void SwgCuiHudWindowManager::onTradeRequestDenied                  (const Networ
 void SwgCuiHudWindowManager::onTradeRequestDeniedPlayerBusy        (const NetworkId & recipient)
 {
 	const CachedNetworkId id (recipient);
-	
+
 	const ClientObject * const obj = safe_cast<ClientObject *>(id.getObject ());
 
 	Unicode::String result;
@@ -1280,7 +1252,7 @@ void SwgCuiHudWindowManager::onTradeRequestDeniedPlayerBusy        (const Networ
 void SwgCuiHudWindowManager::onTradeRequestDeniedPlayerUnreachable (const NetworkId & recipient)
 {
 	const CachedNetworkId id (recipient);
-	
+
 	const ClientObject * const obj = safe_cast<ClientObject *>(id.getObject ());
 
 	Unicode::String result;
@@ -1344,7 +1316,7 @@ void SwgCuiHudWindowManager::updateWindowManager (const float elapsedTime)
 			m_pendingRequestTrade = false;
 			m_pendingRequestTradeId = NetworkId::cms_invalid;
 		}
-		
+
 		if (!m_pendingItemOpenInfo->empty ())
 		{
 			for (ItemRequestInfoVector::iterator it = m_pendingItemOpenInfo->begin (); it != m_pendingItemOpenInfo->end (); ++it)
@@ -1354,7 +1326,7 @@ void SwgCuiHudWindowManager::updateWindowManager (const float elapsedTime)
 
 				if (!container)
 					continue;
-				
+
 				if (info.newWindow)
 				{
 
@@ -1363,26 +1335,26 @@ void SwgCuiHudWindowManager::updateWindowManager (const float elapsedTime)
 					if(inputMap)
 					{
 						uint32 val = inputMap->getShiftState();
-						if(val & CuiM_BITS_SHIFT) 
+						if(val & CuiM_BITS_SHIFT)
 						{
 							bool bLootRuleOK = true;
 							CreatureObject const * const player = Game::getPlayerCreature();
 							if (player)
 							{
 								GroupObject const * const group = safe_cast<GroupObject const *>(player->getGroup().getObject());
-								if (group 
-									&& (group->getLootRule() == GroupObject::LR_lottery 
+								if (group
+									&& (group->getLootRule() == GroupObject::LR_lottery
 										|| group->getLootRule() == GroupObject::LR_random
 									)
 								)
 								{
-									bLootRuleOK = false;	
+									bLootRuleOK = false;
 								}
 							}
-							
+
 							if(bLootRuleOK)
 							{
-								ClientObject * const containedBy = const_cast<ClientObject *>(safe_cast<const ClientObject *>(ContainerInterface::getContainedByObject (*container)));	
+								ClientObject * const containedBy = const_cast<ClientObject *>(safe_cast<const ClientObject *>(ContainerInterface::getContainedByObject (*container)));
 								if(containedBy)
 								{
 									CreatureObject * const creature = containedBy->asCreatureObject ();
@@ -1393,7 +1365,7 @@ void SwgCuiHudWindowManager::updateWindowManager (const float elapsedTime)
 										continue;
 									}
 								}
-							}	
+							}
 						}
 					}
 					// end handle shift click looting
@@ -1408,7 +1380,7 @@ void SwgCuiHudWindowManager::updateWindowManager (const float elapsedTime)
 					inventory = NON_NULL (createInventory (container, info.slotName, false));
 				else
 					CuiInventoryManager::notifyItemClosed(*container, info.slotName);
-				
+
 				inventory->activate ();
 				inventory->setEnabled (true);
 				m_workspace->focusMediator (*inventory, true);
@@ -1422,11 +1394,11 @@ void SwgCuiHudWindowManager::updateWindowManager (const float elapsedTime)
 			for (ItemRequestInfoVector::iterator it = m_pendingItemCloseInfo->begin (); it != m_pendingItemCloseInfo->end (); ++it)
 			{
 				const ItemRequestInfo & info = *it;
-				
+
 				ClientObject * const container = safe_cast<ClientObject *>(info.container.getObject ());
 				if (container)
 				{
-					//-- there can be more than one open container UI on a given container 
+					//-- there can be more than one open container UI on a given container
 					SwgCuiInventory::InventoryVector iv;
 					SwgCuiInventory::findInventoryPagesByContainer (container->getNetworkId (), info.slotName, iv);
 
@@ -1484,13 +1456,13 @@ void SwgCuiHudWindowManager::receiveDroppedChatTab                 (const UIPoin
 //----------------------------------------------------------------------
 
 void SwgCuiHudWindowManager::onItemOpenRequest (const CuiInventoryManager::Messages::ItemOpenRequest::Payload & msg)
-{		
+{
 	ClientObject * const container = msg.first;
 	const std::string & slotname   = msg.second;
-	
+
 	if (!container)
 		return;
-	
+
 	m_pendingItemOpenInfo->push_back (ItemRequestInfo (container, slotname, false));
 }
 
@@ -1506,14 +1478,14 @@ void SwgCuiHudWindowManager::onItemOpenRequestNewWindow (const CuiInventoryManag
 
 	m_pendingItemOpenInfo->push_back (ItemRequestInfo (container, slotname, true));
 }
-		
+
 //----------------------------------------------------------------------
 
 void SwgCuiHudWindowManager::onItemCloseAllInstances (const CuiInventoryManager::Messages::ItemCloseAllInstances::Payload & msg)
 {
 	ClientObject * const container = msg.first;
 	const std::string & slotname   = msg.second;
-		
+
 	if (!container)
 		return;
 
@@ -1537,12 +1509,12 @@ void SwgCuiHudWindowManager::onCreatureDamageTaken (const CreatureObject & creat
 	{
 		if (Game::isViewFirstPerson ())
 		{
-			int h = 0, a = 0, m = 0;		
+			int h = 0, a = 0, m = 0;
 			creature.getAccumulatedHamDamage (h, a, m);
 
 			displayPlayerDamageText (h, a, m);
 		}
-		
+
 		if (m_mfdStatusMediator != NULL)
 		{
 			m_mfdStatusMediator->getPage ().SetEnabled (false);
@@ -1560,23 +1532,23 @@ void SwgCuiHudWindowManager::displayPlayerDamageText (int h, int a, int m)
 	{
 		const UIPoint & mfdLocation = m_mfdStatusMediator->getPage ().GetWorldLocation ();
 		const UIPoint & centerPoint = mfdLocation + (m_mfdStatusMediator->getPage ().GetSize () / 2L);
-		
+
 		const UIPoint & screenCenter = m_workspace->getPage ().GetSize () / 2L;
-		
+
 		UIPoint pt = mfdLocation;
-		
+
 		bool leftRight  = false;
-		
+
 		if (centerPoint.x < screenCenter.x)
 		{
 			pt.x += m_mfdStatusMediator->getPage ().GetWidth ();
 			leftRight = true;
 		}
-		
+
 		SwgCuiAllTargets * const allTargets = safe_cast<SwgCuiAllTargets *>(m_workspace->findMediatorByType (typeid (SwgCuiAllTargets)));
-		
+
 		NOT_NULL (allTargets);
-		
+
 		allTargets->displayDamageText (pt, leftRight, h, a, m);
 	}
 }

@@ -79,7 +79,6 @@ public:
 
 	void                toggleCommunity                       ();
 	void                toggleService                         ();
-	void                spawnTicketSubmission                 ();
 	void                spawnHarassmentMessage                ();
 	void                spawnHarassmentMessageFromKBSearch    ();
 	void                spawnShipComponentManagement          (NetworkId const & shipId, NetworkId const & terminalId) const;
@@ -112,7 +111,7 @@ public:
 	void                onItemCloseAllInstances               (const std::pair<ClientObject *, std::string> & msg);
 	void                onCreatureDamageTaken                 (const CreatureObject & creature);
 	void                onStartingLocationsReceived           (const stdvector<std::pair <StartingLocationData, bool> >::fwd & locations);
-	
+
 	void                displayPlayerDamageText               (int h, int a, int m);
 
 	void                spawnChatRoomWho                      (uint32 roomId);
@@ -133,7 +132,7 @@ protected:
 	void setStatusMediator(SwgCuiMfdStatus * status);
 
 	MessageDispatch::Callback *  m_callback;
-	
+
 private:
 
 	                    SwgCuiHudWindowManager                (const SwgCuiHudWindowManager &);
@@ -214,5 +213,3 @@ inline CuiWorkspace & SwgCuiHudWindowManager::getWorkspace()
 //======================================================================
 
 #endif
-
-

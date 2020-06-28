@@ -7,9 +7,6 @@
 
 #include "swgClientUserInterface/FirstSwgClientUserInterface.h"
 #include "swgClientUserInterface/SwgCuiHarassmentMessage.h"
-#include "swgClientUserInterface/SwgCuiTicketSubmission.h"
-#include "swgClientUserInterface/SwgCuiTicketSubmission_NewTicket.h"
-
 #include "clientGame/ClientObject.h"
 #include "clientGame/Game.h"
 #include "clientUserInterface/CuiActionManager.h"
@@ -50,16 +47,16 @@ SwgCuiHarassmentMessage::SwgCuiHarassmentMessage(UIPage &page)
 //-----------------------------------------------------------------
 SwgCuiHarassmentMessage::~SwgCuiHarassmentMessage()
 {
-	
+
 	m_cancelButton = NULL;
 	m_continueButton = NULL;
-	
+
 }
 
 //-----------------------------------------------------------------
 void SwgCuiHarassmentMessage::performActivate()
 {
-	
+
 }
 
 //-----------------------------------------------------------------
@@ -74,8 +71,8 @@ void SwgCuiHarassmentMessage::OnButtonPressed(UIWidget *context)
 	{
 		if(m_fromKBSearch)
 		{
-			SwgCuiTicketSubmission::NewTicket::setTicketSubmissionEnabled(true);
-			IGNORE_RETURN(CuiActionManager::performAction (CuiActions::ticketSubmission, Unicode::emptyString));
+			//SwgCuiTicketSubmission::NewTicket::setTicketSubmissionEnabled(true);
+			//IGNORE_RETURN(CuiActionManager::performAction (CuiActions::ticketSubmission, Unicode::emptyString));
 		}
 		else
 		{
@@ -106,7 +103,7 @@ SwgCuiHarassmentMessage *SwgCuiHarassmentMessage::createInto(UIPage *parent)
 	IGNORE_RETURN(parent->MoveChild(dupe, UIBaseObject::Top));
 	dupe->Link();
 	dupe->Center();
-	
+
 	SwgCuiHarassmentMessage * const creation = new SwgCuiHarassmentMessage(*dupe);
 	return creation;
 }

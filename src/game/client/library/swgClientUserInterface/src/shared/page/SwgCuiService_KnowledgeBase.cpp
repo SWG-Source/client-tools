@@ -207,7 +207,7 @@ void SwgCuiService::KnowledgeBase::OnButtonPressed(UIWidget *context)
 	}
 	else if (context == m_didNotHelpButton)
 	{
-		IGNORE_RETURN(CuiActionManager::performAction(CuiActions::ticketSubmission, Unicode::emptyString));
+		//IGNORE_RETURN(CuiActionManager::performAction(CuiActions::ticketSubmission, Unicode::emptyString));
 	}
 }
 

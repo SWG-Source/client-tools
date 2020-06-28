@@ -252,7 +252,7 @@ m_toggleDownTimeNames          (0.0f)
 	CuiActionManager::addAction (CuiActions::notepad,                    this, false);
 	CuiActionManager::addAction (CuiActions::setName,                    this, false);
 
-	CuiActionManager::addAction (CuiActions::ticketSubmission,           this, false);
+	//CuiActionManager::addAction (CuiActions::ticketSubmission,           this, false);
 	CuiActionManager::addAction (CuiActions::harassmentMessage,          this, false);
 	CuiActionManager::addAction (CuiActions::harassmentMessageFromKBSearch,this, false);
 	CuiActionManager::addAction (CuiActions::manageShipComponents,       this, false);
@@ -1185,10 +1185,10 @@ bool  SwgCuiHudAction::performAction (const std::string & id, const Unicode::Str
 		SwgCuiWebBrowserManager::setURL(finalUrl.c_str(), true);
 	}
 
-	else if (id == CuiActions::ticketSubmission) // Ticket Submission tabbed form
-	{
-		m_mediator.m_windowManager->spawnTicketSubmission();
-	}
+	//else if (id == CuiActions::ticketSubmission) // Ticket Submission tabbed form
+	//{
+		//m_mediator.m_windowManager->spawnTicketSubmission();
+	//}
 
 	else if (id == CuiActions::harassmentMessage) // Message displayed prior to a harrassment report
 	{

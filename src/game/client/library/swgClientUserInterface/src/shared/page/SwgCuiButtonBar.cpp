@@ -117,7 +117,7 @@ m_characterButton(0),
 m_expertiseButton(0),
 m_optionsButton(0),
 m_commandsButton(0),
-m_serviceButton(0),
+//m_serviceButton(0),
 m_submenuButton(0),
 m_shipDetailsButton(0),
 m_homePortButton(0),
@@ -152,7 +152,7 @@ m_opacityCallback      (0)
 	getCodeDataObject (TUIButton,     m_expertiseButton,         "buttonExpertise");
 	getCodeDataObject (TUIButton,     m_optionsButton,           "buttonOptions");
 	getCodeDataObject (TUIButton,     m_commandsButton,          "buttonCommands");
-	getCodeDataObject (TUIButton,     m_serviceButton,           "buttonService");
+	//getCodeDataObject (TUIButton,     m_serviceButton,           "buttonService");
 	getCodeDataObject (TUIButton,     m_submenuButton,           "buttonMenu");
 	getCodeDataObject (TUIButton,     m_shipDetailsButton,       "buttonShipDetails",    true);
 	getCodeDataObject (TUIButton,     m_homePortButton,          "buttonHomePort",       true);
@@ -185,7 +185,7 @@ m_opacityCallback      (0)
 	registerMediatorObject (*m_expertiseButton,      true);
 	registerMediatorObject (*m_optionsButton,        true);
 	registerMediatorObject (*m_commandsButton,       true);
-	registerMediatorObject (*m_serviceButton,        true);
+	//registerMediatorObject (*m_serviceButton,        true);
 	registerMediatorObject (*m_submenuButton,        true);
 	registerMediatorObject (*m_myCollectionsButton,  true);
 	//registerMediatorObject (*m_tcgButton,            true);
