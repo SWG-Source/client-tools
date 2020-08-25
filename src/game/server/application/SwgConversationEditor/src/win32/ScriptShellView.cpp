@@ -78,10 +78,10 @@ void ScriptShellView::OnUpdate(CView * const pSender, LPARAM const lHint, CObjec
 						buffer.Format ("Created %s.stf\r\n", shellData->m_shortFileName);
 						AddTexts (buffer);
 
-						buffer.Format ("Created %s.script\r\n", shellData->m_shortFileName);
+						buffer.Format ("Created %s.java\r\n", shellData->m_shortFileName);
 						AddTexts (buffer);
 
-						buffer.Format ("Compiling %s.script\r\n", shellData->m_shortFileName);
+						buffer.Format ("Compiling %s.java\r\n", shellData->m_shortFileName);
 						AddTexts (buffer);
 
 						CreateShellRedirect (commandLine);
@@ -114,7 +114,7 @@ void ScriptShellView::OnUpdate(CView * const pSender, LPARAM const lHint, CObjec
 
 					CString m_fullDataScriptFileName (shellData->m_fullScriptFileName);
 					m_fullDataScriptFileName.Replace ("/dsrc/", "/data/");
-					m_fullDataScriptFileName.Replace (".script", ".class");
+					m_fullDataScriptFileName.Replace (".java", ".class");
 
 					CreateShellRedirect (p4 + " edit " + m_fullDataScriptFileName);
 					CreateShellRedirect (p4 + " add " + m_fullDataScriptFileName);

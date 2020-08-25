@@ -1112,9 +1112,9 @@ void ScriptTreeView::OnScriptAddlibrary()
 
 	Conversation::LibrarySet & librarySet = document->getLibrarySet ();
 
-	CFileDialog dlg (true, "*.scriptlib", 0, (OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR), "ScriptLib Files *.scriptlib|*.scriptlib||");
+	CFileDialog dlg (true, "*.java", 0, (OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR), "ScriptLib Files *.java|*.java||");
 	dlg.m_ofn.lpstrInitialDir = RecentDirectory::find ("Script");
-	dlg.m_ofn.lpstrDefExt = "scriptlib";
+	dlg.m_ofn.lpstrDefExt = "java";
 	dlg.m_ofn.lpstrTitle = "Add Script Library";
 	if (dlg.DoModal () == IDOK)
 	{

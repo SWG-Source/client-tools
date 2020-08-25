@@ -37,26 +37,26 @@ namespace SwgConversationEditorDocNamespace
 	CString const cs_labelDefaultName = "_none";
 	CString const cs_labelRootName = "_root";
 
-	CString const cs_scriptPreNameDeclarationConditionString = "boolean ";
-	CString const cs_scriptPostNameDeclarationConditionString = " (obj_id player, obj_id npc)\r\n";
+	CString const cs_scriptPreNameDeclarationConditionString = "public boolean ";
+	CString const cs_scriptPostNameDeclarationConditionString = " (obj_id player, obj_id npc) throws InterruptedException\r\n";
 	CString const cs_scriptBodyConditionString = "{\r\n\treturn true;\r\n}\r\n";
-	CString const cs_scriptPreNameDeclarationActionString = "void ";
-	CString const cs_scriptPostNameDeclarationActionString = " (obj_id player, obj_id npc)\r\n";
+	CString const cs_scriptPreNameDeclarationActionString = "public void ";
+	CString const cs_scriptPostNameDeclarationActionString = " (obj_id player, obj_id npc) throws InterruptedException\r\n";
 	CString const cs_scriptBodyActionString = "{\r\n}\r\n";
-	CString const cs_scriptPreNameDeclarationTokenTOString = "string ";
-	CString const cs_scriptPostNameDeclarationTokenTOString = " (obj_id player, obj_id npc)\r\n";
-	CString const cs_scriptBodyTokenTOString = "{\r\n\treturn new string();\r\n}\r\n";
-	CString const cs_scriptPreNameDeclarationTokenDIString = "int ";
-	CString const cs_scriptPostNameDeclarationTokenDIString = " (obj_id player, obj_id npc)\r\n";
+	CString const cs_scriptPreNameDeclarationTokenTOString = "public String ";
+	CString const cs_scriptPostNameDeclarationTokenTOString = " (obj_id player, obj_id npc) throws InterruptedException\r\n";
+	CString const cs_scriptBodyTokenTOString = "{\r\n\treturn new String();\r\n}\r\n";
+	CString const cs_scriptPreNameDeclarationTokenDIString = "public int ";
+	CString const cs_scriptPostNameDeclarationTokenDIString = " (obj_id player, obj_id npc) throws InterruptedException\r\n";
 	CString const cs_scriptBodyTokenDIString = "{\r\n\treturn 0;\r\n}\r\n";
-	CString const cs_scriptPreNameDeclarationTokenDFString = "float ";
-	CString const cs_scriptPostNameDeclarationTokenDFString = " (obj_id player, obj_id npc)\r\n";
+	CString const cs_scriptPreNameDeclarationTokenDFString = "public float ";
+	CString const cs_scriptPostNameDeclarationTokenDFString = " (obj_id player, obj_id npc) throws InterruptedException\r\n";
 	CString const cs_scriptBodyTokenDFString = "{\r\n\treturn 0.f;\r\n}\r\n";
 
 	CString const cs_scriptHeader1 = "// ======================================================================\n//\n// ";
-	CString const cs_scriptHeader2 = "\n// Copyright 2004, Sony Online Entertainment\n// All Rights Reserved.\n//\n// Created with " + SwgConversationEditorApp::getVersion() + " - DO NOT EDIT THIS AUTO-GENERATED FILE!\n//\n// ======================================================================\n\n";
+	CString const cs_scriptHeader2 = "\n// Copyright 2004, Sony Online Entertainment\n// All Rights Reserved.\n//\n// Created with " + SwgConversationEditorApp::getVersion() + " - DO NOT EDIT THIS AUTO-GENERATED FILE!\n// blour says hi\n// ======================================================================\n\n";
 
-	CString const cs_scriptLibraryDelimiter = "// ======================================================================\n// Library Includes\n// ======================================================================\n\n";
+	CString const cs_scriptLibraryDelimiter = "package script.conversation;\n\n// ======================================================================\n// Library Includes\n// ======================================================================\n\n";
 	CString const cs_scriptConstantsDelimiter = "// ======================================================================\n// Script Constants\n// ======================================================================\n\n";
 	CString const cs_scriptConditionDelimiter = "// ======================================================================\n// Script Conditions\n// ======================================================================\n\n";
 	CString const cs_scriptActionDelimiter = "// ======================================================================\n// Script Actions\n// ======================================================================\n\n";
@@ -173,7 +173,7 @@ namespace SwgConversationEditorDocNamespace
 
 	CString getFullScriptFileName (CString const & shortFileName)
 	{
-		CString fullScriptFileName(ConfigFile::getKeyString("SwgConversationEditor", "scriptPath", 0) + CString ("/") + shortFileName + ".script");
+		CString fullScriptFileName(ConfigFile::getKeyString("SwgConversationEditor", "scriptPath", 0) + CString ("/") + shortFileName + ".java");
 		fullScriptFileName.MakeLower();
 		return fullScriptFileName;
 	}
@@ -503,10 +503,10 @@ CString const SwgConversationEditorDoc::getDefaultTriggerText ()
 
 	//-- write OnInitialize
 	{
-		buffer += "trigger OnInitialize ()\r\n" \
+		buffer += "public int OnInitialize(obj_id self) throws InterruptedException\r\n" \
 			"{\r\n" \
-			"\tif ((!isTangible (self)) || (isPlayer (self)))\r\n" \
-			"\t\tdetachScript(self, \"conversation.filename\");\r\n\r\n" \
+			"\tif ((!isMob (self)) || (isPlayer (self)))\r\n\t{\r\n" \
+			"\t\tdetachScript(self, \"conversation.filename\");\r\n\t}\r\n\r\n" \
 			"\tsetCondition (self, CONDITION_CONVERSABLE);\r\n\r\n" \
 			"\treturn SCRIPT_CONTINUE;\r\n" \
 			"}\r\n\r\n";
@@ -514,7 +514,7 @@ CString const SwgConversationEditorDoc::getDefaultTriggerText ()
 
 	//-- write OnAttach
 	{
-		buffer += "trigger OnAttach ()\r\n" \
+		buffer += "public int OnAttach(obj_id self) throws InterruptedException\r\n" \
 			"{\r\n" \
 			"\tsetCondition (self, CONDITION_CONVERSABLE);\r\n\r\n" \
 			"\treturn SCRIPT_CONTINUE;\r\n" \
@@ -524,7 +524,7 @@ CString const SwgConversationEditorDoc::getDefaultTriggerText ()
 	//-- write OnObjectMenuRequest
 	{
 		buffer +=
-			"trigger OnObjectMenuRequest (obj_id player, menu_info menuInfo)\r\n" \
+			"public int OnObjectMenuRequest(obj_id self, obj_id player, menu_info menuInfo) throws InterruptedException\r\n" \
 			"{\r\n" \
 			"\tint menu = menuInfo.addRootMenu (menu_info_types.CONVERSE_START, null);\r\n" \
 			"\tmenu_info_data menuInfoData = menuInfo.getMenuItemById (menu);\r\n" \
@@ -536,7 +536,7 @@ CString const SwgConversationEditorDoc::getDefaultTriggerText ()
 
 	//-- write OnIncapacitated
 	{
-		buffer += "trigger OnIncapacitated (obj_id killer)\r\n" \
+		buffer += "public int OnIncapacitated(obj_id self, obj_id killer) throws InterruptedException\r\n" \
 			"{\r\n" \
 			"\tclearCondition (self, CONDITION_CONVERSABLE);\r\n" \
 			"\tdetachScript (self, \"conversation.filename\");\r\n\r\n" \
@@ -2072,7 +2072,7 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 		//-- write header
 		outfile.WriteString (cs_scriptHeader1);
 		outfile.WriteString (fileName);
-		outfile.WriteString (".script" );
+		outfile.WriteString (".java" );
 		outfile.WriteString (cs_scriptHeader2);
 
 		//-- write libraries
@@ -2080,9 +2080,16 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 		writeLibraries (outfile);
 		outfile.WriteString ("\n");
 
+		//-- write public class filename extends opener
+		outfile.WriteString("public class ");
+		outfile.WriteString(fileName);
+		outfile.WriteString(" extends script.base_script\n{\n\tpublic ");
+		outfile.WriteString(fileName);
+		outfile.WriteString("()\r\n\t{\r\n\t}\r\n");
+
 		//-- write constants
 		outfile.WriteString (cs_scriptConstantsDelimiter);
-		outfile.WriteString ("string c_stringFile = \"conversation/");
+		outfile.WriteString ("public static String c_stringFile = \"conversation/");
 		outfile.WriteString (fileName);
 		outfile.WriteString ("\";\n");
 		outfile.WriteString ("\n");
@@ -2374,7 +2381,7 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 		}
 
 		{
-			outfile.WriteString ("trigger OnStartNpcConversation (obj_id player)\n");
+			outfile.WriteString ("public int OnStartNpcConversation(obj_id self, obj_id player) throws InterruptedException\n");
 			outfile.WriteString ("{\n");
 
 			//	obj_id npc = self;
@@ -2398,7 +2405,7 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 		//-- write OnNpcConversationResponse
 		outfile.WriteString (cs_scriptSingleDelimiter);
 		{
-			outfile.WriteString ("trigger OnNpcConversationResponse (string conversationId, obj_id player, string_id response)\n{\n");
+			outfile.WriteString ("public int OnNpcConversationResponse(obj_id self, String conversationId, obj_id player, string_id response) throws InterruptedException\n{\n");
 
 			//	if (conversationId != <conversationId>)
 			buffer.Format ("\tif (conversationId != \"%s\")\n", fileName);
@@ -2453,6 +2460,8 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 
 		outfile.WriteString (cs_scriptDoubleDelimiter);
 
+		outfile.WriteString("}"); //write closer for public class blah blah
+
 		return true;
 	}
 
@@ -2467,10 +2476,11 @@ void SwgConversationEditorDoc::writeLibraries (CStdioFile & outfile) const
 	Conversation::LibrarySet::iterator end = librarySet.end ();
 	for (Conversation::LibrarySet::iterator iterator = librarySet.begin (); iterator != end; ++iterator)
 	{
-		outfile.WriteString ("include library.");
+		outfile.WriteString ("import script.library.");
 		outfile.WriteString (iterator->c_str ());
 		outfile.WriteString (";\n");
 	}
+	outfile.WriteString("import script.*;\n");
 }
 
 // ----------------------------------------------------------------------
