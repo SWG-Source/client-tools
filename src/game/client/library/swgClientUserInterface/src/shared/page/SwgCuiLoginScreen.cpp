@@ -85,12 +85,19 @@ m_connecting      (false)
 	}
 	else
 	{
-		m_passwordTextbox->SetLocalText (Unicode::emptyString);
+		if (ConfigClientGame::getLoginClientID()) {
+			m_usernameTextbox->SetLocalText(Unicode::narrowToWide(ConfigClientGame::getLoginClientID()));
+		}
+		else {
+			m_usernameTextbox->SetLocalText(Unicode::emptyString);
+		}
 
-		if (ConfigClientGame::getLoginClientID ())
-			m_usernameTextbox->SetLocalText (Unicode::narrowToWide (ConfigClientGame::getLoginClientID ()));
-		else
-			m_usernameTextbox->SetLocalText (Unicode::emptyString);
+		if (ConfigClientGame::getLoginClientPassword()) {
+			m_passwordTextbox->SetLocalText(Unicode::narrowToWide(ConfigClientGame::getLoginClientPassword()));
+		}
+		else {
+			m_passwordTextbox->SetLocalText(Unicode::emptyString);
+		}
 	}
 
 	DEBUG_REPORT_LOG_PRINT (true, ("SwgCuiLoginScreen: username=%s, sessionId=%s\n", ConfigClientGame::getLoginClientID (), sessionId ? sessionId : "null"));
