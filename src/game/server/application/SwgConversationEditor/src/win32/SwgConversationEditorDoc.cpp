@@ -2285,7 +2285,7 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 					if (numberOfResponses > 0)
 					{
 						// int *_handleBranch<n> (obj_id player, obj_id npc, string_id response)
-						buffer.Format("int %s_handleBranch%i (obj_id player, obj_id npc, string_id response)\n", fileName, sourceBranch->getBranchId());
+						buffer.Format("int %s_handleBranch%i (obj_id player, obj_id npc, string_id response) throws InterruptedException\n", fileName, sourceBranch->getBranchId());
 						outfile.WriteString(buffer);
 
 						// {
@@ -2314,7 +2314,7 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 							outfile.WriteString (buffer);
 
 							//	if (response == "<responseTextCrc>")
-							buffer.Format("\tif (response == \"s_%s\")\n", response->getStringId().c_str());
+							buffer.Format("\tif (response.equals(\"s_%s\"))\n", response->getStringId().c_str());
 							outfile.WriteString (buffer);
 	
 							//	{
@@ -2371,7 +2371,7 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 		outfile.WriteString (cs_scriptTriggerDelimiter);
 		{
 			outfile.WriteString ("//-- This function should move to base_class.java\n");
-			outfile.WriteString ("boolean npcStartConversation(obj_id player, obj_id npc, string convoName, string_id greetingId, prose_package greetingProse, string_id[] responses)\n");
+			outfile.WriteString ("boolean npcStartConversation(obj_id player, obj_id npc, String convoName, string_id greetingId, prose_package greetingProse, string_id[] responses)\n");
 			outfile.WriteString ("{\n");
 			outfile.WriteString ("\tObject[] objects = new Object[responses.length];\n");
 			outfile.WriteString ("\tSystem.arraycopy(responses, 0, objects, 0, responses.length);\n");
@@ -2407,8 +2407,8 @@ bool SwgConversationEditorDoc::writeScript (CString const & scriptName, CString 
 		{
 			outfile.WriteString ("public int OnNpcConversationResponse(obj_id self, String conversationId, obj_id player, string_id response) throws InterruptedException\n{\n");
 
-			//	if (conversationId != <conversationId>)
-			buffer.Format ("\tif (conversationId != \"%s\")\n", fileName);
+			//	if (!conversationId.equals(<conversationId>))
+			buffer.Format ("\tif (!conversationId.equals(\"%s\"))\n", fileName);
 			outfile.WriteString (buffer);
 
 			//		return SCRIPT_CONTINUE;
