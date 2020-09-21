@@ -91,6 +91,7 @@ namespace ObjectAttributeManagerNamespace
 		bool hasTooltips;
 		bool noTrade;
 		bool noTradeShared;
+		bool noTradeRemovable;
 		int revision;
 		int tier;
 		bool unique;
@@ -102,6 +103,7 @@ namespace ObjectAttributeManagerNamespace
 		hasTooltips(false),
 		noTrade(false),
 		noTradeShared(false),
+		noTradeRemovable(false),
 		revision(_revision),
 		tier(-1),
 		unique(false),
@@ -119,6 +121,9 @@ namespace ObjectAttributeManagerNamespace
 
 				if (attribPair.first.find(SharedObjectAttributes::no_trade_shared) != std::string::npos)
 					noTradeShared = true;
+
+				if (attribPair.first.find(SharedObjectAttributes::no_trade_removable) != std::string::npos)
+					noTradeRemovable = true;
 
 				if (attribPair.first.find(SharedObjectAttributes::unique) != std::string::npos)
 					unique = true;
@@ -635,6 +640,9 @@ void ObjectAttributeManager::formatAttributes   (const AttributeVector & av, Uni
 			continue;
 
 		if (fullKey.find(SharedObjectAttributes::no_trade_shared) != std::string::npos)
+			continue;
+
+		if (fullKey.find(SharedObjectAttributes::no_trade_removable) != std::string::npos)
 			continue;
 
 		if (fullKey.find(SharedObjectAttributes::unique) != std::string::npos)
@@ -1367,6 +1375,22 @@ bool ObjectAttributeManager::isNoTradeShared(std::string const & staticItemName)
 	}
 
 	return noTradeShared;
+}
+
+//----------------------------------------------------------------------
+
+bool ObjectAttributeManager::isNoTradeRemovable(NetworkId const & id)
+{
+	bool noTradeRemovable = false;
+
+	AttributeMap::const_iterator it = s_attribs.find(id);
+	if (it != s_attribs.end())
+	{
+		AttributeInfo const & info = it->second;
+		noTradeShared = info.noTradeRemovable;
+	}
+
+	return noTradeRemovable;
 }
 
 //----------------------------------------------------------------------
