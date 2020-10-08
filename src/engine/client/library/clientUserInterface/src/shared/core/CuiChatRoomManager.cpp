@@ -1801,6 +1801,12 @@ void CuiChatRoomManager::receiveFailedEnterRoom             (const uint32 sequen
 	case SWG_CHAT_ERR_NOT_WARDEN:
 		stringId = &CuiStringIdsChatRoom::join_fail_not_warden_prose;
 		break;
+	case SWG_CHAT_ERR_NOT_GUILD_LEADER:
+		stringId = &CuiStringIdsChatRoom::join_fail_not_guild_leader_prose;
+		break;
+	case SWG_CHAT_ERR_NOT_CITY_MAYOR:
+		stringId = &CuiStringIdsChatRoom::join_fail_not_mayor_prose;
+		break;
 	case SWG_CHAT_ERR_INVALID_OBJECT:
 		stringId = &CuiStringIdsChatRoom::join_fail_invalid_object_prose;
 		break;

@@ -57,6 +57,8 @@ namespace CuiStringIdsChatRoom
 	MAKE_STRING_ID(ui_chatroom,      join_fail_invalid_object_prose);
 	MAKE_STRING_ID(ui_chatroom,      join_fail_no_game_server_prose);
 	MAKE_STRING_ID(ui_chatroom,      join_fail_not_warden_prose);
+	MAKE_STRING_ID(ui_chatroom, 	 join_fail_not_guild_leader_prose);
+	MAKE_STRING_ID(ui_chatroom,		 join_fail_not_mayor_prose);
 	MAKE_STRING_ID(ui_chatroom,      list_received);
 	MAKE_STRING_ID(ui_chatroom,      not_a_room);
 	MAKE_STRING_ID(ui_chatroom,      not_found);
