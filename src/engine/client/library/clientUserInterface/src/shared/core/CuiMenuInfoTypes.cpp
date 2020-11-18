@@ -310,6 +310,7 @@ namespace Cui
 			MAKE_ID(ITEM_EQUIP_APPEARANCE,  none,                     item_equip_appearance,                CursorPaths::equip);
 			MAKE_ID(ITEM_UNEQUIP_APPEARANCE,none,                     item_unequip_appearance,              CursorPaths::unequip);
 			MAKE_ID(OPEN_STORYTELLER_RECIPE,none,					  open_storyteller_recipe,              0);
+			MAKE_ID(GOD_TELEPORT, none, god_teleport, 0);
 
 #undef MAKE_ID
 			

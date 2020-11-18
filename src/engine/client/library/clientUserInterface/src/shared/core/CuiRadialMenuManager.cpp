@@ -1798,8 +1798,13 @@ bool CuiRadialMenuManager::populateMenu (CuiMenuInfoHelper & helper, const Objec
 					helper.addRootMenu (ITEM_MAIL, got);
 				}
 			}
-			else
+			else {
 				isUnownedWaypoint = true;
+			}
+			// allow players flagged as admin to radial and teleport directly to a waypoint
+			if (PlayerObject::isAdmin()) {
+				helper.addRootMenu(GOD_TELEPORT, got);
+			}
 		}
 
 		//allow bringing up ship page on ground only for players, in ground or space for gods
@@ -1892,7 +1897,6 @@ void CuiRadialMenuManager::performDefaultAction (Object & object, bool allowOpen
 				Cui::MenuInfoTypes::executeCommandForMenu(EXAMINE, object.getNetworkId(), 0);
 				return;
 			}
-
 			else if (omrd->isOutOfRange ())
 			{
 				ClientObject const * const clientObject = object.asClientObject();
@@ -2406,6 +2410,11 @@ void CuiRadialMenuManager::performMenuAction (int sel, int index, bool serverNot
 				GameNetwork::send(msg, true);
 			}
 		}
+	}
+	else if (sel == GOD_TELEPORT) {
+		ClientWaypointObject const * const cwo = dynamic_cast<ClientWaypointObject const *>(clientObject);
+		GenericValueTypeMessage<std::pair<NetworkId, std::string> > const msg("handleWaypointWarp", std::make_pair(cwo->getNetworkId(), ""));
+		GameNetwork::send(msg, true);
 	}
 	else if (sel == SHIP_MANAGE_COMPONENTS)
 	{
