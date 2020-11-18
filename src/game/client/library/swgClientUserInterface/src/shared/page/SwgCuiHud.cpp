@@ -198,11 +198,9 @@ namespace SwgCuiHudNamespace
 
 		const ClientObject * const clientObject = obj ? obj->asClientObject () : 0;
 
-#if PRODUCTION == 0
 		const bool allowTargetAnything = CuiPreferences::getAllowTargetAnything ();
 		//-- don't target buildings and shit
 		if (!allowTargetAnything)
-#endif
 		{
 			//-- we are looking at an untargettable object
 			if (!clientObject)

@@ -54,9 +54,7 @@
 #include "swgSharedUtility/JediConstants.h"
 
 
-#if PRODUCTION == 0
 bool PlayerObject::s_admin = false;
-#endif
 
 namespace PlayerObjectNamespace
 {
@@ -2071,11 +2069,7 @@ void PlayerObject::getObjectInfo(std::map<std::string, std::map<std::string, Uni
 
 void PlayerObject::setAdmin(bool admin)
 {
-#if PRODUCTION == 0
 	s_admin = admin;
-#else
-	UNREF(admin);
-#endif
 }
 
 //----------------------------------------------------------------------

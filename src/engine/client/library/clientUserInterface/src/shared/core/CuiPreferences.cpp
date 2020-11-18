@@ -1742,7 +1742,7 @@ bool   CuiPreferences::getDragOntoContainers ()
 
 bool   CuiPreferences::getAllowTargetAnything ()
 {
-	return ms_allowTargetAnything;
+	return ms_allowTargetAnything && PlayerObject::isAdmin();
 }
 
 //----------------------------------------------------------------------
