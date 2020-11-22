@@ -55,8 +55,10 @@ namespace SwgCuiButtonBarNamespace
 	const StringId squelched = StringId("ui_chatroom", "squelched");
 	const StringId lotsOverLimitSpam = StringId("ui", "lots_over_limit_spam");
 
-	const int NORMAL_NUMBER_BUTTONS_SPACE = 18;
-	const int NORMAL_NUMBER_BUTTONS_GROUND = 16;
+	// these numbers were reduced based on the removal of the help/cs and tcg menu buttons otherwise the hover offset is fucked
+	// also for some reason these numbers need to be 2 less than the actual number of menu items, thanks SOE
+	const int NORMAL_NUMBER_BUTTONS_SPACE = 16;
+	const int NORMAL_NUMBER_BUTTONS_GROUND = 14;
 
 	void onConfirmGoHomeClosed(const CuiMessageBox & box);
 

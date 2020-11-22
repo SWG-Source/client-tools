@@ -538,6 +538,10 @@ void SwgCuiOptKeymap::updateData ()
 				cbis.cmd->category == Categories::custom)
 				continue;
 		}
+		// don't show voice commands
+		if (cbis.cmd->category == "voice") {
+			continue;
+		}
 		
 		Unicode::String localizedCommandName;
 		Unicode::String localizedCommandDesc;
@@ -681,6 +685,13 @@ void SwgCuiOptKeymap::resetTabs ()
 		if (category == Categories::internal)
 			continue;
 #endif
+		// do not show anyone the "voice" keybind tab of options
+		// this should technically be removed from the input/inputmap_*.iff files, but they are mIFF source not datatables,
+		// and they were not included in the leak, so they need a bit of reverse engineering, so this will do for now
+		if (category == "voice") {
+			continue;
+		}
+
 		std::string categoryIdName = "keybind_category_";
 		categoryIdName += category;
 		StringId categoryId(s_optStringFileName, categoryIdName);

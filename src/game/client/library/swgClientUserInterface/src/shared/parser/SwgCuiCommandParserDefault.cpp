@@ -111,7 +111,7 @@ namespace SwgCuiCommandParserDefaultNamespace
 		MAKE_COMMAND (moods);
 		MAKE_COMMAND (chatTypes);
 		MAKE_COMMAND (emoticons);
-		MAKE_COMMAND (bug);
+		//MAKE_COMMAND (bug);
 		MAKE_COMMAND (memoryReport);
 		MAKE_COMMAND (memoryVerify);
 		MAKE_COMMAND (garbageCollect);
@@ -182,7 +182,7 @@ namespace SwgCuiCommandParserDefaultNamespace
 		{ Commands::moods,                       0, "",                                   "List available moods."},
 		{ Commands::chatTypes,                   0, "",                                   "List available chat types."},
 		{ Commands::emoticons,                   0, "",                                   "List known emoticons."},
-		{ Commands::bug,                         0, "",                                   "Submit a bug"},
+		//{ Commands::bug,                         0, "",                                   "Submit a bug"},
 		{ Commands::brightnessContrastGamma,     3, "<brightness> <contrast> <gamma>",    "Set the brightness, contrast, and gamma"},
 		{ Commands::alarmAddIn,                  3, "<hours> <minutes> <message> Ex. /alarmAddIn 0 30 Pizza is ready!", "Set an alarm to go off in the specified time"},
 		{ Commands::alarmAddAt,                  3, "<hour> <minute> <message> Ex. /alarmAddAt 0 0 Time to go to bed...it is midnight!", "Set an alarm to go off at the specified military time"},
@@ -433,13 +433,13 @@ m_aliasHandler  (0)
 	removeAliasStatic (Unicode::narrowToWide ("drawNetworkIds"));
 #endif
 
-	setAliasStatic ("browser", "/ui browser");
-	setAliasStatic ("url", "/ui url");
+	//setAliasStatic ("browser", "/ui browser");
+	//setAliasStatic ("url", "/ui url");
 
 	addSubCommand (new SwgCuiCommandParserChatRoom ());
 	addSubCommand(new SwgCuiCommandParserShip);
 	addSubCommand(new SwgCuiCommandParserNebula);
-	addSubCommand(new SwgCuiCommandParserVoice);
+	//addSubCommand(new SwgCuiCommandParserVoice);
 
 	loadAliases(m_aliasFilename.c_str ());
 
@@ -1367,11 +1367,11 @@ bool SwgCuiCommandParserDefault::performParsing (const NetworkId & userId, const
 
 	//-----------------------------------------------------------------
 
-	else if (isCommand(argv[0], Commands::bug))
-	{
-		IGNORE_RETURN(CuiActionManager::performAction (CuiActions::bugReport, Unicode::emptyString));
-		return true;
-	}
+	//else if (isCommand(argv[0], Commands::bug))
+	//{
+	//	IGNORE_RETURN(CuiActionManager::performAction (CuiActions::bugReport, Unicode::emptyString));
+	//	return true;
+	//}
 
 	//-----------------------------------------------------------------
 

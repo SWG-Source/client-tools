@@ -173,8 +173,8 @@ namespace SwgCuiCommandParserUINamespace
 		{CommandNames::inputScheme,            0, "[scheme]",    "Reset or list"},
 		{CommandNames::reticleSelect,          1, "[reticle #]", "Select the current reticle."},
 		{CommandNames::radarSelect,            1, "[radar #]",   "Select the current reticle."},
-		{CommandNames::browser,                0, "<url>",       "Opens a web browser. If no URL is specified, you will be sent to the SWG home page."},
-		{CommandNames::url,                    1, "<URL>", "Passes the specified URL to the Web Browser."		},
+		//{CommandNames::browser,                0, "<url>",       "Opens a web browser. If no URL is specified, you will be sent to the SWG home page."},
+		//{CommandNames::url,                    1, "<URL>", "Passes the specified URL to the Web Browser."		},
 #if PRODUCTION == 0
 		{CommandNames::debugPrint,            1, "<1|0>",       "."},
 		{CommandNames::list,                  0, "",            "List all UI Pages."},
@@ -560,6 +560,7 @@ bool SwgCuiCommandParserUI::performParsing (const NetworkId & userId, const Stri
 		
 		return true;
 	}
+	/*
 	else if(isCommand(argv[0], CommandNames::browser))
 	{	
 		if(argv.size() > 1)
@@ -581,6 +582,7 @@ bool SwgCuiCommandParserUI::performParsing (const NetworkId & userId, const Stri
 
 		return true;
 	}
+	*/
 
 #if PRODUCTION == 0
 

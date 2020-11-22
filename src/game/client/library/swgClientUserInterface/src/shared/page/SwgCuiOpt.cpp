@@ -51,7 +51,7 @@ namespace SwgCuiOptNamespace
 		OT_terrain,
 		OT_ui,
 		OT_keymap,
-		OT_voice,
+		//OT_voice,
 		OT_numTabs
 	};
 
@@ -109,8 +109,9 @@ m_keepSettings   (false)
 	getCodeDataObject (TUIPage, optionPage,      "pageUi");
 	(*m_optionPages) [OT_ui] = new SwgCuiOptUi         (*optionPage);
 
-	getCodeDataObject (TUIPage, optionPage, "pageVoice");
-	(*m_optionPages) [OT_voice] = new SwgCuiOptVoice (*optionPage);
+	// do not show the "voice" page of settings as this feature is deprecated
+	//getCodeDataObject (TUIPage, optionPage, "pageVoice");
+	//(*m_optionPages) [OT_voice] = new SwgCuiOptVoice (*optionPage);
 
 	getCodeDataObject (TUIPage, optionPage, "pageKeymap");
 	(*m_optionPages) [OT_keymap] = new SwgCuiOptKeymap (*optionPage, Game::getHudSceneType());

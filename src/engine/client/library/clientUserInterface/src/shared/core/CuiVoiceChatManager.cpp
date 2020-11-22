@@ -741,8 +741,11 @@ std::string CuiVoiceChatManager::getCsReportString()
 
 //----------------------------------------------------------------------------
 
+// disable the ability to enable voice chat
 void CuiVoiceChatManager::setVoiceChatEnabled(bool enabled)
 {
+	return;
+	/*
 	if(enabled != getVoiceChatEnabled())
 	{
 		std::stringstream ss;
@@ -753,6 +756,7 @@ void CuiVoiceChatManager::setVoiceChatEnabled(bool enabled)
 		CuiPreferences::setVoiceChatEnabled(enabled);
 		CuiVoiceChatManagerNamespace::Transceivers::enabledChanged.emitMessage(enabled);
 	}
+	*/
 }
 
 //----------------------------------------------------------------------------

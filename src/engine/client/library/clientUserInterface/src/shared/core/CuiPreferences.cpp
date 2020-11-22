@@ -386,13 +386,13 @@ namespace
 
 	Callback * ms_buffIconSettingsChangedCallback = 0;
 
-
-	bool ms_voiceChatEnabled = true;
-	bool ms_voiceUsePushToTalk = true;
+	// all voice options disabled by default
+	bool ms_voiceChatEnabled = false;
+	bool ms_voiceUsePushToTalk = false;
 	bool ms_voiceUseAdvancedChannelSelection = false;
-	bool ms_voiceShowFlybar = true;
+	bool ms_voiceShowFlybar = false;
 	bool ms_voiceAutoDeclineInvites = false;
-	bool ms_voiceAutoJoinChannels = true;
+	bool ms_voiceAutoJoinChannels = false;
 
 	bool ms_defaultExamineHideAppearance = false;
 	bool ms_doubleClickAppearanceUnequip = true;
@@ -863,10 +863,11 @@ void CuiPreferences::install ()
 
 	REGISTER_OPTION(hideCharactersOnClosedGalaxies);
 
-	CuiVoiceChatManager::setVoiceChatEnabled(getVoiceChatEnabled());
-	CuiVoiceChatManager::setUsePushToTalkForceUpdate(getVoiceUsePushToTalk());
-	CuiVoiceChatManager::setShowFlybar(getVoiceShowFlybar());
-	CuiVoiceChatManager::setUseAdvancedChannelSelection(getVoiceUseAdvancedChannelSelection());
+	// disable all voice preferences by default
+	CuiVoiceChatManager::setVoiceChatEnabled(false);
+	CuiVoiceChatManager::setUsePushToTalkForceUpdate(false);
+	CuiVoiceChatManager::setShowFlybar(false);
+	CuiVoiceChatManager::setUseAdvancedChannelSelection(false);
 
 	// Update our utils class with our loaded option.
 	setCurrencyFormat(static_cast<CuiPreferences::CurrencyFormat>(ms_currencyFormat));
