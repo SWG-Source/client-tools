@@ -546,9 +546,12 @@ void SwgCuiQuestAcceptance::updateDecriptionReward(Quest const & quest)
 	int currentItem = 0;
 	std::vector<std::string> const & inclusiveLootItemNames = quest.getInclusiveStaticLootItemNames();
 	std::vector<std::string> const & exclusiveLootItemNames = quest.getExclusiveStaticLootItemNames();
+	std::vector<int> const & inclusiveLootCounts = quest.getInclusiveStaticLootItemCounts();
+	std::vector<int> const & exclusiveLootCounts = quest.getExclusiveStaticLootItemCounts();
 	DEBUG_FATAL(!inclusiveLootItemNames.empty() && !exclusiveLootItemNames.empty(), ("Both AND and OR rewards type set in quest [%s], this is not allowed.  Use only one!", quest.getName().getString()));
 
 	std::vector<std::string> const & lootItems = (!inclusiveLootItemNames.empty()) ? inclusiveLootItemNames : exclusiveLootItemNames;
+	std::vector<int> const & lootCounts = (!inclusiveLootItemNames.empty()) ? inclusiveLootCounts : exclusiveLootCounts;
 
 	for(int i = 0; i < cms_maxItems; ++i)
 		ms_itemRewards[i].clear();
@@ -609,8 +612,19 @@ void SwgCuiQuestAcceptance::updateDecriptionReward(Quest const & quest)
 		m_rewardItemViewers[currentItem]->GetParentWidget()->GetParentWidget()->GetParentWidget()->SetLocalTooltip(result);
 		m_rewardItemViewers[currentItem]->recomputeZoom();
 		m_rewardItemViewers[currentItem]->setViewDirty(true);
-		m_rewardItemNames[currentItem]->SetLocalText(StringId("static_item_n", lootItem).localize());
 
+		int p = std::distance(lootItems.begin(), it);
+		if (lootCounts[p] > 1) {
+			char pr[16];
+			snprintf(pr, sizeof(pr) - 1, "%d", lootCounts[p]);
+			std::string countMessage = "(";
+			countMessage += pr;
+			countMessage += "x) ";
+			m_rewardItemNames[currentItem]->SetLocalText(Unicode::narrowToWide(countMessage) + StringId("static_item_n", lootItem).localize());
+		}
+		else {
+			m_rewardItemNames[currentItem]->SetLocalText(StringId("static_item_n", lootItem).localize());
+		}
 		showedSomeReward = true;
 		++currentItem;
 	}
