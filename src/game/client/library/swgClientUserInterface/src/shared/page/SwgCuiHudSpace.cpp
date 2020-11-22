@@ -69,7 +69,8 @@ SwgCuiHudSpace::SwgCuiHudSpace(UIPage & page) :
 	m_missileLockOnYouPage(NULL),
 	m_missileLockTimer(c_blinkDecaySeconds),
 	m_missileLockWidget(NULL),
-	m_missileLockEffector(NULL)
+	m_missileLockEffector(NULL),
+	m_enterSpaceButton(NULL)
 { 
 	m_targetingEnabled = false;
 
@@ -124,6 +125,11 @@ SwgCuiHudSpace::SwgCuiHudSpace(UIPage & page) :
 
 	getCodeDataObject(TUIButton, m_tutorialButton, "trainerButton");
 	m_tutorialButton->SetVisible(false);
+
+	// by default keep the atmospheric flight "enterSpaceButton" off when launching into space
+	// this can be adjusted to toggle specifically for atmospheric flight later 
+	getCodeDataObject(TUIButton, m_enterSpaceButton, "buttonEnterSpace");
+	m_enterSpaceButton->SetVisible(false);
 		
 	m_buttonParentPage = NON_NULL(static_cast<UIPage*>(m_exitStationButton->GetParent(TUIPage))); //lint !e1774 // Could dynamic cast.
 	m_buttonParentPage->SetVisible(true);
@@ -356,7 +362,6 @@ void SwgCuiHudSpace::update(float const updateDeltaSeconds)
 	if (s_drawHudSpaceStateDrivenWidgets)
 	{
 		ShipObject const * const playerShip = Game::getPlayerPilotedShip();
-		
 		if (playerShip)
 		{
 			CreateMissileMessage createMissileMessage(0, playerShip->getNetworkId(), playerShip->getNetworkId(), Vector::zero, playerShip->getPosition_w(), 0, 0, 0, 0);

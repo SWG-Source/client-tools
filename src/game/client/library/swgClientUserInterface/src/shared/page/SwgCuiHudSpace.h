@@ -69,6 +69,7 @@ private:
 	UIButton * m_ejectButton;
 	UIButton * m_exitStationButton;
 	UIButton * m_tutorialButton;
+	UIButton * m_enterSpaceButton;
 	UIPage * m_buttonParentPage;
 	UIPage * m_missileLockOnYouPage;
 	Timer m_missileLockTimer;
