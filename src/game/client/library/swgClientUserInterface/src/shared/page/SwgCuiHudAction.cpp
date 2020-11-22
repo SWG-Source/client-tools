@@ -121,6 +121,7 @@ namespace
 	float s_toggleTime = 1.0f / 20.f;
 	int s_toggleDebounceCounter = 250;
 	bool s_allowServiceWindow = false;
+	bool s_allowBugReportWindow = false;
 
 	CuiMessageBox * s_confirmCsBrowserSpawn = 0;
 	CuiMessageBox * s_confirmOpenQuestBuilder = 0;
@@ -299,10 +300,15 @@ m_toggleDownTimeNames          (0.0f)
 	if (!s_installed)
 	{
 		s_installed = true;
+
+		// SWG Source Change: set allowServiceWindow to true under production constant to re-enable "H" key help popup
+		// SWG Source Change: set allowBugReportWindow to true under production constant to re-enable /bug cui reporting form
 #if PRODUCTION == 0
-		s_allowServiceWindow = true;
+		s_allowServiceWindow = false;
+		s_allowBugReportWindow = false;
 #else
 		s_allowServiceWindow = false;
+		s_allowBugReportWindow = false;
 		DebugFlags::registerFlag(s_allowServiceWindow,       "ClientUserInterface", "allowServiceWindow");
 #endif
 	}
@@ -1065,6 +1071,9 @@ bool  SwgCuiHudAction::performAction (const std::string & id, const Unicode::Str
 
 	else if (id == CuiActions::service) // Customer Service
 	{
+		if (!s_allowServiceWindow) {
+			return false;
+		}
 		if (params.length() == 0)
 		{
 			s_confirmCsBrowserSpawn = CuiMessageBox::createYesNoBox (CuiStringIdsCustomerService::confirm_cs_browser_spawn.localize ());
@@ -1225,6 +1234,9 @@ bool  SwgCuiHudAction::performAction (const std::string & id, const Unicode::Str
 
 	else if (id == CuiActions::bugReport)
 	{
+		if (!s_allowBugReportWindow) {
+			return false;
+		}
 		CuiMediator* const m = CuiMediatorFactory::get (CuiMediatorTypes::BugSubmission);
 		CuiBugSubmissionPage* const p = dynamic_cast<CuiBugSubmissionPage*>(m);
 		if(!p)
