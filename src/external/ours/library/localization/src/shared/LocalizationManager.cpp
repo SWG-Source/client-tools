@@ -465,7 +465,7 @@ LocalizationManager::StringValueCode LocalizationManager::getLocalizedStringValu
 	LocalizedStringTable * const table = fetchStringTable (id.getTable (), useEnglish);
 	if (!table)
 	{
-		if (m_displayBadStringIds || s_displayStringIdInfo)
+		if ((m_displayBadStringIds || s_displayStringIdInfo) && id.getTable() != "dummy_string_table") // dummy_string_table is used by scripts to circumvent prose package/string_id requisite
 		{
 			if (s_displayStringIdInfo) 
 			{
