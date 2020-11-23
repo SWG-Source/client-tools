@@ -151,7 +151,11 @@ void ConfigClientUserInterface::install ()
 	KEY_BOOL   (drawObjectNames,             false);
 	KEY_BOOL   (drawSelfName,                false);
 	KEY_BOOL   (allowRadialMenuPickup,       false);
-	KEY_STRING (uiRootPath,                  "ui/");
+
+	KEY_STRING(uiRootPath,					 "ui/");
+	if (ConfigFile::getKeyBool("ClientUserInterface", "use4kResolutionInterface", false)) {
+		ms_uiRootPath = "ui-4k/";
+	}
 
 	KEY_STRING (uiRootName,                  DefaultUIFile);
 	if(ConfigFile::getKeyBool("ClientTools","loadHud",false))
