@@ -86,6 +86,7 @@ public:
 	static bool isNoTrade(std::string const & staticItemName);
 	static bool isNoTradeShared(NetworkId const & id);
 	static bool isNoTradeShared(std::string const & staticItemName);
+	static bool isNoTradeRemovable(NetworkId const & id);
 	// unique stuff
 	static bool isUnique(NetworkId const & id);
 	static bool isUnique(std::string const & staticItemName);

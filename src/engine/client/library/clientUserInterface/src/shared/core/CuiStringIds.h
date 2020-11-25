@@ -184,6 +184,7 @@ namespace CuiStringIds
 
 	MAKE_STRING_ID(ui,      no_trade_tooltip);
 	MAKE_STRING_ID(ui,      no_trade_shared_tooltip);
+	MAKE_STRING_ID(ui,      no_trade_removable_tooltip);
 	MAKE_STRING_ID(ui,      unique_tooltip);
 
 	MAKE_STRING_ID(ui,      change_friend_without_saving);
