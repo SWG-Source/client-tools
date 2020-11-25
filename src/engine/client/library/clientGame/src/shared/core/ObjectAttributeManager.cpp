@@ -1387,7 +1387,7 @@ bool ObjectAttributeManager::isNoTradeRemovable(NetworkId const & id)
 	if (it != s_attribs.end())
 	{
 		AttributeInfo const & info = it->second;
-		noTradeShared = info.noTradeRemovable;
+		noTradeRemovable = info.noTradeRemovable;
 	}
 
 	return noTradeRemovable;

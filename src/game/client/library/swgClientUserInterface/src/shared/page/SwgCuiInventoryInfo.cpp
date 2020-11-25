@@ -735,7 +735,7 @@ void SwgCuiInventoryInfo::updateAttributeFlags()
 			if (ObjectAttributeManager::isNoTradeRemovable(object->getNetworkId()))
 			{
 				m_noTrade->SetLocalText(StringId("object_usability", "no_trade_removable").localize());
-				m_noTrade->SetTooltip(CuiStringIds::no_trade_shared_removable.localize());
+				m_noTrade->SetTooltip(CuiStringIds::no_trade_removable_tooltip.localize());
 			}
 			else if (ObjectAttributeManager::isNoTradeShared(object->getNetworkId()))
 			{
