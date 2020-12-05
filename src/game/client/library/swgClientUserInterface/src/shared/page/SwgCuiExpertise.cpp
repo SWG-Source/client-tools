@@ -905,6 +905,9 @@ void SwgCuiExpertise::updateExpertiseDisplayName()
 	m_expertiseDisplayName->SetLocalText(localizedDisplayName);
 	Unicode::String localizedDisplayDescription;
 	ClientExpertiseManager::localizeExpertiseDescription(m_currentBaseSkillName, localizedDisplayDescription);
+	if (PlayerObject::isAdmin()) {
+		localizedDisplayDescription.append(Unicode::narrowToWide("\n\\#ffff00 ***God Mode Override is On***\\#."));
+	}
 	m_expertiseDisplayDescription->SetLocalText(localizedDisplayDescription);
 	
 	std::string const & iconPath  = RoadmapManager::getIconPathForSkill(m_currentSkillName);

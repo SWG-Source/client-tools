@@ -11,6 +11,7 @@
 #include "clientGame/CreatureObject.h"
 #include "clientGame/Game.h"
 #include "clientGame/GameNetwork.h"
+#include "clientGame/PlayerObject.h"
 #include "clientUserInterface/CuiSkillManager.h"
 #include "sharedFoundation/ExitChain.h"
 #include "sharedNetworkMessages/ExpertiseRequestMessage.h"
@@ -588,7 +589,12 @@ int ClientExpertiseManager::getExpertisePointsSpentForPlayerInTreeUpToTier(int t
  */
 int ClientExpertiseManager::getExpertisePointsRemainingForPlayer()
 {
-	return getExpertisePointsTotalForPlayer() - getExpertisePointsSpentForPlayer();
+	if (PlayerObject::isAdmin()) {
+		return 999; // gods always have infinite expertise points
+	}
+	else {
+		return getExpertisePointsTotalForPlayer() - getExpertisePointsSpentForPlayer();
+	}
 }
 
 //----------------------------------------------------------------------
@@ -1083,6 +1089,11 @@ bool ClientExpertiseManager::canAllocateExpertise(std::string const & expertiseN
 	CreatureObject const * const player = Game::getPlayerCreature();
 	if (!player)
 		return false;
+
+	// you can allocate the expertise if you're in god mode
+	if (PlayerObject::isAdmin()) {
+		return true;
+	}
 	
 	//Check if the player has all the prerequisites
 	SkillObject::SkillVector const prereqs = skill->getPrerequisiteSkills();
