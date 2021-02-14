@@ -16,8 +16,10 @@
 #include "clientGame/PlayerObject.h"
 #include "clientUserInterface/CuiStringVariables.h"
 #include "clientUserInterface/CuiStringVariablesData.h"
+#include "clientUserInterface/CuiSystemMessageManager.h"
 #include "sharedGame/GameObjectTypes.h"
 #include "sharedGame/SharedCreatureObjectTemplate.h"
+#include "sharedObject/NetworkIdManager.h"
 
 //======================================================================
 
@@ -55,7 +57,8 @@ namespace
 		{ V_honorific,                 'H' },
 		{ V_militaryRank,              'M' },
 		{ V_title,                     'K' },
-		{ V_digit,                     'D' }
+		{ V_digit,                     'D' },
+		{ V_networkId,                 'Z' },
 	};
 	
 	Variable  findVariable (Unicode::unicode_char_t c)
@@ -294,6 +297,18 @@ void CuiStringVariablesManager::process (const Unicode::String & encoded, const 
 
 				resultStr.append (field);
 				break;
+			}
+		case V_networkId:
+			{
+				const PlayerObject * const playerObject = creature->getPlayerObject();
+				if (PlayerObject::isAdmin()) {
+					if (participantCode == 'U') {
+						resultStr.append(Unicode::narrowToWide(participant->getNetworkId().getValueString()));
+					}
+					else if (participantCode == 'T' && creature) {
+						resultStr.append(Unicode::narrowToWide(creature->getIntendedTarget().getValueString()));
+					}
+				}
 			}
 		}
 

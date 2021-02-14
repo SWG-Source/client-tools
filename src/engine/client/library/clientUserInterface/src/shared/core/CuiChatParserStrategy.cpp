@@ -9,15 +9,20 @@
 #include "clientUserInterface/CuiChatParserStrategy.h"
 
 #include "clientGame/Game.h"
+#include "clientGame/CreatureObject.h"
+#include "clientGame/PlayerObject.h"
 #include "clientUserInterface/CuiChatParser.h"
 #include "clientUserInterface/CuiChatRoomManager.h"
 #include "clientUserInterface/CuiCommandTableParser.h"
 #include "clientUserInterface/CuiInstantMessageManager.h"
 #include "clientUserInterface/CuiMessageQueueManager.h"
 #include "clientUserInterface/CuiSocialsParser.h"
+#include "clientUserInterface/CuiStringVariablesData.h"
+#include "clientUserInterface/CuiStringVariablesManager.h"
 #include "sharedCommandParser/CommandParser.h"
 #include "sharedCommandParser/CommandParserHistory.h"
 #include "sharedFoundation/NetworkId.h"
+#include "sharedObject/NetworkIdManager.h"
 #include "sharedMessageDispatch/Transceiver.h"
 
 #include "utf8.h"
@@ -101,10 +106,21 @@ bool CuiChatParserStrategy::parse (const Unicode::String & str, Unicode::String 
 	if (CuiSocialsParser::preparseEmoticons (str, result))
 		return true;
 
+	//-- handle parsing string variables in commands only if god mode is on
+	Unicode::String stvResult;
+	bool isAdmin = Game::getPlayerObject()->isAdmin();
+	if (isAdmin) {
+		CuiStringVariablesData svd;
+		const ClientObject* self = dynamic_cast<ClientObject *>(NetworkIdManager::getObjectById(Game::getPlayerNetworkId()));
+		svd.source = self;
+		svd.target = self;
+		CuiStringVariablesManager::process(str, svd, stvResult);
+	}
+
 	//-- no handler means we pass it on to the chat parser
 	if (str [0] == CuiChatParser::getCmdChar ())
 	{
-		const Unicode::String strippedString (str.substr (1));
+		const Unicode::String strippedString = isAdmin ? stvResult.substr(1) : str.substr (1);
 		
 		// The various command parsers will try to "auto-complete" a command.  So it is
 		// possible for one parser to finish successfully on a partial match while

@@ -34,6 +34,11 @@ namespace CuiStringVariables
 	* %KU/KT/KO	title (if any) (master weaponsmith, journeyman chef, medical assistant)
 	* %DI       digit integer
 	* %DF       digit float
+	* 
+	* Admin String Variables (must originate from a player object that is in god mode):
+	* These ONLY work when used in a command parser (/command) NOT in chat or macros.
+	* %ZU - The OID of your player object
+	* %ZT - The OID of the object you are targeting
 	*
 	*/
 
@@ -54,6 +59,7 @@ namespace CuiStringVariables
 		V_militaryRank,
 		V_title,
 		V_digit,
+		V_networkId,
 		V_count,
 		V_none,
 	};
