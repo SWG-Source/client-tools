@@ -819,8 +819,8 @@ bool ObjectAttributeManager::formatDescriptionIfNewer (const NetworkId & id, Uni
 	if (!formatAttributesIfNewer(id, attribs, minimalAttribs, frame, tooltips))
 		return false;
 
-#if PRODUCTION == 0
-	if (obj && CuiPreferences::getDebugExamine ())
+	
+	if (obj && CuiPreferences::getDebugExamine() && Game::getPlayerObject()->isAdmin())
 	{
 		static Unicode::String debugInfo;
 		debugInfo.clear ();
@@ -828,7 +828,6 @@ bool ObjectAttributeManager::formatDescriptionIfNewer (const NetworkId & id, Uni
 		debugInfo.append (1, '\n');
 		attribs = debugInfo + attribs;
 	}
-#endif
 
 	if (obj)
 	{

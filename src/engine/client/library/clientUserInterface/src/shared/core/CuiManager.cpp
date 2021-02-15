@@ -451,7 +451,6 @@ void CuiManager::install ()
 	uiManager->SetRootPage (rootPage);
 
 	//-- initialize warning display
-#if PRODUCTION == 0
 	bool const displayWarnings = ConfigFile::getKeyBool("ClientUserInterface", "displayWarnings", false);
 	if (displayWarnings)
 	{
@@ -466,7 +465,6 @@ void CuiManager::install ()
 			SetWarningCallback(globalWarningCallback);
 		}
 	}
-#endif
 
 	REPORT_LOG_PRINT (s_debugReportInstallVerbose, ("CuiManager::install CuiManagerManager::install\n"));
 
