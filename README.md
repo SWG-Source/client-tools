@@ -37,6 +37,9 @@ This repository and code has undergone extensive renovations and refactoring sin
 ## Contributing and More Information
 Contributions and improvements are welcome and encouraged, please submit a pull request. If you have any questions or are looking for more information and haven't already joined us in Discord, you can join [here](https://discord.gg/Va8e6n8). Please note that any changes to the client-tools that requires a rebuild of the SwgClient, will also mean a newly compiled client binary must be added to the [client-assets repository](https://github.com/swg-source/client-assets) so it can be shipped to end users.
 
+## Additional Dependencies
+Most of the development tools use the [Qt framework](https://www.qt.io/) to render their user interface. You may wish to install the [Qt VS Tools for Visual Studio](https://marketplace.visualstudio.com/items?itemName=TheQtCompany.QtVisualStudioTools-19123) to ease development. 
+
 ## Known Issues
 * For the debug build, and possibly the optimized versions, you will get linker errors about libmozilla, and in release, possibly Vivox - if you alter the project settings you can disable this from killing the output of an exe, as libmozilla is only needed for the ingame browser.
 * Other linker errors sometimes throw, you have to work on these case by case. Please pull request any changes you make.
