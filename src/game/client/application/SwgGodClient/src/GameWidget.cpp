@@ -132,6 +132,14 @@ namespace GameWidgetNamespace
 	const int s_avatarKey          = static_cast<int>(Qt::Key_A);
 	const int s_shiftKey           = static_cast<int>(Qt::Key_Shift);
 	const int s_gotoKey            = static_cast<int>(Qt::Key_Equal);
+	const int s_rotateLKey = static_cast<int>(Qt::Key_Greater);
+	const int s_rotateRKey = static_cast<int>(Qt::Key_Less);
+	const int s_moveUpKey = static_cast<int>(Qt::Key_Semicolon);
+	const int s_moveDownKey = static_cast<int>(Qt::Key_Apostrophe);
+	const int s_nudgeNorth = static_cast<int>(Qt::Key_Up);
+	const int s_nudgeSouth = static_cast<int>(Qt::Key_Down);
+	const int s_nudgeWest = static_cast<int>(Qt::Key_Left);
+	const int s_nudgeEast = static_cast<int>(Qt::Key_Right);
 
 	const int s_gameLoopTimeOut    = 5;
 
@@ -200,11 +208,11 @@ struct GameWidget::KeyStates
 
 	void reset()
 	{
-		container [s_translateKey]       = false;
-		container [s_groundTranslateKey] = false;
-		container [s_scaleKey]           = false;
-		container [s_rotateKey]          = false;
-		container [s_shiftKey]           = false;
+		container[s_translateKey] = false;
+		container[s_groundTranslateKey] = false;
+		container[s_scaleKey] = false;
+		container[s_rotateKey] = false;
+		container[s_shiftKey] = false;
 	}
 
 	//-- not 'any' state, really.  hasAnyState should be hasAnyStateThatOverridesContextMenusAndSelectionEvents
@@ -452,6 +460,7 @@ GameWidget::GameWidget(QWidget* theParent, const char*theName)
 	m_callback->connect (*this, &GameWidget::onEditFormData, static_cast<FormManagerClient::Messages::EditFormData *>(0));
 
 	Graphics::setHardwareMouseCursorEnabled(false);
+	Graphics::setBrightnessContrastGamma(1.0f, 1.0f, 1.0f);
 }
 
 // ----------------------------------------------------------------------
@@ -587,6 +596,7 @@ void GameWidget::keyPressEvent(QKeyEvent*keyEvent)
 
 	if(!m_gameHasFocus)
 	{
+		const float PI = 3.14159265359;
 		if (keyEvent->key() == s_avatarKey && Game::getSinglePlayer())
 		{
 			Vector position;
@@ -607,7 +617,37 @@ void GameWidget::keyPressEvent(QKeyEvent*keyEvent)
 				CollisionWorld::objectWarped(player);
 			}
 		}
-
+		if (keyEvent->key() == s_rotateLKey)
+		{
+			GodClientData::getInstance().rotateGhosts(PI / 4, GodClientData::Rotate_yaw, GodClientData::RotatePivot_self);
+		}
+		if (keyEvent->key() == s_rotateRKey)
+		{
+			GodClientData::getInstance().rotateGhosts(PI / -4, GodClientData::Rotate_yaw, GodClientData::RotatePivot_self);
+		}
+		if (keyEvent->key() == s_moveUpKey)
+		{
+			GodClientData::getInstance().translateSelectionY(+1);
+		}
+		if (keyEvent->key() == s_moveDownKey)
+		{
+			GodClientData::getInstance().translateSelectionY(-1);
+		}
+		if (keyEvent->key() == s_nudgeNorth)
+		{
+			GodClientData::getInstance().translateSelection(+0, +1, false);
+		}
+		if (keyEvent->key() == s_nudgeSouth)
+		{
+			GodClientData::getInstance().translateSelection(+0, -1, false);
+		}
+		if (keyEvent->key() == s_nudgeWest)
+		{
+			GodClientData::getInstance().translateSelection(-1, +0, false);
+		}
+		if (keyEvent->key() == s_nudgeEast)
+		{
+			GodClientData::getInstance().translateSelection(+1, +0, false);
 		if (keyEvent->key() == s_gotoKey)
 		{
 			NOT_NULL(m_gs);
