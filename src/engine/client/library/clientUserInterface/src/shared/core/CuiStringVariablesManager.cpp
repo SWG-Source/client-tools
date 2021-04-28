@@ -300,13 +300,13 @@ void CuiStringVariablesManager::process (const Unicode::String & encoded, const 
 			}
 		case V_networkId:
 			{
-				const PlayerObject * const playerObject = creature->getPlayerObject();
+			const CreatureObject* const playerCreature = dynamic_cast<const CreatureObject*> (data.source);
 				if (PlayerObject::isAdmin()) {
 					if (participantCode == 'U') {
-						resultStr.append(Unicode::narrowToWide(participant->getNetworkId().getValueString()));
+						resultStr.append(Unicode::narrowToWide(playerCreature->getNetworkId().getValueString().c_str()));
 					}
-					else if (participantCode == 'T' && creature) {
-						resultStr.append(Unicode::narrowToWide(creature->getIntendedTarget().getValueString()));
+					else if (participantCode == 'T') {
+						resultStr.append(Unicode::narrowToWide(playerCreature->getIntendedTarget().getValueString().c_str()));
 					}
 				}
 			}
