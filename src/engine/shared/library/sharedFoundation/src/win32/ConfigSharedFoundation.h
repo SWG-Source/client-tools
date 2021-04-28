@@ -68,6 +68,8 @@ public:
 	static bool           getCauseAccessViolation();
 
 	static float          getDebugReportLongFrameTime();
+
+	static bool			  getDevelopmentMode();
 };
 
 // ======================================================================

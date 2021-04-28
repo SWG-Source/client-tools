@@ -79,6 +79,7 @@
 #include "swgClientUserInterface/SwgCuiG15Lcd.h"
 #include "swgClientUserInterface/SwgCuiManager.h"
 #include "swgSharedNetworkMessages/SetupSwgSharedNetworkMessages.h"
+#include "sharedFoundation/ConfigSharedFoundation.h"
 
 
 #include "libMozilla/libMozilla.h"
@@ -166,11 +167,8 @@ int ClientMain(
 #if PRODUCTION
 	data.demoMode = true;
 #endif
-	if (ApplicationVersion::isPublishBuild() || ApplicationVersion::isBootlegBuild())
-	{
-		data.writeMiniDumps = true;
-	}
-
+	data.writeMiniDumps = true; // SWG Source Change - Just always write crash log .txt files, there's no reason not to
+	
 	SetupSharedFoundation::install(data);
 
 	REPORT_LOG(true, ("ClientMain: Command Line = \"%s\"\n", lpCmdLine));

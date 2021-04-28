@@ -10,7 +10,6 @@
 #include "sharedFoundation/ConfigSharedFoundation.h"
 
 #include "sharedFoundation/ConfigFile.h"
-#include "sharedFoundation/Production.h"
 
 // ======================================================================
 
@@ -22,7 +21,7 @@
 // ======================================================================
 
 const int c_defaultFatalCallStackDepth   = 32;
-const int c_defaultWarningCallStackDepth = PRODUCTION ? -1 : 8;
+const int c_defaultWarningCallStackDepth = -1;
 
 // ======================================================================
 
@@ -65,6 +64,8 @@ namespace ConfigSharedFoundationNamespace
 	bool        ms_causeAccessViolation;
 
 	float       ms_debugReportLongFrameTime;
+
+	bool		ms_developmentMode;
 }
 
 using namespace ConfigSharedFoundationNamespace;
@@ -103,7 +104,7 @@ void ConfigSharedFoundation::install (const Defaults &defaults)
 	KEY_BOOL(memoryBlockManagerDebugDumpOnRemove, false);
 
 	KEY_INT(fatalCallStackDepth,              c_defaultFatalCallStackDepth);
-	KEY_INT(warningCallStackDepth,            PRODUCTION ? -1 : c_defaultWarningCallStackDepth);
+	KEY_INT(warningCallStackDepth,            c_defaultWarningCallStackDepth);
 	KEY_BOOL(lookUpCallStackNames,            true);
 
 	KEY_INT(processPriority,                  0);
@@ -114,6 +115,8 @@ void ConfigSharedFoundation::install (const Defaults &defaults)
 	KEY_BOOL(causeAccessViolation,            false);
 
 	KEY_FLOAT(debugReportLongFrameTime,       0.25f);
+
+	KEY_BOOL(developmentMode, true);
 }
 
 // ----------------------------------------------------------------------
@@ -255,6 +258,10 @@ bool ConfigSharedFoundation::getMemoryBlockManagerDebugDumpOnRemove ()
 
 int ConfigSharedFoundation::getFatalCallStackDepth()
 {
+	if(getDevelopmentMode())
+	{
+		return c_defaultFatalCallStackDepth;
+	}
 	return ms_fatalCallStackDepth;
 }
 
@@ -262,6 +269,10 @@ int ConfigSharedFoundation::getFatalCallStackDepth()
 
 int ConfigSharedFoundation::getWarningCallStackDepth()
 {
+	if(getDevelopmentMode())
+	{
+		return 12;
+	}
 	return ms_warningCallStackDepth;
 }
 
@@ -269,6 +280,10 @@ int ConfigSharedFoundation::getWarningCallStackDepth()
 
 bool ConfigSharedFoundation::getLookUpCallStackNames()
 {
+	if(getDevelopmentMode())
+	{
+		return true;
+	}
 	return ms_lookUpCallStackNames;
 }
 
@@ -313,6 +328,24 @@ bool ConfigSharedFoundation::getCauseAccessViolation()
 float ConfigSharedFoundation::getDebugReportLongFrameTime()
 {
 	return ms_debugReportLongFrameTime;
+}
+
+// ----------------------------------------------------------------------
+
+// This is an SWG Source addition we're using for the purposes of defaulting
+// more verbose logging and development tools to ON but we're using a config
+// option so players wanting a more live-like client to share don't have to
+// recompile based on the PRODUCTION constant and can instead just set this
+// [SharedFoundation] developmentMode=false if they want
+
+// ***** WARNING ******
+// This is a config toggle which anyone can change so obviously nothing
+// related to access should be wrapped in this (read: things that should
+// require god mode still need to use PlayerObject::isAdmin() not this)
+
+bool ConfigSharedFoundation::getDevelopmentMode()
+{
+	return ms_developmentMode;
 }
 
 // ======================================================================

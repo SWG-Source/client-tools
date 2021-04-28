@@ -7,6 +7,14 @@
 //
 // ======================================================================
 
+// **********************************************************************
+// SWG Source 2021 - Aconite
+// some modifications have been made to this to, for example, stop the
+// application from sending emails to SOE but this needs some more work!
+// todo this needs to be cleaned up
+// todo this probably could use some new detection/setting support for operating systems made this decade
+// **********************************************************************
+
 #include "FirstSwgClientSetup.h"
 #include "SwgClientSetup.h"
 
@@ -50,8 +58,8 @@ namespace SwgClientSetupNamespace
 	TCHAR const * const cms_lastRatingTimeRegistryKey = _T("LastRatingTime");
 	TCHAR const * const cms_machineRequirementsDisplayCountRegistryKey = _T("MachineRequirementsDisplayCount");
 	TCHAR const * const cms_applicationName = _T("SwgClient_r.exe");
-	char const * const cms_fromEmailAddress = "swgbetatestcrashes@soe.sony.com";
-	char const * const cms_toEmailAddress = "swgbetatestcrashes@soe.sony.com";
+	//char const * const cms_fromEmailAddress = "swgbetatestcrashes@soe.sony.com";
+	//char const * const cms_toEmailAddress = "swgbetatestcrashes@soe.sony.com";
 	TCHAR const * const cms_fileNameMask = _T("SwgClient_?.exe-*.*");
 	TCHAR const * const cms_languageStringJapanese = _T("ja");
 
@@ -389,8 +397,8 @@ BOOL SwgClientSetupApp::InitInstance()
 		CloseHandle(semaphore);
 		return FALSE;
 	}
-	
-	detectAndSendMinidumps ();
+
+	//detectAndSendMinidumps ();
 
 	ClientMachine::install ();
 	
@@ -484,7 +492,7 @@ BOOL SwgClientSetupApp::InitInstance()
 
 		Options::save ();
 
-		detectAndSendHardwareInformation ();
+		//detectAndSendHardwareInformation ();
 
 		bool const displayMessage =
 			(ClientMachine::getPhysicalMemorySize () < 500) ||
@@ -743,6 +751,7 @@ void SwgClientSetupApp::configure ()
 
 // ----------------------------------------------------------------------
 
+/*
 void SwgClientSetupApp::detectAndSendMinidumps ()
 {
 	typedef std::vector<std::wstring> StringList;
@@ -852,9 +861,11 @@ void SwgClientSetupApp::detectAndSendMinidumps ()
 		AfxMessageBox (detectedStr, NULL, MB_ICONINFORMATION | MB_OK);
 	}
 }
+*/
 
 // ----------------------------------------------------------------------
 
+/*
 void SwgClientSetupApp::detectAndSendHardwareInformation ()
 {
 	if (getAutomaticallySendHardwareInformation())
@@ -884,6 +895,7 @@ void SwgClientSetupApp::detectAndSendHardwareInformation ()
 		}
 	}
 }
+*/
 
 // ----------------------------------------------------------------------
 

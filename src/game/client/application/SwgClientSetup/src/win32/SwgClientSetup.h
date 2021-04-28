@@ -59,8 +59,8 @@ public:
 	DECLARE_MESSAGE_MAP()
 
 private:
-	void detectAndSendMinidumps ();
-	void detectAndSendHardwareInformation ();
+	//void detectAndSendMinidumps ();
+	//void detectAndSendHardwareInformation ();
 };
 
 // ======================================================================
