@@ -198,6 +198,23 @@ RegistryKey *RegistryKey::createSubkey(const char *subkeyName,	uint32 accessFlag
 		NULL,                    // security
 		&newKey,
 		&disposition);
+
+	// SWG Source Fix 2021 - Aconite
+	// ACCESS_DENIED is 99% a Windows UAC issue, in which case we should
+	// prompt to the user they need to escalate privileges before we FATAL
+	// out so they know how to fix the issue
+	//
+	// Note: This process flow only happens the first time the SWG Client
+	// is ran on a machine that doesn't have existing SOE registry values,
+	// so there's no need to require a more permanent escalation by e.g.
+	// setting requireAdministrator in the SwgClient UAC linker manifest 
+	if (result == ERROR_ACCESS_DENIED)
+	{
+		// in theory, it would actually be better to force re-start the application
+		// from this point with a requested run as admin prompt but to preserve some
+		// backwards compatibility with Windows XP (god help us) we won't do that
+		MessageBox(nullptr, "Error: SwgClient requires Administrator Permissions to run correctly. Please right click the application and select Run as Administrator.", nullptr, MB_OK | MB_ICONSTOP);
+	}
 	FATAL(result != ERROR_SUCCESS, ("failed to create registry subkey \"%s\", error = %ld\n", subkeyName, result));
 
 	// Create the RegistryKey object.  Assume the key must be closed upon
