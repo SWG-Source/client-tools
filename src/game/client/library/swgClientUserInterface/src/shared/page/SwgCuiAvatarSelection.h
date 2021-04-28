@@ -133,6 +133,9 @@ private:
 	SwgCuiDeleteAvatarConfirmation *  m_deleteAvatarConfirmationMediator;
 
 	UICheckbox *					  m_hideClosed;
+
+	bool                              m_waitForConnectionRetry;
+	bool                              m_hasAlreadyRetriedConnection;
 };
 
 //-----------------------------------------------------------------

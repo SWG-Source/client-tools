@@ -104,6 +104,9 @@ namespace
 		return tooltipText;
 	}
 
+	// SWG Source Change 2021 - Aconite
+	// Remove closed server check process for obvious reasons
+	/*
 	// must be in ascending sorted order (and no dupes either)!!!
 	const uint32 ms_closedServerIds[] = {  4, // Corbantis
 										   9, // Kauri
@@ -134,6 +137,7 @@ namespace
 
 		return std::binary_search(&ms_closedServerIds[0], &ms_closedServerIds[ms_closedServerTotal], serverId);
 	}
+	*/
 }
 
 //----------------------------------------------------------------------
@@ -170,6 +174,8 @@ m_connectionTimeout      (0.0f),
 m_avatarPopulateFirstTime (true),
 m_deleteAvatarConfirmationPage(NULL),
 m_deleteAvatarConfirmationMediator(NULL),
+m_waitForConnectionRetry(false),
+m_hasAlreadyRetriedConnection(false),
 m_hideClosed (NULL)
 {
 	UIWidget *widget = 0;
@@ -387,11 +393,11 @@ void SwgCuiAvatarSelection::refreshList (bool updateSelection)
 	for (it = aiv.begin (); it != aiv.end (); ++it)
 	{
 		const CuiLoginManagerAvatarInfo & avatarInfo = *it;
-		if (isClosedServer(avatarInfo.clusterId))
-		{
-			hasAvatarOnClosedServers = true;
-			break;
-		}
+		//if (isClosedServer(avatarInfo.clusterId))
+		//{
+		//	hasAvatarOnClosedServers = true;
+		//	break;
+		//}
 	}
 
 	m_hideClosed->SetVisible(hasAvatarOnClosedServers);
@@ -479,8 +485,8 @@ void SwgCuiAvatarSelection::addAvatar (const CuiLoginManagerAvatarInfo & avatarI
 
 	WARNING (!clusterInfo, ("Unable to load cluster info for cluster %d, requested by avatar [%s], %s", avatarInfo.clusterId, narrowName.c_str (), avatarInfo.networkId.getValueString ().c_str ()));
 
-	if (m_hideClosed->IsChecked() && isClosedServer(avatarInfo.clusterId))
-		return;
+	//if (m_hideClosed->IsChecked() && isClosedServer(avatarInfo.clusterId))
+	//	return;
 
 	Unicode::String avatarDisplayName = avatarInfo.name;
 	if (avatarInfo.characterType == static_cast<int>(EnumerateCharacterId_Chardata::CT_jedi))
@@ -786,7 +792,7 @@ void SwgCuiAvatarSelection::update (float deltaTimeSecs)
 		return;
 	}
 
-	if (m_connectingToGame)
+	if (m_connectingToGame && !m_waitForConnectionRetry)
 	{
 		static const float TIMEOUT_CONNECTING_TO_GAME = ConfigClientGame::getConnectionTimeout();
 		m_connectionTimeout += deltaTimeSecs;
@@ -796,6 +802,20 @@ void SwgCuiAvatarSelection::update (float deltaTimeSecs)
 			//-- this should trigger a callback to this class
 			CuiLoadingManager::setFullscreenLoadingEnabled (false);
 			CuiMessageBox::createInfoBox (CuiStringIdsServer::server_timeout_gameserver.localize ());
+		}
+
+		// SWG Source Addition 2021 - Aconite
+		// Catch when a player has recently crashed and is trying shortly thereafter to login to
+		// their character again but the connection server has refused to load the character because
+		// it is still authoritative so we need to make the request for a second time to reset
+		// everything since we can't use the back button or escape and our only options are to close
+		// the client entirely or wait for the connection request to timeout
+		if (m_connectionTimeout > 8 && !GameNetwork::isConnectedToConnectionServer() && CuiLoadingManager::isLoadingScreenVisible() && !m_hasAlreadyRetriedConnection)
+		{
+			m_waitForConnectionRetry = true;
+			m_hasAlreadyRetriedConnection = true;
+			m_connectionTimeout = 0;
+			requestAvatarSelection();
 		}
 		return;
 	}
@@ -854,6 +874,7 @@ void SwgCuiAvatarSelection::update (float deltaTimeSecs)
 		}
 
 		m_proceed = false;
+		m_waitForConnectionRetry = false;
 	}
 }
 
@@ -1117,13 +1138,15 @@ void SwgCuiAvatarSelection::requestAvatarSelection ()
 			}
 			
 			CuiLoginManager::connectToCluster (*clusterInfo);
-			
+
 			if (m_messageBox)
 				m_messageBox->closeMessageBox ();
-			
-			m_messageBox = CuiMessageBox::createMessageBox (CuiStringIdsServer::server_connecting_central.localize ());
-			m_messageBox->setRunner (true);
-			m_messageBox->connectToMessages (*this);
+
+			if (!m_hasAlreadyRetriedConnection) {
+				m_messageBox = CuiMessageBox::createMessageBox(CuiStringIdsServer::server_connecting_central.localize());
+				m_messageBox->setRunner(true);
+				m_messageBox->connectToMessages(*this);
+			}
 			
 			m_waitingForConnection = true;
 			m_waitingForClusterId = clusterInfo->id;
