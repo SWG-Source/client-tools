@@ -48,6 +48,7 @@
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation//Os.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Production.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/SetupSharedFoundation.h"
+#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/ConfigSharedFoundation.h"
 #include "sharedGame/CommoditiesAdvancedSearchAttribute.h"
 #include "sharedGame/SetupSharedGame.h"
 #include "sharedImage/SetupSharedImage.h"
@@ -79,10 +80,6 @@
 #include "swgClientUserInterface/SwgCuiG15Lcd.h"
 #include "swgClientUserInterface/SwgCuiManager.h"
 #include "swgSharedNetworkMessages/SetupSwgSharedNetworkMessages.h"
-#include "sharedFoundation/ConfigSharedFoundation.h"
-
-
-#include "libMozilla/libMozilla.h"
 
 
 #include "Resource.h"
@@ -308,19 +305,6 @@ int ClientMain(
 		setupGraphicsData.alphaBufferBitDepth = 0;
 		SetupClientGraphics::setupDefaultGameData(setupGraphicsData);
 
-
-
-		// Mozilla
-		// We want to use the Mozilla that's shipped with the game, not whatever's on the system
-		char szCWD[_MAX_PATH + 1];
-		GetCurrentDirectory(_MAX_PATH, szCWD);
-		std::string sPath(szCWD);
-		sPath += "\\mozilla";
-		if (!libMozilla::init(Os::getWindow(), sPath.c_str()))
-		{
-			DEBUG_FATAL(true, ("Mozilla init failed.\n"));
-		}
-
 		if (SetupClientGraphics::install(setupGraphicsData))
 		{
 			VideoList::install(Audio::getMilesDigitalDriver());
@@ -395,8 +379,6 @@ int ClientMain(
 
 	SetupSharedFoundation::remove();
 	SetupSharedThread::remove();
-
-	libMozilla::release();
 
 	if (semaphore)
 		CloseHandle(semaphore);
