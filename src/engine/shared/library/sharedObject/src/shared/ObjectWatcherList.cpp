@@ -222,7 +222,7 @@ void ObjectWatcherList::alter(real time)
 		// is removed from the list withing its alter()
 	
 		Object * const obj = (*m_alterSafeObjectVector)[i];
-		if (!obj || !obj->isInitialized())
+		if (!obj || !obj->isInitialized() || obj->isInWorld())
 			continue;
 
 		float const alterResult = obj->alter(time);

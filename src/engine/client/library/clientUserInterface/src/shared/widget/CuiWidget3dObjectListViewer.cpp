@@ -2708,7 +2708,7 @@ void CuiWidget3dObjectListViewer::addObject    (Object & obj)
 
 	if (hasFlags (F_alterObjects))
 	{
-		if (obj.isInitialized() && (obj.alter(Clock::frameTime()) != AlterResult::cms_kill))
+		if (obj.isInitialized() && !obj.isInWorld() && (obj.alter(Clock::frameTime()) != AlterResult::cms_kill))
 		{
 			obj.conclude();
 		}
