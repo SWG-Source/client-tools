@@ -70,7 +70,7 @@ namespace SwgCuiAppearanceTabNamespace
 		const UILowerString DefaultViewerYaw   = UILowerString ("DefaultViewerYaw");
 	}
 
-	// This order must corespond to the order of the pages in LayoutPage.
+	// This order must correspond to the order of the pages in LayoutPage.
 	const char* ms_slotNames[] = 
 	{
 		"hat",

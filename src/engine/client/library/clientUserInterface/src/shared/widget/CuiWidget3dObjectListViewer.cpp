@@ -2708,8 +2708,10 @@ void CuiWidget3dObjectListViewer::addObject    (Object & obj)
 
 	if (hasFlags (F_alterObjects))
 	{
-		if (obj.isInitialized() && (obj.alter(1.0f) != AlterResult::cms_kill))
+		if (obj.isInitialized() && (obj.alter(Clock::frameTime()) != AlterResult::cms_kill))
+		{
 			obj.conclude();
+		}
 	}
 
 	if (dynamic_cast<const CreatureObject *>(&obj))
