@@ -2062,6 +2062,34 @@ bool SwgCuiToolbar::performToolbarAction(int slot, bool pet)
 		}
 		else if(item->type == CuiDragInfoTypes::CDIT_object)
 		{
+
+			// Validate on requested item use that we still have the item in our control.
+			// Addresses an exploit that allows item container transfers unintentionally.
+			const ClientObject* clientObject = item->getClientObject();
+			if(clientObject)
+			{
+				bool badObject;
+				const int got = clientObject->getGameObjectType();
+				if(got >= SharedObjectTemplate::GOT_data && got < SharedObjectTemplate::GOT_installation) // data items in toolbar must be in our data pad
+				{
+					CuiInventoryManager::isNestedDatapad(*clientObject) ? badObject = false : badObject = true;
+				}
+				else // any other usable item in toolbar must be in inventory, appearance inventory, or equipped
+				{
+					const bool inInventory = CuiInventoryManager::isNestedInventory(*clientObject);
+					const bool inAppearanceInventory = CuiInventoryManager::isNestedAppearanceInventory(*clientObject);
+					const bool isEquipped = CuiInventoryManager::isNestedEquipped(*clientObject);
+					inInventory || inAppearanceInventory || isEquipped ? badObject = false : badObject = true;
+				}
+				if(badObject)
+				{
+					// remove from toolbar and don't execute command
+					CuiSoundManager::play(CuiSounds::negative);
+					item->clear();
+					repopulateSlots();
+				}
+			}
+			
 			int commandCrc = 0;
 			if(parent->HasProperty(OBJECT_COMMAND_CRC))
 			{						
