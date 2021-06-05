@@ -2087,6 +2087,7 @@ bool SwgCuiToolbar::performToolbarAction(int slot, bool pet)
 					CuiSoundManager::play(CuiSounds::negative);
 					item->clear();
 					repopulateSlots();
+					return false;
 				}
 			}
 			
