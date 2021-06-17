@@ -868,6 +868,18 @@ float ConfigClientGame::getConnectionTimeout()
 
 //-----------------------------------------------------------------------
 
+/**
+ *>>>>>>>> WARNING READ THIS <<<<<<<<<<
+ *
+ * This is not a secure or reliable way to validate who is/is not a CSR.
+ * This only checks for the obfuscation code in the client-side config
+ * which anyone can add. This should ONLY be used to flag for the command
+ * parser that admin commands are available.
+ *
+ * If you need to validate if someone is/is not a CSR (isGod) then you
+ * should use Game::getPlayerObject->isAdmin() only!! But MORE importantly,
+ * anything being done should also be validated server-side!!!
+ */
 bool ConfigClientGame::getCSR()
 {
 	return ms_0fd345d9;

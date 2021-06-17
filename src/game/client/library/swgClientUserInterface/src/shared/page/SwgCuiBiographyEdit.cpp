@@ -115,7 +115,7 @@ SwgCuiBiographyEdit::~SwgCuiBiographyEdit()
 
 void SwgCuiBiographyEdit::performActivate()
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		CuiManager::requestPointer(true);
 		setIsUpdating(true);
@@ -127,7 +127,7 @@ void SwgCuiBiographyEdit::performActivate()
 
 void SwgCuiBiographyEdit::performDeactivate()
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		setIsUpdating(false);
 		CuiManager::requestPointer(false);
@@ -139,7 +139,7 @@ void SwgCuiBiographyEdit::performDeactivate()
 
 void SwgCuiBiographyEdit::onBiographyRetrieved(PlayerCreatureController::Messages::BiographyRetrieved::BiographyOwner const & msg)
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		if (m_biographyStatus == BES_waiting)
 		{
@@ -160,7 +160,7 @@ void SwgCuiBiographyEdit::onBiographyRetrieved(PlayerCreatureController::Message
 
 void SwgCuiBiographyEdit::OnButtonPressed(UIWidget *context)
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		if (context == m_saveButton)
 		{
@@ -198,7 +198,7 @@ void SwgCuiBiographyEdit::update(float deltaTimeSecs)
 {
 	CuiMediator::update(deltaTimeSecs);
 
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		// Out of range check...
 		bool const isInRange = m_player != CachedNetworkId::cms_cachedInvalid && m_player.isValid();

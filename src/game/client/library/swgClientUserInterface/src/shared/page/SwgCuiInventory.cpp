@@ -20,6 +20,7 @@
 #include "clientGame/CreatureObject.h"
 #include "clientGame/Game.h"
 #include "clientGame/GameNetwork.h"
+#include "clientGame/PlayerObject.h"
 #include "clientGraphics/Graphics.h"
 #include "clientUserInterface/CuiInventoryManager.h"
 #include "clientUserInterface/CuiManager.h"
@@ -734,7 +735,7 @@ void SwgCuiInventory::update (float deltaTimeSecs)
 
 	m_timeSinceLastRangeCheck += deltaTimeSecs;
 
-	if (m_timeSinceLastRangeCheck > 3.3f && !ConfigClientGame::getCSR())
+	if (m_timeSinceLastRangeCheck > 3.3f && !Game::getPlayerObject()->isAdmin())
 	{
 		m_timeSinceLastRangeCheck = 0.0f;
 

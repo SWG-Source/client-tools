@@ -1549,7 +1549,7 @@ void CommandCppFuncsNamespace::commandFuncNotepad(Command const & , NetworkId co
 
 void CommandCppFuncsNamespace::commandFuncSetScale (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & params)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		if(target == NetworkId::cms_invalid)
 		{
@@ -1568,7 +1568,7 @@ void CommandCppFuncsNamespace::commandFuncSetScale (Command const & , NetworkId 
 
 void CommandCppFuncsNamespace::commandFuncSetYaw (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & params)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		if(target == NetworkId::cms_invalid)
 		{
@@ -1587,7 +1587,7 @@ void CommandCppFuncsNamespace::commandFuncSetYaw (Command const & , NetworkId co
 
 void CommandCppFuncsNamespace::commandFuncHideMe (Command const &, NetworkId const &, NetworkId const &, Unicode::String const &params)
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		bool hide = false;
 
@@ -1624,7 +1624,7 @@ void CommandCppFuncsNamespace::commandFuncHideMe (Command const &, NetworkId con
 
 void CommandCppFuncsNamespace::commandFuncReloadAdminTable (Command const & , NetworkId const & , NetworkId const & , Unicode::String const & )
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		const std::string reloadCommand = "/remote server reloadAdminTable";
 		IGNORE_RETURN(CuiMessageQueueManager::executeCommandByString(reloadCommand, true));
@@ -1635,7 +1635,7 @@ void CommandCppFuncsNamespace::commandFuncReloadAdminTable (Command const & , Ne
 
 void CommandCppFuncsNamespace::commandFuncSkills (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & )
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		if(target == NetworkId::cms_invalid)
 		{
@@ -1654,7 +1654,7 @@ void CommandCppFuncsNamespace::commandFuncSkills (Command const & , NetworkId co
 
 void CommandCppFuncsNamespace::commandFuncSpawn (Command const & , NetworkId const & , NetworkId const & , Unicode::String const & params)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		const std::string spawnCommand = "/remote object spawn ";
 
@@ -1670,7 +1670,7 @@ void CommandCppFuncsNamespace::commandFuncSpawn (Command const & , NetworkId con
 
 void CommandCppFuncsNamespace::commandFuncDestroy (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & )
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		if(target == NetworkId::cms_invalid)
 		{
@@ -1689,7 +1689,7 @@ void CommandCppFuncsNamespace::commandFuncDestroy (Command const & , NetworkId c
 
 void CommandCppFuncsNamespace::commandFuncEditBank (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & )
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		if (target == NetworkId::cms_invalid)
 		{
@@ -1713,7 +1713,7 @@ void CommandCppFuncsNamespace::commandFuncEditBank (Command const & , NetworkId 
 
 void CommandCppFuncsNamespace::commandFuncEditInventory (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & )
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		if (target == NetworkId::cms_invalid)
 		{
@@ -1737,7 +1737,7 @@ void CommandCppFuncsNamespace::commandFuncEditInventory (Command const & , Netwo
 
 void CommandCppFuncsNamespace::commandFuncEditDatapad (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & )
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		if (target == NetworkId::cms_invalid)
 		{
@@ -1760,7 +1760,7 @@ void CommandCppFuncsNamespace::commandFuncEditDatapad (Command const & , Network
 //----------------------------------------------------------------------
 void CommandCppFuncsNamespace::commandFuncExamineObjVars (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & params)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		const std::string objvarCommand = "/remote objvar list ";
 
@@ -1775,7 +1775,7 @@ void CommandCppFuncsNamespace::commandFuncExamineObjVars (Command const & , Netw
 
 void CommandCppFuncsNamespace::commandFuncRenamePlayer        (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & params)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		if(target == NetworkId::cms_invalid)
 		{
@@ -1803,7 +1803,7 @@ void CommandCppFuncsNamespace::commandFuncRenamePlayer        (Command const & ,
 
 void CommandCppFuncsNamespace::commandFuncDraw (Command const & , NetworkId const & , NetworkId const & , Unicode::String const & params)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		size_t pos = 0;
 		int value = nextIntParm (params, pos);
@@ -1815,7 +1815,7 @@ void CommandCppFuncsNamespace::commandFuncDraw (Command const & , NetworkId cons
 
 void CommandCppFuncsNamespace::commandFuncUiDebugExamine (Command const & , NetworkId const & , NetworkId const & , Unicode::String const & params)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		const std::string debugExamineCommand = "/ui debugexamine ";
 		std::string command = debugExamineCommand + Unicode::wideToUTF8(params);
@@ -1827,7 +1827,7 @@ void CommandCppFuncsNamespace::commandFuncUiDebugExamine (Command const & , Netw
 
 void CommandCppFuncsNamespace::commandFuncUnload (Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & )
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		if(target == NetworkId::cms_invalid)
 		{
@@ -1854,7 +1854,7 @@ void CommandCppFuncsNamespace::commandFuncEmptyMail(Command const & , NetworkId 
 
 void CommandCppFuncsNamespace::commandFuncEditBiography(Command const & , NetworkId const & , NetworkId const & target, Unicode::String const & str)
 {
-	if(ConfigClientGame::getCSR())
+	if(Game::getPlayerObject()->isAdmin())
 	{
 		NetworkId editTarget(target);
 
@@ -2012,7 +2012,7 @@ void CommandCppFuncsNamespace::commandFuncTarget (Command const & , NetworkId co
 
 void CommandCppFuncsNamespace::commandFuncTargetPilot(Command const &, NetworkId const &, NetworkId const &target, Unicode::String const &)
 {
-	if (ConfigClientGame::getCSR())
+	if (Game::getPlayerObject()->isAdmin())
 	{
 		CreatureObject * const player = Game::getPlayerCreature();
 		if (player)
