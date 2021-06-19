@@ -336,8 +336,9 @@ namespace SwgCuiStatusGroundNamespace
 				}
 			}
 		}
-
+		PlayerObject const* self = Game::getConstPlayerObject();
 		bool hasPriviledgedTitle = false;
+		
 		if (playerObject.isNormalPlayer())
 		{
 			hasPriviledgedTitle = false;
@@ -369,30 +370,25 @@ namespace SwgCuiStatusGroundNamespace
 			s.push_back(')');
 			hasPriviledgedTitle = true;
 		}
-		else if (playerObject.isWarden())
+		
+		// If this player is a Warden, and I'm a warden or in God Mode, append (Warden) tag
+		else if (playerObject.isWarden() && (self && (self->isWarden() || self->isAdmin())))
 		{
-#if PRODUCTION == 0
-			// optimized client always display a warden
-#else
-			// release client only display a warden if I'm also a warden (i.e. only warden can see each other)
-			PlayerObject const * self = Game::getConstPlayerObject();
-			if (self && self->isWarden())
-#endif
-			{
-				if (!s.empty())
-					s.push_back('\n');
-				s.push_back('(');
-				s += CuiStringIdsWho::warden.localize();
-				s.push_back(')');
-				hasPriviledgedTitle = true;
-			}
+			if (!s.empty())
+				s.push_back('\n');
+			s.push_back('(');
+			s += CuiStringIdsWho::warden.localize();
+			s.push_back(')');
+			hasPriviledgedTitle = true;
+			
 		}
 
+		// If this player has a squelch/spammer action on them
+		// we display the (Squelch/Spammer) tag if I'm a Warden or if in God Mode
 		int const secondsUntilUnsquelched = playerObject.getSecondsUntilUnsquelched();
-#if PRODUCTION == 0
-		// optimized client always display a squelched character with details of the squelch
-		if (secondsUntilUnsquelched != 0)
+		if (secondsUntilUnsquelched != 0 && (self && (self->isWarden() || self->isAdmin())))
 		{
+			
 			if (hasPriviledgedTitle)
 				s.push_back (' ');
 			else if (!s.empty())
@@ -400,7 +396,7 @@ namespace SwgCuiStatusGroundNamespace
 
 			s.push_back ('(');
 
-			if (secondsUntilUnsquelched < 0)
+			if (secondsUntilUnsquelched < 0) // if < 0, it's a /squlech
 			{
 				s += CuiStringIdsWho::squelched.localize();
 				s.push_back (' ');
@@ -410,7 +406,7 @@ namespace SwgCuiStatusGroundNamespace
 				s += Unicode::narrowToWide(playerObject.getSquelchedById().getValueString());
 				s.push_back (']');
 			}
-			else
+			else // otherwise it's a /spammer
 			{
 				s += CuiStringIdsWho::spammered.localize();
 				s.push_back (' ');
@@ -427,47 +423,19 @@ namespace SwgCuiStatusGroundNamespace
 
 			s.push_back (')');
 		}
-#else
-		// release client only display a squelched character if I'm the one who squelched
-		// the character, or if I'm a warden, and display different text for a squelched
-		// character depending on if I'm the one who squelched the character
-		if (secondsUntilUnsquelched != 0)
+
+		// If I'm in God Mode, and the other player is in God Mode, display a tag for that
+		if(self->isAdmin())
 		{
-			if (playerObject.getSquelchedById() == Game::getPlayerNetworkId())
+			if(playerObject.isAdmin())
 			{
-				if (hasPriviledgedTitle)
-					s.push_back (' ');
-				else if (!s.empty())
-					s.push_back ('\n');
-
-				s.push_back ('(');
-
-				if (secondsUntilUnsquelched < 0)
-					s += CuiStringIdsWho::squelched_by_me.localize();
-				else
-					s += CuiStringIdsWho::spammered_by_me.localize();
-
-				s.push_back (')');
-			}
-			else
-			{
-				PlayerObject const * self = Game::getConstPlayerObject();
-				if (self && self->isWarden())
+				if(hasPriviledgedTitle)
 				{
-					if (hasPriviledgedTitle)
-						s.push_back (' ');
-					else if (!s.empty())
-						s.push_back ('\n');
-
-					s.push_back ('(');
-
-					s += CuiStringIdsWho::silenced.localize();
-
-					s.push_back (')');
+					s.push_back('\n');
 				}
+				s += Unicode::narrowToWide("(God Mode)");
 			}
 		}
-#endif
 	}
 
 	//----------------------------------------------------------------------
@@ -1748,6 +1716,15 @@ void SwgCuiStatusGround::updateTargetName(ClientObject const & obj)
 	else
 		CuiObjectTextManager::getObjectFullName(m_objectName, obj);
 
+	// Append (Hidden) tag on tangible objects which are hidden to non-CSRs
+	if(Game::getPlayerObject()->isAdmin())
+	{
+		if(!tangibleObject->isVisible())
+		{
+			m_objectName.append(Unicode::narrowToWide("\n(Hidden)"));
+		}
+	}
+	
 	setTargetName(m_objectName);
 }
 
