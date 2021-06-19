@@ -943,7 +943,7 @@ void CuiChatRoomManager::receiveRoomList (const RoomDataVector & v)
 		const CuiChatRoomDataNode * const node = chatRoomTree.insertData (data);
 		NOT_NULL (node);
 		UNREF (node);
-		DEBUG_FATAL (node->data.id == 0, ("Inserted a room with zero id: %d, %s", data.id, data.path.c_str ()));
+		DEBUG_WARNING (node->data.id == 0, ("Inserted a room with zero id: %d, %s", data.id, data.path.c_str ()));
 	}
 
 	Transceivers::modified.emitMessage (0);

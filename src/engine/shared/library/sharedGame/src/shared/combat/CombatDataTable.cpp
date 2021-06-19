@@ -77,7 +77,7 @@ bool CombatDataTable::isActionClientAnim(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s, %d].", commandHash, cs_combatDataTableName, s_actionNameCrcColumn));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s, %d].", commandHash, cs_combatDataTableName, s_actionNameCrcColumn));
 		return false;
 	}
 
@@ -105,7 +105,7 @@ std::string CombatDataTable::getActionAnimationData(uint32 commandHash, char con
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return "";
 	}
 
@@ -147,7 +147,7 @@ bool CombatDataTable::actionForcesCharacterIntoCombat(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return false;
 	}
 
@@ -172,7 +172,7 @@ int32 CombatDataTable::getAttackType(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return AT_none;
 	}
 
@@ -196,7 +196,7 @@ int32 CombatDataTable::getHitType(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return HT_attack;
 	}
 
@@ -220,7 +220,7 @@ int32 CombatDataTable::getValidTarget(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return VTT_none;
 	}
 
@@ -244,7 +244,7 @@ float CombatDataTable::getMinRange(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return 0.0f;
 	}
 
@@ -268,7 +268,7 @@ float CombatDataTable::getMaxRange(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return 0.0f;
 	}
 
@@ -292,7 +292,7 @@ float CombatDataTable::getActionCost(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return 0.0f;
 	}
 
@@ -316,7 +316,7 @@ float CombatDataTable::getMindCost(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return 0.0f;
 	}
 
@@ -340,7 +340,7 @@ bool CombatDataTable::getCancelsAutoAttack(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return false;
 	}
 
@@ -364,7 +364,7 @@ float CombatDataTable::getPercentAddFromWeapon(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return 0.0f;
 	}
 
@@ -388,7 +388,7 @@ std::string CombatDataTable::getSpecialLine(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return "";
 	}
 
@@ -426,7 +426,7 @@ int CombatDataTable::getTrailBits(uint32 commandHash)
 	int const row = actionData->searchColumnInt(s_actionNameCrcColumn, commandHash);
 	if (row < 0)
 	{
-		DEBUG_WARNING(true, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
+		DEBUG_WARNING(false, ("Could not find string hash [%u] in table [%s].", commandHash, cs_combatDataTableName));
 		return 0;
 	}
 

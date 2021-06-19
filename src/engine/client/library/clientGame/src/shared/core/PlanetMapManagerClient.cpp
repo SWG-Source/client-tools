@@ -716,7 +716,7 @@ void PlanetMapManagerClient::getGCWRegions(GCWRegionVector & gcwv)
 	GalaxyGCWRegionMap::const_iterator planetRegions = regionMap.find(currentPlanet);
 	if(planetRegions == regionMap.end())
 	{
-		DEBUG_WARNING(true, ("PlanetMapManagerClient: Failed to find GCW Regions for scene[%s]", currentPlanet.c_str()));
+		//DEBUG_WARNING(true, ("PlanetMapManagerClient: Failed to find GCW Regions for scene[%s]", currentPlanet.c_str()));
 		return;
 	}
 
