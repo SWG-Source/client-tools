@@ -18,6 +18,7 @@
 #include "swgClientUserInterface/SwgCuiLockableMediator.h"
 #include "UITypes.h"
 #include "UILowerString.h"
+#include "UITextStyleManager.h"
 
 #include <map>
 #include <vector>
@@ -130,6 +131,7 @@ private:
 
 	UIWidget *          getToolbarItemWidget         (int slot, bool pet = false);
 	UIWidget *          getToolbarItemShadeWidget    (int slot, bool pet = false);
+	UIText*			    getToolbarCooldownTimer      (int slot, bool pet = false);
 	UIWidget *          getToolbarItemBackgroundWidget (int slot, bool pet = false);
 	void                populateSlot                 (int slot, bool pet = false);
 
@@ -302,6 +304,8 @@ private:
 
 	bool						  m_clickedInActionBar;
 	bool						  m_doubleToolbar;
+
+	UITextStyleManager*           m_textStyleManager;
 };
 
 //======================================================================

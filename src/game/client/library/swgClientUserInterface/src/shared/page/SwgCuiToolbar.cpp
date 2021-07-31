@@ -34,8 +34,6 @@
 #include "clientUserInterface/CuiIconManager.h"
 #include "clientUserInterface/CuiInputNames.h"
 #include "clientUserInterface/CuiInventoryManager.h"
-#include "clientUserInterface/CuiIoWin.h"
-#include "clientUserInterface/CuiManager.h"
 #include "clientUserInterface/CuiMenuInfoHelper.h"
 #include "clientUserInterface/CuiMessageQueueManager.h"
 #include "clientUserInterface/CuiPreferences.h"
@@ -49,18 +47,13 @@
 #include "clientUserInterface/CuiStringVariablesManager.h"
 #include "clientUserInterface/CuiSystemMessageManager.h"
 #include "clientUserInterface/CuiWidget3dObjectListViewer.h"
-#include "clientUserInterface/CuiWorkspaceIcon.h"
 #include "sharedFoundation/Clock.h"
-#include "sharedFoundation/ConstCharCrcLowerString.h"
 #include "sharedFoundation/Crc.h"
 #include "sharedGame/CombatDataTable.h"
 #include "sharedGame/Command.h"
 #include "sharedGame/CommandChecks.h"
 #include "sharedGame/CommandTable.h"
-#include "sharedGame/GameObjectTypes.h"
 #include "sharedGame/SharedObjectTemplate.h"
-#include "sharedInputMap/InputMap.h"
-#include "sharedInputMap/InputMap.h"
 #include "sharedMessageDispatch/Message.h"
 #include "sharedMessageDispatch/Transceiver.h"
 #include "sharedNetworkMessages/ConsoleChannelMessages.h"
@@ -73,7 +66,6 @@
 #include "sharedUtility/Callback.h"
 #include "sharedUtility/CallbackReceiver.h"
 #include "swgClientUserInterface/SwgCuiHud.h"
-#include "swgClientUserInterface/SwgCuiHudFactory.h"
 #include "swgClientUserInterface/SwgCuiHudWindowManager.h"
 #include "swgClientUserInterface/SwgCuiMfdStatus.h"
 #include "swgClientUserInterface/SwgCuiServerData.h"
@@ -82,14 +74,12 @@
 #include "UIButtonStyle.h"
 #include "UIColorEffector.h"
 #include "UIData.h"
-#include "UIDataSource.h"
 #include "UIImageFragment.h"
 #include "UIImage.h"
 #include "UIImageStyle.h"
 #include "UIManager.h"
 #include "UIMessage.h"
 #include "UIPage.h"
-#include "UIPalette.h"
 #include "UIPie.h"
 #include "UIPopupMenu.h"
 #include "UITabbedPane.h"
@@ -97,6 +87,7 @@
 #include "UIUtils.h"
 #include "UIVolumePage.h"
 #include "UnicodeUtils.h"
+
 
 #include "utf8.h"
 
@@ -158,6 +149,7 @@ namespace SwgCuiToolbarNamespace
 	const float SHADE_WIDGET_HEIGHT = 1.0f;
 	const UIPoint SHADE_WIDGET_TOOL_OFFSET(4,4);
 	const UIPoint BIG_SHADE_WIDGET_TOOL_OFFSET(3,3);
+	const UIPoint COOLDOWN_TEXT_OFFSET(5, 0);
 	
 	const UILowerString SHADE_HAS_NO_COOLDOWN("nocooldown");
 	const UILowerString SHADE_COMMAND_GROUP("cgroup");
@@ -490,7 +482,8 @@ m_bigViewerBackground2(0),
 m_throttleBarParent(0),
 m_throttleBar(0),
 m_clickedInActionBar(false),
-m_doubleToolbar(false)
+m_doubleToolbar(false),
+m_textStyleManager(UITextStyleManager::GetInstance()) // hook singleton of this into memory instead of call each frame
 {
 	const UIData * const codeData = NON_NULL (getCodeData ());
 	{
@@ -1186,6 +1179,11 @@ void SwgCuiToolbar::populateSlot (int slot, bool pet)
 		if(!isCommandQueueCommand && !hasCooldownTime)
 		{
 			wid->SetPropertyInteger (SHADE_HAS_NO_COOLDOWN, 1);
+			UIText* timer = getToolbarCooldownTimer(slot, false);
+			if (timer)
+			{
+				timer->SetVisible(false);
+			}
 		}
 		if(group != -1)
 		{
@@ -1236,90 +1234,173 @@ void  SwgCuiToolbar::repopulateSlots (bool pet)
 	populateDefaultActionWindow();
 }
 
-//----------------------------------------------------------------------
-
-void SwgCuiToolbar::setToolbarItem (int pane, int slot, const CuiDragInfo & item, bool pet)
+/**
+ * Sets the given slot's item/command from the given drag info
+ * @see populateSlot()
+ * 
+ * @param pane index of which toolbar pane/tab (0 to 5 or 0 if pet)
+ * @param slot index of which toolbar slot (0 to 23 or 0 to max pet slot if pet)
+ * @param item Cui Drag Info of which command is moving
+ * @param pet true if pet toolbar is toolbar in question for this action (default = false)
+ */
+void SwgCuiToolbar::setToolbarItem (const int pane, const int slot, const CuiDragInfo & item, const bool pet)
 {
-	if (pane < 0 || slot < 0)
+	if (pane < 0 || slot < 0 || pane > 0 && pet || slot > MAX_PET_TOOLBAR_BUTTONS && pet)
+	{
 		return;
-
+	}
 	CuiDragInfo * const newItem = getToolbarItem (pane, slot, pet);
 
 	if (!newItem)
+	{
 		return;
-
+	}
 	*newItem = item;
 
 	if (pane == m_tabs->GetActiveTab () || pet)
-		populateSlot (slot, pet);
+	{
+		populateSlot(slot, pet);
+	}
 }
 
 //----------------------------------------------------------------------
 
-UIWidget * SwgCuiToolbar::getToolbarItemWidget (int slot, bool pet)
+/**
+ * @param slot index of specific toolbar slot number
+ * (from 0 to 23 for player, 0-7 for pet)
+ * @param pet true if pet toolbar, false if player toolbar
+ * @return UI Widget for an individual toolbar slot's base UI Page
+ *
+ * This function returns the superclass UI Widget for the UI Page Widget
+ * of the individual toolbar slot you're trying to reach.
+ *
+ * m_volumePage represents a UI Volume Page Widget (grid) which contains
+ * child UI Widgets (pages) 1 per slot on the toolbar which are named 0
+ * through 23, respectively, in order to access them by reference to their
+ * index in this function.
+ *
+ * UI Mapping:
+ * m_volumePage = UI Volume Page by Code Data Name "volumePage"
+ * UI GroundHUD -> Toolbar -> CodeData points "volumePage" to the
+ * UI Volume Page Widget Toolbar.volume (GroundHUD -> Toolbar -> volume)
+ * and volume contains individual pages 0 through 23 which make up the
+ * slots themselves.
+ */
+UIWidget * SwgCuiToolbar::getToolbarItemWidget (const int slot, const bool pet)
 {
-	char numbuf [64];
-	snprintf (numbuf, sizeof (numbuf), "%d", slot);
+	char num [64]; // int to char 1999 style
+	snprintf (num, sizeof (num), "%d", slot);
 	
 	UIVolumePage *page = pet ? m_petVolumePage : m_volumePage;
 	if(!page)
-		return NULL;
-	return static_cast<UIWidget *>(page->GetChild (numbuf));
+	{
+		return nullptr;
+	}
+	return dynamic_cast<UIWidget *>(page->GetChild(num));
 }
 
-//----------------------------------------------------------------------
-
-UIWidget * SwgCuiToolbar::getToolbarItemBackgroundWidget (int slot, bool pet)
+/**
+ * @see getToolbarItemWidget() which is the same logic, just a different element
+ * @return UI Widget of the individual UI Page that constructs the background of
+ * the given toolbar slot
+ */
+UIWidget * SwgCuiToolbar::getToolbarItemBackgroundWidget (const int slot, const bool pet)
 {
-	char numbuf [64];
-	snprintf (numbuf, sizeof (numbuf), "%d", slot);
+	char num[64];
+	snprintf (num, sizeof (num), "%d", slot);
 
 	UIVolumePage *page = pet ? m_petVolumeBackgroundPage : m_volumeBackgroundPage;
 	if(!page)
-		return NULL;
-	return static_cast<UIWidget *>(page->GetChild (numbuf));
+	{
+		return nullptr;
+	}
+	return dynamic_cast<UIWidget *>(page->GetChild(num));
 }
 
-//----------------------------------------------------------------------
-
-UIWidget * SwgCuiToolbar::getToolbarItemShadeWidget (int slot, bool pet)
+/**
+ * @see getToolbarItemWidget() which is the same logic, just a different element
+ * @return UI Widget Superclass object of the UI Pie Widget for the given toolbar slot
+ *
+ * Note: This is the widget that appears when a command in the toolbar is cooling down
+ * represented by a black overlay on the command which counts down by spinning through
+ * a circular representation (UI Pie Widget).
+ */
+UIWidget * SwgCuiToolbar::getToolbarItemShadeWidget (const int slot, const bool pet)
 {
 	if(!m_volumeTimersPage)
-		return NULL;
-	char numbuf [64];
-	snprintf (numbuf, sizeof (numbuf), "%d", slot);
+	{
+		return nullptr;
+	}
+	char num[64];
+	snprintf (num, sizeof (num), "%d", slot);
 
 	UIPage *page = pet ? m_petVolumeTimersPage : m_volumeTimersPage;
 	if(!page)
-		return NULL;
-	return static_cast<UIWidget *>(page->GetChild (numbuf));
+	{
+		return nullptr;
+	}
+	return dynamic_cast<UIWidget *>(page->GetChild(num));
 }
 
-//----------------------------------------------------------------------
+/**
+ * @see getToolbarItemShadeWidget()
+ *
+ * This just returns the text element child of the timer volume instead
+ * of the shader UI Pie so you can set the cooldown timer text.
+ *
+ * Timer Text Widget Child Name = slot + max slots + 1 (e.g. 13 + 24 + 1)
+ */
+UIText* SwgCuiToolbar::getToolbarCooldownTimer(int slot, const bool pet)
+{
+	if(pet)
+	{
+		slot += MAX_PET_TOOLBAR_BUTTONS + 1;
+	}
+	else
+	{
+		slot += DEFAULT_ITEM_COUNT_PER_PANE + 1;
+	}
+	if (!m_volumeTimersPage)
+	{
+		return nullptr;
+	}
+	char num[64];
+	snprintf(num, sizeof(num), "%d", slot);
 
-void SwgCuiToolbar::clearWidgets(bool pet)
+	UIPage* page = pet ? m_petVolumeTimersPage : m_volumeTimersPage;
+	if (!page)
+	{
+		return nullptr;
+	}
+	return dynamic_cast<UIText*>(page->GetChild(num));
+}
+
+/**
+ * Used in SwgCuiToolbar destructor to clear out UI widget data
+ */
+void SwgCuiToolbar::clearWidgets(const bool pet)
 {
 	UIVolumePage *page = pet ? m_petVolumePage : m_volumePage;
 	if(!page)
-		return;
-	const UIBaseObject::UIObjectList & olist = page->GetChildrenRef ();
-	for (UIBaseObject::UIObjectList::const_iterator vit = olist.begin (); vit != olist.end (); ++vit)
 	{
-		UIBaseObject * const parent = *vit;
-		if (!parent->IsA (TUIWidget))
+		return;
+	}
+	const UIBaseObject::UIObjectList & objectList = page->GetChildrenRef ();
+	for (auto parent : objectList)
+	{
+		if (!parent->IsA(TUIWidget))
+		{
 			continue;
-
-		UIWidget * const parentWidget = safe_cast<UIWidget *>(parent);
-
+		}
+		auto* const parentWidget = safe_cast<UIWidget *>(parent);
 		parentWidget->RemoveCallback (this);
 
-		CuiWidget3dObjectListViewer * const viewer = dynamic_cast<CuiWidget3dObjectListViewer *>(parentWidget);
+		auto* const viewer = dynamic_cast<CuiWidget3dObjectListViewer *>(parentWidget);
 		if (viewer)
 		{
 			CuiIconManager::unregisterObjectIcon (*viewer);
 		}
 	}
-
 	page->Clear ();
 }
 
@@ -2436,6 +2517,9 @@ void SwgCuiToolbar::onCommandAdded (const CreatureObject::Messages::CommandAdded
 
 //----------------------------------------------------------------------
 
+/**
+ * Per-Frame Update Loot for the Toolbar
+ */
 void SwgCuiToolbar::update (float deltaTimeSecs)
 {
 	CuiMediator::update (deltaTimeSecs);
@@ -2443,7 +2527,7 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 	if(m_mouseOverPage)
 		m_mouseOverPage->SetVisible(false);
 	
-	bool executing = true;
+	bool executing = true; // are we *executing* the command this frame?
 	m_executeTimer += deltaTimeSecs;
 	if(m_executeTimer >= m_executeMaxTimer)
 	{
@@ -2451,7 +2535,7 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 		executing = false;
 	}
 
-	bool warmingUp = true;
+	bool warmingUp = true; // are we *warming up* the command this frame?
 	m_warmupTimer += deltaTimeSecs;
 	if(m_warmupTimer >= m_warmupMaxTimer)
 	{
@@ -2460,7 +2544,6 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 	}
 
 	bool showNewCurrentActionPages = false;
-	bool showNewNextActionPages = false;
 	if(!warmingUp && !executing && !m_clientOverrideCurrentActionCrc)
 	{
 		if(m_nextCurrentActionPage > 0)
@@ -2471,11 +2554,6 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 	else if(m_nextCurrentActionPage == 0)		
 	{
 		showNewCurrentActionPages = true;
-	}
-
-	if(m_nextNextActionPage == 0)
-	{
-		showNewNextActionPages = true;
 	}
 
 	// cooldown time can be extremely long, like 60 minutes, so we need to always
@@ -2558,47 +2636,55 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 		resetAllPagesInPool(m_wrongWeaponTypePages, m_nextWrongWeaponTypePage);
 	}
 
+	// If we have the timer page, iterate cooldown displays
 	if(m_volumeTimersPage)
 	{			
-
-		// For all the widgets in the shading volume page, find out if the corresponding widget is a combat widget, 
-		// and if so, add the shading
+		// Loop that first runs the player toolbar and then the pet toolbar
 		for(int i = 0; i < 2; ++i)
 		{
-			UIBaseObject::UIObjectList olist;
 			bool pet = i;
 			UIPage *page = pet ? m_petVolumeTimersPage : m_volumeTimersPage;
 			if(!page)
+			{
 				continue;
-			page->GetChildren(olist);
-			int slot = 0;
+			}
+			UIBaseObject::UIObjectList olist;
+			page->GetChildren(olist); // get each slot
+			int slot = 0; // slot iterator
 			float fadedHeight = 0.0f;
-			for (UIBaseObject::UIObjectList::iterator itObj = olist.begin (); itObj != olist.end (); ++itObj)
-			{			
-				UIBaseObject * obj = *itObj;
-				
+
+			// For each slot in the toolbar (children of the volume page)
+			for (auto obj : olist)
+			{
+				// Volume timer pages also contain the text displays for cool downs so we need to make
+				// sure we don't start iterating through those as well here
+				if(slot > DEFAULT_ITEM_COUNT_PER_PANE - 1 || pet && slot > MAX_PET_TOOLBAR_BUTTONS - 1)
+				{
+					continue;
+				}
+				// Make sure it's a widget
 				if (!obj->IsA (TUIWidget))
 				{
 					continue;
 				}
 
-				UIWidget *objAsWidget = static_cast<UIWidget *>(obj);
-
-				if(!objAsWidget->IsA(TUIPie) && (objAsWidget->GetBackgroundOpacity() == 0.0f))  //seperator
+				// UI Base to UI Widget to get Sub-Type, validate UI Pie Type
+				auto objAsWidget = dynamic_cast<UIWidget *>(obj);
+				if(!objAsWidget->IsA(TUIPie) && objAsWidget->GetBackgroundOpacity() == 0.0f)
 				{
 					continue;
 				}
 
+				// Get the physical back-most slot widget of the working toolbar slot we're processing
 				UIWidget *toolWidget = getToolbarItemWidget(slot, pet);							
-
 				if(!toolWidget)
 				{
 					continue;
 				}
-
 				fadedHeight = 0.0f;
 				float opacity = 1.0f;
 
+				
 				if ((toolWidget->HasProperty(SHADE_COMMAND_GROUP)))
 				{
 					int group = -1;
@@ -2620,6 +2706,7 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 					}
 					else
 					{
+						// Determine cooldown time remaining as percentile for UI Pie Circle visual of cooldown
 						float timerFactor1 = (static_cast<float>(getCooldownProgress(group)) / 100.0f);
 						float timerFactor2 = (group2 == -1) ? 0.0f : (static_cast<float>(getCooldownProgress(group2)) / 100.0f);
 						float timerFactor = std::max(timerFactor1, timerFactor2);
@@ -2628,12 +2715,102 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 						{
 							fadedHeight = SHADE_WIDGET_HEIGHT * timerFactor;		
 						}
-						else if (executing)
+						else if (executing) // exception to appearance when the command is executing
 						{
 							timerFactor = (m_executeMaxTimer <= 0.0f) ? 0.0f : (1.0f - (m_executeTimer / m_executeMaxTimer));
 							fadedHeight = SHADE_WIDGET_HEIGHT * timerFactor;
 							opacity = 0.7f;
 						}
+
+						// *******************************************************
+						// Begin Cooldown Timer Display in Toolbar Slots
+						//
+						// SWG Source Addition - 2021
+						// Authors: Aconite
+						// *******************************************************
+						UIText* const cooldownTimer = getToolbarCooldownTimer(slot);
+						// If cooldown active and this command isn't executing/warming up
+						if (timerFactor > 0.0f && !executing && !warmingUp)
+						{
+							// Make sure player has enabled this option
+							if (CuiPreferences::getShowToolbarCooldownTimer())
+							{
+								if (cooldownTimer != nullptr)
+								{
+									// Commands have 2 cooldown groups, so we need to determine if the cooldown is
+									// coming from the primary or secondary cooldown (or both), and whichever is highest
+									// is the one that is displayed because the longest cooldown is what matters
+									// (don't grab the clock ms data from the frame update due to loop lag)
+									int group1Time = 0;
+									int group2Time = 0;
+									// Get command cooldown group 1 time remaining (max - current)
+									CooldownTimerMap::const_iterator it = s_cooldownTimers.find(std::make_pair(Game::getPlayerNetworkId(), group));
+									if (it != s_cooldownTimers.end())
+									{
+										const unsigned long currentMaxTimer = it->second.first;
+										const unsigned long currentTimer = it->second.second;
+										if (currentTimer <= currentMaxTimer && currentMaxTimer != 0)
+										{
+											group1Time = currentMaxTimer - currentTimer;
+										}
+									}
+									// Get command cooldown group 2 time remaining (max - current)
+									// (Only applicable if cooldown group 2 is set)
+									if (group2 >= 0)
+									{
+										CooldownTimerMap::const_iterator it2 = s_cooldownTimers.find(std::make_pair(Game::getPlayerNetworkId(), group2));
+										if (it2 != s_cooldownTimers.end())
+										{
+											const unsigned long currentMaxTimer = it2->second.first;
+											const unsigned long currentTimer = it2->second.second;
+											if (currentTimer <= currentMaxTimer && currentMaxTimer != 0)
+											{
+												group2Time = currentMaxTimer - currentTimer;
+											}
+										}
+									}
+									// Take highest of the cooldown times and divide for milliseconds to seconds
+									const int time = std::max(group1Time, group2Time) / 1000;
+									// If we have time remaining, display it
+									if (time > -1)
+									{
+										// Adjust the position of the timer text to be positioned over the correct toolbar slot
+										UIPoint toolLocation = toolWidget->GetLocation();
+										UIPoint newLocation = toolLocation + UIPoint(0, 12);
+										cooldownTimer->SetLocation(newLocation);
+										// Override text color & style to white/big so we ensure custom UI themes don't make it hard to read
+										cooldownTimer->SetTextColor(UIColor(255, 255, 255));
+										cooldownTimer->SetStyle(m_textStyleManager->GetFontForLogicalFont("bold_13"));
+										cooldownTimer->SetDropShadow(true);
+										// Actually set the text and make the time remaining visible
+										// note: we add +1 to the actual time remaining when displaying the time
+										// due to loss of precision from floating point conversion in cooldown time & ms to sec
+										cooldownTimer->SetText(Unicode::intToWide(time + 1));
+										cooldownTimer->SetVisible(true);
+									}
+									else
+									{
+										// Otherwise, timer shouldn't be active
+										cooldownTimer->SetVisible(false);
+									}
+								}
+							}
+							else
+							{
+								// Hide timer if we change the option to display the timer mid-cooldown
+								cooldownTimer->SetVisible(false);
+							}
+						}
+						else // fail safe catch to make sure we aren't showing the timer when we shouldn't be
+						{
+							if (cooldownTimer != nullptr)
+							{
+								cooldownTimer->SetVisible(false);
+							}
+						}
+						// *******************************************************
+						// End of Cooldown Timer Display Addition
+						// *******************************************************
 					}
 				}
 
@@ -2657,27 +2834,25 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 					m_lastFadedHeight[heightIndex] = fadedHeight;
 				}
 
-				UISize oldSize = objAsWidget->GetSize();
+				// Handle cooldown timer pie visual positioning and appearance
 				UIPoint toolLocation = toolWidget->GetLocation();
 				UIPoint newLocation = toolLocation + SHADE_WIDGET_TOOL_OFFSET;
 				objAsWidget->SetVisible(true);
 				objAsWidget->SetOpacity(opacity);
 				objAsWidget->SetLocation(newLocation);
-
 				objAsWidget->SetPropertyFloat(UIPie::PropertyName::PieValue, fadedHeight);
 				
 				if(m_bigShade)
 					m_bigShade->SetVisible(false);
-				
+
+				// Special additional handling if the slot is also the default action slot (the big one)
 				if((slot == m_defaultActionSlot) && m_bigShade && !pet)
 				{
-					UISize oldSize = m_bigShade->GetSize();
 					UIPoint toolLocation = m_bigButton->GetParentWidget()->GetLocation();
 					UIPoint newLocation = toolLocation + BIG_SHADE_WIDGET_TOOL_OFFSET;
 					m_bigShade->SetVisible(true);
 					m_bigShade->SetOpacity(opacity);
 					m_bigShade->SetLocation(newLocation);
-
 					m_bigShade->SetPropertyFloat(UIPie::PropertyName::PieValue, fadedHeight);
 				}
 
@@ -2686,7 +2861,6 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 		}
 
 	}
-
 		
 	const int index = m_tabs->GetActiveTab ();
 
@@ -2718,7 +2892,7 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 	}
 	else
 	{
-		if(m_volumeTimersPage != NULL)
+		if(m_volumeTimersPage != nullptr)
 		{						
 			const uint32 sequenceId = CuiCombatManager::getPendingCommand();
 
@@ -2769,8 +2943,15 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 			if(m_volumeTimersPage)
 			{			
 				UIWidget * const shadeWidget = getToolbarItemShadeWidget(slot);
-				if (NULL != shadeWidget)
+				if (shadeWidget != nullptr)
+				{
 					shadeWidget->SetVisible(false);
+				}
+				UIWidget* const cooldownTimer = getToolbarCooldownTimer(slot);
+				if (cooldownTimer != nullptr)
+				{
+					cooldownTimer->SetVisible(false);
+				}
 			}
 
 			if(viewer)
@@ -2808,13 +2989,13 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 			}
 		}
 
-		if ((item.type == CuiDragInfoTypes::CDIT_command) || (item.type == CuiDragInfoTypes::CDIT_object))
+		if (item.type == CuiDragInfoTypes::CDIT_command || item.type == CuiDragInfoTypes::CDIT_object)
 		{
 			
 			if (m_volumeTimersPage)
 			{
 				UIWidget * const shadeWidget = getToolbarItemShadeWidget(slot);
-				if (shadeWidget != 0)
+				if (shadeWidget != nullptr)
 				{
 					shadeWidget->SetVisible(true);
 				}

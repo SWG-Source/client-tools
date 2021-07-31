@@ -62,6 +62,7 @@ namespace
 	bool        ms_showLookAtTargetStatusWindowEnabled = false;
 	bool        ms_showStatusOverIntendedTarget     = true;
 	bool        ms_useDoubleToolbar                 = false;
+	bool		ms_showToolbarCooldownTimer			= false;
 	bool        ms_netStatusEnabled                 = false;
 	bool        ms_pointerModeMouseCameraEnabled    = true;
 	bool        ms_mouseModeDefault[Game::ST_numTypes] = {false, false, false};
@@ -489,6 +490,7 @@ void CuiPreferences::install ()
 	ms_showLookAtTargetStatusWindowEnabled = false;
 	ms_showStatusOverIntendedTarget     = ConfigClientUserInterface::getShowStatusOverIntendedTarget ();
 	ms_useDoubleToolbar                 = false;
+	ms_showToolbarCooldownTimer			= false;
 	ms_netStatusEnabled                 = ConfigClientUserInterface::getNetStatusEnabled ();
 	ms_pointerModeMouseCameraEnabled    = ConfigClientUserInterface::getPointerModeMouseCameraEnabled ();
 	ms_mouseModeDefault[Game::ST_ground] = ConfigClientUserInterface::getMouseModeDefault ();
@@ -655,6 +657,7 @@ void CuiPreferences::install ()
 
 	REGISTER_OPTION(showStatusOverIntendedTarget);
 	REGISTER_OPTION(useDoubleToolbar);
+	REGISTER_OPTION(showToolbarCooldownTimer);
 	REGISTER_OPTION(netStatusEnabled);
 	REGISTER_OPTION(pointerModeMouseCameraEnabled);
 	REGISTER_OPTION(useNewbieTutorial);
@@ -1173,6 +1176,13 @@ void CuiPreferences::setUseDoubleToolbar (bool b)
 
 //----------------------------------------------------------------------
 
+void CuiPreferences::setShowToolbarCooldownTimer (bool b)
+{
+	ms_showToolbarCooldownTimer = b;
+}
+
+//----------------------------------------------------------------------
+
 void CuiPreferences::setNetStatusEnabled (bool b)
 {
 	if ((ms_netStatusEnabled && !b) || (!ms_netStatusEnabled && b))
@@ -1532,6 +1542,13 @@ bool   CuiPreferences::getShowStatusOverIntendedTarget ()
 bool   CuiPreferences::getUseDoubleToolbar ()
 {
 	return ms_useDoubleToolbar;
+}
+
+//----------------------------------------------------------------------
+
+bool   CuiPreferences::getShowToolbarCooldownTimer()
+{
+	return ms_showToolbarCooldownTimer;
 }
 
 //----------------------------------------------------------------------

@@ -48,6 +48,9 @@ public:
 	static bool                getUseDoubleToolbar ();
 	static void                setUseDoubleToolbar (bool b);
 
+	static bool                getShowToolbarCooldownTimer();
+	static void                setShowToolbarCooldownTimer(bool b);
+
 	static bool                getPointerModeMouseCameraEnabled ();
 	static void                setPointerModeMouseCameraEnabled (bool b);
 
