@@ -1602,7 +1602,7 @@ void CommandCppFuncsNamespace::commandFuncHideMe (Command const &, NetworkId con
 		}
 		else
 		{
-			DEBUG_WARNING(true, ("Unknown param type passed to hideMe %s", narrowParams.c_str()));
+			CuiSystemMessageManager::sendFakeSystemMessage(Unicode::narrowToWide("Syntax: /hideMe <0 | 1> where 0 is visible and 1 is hidden."));
 			return;
 		}
 
@@ -1616,6 +1616,9 @@ void CommandCppFuncsNamespace::commandFuncHideMe (Command const &, NetworkId con
 		{
 			std::string const &command = std::string("/remote object hide ") + actor->getNetworkId().getValueString() + std::string(" ") + narrowParams;
 			IGNORE_RETURN(CuiMessageQueueManager::executeCommandByString(command, true));
+			std::string msg = std::string("hideMe: Your client and character are now ") + std::string(hide ? "hidden" : "visible") + std::string(" to other players.");
+			CuiSystemMessageManager::sendFakeSystemMessage(Unicode::narrowToWide(msg));
+
 		}
 	}
 }
