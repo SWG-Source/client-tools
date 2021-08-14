@@ -1514,8 +1514,58 @@ void SwgCuiCharacterSheet::updateGcwPage()
 	//neutral
 	else if (PvpData::isNeutralFactionId(pvpFaction))
 	{
-		m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral.localize());
 
+		// GU 18.4 - Display Mercenary Status on Character Sheet for Self Only
+		if(isExaminingSelf())
+		{
+			const PlayerObject* po = Game::getPlayerObject();
+			if(po)
+			{
+				unsigned long slotVal = 0;
+				const char *slots[4] = {
+					"covert_imperial_mercenary",
+					"overt_imperial_mercenary",
+					"covert_rebel_mercenary",
+					"overt_rebel_mercenary"
+				};
+				for (unsigned i = 0; i < 4; i++)
+				{
+					po->getCollectionSlotValue(slots[i], slotVal);
+					if(slotVal > 0)
+					{
+						slotVal = i+1;
+						break;
+					}
+				}
+				switch(slotVal)
+				{
+					case 1:
+						m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral_imperialhelpercovert.localize());
+						break;
+					case 2:
+						m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral_imperialhelperdeclared.localize());
+						break;
+					case 3:
+						m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral_rebelhelpercovert.localize());
+						break;
+					case 4:
+						m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral_rebelhelperdeclared.localize());
+						break;
+					default:
+						m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral.localize());
+						break;
+				}
+			}
+			else
+			{
+				m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral.localize());
+			}
+		}
+		else
+		{
+			m_pvpStatus->SetText(CuiStringIdsCharacterSheet::faction_neutral.localize());
+		}
+	
 		// format high rank text: put highest rank at top. if ranks are equal, just put rebel at top
 		if (highRebelRank >= highImperialRank)
 		{

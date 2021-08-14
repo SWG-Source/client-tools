@@ -23,6 +23,10 @@ namespace CuiStringIdsCharacterSheet
 	MAKE_STRING_ID(ui_charsheet,      unmarried);
 	MAKE_STRING_ID(ui_charsheet,      unknown);
 	MAKE_STRING_ID(ui_charsheet,      faction_neutral);
+	MAKE_STRING_ID(ui_charsheet,      faction_neutral_imperialhelpercovert);
+	MAKE_STRING_ID(ui_charsheet,      faction_neutral_imperialhelperdeclared);
+	MAKE_STRING_ID(ui_charsheet,      faction_neutral_rebelhelpercovert);
+	MAKE_STRING_ID(ui_charsheet,      faction_neutral_rebelhelperdeclared);
 	MAKE_STRING_ID(ui_charsheet,      faction_rebelcovert);
 	MAKE_STRING_ID(ui_charsheet,      faction_rebeldeclared);
 	MAKE_STRING_ID(ui_charsheet,      faction_rebelonleave);
