@@ -119,11 +119,11 @@ m_lastScrollPosY         (0L)
 	setState (MS_closeable);
 	setState (MS_closeDeactivates);
 
-	// disable New/Reply/Forward button if squelched
+	// disable New/Reply/Forward button if squelched or in tutorial
 	const bool isSquelched = Game::isPlayerSquelched();
-	m_buttonNew->SetEnabled(!isSquelched);
-	m_buttonReply->SetEnabled(!isSquelched);
-	m_buttonForward->SetEnabled(!isSquelched);
+	m_buttonNew->SetEnabled(!isSquelched && !Game::isTutorial());
+	m_buttonReply->SetEnabled(!isSquelched && !Game::isTutorial());
+	m_buttonForward->SetEnabled(!isSquelched && !Game::isTutorial());
 
 	registerMediatorObject (*m_table,         true);
 	registerMediatorObject (*m_buttonNew,     true);
@@ -710,14 +710,14 @@ void SwgCuiPersistentMessageBrowser::update(float deltaTimeSecs)
 {
 	CuiMediator::update(deltaTimeSecs);
 
-	// disable New/Reply/Forward button if squelched
+	// disable New/Reply/Forward button if squelched or in tutorial
 	const bool isSquelched = Game::isPlayerSquelched();
 	if (m_buttonNew)
-		m_buttonNew->SetEnabled(!isSquelched);
+		m_buttonNew->SetEnabled(!isSquelched && !Game::isTutorial());
 	if (m_buttonReply)
-		m_buttonReply->SetEnabled(!isSquelched);
+		m_buttonReply->SetEnabled(!isSquelched && !Game::isTutorial());
 	if (m_buttonForward)
-		m_buttonForward->SetEnabled(!isSquelched);
+		m_buttonForward->SetEnabled(!isSquelched && !Game::isTutorial());
 }
 
 //======================================================================

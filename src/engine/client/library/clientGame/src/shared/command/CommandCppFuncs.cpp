@@ -1057,6 +1057,12 @@ void  CommandCppFuncsNamespace::commandFuncInstantMessageTell    (Command const 
 	if (!player || player->getNetworkId () != actorId)
 		return;
 
+	if(Game::isTutorial() && !Game::getPlayerObject()->isAdmin())
+	{
+		CuiSystemMessageManager::sendFakeSystemMessage(Unicode::narrowToWide("You cannot initiate a tell while in the tutorial."));
+		return;
+	}
+
 	Unicode::String result;
 	IGNORE_RETURN(CuiInstantMessageManager::tell  (params, result));
 	if (!result.empty ())
@@ -1071,6 +1077,12 @@ void  CommandCppFuncsNamespace::commandFuncInstantMessageTtell   (Command const 
 	if (!player || player->getNetworkId () != actorId)
 		return;
 
+	if (Game::isTutorial() && !Game::getPlayerObject()->isAdmin())
+	{
+		CuiSystemMessageManager::sendFakeSystemMessage(Unicode::narrowToWide("You cannot initiate a tell while in the tutorial."));
+		return;
+	}
+	
 	Unicode::String result;
 	IGNORE_RETURN(CuiInstantMessageManager::targetedTell  (params, result));
 	if (!result.empty ())
@@ -1084,6 +1096,12 @@ void  CommandCppFuncsNamespace::commandFuncInstantMessageRetell  (Command const 
 	Object * const player = Game::getPlayer ();
 	if (!player || player->getNetworkId () != actorId)
 		return;
+
+	if (Game::isTutorial() && !Game::getPlayerObject()->isAdmin())
+	{
+		CuiSystemMessageManager::sendFakeSystemMessage(Unicode::narrowToWide("You cannot initiate a tell while in the tutorial."));
+		return;
+	}
 
 	Unicode::String result;
 	IGNORE_RETURN(CuiInstantMessageManager::retell  (params, result));
