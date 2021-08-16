@@ -503,7 +503,17 @@ void SwgCuiAvatarSelection::addAvatar (const CuiLoginManagerAvatarInfo & avatarI
 			if (clusterInfo->loading)
 				statusDisplayStr = CuiStringIdsServer::server_loading.localize ();
 			else if (clusterInfo->locked)
-				statusDisplayStr = CuiStringIdsServer::server_locked.localize ();
+			{
+				if(clusterInfo->isAdmin)
+				{
+					Unicode::String lockedFlag = L"\\#00ff00 (God Mode)";
+					statusDisplayStr = CuiStringIdsServer::server_locked.localize() + lockedFlag;
+				}
+				else
+				{
+					statusDisplayStr = CuiStringIdsServer::server_locked.localize();
+				}
+			}
 			else if (clusterInfo->restricted)
 				statusDisplayStr = CuiStringIdsServer::server_restricted.localize ();
 			else if (clusterInfo->isFull)
@@ -513,10 +523,14 @@ void SwgCuiAvatarSelection::addAvatar (const CuiLoginManagerAvatarInfo & avatarI
 		}
 		else
 			statusDisplayStr = CuiStringIdsServer::server_offline.localize ();
+		if(clusterInfo->isAdmin && clusterInfo->isSecret)
+		{
+			Unicode::String secretFlag = L"\\#ff00ff (Secret)";
+			statusDisplayStr += secretFlag;
+		}
 	}
 	
-#if PRODUCTION != 1
-	if (clusterInfo && !clusterInfo->branch.empty())
+	if (clusterInfo && !clusterInfo->branch.empty() && clusterInfo->isAdmin)
 	{
 		static const Unicode::String::value_type *s_colorRed     = L"\\#ff0000";
 		static const Unicode::String::value_type *s_colorGreen   = L"\\#00ff00";
@@ -555,7 +569,6 @@ void SwgCuiAvatarSelection::addAvatar (const CuiLoginManagerAvatarInfo & avatarI
 		planetDisplayName = color + planetDisplayName;
 		statusDisplayStr = color + statusDisplayStr;
 	}
-#endif
 
 	UIData * const d = model->AppendCell (0, narrowName.c_str (), avatarDisplayName);
 	d->SetPropertyNarrow  (Properties::AvatarNetworkId,                 avatarInfo.networkId.getValueString ());
@@ -1227,7 +1240,7 @@ bool SwgCuiAvatarSelection::getCurrentlySelectedAvatar (bool checkCluster)
 					CuiMessageBox::createInfoBox (CuiStringIdsServer::server_connection_loading.localize ());
 					return false;
 				}
-				else if (clusterInfo->locked)
+				else if (clusterInfo->locked && !clusterInfo->isAdmin)
 				{
 					CuiMessageBox::createInfoBox (CuiStringIdsServer::server_connection_locked.localize ());
 					return false;
@@ -1242,7 +1255,7 @@ bool SwgCuiAvatarSelection::getCurrentlySelectedAvatar (bool checkCluster)
 					return false;
 				}
 				*/
-				else if (clusterInfo->isFull && !ConfigClientGame::getAllowConnectWhenFull() && !autoConnectOk())
+				else if (clusterInfo->isFull && !clusterInfo->isAdmin && !autoConnectOk())
 				{
 					CuiMessageBox::createInfoBox (CuiStringIdsServer::server_cluster_full.localize ());
 					return false;

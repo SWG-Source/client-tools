@@ -72,6 +72,7 @@ public:
 	static bool                   canCreateRegularCharacter       ();
 	static bool                   canCreateJedi                   ();
 	static bool                   canSkipTutorial                 ();
+	static bool                   isAdmin                         ();
 	static bool                   hasUnoccupiedJediSlot           ();
 	static void                   characterChangedUnlocked        (const std::string & clusterName, const NetworkId & id);
 	static void                   characterChangedNormal          (const std::string & clusterName, const NetworkId & id);

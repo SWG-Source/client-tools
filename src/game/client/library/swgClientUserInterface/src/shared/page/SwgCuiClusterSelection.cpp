@@ -375,9 +375,9 @@ void SwgCuiClusterSelection::refreshList ()
 
 	const std::string clientBranch(Branch().getBranchName());
 
-	for (CuiLoginManager::ClusterInfoVector::const_iterator it = civ.begin (); it != civ.end (); ++it)
+	for (CuiLoginManager::ClusterInfoVector::const_iterator it = civ.begin(); it != civ.end(); ++it)
 	{
-		const CuiLoginManagerClusterInfo & clusterInfo = *it;
+		const CuiLoginManagerClusterInfo& clusterInfo = *it;
 
 #if PRODUCTION == 1
 		if (clusterInfo.disableCharacterCreation)
@@ -386,8 +386,9 @@ void SwgCuiClusterSelection::refreshList ()
 
 		Unicode::String name(Unicode::narrowToWide(clusterInfo.name));
 
-#if PRODUCTION != 1
-		Unicode::String color = s_colorRed; // red is the default color
+	if (clusterInfo.isAdmin)
+		{
+			Unicode::String color = s_colorRed; // red is the default color
 
 		if (!clusterInfo.branch.empty())
 		{
@@ -413,9 +414,9 @@ void SwgCuiClusterSelection::refreshList ()
 			}
 
 			char buffer[64];
-			name = color + name + L" [" + Unicode::narrowToWide(clusterInfo.branch) + L"." + Unicode::narrowToWide(_itoa(clusterInfo.version, buffer, 10)) +  L"]";
+			name = color + name + L" [" + Unicode::narrowToWide(clusterInfo.branch) + L"." + Unicode::narrowToWide(_itoa(clusterInfo.version, buffer, 10)) + L"]";
 		}
-#endif
+	}
 
 		UIData * const dataCells [C_numColumns] =
 		{
@@ -500,7 +501,15 @@ void SwgCuiClusterSelection::updateServerStatus ()
 					}
 					else if (clusterInfo.locked)
 					{
-						statusStr     = CuiStringIdsServer::server_locked.localize ();
+						if (clusterInfo.isAdmin)
+						{
+							Unicode::String lockedFlag = L"\\#00ff00 (God Mode)";
+							statusStr = CuiStringIdsServer::server_locked.localize() + lockedFlag;
+						}
+						else
+						{
+							statusStr = CuiStringIdsServer::server_locked.localize();
+						}
 						statusSortStr.push_back ('3');
 					}
 					else if (clusterInfo.isFull)
@@ -526,6 +535,11 @@ void SwgCuiClusterSelection::updateServerStatus ()
 				{
 					statusStr = CuiStringIdsServer::server_offline.localize ();
 					statusSortStr.push_back ('6');
+				}
+				if(clusterInfo.isAdmin && clusterInfo.isSecret)
+				{
+					Unicode::String secretFlag = L"\\#ff00ff (Secret)";
+					statusStr += secretFlag;
 				}
 
 				m_model->SetValueAtText     (visualRow, C_online, statusStr);
@@ -727,15 +741,15 @@ void SwgCuiClusterSelection::OnButtonPressed(UIWidget *context)
 			{
 				CuiMessageBox::createInfoBox (CuiStringIdsServer::server_connection_loading.localize ());
 			}
-			else if (clusterInfo->locked)
+			else if (clusterInfo->locked && !clusterInfo->isAdmin)
 			{
 				CuiMessageBox::createInfoBox (CuiStringIdsServer::server_connection_locked.localize ());
 			}
-			else if (clusterInfo->restricted)
+			else if (clusterInfo->restricted && !clusterInfo->isAdmin)
 			{
 				CuiMessageBox::createInfoBox (CuiStringIdsServer::server_connection_restricted.localize ());
 			}
-			else if (clusterInfo->isFull && !ConfigClientGame::getAllowConnectWhenFull())
+			else if (clusterInfo->isFull && !clusterInfo->isAdmin)
 			{
 				CuiMessageBox::createInfoBox (CuiStringIdsServer::server_cluster_full.localize ());
 			}

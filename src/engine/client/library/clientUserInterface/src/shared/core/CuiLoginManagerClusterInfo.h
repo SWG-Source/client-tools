@@ -43,6 +43,8 @@ public:
 	std::string branch;
 	uint32      version;
 	bool        netVersionMatch;
+	bool		isAdmin; // see LoginClusterStatus.h
+	bool		isSecret; // see LoginClusterStatus.h
 
 	Ping &                       getPing ();
 	const Ping &                 getPing () const;

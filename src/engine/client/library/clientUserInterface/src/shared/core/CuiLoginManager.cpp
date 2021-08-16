@@ -78,6 +78,7 @@ namespace CuiLoginManagerNamespace
 	bool      s_canCreateRegularCharacter = false;
 	bool      s_canCreateJedi = false;
 	bool      s_canSkipTutorial = false;
+	bool      s_isAdmin = false;
 
 	UdpSock * pingSocket = 0;
 
@@ -440,7 +441,9 @@ void CuiLoginManager::receiveLoginClusterStatus (const LoginClusterStatus & lcs)
 					info.isFull         = data.m_status == LoginClusterStatusData::S_full;
 					info.onlinePlayerLimit = data.m_onlinePlayerLimit;
 					info.onlineFreeTrialLimit = data.m_onlineFreeTrialLimit;
-					info.notRecommended = data.m_dontRecommend;						
+					info.notRecommended = data.m_dontRecommend;
+					info.isAdmin = data.m_isAdmin;
+					info.isSecret = data.m_isSecret;
 
 #if PRODUCTION == 0
 					std::map<uint32, std::string>::const_iterator iterFind = s_clusterOverrideHostInfo.find(data.m_clusterId);
@@ -504,6 +507,8 @@ void CuiLoginManager::receiveLoginClusterStatus (const LoginClusterStatus & lcs)
 			info.up             = false;
 			info.loading        = false;
 			info.locked         = false;
+			info.isAdmin		= false;
+			info.isSecret		= false;
 			info.restricted     = false;
 			info.isFull         = false;
 			info.onlinePlayerLimit = 0;
@@ -589,6 +594,7 @@ void CuiLoginManager::receiveClientPermissionsMessage (const ClientPermissionsMe
 	s_canCreateRegularCharacter = cpm.getCanCreateRegularCharacter();
 	s_canCreateJedi = cpm.getCanCreateJediCharacter();
 	s_canSkipTutorial = cpm.getCanSkipTutorial();
+	s_isAdmin = cpm.getIsAdmin();
 	
 	Transceivers::clusterConnection.emitMessage (cpm.getCanLogin ());
 	if (!cpm.getCanLogin ())
@@ -952,6 +958,13 @@ bool CuiLoginManager::canCreateJedi()
 bool CuiLoginManager::canSkipTutorial()
 {
 	return s_canSkipTutorial;
+}
+
+//----------------------------------------------------------------------
+
+bool CuiLoginManager::isAdmin()
+{
+	return s_isAdmin;
 }
 
 //----------------------------------------------------------------------
