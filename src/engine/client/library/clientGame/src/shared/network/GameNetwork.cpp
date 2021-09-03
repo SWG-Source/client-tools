@@ -261,6 +261,7 @@ m_userPassword               (ConfigClientGame::getLoginClientPassword()),
 m_userIpAddress              (),
 m_centralServerName          (),
 m_pendingCentralServerName   (),
+m_guid						 (),
 m_loginTokenLength           (0),
 m_userPort                   (0),
 m_acceptSceneCommand         (false),
@@ -464,6 +465,13 @@ void GameNetwork::setUserPassword (const std::string & newUserPassword)
 {
 	DEBUG_FATAL(s_instance == 0, ("GameNetwork not installed"));
 	s_instance->m_userPassword = newUserPassword;
+}
+
+//-------------------------------------------------------------------
+
+void GameNetwork::setUserGuid(const std::string& newUserGuid)
+{
+	s_instance->m_guid = newUserGuid;
 }
 
 //-----------------------------------------------------------------------
@@ -786,6 +794,14 @@ const std::string & GameNetwork::getUserPassword (void)
 {
 	DEBUG_FATAL(s_instance == 0, ("GameNetwork not installed"));
 	return s_instance->m_userPassword;
+}
+
+//-------------------------------------------------------------------
+
+const std::string& GameNetwork::getUserGuid(void)
+{
+	DEBUG_FATAL(s_instance == 0, ("GameNetwork not installed"));
+	return s_instance->m_guid;
 }
 
 //-------------------------------------------------------------------

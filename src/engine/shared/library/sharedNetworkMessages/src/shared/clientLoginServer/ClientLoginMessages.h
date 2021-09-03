@@ -22,15 +22,18 @@ class LoginClientId : public GameNetworkMessage
 {
 public:
 	LoginClientId(const std::string & newId, const std::string & newKey);
+	LoginClientId(const std::string & newId, const std::string & newKey, const std::string & guid);
 	LoginClientId(Archive::ReadIterator & source);
 	~LoginClientId();
 	const std::string &  getId  () const;
 	const std::string &  getKey () const;
 	const std::string &  getVersion () const;
+	const std::string &  getGuid() const;
 private:
 	Archive::AutoVariable<std::string>          id;
 	Archive::AutoVariable<std::string>          key;
 	Archive::AutoVariable<std::string>          version;
+	Archive::AutoVariable<std::string>          guid;
 
 	LoginClientId();
 	LoginClientId(const LoginClientId&);
@@ -56,6 +59,13 @@ inline const std::string & LoginClientId::getKey() const
 inline const std::string & LoginClientId::getVersion() const
 {
 	return version.get();
+}
+
+//-----------------------------------------------------------------------
+
+inline const std::string& LoginClientId::getGuid() const
+{
+	return guid.get();
 }
 
 //-----------------------------------------------------------------------

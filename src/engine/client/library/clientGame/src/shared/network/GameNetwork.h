@@ -70,6 +70,7 @@ public:
 	static const uint16                getLoginTokenLength     ();
 	static const std::string &         getUserName             ();
 	static const std::string &         getUserPassword         ();
+	static const std::string &         getUserGuid();
 	static const std::string &         getUserIpAddress        ();
 	static uint16                      getUserPort             ();
 	static const ConnectionServerConnection* getConnectionServerConnection();
@@ -95,6 +96,7 @@ public:
 	static void                        setSceneChannel         ();
 	static void                        setUserName             (const std::string & newUserName);
 	static void                        setUserPassword         (const std::string & newUserPassword);
+	static void                        setUserGuid             (const std::string& newUserGuid);
 	static void                        startScene              (const std::string & sceneName,
 	                                                     const NetworkId & characterObjectId,
 	                                                     const std::string & characterTemplateName,
@@ -144,6 +146,7 @@ private:
 	std::string              m_userIpAddress;
 	std::string              m_centralServerName;
 	std::string              m_pendingCentralServerName;
+	std::string				 m_guid;
 	uint16                   m_loginTokenLength;
 	uint16                   m_userPort;
 	bool                     m_acceptSceneCommand;

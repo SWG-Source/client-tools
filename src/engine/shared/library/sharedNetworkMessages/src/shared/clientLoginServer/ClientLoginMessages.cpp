@@ -30,6 +30,21 @@ version(ConfigVersion ? ConfigVersion : NetworkVersionId)  //-- todo production 
 
 //-----------------------------------------------------------------------
 
+
+LoginClientId::LoginClientId(const std::string& newId, const std::string& newKey, const std::string& guidVal) :
+	GameNetworkMessage("LoginClientId"),
+	id(newId),
+	key(newKey),
+	version(NetworkVersionId),
+	guid(guidVal)
+{
+	addVariable(id);
+	addVariable(key);
+	addVariable(version);
+	addVariable(guid);
+}
+//-----------------------------------------------------------------------
+
 LoginClientId::LoginClientId(Archive::ReadIterator & source) :
 GameNetworkMessage("LoginClientId"),
 id(),

@@ -244,6 +244,22 @@ void SwgCuiLoginScreen::ok ()
 		GameNetwork::setUserName        (Unicode::wideToNarrow (name));
 		GameNetwork::setUserPassword    (Unicode::wideToNarrow (passwd));
 
+		char szGUID[255];
+		memset(szGUID, 0, 255);
+		DWORD lSize = 255;
+		HKEY hKey;
+		ULONG ulResult = RegOpenKeyEx(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0,
+			KEY_WOW64_64KEY + KEY_READ, &hKey);
+		if (ulResult == ERROR_SUCCESS)
+		{
+			ulResult = RegGetValue(hKey, "", "MachineGUID", RRF_RT_ANY, nullptr, szGUID, &lSize);
+			if (ulResult == ERROR_SUCCESS)
+			{
+				GameNetwork::setUserGuid(szGUID);
+			}
+		}
+		RegCloseKey(hKey);
+
 		std::vector<std::pair<std::string, uint16> > loginServerList;
 
 		{

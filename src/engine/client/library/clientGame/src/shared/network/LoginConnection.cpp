@@ -65,8 +65,17 @@ void LoginConnection::onConnectionOpened()
 	if (CuiLoginManager::getSessionIdKey() && !ConfigClientGame::getEnableAdminLogin())
 		sendUserName = false;
 
-	LoginClientId	id(sendUserName ? GameNetwork::getUserName() : "", GameNetwork::getUserPassword());
-	send(id, true);
+	if(!GameNetwork::getUserGuid().empty())
+	{
+		LoginClientId	id(sendUserName ? GameNetwork::getUserName() : "", GameNetwork::getUserPassword(), GameNetwork::getUserGuid());
+		send(id, true);
+	}
+	else
+	{
+		LoginClientId	id(sendUserName ? GameNetwork::getUserName() : "", GameNetwork::getUserPassword());
+		send(id, true);
+	}
+	
 
 #if PRODUCTION != 1
 	GenericValueTypeMessage< int > msg( "RequestExtendedClusterInfo", 0 );
