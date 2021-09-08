@@ -157,11 +157,11 @@ int ClientMain(
 	data.windowSmallIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON2));
 	data.hInstance = hInstance;
 	data.commandLine = lpCmdLine;
-	#if DEBUG_LEVEL DEBUG_LEVEL_DEBUG
+#if DEBUG_LEVEL DEBUG_LEVEL_DEBUG
 	data.configFile = "client_d.cfg";
-	#else
+#else
 	data.configFile = "client.cfg";
-	#endif
+#endif
 	data.clockUsesSleep = true;
 	data.minFrameRate = 1.f;
 	data.frameRateLimit = 144.f;
