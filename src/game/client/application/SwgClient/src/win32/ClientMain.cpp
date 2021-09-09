@@ -157,7 +157,7 @@ int ClientMain(
 	data.windowSmallIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON2));
 	data.hInstance = hInstance;
 	data.commandLine = lpCmdLine;
-#if DEBUG_LEVEL DEBUG_LEVEL_DEBUG
+#if PRODUCTION == 0
 	data.configFile = "client_d.cfg";
 #else
 	data.configFile = "client.cfg";
