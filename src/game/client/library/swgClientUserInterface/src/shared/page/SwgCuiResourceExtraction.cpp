@@ -386,9 +386,6 @@ void SwgCuiResourceExtraction::onChangeName ()
 
 void SwgCuiResourceExtraction::onChangeExtractionRate  (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
-
 	char buf [128];
 	_snprintf (buf, 128, "%.2f", sync.getExtractionRateInstalled ());
 	m_textExtractionRate->SetText (Unicode::narrowToWide (buf));
@@ -398,9 +395,6 @@ void SwgCuiResourceExtraction::onChangeExtractionRate  (const ClientInstallation
 
 void SwgCuiResourceExtraction::onChangeExtractionRateMax (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
-
 	const int max = sync.getExtractionRateMax ();
 
 	char buf [128];
@@ -412,9 +406,6 @@ void SwgCuiResourceExtraction::onChangeExtractionRateMax (const ClientInstallati
 
 void SwgCuiResourceExtraction::onChangeActive (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
-
 	setActive(sync.getActive(), true);
 
 	updateActivateButtons();
@@ -424,9 +415,6 @@ void SwgCuiResourceExtraction::onChangeActive (const ClientInstallationSynchroni
 
 void SwgCuiResourceExtraction::onChangeResourcePool (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
-
 	updateResourceList(sync);
 
 	const NetworkId & selectedResourcePool = sync.getSelectedResourcePool ();
@@ -472,9 +460,6 @@ void SwgCuiResourceExtraction::onChangeResourcePool (const ClientInstallationSyn
 
 void SwgCuiResourceExtraction::onChangeHopper (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
-
 	updateResourceList(sync);
 
 	const float hopperContentsCur = sync.getHopperContentsCur ();
@@ -506,9 +491,6 @@ void SwgCuiResourceExtraction::onChangeHopper (const ClientInstallationSynchroni
 
 void SwgCuiResourceExtraction::onChangeHopperMax (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
-
 	updateResourceList(sync);
 
 	const float hopperContentsCur = sync.getHopperContentsCur ();
@@ -553,9 +535,6 @@ void SwgCuiResourceExtraction::onUpdateResourcePoolData (const int & )
 
 void SwgCuiResourceExtraction::onChangeCondition (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
-
 	const int8 condition = sync.getCondition();
 	//update the pie piece
 	const float conditionPercentFloat = static_cast<float>(condition) / 100;
@@ -678,8 +657,6 @@ void SwgCuiResourceExtraction::toggleShowData (bool showData)
 
 void SwgCuiResourceExtraction::onDataReady (const ClientInstallationSynchronizedUi & sync)
 {
-	if (sync.getOwner ()->getNetworkId () != CuiResourceManager::getHarvesterId ())
-		return;
 	toggleShowData(true);
 }
 
