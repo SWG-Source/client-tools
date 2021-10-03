@@ -28,6 +28,8 @@ namespace ClientInteriorLayoutManagerNamespace
 	bool ms_disableLazyInteriorLayoutCreation;
 	bool ms_logApplyInteriorLayoutCreates;
 
+	bool ms_disableInteriorLayouts;
+
 	void remove();
 }
 
@@ -40,6 +42,8 @@ void ClientInteriorLayoutManager::install(bool const disableLazyInteriorLayoutCr
 	InstallTimer const installTimer("ClientInteriorLayoutManager::install");
 
 	ms_disableLazyInteriorLayoutCreation = ConfigFile::getKeyBool("ClientGame/ClientInteriorLayoutManager", "disableLazyInteriorLayoutCreation", disableLazyInteriorLayoutCreation);
+
+	ms_disableInteriorLayouts = !ConfigFile::getKeyBool("ClientGame", "useInteriorLayoutFiles", true);
 
 	DebugFlags::registerFlag(ms_logApplyInteriorLayoutCreates, "ClientGame/ClientInteriorLayoutManager", "logApplyInteriorLayoutCreates");
 
@@ -57,7 +61,7 @@ void ClientInteriorLayoutManagerNamespace::remove()
 
 void ClientInteriorLayoutManager::update()
 {
-	if (ms_disableLazyInteriorLayoutCreation)
+	if (ms_disableLazyInteriorLayoutCreation || ms_disableInteriorLayouts)
 		return;
 
 	//-- find all visible cells
@@ -131,7 +135,7 @@ void ClientInteriorLayoutManager::applyInteriorLayout(TangibleObject * const tan
 {
 	UNREF(fileName);
 
-	if (!ms_disableLazyInteriorLayoutCreation)
+	if (!ms_disableLazyInteriorLayoutCreation || ms_disableInteriorLayouts)
 		return;
 
 	if (!tangibleObject)
