@@ -76,8 +76,6 @@ public:
 	static const ConstWaypointVector &       getRegularWaypoints  ();
 	static const ConstWaypointVector &       getPoiWaypoints      ();
 	static const ConstWaypointVector &       getGroupWaypoints    ();
-	static const ConstWaypointVector &		 getCityWaypoints     ();
-	static const ConstWaypointVector &	     getGuildWaypoints    ();
 
 	static void                              checkWaypoints       (float const deltaTime);
 
@@ -92,8 +90,6 @@ public:
 	bool                                     equals               (const WaypointDataBase & wd) const;
 	bool                                     isPoi                () const;
 	bool                                     isGroupWaypoint      () const;
-	bool                                     isCityWaypoint       () const;
-	bool                                     isGuildWaypoint      () const;
 	bool                                     isEntranceUsed       () const;
 	bool                                     isEntrance           () const;
 	bool                                     isSmallWaypoint      () const;
@@ -158,8 +154,6 @@ private:
 	StringId                                                                                        m_description;
 	bool m_isPoi : 1,
 	m_isGroupWaypoint : 1,
-	m_isCityWaypoint : 1,
-	m_isGuildWaypoint : 1,
 	m_isBuildoutWaypoint : 1;
 
 	Vector m_relativeWaypointPosition;
@@ -205,20 +199,6 @@ inline bool ClientWaypointObject::isPoi () const
 inline bool ClientWaypointObject::isGroupWaypoint () const
 {
 	return m_isGroupWaypoint;
-}
-
-//-----------------------------------------------------------------------
-
-inline bool ClientWaypointObject::isCityWaypoint() const
-{
-	return m_isCityWaypoint;
-}
-
-//-----------------------------------------------------------------------
-
-inline bool ClientWaypointObject::isGuildWaypoint() const
-{
-	return m_isGuildWaypoint;
 }
 
 //----------------------------------------------------------------------
