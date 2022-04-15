@@ -83,8 +83,6 @@ private:
 	UIText *                     m_capacityLabel;
 	UIPage *                     m_capacityBarWp;
 	UIText *                     m_capacityLabelWp;
-	UIButton *					 m_buttonCityWaypoint;
-	UIButton *					 m_buttonGuildWaypoint;
 	UIButton *                   m_buttonNewWaypoint;
 	UITabbedPane *               m_tabs;
 	UICheckbox *                 m_waypointsCurrentPlanetOnly;

@@ -229,8 +229,6 @@ public SwgCuiContainerProviderFilter
 	bool showObject (const ClientObject & obj) const;
 	void setShowCurrentPlanetOnly(bool currentOnly) {m_currentPlanetOnly = currentOnly;}
 	void setShowGroupWaypoints(bool enable) {m_showGroupWaypoints = enable;}
-	void setShowCityWaypoints(bool enable)  {m_showCityWaypoints = enable;}
-	void setShowGuildWaypoints(bool enable) {m_showGuildWaypoints = enable;}
 	void setSingleWaypointMode(bool enable) {m_singleWaypointMode = enable;}
 
 	Tabs::Id m_id;
@@ -238,8 +236,6 @@ public SwgCuiContainerProviderFilter
 private:
 	bool m_currentPlanetOnly;
 	bool m_showGroupWaypoints;
-	bool m_showCityWaypoints;
-	bool m_showGuildWaypoints;
 	bool m_singleWaypointMode;
 };
 
@@ -249,8 +245,6 @@ SwgCuiDataStorage::FilterWps::FilterWps() :
 	m_id(Tabs::I_count),
 	m_currentPlanetOnly(false),
 	m_showGroupWaypoints(false),
-	m_showCityWaypoints(false),
-	m_showGuildWaypoints(false),
 	m_singleWaypointMode(true)
 {
 }
@@ -260,7 +254,10 @@ SwgCuiDataStorage::FilterWps::FilterWps() :
 bool SwgCuiDataStorage::FilterWps::showObject (const ClientObject & obj) const
 {
 	ClientWaypointObject const * const wp = dynamic_cast<ClientWaypointObject const * const>(&obj);
-	if (wp && (wp->isGroupWaypoint() == m_showGroupWaypoints) && wp->isCityWaypoint() == m_showCityWaypoints && wp->isGuildWaypoint() == m_showGuildWaypoints && (!m_currentPlanetOnly || wp->getPlanetName () == Game::getNonInstanceSceneId()))
+	if (wp
+		&& wp->isGroupWaypoint() == m_showGroupWaypoints
+		&& (!m_currentPlanetOnly
+		|| wp->getPlanetName() == Game::getNonInstanceSceneId()))
 		return true;
 	return false;
 }
@@ -369,8 +366,6 @@ m_capacityBar       (0),
 m_capacityLabel     (0),
 m_capacityBarWp     (0),
 m_capacityLabelWp   (0),
-m_buttonCityWaypoint(0),
-m_buttonGuildWaypoint(0),
 m_buttonNewWaypoint (0),
 m_tabs              (0),
 m_waypointsCurrentPlanetOnly(0),
@@ -399,8 +394,6 @@ m_callbackReceiverShowGroupWaypoints(0)
 	getCodeDataObject (TUICheckbox,   m_waypointsCurrentPlanetOnly, "checkWaypointCurrentPlanetOnly");
 	getCodeDataObject (TUICheckbox,   m_waypointsSingleWaypointMode, "checkWaypointSingleWaypointMode");
 	getCodeDataObject (TUICheckbox,   m_waypointsOnScreen, "checkWaypointShowWaypointIndicators");
-	getCodeDataObject (TUIButton,     m_buttonGuildWaypoint, "buttonGuildWaypoint");
-	getCodeDataObject (TUIButton,     m_buttonCityWaypoint, "buttonCityWaypoint");
 
 	m_waypointsCurrentPlanetOnly->SetChecked(false);
 	m_waypointsSingleWaypointMode->SetChecked(false);
@@ -455,8 +448,6 @@ m_callbackReceiverShowGroupWaypoints(0)
 	registerMediatorObject (*m_waypointsCurrentPlanetOnly, true);
 	registerMediatorObject (*m_waypointsSingleWaypointMode, true);
 	registerMediatorObject (*m_waypointsOnScreen, true);
-	registerMediatorObject (*m_buttonGuildWaypoint, true);
-	registerMediatorObject (*m_buttonCityWaypoint, true);
 
 	setState (MS_closeable);
 	setState (MS_closeDeactivates);
@@ -478,8 +469,6 @@ SwgCuiDataStorage::~SwgCuiDataStorage ()
 	m_capacityBarWp   = 0;
 	m_capacityLabelWp = 0;
 	m_tabs            = 0;
-	m_buttonCityWaypoint = 0;
-	m_buttonGuildWaypoint = 0;
 	m_buttonNewWaypoint = 0;
 	m_waypointsCurrentPlanetOnly = 0;
 	m_waypointsSingleWaypointMode = 0;
@@ -609,8 +598,7 @@ void SwgCuiDataStorage::performDeactivate ()
 //-----------------------------------------------------------------
 
 void SwgCuiDataStorage::OnButtonPressed( UIWidget *context )
-{
-	bool updateContainer = false;
+{	
 	if(context == m_buttonNewWaypoint)
 	{
 		ClientObject * const player = Game::getClientPlayer ();
@@ -618,24 +606,6 @@ void SwgCuiDataStorage::OnButtonPressed( UIWidget *context )
 		{
 			ClientWaypointObject::requestWaypoint (Unicode::emptyString, player->getPosition_w ());
 		}
-	}
-	else if (context == m_buttonCityWaypoint)
-	{
-		m_filterWps->setShowCityWaypoints(true);
-		updateContainer = true;
-
-	}
-	else if (context == m_buttonGuildWaypoint)
-	{
-		m_filterWps->setShowGuildWaypoints(true);
-		updateContainer = true;
-	}
-
-	if (updateContainer)
-	{
-		m_containerProviderWaypoints->updateObjectVector();
-		m_containerProviderWaypoints->setContentDirty(true);
-		m_containerProviderWaypoints->setProviderDirty(true);
 	}
 }
 
@@ -677,8 +647,7 @@ void SwgCuiDataStorage::OnCheckboxUnset              (UIWidget * context)
 
 	if (context == m_waypointsCurrentPlanetOnly)
 	{
-		m_filterWps->setShowCurrentPlanetOnly(m_waypointsCurrentPlanetOnly->IsChecked());
-		updateContainer = true;
+		m_filterWps->setShowCurrentPlanetOnly(m_waypointsCurrentPlanetOnly->IsChecked());		
 	}
 	else if (context == m_waypointsSingleWaypointMode)
 	{
