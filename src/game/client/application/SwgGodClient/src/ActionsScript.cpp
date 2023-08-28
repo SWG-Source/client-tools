@@ -16,7 +16,6 @@
 #include "ActionHack.h"
 #include "ConfigGodClient.h"
 #include "GodClientData.h"
-#include "GodClientPerforce.h"
 #include "IconLoader.h"
 #include "MainFrame.h"
 #include "ServerCommander.h"
@@ -176,29 +175,16 @@ void ActionsScript::doEditFile(const std::string & filename) const
  */
 void ActionsScript::onRevert()
 {
-	if(m_selectedPath.empty() || !m_isFile || !(m_isEdit || m_isNew))
+	if (m_selectedPath.empty() || !m_isFile || !(m_isEdit || m_isNew))
 		return;
-	
+
 	{
 		const std::string classPath = ActionsScript::convertToClasspath(m_selectedPath);
 		const std::string msg = std::string("Really revert script: [") + classPath + "]?";
 		const int retval = QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str(), QMessageBox::Yes, QMessageBox::No);
-		
-		if(retval == QMessageBox::No)
-			return;
-	}
-	
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getScriptFilePath());
-	sv.push_back(getClassFilePath());
 
-	std::string result;
-	
-	if(!GodClientPerforce::getInstance().revertFiles(sv, false, result))
-	{
-		const std::string msg = "Could not revert class files: " + sv [0] + ", " + sv [1] + "\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
+		if (retval == QMessageBox::No)
+			return;
 	}
 
 	refresh->doActivate();
@@ -212,23 +198,15 @@ void ActionsScript::onRevert()
  */
 void ActionsScript::onView() const
 {
-	if(m_selectedPath.empty() || !m_isFile)
+	if (m_selectedPath.empty() || !m_isFile)
 		return;
 
 	std::string dummy;
 	std::string local;
-	
+
 	const std::string path = getScriptFilePath();
 
 	std::string result;
-
-	//-- map the desired script classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(path, dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
 
 	doEditFile(local);
 }
@@ -241,32 +219,11 @@ void ActionsScript::onView() const
  */
 void ActionsScript::onEdit()
 {
-	if(m_selectedPath.empty() || !m_isFile)
+	if (m_selectedPath.empty() || !m_isFile)
 		return;
 
 	std::string dummy;
 	std::string local;
-			
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getScriptFilePath());
-	sv.push_back(getClassFilePath());
-
-	std::string result;
-	
-	if(!GodClientPerforce::getInstance().editFiles(sv, result))
-	{
-		const std::string msg = "Could not open file(s) for perforce edit.  View Will be read-only.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-	}
-
-	//-- map the desired script classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(sv [0], dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
 
 	refresh->doActivate();
 	doEditFile(local);
@@ -285,73 +242,17 @@ void ActionsScript::onNew()
 
 	//-- trim the filename from the path
 
-	if(!actualPath.empty() && m_isFile)
+	if (!actualPath.empty() && m_isFile)
 	{
 		const size_t slashpos = actualPath.rfind('/');
 
-		if(slashpos == actualPath.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage
+		if (slashpos == actualPath.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage
 			actualPath.clear();
 		else
 			actualPath = actualPath.substr(0, slashpos);
 	}
 
-	
-	const char * const srcPath = NON_NULL(ConfigGodClient::getData().scriptSourcePath);
-	std::string path = GodClientPerforce::concatenateSubpath(srcPath, actualPath);
-
-	std::string dummy;
-	std::string local;
-
-	std::string result;
-	
-	//-- map the desired script classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(path, dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
-
-	const QString qselection = QFileDialog::getSaveFileName(local.c_str(), "*.script", &MainFrame::getInstance());
-	
-	if(qselection == QString::null)
-		return;
-
-	std::string selection = qselection.latin1();
-	if(selection.size() < 7 || selection.substr(selection.size() - 7) != ".script")
-		selection += ".script";
-
-	UNREF(selection);
-
-	//-- discover the depot path to the .class file
-	size_t dsrc_pos = selection.find("\\dsrc\\");
-	if(dsrc_pos == selection.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage
-		dsrc_pos = selection.find("/dsrc/");
-
-	if(dsrc_pos == selection.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage
-	{
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", "Can't translate script path to class path."));
-		return;
-	}
-
-	std::string compiledLocalPath = selection;
-	IGNORE_RETURN(compiledLocalPath.replace(dsrc_pos + 1, 4, "data"));
-	IGNORE_RETURN(compiledLocalPath.replace(compiledLocalPath.size() - 6, 6, "class"));
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(selection);
-	sv.push_back(compiledLocalPath);
-
-	if(!GodClientPerforce::getInstance().addFiles(sv, result))
-	{
-		const std::string msg = "Unable to add new files to perforce." + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
-
 	refresh->doActivate();
-	doEditFile(selection);
 }
 
 //----------------------------------------------------------------------
@@ -383,30 +284,15 @@ void ActionsScript::onServerReload() const
  */
 void ActionsScript::onSubmit()
 {
-	if(m_selectedPath.empty() || !m_isFile || !(m_isEdit || m_isNew))
+	if (m_selectedPath.empty() || !m_isFile || !(m_isEdit || m_isNew))
 		return;
 
 	const std::string classPath = ActionsScript::convertToClasspath(m_selectedPath);
 	const std::string msg = std::string("Really submit script: [") + classPath + "]?";
 	const int retval = QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str(), QMessageBox::Yes, QMessageBox::No);
 
-	if(retval == QMessageBox::No)
+	if (retval == QMessageBox::No)
 		return;
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getScriptFilePath());
-	sv.push_back(getClassFilePath());
-
-	std::string result;
-
-	IGNORE_RETURN(GodClientPerforce::getInstance().revertFiles(sv, true, result));
-
-	if(!GodClientPerforce::getInstance().submitFiles(sv, result))
-	{
-		const std::string msg = "Could not submit file(s) to perforce!  Beanhead.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-	}
 
 	refresh->doActivate();
 }
@@ -450,22 +336,22 @@ const std::string ActionsScript::convertToClasspath(const std::string & path)
 
 const std::string ActionsScript::getScriptFilePath() const
 {
-	if(m_selectedPath.empty() || !m_isFile)
+	if (m_selectedPath.empty() || !m_isFile)
 		return "";
-	
-	const char * const srcPath = NON_NULL(ConfigGodClient::getData().scriptSourcePath);
-	return GodClientPerforce::concatenateSubpath(srcPath, m_selectedPath) + ".script"; 
+
+	const char* const srcPath = NON_NULL(ConfigGodClient::getData().scriptSourcePath);
+	return srcPath;
 }
 
 //----------------------------------------------------------------------
 
 const std::string ActionsScript::getClassFilePath() const
 {
-	if(m_selectedPath.empty() || !m_isFile)
+	if (m_selectedPath.empty() || !m_isFile)
 		return "";
-	
-	const char * const classPath = NON_NULL(ConfigGodClient::getData().scriptClassPath);
-	return GodClientPerforce::concatenateSubpath(classPath, m_selectedPath) + ".class";
+
+	const char* const classPath = NON_NULL(ConfigGodClient::getData().scriptClassPath);
+	return classPath;
 }
 
 //----------------------------------------------------------------------
