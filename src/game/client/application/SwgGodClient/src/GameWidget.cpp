@@ -648,6 +648,7 @@ void GameWidget::keyPressEvent(QKeyEvent*keyEvent)
 		if (keyEvent->key() == s_nudgeEast)
 		{
 			GodClientData::getInstance().translateSelection(+1, +0, false);
+		}
 		if (keyEvent->key() == s_gotoKey)
 		{
 			NOT_NULL(m_gs);
@@ -718,7 +719,7 @@ void GameWidget::keyPressEvent(QKeyEvent*keyEvent)
 
 // ----------------------------------------------------------------------
 
-void GameWidget::keyReleaseEvent(QKeyEvent*keyEvent)
+void GameWidget::keyReleaseEvent(QKeyEvent* keyEvent)
 {
 	if(!m_gameHasFocus)
 	{
