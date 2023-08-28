@@ -14,7 +14,6 @@
 #include "AbstractFilesystemTree.h"
 #include "ConfigGodClient.h"
 #include "FilesystemTree.h"
-#include "GodClientPerforce.h"
 #include "IconLoader.h"
 #include "fileInterface/StdioFile.h"
 
@@ -136,49 +135,7 @@ void ScriptListView::onRefreshList()
 	
 	setCursor(static_cast<int>(Qt::WaitCursor));
 
-	if ( ConfigGodClient::getConnectToPerforce() )
-	{
 
-		const char* const classPath = NON_NULL(ConfigGodClient::getData().scriptClassPath);
-		std::string result;
-		AbstractFilesystemTree* afst = GodClientPerforce::getInstance().getFileTree(classPath, "class", result, GodClientPerforce::FileState_depot);
-
-		if(!afst)
-		{
-			const std::string msg = "Unable to retrieve info from perforce:\n" + result;
-			IGNORE_RETURN(QMessageBox::warning(this, "Warning", msg.c_str()));
-			return;
-		}
-
-		{
-			const QPixmap pix       = IL_PIXMAP(hi16_mime_document);
-			const QPixmap folderPix = IL_PIXMAP(hi16_filesys_folder_green);
-			poulateScriptTree(0,&pix,&folderPix, this, afst);
-		}
-
-		delete afst;
-
-		afst = GodClientPerforce::getInstance().getFileTree(classPath, "class", result, GodClientPerforce::FileState_add);
-		
-		{
-			const QPixmap pix       = IL_PIXMAP(hi16_mime_document);
-			const QPixmap folderPix = IL_PIXMAP(hi16_filesys_folder_red);
-			poulateScriptTree("[NEW]",&pix,&folderPix, this, afst);
-		}
-
-		delete afst;
-
-		afst = GodClientPerforce::getInstance().getFileTree(classPath, "class", result, GodClientPerforce::FileState_edit);
-		
-		{
-			const QPixmap pix       = IL_PIXMAP(hi16_mime_document);
-			const QPixmap folderPix = IL_PIXMAP(hi16_filesys_folder_violet);
-			poulateScriptTree("[EDIT]",&pix,&folderPix, this, afst);
-		}
-
-	}
-	else
-	{
 
 		FilesystemTree* fst = new FilesystemTree();
 
@@ -194,9 +151,7 @@ void ScriptListView::onRefreshList()
 			const QPixmap folderPix = IL_PIXMAP(hi16_filesys_folder_green);
 			poulateScriptTree(0,&pix,&folderPix, this, fst);
 		}
-
 		delete fst;
-	}
 
 	unsetCursor();
 }

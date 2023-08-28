@@ -33,7 +33,6 @@
 #include "FilesystemTree.h"
 #include "ConfigGodClient.h"
 #include "MainFrame.h"
-#include "GodClientPerforce.h"
 #include "ServerObjectData.h"
 #include <hash_set>
 #include <string>
@@ -178,112 +177,6 @@ void BuildoutAreaSupport::getBuildoutAreaList(std::string const &sceneName, std:
 	areaPath += "/datatables/buildout/";
 	areaPath += sceneName;
 
-	if (ConfigGodClient::getConnectToPerforce())
-	{
-		// scan the datatable directory for the specified scene and update status
-		std::string result;
-
-		AbstractFilesystemTree *afst = GodClientPerforce::getInstance().getFileTree(areaPath, "tab", result, GodClientPerforce::FileState_depot);
-		if (afst)
-		{
-			AbstractFilesystemTree::Node const * const node = afst->getRootNode();
-			if (node)
-			{
-				for (AbstractFilesystemTree::Node::ConstIterator i = node->begin (); i != node->end (); ++i)
-				{
-					std::string name((*i)->name);
-					if (name.size() > 4)
-						name.erase(name.size()-4, 4);
-
-					bool found = false;
-					for (unsigned int areaIndex = 0; areaIndex < areaNames.size(); ++areaIndex)
-					{
-						if (areaNames[areaIndex] == name)
-						{
-							areaStatuses[areaIndex] = "Active";
-							found = true;
-						}
-					}
-
-					if (!found)
-					{
-						areaNames.push_back(name);
-						areaLocations.push_back();
-						areaStatuses.push_back("Inactive");
-					}
-				}
-			}
-			delete afst;
-		}
-
-		afst = GodClientPerforce::getInstance().getFileTree(areaPath, "tab", result, GodClientPerforce::FileState_add);
-		if (afst)
-		{
-			AbstractFilesystemTree::Node const * const node = afst->getRootNode();
-			if (node)
-			{
-				for (AbstractFilesystemTree::Node::ConstIterator i = node->begin (); i != node->end (); ++i)
-				{
-					std::string name((*i)->name);
-					if (name.size() > 4)
-						name.erase(name.size()-4, 4);
-
-					bool found = false;
-					for (unsigned int areaIndex = 0; areaIndex < areaNames.size(); ++areaIndex)
-					{
-						if (areaNames[areaIndex] == name)
-						{
-							areaStatuses[areaIndex] = "New";
-							found = true;
-						}
-					}
-
-					if (!found)
-					{
-						areaNames.push_back(name);
-						areaLocations.push_back();
-						areaStatuses.push_back("New+Inactive");
-					}
-				}
-			}
-			delete afst;
-		}
-
-		afst = GodClientPerforce::getInstance().getFileTree(areaPath, "tab", result, GodClientPerforce::FileState_edit);
-		if (afst)
-		{
-			AbstractFilesystemTree::Node const * const node = afst->getRootNode();
-			if (node)
-			{
-				for (AbstractFilesystemTree::Node::ConstIterator i = node->begin (); i != node->end (); ++i)
-				{
-					std::string name((*i)->name);
-					if (name.size() > 4)
-						name.erase(name.size()-4, 4);
-
-					bool found = false;
-					for (unsigned int areaIndex = 0; areaIndex < areaNames.size(); ++areaIndex)
-					{
-						if (areaNames[areaIndex] == name)
-						{
-							areaStatuses[areaIndex] = "Edit";
-							found = true;
-						}
-					}
-
-					if (!found)
-					{
-						areaNames.push_back(name);
-						areaLocations.push_back();
-						areaStatuses.push_back("Edit+Inactive");
-					}
-				}
-			}
-			delete afst;
-		}
-	}
-	else
-	{
 		FilesystemTree* fst = new FilesystemTree();
 
 		fst->setRootPath(areaPath);
@@ -319,7 +212,6 @@ void BuildoutAreaSupport::getBuildoutAreaList(std::string const &sceneName, std:
 		}
 
 		delete fst;
-	}
 }
 
 // ----------------------------------------------------------------------
@@ -329,72 +221,6 @@ bool BuildoutAreaSupport::openBuildoutFilesForEditing( const std::string &areaNa
 	// determine the client and server datatable filenames
 	std::string serverTabFilename, serverIffFilename, clientTabFilename, clientIffFilename;
 	getBuildoutAreaTableNames(areaName, serverTabFilename, serverIffFilename, clientTabFilename, clientIffFilename);
-	
-	if (ConfigGodClient::getConnectToPerforce())
-	{
-		// open the files for edit, in case they already exist
-		std::vector<std::string> perforceFiles;
-		perforceFiles.push_back(serverTabFilename);
-		perforceFiles.push_back(serverIffFilename);
-		perforceFiles.push_back(clientTabFilename);
-		perforceFiles.push_back(clientIffFilename);
-		
-		std::string result;
-		
-		//warn, and possibly abort, if anyone else has the buildout files checked out already
-		std::vector<std::string> alsoOpenedBy;
-		for(std::vector<std::string>::const_iterator it = perforceFiles.begin(); it != perforceFiles.end(); ++it)
-		{
-			bool ok = GodClientPerforce::getInstance().fileAlsoOpenedBy(*it, alsoOpenedBy, result);
-			
-			if (!ok)
-			{
-				QMessageBox::critical (0, "GodClientPerforce::getInstance().fileAlsoOpenedBy error!", result.c_str());
-				return false;
-			}
-			
-			if(!alsoOpenedBy.empty())
-			{
-				//build the warning message string
-				std::string msg = "File:\n";
-				msg += *it + " is also checked out by:\n";
-				for(std::vector<std::string>::const_iterator it2 = alsoOpenedBy.begin(); it2 != alsoOpenedBy.end(); ++it2)
-				{
-					msg += *it2 + "\n";
-				}
-
-
-				if ( !Game::getSinglePlayer() )
-				{
-					QMessageBox::warning (0, "I can not check these files out because...", msg.c_str(), QMessageBox::Ok, 0 );
-					return false;
-				}
-
-				QMessageBox::warning (0, "Uh oh!", msg.c_str(), QMessageBox::Ok, 0 );
-			}
-		}
-		
-		preModifyBuildoutArea(serverTabFilename, serverIffFilename, clientTabFilename, clientIffFilename);
-		
-		if ( Game::getSinglePlayer() )
-		{
-			if (!GodClientPerforce::getInstance().editFiles(perforceFiles, result))
-			{
-				const std::string msg = "Could not open file(s) for perforce edit.\n" + result;
-				IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-				return false;
-			}
-		}
-		else
-		{
-			if (!GodClientPerforce::getInstance().editFilesAndLock(perforceFiles, result))
-			{
-				const std::string msg = "Could not open file(s) for perforce edit and lock!\n" + result;
-				IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-				return false;
-			}
-		}
-	}
 
 	return true;
 }
@@ -405,91 +231,24 @@ void BuildoutAreaSupport::saveBuildoutArea(std::string const &areaName)
 	// determine the client and server datatable filenames
 	std::string serverTabFilename, serverIffFilename, clientTabFilename, clientIffFilename;
 	getBuildoutAreaTableNames(areaName, serverTabFilename, serverIffFilename, clientTabFilename, clientIffFilename);
-	
+
 	// find the buildout in the cache and save it
 	BuildoutAreaCacheMap::iterator i = s_buildoutAreaCacheMap.find(serverTabFilename);
 	if (i == s_buildoutAreaCacheMap.end())
 		return;
 
 	std::map<std::string, std::vector<std::string>> serverEventObjectMap;
-	
-	CachedBuildoutArea const &cachedBuildoutArea = (*i).second;
-	std::vector<ServerBuildoutAreaRow> const &serverRows = cachedBuildoutArea.serverRows;
-	std::vector<ClientBuildoutAreaRow> const &clientRows = cachedBuildoutArea.clientRows;
 
-	if (ConfigGodClient::getConnectToPerforce())
-	{
-		// open the files for edit, in case they already exist
-		std::vector<std::string> perforceFiles;
-		perforceFiles.push_back(serverTabFilename);
-		perforceFiles.push_back(serverIffFilename);
-		perforceFiles.push_back(clientTabFilename);
-		perforceFiles.push_back(clientIffFilename);
-		
-		std::string result;
-		
-		//warn, and possibly abort, if anyone else has the buildout files checked out already
-		std::vector<std::string> alsoOpenedBy;
-		for(std::vector<std::string>::const_iterator it = perforceFiles.begin(); it != perforceFiles.end(); ++it)
-		{
-			bool ok = GodClientPerforce::getInstance().fileAlsoOpenedBy(*it, alsoOpenedBy, result);
-			
-			if (!ok)
-			{
-				QMessageBox::critical (0, "Error", result.c_str());
-				return;
-			}
-			
-			if(!alsoOpenedBy.empty())
-			{
-				//build the warning message string
-				std::string msg = "File:\n";
-				msg += *it + " is also checked out by:\n";
-				for(std::vector<std::string>::const_iterator it2 = alsoOpenedBy.begin(); it2 != alsoOpenedBy.end(); ++it2)
-				{
-					msg += *it2 + "\n";
-				}
-				msg += "Check out anyway?";
-				switch (QMessageBox::warning (0, "Someone else has this file checked out!", msg.c_str(), QMessageBox::Yes | QMessageBox::Default, QMessageBox::No))
-				{
-				case QMessageBox::No: 
-					{
-						QMessageBox::information (0, "Aborted", "Buildout save aborted.", QMessageBox::Ok);
-						return;
-					}
-					break;
-					
-				default:
-					break;
-				}
-			}
-		}
-		
-		preModifyBuildoutArea(serverTabFilename, serverIffFilename, clientTabFilename, clientIffFilename);
-		
-		if ( Game::getSinglePlayer () )
-		{
-			if (!GodClientPerforce::getInstance().editFiles(perforceFiles, result))
-			{
-				const std::string msg = "Could not open file(s) for perforce edit.\n" + result;
-				IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-			}
-		}
-		else
-		{
-			if (!GodClientPerforce::getInstance().editFilesAndLock(perforceFiles, result))
-			{
-				const std::string msg = "Could not open file(s) for perforce edit.\n" + result;
-				IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-			}
-		}
-	}
-	
+	CachedBuildoutArea const& cachedBuildoutArea = (*i).second;
+	std::vector<ServerBuildoutAreaRow> const& serverRows = cachedBuildoutArea.serverRows;
+	std::vector<ClientBuildoutAreaRow> const& clientRows = cachedBuildoutArea.clientRows;
+
+
 	// write the tables
 	{
 		StdioFile serverOutputFile(serverTabFilename.c_str(), "w");
 		StdioFile clientOutputFile(clientTabFilename.c_str(), "w");
-		
+
 		if (!serverOutputFile.isOpen())
 		{
 			std::string msg("File not writable: ");
@@ -510,51 +269,51 @@ void BuildoutAreaSupport::saveBuildoutArea(std::string const &areaName)
 					"objid\tcontainer\tserver_template_crc\tcell_index\tpx\tpy\tpz\tqw\tqx\tqy\tqz\tscripts\tobjvars\n"
 					"i\ti\th\ti\tf\tf\tf\tf\tf\tf\tf\ts\tp\n");
 				serverOutputFile.write(serverHeader.length(), serverHeader.c_str());
-				
+
 				std::string const clientHeader(
 					"objid\tcontainer\ttype\tshared_template_crc\tcell_index\tpx\tpy\tpz\tqw\tqx\tqy\tqz\tradius\tportal_layout_crc\n"
 					"i\ti\ti\th\ti\tf\tf\tf\tf\tf\tf\tf\tf\ti\n");
 				clientOutputFile.write(clientHeader.length(), clientHeader.c_str());
 			}
-			
+
 			// save the server rows
 			{
 				for (std::vector<ServerBuildoutAreaRow>::const_iterator i = serverRows.begin(); i != serverRows.end(); ++i)
 				{
-					ConstCharCrcString const &serverTemplateName = getServerTemplateName((*i).serverTemplateCrc);
+					ConstCharCrcString const& serverTemplateName = getServerTemplateName((*i).serverTemplateCrc);
 					char buf[512];
-					IGNORE_RETURN(snprintf(buf, sizeof(buf)-1, "%d\t%d\t%s\t%d\t%g\t%g\t%g\t%g\t%g\t%g\t%g\t",
+					IGNORE_RETURN(_snprintf(buf, sizeof(buf) - 1, "%d\t%d\t%s\t%d\t%g\t%g\t%g\t%g\t%g\t%g\t%g\t",
 						(*i).id,
 						(*i).container,
 						serverTemplateName.getString(),
 						(*i).cellIndex,
 						(*i).position.x, (*i).position.y, (*i).position.z,
 						(*i).orientation.w, (*i).orientation.x, (*i).orientation.y, (*i).orientation.z));
-					buf[sizeof(buf)-1] = '\0';
+					buf[sizeof(buf) - 1] = '\0';
 					std::string::size_type index = (*i).objvars.find("eventRequired");
 
-					if(index != std::string::npos )
+					if (index != std::string::npos)
 					{
-						std::string::size_type eventSubStringStart = (*i).objvars.find("|", index );
-						if(eventSubStringStart == std::string::npos)
+						std::string::size_type eventSubStringStart = (*i).objvars.find("|", index);
+						if (eventSubStringStart == std::string::npos)
 							continue; //Malformed event obj var. TODO: Warning goes here!
 
 						eventSubStringStart = (*i).objvars.find("|", eventSubStringStart + 1);
 
 						std::string::size_type eventSubStringEnd = (*i).objvars.find("|", eventSubStringStart + 1);
 
-						std::string eventName = (*i).objvars.substr(eventSubStringStart + 1, (eventSubStringEnd - 1) - eventSubStringStart );
+						std::string eventName = (*i).objvars.substr(eventSubStringStart + 1, (eventSubStringEnd - 1) - eventSubStringStart);
 
 						DEBUG_WARNING(true, ("Found an Event Object! Event Name [%s]", eventName.c_str()));
-			
+
 						std::vector<std::string>* eventList = NULL;
 						std::map<std::string, std::vector<std::string>>::iterator eventIter = serverEventObjectMap.find(eventName);
 
-						if(eventIter == serverEventObjectMap.end())
+						if (eventIter == serverEventObjectMap.end())
 						{
 							std::pair<std::map<std::string, std::vector<std::string>>::iterator, bool> insertIter;
-							insertIter = serverEventObjectMap.insert(std::make_pair<std::string, std::vector<std::string>>(eventName, std::vector<std::string>()));
-							if(insertIter.second)
+							insertIter = serverEventObjectMap.insert(std::make_pair(eventName, std::vector<std::string>()));
+							if (insertIter.second)
 								eventList = &(*insertIter.first).second;
 						}
 						else
@@ -566,10 +325,10 @@ void BuildoutAreaSupport::saveBuildoutArea(std::string const &areaName)
 						objectOutputString.append("\t", 1);
 						objectOutputString.append((*i).objvars);
 						objectOutputString.append("\n", 1);
-						
-						if(eventList)
+
+						if (eventList)
 							eventList->push_back(objectOutputString);
-						
+
 						continue;
 					}
 
@@ -580,14 +339,14 @@ void BuildoutAreaSupport::saveBuildoutArea(std::string const &areaName)
 					serverOutputFile.write(1, "\n");
 				}
 			}
-			
+
 			// save the client rows
 			{
 				for (std::vector<ClientBuildoutAreaRow>::const_iterator i = clientRows.begin(); i != clientRows.end(); ++i)
 				{
-					ConstCharCrcString const &sharedTemplateName = getSharedTemplateName((*i).sharedTemplateCrc);
+					ConstCharCrcString const& sharedTemplateName = getSharedTemplateName((*i).sharedTemplateCrc);
 					char buf[512];
-					IGNORE_RETURN(snprintf(buf, sizeof(buf)-1, "%d\t%d\t%d\t%s\t%d\t%g\t%g\t%g\t%g\t%g\t%g\t%g\t%g\t%d\n",
+					IGNORE_RETURN(_snprintf(buf, sizeof(buf) - 1, "%d\t%d\t%d\t%s\t%d\t%g\t%g\t%g\t%g\t%g\t%g\t%g\t%g\t%d\n",
 						(*i).id,
 						(*i).container,
 						(*i).type,
@@ -597,20 +356,20 @@ void BuildoutAreaSupport::saveBuildoutArea(std::string const &areaName)
 						(*i).orientation.w, (*i).orientation.x, (*i).orientation.y, (*i).orientation.z,
 						(*i).radius,
 						static_cast<int>((*i).portalLayoutCrc)));
-					buf[sizeof(buf)-1] = '\0';
+					buf[sizeof(buf) - 1] = '\0';
 					clientOutputFile.write(strlen(buf), buf);
 				}
 			}
 		}
-		
+
 		serverOutputFile.close();
 		clientOutputFile.close();
-		
+
 		postModifyBuildoutArea(serverTabFilename, serverIffFilename, clientTabFilename, clientIffFilename);
-		
+
 		// Write out event specific tables.
 		std::map<std::string, std::vector<std::string>>::iterator beginIter = serverEventObjectMap.begin();
-		for(; beginIter != serverEventObjectMap.end(); ++beginIter)
+		for (; beginIter != serverEventObjectMap.end(); ++beginIter)
 		{
 			writeOutServerEventArea((*beginIter).first, (*beginIter).second);
 		}
@@ -1243,48 +1002,15 @@ void BuildoutAreaSupportNamespace::install()
 {
 	std::string depotPath, clientPath, localPath, result;
 
-	if (ConfigGodClient::getConnectToPerforce())
-	{
 
-		if (!GodClientPerforce::getInstance().getFileMapping(".", depotPath, clientPath, localPath, result))
-		{
-			WARNING(true, ("BuildoutAreaSupportNamespace::install(): %s", result.c_str()));
-			IGNORE_RETURN(QMessageBox::warning(0, "Perforce Buildout Warning", result.c_str()));
-			return;
-		}
+	s_clientSrcPath = ConfigGodClient::getData().localClientSrcPath;
+	s_clientDataPath = ConfigGodClient::getData().localClientDataPath;
+	s_serverSrcPath = ConfigGodClient::getData().localServerSrcPath;
+	s_serverDataPath = ConfigGodClient::getData().localServerDataPath;
 
-		std::string prefix("//depot/swg/");
-		prefix += depotPath.substr(12, depotPath.find("/", 12)-12);
+	s_serverSrcDepotPath = "";
 
-		GodClientPerforce::getInstance().getFileMapping(
-			prefix + "/dsrc/sku.0/sys.server/compiled/game",
-			s_serverSrcDepotPath, clientPath, s_serverSrcPath, result);
-		GodClientPerforce::getInstance().getFileMapping(
-			prefix + "/data/sku.0/sys.server/compiled/game",
-			depotPath, clientPath, s_serverDataPath, result);
-		GodClientPerforce::getInstance().getFileMapping(
-			prefix + "/dsrc/sku.0/sys.client/compiled/game",
-			depotPath, clientPath, s_clientSrcPath, result);
-		GodClientPerforce::getInstance().getFileMapping(
-			prefix + "/data/sku.0/sys.client/compiled/game",
-			depotPath, clientPath, s_clientDataPath, result);
-		GodClientPerforce::getInstance().getFileMapping(
-			prefix + "/data/sku.0/sys.server/built/game/misc/object_template_crc_string_table.iff",
-			depotPath, clientPath, localPath, result);
-		s_serverTemplateCrcStringTable.load(localPath.c_str());
-	}
-	else
-	{
-		s_clientSrcPath = ConfigGodClient::getData().localClientSrcPath;
-		s_clientDataPath = ConfigGodClient::getData().localClientDataPath;
-		s_serverSrcPath = ConfigGodClient::getData().localServerSrcPath;
-		s_serverDataPath = ConfigGodClient::getData().localServerDataPath;
-		
-		s_serverSrcDepotPath = "";
-		
-		s_serverTemplateCrcStringTable.load(ConfigGodClient::getData().localServerCrcStringTable);
-	}
-
+	s_serverTemplateCrcStringTable.load(ConfigGodClient::getData().localServerCrcStringTable);
 
 	s_installed = true;
 }
@@ -1327,13 +1053,6 @@ void BuildoutAreaSupportNamespace::preModifyBuildoutArea(std::string const &serv
 
 	// create the directories to contain the files as needed
 	createDirectoriesForFiles(perforceFiles);
-
-	// open the files for edit, in case they already exist
-	if (ConfigGodClient::getConnectToPerforce())
-	{
-		std::string result;
-		IGNORE_RETURN(GodClientPerforce::getInstance().editFiles(perforceFiles, result));
-	}
 }
 
 // ----------------------------------------------------------------------
@@ -1350,30 +1069,6 @@ void BuildoutAreaSupportNamespace::postModifyBuildoutArea(std::string const &ser
 		DataTableWriter writer;
 		writer.loadFromSpreadsheet(clientTabFilename.c_str());
 		writer.save(clientIffFilename.c_str());
-	}
-
-	if (ConfigGodClient::getConnectToPerforce())
-	{
-		std::vector<std::string> perforceFiles;
-		perforceFiles.push_back(serverTabFilename);
-		perforceFiles.push_back(serverIffFilename);
-		perforceFiles.push_back(clientTabFilename);
-		perforceFiles.push_back(clientIffFilename);
-
-		std::string result;
-		// add the files, in case they didn't already exist
-		if (!GodClientPerforce::getInstance().addFiles(perforceFiles, result))
-		{
-			const std::string msg = "Could not open file(s) for perforce add.\n" + result;
-			IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		}
-		
-		// revert unchanged
-		if (!GodClientPerforce::getInstance().revertFiles(perforceFiles, true, result))
-		{
-			const std::string msg = "Could not revert unchanged file(s).\n" + result;
-			IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		}
 	}
 	
 }
@@ -2195,13 +1890,6 @@ void BuildoutAreaSupportNamespace::writeOutServerEventArea(std::string const eve
 	// create the directories to contain the files as needed
 	createDirectoriesForFiles(eventFiles);
 
-	// open the files for edit, in case they already exist
-	if (ConfigGodClient::getConnectToPerforce())
-	{
-		std::string result;
-		IGNORE_RETURN(GodClientPerforce::getInstance().editFiles(eventFiles, result));
-	}
-
 	StdioFile serverEventOutputFile(serverTabFilename.c_str(), "w");
 
 	if (!serverEventOutputFile.isOpen())
@@ -2220,7 +1908,7 @@ void BuildoutAreaSupportNamespace::writeOutServerEventArea(std::string const eve
 
 		// Write out the actually object info.
 		std::vector<std::string>::size_type i = 0;
-		for(; i < objects.size(); ++i)
+		for (; i < objects.size(); ++i)
 			serverEventOutputFile.write(objects[i].length(), objects[i].c_str());
 
 		serverEventOutputFile.close();
@@ -2230,29 +1918,6 @@ void BuildoutAreaSupportNamespace::writeOutServerEventArea(std::string const eve
 			DataTableWriter writer;
 			writer.loadFromSpreadsheet(serverTabFilename.c_str());
 			writer.save(serverIffFilename.c_str());
-		}
-
-
-		if (ConfigGodClient::getConnectToPerforce())
-		{
-			std::vector<std::string> perforceFiles;
-			perforceFiles.push_back(serverTabFilename);
-			perforceFiles.push_back(serverIffFilename);
-
-			std::string result;
-			// add the files, in case they didn't already exist
-			if (!GodClientPerforce::getInstance().addFiles(perforceFiles, result))
-			{
-				const std::string msg = "Could not open file(s) for perforce add.\n" + result;
-				IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-			}
-
-			// revert unchanged
-			if (!GodClientPerforce::getInstance().revertFiles(perforceFiles, true, result))
-			{
-				const std::string msg = "Could not revert unchanged file(s).\n" + result;
-				IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-			}
 		}
 
 	}

@@ -14,7 +14,6 @@
 #include "ActionsObjectTemplate.h"
 #include "ConfigGodClient.h"
 #include "FileSystemTree.h"
-#include "GodClientPerforce.h"
 #include "IconLoader.h"
 #include "ObjectTemplateData.h"
 
@@ -148,50 +147,6 @@ void ServerTemplateListView::onRefreshList()
 	
 	setCursor(static_cast<int>(Qt::WaitCursor));
 
-	if ( ConfigGodClient::getConnectToPerforce() )
-	{
-
-		const char* const templateIffPath = NON_NULL(ConfigGodClient::getData().templateServerIffPath);
-		std::string result;
-		AbstractFilesystemTree* afst = GodClientPerforce::getInstance().getFileTree(templateIffPath, "iff", result, GodClientPerforce::FileState_depot);
-
-		if(!afst)
-		{
-			const std::string msg = "Unable to retrieve info from perforce:\n" + result;
-			IGNORE_RETURN(QMessageBox::warning(this, "Warning", msg.c_str()));
-			return;
-		}
-
-		{
-			const QPixmap pix       = IL_PIXMAP(hi16_mime_document);
-			const QPixmap folderPix = IL_PIXMAP(hi16_filesys_folder_blue);
-			populateTemplateTree(0,&pix,&folderPix, this, afst);
-		}
-
-		delete afst;
-
-		afst = GodClientPerforce::getInstance().getFileTree(templateIffPath, "iff", result, GodClientPerforce::FileState_add);
-		
-		{
-			const QPixmap pix       = IL_PIXMAP(hi16_mime_document);
-			const QPixmap folderPix = IL_PIXMAP(hi16_filesys_folder_red);
-			populateTemplateTree("[NEW]",&pix,&folderPix, this, afst);
-		}
-
-		delete afst;
-
-		afst = GodClientPerforce::getInstance().getFileTree(templateIffPath, "iff", result, GodClientPerforce::FileState_edit);
-		
-		{
-			const QPixmap pix       = IL_PIXMAP(hi16_mime_document);
-			const QPixmap folderPix = IL_PIXMAP(hi16_filesys_folder_violet);
-			populateTemplateTree("[EDIT]",&pix,&folderPix, this, afst);
-		}
-
-		delete afst;
-	}
-	else
-	{
 		FilesystemTree* fst = new FilesystemTree();
 
 		std::string path = ConfigGodClient::getData().localServerDataPath;
@@ -208,7 +163,6 @@ void ServerTemplateListView::onRefreshList()
 		}
 
 		delete fst;
-	}
 
 
 	unsetCursor();

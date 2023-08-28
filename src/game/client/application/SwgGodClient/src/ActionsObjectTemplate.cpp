@@ -17,7 +17,6 @@
 #include "ConfigGodClient.h"
 #include "FavoritesWindow.h"
 #include "GodClientData.h"
-#include "GodClientPerforce.h"
 #include "IconLoader.h"
 #include "MainFrame.h"
 #include "ServerCommander.h"
@@ -268,29 +267,16 @@ void ActionsObjectTemplate::onServerObjectTemplatePathSelectionChanged(const std
  */
 void ActionsObjectTemplate::onServerRevert()
 {
-	if(m_selectedServerPath.empty() || !m_isServerFile || !(m_isServerEdit || m_isServerNew))
+	if (m_selectedServerPath.empty() || !m_isServerFile || !(m_isServerEdit || m_isServerNew))
 		return;
 
 	{
 		const std::string classPath = ActionsObjectTemplate::convertToClassPath(m_selectedServerPath);
 		const std::string msg = std::string("Really revert ObjectTemplate: [") + classPath + "]?";
 		const int retval = QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str(), QMessageBox::Yes, QMessageBox::No);
-		
-		if(retval == QMessageBox::No)
+
+		if (retval == QMessageBox::No)
 			return;
-	}
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getServerObjectTemplateTpfFilePath());
-	sv.push_back(getServerObjectTemplateIffFilePath());
-
-	std::string result;
-
-	if(!GodClientPerforce::getInstance().revertFiles(sv, false, result))
-	{
-		const std::string msg = "Could not revert class files: " + sv [0] + ", " + sv [1] + "\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
 	}
 
 	m_serverRefresh->doActivate();
@@ -304,7 +290,7 @@ void ActionsObjectTemplate::onServerRevert()
  */
 void ActionsObjectTemplate::onServerView() const
 {
-	if(m_selectedServerPath.empty() || !m_isServerFile)
+	if (m_selectedServerPath.empty() || !m_isServerFile)
 		return;
 
 	std::string dummy;
@@ -313,14 +299,6 @@ void ActionsObjectTemplate::onServerView() const
 	const std::string path = getServerObjectTemplateTpfFilePath();
 
 	std::string result;
-
-	//-- map the desired ObjectTemplate classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(path, dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
 
 	doEditFile(local);
 }
@@ -333,34 +311,12 @@ void ActionsObjectTemplate::onServerView() const
  */
 void ActionsObjectTemplate::onServerEdit()
 {
-	if(m_selectedServerPath.empty() || !m_isServerFile)
+	if (m_selectedServerPath.empty() || !m_isServerFile)
 		return;
 
 	std::string dummy;
 	std::string local;
 	std::string result;
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getServerObjectTemplateTpfFilePath());
-	sv.push_back(getServerObjectTemplateIffFilePath());
-
-	if(!GodClientPerforce::getInstance().editFiles(sv, result))
-	{
-		const std::string msg = "Could not open file(s) for perforce edit.  View Will be read-only." + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-
-		// TODO: missing a return here???
-	}
-
-
-	//-- map the desired ObjectTemplate classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(sv [0], dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
 
 	m_serverRefresh->doActivate();
 	doEditFile(local);
@@ -378,72 +334,17 @@ void ActionsObjectTemplate::onServerNew()
 	std::string actualPath = m_selectedServerPath;
 
 	//-- trim the filename from the path
-	if(!actualPath.empty() && m_isServerFile)
+	if (!actualPath.empty() && m_isServerFile)
 	{
 		const size_t slashpos = actualPath.rfind('/');
 
-		if(slashpos == actualPath.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage 
+		if (slashpos == actualPath.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage 
 			actualPath.clear();
 		else
 			actualPath = actualPath.substr(0, slashpos);
 	}
 
-
-	const char * const srcPath = NON_NULL(ConfigGodClient::getData().templateServerSourcePath);
-	std::string path = GodClientPerforce::concatenateSubpath(srcPath, actualPath);
-
-	std::string dummy;
-	std::string local;
-	std::string result;
-
-	//-- map the desired ObjectTemplate classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(path, dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
-
-	const QString qselection = QFileDialog::getSaveFileName(local.c_str(), "*.tpf",&MainFrame::getInstance());
-	
-	if(qselection == QString::null)
-		return;
-
-	std::string selection = qselection.latin1();
-	if(selection.size() < 4 || selection.substr(selection.size() - 4) != ms_objectTemplateSourceExtension)
-		selection += ms_objectTemplateSourceExtension;
-
-	UNREF(selection);
-
-	//-- discover the depot path to the .class file
-	size_t dsrc_pos = selection.find("\\dsrc\\");
-	if(dsrc_pos == selection.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage
-		dsrc_pos = selection.find("/dsrc/");
-
-	if(dsrc_pos == selection.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage 
-	{
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", "Can't translate ObjectTemplate path to Iff path."));
-		return;
-	}
-
-	std::string compiledLocalPath = selection;
-	IGNORE_RETURN(compiledLocalPath.replace(dsrc_pos + 1, 4, "data"));
-	IGNORE_RETURN(compiledLocalPath.replace(compiledLocalPath.size() - 6, 6, "iff"));
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(selection);
-	sv.push_back(compiledLocalPath);
-
-	if(!GodClientPerforce::getInstance().addFiles(sv, result))
-	{
-		const std::string msg = "Unable to add new files to perforce.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
-
 	m_serverRefresh->doActivate();
-	doEditFile(selection);
 }
 
 //-----------------------------------------------------------------------
@@ -476,30 +377,15 @@ void ActionsObjectTemplate::onServerReload() const
  */
 void ActionsObjectTemplate::onServerSubmit()
 {
-	if(m_selectedServerPath.empty() || !m_isServerFile || !(m_isServerEdit || m_isServerNew))
+	if (m_selectedServerPath.empty() || !m_isServerFile || !(m_isServerEdit || m_isServerNew))
 		return;
 
 	const std::string classPath = ActionsObjectTemplate::convertToClassPath(m_selectedServerPath);
 	const std::string msg = std::string("Really submit ObjectTemplate: [") + classPath + "]?";
 	const int retval = QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str(), QMessageBox::Yes, QMessageBox::No);
 
-	if(retval == QMessageBox::No)
+	if (retval == QMessageBox::No)
 		return;
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getServerObjectTemplateTpfFilePath());
-	sv.push_back(getServerObjectTemplateIffFilePath());
-
-	std::string result;
-
-	IGNORE_RETURN(GodClientPerforce::getInstance().revertFiles(sv, true, result));
-
-	if(!GodClientPerforce::getInstance().submitFiles(sv, result))
-	{
-		const std::string msg = "Could not submit file(s) to perforce!  Beanhead.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-	}
 
 	m_serverRefresh->doActivate();
 }
@@ -521,22 +407,22 @@ void ActionsObjectTemplate::onServerCompile() const
 
 const std::string ActionsObjectTemplate::getServerObjectTemplateTpfFilePath() const
 {
-	if(m_selectedServerPath.empty() || !m_isServerFile)
+	if (m_selectedServerPath.empty() || !m_isServerFile)
 		return "";
 
 	const char* const srcPath = NON_NULL(ConfigGodClient::getData().templateServerSourcePath);
-	return GodClientPerforce::concatenateSubpath(srcPath, m_selectedServerPath) + ms_objectTemplateSourceExtension; 
+	return srcPath;
 }
 
 //-----------------------------------------------------------------------
 
 const std::string ActionsObjectTemplate::getServerObjectTemplateIffFilePath() const
 {
-	if(m_selectedServerPath.empty() || !m_isServerFile)
+	if (m_selectedServerPath.empty() || !m_isServerFile)
 		return "";
 
 	const char* const iffPath = NON_NULL(ConfigGodClient::getData().templateServerIffPath);
-	return GodClientPerforce::concatenateSubpath(iffPath, m_selectedServerPath) + ms_objectTemplateCompiledExtension;
+	return iffPath;
 }
 
 //-----------------------------------------------------------------------
@@ -583,29 +469,16 @@ void ActionsObjectTemplate::onClientObjectTemplatePathSelectionChanged(const std
  */
 void ActionsObjectTemplate::onClientRevert()
 {
-	if(m_selectedClientPath.empty() || !m_isClientFile || !(m_isClientEdit || m_isClientNew))
+	if (m_selectedClientPath.empty() || !m_isClientFile || !(m_isClientEdit || m_isClientNew))
 		return;
 
 	{
 		const std::string classPath = ActionsObjectTemplate::convertToClassPath(m_selectedClientPath);
 		const std::string msg = std::string("Really revert ObjectTemplate: [") + classPath + "]?";
 		const int retval = QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str(), QMessageBox::Yes, QMessageBox::No);
-		
-		if(retval == QMessageBox::No)
+
+		if (retval == QMessageBox::No)
 			return;
-	}
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getClientObjectTemplateTpfFilePath());
-	sv.push_back(getClientObjectTemplateIffFilePath());
-
-	std::string result;
-
-	if(!GodClientPerforce::getInstance().revertFiles(sv, false, result))
-	{
-		const std::string msg = "Could not revert class files: " + sv [0] + ", " + sv [1] + "\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
 	}
 
 	m_clientRefresh->doActivate();
@@ -619,7 +492,7 @@ void ActionsObjectTemplate::onClientRevert()
  */
 void ActionsObjectTemplate::onClientView() const
 {
-	if(m_selectedClientPath.empty() || !m_isClientFile)
+	if (m_selectedClientPath.empty() || !m_isClientFile)
 		return;
 
 	std::string dummy;
@@ -627,14 +500,6 @@ void ActionsObjectTemplate::onClientView() const
 	std::string result;
 
 	const std::string path = getClientObjectTemplateTpfFilePath();
-
-	//-- map the desired ObjectTemplate classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(path, dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
 
 	doEditFile(local);
 }
@@ -647,31 +512,12 @@ void ActionsObjectTemplate::onClientView() const
  */
 void ActionsObjectTemplate::onClientEdit()
 {
-	if(m_selectedClientPath.empty() || !m_isClientFile)
+	if (m_selectedClientPath.empty() || !m_isClientFile)
 		return;
 
 	std::string dummy;
 	std::string local;
 	std::string result;
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getClientObjectTemplateTpfFilePath());
-	sv.push_back(getClientObjectTemplateIffFilePath());
-
-	if(!GodClientPerforce::getInstance().editFiles(sv, result))
-	{
-		const std::string msg = "Could not open file(s) for perforce edit.  View Will be read-only.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-	}
-
-	//-- map the desired ObjectTemplate classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(sv [0], dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
 
 	m_clientRefresh->doActivate();
 	doEditFile(local);
@@ -689,72 +535,17 @@ void ActionsObjectTemplate::onClientNew()
 	std::string actualPath = m_selectedClientPath;
 
 	//-- trim the filename from the path
-	if(!actualPath.empty() && m_isClientFile)
+	if (!actualPath.empty() && m_isClientFile)
 	{
 		const size_t slashpos = actualPath.rfind('/');
 
-		if(slashpos == actualPath.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage 
+		if (slashpos == actualPath.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage 
 			actualPath.clear();
 		else
 			actualPath = actualPath.substr(0, slashpos);
 	}
 
-
-	const char* const srcPath = NON_NULL(ConfigGodClient::getData().templateClientSourcePath);
-	std::string path = GodClientPerforce::concatenateSubpath(srcPath, actualPath);
-
-	std::string dummy;
-	std::string local;
-	std::string result;
-
-	//-- map the desired ObjectTemplate classpath to a local source directory
-	if(!GodClientPerforce::getInstance().getFileMapping(path, dummy, dummy, local, result))
-	{
-		const std::string msg = "Can't 'where' directory.  User error?  Perhaps.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
-
-	const QString qselection = QFileDialog::getSaveFileName(local.c_str(), "*.tpf",&MainFrame::getInstance());
-	
-	if(qselection == QString::null)
-		return;
-
-	std::string selection = qselection.latin1();
-	if(selection.size() < 4 || selection.substr(selection.size() - 4) != ms_objectTemplateSourceExtension)
-		selection += ms_objectTemplateSourceExtension;
-
-	UNREF(selection);
-
-	//-- discover the depot path to the .class file
-	size_t dsrc_pos = selection.find("\\dsrc\\");
-	if(dsrc_pos == selection.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage 
-		dsrc_pos = selection.find("/dsrc/");
-
-	if(dsrc_pos == selection.npos) //lint !e737 implicit promotion, bug in STL with size_t and std::string::npos being of different signage 
-	{
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", "Can't translate ObjectTemplate path to Iff path."));
-		return;
-	}
-
-	std::string compiledLocalPath = selection;
-	IGNORE_RETURN(compiledLocalPath.replace(dsrc_pos + 1, 4, "data"));
-	IGNORE_RETURN(compiledLocalPath.replace(compiledLocalPath.size() - 6, 6, "iff"));
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(selection);
-	sv.push_back(compiledLocalPath);
-
-	if(!GodClientPerforce::getInstance().addFiles(sv, result))
-	{
-		const std::string msg = "Unable to add new files to perforce.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-		return;
-	}
-
 	m_clientRefresh->doActivate();
-	doEditFile(selection);
 }
 
 //-----------------------------------------------------------------------
@@ -765,30 +556,15 @@ void ActionsObjectTemplate::onClientNew()
  */
 void ActionsObjectTemplate::onClientSubmit()
 {
-	if(m_selectedClientPath.empty() || !m_isClientFile || !(m_isClientEdit || m_isClientNew))
+	if (m_selectedClientPath.empty() || !m_isClientFile || !(m_isClientEdit || m_isClientNew))
 		return;
 
 	const std::string classPath = ActionsObjectTemplate::convertToClassPath(m_selectedClientPath);
 	const std::string msg = std::string("Really submit ObjectTemplate: [") + classPath + "]?";
 	const int retval = QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str(), QMessageBox::Yes, QMessageBox::No);
 
-	if(retval == QMessageBox::No)
+	if (retval == QMessageBox::No)
 		return;
-
-	GodClientPerforce::StringVector sv;
-	sv.reserve(2);
-	sv.push_back(getClientObjectTemplateTpfFilePath());
-	sv.push_back(getClientObjectTemplateIffFilePath());
-
-	std::string result;
-
-	IGNORE_RETURN(GodClientPerforce::getInstance().revertFiles(sv, true, result));
-
-	if(!GodClientPerforce::getInstance().submitFiles(sv, result))
-	{
-		const std::string msg = "Could not submit file(s) to perforce!  Beanhead.\n" + result;
-		IGNORE_RETURN(QMessageBox::warning(&MainFrame::getInstance(), "Warning", msg.c_str()));
-	}
 
 	m_clientRefresh->doActivate();
 }
@@ -810,22 +586,22 @@ void ActionsObjectTemplate::onClientCompile() const
 
 const std::string ActionsObjectTemplate::getClientObjectTemplateTpfFilePath() const
 {
-	if(m_selectedClientPath.empty() || !m_isClientFile)
+	if (m_selectedClientPath.empty() || !m_isClientFile)
 		return "";
 
-	const char * const srcPath = NON_NULL(ConfigGodClient::getData().templateClientSourcePath);
-	return GodClientPerforce::concatenateSubpath(srcPath, m_selectedClientPath) + ms_objectTemplateSourceExtension; 
+	const char* const srcPath = NON_NULL(ConfigGodClient::getData().templateClientSourcePath);
+	return srcPath;
 }
 
 //-----------------------------------------------------------------------
 
 const std::string ActionsObjectTemplate::getClientObjectTemplateIffFilePath() const
 {
-	if(m_selectedClientPath.empty() || !m_isClientFile)
+	if (m_selectedClientPath.empty() || !m_isClientFile)
 		return "";
 
-	const char * const iffPath = NON_NULL(ConfigGodClient::getData().templateClientIffPath);
-	return GodClientPerforce::concatenateSubpath(iffPath, m_selectedClientPath) + ms_objectTemplateCompiledExtension;
+	const char* const iffPath = NON_NULL(ConfigGodClient::getData().templateClientIffPath);
+	return iffPath;
 }
 
 //-----------------------------------------------------------------------
