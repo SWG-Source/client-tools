@@ -2,7 +2,7 @@
 This repository contains the source for the SWG Client as well as the tools that support certain aspects of development.
 
 ## Build Instructions
-This repository is configured for use with Visual Studio using msbuild/solutions and is currently ONLY compatible with **Visual Studio 2013**. To setup your environment, acquire any edition of Visual Studio 2013 and clone this repository to your machine. Open Visual Studio 2013 and use `File > Open > Project/Solution` and navigate to the path where you cloned the repository then select the solution file located at `src/build/win32/swg.sln`. Please note that all SWG applications are only compatible with win32.
+This repository is configured for use with Visual Studio using msbuild/solutions and is currently ONLY compatible with **Visual Studio 2013**. To setup your environment, acquire the community or professional edition (NOT the express edition) of Visual Studio 2013 and clone this repository to your machine. Open Visual Studio 2013 and use `File > Open > Project/Solution` and navigate to the path where you cloned the repository then select the solution file located at `src/build/win32/swg.sln`. Please note that all SWG applications are only compatible with win32.
 
 The project has 3 configurations for building the applications:
 * **Release** which is the version intended for public dissemination and gameplay. You may recognize this as the `_r` in the client name `SwgClient_r.exe`. 
