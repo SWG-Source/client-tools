@@ -11,6 +11,7 @@
 #include "clientGame/ClientExpertiseManager.h"
 #include "clientGame/CreatureObject.h"
 #include "clientGame/Game.h"
+#include "clientGame/GameNetwork.h"
 #include "clientGame/ProsePackageManagerClient.h"
 #include "clientUserInterface/CuiManager.h"
 #include "clientUserInterface/CuiMessageBox.h"
@@ -206,7 +207,7 @@ void SwgCuiBuffBuilderBuffer::OnButtonPressed( UIWidget *context )
 	//send the update packet
 	else if(context == m_acceptButton)
 	{
-		if (m_failedLastVerification || Random::random(1, 5) <= 2) // 40% chance
+		if (m_failedLastVerification || Random::random(1, 100) <= GameNetwork::getEntertainerCaptchaPercent())
 		{
 			CuiStringVariablesData csvd;
 			Object const * sourceObj = Game::getPlayer();
