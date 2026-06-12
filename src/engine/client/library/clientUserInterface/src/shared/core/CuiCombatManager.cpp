@@ -2762,11 +2762,22 @@ void CuiCombatManager::updateDeferredCombatActions(float deltaTime)
 		// if there are no more combat actions for this key, remove it
 		combatActions = (*itr).second;
 
+		// 2026-06-12 crash fix: erase() invalidates itr; the old code erased and
+		// then unconditionally ++itr'd the dead iterator (c0000005 in
+		// updateDeferredCombatActions the frame a defender's action list empties,
+		// e.g. the target dies mid-combat). Latent since retail -- STLport's
+		// pooled node allocator usually survived the post-erase increment; the
+		// Phase 9 MSVC-STL migration frees the node to the heap, so combat-frame
+		// churn reuses it and the increment faults. map::erase returns the
+		// successor since C++11; use it and skip the increment.
 		if (combatActions.begin() == combatActions.end())
 		{
-			s_delayedDamageAction.erase(itr);
+			itr = s_delayedDamageAction.erase(itr);
 		}
-		++itr;
+		else
+		{
+			++itr;
+		}
 	}
 }
 
