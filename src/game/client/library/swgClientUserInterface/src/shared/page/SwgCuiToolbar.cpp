@@ -2427,39 +2427,59 @@ void SwgCuiToolbar::onCommandRemoved (const CreatureObject::Messages::CommandRem
 
 //----------------------------------------------------------------------
 
-void SwgCuiToolbar::onCommandAdded (const CreatureObject::Messages::CommandAdded::Payload & payload)
+void SwgCuiToolbar::onCommandAdded(const CreatureObject::Messages::CommandAdded::Payload& payload)
 {
 	if (payload.first != Game::getPlayerCreature())
 	{
-		WARNING (Game::getPlayerCreature(), ("received command added for non-player"));
+		WARNING(Game::getPlayerCreature(), ("received command added for non-player"));
 		return;
 	}
 
-	const std::string & commandName = payload.second;
+	const std::string& commandName = payload.second;
 
-	const Command & cmd = CommandTable::getCommand (Crc::normalizeAndCalculate(commandName.c_str ()));
+	const Command& cmd = CommandTable::getCommand(Crc::normalizeAndCalculate(commandName.c_str()));
 
-	if (cmd.isNull () || cmd.m_visibleToClients < 2)
+	if (cmd.isNull() || cmd.m_visibleToClients < 2)
 		return;
 
 	Unicode::String localizedCommandName;
-	CuiSkillManager::localizeCmdName (Unicode::toLower (commandName), localizedCommandName);
+	CuiSkillManager::localizeCmdName(Unicode::toLower(commandName), localizedCommandName);
 	Unicode::String result;
-	CuiStringVariablesManager::process (CuiStringIdsSkill::command_acquired_prose, localizedCommandName, Unicode::emptyString, Unicode::emptyString, result);
-	CuiSystemMessageManager::sendFakeSystemMessage (result);
-	
-	const std::string & slashCommand = std::string ("/") + commandName;
+	CuiStringVariablesManager::process(CuiStringIdsSkill::command_acquired_prose, localizedCommandName, Unicode::emptyString, Unicode::emptyString, result);
+	CuiSystemMessageManager::sendFakeSystemMessage(result);
+
+	// Prevents specific utility and pet commands from populating the active toolbar
+	static const char* const excludedCommands[] =
+	{
+		"droid_flame_jet_1", "droid_droideka_shield_1", "droid_battery_dump_1",
+		"droid_regenerative_plating_1", "droid_electrical_shock_1", "droid_torturous_needle_1",
+		"droid_follow", "droid_follow_other", "droid_stay", "droid_guard",
+		"droid_friend", "droid_attack", "droid_patrol", "droid_patrol_point",
+		"droid_patrol_clear", "droid_store", "droid_transfer", "droid_group",
+		"droid_trick_1", "droid_trick_2", "droid_trick_3", "droid_trick_4"
+	};
+	static const size_t excludedCommandsCount = sizeof(excludedCommands) / sizeof(excludedCommands[0]);
+
+	for (size_t i = 0; i < excludedCommandsCount; ++i)
+	{
+		if (commandName == excludedCommands[i])
+		{
+			return;
+		}
+	}
+
+	const std::string& slashCommand = std::string("/") + commandName;
 
 	// we won't look in the pet toolbar item pane here, as we don't
 	// want it to automatically add anything, ever.
-	for (ToolbarItemPaneVector::const_iterator pit = m_toolbarItemPanes->begin (); pit != m_toolbarItemPanes->end (); ++pit)
+	for (ToolbarItemPaneVector::const_iterator pit = m_toolbarItemPanes->begin(); pit != m_toolbarItemPanes->end(); ++pit)
 	{
-		const ToolbarItemPane & items = *pit;
-		
-		for (ToolbarItemPane::const_iterator it = items.begin (); it != items.end (); ++it)
+		const ToolbarItemPane& items = *pit;
+
+		for (ToolbarItemPane::const_iterator it = items.begin(); it != items.end(); ++it)
 		{
-			const CuiDragInfo & item = *it;
-			
+			const CuiDragInfo& item = *it;
+
 			if (item.str == slashCommand)
 			{
 				return;
@@ -2467,28 +2487,28 @@ void SwgCuiToolbar::onCommandAdded (const CreatureObject::Messages::CommandAdded
 		}
 	}
 
-	const int index = m_tabs->GetActiveTab ();
+	const int index = m_tabs->GetActiveTab();
 
-	if (index < 0 || index >= static_cast<int>(m_toolbarItemPanes->size ()))
+	if (index < 0 || index >= static_cast<int>(m_toolbarItemPanes->size()))
 		return;
-	
-	ToolbarItemPane & pane = (*m_toolbarItemPanes) [index];
-	
+
+	ToolbarItemPane& pane = (*m_toolbarItemPanes)[index];
+
 	//-- look for this skill in the default list to see if it has a default
-	const int count = sizeof (cs_defaultCombatItems) / sizeof (cs_defaultCombatItems [0]);
+	const int count = sizeof(cs_defaultCombatItems) / sizeof(cs_defaultCombatItems[0]);
 	for (int i = 0; i < count; ++i)
 	{
-		DefaultCommand const & command = cs_defaultCombatItems[i];
-		if(command.m_waitForGrant && (_stricmp(command.m_command.c_str(), slashCommand.c_str()) == 0))
+		DefaultCommand const& command = cs_defaultCombatItems[i];
+		if (command.m_waitForGrant && (_stricmp(command.m_command.c_str(), slashCommand.c_str()) == 0))
 		{
-			int slot = command.m_toolBarIndex;			
+			int slot = command.m_toolBarIndex;
 			CuiDragInfo newItem;
-			newItem.type    = CuiDragInfoTypes::CDIT_command;
-			newItem.str     = slashCommand;
-			CuiDragInfo *existingItem = getToolbarItem(COMBAT_PANE_INDEX, slot);
-			if(existingItem && (existingItem->type == CuiDragInfoTypes::CDIT_none))
+			newItem.type = CuiDragInfoTypes::CDIT_command;
+			newItem.str = slashCommand;
+			CuiDragInfo* existingItem = getToolbarItem(COMBAT_PANE_INDEX, slot);
+			if (existingItem && (existingItem->type == CuiDragInfoTypes::CDIT_none))
 			{
-				setToolbarItem(COMBAT_PANE_INDEX, slot,  newItem);
+				setToolbarItem(COMBAT_PANE_INDEX, slot, newItem);
 				return;
 			}
 		}
@@ -2496,22 +2516,20 @@ void SwgCuiToolbar::onCommandAdded (const CreatureObject::Messages::CommandAdded
 
 	//-- find the first open slot
 	int slot = 0;
-	for (ToolbarItemPane::const_iterator it = pane.begin (); it != pane.end (); ++it, ++slot)
+	for (ToolbarItemPane::const_iterator it = pane.begin(); it != pane.end(); ++it, ++slot)
 	{
-		const CuiDragInfo & item = *it;
-		
+		const CuiDragInfo& item = *it;
+
 		if (item.type == CuiDragInfoTypes::CDIT_none)
 		{
 			CuiDragInfo newItem;
-			newItem.type    = CuiDragInfoTypes::CDIT_command;
-			newItem.str     = slashCommand;
-			
-			setToolbarItem (index, slot, newItem);
+			newItem.type = CuiDragInfoTypes::CDIT_command;
+			newItem.str = slashCommand;
+
+			setToolbarItem(index, slot, newItem);
 			return;
 		}
 	}
-	
-//	WARNING (true, ("Received a new command but there were not open slots on the toolbar."));
 }
 
 
