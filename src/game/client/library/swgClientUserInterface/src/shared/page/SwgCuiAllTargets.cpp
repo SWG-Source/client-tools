@@ -310,8 +310,14 @@ void SwgCuiAllTargets::performDeactivate ()
 {
 	removeUnusedStatusPages(true);
 	setIsUpdating(false);
-	m_reticleLookAt->deactivate ();
-	m_reticleCombat->deactivate ();
+	// The reticles are created lazily (first activate, ~:211/:223) and nulled on teardown (:285/:286),
+	// so performDeactivate can run with them NULL (e.g. the HUD is deactivated at char-select before it
+	// was ever activated). Deref-without-guard was a first-chance AV the main-loop SEH caught on x86;
+	// the x64 boot exercises the same path -- guard it so it degrades cleanly instead of faulting.
+	if (m_reticleLookAt)
+		m_reticleLookAt->deactivate ();
+	if (m_reticleCombat)
+		m_reticleCombat->deactivate ();
 }
 
 //----------------------------------------------------------------------
