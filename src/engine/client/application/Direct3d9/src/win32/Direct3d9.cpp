@@ -1360,6 +1360,18 @@ bool Direct3d9::install(Gl_install *gl_install)
 					if (vertexProcessingMode == D3DCREATE_HARDWARE_VERTEXPROCESSING && ConfigDirect3d9::getUsePureDevice())
 						vertexProcessingMode |= D3DCREATE_PUREDEVICE;
 
+					// 32-bit FP-precision fix (2026-06-20): WITHOUT this flag, D3D9 CreateDevice clamps the
+					// x87 FPU control word to SINGLE precision (24-bit mantissa) for the life of the device.
+					// On 32-bit (x87) that degrades the SHARED engine portal/visibility math -> a borderline
+					// cell-cull test flips at certain camera angles in the Mos Eisley cantina -> the wall
+					// stops drawing and the exterior/skybox shows through (frustum-angle dependent; clears on
+					// look up/down or crossing the portal). x64 (SSE, no x87 mode) and D3D11 (never touches
+					// the FPU) are immune -- which is exactly why the see-through reproduced ONLY on gl05/32-bit.
+					// D3DCREATE_FPU_PRESERVE leaves the FPU at the CRT default (double precision); it is the
+					// recommended setting for modern D3D9 apps. (Reset() does not take CREATE flags, so this
+					// one site covers the device lifetime.)
+					vertexProcessingMode |= D3DCREATE_FPU_PRESERVE;
+
 					hresult = ms_direct3d->CreateDevice(ms_adapter, ms_deviceType, ms_window, vertexProcessingMode, &ms_presentParameters, &ms_device);
 
 					if (SUCCEEDED(hresult))
