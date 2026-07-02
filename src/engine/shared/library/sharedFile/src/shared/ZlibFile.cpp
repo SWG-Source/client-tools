@@ -149,7 +149,16 @@ byte * ZlibFile::decompress() const
 {
 	byte * uncompressedBuffer = new byte[m_uncompressedLength];
 
-	static_cast<void>(ZlibCompressor().expand(m_compressedBuffer, m_compressedBufferLength, uncompressedBuffer, m_uncompressedLength));
+	// CONSULT-55 (2026-07-01): DO NOT discard the expand() result. Previously the return was cast to
+	// void, so a failed/partial inflate (-1, e.g. a truncated/corrupt compressed buffer) silently
+	// returned an uninitialized `new byte[]` block as if it were valid decompressed IFF data. Its
+	// leading bytes were then read as a shader/FORM tag -> the intermittent "Unknown shader template
+	// tag" FATAL, far from the real failure. Fail loud AT the decompress with actionable context so any
+	// residual read/cache corruption is diagnosable at its source instead of as mystery heap garbage.
+	int const expandResult = ZlibCompressor().expand(m_compressedBuffer, m_compressedBufferLength, uncompressedBuffer, m_uncompressedLength);
+	FATAL(expandResult != m_uncompressedLength,
+		("ZlibFile::decompress: inflate produced %d bytes, expected %d (compressed=%d). Corrupt/partial compressed buffer -- likely a short read or a concurrent-cache corruption upstream, NOT a valid asset.",
+		 expandResult, m_uncompressedLength, m_compressedBufferLength));
 
 	return uncompressedBuffer;
 }

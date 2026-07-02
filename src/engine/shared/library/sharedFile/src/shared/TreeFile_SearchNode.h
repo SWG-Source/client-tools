@@ -17,6 +17,7 @@ class MemoryBlockManager;
 
 #include "sharedFile/TreeFile.h"
 #include "sharedFile/FileStreamer.h"
+#include "sharedSynchronization/Mutex.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/LessPointerComparator.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Os.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Tag.h"
@@ -339,6 +340,16 @@ private:
 	class CachedFile;
 	typedef stdmap<CrcString const *, CachedFile *, LessPointerComparator>::fwd CachedFileMap;
 	CachedFileMap * const m_cachedFileMap;
+
+	// CONSULT-55 (2026-07-01): m_cachedFileMap is populated by the MAIN thread across many zone-in
+	// frames (CachedFileManager::preloadSomeAssets) while the AsynchronousLoader BACKGROUND thread
+	// reads it via TreeFile::open->SearchCache::open. Concurrent std::map find/insert is UB (torn
+	// red-black rebalance) -> a fetched file lands on the wrong/torn node -> wrong bytes -> the
+	// intermittent "Unknown shader template tag" crash (worse after a rebuild: cold caches stretch the
+	// insert stream across more frames, widening the window). This leaf mutex serializes ONLY the map
+	// find/insert; disk I/O + decompress + createAbstractFile stay OUTSIDE it (never held while another
+	// lock is taken -> strict leaf, no deadlock with TreeFile::ms_criticalSection / async ms_mutex).
+	mutable Mutex m_cachedFileMapMutex;
 };
 
 // ======================================================================

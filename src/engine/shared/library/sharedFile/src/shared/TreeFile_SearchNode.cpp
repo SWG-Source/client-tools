@@ -1057,7 +1057,11 @@ int TreeFile::SearchCache::addCachedFile(char const * const fileName)
 		fileSize = cachedFile->getCompressedLength();
 		delete abstractFile;
 
+		// CONSULT-55: serialize the insert against concurrent SearchCache::open()/exists() finds on the
+		// loader thread (I/O above stays outside the lock).
+		m_cachedFileMapMutex.enter();
 		bool const result = (m_cachedFileMap->insert(CachedFileMap::value_type (cachedFile->getCrcString(), cachedFile))).second;
+		m_cachedFileMapMutex.leave();
 		if (result)
 		{
 #if PRODUCTION == 0
@@ -1095,7 +1099,10 @@ bool TreeFile::SearchCache::exists(char const * const fileName, bool & deleted) 
 	deleted = false;
 
 	TemporaryCrcString const crcString(fileName, true);
-	return m_cachedFileMap->find(&crcString) != m_cachedFileMap->end();
+	m_cachedFileMapMutex.enter();               // CONSULT-55: serialize find vs concurrent insert (UB otherwise)
+	bool const found = m_cachedFileMap->find(&crcString) != m_cachedFileMap->end();
+	m_cachedFileMapMutex.leave();
+	return found;
 }
 
 // ----------------------------------------------------------------------
@@ -1105,11 +1112,11 @@ int TreeFile::SearchCache::getFileSize(char const * const fileName, bool & delet
 	deleted = false;
 
 	TemporaryCrcString const crcString(fileName, true);
+	m_cachedFileMapMutex.enter();               // CONSULT-55: serialize find vs concurrent insert (UB otherwise)
 	CachedFileMap::iterator iter = m_cachedFileMap->find(&crcString);
-	if (iter != m_cachedFileMap->end())
-		return iter->second->getUncompressedLength();
-
-	return -1;
+	int const size = (iter != m_cachedFileMap->end()) ? iter->second->getUncompressedLength() : -1;
+	m_cachedFileMapMutex.leave();
+	return size;
 }
 
 // ----------------------------------------------------------------------
@@ -1141,11 +1148,20 @@ AbstractFile * TreeFile::SearchCache::open(char const * const fileName, Abstract
 	deleted = false;
 
 	TemporaryCrcString const crcString(fileName, true);
-	CachedFileMap::iterator iter = m_cachedFileMap->find(&crcString);
-	if (iter != m_cachedFileMap->end())
-		return iter->second->createAbstractFile();
 
-	return 0;
+	// CONSULT-55: hold the leaf lock ONLY across the map find; entries are never evicted, so the
+	// CachedFile* stays valid after we release, and createAbstractFile() (a copy/decompress) runs
+	// OUTSIDE the lock. This closes the concurrent find(loader) vs insert(main-thread preload) UB.
+	CachedFile * found = 0;
+	m_cachedFileMapMutex.enter();
+	{
+		CachedFileMap::iterator iter = m_cachedFileMap->find(&crcString);
+		if (iter != m_cachedFileMap->end())
+			found = iter->second;
+	}
+	m_cachedFileMapMutex.leave();
+
+	return found ? found->createAbstractFile() : 0;
 }
 
 // ======================================================================
