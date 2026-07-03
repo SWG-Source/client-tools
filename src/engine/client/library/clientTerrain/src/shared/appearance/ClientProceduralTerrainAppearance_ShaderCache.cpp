@@ -469,17 +469,38 @@ const Shader* ClientProceduralTerrainAppearance::ShaderCache::createBlendedShade
 
 void ClientProceduralTerrainAppearance::ShaderCache::destroyShader (const Shader* shader) const
 {
-	Guard guard(m_nodeListLock);
+	// CONSULT-56 follow-up accounting guards. Underflow means the ClientChunk-teardown
+	// destroys outnumbered the per-tile createBlendedShader bumps: refuse the decrement
+	// so the node stays pinned (an imbalance must fail toward the old leak, never toward
+	// alter() evicting a possibly-still-referenced shader). No-match means the shader
+	// was never cached (or already evicted) -- also an accounting anomaly. The fatals
+	// fire OUTSIDE the lock so the crash handler doesn't run holding m_nodeListLock.
+	bool underflow = false;
+	bool found = false;
 
-	int i;
-	for (i = 0; i < nodeList.getNumberOfElements (); i++)
 	{
-		if (nodeList [i].shader == shader)
+		Guard guard(m_nodeListLock);
+
+		int i;
+		for (i = 0; i < nodeList.getNumberOfElements (); i++)
 		{
-			--nodeList [i].referenceCount;
-			return;
+			if (nodeList [i].shader == shader)
+			{
+				found = true;
+
+				if (nodeList [i].referenceCount <= 0)
+					underflow = true;
+				else
+					--nodeList [i].referenceCount;
+
+				break;
+			}
 		}
 	}
+
+	DEBUG_FATAL (underflow, ("ShaderCache::destroyShader: destroy without matching create"));
+	WARNING (underflow, ("ShaderCache::destroyShader: destroy without matching create; leaving node pinned"));
+	WARNING (!found, ("ShaderCache::destroyShader: shader not in cache; decrement dropped"));
 }
 
 //-------------------------------------------------------------------
@@ -517,6 +538,11 @@ void ClientProceduralTerrainAppearance::ShaderCache::alter (const float elapsedT
 
 void ClientProceduralTerrainAppearance::ShaderCache::flushCache()
 {
+	// WARNING (CONSULT-57): dead code with a latent bug -- zero callers today, and
+	// clear() drops every node WITHOUT shader->release(), leaking each cached blended
+	// StaticShader clone, and strands live ClientChunks whose ~ClientChunk destroyShader
+	// decrements will then no-match. If you wire this up, release each node's shader
+	// first (the ~ShaderCache/alter() pattern) and account for outstanding references.
 	Guard guard(m_nodeListLock);
 
 	nodeList.clear ();

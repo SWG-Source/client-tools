@@ -119,6 +119,9 @@ public:
 
 private:
 
+	// CONSULT-56 follow-up: mutated ONLY under TextureList's critical section (the
+	// ShaderEffect/ShaderImplementation idiom) -- the ClientTerrain worker's StaticShader
+	// clone fetch/release races main-thread render fetch/release and by-name resurrection.
 	mutable int                              m_referenceCount;
 	PersistentCrcString                      m_crcString;
 

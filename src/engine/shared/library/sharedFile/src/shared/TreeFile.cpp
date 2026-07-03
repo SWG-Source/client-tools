@@ -67,6 +67,12 @@ namespace TreeFileNamespace
 	typedef std::map<const char *, AbstractFile *, CachedFilesComparator> CachedFilesMap;
 	static CachedFilesMap cachedFilesMap;
 
+	// CONSULT-56 follow-up: capacity of the per-call stack snapshot of ms_searchNodes.
+	// Real node counts are cfg-bounded (maxSearchPriority buckets x per-priority keys +
+	// runtime adds); typical installs use ~10-15. 256 (2KB of stack) leaves an order of
+	// magnitude of headroom -- addSearchNode WARNs the moment an add crosses it (CONSULT-57).
+	int const cms_searchNodeSnapshotMax = 256;
+
 #if PRODUCTION == 0
 	bool ms_debugLogSynchronousOnly;
 	bool ms_warnTreeFileOpens;
@@ -172,13 +178,23 @@ void TreeFile::install(uint32 skuBits)
 	}
 
 	//-- add an absolute search path after all search nodes
+	// (read the current top priority under the lock -- install is single-threaded
+	// today, but keep every ms_searchNodes access serialized; CONSULT-57. The two
+	// reads are deliberately separate: the cache must land ABOVE the just-added
+	// absolute node, exactly as the original double-evaluation behaved.)
 	{
-		TreeFile::addSearchAbsolute(ConfigFile::getKeyInt("SharedFile", "searchAbsolute", 0, !ms_searchNodes.empty() ? ms_searchNodes.front()->getPriority() + 1 : 0));
+		ms_criticalSection.enter();
+			int const defaultPriority = !ms_searchNodes.empty() ? ms_searchNodes.front()->getPriority() + 1 : 0;
+		ms_criticalSection.leave();
+		TreeFile::addSearchAbsolute(ConfigFile::getKeyInt("SharedFile", "searchAbsolute", 0, defaultPriority));
 	}
 
 	//-- add search cache after all search nodes
 	{
-		TreeFile::addSearchCache(ConfigFile::getKeyInt("SharedFile", "searchCache", 0, !ms_searchNodes.empty() ? ms_searchNodes.front()->getPriority() + 1 : 0));
+		ms_criticalSection.enter();
+			int const defaultPriority = !ms_searchNodes.empty() ? ms_searchNodes.front()->getPriority() + 1 : 0;
+		ms_criticalSection.leave();
+		TreeFile::addSearchCache(ConfigFile::getKeyInt("SharedFile", "searchCache", 0, defaultPriority));
 	}
 
 #if PRODUCTION == 0
@@ -304,7 +320,53 @@ void TreeFile::addSearchNode(SearchNode *newNode)
 		SearchNodes::iterator insertionPoint = std::lower_bound(ms_searchNodes.begin(), ms_searchNodes.end(), newNode, searchNodePriorityOrder);
 		IGNORE_RETURN(ms_searchNodes.insert(insertionPoint, newNode));
 
+		// CONSULT-57: warn at the add that pushes the list past the reader-snapshot
+		// capacity -- past it, copySearchNodes truncates the lowest-priority tail.
+		WARNING(static_cast<int>(ms_searchNodes.size()) > cms_searchNodeSnapshotMax, ("TreeFile::addSearchNode: %d search nodes exceed the reader snapshot capacity %d -- raise cms_searchNodeSnapshotMax", static_cast<int>(ms_searchNodes.size()), cms_searchNodeSnapshotMax));
+
 	ms_criticalSection.leave();
+}
+
+// ----------------------------------------------------------------------
+/**
+ * Snapshot the search-node list under ms_criticalSection.
+ *
+ * CONSULT-56 follow-up: ms_searchNodes is a std::vector mutated at RUNTIME
+ * (e.g. the advertised treeFile::searchTree hookpoint row -> addSearchTree)
+ * while main, the AsynchronousLoader worker, the ClientTerrain worker, and
+ * the audio IO thread traverse it concurrently -- an insert can REALLOCATE
+ * the backing array under an in-flight reader (dangling iterator).  Readers
+ * copy the node pointers under the lock and traverse the snapshot instead;
+ * nodes themselves are only deleted at shutdown (ExitChain, workers joined),
+ * so snapshot entries stay valid, and the blocking per-node disk I/O runs
+ * OUTSIDE the lock (the CONSULT-55 no-I/O-under-the-lock rule).
+ *
+ * @return the number of nodes copied into the snapshot
+ */
+
+int TreeFile::copySearchNodes(SearchNode **snapshot, int maxNodes)
+{
+	NOT_NULL(snapshot);
+	ms_criticalSection.enter();
+
+		int const nodeCount = static_cast<int>(ms_searchNodes.size());
+		if (nodeCount > maxNodes)
+		{
+			// warn once, not per open (this runs on every file lookup); the paired
+			// per-add WARNING in addSearchNode already names the moment it happened.
+			static bool s_warnedTruncation = false;   // guarded by ms_criticalSection
+			if (!s_warnedTruncation)
+			{
+				s_warnedTruncation = true;
+				WARNING(true, ("TreeFile::copySearchNodes: %d search nodes exceed snapshot capacity %d; lowest-priority nodes ignored", nodeCount, maxNodes));
+			}
+		}
+		int const copyCount = nodeCount < maxNodes ? nodeCount : maxNodes;
+		for (int i = 0; i < copyCount; ++i)
+			snapshot[i] = ms_searchNodes[static_cast<SearchNodes::size_type>(i)];
+
+	ms_criticalSection.leave();
+	return copyCount;
 }
 
 // ----------------------------------------------------------------------
@@ -450,12 +512,14 @@ TreeFile::SearchNode *TreeFile::find(const char *fileName)
 		return NULL;
 	}
 
-	// search the list of nodes looking to see if the specified file exists
+	// search a snapshot of the node list looking to see if the specified file exists
+	SearchNode *snapshot[cms_searchNodeSnapshotMax];
+	int const nodeCount = copySearchNodes(snapshot, cms_searchNodeSnapshotMax);
+
 	bool deleted = false;
-	const SearchNodes::iterator iEnd = ms_searchNodes.end();
-	for (SearchNodes::iterator i = ms_searchNodes.begin(); !deleted && i != iEnd; ++i)
-		if ((*i)->exists(fileName, deleted))
-			return *i;
+	for (int i = 0; !deleted && i < nodeCount; ++i)
+		if (snapshot[i]->exists(fileName, deleted))
+			return snapshot[i];
 
 	return NULL;
 }
@@ -489,12 +553,14 @@ int TreeFile::getFileSize(const char *fileName)
 	char fixedFileName[Os::MAX_PATH_LENGTH];
 	fixUpFileName(fixedFileName, fileName, true);
 
-	// search the list of nodes looking to see if the specified file exists
+	// search a snapshot of the node list looking to see if the specified file exists
+	SearchNode *snapshot[cms_searchNodeSnapshotMax];
+	int const nodeCount = copySearchNodes(snapshot, cms_searchNodeSnapshotMax);
+
 	bool deleted = false;
-	const SearchNodes::iterator iEnd = ms_searchNodes.end();
-	for (SearchNodes::iterator i = ms_searchNodes.begin(); !deleted && i != iEnd; ++i)
+	for (int i = 0; !deleted && i < nodeCount; ++i)
 	{
-		int size = (*i)->getFileSize(fixedFileName, deleted);
+		int size = snapshot[i]->getFileSize(fixedFileName, deleted);
 		if (size >= 0)
 			return size;
 	}
@@ -708,11 +774,13 @@ AbstractFile* TreeFile::open(const char *fileName, AbstractFile::PriorityType pr
 	bool first = true;
 #endif
 
+	SearchNode *snapshot[cms_searchNodeSnapshotMax];
+	int const nodeCount = copySearchNodes(snapshot, cms_searchNodeSnapshotMax);
+
 	bool deleted = false;
-	const SearchNodes::iterator iEnd = ms_searchNodes.end();
-	for (SearchNodes::iterator i = ms_searchNodes.begin(); !file && !deleted && i != iEnd; ++i)
+	for (int n = 0; !file && !deleted && n < nodeCount; ++n)
 	{
-		file = (*i)->open(fixedFileName, priority, deleted);
+		file = snapshot[n]->open(fixedFileName, priority, deleted);
 
 #if PRODUCTION == 0
 		if (file)
@@ -723,13 +791,13 @@ AbstractFile* TreeFile::open(const char *fileName, AbstractFile::PriorityType pr
 			if (ms_debugLogFlag || ms_warnTreeFileOpens)
 			{
 				char buffer[Os::MAX_PATH_LENGTH];
-				(*i)->getPathName(fixedFileName, buffer, sizeof(buffer));
+				snapshot[n]->getPathName(fixedFileName, buffer, sizeof(buffer));
 
 				if (ms_warnTreeFileOpens)
 					WARNING(true, ("TF::open(%s) %s @ %s, [size=%d]\n", cms_priorityStrings[priority], fixedFileName, buffer, file->length()));
 				else
 				{
-					REPORT_LOG(!ms_debugLogSynchronousOnly || (ms_debugLogSynchronousOnly && (priority == AbstractFile::PriorityData) && (*i != ms_searchCache)), ("TF::open(%s) %s @ %s, [size=%d]\n", cms_priorityStrings[priority], fixedFileName, buffer, file->length()));
+					REPORT_LOG(!ms_debugLogSynchronousOnly || (ms_debugLogSynchronousOnly && (priority == AbstractFile::PriorityData) && (snapshot[n] != ms_searchCache)), ("TF::open(%s) %s @ %s, [size=%d]\n", cms_priorityStrings[priority], fixedFileName, buffer, file->length()));
 					DEBUG_OUTPUT_CHANNEL("Foundation\\Treefile", ("TF::open %s -- %s\n", fixedFileName, buffer));
 				}
 			}
@@ -770,9 +838,11 @@ int TreeFile::getNumberOfSearchPaths(void)
 {
 	int count = 0;
 
-	const SearchNodes::iterator iEnd = ms_searchNodes.end();
-	for (SearchNodes::iterator i = ms_searchNodes.begin(); i != iEnd; ++i)
-		if (dynamic_cast<const SearchPath*>(*i) != 0)
+	SearchNode *snapshot[cms_searchNodeSnapshotMax];
+	int const nodeCount = copySearchNodes(snapshot, cms_searchNodeSnapshotMax);
+
+	for (int i = 0; i < nodeCount; ++i)
+		if (dynamic_cast<const SearchPath*>(snapshot[i]) != 0)
 			count++;
 
 	return count;
@@ -783,10 +853,13 @@ int TreeFile::getNumberOfSearchPaths(void)
 const char *TreeFile::getSearchPath(int index)
 {
 	int count = 0;
-	const SearchNodes::iterator iEnd = ms_searchNodes.end();
-	for (SearchNodes::iterator i = ms_searchNodes.begin(); i != iEnd; ++i)
+
+	SearchNode *snapshot[cms_searchNodeSnapshotMax];
+	int const nodeCount = copySearchNodes(snapshot, cms_searchNodeSnapshotMax);
+
+	for (int i = 0; i < nodeCount; ++i)
 	{
-		const SearchPath *searchPath = dynamic_cast<const SearchPath*>(*i);
+		const SearchPath *searchPath = dynamic_cast<const SearchPath*>(snapshot[i]);
 		if (searchPath != NULL)
 		{
 			if (count == index)
@@ -860,12 +933,14 @@ bool TreeFile::stripTreeFileSearchPathFromFile(const char *inputPath, char *outp
 	if (!Os::getAbsolutePath(inputPath, buffer, sizeof(buffer)))
 		return false;
 
-	// scan all the search nodes
-	const SearchNodes::iterator iEnd = ms_searchNodes.end();
-	for (SearchNodes::iterator i = ms_searchNodes.begin(); i != iEnd; ++i)
+	// scan a snapshot of the search nodes
+	SearchNode *snapshot[cms_searchNodeSnapshotMax];
+	int const nodeCount = copySearchNodes(snapshot, cms_searchNodeSnapshotMax);
+
+	for (int i = 0; i < nodeCount; ++i)
 	{
 		// make sure it's a relative search path
-		const SearchPath *searchPath = dynamic_cast<const SearchPath*>(*i);
+		const SearchPath *searchPath = dynamic_cast<const SearchPath*>(snapshot[i]);
 		if (searchPath != NULL)
 		{
 			// check to see if the the search path is a prefix for the requested path

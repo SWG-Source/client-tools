@@ -544,9 +544,10 @@ ClientProceduralTerrainAppearance::~ClientProceduralTerrainAppearance ()
 		}
 	}
 
-	//-- delete shader cache
-	delete m_shaderCache;
-	m_shaderCache = 0;
+	//-- (CONSULT-57) the shader cache is deleted AFTER m_chunkTree below: ~TerrainQuadTree
+	//-- deletes every live ClientChunk, and ~ClientChunk now calls
+	//-- shaderCache->destroyShader() to balance the blended-shader reference counts --
+	//-- deleting the cache first would make those calls a use-after-free.
 
 	//-- delete flora managers
 	m_dynamicNearFloraManager         = 0;
@@ -575,6 +576,10 @@ ClientProceduralTerrainAppearance::~ClientProceduralTerrainAppearance ()
 
 	delete m_chunkTree;
 	m_chunkTree = 0;
+
+	//-- delete shader cache (after the chunk tree -- see the CONSULT-57 note above)
+	delete m_shaderCache;
+	m_shaderCache = 0;
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 	//-- to ensure that memory isn't claimed on the client for server terrain (this must be last)

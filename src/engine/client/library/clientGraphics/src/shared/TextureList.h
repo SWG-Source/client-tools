@@ -61,6 +61,10 @@ private:
 
 	static void           remove();
 	static void           removeFromList(const Texture *texture);
+	// Serialize Texture::fetch/release refcounting with by-name create/resurrection
+	// (the ShaderEffectList idiom; ms_criticalSection is a recursive CRITICAL_SECTION).
+	static void           enterCriticalSection();
+	static void           leaveCriticalSection();
 	static const Texture *fetch(CrcString const & fileName, bool createTexture);
 	static const void    *asynchronousLoaderFetchNoCreate(const char *fileName);
 	static void           asynchronousLoaderRelease(const void *texture);

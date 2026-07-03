@@ -118,6 +118,7 @@ private:
 	static void        addSearchCache(int priority);
 	static bool        searchNodePriorityOrder(const SearchNode *a, const SearchNode *b);
 	static void        addSearchNode(SearchNode *newNode);
+	static int         copySearchNodes(SearchNode **snapshot, int maxNodes);
 	static SearchNode *find(const char *fileName);
 
 	static void        fixUpFileName(char *output, const char *filename, bool warning);

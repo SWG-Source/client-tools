@@ -317,19 +317,32 @@ Texture::~Texture(void)
 
 void Texture::fetch() const
 {
+	// CONSULT-56 follow-up: serialize the count under TextureList's critical section
+	// (the ShaderEffect/ShaderImplementation idiom). The ClientTerrain worker's
+	// StaticShader clone fetch/release races main-thread render fetch/release, and
+	// TextureList::create resurrects a dying texture under this same lock -- taking
+	// it here makes the last-release decision and by-name resurrection totally ordered.
+	TextureList::enterCriticalSection();
 	++m_referenceCount;
+	TextureList::leaveCriticalSection();
 }
 
 // ----------------------------------------------------------------------
 
 void Texture::release() const
 {
-	if (--m_referenceCount < 1)
+	TextureList::enterCriticalSection();
+	int const newCount = --m_referenceCount;
+	if (newCount == 0)
 	{
-		FATAL(m_referenceCount < 0, ("Texture reference count has gone negative"));
 		TextureList::removeFromList(this);
 		delete const_cast<Texture*>(this);
 	}
+	TextureList::leaveCriticalSection();
+
+	// fire the corrupted-refcount FATAL only after releasing the critical section
+	// so the crash handler doesn't run with the texture lock held (CONSULT-57)
+	FATAL(newCount < 0, ("Texture reference count has gone negative"));
 }
 
 // ----------------------------------------------------------------------
