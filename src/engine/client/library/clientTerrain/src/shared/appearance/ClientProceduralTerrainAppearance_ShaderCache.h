@@ -10,6 +10,7 @@
 
 #include "clientTerrain/ClientProceduralTerrainAppearance.h"
 #include "sharedSynchronization/Mutex.h"
+#include "sharedSynchronization/RecursiveMutex.h"
 
 class StaticShader;
 class ShaderEffect;
@@ -87,6 +88,21 @@ private:
 	const ShaderEffect*    dot3Effect;
 
 	mutable ArrayList<BlendedShaderCacheNode> nodeList;
+
+	// nodeList is mutated from BOTH the ClientTerrain worker thread (findCachedShader /
+	// createBlendedShader -> nodeList.add, reached from ClientChunk::createTileShader) and the
+	// main thread (alter / destroyShader / flushCache, plus the synchronous LevelOfDetail
+	// createChunk fallback). ArrayList::add re-allocates its buffer (new[]/copy/delete[]), so a
+	// concurrent iterate-vs-add or add-vs-add stale-frees the buffer -> allocator freelist
+	// poisoned -> a later small allocation (typically a loader path string) lands on TOP of a
+	// live object (observed 2026-07-03: a StaticShaderTemplate MaterialMap overwritten with
+	// "...ader file..." text -> AV in std::map::find on the terrain thread). The Mutex.h include
+	// above predates this fix but no lock was ever added -- this member completes it. Leaf lock,
+	// same shape as the TreeFile::SearchCache fix (9c03f53c5). RECURSIVE because
+	// createBlendedShader legitimately re-enters via findCachedShader; Guard-idiom RAII matches
+	// ShaderTemplateList. Ordering: taken only around nodeList access, so it always precedes
+	// ShaderTemplateList::ms_criticalSection (reached via fetchModifiable) -- no inversion.
+	mutable RecursiveMutex m_nodeListLock;
 
 	Texture const * m_whiteTexture;
 	Texture const * m_blackTexture;
