@@ -186,7 +186,15 @@ PlaybackScriptTemplate::PlaybackActionVector *PlaybackScriptTemplate::createThre
 	PlaybackActionVector *const actions = new PlaybackActionVector(actionTemplates->size());
 
 	//-- populate container with new actions created from the action templates
-	std::transform(actionTemplates->begin(), actionTemplates->end(), actions->begin(), std::mem_fun(&PlaybackActionTemplate::createPlaybackAction));
+	std::transform(
+		actionTemplates->begin(),
+		actionTemplates->end(),
+		actions->begin(),
+		[](PlaybackActionTemplate* t)
+		{
+			return t->createPlaybackAction();
+		}
+	);
 
 	//-- return it
 	return actions;

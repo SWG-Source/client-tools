@@ -10,12 +10,12 @@
 
 // ======================================================================
 
-#include "Archive/AutoDeltaByteStream.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
+#include "sharedUtility/PackedArchive.h"
 #include "sharedMath/Transform.h"
 #include "sharedUtility/PackedTransform.h"
 #include "sharedUtility/PackedVelocity.h"
 #include "sharedUtility/PackedRotationRate.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 // ======================================================================
 

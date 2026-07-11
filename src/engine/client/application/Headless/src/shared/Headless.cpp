@@ -24,6 +24,15 @@
 namespace
 {
 	Gl_api            s_api;
+	// Reporting shader capability 1.4 makes the engine take the "real
+	// shaders" path in `ShaderImplementationPassVertexShader` ctor →
+	// `Graphics::createVertexShaderData`. Reporting <1.1 instead makes the
+	// terrain ShaderCache::preloadShaders crash on missing textures. 1.4
+	// gets us further (scene loads, world streams) before the mesh-LOD
+	// teardown crash in `~ShaderImplementationPassVertexShader+0xa1`.
+	// Proper fix: implement real Headless equivalents of
+	// createVertexShaderData / createPixelShaderProgramData /
+	// createPixelShaderData that return empty objects with no-op dtors.
 	const int         cs_shaderMajor      = 1;
 	const int         cs_shaderMinor      = 4;
 	const int         cs_videoMemory      = 1024; // (value in megabytes) 1GB of video memory enough for you?
@@ -58,6 +67,13 @@ bool Headless::install( Gl_install *gl_install )
 	s_api.createDynamicIndexBufferData           = createDynamicIndexBufferData;
 	s_api.createVertexBufferVectorData           = createVertexBufferVectorData;
 	s_api.createShaderImplementationGraphicsData = createShaderImplementationData;
+	// These must return a real pointer (the engine stores it in
+	// m_graphicsData and `delete`s it on shader teardown). The blanket
+	// _defaultFunc_Void above sets them to a void no-op that doesn't
+	// touch RAX, so callers read garbage as the return value → AV in
+	// `~ShaderImplementationPassVertexShader` during mesh-LOD streaming.
+	s_api.createVertexShaderData                 = createVertexShaderData;
+	s_api.createPixelShaderProgramData           = createPixelShaderProgramData;
 
 	// set these to something that will return true
 
@@ -88,7 +104,8 @@ bool Headless::verify()
 
 void Headless::_defaultFunc_Void()
 {
-	__asm xor eax,eax;
+	// x86 inline asm `xor eax,eax` removed for x64 portability.
+	// This is a void no-op stub; return value isn't observed.
 }
 
 //---------------------------------------------------------------------------
@@ -103,6 +120,23 @@ int Headless::_defaultFunc_True()
 ShaderImplementationGraphicsData *Headless::createShaderImplementationData( const ShaderImplementation & /*si*/ )
 {
 	return new ShaderImplementationGraphicsData();
+}
+
+//---------------------------------------------------------------------------
+
+ShaderImplementationPassVertexShaderGraphicsData *Headless::createVertexShaderData( ShaderImplementationPassVertexShader const & /*vertexShader*/ )
+{
+	// Engine stores result in m_graphicsData and `delete`s it later; the
+	// base class has a virtual destructor with an empty body so this is
+	// safe.
+	return new ShaderImplementationPassVertexShaderGraphicsData();
+}
+
+//---------------------------------------------------------------------------
+
+ShaderImplementationPassPixelShaderProgramGraphicsData *Headless::createPixelShaderProgramData( ShaderImplementationPassPixelShaderProgram const & /*pixelShaderProgram*/ )
+{
+	return new ShaderImplementationPassPixelShaderProgramGraphicsData();
 }
 
 //---------------------------------------------------------------------------

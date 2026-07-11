@@ -10,10 +10,10 @@
 
 //======================================================================
 
-#include "Archive/AutoDeltaVector.h"
-#include "sharedGame/SuiPageData.h"
 #include "sharedGame/SuiPageDataArchive.h"
+#include "sharedGame/SuiPageData.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
+#include "Archive/AutoDeltaByteStream.h"
 
 //----------------------------------------------------------------------
 
@@ -26,7 +26,7 @@ public:
 public:
 
 	explicit SuiCreatePageMessage(SuiPageData const & pageData);
-	explicit SuiCreatePageMessage::SuiCreatePageMessage(Archive::ReadIterator & source);
+	explicit SuiCreatePageMessage(Archive::ReadIterator & source);
 
 	SuiPageData const & getPageData() const;
 

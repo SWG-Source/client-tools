@@ -479,10 +479,17 @@ namespace SwgCuiHudNamespace
 		if (!found)
 			return false;
 
-		rect.left   = static_cast<long>(minScreenVect.x);
-		rect.top    = static_cast<long>(minScreenVect.y);
-		rect.right  = static_cast<long>(maxScreenVect.x);
-		rect.bottom = static_cast<long>(maxScreenVect.y);
+		// UI scale: projectInWorldSpace returns coords in PHYSICAL render-
+		// target pixels (camera viewport is physical), but the selection-box
+		// widget that ultimately receives this rect lives inside the canvas
+		// Scale block in CuiManager::render -- so values must be in LOGICAL
+		// canvas coords or the box ends up at scale-X the projected position
+		// (off-screen at uiScale=2). Divide here.
+		const float uiInvScale = 1.0f / Graphics::getUiCanvasScale();
+		rect.left   = static_cast<long>(minScreenVect.x * uiInvScale);
+		rect.top    = static_cast<long>(minScreenVect.y * uiInvScale);
+		rect.right  = static_cast<long>(maxScreenVect.x * uiInvScale);
+		rect.bottom = static_cast<long>(maxScreenVect.y * uiInvScale);
 
 		//-- fudge factor
 
@@ -1267,7 +1274,15 @@ void SwgCuiHud::update (float deltaTimeSecs)
 			if (updateCursor || allowLookAtTargetSelection)
 			{
 				worldStart = camera->getPosition_w ();
-				viewDirection = camera->rotate_o2w( camera->reverseProjectInScreenSpace (reticlePoint.x, reticlePoint.y));
+				// UI scale: reticlePoint is in LOGICAL canvas coords post-
+				// MouseCursor scaling, but the camera viewport is in PHYSICAL
+				// render-target pixels. Scale up so the world-space ray
+				// matches where the user's cursor visually points; otherwise
+				// clicks at the screen edge hit the center of the world.
+				const float pickScale = Graphics::getUiCanvasScale();
+				viewDirection = camera->rotate_o2w( camera->reverseProjectInScreenSpace (
+					static_cast<int>(reticlePoint.x * pickScale),
+					static_cast<int>(reticlePoint.y * pickScale)));
 				viewDirection.normalize ();
 
 				worldEnd = worldStart + viewDirection * viewDistance;
@@ -1933,7 +1948,12 @@ void SwgCuiHud::targetAtCursorModeless( bool startStop )
 				{
 					if ( selectedObject && CuiIoWin::getMouseLookState() == CuiIoWin::MouseLookState_Disabled )
 					{
-						player->setLookAtTarget( selectedObject->getNetworkId() );
+						// Set BOTH lookAt and intended so the green selection
+						// box (SBT_intended widget, hard-coded green) shows
+						// up around the clicked target -- matches the CTRL+1
+						// "target self" behavior which is what users expect
+						// from a target-at-cursor click.
+						player->setLookAtAndIntendedTarget( selectedObject->getNetworkId() );
 
 						if ( CuiIoWin::getLastMouseLookState() == CuiIoWin::MouseLookState_Avatar && CuiRadialMenuManager::isActive() == false )
 						{
@@ -1983,13 +2003,15 @@ void SwgCuiHud::targetAtCursorModal( bool startStop )
 					else
 					{
 						CuiRadialMenuManager::touchCache (selectedObject->getNetworkId ());
-						
+
 						m_radialMenuObject = m_lastSelectedObject;
 						m_radialMenuCountingDown = true;
 						m_radialMenuStartTime      = curTime;
 						m_radialMenuTimeout        = curTime + 0.25f;
 						m_radialMenuTimerCursorPos = mouseCoord;
-						player->setLookAtTarget (selectedObject->getNetworkId ());
+						// See targetAtCursorModeless: set both so green
+						// intended-target box appears like CTRL+1 target-self.
+						player->setLookAtAndIntendedTarget (selectedObject->getNetworkId ());
 						return;
 					}
 				}
@@ -2029,7 +2051,11 @@ void SwgCuiHud::summonRadialMenu(const Unicode::String & params)
 				UIPoint reticlePoint(UIManager::gUIManager ().GetLastMouseCoord ());
 				static const float viewDistance = ConfigClientGame::getTargetingRange ();
 				Vector worldStart = camera->getPosition_w ();
-				Vector viewDirection = camera->rotate_o2w( camera->reverseProjectInScreenSpace (reticlePoint.x, reticlePoint.y));
+				// UI scale: logical cursor coords -> physical viewport pixels.
+				const float pickScale = Graphics::getUiCanvasScale();
+				Vector viewDirection = camera->rotate_o2w( camera->reverseProjectInScreenSpace (
+					static_cast<int>(reticlePoint.x * pickScale),
+					static_cast<int>(reticlePoint.y * pickScale)));
 				viewDirection.normalize ();
 				const Vector worldEnd = worldStart + viewDirection * viewDistance;
 

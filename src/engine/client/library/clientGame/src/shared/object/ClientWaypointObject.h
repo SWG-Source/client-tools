@@ -8,9 +8,9 @@
 //-----------------------------------------------------------------------
 
 #include "clientGame/IntangibleObject.h"
-#include "Archive/AutoDeltaVariableCallback.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
+#include "sharedFoundation/NetworkIdArchive.h"
 #include "sharedMathArchive/VectorArchive.h"
+#include "Archive/AutoDeltaVariableCallback.h"
 
 class SharedWaypointObjectTemplate;
 class StringId;

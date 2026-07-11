@@ -348,20 +348,20 @@ namespace
 
 	//----------------------------------------------------------------------
 
-	std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> > s_attributeFilter;
+	std::map<std::pair<int, int>, std::list<SearchCondition> > s_attributeFilter;
 	std::map<std::pair<int, int>, std::list<std::pair<Unicode::String, Unicode::String> > > s_attributeFilterDisplayData;
 	std::set<std::pair<int, int> > s_enableItemAttributeFilter;
-	std::map<std::pair<int, int>, AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny> s_itemAttributeFilterMatchAllAny;
+	std::map<std::pair<int, int>, AdvancedSearchMatchAllAny> s_itemAttributeFilterMatchAllAny;
 
 	//----------------------------------------------------------------------
 
-	AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny getItemAttributeFilterMatchAllAny(int objectType, int objectTemplateId)
+	AdvancedSearchMatchAllAny getItemAttributeFilterMatchAllAny(int objectType, int objectTemplateId)
 	{
-		std::map<std::pair<int, int>, AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny>::const_iterator iterFind = s_itemAttributeFilterMatchAllAny.find(std::make_pair(objectType, objectTemplateId));
+		std::map<std::pair<int, int>, AdvancedSearchMatchAllAny>::const_iterator iterFind = s_itemAttributeFilterMatchAllAny.find(std::make_pair(objectType, objectTemplateId));
 		if (iterFind != s_itemAttributeFilterMatchAllAny.end())
 			return iterFind->second;
 
-		return AuctionQueryHeadersMessage::ASMAA_match_all;
+		return ASMAA_match_all;
 	}
 
 	//----------------------------------------------------------------------
@@ -461,7 +461,7 @@ m_checkpointTextFilterAny(),
 m_checkpointPriceFilterMin(0),
 m_checkpointPriceFilterMax(0),
 m_checkpointPriceFilterIncludesEntranceFee(false),
-m_checkpointItemAttributeFilterMatchAllAny(AuctionQueryHeadersMessage::ASMAA_match_all),
+m_checkpointItemAttributeFilterMatchAllAny(ASMAA_match_all),
 m_checkpointAttributeFilter(),
 m_currentlySelectedObjectType(SharedObjectTemplate::GOT_none),
 m_currentlySelectedObjectTemplateId(0),
@@ -699,7 +699,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 
 		int selectedRow = -1;
 		std::pair<Unicode::String, Unicode::String> * selectedRowData = NULL;
-		AuctionQueryHeadersMessage::SearchCondition * selectedFilter = NULL;
+		SearchCondition * selectedFilter = NULL;
 		bool factoryCrateObjectTypeFilterBeingUpdated = false;
 		if (context == m_buttonUpdateFilterAttribute)
 		{
@@ -715,7 +715,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			if (selectedRowLogicalIndex < 0)
 				return;
 
-			std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::iterator const iterFind1 = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
+			std::map<std::pair<int, int>, std::list<SearchCondition> >::iterator const iterFind1 = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
 			if ((iterFind1 == s_attributeFilter.end()) || (static_cast<size_t>(selectedRowLogicalIndex) >= iterFind1->second.size()))
 				return;
 
@@ -723,7 +723,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			if ((iterFind2 == s_attributeFilterDisplayData.end()) || (iterFind2->second.size() != iterFind1->second.size()))
 				return;
 
-			std::list<AuctionQueryHeadersMessage::SearchCondition>::iterator iter1 = iterFind1->second.begin();
+			std::list<SearchCondition>::iterator iter1 = iterFind1->second.begin();
 			std::list<std::pair<Unicode::String, Unicode::String> >::iterator iter2 = iterFind2->second.begin();
 			for (; ((iter1 != iterFind1->second.end()) && (iter2 != iterFind2->second.end())); ++iter1, ++iter2)
 			{
@@ -758,12 +758,12 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 				// search condition (if specified) indicates the item type inside the crate
 				if (m_currentlySelectedObjectTemplateId == 0)
 				{
-					std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
+					std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
 					if (iterFindFactoryCrateSearchAttribute != s_attributeFilter.end())
 					{
-						for (std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
+						for (std::list<SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
 						{
-							if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == AuctionQueryHeadersMessage::SCC_string_equal))
+							if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == SCC_string_equal))
 							{
 								if (0 == iterSearchCondition->stringValue.find("@got_n:"))
 								{
@@ -847,7 +847,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			snprintf(buffer, sizeof(buffer)-1, "%d - %d", intMin, intMax);
 			buffer[sizeof(buffer)-1] = '\0';
 
-			AuctionQueryHeadersMessage::SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), intMin, intMax);
+			SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), intMin, intMax);
 
 			if (context == m_buttonUpdateFilterAttribute)
 			{
@@ -940,7 +940,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			snprintf(buffer, sizeof(buffer)-1, "%s - %s", bufferMin, bufferMax);
 			buffer[sizeof(buffer)-1] = '\0';
 
-			AuctionQueryHeadersMessage::SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), floatMin, floatMax);
+			SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), floatMin, floatMax);
 
 			if (context == m_buttonUpdateFilterAttribute)
 			{
@@ -979,15 +979,15 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			std::string compareStr;
 			m_comboboxStringCompare->GetSelectedIndexName(compareStr);
 
-			AuctionQueryHeadersMessage::SearchConditionComparison compare = AuctionQueryHeadersMessage::SCC_string_equal;
+			SearchConditionComparison compare = SCC_string_equal;
 			if (compareStr == std::string("contain"))
-				compare = AuctionQueryHeadersMessage::SCC_string_contain;
+				compare = SCC_string_contain;
 			else if (compareStr == std::string("notContain"))
-				compare = AuctionQueryHeadersMessage::SCC_string_not_contain;
+				compare = SCC_string_not_contain;
 			else if (compareStr == std::string("equal"))
-				compare = AuctionQueryHeadersMessage::SCC_string_equal;
+				compare = SCC_string_equal;
 			else if (compareStr == std::string("notEqual"))
-				compare = AuctionQueryHeadersMessage::SCC_string_not_equal;
+				compare = SCC_string_not_equal;
 			else
 				return;
 
@@ -1000,7 +1000,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			compareDisplayStr += value;
 			compareDisplayStr += Unicode::narrowToWide("\"");
 
-			AuctionQueryHeadersMessage::SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), compare, Unicode::wideToNarrow(value));
+			SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), compare, Unicode::wideToNarrow(value));
 
 			if (context == m_buttonUpdateFilterAttribute)
 			{
@@ -1036,11 +1036,11 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			std::string compareStr;
 			m_comboboxEnumCompare->GetSelectedIndexName(compareStr);
 
-			AuctionQueryHeadersMessage::SearchConditionComparison compare = AuctionQueryHeadersMessage::SCC_string_equal;
+			SearchConditionComparison compare = SCC_string_equal;
 			if (compareStr == std::string("equal"))
-				compare = AuctionQueryHeadersMessage::SCC_string_equal;
+				compare = SCC_string_equal;
 			else if (compareStr == std::string("notEqual"))
-				compare = AuctionQueryHeadersMessage::SCC_string_not_equal;
+				compare = SCC_string_not_equal;
 			else
 				return;
 
@@ -1054,14 +1054,14 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			compareDisplayStr += Unicode::narrowToWide("\"");
 
 			// for factory crate, can only have at most 1 "object_type equal xxxxx" filter
-			if ((m_currentlySelectedObjectType == SharedObjectTemplate::GOT_misc_factory_crate) && (selectedSearchAttribute->attributeNameCrc == s_objectTypeAttributeNameCrc) && (compare == AuctionQueryHeadersMessage::SCC_string_equal))
+			if ((m_currentlySelectedObjectType == SharedObjectTemplate::GOT_misc_factory_crate) && (selectedSearchAttribute->attributeNameCrc == s_objectTypeAttributeNameCrc) && (compare == SCC_string_equal))
 			{
-				std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
+				std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
 				if (iterFindFactoryCrateSearchAttribute != s_attributeFilter.end())
 				{
-					for (std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
+					for (std::list<SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
 					{
-						if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == AuctionQueryHeadersMessage::SCC_string_equal))
+						if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == SCC_string_equal))
 						{
 							if ((selectedFilter == NULL) || (selectedFilter != &(*iterSearchCondition)))
 							{
@@ -1073,7 +1073,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 				}
 			}
 
-			AuctionQueryHeadersMessage::SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), compare, valueInternal);
+			SearchCondition const filter(selectedSearchAttribute->attributeNameCrc, m_requiredAttribute->IsChecked(), compare, valueInternal);
 
 			if (context == m_buttonUpdateFilterAttribute)
 			{
@@ -1097,12 +1097,12 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 		if ((m_currentlySelectedObjectType == SharedObjectTemplate::GOT_misc_factory_crate) && (m_currentlySelectedObjectTemplateId == 0) && (factoryCrateObjectTypeFilterBeingUpdated || (selectedSearchAttribute->attributeNameCrc == s_objectTypeAttributeNameCrc)))
 		{
 			std::map<Unicode::String, std::pair<Unicode::String, std::string> > const * additionalSearchAttribute = NULL;
-			std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
+			std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
 			if (iterFindFactoryCrateSearchAttribute != s_attributeFilter.end())
 			{
-				for (std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
+				for (std::list<SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
 				{
-					if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == AuctionQueryHeadersMessage::SCC_string_equal))
+					if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == SCC_string_equal))
 					{
 						if (0 == iterSearchCondition->stringValue.find("@got_n:"))
 						{
@@ -1154,7 +1154,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 		if (selectedRowLogicalIndex < 0)
 			return;
 
-		std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::iterator const iterFind1 = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
+		std::map<std::pair<int, int>, std::list<SearchCondition> >::iterator const iterFind1 = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
 		if ((iterFind1 == s_attributeFilter.end()) || (static_cast<size_t>(selectedRowLogicalIndex) >= iterFind1->second.size()))
 			return;
 
@@ -1162,7 +1162,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 		if ((iterFind2 == s_attributeFilterDisplayData.end()) || (iterFind2->second.size() != iterFind1->second.size()))
 			return;
 
-		std::list<AuctionQueryHeadersMessage::SearchCondition>::iterator iter1 = iterFind1->second.begin();
+		std::list<SearchCondition>::iterator iter1 = iterFind1->second.begin();
 		std::list<std::pair<Unicode::String, Unicode::String> >::iterator iter2 = iterFind2->second.begin();
 		for (; ((iter1 != iterFind1->second.end()) && (iter2 != iterFind2->second.end())); ++iter1, ++iter2)
 		{
@@ -1171,7 +1171,7 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 			{
 				// for factory crates, include search attributes based on the type of item inside the crates,
 				// as specified by the value of the "object_type" search attribute, if specified
-				bool const repopulateSearchableAttributeNameCombo = ((m_currentlySelectedObjectType == SharedObjectTemplate::GOT_misc_factory_crate) && (m_currentlySelectedObjectTemplateId == 0) && (iter1->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iter1->comparison == AuctionQueryHeadersMessage::SCC_string_equal));
+				bool const repopulateSearchableAttributeNameCombo = ((m_currentlySelectedObjectType == SharedObjectTemplate::GOT_misc_factory_crate) && (m_currentlySelectedObjectTemplateId == 0) && (iter1->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iter1->comparison == SCC_string_equal));
 
 				// remove the selected filter
 				iterFind1->second.erase(iter1);
@@ -1231,16 +1231,16 @@ void SwgCuiAuctionFilter::OnButtonPressed (UIWidget *context)
 		// as specified by the value of the "object_type" search attribute, if specified
 		bool repopulateSearchableAttributeNameCombo = false;
 
-		std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::iterator const iterFind = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
+		std::map<std::pair<int, int>, std::list<SearchCondition> >::iterator const iterFind = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
 		if (iterFind != s_attributeFilter.end())
 		{
 			// for factory crates, include search attributes based on the type of item inside the crates,
 			// as specified by the value of the "object_type" search attribute, if specified
 			if ((m_currentlySelectedObjectType == SharedObjectTemplate::GOT_misc_factory_crate) && (m_currentlySelectedObjectTemplateId == 0))
 			{
-				for (std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iterSearchCondition = iterFind->second.begin(); iterSearchCondition != iterFind->second.end(); ++iterSearchCondition)
+				for (std::list<SearchCondition>::const_iterator iterSearchCondition = iterFind->second.begin(); iterSearchCondition != iterFind->second.end(); ++iterSearchCondition)
 				{
-					if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == AuctionQueryHeadersMessage::SCC_string_equal))
+					if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == SCC_string_equal))
 					{
 						repopulateSearchableAttributeNameCombo = true;
 						break;
@@ -1366,12 +1366,12 @@ void SwgCuiAuctionFilter::OnGenericSelectionChanged (UIWidget * context)
 					// search condition (if specified) indicates the item type inside the crate
 					if (newSelectedObjectTemplateId == 0)
 					{
-						std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(newSelectedObjectType, newSelectedObjectTemplateId));
+						std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(newSelectedObjectType, newSelectedObjectTemplateId));
 						if (iterFindFactoryCrateSearchAttribute != s_attributeFilter.end())
 						{
-							for (std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
+							for (std::list<SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
 							{
-								if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == AuctionQueryHeadersMessage::SCC_string_equal))
+								if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == SCC_string_equal))
 								{
 									if (0 == iterSearchCondition->stringValue.find("@got_n:"))
 									{
@@ -1457,7 +1457,7 @@ void SwgCuiAuctionFilter::OnGenericSelectionChanged (UIWidget * context)
 		bool selectedObjectIsSpecialGeneralGot;
 		int const selectedObjectType = getSelectedObjectType(selectedObjectTemplateId, selectedObjectIsResourceContainer, selectedObjectIsSpecialGeneralGot);
 
-		s_itemAttributeFilterMatchAllAny[std::make_pair(selectedObjectType, selectedObjectTemplateId)] = static_cast<AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny>(std::max(0L, m_comboboxMatchAllAny->GetSelectedIndex()));
+		s_itemAttributeFilterMatchAllAny[std::make_pair(selectedObjectType, selectedObjectTemplateId)] = static_cast<AdvancedSearchMatchAllAny>(std::max(0L, m_comboboxMatchAllAny->GetSelectedIndex()));
 	}
 	else if (context == m_attributeFilterTable)
 	{
@@ -1474,11 +1474,11 @@ void SwgCuiAuctionFilter::OnGenericSelectionChanged (UIWidget * context)
 		if (selectedRowLogicalIndex < 0)
 			return;
 			
-		std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
+		std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(m_currentlySelectedObjectType, m_currentlySelectedObjectTemplateId));
 		if ((iterFind == s_attributeFilter.end()) || (static_cast<size_t>(selectedRowLogicalIndex) >= iterFind->second.size()))
 			return;
 
-		for (std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iter = iterFind->second.begin(); iter != iterFind->second.end(); ++iter)
+		for (std::list<SearchCondition>::const_iterator iter = iterFind->second.begin(); iter != iterFind->second.end(); ++iter)
 		{
 			// found filter that corresponds to the selected filter
 			if (selectedRowLogicalIndex == 0)
@@ -1490,7 +1490,7 @@ void SwgCuiAuctionFilter::OnGenericSelectionChanged (UIWidget * context)
 				m_comboboxAttributeName->SetSelectedIndex(attributeNameIndex);
 				m_requiredAttribute->SetChecked(iter->requiredAttribute);
 
-				if (iter->comparison == AuctionQueryHeadersMessage::SCC_int)
+				if (iter->comparison == SCC_int)
 				{
 					char buffer[128];
 					snprintf(buffer, sizeof(buffer)-1, "%d", iter->intMin);
@@ -1503,7 +1503,7 @@ void SwgCuiAuctionFilter::OnGenericSelectionChanged (UIWidget * context)
 
 					m_textboxMaxIntValue->SetText(Unicode::narrowToWide(buffer));
 				}
-				else if (iter->comparison == AuctionQueryHeadersMessage::SCC_float)
+				else if (iter->comparison == SCC_float)
 				{
 					char buffer[128];
 					int len = snprintf(buffer, sizeof(buffer)-1, "%.6f", iter->floatMin);
@@ -1554,21 +1554,21 @@ void SwgCuiAuctionFilter::OnGenericSelectionChanged (UIWidget * context)
 
 					m_textboxMaxFloatValue->SetText(Unicode::narrowToWide(buffer));
 				}
-				else if ((iter->comparison == AuctionQueryHeadersMessage::SCC_string_equal) ||
-					(iter->comparison == AuctionQueryHeadersMessage::SCC_string_not_equal) ||
-					(iter->comparison == AuctionQueryHeadersMessage::SCC_string_contain) ||
-					(iter->comparison == AuctionQueryHeadersMessage::SCC_string_not_contain))
+				else if ((iter->comparison == SCC_string_equal) ||
+					(iter->comparison == SCC_string_not_equal) ||
+					(iter->comparison == SCC_string_contain) ||
+					(iter->comparison == SCC_string_not_contain))
 				{
 					if (m_comboboxStringCompare->IsVisible())
 					{
 						int comboIndex = -1;
-						if (iter->comparison == AuctionQueryHeadersMessage::SCC_string_equal)
+						if (iter->comparison == SCC_string_equal)
 							comboIndex = getComboBoxIndexFromIndexName(*m_comboboxStringCompare, std::string("equal"));
-						else if (iter->comparison == AuctionQueryHeadersMessage::SCC_string_not_equal)
+						else if (iter->comparison == SCC_string_not_equal)
 							comboIndex = getComboBoxIndexFromIndexName(*m_comboboxStringCompare, std::string("notEqual"));
-						else if (iter->comparison == AuctionQueryHeadersMessage::SCC_string_contain)
+						else if (iter->comparison == SCC_string_contain)
 							comboIndex = getComboBoxIndexFromIndexName(*m_comboboxStringCompare, std::string("contain"));
-						else if (iter->comparison == AuctionQueryHeadersMessage::SCC_string_not_contain)
+						else if (iter->comparison == SCC_string_not_contain)
 							comboIndex = getComboBoxIndexFromIndexName(*m_comboboxStringCompare, std::string("notContain"));
 
 						if (comboIndex >= 0)
@@ -1587,9 +1587,9 @@ void SwgCuiAuctionFilter::OnGenericSelectionChanged (UIWidget * context)
 					else if (m_comboboxEnumCompare->IsVisible())
 					{
 						int comboIndex = -1;
-						if (iter->comparison == AuctionQueryHeadersMessage::SCC_string_equal)
+						if (iter->comparison == SCC_string_equal)
 							comboIndex = getComboBoxIndexFromIndexName(*m_comboboxEnumCompare, std::string("equal"));
-						else if (iter->comparison == AuctionQueryHeadersMessage::SCC_string_not_equal)
+						else if (iter->comparison == SCC_string_not_equal)
 							comboIndex = getComboBoxIndexFromIndexName(*m_comboboxEnumCompare, std::string("notEqual"));
 
 						if (comboIndex >= 0)
@@ -1745,12 +1745,12 @@ void SwgCuiAuctionFilter::enableControlsForItemAttributeFilter(bool refreshValue
 				// search condition (if specified) indicates the item type inside the crate
 				if (selectedObjectTemplateId == 0)
 				{
-					std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
+					std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFindFactoryCrateSearchAttribute = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
 					if (iterFindFactoryCrateSearchAttribute != s_attributeFilter.end())
 					{
-						for (std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
+						for (std::list<SearchCondition>::const_iterator iterSearchCondition = iterFindFactoryCrateSearchAttribute->second.begin(); iterSearchCondition != iterFindFactoryCrateSearchAttribute->second.end(); ++iterSearchCondition)
 						{
-							if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == AuctionQueryHeadersMessage::SCC_string_equal))
+							if ((iterSearchCondition->attributeNameCrc == s_objectTypeAttributeNameCrc) && (iterSearchCondition->comparison == SCC_string_equal))
 							{
 								if (0 == iterSearchCondition->stringValue.find("@got_n:"))
 								{
@@ -1977,13 +1977,13 @@ void SwgCuiAuctionFilter::refreshItemAttributeFilter()
 				m_attributeFilterTable->RemoveRowSelection(selectedRow);
 		}
 
-		std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFind1 = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
+		std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFind1 = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
 		if (iterFind1 != s_attributeFilter.end())
 		{
 			std::map<std::pair<int, int>, std::list<std::pair<Unicode::String, Unicode::String> > >::const_iterator const iterFind2 = s_attributeFilterDisplayData.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
 			if (iterFind2 != s_attributeFilterDisplayData.end())
 			{
-				std::list<AuctionQueryHeadersMessage::SearchCondition>::const_iterator iter1 = iterFind1->second.begin();
+				std::list<SearchCondition>::const_iterator iter1 = iterFind1->second.begin();
 				std::list<std::pair<Unicode::String, Unicode::String> >::const_iterator iter2 = iterFind2->second.begin();
 				for (; ((iter1 != iterFind1->second.end()) && (iter2 != iterFind2->second.end())); ++iter1, ++iter2)
 				{
@@ -2221,9 +2221,9 @@ bool SwgCuiAuctionFilter::getPriceFilterIncludesEntranceFee () const
 
 //----------------------------------------------------------------------
 
-std::list<AuctionQueryHeadersMessage::SearchCondition> const & SwgCuiAuctionFilter::getItemAttributeFilter(AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny & matchAllAny) const
+std::list<SearchCondition> const & SwgCuiAuctionFilter::getItemAttributeFilter(AdvancedSearchMatchAllAny & matchAllAny) const
 {
-	static std::list<AuctionQueryHeadersMessage::SearchCondition> const empty;
+	static std::list<SearchCondition> const empty;
 
 	if (!m_enableItemAttributeFilter)
 		return empty;
@@ -2235,7 +2235,7 @@ std::list<AuctionQueryHeadersMessage::SearchCondition> const & SwgCuiAuctionFilt
 
 	if (s_enableItemAttributeFilter.count(std::make_pair(selectedObjectType, selectedObjectTemplateId)) >= 1)
 	{
-		std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
+		std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
 		if (iterFind != s_attributeFilter.end())
 		{
 			matchAllAny = getItemAttributeFilterMatchAllAny(selectedObjectType, selectedObjectTemplateId);
@@ -2271,7 +2271,7 @@ void SwgCuiAuctionFilter::checkpointTextPriceFilterValues()
 
 	if (s_enableItemAttributeFilter.count(std::make_pair(selectedObjectType, selectedObjectTemplateId)) >= 1)
 	{
-		std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
+		std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
 		if (iterFind != s_attributeFilter.end())
 		{
 			m_checkpointAttributeFilter = iterFind->second;
@@ -2310,7 +2310,7 @@ bool SwgCuiAuctionFilter::hasTextPriceFilterValuesChangedSinceCheckpoint() const
 
 	if (s_enableItemAttributeFilter.count(std::make_pair(selectedObjectType, selectedObjectTemplateId)) >= 1)
 	{
-		std::map<std::pair<int, int>, std::list<AuctionQueryHeadersMessage::SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
+		std::map<std::pair<int, int>, std::list<SearchCondition> >::const_iterator const iterFind = s_attributeFilter.find(std::make_pair(selectedObjectType, selectedObjectTemplateId));
 		if (iterFind != s_attributeFilter.end())
 		{
 			if (m_checkpointAttributeFilter != iterFind->second)

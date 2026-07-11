@@ -6,6 +6,7 @@
 //
 // ======================================================================
 
+#include "AuctionDataArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/GetAuctionDetailsResponse.h"
 
@@ -38,29 +39,5 @@ GetAuctionDetailsResponse::~GetAuctionDetailsResponse()
 {
 }
 
-//----------------------------------------------------------------------
-
-namespace Archive
-{
-
-	void get(ReadIterator &source, Auction::ItemDataDetails &target)
-	{
-		get(source, target.itemId);
-		get(source, target.userDescription);
-		get(source, target.propertyList);
-		get(source, target.templateName);
-		get(source, target.appearanceString);
-	}
-
-	void put(ByteStream &target, Auction::ItemDataDetails const &source)
-	{
-		put(target, source.itemId);
-		put(target, source.userDescription);
-		put(target, source.propertyList);
-		put(target, source.templateName);
-		put(target, source.appearanceString);
-	}
-
-}
 // ======================================================================
 

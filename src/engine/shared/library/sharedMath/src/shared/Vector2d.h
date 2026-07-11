@@ -10,6 +10,9 @@
 #ifndef INCLUDED_Vector2d_H
 #define INCLUDED_Vector2d_H
 
+#include <cmath>
+#include "sharedFoundation/FirstSharedFoundation.h"
+
 //===================================================================
 
 class Vector2d
@@ -121,15 +124,15 @@ inline float Vector2d::dot (const Vector2d& vector) const
 
 inline float Vector2d::theta () const
 {
-	return atan2(x, y);
+	return std::atan2(x, y);
 }
 
 //-------------------------------------------------------------------
 
 inline void Vector2d::rotate (float radians)
 {
-	const float cosAngle = cos (radians);
-	const float sinAngle = sin (radians);
+	const float cosAngle = std::cos (radians);
+	const float sinAngle = std::sin (radians);
 
 	const float oldX = x;
 	const float oldY = y;
@@ -143,8 +146,8 @@ inline void Vector2d::rotate (float radians)
 inline void Vector2d::rotate (float radians, const Vector2d& origin)
 {
 	const Vector2d point (x - origin.x, y - origin.y);
-	const float    cosAngle = cos (radians);
-	const float    sinAngle = sin (radians);
+	const float    cosAngle = std::cos (radians);
+	const float    sinAngle = std::sin (radians);
 
 	x = origin.x + point.x * cosAngle - point.y * sinAngle;
 	y = origin.y + point.x * sinAngle + point.y * cosAngle;

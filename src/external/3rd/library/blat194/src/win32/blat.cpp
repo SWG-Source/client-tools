@@ -707,11 +707,11 @@ int transform_and_send_edit_data( socktag sock, char * editptr )
 
     if ( editptr[send_len-1] != '\n' ) {
         //lint -e605
-        if ( (retval = (*pgensock_put_data_buffered) (sock, "\r\n.\r\n", 5)) )
+        if ( (retval = (*pgensock_put_data_buffered) (sock, const_cast<char*>("\r\n.\r\n"), 5)) )
             return(retval);
     } else
         //lint -e605
-        if ( (retval = (*pgensock_put_data_buffered) (sock, ".\r\n", 3)) )
+        if ( (retval = (*pgensock_put_data_buffered) (sock, const_cast<char*>(".\r\n"), 3)) )
         return(retval);
 
     /* now make sure it's all sent... */
@@ -1255,7 +1255,7 @@ void SetFileType (char *sDestBuffer, char *sFileName)
     sprintf( sDestBuffer, "Content-Type: %s; name=%s\r\n", sType, sFileName );
 }
 
-int ReadNamesFromFile(char * type, char * namesfilename, char * * listofnames) {
+int ReadNamesFromFile(const char * type, char * namesfilename, char * * listofnames) {
     HANDLE fileh;
     int found;
 
@@ -2016,8 +2016,8 @@ int callBlat(int argc, char **argv, char **envp)
     int  headerlen;
     SYSTEMTIME curtime;
     TIME_ZONE_INFORMATION tzinfo;
-    char * days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-    char * months[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+    const char * days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    const char * months[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
     DWORD retval;
 
     GetLocalTime( &curtime );

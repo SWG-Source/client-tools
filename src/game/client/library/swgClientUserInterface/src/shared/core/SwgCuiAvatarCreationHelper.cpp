@@ -36,6 +36,7 @@
 #include "sharedDebug/PerformanceTimer.h"
 #include "sharedFile/AsynchronousLoader.h"
 #include "sharedFile/Iff.h"
+#include "sharedFoundation/Fatal.h"
 #include "sharedFoundation/ConstCharCrcString.h"
 #include "sharedFoundation/PointerDeleter.h"
 #include "sharedFoundation/Watcher.h"
@@ -46,7 +47,6 @@
 #include "sharedNetworkMessages/NameErrors.h"
 #include "sharedObject/Container.h"
 #include "sharedObject/CustomizationData.h"
-#include "sharedObject/CustomizationData.h"
 #include "sharedObject/CustomizationDataProperty.h"
 #include "sharedObject/ObjectTemplate.h"
 #include "sharedObject/ObjectTemplateList.h"
@@ -56,6 +56,7 @@
 #include "swgClientUserInterface/SwgCuiMediatorTypes.h"
 #include "swgClientUserInterface/SwgCuiSceneSelection.h"
 
+#include "SharedFoundation/DynamicVariableListNestedList.h"
 
 #include <algorithm>
 
@@ -350,9 +351,9 @@ bool SwgCuiAvatarCreationHelper::finishCreation (bool automatic)
 			CuiPreferences::getUseNewbieTutorial (),
 			CuiSkillManager::getSkillTemplate(),
 			CuiSkillManager::getWorkingSkill());
-		
-		GameNetwork::send (creationMessage, true); 
-		
+
+		GameNetwork::send (creationMessage, true);
+
 		s_waiting_for_creation = true;
 		//-- create the message box
 		m_messageBox = CuiMessageBox::createMessageBox (CuiStringIds::avatar_wait_confirm_create.localize ());
@@ -370,7 +371,8 @@ bool SwgCuiAvatarCreationHelper::finishCreation (bool automatic)
 		if (sceneSelector->startScene (s_creature->getObjectTemplateName (), s_creature))
 		{
 			//-- the scene now owns the player's creature
-			IGNORE_RETURN (s_creaturePool->erase (std::remove (s_creaturePool->begin (), s_creaturePool->end (), s_creature), s_creaturePool->end ()));
+			CreatureObject* const creaturePtr = s_creature.getPointer();
+			IGNORE_RETURN (s_creaturePool->erase (std::remove (s_creaturePool->begin (), s_creaturePool->end (), creaturePtr), s_creaturePool->end ()));
 			s_creature = 0;
 			purgePool (true);
 			return true;
@@ -529,8 +531,7 @@ CreatureObject * SwgCuiAvatarCreationHelper::duplicateCreatureWithClothesAndCust
 	if(newCreature)
 	{
 		newCreature->setNetworkId(ClientImageDesignerManager::getNextClientNetworkId());
-		CustomizationData const * const sourceCustomizationData = basea.fetchCustomizationData();
-		if(sourceCustomizationData)
+		if(CustomizationData const* const sourceCustomizationData = basea.fetchCustomizationData())
 		{
 			std::string const & customizationDataStr = sourceCustomizationData->writeLocalDataToString();
 			sourceCustomizationData->release();
@@ -662,8 +663,7 @@ CreatureObject * SwgCuiAvatarCreationHelper::duplicateCreatureWithClothesAndCust
 		TangibleObject * const tangibleDestHair = destHair ? destHair->asTangibleObject() : NULL;
 		if(tangibleSourceHair && tangibleDestHair)
 		{
-			CustomizationData const * const sourceCustomizationData = tangibleSourceHair->fetchCustomizationData();
-			if(sourceCustomizationData)
+			if(CustomizationData const* const sourceCustomizationData = tangibleSourceHair->fetchCustomizationData())
 			{
 				std::string const & customizationDataStr = sourceCustomizationData->writeLocalDataToString();
 				sourceCustomizationData->release();
@@ -763,9 +763,9 @@ void SwgCuiAvatarCreationHelper::getCreaturesFromPool (CreatureVector & cv, int 
 
 	cv.reserve              (static_cast<size_t>(n));
 	s_creaturePool->reserve (static_cast<size_t>(n));
-	
+
 	CreatureObject * const baseCreature = NON_NULL (s_creature.getPointer ());
-	
+
 	for (int i = 0; i < n; ++i)
 	{
 		if (i >= static_cast<int>(s_creaturePool->size ()))
@@ -773,19 +773,19 @@ void SwgCuiAvatarCreationHelper::getCreaturesFromPool (CreatureVector & cv, int 
 			CreatureObject * const newCreature = NON_NULL (duplicateCreature (*baseCreature));
 			s_creaturePool->push_back (newCreature);
 		}
-		
+
 		CreatureObject * const creature = NON_NULL ((*s_creaturePool) [static_cast<size_t>(i)]);
 
 		if (creature != baseCreature)
 		{
 			copyHair (*baseCreature, *creature);
-			
+
 			creature->setObjectName (baseCreature->getObjectName ());
-			
+
 			//-- retrieve CustomizationData for source creature
-			
+
 			CustomizationData * const sourceData = baseCreature->fetchCustomizationData ();
-			
+
 			if (sourceData)
 			{
 				creature->setAppearanceData (sourceData->writeLocalDataToString ());
@@ -797,7 +797,7 @@ void SwgCuiAvatarCreationHelper::getCreaturesFromPool (CreatureVector & cv, int 
 				//-- assign CustomizationData to new creature
 				Appearance * const destAppearance = creature->getAppearance ();
 				if (destAppearance)
-					destAppearance->setCustomizationData (sourceData);				
+					destAppearance->setCustomizationData (sourceData);
 
 				*/
 

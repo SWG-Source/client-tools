@@ -247,6 +247,7 @@ inline void ArrayList<T>::addIfNotExist (const T& newElement)
 template <class T>
 inline int ArrayList<T>::findOrAdd (const T& newElement)
 {
+	int index;
 	if (existsInList (newElement, index))
 		return index;
 

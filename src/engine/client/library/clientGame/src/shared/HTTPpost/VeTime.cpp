@@ -26,22 +26,22 @@ VeTime - Useful time/date class
 
 
 
-static char* DAYS[] =
+static const char* DAYS[] =
 {
     "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
 
-static char* FULLDAYS[] =
+static const char* FULLDAYS[] =
 {
     "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 };
 
-static char* MONTHS[] =
+static const char* MONTHS[] =
 {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
 
-static char* FULLMONTHS[] =
+static const char* FULLMONTHS[] =
 {
     "January",
     "February",
@@ -105,7 +105,7 @@ static int32 Get_Day( int month, int day, int year )
 //
 static bool Get_Date_From_Day( int32 days,  int& year,  int& yday )
 {
-    register long int y;
+    long int y;
 
     if ( days <= 365 )
     {

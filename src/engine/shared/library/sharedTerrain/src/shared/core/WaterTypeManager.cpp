@@ -58,7 +58,11 @@ void WaterTypeManager::install()
 
 	{
 		DataTable const * const waterTypeDataTable = DataTableManager::getTable("datatables/terrain/water_values.iff", true);
-		FATAL(!waterTypeDataTable,("water_values data table could not be opened."));
+		if (!waterTypeDataTable)
+		{
+			DEBUG_WARNING(true, ("WaterTypeManager: datatables/terrain/water_values.iff missing - water types disabled.\n"));
+			return;
+		}
 		int const numRows = waterTypeDataTable->getNumRows();
 		for (int row=0; row<numRows; ++row)
 		{
@@ -77,7 +81,11 @@ void WaterTypeManager::install()
 
 	{
 		DataTable const* const creatureWaterTypeDataTable = DataTableManager::getTable("datatables/terrain/creature_water_values.iff",true);
-		FATAL(!creatureWaterTypeDataTable,("creature_water_values data table could not be opened."));
+		if (!creatureWaterTypeDataTable)
+		{
+			DEBUG_WARNING(true, ("WaterTypeManager: datatables/terrain/creature_water_values.iff missing - creature water resistance disabled.\n"));
+			return;
+		}
 		int const numRows = creatureWaterTypeDataTable->getNumRows();
 		for(int row=0; row < numRows; ++row)
 		{

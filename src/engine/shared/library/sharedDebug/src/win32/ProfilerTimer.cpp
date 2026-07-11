@@ -11,6 +11,8 @@
 #include "shareddebug/DebugFlags.h"
 #include "sharedFoundation/WindowsWrapper.h"
 
+#include <intrin.h>  // __rdtsc
+
 // ======================================================================
 
 namespace ProfilerTimerNamespace
@@ -26,13 +28,12 @@ using namespace ProfilerTimerNamespace;
 
 // ======================================================================
 
-static __int64 __declspec(naked) __stdcall readTimeStampCounter()
+// Was a naked function with inline `rdtsc; ret;` - both `__declspec(naked)`
+// and inline assembly are x86-only in MSVC. Use the intrinsic instead;
+// it works on both x86 and x64.
+static __int64 readTimeStampCounter()
 {
-    __asm
-		{
-        rdtsc;
-        ret;
-    }
+	return static_cast<__int64>(__rdtsc());
 }
 
 // ======================================================================

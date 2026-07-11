@@ -95,6 +95,14 @@ protected:
 
 private:
 
+	// Real implementations - wrapped by saveSettings/loadSettings under SEH
+	// so an AV from a stale widget pointer during mediator teardown does not
+	// crash the client (see SwgCuiPlanetMap.cpp).
+	void                         saveSettingsImpl          () const;
+	void                         loadSettingsImpl          ();
+
+
+
 	SwgCuiPlanetMap (const SwgCuiPlanetMap & rhs);
 	SwgCuiPlanetMap & operator= (const SwgCuiPlanetMap & rhs);
 

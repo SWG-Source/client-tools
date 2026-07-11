@@ -12,17 +12,18 @@
 
 // ======================================================================
 
+#include "sharedSkillSystem/SkillObjectArchive.h"
+#include "sharedMathArchive/VectorArchive.h"
+#include "sharedGame/CraftingDataArchive.h"
+#include "sharedGame/WearableEntry.h"
+#include "sharedGame/Buff.h"
+
 #include "Archive/AutoDeltaMap.h"
 #include "Archive/AutoDeltaSet.h"
 #include "clientGame/TangibleObject.h"
 #include "clientObject/ShadowBlobObject.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Timer.h"
-#include "sharedGame/Buff.h"
-#include "sharedGame/CraftingDataArchive.h"
+#include "sharedFoundation/Timer.h"
 #include "sharedGame/ShipChassisSlotType.h"
-#include "sharedGame/WearableEntry.h"
-#include "sharedMathArchive/VectorArchive.h"
-#include "sharedSkillSystem/SkillObjectArchive.h"
 #include "swgSharedUtility/Attributes.def"
 #include "swgSharedUtility/Locomotions.def"
 
@@ -574,7 +575,7 @@ private:
 	
 	void maxAttributesOnChanged   ();
 
-	void attributesOnSet          (const size_t elem, const Attributes::Value & oldValue, const Attributes::Value & newValue);
+	void attributesOnSet          (const unsigned int elem, const Attributes::Value & oldValue, const Attributes::Value & newValue);
 
 	void setAppearanceTransformModifiers ();
 
@@ -609,6 +610,7 @@ private:
 	void onLeftGunnerStation(NetworkId const &oldContainerId, int oldWeaponIndex);
 
 	void verifyWornAppearanceItems();
+	void verifyWornItems();
 
 	// Mounts: called on the mount.  Do not call these directly!  Must be public because of the auto delta callback callsite.
 public:

@@ -19,6 +19,10 @@ class VertexBufferVectorGraphicsData;
 class VertexBufferVector;
 class ShaderImplementationGraphicsData;
 class ShaderImplementation;
+class ShaderImplementationPassVertexShader;
+class ShaderImplementationPassVertexShaderGraphicsData;
+class ShaderImplementationPassPixelShaderProgram;
+class ShaderImplementationPassPixelShaderProgramGraphicsData;
 
 class Headless
 {
@@ -46,6 +50,13 @@ public:
 	static DynamicIndexBufferGraphicsData * createDynamicIndexBufferData();
 	static VertexBufferVectorGraphicsData * createVertexBufferVectorData( const VertexBufferVector & vbv );
 	static ShaderImplementationGraphicsData* createShaderImplementationData( const ShaderImplementation &si );
+
+	// Real-pointer stubs for shader graphics data. The engine stores the
+	// returned pointer in `m_graphicsData` and calls `delete` on it later;
+	// the blanket _defaultFunc_Void doesn't write RAX so callers would
+	// otherwise receive uninitialized garbage as the return value.
+	static ShaderImplementationPassVertexShaderGraphicsData       *createVertexShaderData      ( ShaderImplementationPassVertexShader const &vertexShader );
+	static ShaderImplementationPassPixelShaderProgramGraphicsData *createPixelShaderProgramData( ShaderImplementationPassPixelShaderProgram const &pixelShaderProgram );
 
 
 

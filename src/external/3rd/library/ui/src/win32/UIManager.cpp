@@ -31,7 +31,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
-#include <hash_map>
+#include <unordered_map>
 #include <list>
 #include <map>
 #include <set>
@@ -84,6 +84,18 @@ using namespace UIManagerNamespace;
 UIManager * volatile UIManager::gSingleton = 0;
 //static     bool UIManager::isUIReady();
 bool UIManager::gIsUIReady = false;
+
+// UI input scale (2026-05-16, ultrawide). Retained as a compat shim only --
+// the real scaling happens at the MouseCursor input level via
+// Graphics::ms_uiCanvasScale (which CuiManager::install sets via
+// Graphics::setUiCanvasScale). MouseCursor::processEvent divides raw OS
+// pixel coords by the scale and stores m_x/m_y as LOGICAL canvas coords,
+// so by the time CuiIoWin builds a UIMessage from m_mouseCursor->getX/Y
+// the MouseCoords are already in logical space -- no second divide needed
+// here, otherwise scale gets applied twice and clicks miss the widget by
+// a factor of (1/scale). Setter is a no-op kept only so existing callers
+// in CuiManager don't fail to link.
+float UIManager::ms_mouseInputScale = 1.0f;
 
 
 
@@ -219,7 +231,7 @@ void UIManager::ContextInfo::reset ()
 
 struct UIManager::StringTokenMapping
 {
-	typedef std::hash_map<UIString, UINarrowString>  Container;
+	typedef std::unordered_map<UIString, UINarrowString>  Container;
 	Container c;
 };
 
@@ -479,13 +491,13 @@ void UIManager::SendHeartbeats ()
 				if (mMouseDownControl)
 					ResetTooltipCountdown ();
 				else
-					mCountdownToTooltip = std::max (0L, mCountdownToTooltip - Ticks);
+					mCountdownToTooltip = std::max(0L, mCountdownToTooltip - Ticks);
 				
 				//-- handle hoverpress
 				
 				if (!mHoverPressComplete && mDraggedControl)
 				{
-					mCountdownToHoverPress = std::max (0L, mCountdownToHoverPress - Ticks);
+					mCountdownToHoverPress = std::max(0L, mCountdownToHoverPress - Ticks);
 					
 					if (mCountdownToHoverPress == 0)
 					{
@@ -749,6 +761,13 @@ bool UIManager::ProcessMessage (const UIMessage &Msg)
 	if( !mRootPage )
 		return false;
 
+	// NOTE (2026-05-16): MouseCoords arrive here already in logical UI
+	// canvas coords, not physical pixels. MouseCursor::processEvent in
+	// clientObject divides raw OS deltas by Graphics::getUiCanvasScale()
+	// before storing into m_x/m_y, and CuiIoWin builds the UIMessage
+	// from those. Do not divide again here -- doing so caused a (1/scale^2)
+	// hit-test offset and missed clicks at uiScale=2.
+
 	if( Msg.Type == UIMessage::MouseMove )
 	{
 		if( mLastMouseCoord == Msg.MouseCoords && !ms_isRefreshing)
@@ -777,7 +796,7 @@ bool UIManager::ProcessMessage (const UIMessage &Msg)
 
 		//----------------------------------------------------------------------
 
-		if( Msg.Modifiers.and (*mDragModifier) )
+		if( Msg.Modifiers.Matches(*mDragModifier) )
 		{
 			if( mDraggedControl )
 			{
@@ -1133,21 +1152,22 @@ bool UIManager::ProcessMessage (const UIMessage &Msg)
 
 					listbox->Clear();
 
-					std::vector<Unicode::String> &candidates = UIManager::getUIIMEManager()->GetCandidateList();
-					for (unsigned int i = 0; i < candidates.size(); i++)
+					std::vector<Unicode::String>& candidates =
+						UIManager::getUIIMEManager()->GetCandidateList();
+
+					for (size_t i = 0; i < candidates.size(); ++i)
 					{
-						unsigned short num[2];
+						// Build number prefix: "1", "2", ..., "9", "0"
+						char16_t numChar = static_cast<char16_t>(u'0' + ((i + 1) % 10));
 
-						num[0] = (unsigned short) (L'0' + ((i + 1) % 10));
-						num[1] = 0;
-			
-						UIString str = candidates[i];
-						
-						unsigned short buf[512];
-						_snwprintf(buf, sizeof(buf) - 1, L"%s\\>032%s", num, str.c_str());
-						
-						listbox->AddRow(Unicode::String(buf), "Candidate");
+						Unicode::String row;
+						row.reserve(1 + 4 + candidates[i].size());
 
+						row.push_back(numChar);
+						row.append(u"\\>032");
+						row.append(candidates[i]);
+
+						listbox->AddRow(row, "Candidate");
 					}
 
 					if (listbox)
@@ -2256,7 +2276,7 @@ UIIMEManager *UIManager::getUIIMEManager()
 
 char const * UIManager::GetLocaleString() const
 {
-	char * localName = NULL;
+	const char * localName = NULL;
 
 	switch(mLocale) 
 	{

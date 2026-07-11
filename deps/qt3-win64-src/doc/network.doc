@@ -1,0 +1,519 @@
+/****************************************************************************
+** $Id: qt/network.doc   3.3.8   edited Jan 11 14:36 $
+**
+** Documentation for network programming
+**
+** Copyright (C) 1992-2007 Trolltech ASA.  All rights reserved.
+**
+** This file is part of the Qt GUI Toolkit.
+**
+** This file may be distributed under the terms of the Q Public License
+** as defined by Trolltech ASA of Norway and appearing in the file
+** LICENSE.QPL included in the packaging of this file.
+**
+** This file may be distributed and/or modified under the terms of the
+** GNU General Public License version 2 as published by the Free Software
+** Foundation and appearing in the file LICENSE.GPL included in the
+** packaging of this file.
+**
+** Licensees holding valid Qt Enterprise Edition or Qt Professional Edition
+** licenses may use this file in accordance with the Qt Commercial License
+** Agreement provided with the Software.
+**
+** This file is provided AS IS with NO WARRANTY OF ANY KIND, INCLUDING THE
+** WARRANTY OF DESIGN, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+**
+** See http://www.trolltech.com/pricing.html or email sales@trolltech.com for
+**   information about Qt Commercial License Agreements.
+** See http://www.trolltech.com/qpl/ for QPL licensing information.
+** See http://www.trolltech.com/gpl/ for GPL licensing information.
+**
+** Contact info@trolltech.com if any conditions of this licensing are
+** not clear to you.
+**
+**********************************************************************/
+
+/*
+    The text here is due to be replaced by networking.doc, once that's
+    ready.
+*/
+
+/*!
+\page network.html
+
+\title Network Module
+
+\if defined(commercial)
+This module is part of the \link commercialeditions.html Qt Enterprise Edition \endlink.
+\endif
+
+\tableofcontents
+
+
+\section1 Introduction
+
+The network module offers classes to make network programming easier
+and portable. Essentially, there are three sets of classes, first low
+level classes like \l QSocket, \l QServerSocket, \l QDns, etc. which
+allow you to work in a portable way with TCP/IP sockets. In addition,
+there are classes like \l QNetworkProtocol, \l QNetworkOperation in
+the Qt base library, which provide an abstract layer for implementing
+network protocols and \c QUrlOperator which operates on such network
+protocols. Finally the third set of network classes are the passive
+ones, specifically \c QUrl and \c QUrlInfo which do URL parsing and
+similar.
+
+The first set of classes (\l QSocket, \l QServerSocket, \l QDns, \l
+QFtp, etc.) are included in Qt's "network" module.
+
+The QSocket classes are not directly related to the QNetwork classes,
+but QSocket should and will be used for implementing network
+protocols, which are directly related to the QNetwork classes. For
+example, the QFtp class (which implements the FTP protocol) uses
+QSockets. But QSockets don't need to be used for protocol
+implementations, e.g. QLocalFs (which is an implementation of the
+local filesystem as network protocol) uses QDir and doesn't use
+QSocket. Using QNetworkProtocols you can implement everything which
+fits into a hierarchical structure and can be accessed using URLs.
+This could be, for example, a protocol which can read pictures from a
+digital camera using a serial connection.
+
+
+\section1 Working Network Protocol independently with QUrlOperator and QNetworkOperation
+
+It is quite easy to just use existing network protocol implementations
+and operate on URLs. For example, downloading a file from an FTP
+server to the local filesystem can be done with following code:
+
+\code
+    QUrlOperator op;
+    op.copy( "ftp://ftp.trolltech.com/qt/source/qt-2.1.0.tar.gz", "file:/tmp", FALSE );
+\endcode
+
+And that's all! Of course an implementation of the FTP protocol has to
+be available and registered for doing that. More information on that
+later.
+
+You can also do things like creating directories, removing files,
+renaming, etc. For example, to create a folder on a private FTP
+account do
+
+\code
+    QUrlOperator op( "ftp://username:password@host.domain.no/home/username" );
+    op.mkdir( "New Directory" );
+\endcode
+
+To see all available operations, look at the \c QUrlOperator class
+documentation.
+
+Since networking works asynchronously, the function call for an
+operation will normally return before the operation has been
+completed. This means that the function cannot return a value
+indicating failure or success. Instead, the return value always is a
+pointer to a \c QNetworkOperation, and this object stores
+all the information about the operation.
+
+For example, \c QNetworkOperation has a method which returns the state
+of this operation. Using this you can find out the state of the
+operation at any time. The object also makes available the arguments
+you passed to the \c QUrlOperator method, the type of the operation
+and some more information. For more details see the class
+documentation of \c QNetworkOperation.
+
+The \c QUrlOperator emits signals to inform you about the progress of
+the operations. As you can call many methods which operate on a \c
+QUrlOperator's URL, it queues up all the operations. So you can't know
+which operation the \c QUrlOperator just processed. Clearly you will
+want to know which operation just took place, so each signal's last
+argument is a pointer to the \c QNetworkOperation object which was
+just processed and which caused the signal to be emitted.
+
+Some of these operations send a \c start() signal at the beginning (if
+this makes sense), and some of them send some signals during
+processing. All operations send a \c finished() signal after they are
+done. To find that out if an operation finished successfully you can
+use the \c QNetworkOperation pointer you got with the \c finished()
+signal. If \c QNetworkOperation::state() equals \c
+QNetworkProtocol::StDone the operation finished successfully, if it is
+\c QNetworkProtocol::StFailed the operation failed.
+
+Example: A slot which you might connect to the 
+\c{QUrlOperator::finished( QNetworkOperation * )}
+\code
+void MyClass::slotOperationFinished( QNetworkOperation *op )
+{
+    switch ( op->operation() ) {
+    case QNetworkProtocol::OpMkDir: 
+        if ( op->state() == QNetworkProtocol::StFailed )
+            qDebug( "Couldn't create directory %s", op->arg( 0 ).latin1() );
+        else
+            qDebug( "Successfully created directory %s", op->arg( 0 ).latin1() );
+	break;
+    // ... and so on
+    }
+}
+\endcode
+
+As mentioned earlier, some operations send other signals too. Let's
+take the list children operation as an example (e.g. read a directory
+on a FTP server):
+
+\code
+QUrlOperator op;
+
+MyClass::MyClass() : QObject(), op( "ftp://ftp.trolltech.com" )
+{
+    connect( &op, SIGNAL( newChildren( const QValueList<QUrlInfo> &, QNetworkOperation * ) ),
+	     this, SLOT( slotInsertEntries( const QValueList<QUrlInfo> &, QNetworkOperation * ) ) );
+    connect( &op, SIGNAL( start( QNetworkOperation * ) ),
+	     this, SLOT( slotStart( QNetworkOperation *) ) );
+    connect( &op, SIGNAL( finished( QNetworkOperation * ) ),
+	     this, SLOT( slotFinished( QNetworkOperation *) ) );
+}
+
+void MyClass::slotInsertEntries( const QValueList<QUrlInfo> &info, QNetworkOperation * )
+{
+    QValueList<QUrlInfo>::ConstIterator it = info.begin();
+    for ( ; it != info.end(); ++it ) {
+        const QUrlInfo &inf = *it;
+        qDebug( "Name: %s, Size: %d, Last Modified: %s",
+	    inf.name().latin1(), inf.size(), inf.lastModified().toString().latin1() );
+    }
+}
+
+void MyClass::slotStart( QNetworkOperation * )
+{
+    qDebug( "Start reading '%s'", op.toString().latin1() );
+}
+
+void MyClass::slotFinished( QNetworkOperation *operation )
+{
+    if ( operation->operation() == QNetworkProtocol::OpListChildren ) {
+        if ( operation->state() == QNetworkProtocol::StFailed )
+            qDebug( "Couldn't read '%s'! Following error occurred: %s",
+                op.toString().latin1(), operation->protocolDetail().latin1() );
+        else
+            qDebug( "Finished reading '%s'!", op.toString().latin1() );
+    }
+}
+
+\endcode
+
+These examples demonstrate now how to use the \c QUrlOperator and \c
+QNetworkOperations. The network extension also contains useful example
+code.
+
+
+\section2 Implementing your own Network Protocol
+
+\c QNetworkProtocol provides a base class for implementations
+of network protocols and an architecture for the a dynamic
+registration and de-registration of network protocols. If you use this
+architecture you don't need to care about asynchronous programming, as
+the architecture hides this and does all the work for you.
+
+\e{Note} It is difficult to design a base class for network protocols
+which is useful for all network protocols. The architecture described
+here is designed to work with all kinds of hierarchical structures,
+like filesystems. So everything which can be interpreted as
+hierarchical structure and accessed via URLs, can be implemented as
+network protocol and easily used in Qt. This is not limited to
+filesystems only!
+
+To implement a network protocol create a class derived from
+\c QNetworkProtocol.
+
+Other classes will use this network protocol implementation
+to operate on it. So you should reimplement following protected members
+
+\code
+    void QNetworkProtocol::operationListChildren( QNetworkOperation *op );
+    void QNetworkProtocol::operationMkDir( QNetworkOperation *op );
+    void QNetworkProtocol::operationRemove( QNetworkOperation *op );
+    void QNetworkProtocol::operationRename( QNetworkOperation *op );
+    void QNetworkProtocol::operationGet( QNetworkOperation *op );
+    void QNetworkProtocol::operationPut( QNetworkOperation *op );
+\endcode
+
+Some notes on reimplementing these methods: You always get a pointer
+to a \c QNetworkOperation as argument. This pointer holds all the
+information about the operation in the current state. If you start
+processing such an operation, set the state to \c
+QNetworkProtocol::StInProgress. If you finished processing the
+operation, set the state to \c QNetworkProtocol::StDone if it was
+successful or \c QNetworkProtocol::StFailed if an error occurred. If
+an error occurred you must set an error code (see
+\c{QNetworkOperation::setErrorCode()}) and if you know some details
+(e.g. an error message) you can also set this message to the operation
+pointer (see \c{QNetworkOperation::setProtocolDetail()}). Also you get
+all the relevant information (type, arguments, etc.) about the
+operation from the \c QNetworkOperation pointer. For details about
+which arguments you can get and set look at \c{QNetworkOperation}'s
+class documentation.
+
+If you reimplement an operation function, it's very important to emit
+the correct signals at the correct time: In general always emit \c
+finished() at the end of an operation (when you either successfully
+finished processing the operation or an error occurred) with the
+network operation as argument. The whole network architecture relies
+on correctly emitted \c finished() signals! Then there are some more
+specialized signals which are specific to operations:
+\list
+    \i Emit in \c operationListChildren:
+    \list
+	\i  \c start() just before starting to list the children
+	\i  \c newChildren() when new children are read
+    \endlist
+    \i Emit in \c operationMkDir:
+    \list
+	\i  \c createdDirectory() after the directory has been created
+	\i  \c newChild() (or newChildren()) after the directory has been
+	    created (since a new directory is a new child)
+    \endlist
+    \i Emit in \c operationRemove:
+    \list
+	\i  \c removed() after a child has been removed
+    \endlist
+    \i Emit in \c operationRename:
+    \list
+	\i  \c itemChanged() after a child has been renamed
+    \endlist
+    \i Emit in \c operationGet:
+    \list
+	\i  \c data() each time new data has been read
+	\i  \c dataTransferProgress() each time new data has been read to
+	    indicate how much of the data has been read now.
+    \endlist
+    \i Emit in \c operationPut:
+    \list
+	\i  \c dataTransferProgress() each time data has been written to
+	    indicate how much of the data has been written. Although you
+	    know the whole data when this operation is called, it's
+	    suggested not to write the whole data at once, but to do it
+	    step by step to avoid blocking the GUI. Doing things
+	    incrementally also means that progress can be made visible
+	    to the user.
+    \endlist
+\endlist
+
+And remember, always emit the \c finished() signal at the end!
+
+For more details about these signals' arguments look at the \c
+QNetworkProtocol class documentation.
+
+Here is a list of which \c QNetworkOperation arguments you can get and
+which you must set in which function:
+
+(To get the URL on which you should work, use the \c
+QNetworkProtocol::url() method which returns a pointer to the URL
+operator. Using that you can get the path, host, name filter, etc.)
+
+\list
+    \i In \c operationListChildren:
+    \list
+       \i   Nothing.
+    \endlist
+    \i In \c operationMkDir:
+    \list
+	\i  \c QNetworkOperation::arg( 0 ) contains the name of the directory which should be created
+    \endlist
+    \i In \c operationRemove:
+    \list
+	\i  \c QNetworkOperation::arg( 0 ) contains the name of the file
+	    which should be removed. Normally this is a relative name. But
+	    it could be absolute. Use QUrl( op->arg( 0 ) ).fileName()
+	    to get the filename.
+    \endlist
+    \i In \c operationRename:
+    \list
+	\i  \c QNetworkOperation::arg( 0 ) contains the name of the file
+	    which should be renamed
+	\i  \c QNetworkOperation::arg( 1 ) contains the name to which it
+	    should be renamed.
+    \endlist
+    \i In \c operationGet:
+    \list
+	\i  \c QNetworkOperation::arg( 0 ) contains the full URL of the
+	    file which should be retrieved.
+    \endlist
+    \i In \c operationPut:
+    \list
+	\i  \c QNetworkOperation::arg( 0 ) contains the full URL of the
+	    file in which the data should be stored.
+	\i  \c QNetworkOperation::rawArg( 1 ) contains the data which
+	    should be stored in \c QNetworkOperation::arg( 0 )
+    \endlist
+\endlist
+
+In summary: If you reimplement an operation function, you must emit
+some special signals and at the end you must \e always emit a \c
+finished() signal, regardless of success or failure. Also you must
+change the state of the \c QNetworkOperation during processing. You 
+can also get and set \c QNetworkOperation arguments as the operation
+progresses.
+
+It may occur that the network protocol you implement only requires a
+subset of these operations. In such cases, simply reimplement the
+operations which are supported by the protocol. Additionally you must
+specify which operations you support. This is achieved by
+reimplementing
+
+\code
+    int QNetworkProtocol::supportedOperations() const;
+\endcode
+
+In your implementation of this method return an \c int value
+which is constructed by OR-ing together the correct values
+(supported operations) of the following enum (of \c QNetworkProtocol):
+
+\list
+\i \c OpListChildren
+\i \c OpMkDir
+\i \c OpRemove
+\i \c OpRename
+\i \c OpGet
+\i \c OpPut
+\endlist
+
+For example, if your protocol supports listing children and renaming
+them, your implementation of \c supportedOperations() should do this:
+
+\code
+    return OpListChildren | OpRename;
+\endcode
+
+The last method you must reimplement is
+
+\code
+    bool QNetworkProtocol::checkConnection( QNetworkOperation *op );
+\endcode
+
+Here you must return TRUE, if the connection is up and okay (this means
+operations on the protocol can be done). If the connection is not okay,
+return FALSE and start to try opening it. If you cannot open the
+connection at all (e.g. because the host is not found), emit a \c finished()
+signal and set an error code and the \c QNetworkProtocol::StFailed state to
+the \c QNetworkOperation pointer you get here.
+
+Now, you never need to check before doing an operation yourself, if
+the connection is okay. The network architecture does this, which
+means it uses \c checkConnection() to see if an operation can be done
+and if not, it tries it again and again for some time, only calling an
+operation function if the connection is okay.
+
+To be able to use a network protocol with a QUrlOperator (and so, for
+example, in the QFileDialog), you must register the network
+protocol implementation. This can be done like this:
+
+\code
+    QNetworkProtocol::registerNetworkProtocol( "myprot", new QNetworkProtocolFactory<MyProtocol> );
+\endcode
+
+In this case \c MyProtocol would be a class you implemented as
+described here (derived from \c QNetworkProtocol) and the name of the
+protocol would be "myprot". So to use it, you would do something like
+
+\code
+    QUrlOperator op( "myprot://host/path" );
+    op.listChildren();
+\endcode
+
+Finally, as example of a network protocol implementation you could
+look at the implementation of QLocalFs. The network extension also
+contains an example implementation of a network protocol.
+
+
+\section2 Error Handling
+
+Error handling is important for both implementing new network
+protocols for and using them (through \c QUrlOperator).
+
+After processing an operation has been finished the network operation
+the QUrlOperator emits the \c finished() signal. This has as argument
+a pointer to the processed \c QNetworkOperation. If the state of this
+operation is \c QNetworkProtocol::StFailed, the operation contains
+some more information about this error. The following error codes are
+defined in \c QNetworkProtocol:
+
+\table
+\header \i Error \i Meaning
+\row \i \c QNetworkProtocol::NoError 
+     \i No error occurred
+\row \i \c QNetworkProtocol::ErrValid 
+     \i The URL you are operating on is not valid
+\row \i \c QNetworkProtocol::ErrUnknownProtocol 
+     \i There is no protocol implementation available for the protocol
+	of the URL you are operating on (e.g. if the protocol is http
+	and no http implementation has been registered)
+\row \i \c QNetworkProtocol::ErrUnsupported 
+     \i The operation is not supported by the protocol
+\row \i \c QNetworkProtocol::ErrParse 
+     \i Parse error of the URL
+\row \i \c QNetworkProtocol::ErrLoginIncorrect 
+     \i You needed to login but the username or password are wrong
+\row \i \c QNetworkProtocol::ErrHostNotFound 
+     \i The specified host (in the URL) couldn't be found
+\row \i \c QNetworkProtocol::ErrListChildren 
+     \i An error occurred while listing the children
+\row \i \c QNetworkProtocol::ErrMkDir 
+     \i An error occurred when creating a directory
+\row \i \c QNetworkProtocol::ErrRemove 
+     \i An error occurred while removing a child
+\row \i \c QNetworkProtocol::ErrRename 
+     \i An error occurred while renaming a child
+\row \i \c QNetworkProtocol::ErrGet 
+     \i An error occurred while getting (retrieving) data
+\row \i \c QNetworkProtocol::ErrPut 
+     \i An error occurred while putting (uploading) data
+\row \i \c QNetworkProtocol::ErrFileNotExisting 
+     \i A file which is needed by the operation doesn't exist
+\row \i \c QNetworkProtocol::ErrPermissionDenied 
+     \i The permission for doing the operation has been denied
+\endtable
+
+\c QNetworkOperation::errorCode() returns one of these codes or
+perhaps a different one if you use your an own network protocol
+implementation which defines additional error codes.
+
+\c QNetworkOperation::protocolDetails() may also return a string which
+contains an error message then which might be suitable for display to
+the user.
+
+If you implement your own network protocol, you must report any
+errors which occurred. First you always need to be able to
+access the \c QNetworkOperation which is being processed at the
+moment. This is done using \c
+QNetworkOperation::operationInProgress(), which returns a pointer to
+the current network operation or 0 if no operation is processed at the
+moment.
+
+Now if an error occurred and you need to handle it, do this:
+\code
+    if ( operationInProgress() ) {
+        operationInProgress()->setErrorCode( error_code_of_your_error );
+        operationInProgress()->setProtocolDetails( detail ); // optional
+        emit finished( operationInProgress() );
+        return;
+    }
+\endcode
+
+That's all. The connection to the \c QUrlOperator and so on is done
+automatically. Additionally, if the error was really bad so that no
+more operations can be done in the current state (e.g. if the host
+couldn't be found), call \c QNetworkProtocol::clearOperationStack() \e
+before emitting \c finished().
+
+Ideally you should use one of the predefined error codes of \c
+QNetworkProtocol. If this is not possible, you can add own error codes
+- they are just normal \c{int}s. Just be careful that the value of the
+error code doesn't conflict with an existing one.
+
+An example to look at is in qt/examples/network/ftpclient.
+This is the implementation of a fairly complete FTP client, which
+supports uploading and downloading files, making directories, etc.,
+all done using \c QUrlOperators.
+
+You might also like to look at QFtp (in qt/src/network/qftp.cpp) or at
+the example in qt/examples/network/networkprotocol/nntp.cpp.
+
+*/

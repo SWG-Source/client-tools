@@ -98,11 +98,11 @@ UIImage * SwgCuiBuffUtils::addBuffIcon(const Buff & buff, UIVolumePage & bufPage
 	
 	if(isGod && !ClientBuffManager::getBuffIsGroupVisible(buff.m_nameCrc))
 	{
-		UIImageStyle * imageStyle = safe_cast<UIImageStyle *>(UIManager::gUIManager().GetRootPage()->GetObjectFromPath (UIString(Unicode::narrowToWide("/Styles.Icon.mood.careful")), TUIImageStyle));
+		UIImageStyle * godImageStyle = safe_cast<UIImageStyle *>(UIManager::gUIManager().GetRootPage()->GetObjectFromPath (UIString(Unicode::narrowToWide("/Styles.Icon.mood.careful")), TUIImageStyle));
 
-		if (imageStyle)
+		if (godImageStyle)
 		{
-			image->SetStyle(imageStyle);
+			image->SetStyle(godImageStyle);
 		}
 	}
 
@@ -164,11 +164,11 @@ UIPage * SwgCuiBuffUtils::addBuffIcon(const Buff & buff, UIVolumePage & buffPage
 		
 		if(isGod && !ClientBuffManager::getBuffIsGroupVisible(buff.m_nameCrc))
 		{
-			UIImageStyle * imageStyle = safe_cast<UIImageStyle *>(UIManager::gUIManager().GetRootPage()->GetObjectFromPath (UIString(Unicode::narrowToWide("/Styles.Icon.mood.careful")), TUIImageStyle));
+			UIImageStyle * godImageStyle = safe_cast<UIImageStyle *>(UIManager::gUIManager().GetRootPage()->GetObjectFromPath (UIString(Unicode::narrowToWide("/Styles.Icon.mood.careful")), TUIImageStyle));
 
-			if (imageStyle)
+			if (godImageStyle)
 			{
-				image->SetStyle(imageStyle);
+				image->SetStyle(godImageStyle);
 			}
 		}				
 	}	

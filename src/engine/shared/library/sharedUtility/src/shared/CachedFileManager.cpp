@@ -147,16 +147,26 @@ void CachedFileManager::install(bool const allowFileCaching)
 		Iff iff;
 		if (iff.open (result, true))
 		{
-			iff.enterForm (TAG_CACH);
-				iff.enterChunk (TAG_0000);
+			// Restoration's cache file may not be in the SOE-era CACH-form
+			// layout. The cache is purely a preload-hint optimization, so
+			// treat a missing CACH form as "no cache" rather than a fatal.
+			if (iff.getCurrentName() == TAG_CACH)
+			{
+				iff.enterForm (TAG_CACH);
+					iff.enterChunk (TAG_0000);
 
-					//-- the entire chunk is filled with null terminated strings
-					ms_filenamesLength = iff.getChunkLengthLeft();
-					ms_filenames = iff.readRest_char();
+						//-- the entire chunk is filled with null terminated strings
+						ms_filenamesLength = iff.getChunkLengthLeft();
+						ms_filenames = iff.readRest_char();
 
-				iff.exitChunk (TAG_0000);
+					iff.exitChunk (TAG_0000);
 
-			iff.exitForm (TAG_CACH);
+				iff.exitForm (TAG_CACH);
+			}
+			else
+			{
+				DEBUG_WARNING(true, ("CachedFileManager: %s does not start with [CACH] form (got tag %08x); skipping preload cache.\n", result, iff.getCurrentName()));
+			}
 		}
 	}
 

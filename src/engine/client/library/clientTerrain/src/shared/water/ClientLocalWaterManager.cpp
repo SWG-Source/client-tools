@@ -966,10 +966,25 @@ void ClientLocalWaterManager::addRibbonStrip (char const * debugName, const char
 void ClientLocalWaterManager::alter (float time)
 {
 	NOT_NULL (m_localShaderPrimitiveDefaultList);
-	std::for_each (m_localShaderPrimitiveDefaultList->begin (), m_localShaderPrimitiveDefaultList->end (), std::bind2nd (std::mem_fun (&LocalShaderPrimitiveDefault::alter), time));
+	std::for_each(
+		m_localShaderPrimitiveDefaultList->begin(),
+		m_localShaderPrimitiveDefaultList->end(),
+		[time](LocalShaderPrimitiveDefault* p)
+		{
+			p->alter(time);
+		}
+	);
 
 	NOT_NULL (m_localShaderPrimitiveRibbonStripList);
-	std::for_each (m_localShaderPrimitiveRibbonStripList->begin (), m_localShaderPrimitiveRibbonStripList->end (), std::bind2nd (std::mem_fun (&LocalShaderPrimitiveRibbonStrip::alter), time));
+	std::for_each(
+		m_localShaderPrimitiveRibbonStripList->begin(),
+		m_localShaderPrimitiveRibbonStripList->end(),
+		[time](LocalShaderPrimitiveRibbonStrip* p)
+		{
+			p->alter(time);
+		}
+	);
+
 }
 
 //-------------------------------------------------------------------

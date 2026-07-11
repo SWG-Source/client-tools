@@ -2852,7 +2852,6 @@ bool BlueprintTextureRendererTemplate::render(Texture *destinationTexture, const
 		Graphics::setRenderTarget(NULL, CF_none, 0);
 
 	}
-
 	return endFrameSucceeded;
 }
 

@@ -13,6 +13,9 @@ public:
 	virtual TextureFormat getNativeFormat() const;
 	virtual void        lock(LockData &lockData);
 	virtual void        unlock(LockData &lockData);
+	virtual void        copyFrom(int surfaceLevel, TextureGraphicsData const &rhs,
+	                             int srcX, int srcY, int srcWidth, int srcHeight,
+	                             int dstX, int dstY, int dstWidth, int dstHeight);
 
 private:
 	TextureFormat       m_format;

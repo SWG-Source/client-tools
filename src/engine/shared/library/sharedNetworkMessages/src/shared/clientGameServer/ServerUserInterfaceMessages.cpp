@@ -131,10 +131,10 @@ const SuiCreatePage::CommandVector & SuiCreatePage::getCommands() const
 
 //----------------------------------------------------------------------
 
-void SuiCreatePage::addCommand(const SuiCreatePage_Command::Type type, const std::vector<Unicode::String>& parameters) 
+void SuiCreatePage::addCommand(const SuiCreatePage_Command::Type newType, const std::vector<Unicode::String>& parameters)
 {
 	Command c;
-	c.m_type = type;
+	c.m_type = newType;
 	c.m_parameters = parameters;
 	m_commands.get().push_back(c);
 }

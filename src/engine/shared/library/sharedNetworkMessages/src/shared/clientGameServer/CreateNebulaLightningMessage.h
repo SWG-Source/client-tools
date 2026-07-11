@@ -10,9 +10,9 @@
 
 //======================================================================
 
-#include "Archive/AutoDeltaByteStream.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
+#include "NebulaLightningArchive.h"
 #include "sharedNetworkMessages/NebulaLightningData.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //----------------------------------------------------------------------
 

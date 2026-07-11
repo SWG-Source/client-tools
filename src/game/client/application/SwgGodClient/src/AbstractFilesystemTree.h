@@ -8,6 +8,9 @@
 #ifndef INCLUDED_AbstractFilesystemTree_H
 #define INCLUDED_AbstractFilesystemTree_H
 
+#include <qlistview.h>
+#include <qpixmap.h>
+
 // ======================================================================
 
 /**

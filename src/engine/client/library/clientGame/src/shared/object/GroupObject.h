@@ -145,12 +145,12 @@ public:
 	int                         getIndexForMember (NetworkId const & id) const;
 
 	void                        membersOnChanged   ();
-	void                        membersOnErase     (const size_t n, const GroupMember & member);
-	void                        membersOnInsert    (const size_t n, const GroupMember & member);
+	void                        membersOnErase     (const unsigned int n, const GroupMember & member);
+	void                        membersOnInsert    (const unsigned int n, const GroupMember & member);
 
 	void memberShipsOnChanged();
-	void memberShipsOnErase(const size_t n, const GroupShipFormationMember & member);
-	void memberShipsOnInsert(const size_t n, const GroupShipFormationMember & member);
+	void memberShipsOnErase(const unsigned int n, const GroupShipFormationMember & member);
+	void memberShipsOnInsert(const unsigned int n, const GroupShipFormationMember & member);
 
 	int16                       getGroupLevel      () const;
 

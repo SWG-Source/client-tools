@@ -8,147 +8,76 @@
 
 #include "FirstDirect3d9.h"
 
+#include <intrin.h>   // _ReturnAddress
+
 // ======================================================================
 
 // we are using the arguments (except for file and line), but MSVC can't tell that.
 #pragma warning(disable: 4100)
 
 // ======================================================================
-// this is here because MSVC won't let me call MemoryManager::allocate() directly from inline assembly
+//
+// Was: each `operator new`/`operator new[]` overload below was an x86
+// naked function written in inline asm to read the caller's return
+// address from [ebp+4] and forward it to localAllocate as the
+// memory-owner tag. MSVC dropped support for naked + inline asm on
+// x64. The `_ReturnAddress` intrinsic does the same thing portably and
+// the compiler emits the prolog/epilog itself.
 
 static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
 {
 	return MemoryManager::allocate(size, owner, array, leakTest);
 }
 
+namespace
+{
+	inline uint32 callerOwner()
+	{
+		// Truncate the (possibly 64-bit) return address to the 32-bit
+		// owner-tag type. The tag is opaque to MemoryManager; only the
+		// leak tracker reads it for diagnostics.
+		return static_cast<uint32>(reinterpret_cast<uintptr_t>(_ReturnAddress()));
+	}
+}
+
 // ======================================================================
 
-__declspec(naked) void *operator new(size_t size, MemoryManagerNotALeak)
+void *operator new(size_t size, MemoryManagerNotALeak)
 {
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// localAllocate(size, [return address], false, false)
-		push    0
-		push    0
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
+	// localAllocate(size, [return address], array=false, leakTest=false)
+	return localAllocate(size, callerOwner(), false, false);
 }
 
 // ----------------------------------------------------------------------
 
-__declspec(naked) void *operator new(size_t size)
+void *operator new(size_t size)
 {
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// localAllocate(size, [return address], false, true)
-		push    1
-		push    0
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
+	// localAllocate(size, [return address], array=false, leakTest=true)
+	return localAllocate(size, callerOwner(), false, true);
 }
 
 // ----------------------------------------------------------------------
 
-__declspec(naked) void *operator new[](size_t size)
+void *operator new[](size_t size)
 {
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// localAllocate(size, [return address], true, true)
-		push    1
-		push    1
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
+	// localAllocate(size, [return address], array=true, leakTest=true)
+	return localAllocate(size, callerOwner(), true, true);
 }
 
 // ----------------------------------------------------------------------
 
-__declspec(naked) void *operator new(size_t size, const char *file, int line)
+void *operator new(size_t size, const char *file, int line)
 {
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// localAllocate(size, [return address], false, true)
-		push    1
-		push    0
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
+	// localAllocate(size, [return address], array=false, leakTest=true)
+	return localAllocate(size, callerOwner(), false, true);
 }
 
 // ----------------------------------------------------------------------
 
-__declspec(naked) void *operator new[](size_t size, const char *file, int line)
+void *operator new[](size_t size, const char *file, int line)
 {
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// localAllocate(size, [return address], true, true)
-		push    1
-		push    1
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
+	// localAllocate(size, [return address], array=true, leakTest=true)
+	return localAllocate(size, callerOwner(), true, true);
 }
 
 // ----------------------------------------------------------------------

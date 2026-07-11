@@ -1,0 +1,121 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<!-- /home/espenr/tmp/qt-3.3.8-espenr-2499/qt-x11-free-3.3.8/doc/accel.doc:36 -->
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<title>Adding an accelerated graphics driver to Qt/Embedded</title>
+<style type="text/css"><!--
+fn { margin-left: 1cm; text-indent: -1cm; }
+a:link { color: #004faf; text-decoration: none }
+a:visited { color: #672967; text-decoration: none }
+body { background: #ffffff; color: black; }
+--></style>
+</head>
+<body>
+
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr bgcolor="#E5E5E5">
+<td valign=center>
+ <a href="index.html">
+<font color="#004faf">Home</font></a>
+ | <a href="classes.html">
+<font color="#004faf">All&nbsp;Classes</font></a>
+ | <a href="mainclasses.html">
+<font color="#004faf">Main&nbsp;Classes</font></a>
+ | <a href="annotated.html">
+<font color="#004faf">Annotated</font></a>
+ | <a href="groups.html">
+<font color="#004faf">Grouped&nbsp;Classes</font></a>
+ | <a href="functions.html">
+<font color="#004faf">Functions</font></a>
+</td>
+<td align="right" valign="center"><img src="logo32.png" align="right" width="64" height="32" border="0"></td></tr></table><h1 align=center>Adding an accelerated graphics driver to Qt/Embedded</h1>
+
+
+
+<p> Qt/Embedded has the capacity to make use of hardware accelerators.
+To use a hardware accelerator for a PCI or AGP driver, you must
+perform the following steps:
+<p> <ol type=1>
+<li> 
+Define an accelerated descendant of QLinuxFbScreen. 
+<p> This should implement <tt>QVoodooScreen::connect()</tt> to map its
+registers. Use <tt>qt_probe_bus</tt> to get a pointer to the PCI config
+space. This is where you should check that you're being pointed to the
+right device (using the PCI device/manufacturer ID information). Then
+use PCI config space to locate your device's accelerator registers in
+physical memory and mmap the appropriate region from <tt>/dev/mem</tt>.
+There is no need to map the framebuffer, <tt>QLinuxFbScreen</tt> will do
+this for you. Return <tt>FALSE</tt> if a problem occurs at any point. <tt>QVoodooScreen::initDevice()</tt> will be called only by the QWS server and
+is guaranteed to be called before any drawing is done (and so is a
+good place to set registers to known states). <tt>connect()</tt> will be called
+by every connecting client.
+<p> <li> 
+Define an accelerated descendant of QGfxRaster. 
+<p> This is where the actual drawing code goes. Anything not implemented
+in hardware can be passed back to <tt>QGfxRaster</tt> to do in software. Use
+the optype variable to make sure that accelerated and unaccelerated
+operations are synchronised (if you start drawing via software into an
+area where the hardware accelerator is still drawing then your drawing
+operations will appear to be in the wrong order). optype is stored in
+shared memory and is set to 0 by unaccelerated operations; accelerated
+operations should set it to 1. When a software graphics operation is
+requested and optype is 1, <tt>QGfxRaster::sync()</tt> is called; you should
+provide your own implementation of this that waits for the graphics
+engine to go idle. lastop is also available for optimisation and is
+stored in the shared space: this will not be set by the software-only
+<tt>QGfx</tt> and can be used to store the type of your last operation (e.g.
+drawing a rectangle) so that part of the setup for the next operation
+can be avoided when many of the same operations are performed in
+sequence.
+<p> All drawing operations should be protected via a <tt>QWSDisplay::grab()</tt>
+before any registers, lastop or optype are accessed, and <tt>ungrabbed()</tt> at the end. This prevents two applications trying to
+access the accelerator at once and possibly locking up the machine.
+It's possible that your source data is not on the graphics card so you
+should check in such cases and fall back to software if necessary.
+Note that <tt>QGfxRaster</tt> supports some features not directly supported
+by <a href="qpainter.html">QPainter</a> (for instance, alpha channels in 32-bit data and
+stretchBlt's). These features are used by Qt; stretchBlt speeds up <a href="qpixmap.html#xForm">QPixmap::xForm</a>() and <tt>drawPixmap()</tt> into a transformed <a href="qpainter.html">QPainter</a>,
+alpha channel acceleration is supported for 32-bit pixmaps.
+<p> <li>
+If you wish, define an accelerated descendant of <tt>QScreenCursor</tt>. <tt>restoreUnder()</tt>, <tt>saveUnder()</tt>, <tt>drawCursor()</tt> and <tt>draw()</tt> should
+be defined as null operations. Implement <tt>set()</tt>, <tt>move()</tt>, <tt>show()</tt> and <tt>hide()</tt>. 4KB is left for your cursor at the end of the
+visible part of the framebuffer (i.e. at (width*height*depth)/8 )
+<p> <li>
+Implement <tt>initCursor()</tt> and <tt>createGfx()</tt> in your <a href="qscreen.html">QScreen</a>
+descendant. Implement <tt>useOffscreen()</tt> and return <tt>TRUE</tt> if you can
+make use of offscreen graphics memory.
+<p> <li>
+Implement a small function <tt>qt_get_screen_mychip()</tt>, which simply
+returns a new <tt>QMychipScreen</tt>
+<p> <li>
+Add your driver to the DriverTable table in <tt>qgfxraster_qws.cpp</tt>,
+e.g.
+<pre>
+{ "MyChip", qt_get_screen_mychip,1 },
+</pre>
+ 
+<p> The first parameter is the name used with QWS_DISPLAY to request your
+accelerated driver.
+<p> <li>
+To run with your new driver,
+<pre>
+export QWS_DISPLAY=MyChip 
+</pre>
+ 
+(optionally MyChip:/dev/fb&lt;n&gt; to request a different Linux
+framebuffer than <tt>/dev/fb0</tt>), then run the program
+<p> </ol>
+<p> If your driver is not PCI or AGP you'll need to inherit <a href="qscreen.html">QScreen</a>
+instead of <tt>QLinuxFbScreen</tt> and implement similar functionality to <tt>QLinuxFbScreen</tt>, but otherwise the process should be similar. The most
+complete example driver is <tt>qgfxmach64_qws.cpp</tt>; <tt>qgfxvoodoo_qws.cpp</tt> may provide a smaller and easier-to-understand
+driver.
+<p> 
+<!-- eof -->
+<p><address><hr><div align=center>
+<table width=100% cellspacing=0 border=0><tr>
+<td>Copyright &copy; 2007
+<a href="troll.html">Trolltech</a><td align=center><a href="trademarks.html">Trademarks</a>
+<td align=right><div align=right>Qt 3.3.8</div>
+</table></div></address></body>
+</html>

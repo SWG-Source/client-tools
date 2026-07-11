@@ -12,13 +12,13 @@
 
 #include "UIEventCallback.h"
 #include "clientUserInterface/CuiMediator.h"
+#include "clientGame/TangibleObject.h"
 
 class CachedNetworkId;
 class CustomizationManagerPaletteColumns;
 class NetworkId;
 class Object;
 class PaletteArgb;
-class TangibleObject;
 class UIButton;
 class UIDataSource;
 class UILowerString;

@@ -35,7 +35,7 @@ public:
 
 	//-- LocalizationUnicodeString is simply a typedef that is equivalent to Unicode::String
 	//-- it is defined here to prevent #including Unicode.h
-	typedef std::basic_string<unsigned short> LocUnicodeString;
+	typedef Unicode::String LocUnicodeString;
 
 	                        StringId       ();
 	                        StringId       (const std::string & table, const std::string & text);

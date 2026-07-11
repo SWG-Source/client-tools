@@ -166,8 +166,29 @@ void NetworkHandler::dispatch()
 				}
 				catch(const Archive::ReadException & readException)
 				{
-					WARNING(true, ("Unhandled Archive read error (%s) on connection. Continuing to throw from NetwokrHandler::Dispatch", readException.what()));
-					throw(readException);
+					// Drop the malformed message and continue - do NOT re-throw.
+					// Layout based on observation: 2-byte connection-layer prefix,
+					// then the GameNetworkMessage CRC at bytes [2..5], then for
+					// BaselinesMessage: target NetworkId at [6..13], typeId Tag
+					// at [14..17], packageId at [18], package size at [19..22].
+					const Archive::ByteStream & bs = (*i).byteStream;
+					unsigned char const * const buf = bs.getBuffer();
+					unsigned int const sz = bs.getSize();
+					unsigned int msgCrc = 0;
+					char tagStr[5] = "????";
+					if (sz >= 6)  memcpy(&msgCrc, buf + 2, 4);
+					if (sz >= 18)
+					{
+						// typeId Tag is 4 bytes packed in network order
+						tagStr[0] = static_cast<char>(buf[17]);
+						tagStr[1] = static_cast<char>(buf[16]);
+						tagStr[2] = static_cast<char>(buf[15]);
+						tagStr[3] = static_cast<char>(buf[14]);
+						for (int k = 0; k < 4; ++k)
+							if (tagStr[k] < 32 || tagStr[k] > 126) tagStr[k] = '.';
+					}
+					WARNING(true, ("Archive read error (%s) on connection - dropping message [size=%u, msgCRC=0x%08x, typeId=%s] and continuing",
+						readException.what(), sz, msgCrc, tagStr));
 				}
 			}
 
@@ -255,7 +276,7 @@ void NetworkHandler::onReceive(Connection * c, const unsigned char * d, int s)
 {
 	if(c)
 	{
-		services.inputQueue.push_back();
+		services.inputQueue.emplace_back();
 		services.inputQueue.back().connection = c;
 		services.inputQueue.back().byteStream.put(d, s);
 

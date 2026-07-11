@@ -112,12 +112,23 @@ public:
 		return *gSingleton;
 	};
 
-	static void              ExplicitDestroy () 
+	static void              ExplicitDestroy ()
 	{
 		gIsUIReady = false;
-		delete gSingleton; 
+		delete gSingleton;
 		gSingleton = 0;
 	};
+
+	// UI input scale (2026-05-16, ultrawide support). When uiScale != 1.0,
+	// the root UIPage is sized smaller than the viewport and rendered with
+	// a Scale() transform applied so widgets fill the screen. Mouse input
+	// arrives in physical screen pixels, but UI hit-testing happens in
+	// logical (smaller) coords. SetMouseInputScale must be called by the
+	// app (CuiManager::install does this) with the same scale factor used
+	// for rendering; ProcessMessage then divides incoming MouseCoords by
+	// this value before any UI dispatch. Default 1.0f = no-op.
+	static void              SetMouseInputScale (float scale) { ms_mouseInputScale = scale; }
+	static float             GetMouseInputScale ()            { return ms_mouseInputScale; }
 
 	void              AddClock( UIClock * );
 	void              RemoveClock( UIClock * );
@@ -253,6 +264,8 @@ private:
 	 */
 	static bool           gIsUIReady;
 
+	// UI scale for mouse input (2026-05-16). See SetMouseInputScale doc.
+	static float          ms_mouseInputScale;
 
 	UIPage                *mRootPage;
 	UISoundCanvas         *mSoundCanvas;

@@ -8,6 +8,8 @@
 #include "sharedCollision/FirstSharedCollision.h"
 #include "sharedCollision/CollisionUtils.h"
 
+#include <cmath>   // sqrtf (used in faster_normalize below)
+
 #include "sharedCollision/Overlap2d.h"
 #include "sharedCollision/Overlap3d.h"
 #include "sharedCollision/Containment3d.h"
@@ -424,9 +426,10 @@ inline void faster_normalize( Vector & V )
 {
 	float t = (V.x * V.x) + (V.y * V.y) + (V.z * V.z);
 
-	__asm fld t;
-	__asm fsqrt;
-	__asm fstp t;
+	// Was: x87 inline asm `fld t; fsqrt; fstp t`. sqrtf compiles to a
+	// single SSE sqrtss on x64 and an x87 fsqrt on x86 - same speed,
+	// portable, no inline asm.
+	t = sqrtf(t);
 
 	t = 1.0f / t;
 

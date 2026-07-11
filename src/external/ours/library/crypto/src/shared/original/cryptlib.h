@@ -61,6 +61,7 @@ and getting me started with this manual.
 #include <limits.h>
 #include <exception>
 #include <string>
+#include <algorithm>
 
 NAMESPACE_BEGIN(CryptoPP)
 
@@ -180,8 +181,13 @@ public:
 	//! randomly shuffle the specified array, resulting permutation is uniformly distributed
 	template <class IT> void Shuffle(IT begin, IT end)
 	{
-		for (; begin != end; ++begin)
-			std::iter_swap(begin, begin + GenerateWord32(0, end-begin-1));
+		for (IT i = begin; i != end; ++i)
+		{
+			auto dist = std::distance(i, end);
+			auto offset = dist > 1 ? GenerateWord32(0, dist - 1) : 0;
+			std::iter_swap(i, i + offset);
+		}
+
 	}
 
 	// for backwards compatibility, maybe be remove later

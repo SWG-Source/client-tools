@@ -21,12 +21,12 @@ namespace UIIMEManagerNamespace
 {
 	const Unicode::String colorModifiers[6] = 
 	{
-		L"\\#DDDD00",	//ATTR_INPUT 	The character being entered by a user, not yet converted by the IME.
-		L"\\#00DD00",	//ATTR_INPUT_ERROR 	The character is the error character and cannot be converted by the IME.
-		L"\\#DDDDDD",	//ATTR_TARGET_CONVERTED 	The character converted by the IME. A user has selected this character, and the IME has converted it.
-		L"\\#0000DD",	//ATTR_CONVERTED 	A converted character. The IME has already converted this character.
-		L"\\#DD0000",	//ATTR_TARGET_NOTCONVERTED 	The character being converted. A user has selected this character, but the IME has not yet converted it.
-		L"\\#DDDDDD",	//ATTR_FIXEDCONVERTED
+		u"\\#DDDD00",	//ATTR_INPUT 	The character being entered by a user, not yet converted by the IME.
+		u"\\#00DD00",	//ATTR_INPUT_ERROR 	The character is the error character and cannot be converted by the IME.
+		u"\\#DDDDDD",	//ATTR_TARGET_CONVERTED 	The character converted by the IME. A user has selected this character, and the IME has converted it.
+		u"\\#0000DD",	//ATTR_CONVERTED 	A converted character. The IME has already converted this character.
+		u"\\#DD0000",	//ATTR_TARGET_NOTCONVERTED 	The character being converted. A user has selected this character, but the IME has not yet converted it.
+		u"\\#DDDDDD",	//ATTR_FIXEDCONVERTED
 	};
 }
 

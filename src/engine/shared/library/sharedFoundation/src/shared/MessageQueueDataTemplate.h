@@ -39,7 +39,7 @@ public:
 		return m_data;
 	}
 
-	void setData (const T & t) const
+	void setData (const T & t)
 	{
 		m_data = t;
 	}

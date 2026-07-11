@@ -9,21 +9,25 @@
 #ifndef INCLUDED_PlayerObject_H
 #define INCLUDED_PlayerObject_H
 
+#include "sharedObject/CachedNetworkIdArchive.h"
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "sharedGame/CraftingDataArchive.h"
+#include "sharedGame/MatchMakingId.h"
+
+#include "sharedFoundation/BitArray.h"
+#include "sharedGame/PlayerQuestData.h"
+
 #include "archive/AutoDeltaMap.h"
 #include "archive/AutoDeltaPackedMap.h"
 #include "archive/AutoDeltaSet.h"
 #include "archive/AutoDeltaVector.h"
+
 #include "clientGame/IntangibleObject.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/BitArray.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Production.h"
+#include "sharedFoundation/Production.h"
 #include "sharedGame/CollectionsDataTable.h"
-#include "sharedGame/CraftingDataArchive.h"
-#include "sharedGame/MatchMakingId.h"
 #include "sharedGame/PlayerData.h"
-#include "sharedGame/PlayerQuestData.h"
 #include "sharedObject/CachedNetworkId.h"
-#include "sharedObject/CachedNetworkIdArchive.h"
+
 
 class ClientWaypointObject;
 class Quest;

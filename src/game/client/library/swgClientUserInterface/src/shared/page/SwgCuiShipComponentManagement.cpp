@@ -1312,7 +1312,7 @@ void SwgCuiShipComponentManagement::addDroidSlot(UIDataSourceContainer & droidCo
 
 void SwgCuiShipComponentManagement::onComponentsChanged (ShipObject::Messages::ComponentsChanged::Payload & ship)
 {
-	if(&ship == m_ship)
+	if (&ship == m_ship.getPointer())
 	{
 		ms_energyUsageDirty = true;
 		rebuildOpenTreeBranches();
@@ -1323,7 +1323,7 @@ void SwgCuiShipComponentManagement::onComponentsChanged (ShipObject::Messages::C
 
 void SwgCuiShipComponentManagement::onDroidPcdChanged(ShipObject::Messages::DroidPcdChanged::Payload & ship)
 {
-	if(&ship == m_ship)
+	if(&ship == m_ship.getPointer())
 	{
 		rebuildOpenTreeBranches();
 	}

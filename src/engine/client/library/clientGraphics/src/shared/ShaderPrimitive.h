@@ -24,7 +24,7 @@ class ShaderPrimitive
 {
 public:
 
-	typedef enum SkinningMode
+	enum SkinningMode
 	{
 		SM_noSkinning,
 		SM_hardSkinning,

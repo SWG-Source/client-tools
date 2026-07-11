@@ -13,6 +13,7 @@
 #include "sharedGame/SuiPageData.h"
 #include "sharedGame/SuiPageDataArchive.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
+#include "Archive/AutoDeltaByteStream.h"
 
 //----------------------------------------------------------------------
 
@@ -25,7 +26,7 @@ public:
 public:
 
 	explicit SuiUpdatePageMessage(SuiPageData const & pageData);
-	explicit SuiUpdatePageMessage::SuiUpdatePageMessage(Archive::ReadIterator & source);
+	explicit SuiUpdatePageMessage(Archive::ReadIterator & source);
 
 	SuiPageData const & getPageData() const;
 

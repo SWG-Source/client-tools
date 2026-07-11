@@ -64,6 +64,8 @@
 #define LOG_SPECIFIC_JOINT_OUTPUT 1
 
 #if LOG_SPECIFIC_JOINT_OUTPUT
+// Disable deprecated auto_ptr support for modern C++
+#define BOOST_NO_AUTO_PTR
 #include <boost/smart_ptr.hpp>
 #endif
 

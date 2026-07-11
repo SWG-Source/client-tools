@@ -30,6 +30,7 @@
 #include "sharedMessageDispatch/Receiver.h"
 #include "sharedMessageDispatch/Transceiver.h"
 #include "sharedNetwork/UdpSock.h"
+#include "sharedNetworkMessages/ClientCentralMessagesArchive.h"
 #include "sharedNetworkMessages/ClientCentralMessages.h"
 #include "sharedNetworkMessages/ClientPermissionsMessage.h"
 #include "sharedNetworkMessages/GenericValueTypeMessage.h"
@@ -156,7 +157,6 @@ namespace CuiLoginManagerNamespace
 			{
 				Archive::ReadIterator ri = NON_NULL (safe_cast<const GameNetworkMessage *>(&message))->getByteStream ().begin ();
 				const GenericValueTypeMessage<std::set<std::string> > ccd (ri);
-
 				if (lec)
 				{
 					CuiLoginManager::receiveLoginEnumCluster (*lec, ccd.getValue());
@@ -171,7 +171,6 @@ namespace CuiLoginManagerNamespace
 			{
 				Archive::ReadIterator ri = NON_NULL (safe_cast<const GameNetworkMessage *>(&message))->getByteStream ().begin ();
 				const LoginClusterStatus lcs (ri);
-
 				if (lec)
 				{
 					CuiLoginManager::receiveLoginEnumCluster (*lec, std::set<std::string>());

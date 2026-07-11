@@ -11,145 +11,20 @@
 
 //-----------------------------------------------------------------------
 
-#include "Archive/AutoDeltaByteStream.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Tag.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "sharedFoundation/NetworkId.h"
+#include "sharedFoundation/Tag.h"
 #include "unicodeArchive/UnicodeArchive.h"
+#include "Unicode.h"
+#include "AuctionQueryArchive.h"
+#include "Archive/AutoDeltaByteStream.h"
+#include "AuctionQueryTypes.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 
 class AuctionQueryHeadersMessage : public GameNetworkMessage
 {
-public: // types
-	/*  auction query types */
-	enum AuctionSearchType
-	{
-		AST_ByCategory,
-		AST_ByLocation,
-		AST_ByAll,
-		AST_ByPlayerSales,
-		AST_ByPlayerBids,
-		AST_ByPlayerStockroom,
-		AST_ByVendorOffers,
-		AST_ByVendorSelling,
-		AST_ByVendorStockroom,
-		AST_ByPlayerOffersToVendor
-	};
-
-	enum AuctionLocationSearch
-	{
-		ALS_Galaxy,
-		ALS_Planet,
-		ALS_Region,
-		ALS_Market
-	};
-
-	enum SearchConditionComparison
-	{
-		// DO NOT CHANGE THE ORDERING OR THE NUMBERING
-		// ADD NEW ENUM VALUE BEFORE SCC_LAST
-		SCC_int = 0,
-		SCC_float,
-		SCC_string_equal,
-		SCC_string_not_equal,
-		SCC_string_contain,
-		SCC_string_not_contain,
-		SCC_LAST
-	};
-
-	// order of enum value MUST match the order defined in the combo box for dsComboMatchAllAny defined in ui_auction.inc
-	enum AdvancedSearchMatchAllAny
-	{
-		// DO NOT CHANGE THE ORDERING OR THE NUMBERING
-		// ADD NEW ENUM VALUE BEFORE ASMAA_LAST
-		ASMAA_match_all = 0,
-		ASMAA_match_any,
-		ASMAA_not_match_all,
-		ASMAA_not_match_any,
-		ASMAA_LAST
-	};
-
-	class SearchCondition
-	{
-	public:
-		SearchCondition() :
-		  attributeNameCrc(), requiredAttribute(false), comparison(SCC_int), intMin(0), intMax(0), floatMin(0.0f), floatMax(0.0f), stringValue() {};
-
-		SearchCondition(SearchCondition const & rhs) :
-		  attributeNameCrc(rhs.attributeNameCrc), requiredAttribute(rhs.requiredAttribute), comparison(rhs.comparison), intMin(rhs.intMin), intMax(rhs.intMax), floatMin(rhs.floatMin), floatMax(rhs.floatMax), stringValue(rhs.stringValue) {};
-
-		explicit SearchCondition(uint32 const pAttributeNameCrc, bool const pRequiredAttribute, int const pIntMin, int const pIntMax) :
-		  attributeNameCrc(pAttributeNameCrc), requiredAttribute(pRequiredAttribute), comparison(SCC_int), intMin(pIntMin), intMax(pIntMax), floatMin(0.0f), floatMax(0.0f), stringValue() {};
-
-		explicit SearchCondition(uint32 const pAttributeNameCrc, bool const pRequiredAttribute, double const pFloatMin, double const pFloatMax) :
-		  attributeNameCrc(pAttributeNameCrc), requiredAttribute(pRequiredAttribute), comparison(SCC_float), intMin(0), intMax(0), floatMin(pFloatMin), floatMax(pFloatMax), stringValue() {};
-
-		explicit SearchCondition(uint32 const pAttributeNameCrc, bool const pRequiredAttribute, SearchConditionComparison const pComparison, std::string const & pStringValue) :
-		  attributeNameCrc(pAttributeNameCrc), requiredAttribute(pRequiredAttribute), comparison(pComparison), intMin(0), intMax(0), floatMin(0.0f), floatMax(0.0f), stringValue(pStringValue) {};
-
-		SearchCondition &operator =(SearchCondition const & rhs)
-		{
-			if (this != (&rhs))
-			{
-				attributeNameCrc = rhs.attributeNameCrc;
-				requiredAttribute = rhs.requiredAttribute;
-				comparison = rhs.comparison;
-				intMin = rhs.intMin;
-				intMax = rhs.intMax;
-				floatMin = rhs.floatMin;
-				floatMax = rhs.floatMax;
-				stringValue = rhs.stringValue;
-			}
-
-			return *this;
-		}
-
-		bool operator== (SearchCondition const & rhs) const
-		{
-			if (this == &rhs)
-			{
-				return true;
-			}
-
-			if ((attributeNameCrc != rhs.attributeNameCrc) ||
-				(requiredAttribute != rhs.requiredAttribute) ||
-				(comparison != rhs.comparison))
-			{
-				return false;
-			}
-
-			if (comparison == SCC_int)
-			{
-				return ((intMin == rhs.intMin) && (intMax == rhs.intMax));
-			}
-			else if (comparison == SCC_float)
-			{
-				return ((floatMin == rhs.floatMin) && (floatMax == rhs.floatMax));
-			}
-
-			return (stringValue == rhs.stringValue);
-		}
-
-		bool operator!= (SearchCondition const & rhs) const
-		{
-			return !operator==(rhs);
-		}
-
-		uint32 attributeNameCrc;
-		bool requiredAttribute;
-		SearchConditionComparison comparison;
-
-		int intMin;
-		int intMax;
-
-		double floatMin;
-		double floatMax;
-
-		std::string stringValue;
-	};
-
 public:
 
 	AuctionQueryHeadersMessage(
@@ -290,14 +165,14 @@ inline bool AuctionQueryHeadersMessage::getPriceFilterIncludesFee() const
 
 // ----------------------------------------------------------------------
 
-inline const std::list<AuctionQueryHeadersMessage::SearchCondition> & AuctionQueryHeadersMessage::getAdvancedSearch() const
+inline const std::list<SearchCondition> & AuctionQueryHeadersMessage::getAdvancedSearch() const
 {
 	return m_advancedSearch.get();
 }
 
 // ----------------------------------------------------------------------
 
-inline AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny AuctionQueryHeadersMessage::getAdvancedSearchMatchAllAny() const
+inline AdvancedSearchMatchAllAny AuctionQueryHeadersMessage::getAdvancedSearchMatchAllAny() const
 {
 	return static_cast<AdvancedSearchMatchAllAny>(m_advancedSearchMatchAllAny.get());
 }
@@ -321,17 +196,6 @@ inline bool AuctionQueryHeadersMessage::getMyVendorsOnly() const
 inline uint16 AuctionQueryHeadersMessage::getQueryOffset() const
 {
 	return m_queryOffset.get();
-}
-
-// ======================================================================
-
-namespace Archive
-{
-	class ReadIterator;
-	class ByteStream;
-
-	void get(ReadIterator & source, AuctionQueryHeadersMessage::SearchCondition & target);
-	void put(ByteStream & target, const AuctionQueryHeadersMessage::SearchCondition & source);
 }
 
 // ======================================================================

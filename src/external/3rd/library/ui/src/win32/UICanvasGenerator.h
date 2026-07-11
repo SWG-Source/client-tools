@@ -3,6 +3,10 @@
 
 #include "UIBaseObject.h"
 
+#include "../../../application/UiBuilder/UIDirect3DTextureCanvas.h"
+
+#include "UIRenderGlobals.h"
+
 class UICanvas;
 
 // =====================================

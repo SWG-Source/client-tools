@@ -114,6 +114,21 @@ void DataTableManager::close(const std::string& table)
 // ----------------------------------------------------------------------
 
 
+// Vanilla NGE-retail TRE pack omits many post-launch datatables. Lots of
+// `Manager::install()` paths read `getTable(name, true)` and immediately
+// dereference the result without a null check, crashing the client on
+// missing files. Hand back a static empty sentinel instead - callers see
+// 0 rows and skip their for-loops harmlessly. The sentinel is only used
+// for the missing-file path; real tables still load normally.
+namespace DataTableManagerNamespace
+{
+	DataTable * getEmptySentinel()
+	{
+		static DataTable s_empty;
+		return &s_empty;
+	}
+}
+
 DataTable * DataTableManager::getTable(const std::string& table, bool openIfNotFound)
 {
 //	FATAL(!m_installed, ("DataTableManager::getTable: not installed."));
@@ -128,8 +143,8 @@ DataTable * DataTableManager::getTable(const std::string& table, bool openIfNotF
 			DataTable * dt = open(table);
 			if (!dt)
 			{
-				DEBUG_WARNING(true, ("Could not find table [%s]", table.c_str()));
-				return NULL;
+				DEBUG_WARNING(true, ("Could not find table [%s] - returning empty sentinel.\n", table.c_str()));
+				return DataTableManagerNamespace::getEmptySentinel();
 			}
 			else
 			{

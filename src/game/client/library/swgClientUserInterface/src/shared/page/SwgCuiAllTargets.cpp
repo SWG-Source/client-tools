@@ -31,11 +31,11 @@
 #include "sharedCollision/BoxExtent.h"
 #include "sharedFoundation/Crc.h"
 #include "sharedFoundation/Timer.h"
+#include "sharedFoundation/PlatformGlue.h"
 #include "sharedGame/Command.h"
 #include "sharedGame/CommandChecks.h"
 #include "sharedGame/CommandTable.h"
 #include "sharedGame/SharedBuildingObjectTemplate.h"
-#include "sharedGame/SharedCreatureObjectTemplate.h"
 #include "sharedGame/SharedCreatureObjectTemplate.h"
 #include "sharedMath/Sphere.h"
 #include "sharedMath/Volume.h"
@@ -112,14 +112,13 @@ namespace SwgCuiAllTargetsNamespace
 		std::vector<UIPage *> *        m_waypointArrowPages;
 	};
 
-	struct TextOpacityZero: public std::unary_function<UISmartPointer<UIText>, bool>
+	struct TextOpacityZero
 	{
-		bool operator() (UISmartPointer<UIText> const & t) const 
+		bool operator()(UISmartPointer<UIText> const& t) const
 		{
 			return t.pointer() && (t->GetOpacity() <= 0.0f);
 		}
 	};
-
 
 	//--------------------------------------------------------------------
 	
@@ -367,7 +366,8 @@ void SwgCuiAllTargets::updateStatusOpacity(CachedNetworkId const & id)
 
 		for (it = m_statii->begin(); it != m_statii->end(); ++it)
 		{
-			if (it->second && it->second != status)
+			SwgCuiStatusGround* other = it->second;
+			if (other && other != status)
 			{
 				if (status->isStatusBarVisibleAndOverlapping(it->second))
 				{
@@ -525,7 +525,7 @@ void SwgCuiAllTargets::update(const Camera & camera)
 						int64 const value = tangible->getNetworkId().getValue();
 						unsigned const long procId = tangible->getAuthServerProcessId();
 						
-						snprintf(buffer, sizeof(buffer), "(%d) "INT64_FORMAT_SPECIFIER, procId, value);
+						snprintf(buffer, sizeof(buffer), "(%d) " INT64_FORMAT_SPECIFIER, procId, value);
 						
 						status->setDebugInformation(buffer);
 					}

@@ -59,7 +59,7 @@ friend class LightningAppearance;
 
 public:
 
-	static VertexBufferFormat LocalShaderPrimitive::getVertexBufferFormat();
+	static VertexBufferFormat getVertexBufferFormat();
 
 public:
 

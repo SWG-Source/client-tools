@@ -82,48 +82,51 @@ SwgCuiCommunity::Character::Character(UIPage &page, SwgCuiCommunity const &commu
 	m_callBack->connect(*this, &SwgCuiCommunity::Character::onWhoStatusChanged, static_cast<PlayerObject::Messages::WhoStatusChanged *>(0));
 	m_callBack->connect(*this, &SwgCuiCommunity::Character::onSpokenLanguageChanged, static_cast<PlayerObject::Messages::SpokenLangaugeChanged *>(0));
 
-	getCodeDataObject(TUIText, m_nameText, "textName");
-	registerMediatorObject(*m_nameText, true);
+	getCodeDataObject(TUIText, m_nameText, "textName", true);
+	if (m_nameText) registerMediatorObject(*m_nameText, true);
 
-	getCodeDataObject(TUIText, m_birthDateText, "textBirthDate");
-	registerMediatorObject(*m_birthDateText, true);
-	m_birthDateText->Clear();
+	getCodeDataObject(TUIText, m_birthDateText, "textBirthDate", true);
+	if (m_birthDateText) { registerMediatorObject(*m_birthDateText, true); m_birthDateText->Clear(); }
 
-	getCodeDataObject(TUIText, m_speciesText, "textSpecies");
-	registerMediatorObject(*m_speciesText, true);
+	getCodeDataObject(TUIText, m_speciesText, "textSpecies", true);
+	if (m_speciesText) registerMediatorObject(*m_speciesText, true);
 
-	getCodeDataObject(TUIText, m_bioText, "textBio");
-	registerMediatorObject(*m_bioText, true);
-	m_bioText->SetEditable(false);
-	m_bioText->SetMaxLines(-1);
-	m_bioText->SetMaximumCharacters(1024);
+	getCodeDataObject(TUIText, m_bioText, "textBio", true);
+	if (m_bioText)
+	{
+		registerMediatorObject(*m_bioText, true);
+		m_bioText->SetEditable(false);
+		m_bioText->SetMaxLines(-1);
+		m_bioText->SetMaximumCharacters(1024);
+	}
 
-	getCodeDataObject(TUICheckbox, m_searchableByCtsSourceGalaxyCheckBox, "checkSearchByCtsSourceGalaxy");
-	registerMediatorObject(*m_searchableByCtsSourceGalaxyCheckBox, true);
+	getCodeDataObject(TUICheckbox, m_searchableByCtsSourceGalaxyCheckBox, "checkSearchByCtsSourceGalaxy", true);
+	if (m_searchableByCtsSourceGalaxyCheckBox) registerMediatorObject(*m_searchableByCtsSourceGalaxyCheckBox, true);
 
-	getCodeDataObject(TUICheckbox, m_displayLocationInSearchResultsCheckBox, "checkhideloc");
-	registerMediatorObject(*m_displayLocationInSearchResultsCheckBox, true);
+	getCodeDataObject(TUICheckbox, m_displayLocationInSearchResultsCheckBox, "checkhideloc", true);
+	if (m_displayLocationInSearchResultsCheckBox) registerMediatorObject(*m_displayLocationInSearchResultsCheckBox, true);
 
-	getCodeDataObject(TUICheckbox, m_characterSearchableCheckBox, "checkMakeSearchable");
-	registerMediatorObject(*m_characterSearchableCheckBox, true);
+	getCodeDataObject(TUICheckbox, m_characterSearchableCheckBox, "checkMakeSearchable", true);
+	if (m_characterSearchableCheckBox) registerMediatorObject(*m_characterSearchableCheckBox, true);
 
-	getCodeDataObject(TUICheckbox, m_awayFromKeyBoardCheckBox, "checkAwayFromKeyboard");
-	registerMediatorObject(*m_awayFromKeyBoardCheckBox, true);
+	getCodeDataObject(TUICheckbox, m_awayFromKeyBoardCheckBox, "checkAwayFromKeyboard", true);
+	if (m_awayFromKeyBoardCheckBox) registerMediatorObject(*m_awayFromKeyBoardCheckBox, true);
 
-	getCodeDataObject(TUICheckbox, m_displayingFactionRankCheckBox, "checkDisplayingFactionRank");
-	registerMediatorObject(*m_displayingFactionRankCheckBox, true);
+	getCodeDataObject(TUICheckbox, m_displayingFactionRankCheckBox, "checkDisplayingFactionRank", true);
+	if (m_displayingFactionRankCheckBox) registerMediatorObject(*m_displayingFactionRankCheckBox, true);
 
-	getCodeDataObject(TUIComboBox, m_titleComboBox, "comboTitle");
-	registerMediatorObject(*m_titleComboBox, true);
+	getCodeDataObject(TUIComboBox, m_titleComboBox, "comboTitle", true);
+	if (m_titleComboBox) registerMediatorObject(*m_titleComboBox, true);
 
-	getCodeDataObject(TUIComboBox, m_languageComboBox, "comboLanguage");
-	registerMediatorObject(*m_languageComboBox, true);
+	getCodeDataObject(TUIComboBox, m_languageComboBox, "comboLanguage", true);
+	if (m_languageComboBox) registerMediatorObject(*m_languageComboBox, true);
 
 	UIPage *lfgPage = NULL;
-	getCodeDataObject(TUIPage, lfgPage, "pagelfg");
-	m_Lfg = new SwgCuiLfg(*lfgPage, true);
-	
-	if (m_Lfg)
+	getCodeDataObject(TUIPage, lfgPage, "pagelfg", true);
+	if (lfgPage)
+		m_Lfg = new SwgCuiLfg(*lfgPage, true);
+
+	if (m_Lfg && lfgPage)
 	{
 		m_Lfg->fetch();
 
@@ -198,14 +201,14 @@ void SwgCuiCommunity::Character::performActivate()
 	Object *object = Game::getPlayer();
 	ClientObject *clientObject = dynamic_cast<ClientObject *>(object);
 
-	if (clientObject != NULL)
+	if (clientObject != NULL && m_nameText)
 	{
 		m_nameText->SetLocalText(clientObject->getLocalizedName());
 	}
 
 	CreatureObject *creatureObject = dynamic_cast<CreatureObject *>(object);
 
-	if (creatureObject != NULL)
+	if (creatureObject != NULL && m_speciesText)
 	{
 		m_speciesText->SetPreLocalized(true);
 		const Unicode::String & speciesString = Species::getLocalizedName(static_cast<SharedCreatureObjectTemplate::Species>(creatureObject->getSpecies()));
@@ -221,20 +224,22 @@ void SwgCuiCommunity::Character::performActivate()
 		//the actual request to the server only occurs once
 		playerObject->requestBiography();
 
-		if(playerObject->haveBiography())
+		if(playerObject->haveBiography() && m_bioText)
 		{
 			m_bioText->SetLocalText(playerObject->getBiography());
 			m_bioText->SetEditable(true);
 			m_biography = playerObject->getBiography();
 		}
 
-		m_birthDateText->SetLocalText(Unicode::narrowToWide(CalendarTime::getCharacerBirthDateString(playerObject->getBornDate())));
+		if (m_birthDateText)
+			m_birthDateText->SetLocalText(Unicode::narrowToWide(CalendarTime::getCharacerBirthDateString(playerObject->getBornDate())));
 	}
 
 	// Get all the possible titles
 	CreatureObject *localCreatureObject = m_communityMediator.getLocalCreatureObject();
 
-	m_titleComboBox->Clear();
+	if (m_titleComboBox)
+		m_titleComboBox->Clear();
 
 	if (localCreatureObject != NULL)
 	{
@@ -261,7 +266,7 @@ void SwgCuiCommunity::Character::performActivate()
 			}
 		}
 
-		UIDataSource *dataSource = m_titleComboBox->GetDataSource();
+		UIDataSource *dataSource = m_titleComboBox ? m_titleComboBox->GetDataSource() : NULL;
 
 		if (dataSource != NULL)
 		{
@@ -297,30 +302,35 @@ void SwgCuiCommunity::Character::performActivate()
 		setComboTitleToCurrentTitle();
 	}
 
-	// Set the check box states
+	// Set the check box states (all optional - NGE-retail UI is missing many)
 
-	m_lookingForGroupCheckBox->SetChecked(MatchMakingManager::isLookingForGroup());
-	m_searchableByCtsSourceGalaxyCheckBox->SetChecked(MatchMakingManager::isSearchableByCtsSourceGalaxy());
-	m_displayLocationInSearchResultsCheckBox->SetChecked(MatchMakingManager::isDisplayLocationInSearchResults());
-	m_characterSearchableCheckBox->SetChecked(!MatchMakingManager::isAnonymous());
-	m_helperCheckBox->SetChecked(MatchMakingManager::isHelper());
-	m_rolePlayCheckBox->SetChecked(MatchMakingManager::isRolePlay());
-	m_lookingForWorkCheckBox->SetChecked(MatchMakingManager::isLookingForWork());
-	m_awayFromKeyBoardCheckBox->SetChecked(MatchMakingManager::isAwayFromKeyBoard());
-	m_displayingFactionRankCheckBox->SetChecked(MatchMakingManager::isDisplayingFactionRank());
+	if (m_lookingForGroupCheckBox)             m_lookingForGroupCheckBox->SetChecked(MatchMakingManager::isLookingForGroup());
+	if (m_searchableByCtsSourceGalaxyCheckBox) m_searchableByCtsSourceGalaxyCheckBox->SetChecked(MatchMakingManager::isSearchableByCtsSourceGalaxy());
+	if (m_displayLocationInSearchResultsCheckBox) m_displayLocationInSearchResultsCheckBox->SetChecked(MatchMakingManager::isDisplayLocationInSearchResults());
+	if (m_characterSearchableCheckBox)         m_characterSearchableCheckBox->SetChecked(!MatchMakingManager::isAnonymous());
+	if (m_helperCheckBox)                      m_helperCheckBox->SetChecked(MatchMakingManager::isHelper());
+	if (m_rolePlayCheckBox)                    m_rolePlayCheckBox->SetChecked(MatchMakingManager::isRolePlay());
+	if (m_lookingForWorkCheckBox)              m_lookingForWorkCheckBox->SetChecked(MatchMakingManager::isLookingForWork());
+	if (m_awayFromKeyBoardCheckBox)            m_awayFromKeyBoardCheckBox->SetChecked(MatchMakingManager::isAwayFromKeyBoard());
+	if (m_displayingFactionRankCheckBox)       m_displayingFactionRankCheckBox->SetChecked(MatchMakingManager::isDisplayingFactionRank());
 
-	m_Lfg->updateBranchStateByName("general");
+	if (m_Lfg)
+		m_Lfg->updateBranchStateByName("general");
 
-	if (m_characterSearchableCheckBox->IsChecked())
+	bool const isSearchable = (m_characterSearchableCheckBox && m_characterSearchableCheckBox->IsChecked());
+	if (m_Lfg)
 	{
-		m_Lfg->enableWindow();
-		m_Lfg->sendInterestsToServer();
-		s_timeToUpdateServerInterest = ::time(NULL) + s_interestUpdateInterval;
-	}
-	else
-	{
-		m_Lfg->disableWindow();
-		s_timeToUpdateServerInterest = 0;
+		if (isSearchable)
+		{
+			m_Lfg->enableWindow();
+			m_Lfg->sendInterestsToServer();
+			s_timeToUpdateServerInterest = ::time(NULL) + s_interestUpdateInterval;
+		}
+		else
+		{
+			m_Lfg->disableWindow();
+			s_timeToUpdateServerInterest = 0;
+		}
 	}
 
 	// Set the languages
@@ -329,7 +339,7 @@ void SwgCuiCommunity::Character::performActivate()
 
 	// Title
 
-	if (playerObject != NULL)
+	if (playerObject != NULL && m_titleComboBox)
 	{
 		//add collection and guild rank titles to title window
 		UIDataSource *dataSource = m_titleComboBox->GetDataSource();
@@ -430,6 +440,9 @@ void SwgCuiCommunity::Character::performActivate()
 
 void SwgCuiCommunity::Character::setComboTitleToCurrentTitle()
 {
+	if (!m_titleComboBox)
+		return;
+
 	PlayerObject *playerObject = Game::getPlayerObject();
 	bool titleFound = false;
 
@@ -465,20 +478,25 @@ void SwgCuiCommunity::Character::performDeactivate()
 {
 	setIsUpdating(false);
 
-	m_Lfg->sendInterestsToServer();
-	m_Lfg->saveOrLoadBackup(true);
-	
-	// Synchronize the biography to the server if it has changed
-
-	Unicode::String const &biographyWidgetText = m_bioText->GetLocalText();
-
-	if (m_biography != biographyWidgetText)
+	if (m_Lfg)
 	{
-		PlayerObject *playerObject = Game::getPlayerObject();
+		m_Lfg->sendInterestsToServer();
+		m_Lfg->saveOrLoadBackup(true);
+	}
 
-		if (playerObject != NULL)
+	// Synchronize the biography to the server if it has changed
+	if (m_bioText)
+	{
+		Unicode::String const &biographyWidgetText = m_bioText->GetLocalText();
+
+		if (m_biography != biographyWidgetText)
 		{
-			playerObject->setBiography(biographyWidgetText, true);
+			PlayerObject *playerObject = Game::getPlayerObject();
+
+			if (playerObject != NULL)
+			{
+				playerObject->setBiography(biographyWidgetText, true);
+			}
 		}
 	}
 }
@@ -509,7 +527,8 @@ void SwgCuiCommunity::Character::OnCheckboxSet(UIWidget *context)
 		else if (context == m_characterSearchableCheckBox)
 		{
 			playerObject->toggleAnonymous();
-			m_Lfg->enableWindow();
+			if (m_Lfg)
+				m_Lfg->enableWindow();
 		}
 		else if (context == m_helperCheckBox)
 		{
@@ -560,7 +579,8 @@ void SwgCuiCommunity::Character::OnCheckboxUnset(UIWidget *context)
 		else if (context == m_characterSearchableCheckBox)
 		{
 			playerObject->toggleAnonymous();
-			m_Lfg->disableWindow();
+			if (m_Lfg)
+				m_Lfg->disableWindow();
 			s_timeToUpdateServerInterest = 0;
 		}
 		else if (context == m_helperCheckBox)
@@ -598,7 +618,8 @@ void SwgCuiCommunity::Character::onBiographyRetrieved(PlayerCreatureController::
 
 	if (   (localPlayer != NULL)
 	    && (playerObject != NULL)
-	    && (localPlayer->getNetworkId() == networkId))
+	    && (localPlayer->getNetworkId() == networkId)
+	    && m_bioText)
 	{
 		m_bioText->SetLocalText(playerObject->getBiography());
 		m_bioText->SetEditable(true);
@@ -613,26 +634,29 @@ void SwgCuiCommunity::Character::onWhoStatusChanged(MatchMakingId const &matchMa
 	// This function cathces any messages that the who id was changed from a source
 	// other than this ui page
 
-	m_lookingForGroupCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_lookingForGroup), false);
-	m_searchableByCtsSourceGalaxyCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_searchableByCtsSourceGalaxy), false);
-	m_displayLocationInSearchResultsCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_displayLocationInSearchResults), false);
-	m_characterSearchableCheckBox->SetChecked(!matchMakingId.isBitSet(MatchMakingId::B_anonymous), false);
-	m_helperCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_helper), false);
-	m_rolePlayCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_rolePlay), false);
-	m_lookingForWorkCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_lookingForWork), false);
-	m_awayFromKeyBoardCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_awayFromKeyBoard), false);
-	m_displayingFactionRankCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_displayingFactionRank), false);
+	if (m_lookingForGroupCheckBox)             m_lookingForGroupCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_lookingForGroup), false);
+	if (m_searchableByCtsSourceGalaxyCheckBox) m_searchableByCtsSourceGalaxyCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_searchableByCtsSourceGalaxy), false);
+	if (m_displayLocationInSearchResultsCheckBox) m_displayLocationInSearchResultsCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_displayLocationInSearchResults), false);
+	if (m_characterSearchableCheckBox)         m_characterSearchableCheckBox->SetChecked(!matchMakingId.isBitSet(MatchMakingId::B_anonymous), false);
+	if (m_helperCheckBox)                      m_helperCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_helper), false);
+	if (m_rolePlayCheckBox)                    m_rolePlayCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_rolePlay), false);
+	if (m_lookingForWorkCheckBox)              m_lookingForWorkCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_lookingForWork), false);
+	if (m_awayFromKeyBoardCheckBox)            m_awayFromKeyBoardCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_awayFromKeyBoard), false);
+	if (m_displayingFactionRankCheckBox)       m_displayingFactionRankCheckBox->SetChecked(matchMakingId.isBitSet(MatchMakingId::B_displayingFactionRank), false);
 
-	m_Lfg->updateBranchStateByName("general");
+	if (m_Lfg)
+	{
+		m_Lfg->updateBranchStateByName("general");
 
-	if (m_characterSearchableCheckBox->IsChecked())
-	{
-		m_Lfg->enableWindow();
-	}
-	else
-	{
-		m_Lfg->disableWindow();
-		s_timeToUpdateServerInterest = 0;
+		if (m_characterSearchableCheckBox && m_characterSearchableCheckBox->IsChecked())
+		{
+			m_Lfg->enableWindow();
+		}
+		else
+		{
+			m_Lfg->disableWindow();
+			s_timeToUpdateServerInterest = 0;
+		}
 	}
 }
 
@@ -679,6 +703,9 @@ void SwgCuiCommunity::Character::OnGenericSelectionChanged(UIWidget *context)
 
 void SwgCuiCommunity::Character::populateLanguages()
 {
+	if (!m_languageComboBox)
+		return;
+
 	PlayerObject *playerObject = Game::getPlayerObject();
 
 	if (playerObject != NULL)
@@ -722,7 +749,7 @@ void SwgCuiCommunity::Character::update(float deltaTimeSecs)
 
 	bool const timeForServerUpdate = (s_timeToUpdateServerInterest > 0) && (s_timeToUpdateServerInterest <= ::time(NULL));
 
-	if (s_interestsChanged && timeForServerUpdate)
+	if (s_interestsChanged && timeForServerUpdate && m_Lfg)
 	{
 		m_Lfg->sendInterestsToServer();
 

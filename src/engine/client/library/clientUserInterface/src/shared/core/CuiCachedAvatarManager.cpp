@@ -841,7 +841,7 @@ void CuiCachedAvatarManager::saveCharacterList  ()
 {
 	const std::string & userName = GameNetwork::getUserName ();
 
-	const std::string filename = std::string ("characterlist_") + userName + ".txt";
+	const std::string filename = std::string ("logs/ext/characterlist_") + userName + ".txt";
 
 	std::string str;
 	static char buf [1024];

@@ -360,7 +360,11 @@ CuiMediator * CuiMediatorFactory::activateInWorkspace       (const char * namePt
 	CuiWorkspace * const ws = CuiWorkspace::getGameWorkspace ();
 	NOT_NULL (ws);
 	CuiMediator * const mediator = getInWorkspace (namePtr, true, ignoreExisting, settingsAutoSizeLocation);
-	NOT_NULL (mediator);
+	if (!mediator)
+	{
+		WARNING(true, ("CuiMediatorFactory::activateInWorkspace [%s] - mediator null, skipping activation", namePtr));
+		return 0;
+	}
 
 	if (ws->hasMediator (*mediator) && !mediator->isOpenNextFrame())
 		mediator->open ();
@@ -430,8 +434,12 @@ CuiMediator * CuiMediatorFactory::getInWorkspace            (const char * namePt
 		if (create)
 		{
 			mediator = ctor->createInto (ws->getPage ());
+			if (!mediator)
+			{
+				WARNING(true, ("CuiMediatorFactory::getInWorkspace [%s] - createInto returned null", namePtr));
+				return 0;
+			}
 			ws->getPage ().RemoveChild (&mediator->getPage ());
-			NOT_NULL (mediator);
 			if (settingsAutoSizeLocation)
 				mediator->setSettingsAutoSizeLocation (true, true);
 		}

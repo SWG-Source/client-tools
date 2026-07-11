@@ -140,7 +140,14 @@ void CuiLayer::CursorInterface::render    (unsigned long theTime, UICursor * cur
 
 	setCursor (cursor);
 
-	if (Graphics::getHardwareMouseCursorEnabled())
+	// Once the hardware cursor has failed (e.g. D3D9 SetCursorProperties
+	// rejects the texture on certain GPU/driver combos), permanently route
+	// through the software cursor path so the user gets the textured cursor
+	// (green combat reticle, etc.) rendered as a UI quad instead of a stale
+	// or default Windows arrow.
+	static bool s_hardwareCursorBroken = false;
+
+	if (Graphics::getHardwareMouseCursorEnabled() && !s_hardwareCursorBroken)
 	{
 		//-- handle hardware cursor
 		const Texture * texture = NULL;
@@ -168,25 +175,39 @@ void CuiLayer::CursorInterface::render    (unsigned long theTime, UICursor * cur
 
 		if (mLastTexture != texture || ms_acquiredFocus || ConfigClientUserInterface::getAlwaysSetMouseCursor ())
 		{
-			// switch to the new texture
-			if (texture)
-				texture->fetch ();
-			if (mLastTexture)
-				mLastTexture->release ();
-			mLastTexture = texture;
-
-			if (!Graphics::setMouseCursor(*texture, hotSpotX, hotSpotY))
+			if (Graphics::setMouseCursor(*texture, hotSpotX, hotSpotY))
+			{
+				// only commit the cache and ref-count swap on success
+				if (texture)
+					texture->fetch ();
+				if (mLastTexture)
+					mLastTexture->release ();
+				mLastTexture = texture;
+			}
+			else
+			{
 				failed = true;
+				s_hardwareCursorBroken = true;
+			}
 		}
 
 		if (mCursorVisible != visible || ms_acquiredFocus || ConfigClientUserInterface::getAlwaysSetMouseCursor())
 		{
 			if (!Graphics::showMouseCursor(visible))
+			{
 				failed = true;
+				s_hardwareCursorBroken = true;
+			}
 			mCursorVisible = visible;
 		}
+
+		// On first failure, hide the hardware cursor so it doesn't compete
+		// with the software cursor we're about to render this same frame.
+		if (s_hardwareCursorBroken)
+			IGNORE_RETURN(Graphics::showMouseCursor(false));
 	}
-	else
+
+	if (!Graphics::getHardwareMouseCursorEnabled() || s_hardwareCursorBroken)
 	{
 		if (mCursor)
 		{

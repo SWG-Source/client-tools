@@ -14,8 +14,8 @@
 
 #include "clientUserInterface/CuiMediator.h"
 
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
 #include "swgSharedNetworkMessages/SurveyMessage.h"
+#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
 
 #include "UITypes.h"
 #include "UIEventCallback.h"

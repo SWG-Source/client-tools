@@ -10,6 +10,7 @@
 
 #include "UIClipboard.h"
 #include "UIUtils.h"
+#include "UIString.h"
 #include "clientGame/ClientCommandQueue.h"
 #include "clientGame/ClientObject.h"
 #include "clientGame/DraftSchematicManager.h"
@@ -521,7 +522,7 @@ bool DraftSchematicInfo::formatDraftAttribWeights (Unicode::String & draftAttrib
 								bool foundMapping = false;
 								for(int i = 0; i < s_numTypes; i++)
 								{
-									if(!_wcsicmp(s_typeToAttribMap[i].localName.c_str(), resourceAttribName.c_str()))
+									if(!UIUnicode::icmp(s_typeToAttribMap[i].localName.c_str(), resourceAttribName.c_str()))
 									{
 										mappedType = s_typeToAttribMap[i].id;
 										foundMapping = true;
@@ -1048,7 +1049,7 @@ float DraftSchematicInfo::calculateResourceMatch(const NetworkId &resourceTypeId
 						bool foundMapping = false;
 						for(int i = 0; i < s_numTypes; i++)
 						{
-							if(!_wcsicmp(s_typeToAttribMap[i].localName.c_str(), resourceAttribName.c_str()))
+							if(!UIUnicode::icmp(s_typeToAttribMap[i].localName.c_str(), resourceAttribName.c_str()))
 							{
 								mappedType = s_typeToAttribMap[i].id;
 								foundMapping = true;

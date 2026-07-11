@@ -6,6 +6,7 @@
 //
 //========================================================================
 
+#include "sharedFoundation/DynamicVariable.h"
 #include "sharedFoundation/FirstSharedFoundation.h"
 #include "sharedFoundation/DynamicVariableList.h"
 #include "sharedFoundation/DynamicVariableListNestedList.h"

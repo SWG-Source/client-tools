@@ -81,6 +81,7 @@
 #include "swgClientUserInterface/SwgCuiHudFactory.h"
 #include "swgClientUserInterface/SwgCuiManager.h"
 #include "swgClientUserInterface/SwgCuiMediatorTypes.h"
+#include "swgClientUserInterface/SetupSwgClientUserInterface.h"
 #include "swgSharedNetworkMessages/SetupSwgSharedNetworkMessages.h"
 
 //GodClient local includes
@@ -412,6 +413,7 @@ GameWidget::GameWidget(QWidget* theParent, const char*theName)
 		setFrameRateLimit(ConfigGodClient::getData().frameRateLimit);
 
 	CuiManager::setImplementationInstallFunctions(SwgCuiManager::install, SwgCuiManager::remove, SwgCuiManager::update);
+	SetupSwgClientUserInterface::install();
 
 	// setup the game
 	Game::install(Game::A_godClient);
@@ -501,11 +503,16 @@ void GameWidget::runGameLoop()
 	static bool processingThisFunction = false;
 
 	int actualMinFrameLength = m_minFrameLength;
-	//-- if invisible, run at 1 fps, if simply inactive(may still be visible), run at half speed
+	//-- if invisible, run at 1 fps, if simply inactive(may still be visible), run at 5 fps
+	// (was *= 2; bumped because alt-tabbing OUT left ~16-33ms loop running
+	// nonstop, starving Qt window events so close/refocus took multiple seconds
+	// to register. 200ms gap = ~5 FPS gives Qt plenty of breathing room while
+	// keeping the game world visible if the GodClient window is just behind
+	// another app rather than minimized.)
 	if(!isVisible())
 		actualMinFrameLength = 1000;
 	else if(!MainFrame::getInstance().isActive())
-		actualMinFrameLength *= 2;
+		actualMinFrameLength = std::max(actualMinFrameLength, 200);
 
 	const QTime curTime = QTime::currentTime();
 
@@ -1555,7 +1562,12 @@ void GameWidget::updateSceneData()
 		FreeCamera* const cam  = NON_NULL(m_gs->getGodClientCamera());
 		cam->setMode(FreeCamera::M_pivot);
 		FreeCamera::Info fci = cam->getInfo();
-		fci.distance = CONST_REAL(100);
+		Object const * const player = m_gs->getPlayer();
+		CellProperty const * const playerCell = player ? player->getParentCell() : 0;
+		if (playerCell && playerCell != CellProperty::getWorldCellProperty())
+			fci.distance = std::max(CONST_REAL(1), std::min(fci.distance, CONST_REAL(5)));
+		else
+			fci.distance = CONST_REAL(100);
 		cam->setInfo(fci);
 
 		SwgCuiHud * const hud = SwgCuiHudFactory::findMediatorForCurrentHud ();

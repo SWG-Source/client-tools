@@ -270,7 +270,7 @@ bool InputMap::Command::EventData::execute (MessageQueue & mq, const float * ove
 		{
 			typedef MessageQueueDataTemplate<std::string> MessageString;
 			MessageString * const data = new MessageString (str);
-			mq.appendMessage (message, theValue, data, sizeof (MessageString));
+			mq.appendMessage (message, theValue, data);
 
 		}
 		return true;

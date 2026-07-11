@@ -629,7 +629,8 @@ inline const bool AutoDeltaVariable<ValueType>::isDirty() const
 template<typename ValueType>
 inline void AutoDeltaVariable<ValueType>::pack(ByteStream & target) const
 {
-	Archive::put(target, currentValue);
+	using Archive::put;
+	put(target, currentValue);
 }
 
 //-----------------------------------------------------------------------
@@ -691,7 +692,8 @@ inline void AutoDeltaVariable<ValueType>::set(const ValueType & source)
 template<typename ValueType>
 inline void AutoDeltaVariable<ValueType>::unpack(ReadIterator & source)
 {
-	Archive::get(source, currentValue);
+	using Archive::get;
+	get(source, currentValue);
 	clearDelta();
 }
 
@@ -700,7 +702,8 @@ inline void AutoDeltaVariable<ValueType>::unpack(ReadIterator & source)
 template<typename ValueType>
 inline void AutoDeltaVariable<ValueType>::unpackDelta(ReadIterator & source)
 {
-	Archive::get(source, currentValue);
+	using Archive::get;
+	get(source, currentValue);
 	touch();
 }
 

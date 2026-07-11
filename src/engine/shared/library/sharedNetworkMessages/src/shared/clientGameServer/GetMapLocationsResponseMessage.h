@@ -11,12 +11,11 @@
 
 //-----------------------------------------------------------------------
 
-#include "Archive/AutoDeltaByteStream.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Tag.h"
-#include "sharedNetworkMessages/MapLocation.h"
 #include "sharedNetworkMessages/MapLocationArchive.h"
+#include "sharedNetworkMessages/MapLocation.h"
+#include "sharedFoundation/Tag.h"
+#include "sharedFoundation/NetworkId.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 

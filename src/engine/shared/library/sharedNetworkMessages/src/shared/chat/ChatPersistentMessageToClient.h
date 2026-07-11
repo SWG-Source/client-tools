@@ -7,9 +7,9 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/GameNetworkMessage.h"
 #include "sharedNetworkMessages/ChatPersistentMessageToClientDataArchive.h"
 #include "sharedNetworkMessages/ChatPersistentMessageToClientData.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 

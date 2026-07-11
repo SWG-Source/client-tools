@@ -68,27 +68,27 @@ namespace
 
 				switch (msg.getTypeFlag ())
 				{
-				case AuctionQueryHeadersMessage::AST_ByAll:
+				case AST_ByAll:
 					AuctionManagerClient::receiveHeaders          (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					break;
-				case AuctionQueryHeadersMessage::AST_ByPlayerSales:
+				case AST_ByPlayerSales:
 					AuctionManagerClient::receiveHeadersSales     (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					break;
-				case AuctionQueryHeadersMessage::AST_ByPlayerBids:
+				case AST_ByPlayerBids:
 					AuctionManagerClient::receiveHeadersBids      (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					break;
-				case AuctionQueryHeadersMessage::AST_ByPlayerStockroom:
+				case AST_ByPlayerStockroom:
 					AuctionManagerClient::receiveHeadersAvailable (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					break;
-				case AuctionQueryHeadersMessage::AST_ByVendorSelling:
+				case AST_ByVendorSelling:
 					AuctionManagerClient::receiveHeadersVendorSelling   (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					AuctionManagerClient::receiveHeadersLocation  (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					break;
-				case AuctionQueryHeadersMessage::AST_ByVendorStockroom:
+				case AST_ByVendorStockroom:
 					AuctionManagerClient::receiveHeadersVendorStockroom (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					break;
-				case AuctionQueryHeadersMessage::AST_ByVendorOffers:
-				case AuctionQueryHeadersMessage::AST_ByPlayerOffersToVendor:
+				case AST_ByVendorOffers:
+				case AST_ByPlayerOffersToVendor:
 					AuctionManagerClient::receiveHeadersVendorOffers    (msg.getAuctionData (), msg.getQueryOffset (), msg.getHasMorePages ());
 					break;
 				}

@@ -419,7 +419,7 @@ void SwgCuiShipView::populateGroupButton()
 
 void SwgCuiShipView::onComponentsChanged (ShipObject::Messages::ComponentsChanged::Payload & ship)
 {
-	if(&ship == m_ship)
+	if(&ship == m_ship.getPointer())
 		populateUi();
 } //lint !e1764 ship could be const (not it couldn't - need to match message payload)
 

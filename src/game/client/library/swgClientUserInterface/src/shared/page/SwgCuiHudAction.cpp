@@ -697,10 +697,11 @@ bool  SwgCuiHudAction::performAction (const std::string & id, const Unicode::Str
 	//access the skills ui
 	else if (id == CuiActions::skills)
 	{
-		if(RoadmapManager::playerIsNewCharacter())
-			;  //do nothing
-		else if(RoadmapManager::playerIsOnRoadmap())
-			CuiMediatorFactory::toggleInWorkspace(CuiMediatorTypes::WS_Roadmap);
+		// Pre-CU: route the Skills keybind / lightning-bolt toolbar
+		// button to the dedicated Pre-CU skill window. The NGE Roadmap
+		// UI is still reachable via CuiActions::roadmap for anyone who
+		// wants it; we no longer fall through to character sheet.
+		CuiMediatorFactory::toggleInWorkspace(CuiMediatorTypes::WS_Skills);
 	}
 	
 	else if (id == CuiActions::netStatus)

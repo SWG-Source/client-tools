@@ -6,6 +6,7 @@
 //
 // ======================================================================
 
+#include "AuctionQueryArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/AuctionQueryResponseMessage.h"
 

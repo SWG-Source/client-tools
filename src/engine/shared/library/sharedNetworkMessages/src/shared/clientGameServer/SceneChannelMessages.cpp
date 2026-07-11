@@ -107,7 +107,7 @@ m_hyperspace(hyperspace)
 	addVariable(m_hyperspace);
 
 	char buffer[64];
-	sprintf(buffer, "send.SceneCreateObjectByCrc.%08x", static_cast<int>(templateCrc));
+	snprintf(buffer, sizeof(buffer), "send.SceneCreateObjectByCrc.%08x", static_cast<unsigned int>(templateCrc));
 	NetworkHandler::reportMessage(buffer, sizeof(SceneCreateObjectByCrc));
 }
 //-----------------------------------------------------------------
@@ -127,7 +127,7 @@ m_hyperspace(false)
 	AutoByteStream::unpack(source);
 
 	char buffer[64];
-	sprintf(buffer, "recv.SceneCreateObjectByCrc.%08x", static_cast<int>(m_templateCrc.get()));
+	snprintf(buffer, sizeof(buffer), "recv.SceneCreateObjectByCrc.%08x", static_cast<unsigned int>(m_templateCrc.get()));
 	NetworkHandler::reportMessage(buffer, sizeof(SceneCreateObjectByCrc));
 }
 

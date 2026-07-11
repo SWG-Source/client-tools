@@ -74,13 +74,18 @@ using namespace CuiModifierManagerNamespace;
 
 void CuiModifierManagerNamespace::addModifierNode(ModifierNode &parentNode, std::string const &modifierName, const int depth)
 {
-	// Find the correct position depending on our depth
+	// Find the correct position depending on our depth.
+	// (size_t, not int: on x64 npos = SIZE_MAX which truncates to -1 when
+	//  stored in int, and the subsequent ++position would then traverse
+	//  through 0 again, corrupting the search.)
 
-	int position = std::string::npos;
-	
+	size_t position = std::string::npos;
+
 	for (int i = 0; i < depth; ++i)
 	{
-		position = modifierName.find(".", ++position);
+		position = modifierName.find(".", position + 1);
+		if (position == std::string::npos)
+			break;
 	}
 
 	if (position != std::string::npos)

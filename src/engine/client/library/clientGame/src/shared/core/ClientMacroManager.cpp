@@ -347,6 +347,7 @@ bool ClientMacroManager::loadText        ()
 		return false;
 	}
 	
+	int const fileLength = fl.length ();   // capture before readEntireFileAndClose() closes the file
 	char * cbuf = reinterpret_cast<char *>(fl.readEntireFileAndClose ());
 	fl.close ();
 
@@ -356,7 +357,11 @@ bool ClientMacroManager::loadText        ()
 		return false;
 	}
 
-	const std::string sbuf (cbuf);
+	// readEntireFileAndClose() returns exactly fileLength bytes with NO trailing null.
+	// std::string(cbuf) would strlen past the buffer end - a heap over-read that is benign
+	// on a normal run but faults under page heap (masking real overflows during debugging).
+	// Construct with the explicit length instead.
+	const std::string sbuf (cbuf, (fileLength > 0 ? static_cast<size_t>(fileLength) : static_cast<size_t>(0)));
 	delete [] cbuf;
 	cbuf = 0;
 	

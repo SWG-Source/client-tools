@@ -7,9 +7,9 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "sharedNetworkMessages/ChatAvatarId.h"
 #include "sharedNetworkMessages/ChatAvatarIdArchive.h"
+#include "sharedNetworkMessages/ChatAvatarId.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 

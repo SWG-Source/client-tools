@@ -648,7 +648,7 @@ void SwgCuiQuestBuilder::populateTasksTable(const char * stringNameFilter, const
 		UIBaseObject::UIObjectList::iterator iter = taskList.begin();
 		for(; iter != taskList.end(); ++iter)
 		{
-			TaskPageMap::iterator pageIter = NULL;
+			TaskPageMap::iterator pageIter = ms_taskButtonsToTaskPages.end();
 
 			if((*iter)->IsA(TUIPage))
 			{
@@ -1231,7 +1231,7 @@ UIPage* SwgCuiQuestBuilder::addKillTask(TaskSlotInfo const * taskInfo, std::stri
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 
@@ -1270,14 +1270,14 @@ void SwgCuiQuestBuilder::createSlotMap()
 			newSlotInfo.categoryFlags = categoryFlags;
 			newSlotInfo.recipeRequirement = 0;
 			
-			std::pair< std::map<CrcLowerString, TaskSlotInfo>::iterator, bool > retVal = m_slotMap.insert(std::make_pair<CrcLowerString, TaskSlotInfo>(newSlotInfo.slotCrc, newSlotInfo));
+			std::pair< std::map<CrcLowerString, TaskSlotInfo>::iterator, bool > retVal = m_slotMap.insert(std::make_pair(newSlotInfo.slotCrc, newSlotInfo));
 			
 			if(retVal.second == false)
 			{
 				WARNING(true, ("Failed to add slot %s with the CRC %d to our slot map.", newSlotInfo.slotName, newSlotInfo.slotCrc.getCrc()));
 			}
 			
-			std::pair< std::map<std::string, CrcLowerString>::iterator, bool > secondRetVal = ms_SlotNamesToSlotCrcMap.insert(std::make_pair<std::string, CrcLowerString>(newSlotInfo.slotName, newSlotInfo.slotCrc));
+			std::pair< std::map<std::string, CrcLowerString>::iterator, bool > secondRetVal = ms_SlotNamesToSlotCrcMap.insert(std::make_pair(newSlotInfo.slotName, newSlotInfo.slotCrc));
 		
 			if(secondRetVal.second == false)
 			{
@@ -1365,7 +1365,7 @@ void SwgCuiQuestBuilder::requestCreateQuest()
 	UIBaseObject::UIObjectList::iterator iter = taskList.begin();
 	for(; iter != taskList.end(); ++iter)
 	{
-		TaskPageMap::iterator pageIter = NULL;
+		TaskPageMap::iterator pageIter = ms_taskButtonsToTaskPages.end();
 
 		if((*iter)->IsA(TUIPage))
 		{
@@ -1728,7 +1728,7 @@ UIPage* SwgCuiQuestBuilder::addLocationTask(TaskSlotInfo const * taskInfo, std::
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -1860,7 +1860,7 @@ UIPage* SwgCuiQuestBuilder::addLootTask(TaskSlotInfo const * taskInfo, std::stri
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -1969,7 +1969,7 @@ UIPage* SwgCuiQuestBuilder::addPvpKillTask(TaskSlotInfo const * taskInfo, std::s
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -2149,7 +2149,7 @@ UIPage* SwgCuiQuestBuilder::addPerformTask(TaskSlotInfo const * taskInfo, std::s
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -2264,7 +2264,7 @@ UIPage* SwgCuiQuestBuilder::addCommTask(TaskSlotInfo const * taskInfo, std::stri
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -2421,7 +2421,7 @@ UIPage* SwgCuiQuestBuilder::addCraftTask(TaskSlotInfo const * taskInfo, std::str
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -2530,7 +2530,7 @@ UIPage* SwgCuiQuestBuilder::addPvpDestroyTask(TaskSlotInfo const * taskInfo, std
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -2697,7 +2697,7 @@ UIPage* SwgCuiQuestBuilder::addKillLootTask(TaskSlotInfo const * taskInfo, std::
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -2825,7 +2825,7 @@ UIPage* SwgCuiQuestBuilder::addSpawnTask(TaskSlotInfo const * taskInfo, std::str
 
 	newTaskInfo->flags = flags ^ ( taskInfo ? taskInfo->categoryFlags : 0 );
 
-	ms_taskButtonsToTaskPages.insert(std::make_pair<UIPage*, TaskInfo *>(newPage, newTaskInfo));
+	ms_taskButtonsToTaskPages.insert(std::make_pair(newPage, newTaskInfo));
 
 	return newPage;
 }
@@ -3960,7 +3960,7 @@ void SwgCuiQuestBuilder::refreshCollectionData()
 	UIBaseObject::UIObjectList::iterator iter = taskList.begin();
 	for(; iter != taskList.end(); ++iter)
 	{
-		TaskPageMap::iterator pageIter = NULL;
+		TaskPageMap::iterator pageIter = ms_taskButtonsToTaskPages.end();
 
 		if((*iter)->IsA(TUIPage))
 		{

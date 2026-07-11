@@ -6,6 +6,7 @@
 //
 // ======================================================================
 
+#include "sharedUtility/PackedPosition.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/CreateProjectileMessage.h"
 

@@ -2158,6 +2158,7 @@ void ShaderImplementationPassVertexShader::reloadShaderProgram()
 		file->read(m_text, m_textLength);
 		m_text[m_textLength] = '\0';
 		delete file;
+
 		m_graphicsData = Graphics::createVertexShaderData(*this);
 	}
 
@@ -2753,6 +2754,8 @@ ShaderImplementationPassPixelShaderProgram::ShaderImplementationPassPixelShaderP
 	m_referenceCount(1),
 	m_fileName(fileName),
 	m_exe(NULL),
+	m_source(NULL),
+	m_sourceLength(0),
 	m_graphicsData(NULL)
 {
 	using namespace ShaderImplementationPassPixelShaderProgramNamespace;
@@ -2781,6 +2784,7 @@ ShaderImplementationPassPixelShaderProgram::~ShaderImplementationPassPixelShader
 	ms_programMap.erase(i);
 
 	delete [] m_exe;
+	delete [] m_source;
 	delete m_graphicsData;
 }
 
@@ -2830,9 +2834,12 @@ void ShaderImplementationPassPixelShaderProgram::reload()
 		ms_programMap.erase(i);
 
 		delete [] m_exe;
+		delete [] m_source;
 		delete m_graphicsData;
 
 		m_exe = 0;
+		m_source = 0;
+		m_sourceLength = 0;
 		m_graphicsData = 0;
 	}
 
@@ -2896,8 +2903,18 @@ void ShaderImplementationPassPixelShaderProgram::load_0000(Iff &iff)
 {
 	iff.enterForm(TAG_0000);
 
-		// load the source code
+		// load the HLSL/asm source code (PSRC). x64 fix: the original code
+		// skipped this chunk and only used the precompiled PEXE bytecode, but
+		// our TRE set's PEXE is stale/mismatched (renders characters dark).
+		// Keep the source so the graphics layer can recompile it fresh.
 		iff.enterChunk(TAG_PSRC);
+			m_sourceLength = iff.getChunkLengthLeft(sizeof(char));
+			if (m_sourceLength > 0)
+			{
+				m_source = new char[m_sourceLength + 1];
+				iff.read_char(m_sourceLength, m_source);
+				m_source[m_sourceLength] = '\0';
+			}
 		iff.exitChunk(TAG_PSRC, true);
 
 		// load the d3d8 executable data

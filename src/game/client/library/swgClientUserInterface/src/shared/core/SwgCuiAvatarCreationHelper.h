@@ -40,7 +40,7 @@ public:
 
 		struct VerifyAndLockNameResponse
 		{
-			typedef struct Payload
+			struct Payload
 			{
 				bool success;
 				Unicode::String name;

@@ -41,7 +41,7 @@ class Game
 {
 public:
 
-	typedef std::basic_string<unsigned short, std::char_traits<unsigned short>, std::allocator<unsigned short> > UnicodeString;
+	typedef Unicode::String UnicodeString;
 	struct Messages
 	{
 		static const char * const SCENE_CHANGED;

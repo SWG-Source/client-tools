@@ -181,54 +181,55 @@ CuiMediator                  ("SwgCuiQuestJournal", page)
  , m_playerQuestTaskComposite (0)
  , m_playerQuestDifficultyText (0)
 {
-	//hook to UI elements
-	getCodeDataObject(TUICheckbox,     m_showCompletedCheckbox,       "checkShowMission");
-	getCodeDataObject(TUIText,         m_description,                 "descQuest");
-	getCodeDataObject(TUITreeView,     m_questTree,                   "treeQuests");
-	getCodeDataObject(TUIButton,       m_okButton,                    "buttonOK");
-	getCodeDataObject(TUIComposite,    m_descriptionComp,             "descriptionComp");
-	getCodeDataObject(TUIButton,       m_buttonAbandonQuest,          "buttonAbandon");
-	getCodeDataObject(TUIText,         m_titleText,                   "texttitle");
-	getCodeDataObject(TUIText,         m_experienceRewardText,        "experienceRewardText");
-	getCodeDataObject(TUIText,         m_factionRewardText,           "factionRewardText");
-	getCodeDataObject(TUIText,         m_moneyRewardText,             "moneyRewardText");
-	getCodeDataObject(TUIText,         m_rewardLabel,                 "rewardLabel");
-	getCodeDataObject(TUIComposite,    m_tasksSample,                 "sampleTask");
-	getCodeDataObject(TUIText,         m_descLabel,                   "descLabel");
-	getCodeDataObject(TUIComboBox,     m_sortCombo,                   "sortCombo");
-	getCodeDataObject(TUIText,         m_levelText,                   "textlevel");
-	getCodeDataObject(TUIText,         m_levelLabel,                  "textLevelLabel");
-	getCodeDataObject(TUIText,         m_postTaskSpacer,              "postTaskSpacer");
-	getCodeDataObject(TUIButton,       m_buttonExpandAll,             "buttonExpandAll");
-	getCodeDataObject(TUIPage,         m_typePage,                    "typepage");
-	getCodeDataObject(TUIText,         m_typeText,                    "typetext");
-	getCodeDataObject(TUIText,         m_inclusiveText,               "inclusiveText");
-	getCodeDataObject(TUIText,         m_exclusiveText,               "exclusiveText");
-	getCodeDataObject(TUIText,         m_chooseOneText,               "chooseOneText");
-	getCodeDataObject(TUIButton,       m_abandonMissionButton,        "buttonabandonmission");
-	getCodeDataObject(TUIPage,         m_questDescriptionPage,        "questdescriptionpage");
-	getCodeDataObject(TUIPage,         m_missionDescriptionPage,      "missiondescriptionpage");
-	getCodeDataObject(TUIText,         m_missionTitleText,            "missiontitletext");
-	getCodeDataObject(TUIText,         m_missionDescriptionText,      "missiondescriptiontext");
-	getCodeDataObject(TUIText,         m_missionMoneyRewardText,      "missionmoneyrewardtext");
-	getCodeDataObject(TUIComposite,    m_missionDescriptionComp,      "missionDescriptionComp");
-	getCodeDataObject(TUIText,         m_missionLevelText,            "missiontextlevel");
-	getCodeDataObject(TUIText,         m_missionTypeText,             "missiontypetext");
+	//hook to UI elements (all optional - NGE-retail journal page is missing
+	//many widgets; null guards downstream protect against deref)
+	getCodeDataObject(TUICheckbox,     m_showCompletedCheckbox,       "checkShowMission", true);
+	getCodeDataObject(TUIText,         m_description,                 "descQuest", true);
+	getCodeDataObject(TUITreeView,     m_questTree,                   "treeQuests", true);
+	getCodeDataObject(TUIButton,       m_okButton,                    "buttonOK", true);
+	getCodeDataObject(TUIComposite,    m_descriptionComp,             "descriptionComp", true);
+	getCodeDataObject(TUIButton,       m_buttonAbandonQuest,          "buttonAbandon", true);
+	getCodeDataObject(TUIText,         m_titleText,                   "texttitle", true);
+	getCodeDataObject(TUIText,         m_experienceRewardText,        "experienceRewardText", true);
+	getCodeDataObject(TUIText,         m_factionRewardText,           "factionRewardText", true);
+	getCodeDataObject(TUIText,         m_moneyRewardText,             "moneyRewardText", true);
+	getCodeDataObject(TUIText,         m_rewardLabel,                 "rewardLabel", true);
+	getCodeDataObject(TUIComposite,    m_tasksSample,                 "sampleTask", true);
+	getCodeDataObject(TUIText,         m_descLabel,                   "descLabel", true);
+	getCodeDataObject(TUIComboBox,     m_sortCombo,                   "sortCombo", true);
+	getCodeDataObject(TUIText,         m_levelText,                   "textlevel", true);
+	getCodeDataObject(TUIText,         m_levelLabel,                  "textLevelLabel", true);
+	getCodeDataObject(TUIText,         m_postTaskSpacer,              "postTaskSpacer", true);
+	getCodeDataObject(TUIButton,       m_buttonExpandAll,             "buttonExpandAll", true);
+	getCodeDataObject(TUIPage,         m_typePage,                    "typepage", true);
+	getCodeDataObject(TUIText,         m_typeText,                    "typetext", true);
+	getCodeDataObject(TUIText,         m_inclusiveText,               "inclusiveText", true);
+	getCodeDataObject(TUIText,         m_exclusiveText,               "exclusiveText", true);
+	getCodeDataObject(TUIText,         m_chooseOneText,               "chooseOneText", true);
+	getCodeDataObject(TUIButton,       m_abandonMissionButton,        "buttonabandonmission", true);
+	getCodeDataObject(TUIPage,         m_questDescriptionPage,        "questdescriptionpage", true);
+	getCodeDataObject(TUIPage,         m_missionDescriptionPage,      "missiondescriptionpage", true);
+	getCodeDataObject(TUIText,         m_missionTitleText,            "missiontitletext", true);
+	getCodeDataObject(TUIText,         m_missionDescriptionText,      "missiondescriptiontext", true);
+	getCodeDataObject(TUIText,         m_missionMoneyRewardText,      "missionmoneyrewardtext", true);
+	getCodeDataObject(TUIComposite,    m_missionDescriptionComp,      "missionDescriptionComp", true);
+	getCodeDataObject(TUIText,         m_missionLevelText,            "missiontextlevel", true);
+	getCodeDataObject(TUIText,         m_missionTypeText,             "missiontypetext", true);
 
-	getCodeDataObject(TUIText,         m_missionCreatorText,          "missioncreatortext");
-	getCodeDataObject(TUIText,         m_missionTargetText,           "missiontargettext");
-	getCodeDataObject(TUIText,         m_missionStartLocText,         "missionstartloctext");
-	getCodeDataObject(TUIText,         m_missionDestLocText,          "missiondestloctext");
-	getCodeDataObject(TUIText,         m_missionEfficiencyText,       "missionefficiencytext");
+	getCodeDataObject(TUIText,         m_missionCreatorText,          "missioncreatortext", true);
+	getCodeDataObject(TUIText,         m_missionTargetText,           "missiontargettext", true);
+	getCodeDataObject(TUIText,         m_missionStartLocText,         "missionstartloctext", true);
+	getCodeDataObject(TUIText,         m_missionDestLocText,          "missiondestloctext", true);
+	getCodeDataObject(TUIText,         m_missionEfficiencyText,       "missionefficiencytext", true);
 
-	getCodeDataObject(TUIText,         m_playerQuestTitleText,        "playerquesttitletext");
-	getCodeDataObject(TUIText,		   m_playerQuestDescriptionText,  "playerquestdescriptiontext");
-	getCodeDataObject(TUIComposite,    m_playerQuestDescriptionComp,  "playerquestdetailscomp");
-	getCodeDataObject(TUIText,		   m_playerQuestCreatorText,      "playerquestcreatortext");
-	getCodeDataObject(TUIPage,		   m_playerQuestDescriptionPage,  "playerquestpage");
-	getCodeDataObject(TUIPage,		   m_playerQuestTaskSample,       "playerquestsampletask");
-	getCodeDataObject(TUIComposite,    m_playerQuestTaskComposite,    "playerquesttaskcomposite");
-	getCodeDataObject(TUIText,		   m_playerQuestDifficultyText,   "playerquestdifficultytext");
+	getCodeDataObject(TUIText,         m_playerQuestTitleText,        "playerquesttitletext", true);
+	getCodeDataObject(TUIText,		   m_playerQuestDescriptionText,  "playerquestdescriptiontext", true);
+	getCodeDataObject(TUIComposite,    m_playerQuestDescriptionComp,  "playerquestdetailscomp", true);
+	getCodeDataObject(TUIText,		   m_playerQuestCreatorText,      "playerquestcreatortext", true);
+	getCodeDataObject(TUIPage,		   m_playerQuestDescriptionPage,  "playerquestpage", true);
+	getCodeDataObject(TUIPage,		   m_playerQuestTaskSample,       "playerquestsampletask", true);
+	getCodeDataObject(TUIComposite,    m_playerQuestTaskComposite,    "playerquesttaskcomposite", true);
+	getCodeDataObject(TUIText,		   m_playerQuestDifficultyText,   "playerquestdifficultytext", true);
 
 	std::string codeDataName;
 	for(int i = 0; i < cms_maxItems; ++i)
@@ -238,87 +239,97 @@ CuiMediator                  ("SwgCuiQuestJournal", page)
 		//add once, since codedatas are 1-based
 		_itoa(i+1, buffer, 10);
 		codeDataName += buffer;
-		getCodeDataObject(TUIPage, m_rewardItemPages[i], codeDataName.c_str());
-		UIBaseObject * const comp = m_rewardItemPages[i]->GetChild("comp");
-		UIBaseObject * const icon = comp->GetChild("icon");
-		m_rewardItemViewers[i] = dynamic_cast<CuiWidget3dObjectListViewer *>(icon->GetChild("v"));
-		m_rewardItemViewers[i]->setRotateSpeed(1.0f);
-		m_rewardItemNames[i] = dynamic_cast<UIText *>(comp->GetChild("rewardname"));
-		m_rewardItemNames[i]->SetPreLocalized(true);
-		m_rewardItemNames[i]->Clear();
-		m_rewardItemTexts[i] = dynamic_cast<UIText *>(comp->GetChild("text"));
-		m_rewardItemTexts[i]->SetPreLocalized(true);
-		m_rewardItemSelectionBoxes[i] = dynamic_cast<UIPage *>(m_rewardItemPages[i]->GetChild("selection"));
-		m_rewardItemSelectionBoxes[i]->SetVisible(false);
 
+		m_rewardItemPages[i] = NULL;
+		m_rewardItemViewers[i] = NULL;
+		m_rewardItemNames[i] = NULL;
+		m_rewardItemTexts[i] = NULL;
+		m_rewardItemSelectionBoxes[i] = NULL;
 		ms_itemRewardObjects[i] = NULL;
+
+		getCodeDataObject(TUIPage, m_rewardItemPages[i], codeDataName.c_str(), true);
+		if (!m_rewardItemPages[i])
+		{
+			WARNING(true, ("SwgCuiQuestJournal: missing codedata %s - skipping reward slot %d", codeDataName.c_str(), i));
+			continue;
+		}
+
+		UIBaseObject * const comp = m_rewardItemPages[i]->GetChild("comp");
+		if (!comp)
+		{
+			WARNING(true, ("SwgCuiQuestJournal: %s missing 'comp' child - skipping reward slot %d", codeDataName.c_str(), i));
+			continue;
+		}
+
+		UIBaseObject * const icon = comp->GetChild("icon");
+		if (icon)
+		{
+			m_rewardItemViewers[i] = dynamic_cast<CuiWidget3dObjectListViewer *>(icon->GetChild("v"));
+			if (m_rewardItemViewers[i])
+				m_rewardItemViewers[i]->setRotateSpeed(1.0f);
+			else
+				WARNING(true, ("SwgCuiQuestJournal: %s comp.icon.v missing/wrong-type", codeDataName.c_str()));
+		}
+
+		m_rewardItemNames[i] = dynamic_cast<UIText *>(comp->GetChild("rewardname"));
+		if (m_rewardItemNames[i])
+		{
+			m_rewardItemNames[i]->SetPreLocalized(true);
+			m_rewardItemNames[i]->Clear();
+		}
+
+		m_rewardItemTexts[i] = dynamic_cast<UIText *>(comp->GetChild("text"));
+		if (m_rewardItemTexts[i])
+			m_rewardItemTexts[i]->SetPreLocalized(true);
+
+		m_rewardItemSelectionBoxes[i] = dynamic_cast<UIPage *>(m_rewardItemPages[i]->GetChild("selection"));
+		if (m_rewardItemSelectionBoxes[i])
+			m_rewardItemSelectionBoxes[i]->SetVisible(false);
 	}
 
-	//initialize UI state
-	registerMediatorObject(*m_showCompletedCheckbox, true);
-	registerMediatorObject(*m_questTree, true);
-	registerMediatorObject(*m_okButton, true);
-	registerMediatorObject(*m_buttonAbandonQuest, true);
-	registerMediatorObject(*m_abandonMissionButton, true);
-	registerMediatorObject(*m_sortCombo, true);
-	registerMediatorObject(*m_buttonExpandAll, true);
-	m_showCompletedCheckbox->SetChecked(false);
-	m_description->SetPreLocalized(true);
-	m_titleText->SetPreLocalized(true);
-	m_titleText->Clear();
-	m_experienceRewardText->SetPreLocalized(true);
-	m_experienceRewardText->Clear();
-	m_experienceRewardText->SetVisible(false);
-	m_factionRewardText->SetPreLocalized(true);
-	m_factionRewardText->Clear();
-	m_factionRewardText->SetVisible(false);
-	m_moneyRewardText->SetPreLocalized(true);
-	m_moneyRewardText->Clear();
-	m_moneyRewardText->SetVisible(false);
-	m_buttonAbandonQuest->SetVisible(false);
-	NON_NULL(m_questTree)->ClearData();
-	m_sortCombo->SetSelectedIndex(0, true);
-	m_levelText->Clear();
-	m_levelText->SetPreLocalized(true);
-	m_typePage->SetVisible(false);
-	m_typeText->Clear();
-	m_typeText->SetPreLocalized(true);
-	m_tasksSample->SetVisible(false);
-	m_inclusiveText->SetVisible(false);
-	m_exclusiveText->SetVisible(false);
-	m_chooseOneText->SetVisible(false);
+	//initialize UI state (all guarded - NGE-retail journal layout misses many)
+	if (m_showCompletedCheckbox)        registerMediatorObject(*m_showCompletedCheckbox, true);
+	if (m_questTree)                    registerMediatorObject(*m_questTree, true);
+	if (m_okButton)                     registerMediatorObject(*m_okButton, true);
+	if (m_buttonAbandonQuest)           registerMediatorObject(*m_buttonAbandonQuest, true);
+	if (m_abandonMissionButton)         registerMediatorObject(*m_abandonMissionButton, true);
+	if (m_sortCombo)                    registerMediatorObject(*m_sortCombo, true);
+	if (m_buttonExpandAll)              registerMediatorObject(*m_buttonExpandAll, true);
 
-	m_missionTitleText->Clear();
-	m_missionDescriptionText->Clear();
-	m_missionMoneyRewardText->Clear();
-	m_missionLevelText->Clear();
-	m_missionTypeText->Clear();
-	m_missionCreatorText->Clear();
-	m_missionTargetText->Clear();
-	m_missionStartLocText->Clear();
-	m_missionDestLocText->Clear();
-	m_missionEfficiencyText->Clear();
-	m_missionTitleText->SetPreLocalized(true);
-	m_missionDescriptionText->SetPreLocalized(true);
-	m_missionMoneyRewardText->SetPreLocalized(true);
-	m_missionLevelText->SetPreLocalized(true);
-	m_missionTypeText->SetPreLocalized(true);
-	m_missionCreatorText->SetPreLocalized(true);
-	m_missionTargetText->SetPreLocalized(true);
-	m_missionStartLocText->SetPreLocalized(true);
-	m_missionDestLocText->SetPreLocalized(true);
-	m_missionEfficiencyText->SetPreLocalized(true);
+	if (m_showCompletedCheckbox)        m_showCompletedCheckbox->SetChecked(false);
+	if (m_description)                  m_description->SetPreLocalized(true);
+	if (m_titleText)                  { m_titleText->SetPreLocalized(true); m_titleText->Clear(); }
+	if (m_experienceRewardText)       { m_experienceRewardText->SetPreLocalized(true); m_experienceRewardText->Clear(); m_experienceRewardText->SetVisible(false); }
+	if (m_factionRewardText)          { m_factionRewardText->SetPreLocalized(true); m_factionRewardText->Clear(); m_factionRewardText->SetVisible(false); }
+	if (m_moneyRewardText)            { m_moneyRewardText->SetPreLocalized(true); m_moneyRewardText->Clear(); m_moneyRewardText->SetVisible(false); }
+	if (m_buttonAbandonQuest)           m_buttonAbandonQuest->SetVisible(false);
+	if (m_questTree)                    m_questTree->ClearData();
+	if (m_sortCombo)                    m_sortCombo->SetSelectedIndex(0, true);
+	if (m_levelText)                  { m_levelText->Clear(); m_levelText->SetPreLocalized(true); }
+	if (m_typePage)                     m_typePage->SetVisible(false);
+	if (m_typeText)                   { m_typeText->Clear(); m_typeText->SetPreLocalized(true); }
+	if (m_tasksSample)                  m_tasksSample->SetVisible(false);
+	if (m_inclusiveText)                m_inclusiveText->SetVisible(false);
+	if (m_exclusiveText)                m_exclusiveText->SetVisible(false);
+	if (m_chooseOneText)                m_chooseOneText->SetVisible(false);
 
-	m_missionStartLocText->SetVisible(false);
-	m_missionDestLocText->SetVisible(false);
-	m_missionEfficiencyText->SetVisible(false);
+	if (m_missionTitleText)           { m_missionTitleText->Clear(); m_missionTitleText->SetPreLocalized(true); }
+	if (m_missionDescriptionText)     { m_missionDescriptionText->Clear(); m_missionDescriptionText->SetPreLocalized(true); }
+	if (m_missionMoneyRewardText)     { m_missionMoneyRewardText->Clear(); m_missionMoneyRewardText->SetPreLocalized(true); }
+	if (m_missionLevelText)           { m_missionLevelText->Clear(); m_missionLevelText->SetPreLocalized(true); }
+	if (m_missionTypeText)            { m_missionTypeText->Clear(); m_missionTypeText->SetPreLocalized(true); }
+	if (m_missionCreatorText)         { m_missionCreatorText->Clear(); m_missionCreatorText->SetPreLocalized(true); }
+	if (m_missionTargetText)          { m_missionTargetText->Clear(); m_missionTargetText->SetPreLocalized(true); }
+	if (m_missionStartLocText)        { m_missionStartLocText->Clear(); m_missionStartLocText->SetPreLocalized(true); m_missionStartLocText->SetVisible(false); }
+	if (m_missionDestLocText)         { m_missionDestLocText->Clear(); m_missionDestLocText->SetPreLocalized(true); m_missionDestLocText->SetVisible(false); }
+	if (m_missionEfficiencyText)      { m_missionEfficiencyText->Clear(); m_missionEfficiencyText->SetPreLocalized(true); m_missionEfficiencyText->SetVisible(false); }
 
-	m_playerQuestCreatorText->SetPreLocalized(true);
-	m_playerQuestDescriptionText->SetPreLocalized(true);
-	m_playerQuestTitleText->SetPreLocalized(true);
-	m_playerQuestDifficultyText->SetPreLocalized(true);
+	if (m_playerQuestCreatorText)       m_playerQuestCreatorText->SetPreLocalized(true);
+	if (m_playerQuestDescriptionText)   m_playerQuestDescriptionText->SetPreLocalized(true);
+	if (m_playerQuestTitleText)         m_playerQuestTitleText->SetPreLocalized(true);
+	if (m_playerQuestDifficultyText)    m_playerQuestDifficultyText->SetPreLocalized(true);
 
-	m_playerQuestTaskSample->SetVisible(false);
+	if (m_playerQuestTaskSample)        m_playerQuestTaskSample->SetVisible(false);
 
 	//page can be closed
 	setState(MS_closeable);
@@ -410,8 +421,16 @@ void SwgCuiQuestJournal::performActivate()
 	m_callback->connect(*this, &SwgCuiQuestJournal::onPlayerSetup,             static_cast<CreatureObject::Messages::PlayerSetup *>              (0));
 	m_callback->connect(*this, &SwgCuiQuestJournal::onContainerChange,         static_cast<ClientObject::Messages::AddedToContainer *>     (0));
 	m_callback->connect(*this, &SwgCuiQuestJournal::onContainerChange,         static_cast<ClientObject::Messages::RemovedFromContainer *> (0));
-	
-	CuiManager::requestPointer(true); 
+
+	CuiManager::requestPointer(true);
+
+	// Without the quest-tree widget the journal has nothing to populate.
+	// NGE-retail UI may be missing it; bail out cleanly rather than AV.
+	if (!m_questTree)
+	{
+		WARNING(true, ("SwgCuiQuestJournal::performActivate: m_questTree is null - quest journal UI unavailable in this asset bundle"));
+		return;
+	}
 
 	updateAll();
 
@@ -426,6 +445,8 @@ void SwgCuiQuestJournal::performActivate()
 		for(int i = 0; i < childrenCount; ++i)
 		{
 			UIDataSourceContainer const * const dsc = m_questTree->GetDataSourceContainerAtRow(i);
+			if (!dsc)
+				continue;
 			UIString name;
 			dsc->GetProperty(UILowerString("Name"), name);
 			if(ms_openedRows.find(Unicode::wideToNarrow(name)) != ms_openedRows.end())
@@ -511,9 +532,21 @@ void SwgCuiQuestJournal::onContainerChange(ClientObject::Messages::ContainerMsg 
  * Update the entire UI
  */
 void SwgCuiQuestJournal::updateAll()
-{	
+{
 	PlayerObject const * const player = Game::getPlayerObject();
 	if(!player)
+	{
+		return;
+	}
+	// Bail entirely if the journal's required widgets are missing - the
+	// NGE-retail UI lacks several of them, and every helper below
+	// unconditionally dereferences widget pointers.
+	if (!m_questTree
+		|| !m_buttonAbandonQuest
+		|| !m_abandonMissionButton
+		|| !m_questDescriptionPage
+		|| !m_missionDescriptionPage
+		|| !m_playerQuestDescriptionPage)
 	{
 		return;
 	}
@@ -564,6 +597,18 @@ void SwgCuiQuestJournal::updateSelection()
  */
 void SwgCuiQuestJournal::updateDescription()
 {
+	// Bail if essential widgets are missing - this gets called from
+	// updateTimers/onTimersChanged/onCountersChanged too (not just updateAll),
+	// so guarding only updateAll isn't enough.
+	if (!m_buttonAbandonQuest
+		|| !m_abandonMissionButton
+		|| !m_questDescriptionPage
+		|| !m_missionDescriptionPage
+		|| !m_playerQuestDescriptionPage)
+	{
+		return;
+	}
+
 	std::string const & selectedQuest = getSelectedQuest();
 	uint32 const questCrc = getSelectedQuestCrc();
 	NetworkId const & missionNid = getSelectedMission();
@@ -1179,6 +1224,9 @@ void SwgCuiQuestJournal::updateDecriptionReward(Quest const & quest)
  */
 void SwgCuiQuestJournal::updateQuestTree()
 {
+	if (!m_questTree)
+		return;
+
 	ms_internalTreeUpdating = true;
 
 	std::map<Unicode::String, std::vector<Quest const *> > questGroups;
@@ -1824,6 +1872,9 @@ void SwgCuiQuestJournal::clearTaskPages()
  */
 void SwgCuiQuestJournal::expandAllCategories(bool const expand)
 {
+	if (!m_questTree)
+		return;
+
 	int const childrenCount = static_cast<int>(m_questTree->GetRowCount());
 	for(int i = 0; i < childrenCount; ++i)
 	{
@@ -1832,7 +1883,8 @@ void SwgCuiQuestJournal::expandAllCategories(bool const expand)
 	}
 
 	Unicode::String const & newStyle = expand ? cms_collapseAllStyle : cms_expandAllStyle;
-	IGNORE_RETURN(m_buttonExpandAll->SetProperty(UITreeView::DataProperties::Text, newStyle));
+	if (m_buttonExpandAll)
+		IGNORE_RETURN(m_buttonExpandAll->SetProperty(UITreeView::DataProperties::Text, newStyle));
 }
 
 //----------------------------------------------------------------------

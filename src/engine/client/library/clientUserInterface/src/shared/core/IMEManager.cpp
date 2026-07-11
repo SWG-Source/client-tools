@@ -697,7 +697,7 @@ DWORD GetImeId( UINT uIndex )
         {
             if( _GetFileVersionInfoA( szTmp, dwVerHandle, dwVerSize, lpVerBuffer ) )
             {
-                if( _VerQueryValueA( lpVerBuffer, "\\", &lpVerData, &cbVerData ) )
+                if( _VerQueryValueA( lpVerBuffer, const_cast<char*>("\\"), &lpVerData, &cbVerData ) )
                 {
                     DWORD dwVer = ( (VS_FIXEDFILEINFO*)lpVerData )->dwFileVersionMS;
                     dwVer = ( dwVer & 0x00ff0000 ) << 8 | ( dwVer & 0x000000ff ) << 16;
@@ -734,7 +734,7 @@ DWORD GetImeId( UINT uIndex )
 // Resets the composition string.
 void ResetCompositionString()
 {
-    s_CompString = L"";
+    s_CompString = u"";
 	s_compCaretPos = 0;
     ZeroMemory( s_abCompStringAttr, sizeof(s_abCompStringAttr) );
 }
@@ -778,7 +778,7 @@ void HandleIMEComposition(LPARAM lParam)
 		{
 			lRet /= sizeof(WCHAR); // convert size in byte to size in char
 			wszCompStr[lRet] = 0;
-			s_CompString = wszCompStr;
+			s_CompString.assign(reinterpret_cast<const char16_t*>(wszCompStr), static_cast<size_t>(lRet));
 			s_consumeEnter = true;
 			SendCompString();
 			ResetCompositionString();
@@ -794,7 +794,7 @@ void HandleIMEComposition(LPARAM lParam)
 			lRet /= sizeof(WCHAR); // convert size in byte to size in char
 			wszCompStr[lRet] = 0;
 
-			s_CompString = wszCompStr;
+			s_CompString.assign(reinterpret_cast<const char16_t*>(wszCompStr), static_cast<size_t>(lRet));
 
 			lRet = _ImmGetCompositionStringW(hImc, GCS_COMPATTR, s_abCompStringAttr, sizeof(s_abCompStringAttr));
 			if (lRet >= 0)
@@ -887,7 +887,10 @@ void HandleChangeCandidateList()
 			break;
 		}
 
-		Unicode::String str = (LPWSTR) ((char *) lpCandList + lpCandList->dwOffset[curCand]);
+		const wchar_t* wstr =
+			reinterpret_cast<const wchar_t*>(
+				reinterpret_cast<const char*>(lpCandList) + lpCandList->dwOffset[curCand]);
+		Unicode::String str = reinterpret_cast<const char16_t*>(wstr);
 
 		s_candidateList.push_back(str);
 

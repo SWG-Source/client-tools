@@ -90,7 +90,23 @@ namespace DPVS
 
 #undef DPVS_VFT_IN_END
 
-#if defined (_WIN32) || defined (WIN32)						// Automatically detect Win32
+// MSVC defines BOTH _WIN32 and _WIN64 on x64 builds (the original DPVS
+// header pre-dated _WIN64 and assumed _WIN32 == 32-bit only). Detect
+// Win64 first and gate Win32 on `!_WIN64` so x64 takes the
+// DPVS_CPU_X86_64 path and skips DPVS_X86_ASSEMBLY.
+#if defined (_WIN64) || defined (WIN64)						// Automatically detect Win64
+#	undef DPVS_OS_WIN64
+#	define DPVS_OS_WIN64
+#endif
+
+// _WIN64 is defined by MSVC for x64 targets. The original code never
+// auto-set DPVS_OS_WIN64 anywhere, so x64 builds fell through to WIN32
+// and hit "Unrecognized CPU" later. Detect WIN64 first.
+#if (defined (_WIN64) || defined (WIN64)) && !defined(DPVS_OS_WIN64)
+#	define DPVS_OS_WIN64
+#endif
+
+#if (defined (_WIN32) || defined (WIN32)) && !defined(DPVS_OS_WIN64)
 #	undef DPVS_OS_WIN32
 #	define DPVS_OS_WIN32
 #endif
@@ -129,6 +145,12 @@ namespace DPVS
 #if defined (DPVS_OS_WIN32)
 #	define DPVS_CPU_X86										// x86 series CPU
 #	define DPVS_LITTLE_ENDIAN								// x86 processors are little-endian
+#elif defined (DPVS_OS_WIN64)
+#	define DPVS_CPU_X86_64									// x86-64 series CPU
+#	define DPVS_LITTLE_ENDIAN								// x86-64 is little-endian too
+#	define DPVS_UINT64_DEFINED								// 64-bit integer support
+	typedef signed __int64 INT64;
+	typedef unsigned __int64 UINT64;
 #elif defined (DPVS_OS_MAC)									// Apple Macintosh
 #	define DPVS_CPU_PPC
 #	define DPVS_CPU_NAME		"PowerPC"
@@ -170,8 +192,12 @@ namespace DPVS
 	typedef unsigned long UINT64;
 #endif
 
-#if defined (DPVS_CPU_X86)	&& !defined (DPVS_CPU_NAME)								
+#if defined (DPVS_CPU_X86)	&& !defined (DPVS_CPU_NAME)
 #	define DPVS_CPU_NAME "X86"
+#endif
+
+#if defined (DPVS_CPU_X86_64) && !defined (DPVS_CPU_NAME)
+#	define DPVS_CPU_NAME "X86-64"
 #endif
 
 #if !defined (DPVS_CPU_NAME)
@@ -429,7 +455,12 @@ namespace DPVS
 typedef unsigned char			UINT8;					// 8-bit unsigned integer
 typedef short int				INT16;                  // 16-bit signed integer
 typedef unsigned short int		UINT16;                 // 16-bit unsigned integer
+
+#ifdef DPVS_OS_WIN64
+typedef uintptr_t				UPTR;					// unsigned integer large enough to hold a void*
+#else
 typedef unsigned int			UPTR;					// unsigned integer large enough to hold a void*
+#endif // DPVS_OS_WIN64
 
 //------------------------------------------------------------------------
 // Make sure that certain typedefs really do have the intended sizes

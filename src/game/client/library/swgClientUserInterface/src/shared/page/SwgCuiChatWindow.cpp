@@ -1912,13 +1912,13 @@ void SwgCuiChatWindow::onNamedRoomIdChanged(const CuiChatRoomManager::Messages::
 	if (roomNode)
 	{
 		ChannelId const cid(CT_named, roomNode->getFullPath());
-		for (ChatWindowSet::const_iterator it = ms_activeChatWindows[sceneType].begin(); it != ms_activeChatWindows[sceneType].end(); ++it)
+		for (ChatWindowSet::const_iterator chatWindowIt = ms_activeChatWindows[sceneType].begin(); chatWindowIt != ms_activeChatWindows[sceneType].end(); ++chatWindowIt)
 		{
-			SwgCuiChatWindow const * const cw = NON_NULL(*it);
+			SwgCuiChatWindow const * const cw = NON_NULL(*chatWindowIt);
 			
-			for (TabVector::iterator it = cw->m_tabVector->begin(); it != cw->m_tabVector->end(); ++it)
+			for (TabVector::iterator tabIt = cw->m_tabVector->begin(); tabIt != cw->m_tabVector->end(); ++tabIt)
 			{
-				Tab * tab = *it;
+				Tab * tab = *tabIt;
 				if (tab->getDefaultChannel().type == cid.type && tab->getDefaultChannel().getDisplayName() == cid.getDisplayName())
 				{
 					tab->setDefaultChannel(cid);
@@ -2498,7 +2498,7 @@ SwgCuiChatWindow::Tab * SwgCuiChatWindow::staticFindChatTabByTabId(int tabId, Sw
 		}
 	}
 
-	return false;
+	return nullptr;
 }
 
 //----------------------------------------------------------------------

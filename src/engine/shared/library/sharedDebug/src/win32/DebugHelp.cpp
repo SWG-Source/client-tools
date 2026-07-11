@@ -500,29 +500,34 @@ void DebugHelp::getCallStack(uint32 *callStack, int sizeOfCallStack)
 	//	return;
 
 	EnterCriticalSection(&criticalSection);
-	__asm
-	{
-		call GetEIP
-		GetEIP:
-		pop eax
-		mov context.Eip, eax
-		mov context.Esp, esp
-		mov context.Ebp, ebp
-	}
+	// Was: x86 inline asm `call GetEIP; pop eax; mov context.Eip, eax;
+	// mov context.Esp, esp; mov context.Ebp, ebp` to seed the CONTEXT
+	// with the current thread's instruction/stack/frame pointers.
+	// RtlCaptureContext does the same thing portably (fills Eip/Esp/Ebp
+	// on x86, Rip/Rsp/Rbp on x64).
+	RtlCaptureContext(&context);
 	LeaveCriticalSection(&criticalSection);
 
 	STACKFRAME64 stackFrame;
 	Zero(stackFrame);
 	stackFrame.AddrPC.Mode      = AddrModeFlat;
+	stackFrame.AddrStack.Mode   = AddrModeFlat;
+	stackFrame.AddrFrame.Mode   = AddrModeFlat;
+#if defined(_M_X64)
+	stackFrame.AddrPC.Offset    = context.Rip;
+	stackFrame.AddrStack.Offset = context.Rsp;
+	stackFrame.AddrFrame.Offset = context.Rbp;
+	const DWORD machineType     = IMAGE_FILE_MACHINE_AMD64;
+#else
 	stackFrame.AddrPC.Offset    = context.Eip;
 	stackFrame.AddrStack.Offset = context.Esp;
-	stackFrame.AddrStack.Mode   = AddrModeFlat;
 	stackFrame.AddrFrame.Offset = context.Ebp;
-	stackFrame.AddrFrame.Mode   = AddrModeFlat;
+	const DWORD machineType     = IMAGE_FILE_MACHINE_I386;
+#endif
 
 	for (int i = 0; i < sizeOfCallStack; ++i, ++callStack)
 	{
-		if (stackWalk64(IMAGE_FILE_MACHINE_I386, process, process, &stackFrame, &context, NULL, functionTableAccess, getModuleBase, NULL))
+		if (stackWalk64(machineType, process, process, &stackFrame, &context, NULL, functionTableAccess, getModuleBase, NULL))
 		{
 			const DWORD64 Offset = stackFrame.AddrPC.Offset;
 			*callStack = DWORD(Offset);

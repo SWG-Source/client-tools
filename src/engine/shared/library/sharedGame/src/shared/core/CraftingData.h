@@ -9,7 +9,9 @@
 #ifndef INCLUDED_CraftingData_H
 #define INCLUDED_CraftingData_H
 
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
+#include "sharedFoundation/NetworkId.h"
+// Disable deprecated auto_ptr support for modern C++
+#define BOOST_NO_AUTO_PTR
 #include "boost/smart_ptr.hpp"
 #include "StringId.h"
 #include <vector>

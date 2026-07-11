@@ -10,6 +10,9 @@
 #ifndef MISC_H
 #define MISC_H
 
+#include "sharedFoundation/FirstSharedFoundation.h"
+#include "sharedFoundation/Fatal.h"
+
 // ======================================================================
 /**
  * Return the square of a number.
@@ -172,7 +175,7 @@ inline char *DuplicateStringWithToLower(const char *source)
 		return NULL;
 
 	const size_t length = strlen(source)+1;
-	char *result = NON_NULL (new char[length]);
+	char *result = NON_NULL(new char[length]);
 
 	for (size_t i = 0; i < length; ++i)
 		result[i] = static_cast<char>(tolower(source[i]));
@@ -230,7 +233,7 @@ inline void *memmove(void *destination, const void *source, int length)
 {
 	DEBUG_FATAL(!destination, ("null destination arg"));
 	DEBUG_FATAL(!source, ("null source arg"));
-	return memmove(destination, source, static_cast<uint>(length));
+	return ::memmove(destination, source, static_cast<size_t>(length));
 }
 
 // ----------------------------------------------------------------------

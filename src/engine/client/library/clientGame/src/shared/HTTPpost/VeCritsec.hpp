@@ -5,6 +5,8 @@
 
 #pragma warning( disable : 4740 ) // disable warning C4740: flow in or out of inline asm code suppresses global optimization
 
+#include <intrin.h>   // _interlockedbittestandset
+
 // Explicit declaration to avoid having to #include <windows.h>
 extern "C"
 {
@@ -39,19 +41,18 @@ public:
             return( true );
         }
 
-        volatile unsigned int* p_i_lock = &m_iLock;
-        __asm 
+        // Was: x86 inline asm `lock bts dword ptr [esi], 0` with jnc.
+        // _interlockedbittestandset is the portable intrinsic; it
+        // emits LOCK BTS and returns the previous bit value (0 = we
+        // got the lock).
+        volatile long *p_i_lock = reinterpret_cast<volatile long *>(&m_iLock);
+        if (_interlockedbittestandset(p_i_lock, 0) == 0)
         {
-            mov esi,[p_i_lock]
-            lock bts dword ptr [esi], 0
-            jnc Locked
+            m_uThreadID = uCallingThread;
+            m_uLockCount = 1;
+            return( true );
         }
         return( false );
-        
-        Locked:
-        m_uThreadID = uCallingThread;
-        m_uLockCount = 1;
-        return( true );    
 #else
         //
         // This looks like a race condition, but it isn't.  Yes the value of m_uThreadID

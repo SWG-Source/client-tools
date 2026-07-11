@@ -10,6 +10,7 @@
 
 // ======================================================================
 
+#include "NetworkIdArchive.h"
 #include "Archive/AutoDeltaMap.h"
 #include <stdio.h>
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"

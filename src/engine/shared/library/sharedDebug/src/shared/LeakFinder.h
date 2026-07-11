@@ -17,7 +17,7 @@
 
 #include <vector>
 #include <list>
-#include <hash_map>
+#include <unordered_map>
 
 // ======================================================================
 
@@ -77,7 +77,9 @@ protected:
 	void _printReferenceCountingData(const ReferenceCountingData &) const;
 
 	struct ptr_hash {
-		size_t operator()(void *p) const { return std::hash<unsigned long>()((unsigned long)p); }
+		size_t operator()(void* p) const noexcept {
+			return std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(p));
+		}
 	};
 
 	struct ObjectData
@@ -89,7 +91,7 @@ protected:
 		ReferenceCountingData *referenceData;
 	};
 
-	typedef std::hash_map<void *, ObjectData, ptr_hash> ObjectMap;
+	typedef std::unordered_map<void *, ObjectData, ptr_hash> ObjectMap;
 
 	ObjectMap liveObjects;
 };

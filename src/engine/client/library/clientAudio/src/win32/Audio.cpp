@@ -194,7 +194,7 @@ namespace AudioNamespace
 	void insertionSort(QueuedSamplesToStartList & list, Sound2 & sound);
 	int getMaxNumberOfSamples();
 	int getProviderSpec(std::string const & provider);
-	std::string const getSpeakerSpec();
+	std::string getSpeakerSpec();
 	bool isNonBufferedMusic(Audio::SoundCategory const soundCategory);
 
 #ifdef _DEBUG
@@ -227,12 +227,15 @@ namespace AudioNamespace
 
 using namespace AudioNamespace;
 
-// Callbacks for Miles to the TreeFile system
+// Callbacks for Miles to the TreeFile system.
+// FileHandle is `UINTa` in mss.h (pointer-sized) - on x64 that's 8 bytes,
+// not 4. Match the upstream typedefs exactly so AIL_set_file_callbacks
+// accepts these function pointers.
 
-static U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle);
-static void __stdcall fileCloseCallBack(U32 fileHandle);
-static S32 __stdcall fileSeekCallBack(U32 fileHandle, S32 offset, U32 type);
-static U32 __stdcall fileReadCallBack(U32 fileHandle, void *buffer, U32 bytes);
+static U32 AILCALLBACK fileOpenCallBack(MSS_FILE const *fileName, UINTa *fileHandle);
+static void AILCALLBACK fileCloseCallBack(UINTa fileHandle);
+static S32 AILCALLBACK fileSeekCallBack(UINTa fileHandle, S32 offset, U32 type);
+static U32 AILCALLBACK fileReadCallBack(UINTa fileHandle, void *buffer, U32 bytes);
 
 static SoundId attachSound(SoundTemplate const *soundTemplate, Object const *object, char const *hardPointName=0);
 static bool cacheSound(SoundTemplate const *soundTemplate);
@@ -932,7 +935,7 @@ int AudioNamespace::getProviderSpec(std::string const & provider)
 }
 
 //-----------------------------------------------------------------------------
-std::string const AudioNamespace::getSpeakerSpec()
+std::string AudioNamespace::getSpeakerSpec()
 {
 	if (s_speakers == MSS_MC_USE_SYSTEM_CONFIG)
 		return "Windows Speaker Configuration";
@@ -1009,8 +1012,8 @@ void Audio::showAudioDebug()
 	DEBUG_REPORT_PRINT(true, ("Sound Instant Rejections   - %d\n", s_instantRejectionCount));
 	DEBUG_REPORT_PRINT(true, ("Next sampleId/soundId      - %d/%d\n", s_nextSampleId, s_nextSoundId));
 	DEBUG_REPORT_PRINT(true, ("Timer Delay (ms)           - %d/%d peak (%.1f) avg\n", s_timerCurrentDelay, s_timerHighestDelay, s_averageTimerDelay));
-	DEBUG_REPORT_PRINT(true, ("User Speaker Setting       - %s\n", getCurrent3dProvider()));
-	DEBUG_REPORT_PRINT(true, ("Miles Speaker Setting      - %s\n", getSpeakerSpec()));
+	DEBUG_REPORT_PRINT(true, ("User Speaker Setting       - %s\n", getCurrent3dProvider().c_str()));
+	DEBUG_REPORT_PRINT(true, ("Miles Speaker Setting      - %s\n", getSpeakerSpec().c_str()));
 	DEBUG_REPORT_PRINT(true, ("Environmental Reverb       - %s\n", getRoomTypeString()));
 	DEBUG_REPORT_PRINT(true, ("Obstruction (interiors)    - %d%%\n", static_cast<int>(getObstruction() * 100.0f + 0.5f)));
 	DEBUG_REPORT_PRINT(true, ("Occlusion (inside vs out)  - %d%%\n", static_cast<int>(getOcclusion() * 100.0f + 0.5f)));
@@ -1209,7 +1212,12 @@ bool Audio::install()
 {
 	DEBUG_FATAL(s_installed, ("Already installed"));
 
+#if defined(_WIN64)
+	// The vendored x64 Miles compatibility DLL only satisfies imports; it has no audio driver.
+	s_disableMiles = ConfigFile::getKeyBool("ClientAudio", "disableMiles", true);
+#else
 	s_disableMiles = ConfigFile::getKeyBool("ClientAudio", "disableMiles", false);
+#endif
 
 	if (s_disableMiles)
 	{
@@ -1322,7 +1330,7 @@ bool Audio::install()
 	AIL_speaker_configuration(s_digitalDevice2d, NULL, NULL, NULL, &s_speakers);
 
 	REPORT_LOG(true, ("Audio: %s\n", getCurrent3dProvider().c_str()));
-	REPORT_LOG(true, ("Audio: Miles speakers are %s\n", getSpeakerSpec()));
+	REPORT_LOG(true, ("Audio: Miles speakers are %s\n", getSpeakerSpec().c_str()));
 	REPORT_LOG(true, ("Audio: Miles Max DIG_MIXER_CHANNELS(%d)\n", getMaxDigitalMixerChannels()));
 
 	// This disables any reberb from a previous product
@@ -1987,8 +1995,6 @@ void Audio::alter(float const deltaTime, Object const *listener)
 					|| !queueSample(*sound, soundIsAlreadyPlaying))
 				{
 					// The sample is not a good choice to play so stop it
-
-					Sound2 * sound = (*iterUtilitySoundList);
 					float const fadeOutTime = 0.0f;
 					bool const keepAlive = sound->isInfiniteLooping();
 
@@ -3932,7 +3938,7 @@ float Audio::getSampleEffectsLevel(SampleId const &sampleId)
 static int once = true;
 
 //-----------------------------------------------------------------------------
-U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle)
+U32 AILCALLBACK fileOpenCallBack(MSS_FILE const *fileName, UINTa *fileHandle)
 {
 	if (once && !Os::isMainThread())
 	{
@@ -3961,7 +3967,7 @@ U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle)
 }
 
 //-----------------------------------------------------------------------------
-void __stdcall fileCloseCallBack(U32 const fileHandle)
+void AILCALLBACK fileCloseCallBack(UINTa const fileHandle)
 {
 	if (once && !Os::isMainThread())
 	{
@@ -4000,7 +4006,7 @@ void __stdcall fileCloseCallBack(U32 const fileHandle)
 }
 
 //-----------------------------------------------------------------------------
-S32 __stdcall fileSeekCallBack(U32 const fileHandle, S32 const offset, U32 const type)
+S32 AILCALLBACK fileSeekCallBack(UINTa const fileHandle, S32 const offset, U32 const type)
 {
 	if (once && !Os::isMainThread())
 	{
@@ -4056,7 +4062,7 @@ S32 __stdcall fileSeekCallBack(U32 const fileHandle, S32 const offset, U32 const
 }
 
 //-----------------------------------------------------------------------------
-U32 __stdcall fileReadCallBack(U32 const fileHandle, void *buffer, U32 const bytes)
+U32 AILCALLBACK fileReadCallBack(UINTa const fileHandle, void *buffer, U32 const bytes)
 {
 // miles crasher hack
 #if 0

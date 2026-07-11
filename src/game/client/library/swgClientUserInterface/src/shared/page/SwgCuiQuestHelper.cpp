@@ -483,11 +483,16 @@ bool SwgCuiQuestHelper::updateHelperWithMissionData(PlayerObject const * const /
 		questHelperTask->setQuestTaskData(0, 0);
 	}
 
-	ClientWaypointObject const * const waypointLocation = m->getLocalWaypoint();
-	if (waypointLocation && waypointLocation->isWaypointVisible())
+	ClientWaypointObject const* const waypointObj = m->getLocalWaypoint();
+	if (waypointObj && waypointObj->isWaypointVisible())
 	{
-		Location waypointLocation(waypointLocation->getLocation(), waypointLocation->getCell(), Crc::calculate(waypointLocation->getPlanetName().c_str()));
-		showedPath = setupWaypointForTask(NULL, questHelperTask, waypointLocation, false, false, NULL);
+		Location waypointLoc(
+			waypointObj->getLocation(),
+			waypointObj->getCell(),
+			Crc::calculate(waypointObj->getPlanetName().c_str())
+		);
+
+		showedPath = setupWaypointForTask(nullptr, questHelperTask, waypointLoc, false, false, nullptr);
 	}
 
 	if (s_showingPath && !showedPath)
@@ -939,14 +944,14 @@ void SwgCuiQuestHelper::onRemovedFromContainer(ClientObject::Messages::Container
 Quest const * SwgCuiQuestHelperNamespace::getActiveVisibleQuest(uint32 questCrc, PlayerObject const & playerObject)
 {
 	if (!playerObject.questHasActiveQuest(questCrc))
-		return false;
+		return nullptr;
 
 	Quest const * quest = QuestManager::getQuest(questCrc);
 
 	if (quest && quest->isVisible())
 		return quest;
 
-	return NULL;
+	return nullptr;
 }
 
 // ----------------------------------------------------------------------
@@ -1097,12 +1102,18 @@ bool SwgCuiQuestHelper::updateHelperWithPlayerQuestData(PlayerObject const * con
 
 			questHelperTask->setTaskProgress(Unicode::narrowToWide(result.c_str()), Task::PH_none);
 
-			ClientWaypointObject * waypointLocation = pq->getLocalWaypointObject(i);
-			if (waypointLocation && waypointLocation->isWaypointVisible())
+			ClientWaypointObject* waypointObj = pq->getLocalWaypointObject(i);
+			if (waypointObj && waypointObj->isWaypointVisible())
 			{
-				waypointLocation->setWaypointActive(true);
-				Location waypointLocation(waypointLocation->getLocation(), waypointLocation->getCell(), Crc::calculate(waypointLocation->getPlanetName().c_str()));
-				showedPath = setupWaypointForTask(NULL, questHelperTask, waypointLocation, false, false, NULL);
+				waypointObj->setWaypointActive(true);
+
+				Location waypointLoc(
+					waypointObj->getLocation(),
+					waypointObj->getCell(),
+					Crc::calculate(waypointObj->getPlanetName().c_str())
+				);
+
+				showedPath = setupWaypointForTask(nullptr, questHelperTask, waypointLoc, false, false, nullptr);
 			}
 
 			if (s_showingPath && !showedPath)

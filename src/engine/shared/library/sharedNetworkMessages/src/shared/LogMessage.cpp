@@ -6,6 +6,7 @@
 //
 // ======================================================================
 
+#include "unicodeArchive/UnicodeArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/LogMessage.h"
 

@@ -12,11 +12,11 @@ class MD5 : public IteratedHash<word32, false, 64>
 public:
 	enum {DIGESTSIZE = 16};
 	MD5() : IteratedHash<word32, false, 64>(DIGESTSIZE) {Init();}
-	static void Transform(word32 *digest, const word32 *data);
+	static void Transform(word32 *digest, const word32 * inData);
 
 protected:
 	void Init();
-	void vTransform(const word32 *data) {Transform(digest, data);}
+	void vTransform(const word32 *inData) {Transform(digest, inData);}
 };
 
 NAMESPACE_END

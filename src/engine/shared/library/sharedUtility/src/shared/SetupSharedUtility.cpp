@@ -92,7 +92,12 @@ void SetupSharedUtility::installFileManifestEntries ()
 	// read in the datatable entries for sharedFile/FileManifest.cpp
 	std::string datatableName = FileManifest::getDatatableName();
 
-	FATAL(!TreeFile::exists(datatableName.c_str()), ("%s could not be found. Are your paths set up correctly?", datatableName.c_str()));
+	// The manifest is only used for SKU/download bookkeeping, not
+	// gameplay. Skip it unconditionally on x64 - the file in the
+	// Restoration TRE pack uses a TRE 0006 per-file content scheme we
+	// don't yet decrypt/decompress, which would FATAL inside DataTable::load.
+	DEBUG_WARNING(true, ("SetupSharedUtility::installFileManifestEntries(): skipping %s - SKU manifest not required.\n", datatableName.c_str()));
+	return;
 
 	DataTable * manifestDatatable = DataTableManager::getTable(datatableName, true);
 

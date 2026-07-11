@@ -226,7 +226,15 @@ namespace Unicode
 	
 	inline NarrowString wideToNarrow (const String & str)
 	{
-		return NarrowString (str.begin (), str.end ());
+		NarrowString result;
+		result.reserve(str.size());
+
+		for (auto ch : str)
+		{
+			result.push_back(static_cast<char>(ch));
+		}
+
+		return result;
 	}
 
 	//-----------------------------------------------------------------
@@ -237,7 +245,15 @@ namespace Unicode
 	*/
 	inline NarrowString &  wideToNarrow (const String & str, NarrowString & nstr)
 	{ //lint !e1929 // function returning a reference
-		return nstr.assign (str.begin (), str.end ());
+		nstr.clear();
+		nstr.reserve(str.size());
+
+		for (auto ch : str)
+		{
+			nstr.push_back(static_cast<char>(ch));
+		}
+
+		return nstr;
 	}
 
 	/**

@@ -84,10 +84,14 @@ bool CuiMessageQueueManager::executeCommandByName   (const std::string & str)
 		if (imap->executeCommandByName (str.c_str (), 0, 0, 0))
 			return true;
 		
-		WARNING (true, ("CuiMessageQueueManager failed to execute command by name: '%s'", str.c_str ()));
 	}
 
-	return false;
+	// Pre-CU restore: commands added via the command_table override aren't in the
+	// input map (it carries only inputmap-config commands), so the dispatch above
+	// no-ops for them. Fall back to the command-string parser -- the same path chat
+	// and macros use, which reaches the server -- so abilities fire from the toolbar
+	// and command window. '/' is the command char CuiChatParserStrategy::parse strips.
+	return executeCommandByString ("/" + str, true);
 }
 
 //----------------------------------------------------------------------

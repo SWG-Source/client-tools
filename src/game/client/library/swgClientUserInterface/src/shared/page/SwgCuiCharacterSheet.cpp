@@ -1641,7 +1641,9 @@ void SwgCuiCharacterSheet::updateGcwPage()
 	else
 	{
 		char buffer[512];
-		int timeUntil = static_cast<int>(time - ::time(NULL));
+		// time_t is 64-bit on x64 Windows; keep arithmetic in time_t and only
+		// narrow to unsigned int for the seconds-display helper.
+		time_t const timeUntil = time - ::time(NULL);
 
 		if (timeUntil >= 0)
 		{

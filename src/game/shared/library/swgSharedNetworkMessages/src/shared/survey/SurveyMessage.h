@@ -10,16 +10,9 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedMath/Vector.h"
+#include "SurveyMessageTypes.h"
+#include "SurveyMessageArchive.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
-
-//-----------------------------------------------------------------------
-
-struct Survey_DataItem
-{
-	Vector m_location;
-	float  m_efficiency;
-};
 
 //-----------------------------------------------------------------------
 
@@ -29,7 +22,7 @@ public:
 
 	static const char * const MessageType;
 
-	typedef Survey_DataItem DataItem;
+	using DataItem = Survey_DataItem;
 	
 public:
 	SurveyMessage           (const stdvector<DataItem>::fwd &data);
@@ -48,11 +41,6 @@ private:
 
 // ======================================================================
 
-namespace Archive
-{
-	void put(ByteStream &target, const Survey_DataItem &data);
-	void get(ReadIterator &source, Survey_DataItem &data);
-}
 
 // ======================================================================
 

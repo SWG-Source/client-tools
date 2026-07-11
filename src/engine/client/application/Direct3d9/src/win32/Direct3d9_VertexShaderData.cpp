@@ -32,6 +32,16 @@
 
 namespace Direct3d9_VertexShaderDataNamespace
 {
+	// The original SWG shaders assign aggregate constants to fixed c-registers.
+	// Current D3DX compilers reject that layout with X4016, while the D3DX9.31
+	// compiler accepts it and preserves the register contract expected by the
+	// renderer.  The bundled legacy DirectX header predates the named flag.
+#if defined(_WIN64)
+	DWORD const cms_hlslCompileFlags = (1u << 16); // D3DXSHADER_USE_LEGACY_D3DX9_31_DLL
+#else
+	DWORD const cms_hlslCompileFlags = 0;
+#endif
+
 	struct Include
 	{
 	public:
@@ -85,9 +95,84 @@ using namespace Direct3d9_VertexShaderDataNamespace;
 Direct3d9_VertexShaderDataNamespace::Include::Include(CrcString const &fileName, AbstractFile * file)
 :
 	m_fileName(fileName),
-	m_length(file->length()),
-	m_data(file->readEntireFileAndClose())
+	m_length(0),
+	m_data(NULL)
 {
+	int const origLength = file->length();
+	byte * const origData = file->readEntireFileAndClose();
+
+	// Prepend a #define so `point` (used as a struct field on LightData in
+	// vertex_shader_constants.inc) doesn't collide with HLSL's reserved
+	// `point` keyword on modern d3dcompiler.
+	static char const PREFIX[] = "#define point _pt_lights\n";
+	int const prefixLen = static_cast<int>(sizeof(PREFIX) - 1);
+
+	// c_ambient.inc ships as `mov r7, vColor0` — it uses the per-vertex baked
+	// ambient color and ignores lightData.ambient (c16). Static meshes have
+	// vColor0 baked at export time, but skinned/character meshes don't, so
+	// vColor0 is (0,0,0) and characters end up with zero ambient contribution.
+	// When the parallel sun light is also weak (e.g. avatar customization scene
+	// running through GroundEnvironment with mainDiffuse scale near zero), the
+	// final character color is solid black. Patch the line to also mix in c16
+	// (the global ambient) so character meshes get scene ambient lighting.
+	char const * const fname = fileName.getString();
+	bool const patchAmbient = fname && strstr(fname, "c_ambient.inc") != NULL;
+	static char const AMBIENT_SEARCH[]  = "mov r7, vColor0";
+	static char const AMBIENT_REPLACE[] = "add r7, vColor0, c16";
+	int const searchLen  = static_cast<int>(sizeof(AMBIENT_SEARCH)  - 1);
+	int const replaceLen = static_cast<int>(sizeof(AMBIENT_REPLACE) - 1);
+
+	int extraGrowth = 0;
+	if (patchAmbient)
+	{
+		char const * p = reinterpret_cast<char const *>(origData);
+		char const * const pEnd = p + origLength;
+		while (p + searchLen <= pEnd)
+		{
+			if (memcmp(p, AMBIENT_SEARCH, searchLen) == 0)
+			{
+				extraGrowth += (replaceLen - searchLen);
+				p += searchLen;
+			}
+			else
+			{
+				++p;
+			}
+		}
+	}
+
+	byte * const buf = new byte[prefixLen + origLength + extraGrowth];
+	memcpy(buf, PREFIX, prefixLen);
+
+	if (patchAmbient && extraGrowth > 0)
+	{
+		byte const * src = origData;
+		byte const * const srcEnd = src + origLength;
+		byte * dst = buf + prefixLen;
+		while (src < srcEnd)
+		{
+			if (src + searchLen <= srcEnd
+				&& memcmp(src, AMBIENT_SEARCH, searchLen) == 0)
+			{
+				memcpy(dst, AMBIENT_REPLACE, replaceLen);
+				dst += replaceLen;
+				src += searchLen;
+			}
+			else
+			{
+				*dst++ = *src++;
+			}
+		}
+		m_length = static_cast<int>(dst - buf);
+	}
+	else
+	{
+		memcpy(buf + prefixLen, origData, origLength);
+		m_length = prefixLen + origLength;
+	}
+
+	delete [] origData;
+	m_data = buf;
 }
 
 // ----------------------------------------------------------------------
@@ -98,6 +183,24 @@ Direct3d9_VertexShaderDataNamespace::Include::~Include()
 }
 
 // ======================================================================
+
+// On modern d3dcompiler/d3dx9, the HLSL lexer treats `point` as a reserved
+// keyword (geometry-shader input topology). The SOE shader includes use it
+// as a field name on the LightData struct (`PointLight point[N];`). Patch
+// the source on the fly to add a `#define point _pt_lights` at the top of
+// every include so callers' `lightData.point[i]` references rewrite cleanly.
+// The legacy d3dx9_43 from June 2010 SDK accepts this; gluing on the define
+// keeps newer compilers happy too.
+static unsigned char * fixupShaderSourcePoint(unsigned char const * data, unsigned int length, unsigned int & outLength)
+{
+	static char const PREFIX[] = "#define point _pt_lights\n";
+	unsigned int const prefixLen = static_cast<unsigned int>(sizeof(PREFIX) - 1);
+	unsigned char * buf = new unsigned char[prefixLen + length];
+	memcpy(buf, PREFIX, prefixLen);
+	memcpy(buf + prefixLen, data, length);
+	outLength = prefixLen + length;
+	return buf;
+}
 
 HRESULT Direct3d9_VertexShaderDataNamespace::IncludeHandler::Open(D3DXINCLUDE_TYPE, LPCSTR pFileName, LPCVOID, LPCVOID *ppData, UINT *pBytes)
 {
@@ -136,9 +239,20 @@ HRESULT Direct3d9_VertexShaderDataNamespace::IncludeHandler::Open(D3DXINCLUDE_TY
 			return STG_E_FILENOTFOUND;
 		}
 
-		*pBytes = file->length();
-		*ppData = file->readEntireFileAndClose();
+		int const origLength = file->length();
+		byte * const origData = file->readEntireFileAndClose();
 		delete file;
+
+		// Same point-keyword fixup as the Include constructor.
+		static char const PREFIX[] = "#define point _pt_lights\n";
+		int const prefixLen = static_cast<int>(sizeof(PREFIX) - 1);
+		byte * const buf = new byte[prefixLen + origLength];
+		memcpy(buf, PREFIX, prefixLen);
+		memcpy(buf + prefixLen, origData, origLength);
+		delete [] origData;
+
+		*pBytes = prefixLen + origLength;
+		*ppData = buf;
 	}
 
 	return S_OK;
@@ -236,6 +350,7 @@ Direct3d9_VertexShaderData::Direct3d9_VertexShaderData(ShaderImplementation::Pas
 	m_hlsl(false),
 	m_compileText(NULL),
 	m_compileTextLength(0),
+	m_ownedCompileBuffer(NULL),
 	m_textureCoordinateSetTags(NULL),
 	m_container(NULL),
 	m_nonPatchedVertexShader(NULL),
@@ -311,6 +426,113 @@ Direct3d9_VertexShaderData::Direct3d9_VertexShaderData(ShaderImplementation::Pas
 
 	DEBUG_FATAL(!assembly && !m_hlsl, ("Could not determine shader language for %s",  m_vertexShader->getFilename()));
 	m_compileTextLength = strlen(m_compileText);
+
+	// ====================================================================
+	// x64 character-lighting fix.
+	// The skinned-character vertex shaders (a_specmap_bump_vs20*, etc.) build
+	// the per-vertex diffuse term as:
+	//   outputVertex.diffuse = lightData.ambient.ambientColor + diffuseSpecular.diffuse;
+	// For dot3 bump shaders, diffuseSpecular.diffuse only sums the parallel
+	// (non-spec) and point lights - all of which are (0,0,0) in the Tatooine
+	// outdoor scene (the sun is in the parallel-SPEC slot, which dot3 mode
+	// deliberately skips). So vertexDiffuse collapses to whatever ambient is,
+	// and if that's stale/low the h_specmap_bump pixel shader's hemispheric
+	// term bottoms out => "dark / unlit" characters.
+	// Floor the per-vertex diffuse with a max(..., 0.45) so the pixel shader
+	// always gets a sane base lighting level. Source-patch the HLSL the same
+	// way the c_ambient.inc include is patched.
+	if (m_hlsl && m_compileText)
+	{
+		static char const SEARCH[]  = "lightData.ambient.ambientColor + diffuseSpecular.diffuse";
+		static char const REPLACE[] = "max(lightData.ambient.ambientColor + diffuseSpecular.diffuse, 0.85)";
+		int const searchLen  = static_cast<int>(sizeof(SEARCH)  - 1);
+		int const replaceLen = static_cast<int>(sizeof(REPLACE) - 1);
+		int const growth     = replaceLen - searchLen;
+
+		// count occurrences
+		int occurrences = 0;
+		{
+			char const * p = m_compileText;
+			while ((p = strstr(p, SEARCH)) != NULL) { ++occurrences; p += searchLen; }
+		}
+
+		if (occurrences > 0)
+		{
+			m_ownedCompileBuffer = new char[m_compileTextLength + occurrences * growth + 1];
+			char const * src = m_compileText;
+			char * dst = m_ownedCompileBuffer;
+			while (*src)
+			{
+				if (strncmp(src, SEARCH, searchLen) == 0)
+				{
+					memcpy(dst, REPLACE, replaceLen);
+					dst += replaceLen;
+					src += searchLen;
+				}
+				else
+				{
+					*dst++ = *src++;
+				}
+			}
+			*dst = '\0';
+			m_compileText = m_ownedCompileBuffer;
+			m_compileTextLength = static_cast<int>(dst - m_ownedCompileBuffer);
+		}
+	}
+
+	// Current D3DX compilers reject the legacy "SEMANTIC : register(vN)"
+	// syntax on struct members. D3D9 binds vertex inputs by semantic, so the
+	// explicit location is redundant and can be removed before compilation.
+	if (m_hlsl && m_compileText)
+	{
+		static char const REGISTER_PREFIX[] = " : register(v";
+		int const prefixLength = static_cast<int>(sizeof(REGISTER_PREFIX) - 1);
+		int occurrenceCount = 0;
+		int removedCharacterCount = 0;
+
+		char const * scan = m_compileText;
+		while ((scan = strstr(scan, REGISTER_PREFIX)) != NULL)
+		{
+			char const * closeParenthesis = strchr(scan + prefixLength, ')');
+			if (!closeParenthesis)
+				break;
+
+			++occurrenceCount;
+			removedCharacterCount += static_cast<int>((closeParenthesis + 1) - scan);
+			scan = closeParenthesis + 1;
+		}
+
+		if (occurrenceCount > 0)
+		{
+			char * normalizedSource = new char[m_compileTextLength - removedCharacterCount + 1];
+			char const * source = m_compileText;
+			char * destination = normalizedSource;
+			while (*source)
+			{
+				char const * location = strstr(source, REGISTER_PREFIX);
+				if (!location)
+				{
+					strcpy(destination, source);
+					destination += strlen(source);
+					break;
+				}
+
+				int const copyLength = static_cast<int>(location - source);
+				memcpy(destination, source, copyLength);
+				destination += copyLength;
+
+				char const * closeParenthesis = strchr(location + prefixLength, ')');
+				NOT_NULL(closeParenthesis);
+				source = closeParenthesis + 1;
+			}
+
+			*destination = '\0';
+			delete [] m_ownedCompileBuffer;
+			m_ownedCompileBuffer = normalizedSource;
+			m_compileText = m_ownedCompileBuffer;
+			m_compileTextLength = static_cast<int>(destination - normalizedSource);
+		}
+	}
 }
 
 // ----------------------------------------------------------------------
@@ -337,6 +559,9 @@ Direct3d9_VertexShaderData::~Direct3d9_VertexShaderData()
 
 	delete m_textureCoordinateSetTags;
 	m_compileText = 0;
+
+	delete [] m_ownedCompileBuffer;
+	m_ownedCompileBuffer = 0;
 }
 
 // ----------------------------------------------------------------------
@@ -390,7 +615,7 @@ IDirect3DVertexShader9 * Direct3d9_VertexShaderData::createVertexShader(uint32 t
 
 			{
 				// here's an example of what we are defining:
-				// #define DECLARE_textureCoordinateSets  float2 textureCoordinateSet0 : TEXCOORD0 : register(v7);
+				// #define DECLARE_textureCoordinateSets  float2 textureCoordinateSet0 : TEXCOORD0;
 
 				D3DXMACRO macro;
 
@@ -410,9 +635,7 @@ IDirect3DVertexShader9 * Direct3d9_VertexShaderData::createVertexShader(uint32 t
 						SCRATCH_INT(i);
 						SCRATCH_STRING(" : TEXCOORD", 11);
 						SCRATCH_INT(i);
-						SCRATCH_STRING(" : register(v", 13);
- 						SCRATCH_INT(VSVR_textureCoordinateSet0 + i);
-						SCRATCH_STRING(");", 2);
+						SCRATCH_STRING(";", 1);
 					}
 
 				SCRATCH_DONE();
@@ -430,7 +653,8 @@ IDirect3DVertexShader9 * Direct3d9_VertexShaderData::createVertexShader(uint32 t
 
 		IncludeHandler includeHandler;
 		ID3DXBuffer *error = NULL;
-		HRESULT result = D3DXCompileShader(m_compileText, m_compileTextLength, &(ms_defines.front()), &includeHandler, "main", target, 0, &compiledShader, &error, NULL);
+
+		HRESULT result = D3DXCompileShader(m_compileText, m_compileTextLength, &(ms_defines.front()), &includeHandler, "main", target, cms_hlslCompileFlags, &compiledShader, &error, NULL);
 
 		//-----------------------------------------------------------------------------------
 		// DBE - I was getting strange Float Invalid Operation Exceptions (0xC0000090) in the 

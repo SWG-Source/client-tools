@@ -254,7 +254,7 @@ bool SwgCuiCommandParserMountNamespace::doCreateAt(StringVector const &argv, Str
 	if (!objectTemplate)
 	{
 		char buffer[512];
-		snprintf(buffer, sizeof(buffer) - 1, "Failed to find/load object template [%s]\n", objectTemplateName);
+		snprintf(buffer, sizeof(buffer) - 1, "Failed to find/load object template [%s]\n", objectTemplateName.c_str());
 		buffer[sizeof(buffer) - 1] = '\0';
 
 		result += Unicode::narrowToWide(buffer);

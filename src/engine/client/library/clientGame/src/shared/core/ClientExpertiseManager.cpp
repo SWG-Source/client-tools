@@ -978,7 +978,7 @@ std::string ClientExpertiseManager::getExpertiseCommand(std::string const & expe
 {
 	SkillObject const * skill = SkillManager::getInstance().getSkill(expertiseName);
 	if(!skill)
-		return false;
+		return s_emptyString;
 	const std::vector<std::string> & commands = skill->getCommandsProvided();
 	if(!commands.empty())
 	{
@@ -1151,9 +1151,9 @@ bool ClientExpertiseManager::canDeallocateExpertise(std::string const & expertis
 		if(potentialPostReq)
 		{
 			SkillObject::SkillVector const prereqs = potentialPostReq->getPrerequisiteSkills();
-			for (SkillObject::SkillVector::const_iterator i = prereqs.begin(); i != prereqs.end(); ++i)
+			for (SkillObject::SkillVector::const_iterator prereqsIter = prereqs.begin(); prereqsIter != prereqs.end(); ++prereqsIter)
 			{
-				SkillObject const * prereq = (*i);
+				SkillObject const * prereq = (*prereqsIter);
 				if (prereq && (prereq->getSkillName() == expertiseName))
 				{
 					return false;

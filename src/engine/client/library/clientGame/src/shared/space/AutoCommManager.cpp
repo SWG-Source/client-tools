@@ -53,25 +53,6 @@ namespace AutoCommManagerNamespace
 	};
 
 	//----------------------------------------------------------------------
-	
-	// STL sure requires a lot of text for something simple:
-	class IsTriggerForObject : public std::unary_function<CommTrigger, bool>
-	{
-	public:
-		explicit IsTriggerForObject(const NetworkId & networkId) :			
-			m_networkId(networkId)
-		{ //lint !e1928 // base class has no constructor
-		}
-
-		bool operator()(CommTrigger const & trigger) const
-		{
-			return trigger.getNetworkId() == m_networkId;
-		}
-	private:
-		NetworkId m_networkId;
-	}; //lint !e1509 !e1712 // no virtual destructor, default constructor
-
-	//----------------------------------------------------------------------
 
 	typedef std::vector<CommTrigger> CommTriggersType;
 	typedef std::set<NetworkId> TrackedObjectsType;
@@ -140,11 +121,21 @@ void AutoCommManager::registerShip(ShipObject const & ship)
 
 //----------------------------------------------------------------------
 
-void AutoCommManager::removeShip(ShipObject const & ship)
-{	
+void AutoCommManager::removeShip(ShipObject const& ship)
+{
 	if (s_trackedObjects.erase(ship.getNetworkId()) != 0)
 	{
-		IGNORE_RETURN(s_commTriggers.erase(std::remove_if(s_commTriggers.begin(), s_commTriggers.end(), IsTriggerForObject(ship.getNetworkId())), s_commTriggers.end()));
+		const NetworkId id = ship.getNetworkId();
+
+		s_commTriggers.erase(
+			std::remove_if(
+				s_commTriggers.begin(),
+				s_commTriggers.end(),
+				[&id](CommTrigger const& trigger)
+				{
+					return trigger.getNetworkId() == id;
+				}),
+			s_commTriggers.end());
 	}
 }
 

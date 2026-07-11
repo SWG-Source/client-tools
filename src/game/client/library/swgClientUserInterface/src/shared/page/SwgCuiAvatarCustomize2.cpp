@@ -130,14 +130,22 @@ void SwgCuiAvatarCustomize2::OnButtonPressed(UIWidget *context)
 	{
 		setObject (0, 0);
 
-		CuiTransition::startTransition(CuiMediatorTypes::AvatarCustomize, CuiMediatorTypes::AvatarProfessionTemplateSelect);
+		// AvatarProfessionTemplateSelect is the post-NGE simplified profession
+		// picker (UI page /AvProfessionTemplateSelect) which does not exist in
+		// the NGE-retail UI bundle - the mediator factory FATALs on the
+		// missing page. NGE-retail uses AvatarSetupProf (/AvSetupProf).
+		CuiTransition::startTransition(CuiMediatorTypes::AvatarCustomize, CuiMediatorTypes::AvatarSetupProf);
+		//CuiTransition::startTransition(CuiMediatorTypes::AvatarCustomize, CuiMediatorTypes::AvatarProfessionTemplateSelect);
 
 		closeNextFrame();
 	}
 
 	else if (context == m_cancelButton)
 	{
-		CuiTransition::startTransition(CuiMediatorTypes::AvatarCustomize, CuiMediatorTypes::AvatarSimple);
+		// AvatarSimple is post-NGE; route back to AvatarCreation (race-select)
+		// which is the previous step in the NGE-retail flow.
+		CuiTransition::startTransition(CuiMediatorTypes::AvatarCustomize, CuiMediatorTypes::AvatarCreation);
+		//CuiTransition::startTransition(CuiMediatorTypes::AvatarCustomize, CuiMediatorTypes::AvatarSimple);
 		return;
 	}
 

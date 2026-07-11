@@ -121,13 +121,35 @@ namespace CuiManagerNamespace
 	Unicode::String const s_effectTokenSeparatorString(Unicode::narrowToWide("=:+"));
 	Unicode::String const s_booleanTrue(Unicode::narrowToWide("true"));
 
+	// Global UI scale factor (2026-05-16). Read once at install() from
+	// [ClientUserInterface] uiScale=N.N in client.cfg (or via the
+	// .include "../options.cfg" chain). 1.0 = no scaling (legacy retail
+	// look). 2.0 = double-size UI; useful on 4K / 32:9 ultrawide where
+	// pixel-coordinate widgets are too small to read. Implemented at the
+	// root UIPage level: setSize divides the logical canvas by the scale
+	// so right-anchored layouts still hit the screen edge, and render()
+	// pushes a canvas Scale transform around the main UIManager::Render
+	// so coords are multiplied back up to physical pixels. World-space
+	// floating text (CuiTextManager) and chat bubbles
+	// (CuiChatBubbleManager) intentionally stay UNscaled - they project
+	// from world-space camera coords and need to stick to in-world
+	// objects, not magnify away from them.
+	//
+	// KNOWN LIMITATION v1: mouse input still arrives in physical-pixel
+	// coords from m_mouseCursor, so click hit-testing will be wrong by a
+	// factor of ms_uiScale when scale != 1.0. Fix is to divide
+	// msg.MouseCoords by ms_uiScale at the CuiIoWin dispatch points
+	// (lines ~466, ~478, ~679, ~784, ~1161 in CuiIoWin.cpp). Deferred
+	// until visual scaling is validated in-game.
+	float ms_uiScale = 1.0f;
+
 	bool getTokenValue(Unicode::UnicodeStringVector const & effectTokens, UIString const & token, UIString & value)
 	{
 		// Find the token.
 		Unicode::UnicodeStringVector::const_iterator itToken;
 		for (itToken = effectTokens.begin(); itToken != effectTokens.end(); ++itToken)
 		{
-			if (_wcsnicmp((*itToken).c_str(), token.c_str(), token.size()) == 0)
+			if (UIUnicode::nicmp((*itToken).c_str(), token.c_str(), token.size()) == 0)
 			{
 				break;
 			}
@@ -141,7 +163,7 @@ namespace CuiManagerNamespace
 		// Ensure we have a properly formatted string.
 		Unicode::String const & assignementString = *(itToken + 1);
 		UIString const & assignmentToken = UIManager::gUIManager().getEffectToken(UIManager::EFTKN_Assignment);
-		if (_wcsnicmp(assignementString.c_str(), assignmentToken.c_str(), assignmentToken.size()) != 0)
+		if (UIUnicode::nicmp(assignementString.c_str(), assignmentToken.c_str(), assignmentToken.size()) != 0)
 		{
 			return false;
 		}
@@ -445,7 +467,32 @@ void CuiManager::install ()
 	ms_uiStringFactory	= new CuiLayer::StringFactory;
 	uiManager->AddLocalizedStringFactory (ms_uiStringFactory);
 
-	rootPage->SetSize (UISize (Graphics::getCurrentRenderTargetWidth (), Graphics::getCurrentRenderTargetHeight ()));
+	// UI scale: read once at install (see ms_uiScale comment in namespace).
+	// Clamp to a sane range -- below 0.5 widgets clip off-screen weirdly,
+	// above 4.0 you can't fit even the main HUD on screen.
+	ms_uiScale = ConfigFile::getKeyFloat("ClientUserInterface", "uiScale", 1.0f);
+	if (ms_uiScale < 0.5f) ms_uiScale = 0.5f;
+	if (ms_uiScale > 4.0f) ms_uiScale = 4.0f;
+
+	// Make UIManager scale mouse input by the same factor, so clicks land
+	// on the visually-rendered widget. Without this, mouse coords arrive
+	// in viewport pixels (5120x1440 on 32:9) but UI hit-tests against
+	// a root sized to viewport/scale -- everything past logical (2560,720)
+	// silently misses, which manifests as "mouse disappears at ~75% to
+	// the right" (the actual screen-pixel boundary where logical canvas
+	// runs out).
+	UIManager::SetMouseInputScale(ms_uiScale);
+
+	// Publish the scale globally via Graphics so MouseCursor, SwgCuiInventory,
+	// SwgCuiNotifications etc. can query without dependency on
+	// clientUserInterface. Their consumers should call Graphics::getUiCanvas*
+	// instead of Graphics::getFrameBufferMax* to get the LOGICAL canvas size
+	// (the scaled-down view the UI thinks it has).
+	Graphics::setUiCanvasScale(ms_uiScale);
+
+	const int initialRootWidth  = static_cast<int>(static_cast<float>(Graphics::getCurrentRenderTargetWidth ())  / ms_uiScale);
+	const int initialRootHeight = static_cast<int>(static_cast<float>(Graphics::getCurrentRenderTargetHeight ()) / ms_uiScale);
+	rootPage->SetSize (UISize (initialRootWidth, initialRootHeight));
 	rootPage->ForcePackChildren ();
 
 	uiManager->SetRootPage (rootPage);
@@ -840,6 +887,9 @@ void CuiManager::render ()
 	bool wasDropShadowEnabled = UITextStyle::GetGlobalDropShadowEnabled();
 	UITextStyle::SetGlobalDropShadowEnabled (s_textDropShadow);
 
+	// World-space stuff first, UNscaled - these project from the 3D camera
+	// onto pixel coords and need to stay anchored to in-world objects, not
+	// magnify away from them.
 	CuiTextManager::render (*ms_uiCanvas);
 	CuiTextManager::resetQueue ();
 
@@ -849,7 +899,22 @@ void CuiManager::render ()
 
 	UITextStyle::SetGlobalDropShadowEnabled(wasDropShadowEnabled);
 
+	// Main UI (HUD, chat window, action bar, all CUI pages) renders with
+	// the global ms_uiScale applied via canvas transform. Push/pop guards
+	// the scaled state. Skip the push entirely when scale == 1.0 to avoid
+	// touching the canvas state stack in the common case.
+	const bool applyUIScale = (ms_uiScale != 1.0f);
+	if (applyUIScale)
+	{
+		ms_uiCanvas->PushState();
+		ms_uiCanvas->Scale(ms_uiScale, ms_uiScale);
+	}
+
 	UIManager::gUIManager ().Render (*ms_uiCanvas);
+
+	if (applyUIScale)
+		ms_uiCanvas->PopState();
+
 	CuiLayerRenderer::flushRenderQueue ();
 
 	Graphics::setFillMode (oldFillMode);
@@ -1371,7 +1436,13 @@ void CuiManager::setSize (int width, int height)
 
 	NOT_NULL (rootPage);
 
-	rootPage->SetSize (UISize (width, height));
+	// UI scale: shrink the logical root by ms_uiScale so right-anchored
+	// elements still land at the screen edge after render() multiplies
+	// coords back up via Scale. width/height arriving here are physical
+	// viewport pixels; rootPage stores logical coords.
+	const int scaledWidth  = static_cast<int>(static_cast<float>(width)  / ms_uiScale);
+	const int scaledHeight = static_cast<int>(static_cast<float>(height) / ms_uiScale);
+	rootPage->SetSize (UISize (scaledWidth, scaledHeight));
 	rootPage->ForcePackChildren ();
 
 	if (ms_theIoWin)
@@ -1483,7 +1554,7 @@ void CuiManager::playUiEffect(std::string const & effect, Object * /*target*/)
 		bool resetEffectors = false;
 		if(getTokenValue(effectTokens, UIManager::gUIManager().getEffectToken(UIManager::EFTKN_Reset), resetToken))
 		{
-			resetEffectors = _wcsnicmp(resetToken.c_str(), s_booleanTrue.c_str(), s_booleanTrue.size()) == 0;
+			resetEffectors = UIUnicode::nicmp(resetToken.c_str(), s_booleanTrue.c_str(), s_booleanTrue.size()) == 0;
 		}
 
 		//-- Cancel.
@@ -1491,7 +1562,7 @@ void CuiManager::playUiEffect(std::string const & effect, Object * /*target*/)
 		bool cancelEffector = false;
 		if(getTokenValue(effectTokens, UIManager::gUIManager().getEffectToken(UIManager::EFTKN_Cancel), cancelToken))
 		{
-			cancelEffector = _wcsnicmp(cancelToken.c_str(), s_booleanTrue.c_str(), s_booleanTrue.size()) == 0;
+			cancelEffector = UIUnicode::nicmp(cancelToken.c_str(), s_booleanTrue.c_str(), s_booleanTrue.size()) == 0;
 		}
 
 		//-- Set active.
@@ -1499,7 +1570,7 @@ void CuiManager::playUiEffect(std::string const & effect, Object * /*target*/)
 		bool setVisible = true;
 		if(getTokenValue(effectTokens, UIManager::gUIManager().getEffectToken(UIManager::EFTKN_Active), activatePage))
 		{
-			setVisible = _wcsnicmp(activatePage.c_str(), s_booleanTrue.c_str(), s_booleanTrue.size()) == 0;
+			setVisible = UIUnicode::nicmp(activatePage.c_str(), s_booleanTrue.c_str(), s_booleanTrue.size()) == 0;
 			targetPage->SetVisible(setVisible);
 		}
 

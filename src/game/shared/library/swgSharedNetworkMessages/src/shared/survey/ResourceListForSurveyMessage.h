@@ -10,12 +10,13 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "Unicode.h"
-#include "sharedFoundation/NetworkIdArchive.h"
+#include "archive/ByteStream.h"
+#include "archive/Archive.h"
 #include "unicodeArchive/UnicodeArchive.h"
-
-//-----------------------------------------------------------------------
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "Unicode.h"
+#include "sharedFoundation/NetworkId.h"
+#include "sharedFoundation/StlForwardDeclaration.h"
 
 struct ResourceList_DataItem
 {
@@ -23,6 +24,14 @@ struct ResourceList_DataItem
 	NetworkId       resourceId;
 	std::string     parentClassName;
 };
+
+namespace Archive
+{
+	void put(ByteStream& target, const ResourceList_DataItem& data);
+	void get(ReadIterator& source, ResourceList_DataItem& data);
+}
+
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 
@@ -54,11 +63,7 @@ private:
 
 // ======================================================================
 
-namespace Archive
-{
-	void put(ByteStream &target, const ResourceList_DataItem &data);
-	void get(ReadIterator &source, ResourceList_DataItem &data);
-}
+
 
 // ======================================================================
 

@@ -367,7 +367,15 @@ bool SpeedSkeletalAnimation::alterSingleCycle(float deltaTime, SkeletalAnimation
 			SpeedChoiceVector::iterator it = m_speedChoices->begin();
 
 			deltaTimeRemaining = (*it)->alterSingleCycle(deltaTime);
-			std::for_each(++it, m_speedChoices->end(), std::bind2nd(std::mem_fun(&SpeedChoice::alterSingleCycle), deltaTime));
+			std::for_each(
+				std::next(it),
+				m_speedChoices->end(),
+				[deltaTime](SpeedChoice* choice)
+				{
+					choice->alterSingleCycle(deltaTime);
+				}
+			);
+
 		}
 
 #if TRACK_SPEED

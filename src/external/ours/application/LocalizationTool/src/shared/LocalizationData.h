@@ -13,7 +13,7 @@ class LocalizedStringTableRW;
 
 #include "LocalizedString.h"
 
-#include <hash_map>
+#include <unordered_map>
 #include <set>
 
 struct DataChangeListener;
@@ -25,7 +25,7 @@ class LocalizationData
 {
 public:
 
-	typedef std::hash_map<LocalizedString::id_type, LocalizedStringPair> StringMap_t;
+	typedef std::unordered_map<LocalizedString::id_type, LocalizedStringPair> StringMap_t;
 
 	typedef StringMap_t::iterator iterator;
 	typedef StringMap_t::const_iterator const_iterator;

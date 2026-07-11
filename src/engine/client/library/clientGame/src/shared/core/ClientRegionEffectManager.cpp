@@ -49,7 +49,7 @@ void ClientRegionEffectManager::install()
 
 	for(int i = 0; i < REGION_EFFECTS_SIZE; ++i)
 	{
-		s_regionEffectMap.insert( std::make_pair<TemporaryCrcString, int32 >( TemporaryCrcString(s_regionEffects[i], true), 1 << i ) );
+		s_regionEffectMap.insert( std::make_pair( TemporaryCrcString(s_regionEffects[i], true), 1 << i ) );
 	}
 
 	s_installed = true;

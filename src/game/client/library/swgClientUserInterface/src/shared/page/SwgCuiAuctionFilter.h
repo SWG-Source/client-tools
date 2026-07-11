@@ -74,7 +74,7 @@ public:
 	int                          getPriceFilterMin             () const;
 	int                          getPriceFilterMax             () const;
 	bool                         getPriceFilterIncludesEntranceFee() const;
-	std::list<AuctionQueryHeadersMessage::SearchCondition> const & getItemAttributeFilter(AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny & matchAllAny) const;
+	std::list<SearchCondition> const & getItemAttributeFilter(AdvancedSearchMatchAllAny & matchAllAny) const;
 
 	void                         checkpointTextPriceFilterValues     ();
 	bool                         hasTextPriceFilterValuesChangedSinceCheckpoint() const;
@@ -174,8 +174,8 @@ private:
 	int                         m_checkpointPriceFilterMin;
 	int                         m_checkpointPriceFilterMax;
 	bool                        m_checkpointPriceFilterIncludesEntranceFee;
-	AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny m_checkpointItemAttributeFilterMatchAllAny;
-	std::list<AuctionQueryHeadersMessage::SearchCondition> m_checkpointAttributeFilter;
+	AdvancedSearchMatchAllAny m_checkpointItemAttributeFilterMatchAllAny;
+	std::list<SearchCondition> m_checkpointAttributeFilter;
 
 	int                         m_currentlySelectedObjectType;
 	int                         m_currentlySelectedObjectTemplateId;

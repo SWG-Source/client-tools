@@ -9,6 +9,8 @@
 #ifndef INCLUDED_SseMath_H
 #define INCLUDED_SseMath_H
 
+#include <xmmintrin.h>   // _mm_prefetch (used in inline prefetch() below)
+
 // ======================================================================
 
 class Transform;
@@ -41,11 +43,10 @@ public:
 inline void SseMath::prefetch(void const * const sourceData, size_t const objectSize)
 {
 #if defined(_MSC_VER)
-	_asm
-	{ 
-		mov esi, sourceData
-		prefetchnta objectSize[esi]
-	}
+	// Was: x86 inline asm `prefetchnta objectSize[esi]`. The intrinsic
+	// emits the same instruction on both x86 and x64.
+	_mm_prefetch(static_cast<const char *>(sourceData) + objectSize,
+	             _MM_HINT_NTA);
 #else
 	// rls - add linux version here.
 	UNREF(sourceData);

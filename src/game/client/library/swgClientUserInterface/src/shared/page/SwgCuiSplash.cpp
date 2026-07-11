@@ -36,28 +36,21 @@ m_currentPage    (0),
 m_timeout        (0.0f)
 {
 	bool const useJapanese = UIManager::gUIManager().isLocaleJapanese();
-#if 0
-	bool hasCoa = (Game::getGameFeatureBits () & ClientGameFeature::CompleteOnlineAdventures) != 0;
-	if(hasCoa)
+	// Try the post-2008 anniversary logo first; fall back to the SOE-era
+	// SWG/JTL/COA logos that ship with vanilla NGE retail TRE packs. The
+	// final `true` makes getCodeDataObject return null on miss rather than
+	// FATAL'ing. The splash mediator handles a NULL m_pages[0] later.
 	{
-		getCodeDataObject(TUIPage, m_pages[0], "0COA");
+		bool const hasCoa = (Game::getGameFeatureBits() & ClientGameFeature::CompleteOnlineAdventures) != 0;
+		m_pages[0] = NULL;
+		getCodeDataObject(TUIPage, m_pages[0], "0ANV", true);
+		if (!m_pages[0] && hasCoa)
+			getCodeDataObject(TUIPage, m_pages[0], "0COA", true);
+		if (!m_pages[0] && useJapanese)
+			getCodeDataObject(TUIPage, m_pages[0], "0JTLJapan", true);
+		if (!m_pages[0])
+			getCodeDataObject(TUIPage, m_pages[0], "0SWG", true);
 	}
-	else
-	{
-		//game screen, either japanese, swg, jtl, or ep3
-		if(useJapanese)
-		{
-			getCodeDataObject (TUIPage, m_pages [0], "0JTLJapan");
-		}
-		else
-		{
-			getCodeDataObject (TUIPage, m_pages [0], "0SWG");
-		}
-	}
-#else
-	// everyone sees the anniversary logo
-	getCodeDataObject(TUIPage, m_pages[0], "0ANV");
-#endif
 
 	//lucasarts
 	getCodeDataObject (TUIPage, m_pages [1], "1");

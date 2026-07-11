@@ -97,25 +97,13 @@ void ImageFormatList::removeImageFormat(const ImageFormat *imageFormat)
 
 	//-- remove image format from extension map
 	{
-		ExtensionMap::iterator       it;
-		ExtensionMap::const_iterator itEnd;
-		do
+		for (auto it = ms_extensionMap->begin(); it != ms_extensionMap->end(); )
 		{
-			it    = ms_extensionMap->begin();
-			itEnd = ms_extensionMap->end();
-			for (; it != itEnd; ++it)
-			{
-				if ((*it).second == imageFormat)
-				{
-					// found one, remove it
-					ms_extensionMap->erase(it);
-
-					// we invalidate the iterator once we modify the container, so restart search
-					break;
-				}
-			}
+			if (it->second == imageFormat)
+				it = ms_extensionMap->erase(it);   // returns the next iterator
+			else
+				++it;
 		}
-		while (it != itEnd);
 	}
 
 	//-- remove image format from image format list

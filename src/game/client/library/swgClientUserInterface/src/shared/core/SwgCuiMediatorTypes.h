@@ -80,6 +80,7 @@ namespace CuiMediatorTypes
 	MAKE_MEDIATOR_TYPE (WS_QuestAcceptance);
 	MAKE_MEDIATOR_TYPE (WS_QuestHelper);
 	MAKE_MEDIATOR_TYPE (WS_Roadmap);
+	MAKE_MEDIATOR_TYPE (WS_Skills);
 	MAKE_MEDIATOR_TYPE (WS_Trade);
 	MAKE_MEDIATOR_TYPE (Credits);
 	MAKE_MEDIATOR_TYPE (WS_HarassmentReport);

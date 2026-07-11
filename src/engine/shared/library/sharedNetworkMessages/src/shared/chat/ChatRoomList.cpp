@@ -4,6 +4,7 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedNetworkMessages/ChatRoomDataArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "ChatRoomList.h"
 

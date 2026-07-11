@@ -542,10 +542,10 @@ void KeyboardDevice::loadTranslationTable()
 			if (_stricmp(keyboardLayoutName, layoutId.c_str()) == 0)
 			{
 				int const fromScanCode = dataTable.getIntValue("FromScanCode", row);
-				int const toScanCode = dataTable.getIntValue("ToScanCode", row);
+				uint8 const toScanCode = static_cast<uint8>(dataTable.getIntValue("ToScanCode", row));
 				std::string const &fromKeyName = dataTable.getStringValue("FromKeyName", row);
 
-				m_translationTable[fromScanCode] = static_cast<uint8>(toScanCode);
+				m_translationTable[fromScanCode] = toScanCode;
 				s_scanCodeToKeyNameMap.insert(std::make_pair(toScanCode, fromKeyName));
 
 				DEBUG_REPORT_LOG(true, ("fromScanCode: %d toScanCode: %d fromKeyName: %s\n", fromScanCode, toScanCode, fromKeyName.c_str()));

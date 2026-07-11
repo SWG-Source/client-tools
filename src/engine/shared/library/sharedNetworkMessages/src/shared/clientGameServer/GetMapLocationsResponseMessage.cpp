@@ -6,6 +6,7 @@
 //
 // ======================================================================
 
+#include "sharedNetworkMessages/MapLocationArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/GetMapLocationsResponseMessage.h"
 

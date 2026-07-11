@@ -176,24 +176,29 @@ m_opacityCallback      (0)
 	getCodeDataObject (TUIPage,       m_menuButtonPage,          "bigMenuPage");
 	getCodeDataObject (TUIPage,       m_mouseoverPage,           "mouseover");
 
-	registerMediatorObject (*m_communityButton,      true);
-	registerMediatorObject (*m_mailButton,           true);
-	registerMediatorObject (*m_inventoryButton,      true);
-	registerMediatorObject (*m_journalButton,        true);
-	registerMediatorObject (*m_mapButton,            true);
-	registerMediatorObject (*m_menuButton,           true);
-	registerMediatorObject (*m_datapadButton,        true);
-	registerMediatorObject (*m_characterButton,      true);
-	registerMediatorObject (*m_expertiseButton,      true);
-	registerMediatorObject (*m_optionsButton,        true);
-	registerMediatorObject (*m_commandsButton,       true);
+	// Null-guard every registerMediatorObject - the NGE-retail ButtonBar
+	// page omits many of these post-NGE additions (Community/Mail/Journal/
+	// Map/Datapad/Character/Expertise/Options/Commands/Submenu/
+	// MyCollections/Appearance/QuestBuilder/GCW etc.); without guards
+	// the constructor AVs in registerMediatorObject's first member access.
+	if (m_communityButton)      registerMediatorObject (*m_communityButton,      true);
+	if (m_mailButton)           registerMediatorObject (*m_mailButton,           true);
+	if (m_inventoryButton)      registerMediatorObject (*m_inventoryButton,      true);
+	if (m_journalButton)        registerMediatorObject (*m_journalButton,        true);
+	if (m_mapButton)            registerMediatorObject (*m_mapButton,            true);
+	if (m_menuButton)           registerMediatorObject (*m_menuButton,           true);
+	if (m_datapadButton)        registerMediatorObject (*m_datapadButton,        true);
+	if (m_characterButton)      registerMediatorObject (*m_characterButton,      true);
+	if (m_expertiseButton)      registerMediatorObject (*m_expertiseButton,      true);
+	if (m_optionsButton)        registerMediatorObject (*m_optionsButton,        true);
+	if (m_commandsButton)       registerMediatorObject (*m_commandsButton,       true);
 	//registerMediatorObject (*m_serviceButton,        true);
-	registerMediatorObject (*m_submenuButton,        true);
-	registerMediatorObject (*m_myCollectionsButton,  true);
+	if (m_submenuButton)        registerMediatorObject (*m_submenuButton,        true);
+	if (m_myCollectionsButton)  registerMediatorObject (*m_myCollectionsButton,  true);
 	//registerMediatorObject (*m_tcgButton,            true);
-	registerMediatorObject (*m_appearanceButton,     true);
-	registerMediatorObject (*m_questBuilderButton,   true);
-	registerMediatorObject (*m_gcwInfoButton,        true);
+	if (m_appearanceButton)     registerMediatorObject (*m_appearanceButton,     true);
+	if (m_questBuilderButton)   registerMediatorObject (*m_questBuilderButton,   true);
+	if (m_gcwInfoButton)        registerMediatorObject (*m_gcwInfoButton,        true);
 
 	if (m_shipDetailsButton)
 		registerMediatorObject (*m_shipDetailsButton, true);
@@ -216,17 +221,22 @@ m_opacityCallback      (0)
 		getCodeDataObject(TUIWidget, m_buttonImages[buttonStates], imageNameBase.c_str(), true);
 	}
 
-	m_menuButtonRestLoc = m_menuButtonPage->GetLocation();
+	if (m_menuButtonPage)
+	{
+		m_menuButtonRestLoc = m_menuButtonPage->GetLocation();
+		m_menuButtonPage->SetOpacity(CuiPreferences::getCommandButtonOpacity());
+		m_menuButtonPage->SetNotModifyingUseDefaultCursor(true);
+	}
 	setSettingsAutoSizeLocation(true, true);
 
-	m_menuButtonPage->SetOpacity(CuiPreferences::getCommandButtonOpacity());
-
 	getPage().SetNotModifyingUseDefaultCursor(true);
-	m_menuButtonPage->SetNotModifyingUseDefaultCursor(true);
-	m_menuButton->SetNotModifyingUseDefaultCursor(true);
+	if (m_menuButton) m_menuButton->SetNotModifyingUseDefaultCursor(true);
 
-	registerMediatorObject(*m_menuButtonPage, true);
-	setPageToLock(m_menuButtonPage);
+	if (m_menuButtonPage)
+	{
+		registerMediatorObject(*m_menuButtonPage, true);
+		setPageToLock(m_menuButtonPage);
+	}
 }
 
 //----------------------------------------------------------------------
@@ -255,8 +265,10 @@ SwgCuiButtonBar::~SwgCuiButtonBar                ()
 
 void  SwgCuiButtonBar::performActivate()
 {
-	m_menuButtonPage->SetOpacity(CuiPreferences::getCommandButtonOpacity());
-	CuiPreferences::getCommandButtonOpacityCallback ().attachReceiver (*m_opacityCallback);
+	if (m_menuButtonPage)
+		m_menuButtonPage->SetOpacity(CuiPreferences::getCommandButtonOpacity());
+	if (m_opacityCallback)
+		CuiPreferences::getCommandButtonOpacityCallback ().attachReceiver (*m_opacityCallback);
 	setIsUpdating (true);
 }
 
@@ -264,19 +276,24 @@ void  SwgCuiButtonBar::performActivate()
 
 void  SwgCuiButtonBar::performDeactivate()
 {
-	CuiPreferences::getCommandButtonOpacityCallback ().detachReceiver (*m_opacityCallback);
+	if (m_opacityCallback)
+		CuiPreferences::getCommandButtonOpacityCallback ().detachReceiver (*m_opacityCallback);
 	setIsUpdating (false);
 
-	m_mailButton->CancelEffector (*m_effectorNewMail);
+	if (m_mailButton && m_effectorNewMail)
+		m_mailButton->CancelEffector (*m_effectorNewMail);
 	m_effectingNewMail = false;
 
-	m_inventoryButton->CancelEffector (*m_effectorInventoryFull);
+	if (m_inventoryButton && m_effectorInventoryFull)
+		m_inventoryButton->CancelEffector (*m_effectorInventoryFull);
 	m_effectingInventoryFull = false;
 
-	m_menuButton->CancelEffector(*m_effectorMenu);
+	if (m_menuButton && m_effectorMenu)
+		m_menuButton->CancelEffector(*m_effectorMenu);
 	m_effectingMenu = false;
 
-	m_expertiseButton->CancelEffector(*m_effectorExpertise);
+	if (m_expertiseButton && m_effectorExpertise)
+		m_expertiseButton->CancelEffector(*m_effectorExpertise);
 	m_effectingExpertise = false;
 
 	m_journalMissionCount = 0;
@@ -286,10 +303,13 @@ void  SwgCuiButtonBar::performDeactivate()
 
 void SwgCuiButtonBar::turnOffInventoryEffector()
 {
-	m_inventoryButton->CancelEffector (*m_effectorInventoryFull);
-	m_inventoryButton->SetColor (UIColor::white);
-	m_inventoryButton->SetBackgroundColor (UIColor::white);
-	m_inventoryButton->SetBackgroundTint (UIColor::white);
+	if (m_inventoryButton && m_effectorInventoryFull)
+	{
+		m_inventoryButton->CancelEffector (*m_effectorInventoryFull);
+		m_inventoryButton->SetColor (UIColor::white);
+		m_inventoryButton->SetBackgroundColor (UIColor::white);
+		m_inventoryButton->SetBackgroundTint (UIColor::white);
+	}
 	m_effectingInventoryFull = false;
 }
 
@@ -298,6 +318,9 @@ void SwgCuiButtonBar::turnOffInventoryEffector()
 void SwgCuiButtonBar::update (float deltaTimeSecs)
 {
 	CuiMediator::update (deltaTimeSecs);
+
+	if (!m_menuButtonPage || !m_buttonsComposite)
+		return;
 
 	updateExpertiseEffector();
 
@@ -312,7 +335,7 @@ void SwgCuiButtonBar::update (float deltaTimeSecs)
 		m_scheduleButtonPress = false;
 		if(m_menuMovedIgnoredPress)
 			m_menuMovedIgnoredPress = false;
-		else
+		else if (m_menuButton)
 			m_menuButton->Press();
 	}
 
@@ -434,15 +457,19 @@ void SwgCuiButtonBar::update (float deltaTimeSecs)
 	{
 		if (!hasNewMail)
 		{
-			m_mailButton->CancelEffector (*m_effectorNewMail);
-			m_mailButton->SetColor (UIColor::white);
+			if (m_mailButton && m_effectorNewMail)
+			{
+				m_mailButton->CancelEffector (*m_effectorNewMail);
+				m_mailButton->SetColor (UIColor::white);
+			}
 			m_effectingNewMail = false;
 		}
 	}
 	else if (hasNewMail)
 	{
 		m_effectingNewMail = true;
-		m_mailButton->ExecuteEffector (*m_effectorNewMail);
+		if (m_mailButton && m_effectorNewMail)
+			m_mailButton->ExecuteEffector (*m_effectorNewMail);
 	}
 	if (m_effectingInventoryFull)
 	{
@@ -454,7 +481,8 @@ void SwgCuiButtonBar::update (float deltaTimeSecs)
 	else if (inventoryFull)
 	{
 		m_effectingInventoryFull = true;
-		m_inventoryButton->ExecuteEffector (*m_effectorInventoryFull);
+		if (m_inventoryButton && m_effectorInventoryFull)
+			m_inventoryButton->ExecuteEffector (*m_effectorInventoryFull);
 	}
 
 	updateMenuEffector();
@@ -482,6 +510,8 @@ void SwgCuiButtonBar::updateMenuPosition()
 
 void SwgCuiButtonBar::updateMenuEffector()
 {
+	if (!m_menuButton || !m_effectorMenu)
+		return;
 	//Menu effector should be on if anything else is (except expertise effector)
 	if(m_effectingNewMail || m_effectingInventoryFull || m_journalMissionUpdate)
 	{
@@ -505,6 +535,8 @@ void SwgCuiButtonBar::updateMenuEffector()
 
 bool SwgCuiButtonBar::isCompositeVisible()
 {
+	if (!m_buttonsComposite)
+		return false;
 	return m_buttonsComposite->IsVisible();
 }
 
@@ -512,6 +544,8 @@ bool SwgCuiButtonBar::isCompositeVisible()
 
 void SwgCuiButtonBar::updateMenuHighlight()
 {
+	if (!m_buttonsComposite || !m_mouseoverPage)
+		return;
 	if(!m_buttonsComposite->IsVisible())
 		return;
 
@@ -585,6 +619,11 @@ bool SwgCuiButtonBar::OnMessage (UIWidget * context, const UIMessage & msg)
 
 void SwgCuiButtonBar::toggleMenu()
 {
+	// Bail out entirely if the post-NGE-retail UI doesn't have the
+	// composite/page widgets the SOE menu expects.
+	if (!m_buttonsComposite || !m_menuButtonPage || !m_mouseoverPage || !m_menuButton)
+		return;
+
 	if(m_buttonsComposite->IsVisible())
 	{
 		m_menuButtonPage->SetOpacity(CuiPreferences::getCommandButtonOpacity());
@@ -607,12 +646,14 @@ void SwgCuiButtonBar::toggleMenu()
 
 		if(RoadmapManager::playerIsNewCharacter())
 		{
-			m_expertiseButton->GetParentWidget()->SetVisible(false);
-			m_roadmapButton->GetParentWidget()->SetVisible(false);
+			if (m_expertiseButton && m_expertiseButton->GetParentWidget())
+				m_expertiseButton->GetParentWidget()->SetVisible(false);
+			if (m_roadmapButton && m_roadmapButton->GetParentWidget())
+				m_roadmapButton->GetParentWidget()->SetVisible(false);
 		}
 		else
 		{
-			if(m_roadmapButton)
+			if(m_roadmapButton && m_roadmapButton->GetParentWidget())
 			{
 				if (RoadmapManager::playerIsOnRoadmap())
 				{
@@ -624,7 +665,7 @@ void SwgCuiButtonBar::toggleMenu()
 					m_roadmapButton->GetParentWidget()->SetVisible(false);
 				}
 			}
-			if(m_expertiseButton)
+			if(m_expertiseButton && m_expertiseButton->GetParentWidget())
 			{
 				if (ClientExpertiseManager::hasExpertiseTrees() && ClientExpertiseManager::getExpertisePointsTotalForPlayer() > 0)
 				{
@@ -683,8 +724,8 @@ void SwgCuiButtonBar::OnButtonPressed   (UIWidget * context)
 		}
 		else
 		{
-			m_mouseoverPage->SetVisible(false);
-			m_buttonsComposite->SetVisible(false);
+			if (m_mouseoverPage)     m_mouseoverPage->SetVisible(false);
+			if (m_buttonsComposite)  m_buttonsComposite->SetVisible(false);
 
 			CuiManager::requestPointer (false);
 		}
@@ -696,14 +737,15 @@ void SwgCuiButtonBar::OnButtonPressed   (UIWidget * context)
 
 void SwgCuiButtonBar::ensureMenuIsVisible()
 {
-	if (!m_buttonsComposite->IsVisible())
-	{
+	if (!m_buttonsComposite || m_buttonsComposite->IsVisible())
+		return;
+	if (m_menuButtonPage)
 		m_menuButtonPage->SetOpacity(1.0f);
-		m_buttonsComposite->SetVisible(true);
+	m_buttonsComposite->SetVisible(true);
+	if (m_mouseoverPage)
 		m_mouseoverPage->SetVisible(true);
 
-		CuiManager::requestPointer (true);
-	}
+	CuiManager::requestPointer (true);
 }
 
 //----------------------------------------------------------------------
@@ -749,13 +791,12 @@ void SwgCuiButtonBar::enableJournalEffector(bool const enabled)
 	{
 		m_journalMissionUpdate = enabled;
 
-		if (enabled)
+		if (m_journalButton && m_journalButtonEffector)
 		{
-			m_journalButton->ExecuteEffector(*m_journalButtonEffector);
-		}
-		else
-		{
-			m_journalButton->CancelEffector(*m_journalButtonEffector);
+			if (enabled)
+				m_journalButton->ExecuteEffector(*m_journalButtonEffector);
+			else
+				m_journalButton->CancelEffector(*m_journalButtonEffector);
 		}
 	}
 }
@@ -786,6 +827,8 @@ void SwgCuiButtonBar::updateJournalEffector()
 
 void SwgCuiButtonBar::updateExpertiseEffector()
 {
+	if (!m_buttonsComposite || !m_expertiseButton || !m_effectorExpertise)
+		return;
 	if(!m_buttonsComposite->IsVisible())
 		return;
 
@@ -812,7 +855,7 @@ void SwgCuiButtonBar::updateExpertiseEffector()
 
 void SwgCuiButtonBar::OnHoverOut( UIWidget *Context )
 {
-	if (m_menuButton == Context)
+	if (m_menuButton == Context && m_menuButtonPage)
 	{
 		m_menuButtonPage->SetOpacity(CuiPreferences::getCommandButtonOpacity());
 		m_hoverState = false;
@@ -823,7 +866,7 @@ void SwgCuiButtonBar::OnHoverOut( UIWidget *Context )
 
 void SwgCuiButtonBar::OnHoverIn( UIWidget *Context )
 {
-	if (m_menuButton == Context)
+	if (m_menuButton == Context && m_menuButtonPage)
 	{
 		m_menuButtonPage->SetOpacity(1.0f);
 		m_hoverState = true;
@@ -834,6 +877,8 @@ void SwgCuiButtonBar::OnHoverIn( UIWidget *Context )
 
 void SwgCuiButtonBar::updateSkinnedImageState()
 {
+	if (!m_buttonsComposite)
+		return;
 	int const stateIndex = static_cast<int>(m_hoverState) + static_cast<int>(m_buttonsComposite->IsVisible()) * 2;
 	for (int buttonStates = 0; buttonStates < MaxButtonStates; ++buttonStates)
 	{

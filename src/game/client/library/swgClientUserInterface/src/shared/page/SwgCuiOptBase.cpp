@@ -846,6 +846,13 @@ void SwgCuiOptBase::onConfirmResetDefaultsClosed (const CuiMessageBox & box)
 
 void SwgCuiOptBase::registerSlider   (UISliderbar & slider, StaticSetterInt   setter, StaticGetterInt   getter, StaticGetterInt   getterDefault, int start,   int endAllowed, int end, SliderFuncInt func,   SliderFuncRaw funcRaw)
 {
+	// Post-NGE UI XML may be missing widgets; getCodeDataObject() returns NULL and
+	// caller passes *ptr -> null reference. Guard to avoid crash.
+	if (&slider == nullptr)
+	{
+		WARNING(true, ("SwgCuiOptBase::registerSlider(int) called with null reference - widget missing from UI XML"));
+		return;
+	}
 	const ControlDataBaseMap::iterator it = m_controlDataBaseMap->find (&slider);
 	if (it != m_controlDataBaseMap->end ())
 		DEBUG_FATAL (true, ("SwgCuiOptBase slider [%s] already registered", slider.GetFullPath ().c_str ()));
@@ -859,6 +866,11 @@ void SwgCuiOptBase::registerSlider   (UISliderbar & slider, StaticSetterInt   se
 
 void SwgCuiOptBase::registerSlider   (UISliderbar & slider, StaticSetterFloat setter, StaticGetterFloat getter, StaticGetterFloat getterDefault, float start, float endAllowed, float end, SliderFuncFloat func, SliderFuncRaw funcRaw)
 {
+	if (&slider == nullptr)
+	{
+		WARNING(true, ("SwgCuiOptBase::registerSlider(float) called with null reference - widget missing from UI XML"));
+		return;
+	}
 	const ControlDataBaseMap::iterator it = m_controlDataBaseMap->find (&slider);
 	if (it != m_controlDataBaseMap->end ())
 		DEBUG_FATAL (true, ("SwgCuiOptBase slider [%s] already registered", slider.GetFullPath ().c_str ()));
@@ -872,6 +884,11 @@ void SwgCuiOptBase::registerSlider   (UISliderbar & slider, StaticSetterFloat se
 
 void SwgCuiOptBase::registerCheckbox (UICheckbox & checkbox, StaticSetterBool  setter, StaticGetterBool  getter, StaticGetterBool  getterDefault, CheckboxFunc func)
 {
+	if (&checkbox == nullptr)
+	{
+		WARNING(true, ("SwgCuiOptBase::registerCheckbox called with null reference - widget missing from UI XML"));
+		return;
+	}
 	const ControlDataBaseMap::iterator it = m_controlDataBaseMap->find (&checkbox);
 	if (it != m_controlDataBaseMap->end ())
 		DEBUG_FATAL (true, ("SwgCuiOptBase checkbox [%s] already registered", checkbox.GetFullPath ().c_str ()));
@@ -885,6 +902,11 @@ void SwgCuiOptBase::registerCheckbox (UICheckbox & checkbox, StaticSetterBool  s
 
 void SwgCuiOptBase::registerComboBox (UIComboBox & combo, ComboSetterFunc  setter, ComboGetterFunc  getter, ComboGetterFunc  getterDefault)
 {
+	if (&combo == nullptr)
+	{
+		WARNING(true, ("SwgCuiOptBase::registerComboBox called with null reference - widget missing from UI XML"));
+		return;
+	}
 	const ControlDataBaseMap::iterator it = m_controlDataBaseMap->find (&combo);
 	if (it != m_controlDataBaseMap->end ())
 		DEBUG_FATAL (true, ("SwgCuiOptBase combo [%s] already registered", combo.GetFullPath ().c_str ()));

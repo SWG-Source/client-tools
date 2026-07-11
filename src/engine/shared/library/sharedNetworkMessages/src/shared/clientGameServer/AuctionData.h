@@ -13,7 +13,7 @@
 #include <Unicode.h>
 #include <vector>
 
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
+#include "sharedFoundation/NetworkId.h"
 
 // These ***MUST*** be kept in sync in src/engine/shared/library/sharedNetworkMessages/src/shared/clientGameServer/AuctionData.h and src/engine/server/library/serverNetworkMessages/src/shared/gameCommoditiesServer/AuctionBase.h
 #ifndef AUCTION_PREMIUM_AUCTION

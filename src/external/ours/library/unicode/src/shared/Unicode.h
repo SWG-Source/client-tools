@@ -23,13 +23,8 @@
 
 namespace Unicode
 {
-
-	typedef unsigned short unicode_char_t;
-
-	/**
-	* Standard Unicode string is UTF-16
-	*/
-	typedef std::basic_string <unicode_char_t, std::char_traits<unicode_char_t>, std::allocator<unicode_char_t> > String;
+	using unicode_char_t = char16_t;   // fixed 16-bit
+	using String = std::u16string;
 
 	/**
 	* NarrowString is a ascii string.
@@ -37,12 +32,17 @@ namespace Unicode
 
 	typedef std::string                        NarrowString;
 
-	const unicode_char_t                       whitespace []       = { ' ', '\n', '\r', '\t', 0x3000, 0 };
-	const unicode_char_t                       endlines []         = { '\r', '\n', 0 };
-	const char                                 ascii_whitespace [] = { ' ', '\n', '\r', '\t', 0 };
-	const char                                 ascii_endlines []   = { '\r', '\n', 0 };
+	// Unicode whitespace/endline tables must also use wchar_t
+	inline constexpr unicode_char_t whitespace[] = {
+		u' ', u'\n', u'\r', u'\t', 0x3000, 0
+	};
 
-	const String                               emptyString;
+	inline constexpr unicode_char_t endlines[] = { u'\r', u'\n', 0 };
+
+	inline constexpr char ascii_whitespace[] = { ' ', '\n', '\r', '\t', 0 };
+	inline constexpr char ascii_endlines[] = { '\r', '\n', 0 };
+
+	inline const String emptyString;
 }
 
 //-----------------------------------------------------------------

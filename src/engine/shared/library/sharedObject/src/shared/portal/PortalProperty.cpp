@@ -65,7 +65,8 @@ PortalProperty::PortalProperty(Object &owner, const char *fileName)
 #endif // _DEBUG
 
 	m_template = PortalPropertyTemplateList::fetch(CrcLowerString(fileName));
-	m_cellList->resize(static_cast<CellList::size_type>(m_template->getNumberOfCells()), NULL);
+	if (m_template)
+		m_cellList->resize(static_cast<CellList::size_type>(m_template->getNumberOfCells()), NULL);
 
 #ifdef _DEBUG
 	DataLint::popAsset();
@@ -480,8 +481,16 @@ void PortalProperty::cellLoaded(int cellIndex, Object &cellObject, bool shouldCr
 		WARNING(true, ("CellProblem for portal %s cell index %d already loaded", getOwner().getNetworkId().getValueString().c_str(), cellIndex));
 	}
 
-	// attach the cell as a child of the portal object
-	cellObject.attachToObject_p(&getOwner(), false);
+	// attach the cell as a child of the portal object.
+	// asChildObject MUST be true so that when the building (parent) later gets
+	// addToWorld(), Object::addToWorld iterates m_attachedObjects and adds
+	// each cell via `if ((*i)->isChildObject() && !(*i)->isInWorld())`. With
+	// asChildObject=false the cell would never be added in the multiplayer-
+	// client SceneCreate flow (cells' SceneEndBaselines arrive before the
+	// building's, so the conditional addToWorld in handleEndBaselines is
+	// skipped on the containedBy->isInWorld() check, and nothing later picks
+	// them up).
+	cellObject.attachToObject_p(&getOwner(), true);
 
 	// get the cell property from the cell object
 	CellProperty *cell = cellObject.getCellProperty();

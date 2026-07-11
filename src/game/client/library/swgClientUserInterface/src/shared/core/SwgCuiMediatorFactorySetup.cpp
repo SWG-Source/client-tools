@@ -110,6 +110,7 @@
 #include "swgClientUserInterface/SwgCuiResourceExtraction_SetResource.h"
 #include "swgClientUserInterface/SwgCuiResourceSplitter.h"
 #include "swgClientUserInterface/SwgCuiRoadmap.h"
+#include "swgClientUserInterface/SwgCuiSkills.h"
 #include "swgClientUserInterface/SwgCuiSceneSelection.h"
 #include "swgClientUserInterface/SwgCuiServerDisconnected.h"
 #include "swgClientUserInterface/SwgCuiService_TicketList_AddComment.h"
@@ -249,6 +250,7 @@ void SwgCuiMediatorFactorySetup::install ()
 	MAKE_SWG_CTOR_WS (LocationDisplay,                "/pda.LocationDisplay");
 	MAKE_SWG_CTOR_WS (DpsMeter,                       "/pda.dpsMeter");
 	MAKE_SWG_CTOR_WS (Roadmap,                        "/pda.Roadmap");
+	MAKE_SWG_CTOR_WS (Skills,                         "/Skill.skills");
 	MAKE_SWG_CTOR_WS (LootBox,                        "/pda.lootbox");
 	MAKE_SWG_CTOR_WS (KillMeter,                      "/pda.KillMeter");
 	MAKE_SWG_CTOR_WS (BuffBuilderBuffer,              "/pda.BuffBuilder.buffer");

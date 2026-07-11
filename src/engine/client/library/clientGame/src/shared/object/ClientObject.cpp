@@ -37,6 +37,7 @@
 #include "clientUserInterface/CuiTextManager.h"
 #include "sharedDebug/DebugFlags.h"
 #include "sharedDebug/InstallTimer.h"
+#include "sharedFile/TreeFile.h"
 #include "sharedFoundation/PointerDeleter.h"
 #include "sharedGame/GameObjectTypes.h"
 #include "sharedMessageDispatch/Transceiver.h"
@@ -190,6 +191,7 @@ ClientObject::ClientObject(const SharedObjectTemplate* newTemplate, const Object
 	m_cashBalance(0),
 	m_bankBalance(0),
 	m_clientCached(false),
+	m_clientDataFileWearablesApplied(false),
 	m_uniqueId(ms_nextUniqueId++),
 	m_auxilliaryObjectVector(NULL),
 	m_lastFlyTextTime(0.f)
@@ -305,10 +307,20 @@ ClientObject::ClientObject(const SharedObjectTemplate* newTemplate, const Object
 		const std::string &portalLayoutFileName = newTemplate->getPortalLayoutFilename();
 		if (!portalLayoutFileName.empty())
 		{
-			PortalProperty *portalProperty = new PortalProperty(*this, portalLayoutFileName.c_str());
-			addProperty(*portalProperty);
-			portalProperty->createAppearance();
-		} //lint !e429 // Custodial pointer has not been freed or returned // addProperty() absorbed the pointer
+			// Skip the portal property block when the .pob file isn't in the
+			// loaded TRE (post-NGE TRE may not have NPE/tutorial assets).
+			// Without this, PortalPropertyTemplate's Iff ctor FATALs.
+			if (!TreeFile::exists(portalLayoutFileName.c_str()))
+			{
+				WARNING(true, ("ClientObject: portal layout '%s' not found in TreeFile, skipping PortalProperty for [%s]", portalLayoutFileName.c_str(), newTemplate->getName()));
+			}
+			else
+			{
+				PortalProperty *portalProperty = new PortalProperty(*this, portalLayoutFileName.c_str());
+				addProperty(*portalProperty);
+				portalProperty->createAppearance();
+			} //lint !e429 // Custodial pointer has not been freed or returned // addProperty() absorbed the pointer
+		}
 	}
 
 	m_objectName.setSourceObject   (this);
@@ -1374,6 +1386,20 @@ void ClientObject::setClientCached ()
 bool ClientObject::isClientCached () const
 {
 	return m_clientCached;
+}
+
+//----------------------------------------------------------------------
+
+bool ClientObject::getClientDataFileWearablesApplied () const
+{
+	return m_clientDataFileWearablesApplied;
+}
+
+//----------------------------------------------------------------------
+
+void ClientObject::setClientDataFileWearablesApplied (bool const applied)
+{
+	m_clientDataFileWearablesApplied = applied;
 }
 
 //----------------------------------------------------------------------

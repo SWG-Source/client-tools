@@ -170,9 +170,10 @@ static void InternalFatal(const char *format, va_list va)
 		throw FatalException(ms_buffer, FatalException::ZeroSourceString); //lint !e1549 // Function not declared to throw
 
 #ifdef _WIN32
-	{
-		__asm int 3;
-	}
+	// Was: `__asm int 3;` - inline asm is x86-only in MSVC. Use the
+	// portable intrinsic, which lowers to int 3 on x86/x64 and the
+	// equivalent BKPT/UDF on ARM.
+	__debugbreak();
 #endif
 
 	DEBUG_OUTPUT_CHANNEL("Foundation\\Fatal", ("%s", ms_buffer));

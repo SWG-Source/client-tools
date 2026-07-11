@@ -93,6 +93,7 @@ int UTF8_convertCharToUTF16( char * ptr , UTF16 * ret )
 // takes a pointer to a UTF8 String and fills the 2nd array with the corresponding UTF16 string, up to
 // the limit number of characters.
 // return value is the length of the UTF16 string converted.
+// TODO: Source Ptr should be const char*
 int UTF8_convertToUTF16( char * ptr , UTF16 * ret, int limit )
 {
 	int len = 0;
@@ -223,17 +224,23 @@ void FakeUtf8ToEnglish(char *englishDestination, char *fakeSource, int destinati
 	*d = 0;
 }
 
-Unicode::String UTF8ToUnicode(const char *source)
+Unicode::String UTF8ToUnicode(const char* source)
 {
-	Unicode::String s = narrowToWide("");
+	Unicode::String s;   // start empty
+
 	int length = strlen(source) + 1;
-	UTF16 *buffer = new UTF16[length];	
+	UTF16* buffer = new UTF16[length];
+
 	if (buffer != NULL)
 	{
-		UTF8_convertToUTF16(const_cast<char *>(source) , buffer, length);
-		s =buffer;
-		delete [] buffer;
+		UTF8_convertToUTF16(const_cast<char*>(source), buffer, length);
+
+		// Assign using UTF16 iterator conversion
+		s.assign(buffer, buffer + length - 1); // exclude null terminator
+
+		delete[] buffer;
 	}
+
 	return s;
 }
 

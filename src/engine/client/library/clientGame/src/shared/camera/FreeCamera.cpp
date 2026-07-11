@@ -223,6 +223,14 @@ void FreeCamera::setMode (Mode mode)
 
 //-------------------------------------------------------------------
 
+void FreeCamera::setCurrentCell (CellProperty* cell)
+{
+	if (cell && m_currentCell != cell)
+		convertPivotPoint(cell);
+}
+
+//-------------------------------------------------------------------
+
 namespace
 {
 	float angleDiff2Pi( float a, float b ) {

@@ -58,10 +58,9 @@ namespace Archive
 	class ReadIterator;
 	class ByteStream;
 
-	void get (ReadIterator &source, Buff::PackedBuff &target);
-	void put (ByteStream &target, const Buff::PackedBuff &source);
+	void get(ReadIterator& source, Buff::PackedBuff& target);
+	void put(ByteStream& target, const Buff::PackedBuff& source);
 }
-
 
 inline bool Buff::PackedBuff::operator != (const Buff::PackedBuff& rhs) const 
 { 
@@ -72,8 +71,6 @@ inline bool Buff::PackedBuff::operator == (const Buff::PackedBuff& rhs) const
 { 
 	return !(rhs != *this); 
 }
-
-
 
 // ======================================================================
 

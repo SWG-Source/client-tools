@@ -568,8 +568,12 @@ void SwgCuiInventory::setContainerObject (ClientObject * containerObject, const 
 		}
 		break;
 	case IT_LOOT:
-		{		
-			getPage().SetLocation(Graphics::getFrameBufferMaxWidth() - 410, Graphics::getFrameBufferMaxHeight() / 2L - 130);			
+		{
+			// Use UI canvas size so right/center anchoring respects ultrawide
+			// UI scale (2026-05-16). FrameBufferMax* returns physical pixels;
+			// at uiScale > 1 those go off-screen after canvas Scale().
+			getPage().SetLocation(Graphics::getUiCanvasWidth() - 410, Graphics::getUiCanvasHeight() / 2L - 130);
+
 			if(m_eqMediator)
 				m_eqMediator->deactivate();
 			getPage().SetSize(UISize(400, 245));

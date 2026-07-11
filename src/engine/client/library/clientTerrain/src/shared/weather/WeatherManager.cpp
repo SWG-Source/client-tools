@@ -38,14 +38,15 @@ void WeatherManager::addWeatherChangedFunction (WeatherChangedFunction weatherCh
 	NOT_NULL (weatherChangedFunction);
 	if (weatherChangedFunction)
 	{
-		//-- verify weather changed function isn't already in list
-		if (!std::find (ms_weatherChangedFunctionList.end (), ms_weatherChangedFunctionList.begin (), weatherChangedFunction))
+		// verify weatherChangedFunction isn't already in list
+		if (std::find(ms_weatherChangedFunctionList.begin(),
+			ms_weatherChangedFunctionList.end(),
+			weatherChangedFunction) == ms_weatherChangedFunctionList.end())
 		{
-			//-- add to list
-			ms_weatherChangedFunctionList.push_back (weatherChangedFunction);
+			ms_weatherChangedFunctionList.push_back(weatherChangedFunction);
 
-			//-- call weatherChangedFunction with weather data
-			weatherChangedFunction (getScaledWindVelocity_w ());
+			// call weatherChangedFunction with weather data
+			weatherChangedFunction(getScaledWindVelocity_w());
 		}
 	}
 }

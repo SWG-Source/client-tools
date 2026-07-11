@@ -19,8 +19,8 @@ public:
 	static void install();
 	static void remove();
 
-	static void SwgCuiMahjongDataTable::getLayoutNames(std::list<std::string> & names);
-	static bool SwgCuiMahjongDataTable::getLayoutTiles(std::string const & layoutName, std::list<TilePosition> & tiles);
+	static void getLayoutNames(std::list<std::string> & names);
+	static bool getLayoutTiles(std::string const & layoutName, std::list<TilePosition> & tiles);
 
 	struct TilesetImages
 	{

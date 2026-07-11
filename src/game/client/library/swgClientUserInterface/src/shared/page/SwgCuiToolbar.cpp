@@ -508,7 +508,10 @@ m_textStyleManager(UITextStyleManager::GetInstance()) // hook singleton of this 
 
 	m_effectorUseChild->SetPropertyNarrow (UILowerString ("PalTarget"), "icon");
 
-	m_toolbarItemPanes = new ToolbarItemPaneVector (DEFAULT_PANE_COUNT, DEFAULT_ITEM_COUNT_PER_PANE);
+	m_toolbarItemPanes = new ToolbarItemPaneVector(
+		DEFAULT_PANE_COUNT,
+		ToolbarItemPane(DEFAULT_ITEM_COUNT_PER_PANE)
+	);
 	m_petToolbarItemPane = new ToolbarItemPane(DEFAULT_ITEM_COUNT_PER_PANE);
 
 	getCodeDataObject (TUIPage, m_toolbarPage,      "ToolBar", true);
@@ -1528,7 +1531,7 @@ bool SwgCuiToolbar::OnMessage(UIWidget *context, const UIMessage & msg)
 
 		if (m_dragCounter == UIManager::gUIManager().GetDragCounter ())
 		{
-			CuiDragInfo * const oldItem = getToolbarItem (m_draggingPane, m_draggingSlot);
+			CuiDragInfo * const oldItem = getToolbarItem (m_draggingPane, m_draggingSlot, false);
 			if (!oldItem)
 				return false;
 
@@ -2397,25 +2400,23 @@ void SwgCuiToolbar::onCommandRemoved (const CreatureObject::Messages::CommandRem
 		
 		for (ToolbarItemPane::iterator it = items.begin (); it != items.end (); ++it)
 		{
-			CuiDragInfo * item = it;
-			if(!item)
-				continue;
+			CuiDragInfo& item = *it;
 			
 			std::string compareString;
-			if (!item->str.empty ())
+			if (!item.str.empty ())
 			{
-				compareString = item->str;
+				compareString = item.str;
 			}
-			else if (!item->cmd.empty ())
+			else if (item.cmd.empty ())
 			{						
 				std::string str;
-				if (CuiMessageQueueManager::findCommandString (item->cmd, str, false))
+				if (CuiMessageQueueManager::findCommandString (item.cmd, str, false))
 					compareString = str;
 			}
 
 			if (compareString == slashCommand)
 			{
-				item->clear ();
+				item.clear ();
 				found = true;
 			}
 		}
@@ -2798,7 +2799,8 @@ void SwgCuiToolbar::update (float deltaTimeSecs)
 							else
 							{
 								// Hide timer if we change the option to display the timer mid-cooldown
-								cooldownTimer->SetVisible(false);
+								if (cooldownTimer != nullptr)
+									cooldownTimer->SetVisible(false);
 							}
 						}
 						else // fail safe catch to make sure we aren't showing the timer when we shouldn't be

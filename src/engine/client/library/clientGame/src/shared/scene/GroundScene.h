@@ -111,6 +111,7 @@ private:
 	bool                    m_receivedSceneReady;
 	bool                    m_noDraw;
 	int                     m_currentLoadCount;
+	float                   m_loadingElapsedTime;
 
 	int                     m_debugKeyContext;
 	std::string             m_debugKeySubContext;

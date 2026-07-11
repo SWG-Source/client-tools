@@ -25,6 +25,7 @@
 #include "sharedMessageDispatch/Transceiver.h"
 
 #include <algorithm>
+#include <iterator>
 
 //======================================================================
 
@@ -297,17 +298,34 @@ void SwgCuiNewMacro::OnButtonPressed   (UIWidget * context)
 		UIString name = m_nameText->GetLocalText();
 		UIString text = m_textText->GetLocalText();
 
-		std::string narrowText = Unicode::wideToUTF8 (text);
+		std::string narrowText = Unicode::wideToUTF8(text);
 
-		const std::vector<std::string> & disallowedMacroCommands = ClientMacroManager::getDisallowedCommands();
-		for(std::vector<std::string>::const_iterator i = disallowedMacroCommands.begin(); i != disallowedMacroCommands.end(); ++i)
+		// Lowercase the user macro text once (ASCII semantics).
+		std::string lowertext;
+		lowertext.reserve(narrowText.size());
+
+		auto toLowerAscii = [](unsigned char c) -> char
+			{
+				return static_cast<char>(std::tolower(c));
+			};
+
+		std::transform(narrowText.begin(), narrowText.end(),
+			std::back_inserter(lowertext),
+			toLowerAscii);
+
+		const std::vector<std::string>& disallowedMacroCommands = ClientMacroManager::getDisallowedCommands();
+		for (std::vector<std::string>::const_iterator i = disallowedMacroCommands.begin();
+			i != disallowedMacroCommands.end();
+			++i)
 		{
-			std::string lowertext;
 			std::string lowercommand;
-			std::transform(text.begin(), text.end(), std::back_inserter(lowertext),    tolower);
-			std::transform(i->begin(),   i->end(),   std::back_inserter(lowercommand), tolower);
+			lowercommand.reserve(i->size());
 
-			if(lowertext.find(lowercommand) != text.npos)
+			std::transform(i->begin(), i->end(),
+				std::back_inserter(lowercommand),
+				toLowerAscii);
+
+			if (lowertext.find(lowercommand) != std::string::npos)
 			{
 				Unicode::String msg = CuiStringIds::macro_badcommand1.localize();
 				msg += Unicode::narrowToWide(*i);

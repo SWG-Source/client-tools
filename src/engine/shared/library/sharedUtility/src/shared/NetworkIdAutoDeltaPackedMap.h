@@ -10,8 +10,9 @@
 
 // ======================================================================
 
-#include "Archive/AutoDeltaPackedMap.h"
+#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
+#include "Archive/AutoDeltaPackedMap.h"
 
 // ======================================================================
 

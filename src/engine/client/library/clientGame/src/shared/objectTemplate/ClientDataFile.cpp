@@ -11,6 +11,7 @@
 #include "clientGame/ClientDataFile.h"
 
 #include "clientAudio/Audio.h"
+#include "clientSkeletalAnimation/SkeletalAppearance2.h"
 #include "clientAudio/SoundTemplate.h"
 #include "clientAudio/SoundTemplateList.h"
 #include "clientGame/ClearNonCollidableFloraNotification.h"
@@ -1226,6 +1227,106 @@ void ClientDataFile::preloadAssets () const
 }
 
 //-------------------------------------------------------------------
+/**
+ * x64 fix: apply the ClientDataFile-baked wearables (WEAR/MESH chunks) to a
+ * wearer object. This is how "dressed" NPCs get their clothing.
+ *
+ * Extracted from apply() so it can be RETRIED. apply() runs once, at
+ * ClientObject::endBaselines time, but the wearer's skeletal appearance is
+ * frequently not loaded yet at that point - the old inline code just
+ * DEBUG_WARNING'd and dropped the wearables, with no retry, so "dressed" NPCs
+ * rendered naked. This method is idempotent (guarded by a flag on the
+ * ClientObject) and returns false when there ARE wearables but the skeletal
+ * appearance still isn't ready, so a caller (CreatureObject's periodic verify
+ * pass) can retry until it sticks.
+ *
+ * @return true if there is nothing to do, the wearables were already applied,
+ *         or they were applied now; false if there are wearables but the
+ *         skeletal appearance is not ready yet (caller should retry).
+ */
+
+bool ClientDataFile::applyWearables (Object * const object) const
+{
+	if (!object)
+		return true;
+
+	ClientObject * const clientObject = object->asClientObject();
+
+	if (!hasWearables())
+	{
+		//-- nothing to apply, ever - mark done so a retrying caller stops
+		if (clientObject)
+			clientObject->setClientDataFileWearablesApplied(true);
+		return true;
+	}
+
+	// x64 note: for creatures WITH client-baked wearables we deliberately
+	// NEVER set m_clientDataFileWearablesApplied. CreatureObject::alter()'s
+	// catch-up keeps calling applyWearables every tick; this routine is
+	// idempotent (attach happens once via the alreadyAttached check) and the
+	// preload re-kick keeps nudging stalled async mesh-generator loads
+	// across display-LOD changes (e.g. when the camera moves closer and a
+	// previously-unloaded high-detail LOD becomes the active one). The cost
+	// when fully loaded is one count check + isLoaded check per alter.
+
+	//-- the wearer must have a skeletal appearance to wear MGN clothing onto
+	Appearance * const baseAppearance = object->getAppearance();
+	SkeletalAppearance2 * const skelApp = baseAppearance ? baseAppearance->asSkeletalAppearance2() : 0;
+	if (!skelApp)
+		return false;
+
+	//-- x64 fix: distinguish "first time, need to attach" from "already
+	//   attached, waiting for the .lmg/.mgn async load to complete". The
+	//   wearables are wear()'d once; on every subsequent retry we just
+	//   re-kick the preload until the wearer's mesh generators are ready
+	//   (a few very-early-init NPCs need many ticks before the asset loader
+	//   accepts the load). Only mark fully done after the load is actually
+	//   ready; the catch-up in CreatureObject::alter retries until then.
+	bool const alreadyAttached = (skelApp->getWearableCount() >= static_cast<int>(m_wearableList->size()));
+
+	if (!alreadyAttached)
+	{
+		WearableList::const_iterator const endIt = m_wearableList->end();
+		for (WearableList::const_iterator it = m_wearableList->begin(); it != endIt; ++it)
+		{
+			Wearable const *const wearable = *it;
+			if (wearable)
+			{
+				if (!wearable->apply(object))
+					WARNING(true, ("ClientDataFile %s failed to apply wearable", getName()));
+			}
+		}
+
+		if (!m_wearableList->empty())
+		{
+			//-- Conclude handles locking the appearance wearables so they cannot be modified once client-baked wearables are specified.
+			Wearable::concludeApply(object);
+		}
+	}
+	else
+	{
+		//-- Already attached. UNCONDITIONALLY re-kick the wearables' preload
+		//   to nudge stalled async mesh-generator loads at LODs the body
+		//   doesn't gate on. SkeletalAppearance2::isLoaded() only checks the
+		//   wearer's current display LOD against the BODY's mesh generators -
+		//   it can return true while the wearables' LOD meshes are still
+		//   stalled, leaving the composite without clothing even though
+		//   isLoaded() says "ready" (this is exactly what was happening for
+		//   the nikto_m_03 NPC: body LOD 3 loaded, isLoaded()==true, but the
+		//   wearable LODs 0-2 never loaded). preloadAssets() is idempotent
+		//   and cheap once all LODs have actually loaded.
+		WearableList::const_iterator const endIt = m_wearableList->end();
+		for (WearableList::const_iterator it = m_wearableList->begin(); it != endIt; ++it)
+		{
+			if (*it)
+				(*it)->preloadAssets();
+		}
+	}
+
+	return false;
+}
+
+//-------------------------------------------------------------------
 
 void ClientDataFile::apply (Object* const object) const
 {
@@ -1513,33 +1614,11 @@ void ClientDataFile::apply (Object* const object) const
 	bool const on = object->asClientObject() && object->asClientObject()->asTangibleObject() && object->asClientObject()->asTangibleObject()->hasCondition(TangibleObject::C_onOff);
 	applyOnOff (object, on);
 
-	//-- apply client-baked wearables
-	if (hasWearables())
-	{
-		if (object->getAppearance() && object->getAppearance()->asSkeletalAppearance2())
-		{
-			WearableList::const_iterator const endIt = m_wearableList->end();
-			for (WearableList::const_iterator it = m_wearableList->begin(); it != endIt; ++it)
-			{
-				Wearable const *const wearable = *it;
-				if (wearable)
-				{
-					if (!wearable->apply(object))
-					{ 
-						WARNING(true, ("ClientDataFile %s failed to apply wearable", getName()));
-					}
-				}
-			}
-
-			if (!m_wearableList->empty())
-			{
-				//-- Conclude handles locking the appearance wearables so they cannot be modified once client-baked wearables are specified.
-				Wearable::concludeApply(object);
-			}
-		}
-		else
-			DEBUG_WARNING(true, ("ClientDataFile::apply: object %s has wearables but no skeletal appearance", object->getDebugInformation(true)));
-	}
+	//-- apply client-baked wearables (the WEAR/MESH chunks - this is how
+	//   "dressed" NPCs get their clothing). applyWearables() is idempotent and
+	//   can be retried later by the wearer's periodic catch-up if the skeletal
+	//   appearance wasn't loaded yet at this (endBaselines) point.
+	IGNORE_RETURN(applyWearables(object));
 
 	//-- apply flags.
 	if (m_flagList)

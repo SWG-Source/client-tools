@@ -29,12 +29,12 @@
 
 #include <vector>
 
-//lint -esym(534, basic_string<unsigned short,_STL::char_traits<unsigned short>,_STL::allocator<unsigned short>>::erase)
-//lint -esym(534, std::basic_string<unsigned short,_STL::char_traits<unsigned short>,_STL::allocator<unsigned short>>::erase)
-//lint -esym(534, _STL::basic_string<unsigned short,_STL::char_traits<unsigned short>,_STL::allocator<unsigned short>>::erase)
+//lint -esym(534, basic_string<unsigned short,std::char_traits<unsigned short>,std::allocator<unsigned short>>::erase)
+//lint -esym(534, std::basic_string<unsigned short,std::char_traits<unsigned short>,std::allocator<unsigned short>>::erase)
+//lint -esym(534, std::basic_string<unsigned short,std::char_traits<unsigned short>,std::allocator<unsigned short>>::erase)
 //lint -esym(534, basic_string::erase)
 //lint -esym(534, std::basic_string::erase)
-//lint -esym(534, _STL::basic_string::erase)
+//lint -esym(534, std::basic_string::erase)
 
 // ======================================================================
 

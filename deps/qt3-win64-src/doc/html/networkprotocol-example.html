@@ -1,0 +1,364 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<!-- /home/espenr/tmp/qt-3.3.8-espenr-2499/qt-x11-free-3.3.8/examples/network/networkprotocol/networkprotocol.doc:5 -->
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<title>A simple NNTP implementation</title>
+<style type="text/css"><!--
+fn { margin-left: 1cm; text-indent: -1cm; }
+a:link { color: #004faf; text-decoration: none }
+a:visited { color: #672967; text-decoration: none }
+body { background: #ffffff; color: black; }
+--></style>
+</head>
+<body>
+
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr bgcolor="#E5E5E5">
+<td valign=center>
+ <a href="index.html">
+<font color="#004faf">Home</font></a>
+ | <a href="classes.html">
+<font color="#004faf">All&nbsp;Classes</font></a>
+ | <a href="mainclasses.html">
+<font color="#004faf">Main&nbsp;Classes</font></a>
+ | <a href="annotated.html">
+<font color="#004faf">Annotated</font></a>
+ | <a href="groups.html">
+<font color="#004faf">Grouped&nbsp;Classes</font></a>
+ | <a href="functions.html">
+<font color="#004faf">Functions</font></a>
+</td>
+<td align="right" valign="center"><img src="logo32.png" align="right" width="64" height="32" border="0"></td></tr></table><h1 align=center>A simple NNTP implementation</h1>
+
+ 
+<p> 
+<p> This example shows how to implement your own <a href="qnetworkprotocol.html">QNetworkProtocol</a>. The
+protocol that was chosen for this example is NTTP. Please note that this
+implementation is very simple since it is designed to be an example. It
+should not be used as a real NNTP implemention.
+<p> <hr>
+<p> Header file (nntp.h):
+<p> <pre>/****************************************************************************
+** $Id: networkprotocol-example.html 2051 2007-02-21 10:04:20Z chehrlic $
+**
+** Copyright (C) 1992-2007 Trolltech ASA.  All rights reserved.
+**
+** This file is part of an example program for Qt.  This example
+** program may be used, distributed and modified without limitation.
+**
+*****************************************************************************/
+
+#ifndef NNTP_H
+#define NNTP_H
+
+#include &lt;<a href="qsocket-h.html">qsocket.h</a>&gt;
+#include &lt;<a href="qnetworkprotocol-h.html">qnetworkprotocol.h</a>&gt;
+
+class Nntp : public <a href="qnetworkprotocol.html">QNetworkProtocol</a>
+{
+    <a href="metaobjects.html#Q_OBJECT">Q_OBJECT</a>
+
+public:
+    Nntp();
+    virtual ~Nntp();
+    virtual int supportedOperations() const;
+
+protected:
+    virtual void operationListChildren( <a href="qnetworkoperation.html">QNetworkOperation</a> *op );
+    virtual void operationGet( <a href="qnetworkoperation.html">QNetworkOperation</a> *op );
+
+    <a href="qsocket.html">QSocket</a> *commandSocket;
+    bool connectionReady;
+    bool readGroups;
+    bool readArticle;
+
+private:
+    bool checkConnection( <a href="qnetworkoperation.html">QNetworkOperation</a> *op );
+    void close();
+    void parseGroups();
+    void parseArticle();
+
+protected slots:
+    void hostFound();
+    void connected();
+    void closed();
+    void readyRead();
+    void error( int );
+
+};
+
+#endif
+</pre>
+
+<p> <hr>
+<p> Implementation (nntp.cpp):
+<p> <pre>/****************************************************************************
+** $Id: networkprotocol-example.html 2051 2007-02-21 10:04:20Z chehrlic $
+**
+** Copyright (C) 1992-2007 Trolltech ASA.  All rights reserved.
+**
+** This file is part of an example program for Qt.  This example
+** program may be used, distributed and modified without limitation.
+**
+*****************************************************************************/
+
+#include "nntp.h"
+#include &lt;<a href="qurlinfo-h.html">qurlinfo.h</a>&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;<a href="qurloperator-h.html">qurloperator.h</a>&gt;
+#include &lt;<a href="qstringlist-h.html">qstringlist.h</a>&gt;
+#include &lt;<a href="qregexp-h.html">qregexp.h</a>&gt;
+
+<a name="f288"></a>Nntp::Nntp()
+    : <a href="qnetworkprotocol.html">QNetworkProtocol</a>(), connectionReady( FALSE ),
+      readGroups( FALSE ), readArticle( FALSE )
+{
+    // create the command socket and connect to its signals
+    commandSocket = new <a href="qsocket.html">QSocket</a>( this );
+<a name="x684"></a>    <a href="qobject.html#connect">connect</a>( commandSocket, SIGNAL( <a href="qsocket.html#hostFound">hostFound</a>() ),
+             this, SLOT( hostFound() ) );
+<a name="x681"></a>    <a href="qobject.html#connect">connect</a>( commandSocket, SIGNAL( <a href="qsocket.html#connected">connected</a>() ),
+             this, SLOT( connected() ) );
+<a name="x682"></a>    <a href="qobject.html#connect">connect</a>( commandSocket, SIGNAL( <a href="qsocket.html#connectionClosed">connectionClosed</a>() ),
+             this, SLOT( closed() ) );
+<a name="x687"></a>    <a href="qobject.html#connect">connect</a>( commandSocket, SIGNAL( <a href="qsocket.html#readyRead">readyRead</a>() ),
+             this, SLOT( readyRead() ) );
+<a name="x683"></a>    <a href="qobject.html#connect">connect</a>( commandSocket, SIGNAL( <a href="qsocket.html#error">error</a>( int ) ),
+             this, SLOT( error( int ) ) );
+}
+
+Nntp::~Nntp()
+{
+    close();
+    delete commandSocket;
+}
+
+<a name="x675"></a>void Nntp::<a href="qnetworkprotocol.html#operationListChildren">operationListChildren</a>( <a href="qnetworkoperation.html">QNetworkOperation</a> * )
+{
+    // create a command
+    <a href="qstring.html">QString</a> path = <a href="qnetworkprotocol.html#url">url</a>()-&gt;path(), cmd;
+<a name="x691"></a>    if ( path.<a href="qstring.html#isEmpty">isEmpty</a>() || path == "/" ) {
+        // if the path is empty or we are in the root dir,
+        // we want to read the list of available newsgroups
+        cmd = "list newsgroups\r\n";
+    } else if ( <a href="qnetworkprotocol.html#url">url</a>()-&gt;isDir() ) {
+        // if the path is a directory (in our case a news group)
+        // we want to list the articles of this group
+<a name="x694"></a>        path = path.<a href="qstring.html#replace">replace</a>( "/", "" );
+        cmd = "listgroup " + path + "\r\n";
+    } else
+        return;
+
+    // write the command to the socket
+<a name="x693"></a><a name="x692"></a><a name="x689"></a>    commandSocket-&gt;<a href="qsocket.html#writeBlock">writeBlock</a>( cmd.<a href="qstring.html#latin1">latin1</a>(), cmd.<a href="qstring.html#length">length</a>() );
+    readGroups = TRUE;
+}
+
+<a name="x674"></a>void Nntp::<a href="qnetworkprotocol.html#operationGet">operationGet</a>( <a href="qnetworkoperation.html">QNetworkOperation</a> *op )
+{
+    // get the dirPath of the URL (this is our news group)
+    // and the filename (which is the article we want to read)
+<a name="x672"></a>    <a href="qurl.html">QUrl</a> u( op-&gt;<a href="qnetworkoperation.html#arg">arg</a>( 0 ) );
+<a name="x696"></a><a name="x695"></a>    <a href="qstring.html">QString</a> dirPath = u.<a href="qurl.html#dirPath">dirPath</a>(), file = u.<a href="qurl.html#fileName">fileName</a>();
+    dirPath = dirPath.<a href="qstring.html#replace">replace</a>( "/", "" );
+
+    // go to the group in which the article is
+    <a href="qstring.html">QString</a> cmd;
+    cmd = "group " + dirPath + "\r\n";
+    commandSocket-&gt;<a href="qsocket.html#writeBlock">writeBlock</a>( cmd.<a href="qstring.html#latin1">latin1</a>(), cmd.<a href="qstring.html#length">length</a>() );
+
+    // read the head of the article
+    cmd = "article " + file + "\r\n";
+    commandSocket-&gt;<a href="qsocket.html#writeBlock">writeBlock</a>( cmd.<a href="qstring.html#latin1">latin1</a>(), cmd.<a href="qstring.html#length">length</a>() );
+    readArticle = TRUE;
+}
+
+<a name="x673"></a>bool Nntp::<a href="qnetworkprotocol.html#checkConnection">checkConnection</a>( <a href="qnetworkoperation.html">QNetworkOperation</a> * )
+{
+    // we are connected, return TRUE
+<a name="x670"></a>    if ( commandSocket-&gt;<a href="qiodevice.html#isOpen">isOpen</a>() &amp;&amp; connectionReady )
+        return TRUE;
+
+    // seems that there is no chance to connect
+    if ( commandSocket-&gt;<a href="qiodevice.html#isOpen">isOpen</a>() )
+        return FALSE;
+
+    // don't call connectToHost() if we are already trying to connect
+<a name="x688"></a>    if ( commandSocket-&gt;<a href="qsocket.html#state">state</a>() == QSocket::Connecting )
+        return FALSE;
+
+    // start connecting
+    connectionReady = FALSE;
+<a name="x680"></a>    commandSocket-&gt;<a href="qsocket.html#connectToHost">connectToHost</a>( <a href="qnetworkprotocol.html#url">url</a>()-&gt;host(),
+                                  <a href="qnetworkprotocol.html#url">url</a>()-&gt;port() != -1 ? url()-&gt;port() : 119 );
+    return FALSE;
+}
+
+void <a name="f289"></a>Nntp::close()
+{
+    // close the command socket
+    if ( commandSocket-&gt;<a href="qiodevice.html#isOpen">isOpen</a>() ) {
+        commandSocket-&gt;<a href="qsocket.html#writeBlock">writeBlock</a>( "quit\r\n", strlen( "quit\r\n" ) );
+<a name="x679"></a>        commandSocket-&gt;<a href="qsocket.html#close">close</a>();
+    }
+}
+
+<a name="x676"></a>int Nntp::<a href="qnetworkprotocol.html#supportedOperations">supportedOperations</a>() const
+{
+    // we only support listing children and getting data
+    return OpListChildren | OpGet;
+}
+
+void <a name="f290"></a>Nntp::hostFound()
+{
+    if ( <a href="qnetworkprotocol.html#url">url</a>() )
+        emit connectionStateChanged( ConHostFound, tr( "Host %1 found" ).arg( <a href="qnetworkprotocol.html#url">url</a>()-&gt;host() ) );
+    else
+        emit connectionStateChanged( ConHostFound, tr( "Host found" ) );
+}
+
+void <a name="f291"></a>Nntp::connected()
+{
+    if ( <a href="qnetworkprotocol.html#url">url</a>() )
+        emit connectionStateChanged( ConConnected, tr( "Connected to host %1" ).arg( <a href="qnetworkprotocol.html#url">url</a>()-&gt;host() ) );
+    else
+        emit connectionStateChanged( ConConnected, tr( "Connected to host" ) );
+}
+
+void <a name="f292"></a>Nntp::closed()
+{
+    if ( <a href="qnetworkprotocol.html#url">url</a>() )
+        emit connectionStateChanged( ConClosed, tr( "Connection to %1 closed" ).arg( <a href="qnetworkprotocol.html#url">url</a>()-&gt;host() ) );
+    else
+        emit connectionStateChanged( ConClosed, tr( "Connection closed" ) );
+}
+
+void <a name="f293"></a>Nntp::readyRead()
+{
+    // new data arrived on the command socket
+
+    // of we should read the list of available groups, let's do so
+    if ( readGroups ) {
+        parseGroups();
+        return;
+    }
+
+    // of we should read an article, let's do so
+    if ( readArticle ) {
+        parseArticle();
+        return;
+    }
+
+    // read the new data from the socket
+    <a href="qcstring.html">QCString</a> s;
+<a name="x677"></a><a name="x668"></a>    s.<a href="qcstring.html#resize">resize</a>( commandSocket-&gt;<a href="qsocket.html#bytesAvailable">bytesAvailable</a>() + 1 );
+<a name="x685"></a><a name="x671"></a>    commandSocket-&gt;<a href="qsocket.html#readBlock">readBlock</a>( s.<a href="qmemarray.html#data">data</a>(), commandSocket-&gt;<a href="qsocket.html#bytesAvailable">bytesAvailable</a>() );
+
+    if ( !url() )
+        return;
+
+    // of the code of the server response was 200, we know that the
+    // server is ready to get commands from us now
+<a name="x664"></a>    if ( s.<a href="qcstring.html#left">left</a>( 3 ) == "200" )
+        connectionReady = TRUE;
+}
+
+void <a name="f294"></a>Nntp::parseGroups()
+{
+<a name="x678"></a>    if ( !commandSocket-&gt;<a href="qsocket.html#canReadLine">canReadLine</a>() )
+        return;
+
+    // read one line after the other
+    while ( commandSocket-&gt;<a href="qsocket.html#canReadLine">canReadLine</a>() ) {
+<a name="x686"></a>        <a href="qstring.html">QString</a> s = commandSocket-&gt;<a href="qsocket.html#readLine">readLine</a>();
+
+        // if the  line starts with a dot, all groups or articles have been listed,
+        // so we finished processing the listChildren() command
+        if ( s[ 0 ] == '.' ) {
+            readGroups = FALSE;
+            <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>()-&gt;setState( StDone );
+            emit finished( <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>() );
+            return;
+        }
+
+        // if the code of the server response is 215 or 211
+        // the next line will be the first group or article (depending on what we read).
+        // So let others know that we start reading now...
+        if ( s.<a href="qcstring.html#left">left</a>( 3 ) == "215" || s.<a href="qcstring.html#left">left</a>( 3 ) == "211" ) {
+            <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>()-&gt;setState( StInProgress );
+            emit start( <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>() );
+            continue;
+        }
+
+        // parse the line and create a QUrlInfo object
+        // which describes the child (group or article)
+<a name="x663"></a>        bool tab = s.<a href="qcstring.html#find">find</a>( '\t' ) != -1;
+<a name="x666"></a>        <a href="qstring.html">QString</a> group = s.<a href="qcstring.html#mid">mid</a>( 0, s.<a href="qcstring.html#find">find</a>( tab ? '\t' : ' ' ) );
+        <a href="qurlinfo.html">QUrlInfo</a> inf;
+<a name="x700"></a>        inf.<a href="qurlinfo.html#setName">setName</a>( group );
+        <a href="qstring.html">QString</a> path = <a href="qnetworkprotocol.html#url">url</a>()-&gt;path();
+<a name="x698"></a>        inf.<a href="qurlinfo.html#setDir">setDir</a>( path.<a href="qstring.html#isEmpty">isEmpty</a>() || path == "/" );
+<a name="x702"></a>        inf.<a href="qurlinfo.html#setSymLink">setSymLink</a>( FALSE );
+<a name="x699"></a><a name="x697"></a>        inf.<a href="qurlinfo.html#setFile">setFile</a>( !inf.<a href="qurlinfo.html#isDir">isDir</a>() );
+<a name="x703"></a>        inf.<a href="qurlinfo.html#setWritable">setWritable</a>( FALSE );
+<a name="x701"></a>        inf.<a href="qurlinfo.html#setReadable">setReadable</a>( TRUE );
+
+        // let others know about our new child
+        emit newChild( inf, operationInProgress() );
+    }
+
+}
+
+void <a name="f295"></a>Nntp::parseArticle()
+{
+    if ( !commandSocket-&gt;<a href="qsocket.html#canReadLine">canReadLine</a>() )
+        return;
+
+    // read an article one line after the other
+    while ( commandSocket-&gt;<a href="qsocket.html#canReadLine">canReadLine</a>() ) {
+        <a href="qstring.html">QString</a> s = commandSocket-&gt;<a href="qsocket.html#readLine">readLine</a>();
+
+        // if the  line starts with a dot, we finished reading something
+        if ( s[ 0 ] == '.' ) {
+            readArticle = FALSE;
+            <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>()-&gt;setState( StDone );
+            emit finished( <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>() );
+            return;
+        }
+
+<a name="x669"></a>        if ( s.<a href="qcstring.html#right">right</a>( 1 ) == "\n" )
+<a name="x667"></a><a name="x665"></a>            s.<a href="qcstring.html#remove">remove</a>( s.<a href="qcstring.html#length">length</a>() - 1, 1 );
+
+        // emit the new data of the article which we read
+<a name="x690"></a>        emit data( QCString( s.<a href="qstring.html#ascii">ascii</a>() ), operationInProgress() );
+    }
+}
+
+void <a name="f296"></a>Nntp::error( int code )
+{
+    if ( code == QSocket::ErrHostNotFound ||
+         code == QSocket::ErrConnectionRefused ) {
+        // this signal is called if connecting to the server failed
+        if ( <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>() ) {
+            <a href="qstring.html">QString</a> msg = <a href="qobject.html#tr">tr</a>( "Host not found or couldn't connect to: \n" + url()-&gt;host() );
+            <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>()-&gt;setState( StFailed );
+            <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>()-&gt;setProtocolDetail( msg );
+            <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>()-&gt;setErrorCode( (int)ErrHostNotFound );
+            <a href="qnetworkprotocol.html#clearOperationQueue">clearOperationQueue</a>();
+            emit finished( <a href="qnetworkprotocol.html#operationInProgress">operationInProgress</a>() );
+        }
+    }
+}
+</pre>
+
+<p>See also <a href="network-examples.html">Network Examples</a>.
+
+<!-- eof -->
+<p><address><hr><div align=center>
+<table width=100% cellspacing=0 border=0><tr>
+<td>Copyright &copy; 2007
+<a href="troll.html">Trolltech</a><td align=center><a href="trademarks.html">Trademarks</a>
+<td align=right><div align=right>Qt 3.3.8</div>
+</table></div></address></body>
+</html>

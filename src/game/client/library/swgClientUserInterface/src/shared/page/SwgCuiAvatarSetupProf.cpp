@@ -201,17 +201,16 @@ void SwgCuiAvatarSetupProf::performActivate ()
 		PlayerCreationManager::StringVector sv;
 
 		PlayerCreationManager::getProfessionVector (sv, "");
-		
 		WARNING (sv.empty (), ("No professions available"));
 
 		int numProfessions = 0;
 		if (CuiLoginManager::canCreateRegularCharacter())
 			numProfessions += sv.size() - 1;
-		
+
 		m_creatures->reserve(numProfessions);
-		
+
 		int indexSelection = 0;
-		
+
 		SwgCuiAvatarCreationHelper::CreatureVector cv;
 		SwgCuiAvatarCreationHelper::getCreaturesFromPool (cv, static_cast<int>(sv.size ()));
 		
@@ -746,7 +745,7 @@ void SwgCuiAvatarSetupProf::finishAndCreateCharacter()
 
 	Unicode::String playerName;
 
-	if (!player)		
+	if (!player)
 	{
 		if (!SwgCuiAvatarCreationHelper::wasLastCreationAutomatic(playerName))
 		{
@@ -762,10 +761,17 @@ void SwgCuiAvatarSetupProf::finishAndCreateCharacter()
 	SwgCuiAvatarCreationHelper::purgeExtraPoolMembers();
 	SwgCuiAvatarCreationHelper::setCreatureCustomized(true);
 
-	if (SwgCuiAvatarCreationHelper::finishCreation())
-	{
-		deactivate();
-	}
+	// In the post-NGE simplified flow this called finishCreation() directly,
+	// which sends ClientCreateCharacter immediately. But the creature has no
+	// object name yet (name input is on the AvatarSummary page in the
+	// NGE-retail UI), so the server's ConnectionServer handler silently
+	// disconnects with "tried to create a character with no name."
+	// (See ClientConnection.cpp:939.) Route through AvatarSummary so the
+	// user enters/confirms a name; that page's Next button calls
+	// finishCreation itself.
+	CuiTransition::startTransition(CuiMediatorTypes::AvatarSetupProf, CuiMediatorTypes::AvatarSummary);
+	//if (SwgCuiAvatarCreationHelper::finishCreation())
+	//	deactivate();
 }
 
 //----------------------------------------------------------------------

@@ -128,6 +128,13 @@ namespace GraphicsNamespace
 	float                                     ms_contrast = Graphics::getDefaultContrast();
 	float                                     ms_gamma = Graphics::getDefaultGamma();
 
+	// UI canvas scale (set by CuiManager::install from [ClientUserInterface]
+	// uiScale in client.cfg). 1.0 = no scaling. See Graphics.h for full
+	// semantics. Stored here in Graphics so MouseCursor, SwgCuiInventory,
+	// SwgCuiNotifications etc. can query without circular deps on
+	// clientUserInterface.
+	float                                     ms_uiCanvasScale = 1.0f;
+
 	int                                       ms_screenShotFormat = static_cast<int>(GSSF_jpg);
 	int                                       ms_screenShotQuality = 100;
 
@@ -206,8 +213,22 @@ bool Graphics::install()
 		ms_rasterMajor = 5;
 	}
 
-	if (ms_rasterMajor >= 5 && ms_rasterMajor <= 7)
+	if (ms_rasterMajor == 0)
 	{
+		// rasterMajor=0 selects the Headless stub graphics driver (gl00_r.dll).
+		// No DX path is enabled; the renderer is a no-op.
+		GraphicsOptionTags::set(TAG_DX8, false);
+		GraphicsOptionTags::set(TAG_DX9, false);
+	}
+	else if (ms_rasterMajor >= 5 && ms_rasterMajor <= 7)
+	{
+		GraphicsOptionTags::set(TAG_DX8, false);
+		GraphicsOptionTags::set(TAG_DX9, true);
+	}
+	else if (ms_rasterMajor == 11)
+	{
+		// DX11 backend (gl11_r.dll). Shader-capable path; reuse the DX9 option
+		// tag so the engine keeps shader features (DOT3 / POST / HEAT) enabled.
 		GraphicsOptionTags::set(TAG_DX8, false);
 		GraphicsOptionTags::set(TAG_DX9, true);
 	}
@@ -435,6 +456,32 @@ int Graphics::getFrameBufferMaxWidth()
 int Graphics::getFrameBufferMaxHeight()
 {
 	return ms_frameBufferMaxHeight;
+}
+
+// ----------------------------------------------------------------------
+
+float Graphics::getUiCanvasScale()
+{
+	return ms_uiCanvasScale;
+}
+
+void Graphics::setUiCanvasScale(float scale)
+{
+	// Mirror the clamp in CuiManager::install -- defense in depth in case
+	// something else tries to set this directly.
+	if (scale < 0.5f) scale = 0.5f;
+	if (scale > 4.0f) scale = 4.0f;
+	ms_uiCanvasScale = scale;
+}
+
+int Graphics::getUiCanvasWidth()
+{
+	return static_cast<int>(static_cast<float>(ms_frameBufferMaxWidth) / ms_uiCanvasScale);
+}
+
+int Graphics::getUiCanvasHeight()
+{
+	return static_cast<int>(static_cast<float>(ms_frameBufferMaxHeight) / ms_uiCanvasScale);
 }
 
 // ----------------------------------------------------------------------

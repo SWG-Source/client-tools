@@ -247,77 +247,102 @@ m_radarSkinLargeWidth  (0)
 	getCodeDataObject (TUICheckbox, m_conModeCheckbox,    "conMode");
 	
 	UIImage * iconImage = 0;
-	getCodeDataObject (TUIImage,    iconImage,          "iconImage");
-	m_iconImage = NON_NULL (dynamic_cast<UIImage *>(iconImage->DuplicateObject ()));
-	iconImage->SetVisible (false);
-	
+	getCodeDataObject (TUIImage,    iconImage,          "iconImage", true);
+	if (iconImage)
+	{
+		m_iconImage = dynamic_cast<UIImage *>(iconImage->DuplicateObject ());
+		iconImage->SetVisible (false);
+	}
+
 	UIImage * arrowImage = 0;
 	UIImage * arrowWaypointImage = 0;
 	UIImage * arrowBracket       = 0;
 	UIImage * arrowGroupImage    = 0;
-	
-	getCodeDataObject (TUIImage,     arrowImage,               "arrow");
-	getCodeDataObject (TUIImage,     arrowWaypointImage,       "arrowWaypoint");
-	getCodeDataObject (TUIImage,     arrowBracket,             "arrowBracket");
-	getCodeDataObject (TUIImage,     arrowGroupImage,          "arrowGroup");
-	
-	UIColorEffector * effectorWaypoint = 0;
-	getCodeDataObject (TUIColorEffector,     effectorWaypoint,             "effectorWaypoint");
-	
-	arrowWaypointImage->ExecuteEffector (*effectorWaypoint);
 
-	arrowImage->SetVisible         (false);
-	arrowWaypointImage->SetVisible (false);
-	arrowBracket->SetVisible       (false);
-	arrowGroupImage->SetVisible    (false);
-	
-	m_textLong->SetPreLocalized (true);
-	m_textHeight->SetPreLocalized  (true);
-	m_textLat->SetPreLocalized  (true);
-	
-	getPage ().SetVisible (true); 
-	
+	getCodeDataObject (TUIImage,     arrowImage,               "arrow", true);
+	getCodeDataObject (TUIImage,     arrowWaypointImage,       "arrowWaypoint", true);
+	getCodeDataObject (TUIImage,     arrowBracket,             "arrowBracket", true);
+	getCodeDataObject (TUIImage,     arrowGroupImage,          "arrowGroup", true);
+
+	UIColorEffector * effectorWaypoint = 0;
+	getCodeDataObject (TUIColorEffector,     effectorWaypoint,             "effectorWaypoint", true);
+
+	if (arrowWaypointImage && effectorWaypoint)
+		arrowWaypointImage->ExecuteEffector (*effectorWaypoint);
+
+	if (arrowImage)         arrowImage->SetVisible         (false);
+	if (arrowWaypointImage) arrowWaypointImage->SetVisible (false);
+	if (arrowBracket)       arrowBracket->SetVisible       (false);
+	if (arrowGroupImage)    arrowGroupImage->SetVisible    (false);
+
+	if (m_textLong)   m_textLong->SetPreLocalized (true);
+	if (m_textHeight) m_textHeight->SetPreLocalized  (true);
+	if (m_textLat)    m_textLat->SetPreLocalized  (true);
+
+	getPage ().SetVisible (true);
+
 	setLockedAspectRatio (UIFloatPoint::one);
-	
-	UIPage * const blipPaneParent = safe_cast<UIPage *>(arrowImage->GetParentWidget ());
-	blipPaneParent->SetVisible (false);
-	
-	m_waypointPane = new WaypointPane (*m_groundRadar, *arrowImage, *arrowWaypointImage, *arrowGroupImage, *arrowBracket);
-	m_pageSquare->InsertChildBefore (m_waypointPane, blipPaneParent);
-	
+
+	UIPage * blipPaneParent = 0;
+	if (arrowImage)
+	{
+		blipPaneParent = safe_cast<UIPage *>(arrowImage->GetParentWidget ());
+		if (blipPaneParent)
+			blipPaneParent->SetVisible (false);
+	}
+
+	if (m_groundRadar && arrowImage && arrowWaypointImage && arrowGroupImage && arrowBracket)
+	{
+		m_waypointPane = new WaypointPane (*m_groundRadar, *arrowImage, *arrowWaypointImage, *arrowGroupImage, *arrowBracket);
+		if (m_pageSquare && blipPaneParent)
+			m_pageSquare->InsertChildBefore (m_waypointPane, blipPaneParent);
+		m_waypointPane->SetLocation(m_groundRadar->GetLocation());
+		m_waypointPane->SetSize(m_groundRadar->GetSize());
+	}
+	else
+	{
+		WARNING(true, ("SwgCuiGroundRadar: missing arrow/waypoint widgets, skipping waypoint/blip pane creation"));
+	}
+
 	Unicode::String tmp;
-	
-	m_waypointPane->SetLocation(m_groundRadar->GetLocation());
-	m_waypointPane->SetSize(m_groundRadar->GetSize());
-	
+
+	if (m_waypointPane && m_groundRadar)
 	{
 		UIImage * blip          = 0;
 		UIImage * blipCorpse    = 0;
 		UIImage * blipWaypoint  = 0;
 		UIImage * blipStructure = 0;
 		UIImage * blipBracket   = 0;
-		UIImage * blipGroup     = 0;		
+		UIImage * blipGroup     = 0;
 		UIImage * blipRing      = 0;
 		UIImage * blipEntrance  = 0;
 
-		getCodeDataObject (TUIImage, blip,          "blipDefault");
-		getCodeDataObject (TUIImage, blipCorpse,    "blipCorpse");
-		getCodeDataObject (TUIImage, blipWaypoint,  "blipWaypoint");
-		getCodeDataObject (TUIImage, blipStructure, "blipStructure");
-		getCodeDataObject (TUIImage, blipBracket,   "blipBracket");
-		getCodeDataObject (TUIImage, blipGroup,     "blipGroup");
-		getCodeDataObject (TUIImage, blipRing,      "blipRing");
-		getCodeDataObject (TUIImage, blipEntrance,  "blipEntrance");
+		getCodeDataObject (TUIImage, blip,          "blipDefault",  true);
+		getCodeDataObject (TUIImage, blipCorpse,    "blipCorpse",   true);
+		getCodeDataObject (TUIImage, blipWaypoint,  "blipWaypoint", true);
+		getCodeDataObject (TUIImage, blipStructure, "blipStructure",true);
+		getCodeDataObject (TUIImage, blipBracket,   "blipBracket",  true);
+		getCodeDataObject (TUIImage, blipGroup,     "blipGroup",    true);
+		getCodeDataObject (TUIImage, blipRing,      "blipRing",     true);
+		getCodeDataObject (TUIImage, blipEntrance,  "blipEntrance", true);
 
-		blipWaypoint->ExecuteEffector (*effectorWaypoint);
-		
-		BlipPane * const blipPane = new BlipPane (*m_groundRadar, *blip, *blipCorpse, *blipWaypoint, *blipStructure, *blipBracket, *blipGroup, *blipRing, *blipEntrance, *m_waypointPane, getConMode());
-		m_pageSquare->InsertChildAfter (blipPane, m_waypointPane);
-		m_blipPane = blipPane;
+		if (blipWaypoint && effectorWaypoint)
+			blipWaypoint->ExecuteEffector (*effectorWaypoint);
 
-		m_blipPane->SetLocation(m_groundRadar->GetLocation());
-		m_blipPane->SetSize(m_groundRadar->GetSize());
+		if (blip && blipCorpse && blipWaypoint && blipStructure && blipBracket && blipGroup && blipRing && blipEntrance)
+		{
+			BlipPane * const blipPane = new BlipPane (*m_groundRadar, *blip, *blipCorpse, *blipWaypoint, *blipStructure, *blipBracket, *blipGroup, *blipRing, *blipEntrance, *m_waypointPane, getConMode());
+			if (m_pageSquare)
+				m_pageSquare->InsertChildAfter (blipPane, m_waypointPane);
+			m_blipPane = blipPane;
 
+			m_blipPane->SetLocation(m_groundRadar->GetLocation());
+			m_blipPane->SetSize(m_groundRadar->GetSize());
+		}
+		else
+		{
+			WARNING(true, ("SwgCuiGroundRadar: missing blip widgets, skipping blip pane creation"));
+		}
 	}
 
 	//----------------------------------------------------------------------
@@ -329,11 +354,14 @@ m_radarSkinLargeWidth  (0)
 	icon->SetBackgroundColor (UIColor (0, 0, 0, 50));
 	icon->SetLocation (0, 64);
 
-	m_iconImage->SetSize (icon->GetSize ());
-	m_iconImage->SetLocation (0, 0);
-	m_iconImage->SetProperty (UIWidget::PropertyName::PackSize, Unicode::narrowToWide ("1,1"));
-	icon->AddChild (m_iconImage);
-	m_iconImage->Link ();
+	if (m_iconImage)
+	{
+		m_iconImage->SetSize (icon->GetSize ());
+		m_iconImage->SetLocation (0, 0);
+		m_iconImage->SetProperty (UIWidget::PropertyName::PackSize, Unicode::narrowToWide ("1,1"));
+		icon->AddChild (m_iconImage);
+		m_iconImage->Link ();
+	}
 
 	setIcon (icon);
 
@@ -346,11 +374,11 @@ m_radarSkinLargeWidth  (0)
 	CuiActionManager::addAction (SwgCuiActions::radarConMode,          m_action, false);
 	CuiActionManager::addAction (SwgCuiActions::radarAlwaysShowRange,  m_action, false);
 
-	registerMediatorObject (*m_topZoomButton,    true);
-	registerMediatorObject (*m_bottomZoomButton, true);
-	registerMediatorObject (*m_conModeCheckbox,    true);
+	if (m_topZoomButton)    registerMediatorObject (*m_topZoomButton,    true);
+	if (m_bottomZoomButton) registerMediatorObject (*m_bottomZoomButton, true);
+	if (m_conModeCheckbox)  registerMediatorObject (*m_conModeCheckbox,  true);
 	registerMediatorObject (getPage (),          true);
-	
+
 	//-----------------------------------------------------------------
 	// one time loading of the per-planet radar min/max range list
 
@@ -358,17 +386,17 @@ m_radarSkinLargeWidth  (0)
 
 	getPage().SetLockDiagonal(true);
 
-	m_radarSkinSmall->GetPropertyInteger(UILowerString("SkinWidth"), m_radarSkinSmallWidth);
-	m_radarSkinMedium->GetPropertyInteger(UILowerString("SkinWidth"), m_radarSkinMediumWidth);
-	m_radarSkinLarge->GetPropertyInteger(UILowerString("SkinWidth"), m_radarSkinLargeWidth);
+	if (m_radarSkinSmall)  m_radarSkinSmall->GetPropertyInteger(UILowerString("SkinWidth"), m_radarSkinSmallWidth);
+	if (m_radarSkinMedium) m_radarSkinMedium->GetPropertyInteger(UILowerString("SkinWidth"), m_radarSkinMediumWidth);
+	if (m_radarSkinLarge)  m_radarSkinLarge->GetPropertyInteger(UILowerString("SkinWidth"), m_radarSkinLargeWidth);
 
-	m_radarSkinSmall->SetVisible(false);
-	m_radarSkinMedium->SetVisible(false);
-	m_radarSkinLarge->SetVisible(false);
+	if (m_radarSkinSmall)        m_radarSkinSmall->SetVisible(false);
+	if (m_radarSkinMedium)       m_radarSkinMedium->SetVisible(false);
+	if (m_radarSkinLarge)        m_radarSkinLarge->SetVisible(false);
 
-	m_radarCompassTopSmall->SetVisible(false);
-	m_radarCompassTopMedium->SetVisible(false);
-	m_radarCompassTopLarge->SetVisible(false);
+	if (m_radarCompassTopSmall)  m_radarCompassTopSmall->SetVisible(false);
+	if (m_radarCompassTopMedium) m_radarCompassTopMedium->SetVisible(false);
+	if (m_radarCompassTopLarge)  m_radarCompassTopLarge->SetVisible(false);
 
 	getPage().GetPropertyInteger(UILowerString("RadarToParentOffset"), m_radarToParentOffset);
 }
@@ -574,13 +602,14 @@ void  SwgCuiGroundRadar::updateRadar (const Vector & pos, const ClientProcedural
 
 void SwgCuiGroundRadar::setAngle (float theta, bool force)
 {
-	m_groundRadar->setAngle (theta, force);
+	if (m_groundRadar)
+		m_groundRadar->setAngle (theta, force);
 	static const float ONE_OVER_PI_TIMES_2 = RECIP (PI_TIMES_2);
 
 	const float uiRotation = - theta * ONE_OVER_PI_TIMES_2;
-	m_radarCompass->SetRotation    (uiRotation);
-	m_radarCompassTop->SetRotation (uiRotation);
-	m_iconImage->SetRotation       (uiRotation);
+	if (m_radarCompass)    m_radarCompass->SetRotation (uiRotation);
+	if (m_radarCompassTop) m_radarCompassTop->SetRotation (uiRotation);
+	if (m_iconImage)       m_iconImage->SetRotation (uiRotation);
 }
 
 //-----------------------------------------------------------------
@@ -704,42 +733,51 @@ void SwgCuiGroundRadar::update             (float deltaTimeSecs)
 {
 	CuiMediator::update (deltaTimeSecs);
 
+	if (!m_groundRadar)
+		return;
+
 	getPage().SetResizeInset( static_cast<unsigned char>((getPage().GetWidth() - m_groundRadar->GetWidth()) / 2) );
 
-	m_blipPane->SetVisible(true);
-	m_waypointPane->SetVisible(true);
-	m_blipPane->SetLocation(m_groundRadar->GetLocation());
-	m_blipPane->SetSize(m_groundRadar->GetSize());
-	m_waypointPane->SetLocation(m_groundRadar->GetLocation());
-	m_waypointPane->SetSize(m_groundRadar->GetSize());
+	if (m_blipPane)
+	{
+		m_blipPane->SetVisible(true);
+		m_blipPane->SetLocation(m_groundRadar->GetLocation());
+		m_blipPane->SetSize(m_groundRadar->GetSize());
+	}
+	if (m_waypointPane)
+	{
+		m_waypointPane->SetVisible(true);
+		m_waypointPane->SetLocation(m_groundRadar->GetLocation());
+		m_waypointPane->SetSize(m_groundRadar->GetSize());
+	}
 
 	int radarWidth = m_groundRadar->GetWidth();
 	if(radarWidth < (m_radarSkinSmallWidth + m_radarSkinMediumWidth) / 2)
 	{
-		m_radarSkinSmall->SetVisible(true);
-		m_radarSkinMedium->SetVisible(false);
-		m_radarSkinLarge->SetVisible(false);
-		m_radarCompassTopSmall->SetVisible(true);
-		m_radarCompassTopMedium->SetVisible(false);
-		m_radarCompassTopLarge->SetVisible(false);
+		if (m_radarSkinSmall)        m_radarSkinSmall->SetVisible(true);
+		if (m_radarSkinMedium)       m_radarSkinMedium->SetVisible(false);
+		if (m_radarSkinLarge)        m_radarSkinLarge->SetVisible(false);
+		if (m_radarCompassTopSmall)  m_radarCompassTopSmall->SetVisible(true);
+		if (m_radarCompassTopMedium) m_radarCompassTopMedium->SetVisible(false);
+		if (m_radarCompassTopLarge)  m_radarCompassTopLarge->SetVisible(false);
 	}
 	else if(radarWidth < (m_radarSkinMediumWidth + m_radarSkinLargeWidth) / 2)
 	{
-		m_radarSkinSmall->SetVisible(false);
-		m_radarSkinMedium->SetVisible(true);
-		m_radarSkinLarge->SetVisible(false);
-		m_radarCompassTopSmall->SetVisible(false);
-		m_radarCompassTopMedium->SetVisible(true);
-		m_radarCompassTopLarge->SetVisible(false);
+		if (m_radarSkinSmall)        m_radarSkinSmall->SetVisible(false);
+		if (m_radarSkinMedium)       m_radarSkinMedium->SetVisible(true);
+		if (m_radarSkinLarge)        m_radarSkinLarge->SetVisible(false);
+		if (m_radarCompassTopSmall)  m_radarCompassTopSmall->SetVisible(false);
+		if (m_radarCompassTopMedium) m_radarCompassTopMedium->SetVisible(true);
+		if (m_radarCompassTopLarge)  m_radarCompassTopLarge->SetVisible(false);
 	}
 	else
 	{
-		m_radarSkinSmall->SetVisible(false);
-		m_radarSkinMedium->SetVisible(false);
-		m_radarSkinLarge->SetVisible(true);
-		m_radarCompassTopSmall->SetVisible(false);
-		m_radarCompassTopMedium->SetVisible(false);
-		m_radarCompassTopLarge->SetVisible(true);
+		if (m_radarSkinSmall)        m_radarSkinSmall->SetVisible(false);
+		if (m_radarSkinMedium)       m_radarSkinMedium->SetVisible(false);
+		if (m_radarSkinLarge)        m_radarSkinLarge->SetVisible(true);
+		if (m_radarCompassTopSmall)  m_radarCompassTopSmall->SetVisible(false);
+		if (m_radarCompassTopMedium) m_radarCompassTopMedium->SetVisible(false);
+		if (m_radarCompassTopLarge)  m_radarCompassTopLarge->SetVisible(true);
 	}
 
 
@@ -888,15 +926,17 @@ void SwgCuiGroundRadar::OnWidgetRectChanging (UIWidget * context, UIRect & targe
 {
 	if(context == &getPage())
 	{
-		positionWidgetAroundRadarWithRect(m_conModeCheckbox, CON_MODE_ANGLE, targetRect);
-		positionWidgetAroundRadarWithRect(m_topZoomButton, ZOOM_TOP_ANGLE, targetRect);
-		positionWidgetAroundRadarWithRect(m_bottomZoomButton, ZOOM_BOTTOM_ANGLE, targetRect);
-		m_blipPane->SetVisible(false);
-		m_waypointPane->SetVisible(false);
+		if (m_conModeCheckbox)  positionWidgetAroundRadarWithRect(m_conModeCheckbox, CON_MODE_ANGLE, targetRect);
+		if (m_topZoomButton)    positionWidgetAroundRadarWithRect(m_topZoomButton, ZOOM_TOP_ANGLE, targetRect);
+		if (m_bottomZoomButton) positionWidgetAroundRadarWithRect(m_bottomZoomButton, ZOOM_BOTTOM_ANGLE, targetRect);
+		if (m_blipPane)         m_blipPane->SetVisible(false);
+		if (m_waypointPane)     m_waypointPane->SetVisible(false);
 	}
 }
 void SwgCuiGroundRadar::positionWidgetAroundRadarWithRect(UIWidget *widget, double angle, UIRect & targetRect)
 {
+	if (!widget || !m_groundRadar || m_radarSkinSmallWidth == 0)
+		return;
 	int radarToParentOffset = (m_radarToParentOffset * m_groundRadar->GetWidth()) / m_radarSkinSmallWidth;
 	if(targetRect.right < targetRect.left + m_radarSkinSmallWidth + m_radarToParentOffset * 2)
 		targetRect.right = targetRect.left + m_radarSkinSmallWidth + m_radarToParentOffset * 2;

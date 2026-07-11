@@ -27,17 +27,17 @@ public:
 
 public:
 
-	real w;
-	real x;
-	real y;
-	real z;
+	float w;
+	float x;
+	float y;
+	float z;
 
 public:
 
 	Quaternion(void);
 	explicit Quaternion(const Transform &transform);
-	Quaternion(real angle, const Vector &vector);
-	Quaternion(real newW, real newX, real newY, real newZ);
+	Quaternion(float angle, const Vector &vector);
+	Quaternion(float newW, float newX, float newY, float newZ);
 	~Quaternion(void);
 
 	bool               operator ==(const Quaternion &rhs);
@@ -54,16 +54,16 @@ public:
 
 	void               getTransform(Transform *transform) const;
 	void               getTransformPreserveTranslation(Transform *transform) const;
-	real               getMagnitudeSquared(void) const;
+	float               getMagnitudeSquared(void) const;
 
-	const Quaternion   slerp(const Quaternion &other, real fractionOfOther) const;
+	const Quaternion   slerp(const Quaternion &other, float fractionOfOther) const;
 
 	void               normalize(void);
 
 	Quaternion         getComplexConjugate() const;
 
 	void               debugDump() const;
-	real dot(Quaternion const & rhs) const;
+	float dot(Quaternion const & rhs) const;
 };
 
 // ======================================================================
@@ -98,7 +98,7 @@ inline bool Quaternion::operator !=(const Quaternion &rhs)
 }
 
 
-inline real Quaternion::dot(Quaternion const & rhs) const
+inline float Quaternion::dot(Quaternion const & rhs) const
 {
 	return w * rhs.w + x * rhs.x + y * rhs.y + z * rhs.z;
 }

@@ -1007,8 +1007,11 @@ void ClientProceduralTerrainAppearance::retrieveCompletedChunkCreationRequests (
 
 //-----------------------------------------------------------------
 
-struct MapFinder : public std::unary_function <ClientProceduralTerrainAppearance::ChunkRequestInfoMap::value_type, bool>
+struct MapFinder
 {
+	using argument_type = ClientProceduralTerrainAppearance::ChunkRequestInfoMap::value_type;
+	using result_type = bool;
+
 	const ClientProceduralTerrainAppearance::ChunkRequestInfo * m;
 
 	inline result_type operator () (const argument_type & rhs) const

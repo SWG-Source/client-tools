@@ -34,7 +34,7 @@
 #include "ConfigGodClient.h"
 #include "MainFrame.h"
 #include "ServerObjectData.h"
-#include <hash_set>
+#include <unordered_Set>
 #include <string>
 
 // ======================================================================
@@ -54,7 +54,7 @@ namespace BuildoutAreaSupportNamespace
 	bool s_unlockAll = false;
 	bool s_unlockNonStructures = false;
 	bool s_unlockServerOnly = false;
-	std::hash_set<int> s_unlockedIds;
+	std::unordered_set<int> s_unlockedIds;
 
 	typedef std::map< NetworkId, const BuildoutArea * > AreaIdMap;
 	AreaIdMap          s_areaIdMap;
@@ -205,7 +205,7 @@ void BuildoutAreaSupport::getBuildoutAreaList(std::string const &sceneName, std:
 				if (!found)
 				{
 					areaNames.push_back(name);
-					areaLocations.push_back();
+					areaLocations.push_back(std::string());
 					areaStatuses.push_back("Inactive");
 				}
 			}
@@ -456,7 +456,7 @@ Object* BuildoutAreaSupport::createNewObject(CrcString const &templateName, Cell
 				++rowIter;
 		}
 
-		ServerBuildoutAreaRow &serverRow = *(cachedBuildoutArea->serverRows.insert(rowIter));
+		ServerBuildoutAreaRow &serverRow = *(cachedBuildoutArea->serverRows.insert(rowIter, ServerBuildoutAreaRow()));
 
 		serverRow.id = newId;
 		serverRow.container = container ? container->getNetworkId().getValue() : 0;
@@ -476,7 +476,7 @@ Object* BuildoutAreaSupport::createNewObject(CrcString const &templateName, Cell
 
 		for (int cell = 0; cell < cellCount; ++cell)
 		{
-			ServerBuildoutAreaRow &serverRow = *( cachedBuildoutArea->serverRows.insert( cachedBuildoutArea->serverRows.end() ) );
+			ServerBuildoutAreaRow &serverRow = *( cachedBuildoutArea->serverRows.insert( cachedBuildoutArea->serverRows.end(), ServerBuildoutAreaRow() ) );
 
 			serverRow.id = newId+cell+1;
 			serverRow.container = newId;
@@ -496,7 +496,7 @@ Object* BuildoutAreaSupport::createNewObject(CrcString const &templateName, Cell
 			while (rowIter != cachedBuildoutArea->clientRows.end() && (*rowIter).cellIndex)
 				++rowIter;
 		}
-		ClientBuildoutAreaRow &clientRow = *(cachedBuildoutArea->clientRows.insert(rowIter));
+		ClientBuildoutAreaRow &clientRow = *(cachedBuildoutArea->clientRows.insert(rowIter, ClientBuildoutAreaRow()));
 
 		clientRow.id = newId;
 		clientRow.container = container ? container->getNetworkId().getValue() : 0;
@@ -509,7 +509,7 @@ Object* BuildoutAreaSupport::createNewObject(CrcString const &templateName, Cell
 
 		for (int cell = 0; cell < cellCount; ++cell)
 		{
-			cachedBuildoutArea->clientRows.push_back();
+			cachedBuildoutArea->clientRows.push_back(ClientBuildoutAreaRow());
 			ClientBuildoutAreaRow &clientRow = cachedBuildoutArea->clientRows.back();
 
 			clientRow.id = newId+cell+1;
@@ -1154,7 +1154,7 @@ CachedBuildoutArea *BuildoutAreaSupportNamespace::loadBuildoutArea(BuildoutArea 
 
 			for (int buildoutRow = 0; buildoutRow < buildoutRowCount; ++buildoutRow)
 			{
-				cachedBuildoutArea.serverRows.push_back();
+				cachedBuildoutArea.serverRows.push_back(ServerBuildoutAreaRow());
 				ServerBuildoutAreaRow &serverBuildoutAreaRow = cachedBuildoutArea.serverRows.back();
 
 
@@ -1273,7 +1273,7 @@ CachedBuildoutArea *BuildoutAreaSupportNamespace::loadBuildoutArea(BuildoutArea 
 
 			for (int buildoutRow = 0; buildoutRow < buildoutRowCount; ++buildoutRow)
 			{
-				cachedBuildoutArea.clientRows.push_back();
+				cachedBuildoutArea.clientRows.push_back(ClientBuildoutAreaRow());
 				ClientBuildoutAreaRow &clientBuildoutAreaRow = cachedBuildoutArea.clientRows.back();
 
 				clientBuildoutAreaRow.sharedTemplateCrc = static_cast<uint32>(areaBuildoutTable.getIntValue(sharedTemplateCrcColumn, buildoutRow));

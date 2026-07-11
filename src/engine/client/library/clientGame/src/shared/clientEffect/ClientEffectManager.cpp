@@ -1224,7 +1224,7 @@ void ClientEffectManager::createClientTrackingProjectileObjectToObject(std::stri
 
 // ----------------------------------------------------------------------
 
-void ClientEffectManager::createClientTrackingProjectileObjectToLocation(const _STL::string &weaponObjectTemplateName, const CellProperty *const cellProperty, const Object &source, const _STL::string &sourceHardpoint, const Vector &endLoc, const float speed, const float expiration, const bool hasTrail, const uint32 trailArgb)
+void ClientEffectManager::createClientTrackingProjectileObjectToLocation(const std::string &weaponObjectTemplateName, const CellProperty *const cellProperty, const Object &source, const std::string &sourceHardpoint, const Vector &endLoc, const float speed, const float expiration, const bool hasTrail, const uint32 trailArgb)
 {
 	if (!cellProperty)
 		return;
@@ -1287,7 +1287,7 @@ void ClientEffectManager::createClientTrackingProjectileObjectToLocation(const _
 
 // ----------------------------------------------------------------------
 
-void ClientEffectManager::createClientTrackingProjectileLocationToObject(const _STL::string &weaponObjectTemplateName, const CellProperty *const cellProperty, const Vector &startLoc, const Object &target, const _STL::string &targetHardpoint, const float speed, const float expiration, const bool hasTrail, const uint32 trailArgb)
+void ClientEffectManager::createClientTrackingProjectileLocationToObject(const std::string &weaponObjectTemplateName, const CellProperty *const cellProperty, const Vector &startLoc, const Object &target, const std::string &targetHardpoint, const float speed, const float expiration, const bool hasTrail, const uint32 trailArgb)
 {
 	if (!cellProperty)
 		return;

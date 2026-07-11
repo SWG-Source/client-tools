@@ -1,4 +1,4 @@
-// ======================================================================
+﻿// ======================================================================
 //
 // CitizenRankDataTable.cpp
 // Copyright 2006 Sony Online Entertainment LLC (SOE)
@@ -59,9 +59,9 @@ void CitizenRankDataTable::install()
 			columnAlternateTitle.push_back(columnNumber);
 		}
 
-		FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_citizenRankDataTableName));
-		FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_citizenRankDataTableName));
-		FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_citizenRankDataTableName));
+		DEBUG_FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_citizenRankDataTableName));
+		DEBUG_FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_citizenRankDataTableName));
+		DEBUG_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_citizenRankDataTableName));
 
 		CitizenRankDataTable::CitizenRank const * currentRank = NULL;
 
@@ -150,7 +150,7 @@ void CitizenRankDataTable::install()
 	}
 	else
 	{
-		FATAL(true, ("citizen rank datatable %s not found", cs_citizenRankDataTableName));
+		DEBUG_WARNING(true, ("citizen rank datatable %s not found - feature disabled (likely NGE-retail TRE pack pre-dates it).\n", cs_citizenRankDataTableName));
 	}
 
 	ExitChain::add(remove, "CitizenRankDataTable::remove");

@@ -343,7 +343,7 @@ void CuiAuctionManager::handleGenericSell    (const NetworkId & itemId, int pric
 				for (std::vector<Unicode::String>::const_iterator iter = decodedComponents.begin(); iter != decodedComponents.end(); ++iter)
 				{
 					if (itemLocalizedName.size() > 0)
-						itemLocalizedName += uint16(0);
+						itemLocalizedName += wchar_t(0);
 
 					itemLocalizedName += *iter;
 				}

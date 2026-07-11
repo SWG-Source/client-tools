@@ -38,6 +38,9 @@ public:
 
 	static IDirect3DTexture9 *create2dTexture(int width, int height, int mipmapLevelCount, TextureFormat textureFormat);
 
+	// MEMPROBE: live D3D texture instance count (leak diagnostic). Strip with MEMPROBE.
+	static int getLiveInstanceCount();
+
 public:
 
 	Direct3d9_TextureData(const Texture &newEngineTexture, const TextureFormat *runtimeFormats, int numberOfRuntimeFormats);

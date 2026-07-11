@@ -162,18 +162,18 @@ namespace Archive
 	{
 		if (onChangedCallback && onChangedCallback->first)
 		{
-			ObjectType &owner = *onChangedCallback->first;
+			ObjectType &ownerObj = *onChangedCallback->first;
 			void (ObjectType::*cb)() = onChangedCallback->second;
-			(owner.*cb)();
+			(ownerObj.*cb)();
 		}
 	}
 
 	template<class KeyType, typename ValueType, typename ObjectType>
-	inline void AutoDeltaPackedMap<KeyType, ValueType, ObjectType>::setOnChanged(ObjectType * owner, void (ObjectType::*cb)())
+	inline void AutoDeltaPackedMap<KeyType, ValueType, ObjectType>::setOnChanged(ObjectType * ownerObj, void (ObjectType::*cb)())
 	{
 		delete onChangedCallback;
 		onChangedCallback = new std::pair<ObjectType *, void (ObjectType::*)()>;
-		onChangedCallback->first = owner;
+		onChangedCallback->first = ownerObj;
 		onChangedCallback->second = cb;
 	}
 

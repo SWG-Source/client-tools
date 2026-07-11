@@ -981,8 +981,8 @@ void SwgCuiAvatarSimple::onVerifyAndLockNameFinished(const SwgCuiAvatarCreationH
 
 			if (playerAvatar->getObjectName() == playerName)
 			{
-				CreatureObject * const playerAvatar = SwgCuiAvatarCreationHelper::getCreature();
-				NOT_NULL(playerAvatar);
+				/*CreatureObject * const playerAvatar = SwgCuiAvatarCreationHelper::getCreature();
+				NOT_NULL(playerAvatar);*/
 
 				if (hasLastName)
 				{
@@ -1280,8 +1280,8 @@ void SwgCuiAvatarSimple::loadAllPlayerModelData()
 						m_hiddenAvatarList->SelectRow(i);
 					}
 
-					AvatarMap::const_iterator ii = m_avatarMap->find(templateName);
-					if (ii == m_avatarMap->end() || (*ii).second.m_creature == 0)
+					AvatarMap::const_iterator iii = m_avatarMap->find(templateName);
+					if (iii == m_avatarMap->end() || (*iii).second.m_creature == 0)
 					{
 						Avatar & avatar = (*m_avatarMap)[templateName];
 
@@ -1302,8 +1302,8 @@ void SwgCuiAvatarSimple::loadAllPlayerModelData()
 						m_hiddenAvatarList->SelectRow(i);
 					}
 
-					AvatarMap::const_iterator ii = m_avatarMap->find(templateName);
-					if (ii == m_avatarMap->end() || (*ii).second.m_creature == 0)
+					AvatarMap::const_iterator iii = m_avatarMap->find(templateName);
+					if (iii == m_avatarMap->end() || (*iii).second.m_creature == 0)
 					{
 						Avatar & avatar =(*m_avatarMap)[templateName];
 
@@ -1580,11 +1580,11 @@ void SwgCuiAvatarSimple::randomizeAppearance()
 					}
 
 					//-- don't randomize the color multiple times
-					StringIntMap::const_iterator ii = colorValues.find(group.varColors[i]);
+					StringIntMap::const_iterator iii = colorValues.find(group.varColors[i]);
 
 					int value = 0;
 
-					if (ii == colorValues.end())
+					if (iii == colorValues.end())
 					{
 						PaletteColorCustomizationVariable * const var = dynamic_cast<PaletteColorCustomizationVariable *>(CustomizationManager::findVariable(*m_cdata, group.varColors[i]));
 
@@ -1623,7 +1623,7 @@ void SwgCuiAvatarSimple::randomizeAppearance()
 					}
 					else
 					{
-						value =(*ii).second;
+						value =(*iii).second;
 					}
 
 					if (group.isColorLinkedToHair)

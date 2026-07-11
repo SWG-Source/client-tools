@@ -10,6 +10,8 @@
 #ifndef INCLUDED_FloatMath_H
 #define INCLUDED_FloatMath_H
 
+#include "sharedFoundation/Misc.h"
+
 // ======================================================================
 
 float const PI          = 3.14159265358979323846f;
@@ -151,10 +153,14 @@ inline float cot(float f)
 	return RECIP(tanf(f));
 }
 
+// Forward declare sqr in case Misc.h hasn't been seen yet
+template<class T>
+inline T sqr(const T& t);
+
 inline float GaussianDistribution(float variate, float standardDeviation, float mean)
 {
 	// equation from http://mathworld.wolfram.com/NormalDistribution.html
-	return (1.0f / (standardDeviation * sqrt(2.0f * PI))) * pow(E, -(sqr(variate - mean) / (2.0f * sqr(standardDeviation))));
+	return (1.0f / (standardDeviation * sqrt(2.0f * PI))) * pow(E, -(::sqr(variate - mean) / (2.0f * ::sqr(standardDeviation))));
 }
 
 inline float withinEpsilon(float const rhs, float const lhs, float const epsilon = 1.0e-3f)

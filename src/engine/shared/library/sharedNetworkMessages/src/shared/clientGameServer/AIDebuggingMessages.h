@@ -11,10 +11,13 @@
 //-----------------------------------------------------------------------
 
 #include "sharedMath/Vector.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "sharedMath/Transform.h"
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "sharedFoundation/NetworkId.h"
 #include "sharedMathArchive/TransformArchive.h"
+#include "sharedNetworkMessages/AIDebuggingMessagesArchive.h"
+#include "AIDebuggingMessagesArchiveTypes.h"
+#include "sharedMath/Transform.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 // ======================================================================
 
@@ -311,26 +314,6 @@ inline void AINodeInfo::setLevel(int l)
 }
 
 // ======================================================================
-
-struct AIPathInfo_NodeInfo
-{
-	int node;
-	enum eState
-	{
-		kReported=1,
-		kCanMove=2,
-		kTarget=4,
-		kPassed=8,
-		kFacingTarget=16,
-		kInCone=32,
-		kFinalTarget=64
-	};
-	eState state;
-	bool operator==(AIPathInfo_NodeInfo const &other) const
-	{
-		return node == other.node && state == other.state;
-	}
-};
 
 /**
  * This message is sent from the gameserver to the client, and represents the data about a given object's path

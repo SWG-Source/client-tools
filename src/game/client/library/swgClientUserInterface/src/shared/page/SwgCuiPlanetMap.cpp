@@ -51,6 +51,8 @@
 #include "swgClientUserInterface/SwgCuiMediatorTypes.h"
 #include <list>
 #include <map>
+#include <excpt.h>   // for EXCEPTION_EXECUTE_HANDLER; used to SEH-wrap save/loadSettings
+
 
 //======================================================================
 
@@ -204,72 +206,70 @@ m_entriesRequested         (false)
 	setState (MS_closeable);
 	setState (MS_closeDeactivates);
 
-	getCodeDataObject (TUIPage,           m_pagePlanet,            "pagePlanet");
-	getCodeDataObject (TUISliderbar,      m_sliderZoom,            "sliderZoom");
-	getCodeDataObject (TUICheckbox,       m_checkShowCities,       "checkShowCities");
-	getCodeDataObject (TUICheckbox,       m_checkShowWaypoints,    "checkShowWaypoints");
-	getCodeDataObject (TUICheckbox,       m_checkShowNames,        "checkShowNames");
-	getCodeDataObject (TUICheckbox,       m_checkShowGCWRegions,   "checkShowGCWRegions");
-	getCodeDataObject (TUITreeView,       m_treeLocations,         "treeLocations");
-	getCodeDataObject (TUIWidget,         m_iconHere,              "iconHere");
-	getCodeDataObject (TUIButton,         m_buttonSample,          "buttonSampleGeneric");
-	getCodeDataObject (TUIColorEffector,  m_effectorWaypointFlash, "effectorWaypointFlash");
+	// All widgets are optional - the post-NGE-retail UI may not have every
+	// post-launch field. Use allowFail=true on every getCodeDataObject and
+	// null-guard each subsequent access.
+	getCodeDataObject (TUIPage,           m_pagePlanet,            "pagePlanet",            true);
+	getCodeDataObject (TUISliderbar,      m_sliderZoom,            "sliderZoom",            true);
+	getCodeDataObject (TUICheckbox,       m_checkShowCities,       "checkShowCities",       true);
+	getCodeDataObject (TUICheckbox,       m_checkShowWaypoints,    "checkShowWaypoints",    true);
+	getCodeDataObject (TUICheckbox,       m_checkShowNames,        "checkShowNames",        true);
+	getCodeDataObject (TUICheckbox,       m_checkShowGCWRegions,   "checkShowGCWRegions",   true);
+	getCodeDataObject (TUITreeView,       m_treeLocations,         "treeLocations",         true);
+	getCodeDataObject (TUIWidget,         m_iconHere,              "iconHere",              true);
+	getCodeDataObject (TUIButton,         m_buttonSample,          "buttonSampleGeneric",   true);
+	getCodeDataObject (TUIColorEffector,  m_effectorWaypointFlash, "effectorWaypointFlash", true);
 
-	getCodeDataObject (TUIText,           m_textSample,            "textSample");
-	getCodeDataObject (TUIPage,           m_pageMarkers,           "pageMarkers");
-	getCodeDataObject (TUIText,           m_textPosition,          "textPosition");
-	getCodeDataObject (TUIText,           m_textHeadingRange,      "textHeadingRange");
-	
-	getCodeDataObject (TUIText,           m_textPlanetName,        "textPlanetName");
-	getCodeDataObject (TUIPage,           m_pageMaps,              "pageMaps");
+	getCodeDataObject (TUIText,           m_textSample,            "textSample",            true);
+	getCodeDataObject (TUIPage,           m_pageMarkers,           "pageMarkers",           true);
+	getCodeDataObject (TUIText,           m_textPosition,          "textPosition",          true);
+	getCodeDataObject (TUIText,           m_textHeadingRange,      "textHeadingRange",      true);
 
-	getCodeDataObject (TUIButton,         m_buttonRefresh,         "buttonRefresh");
-	getCodeDataObject (TUIButton,         m_buttonZoom,            "buttonZoom");
+	getCodeDataObject (TUIText,           m_textPlanetName,        "textPlanetName",        true);
+	getCodeDataObject (TUIPage,           m_pageMaps,              "pageMaps",              true);
+
+	getCodeDataObject (TUIButton,         m_buttonRefresh,         "buttonRefresh",         true);
+	getCodeDataObject (TUIButton,         m_buttonZoom,            "buttonZoom",            true);
 
 	const UIData * const codeData = getCodeData ();
-	NOT_NULL (codeData);
 	if (codeData)
 	{
-		if (!codeData->GetProperty (UILowerString ("IconPathInactive"), m_iconPathInactive))
-			DEBUG_FATAL (true, ("SwgCuiPlanetMap must have property IconPathInactive"));
-		if (!codeData->GetProperty (UILowerString ("IconPathActive"), m_iconPathActive))
-			DEBUG_FATAL (true, ("SwgCuiPlanetMap must have property IconPathActive"));
-
-		if (!UIManager::gUIManager ().GetObjectFromPath (Unicode::wideToNarrow (m_iconPathActive).c_str (), TUIImageStyle))
-			DEBUG_FATAL (true, ("SwgCuiPlanetMap IconPathActive [%s] not found", Unicode::wideToNarrow (m_iconPathActive).c_str ()));
-		if (!UIManager::gUIManager ().GetObjectFromPath (Unicode::wideToNarrow (m_iconPathInactive).c_str (), TUIImageStyle))
-			DEBUG_FATAL (true, ("SwgCuiPlanetMap IconPathInactive [%s] not found", Unicode::wideToNarrow (m_iconPathInactive).c_str ()));
+		// Demoted DEBUG_FATALs - missing properties shouldn't kill the client
+		IGNORE_RETURN(codeData->GetProperty (UILowerString ("IconPathInactive"), m_iconPathInactive));
+		IGNORE_RETURN(codeData->GetProperty (UILowerString ("IconPathActive"), m_iconPathActive));
 	}
 
-	m_textPosition->SetPreLocalized        (true);
-	m_textHeadingRange->SetPreLocalized    (true);
-	m_buttonSample->SetVisible             (false);
-	m_textPlanetName->SetPreLocalized      (true);
-	m_textSample->SetVisible               (false);
+	if (m_textPosition)        m_textPosition->SetPreLocalized        (true);
+	if (m_textHeadingRange)    m_textHeadingRange->SetPreLocalized    (true);
+	if (m_buttonSample)        m_buttonSample->SetVisible             (false);
+	if (m_textPlanetName)      m_textPlanetName->SetPreLocalized      (true);
+	if (m_textSample)          m_textSample->SetVisible               (false);
 
-	m_sliderZoom->SetUpperLimit (s_sliderRange);
+	if (m_sliderZoom)          m_sliderZoom->SetUpperLimit (s_sliderRange);
 
-	m_pagePlanet->SetContextCapable    (true, true);
-	m_treeLocations->SetContextCapable (true, true);
+	if (m_pagePlanet)          m_pagePlanet->SetContextCapable    (true, true);
+	if (m_treeLocations)
+	{
+		m_treeLocations->SetContextCapable (true, true);
+		m_treeLocations->ClearData ();
+	}
 
-	m_treeLocations->ClearData ();
+	if (m_sliderZoom)          registerMediatorObject (*m_sliderZoom,         true);
+	if (m_pagePlanet)          registerMediatorObject (*m_pagePlanet,         true);
+	if (m_checkShowCities)     registerMediatorObject (*m_checkShowCities,    true);
+	if (m_checkShowWaypoints)  registerMediatorObject (*m_checkShowWaypoints, true);
+	if (m_checkShowNames)      registerMediatorObject (*m_checkShowNames,     true);
+	if (m_checkShowGCWRegions) registerMediatorObject (*m_checkShowGCWRegions, true);
+	if (m_treeLocations)       registerMediatorObject (*m_treeLocations,      true);
+	if (m_buttonRefresh)       registerMediatorObject (*m_buttonRefresh,      true);
+	if (m_buttonZoom)          registerMediatorObject (*m_buttonZoom,         true);
 
-	registerMediatorObject (*m_sliderZoom,         true);
-	registerMediatorObject (*m_pagePlanet,         true);
-	registerMediatorObject (*m_checkShowCities,    true);
-	registerMediatorObject (*m_checkShowWaypoints, true);
-	registerMediatorObject (*m_checkShowNames,     true);
-	registerMediatorObject (*m_checkShowGCWRegions, true);
-	registerMediatorObject (*m_treeLocations,      true);
-	registerMediatorObject (*m_buttonRefresh,      true);
-	registerMediatorObject (*m_buttonZoom,         true);
+	if (m_checkShowNames)      m_checkShowNames->SetChecked      (false);
+	if (m_checkShowCities)     m_checkShowCities->SetChecked     (true);
+	if (m_checkShowWaypoints)  m_checkShowWaypoints->SetChecked  (true);
+	if (m_checkShowGCWRegions) m_checkShowGCWRegions->SetChecked (true);
 
-	m_checkShowNames->SetChecked      (false);
-	m_checkShowCities->SetChecked     (true);	
-	m_checkShowWaypoints->SetChecked  (true);
-	m_checkShowGCWRegions->SetChecked (true);
-
-	m_pagePlanet->SetLocalTooltip (CuiStringIdsPlanetMap::tooltip_map.localize ());
+	if (m_pagePlanet)          m_pagePlanet->SetLocalTooltip (CuiStringIdsPlanetMap::tooltip_map.localize ());
 	
 	static const std::pair<std::string, std::string> s_buttonSampleNames [] =
 	{
@@ -296,11 +296,17 @@ m_entriesRequested         (false)
 
 		UIButton * & button = (*m_sampleButtonMap) [category] = 0;
 
-		getCodeDataObject (TUIButton,         button, codeDataName.c_str ());
-		button->SetVisible (false);
+		getCodeDataObject (TUIButton,         button, codeDataName.c_str (), true);
+		if (button)
+			button->SetVisible (false);
 	}
 
-	NON_NULL (m_buttonSample->GetParentWidget ())->SetVisible (false);
+	if (m_buttonSample)
+	{
+		UIWidget * const parent = m_buttonSample->GetParentWidget ();
+		if (parent)
+			parent->SetVisible (false);
+	}
 
 	UnusedMapPixels unusedPixels;
 	ms_mapAdjustments.clear();
@@ -1369,6 +1375,10 @@ void SwgCuiPlanetMap::updateMarkers ()
 	if(m_zoomLevel == ZL_ZoneSupermap)
 		return;
 
+	// Bail if widgets are missing in post-NGE-retail UI
+	if (!m_treeLocations)
+		return;
+
 	bool isSubCategory = false;
 	bool isCategory    = false;
 
@@ -1414,15 +1424,15 @@ void SwgCuiPlanetMap::updateMarkers ()
 	}
 
 	//-- show all cities unless the player has a specific city selected
-	if (m_checkShowCities->IsChecked () && category != cityCategory)
+	if (m_checkShowCities && m_checkShowCities->IsChecked () && category != cityCategory)
 		setupMarkersForType (PlanetMapManager::getCityCategory (), 0, NetworkId::cms_invalid, false, true);
 
 	//-- show all waypoints unless the player has a specific waypoint selected
-	if (m_checkShowWaypoints->IsChecked () && category != waypointCategory)
+	if (m_checkShowWaypoints && m_checkShowWaypoints->IsChecked () && category != waypointCategory)
 		setupMarkersForType (waypointCategory, 0, NetworkId::cms_invalid, false, true);
 
 	// -- show all GCW regions
-	if (m_checkShowGCWRegions->IsChecked() && category != GCWRegionCategory)
+	if (m_checkShowGCWRegions && m_checkShowGCWRegions->IsChecked() && category != GCWRegionCategory)
 		setupMarkersForType (GCWRegionCategory, 0, NetworkId::cms_invalid, false, false);
 
 	//-- show all active waypoints if the selected treeview item is a category or subcategory or not a waypoint
@@ -1434,6 +1444,10 @@ void SwgCuiPlanetMap::updateMarkers ()
 
 void SwgCuiPlanetMap::setupMarkersForType (uint8 category, uint8 subCategory, const NetworkId & id, bool activeWaypointsOnly, bool skipActiveWaypoints, std::string const locationName)
 {
+	// Bail if widgets are missing in post-NGE-retail UI
+	if (!m_pagePlanet || !m_pageMarkers)
+		return;
+
 	UISize extent;
 	m_pagePlanet->GetScrollExtent (extent);
 
@@ -1856,22 +1870,60 @@ void SwgCuiPlanetMap::onLocationsRequested (const bool &)
 //----------------------------------------------------------------------
 
 
+// Public entry point. We've seen crashes here during mediator teardown where
+// a checkbox pointer appears non-null but is stale (e.g. the underlying UI
+// widget was freed while m_check* still holds the pointer), or the page is
+// being destroyed concurrently with the deactivate call. Wrap the real work
+// in SEH so an AV gets swallowed instead of taking down the client. The
+// __try body only contains a single function call - no local objects with
+// destructors - to satisfy MSVC's C2712 restriction.
 void SwgCuiPlanetMap::saveSettings         () const
+{
+	__try
+	{
+		saveSettingsImpl();
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		// Settings not saved. Better than crashing.
+	}
+}
+
+//----------------------------------------------------------------------
+
+void SwgCuiPlanetMap::saveSettingsImpl     () const
 {
 	CuiMediator::saveSettings ();
 
 	CuiSettings::saveString  (getMediatorDebugName (), Settings::lastSelectedLocationPath, Unicode::narrowToWide (m_lastSelectedLocationPath));
 
-	CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showCities,               m_checkShowCities->IsChecked ());
-	CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showWaypoints,            m_checkShowWaypoints->IsChecked ());
-	CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showNames,                m_checkShowNames->IsChecked ());
-	CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showGCWRregions,          m_checkShowGCWRegions->IsChecked ());
-
+	if (m_checkShowCities)
+		CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showCities,       m_checkShowCities->IsChecked ());
+	if (m_checkShowWaypoints)
+		CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showWaypoints,    m_checkShowWaypoints->IsChecked ());
+	if (m_checkShowNames)
+		CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showNames,        m_checkShowNames->IsChecked ());
+	if (m_checkShowGCWRegions)
+		CuiSettings::saveBoolean (getMediatorDebugName (), Settings::showGCWRregions,  m_checkShowGCWRegions->IsChecked ());
 }
 
 //----------------------------------------------------------------------
 
 void SwgCuiPlanetMap::loadSettings         ()
+{
+	__try
+	{
+		loadSettingsImpl();
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		// Settings not loaded - widgets keep their defaults from onCreate.
+	}
+}
+
+//----------------------------------------------------------------------
+
+void SwgCuiPlanetMap::loadSettingsImpl     ()
 {
 	CuiMediator::loadSettings ();
 
@@ -1883,16 +1935,16 @@ void SwgCuiPlanetMap::loadSettings         ()
 
 	bool tmpBool = false;
 
-	if (CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showCities,               tmpBool))
+	if (m_checkShowCities && CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showCities, tmpBool))
 		m_checkShowCities->SetChecked (tmpBool, false);
 
-	if (CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showWaypoints,            tmpBool))
+	if (m_checkShowWaypoints && CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showWaypoints, tmpBool))
 		m_checkShowWaypoints->SetChecked (tmpBool, false);
 
-	if (CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showNames,                tmpBool))
+	if (m_checkShowNames && CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showNames, tmpBool))
 		m_checkShowNames->SetChecked  (tmpBool, false);
 
-	if (CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showGCWRregions,          tmpBool))
+	if (m_checkShowGCWRegions && CuiSettings::loadBoolean (getMediatorDebugName (), Settings::showGCWRregions, tmpBool))
 		m_checkShowGCWRegions->SetChecked  (tmpBool, false);
 
 	reset ();

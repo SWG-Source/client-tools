@@ -5,10 +5,9 @@
 //
 // ======================================================================
 
+#include "SurveyMessageArchive.h"
 #include "swgSharedNetworkMessages/FirstSwgSharedNetworkMessages.h"
 #include "swgSharedNetworkMessages/SurveyMessage.h"
-
-#include "sharedMathArchive/VectorArchive.h"
 
 // ======================================================================
 
@@ -45,20 +44,6 @@ SurveyMessage::~SurveyMessage()
 const std::vector<SurveyMessage::DataItem>& SurveyMessage::getData() const
 {
 	return m_data.get();
-}
-
-// ======================================================================
-
-void Archive::put(ByteStream &target, const Survey_DataItem &data)
-{
-	put(target,data.m_location);
-	put(target,data.m_efficiency);
-}
-
-void Archive::get(ReadIterator &source, Survey_DataItem &data)
-{
-	get(source,data.m_location);
-	get(source,data.m_efficiency);
 }
 
 // ======================================================================

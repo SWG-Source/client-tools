@@ -149,15 +149,24 @@ namespace WorldSnapshotNamespace
 		//-- verify that the portal layout crcs match
 		{
 			uint32 portalLayoutCrc = 0;
-			if (!Game::getSinglePlayer() || !ConfigClientGame::getWorldSnapshotIgnorePobChanges())
+			if (PortalPropertyTemplate::extractPortalLayoutCrc (objectTemplate->getPortalLayoutFilename ().c_str (), portalLayoutCrc))
 			{
-				if (PortalPropertyTemplate::extractPortalLayoutCrc (objectTemplate->getPortalLayoutFilename ().c_str (), portalLayoutCrc))
+				if (portalLayoutCrc != static_cast<uint32> (node->getPortalLayoutCrc ()))
 				{
-					if (portalLayoutCrc != static_cast<uint32> (node->getPortalLayoutCrc ()))
-					{
-						WARNING(true, ("WorldSnapshot createObject [%s] pob crc changed from [%d] to [%d]", 
-							objectTemplate->getName(), static_cast<int>(node->getPortalLayoutCrc()), static_cast<int>(portalLayoutCrc)));
+					// POB CRC mismatch: the buildout node recorded a different .pob
+					// CRC than the .pob actually loaded from the TREs (common with a
+					// reborn client + post-NGE / upstream content). Previously this
+					// returned 0 -> the portalized BUILDING was never instantiated ->
+					// its server-sent cells couldn't bind -> black "phantom" interiors.
+					// Now: log it and PROCEED with the loaded .pob, unless the strict
+					// check is explicitly forced (worldSnapshotIgnorePobChanges=false).
+					bool const ignorePob = ConfigClientGame::getWorldSnapshotIgnorePobChanges();
+					WARNING(true, ("WorldSnapshot createObject [%s] pob crc changed from [%d] to [%d] -- %s",
+						objectTemplate->getName(), static_cast<int>(node->getPortalLayoutCrc()), static_cast<int>(portalLayoutCrc),
+						ignorePob ? "ignoring, proceeding with loaded .pob" : "STRICT, skipping object"));
 
+					if (!ignorePob)
+					{
 						objectTemplate->releaseReference ();
 						objectTemplate=0;
 
@@ -442,7 +451,7 @@ void WorldSnapshot::load (char const *sceneName)
 	if ( ConfigClientGame::getLoadBuildoutOnly() == false )
 #endif
 	{
-		if ( !ms_reader.load (sceneName))
+		if (!ms_reader.load (sceneName))
 		{
 			//-- only warn if we don't have a buildout and are not in a space scene
 			if (strncmp(sceneName, "space_", 6))

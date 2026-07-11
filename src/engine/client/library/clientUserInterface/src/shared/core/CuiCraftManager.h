@@ -198,7 +198,7 @@ public:
 	static bool isCrafting(NetworkId const & object);
 
 	static bool isCraftingStartCommand(uint32 commandHash);
-	static void CuiCraftManager::abortCraftingStart();
+	static void abortCraftingStart();
 
 
 private:

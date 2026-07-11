@@ -284,6 +284,14 @@ void  CuiLayerRenderer::renderPointsGeneric (int type, const Shader * shader, co
 	}
 
 	const real pixOffset = CuiManager::getPixelOffset ();
+	// UI scale (2026-05-16): points/lines/triangles arrive in LOGICAL UI
+	// canvas coords, but the vertex format is setTransformed -- vertices go
+	// straight to D3D as physical pixels. Multiply by getUiCanvasScale here
+	// so they land at the same physical pixel where the rest of the
+	// (Scale-transformed) UI draws. Quads (render() above) are already
+	// pre-transformed via TransformFP in UICanvas::BltFrom, so they MUST
+	// NOT be scaled again here.
+	const float uiScale = Graphics::getUiCanvasScale();
 
 	uint32 const color32 = color.convertToUint32NoClamp();
 	for (int i = 0; i < numPoints; ++i, ++s_vertexBufferWriteIterator, ++s_numberOfVertices)
@@ -291,7 +299,7 @@ void  CuiLayerRenderer::renderPointsGeneric (int type, const Shader * shader, co
 		const UIFloatPoint & pt = pts [i];
 		const UIFloatPoint & uv = uvs [i];
 
-		s_vertexBufferWriteIterator.setPosition(pt.x + pixOffset, pt.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((pt.x + pixOffset) * uiScale, (pt.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(color32);
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.x, uv.y);
@@ -331,6 +339,7 @@ void CuiLayerRenderer::renderLines     (const Shader * shader, const int numLine
 	}
 
 	const real pixOffset = CuiManager::getPixelOffset ();
+	const float uiScale = Graphics::getUiCanvasScale(); // see renderPointsGeneric for rationale
 	uint32 const color32 = color.convertToUint32NoClamp();
 
 	for (int i = 0; i < numLines; ++i)
@@ -338,14 +347,14 @@ void CuiLayerRenderer::renderLines     (const Shader * shader, const int numLine
 		const UILine & line = lines [i];
 		const UILine & uv   = uvs   [i];
 
-		s_vertexBufferWriteIterator.setPosition(line.p1.x + pixOffset, line.p1.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((line.p1.x + pixOffset) * uiScale, (line.p1.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(color32);
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.p1.x, uv.p1.y);
 		++s_vertexBufferWriteIterator;
 		++s_numberOfVertices;
 
-		s_vertexBufferWriteIterator.setPosition(line.p2.x + pixOffset, line.p2.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((line.p2.x + pixOffset) * uiScale, (line.p2.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(color32);
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.p2.x, uv.p2.y);
@@ -380,6 +389,7 @@ void CuiLayerRenderer::renderLines(const Shader * shader, const int numLines, co
 	}
 
 	const real pixOffset = CuiManager::getPixelOffset ();
+	const float uiScale = Graphics::getUiCanvasScale(); // see renderPointsGeneric for rationale
 
 	for (int i = 0; i < numLines; ++i)
 	{
@@ -388,14 +398,14 @@ void CuiLayerRenderer::renderLines(const Shader * shader, const int numLines, co
 
 		int transformIndex = i * 2;
 
-		s_vertexBufferWriteIterator.setPosition(line.p1.x + pixOffset, line.p1.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((line.p1.x + pixOffset) * uiScale, (line.p1.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(colors[transformIndex].convertToUint32NoClamp());
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.p1.x, uv.p1.y);
 		++s_vertexBufferWriteIterator;
 		++s_numberOfVertices;
 
-		s_vertexBufferWriteIterator.setPosition(line.p2.x + pixOffset, line.p2.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((line.p2.x + pixOffset) * uiScale, (line.p2.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(colors[transformIndex+1].convertToUint32NoClamp());
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.p2.x, uv.p2.y);
@@ -432,6 +442,7 @@ void CuiLayerRenderer::renderTriangles (const Shader * shader, int numTris, cons
 	}
 
 	const real pixOffset = CuiManager::getPixelOffset ();
+	const float uiScale = Graphics::getUiCanvasScale(); // see renderPointsGeneric for rationale
 
 	uint32 const color32 = color.convertToUint32NoClamp();
 
@@ -440,7 +451,7 @@ void CuiLayerRenderer::renderTriangles (const Shader * shader, int numTris, cons
 		const UITriangle & tri = tris  [i];
 		const UITriangle & uv  = uvs   [i];
 
-		s_vertexBufferWriteIterator.setPosition(tri.p1.x + pixOffset, tri.p1.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((tri.p1.x + pixOffset) * uiScale, (tri.p1.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(color32);
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.p1.x, uv.p1.y);
@@ -448,7 +459,7 @@ void CuiLayerRenderer::renderTriangles (const Shader * shader, int numTris, cons
 		++s_numberOfVertices;
 
 
-		s_vertexBufferWriteIterator.setPosition(tri.p2.x + pixOffset, tri.p2.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((tri.p2.x + pixOffset) * uiScale, (tri.p2.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(color32);
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.p2.x, uv.p2.y);
@@ -456,7 +467,7 @@ void CuiLayerRenderer::renderTriangles (const Shader * shader, int numTris, cons
 		++s_numberOfVertices;
 
 
-		s_vertexBufferWriteIterator.setPosition(tri.p3.x + pixOffset, tri.p3.y + pixOffset, s_z);
+		s_vertexBufferWriteIterator.setPosition((tri.p3.x + pixOffset) * uiScale, (tri.p3.y + pixOffset) * uiScale, s_z);
 		s_vertexBufferWriteIterator.setOoz(s_ooz);
 		s_vertexBufferWriteIterator.setColor0(color32);
 		s_vertexBufferWriteIterator.setTextureCoordinates(0, uv.p3.x, uv.p3.y);

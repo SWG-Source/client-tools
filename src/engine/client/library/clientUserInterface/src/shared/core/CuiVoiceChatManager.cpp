@@ -151,29 +151,9 @@ CuiVoiceChatManager::CuiVoiceChatManager()
   m_disabledByServer(false),
   m_preventAutoLogin(false),
   m_localLogoutRequest(false),
-  m_otherPlayer(false)
+m_otherPlayer(false)
 {
-	DEBUG_FATAL(!SwgVivox::isInstalled(), ("Vivox wrapper must be installed before an instance of CuiVoiceChatManager can be created"));
 
-	connectToMessage(VoiceChatChannelInfo::cms_name);
-	connectToMessage(VoiceChatOnGetAccount::cms_name);
-	connectToMessage(VoiceChatOnGetChannel::cms_name);
-	connectToMessage(VoiceChatInvite::cms_name);
-	connectToMessage(VoiceChatKick::cms_name);
-	connectToMessage(VoiceChatStatus::cms_name);
-	connectToMessage("VCBroadcastMessage");
-
-	//toggle the key to make sure everything is in a good state
-	pushToTalkKeyPressed(true);
-	pushToTalkKeyPressed(false);
-
-	setHandsOff(false);
-	setOtherPlayer(false);
-
-	m_callback->connect(*this, &CuiVoiceChatManager::onConnectionServerConnectionChanged, static_cast<GameNetwork::Messages::ConnectionServerConnectionChanged*>(0));
-	m_callback->connect(*this, &CuiVoiceChatManager::onIgnoreListChanged, static_cast<CommunityManager::Messages::IgnoreListChanged*>(0));
-
-	setUpMessageProcessors();
 }
 
 //----------------------------------------------------------------------------
@@ -229,6 +209,31 @@ CuiVoiceChatManager::~CuiVoiceChatManager()
 
 	//TODO: clean up invitations
 
+}
+
+void CuiVoiceChatManager::PostInstall()
+{
+	DEBUG_FATAL(!SwgVivox::isInstalled(), ("Vivox wrapper must be installed before an instance of CuiVoiceChatManager can be created"));
+
+	connectToMessage(VoiceChatChannelInfo::cms_name);
+	connectToMessage(VoiceChatOnGetAccount::cms_name);
+	connectToMessage(VoiceChatOnGetChannel::cms_name);
+	connectToMessage(VoiceChatInvite::cms_name);
+	connectToMessage(VoiceChatKick::cms_name);
+	connectToMessage(VoiceChatStatus::cms_name);
+	connectToMessage("VCBroadcastMessage");
+
+	//toggle the key to make sure everything is in a good state
+	pushToTalkKeyPressed(true);
+	pushToTalkKeyPressed(false);
+
+	setHandsOff(false);
+	setOtherPlayer(false);
+
+	m_callback->connect(*this, &CuiVoiceChatManager::onConnectionServerConnectionChanged, static_cast<GameNetwork::Messages::ConnectionServerConnectionChanged*>(0));
+	m_callback->connect(*this, &CuiVoiceChatManager::onIgnoreListChanged, static_cast<CommunityManager::Messages::IgnoreListChanged*>(0));
+
+	setUpMessageProcessors();
 }
 
 //----------------------------------------------------------------------------

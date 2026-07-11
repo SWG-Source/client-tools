@@ -21,7 +21,7 @@
 
 namespace Unicode
 {
-	typedef unsigned short unicode_char_t; //lint !e761 redundant typedef
+	using unicode_char_t = char16_t;     // UTF-16 code unit on Windows
 
 	struct CharData;
 	

@@ -4,6 +4,7 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedNetworkMessages/ChatAvatarIdArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "ChatChangeFriendStatus.h"
 

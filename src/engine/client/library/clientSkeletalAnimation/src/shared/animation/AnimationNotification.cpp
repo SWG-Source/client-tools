@@ -219,7 +219,7 @@ AnimationNotification::AnimationNotification():
 
 void AnimationNotification::associateObject(Object *object)
 {
-	if (object == m_ownerObject)
+	if (m_ownerObject.getPointer() == object)
 		return;
 
 	FATAL((object != NULL) && (m_ownerObject != NULL), ("AnimationNotification::associateObject(): associating new owner id=[%s],template=[%s]; old owner id=[%s],template=[%s].",

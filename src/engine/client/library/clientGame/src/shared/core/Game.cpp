@@ -143,7 +143,7 @@
 #include "sharedUtility/LocalMachineOptionManager.h"
 #include "swgSharedNetworkMessages/MessageQueueCombatAction.h"
 #include "swgSharedUtility/Postures.def"
-#if DEBUG=0
+#if DEBUG==0
 #include "libMozilla/libMozilla.h"
 #endif
 
@@ -959,8 +959,16 @@ void Game::install(Application const application)
 				else
 #endif
 				{
-					IGNORE_RETURN(CuiMediatorFactory::activate (CuiMediatorTypes::Splash));
-					IGNORE_RETURN(CuiMediatorFactory::activate (CuiMediatorTypes::Backdrop));
+					CuiMediator * const splashMediator = CuiMediatorFactory::activate (CuiMediatorTypes::Splash);
+					CuiMediator * const backdropMediator = CuiMediatorFactory::activate (CuiMediatorTypes::Backdrop);
+
+					if (!splashMediator)
+					{
+						WARNING(true, ("Game::install: /Splash page missing, going directly to LoginScreen"));
+						IGNORE_RETURN(CuiMediatorFactory::activate ("LoginScreen"));
+					}
+
+					UNREF(backdropMediator);
 
 					preloadAssets ();
 				}
@@ -1135,7 +1143,12 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 			return;
 		}
 
-		if (GetActiveWindow() == Os::getWindow())
+		// SwgAgent (headless) has no top-level window, so GetActiveWindow()
+		// never matches Os::getWindow(). Bypass the foreground check when the
+		// config sets ClientGame::runWithoutFocus (which the headless agent
+		// pins in its client.cfg). The real client still gates on focus.
+		if (GetActiveWindow() == Os::getWindow() ||
+		    ConfigFile::getKeyBool("ClientGame", "runWithoutFocus", false))
 		{
 			NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "GameScheduler update");
 			GameScheduler::alter(elapsedTime);

@@ -8,6 +8,7 @@
 //-----------------------------------------------------------------------
 
 #include <qobject.h>
+#include "Singleton/Singleton.h"
 
 //-----------------------------------------------------------------------
 
@@ -15,7 +16,7 @@ class ActionHack;
 
 //-----------------------------------------------------------------------
 
-class ActionsSkill : public QObject
+class ActionsSkill : public QObject, public Singleton<ActionsSkill>
 {
 	Q_OBJECT; //lint !e1516 !e19 !e1924 !e1762
 public:

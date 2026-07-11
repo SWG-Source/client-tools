@@ -4,9 +4,9 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedNetworkMessages/ChatAvatarIdArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/ChatAddModeratorToRoom.h"
-#include "sharedNetworkMessages/ChatAvatarIdArchive.h"
 
 //-----------------------------------------------------------------------
 

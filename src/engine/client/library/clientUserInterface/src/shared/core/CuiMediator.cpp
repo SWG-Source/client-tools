@@ -39,7 +39,7 @@
 #include "UITextbox.h"
 #include "UIUtils.h"
 
-#include <typeinfo.h>
+#include <typeinfo>
 #include <vector>
 #include <list>
 
@@ -1006,7 +1006,7 @@ void CuiMediator::updateAll (float deltaTimeSecs)
 #if _DEBUG
 					if (i < numProfilerBufs)
 					{
-						snprintf (buf [i], buf_size, "%-30s 0x%08x", mediator->getMediatorDebugName ().c_str (), reinterpret_cast<int>(mediator));
+						snprintf (buf [i], buf_size, "%-30s %p", mediator->getMediatorDebugName ().c_str (), static_cast<void *>(mediator));
 						//PROFILER_START (buf [i]);
 					}
 #endif
@@ -1467,16 +1467,16 @@ UIBaseObject * CuiMediator::getCodeDataObject (UIPage *rootPage, const UIData * 
 		
 		if (!result)
 		{
-			//-- a bad path should just warning if optional
-			FATAL   (!optional, ("Unable to find CodeData object '%s' [%s] from [%s] for [%s]\n", name, path.c_str (), rootPage->GetFullPath ().c_str (), m_mediatorDebugName.c_str ()));
-			WARNING (optional,  ("Unable to find CodeData object '%s' [%s] from [%s] for [%s]",   name, path.c_str (), rootPage->GetFullPath ().c_str (), m_mediatorDebugName.c_str ()));
+			//-- demoted from FATAL to WARNING so vanilla NGE-retail UIs that
+			// don't have all post-launch widgets keep working.
+			WARNING (true,  ("Unable to find CodeData object '%s' [%s] from [%s] for [%s]",   name, path.c_str (), rootPage->GetFullPath ().c_str (), m_mediatorDebugName.c_str ()));
 			
 			return 0;
 		}
 		
 		if (result && !result->IsA (id))
 		{
-			FATAL (true,  ("CodeData object request type mismatch from '%s'. Requested '%s', type %d [%s], found type %s\n",
+			WARNING (true,  ("CodeData object request type mismatch from '%s'. Requested '%s', type %d [%s], found type %s - returning NULL\n",
 				rootPage->GetFullPath ().c_str (), name, id, path.c_str (), result->GetTypeName ()));
 			result = 0;
 		}
@@ -1484,7 +1484,15 @@ UIBaseObject * CuiMediator::getCodeDataObject (UIPage *rootPage, const UIData * 
 	else
 	{
 		result = rootPage->GetChild (name);
-		FATAL   (!result && !optional, ("Unable to find CodeData property '%s' from [%s] for [%s]\n", name, m_thePage.GetFullPath ().c_str (), m_mediatorDebugName.c_str ()));
+		// Vanilla NGE-retail UIs are missing many widgets that post-2008
+		// patches added. Demote the FATAL to a warning so individual UI
+		// mediators don't have to be patched one-by-one - they'll see a
+		// NULL `result` and (mostly) fall back via existing null checks
+		// or our subsequent patches.
+		if (!result && !optional)
+		{
+			DEBUG_WARNING(true, ("Unable to find CodeData property '%s' from [%s] for [%s]\n", name, m_thePage.GetFullPath ().c_str (), m_mediatorDebugName.c_str ()));
+		}
 	}
 
 

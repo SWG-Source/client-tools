@@ -101,27 +101,32 @@ m_checkPlayerReady        (0)
 	getCodeDataObject (TUICheckbox, m_checkTerrainGenerated, "checkterraingenerated");
 	getCodeDataObject (TUICheckbox, m_checkPlayerReady,      "checkplayerready");
 
+	// Null-guard everything below: getCodeDataObject was demoted from FATAL
+	// to warning earlier so any widget the NGE-retail loading_ground UI
+	// doesn't ship comes back null. Without these guards the constructor
+	// AV-crashes inside registerMediatorObject when the loading screen
+	// shows for the first time (transitioning into the world after
+	// character creation).
 	if(!ConfigClientUserInterface::getDisplayLoadingBoxes())
 	{
-		m_checkServerObjects->SetVisible(false);
-		m_checkFileCaching->SetVisible(false);
-		m_checkWorldLoaded->SetVisible(false);
-		m_checkTerrainGenerated->SetVisible(false);
-		m_checkPlayerReady->SetVisible(false);
+		if (m_checkServerObjects)     m_checkServerObjects->SetVisible(false);
+		if (m_checkFileCaching)       m_checkFileCaching->SetVisible(false);
+		if (m_checkWorldLoaded)       m_checkWorldLoaded->SetVisible(false);
+		if (m_checkTerrainGenerated)  m_checkTerrainGenerated->SetVisible(false);
+		if (m_checkPlayerReady)       m_checkPlayerReady->SetVisible(false);
 	}
 
-	m_bar->SetVisible(true);
+	if (m_bar)                m_bar->SetVisible(true);
+	if (m_textPercentScroll)  m_textPercentScroll->SetVisible(false);
 
-	m_textPercentScroll->SetVisible(false);
+	if (m_text)               m_text->Clear();
+	if (m_textPlanetName)     m_textPlanetName->Clear();
+	if (m_textScreenshotName) m_textScreenshotName->Clear();
+	if (m_textPercentScroll)  m_textPercentScroll->Clear();
+	if (m_textLoad)           m_textLoad->Clear();
 
-	m_text->Clear();
-	m_textPlanetName->Clear();
-	m_textScreenshotName->Clear();
-	m_textPercentScroll->Clear();
-	m_textLoad->Clear();
-
-	registerMediatorObject (*m_buttonBack, true);
-	registerMediatorObject (*m_buttonEsc, true);
+	if (m_buttonBack)  registerMediatorObject (*m_buttonBack, true);
+	if (m_buttonEsc)   registerMediatorObject (*m_buttonEsc, true);
 
 	clearAllLoadingChecks();
 }

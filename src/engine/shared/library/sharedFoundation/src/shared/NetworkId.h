@@ -15,6 +15,9 @@ namespace DB
 	class BindableNetworkId;
 }
 
+#include "sharedFoundationTypes/FoundationTypes.h"
+#include <string>
+
 // ======================================================================
 
 class NetworkId

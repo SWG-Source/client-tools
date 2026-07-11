@@ -100,6 +100,7 @@ public:
 	class ScoreKeeper
 	{
 	public:
+		virtual ~ScoreKeeper() = default;
 		virtual void setOwner(MahjongGame * owner) = 0;
 		virtual void gameStarted() = 0;
 		virtual void moveExecuted(MahjongGame::Move const & move) = 0;

@@ -49,7 +49,13 @@ UILoader ()
 bool CuiLayer::Loader::LoadStringFromResource( const UINarrowString &ResourceName, UINarrowString &Out )
 {
 	const std::string filename = ConfigClientUserInterface::getUiRootPath () + ResourceName;
-	AbstractFile * file = TreeFile::open (filename.c_str (), AbstractFile::PriorityData, false);
+	// allowFail=true so a missing UI include (e.g. ui_voice.inc, present
+	// in the swgsource_3.0.tre's ui_root.ui include list but absent from
+	// both the upstream TRE and the NGE-retail TREs) returns null
+	// gracefully instead of FATAL'ing the client at startup. The caller
+	// returns false on miss; the UILoader treats that as "include skipped"
+	// and continues with the rest of the layout.
+	AbstractFile * file = TreeFile::open (filename.c_str (), AbstractFile::PriorityData, true);
 	if(!file)
 		return false;
 	

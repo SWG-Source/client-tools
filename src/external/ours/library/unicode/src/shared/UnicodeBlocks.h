@@ -341,7 +341,7 @@ namespace Unicode
 		{
 			
 			const NameMap_t::const_iterator iter = m_nameMap.find (name);
-			if (iter != m_idMap.end ())
+			if (iter != m_nameMap.end ())
 				return (*iter).second;
 			else
 				return m_errorData;

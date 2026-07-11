@@ -6,47 +6,52 @@
 //
 // ======================================================================
 
-#ifndef INCLUDED_OsNewDel_H
-#define INCLUDED_OsNewDel_H
+#pragma once
+#include <cstddef>  // for size_t
 
+// ======================================================================
+// MemoryManager custom new/delete overloads
 // ======================================================================
 
 enum MemoryManagerNotALeak
 {
-	MM_notALeak
+    MM_notALeak
 };
 
-void * __cdecl operator new(size_t size, MemoryManagerNotALeak);
-void * __cdecl operator new(size_t size);
-void * __cdecl operator new[](size_t size);
-void * __cdecl operator new(size_t size, char const *file, int line);
-void * __cdecl operator new[](size_t size, char const *file, int line);
-void * __cdecl operator new(size_t size, void *placement);
+// ----------------------------------------------------------------------
+// Custom allocation operators (implemented in OsNewDel.cpp)
+// ----------------------------------------------------------------------
 
-void operator delete(void *pointer);
-void operator delete[](void *pointer);
-void operator delete(void *pointer, char const *file, int line);
-void operator delete[](void *pointer, char const *file, int line);
-void operator delete(void *pointer, void *placement);
+void* __cdecl operator new(std::size_t size, MemoryManagerNotALeak);
+void* __cdecl operator new(std::size_t size);
+void* __cdecl operator new[](std::size_t size);
+void* __cdecl operator new(std::size_t size, const char* file, int line);
+void* __cdecl operator new[](std::size_t size, const char* file, int line);
 
-#ifndef __PLACEMENT_NEW_INLINE
-#define __PLACEMENT_NEW_INLINE
+// ----------------------------------------------------------------------
+// Delete overloads
+// ----------------------------------------------------------------------
 
-inline void *operator new(size_t size, void *placement)
+void operator delete(void* pointer) noexcept;
+void operator delete[](void* pointer) noexcept;
+void operator delete(void* pointer, const char* file, int line) noexcept;
+void operator delete[](void* pointer, const char* file, int line) noexcept;
+
+// ----------------------------------------------------------------------
+// C++14 sized delete overloads (optional, avoids warnings in modern compilers)
+// ----------------------------------------------------------------------
+
+#if __cplusplus >= 201402L
+inline void operator delete(void* ptr, std::size_t) noexcept
 {
-	static_cast<void>(size);
-	return placement;
+    operator delete(ptr);
 }
 
-inline void operator delete(void *pointer, void *placement)
+inline void operator delete[](void* ptr, std::size_t) noexcept
 {
-	static_cast<void>(pointer);
-	static_cast<void>(placement);
+    operator delete[](ptr);
 }
-
-#endif // __PLACEMENT_NEW_INLINE
+#endif
 
 // ======================================================================
-
-#endif INCLUDED_OsNewDel_H
 

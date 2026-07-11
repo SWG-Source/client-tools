@@ -4,11 +4,15 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
+#include "ClientCentralMessagesArchive.h"
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "localizationArchive/StringIdArchive.h"
+#include "ClientCentralMessagesTypes.h"
 #include "Archive/ByteStream.h"
 #include "sharedFoundation/ConfigFile.h"
-#include "sharedNetworkMessages/ClientCentralMessages.h"
 #include "unicodeArchive/UnicodeArchive.h"
+#include "sharedNetworkMessages/ClientCentralMessages.h"
+#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 
 //-----------------------------------------------------------------------
 

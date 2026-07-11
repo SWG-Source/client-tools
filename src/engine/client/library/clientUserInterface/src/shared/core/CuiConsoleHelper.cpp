@@ -49,7 +49,7 @@ struct StrEqualsNoCaseSet
 
 	bool                    operator() (const std::set<Unicode::String>::value_type & t) const
 	{
-		return !_wcsicmp (str.c_str (), t.c_str ());
+		return !UIUnicode::icmp(str.c_str (), t.c_str ());
 	}
 
 	                        StrEqualsNoCaseSet (const StrEqualsNoCaseSet & rhs) : str (rhs.str) {}
@@ -245,8 +245,11 @@ int CuiConsoleHelper::appendOutputText (Unicode::String result, bool notify)
 */
 void CuiConsoleHelper::getAppendableText (const Unicode::String & current, Unicode::String & str, bool appendMode)
 {
-	if (str [str.length () - 1] == '\n' && !appendMode)
-		str.erase (str.length () - 1);
+	if (!str.empty())
+	{
+		if (str[str.length() - 1] == '\n' && !appendMode)
+			str.erase(str.length() - 1);
+	}
 	
 	if (!current.empty())
 	{

@@ -13,10 +13,12 @@
 
 #include "sharedNetwork/Address.h"
 
+#include <basetsd.h>      // UINT_PTR (matches WinSock SOCKET)
+
 // ======================================================================
 
 const unsigned int SOCK_ERROR = 0xFFFFFFFF;
-typedef unsigned int SOCKET;
+typedef UINT_PTR SOCKET;  // 4 bytes on Win32, 8 bytes on x64 - matches WinSock
 
 /**
 	@brief a BSD socket abstraction

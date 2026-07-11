@@ -148,6 +148,39 @@ namespace
 
 //----------------------------------------------------------------------
 
+namespace
+{
+	// x64 / post-NGE UI fix - stuck "xxx command name here" bar.
+	//
+	// The post-NGE `ui_command` page (concatenated into `ui_skill.inc`) has
+	// SEVERAL widgets named "sample" - they are the command-list row
+	// templates - and only some of them carry `Visible='false'` in the .ui.
+	// The mediator's `getCodeDataObject(..., "sample")` only resolves ONE of
+	// them (and hides that one); the others are left visible and render their
+	// literal placeholder text ("xxx command name here") as a stuck on-screen
+	// bar that never functions or dismisses. Recursively hide EVERY widget
+	// named "sample" so only the runtime-cloned, real command rows show.
+	void hideAllSampleTemplates(UIBaseObject * const obj)
+	{
+		if (obj == 0)
+			return;
+
+		if (obj->IsName("sample") && obj->IsA(TUIWidget))
+		{
+			UIWidget * const widget = safe_cast<UIWidget *>(obj);
+			if (widget != 0)
+				widget->SetVisible(false);
+		}
+
+		UIBaseObject::UIObjectList children;
+		obj->GetChildren(children);
+		for (UIBaseObject::UIObjectList::const_iterator it = children.begin(); it != children.end(); ++it)
+			hideAllSampleTemplates(*it);
+	}
+}
+
+//----------------------------------------------------------------------
+
 SwgCuiCommandBrowser::SwgCuiCommandBrowser (UIPage & page) :
 CuiMediator           ("SwgCuiCommandBrowser", page),
 UIEventCallback       (),
@@ -177,6 +210,12 @@ m_displayGroupSpace   (Crc::normalizeAndCalculate ("ship"))
 	getCodeDataObject (TUIPage,       m_pageInfo,          "info");
 
 	m_sample->SetVisible (false);
+
+	// x64 / post-NGE UI fix: the post-NGE ui_command page has several widgets
+	// named "sample" and only some carry Visible='false'; getCodeDataObject
+	// hid just one. Hide them all so the leftover "xxx command name here"
+	// placeholder bar doesn't stay stuck on screen. See hideAllSampleTemplates.
+	hideAllSampleTemplates (&getPage());
 
 	setState    (MS_closeable);
 	setState    (MS_closeDeactivates);

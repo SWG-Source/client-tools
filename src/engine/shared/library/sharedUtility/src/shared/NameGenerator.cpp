@@ -617,26 +617,22 @@ bool NameGenerator::verifyName(const Unicode::String &name) const
 		}
 	}
 
-	int pos=0;
+	size_t pos = 0;
 	size_t nameindex = 0;
 	for (;;)
 	{
 		if (nameindex >= m_nameTemplates.size())
 			return false;
 
-		int newpos = name.find(' ', pos);
-		int namelength = newpos - pos;
-		if (newpos == int(Unicode::String::npos))
-		{
-			namelength = name.size() - pos;
-		}
-		if (namelength < m_nameTemplates[nameindex].m_charsMin)
+		size_t const newpos = name.find(' ', pos);
+		size_t namelength = (newpos == Unicode::String::npos) ? (name.size() - pos) : (newpos - pos);
+		if (static_cast<int>(namelength) < m_nameTemplates[nameindex].m_charsMin)
 			return false;
-		if (namelength > m_nameTemplates[nameindex].m_charsMax)
+		if (static_cast<int>(namelength) > m_nameTemplates[nameindex].m_charsMax)
 			return false;
 		pos = newpos + 1;
 		++nameindex;
-		if (newpos == int(Unicode::String::npos))
+		if (newpos == Unicode::String::npos)
 		{
 			if (nameindex < minNameCount)
 				return false;

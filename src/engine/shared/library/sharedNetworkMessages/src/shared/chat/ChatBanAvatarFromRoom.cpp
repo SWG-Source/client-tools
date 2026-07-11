@@ -3,9 +3,9 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedNetworkMessages/ChatAvatarIdArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/ChatBanAvatarFromRoom.h"
-#include "sharedNetworkMessages/ChatAvatarIdArchive.h"
 
 //-----------------------------------------------------------------------
 

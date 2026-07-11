@@ -76,10 +76,10 @@ void MessageQueueDraftSchematics::pack (const MessageQueue::Data* const data, Ar
 		Archive::put(target, count);
 		for (int i = 0; i < count; ++i)
 		{
-			const MessageQueueDraftSchematics::SchematicData & data = msg->getSchematic(i);
-			Archive::put(target, data.serverCrc);
-			Archive::put(target, data.sharedCrc);
-			Archive::put(target, data.category);
+			const MessageQueueDraftSchematics::SchematicData & sourceData = msg->getSchematic(i);
+			Archive::put(target, sourceData.serverCrc);
+			Archive::put(target, sourceData.sharedCrc);
+			Archive::put(target, sourceData.category);
 		}
 	}
 }

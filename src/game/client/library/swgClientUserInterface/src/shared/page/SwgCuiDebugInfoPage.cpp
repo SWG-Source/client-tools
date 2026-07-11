@@ -53,6 +53,13 @@
 
 #include <cstdio>
 
+//-- LEAK INSTRUMENT (2026-06-01): process working-set readout for the overlay.
+// psapi is not in SwgClient's link line; pull it in self-contained here so no
+// vcxproj edit is needed (avoids touching the fragile AdditionalDependencies).
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")
+
 //----------------------------------------------------------------------
 namespace PlayerCreatureControllerNamespace
 {
@@ -109,32 +116,48 @@ m_serverLoopTimeRequested (false)
 	getCodeDataObject (TUIText, m_bandwidthText,      "bandwidth");
 	getCodeDataObject (TUIText, m_versionText,        "version");
 	getCodeDataObject (TUIText, m_serverLoopTimeText, "serverLoopTime");
+	// NGE-retail ui_debuginfo.inc lacks these dev-only debug widgets, so
+	// getCodeDataObject warns-and-leaves-null. Guard every deref (Ctrl+Shift+G crash).
 	getCodeDataObject (TUIText, m_playerAnimInfoText, "playerAnimInfo");
-	m_playerAnimInfoText->SetPreLocalized(true);
+	if (m_playerAnimInfoText)
+		m_playerAnimInfoText->SetPreLocalized(true);
 
 	char buff[256];
 	for(int i = 0; i < s_maxAnimTracks; ++i)
 	{
+		// FIX (Ctrl+Shift+G crash): m_playerAnimTrackText[] is NOT in the ctor init
+		// list, so its entries start as garbage. getCodeDataObject leaves the pointer
+		// UNCHANGED when the widget is absent from the (NGE-retail) ui_debuginfo.inc,
+		// so without this the if-guard below would pass on garbage and SetPreLocalized
+		// would dereference a wild pointer. Zero each entry before the lookup.
+		m_playerAnimTrackText[i] = 0;
 		sprintf(buff,"playerAnimTrack%d",i);
 		getCodeDataObject(TUIText, m_playerAnimTrackText[i],buff);
-		m_playerAnimTrackText[i]->SetPreLocalized(true);
+		if (m_playerAnimTrackText[i])
+			m_playerAnimTrackText[i]->SetPreLocalized(true);
 	}
 
 	getCodeDataObject(TUIText, m_playerServerSpeed, "serverSpeed");
 	getCodeDataObject(TUIText, m_playerServerSpeedEnabled, "serverSpeedEnabled");
 
-	m_camera_pText->SetPreLocalized (true);
-	m_camera_wText->SetPreLocalized (true);
-	m_player_pText->SetPreLocalized (true);
-	m_player_wText->SetPreLocalized (true);
-	m_fpsText->SetPreLocalized (true);
-	m_terrainText->SetPreLocalized (true);
-	m_pingTimeText->SetPreLocalized (true);
-	m_bandwidthText->SetPreLocalized (true);
-	m_versionText->SetPreLocalized (true);
-	m_serverLoopTimeText->SetPreLocalized (true);
-	m_playerServerSpeed->SetPreLocalized(true);
-	m_playerServerSpeedEnabled->SetPreLocalized(true);
+	// Every widget below may be null: getCodeDataObject silently leaves the
+	// pointer null when the codedata property is ABSENT from the loaded .inc
+	// (it only WARNs when the property exists but its target path is missing).
+	// The NGE-retail ui_debuginfo.inc lacks several of these, so guard all derefs.
+	if (m_camera_pText)       m_camera_pText->SetPreLocalized (true);
+	if (m_camera_wText)       m_camera_wText->SetPreLocalized (true);
+	if (m_player_pText)       m_player_pText->SetPreLocalized (true);
+	if (m_player_wText)       m_player_wText->SetPreLocalized (true);
+	if (m_fpsText)            m_fpsText->SetPreLocalized (true);
+	if (m_terrainText)        m_terrainText->SetPreLocalized (true);
+	if (m_pingTimeText)       m_pingTimeText->SetPreLocalized (true);
+	if (m_bandwidthText)      m_bandwidthText->SetPreLocalized (true);
+	if (m_versionText)        m_versionText->SetPreLocalized (true);
+	if (m_serverLoopTimeText) m_serverLoopTimeText->SetPreLocalized (true);
+	if (m_playerServerSpeed)
+		m_playerServerSpeed->SetPreLocalized(true);
+	if (m_playerServerSpeedEnabled)
+		m_playerServerSpeedEnabled->SetPreLocalized(true);
 
 	const char * const version = ApplicationVersion::getPublicVersion();
 	NOT_NULL (version);
@@ -143,18 +166,25 @@ m_serverLoopTimeRequested (false)
 	connectToMessage ("GalaxyLoopTimesResponse");
 #endif
 
-	m_versionText->SetLocalText (Unicode::narrowToWide (version));
+	if (m_versionText)
+		m_versionText->SetLocalText (Unicode::narrowToWide (version));
 
 	//hide server loop time and animtrack stuff in release
+	// NOTE: this Release/x64 build is PRODUCTION==1 (DEBUG_LEVEL=0), so THIS block
+	// compiles — it was the actual Ctrl+Shift+G crash site. The member widgets below
+	// are silent-null on NGE-retail ui_debuginfo.inc, so guard every member deref too
+	// (the label locals were already guarded; the m_* members were not).
 #if PRODUCTION == 1
 	{
-		m_serverLoopTimeText->SetVisible(false);
+		if (m_serverLoopTimeText)
+			m_serverLoopTimeText->SetVisible(false);
 		UIText * serverLoopTimeLabel = NULL;
 		getCodeDataObject (TUIText, serverLoopTimeLabel, "labelServerLoopTime");
 		if (serverLoopTimeLabel)
 			serverLoopTimeLabel->SetVisible(false);
 
-		m_playerAnimInfoText->SetVisible(false);
+		if (m_playerAnimInfoText)
+			m_playerAnimInfoText->SetVisible(false);
 		UIText * labelPlayerAnimInfo = NULL;
 		getCodeDataObject (TUIText, labelPlayerAnimInfo, "labelPlayerAnimInfo");
 		if(labelPlayerAnimInfo)
@@ -162,7 +192,8 @@ m_serverLoopTimeRequested (false)
 		char buff[256];
 		for(int i = 0; i < s_maxAnimTracks; ++i)
 		{
-			m_playerAnimTrackText[i]->SetVisible(false);
+			if (m_playerAnimTrackText[i])
+				m_playerAnimTrackText[i]->SetVisible(false);
 
 			UIText * labelPlayerAnimTrack = NULL;
 			sprintf(buff,"labelPlayerAnimTrack%d",i);
@@ -170,18 +201,20 @@ m_serverLoopTimeRequested (false)
 			if(labelPlayerAnimTrack)
 				labelPlayerAnimTrack->SetVisible(false);
 		}
-	
+
 		UIText* labelPlayerServerSpeed = NULL;
 		getCodeDataObject(TUIText, labelPlayerServerSpeed, "playerServerSpeed");
 		if(labelPlayerServerSpeed)
 			labelPlayerServerSpeed->SetVisible(false);
-		m_playerServerSpeed->SetVisible(false);
+		if (m_playerServerSpeed)
+			m_playerServerSpeed->SetVisible(false);
 
 		UIText* labelPlayerServerSpeedEnabled = NULL;
 		getCodeDataObject(TUIText, labelPlayerServerSpeedEnabled, "playerServerSpeedEnabled");
 		if(labelPlayerServerSpeedEnabled)
 			labelPlayerServerSpeedEnabled->SetVisible(false);
-		m_playerServerSpeedEnabled->SetVisible(false);
+		if (m_playerServerSpeedEnabled)
+			m_playerServerSpeedEnabled->SetVisible(false);
 	}
 
 #endif
@@ -309,7 +342,8 @@ void SwgCuiDebugInfoPage::updateAnimInfo()
 		char buffer[256];
 			
 		_snprintf(buffer, sizeof(buffer), "numTrackTemplate == %d",numTrackTemplates);
-		m_playerAnimInfoText->SetLocalText (Unicode::narrowToWide(buffer));
+		if (m_playerAnimInfoText)
+			m_playerAnimInfoText->SetLocalText (Unicode::narrowToWide(buffer));
 
 		for(int i = 0; i < numTrackTemplates; ++i)
 		{
@@ -330,7 +364,8 @@ void SwgCuiDebugInfoPage::updateAnimInfo()
 				trackTemplate.getTrackName().getString(),
 				animationName.c_str()
 			);
-			m_playerAnimTrackText[i]->SetLocalText (Unicode::narrowToWide(buffer));
+			if (m_playerAnimTrackText[i])
+				m_playerAnimTrackText[i]->SetLocalText (Unicode::narrowToWide(buffer));
 		}
 	}
 #endif
@@ -356,7 +391,8 @@ void SwgCuiDebugInfoPage::updateServerInfo()
 		{
 			char buf[256];
 			_snprintf (buf, sizeof(buf), "%3ims", ping);
-			m_pingTimeText->SetLocalText (Unicode::narrowToWide (buf));
+			if (m_pingTimeText)
+				m_pingTimeText->SetLocalText (Unicode::narrowToWide (buf));
 			m_cachedPing = ping;
 		}
 	}
@@ -383,7 +419,8 @@ void SwgCuiDebugInfoPage::updatePositions (const Object* const object, UIText* c
 		const Vector& position_w = object->getPosition_w ();
 		const int     frameK_w   = static_cast<int> (convertRadiansToDegrees (object->getObjectFrameK_w ().theta ()));
 		_snprintf (buffer, sizeof (buffer), "%5.1f %5.1f %5.1f %i  world", position_w.x, position_w.y, position_w.z, frameK_w);
-		position_wText->SetLocalText (Unicode::narrowToWide (buffer));
+		if (position_wText)
+			position_wText->SetLocalText (Unicode::narrowToWide (buffer));
 
 		//-- position_p
 		const Vector&             position_p    = object->getPosition_p ();
@@ -391,7 +428,8 @@ void SwgCuiDebugInfoPage::updatePositions (const Object* const object, UIText* c
 		const CellProperty* const cellProperty  = object->getParentCell ();
 		char const * const accessAllowed = (cellProperty->getAccessAllowed()) ? "public" : "private";
 		_snprintf (buffer, sizeof (buffer), "%5.1f %5.1f %5.1f %i  %s  %s  [%s] %s", position_p.x, position_p.y, position_p.z, frameK_p, cellProperty == CellProperty::getWorldCellProperty () ? "world" : cellProperty->getPortalProperty ()->getPobShortName (), cellProperty == CellProperty::getWorldCellProperty () ? "world" : cellProperty->getCellName (), cellProperty == CellProperty::getWorldCellProperty () ? "NA" : cellProperty->getOwner ().getNetworkId ().getValueString ().c_str (), accessAllowed);
-		position_pText->SetLocalText (Unicode::narrowToWide (buffer));
+		if (position_pText)
+			position_pText->SetLocalText (Unicode::narrowToWide (buffer));
 	}
 }
 
@@ -412,12 +450,16 @@ void SwgCuiDebugInfoPage::updatePositions ()
 				updatePositions (player, m_player_wText, m_player_pText);
 			}
 
-			char buffer[32];
-			memset(buffer, 0, 32);
-			_snprintf(buffer, sizeof(buffer), "%3.2f", ms_playerServerMovementSpeed);
-			m_playerServerSpeed->SetLocalText(Unicode::narrowToWide(buffer));
+			if (m_playerServerSpeed)
+			{
+				char buffer[32];
+				memset(buffer, 0, 32);
+				_snprintf(buffer, sizeof(buffer), "%3.2f", ms_playerServerMovementSpeed);
+				m_playerServerSpeed->SetLocalText(Unicode::narrowToWide(buffer));
+			}
 #if PRODUCTION == 0
-			m_playerServerSpeedEnabled->SetLocalText(s_usePlayerServerSpeed ? Unicode::narrowToWide("True") : Unicode::narrowToWide("False"));
+			if (m_playerServerSpeedEnabled)
+				m_playerServerSpeedEnabled->SetLocalText(s_usePlayerServerSpeed ? Unicode::narrowToWide("True") : Unicode::narrowToWide("False"));
 #endif
 		}
 	}
@@ -457,11 +499,29 @@ void SwgCuiDebugInfoPage::updateFps ()
 			const int numberOfMegabytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated () / (1024 * 1024);
 			const int limit = MemoryManager::getLimit ();
 
-			char buf[128];
-			sprintf (buf, "%5.2f     %iMB/%iMB", fps, numberOfMegabytesAllocated, limit);
+			//-- LEAK INSTRUMENT (2026-06-01): the SWG MemoryManager number above only
+			// counts MM-tracked allocations; it resets in bulk on cache cycles. The real
+			// leak is in UNTRACKED native/D3D memory = process working set minus the
+			// tracked total. Surface both live so the overlay is a real-time leak gauge.
+			int workingSetMB = 0;
+			int untrackedMB  = 0;
+			{
+				PROCESS_MEMORY_COUNTERS pmc;
+				memset (&pmc, 0, sizeof (pmc));
+				pmc.cb = sizeof (pmc);
+				if (GetProcessMemoryInfo (GetCurrentProcess (), &pmc, sizeof (pmc)))
+				{
+					workingSetMB = static_cast<int> (pmc.WorkingSetSize / (1024 * 1024));
+					untrackedMB  = workingSetMB - numberOfMegabytesAllocated;
+				}
+			}
+
+			char buf[160];
+			sprintf (buf, "%5.2f  %iMB/%iMB  WS:%iMB  Untrk:%iMB", fps, numberOfMegabytesAllocated, limit, workingSetMB, untrackedMB);
 			UINarrowString str (buf);
 
-			m_fpsText->SetLocalText (Unicode::narrowToWide (str));
+			if (m_fpsText)
+				m_fpsText->SetLocalText (Unicode::narrowToWide (str));
 		}
 	}
 }
@@ -478,7 +538,8 @@ void SwgCuiDebugInfoPage::updateTerrain ()
 
 		char buffer [64];
 		_snprintf (buffer, sizeof(buffer), "Time: %02i:%02i     T=%i TNT=%i I=%i C=%i S=%i P=%i", hour, minute, ClientWorld::getNumberOfObjects (WOL_Tangible), ClientWorld::getNumberOfObjects (WOL_TangibleNotTargetable), ClientWorld::getNumberOfObjects (WOL_Intangible), CreatureObject::getNumberOfInstances (), ShipObject::getNumberOfInstances(), ShipProjectile::getNumberOfInstances());
-		m_terrainText->SetLocalText (Unicode::narrowToWide (buffer));
+		if (m_terrainText)
+			m_terrainText->SetLocalText (Unicode::narrowToWide (buffer));
 	}
 }
 
@@ -488,7 +549,8 @@ void SwgCuiDebugInfoPage::updateBandwidth ()
 {
 	char buffer [64];
 	snprintf (buffer, sizeof(buffer), "R: %i  S: %i", Game::getReceivedCompressedBytesPerSecond(), Game::getSentCompressedBytesPerSecond());
-	m_bandwidthText->SetLocalText (Unicode::narrowToWide (buffer));
+	if (m_bandwidthText)
+		m_bandwidthText->SetLocalText (Unicode::narrowToWide (buffer));
 }
 
 //----------------------------------------------------------------------
@@ -503,7 +565,8 @@ void SwgCuiDebugInfoPage::receiveMessage(const MessageDispatch::Emitter &, const
 #if PRODUCTION == 0
 		char buf [256];
 		_snprintf (buf, sizeof(buf), "%lu ms", (cg.getLastFrameMilliseconds() / 3193)); // loop time (in ms) * 3193
-		m_serverLoopTimeText->SetLocalText (Unicode::narrowToWide (buf));
+		if (m_serverLoopTimeText)
+			m_serverLoopTimeText->SetLocalText (Unicode::narrowToWide (buf));
 #else
 		UNREF(cg);
 #endif

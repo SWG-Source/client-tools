@@ -1,4 +1,4 @@
-// ======================================================================
+﻿// ======================================================================
 //
 // MountValidScaleRangeTable.cpp
 // Copyright 2003 Sony Online Entertainment, Inc.
@@ -218,7 +218,7 @@ int MountValidScaleRangeTableNamespace::getRequiredColumnNumberFromNamedTable(ch
 	NOT_NULL(columnName);
 
 	int const columnNumber = table->findColumnNumber(columnName);
-	FATAL(columnNumber < 0, ("failed to find column name [%s] in MountValidScaleRangeTable file [%s].", columnName, filename));
+	DEBUG_FATAL((columnNumber < 0), ("failed to find column name [%s] in MountValidScaleRangeTable file [%s].", columnName, filename));
 
 	return columnNumber;
 }

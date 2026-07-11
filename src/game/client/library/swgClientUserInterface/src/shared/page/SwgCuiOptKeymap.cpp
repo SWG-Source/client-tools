@@ -118,43 +118,45 @@ m_sceneType                   (sceneType)
 {
 	m_callbackReceiver->menu = this;
 
-	getCodeDataObject (TUIButton,      m_buttonDelete,         "buttonDelete");
-	getCodeDataObject (TUIButton,      m_buttonRebind,         "buttonRebind");
-	getCodeDataObject (TUITable,       m_tableBinds,           "tableBinds");
-	getCodeDataObject (TUIComboBox,    m_comboPreset,          "comboPreset");
-	getCodeDataObject (TUITabbedPane,  m_tabBinds,             "tabBinds");
-	getCodeDataObject (TUICheckbox,    m_checkMouseMode,       "checkMouseMode");
-	getCodeDataObject (TUICheckbox,    m_checkChaseCam,        "checkChaseCam");
-	getCodeDataObject (TUICheckbox,    m_checkTurnStrafes,     "checkTurnStrafes");
-	getCodeDataObject (TUICheckbox,    m_checkCanFireSecondariesFromToolbar,"checkCanFireSecondariesFromToolbar");
-	getCodeDataObject (TUICheckbox,    m_middleMouseDrivesMovement, "middleMouseDrivesMovement");
-	getCodeDataObject (TUICheckbox,    m_mouseLeftAndRightDrivesMovement, "mouseLeftAndRightDrivesMovement");
-	getCodeDataObject (TUICheckbox,    m_scrollThroughDefaultActions, "scrollThroughDefaultActions");
-	getCodeDataObject (TUICheckbox,    m_checkModalChat,       "checkModalChat");
+	getCodeDataObject (TUIButton,      m_buttonDelete,         "buttonDelete",         true);
+	getCodeDataObject (TUIButton,      m_buttonRebind,         "buttonRebind",         true);
+	getCodeDataObject (TUITable,       m_tableBinds,           "tableBinds",           true);
+	getCodeDataObject (TUIComboBox,    m_comboPreset,          "comboPreset",          true);
+	getCodeDataObject (TUITabbedPane,  m_tabBinds,             "tabBinds",             true);
+	getCodeDataObject (TUICheckbox,    m_checkMouseMode,       "checkMouseMode",       true);
+	getCodeDataObject (TUICheckbox,    m_checkChaseCam,        "checkChaseCam",        true);
+	getCodeDataObject (TUICheckbox,    m_checkTurnStrafes,     "checkTurnStrafes",     true);
+	getCodeDataObject (TUICheckbox,    m_checkCanFireSecondariesFromToolbar,"checkCanFireSecondariesFromToolbar", true);
+	getCodeDataObject (TUICheckbox,    m_middleMouseDrivesMovement, "middleMouseDrivesMovement",                 true);
+	getCodeDataObject (TUICheckbox,    m_mouseLeftAndRightDrivesMovement, "mouseLeftAndRightDrivesMovement",     true);
+	getCodeDataObject (TUICheckbox,    m_scrollThroughDefaultActions, "scrollThroughDefaultActions",             true);
+	getCodeDataObject (TUICheckbox,    m_checkModalChat,       "checkModalChat",       true);
 
-	m_tableModelBinds = dynamic_cast<UITableModelDefault *>(m_tableBinds->GetTableModel ());
-	NOT_NULL (m_tableModelBinds);
-	m_tableModelBinds->ClearData ();
+	if (m_tableBinds)
+		m_tableModelBinds = dynamic_cast<UITableModelDefault *>(m_tableBinds->GetTableModel ());
+	if (m_tableModelBinds)
+		m_tableModelBinds->ClearData ();
 
-	getCodeDataObject (TUIPage,       m_entryPage,  "EntryPage");
+	getCodeDataObject (TUIPage,       m_entryPage,  "EntryPage", true);
 
-	m_entryPage->SetVisible (false);
+	if (m_entryPage)
+		m_entryPage->SetVisible (false);
 
 	connectToMessage (CuiControlsMenuBindEntry::Messages::UPDATE_BINDING);
 
-	registerMediatorObject (*m_buttonDelete,           true);
-	registerMediatorObject (*m_buttonRebind,           true);
-	registerMediatorObject (*m_tableBinds,             true);	
-	registerMediatorObject (*m_comboPreset,            true);
-	registerMediatorObject (*m_tabBinds,               true);
-	registerMediatorObject (*m_checkMouseMode,         true);
-	registerMediatorObject (*m_checkChaseCam,          true);
-	registerMediatorObject (*m_checkTurnStrafes,       true);
-	registerMediatorObject (*m_checkCanFireSecondariesFromToolbar,       true);
-	registerMediatorObject (*m_middleMouseDrivesMovement, true);
-	registerMediatorObject (*m_mouseLeftAndRightDrivesMovement, true);
-	registerMediatorObject (*m_scrollThroughDefaultActions, true);
-	registerMediatorObject (*m_checkModalChat,         true);
+	if (m_buttonDelete)                          registerMediatorObject (*m_buttonDelete,           true);
+	if (m_buttonRebind)                          registerMediatorObject (*m_buttonRebind,           true);
+	if (m_tableBinds)                            registerMediatorObject (*m_tableBinds,             true);
+	if (m_comboPreset)                           registerMediatorObject (*m_comboPreset,            true);
+	if (m_tabBinds)                              registerMediatorObject (*m_tabBinds,               true);
+	if (m_checkMouseMode)                        registerMediatorObject (*m_checkMouseMode,         true);
+	if (m_checkChaseCam)                         registerMediatorObject (*m_checkChaseCam,          true);
+	if (m_checkTurnStrafes)                      registerMediatorObject (*m_checkTurnStrafes,       true);
+	if (m_checkCanFireSecondariesFromToolbar)    registerMediatorObject (*m_checkCanFireSecondariesFromToolbar, true);
+	if (m_middleMouseDrivesMovement)             registerMediatorObject (*m_middleMouseDrivesMovement, true);
+	if (m_mouseLeftAndRightDrivesMovement)       registerMediatorObject (*m_mouseLeftAndRightDrivesMovement, true);
+	if (m_scrollThroughDefaultActions)           registerMediatorObject (*m_scrollThroughDefaultActions, true);
+	if (m_checkModalChat)                        registerMediatorObject (*m_checkModalChat,         true);
 
 	registerMediatorObject (getPage (),                true);
 
@@ -208,8 +210,9 @@ void SwgCuiOptKeymap::performActivate ()
 	resetPresets ();
 	resetChecks  ();
 	updateData   ();
-	
-	m_tableModelBinds->sortOnColumn (0, UITableModel::SD_up);
+
+	if (m_tableModelBinds)
+		m_tableModelBinds->sortOnColumn (0, UITableModel::SD_up);
 	
 	Callback * const callback = InputScheme::getResetCallback ();
 	if (callback)
@@ -243,7 +246,8 @@ void SwgCuiOptKeymap::performDeactivate ()
 {
 	CuiManager::requestPointer (false);
 
-	m_tableModelBinds->ClearData ();
+	if (m_tableModelBinds)
+		m_tableModelBinds->ClearData ();
 	if (m_bindEntry)
 	{
 		m_bindEntry->deactivate ();
@@ -293,6 +297,8 @@ void SwgCuiOptKeymap::OnButtonPressed           ( UIWidget *context )
 	}
 	else if (context == m_buttonDelete)
 	{
+		if (!m_tableModelBinds || !m_tableBinds)
+			return;
 		const UIData * const data = m_tableModelBinds->GetCellDataVisual (m_tableBinds->GetLastSelectedRow (), 0);
 		if (!data)
 			return;
@@ -317,6 +323,8 @@ void SwgCuiOptKeymap::OnButtonPressed           ( UIWidget *context )
 	}
 	else if (context == m_buttonRebind)
 	{
+		if (!m_tableModelBinds || !m_tableBinds || !m_entryPage)
+			return;
 		const UIData * const data = m_tableModelBinds->GetCellDataVisual (m_tableBinds->GetLastSelectedRow (), 0);
 		if (!data)
 			return;
@@ -350,24 +358,27 @@ bool SwgCuiOptKeymap::OnMessage ( UIWidget *context, const UIMessage & msg )
 		{
 			if (msg.Keystroke == UIMessage::Delete)
 			{
-				m_buttonDelete->Press ();
+				if (m_buttonDelete)
+					m_buttonDelete->Press ();
 				return false;
 			}
 		}
 		else if (msg.Type == UIMessage::LeftMouseDoubleClick)
 		{
 			getPage ().ReleaseMouseLock (UIPoint::zero);
-			m_buttonRebind->Press ();
+			if (m_buttonRebind)
+				m_buttonRebind->Press ();
 			return false;
 		}
 		else if (msg.Type == UIMessage::Character && msg.Keystroke == ' ')
 		{
 			getPage ().ReleaseMouseLock (UIPoint::zero);
-			m_buttonRebind->Press ();
+			if (m_buttonRebind)
+				m_buttonRebind->Press ();
 			return false;
 		}
 	}
-	
+
 	return true;
 }
 
@@ -375,12 +386,14 @@ bool SwgCuiOptKeymap::OnMessage ( UIWidget *context, const UIMessage & msg )
 
 void SwgCuiOptKeymap::OnGenericSelectionChanged     (UIWidget * context)
 {
-	if (context == m_tableBinds)
+	if (context == m_tableBinds && m_tableBinds)
 	{
-		m_buttonDelete->SetEnabled (m_tableBinds->GetLastSelectedRow () >= 0);
-		m_buttonRebind->SetEnabled (m_tableBinds->GetLastSelectedRow () >= 0);
+		if (m_buttonDelete)
+			m_buttonDelete->SetEnabled (m_tableBinds->GetLastSelectedRow () >= 0);
+		if (m_buttonRebind)
+			m_buttonRebind->SetEnabled (m_tableBinds->GetLastSelectedRow () >= 0);
 	}
-	else if (context == m_comboPreset)
+	else if (context == m_comboPreset && m_comboPreset)
 	{
 		const int selectedIndex = m_comboPreset->GetSelectedIndex ();
 		
@@ -403,7 +416,8 @@ void SwgCuiOptKeymap::OnTabbedPaneChanged    (UIWidget * context)
 	if (context == m_tabBinds)
 	{
 		updateData ();
-		m_tableModelBinds->sortOnColumn (0, UITableModel::SD_up);
+		if (m_tableModelBinds)
+			m_tableModelBinds->sortOnColumn (0, UITableModel::SD_up);
 	}
 }
 
@@ -480,8 +494,11 @@ void SwgCuiOptKeymap::handleCheck  (UICheckbox & box)
 
 void SwgCuiOptKeymap::updateData ()
 {
-	m_buttonDelete->SetEnabled   (false);
-	m_buttonRebind->SetEnabled   (false);
+	if (!m_tableModelBinds || !m_tableBinds)
+		return;
+
+	if (m_buttonDelete) m_buttonDelete->SetEnabled (false);
+	if (m_buttonRebind) m_buttonRebind->SetEnabled (false);
 
 	std::string lastSelectedCommand;
 	UIPoint lastScrolledToPoint;
@@ -505,8 +522,15 @@ void SwgCuiOptKeymap::updateData ()
 	m_tableModelBinds->Attach (0);
 	m_tableBinds->SetTableModel (0);
 
-	const UIData * const activeTabData = m_tabBinds->GetTabData(m_tabBinds->GetActiveTab ());
-	const std::string & category = activeTabData->GetName ();
+	// Fall back to "all" category when there's no tabBinds widget (NGE-retail
+	// UI doesn't ship a keymap page so we built one without category tabs).
+	std::string category = Categories::all;
+	if (m_tabBinds)
+	{
+		const UIData * const activeTabData = m_tabBinds->GetTabData(m_tabBinds->GetActiveTab ());
+		if (activeTabData)
+			category = activeTabData->GetName ();
+	}
 	m_lastSelectedCategory = category;
 
 	const bool all    = category == Categories::all;
@@ -622,8 +646,8 @@ void SwgCuiOptKeymap::updateData ()
 		
 	}
 
-	m_buttonDelete->SetEnabled   (m_tableBinds->GetLastSelectedRow () >= 0);
-	m_buttonRebind->SetEnabled   (m_tableBinds->GetLastSelectedRow () >= 0);
+	if (m_buttonDelete) m_buttonDelete->SetEnabled   (m_tableBinds->GetLastSelectedRow () >= 0);
+	if (m_buttonRebind) m_buttonRebind->SetEnabled   (m_tableBinds->GetLastSelectedRow () >= 0);
 }
 
 //-----------------------------------------------------------------
@@ -668,6 +692,9 @@ void SwgCuiOptKeymap::receiveMessage(const MessageDispatch::Emitter & , const Me
 
 void SwgCuiOptKeymap::resetTabs ()
 {
+	if (!m_tabBinds)
+		return;
+
 	m_tabBinds->Clear ();
 
 	if (!m_workingInputMap)
@@ -715,11 +742,16 @@ void SwgCuiOptKeymap::resetTabs ()
 
 void SwgCuiOptKeymap::resetPresets ()
 {
+	if (!m_comboPreset)
+		return;
+
 	InputScheme::StringVector sv;
 	InputScheme::getTypes (sv);
 
-	UIDataSource * const dataSource = NON_NULL(m_comboPreset->GetDataSource());
-	
+	UIDataSource * const dataSource = m_comboPreset->GetDataSource();
+	if (!dataSource)
+		return;
+
 	dataSource->Clear();
 
 	std::string const & lastInputScheme = InputScheme::getLastInputSchemeType ();
@@ -748,34 +780,28 @@ void SwgCuiOptKeymap::resetPresets ()
 					selectComboIndex = index;
 					break;
 				}
-			}			
+			}
 		}
 	}
 
-	m_comboPreset->SetSelectedIndex (selectComboIndex);
+	if (m_comboPreset)
+		m_comboPreset->SetSelectedIndex (selectComboIndex);
 }
 
 //----------------------------------------------------------------------
 
 void SwgCuiOptKeymap::resetChecks ()
 {
-	m_checkMouseMode->SetChecked(CuiPreferences::getMouseModeDefault (), false);
-	m_checkModalChat->SetChecked    (CuiPreferences::getModalChat        (), false);
-	m_checkChaseCam->SetChecked(FreeChaseCamera::getCameraMode () == FreeChaseCamera::CM_chase, false);
-	m_checkTurnStrafes->SetChecked(CuiPreferences::getTurnStrafesDuringMouseModeToggle (), false);
-	m_checkCanFireSecondariesFromToolbar->SetChecked(CuiPreferences::getCanFireSecondariesFromToolbar (), false);
-	m_middleMouseDrivesMovement->SetChecked(CuiPreferences::getMiddleMouseDrivesMovementToggle(), false);
-	m_mouseLeftAndRightDrivesMovement->SetChecked(CuiPreferences::getMouseLeftAndRightDrivesMovementToggle(), false);
-	m_scrollThroughDefaultActions->SetChecked(CuiPreferences::getScrollThroughDefaultActions(), false);
+	bool const enabled = !CuiPreferences::getUseModelessInterface();
 
-	m_checkMouseMode->SetEnabled(!CuiPreferences::getUseModelessInterface());
-	m_checkModalChat->SetEnabled( !CuiPreferences::getUseModelessInterface() );
-	m_checkChaseCam->SetEnabled(!CuiPreferences::getUseModelessInterface());
-	m_checkTurnStrafes->SetEnabled(!CuiPreferences::getUseModelessInterface());
-	m_checkCanFireSecondariesFromToolbar->SetEnabled(!CuiPreferences::getUseModelessInterface());
-	m_middleMouseDrivesMovement->SetEnabled(!CuiPreferences::getUseModelessInterface());
-	m_mouseLeftAndRightDrivesMovement->SetEnabled(!CuiPreferences::getUseModelessInterface());
-	m_scrollThroughDefaultActions->SetEnabled(!CuiPreferences::getUseModelessInterface());
+	if (m_checkMouseMode)                       { m_checkMouseMode->SetChecked(CuiPreferences::getMouseModeDefault (), false); m_checkMouseMode->SetEnabled(enabled); }
+	if (m_checkModalChat)                       { m_checkModalChat->SetChecked(CuiPreferences::getModalChat (), false); m_checkModalChat->SetEnabled(enabled); }
+	if (m_checkChaseCam)                        { m_checkChaseCam->SetChecked(FreeChaseCamera::getCameraMode () == FreeChaseCamera::CM_chase, false); m_checkChaseCam->SetEnabled(enabled); }
+	if (m_checkTurnStrafes)                     { m_checkTurnStrafes->SetChecked(CuiPreferences::getTurnStrafesDuringMouseModeToggle (), false); m_checkTurnStrafes->SetEnabled(enabled); }
+	if (m_checkCanFireSecondariesFromToolbar)   { m_checkCanFireSecondariesFromToolbar->SetChecked(CuiPreferences::getCanFireSecondariesFromToolbar (), false); m_checkCanFireSecondariesFromToolbar->SetEnabled(enabled); }
+	if (m_middleMouseDrivesMovement)            { m_middleMouseDrivesMovement->SetChecked(CuiPreferences::getMiddleMouseDrivesMovementToggle(), false); m_middleMouseDrivesMovement->SetEnabled(enabled); }
+	if (m_mouseLeftAndRightDrivesMovement)      { m_mouseLeftAndRightDrivesMovement->SetChecked(CuiPreferences::getMouseLeftAndRightDrivesMovementToggle(), false); m_mouseLeftAndRightDrivesMovement->SetEnabled(enabled); }
+	if (m_scrollThroughDefaultActions)          { m_scrollThroughDefaultActions->SetChecked(CuiPreferences::getScrollThroughDefaultActions(), false); m_scrollThroughDefaultActions->SetEnabled(enabled); }
 }
 
 //----------------------------------------------------------------------
@@ -789,7 +815,8 @@ void SwgCuiOptKeymap::onModalChatConfirmClosed (const CuiMessageBox & box)
 		if (box.completedAffirmative ())
 		{
 			CuiPreferences::setModalChat (!CuiPreferences::getModalChat ());
-			m_checkModalChat->SetChecked (CuiPreferences::getModalChat (), false);
+			if (m_checkModalChat)
+				m_checkModalChat->SetChecked (CuiPreferences::getModalChat (), false);
 		}
 	}
 }
@@ -823,6 +850,8 @@ void SwgCuiOptKeymap::onInputSchemeReset ()
 
 void SwgCuiOptKeymap::resetDefaults()
 {
+	if (!m_comboPreset)
+		return;
 	const int selectedIndex = m_comboPreset->GetSelectedIndex ();
 	
 	if (selectedIndex >= 0)

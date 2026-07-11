@@ -334,9 +334,9 @@ const bool Address::operator > (const Address & rhs) const
 
 //---------------------------------------------------------------------
 /**
-	@brief a hash_map support routine
+	@brief a unordered_map support routine
 
-	The STL hash_map (present in most STL implementations) requires
+	The STL unordered_map (present in most STL implementations) requires
 	a size_t return from a hash function to identify which bucket
 	a particular value should reside in. On 32 bit or better platforms
 	the sockaddr_in.sin_addr.s_addr member is small enough to
@@ -345,7 +345,7 @@ const bool Address::operator > (const Address & rhs) const
 
 	Example:
 	\code
-	typedef std::hash_map<Address, Connection *, Address::HashFunction, Address::EqualFunction> AddressMap;
+	typedef std::unordered_map<Address, Connection *, Address::HashFunction, Address::EqualFunction> AddressMap;
 	\endcode
 
 	@return the ip number member of a sockaddr_in struct
@@ -361,14 +361,14 @@ size_t Address::hashFunction() const
 /**
 	@brief STL map support routine
 
-	STL maps (including hash_maps) require unique keys, and therefore
+	STL maps (including unordered_map) require unique keys, and therefore
 	need to compare a key for equality with an existing target.
 
 	The functor uses Address::operator = for the comparison.
 
 	Example:
 	\code
-	typedef std::hash_map<Address, Connection *, Address::HashFunction, Address::EqualFunction> AddressMap;
+	typedef std::unordered_map<Address, Connection *, Address::HashFunction, Address::EqualFunction> AddressMap;
 	\endcode
 
 	@return true if the left hand side and right hand side are equal
@@ -383,14 +383,14 @@ bool Address::EqualFunction::operator () (const Address & lhs, const Address & r
 
 //---------------------------------------------------------------------
 /**
-	@brief STL hash_map support routine
+	@brief STL unordered_map support routine
 
 	The HashFunction::operator() invokes Address::hashFunction to
 	determine an appropriate hash for the address.
 
 	Example:
 	\code
-	typedef std::hash_map<Address, Connection *, Address::HashFunction, Address::EqualFunction> AddressMap;
+	typedef std::unordered_map<Address, Connection *, Address::HashFunction, Address::EqualFunction> AddressMap;
 	\endcode
 
 	@see Address::hashFunction

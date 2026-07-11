@@ -114,14 +114,19 @@ m_timerBar(NULL)
 {
 	{
 		UIPage * sample = 0;
-		getCodeDataObject(TUIPage, sample, "sample");
-		m_sample = UI_ASOBJECT(UIPage, sample->DuplicateObject());
-		m_sample->SetVisible(false);
-		m_sample->Link();
-
-		getPage().RemoveChild(sample);
+		getCodeDataObject(TUIPage, sample, "sample", true);
+		if (sample)
+		{
+			m_sample = UI_ASOBJECT(UIPage, sample->DuplicateObject());
+			if (m_sample)
+			{
+				m_sample->SetVisible(false);
+				m_sample->Link();
+			}
+			getPage().RemoveChild(sample);
+		}
 	}
-	
+
 	m_callback->connect(*this, &SwgCuiGroup::onMembersChanged, static_cast<GroupObject::Messages::MembersChanged*>(0));
 	m_callback->connect(*this, &SwgCuiGroup::onMemberAdded, static_cast<GroupObject::Messages::MemberAdded*>(0));
 	m_callback->connect(*this, &SwgCuiGroup::onMemberRemoved, static_cast<GroupObject::Messages::MemberRemoved*>(0));
@@ -131,12 +136,13 @@ m_timerBar(NULL)
 	m_callback->connect(*this, &SwgCuiGroup::onGroupPickupPointTimerChanged, static_cast<GroupObject::Messages::GroupPickupTimerChanged*>(0));
 
 	registerMediatorObject(getPage(), true);
-	
-	getCodeDataObject(TUIPage, m_timerPage, "timerpage");
-	getCodeDataObject(TUIPage, m_timerBar, "timerbar");
-	getCodeDataObject(TUIText, m_timerText, "timertext");
 
-	m_timerPage->SetVisible(false);
+	getCodeDataObject(TUIPage, m_timerPage, "timerpage", true);
+	getCodeDataObject(TUIPage, m_timerBar, "timerbar", true);
+	getCodeDataObject(TUIText, m_timerText, "timertext", true);
+
+	if (m_timerPage)
+		m_timerPage->SetVisible(false);
 
 	s_timerString = StringId("ui", "group_pickup_timer").localize();
 }
@@ -262,16 +268,17 @@ void SwgCuiGroup::update(float deltaTimeSecs)
 		
 		if (timerEnd > 0)
 		{
-			UIWidget const * const parent = m_timerBar->GetParentWidget();
+			UIWidget const * const parent = m_timerBar ? m_timerBar->GetParentWidget() : 0;
 
 			if (parent)
 			{
 				long const width = parent->GetWidth() * timerEnd / timerTotal;
 				m_timerBar->SetWidth(width);
-								
+
 				std::string timeString = CalendarTime::convertSecondsToMS(timerEnd);
-							
-				m_timerText->SetLocalText(s_timerString + Unicode::narrowToWide(timeString.c_str()));
+
+				if (m_timerText)
+					m_timerText->SetLocalText(s_timerString + Unicode::narrowToWide(timeString.c_str()));
 			}
 		}
 		else
@@ -280,8 +287,9 @@ void SwgCuiGroup::update(float deltaTimeSecs)
 			resizeGroupWindow(m_mfds->size());
 		}
 	}
-	
-	m_timerPage->SetVisible(s_groupPickupTimerActive);
+
+	if (m_timerPage)
+		m_timerPage->SetVisible(s_groupPickupTimerActive);
 }
 
 //----------------------------------------------------------------------
@@ -503,7 +511,7 @@ void SwgCuiGroup::OnPopupMenuSelection(UIWidget * context)
 							sprintf(tellMember, "/tell %s ",firstName);
 						}
 						else
-							sprintf(tellMember, "/tell %s ", member.second);
+							sprintf(tellMember, "/tell %s ", member.second.c_str());
 
 						Game::startChatInput(Unicode::narrowToWide(tellMember));
 					}
@@ -613,8 +621,11 @@ void SwgCuiGroup::addMember(NetworkId const & member, std::string const & member
 	}
 	else
 	{
+		if (!m_sample)
+			return;
 		mfdStatusPage = UI_ASOBJECT(UIPage, m_sample->DuplicateObject());
-		NOT_NULL(mfdStatusPage);
+		if (!mfdStatusPage)
+			return;
 
 		getPage().AddChild(mfdStatusPage);
 		getPage().MoveChild(mfdStatusPage, UIBaseObject::Bottom);
@@ -707,7 +718,7 @@ void SwgCuiGroup::resizeGroupWindow(int numElements)
 	maxSize.y = height;
 	maxSize.x = getPage().GetSize().x;
 
-	if (s_groupPickupTimerActive)
+	if (s_groupPickupTimerActive && m_timerPage)
 	{
 		UIPoint timerLoc = m_timerPage->GetLocation();
 		timerLoc.y = maxSize.y;

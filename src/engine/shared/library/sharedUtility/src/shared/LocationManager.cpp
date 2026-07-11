@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <map>
 #include <string>
+#include <random>
 
 // ======================================================================
 // LocationManagerNamespace
@@ -273,7 +274,9 @@ bool LocationManager::requestLocation (float const searchX, float const searchZ,
 			}
 
 		//-- shuffle offset list to randomize rasterization
-		std::random_shuffle (ms_offsetList.begin (), ms_offsetList.end ());
+		std::random_device rd;
+		std::mt19937 gen(rd());
+		std::shuffle(ms_offsetList.begin(), ms_offsetList.end(), gen);
 	}
 
 	bool found = false;

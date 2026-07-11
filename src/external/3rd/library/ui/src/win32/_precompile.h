@@ -3,6 +3,8 @@
 
 #pragma warning( disable : 4702 )
 
+#define NOMINMAX
+
 #include <cstdlib>
 #include "UIStlFwd.h"
 #include "UiReport.h"

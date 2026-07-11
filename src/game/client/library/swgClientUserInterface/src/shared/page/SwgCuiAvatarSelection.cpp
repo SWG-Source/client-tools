@@ -191,10 +191,16 @@ m_hideClosed (NULL)
 	getCodeDataObject (TUIButton,     m_cancelButton,   "buttonPrev");
 	getCodeDataObject (TUIButton,     m_createButton,   "buttonCreate");
 	getCodeDataObject (TUIButton,     m_deleteButton,   "buttonDelete");
-	getCodeDataObject (TUICheckbox,   m_hideClosed,     "checkHideClosed");
+	// "Hide closed galaxies" checkbox was added in a later live patch.
+	// Vanilla NGE-retail UI doesn't have it - treat as optional.
+	m_hideClosed = NULL;
+	getCodeDataObject (TUICheckbox,   m_hideClosed,     "checkHideClosed", true);
 
-	registerMediatorObject(*m_hideClosed, true);
-	m_hideClosed->SetChecked(CuiPreferences::getHideCharactersOnClosedGalaxies());
+	if (m_hideClosed)
+	{
+		registerMediatorObject(*m_hideClosed, true);
+		m_hideClosed->SetChecked(CuiPreferences::getHideCharactersOnClosedGalaxies());
+	}
 
 	getCodeDataObject (TUIPage,       m_deleteAvatarConfirmationPage, "deleteConfirmation");
 	m_deleteAvatarConfirmationPage->SetVisible(false);
@@ -302,15 +308,18 @@ void SwgCuiAvatarSelection::performActivate ()
 	m_objectViewer->setPaused  (false);
 
 	{
-		UIText* text;
+		// backTextOnPrev / exitTextOnPrev label widgets were added in a
+		// later live patch and don't exist in vanilla NGE-retail UIs.
+		UIText* text = NULL;
 
 		bool useExitText = !Game::getSinglePlayer() && (CuiLoginManager::getSessionIdKey () && !ConfigClientGame::getEnableAdminLogin());
 
-		getCodeDataObject (TUIText,       text, "backTextOnPrev");
-		text->SetVisible(!useExitText);
+		getCodeDataObject (TUIText, text, "backTextOnPrev", true);
+		if (text) text->SetVisible(!useExitText);
 
-		getCodeDataObject (TUIText,       text, "exitTextOnPrev");
-		text->SetVisible(useExitText);
+		text = NULL;
+		getCodeDataObject (TUIText, text, "exitTextOnPrev", true);
+		if (text) text->SetVisible(useExitText);
 	}
 
 
@@ -390,17 +399,18 @@ void SwgCuiAvatarSelection::refreshList (bool updateSelection)
 	AvatarInfoVector::const_iterator it;
 
 	bool hasAvatarOnClosedServers = false;
-	for (it = aiv.begin (); it != aiv.end (); ++it)
-	{
-		const CuiLoginManagerAvatarInfo & avatarInfo = *it;
+	//for (it = aiv.begin (); it != aiv.end (); ++it)
+	//{
+		//const CuiLoginManagerAvatarInfo & avatarInfo = *it;
 		//if (isClosedServer(avatarInfo.clusterId))
 		//{
 		//	hasAvatarOnClosedServers = true;
 		//	break;
 		//}
-	}
+	//}
 
-	m_hideClosed->SetVisible(hasAvatarOnClosedServers);
+	if (m_hideClosed)
+		m_hideClosed->SetVisible(hasAvatarOnClosedServers);
 	
 	for (it = aiv.begin (); it != aiv.end (); ++it)
 	{
@@ -506,7 +516,7 @@ void SwgCuiAvatarSelection::addAvatar (const CuiLoginManagerAvatarInfo & avatarI
 			{
 				if(clusterInfo->isAdmin)
 				{
-					Unicode::String lockedFlag = L"\\#00ff00 (God Mode)";
+					Unicode::String lockedFlag = u"\\#00ff00 (God Mode)";
 					statusDisplayStr = CuiStringIdsServer::server_locked.localize() + lockedFlag;
 				}
 				else
@@ -525,21 +535,21 @@ void SwgCuiAvatarSelection::addAvatar (const CuiLoginManagerAvatarInfo & avatarI
 			statusDisplayStr = CuiStringIdsServer::server_offline.localize ();
 		if(clusterInfo->isAdmin && clusterInfo->isSecret)
 		{
-			Unicode::String secretFlag = L"\\#ff00ff (Secret)";
+			Unicode::String secretFlag = u"\\#ff00ff (Secret)";
 			statusDisplayStr += secretFlag;
 		}
 	}
 	
 	if (clusterInfo && !clusterInfo->branch.empty() && clusterInfo->isAdmin)
 	{
-		static const Unicode::String::value_type *s_colorRed     = L"\\#ff0000";
-		static const Unicode::String::value_type *s_colorGreen   = L"\\#00ff00";
-		static const Unicode::String::value_type *s_colorBlue    = L"\\#0000ff";
-		static const Unicode::String::value_type *s_colorMagenta = L"\\#ff00ff";
-		static const Unicode::String::value_type *s_colorYellow  = L"\\#ffff00";
-		static const Unicode::String::value_type *s_colorCyan    = L"\\#00ffff";
-		static const Unicode::String::value_type *s_colorWhite   = L"\\#ffffff";
-		static const Unicode::String::value_type *s_colorBlack   = L"\\#000000";
+		static const Unicode::String::value_type *s_colorRed     = u"\\#ff0000";
+		static const Unicode::String::value_type *s_colorGreen   = u"\\#00ff00";
+		static const Unicode::String::value_type *s_colorBlue    = u"\\#0000ff";
+		static const Unicode::String::value_type *s_colorMagenta = u"\\#ff00ff";
+		static const Unicode::String::value_type *s_colorYellow  = u"\\#ffff00";
+		static const Unicode::String::value_type *s_colorCyan    = u"\\#00ffff";
+		static const Unicode::String::value_type *s_colorWhite   = u"\\#ffffff";
+		static const Unicode::String::value_type *s_colorBlack   = u"\\#000000";
 
 		Unicode::String color = s_colorRed; // red is the default color
 
@@ -565,7 +575,7 @@ void SwgCuiAvatarSelection::addAvatar (const CuiLoginManagerAvatarInfo & avatarI
 		char buffer[64];
 
 		//avatarDisplayName = color + avatarDisplayName;
-		clusterDisplayName = color + clusterDisplayName + L" [" + Unicode::narrowToWide(clusterInfo->branch) + L"." + Unicode::narrowToWide(_itoa(clusterInfo->version, buffer, 10)) +  L"]";
+		clusterDisplayName = color + clusterDisplayName + u" [" + Unicode::narrowToWide(clusterInfo->branch) + u"." + Unicode::narrowToWide(_itoa(clusterInfo->version, buffer, 10)) +  u"]";
 		planetDisplayName = color + planetDisplayName;
 		statusDisplayStr = color + statusDisplayStr;
 	}
@@ -917,6 +927,17 @@ void SwgCuiAvatarSelection::onClusterConnection       (bool b)
 			{
 				WARNING (true, ("SwgCuiAvatarSelection received cluster connection to the wrong cluster [%d], wanted [%d], dropping.", clusterId, m_waitingForClusterId));
 				m_dropFromCluster = true;
+			}
+			else if (m_waitingLoginForCreate)
+			{
+				// Connection completed for the Create flow (we initiated it
+				// in handleCreate). Resume create now that ConnectionServer
+				// is reachable. Do NOT set m_proceed - that branch is the
+				// "play existing character" path and would fire the
+				// "no character selected" popup since nothing is in the
+				// table for a new account.
+				m_waitingLoginForCreate = false;
+				handleCreate();
 			}
 			else
 				m_proceed = true;
@@ -1386,24 +1407,65 @@ void SwgCuiAvatarSelection::handleCreate ()
 {
 	if (m_waitingLoginForSelect || m_waitingLoginForDelete)
 		return;
-	
+
 	//-- keep waiting
 	if (m_waitingLogin)
 	{
 		m_waitingLoginForCreate = true;
 		return;
 	}
-	
+
 	m_waitingLoginForCreate = false;
-		
-	if (!GameNetwork::isConnectedToLoginServer ())
-	{ 
-		reconnectLoginServer (false);
-		m_waitingLoginForCreate = true;
-		return;
+
+	// SwgCuiLoginScreen transitions LoginScreen->AvatarSelection directly
+	// (no ClusterSelection in between), so a brand new account that has
+	// never picked a cluster is not yet connected to the ConnectionServer.
+	// `requestAvatarSelection` (Play button) calls connectToCluster to
+	// establish that connection; we need to do the same for the Create
+	// button before transitioning to AvatarCreation, otherwise
+	// SwgCuiAvatarCreationHelper::finishCreation later sends
+	// ClientCreateCharacter into the void and the user sits on the
+	// "Creating your character..." modal forever.
+	if (!GameNetwork::isConnectedToConnectionServer())
+	{
+		// Find an available cluster to connect to. With our single-cluster
+		// Docker setup there's exactly one - first up cluster wins.
+		CuiLoginManager::ClusterInfoVector civ;
+		CuiLoginManager::getClusterInfo(civ);
+		const CuiLoginManagerClusterInfo * targetCluster = 0;
+		for (CuiLoginManager::ClusterInfoVector::const_iterator it = civ.begin(); it != civ.end(); ++it)
+		{
+			if (it->up && !it->getHost().empty() && it->getPort() != 0)
+			{
+				targetCluster = &(*it);
+				break;
+			}
+		}
+
+		if (targetCluster)
+		{
+			m_waitingForConnection = true;
+			m_waitingForClusterId = targetCluster->id;
+			m_waitingLoginForCreate = true;     // resume create after connection completes
+			CuiLoginManager::connectToCluster(*targetCluster);
+
+			if (m_messageBox)
+				m_messageBox->closeMessageBox();
+			m_messageBox = CuiMessageBox::createMessageBox(CuiStringIdsServer::server_connecting_central.localize());
+			m_messageBox->setRunner(true);
+			m_messageBox->connectToMessages(*this);
+			return;
+		}
+		WARNING(true, ("handleCreate: no eligible cluster for create"));
 	}
 
-	CuiTransition::startTransition(CuiMediatorTypes::AvatarSelection, CuiMediatorTypes::ClusterSelection);
+	// Route directly to AvatarCreation (UI path /AvCre) - the actual
+	// character-creation entry page in the NGE-retail UI bundle.
+	// Original post-NGE flow used /AvSimple (not in NGE retail), and the
+	// pre-modification flow round-tripped through ClusterSelection which
+	// renders blank under NGE-retail's UI layout.
+	CuiTransition::startTransition(CuiMediatorTypes::AvatarSelection, CuiMediatorTypes::AvatarCreation);
+	//CuiTransition::startTransition(CuiMediatorTypes::AvatarSelection, CuiMediatorTypes::ClusterSelection);
 	//CuiTransition::startTransition(CuiMediatorTypes::AvatarSelection, CuiMediatorTypes::AvatarSimple);
 }
 

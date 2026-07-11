@@ -10,6 +10,7 @@
 #define _INCLUDED_DynamicVariable_H
 
 #include "Unicode.h"
+#include "sharedFoundation/StlForwardDeclaration.h"
 
 class DynamicVariable;
 class DynamicVariableLocationData;

@@ -126,6 +126,7 @@ private:
 
 	float				   m_reticleOffsetCenter;
 	float				   m_reticleOffsetShoulder;
+	float				   m_firstPersonEyeHeight;
 };
 
 //===================================================================

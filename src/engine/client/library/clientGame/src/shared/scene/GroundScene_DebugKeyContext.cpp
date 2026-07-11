@@ -53,6 +53,8 @@
 #include "sharedTerrain/TerrainObject.h"
 
 #include <vector>
+#include <algorithm>
+#include <random>
 
 // =====================================================================
 
@@ -562,8 +564,10 @@ void GroundScene::handleDebugKeyContextKey1 ()
 			for(int j = 0; j < numCols; ++j)
 				yRange.push_back(j);
 
-			std::random_shuffle(xRange.begin(), xRange.end());
-			std::random_shuffle(yRange.begin(), yRange.end());
+			static std::mt19937 rng{ std::random_device{}() };
+
+			std::shuffle(xRange.begin(), xRange.end(), rng);
+			std::shuffle(yRange.begin(), yRange.end(), rng);
 
 			bool dontCheckWater = false;
 			bool dontCheckSlope = m_debugKeySubContext == "1";

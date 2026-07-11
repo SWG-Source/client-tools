@@ -10,6 +10,10 @@
 #ifndef INCLUDED_Vector_H
 #define INCLUDED_Vector_H
 
+#include <cmath>
+#include "sharedFoundation/StlForwardDeclaration.h"
+#include "sharedFoundation/Misc.h"
+
 // ======================================================================
 
 class Vector
@@ -47,30 +51,30 @@ public:
 	static const Vector negativeMaxXYZ;
 
 	// minimum vector magnitude to normalize
-	static const real   NORMALIZE_THRESHOLD;
+	static const float   NORMALIZE_THRESHOLD;
 
 	// A vector is normalized if its magnitude is within NORMALIZED_EPSILON of 1.
-	static const real   NORMALIZED_EPSILON;
+	static const float   NORMALIZED_EPSILON;
 
 public:
 
 	// x-component of the 3d vector
-	real x;  //lint !e1925 // Public data member
+	float x;  //lint !e1925 // Public data member
 
 	// y-component of the 3d vector
-	real y;  //lint !e1925 // Public data member
+	float y;  //lint !e1925 // Public data member
 
 	// z-component of the 3d vector
-	real z;  //lint !e1925 // Public data member
+	float z;  //lint !e1925 // Public data member
 
 public:
 
 	Vector(void);
-	Vector(real newX, real newY, real newZ);
+	Vector(float newX, float newY, float newZ);
 
 	void                 debugPrint(const char *header) const;
 
-	void                 set(real newX, real newY, real newZ);
+	void                 set(float newX, float newY, float newZ);
 	void                 makeZero(void);
 
 	bool                 normalize(void);
@@ -78,41 +82,41 @@ public:
 	bool                 isNormalized(void) const;
 
 	const Vector         findClosestPointOnLine(const Vector &line0, const Vector &line1) const;
-	const Vector         findClosestPointOnLine(const Vector &line0, const Vector &line1, real *t) const;
+	const Vector         findClosestPointOnLine(const Vector &line0, const Vector &line1, float *t) const;
 	const Vector         findClosestPointOnLineSegment(const Vector & startPoint, const Vector & endPoint) const;
-	real                 distanceToLine(const Vector &line0, const Vector &line1) const;
-	real                 distanceToLineSegment(const Vector &line0, const Vector &line1) const;
+	float                 distanceToLine(const Vector &line0, const Vector &line1) const;
+	float                 distanceToLineSegment(const Vector &line0, const Vector &line1) const;
 
-	real                 theta(void) const;
-	real                 phi(void) const;
+	float                 theta(void) const;
+	float                 phi(void) const;
 
-	real                 dot(const Vector &vector) const;
+	float                 dot(const Vector &vector) const;
 	const Vector         cross(const Vector &rhs) const;
 
-	real                 magnitudeSquared(void) const;
-	real                 approximateMagnitude(void) const;
-	real                 magnitude(void) const;
-	real                 magnitudeBetween(const Vector &vector) const;
-	real                 magnitudeBetweenSquared(const Vector &vector) const;
-	real                 magnitudeXYBetween(const Vector &vector) const;
-	real                 magnitudeXYBetweenSquared(const Vector &vector) const;
-	real                 magnitudeXZBetween(const Vector &vector) const;
-	real                 magnitudeXZBetweenSquared(const Vector &vector) const;
-	real                 magnitudeYZBetween(const Vector &vector) const;
-	real                 magnitudeYZBetweenSquared(const Vector &vector) const;
+	float                 magnitudeSquared(void) const;
+	float                 approximateMagnitude(void) const;
+	float                 magnitude(void) const;
+	float                 magnitudeBetween(const Vector &vector) const;
+	float                 magnitudeBetweenSquared(const Vector &vector) const;
+	float                 magnitudeXYBetween(const Vector &vector) const;
+	float                 magnitudeXYBetweenSquared(const Vector &vector) const;
+	float                 magnitudeXZBetween(const Vector &vector) const;
+	float                 magnitudeXZBetweenSquared(const Vector &vector) const;
+	float                 magnitudeYZBetween(const Vector &vector) const;
+	float                 magnitudeYZBetweenSquared(const Vector &vector) const;
 
 	const Vector         operator -(void) const;
 
 	Vector              &operator -=(const Vector &rhs);
 	Vector              &operator +=(const Vector &rhs);
-	Vector              &operator /=(real scalar);
-	Vector              &operator *=(real scalar);
+	Vector              &operator /=(float scalar);
+	Vector              &operator *=(float scalar);
 
 	const Vector         operator +(const Vector &rhs) const;
 	const Vector         operator -(const Vector &rhs) const;
-	const Vector         operator *(real scalar) const;
-	const Vector         operator /(real scalar) const;
-	friend const Vector  operator *(real scalar, const Vector &vector);
+	const Vector         operator *(float scalar) const;
+	const Vector         operator /(float scalar) const;
+	friend const Vector  operator *(float scalar, const Vector &vector);
 
 	bool                 operator ==(const Vector &rhs) const;
 	bool                 operator !=(const Vector &rhs) const;
@@ -121,7 +125,7 @@ public:
 	const Vector         reflectIncoming(const Vector &incident) const;
 	const Vector         reflectOutgoing(const Vector &incident) const;
 
-	// const Vector      refract(const Vector &normal, real n1, real n2);
+	// const Vector      refract(const Vector &normal, float n1, float n2);
 
 	bool                 inPolygon (const Vector& v0, const Vector& v1, const Vector& v2) const;
 	bool                 inPolygon (const stdvector<Vector>::fwd &convexPolygonVertices) const;
@@ -129,10 +133,10 @@ public:
 public:
 
 	static const Vector  midpoint(const Vector &vector1, const Vector &vector2);
-	static const Vector  linearInterpolate(const Vector &begin, const Vector &end, real t);
+	static const Vector  linearInterpolate(const Vector &begin, const Vector &end, float t);
 
 	static const Vector  randomUnit(void);
-	static const Vector  randomCube(real halfSideLength=CONST_REAL(1));
+	static const Vector  randomCube(float halfSideLength=1.0f);
 
 	static const Vector perpendicular(Vector const & direction);
 };
@@ -145,7 +149,7 @@ public:
 //   Initializes the components to 0.
 
 inline Vector::Vector(void)
-: x(CONST_REAL(0)), y(CONST_REAL(0)), z(CONST_REAL(0))
+: x(0.0f), y(0.0f), z(0.0f)
 {
 }
 
@@ -160,7 +164,7 @@ inline Vector::Vector(void)
  * @param newZ  Value for the Z component
  */
 
-inline Vector::Vector(real newX, real newY, real newZ)
+inline Vector::Vector(float newX, float newY, float newZ)
 : x(newX), y(newY), z(newZ)
 {
 }
@@ -174,7 +178,7 @@ inline Vector::Vector(real newX, real newY, real newZ)
  * @param newZ  Value for the Z component
  */
 
-inline void Vector::set(real newX, real newY, real newZ)
+inline void Vector::set(float newX, float newY, float newZ)
 {
 	x = newX;
 	y = newY;
@@ -188,9 +192,9 @@ inline void Vector::set(real newX, real newY, real newZ)
 
 inline void Vector::makeZero(void)
 {
-	x = CONST_REAL(0);
-	y = CONST_REAL(0);
-	z = CONST_REAL(0);
+	x = 0.0f;
+	y = 0.0f;
+	z = 0.0f;
 }
 
 // ----------------------------------------------------------------------
@@ -204,7 +208,7 @@ inline void Vector::makeZero(void)
  * @return The rotation of the vector around the Y plane
  */
 
-inline real Vector::theta(void) const
+inline float Vector::theta(void) const
 {
 	return atan2(x, z);
 }
@@ -218,7 +222,7 @@ inline real Vector::theta(void) const
  * @return The angle of the vector from the X-Z plane
  */
 
-inline real Vector::phi(void) const
+inline float Vector::phi(void) const
 {
 	return atan2(-y, sqrt(sqr(x) + sqr(z)));
 }
@@ -233,7 +237,7 @@ inline real Vector::phi(void) const
  * @param vector  Vector to compute the dot product against
  */
 
-inline real Vector::dot(const Vector &vec) const
+inline float Vector::dot(const Vector &vec) const
 {
 	return (x * vec.x) + (y * vec.y) + (z * vec.z);
 }
@@ -248,7 +252,7 @@ inline real Vector::dot(const Vector &vec) const
  * @see Vector::magnitude()
  */
 
-inline real Vector::magnitudeSquared(void) const
+inline float Vector::magnitudeSquared(void) const
 {
 	return (sqr(x) + sqr(y) + sqr(z));
 }
@@ -263,36 +267,36 @@ inline real Vector::magnitudeSquared(void) const
  */
 
 
-inline real Vector::approximateMagnitude(void) const
+inline float Vector::approximateMagnitude(void) const
 {
-	real minc = abs(x);
-	real midc = abs(y);
-	real maxc = abs(z);
+	float minc = abs(x);
+	float midc = abs(y);
+	float maxc = abs(z);
 
 	// sort the vectors
 	// we do our own swapping to avoid heavy-weight includes in such a low-level class
 	if (midc < minc)
 	{
-		const real temp = midc;
+		const float temp = midc;
 		midc = minc;
 		minc = temp;
 	}
 
 	if (maxc < minc)
 	{
-		const real temp = maxc;
+		const float temp = maxc;
 		maxc = minc;
 		minc = temp;
 	}
 
 	if (maxc < midc)
 	{
-		const real temp = maxc;
+		const float temp = maxc;
 		maxc = midc;
 		midc = temp;
 	}
 
-	return (maxc + CONST_REAL(11.0f / 32.0f) * midc + CONST_REAL(0.25f) * minc);
+	return (maxc + (11.0f / 32.0f) * midc + (0.25f) * minc);
 }
 
 // ----------------------------------------------------------------------
@@ -305,7 +309,7 @@ inline real Vector::approximateMagnitude(void) const
  * @see Vector::magnitudeSquared()
  */
 
-inline real Vector::magnitude(void) const
+inline float Vector::magnitude(void) const
 {
 	return sqrt(magnitudeSquared());
 }
@@ -321,7 +325,7 @@ inline real Vector::magnitude(void) const
  * @see Vector::magnitudeBetween()
  */
 
-inline real Vector::magnitudeBetweenSquared(const Vector &vec) const
+inline float Vector::magnitudeBetweenSquared(const Vector &vec) const
 {
 	return (sqr(x - vec.x) + sqr(y - vec.y) + sqr(z - vec.z));
 }
@@ -337,7 +341,7 @@ inline real Vector::magnitudeBetweenSquared(const Vector &vec) const
  * @see Vector::magnitudeBetweenSquared()
  */
 
-inline real Vector::magnitudeBetween(const Vector &vec) const
+inline float Vector::magnitudeBetween(const Vector &vec) const
 {
 	return sqrt(magnitudeBetweenSquared(vec));
 }
@@ -353,7 +357,7 @@ inline real Vector::magnitudeBetween(const Vector &vec) const
 * @see Vector::magnitudeBetween()
 */
 
-inline real Vector::magnitudeXYBetweenSquared(const Vector &vec) const
+inline float Vector::magnitudeXYBetweenSquared(const Vector &vec) const
 {
 	return (sqr(x - vec.x) + sqr(y - vec.y));
 }
@@ -369,7 +373,7 @@ inline real Vector::magnitudeXYBetweenSquared(const Vector &vec) const
 * @see Vector::magnitudeBetweenSquared()
 */
 
-inline real Vector::magnitudeXYBetween(const Vector &vec) const
+inline float Vector::magnitudeXYBetween(const Vector &vec) const
 {
 	return sqrt(magnitudeXYBetweenSquared(vec));
 }
@@ -385,7 +389,7 @@ inline real Vector::magnitudeXYBetween(const Vector &vec) const
 * @see Vector::magnitudeBetween()
 */
 
-inline real Vector::magnitudeXZBetweenSquared(const Vector &vec) const
+inline float Vector::magnitudeXZBetweenSquared(const Vector &vec) const
 {
 	return (sqr(x - vec.x) + sqr(z - vec.z));
 }
@@ -401,7 +405,7 @@ inline real Vector::magnitudeXZBetweenSquared(const Vector &vec) const
 * @see Vector::magnitudeBetweenSquared()
 */
 
-inline real Vector::magnitudeXZBetween(const Vector &vec) const
+inline float Vector::magnitudeXZBetween(const Vector &vec) const
 {
 	return sqrt(magnitudeXZBetweenSquared(vec));
 }
@@ -417,7 +421,7 @@ inline real Vector::magnitudeXZBetween(const Vector &vec) const
 * @see Vector::magnitudeBetween()
 */
 
-inline real Vector::magnitudeYZBetweenSquared(const Vector &vec) const
+inline float Vector::magnitudeYZBetweenSquared(const Vector &vec) const
 {
 	return (sqr(y - vec.y) + sqr(z - vec.z));
 }
@@ -433,7 +437,7 @@ inline real Vector::magnitudeYZBetweenSquared(const Vector &vec) const
 * @see Vector::magnitudeBetweenSquared()
 */
 
-inline real Vector::magnitudeYZBetween(const Vector &vec) const
+inline float Vector::magnitudeYZBetween(const Vector &vec) const
 {
 	return sqrt(magnitudeYZBetweenSquared(vec));
 }
@@ -496,7 +500,7 @@ inline Vector &Vector::operator +=(const Vector &rhs)
  * @return A reference to this modified vector
  */
 
-inline Vector &Vector::operator *=(real scalar)
+inline Vector &Vector::operator *=(float scalar)
 {
 	x *= scalar;
 	y *= scalar;
@@ -514,9 +518,9 @@ inline Vector &Vector::operator *=(real scalar)
  * @return A reference to this modified vector
  */
 
-inline Vector &Vector::operator /=(real scalar)
+inline Vector &Vector::operator /=(float scalar)
 {
-	*this *= (CONST_REAL(1.0) / scalar);
+	*this *= (1.0f / scalar);
 	return *this;
 }
 
@@ -577,7 +581,7 @@ inline const Vector Vector::operator -(const Vector &rhs) const
  * @return The source vector multiplied by the scalar
  */
 
-inline const Vector Vector::operator *(real scalar) const
+inline const Vector Vector::operator *(float scalar) const
 {
 	return Vector(x * scalar, y * scalar, z * scalar);
 }
@@ -592,9 +596,9 @@ inline const Vector Vector::operator *(real scalar) const
  * @return The source vector divided by the scalar
  */
 
-inline const Vector Vector::operator /(real scalar) const
+inline const Vector Vector::operator /(float scalar) const
 {
-	const real multiplier(CONST_REAL(1.0) / scalar);
+	const float multiplier(1.0f / scalar);
 	return Vector(x * multiplier, y * multiplier, z * multiplier);
 }
 
@@ -607,7 +611,7 @@ inline const Vector Vector::operator /(real scalar) const
  * @return The source vector multiplied by the scalar
  */
 
-inline const Vector operator *(real scalar, const Vector &vec)
+inline const Vector operator *(float scalar, const Vector &vec)
 {
 	return Vector(vec.x * scalar, vec.y * scalar, vec.z * scalar);
 }
@@ -690,7 +694,7 @@ inline const Vector Vector::reflectIncoming(const Vector &incident) const
 
 inline const Vector Vector::midpoint(const Vector &vector1, const Vector &vector2)
 {
-	return Vector((vector1.x + vector2.x) * CONST_REAL(0.5), (vector1.y + vector2.y) * CONST_REAL(0.5), (vector1.z + vector2.z) * CONST_REAL(0.5));
+	return Vector((vector1.x + vector2.x) * 0.5f, (vector1.y + vector2.y) * 0.5f, (vector1.z + vector2.z) * 0.5f);
 }
 
 // ----------------------------------------------------------------------
@@ -706,7 +710,7 @@ inline const Vector Vector::midpoint(const Vector &vector1, const Vector &vector
  * @param time   
  */
 
-inline const Vector Vector::linearInterpolate(const Vector &vector1, const Vector &vector2, real time)
+inline const Vector Vector::linearInterpolate(const Vector &vector1, const Vector &vector2, float time)
 {
 	return Vector(vector1.x + (vector2.x - vector1.x) * time, vector1.y + (vector2.y - vector1.y) * time, vector1.z + (vector2.z - vector1.z) * time);
 }

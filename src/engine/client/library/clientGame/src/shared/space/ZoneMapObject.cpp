@@ -95,17 +95,17 @@ namespace ZoneMapObjectNamespace
 	int s_nextAsteroidAppearanceIndex = 0;
 
 	typedef std::pair<int, int> MembraneCustomization;
-	MembraneCustomization s_defaultMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_shipMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_selectMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_activeWaypointMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_inactiveWaypointMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_activePoiWaypointMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_inactivePoiWaypointMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_missionCriticalMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_spaceStationMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_hyperspaceMembrane(std::make_pair<int, int>(132, 122));
-	MembraneCustomization s_asteroidMembrane(std::make_pair<int, int>(132, 122));
+	MembraneCustomization s_defaultMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_shipMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_selectMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_activeWaypointMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_inactiveWaypointMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_activePoiWaypointMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_inactivePoiWaypointMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_missionCriticalMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_spaceStationMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_hyperspaceMembrane(std::make_pair(132, 122));
+	MembraneCustomization s_asteroidMembrane(std::make_pair(132, 122));
 
 	void install();
 	void remove();

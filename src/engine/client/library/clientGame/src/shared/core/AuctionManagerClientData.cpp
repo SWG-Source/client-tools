@@ -39,7 +39,7 @@ AuctionManagerClientData::Header AuctionManagerClientData::constructSimulationHe
 	if (s_nameType)
 		_snprintf (buf, sizeof (buf), "Item number %d", static_cast<int>(s_id));
 	else
-		_snprintf (buf, sizeof (buf), "@obj_n:unknown_object", static_cast<int>(s_id));
+		_snprintf (buf, sizeof (buf), "@obj_n:unknown_object");
 
 	s_nameType = !s_nameType;
 

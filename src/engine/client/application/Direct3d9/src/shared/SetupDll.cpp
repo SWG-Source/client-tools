@@ -41,15 +41,16 @@ static FARPROC WINAPI DliHook(unsigned dliNotify, PDelayLoadInfo  pdli)
 	return 0;
 }
 
+#if _MSC_VER < 1300
+extern "C" PfnDliHook __pfnDliNotifyHook = DliHook;
+#else
+extern "C" const PfnDliHook __pfnDliNotifyHook2 = DliHook;
+#endif
+
 // ======================================================================
 
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID)
 {
-#if _MSC_VER < 1300
-	__pfnDliNotifyHook = DliHook;
-#else
-	__pfnDliNotifyHook2 = DliHook;
-#endif
 	return TRUE;
 }
 

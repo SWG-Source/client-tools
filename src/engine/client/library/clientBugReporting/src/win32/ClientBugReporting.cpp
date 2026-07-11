@@ -100,26 +100,26 @@ bool ClientBugReporting::sendMail(const std::string& to, const std::string& from
 	const int static_args = 13;
 
 	int argc = static_args + (2 * numAttachments);
-	char** argv = new char*[argc];
+	const char** argv = new const char*[argc];
 	int argv_value = 1;
 	argv[argv_value++] = "-to";
-	argv[argv_value++] = const_cast<char*>(to.c_str());
+	argv[argv_value++] = to.c_str();
 	argv[argv_value++] = "-subject";
-	argv[argv_value++] = const_cast<char*>(subject.c_str());
+	argv[argv_value++] = subject.c_str();
 	argv[argv_value++] = "-smtphost";
-	argv[argv_value++] = const_cast<char*>(ms_smtpServer.c_str());
+	argv[argv_value++] = ms_smtpServer.c_str();
 	argv[argv_value++] = "-port";
-	argv[argv_value++] = const_cast<char*>(ms_smtpPort.c_str());
+	argv[argv_value++] = ms_smtpPort.c_str();
 	argv[argv_value++] = "-f";
-	argv[argv_value++] =  const_cast<char*>(from.c_str());
+	argv[argv_value++] = from.c_str();
 	argv[argv_value++] = "-body";
-	argv[argv_value++] = const_cast<char*>(body.c_str());
+	argv[argv_value++] = body.c_str();
 
 	//iterate through all attachments, building the argv entries for them
 	for(std::vector<std::string>::const_iterator i = attachments.begin(); i != attachments.end(); ++i)
 	{
 		argv[argv_value++] = "-attach";
-		argv[argv_value++] = const_cast<char*>(i->c_str());
+		argv[argv_value++] = i->c_str();
 	}
 
 	int numFiles = 0;
@@ -163,7 +163,7 @@ bool ClientBugReporting::sendMail(const std::string& to, const std::string& from
 	memset(envp, 0, 256);
 
 	//call into blat to send the mail
-	int result = callBlat(argc, argv, &envp);
+	const int result = callBlat(argc, const_cast<char**>(argv), &envp);
 	//clean up allocated memory
 	delete[] argv;
 	delete[] envp;

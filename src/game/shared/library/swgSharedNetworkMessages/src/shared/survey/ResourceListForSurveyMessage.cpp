@@ -5,8 +5,27 @@
 //
 // ======================================================================
 
-#include "swgSharedNetworkMessages/FirstSwgSharedNetworkMessages.h"
 #include "swgSharedNetworkMessages/ResourceListForSurveyMessage.h"
+#include "swgSharedNetworkMessages/FirstSwgSharedNetworkMessages.h"
+
+static_assert(std::is_class<Archive::ByteStream>::value, "ByteStream wrong");
+static_assert(std::is_class<Archive::ReadIterator>::value, "ReadIterator wrong");
+
+void Archive::put(ByteStream& target, const ResourceList_DataItem& data)
+{
+	put(target, data.resourceName);
+	put(target, data.resourceId);
+	put(target, data.parentClassName);
+}
+
+void Archive::get(ReadIterator& source, ResourceList_DataItem& data)
+{
+	get(source, data.resourceName);
+	get(source, data.resourceId);
+	get(source, data.parentClassName);
+}
+
+// ======================================================================
 
 // ======================================================================
 
@@ -68,19 +87,3 @@ const NetworkId &ResourceListForSurveyMessage::getSurveyToolId() const
 }
 
 // =====================================================================
-
-void Archive::put(ByteStream &target, const ResourceList_DataItem &data)
-{
-	put(target,data.resourceName);
-	put(target,data.resourceId);
-	put(target,data.parentClassName);
-}
-
-void Archive::get(ReadIterator &source, ResourceList_DataItem &data)
-{
-	get(source,data.resourceName);
-	get(source,data.resourceId);
-	get(source,data.parentClassName);
-}
-
-// ======================================================================
