@@ -8,6 +8,8 @@ The God client supports both its legacy Win32 build and a self-contained `Releas
 - Microsoft DirectX SDK (June 2010), exposed through `DXSDK_DIR` or installed in its default location.
 - An existing God client data package for staging and world editing.
 
+The x64 libjpeg-turbo dependency is included under `deps/x64`; do not install it separately.
+
 ## x64 Build and Stage
 
 Run from PowerShell:

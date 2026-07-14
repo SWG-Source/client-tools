@@ -8,7 +8,7 @@ The `Release|x64` gameplay client builds from this repository with modern MSBuil
 - Microsoft DirectX SDK (June 2010). Set `DXSDK_DIR` when it is not installed at the default location.
 - The x64 Visual C++ runtime and the legacy DirectX runtime. The stage script verifies `vcruntime140.dll` and `d3dx9_43.dll` in `System32`.
 
-The required non-system libraries and runtime DLLs are vendored in `deps/x64` and `mss64-stub`.
+The required non-system libraries and runtime DLLs, including the x64 libjpeg-turbo headers and static library, are vendored in `deps/x64` and `mss64-stub`. No system-wide libjpeg-turbo installation is required.
 
 ## Build
 

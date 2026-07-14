@@ -85,6 +85,8 @@ if (-not $env:DXSDK_DIR -or -not (Test-Path -LiteralPath $env:DXSDK_DIR -PathTyp
 }
 
 $requiredInputs = @(
+    "deps\x64\include\libjpeg-turbo\jpeglib.h",
+    "deps\x64\lib\jpeg-static.lib",
     "deps\x64\lib\libxml2.lib",
     "deps\x64\lib\pcre.lib",
     "deps\x64\lib\dpvs.lib",
