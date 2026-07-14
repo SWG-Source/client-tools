@@ -4,11 +4,22 @@ The `Release|x64` gameplay client builds from this repository with modern MSBuil
 
 ## Prerequisites
 
-- Visual Studio or Build Tools with Desktop development with C++ and an x64 MSVC toolset. The validated build used Visual Studio 2026, MSVC v145.
-- Microsoft DirectX SDK (June 2010). Set `DXSDK_DIR` when it is not installed at the default location.
+- Visual Studio 2026 or Build Tools 2026 with MSBuild 18, Desktop development with C++, and the v145 x64 MSVC toolset.
+- Windows 10 SDK 10.0.19041 or newer.
+- Microsoft DirectX SDK (June 2010). The similarly named DirectX redistributable is runtime-only and does not contain the build headers or libraries.
 - The x64 Visual C++ runtime and the legacy DirectX runtime. The stage script verifies `vcruntime140.dll` and `d3dx9_43.dll` in `System32`.
 
 The required non-system libraries and runtime DLLs, including the x64 libjpeg-turbo headers and static library, are vendored in `deps/x64` and `mss64-stub`. No system-wide libjpeg-turbo installation is required.
+
+Check or install the complete build profile from the repository root:
+
+```powershell
+.\scripts\Test-X64BuildPrerequisites.ps1
+# Run this command from elevated PowerShell when anything is missing:
+.\scripts\Setup-X64BuildPrerequisites.ps1 -Install
+```
+
+The setup script downloads Microsoft installers into the ignored `deps/source-cache/build-prerequisites` cache, verifies their signatures and pinned hashes, and installs only missing components. See [the prerequisite manifest guide](../deps/build-prerequisites/README.md) for direct links and offline-cache commands.
 
 ## Build
 
@@ -18,7 +29,7 @@ From the repository root:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-X64Client.ps1
 ```
 
-The script locates the newest installed MSBuild, builds `SwgClient` as `Release|x64`, and verifies that the client and all three D3D9 raster DLLs have the x64 PE machine type.
+The script validates the complete `x64-dx9-vanilla` build profile, locates MSBuild 18 with v145, builds `SwgClient` as `Release|x64`, and verifies that the client and all three D3D9 raster DLLs have the x64 PE machine type.
 
 To select a Visual Studio installation or toolset explicitly:
 

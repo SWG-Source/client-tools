@@ -13,37 +13,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function Get-MsBuildPath {
-    param([string]$RequestedVisualStudioRoot)
-
-    if ($RequestedVisualStudioRoot) {
-        $candidate = Join-Path $RequestedVisualStudioRoot "MSBuild\Current\Bin\MSBuild.exe"
-        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-            throw "MSBuild was not found below VisualStudioRoot: $RequestedVisualStudioRoot"
-        }
-
-        return (Resolve-Path -LiteralPath $candidate).Path
-    }
-
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
-        $matches = @(
-            & $vswhere -latest -products * -requires Microsoft.Component.MSBuild `
-                -find "MSBuild\**\Bin\MSBuild.exe"
-        )
-        if ($matches.Count -gt 0) {
-            return $matches[0]
-        }
-    }
-
-    $command = Get-Command msbuild.exe -ErrorAction SilentlyContinue
-    if ($command) {
-        return $command.Source
-    }
-
-    throw "MSBuild was not found. Install Visual Studio Build Tools with Desktop development with C++."
-}
-
 function Get-PeMachine {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -71,18 +40,13 @@ function Get-PeMachine {
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $solution = Join-Path $repoRoot "src\build\win32\swg.sln"
-$msbuild = Get-MsBuildPath -RequestedVisualStudioRoot $VisualStudioRoot
-
-if (-not $env:DXSDK_DIR) {
-    $defaultDirectX = Join-Path ${env:ProgramFiles(x86)} "Microsoft DirectX SDK (June 2010)"
-    if (Test-Path -LiteralPath $defaultDirectX -PathType Container) {
-        $env:DXSDK_DIR = $defaultDirectX.TrimEnd("\") + "\"
-    }
-}
-
-if (-not $env:DXSDK_DIR -or -not (Test-Path -LiteralPath $env:DXSDK_DIR -PathType Container)) {
-    throw "Set DXSDK_DIR to the Microsoft DirectX SDK (June 2010) installation directory."
-}
+$prerequisites = & (Join-Path $PSScriptRoot "Test-X64BuildPrerequisites.ps1") `
+    -PlatformToolset $PlatformToolset `
+    -VisualStudioRoot $VisualStudioRoot `
+    -Quiet `
+    -PassThru
+$msbuild = $prerequisites.VisualStudio.MSBuildPath
+$env:DXSDK_DIR = $prerequisites.DirectXSdk.Root.TrimEnd("\") + "\"
 
 $requiredInputs = @(
     "deps\x64\include\libjpeg-turbo\jpeglib.h",

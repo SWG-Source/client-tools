@@ -15,6 +15,15 @@ To build the client, find the `SwgClient` project in solution explorer and right
 
 ### x64 Quick Start
 
+Check the build environment, or install missing Microsoft prerequisites from an elevated PowerShell window:
+
+```powershell
+.\scripts\Test-X64BuildPrerequisites.ps1
+.\scripts\Setup-X64BuildPrerequisites.ps1 -Install
+```
+
+Installer URLs, pinned DirectX hashes, and the offline-cache workflow are documented in [the x64 prerequisite profile](deps/build-prerequisites/README.md).
+
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-X64Client.ps1
 ```

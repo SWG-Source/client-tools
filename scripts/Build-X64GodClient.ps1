@@ -15,25 +15,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function Get-VisualStudioRoot {
-    param([string]$RequestedRoot)
-
-    if ($RequestedRoot) {
-        return (Resolve-Path -LiteralPath $RequestedRoot).Path
-    }
-
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-        throw "vswhere.exe was not found. Pass -VisualStudioRoot explicitly."
-    }
-
-    $root = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
-    if (-not $root) {
-        throw "Visual Studio with the x64 C++ toolchain was not found."
-    }
-    return $root
-}
-
 function Get-PeMachine {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -59,7 +40,12 @@ function Get-PeMachine {
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $solution = Join-Path $repoRoot "src\build\win32\swg.sln"
-$vsRoot = Get-VisualStudioRoot -RequestedRoot $VisualStudioRoot
+$prerequisites = & (Join-Path $PSScriptRoot "Test-X64BuildPrerequisites.ps1") `
+    -PlatformToolset $PlatformToolset `
+    -VisualStudioRoot $VisualStudioRoot `
+    -Quiet `
+    -PassThru
+$vsRoot = $prerequisites.VisualStudio.Root
 $devShell = Join-Path $vsRoot "Common7\Tools\Launch-VsDevShell.ps1"
 $msbuild = Join-Path $vsRoot "MSBuild\Current\Bin\MSBuild.exe"
 
@@ -72,16 +58,7 @@ if (-not $SkipQtBuild) {
 }
 
 & $devShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-
-if (-not $env:DXSDK_DIR) {
-    $defaultDirectX = Join-Path ${env:ProgramFiles(x86)} "Microsoft DirectX SDK (June 2010)"
-    if (Test-Path -LiteralPath $defaultDirectX -PathType Container) {
-        $env:DXSDK_DIR = $defaultDirectX.TrimEnd("\") + "\"
-    }
-}
-if (-not $env:DXSDK_DIR -or -not (Test-Path -LiteralPath $env:DXSDK_DIR -PathType Container)) {
-    throw "Set DXSDK_DIR to the Microsoft DirectX SDK (June 2010) installation directory."
-}
+$env:DXSDK_DIR = $prerequisites.DirectXSdk.Root.TrimEnd("\") + "\"
 
 $requiredInputs = @(
     "deps\x64\include\libjpeg-turbo\jpeglib.h",

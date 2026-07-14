@@ -19,12 +19,12 @@ function Get-VisualStudioRoot {
 
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-        throw "vswhere.exe was not found. Pass -VisualStudioRoot explicitly."
+        throw "vswhere.exe was not found. Run .\scripts\Setup-X64BuildPrerequisites.ps1 -Install or pass -VisualStudioRoot explicitly."
     }
 
     $root = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
     if (-not $root) {
-        throw "Visual Studio with the x64 C++ toolchain was not found."
+        throw "Visual Studio with the x64 C++ toolchain was not found. Run .\scripts\Setup-X64BuildPrerequisites.ps1 -Install."
     }
     return $root
 }
