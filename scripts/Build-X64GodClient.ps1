@@ -61,6 +61,9 @@ if (-not $SkipQtBuild) {
 $env:DXSDK_DIR = $prerequisites.DirectXSdk.Root.TrimEnd("\") + "\"
 
 $requiredInputs = @(
+    "deps\x64\include\SDL3\SDL.h",
+    "deps\x64\lib\SDL3.lib",
+    "deps\x64\bin\SDL3.dll",
     "deps\x64\include\libjpeg-turbo\jpeglib.h",
     "deps\x64\lib\jpeg-static.lib",
     "deps\x64\lib\dpvs.lib",
@@ -71,12 +74,40 @@ $requiredInputs = @(
     "deps\qt3-win64-src\lib\qt-mt3.lib",
     "deps\qt3-win64-src\lib\qtmain.lib",
     "deps\qt3-win64-src\lib\qt-mt3.dll",
+    "src\external\3rd\library\qt\3.3.4\bin\uic.exe",
+    "src\external\3rd\library\qt\3.3.4\bin\moc.exe",
     "mss64-stub\mss64.lib"
 )
 foreach ($relativePath in $requiredInputs) {
     $path = Join-Path $repoRoot $relativePath
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required local x64 God client input is missing: $path"
+    }
+}
+
+# The converted project can compile generated UI sources before its CustomBuild
+# items run, so generate them explicitly to make clean worktrees deterministic.
+$uiRoot = Join-Path $repoRoot "src\game\client\application\SwgGodClient\src\shared\ui"
+$uiOutputRoot = Join-Path $repoRoot "src\compile\win32\SwgGodClient\$Configuration"
+$uic = Join-Path $repoRoot "src\external\3rd\library\qt\3.3.4\bin\uic.exe"
+$moc = Join-Path $repoRoot "src\external\3rd\library\qt\3.3.4\bin\moc.exe"
+[void](New-Item -ItemType Directory -Path $uiOutputRoot -Force)
+
+foreach ($uiFile in Get-ChildItem -LiteralPath $uiRoot -Filter "*.ui" -File | Sort-Object Name) {
+    $header = Join-Path $uiOutputRoot ($uiFile.BaseName + ".h")
+    $source = Join-Path $uiOutputRoot ($uiFile.BaseName + "_r.cpp")
+
+    & $uic -o $header $uiFile.FullName
+    if ($LASTEXITCODE -ne 0) {
+        throw "uic failed to generate $header."
+    }
+    & $uic -o $source -impl $header $uiFile.FullName
+    if ($LASTEXITCODE -ne 0) {
+        throw "uic failed to generate $source."
+    }
+    & $moc $header | Out-File -LiteralPath $source -Append -Encoding ascii
+    if ($LASTEXITCODE -ne 0) {
+        throw "moc failed to generate metadata for $header."
     }
 }
 
@@ -121,6 +152,7 @@ $artifacts = @(
     "src\build\win32\x64\$Configuration\gl07_r.dll",
     "src\build\win32\x64\$Configuration\DllExport.dll",
     "deps\qt3-win64-src\lib\qt-mt3.dll",
+    "deps\x64\bin\SDL3.dll",
     "mss64-stub\mss64.dll",
     "deps\x64\bin\libxml2.dll",
     "deps\x64\bin\iconv-2.dll",

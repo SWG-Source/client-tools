@@ -28,7 +28,7 @@ public:
 
 	enum
 	{
-		MAX_JOYSTICKS          = 1,
+		MAX_JOYSTICKS          = 8,
 
 		MAX_KEYS               = 255,
 		MAX_MOUSE_BUTTONS      = 8,
@@ -66,8 +66,21 @@ public:
 		uint32    shiftState;
 		InputType type;
 		int32     value;
+		int32     device;   // joystick slot (0..MAX_JOYSTICKS-1) for IT_Joy* binds; -1 = any device / not joystick
 		BindInfo ();
-		BindInfo (uint32 theShiftStaate, InputType theType, int32 theValue);
+		BindInfo (uint32 theShiftStaate, InputType theType, int32 theValue, int32 theDevice = -1);
+	};
+
+	//-----------------------------------------------------------------
+	/**
+	* Stable identity of the physical device assigned to a joystick slot.
+	* Persisted with the input map so bindings survive replug / re-enumeration.
+	*/
+
+	struct JoystickIdentity
+	{
+		std::string guid;   // stable per-model device GUID (e.g. SDL joystick GUID string)
+		std::string name;   // human readable product name, for the configuration UI
 	};
 
 	//-----------------------------------------------------------------
@@ -142,9 +155,10 @@ private:
 
 	MessageQueue   *m_messageQueue;
 
-	int             m_keyboardNumber;
-	int             m_mouseNumber;
-	int             m_joystickNumber[MAX_JOYSTICKS];
+	int               m_keyboardNumber;
+	int               m_mouseNumber;
+	int               m_joystickNumber[MAX_JOYSTICKS];
+	JoystickIdentity  m_joystickIdentity[MAX_JOYSTICKS];
 
 	Shifts *        m_shifts;
 	Map             m_currentMap;
@@ -169,9 +183,10 @@ private:
 
 	bool            load(Iff & iff, bool allowFail);
 	void            load_0006(Iff & iff);
+	void            load_0007(Iff & iff);
 
-	void            processButtonPress(const Map::Button &mapButton, InputType type, int value);
-	void            processButtonRelease(InputType type, int value);
+	void            processButtonPress(const Map::Button &mapButton, InputType type, int value, int device = -1);
+	void            processButtonRelease(InputType type, int value, int device = -1);
 
 	void            processJoystickPovHat(int joystickIndex, int hatNumber, real direction);
 
@@ -205,6 +220,16 @@ public:
 	void                  setKeyboard(int newKeyboardNumber);
 	void                  setMouse(int newMouseNumber);
 	void                  setJoystick(int joystickIndex, int newJoystickNumber);
+
+	// -- multi-device joystick slot management.  A "slot" is a logical joystick
+	//    binding bank (0..MAX_JOYSTICKS-1); the physical device that feeds it is
+	//    identified at runtime by number (event->arg1) and persisted by stable guid/name.
+	int                   getJoystickNumber       (int slot) const;
+	void                  setJoystickIdentity     (int slot, const char * guid, const char * name);
+	bool                  getJoystickIdentity     (int slot, std::string & guid, std::string & name) const;
+	int                   getJoystickSlotForNumber (int number) const;   // slot whose device number == number, else -1
+	int                   findJoystickSlotByGuid  (const char * guid) const; // slot whose identity guid matches, else -1
+	int                   findFreeJoystickSlot    () const;             // unbound (empty identity, inactive) slot, else -1
 
 	void                  handleInputReset(void);
 
@@ -309,19 +334,21 @@ inline uint32 InputMap::getShiftState () const
 
 //----------------------------------------------------------------------
 
-inline InputMap::BindInfo::BindInfo() : 
+inline InputMap::BindInfo::BindInfo() :
 shiftState (0),
 type (IT_None),
-value (0)
+value (0),
+device (-1)
 {
 }
 
 //----------------------------------------------------------------------
 
-inline InputMap::BindInfo::BindInfo (uint32 theShiftState, InputType theType, int32 theValue) :
+inline InputMap::BindInfo::BindInfo (uint32 theShiftState, InputType theType, int32 theValue, int32 theDevice) :
 shiftState (theShiftState),
 type (theType),
-value (theValue)
+value (theValue),
+device (theDevice)
 {
 }
 

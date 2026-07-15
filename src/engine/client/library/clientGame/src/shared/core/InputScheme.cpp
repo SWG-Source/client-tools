@@ -18,6 +18,7 @@
 #include "clientUserInterface/CuiMessageBox.h"
 #include "clientUserInterface/CuiStringVariablesManager.h"
 #include "clientUserInterface/CuiPreferences.h"
+#include "clientDirectInput/SdlJoystickInput.h"
 #include "sharedFoundation/NetworkId.h"
 #include "sharedInputMap/InputMap.h"
 #include "sharedInputMap/InputMap_Command.h"
@@ -278,6 +279,16 @@ namespace
 		CurrentUserOptionManager::save ();
 	}
 
+	//----------------------------------------------------------------------
+	// SDL device hot-plug: re-resolve which physical device feeds each binding
+	// slot of the live input map whenever controllers are attached/removed.
+
+	void onInputDevicesChanged()
+	{
+		if (s_groundInputMap)
+			InputScheme::resolveInputMapDevices (*s_groundInputMap);
+	}
+
 }
 
 //----------------------------------------------------------------------
@@ -339,7 +350,10 @@ bool InputScheme::resetFromType (const std::string & type, bool confirmed)
 			WARNING (true, ("Unable to reload inputmap"));
 			return false;
 		}
-		
+
+		//-- a reload re-reads the persisted device identities; re-attach devices
+		resolveInputMapDevices (*s_groundInputMap);
+
 		const uint32 flags = data->flags;
 		
 		CuiPreferences::setUseSwgMouseMap( ( flags & F_swgMouseMap ) != 0 );
@@ -472,6 +486,11 @@ InputMap * InputScheme::fetchGroundInputMap()
 			}
 		}
 
+		//-- attach connected controllers to their binding slots, and keep them in
+		//-- sync as devices are plugged/unplugged while playing
+		resolveInputMapDevices (*s_groundInputMap);
+		SdlJoystickInput::setDeviceChangeCallback (onInputDevicesChanged);
+
 	}
 	else
 	{
@@ -503,10 +522,55 @@ void InputScheme::releaseGroundInputMap (InputMap & imap)
 	DEBUG_FATAL (s_groundInputMap != &imap, ("Attempt to InputScheme::releaseGroundInputMap invalid InputMap"));
 	if (!--s_groundInputMapRefCount)
 	{
+		//-- stop the hot-plug callback before the map it references is destroyed
+		SdlJoystickInput::setDeviceChangeCallback (0);
+
 		delete s_groundInputMap;
 		s_groundInputMap = 0;
 		s_resetCallback->release ();
 		s_resetCallback = 0;
+	}
+}
+
+//----------------------------------------------------------------------
+
+void InputScheme::resolveInputMapDevices (InputMap & imap)
+{
+	if (!SdlJoystickInput::isInstalled ())
+		return;
+
+	//-- drop all runtime device->slot assignments (persisted identities are kept)
+	for (int slot = 0; slot < InputMap::MAX_JOYSTICKS; ++slot)
+		imap.setJoystick (slot, -1);
+
+	//-- attach each connected device to the binding slot whose saved identity
+	//-- matches its guid; brand-new devices claim a free slot and adopt it
+	int const deviceCount = SdlJoystickInput::getNumberOfDevices ();
+	for (int i = 0; i < deviceCount; ++i)
+	{
+		int         number    = -1;
+		std::string guid;
+		std::string name;
+		bool        isGamepad = false;
+
+		if (!SdlJoystickInput::getDeviceByIndex (i, number, guid, name, isGamepad))
+			continue;
+
+		int slot = imap.findJoystickSlotByGuid (guid.c_str ());
+
+		//-- if that slot was already claimed this pass (identical device), look elsewhere
+		if (slot >= 0 && imap.getJoystickNumber (slot) >= 0)
+			slot = -1;
+
+		if (slot < 0)
+		{
+			slot = imap.findFreeJoystickSlot ();
+			if (slot >= 0)
+				imap.setJoystickIdentity (slot, guid.c_str (), name.c_str ());
+		}
+
+		if (slot >= 0)
+			imap.setJoystick (slot, number);
 	}
 }
 

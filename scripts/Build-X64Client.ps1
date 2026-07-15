@@ -49,6 +49,9 @@ $msbuild = $prerequisites.VisualStudio.MSBuildPath
 $env:DXSDK_DIR = $prerequisites.DirectXSdk.Root.TrimEnd("\") + "\"
 
 $requiredInputs = @(
+    "deps\x64\include\SDL3\SDL.h",
+    "deps\x64\lib\SDL3.lib",
+    "deps\x64\bin\SDL3.dll",
     "deps\x64\include\libjpeg-turbo\jpeglib.h",
     "deps\x64\lib\jpeg-static.lib",
     "deps\x64\lib\libxml2.lib",

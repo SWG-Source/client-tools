@@ -41,6 +41,11 @@ public:
 	static InputMap *            fetchGroundInputMap    ();
 	static void                  releaseGroundInputMap  (InputMap & imap);
 
+	// Assign each currently-attached SDL device to the input map binding slot
+	// whose persisted identity (guid) matches, claiming a free slot for new
+	// devices.  Call after loading/reloading a map and on device hot-plug.
+	static void                  resolveInputMapDevices (InputMap & imap);
+
 	static Callback *            getResetCallback       ();
 
 	static std::string const &   getLastInputSchemeType ();

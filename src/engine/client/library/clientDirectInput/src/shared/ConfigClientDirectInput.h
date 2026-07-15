@@ -18,6 +18,7 @@ public:
 	static void         install();
 	static bool         getUseJoysticks();
 	static int          getUseJoystick();
+	static bool         getUseSdlInput();
 	static bool         getUseMouse();
 	static bool         getWindowsKeyEnabledWhenFullscreen();
 	static bool         getWindowsKeyEnabledWhenWindowed();

@@ -85,6 +85,10 @@ $runtimeFiles = @(
         Name   = "mss64.dll"
     },
     [pscustomobject]@{
+        Source = Join-Path $repoRoot "deps\x64\bin\SDL3.dll"
+        Name   = "SDL3.dll"
+    },
+    [pscustomobject]@{
         Source = Join-Path $repoRoot "deps\x64\bin\libxml2.dll"
         Name   = "libxml2.dll"
     },
@@ -209,6 +213,7 @@ $manifest = [ordered]@{
     workingTreeDirty = $workingTreeDirty
     clientRoot       = $clientRootPath
     rootTreCount     = $treFiles.Count
+    inputBackend     = "SDL 3.4.10 multi-device controller input"
     audioBackend     = "mss64 compatibility stub (silent)"
     backupDirectory  = $backupDirectory
     removedIncompatibleLocalFiles = @($incompatibleLocalPaths | ForEach-Object { [IO.Path]::GetFileName($_) })
