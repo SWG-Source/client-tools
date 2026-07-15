@@ -15,6 +15,9 @@
 #include "sharedMemoryManager/FirstSharedMemoryManager.h"
 
 #pragma warning(push, 3)
+#if defined(_WIN64)
+#define SWG_JUCE_BACKEND
+#endif
 #include <mss.h>
 #pragma warning(pop)
 
