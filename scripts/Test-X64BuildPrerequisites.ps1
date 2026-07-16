@@ -109,11 +109,34 @@ function Get-VisualStudioStatus {
 
         $json = (& $vswhere @arguments 2>$null) -join [Environment]::NewLine
         if ($LASTEXITCODE -eq 0 -and $json) {
-            $instances = @($json | ConvertFrom-Json | Sort-Object { [version]$_.installationVersion } -Descending)
+            # Windows PowerShell 5.1 can emit a JSON array as one pipeline
+            # object. Assign it first so the next pipeline enumerates each
+            # Visual Studio instance before evaluating instance properties.
+            $parsedInstances = $json | ConvertFrom-Json
+            $instances = @(
+                $parsedInstances |
+                    Where-Object {
+                        $_ -and
+                        $_.PSObject.Properties["installationPath"] -and
+                        [string]$_.installationPath
+                    } |
+                    Sort-Object {
+                        $versionProperty = $_.PSObject.Properties["installationVersion"]
+                        [version]$version = $null
+                        if ($versionProperty -and
+                            [version]::TryParse([string]$versionProperty.Value, [ref]$version)) {
+                            $version
+                        }
+                        else {
+                            [version]"0.0"
+                        }
+                    } -Descending
+            )
             foreach ($instance in $instances) {
+                $versionProperty = $instance.PSObject.Properties["installationVersion"]
                 $roots += [pscustomobject]@{
                     Root = [string]$instance.installationPath
-                    Version = [string]$instance.installationVersion
+                    Version = if ($versionProperty) { [string]$versionProperty.Value } else { $null }
                 }
             }
         }
