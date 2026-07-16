@@ -56,7 +56,7 @@ $requiredInputs = @(
     "deps\x64\lib\dpvs.lib",
     "deps\x64\lib\libEverQuestTCG.lib",
     "deps\x64\lib\vivoxSharedWrapper.lib",
-    "mss64-stub\mss64.lib"
+    "deps\x64\lib\swg-stubs.lib"
 )
 
 foreach ($relativePath in $requiredInputs) {

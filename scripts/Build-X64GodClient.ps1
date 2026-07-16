@@ -68,10 +68,11 @@ $requiredInputs = @(
     "deps\x64\lib\pcre.lib",
     "deps\x64\lib\libEverQuestTCG.lib",
     "deps\x64\lib\vivoxSharedWrapper.lib",
+    "deps\x64\lib\swg-stubs.lib",
+    "deps\x64\compat-source\misc_stubs.cpp",
     "deps\qt3-win64-src\lib\qt-mt3.lib",
     "deps\qt3-win64-src\lib\qtmain.lib",
-    "deps\qt3-win64-src\lib\qt-mt3.dll",
-    "mss64-stub\mss64.lib"
+    "deps\qt3-win64-src\lib\qt-mt3.dll"
 )
 foreach ($relativePath in $requiredInputs) {
     $path = Join-Path $repoRoot $relativePath
@@ -80,14 +81,17 @@ foreach ($relativePath in $requiredInputs) {
     }
 }
 
-$stubRoot = Join-Path $repoRoot "mss64-stub"
-Push-Location $stubRoot
+$compatSourceRoot = Join-Path $repoRoot "deps\x64\compat-source"
+$compatLibraryRoot = Join-Path $repoRoot "deps\x64\lib"
+$compatObject = Join-Path $compatLibraryRoot "lgLcd_stubs.obj"
+$compatLibrary = Join-Path $compatLibraryRoot "lgLcd.lib"
+Push-Location $compatSourceRoot
 try {
-    & cl.exe /nologo /c /O2 /MT /EHsc misc_stubs.cpp /Fo:lgLcd_stubs.obj
+    & cl.exe /nologo /c /O2 /MT /EHsc misc_stubs.cpp "/Fo:$compatObject"
     if ($LASTEXITCODE -ne 0) {
         throw "The x64 LCD compatibility stub compile failed with exit code $LASTEXITCODE."
     }
-    & lib.exe /nologo /MACHINE:X64 /OUT:lgLcd.lib lgLcd_stubs.obj
+    & lib.exe /nologo /MACHINE:X64 "/OUT:$compatLibrary" $compatObject
     if ($LASTEXITCODE -ne 0) {
         throw "The x64 LCD compatibility library build failed with exit code $LASTEXITCODE."
     }
@@ -121,7 +125,6 @@ $artifacts = @(
     "src\build\win32\x64\$Configuration\gl07_r.dll",
     "src\build\win32\x64\$Configuration\DllExport.dll",
     "deps\qt3-win64-src\lib\qt-mt3.dll",
-    "mss64-stub\mss64.dll",
     "deps\x64\bin\libxml2.dll",
     "deps\x64\bin\iconv-2.dll",
     "deps\x64\bin\z.dll"

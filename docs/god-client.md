@@ -27,7 +27,7 @@ The script builds local Qt 3, the God executable, and all three D3D9 renderer DL
 
 Launch `swg\exe\win32\SwgGodClient_r.exe` with `swg\exe\win32` as its working directory. The local test account is station ID `1001` with password `local`.
 
-The validated x64 editor loads the world, renders through `gl05_r.dll`, accepts editor/game focus input, and connects to the local Docker server. Legacy Perforce integration is disabled in x64, and the bundled `mss64.dll` compatibility runtime is silent.
+The validated x64 editor loads the world, renders through `gl05_r.dll`, accepts editor/game focus input, connects to the local Docker server, and uses the same JUCE 8.0.14/WASAPI backend as the gameplay client. Legacy Perforce integration remains disabled in x64. JUCE distribution requires AGPLv3 compliance or an applicable commercial JUCE licence.
 
 ## Legacy Win32 Build
 

@@ -1212,16 +1212,11 @@ bool Audio::install()
 {
 	DEBUG_FATAL(s_installed, ("Already installed"));
 
-#if defined(_WIN64)
-	// The vendored x64 Miles compatibility DLL only satisfies imports; it has no audio driver.
-	s_disableMiles = ConfigFile::getKeyBool("ClientAudio", "disableMiles", true);
-#else
 	s_disableMiles = ConfigFile::getKeyBool("ClientAudio", "disableMiles", false);
-#endif
 
 	if (s_disableMiles)
 	{
-		REPORT_LOG(true, ("Audio: Miles is disabled. To enable miles, set \"disableMiles=false\" in the [ClientAudio] section of client.cfg.\n"));
+		REPORT_LOG(true, ("Audio: The audio backend is disabled. Set \"disableMiles=false\" in the [ClientAudio] section of client.cfg to enable it.\n"));
 		return false;
 	}
 
@@ -1330,8 +1325,9 @@ bool Audio::install()
 	AIL_speaker_configuration(s_digitalDevice2d, NULL, NULL, NULL, &s_speakers);
 
 	REPORT_LOG(true, ("Audio: %s\n", getCurrent3dProvider().c_str()));
-	REPORT_LOG(true, ("Audio: Miles speakers are %s\n", getSpeakerSpec().c_str()));
-	REPORT_LOG(true, ("Audio: Miles Max DIG_MIXER_CHANNELS(%d)\n", getMaxDigitalMixerChannels()));
+	REPORT_LOG(true, ("Audio: Backend %s\n", getMilesVersion().c_str()));
+	REPORT_LOG(true, ("Audio: Speakers are %s\n", getSpeakerSpec().c_str()));
+	REPORT_LOG(true, ("Audio: Max mixer channels (%d)\n", getMaxDigitalMixerChannels()));
 
 	// This disables any reberb from a previous product
 
@@ -2467,10 +2463,14 @@ void Audio::setSamplePosition_w(SampleId const &sampleId, Vector const &position
 //-----------------------------------------------------------------------------
 std::string Audio::getMilesVersion()
 {
+#if defined(_WIN64)
+	return "JUCE 8.0.14 / Windows Audio (WASAPI)";
+#else
 	char version[256];
 	AIL_MSS_version(version, sizeof(version));
 
 	return version;
+#endif
 }
 
 //-----------------------------------------------------------------------------

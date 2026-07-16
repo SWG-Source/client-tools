@@ -75,7 +75,6 @@ $runtimeFiles = @(
     [pscustomobject]@{ Source = Join-Path $repoRoot "src\build\win32\x64\$Configuration\gl07_r.dll"; Name = "gl07_r.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "src\build\win32\x64\$Configuration\DllExport.dll"; Name = "DllExport.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\qt3-win64-src\lib\qt-mt3.dll"; Name = "qt-mt3.dll" },
-    [pscustomobject]@{ Source = Join-Path $repoRoot "mss64-stub\mss64.dll"; Name = "mss64.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\x64\bin\libxml2.dll"; Name = "libxml2.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\x64\bin\iconv-2.dll"; Name = "iconv-2.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\x64\bin\z.dll"; Name = "z.dll" }
@@ -106,6 +105,10 @@ $incompatibleLocalPaths = @(
         }
     }
 )
+$obsoleteRuntimePaths = @(
+    Join-Path $runtimeRoot "mss64.dll" |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+)
 
 if (-not $PSCmdlet.ShouldProcess($runtimeRoot, "stage $Configuration x64 God client")) {
     return
@@ -122,6 +125,7 @@ if (-not $NoBackup) {
         $existingTargets += $manifestPath
     }
     $existingTargets += $incompatibleLocalPaths
+    $existingTargets += $obsoleteRuntimePaths
     $existingTargets = @($existingTargets | Sort-Object -Unique)
 
     $backupDirectory = Join-Path $runtimeRoot (".swgsource-build-backups\{0}-x64" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
@@ -134,7 +138,7 @@ if (-not $NoBackup) {
     }
 }
 
-foreach ($path in $incompatibleLocalPaths) {
+foreach ($path in @($incompatibleLocalPaths) + @($obsoleteRuntimePaths)) {
     Remove-Item -LiteralPath $path -Force
 }
 foreach ($file in $runtimeFiles) {
@@ -185,11 +189,12 @@ $manifest = [ordered]@{
     loginServerAddress = "127.0.0.1"
     relativeDataPaths = -not $KeepAbsoluteConfigPaths
     qtRuntime = "local Qt 3 Windows port, x64"
-    audioBackend = "mss64 compatibility stub (silent)"
+    audioBackend = "JUCE 8.0.14 with WASAPI and WAV/MP3/Ogg decoders"
     perforceIntegration = "disabled in x64 build"
     backupDirectory = $backupDirectory
     newlyAddedFiles = $newFiles
     removedIncompatibleLocalFiles = @($incompatibleLocalPaths | ForEach-Object { [IO.Path]::GetFileName($_) })
+    removedObsoleteRuntimeFiles = @($obsoleteRuntimePaths | ForEach-Object { [IO.Path]::GetFileName($_) })
     files = $stagedFiles
 }
 $json = $manifest | ConvertTo-Json -Depth 5
@@ -199,4 +204,4 @@ Write-Host "Staged $($runtimeFiles.Count) x64 God client runtime files to $runti
 if ($backupDirectory) {
     Write-Host "Previous runtime and configuration files were backed up to $backupDirectory"
 }
-Write-Warning "The bundled mss64 compatibility DLL is silent, and the legacy Perforce integration is disabled in this x64 build."
+Write-Warning "Audio uses JUCE 8.0.14/WASAPI; the legacy Perforce integration remains disabled in this x64 build."

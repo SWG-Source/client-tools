@@ -41,4 +41,4 @@ The supplied `directx_Jun2010_redist.exe` link is the runtime package, not the d
 
 The Build Tools and Windows SDK bootstrap links are mutable Microsoft channels, so the setup script validates their Microsoft Authenticode signatures instead of pinning a changing hash. The two immutable DirectX downloads have pinned size and SHA-256 values in `manifest.json`, and every downloaded executable must also have a valid Microsoft signature.
 
-All other x64 headers, static libraries, compatibility libraries, runtime DLLs, and prepared Qt 3 source are already tracked under `deps/x64`, `mss64-stub`, and `deps/qt3-win64-src`. The installers directly under the repository's legacy `deps` root are Visual Studio 2013/Win32 artifacts and are not used by this x64 profile.
+All other x64 headers, static libraries, compatibility libraries, runtime DLLs, and prepared Qt 3 source are already tracked under `deps/x64` and `deps/qt3-win64-src`. The legacy Miles files under `mss64-stub` are not used by the JUCE x64 profile. The installers directly under the repository's legacy `deps` root are Visual Studio 2013/Win32 artifacts and are not used by this x64 profile.

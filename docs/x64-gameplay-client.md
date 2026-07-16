@@ -9,7 +9,7 @@ The `Release|x64` gameplay client builds from this repository with modern MSBuil
 - Microsoft DirectX SDK (June 2010). The similarly named DirectX redistributable is runtime-only and does not contain the build headers or libraries.
 - The x64 Visual C++ runtime and the legacy DirectX runtime. The stage script verifies `vcruntime140.dll` and `d3dx9_43.dll` in `System32`.
 
-The required non-system libraries and runtime DLLs, including the x64 libjpeg-turbo headers and static library, are vendored in `deps/x64` and `mss64-stub`. No system-wide libjpeg-turbo installation is required.
+The required non-system libraries and runtime DLLs, including the x64 libjpeg-turbo headers and static library, are vendored in `deps/x64`. JUCE 8.0.14 audio modules are vendored under `src/external/3rd/library/JUCE-8.0.14`; no separate JUCE installation is required.
 
 Check or install the complete build profile from the repository root:
 
@@ -67,6 +67,7 @@ Staging validates every copied PE as x64, backs up only replaced runtime files u
 
 ## Current Limits
 
-- `mss64.dll` is a no-op compatibility implementation because a licensed x64 Miles library is not present. Miles defaults to disabled on x64, so this build is silent. Set `disableMiles=false` in `[ClientAudio]` only after installing a compatible real x64 Miles runtime.
+- x64 audio uses JUCE 8.0.14 with Windows Audio (WASAPI) and in-process WAV, MP3, and Ogg Vorbis decoding. The compatibility layer preserves sample callbacks, looping, seeking, playback-rate changes, 3D positioning, distance falloff, Doppler, obstruction/occlusion filtering, multichannel routing, and room reverb. No Miles DLL is required for x64.
+- JUCE 8 modules are dual-licensed under AGPLv3 or the commercial JUCE licence. Anyone distributing this client must select and comply with an applicable JUCE licensing path; see `src/external/3rd/library/JUCE-8.0.14/LICENSE.md`.
 - Vivox, Bink, and the retired TCG/browser components do not have usable x64 runtimes in this tree. Keep voice chat and intro video disabled.
 - The regular D3D9 gameplay client and x64 God client are validated. See [the God client guide](god-client.md) for its build and staging workflow.
