@@ -9,7 +9,7 @@ The `Release|x64` gameplay client builds from this repository with modern MSBuil
 - Microsoft DirectX SDK (June 2010). The similarly named DirectX redistributable is runtime-only and does not contain the build headers or libraries.
 - The x64 Visual C++ runtime and the legacy DirectX runtime. The stage script verifies `vcruntime140.dll` and `d3dx9_43.dll` in `System32`.
 
-The required non-system libraries and runtime DLLs, including the x64 libjpeg-turbo headers and static library, are vendored in `deps/x64`. JUCE 8.0.14 audio modules are vendored under `src/external/3rd/library/JUCE-8.0.14`; no separate JUCE installation is required.
+The required non-system libraries and runtime DLLs, including libjpeg-turbo and SDL 3.4.10, are vendored in `deps/x64`. JUCE 8.0.14 audio modules are vendored under `src/external/3rd/library/JUCE-8.0.14`; no separate JUCE, SDL, or libjpeg-turbo installation is required.
 
 Check or install the complete build profile from the repository root:
 
@@ -64,6 +64,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-X64Clien
 ```
 
 Staging validates every copied PE as x64, backs up only replaced runtime files under `.x64-backups`, and writes `x64-runtime-manifest.json`. It also backs up and removes incompatible local x86 copies of system DLLs such as `dbghelp.dll`, allowing the x64 process to use `System32`. It does not change client configuration, login settings, TOCs, or TRE files.
+
+SDL3 provides native input from as many as eight independent joysticks, throttles, rudder pedals, and gamepads. Existing keymaps continue to load; newly saved keymaps record stable device GUIDs so bindings can be restored after reconnecting or reordering controllers. See [the multi-controller input guide](inputreborn.md) for configuration and compatibility details.
 
 ## Current Limits
 

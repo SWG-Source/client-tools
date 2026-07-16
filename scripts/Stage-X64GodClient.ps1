@@ -75,6 +75,7 @@ $runtimeFiles = @(
     [pscustomobject]@{ Source = Join-Path $repoRoot "src\build\win32\x64\$Configuration\gl07_r.dll"; Name = "gl07_r.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "src\build\win32\x64\$Configuration\DllExport.dll"; Name = "DllExport.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\qt3-win64-src\lib\qt-mt3.dll"; Name = "qt-mt3.dll" },
+    [pscustomobject]@{ Source = Join-Path $repoRoot "deps\x64\bin\SDL3.dll"; Name = "SDL3.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\x64\bin\libxml2.dll"; Name = "libxml2.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\x64\bin\iconv-2.dll"; Name = "iconv-2.dll" },
     [pscustomobject]@{ Source = Join-Path $repoRoot "deps\x64\bin\z.dll"; Name = "z.dll" }
@@ -186,6 +187,7 @@ $manifest = [ordered]@{
     workingTreeDirty = $workingTreeDirty
     godClientRoot = $godClientRootPath
     runtimeRoot = $runtimeRoot
+    inputBackend = "SDL 3.4.10 multi-device controller input"
     loginServerAddress = "127.0.0.1"
     relativeDataPaths = -not $KeepAbsoluteConfigPaths
     qtRuntime = "local Qt 3 Windows port, x64"

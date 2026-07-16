@@ -333,6 +333,11 @@ void SwgCuiOptKeymap::OnButtonPressed           ( UIWidget *context )
 		const InputMap::Command * const cmd = NON_NULL(m_workingInputMap)->findCommandByName (commandName.c_str ());
 		NOT_NULL (cmd);
 
+		//-- release-safe: if the selected row maps to no command, don't open the
+		//-- bind dialog with a null command (would crash in doAddBinding)
+		if (!cmd)
+			return;
+
 		if (!m_bindEntry)
 		{
 			m_bindEntry = new CuiControlsMenuBindEntry (*m_entryPage);

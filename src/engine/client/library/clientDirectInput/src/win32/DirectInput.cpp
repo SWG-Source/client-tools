@@ -10,6 +10,7 @@
 
 #include "clientDirectInput/ConfigClientDirectInput.h"
 #include "clientDirectInput/ForceFeedbackEffectTemplate.h"
+#include "clientDirectInput/SdlJoystickInput.h"
 
 #include "sharedDebug/DebugKey.h"
 #include "sharedDebug/InstallTimer.h"
@@ -1691,6 +1692,13 @@ BOOL CALLBACK DirectInputNamespace::EnumEffectsInFileIntoTemplateProc(LPCDIFILEE
 void DirectInputNamespace::installJoystickDevices()
 {
 	InstallTimer const installTimer("DirectInputNamespace::installJoystickDevices");
+
+	// When the SDL backend owns joysticks/gamepads, do NOT also enumerate them
+	// through DirectInput8 -- a second exclusive owner would double-feed input
+	// and could fail to acquire devices.  Keyboard/mouse stay on DirectInput.
+	if (ConfigClientDirectInput::getUseSdlInput() && SdlJoystickInput::isInstalled())
+		return;
+
 	if (ConfigClientDirectInput::getUseJoysticks())
 	{
 		NOT_NULL(ms_directInput);
@@ -1965,6 +1973,11 @@ void DirectInput::update()
 
 	if (ms_suspended)
 		return;
+
+	// poll SDL joysticks/gamepads (when the SDL backend owns them) and queue
+	// their events alongside the DirectInput keyboard/mouse events this frame
+	if (SdlJoystickInput::isInstalled())
+		SdlJoystickInput::update();
 
 	// update each device
 	{
@@ -2333,6 +2346,11 @@ void DirectInput::setJoystickSliderSaturation(int joystickIndex, int sliderIndex
 
 void DirectInput::reaquireJoystick()
 {
+	if (ConfigClientDirectInput::getUseSdlInput() && SdlJoystickInput::isInstalled())
+	{
+		SdlJoystickInput::rescan();
+		return;
+	}
 	DirectInputNamespace::installJoystickDevices();
 }
 // ----------------------------------------------------------------------

@@ -81,65 +81,58 @@ SwgCuiHudSpace::SwgCuiHudSpace(UIPage & page) :
 
 	setHudEnabled(!ConfigClientGame::getHudDisabled());
 
-	getCodeDataObject(TUIPage, m_damagePage, "DamagePage");
-	m_damagePage->SetVisible(false);
-	
-	m_nebulaHuePage = safe_cast<UIPage *>(m_damagePage->DuplicateObject());
-	NON_NULL(safe_cast<UIPage *>(m_damagePage->GetParent()))->InsertChildBefore(m_nebulaHuePage, m_damagePage);
-	m_nebulaHuePage->SetPropertyNarrow(UIWidget::PropertyName::PackSize, "1,1");
-	m_nebulaHuePage->SetBackgroundTint(UIColor::white);
-	m_nebulaHuePage->SetBackgroundColor(UIColor::white);
-	m_nebulaHuePage->SetBackgroundOpacity(1.0f);
-	m_nebulaHuePage->SetVisible(false);
-
-	Iff iff;
-	if (iff.open("datatables/space/ship_station_hud_elements.iff", true))
+	// Space HUD widgets are looked up optionally and guarded so a UI data set
+	// missing one of them degrades gracefully instead of crashing the ctor.
+	getCodeDataObject(TUIPage, m_damagePage, "DamagePage", true);
+	if (m_damagePage)
 	{
-		DataTable dataTable;
-		dataTable.load(iff);
-		int numberOfRows = dataTable.getNumRows();
-		for (int row = 0; row < numberOfRows; ++row)
+		m_damagePage->SetVisible(false);
+		UIBaseObject * const damageParent = m_damagePage->GetParent();
+		if (damageParent)
 		{
-			uint32 const chassis = static_cast<uint32>(dataTable.getIntValue("chassis", row));
-			int const station = dataTable.getIntValue("station", row);
-			std::string element = dataTable.getStringValue("element", row);
-			bool const enabled = dataTable.getIntValue("enabled", row) != 0;
-			if (!element.empty())
-			{
-				IGNORE_RETURN(
-					m_spaceHudPageStates->insert(
-						std::make_pair(
-							std::make_pair(chassis, station),
-							std::make_pair(element, enabled))));
-			}			
+			m_nebulaHuePage = safe_cast<UIPage *>(m_damagePage->DuplicateObject());
+			safe_cast<UIPage *>(damageParent)->InsertChildBefore(m_nebulaHuePage, m_damagePage);
+			m_nebulaHuePage->SetPropertyNarrow(UIWidget::PropertyName::PackSize, "1,1");
+			m_nebulaHuePage->SetBackgroundTint(UIColor::white);
+			m_nebulaHuePage->SetBackgroundColor(UIColor::white);
+			m_nebulaHuePage->SetBackgroundOpacity(1.0f);
+			m_nebulaHuePage->SetVisible(false);
+		}
+	}
+	else
+		WARNING(true, ("SwgCuiHudSpace: space HUD page missing widget 'DamagePage'; HUD running degraded"));
+
+	getCodeDataObject(TUIButton, m_ejectButton, "buttonEject", true);
+	if (m_ejectButton)
+		m_ejectButton->SetVisible(false);
+
+	getCodeDataObject(TUIButton, m_exitStationButton, "buttonExitStation", true);
+	if (m_exitStationButton)
+		m_exitStationButton->SetVisible(false);
+
+	getCodeDataObject(TUIButton, m_tutorialButton, "trainerButton", true);
+	if (m_tutorialButton)
+		m_tutorialButton->SetVisible(false);
+
+	getCodeDataObject(TUIButton, m_enterSpaceButton, "buttonEnterSpace", true);
+	if (m_enterSpaceButton)
+		m_enterSpaceButton->SetVisible(false);
+
+	if (m_exitStationButton)
+	{
+		m_buttonParentPage = static_cast<UIPage*>(m_exitStationButton->GetParent(TUIPage));
+		if (m_buttonParentPage)
+		{
+			m_buttonParentPage->SetVisible(true);
+			m_buttonParentPage->Link();
 		}
 	}
 
+	getCodeDataObject(TUIPage, m_missileLockWidget, "missileLockOnYou", true);
+	if (m_missileLockWidget)
+		m_missileLockWidget->SetVisible(false);
 
-	// ExitStation and Eject buttons.
-	getCodeDataObject(TUIButton, m_ejectButton, "buttonEject");
-	m_ejectButton->SetVisible(false);
-	
-	getCodeDataObject(TUIButton, m_exitStationButton, "buttonExitStation");
-	m_exitStationButton->SetVisible(false);
-
-	getCodeDataObject(TUIButton, m_tutorialButton, "trainerButton");
-	m_tutorialButton->SetVisible(false);
-
-	// by default keep the atmospheric flight "enterSpaceButton" off when launching into space
-	// this can be adjusted to toggle specifically for atmospheric flight later 
-	getCodeDataObject(TUIButton, m_enterSpaceButton, "buttonEnterSpace");
-	m_enterSpaceButton->SetVisible(false);
-		
-	m_buttonParentPage = NON_NULL(static_cast<UIPage*>(m_exitStationButton->GetParent(TUIPage))); //lint !e1774 // Could dynamic cast.
-	m_buttonParentPage->SetVisible(true);
-	m_buttonParentPage->Link();
-
-	// Missile lock on you.
-	getCodeDataObject(TUIPage, m_missileLockWidget, "missileLockOnYou");
-	m_missileLockWidget->SetVisible(false);
-
-	getCodeDataObject(TUIEffector, m_missileLockEffector, "missileLockOnYouDeformer");
+	getCodeDataObject(TUIEffector, m_missileLockEffector, "missileLockOnYouDeformer", true);
 
 	m_callback->connect(*this, &SwgCuiHudSpace::onCreateMissileMessage);
 }
@@ -281,7 +274,9 @@ void SwgCuiHudSpace::update(float const updateDeltaSeconds)
 	UIColor const & color = CuiUtils::convertColor(nebulaCameraHue);
 	float const opacity = nebulaCameraHue.a * 0.25f;
 	
-	if (opacity < 0.01f)
+		if (m_nebulaHuePage)
+	{
+if (opacity < 0.01f)
 		m_nebulaHuePage->SetVisible(false);
 	else
 	{
@@ -290,9 +285,13 @@ void SwgCuiHudSpace::update(float const updateDeltaSeconds)
 		m_nebulaHuePage->SetOpacity(opacity);
 	}
 
+	}
+
 
 	// Update the buttons.
-	CreatureObject const * const player = Game::getPlayerCreature();
+		if (m_ejectButton && m_exitStationButton && m_tutorialButton && m_buttonParentPage)
+	{
+CreatureObject const * const player = Game::getPlayerCreature();
 	bool canEject = false;
 	bool canExitStation = false;
 	bool canTutor = false;
@@ -352,11 +351,17 @@ void SwgCuiHudSpace::update(float const updateDeltaSeconds)
 		m_buttonParentPage->SetVisible(getHudEnabled());
 	}
 
+	}
+
 	//-- Do the missile lock blinky thing.
-	if (m_missileLockTimer.updateNoReset(updateDeltaSeconds) && m_missileLockWidget->IsVisible())
 	{
-		m_missileLockWidget->SetVisible(false);
-		m_missileLockWidget->CancelEffector(*m_missileLockEffector);
+		bool const missileTimerFired = m_missileLockTimer.updateNoReset(updateDeltaSeconds);
+		if (missileTimerFired && m_missileLockWidget && m_missileLockWidget->IsVisible())
+		{
+			m_missileLockWidget->SetVisible(false);
+			if (m_missileLockEffector)
+				m_missileLockWidget->CancelEffector(*m_missileLockEffector);
+		}
 	}
 
 	if (s_drawHudSpaceStateDrivenWidgets)
@@ -382,9 +387,12 @@ void SwgCuiHudSpace::onCreateMissileMessage(const CreateMissileMessage & createM
 	if (playerShip && playerShip->getNetworkId() == createMissileMessage.getTarget() && m_missileLockTimer.isExpired())
 	{
 		m_missileLockTimer.reset();
-		m_missileLockWidget->SetVisible(true);
-		m_missileLockWidget->CancelEffector(*m_missileLockEffector);
-		m_missileLockWidget->ExecuteEffector(*m_missileLockEffector);
+		if (m_missileLockWidget && m_missileLockEffector)
+		{
+			m_missileLockWidget->SetVisible(true);
+			m_missileLockWidget->CancelEffector(*m_missileLockEffector);
+			m_missileLockWidget->ExecuteEffector(*m_missileLockEffector);
+		}
 	}
 }
 
