@@ -1672,7 +1672,7 @@ void MemoryManager::own(void * userPointer)
 		// update the owners
 		{
 			enum { OFFSET = 2 };
-			uint32 owners[DO_TRACK + OFFSET];
+			uint64 owners[DO_TRACK + OFFSET];
 			DebugHelp::getCallStack(owners, DO_TRACK + OFFSET);
 
 			for (int i = 0; i < DO_TRACK; ++i)

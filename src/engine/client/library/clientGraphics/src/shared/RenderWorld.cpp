@@ -144,7 +144,7 @@ namespace RenderWorldNamespace
 	const int CALL_STACK_SIZE = 16;
 	struct CallStack
 	{
-		uint32 callers[CALL_STACK_SIZE];
+		uint64 callers[CALL_STACK_SIZE];
 	};
 	typedef std::map<DPVS::Object*, CallStack> CallStacks;
 	CallStacks            ms_callStacks;
@@ -1103,7 +1103,7 @@ void RenderWorld::leakedObject(DPVS::Object *object)
 				if (DebugHelp::lookupAddress(callStack.callers[i], libName, fileName, sizeof(fileName), line))
 					DEBUG_REPORT_LOG_PRINT(true, ("  %s(%d) : caller %d\n", fileName, line, i));
 				else
-					DEBUG_REPORT_LOG_PRINT(true, ("  0x%08X : caller %d\n", static_cast<int>(callStack.callers[i]), i));
+					DEBUG_REPORT_LOG_PRINT(true, ("  0x%016llX : caller %d\n", static_cast<unsigned long long>(callStack.callers[i]), i));
 			}
 	}
 	else
