@@ -81,6 +81,10 @@ $runtimeFiles = @(
         Name   = "gl11_$suffix.dll"
     },
     [pscustomobject]@{
+        Source = Join-Path $repoRoot "src\build\win32\x64\$Configuration\gl00_$suffix.dll"
+        Name   = "gl00_$suffix.dll"
+    },
+    [pscustomobject]@{
         Source = Join-Path $repoRoot "src\build\win32\x64\$Configuration\DllExport.dll"
         Name   = "DllExport.dll"
     },
