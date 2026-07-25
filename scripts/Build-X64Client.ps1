@@ -100,6 +100,7 @@ $artifacts = @(
     "src\build\win32\x64\$Configuration\gl05_$suffix.dll",
     "src\build\win32\x64\$Configuration\gl06_$suffix.dll",
     "src\build\win32\x64\$Configuration\gl07_$suffix.dll",
+    "src\build\win32\x64\$Configuration\gl11_$suffix.dll",
     "src\build\win32\x64\$Configuration\DllExport.dll"
 )
 
