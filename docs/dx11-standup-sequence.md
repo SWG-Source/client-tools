@@ -612,3 +612,64 @@ Each is either designed out by a commit above or accepted explicitly.
 2. Land C1: author /e/SWG/64bit-server/client-tools/src/engine/client/application/Direct3d11/build/win32/Direct3d11.vcxproj from scratch adopting the reference project's OMISSIONS (zero $(DXSDK_DIR), no MachineX86/BaseAddress//SAFESEH:NO, no d3dx9/DxErr/ddraw, x64-only, the four SDK DX libs) while fixing its three defects (Optimized|x64 -> Optimization=Full with BasicRuntimeChecks REMOVED and MultiThreadedDebug KEPT; delete the VSPS define; delete all nine output-path literals) and re-adding jpeg-static.lib plus the libjpeg-turbo include; copy src/shared/{MemoryManagerHook,SetupDll,PaddedVector,WriteTga} verbatim from Direct3d9/src/shared; wire Directory.Build.targets:12, the swg.sln Project() block after :209, six x64 configuration rows, and the SwgClient ProjectDependencies line at swg.sln:706-772; add gl11 to the four build/stage scripts. Prove a standalone msbuild with $env:DXSDK_DIR cleared emits src/build/win32/x64/Release/gl11_r.dll, that /t:SwgClient also builds it, and that rasterMajor=11 in /e/SWG/64bit-server/_client/options.cfg:18 LoadLibrary's it and refuses to install with a log line.
 
 3. Start the three DX9-side measurements in parallel with C2/C3, because each gates a later commit and none can be recovered cheaply once code is written against a guess: (a) P0-C, the m_zCompare / m_stencilCompare / m_stencilCompareCounterClockwise census over the 1,518 decoded passes through the swapped Compare table plus the blend-factor census over passes with alphaBlendEnable==false, which gates C6 and C13; (b) P0-D, one gl05 RenderDoc A/B on a known UI blit settling the one-to-one-UV / half-texel convention, which gates C12 and touches every UI element; (c) P0-E, one gl05 capture on a long fogged surface fixing the `: FOG` interpolation modifier, which gates C14 and ~90 shader pairs.
+
+## Corrections made during implementation
+
+The sequence above was written before any of it was built. These are the places
+the tree disagreed with it, recorded here rather than silently edited above, so
+the reasoning that produced the original plan stays reviewable.
+
+### C3 cannot end with a cleared frame in the client
+
+C3's stated exit criterion was that `rasterMajor=11` presents a cleared frame.
+It cannot, and the reason is in the engine rather than in the backend.
+
+`SetupClientGraphics::install` does not stop when `Graphics::install` returns. It
+immediately gates DOT3, POST and HEAT on the reported shader capability and video
+memory, then loads `texture/defaultcubemap.dds` and calls `setGlobalTexture`
+twice, then preloads the vertex-colour shader templates. So `createTextureData`,
+`setGlobalTexture`, `createShaderImplementationGraphicsData`,
+`createStaticShaderGraphicsData`, `createVertexShaderData`,
+`createPixelShaderProgramData` and `setBadVertexShaderStaticShader` are all
+reached before the first frame is even attempted.
+
+A cleared frame therefore requires the texture and shader factories, which belong
+to later commits. What C3 delivers instead is: the device and swap chain come up,
+the window is shown at the requested size, capabilities are reported honestly,
+and the run then stops at the first resource factory with that slot named. That
+is a real, verifiable milestone; it is just not a picture.
+
+The "cleared frame presents" gate moves to the commit that first has a texture
+and a shader to draw with.
+
+### The Gl_api layout count was wrong in both directions
+
+The audit and this document both said Gl_api has three binary layouts, one per
+DEBUG_LEVEL. It has two. `_DEBUG` is defined for the Debug **and** Optimized
+configurations, while `PRODUCTION` is 1 only for Release, so Optimized and Debug
+share a layout and Release has its own. The size guard is unaffected -- it
+compares actual sizes -- but the comment explaining it was misleading and has
+been corrected in the code.
+
+Separately, the slot count is 117, not 118 or 120. Parsing `Gl_dll.def`
+mechanically yields 118 entries, one of which is the `CallbackFunction` typedef
+rather than a slot.
+
+### Video memory is not reported from Direct3D at all in DX9
+
+`getVideoMemoryInMegabytes` was assumed to be a straightforward query to mirror.
+DX9 creates a **DirectDraw** object and reads `DDCAPS.dwVidMemTotal`, defaulting
+to 32 MB (`Direct3d9.cpp:1651-1657`). That number gates DOT3 at 40 MB and POST
+and HEAT at 100 MB.
+
+DirectDraw's reported total is unreliable on modern hardware, so the shipping DX9
+client may well be running with POST and HEAT disabled without anyone having
+chosen that. DXGI's `DedicatedVideoMemory` is the honest answer and will usually
+be much larger, which means DX11 can switch those effects on and produce image
+differences that are not port defects.
+
+Consequence for the gates: what gl05 actually reports on the test hardware has to
+be captured, not assumed, and gl11 has to be compared against observed gl05
+behaviour. Enabling POST and HEAT is a deliberate change with its own
+measurement, not a side effect of a renderer swap. It also adds a real `ddraw`
+consumer to the Phase 5 deletion list, which had counted only a header leak.
