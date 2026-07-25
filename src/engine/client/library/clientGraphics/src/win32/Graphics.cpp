@@ -257,6 +257,17 @@ bool Graphics::install()
 	GetApi getApi = reinterpret_cast<GetApi>(GetProcAddress(ms_dll, "GetApi"));
 	DEBUG_FATAL(!getApi, ("GetProcAddress returned NULL"));
 
+	// Confirm the backend was compiled against this exact Gl_api layout before
+	// calling through any of its slots.  The five #ifdef _DEBUG slots and the
+	// four #if PRODUCTION == 0 slots mean the struct has three layouts, chosen
+	// by the _r/_o/_d suffix above, and a mismatched pair loads without
+	// complaint and then calls the wrong function through every shifted slot.
+	typedef unsigned int (*GetGlApiStructSize)();
+	GetGlApiStructSize getGlApiStructSize = reinterpret_cast<GetGlApiStructSize>(GetProcAddress(ms_dll, "GetGlApiStructSize"));
+	FATAL(!getGlApiStructSize, ("%s does not export GetGlApiStructSize, so its Gl_api layout cannot be verified.  Rebuild and restage the raster DLLs.", library));
+	const unsigned int backendGlApiStructSize = getGlApiStructSize();
+	FATAL(backendGlApiStructSize != sizeof(Gl_api), ("%s was built against a %u-byte Gl_api but this client expects %u bytes.  The DEBUG_LEVEL of the client and the raster DLL disagree; rebuild both at the same level.", library, backendGlApiStructSize, static_cast<unsigned int>(sizeof(Gl_api))));
+
 	// call the getApi function
 	ms_api = getApi();
 	FATAL(!ms_api, ("GetApi returned NULL"));
@@ -1683,18 +1694,6 @@ DynamicIndexBufferGraphicsData *Graphics::createIndexBufferData()
 	NOT_NULL(ms_api);
 	NOT_NULL(ms_api->createDynamicIndexBufferData);
 	return ms_api->createDynamicIndexBufferData();
-}
-
-// ----------------------------------------------------------------------
-/**
- * Set the max number of indices in a dynamic index buffer.
- *
- * @param numberOfIndices The number of vertices in the dynamic vertex buffer.
- */
-
-void Graphics::setDynamicIndexBufferSize(int numberOfIndices)
-{
-	ms_api->setDynamicIndexBufferSize(numberOfIndices);
 }
 
 // ----------------------------------------------------------------------

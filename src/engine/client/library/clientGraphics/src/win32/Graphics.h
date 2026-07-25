@@ -223,7 +223,6 @@ public:
 	static VertexBufferVectorGraphicsData    *createVertexBufferVectorData(VertexBufferVector const & vertexBufferVector);
 
 	// index buffer routines
-	static void                              setDynamicIndexBufferSize(int numberOfIndices);
 	static void                              setIndexBuffer(const HardwareIndexBuffer &indexBuffer);
 	static StaticIndexBufferGraphicsData    *createIndexBufferData(const StaticIndexBuffer &indexBuffer);
 	static DynamicIndexBufferGraphicsData   *createIndexBufferData();

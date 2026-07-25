@@ -81,18 +81,6 @@ void Direct3d9_DynamicIndexBufferData::operator delete(void *memory)
 
 // ----------------------------------------------------------------------
 
-void Direct3d9_DynamicIndexBufferData::setSize(int numberOfIndices)
-{
-	if (ms_numberOfIndices != numberOfIndices)
-	{
-		lostDevice();
-		ms_numberOfIndices = numberOfIndices;
-		restoreDevice();
-	}
-}
-
-// ----------------------------------------------------------------------
-
 void Direct3d9_DynamicIndexBufferData::lostDevice()
 {
 	if (ms_d3dIndexBuffer)

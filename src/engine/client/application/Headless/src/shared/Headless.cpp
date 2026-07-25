@@ -40,6 +40,18 @@ namespace
 
 extern "C" __declspec(dllexport) Gl_api const * GetApi();
 
+// Reported out of band rather than through Gl_api, because install() below
+// blanket-fills the struct as void** over sizeof(Gl_api)/sizeof(void*) and
+// would overwrite a member.  Graphics::install FATALs on a mismatch.
+extern "C" __declspec(dllexport) unsigned int GetGlApiStructSize();
+
+// ----------------------------------------------------------------------
+
+unsigned int GetGlApiStructSize()
+{
+	return static_cast<unsigned int>(sizeof(Gl_api));
+}
+
 // ----------------------------------------------------------------------
 
 

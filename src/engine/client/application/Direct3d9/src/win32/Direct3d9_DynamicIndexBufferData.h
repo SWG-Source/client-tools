@@ -27,7 +27,6 @@ public:
 	static void  beginFrame();
 	static void  lostDevice();
 	static void  restoreDevice();
-	static void  setSize(int numberOfIndices);
 	static IDirect3DIndexBuffer9 *getIndexBuffer();
 
 	static void *operator new(size_t size);
