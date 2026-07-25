@@ -48,15 +48,15 @@
 #define DISABLED                0
 
 
-#define DO_TRACK               5   // TEMP: record 5-deep alloc call stack so a corrupt guard names its allocator
+#define DO_TRACK               0   // Per-allocation call stack capture. Debugging aid only: costs a stack walk on every allocation.
 #define DO_SCALAR              0
-#define DO_GUARDS              1   // TEMP: 16-byte guard bands (0xAB) around every allocation to catch the gl11 world-load overflow
+#define DO_GUARDS              0   // Guard bands around every allocation. Debugging aid only: adds 32 bytes per block and sweeps the whole heap every 512 alloc/free.
 #define DO_INITIALIZE_FILLS    0
 #define DO_FREE_FILLS          0
 
 #ifdef PLATFORM_LINUX
 	#undef DO_TRACK
-	#define DO_TRACK 5
+	#define DO_TRACK 0
 #endif
 
 // ======================================================================
