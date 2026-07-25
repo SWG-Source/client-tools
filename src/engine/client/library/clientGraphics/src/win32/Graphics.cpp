@@ -1048,8 +1048,8 @@ bool Graphics::lockBackBuffer(Gl_pixelRect &o_pixels, const Gl_rect *i_lockRect)
 	{
 		lockRect.left   =i_lockRect->x0;
 		lockRect.top    =i_lockRect->y0;
-		lockRect.bottom =i_lockRect->x1;
-		lockRect.right  =i_lockRect->y1;
+		lockRect.right  =i_lockRect->x1;
+		lockRect.bottom =i_lockRect->y1;
 		pLockRect=&lockRect;
 	}
 	return ms_api->lockBackBuffer(o_pixels, pLockRect);
