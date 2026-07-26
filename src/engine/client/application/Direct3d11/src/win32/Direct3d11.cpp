@@ -27,6 +27,7 @@
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_QueryPool.h"
 #include "Direct3d11_SceneTarget.h"
+#include "Direct3d11_ShaderCompiler.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_StateObjectCache.h"
 #include "Direct3d11_SwapChain.h"
@@ -610,6 +611,7 @@ bool Direct3d11::install(Gl_install *gl_install)
 
 	Direct3d11_StateObjectCache::install();
 	Direct3d11_StateCache::install();
+	Direct3d11_ShaderCompiler::install();
 
 	// Come up already holding the state the engine believes is set: it
 	// initialises fill to solid and cull to counter-clockwise as statics and never
@@ -656,6 +658,7 @@ void Direct3d11Namespace::remove()
 		ms_annotation = NULL;
 	}
 
+	Direct3d11_ShaderCompiler::remove();
 	Direct3d11_StateCache::remove();
 	Direct3d11_StateObjectCache::remove();
 	Direct3d11_SwapChain::remove();
