@@ -730,3 +730,71 @@ A ring needs both. The device queries both at install, and the fallback to rotat
 buffers with DISCARD names whichever one was missing, so a machine that is slower
 for this reason says so instead of looking like a regression in whatever landed
 most recently.
+
+### drawPartial is overload resolution, not aliasing
+
+C9 says DX9 "aliases every drawPartial* to its full-draw counterpart at
+Direct3d9.cpp:1104-1116 and recovers the range from ms_slice* state". That reading
+is wrong, and it is wrong in a way that produces garbage on screen.
+
+`Direct3d9Namespace` declares each draw name TWICE -- a no-argument overload and a
+parameterised one. The assignment `ms_glApi.drawPartialTriangleList = drawTriangleList;`
+therefore selects the PARAMETERISED overload, by overload resolution against the
+Gl_api slot's function-pointer type. It only looks like aliasing. The twelve partial
+entry points have their own implementations, and they read nothing from the slice
+counts -- the caller's start and primitive count are the range.
+
+A port that writes one function per name and assigns it to both slots either passes
+uninitialised arguments to the full versions or silently ignores the caller's range
+in the partial ones. All 25 draw slots must be distinct functions for a second
+reason too: the engine stores `Graphics::drawX` addresses in lookup tables and
+compares them for identity, so they cannot be collapsed onto one another.
+
+### The dynamic ring cannot be resized during a parity port
+
+C9 says to resize the rings from 2 MB to 16 MB and 64 KB to 4 MB, citing terrain
+batches that exhaust the current size.
+
+ShadowVolume::install derives a permanent batch budget from the ring:
+
+    const int numberOfLockableDynamicVertices = vertexBuffer.getNumberOfLockableDynamicVertices (true);
+    ms_maximumVertexBufferSize = numberOfLockableDynamicVertices - (numberOfLockableDynamicVertices % 4);
+
+`getNumberOfLockableDynamicVertices(true)` returns the WHOLE ring divided by the
+vertex size. So the ring size sets shadow batch sizes, which set draw counts --
+which is exactly what the geometry-integrity gate compares within 2%. Growing the
+ring fails that gate by construction, and the cause would look like a shadow bug.
+
+It also approaches a hard ceiling: `Index` is `unsigned short` throughout the engine,
+so a batch above 65535 vertices cannot be addressed by any index buffer at all.
+
+DX9 sizes the ring from video memory in tiers of 256 KB to 2 MB, and its
+config-driven size is commented out, so the tiers are the only policy. That policy
+is reproduced exactly. Resizing belongs in the performance phase with its own
+measurement and its own re-baseline of draw counts.
+
+### The buffer-touching slots must be class members
+
+C9 describes the buffer slots as functions to implement, without noting where they
+live. They cannot be namespace functions: `setVertexBuffer`,
+`setVertexBufferVector` and `setIndexBuffer` read `m_graphicsData` and
+`m_vertexBufferList` out of the engine's buffer objects, and the engine befriends
+`class Direct3d11`. Free functions in a namespace have no friend access. DX9 has the
+same three as class members with a comment saying precisely that.
+
+The five buffer headers also granted friendship to `class Direct3d11` but not to the
+per-buffer data classes, where DX9 grants both. Added.
+
+### An accounted stub is the wrong tool for a value the engine consumes structurally
+
+`getMaximumVertexBufferStreamCount` was left as an accounted stub returning zero.
+The accounting facility makes a missing feature audible, which is right for a
+feature -- but this value is read during install to size a per-stream shadow array
+and gates the multi-stream skinned path on being above one. Zero sized that array to
+nothing and silently disabled skinned multi-stream, and the counter said nothing
+useful about either consequence.
+
+The lesson generalises: a slot whose RETURN VALUE the engine builds structure from
+needs a real answer from the first commit that can give one, even when the feature
+behind it is unimplemented. Slots whose EFFECT is missing are what the accounting is
+for.
