@@ -1228,3 +1228,125 @@ numerical comparison.
 
 Until that exists the compiler refuses a non-HLSL program by name, so the first run
 enumerates exactly which ones are wanted rather than rendering something wrong.
+
+## The assembly translation, scoped -- and a defect in the installed asset set
+
+Sizing the transpiler meant expanding the includes, and that turned up something more
+important than the size.
+
+### The real size
+
+The earlier figure of 511 instructions counted only the program files. The assembly vertex
+programs are thin shells -- `tf.vsh` is nine lines, six of them `#include` -- and nearly all
+their work lives in shared modules under `vertex_program/modules/`. Counting those once
+each:
+
+| | files | instructions |
+| --- | --- | --- |
+| reachable programs | 97 | 475 |
+| shared modules they include | 15 | 344 |
+| **total** | **112** | **819** |
+
+The four largest modules (`diffuse_specular.inc` 80, `diffuse_specular_lookup.inc` 80,
+`diffuse.inc` 69, `dot3_diffuse.inc` 62) are 291 of the 344, and they are the lighting
+loops.
+
+### The instruction set, surveyed rather than remembered
+
+With includes expanded and `registers.inc`'s name-to-register defines substituted, the
+whole reachable assembly corpus uses:
+
+- **vertex, 16 opcodes:** `dp3 mul mad rsq max sub rcp dst mov add m4x4 m3x3 m4x3 exp lit min`.
+  No `sge`, `slt`, `log`, `dp4`, `expp`, `logp`, no address register, no flow control.
+  Destinations are only `r`, `oPos`, `oD`, `oT`, `oFog`, with write masks. Sources are `r`,
+  `c`, `v` with swizzles and negation. `dst` and `lit` both have HLSL intrinsics of the same
+  name.
+- **pixel, 12 opcodes:** `tex mul mov lrp mad add mad_sat add_sat dp3 dp3_sat texcoord mul_x2`
+  plus `texm3x2pad`/`texm3x2tex` once each in a single program. Source modifiers in use are
+  `_bx2`, `_bias`, complement (`1-r0`) and `.a`/`.w` selectors. 39 co-issue (`+`) markers.
+  Constants appear as `c[symbolicName]`, and every name used is one the engine-layout
+  `pixel_shader_constants.inc` already defines -- so they translate to themselves.
+
+`registers.inc` maps `c0_0`, `c0_5`, `c1_0` and `cLog2e` to `c95.x/y/z/w`, which is what the
+`#pragma def(vs, c95, ...)` directive preloads. Only the assembly programs read c95, so the
+translation materialises those four as literals rather than depending on an upload.
+
+A flat register file is the right vehicle for the translated constants: `fxc` places
+`float4 c[96] : register(c0)` at `$Globals` offset 0 with size 1536, so element *i* sits at
+byte 16*i* -- byte-identical to the DX9 constant ABI, verified.
+
+### ILM_visuals.tre ships a diffuse.inc that cannot assemble
+
+`vertex_program/modules/diffuse.inc` exists in five trees. The one that wins resolution is
+`ILM_visuals.tre`'s, at priority 5, and it references three symbols --
+`cExtLtData_parallelSpec_0_tangentColor`, `_tangentMinusDiffuse` and `_tangentMinusBack` --
+that **nothing in any of the 209 TREs defines.** Searched exhaustively; there are no
+`#define`s for them anywhere, and DX9 passes only the texture-coordinate macros and `TARGET`
+to the assembler.
+
+`Direct3d9_VertexShaderData.cpp:746` is `FATAL(FAILED(result), ("Could not compile shader
+%s %d", ...))` -- a hard fatal in every configuration, not a debug one. So on this
+installation, the first time one of the programs including that module is created, the DX9
+client should die.
+
+**Sixteen reachable assembly vertex programs include it, and fifteen of them are base game
+content from `patch_00.tre`:** `c_2blend`, `c_2blend_decal_dirt`, `c_2blend_decal_lowmem`,
+`c_2blend_dirt`, `c_alpha_envmask`, `c_detail_dirt`, `c_simple`, `c_simple_openuv`,
+`a_vertcoloronly`, `tfal`, `tfcl`, `tfcl_2uv`, `tfcl_3uv`, `tfcl_4uv`, `tfcl_4uv_b`,
+`tfcl_env`. The `c_` and `tfcl_` prefixes are cell and cell-terrain shaders -- building
+interiors.
+
+So a mod tree replaced a shared include and broke sixteen base programs that depend on it.
+
+### What the base version does, and why the 0.85 floor exists
+
+The base `diffuse.inc` differs from ILM's in exactly the interesting way. It gates every
+diffuse light term behind assembly static branching:
+
+```
+#if VERTEX_SHADER_VERSION >= 20
+if cLightData_parallelSpecular_0_enabled
+#endif
+max r0, r0, c0_0
+mad r7, cLightData_parallelSpecular_0_diffuseColor, r0.y, r7
+#if VERTEX_SHADER_VERSION >= 20
+endif
+#endif
+```
+
+Those `cLightData_*_enabled` names are the b0..b7 boolean constant registers. **The engine
+never writes them** -- the `BOOL` overload of
+`Direct3d9_StateCache::setVertexShaderConstants` has no callers anywhere in the backend --
+so all eight are false, and the base assembly path therefore contributes **no diffuse
+lighting at all**.
+
+That is almost certainly the root cause the two inherited lighting patches are treating.
+`c_ambient.inc` was patched to add the global ambient because "characters end up with zero
+ambient contribution", and the per-vertex diffuse was floored at `max(..., 0.85)` because
+"dot3 characters rendered dark". Both are compensating downstream for eight booleans that
+were never uploaded. ILM's rewrite attacks the same problem from the other direction --
+delete the branches, use hemispheric terms -- and fails only because it forgot to define its
+new constants.
+
+Writing the booleans is a strictly better fix than a tuned floor, and it is one line in the
+constant upload. It is also a visual change, so it belongs after parity, not before -- but
+it should be recorded as the likely correct answer rather than left as folklore.
+
+### Why this stops the transpiler
+
+The transpiler itself is ready to write: 24 opcodes, no flow control, a verified constant
+vehicle, and every symbolic constant name already resolving. What it cannot decide is what
+those sixteen programs should compute, and there is no defensible default:
+
+- Translating ILM's version as written produces code referencing undefined constants; there
+  is nothing to translate them to.
+- Defining the missing names as the engine's `extendedLightData` (c60..c63, whose
+  `HemisphericLightData` fields are `backColor`, `tangentColor`, `tangentMinusBackColor`,
+  `tangentMinusDiffuseColor` -- a plausible match by name) makes the mod's intent work, and
+  produces lighting DX9 does not currently produce.
+- Using the base `diffuse.inc` instead reproduces pre-mod behaviour: bool-gated, all
+  branches off, no diffuse contribution, i.e. the dark result the inherited patches exist to
+  mask.
+
+Each is a different image, none of them is what DX9 renders today, and DX9 does not render
+anything today for this content -- it fatals. That is a content decision.

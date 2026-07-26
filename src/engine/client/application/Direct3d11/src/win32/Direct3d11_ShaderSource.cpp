@@ -251,12 +251,22 @@ namespace Direct3d11_ShaderSourceNamespace
 		"	}\n"
 		"};\n"
 		"\n"
-		// The light-enable booleans. The shipped include binds these to b0..b7. Nothing in
-		// the engine ever writes a boolean constant register -- the BOOL overload of
+		// The light-enable booleans. The shipped include binds these to b0..b7, and nothing
+		// in the engine ever writes a boolean constant register -- the BOOL overload of
 		// Direct3d9_StateCache::setVertexShaderConstants has no callers anywhere -- so in
-		// the shipping client they are all false, and nothing in the corpus reads them.
-		// Declaring them as plain false constants reproduces the shipped value and costs
-		// nothing. The earlier DX11 attempt set them true, which inverts it.
+		// the shipping client they are all false. Declaring them as false constants
+		// reproduces that exactly. The earlier DX11 attempt set them true, which inverts it.
+		//
+		// They are not unread, though, and an earlier version of this comment claimed they
+		// were. The BASE vertex_program/modules/diffuse.inc gates every diffuse light term
+		// behind `if cLightData_..._enabled` / `endif` -- assembly static branching -- so
+		// with all eight false the base assembly path contributes no diffuse lighting at
+		// all. That is very likely what the two inherited lighting patches (c_ambient.inc
+		// and the 0.85 diffuse floor) are compensating for. No HLSL program reads them, and
+		// the copy of diffuse.inc that actually wins resolution here is ILM_visuals.tre's,
+		// which removed the branches -- which is why a search of the resolved corpus finds
+		// no readers. Writing the booleans properly is the obvious candidate fix once
+		// parity has been established, and is a strictly better answer than a tuned floor.
 		"static const bool light_parallelSpecular_0_enabled = false;\n"
 		"static const bool light_parallel_0_enabled         = false;\n"
 		"static const bool light_parallel_1_enabled         = false;\n"
