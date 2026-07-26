@@ -22,6 +22,7 @@
 #include "Direct3d11.h"
 
 #include "ConfigDirect3d11.h"
+#include "Direct3d11_ConstantBuffers.h"
 #include "Direct3d11_Device.h"
 #include "Direct3d11_ImageWriter.h"
 #include "Direct3d11_Metrics.h"
@@ -35,6 +36,7 @@
 #include "SetupDll.h"
 
 #include "clientGraphics/Gl_dll.def"
+#include "clientGraphics/ShaderConstantRegisters.h"
 
 // ======================================================================
 
@@ -168,6 +170,7 @@ namespace Direct3d11Namespace
 	{
 		Direct3d11_Metrics::beginFrame();
 		Direct3d11_QueryPool::beginFrame();
+		Direct3d11_ConstantBuffers::beginFrame();
 		Direct3d11_SwapChain::beginScene();
 	}
 
@@ -182,14 +185,48 @@ namespace Direct3d11Namespace
 	void setViewport(int x, int y, int width, int height, real minZ, real maxZ)
 	{
 		Direct3d11_SwapChain::setViewport(x, y, width, height, minZ, maxZ);
+
+		// The rasterizer viewport is only half of it. The engine's 2D shaders map
+		// pixels to clip space through vertex register c9, which the shipped assets
+		// have baked in, so without this the whole UI collapses to clip zero.
+		Direct3d11_ConstantBuffers::setViewportData(x, y, width, height);
+	}
+
+	void setFog(bool enabled, real density, PackedArgb const &color)
+	{
+		// The colour is consumed by the pixel epilogue, which arrives with the
+		// alpha test work; the density constant is live now.
+		UNREF(color);
+		Direct3d11_ConstantBuffers::setFog(enabled, static_cast<float>(density));
+	}
+
+	void setVertexShaderUserConstants(int index, float c0, float c1, float c2, float c3)
+	{
+		FATAL(index < 0 || index > (VCSR_userConstant7 - VCSR_userConstant0), ("Direct3d11: vertex user constant index %d is outside the eight the register file reserves.", index));
+
+		float const values[4] = { c0, c1, c2, c3 };
+		Direct3d11_ConstantBuffers::setVertexShaderConstants(VCSR_userConstant0 + index, values, 1);
+	}
+
+	void setPixelShaderUserConstants(VectorRgba const *constants, int count)
+	{
+		NOT_NULL(constants);
+
+		// PSCR_userConstant is deliberately last in the pixel enumeration so that
+		// several rows can follow it.
+		FATAL(PSCR_userConstant + count > PSCR_CBUFFER_ROWS, ("Direct3d11: %d pixel user constant row(s) at register %d run past the end of the pixel register file.", count, PSCR_userConstant));
+
+		Direct3d11_ConstantBuffers::setPixelShaderConstants(PSCR_userConstant, constants, count);
 	}
 
 	void update(float elapsedTime)
 	{
-		// D3D9 accumulates this into the currentTime vertex shader constant that
-		// drives every scrolling and animated material. Kept here so the value is
-		// correct from frame one when the constant buffers start uploading it.
+		// Accumulated monotonically and uploaded once per frame, before the scene,
+		// exactly where D3D9 does it. Every scrolling and animated material reads
+		// this, and the texture scroll constant is derived from the same value, so
+		// a frame is reproducible from its time alone.
 		ms_currentTime += elapsedTime;
+		Direct3d11_ConstantBuffers::setCurrentTime(ms_currentTime);
 	}
 
 	void setBrightnessContrastGamma(float brightness, float contrast, float gamma)
@@ -310,13 +347,10 @@ namespace Direct3d11Namespace
 	void setWorldToCameraTransform(const Transform &, const Vector &)      { DX11_NOT_IMPLEMENTED("setWorldToCameraTransform"); }
 	void setProjectionMatrix(const GlMatrix4x4 &)                          { DX11_NOT_IMPLEMENTED("setProjectionMatrix"); }
 	void setObjectToWorldTransformAndScale(const Transform &, const Vector &) { DX11_NOT_IMPLEMENTED("setObjectToWorldTransformAndScale"); }
-	void setFog(bool, real, const PackedArgb &)                            { DX11_NOT_IMPLEMENTED("setFog"); }
 	void setAlphaFadeOpacity(bool, float)                                  { DX11_NOT_IMPLEMENTED("setAlphaFadeOpacity"); }
 	void setBloomEnabled(bool)                                             { DX11_NOT_IMPLEMENTED("setBloomEnabled"); }
 	void setLights(const stdvector<const Light*>::fwd &)                   { DX11_NOT_IMPLEMENTED("setLights"); }
 	void setTextureTransform(int, bool, int, bool, const real *)           { DX11_NOT_IMPLEMENTED("setTextureTransform"); }
-	void setVertexShaderUserConstants(int, float, float, float, float)     { DX11_NOT_IMPLEMENTED("setVertexShaderUserConstants"); }
-	void setPixelShaderUserConstants(VectorRgba const *, int)              { DX11_NOT_IMPLEMENTED("setPixelShaderUserConstants"); }
 
 	// Textures and shaders.
 	void setGlobalTexture(Tag, const Texture &)                            { DX11_NOT_IMPLEMENTED("setGlobalTexture"); }
@@ -612,6 +646,7 @@ bool Direct3d11::install(Gl_install *gl_install)
 	Direct3d11_StateObjectCache::install();
 	Direct3d11_StateCache::install();
 	Direct3d11_ShaderCompiler::install();
+	Direct3d11_ConstantBuffers::install();
 
 	// Come up already holding the state the engine believes is set: it
 	// initialises fill to solid and cull to counter-clockwise as statics and never
@@ -658,6 +693,7 @@ void Direct3d11Namespace::remove()
 		ms_annotation = NULL;
 	}
 
+	Direct3d11_ConstantBuffers::remove();
 	Direct3d11_ShaderCompiler::remove();
 	Direct3d11_StateCache::remove();
 	Direct3d11_StateObjectCache::remove();

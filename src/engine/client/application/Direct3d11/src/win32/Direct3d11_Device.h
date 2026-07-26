@@ -47,6 +47,21 @@ public:
 	static D3D_FEATURE_LEVEL       getFeatureLevel();
 	static bool                    supportsTearing();
 
+	// Two separate capabilities, both needed for a constant buffer to be used as
+	// a ring rather than renamed per draw, and both optional on feature level 11_0
+	// hardware even though the interface that exposes them is 11_1:
+	//
+	//   offsetting   bind a sub-range of one buffer with VSSetConstantBuffers1,
+	//                so a per-draw slice costs an offset instead of an upload
+	//   noOverwrite  Map a dynamic CONSTANT buffer WRITE_NO_OVERWRITE, so
+	//                appending to the ring does not rename it
+	//
+	// Without both, per-draw constants have to fall back to rotating buffers with
+	// WRITE_DISCARD. That is measurably worse, so it is reported rather than
+	// silently adopted.
+	static bool                    supportsConstantBufferOffsetting();
+	static bool                    supportsConstantBufferNoOverwrite();
+
 	// Gl_api surface this class answers directly.
 	static int                     getShaderCapability();
 	static int                     getVideoMemoryInMegabytes();

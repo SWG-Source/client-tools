@@ -1,0 +1,532 @@
+// ======================================================================
+//
+// Direct3d11_ConstantBuffers.cpp
+// copyright (c) 2026 Galaxies Reborn
+//
+// ======================================================================
+
+#include "FirstDirect3d11.h"
+#include "Direct3d11_ConstantBuffers.h"
+
+#include "Direct3d11_Device.h"
+#include "Direct3d11_Metrics.h"
+#include "PaddedVector.h"
+
+#include "clientGraphics/ShaderConstantRegisters.h"
+
+#include <math.h>
+
+// ======================================================================
+
+namespace Direct3d11_ConstantBuffersNamespace
+{
+	int const cms_bytesPerRow = 16;
+
+	// Sized from the register enumeration rather than from a literal. The vertex
+	// file has to reach c95 because registers.inc aliases four scalars onto it;
+	// VSCR_MAX alone stops at 68 and would leave every one of those reading zero.
+	int const cms_vertexRows = VSCR_CBUFFER_ROWS;
+	int const cms_pixelRows  = PSCR_CBUFFER_ROWS;
+
+	// The rows the per-object ring owns. D3D9 put these two matrices at c0..c7 in
+	// the register file; here they are a separate buffer, so the register file's
+	// front eight rows are never touched per draw.
+	int const cms_perObjectFirstRow = VSCR_objectWorldCameraProjectionMatrix;
+	int const cms_perObjectRows     = 8;
+	int const cms_perObjectBytes    = cms_perObjectRows * cms_bytesPerRow;
+
+	// Constant buffer offsets must be a multiple of sixteen constants.
+	int const cms_perObjectStride   = 256;
+	int const cms_perObjectSlices   = 1024;
+
+	float          *ms_vertexShadow;
+	float          *ms_pixelShadow;
+
+	int             ms_vertexDirtyFirst;
+	int             ms_vertexDirtyLast;
+	int             ms_pixelDirtyFirst;
+	int             ms_pixelDirtyLast;
+
+	ID3D11Buffer   *ms_vertexGlobals;
+	ID3D11Buffer   *ms_pixelGlobals;
+
+	// The ring, when the device can offset-bind and no-overwrite it. Otherwise a
+	// small set of single-slice buffers renamed with DISCARD in turn.
+	ID3D11Buffer   *ms_perObjectRing;
+	ID3D11Buffer   *ms_perObjectRotating[4];
+	int             ms_perObjectCursor;
+	int             ms_perObjectRotatingIndex;
+	bool            ms_perObjectUsesRing;
+	bool            ms_perObjectBoundThisDraw;
+
+	float           ms_perObject[cms_perObjectRows * 4];
+
+	bool            ms_installed;
+
+	void            markVertexDirty(int firstRow, int rowCount);
+	void            markPixelDirty(int firstRow, int rowCount);
+	bool            createBuffers();
+	void            releaseBuffers();
+	void            flushPerObject();
+}
+using namespace Direct3d11_ConstantBuffersNamespace;
+
+// ======================================================================
+
+void Direct3d11_ConstantBuffersNamespace::markVertexDirty(int firstRow, int rowCount)
+{
+	int const lastRow = firstRow + rowCount - 1;
+
+	if (ms_vertexDirtyFirst < 0 || firstRow < ms_vertexDirtyFirst)
+		ms_vertexDirtyFirst = firstRow;
+	if (lastRow > ms_vertexDirtyLast)
+		ms_vertexDirtyLast = lastRow;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffersNamespace::markPixelDirty(int firstRow, int rowCount)
+{
+	int const lastRow = firstRow + rowCount - 1;
+
+	if (ms_pixelDirtyFirst < 0 || firstRow < ms_pixelDirtyFirst)
+		ms_pixelDirtyFirst = firstRow;
+	if (lastRow > ms_pixelDirtyLast)
+		ms_pixelDirtyLast = lastRow;
+}
+
+// ======================================================================
+
+bool Direct3d11_ConstantBuffersNamespace::createBuffers()
+{
+	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
+	NOT_NULL(device);
+
+	D3D11_BUFFER_DESC description;
+	Zero(description);
+	description.Usage          = D3D11_USAGE_DYNAMIC;
+	description.BindFlags      = D3D11_BIND_CONSTANT_BUFFER;
+	description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+	description.ByteWidth = static_cast<UINT>(cms_vertexRows * cms_bytesPerRow);
+	HRESULT hresult = device->CreateBuffer(&description, NULL, &ms_vertexGlobals);
+	if (FAILED(hresult) || !ms_vertexGlobals)
+	{
+		WARNING(true, ("Direct3d11: the vertex constant buffer could not be created (%s).", Direct3d11_Device::describeHresult(hresult)));
+		return false;
+	}
+	++Direct3d11_Metrics::constantBufferCreations;
+
+	description.ByteWidth = static_cast<UINT>(cms_pixelRows * cms_bytesPerRow);
+	hresult = device->CreateBuffer(&description, NULL, &ms_pixelGlobals);
+	if (FAILED(hresult) || !ms_pixelGlobals)
+	{
+		WARNING(true, ("Direct3d11: the pixel constant buffer could not be created (%s).", Direct3d11_Device::describeHresult(hresult)));
+		return false;
+	}
+	++Direct3d11_Metrics::constantBufferCreations;
+
+	// A ring needs both capabilities. Without either, a per-draw slice cannot be
+	// appended and bound by offset, and the fallback is renaming a small buffer
+	// per draw -- which works, costs more, and is reported rather than assumed.
+	ms_perObjectUsesRing = Direct3d11_Device::supportsConstantBufferOffsetting() && Direct3d11_Device::supportsConstantBufferNoOverwrite();
+
+	if (ms_perObjectUsesRing)
+	{
+		description.ByteWidth = static_cast<UINT>(cms_perObjectStride * cms_perObjectSlices);
+		hresult = device->CreateBuffer(&description, NULL, &ms_perObjectRing);
+		if (FAILED(hresult) || !ms_perObjectRing)
+		{
+			WARNING(true, ("Direct3d11: the per-object constant ring could not be created (%s), falling back to rotating buffers.", Direct3d11_Device::describeHresult(hresult)));
+			ms_perObjectUsesRing = false;
+		}
+		else
+			++Direct3d11_Metrics::constantBufferCreations;
+	}
+
+	if (!ms_perObjectUsesRing)
+	{
+		description.ByteWidth = static_cast<UINT>(cms_perObjectStride);
+		for (int i = 0; i < 4; ++i)
+		{
+			hresult = device->CreateBuffer(&description, NULL, &ms_perObjectRotating[i]);
+			if (FAILED(hresult) || !ms_perObjectRotating[i])
+			{
+				WARNING(true, ("Direct3d11: per-object constant buffer %d could not be created (%s).", i, Direct3d11_Device::describeHresult(hresult)));
+				return false;
+			}
+			++Direct3d11_Metrics::constantBufferCreations;
+		}
+
+		WARNING(true, ("Direct3d11: per-draw constants are using rotating buffers with DISCARD rather than an offset-bound ring. This is the slower path; it is in use because this device lacks constant buffer offsetting or no-overwrite constant mapping."));
+	}
+
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffersNamespace::releaseBuffers()
+{
+	for (int i = 0; i < 4; ++i)
+		if (ms_perObjectRotating[i])
+		{
+			ms_perObjectRotating[i]->Release();
+			ms_perObjectRotating[i] = NULL;
+		}
+
+	if (ms_perObjectRing) { ms_perObjectRing->Release(); ms_perObjectRing = NULL; }
+	if (ms_pixelGlobals)  { ms_pixelGlobals->Release();  ms_pixelGlobals = NULL; }
+	if (ms_vertexGlobals) { ms_vertexGlobals->Release(); ms_vertexGlobals = NULL; }
+}
+
+// ======================================================================
+
+void Direct3d11_ConstantBuffers::install()
+{
+	DEBUG_FATAL(ms_installed, ("Direct3d11_ConstantBuffers::install called twice"));
+
+	ms_vertexShadow = new float[cms_vertexRows * 4];
+	ms_pixelShadow  = new float[cms_pixelRows * 4];
+
+	memset(ms_vertexShadow, 0, cms_vertexRows * cms_bytesPerRow);
+	memset(ms_pixelShadow, 0, cms_pixelRows * cms_bytesPerRow);
+	memset(ms_perObject, 0, sizeof(ms_perObject));
+
+	ms_vertexDirtyFirst = -1;
+	ms_vertexDirtyLast = -1;
+	ms_pixelDirtyFirst = -1;
+	ms_pixelDirtyLast = -1;
+
+	FATAL(!createBuffers(), ("Direct3d11: the constant buffers could not be created."));
+
+	Direct3d11_ConstantBuffers::seedBackendOwnedConstants();
+
+	ms_installed = true;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::remove()
+{
+	releaseBuffers();
+
+	delete [] ms_pixelShadow;
+	ms_pixelShadow = NULL;
+	delete [] ms_vertexShadow;
+	ms_vertexShadow = NULL;
+
+	ms_installed = false;
+}
+
+// ======================================================================
+/**
+ * Write the constants this backend owns rather than receives.
+ *
+ * These four rows are exactly the ones D3D9 re-establishes in
+ * Direct3d9_StateCache::restoreDevice, and nothing else: every other constant is
+ * rewritten by the ordinary drawing flow. Reproducing that set, rather than
+ * reseeding everything, keeps the two backends in step about what is stale after
+ * a rebuild.
+ */
+
+void Direct3d11_ConstantBuffers::seedBackendOwnedConstants()
+{
+	// c95, whose components registers.inc aliases as c0_0, c0_5, c1_0 and cLog2e.
+	// The last is log2(e), which the fog exponent conversion needs; without this
+	// row every 0.5 bias and every 1.0 constant in nine assembly modules reads
+	// zero. Expression copied from Direct3d9_StateCache.cpp.
+	float const literalConstants[4] = { 0.0f, 0.5f, 1.0f, 1.0f / static_cast<float>(log(2.0f)) };
+	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_literalConstants, literalConstants, 1);
+
+	// The unit vectors, which terrain_dot3 consumes. Note the fourth component is
+	// ZERO, not one: D3D9 uploads a PaddedVector whose pad member is initialised
+	// to 0.0f, so w is 0. Writing 1.0f there would be an easy and invisible error.
+	PaddedVector const unitX(1.0f, 0.0f, 0.0f);
+	PaddedVector const unitY(0.0f, 1.0f, 0.0f);
+	PaddedVector const unitZ(0.0f, 0.0f, 1.0f);
+	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_unitX, &unitX, 1);
+	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_unitY, &unitY, 1);
+	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_unitZ, &unitZ, 1);
+}
+
+// ======================================================================
+
+void Direct3d11_ConstantBuffers::setVertexShaderConstants(int index, void const *data, int numberOfConstants)
+{
+	NOT_NULL(data);
+	DEBUG_FATAL(index < 0 || numberOfConstants < 0, ("Direct3d11: bad vertex constant range %d + %d", index, numberOfConstants));
+
+	// A write past the end of the register file is fatal rather than clamped.
+	// D3D9 FATALs on the same condition through FATAL_DX_HR, and a silent clamp
+	// would drop constants the shader then reads as whatever was there before.
+	FATAL(index + numberOfConstants > cms_vertexRows, ("Direct3d11: a vertex constant write of %d row(s) at register %d runs past the end of the %d-row register file.", numberOfConstants, index, cms_vertexRows));
+
+	if (!numberOfConstants)
+		return;
+
+	int const bytes = numberOfConstants * cms_bytesPerRow;
+	float * const destination = ms_vertexShadow + (index * 4);
+
+	// Only mark dirty when something actually changed. D3D9 had no shadow and so
+	// no way to notice; here the comparison is far cheaper than the upload it
+	// avoids, and the light manager re-sends identical blocks constantly.
+	if (memcmp(destination, data, bytes) == 0)
+		return;
+
+	memcpy(destination, data, bytes);
+	markVertexDirty(index, numberOfConstants);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::setPixelShaderConstants(int index, void const *data, int numberOfConstants)
+{
+	NOT_NULL(data);
+	DEBUG_FATAL(index < 0 || numberOfConstants < 0, ("Direct3d11: bad pixel constant range %d + %d", index, numberOfConstants));
+	FATAL(index + numberOfConstants > cms_pixelRows, ("Direct3d11: a pixel constant write of %d row(s) at register %d runs past the end of the %d-row register file.", numberOfConstants, index, cms_pixelRows));
+
+	if (!numberOfConstants)
+		return;
+
+	int const bytes = numberOfConstants * cms_bytesPerRow;
+	float * const destination = ms_pixelShadow + (index * 4);
+
+	if (memcmp(destination, data, bytes) == 0)
+		return;
+
+	memcpy(destination, data, bytes);
+	markPixelDirty(index, numberOfConstants);
+}
+
+// ======================================================================
+
+void Direct3d11_ConstantBuffers::setPerObjectTransforms(float const *objectWorldCameraProjection, float const *objectWorldMatrix)
+{
+	NOT_NULL(objectWorldCameraProjection);
+	NOT_NULL(objectWorldMatrix);
+
+	memcpy(ms_perObject, objectWorldCameraProjection, 64);
+	memcpy(ms_perObject + 16, objectWorldMatrix, 64);
+
+	ms_perObjectBoundThisDraw = false;
+}
+
+// ----------------------------------------------------------------------
+/**
+ * Put the per-object slice somewhere the shader can read it.
+ *
+ * On the ring path this appends at the cursor with WRITE_NO_OVERWRITE, which does
+ * not rename the buffer, and binds a sub-range by offset. That is the whole point:
+ * a draw costs sixteen bytes of bookkeeping rather than a buffer rename.
+ *
+ * On the fallback path it renames one of a handful of small buffers with DISCARD
+ * and binds it whole.
+ */
+
+void Direct3d11_ConstantBuffersNamespace::flushPerObject()
+{
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	if (!context)
+		return;
+
+	if (ms_perObjectUsesRing)
+	{
+		if (ms_perObjectCursor >= cms_perObjectSlices)
+		{
+			// Wrapped. A DISCARD here is correct and is the only one this buffer
+			// should ever see in a frame; more than one means the ring is too small
+			// for the frame's draw count.
+			ms_perObjectCursor = 0;
+			++Direct3d11_Metrics::ringDiscards;
+
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			Zero(mapped);
+			if (SUCCEEDED(context->Map(ms_perObjectRing, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+			{
+				memcpy(mapped.pData, ms_perObject, cms_perObjectBytes);
+				context->Unmap(ms_perObjectRing, 0);
+			}
+		}
+		else
+		{
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			Zero(mapped);
+			if (SUCCEEDED(context->Map(ms_perObjectRing, 0, D3D11_MAP_WRITE_NO_OVERWRITE, 0, &mapped)))
+			{
+				memcpy(static_cast<uint8 *>(mapped.pData) + (ms_perObjectCursor * cms_perObjectStride), ms_perObject, cms_perObjectBytes);
+				context->Unmap(ms_perObjectRing, 0);
+				++Direct3d11_Metrics::ringNoOverwrites;
+			}
+		}
+
+		UINT const firstConstant = static_cast<UINT>((ms_perObjectCursor * cms_perObjectStride) / cms_bytesPerRow);
+		UINT const constantCount = static_cast<UINT>(cms_perObjectStride / cms_bytesPerRow);
+		UINT const slot = Direct3d11_ConstantBuffers::PER_OBJECT_SLOT;
+
+		context->VSSetConstantBuffers1(slot, 1, &ms_perObjectRing, &firstConstant, &constantCount);
+
+		++ms_perObjectCursor;
+	}
+	else
+	{
+		ms_perObjectRotatingIndex = (ms_perObjectRotatingIndex + 1) & 3;
+		ID3D11Buffer * const buffer = ms_perObjectRotating[ms_perObjectRotatingIndex];
+
+		D3D11_MAPPED_SUBRESOURCE mapped;
+		Zero(mapped);
+		if (SUCCEEDED(context->Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+		{
+			memcpy(mapped.pData, ms_perObject, cms_perObjectBytes);
+			context->Unmap(buffer, 0);
+			++Direct3d11_Metrics::ringDiscards;
+		}
+
+		UINT const slot = Direct3d11_ConstantBuffers::PER_OBJECT_SLOT;
+		context->VSSetConstantBuffers(slot, 1, &buffer);
+	}
+
+	Direct3d11_Metrics::constantBufferBytes += cms_perObjectBytes;
+	++Direct3d11_Metrics::constantBufferUpdates;
+
+	ms_perObjectBoundThisDraw = true;
+}
+
+// ======================================================================
+/**
+ * Upload whatever changed, and nothing else.
+ *
+ * The register files are renamed with DISCARD rather than partially updated,
+ * which sounds wasteful and is not: it needs no optional capability, and it only
+ * happens when a row actually changed, which after the per-draw matrices moved to
+ * b3 means on a shader or light change rather than on every draw. Only the dirty
+ * span is copied, so an unchanged tail costs nothing to skip.
+ */
+
+void Direct3d11_ConstantBuffers::flush()
+{
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	if (!context)
+		return;
+
+	if (ms_vertexDirtyFirst >= 0)
+	{
+		D3D11_MAPPED_SUBRESOURCE mapped;
+		Zero(mapped);
+		if (SUCCEEDED(context->Map(ms_vertexGlobals, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+		{
+			int const rows = ms_vertexDirtyLast + 1;
+			memcpy(mapped.pData, ms_vertexShadow, rows * cms_bytesPerRow);
+			context->Unmap(ms_vertexGlobals, 0);
+
+			Direct3d11_Metrics::constantBufferBytes += rows * cms_bytesPerRow;
+			++Direct3d11_Metrics::constantBufferUpdates;
+		}
+
+		UINT const slot = VERTEX_GLOBALS_SLOT;
+		context->VSSetConstantBuffers(slot, 1, &ms_vertexGlobals);
+
+		ms_vertexDirtyFirst = -1;
+		ms_vertexDirtyLast = -1;
+	}
+
+	if (ms_pixelDirtyFirst >= 0)
+	{
+		D3D11_MAPPED_SUBRESOURCE mapped;
+		Zero(mapped);
+		if (SUCCEEDED(context->Map(ms_pixelGlobals, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+		{
+			int const rows = ms_pixelDirtyLast + 1;
+			memcpy(mapped.pData, ms_pixelShadow, rows * cms_bytesPerRow);
+			context->Unmap(ms_pixelGlobals, 0);
+
+			Direct3d11_Metrics::constantBufferBytes += rows * cms_bytesPerRow;
+			++Direct3d11_Metrics::constantBufferUpdates;
+		}
+
+		UINT const slot = PIXEL_GLOBALS_SLOT;
+		context->PSSetConstantBuffers(slot, 1, &ms_pixelGlobals);
+
+		ms_pixelDirtyFirst = -1;
+		ms_pixelDirtyLast = -1;
+	}
+
+	if (!ms_perObjectBoundThisDraw)
+		flushPerObject();
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::beginFrame()
+{
+	// The ring restarts each frame. The GPU is at most a couple of frames behind
+	// and the ring holds far more slices than a frame uses, so restarting is not
+	// the same as overwriting work in flight -- and if it ever were, the discard
+	// counter would say so.
+	ms_perObjectCursor = 0;
+	ms_perObjectBoundThisDraw = false;
+}
+
+// ======================================================================
+/**
+ * The 2D pixel-to-clip transform, at c9.
+ *
+ * Component order and signs copied exactly from D3D9. The Y scale is negative
+ * because screen Y grows downward, and the biases are asymmetric for the same
+ * reason. Without this row every 2D vertex -- the whole UI, and any full-screen
+ * pass -- collapses to clip zero, with nothing reported anywhere.
+ */
+
+void Direct3d11_ConstantBuffers::setViewportData(int x, int y, int width, int height)
+{
+	// Guard the divisions rather than uploading infinities: a zero-sized viewport
+	// is transient, and a NaN in the register file persists.
+	if (width <= 0 || height <= 0)
+		return;
+
+	float const xOffset = (static_cast<float>(x) * 2.0f) / static_cast<float>(width);
+	float const yOffset = (static_cast<float>(y) * 2.0f) / static_cast<float>(height);
+
+	float const viewportData[4] =
+	{
+		 2.0f / static_cast<float>(width),
+		-2.0f / static_cast<float>(height),
+		-1.0f - xOffset,
+		 1.0f + yOffset
+	};
+
+	setVertexShaderConstants(VSCR_viewportData, viewportData, 1);
+}
+
+// ----------------------------------------------------------------------
+/**
+ * Fog density, at c10.
+ *
+ * Packed { 0, 0, density, density * density }, and written ONLY when fog is being
+ * enabled -- which is what D3D9 does. Disabling fog there clears a render state
+ * and leaves this constant live, so the shader's fog term still has a density in
+ * it and the disable works by some other means. Zeroing the row here instead
+ * would look tidier and would change what every scoped fog disable does.
+ */
+
+void Direct3d11_ConstantBuffers::setFog(bool enabled, float density)
+{
+	if (!enabled)
+		return;
+
+	float const fog[4] = { 0.0f, 0.0f, density, density * density };
+	setVertexShaderConstants(VSCR_fog, fog, 1);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::setCurrentTime(float currentTime)
+{
+	// { time, 0, 0, 0 }, once per frame, before the scene. Monotonic and never
+	// wrapped, exactly as D3D9 accumulates it -- a modulo here would make every
+	// animated material jump at the wrap.
+	float const time[4] = { currentTime, 0.0f, 0.0f, 0.0f };
+	setVertexShaderConstants(VSCR_currentTime, time, 1);
+}
+
+// ======================================================================

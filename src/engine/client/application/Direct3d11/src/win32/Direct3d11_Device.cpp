@@ -28,6 +28,7 @@ namespace Direct3d11_DeviceNamespace
 	ID3D11Device1              *ms_device;
 	ID3D11DeviceContext1       *ms_context;
 	D3D11_FEATURE_DATA_THREADING ms_threadingSupport;
+	D3D11_FEATURE_DATA_D3D11_OPTIONS ms_options;
 	D3D_FEATURE_LEVEL           ms_featureLevel = D3D_FEATURE_LEVEL_11_0;
 	bool                        ms_supportsTearing;
 
@@ -235,6 +236,18 @@ void Direct3d11_DeviceNamespace::queryCapabilities()
 	if (SUCCEEDED(hresult))
 		WARNING(!ms_threadingSupport.DriverConcurrentCreates, ("Direct3d11: this driver reports it cannot create resources concurrently. Asset loading happens on the AsynchronousLoader thread, so expect trouble."));
 
+	// Constant buffer offsetting and no-overwrite mapping. Both are exposed
+	// through the 11_1 interface but are optional on 11_0 hardware, and the
+	// per-draw constant design needs both: offsetting to bind a slice of a ring,
+	// no-overwrite to append to it without renaming the buffer. Queried here so
+	// the constant buffers can pick their strategy once, at install, and report
+	// which one they got.
+	Zero(ms_options);
+	IGNORE_RETURN(ms_device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &ms_options, sizeof(ms_options)));
+	WARNING(!ms_options.ConstantBufferOffsetting || !ms_options.MapNoOverwriteOnDynamicConstantBuffer,
+		("Direct3d11: this device lacks constant buffer offsetting (%d) or no-overwrite constant mapping (%d), so per-draw constants must use rotating buffers with DISCARD. Expect higher per-draw constant cost than a device with both.",
+		ms_options.ConstantBufferOffsetting ? 1 : 0, ms_options.MapNoOverwriteOnDynamicConstantBuffer ? 1 : 0));
+
 	// Tearing lets a benchmark run present without waiting for vblank. Without
 	// it every frame-time percentile is pinned to the refresh rate.
 	ms_supportsTearing = false;
@@ -436,6 +449,20 @@ D3D_FEATURE_LEVEL Direct3d11_Device::getFeatureLevel()
 bool Direct3d11_Device::supportsTearing()
 {
 	return ms_supportsTearing;
+}
+
+// ----------------------------------------------------------------------
+
+bool Direct3d11_Device::supportsConstantBufferOffsetting()
+{
+	return ms_options.ConstantBufferOffsetting != FALSE;
+}
+
+// ----------------------------------------------------------------------
+
+bool Direct3d11_Device::supportsConstantBufferNoOverwrite()
+{
+	return ms_options.MapNoOverwriteOnDynamicConstantBuffer != FALSE;
 }
 
 // ----------------------------------------------------------------------
