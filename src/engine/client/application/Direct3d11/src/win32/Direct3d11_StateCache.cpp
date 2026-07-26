@@ -30,6 +30,7 @@ namespace Direct3d11_StateCacheNamespace
 	D3D11_PRIMITIVE_TOPOLOGY  ms_primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 
 	ID3D11ShaderResourceView *ms_shaderResource[Direct3d11_StateCache::cms_shaderResourceSlots];
+	ID3D11SamplerState       *ms_samplerState[Direct3d11_StateCache::cms_shaderResourceSlots];
 }
 using namespace Direct3d11_StateCacheNamespace;
 
@@ -73,7 +74,10 @@ void Direct3d11_StateCache::invalidate()
 	ms_primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 
 	for (int i = 0; i < cms_shaderResourceSlots; ++i)
+	{
 		ms_shaderResource[i] = NULL;
+		ms_samplerState[i] = NULL;
+	}
 }
 
 // ======================================================================
@@ -246,6 +250,35 @@ void Direct3d11_StateCache::setShaderResource(int slot, ID3D11ShaderResourceView
 
 	ms_shaderResource[slot] = view;
 	context->PSSetShaderResources(static_cast<UINT>(slot), 1, &view);
+}
+
+// ----------------------------------------------------------------------
+/**
+ * Bind a sampler.
+ *
+ * Samplers are immutable objects shared through Direct3d11_StateObjectCache, so the same
+ * material's sampler is the same pointer every draw and the shadow comparison is a hit in
+ * the steady state. DX9 had to push seven individual sampler states per stage per draw to
+ * express the same thing.
+ */
+
+void Direct3d11_StateCache::setSamplerState(int slot, ID3D11SamplerState *sampler)
+{
+	DEBUG_FATAL(slot < 0 || slot >= cms_shaderResourceSlots, ("Direct3d11: sampler slot %d is out of range 0..%d.", slot, cms_shaderResourceSlots - 1));
+
+	++Direct3d11_Metrics::samplerBindCalls;
+
+	if (sampler == ms_samplerState[slot])
+		return;
+
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	if (!context)
+		return;
+
+	++Direct3d11_Metrics::samplerBindMisses;
+
+	ms_samplerState[slot] = sampler;
+	context->PSSetSamplers(static_cast<UINT>(slot), 1, &sampler);
 }
 
 // ----------------------------------------------------------------------

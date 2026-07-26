@@ -11,6 +11,7 @@
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ShaderCompiler.h"
+#include "Direct3d11_ShaderReflection.h"
 #include "Direct3d11_ShaderSource.h"
 
 #include <vector>
@@ -54,7 +55,8 @@ Direct3d11_PixelShaderProgramData::Direct3d11_PixelShaderProgramData(ShaderImple
 	ShaderImplementationPassPixelShaderProgramGraphicsData(),
 	m_program(program),
 	m_bytecode(NULL),
-	m_shader(NULL)
+	m_shader(NULL),
+	m_reflection()
 {
 	++ms_liveInstanceCount;
 	compile();
@@ -111,6 +113,12 @@ void Direct3d11_PixelShaderProgramData::compile()
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	if (!device)
 		return;
+
+	// Reflect before creating the shader object. The reflection is what says which texture
+	// register each sampler register pairs with, and the engine cannot bind a texture
+	// correctly without it -- fxc packs texture registers densely across the samplers the
+	// program actually samples, so the mapping is not the identity.
+	IGNORE_RETURN(Direct3d11_ShaderReflection::reflect(m_bytecode, name, false, m_reflection));
 
 	HRESULT const hresult = device->CreatePixelShader(m_bytecode->GetBufferPointer(), m_bytecode->GetBufferSize(), NULL, &m_shader);
 	if (FAILED(hresult) || !m_shader)

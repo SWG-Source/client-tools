@@ -53,6 +53,7 @@ public:
 	enum { cms_shaderResourceSlots = 16 };
 
 	static void  setShaderResource(int slot, ID3D11ShaderResourceView *view);
+	static void  setSamplerState(int slot, ID3D11SamplerState *sampler);
 
 	// A texture is about to be destroyed. Unbind it from every slot holding it and
 	// clear the shadow.

@@ -32,6 +32,8 @@
 
 // ======================================================================
 
+#include "Direct3d11_ShaderReflection.h"
+
 #include "clientGraphics/ShaderImplementation.h"
 
 #include <d3d11_1.h>
@@ -57,6 +59,21 @@ public:
 	// needs it.
 	ID3D11PixelShader *getPixelShader() const;
 
+	// Which texture register a given sampler register pairs with, or -1 when the shader
+	// declares that sampler but never samples through it.
+	//
+	// This is not the identity, and assuming it were would bind textures to the wrong
+	// samplers silently. fxc packs texture registers densely across the samplers a shader
+	// actually USES: a program declaring s0, s1, s2 and s3 but only sampling s0, s2 and s3
+	// gets t0, t1 and t2, so s2 reads t1. The engine addresses its textures by D3D9 sampler
+	// stage, so the translation has to come from reflection.
+	int  getTextureSlotForSampler(int samplerSlot) const;
+
+	// Bytes of $Globals this program declares. Bounding a constant upload by this rather
+	// than by the whole register file is the difference between per-draw constant traffic
+	// that matches DX9 and traffic an order of magnitude worse.
+	int  getConstantExtentBytes() const;
+
 private:
 
 	Direct3d11_PixelShaderProgramData();
@@ -71,6 +88,8 @@ private:
 
 	ID3DBlob          *m_bytecode;
 	ID3D11PixelShader *m_shader;
+
+	Direct3d11_ShaderReflection::Result m_reflection;
 };
 
 // ======================================================================
@@ -78,6 +97,23 @@ private:
 inline ID3D11PixelShader *Direct3d11_PixelShaderProgramData::getPixelShader() const
 {
 	return m_shader;
+}
+
+// ----------------------------------------------------------------------
+
+inline int Direct3d11_PixelShaderProgramData::getTextureSlotForSampler(int samplerSlot) const
+{
+	if (samplerSlot < 0 || samplerSlot >= Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
+		return -1;
+
+	return m_reflection.samplerToTexture[samplerSlot];
+}
+
+// ----------------------------------------------------------------------
+
+inline int Direct3d11_PixelShaderProgramData::getConstantExtentBytes() const
+{
+	return m_reflection.constantExtentBytes;
 }
 
 // ======================================================================
