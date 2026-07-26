@@ -40,6 +40,7 @@ int Direct3d11_Metrics::shaderResourceBindCalls;
 int Direct3d11_Metrics::shaderResourceBindMisses;
 int Direct3d11_Metrics::viewportSetCalls;
 int Direct3d11_Metrics::scissorSetCalls;
+int Direct3d11_Metrics::setTransformCalls;
 
 int Direct3d11_Metrics::constantBufferUpdates;
 int Direct3d11_Metrics::constantBufferBytes;
@@ -173,6 +174,7 @@ void Direct3d11_Metrics::beginFrame()
 	shaderResourceBindMisses = 0;
 	viewportSetCalls = 0;
 	scissorSetCalls = 0;
+	setTransformCalls = 0;
 
 	constantBufferUpdates = 0;
 	constantBufferBytes = 0;

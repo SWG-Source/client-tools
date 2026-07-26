@@ -39,6 +39,7 @@
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_StaticIndexBufferData.h"
 #include "Direct3d11_StaticShaderData.h"
+#include "Direct3d11_Transforms.h"
 #include "Direct3d11_StaticVertexBufferData.h"
 #include "Direct3d11_TextureData.h"
 #include "Direct3d11_VertexShaderData.h"
@@ -370,9 +371,12 @@ namespace Direct3d11Namespace
 	void setAntialiasEnabled(bool)                                         { DX11_NOT_IMPLEMENTED("setAntialiasEnabled"); }
 
 	// Transforms, lighting and per-draw material state.
-	void setWorldToCameraTransform(const Transform &, const Vector &)      { DX11_NOT_IMPLEMENTED("setWorldToCameraTransform"); }
-	void setProjectionMatrix(const GlMatrix4x4 &)                          { DX11_NOT_IMPLEMENTED("setProjectionMatrix"); }
-	void setObjectToWorldTransformAndScale(const Transform &, const Vector &) { DX11_NOT_IMPLEMENTED("setObjectToWorldTransformAndScale"); }
+	// The concatenation these three feed is deferred to prepareToDraw; see
+	// Direct3d11_Transforms.h for why, and for the three parity details that are easy to get
+	// wrong.
+	void setWorldToCameraTransform(const Transform &transform, const Vector &cameraPosition)       { Direct3d11_Transforms::setWorldToCameraTransform(transform, cameraPosition); }
+	void setProjectionMatrix(const GlMatrix4x4 &projectionMatrix)                                  { Direct3d11_Transforms::setProjectionMatrix(projectionMatrix); }
+	void setObjectToWorldTransformAndScale(const Transform &objectToWorld, const Vector &scale)    { Direct3d11_Transforms::setObjectToWorldTransformAndScale(objectToWorld, scale); }
 	void setAlphaFadeOpacity(bool enabled, float opacity)
 	{
 		// Two consumers. The shipped pixel constants expose alphaFadeOpacityEnabled and
@@ -727,6 +731,7 @@ bool Direct3d11::install(Gl_install *gl_install)
 	// objects on.
 	Direct3d11_ShaderImplementationData::install();
 	Direct3d11_StaticShaderData::install();
+	Direct3d11_Transforms::install();
 	Direct3d11_VertexShaderData::install();
 	Direct3d11_PixelShaderProgramData::install();
 

@@ -32,6 +32,7 @@
 #include "clientGraphics/StaticShader.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_StateCache.h"
+#include "Direct3d11_Transforms.h"
 #include "Direct3d11_StaticIndexBufferData.h"
 #include "Direct3d11_StaticVertexBufferData.h"
 
@@ -414,6 +415,11 @@ bool Direct3d11::prepareToDraw()
 	}
 
 	Direct3d11_StateCache::setInputLayout(layout);
+
+	// Concatenate the object, camera and projection matrices if any of them moved. This has to
+	// happen before the constant flush below, because it writes the per-object slice that the
+	// flush uploads.
+	Direct3d11_Transforms::flush();
 
 	// Push whatever constants changed. At most one flush per stage, and the
 	// per-object slice either way.

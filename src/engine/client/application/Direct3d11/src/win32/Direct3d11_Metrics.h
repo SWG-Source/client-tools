@@ -85,6 +85,11 @@ public:
 	static int  viewportSetCalls;
 	static int  scissorSetCalls;
 
+	// Transform setters. Counted because the concatenation is deferred: a count far
+	// above the draw count means the engine is resetting matrices it is not drawing
+	// with, and a count of zero means nothing will transform at all.
+	static int  setTransformCalls;
+
 	// Constant traffic. Bytes as well as calls, because the failure this guards
 	// against is uploading a whole register file per draw rather than the part
 	// that changed.
