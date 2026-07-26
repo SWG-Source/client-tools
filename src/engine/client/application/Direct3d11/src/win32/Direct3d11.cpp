@@ -850,10 +850,19 @@ bool Direct3d11::install(Gl_install *gl_install)
 
 	ms_installed = true;
 
-	// What is genuinely absent, so the log says it once at install rather than leaving it to be
-	// discovered. Everything not listed here is implemented: resources, shaders, state, draws,
-	// transforms, lighting, render targets and fog.
-	WARNING(true, ("Direct3d11: up at %dx%d %s. Not implemented: point sprites (the star field renders as single pixels), the hardware mouse cursor (the interface draws its own instead), presentToWindow (editors and viewers only, never SwgClient) and the debug video buffers.",
+	// Deliberately does NOT enumerate what is missing.
+	//
+	// Three revisions of this line have now been wrong, each because it was a hand-written list
+	// that outlived the code: it claimed resources and draws were unimplemented a dozen commits
+	// after they landed, and then claimed point sprites and the hardware cursor were missing on
+	// the very run that first exercised both. A list maintained by hand beside code that changes
+	// is a list that lies, and this is the first line anyone reads in the log.
+	//
+	// So the unimplemented slots report themselves instead -- DX11_NOT_IMPLEMENTED already logs
+	// each one by name the first time it is actually called, which is both accurate by
+	// construction and better evidence, because it says what this run REACHED rather than what
+	// someone believed was absent when they last edited a comment.
+	WARNING(true, ("Direct3d11: up at %dx%d %s. Unimplemented entry points name themselves if they are reached.",
 		Direct3d11_SwapChain::getWidth(), Direct3d11_SwapChain::getHeight(), Direct3d11_SwapChain::isWindowed() ? "windowed" : "fullscreen"));
 
 	return true;

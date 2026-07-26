@@ -169,6 +169,26 @@ D3D11_BLEND Direct3d11_StateTables::getBlend(int engineBlend)
 
 // ----------------------------------------------------------------------
 
+D3D11_BLEND Direct3d11_StateTables::getAlphaChannelBlend(D3D11_BLEND colorBlend)
+{
+	// Only the five colour-reading factors need renaming; every other factor is already legal
+	// on the alpha channel and passes through unchanged. SRC1 is dual-source blending, which
+	// nothing in this engine uses, but it is in the table because omitting it would leave the
+	// same E_INVALIDARG waiting for whoever adds it.
+	switch (colorBlend)
+	{
+		case D3D11_BLEND_SRC_COLOR:       return D3D11_BLEND_SRC_ALPHA;
+		case D3D11_BLEND_INV_SRC_COLOR:   return D3D11_BLEND_INV_SRC_ALPHA;
+		case D3D11_BLEND_DEST_COLOR:      return D3D11_BLEND_DEST_ALPHA;
+		case D3D11_BLEND_INV_DEST_COLOR:  return D3D11_BLEND_INV_DEST_ALPHA;
+		case D3D11_BLEND_SRC1_COLOR:      return D3D11_BLEND_SRC1_ALPHA;
+		case D3D11_BLEND_INV_SRC1_COLOR:  return D3D11_BLEND_INV_SRC1_ALPHA;
+		default:                          return colorBlend;
+	}
+}
+
+// ----------------------------------------------------------------------
+
 D3D11_BLEND_OP Direct3d11_StateTables::getBlendOperation(int engineBlendOperation)
 {
 	DEBUG_FATAL(engineBlendOperation < 0 || engineBlendOperation >= cms_blendOperationCount, ("Direct3d11: blend operation index %d out of range", engineBlendOperation));

@@ -47,6 +47,14 @@ public:
 	static D3D11_COMPARISON_FUNC     getCompare(int engineCompare);
 	static D3D11_BLEND               getBlend(int engineBlend);
 	static D3D11_BLEND_OP            getBlendOperation(int engineBlendOperation);
+
+	// The alpha-channel-legal form of a blend factor.
+	//
+	// D3D11 rejects the *_COLOR factors on the alpha channel with E_INVALIDARG -- the alpha
+	// channel has no colour to read. D3D9 had one factor for all four channels, where
+	// D3DBLEND_SRCCOLOR meant "the source's own value in this channel", which for alpha is the
+	// source alpha. So this renames rather than approximates.
+	static D3D11_BLEND               getAlphaChannelBlend(D3D11_BLEND colorBlend);
 	static D3D11_STENCIL_OP          getStencilOperation(int engineStencilOperation);
 	static D3D11_TEXTURE_ADDRESS_MODE getTextureAddress(int engineTextureAddress);
 

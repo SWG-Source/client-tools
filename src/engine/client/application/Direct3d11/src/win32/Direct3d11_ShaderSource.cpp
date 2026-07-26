@@ -218,6 +218,44 @@ namespace Direct3d11_ShaderSourceNamespace
 		"float4    userConstant6 : register(c58);\n"
 		"float4    userConstant7 : register(c59);\n"
 		"\n"
+		// The hemispheric block at c60..c63, which the light manager fills from
+		// Direct3d11_LightManager::HemisphericLightData. Field ORDER here is that struct's
+		// order and must stay so -- it is a register layout, not a naming choice.
+		//
+		// The HLSL names are not the C++ names: the shipped include calls the last two
+		// tangentColorMinusBackColor and tangentColorMinusDiffuseColor where the C++ struct says
+		// tangentMinusBackColor and tangentMinusDiffuseColor. The asset's spelling wins, because
+		// the asset is what the shipped functions.inc reads.
+		"float4    vsExtendedParallelSpecular0BackColor                    : register(c60);\n"
+		"float4    vsExtendedParallelSpecular0TangentColor                 : register(c61);\n"
+		"float4    vsExtendedParallelSpecular0TangentColorMinusBackColor    : register(c62);\n"
+		"float4    vsExtendedParallelSpecular0TangentColorMinusDiffuseColor : register(c63);\n"
+		"\n"
+		// float4, and the asset settles it in both directions.
+		//
+		// float3 looked right from calculateDiffuseParallelHemisphericLight, which does
+		// "float3 color = extendedLight.tangentColor;". But
+		// calculateDiffuseSpecularParallelHemisphericLight assigns that same field into
+		// DiffuseSpecular::diffuse, which is a float4 -- it sets .a on it a few lines later --
+		// and then does "diffuse += (-lighting.y * extendedLight.tangentColorMinusDiffuseColor)".
+		// float4 += float3 is X3017, a hard error.
+		//
+		// So float4 is the only width that compiles both uses. The float3 assignment truncates,
+		// which is X3206, a warning this include already produces in eight other places and which
+		// the shipped build lived with. A warning in one function beats an error in another.
+		"struct HemisphericLightData\n"
+		"{\n"
+		"	float4 backColor;\n"
+		"	float4 tangentColor;\n"
+		"	float4 tangentColorMinusBackColor;\n"
+		"	float4 tangentColorMinusDiffuseColor;\n"
+		"};\n"
+		"\n"
+		"struct ExtendedLightData\n"
+		"{\n"
+		"	HemisphericLightData parallelSpecular[NumberOfParallelSpecularLights];\n"
+		"};\n"
+		"\n"
 		"static Material material =\n"
 		"{\n"
 		"	vsMaterialDiffuseColor,\n"
@@ -248,6 +286,18 @@ namespace Direct3d11_ShaderSourceNamespace
 		"	},\n"
 		"	{\n"
 		"		{ vsDot30CameraPosition.xyz, vsDot30Direction.xyz, vsDot30Diffuse, vsDot30Specular }\n"
+		"	}\n"
+		"};\n"
+		"\n"
+		"static ExtendedLightData extendedLightData =\n"
+		"{\n"
+		"	{\n"
+		"		{\n"
+		"			vsExtendedParallelSpecular0BackColor,\n"
+		"			vsExtendedParallelSpecular0TangentColor,\n"
+		"			vsExtendedParallelSpecular0TangentColorMinusBackColor,\n"
+		"			vsExtendedParallelSpecular0TangentColorMinusDiffuseColor\n"
+		"		}\n"
 		"	}\n"
 		"};\n"
 		"\n"

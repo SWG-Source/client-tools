@@ -106,12 +106,22 @@ Direct3d11_ShaderImplementationData::Direct3d11_ShaderImplementationData(ShaderI
 		target.DestBlend = Direct3d11_StateTables::getBlend(static_cast<int>(source.m_alphaBlendDestination));
 		target.BlendOp   = Direct3d11_StateTables::getBlendOperation(static_cast<int>(source.m_alphaBlendOperation));
 
-		// D3D9 had one blend equation covering colour and alpha; D3D11 splits them. Setting
-		// the alpha equation to the colour one reproduces D3D9 exactly. Leaving the alpha
-		// fields at their D3D11 defaults instead would blend alpha as ONE/ZERO and quietly
-		// change every translucent surface's destination alpha.
-		target.SrcBlendAlpha  = target.SrcBlend;
-		target.DestBlendAlpha = target.DestBlend;
+		// D3D9 had one blend equation covering colour and alpha; D3D11 splits them. The alpha
+		// equation therefore has to be set from the colour one, because leaving the alpha fields
+		// at their D3D11 defaults would blend alpha as ONE/ZERO and quietly change every
+		// translucent surface's destination alpha.
+		//
+		// But it cannot be a straight copy, and this is where the first run of the client
+		// stopped: D3D11 REJECTS the *_COLOR blend factors on the alpha channel outright, with
+		// E_INVALIDARG out of CreateBlendState. The alpha channel has no colour to read, so
+		// D3D11_BLEND_SRC_COLOR and its four relatives are simply not legal there.
+		//
+		// The mapping below is what D3D9 meant. D3D9 applied one factor to all four channels, so
+		// D3DBLEND_SRCCOLOR read the source colour per channel -- and for the alpha channel, the
+		// source's alpha IS its per-channel value. So SRC_COLOR becomes SRC_ALPHA and so on: not
+		// an approximation, the same arithmetic named the way D3D11 requires.
+		target.SrcBlendAlpha  = Direct3d11_StateTables::getAlphaChannelBlend(target.SrcBlend);
+		target.DestBlendAlpha = Direct3d11_StateTables::getAlphaChannelBlend(target.DestBlend);
 		target.BlendOpAlpha   = target.BlendOp;
 
 		// The engine's write-enable mask is already the D3D9 COLORWRITEENABLE bit layout,

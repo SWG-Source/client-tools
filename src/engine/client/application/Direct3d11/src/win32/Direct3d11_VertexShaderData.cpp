@@ -157,14 +157,38 @@ Direct3d11_VertexShaderData::~Direct3d11_VertexShaderData()
 
 void Direct3d11_VertexShaderData::parseHeader()
 {
-	char const *text = m_vertexShader.m_text;
-	char const * const end = text + m_vertexShader.m_textLength;
+	// The null check comes before any pointer arithmetic, and the order is the whole point.
+	//
+	// This previously read
+	//
+	//   char const *text = m_vertexShader.m_text;
+	//   char const * const end = text + m_vertexShader.m_textLength;
+	//   if (!text || ...) return;
+	//
+	// which forms `null + n` when m_text is null. That is undefined behaviour, and an optimiser
+	// is entitled to reason backwards from it: the arithmetic is only defined if m_text is
+	// non-null, therefore m_text is non-null, therefore the `!text` test below is dead and can be
+	// deleted. In a Release build it was, and the first run of the client crashed here with an
+	// access violation reading a small address -- exactly what walking a null buffer with a
+	// non-null end looks like.
+	//
+	// The pointer arithmetic now happens only after the pointer is known good.
+	char const * const begin = m_vertexShader.m_text;
+	int const length = m_vertexShader.m_textLength;
 
-	if (!text || m_vertexShader.m_textLength <= 0)
+	if (!begin || length <= 0)
 	{
-		WARNING(true, ("Direct3d11: vertex program '%s' has no source text.", m_vertexShader.getFilename()));
+		// Names the program, because "which one" is the entire question when this fires. The
+		// engine's loader does not check TreeFile::open's result before calling length() on it
+		// (ShaderImplementation.cpp's ShaderImplementationPassVertexShader::load), so a program
+		// that resolves to nothing arrives here rather than being refused there.
+		WARNING(true, ("Direct3d11: vertex program '%s' has no source text (text %p, length %d), so it cannot be compiled.",
+			m_vertexShader.getFilename(), static_cast<void const *>(begin), length));
 		return;
 	}
+
+	char const *text = begin;
+	char const * const end = begin + length;
 
 	bool isHlsl = false;
 	bool isAssembly = false;

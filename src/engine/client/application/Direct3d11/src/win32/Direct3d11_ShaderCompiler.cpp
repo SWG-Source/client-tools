@@ -6,6 +6,8 @@
 // ======================================================================
 
 #include "FirstDirect3d11.h"
+
+#include <algorithm>
 #include "Direct3d11_ShaderCompiler.h"
 
 #include "Direct3d11_Device.h"
@@ -55,6 +57,7 @@ namespace Direct3d11_ShaderCompilerNamespace
 	IncludeHandler  ms_includeHandler;
 
 	ID3DBlob       *compile(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target);
+	bool            refuseIfNotHlsl(char const *source, int sourceLength, char const *name);
 	ID3DBlob       *compilePatched(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target, bool isVertexProgram);
 	void            reportCompilerVersion();
 }
@@ -114,6 +117,14 @@ HRESULT STDMETHODCALLTYPE Direct3d11_ShaderCompilerNamespace::IncludeHandler::Op
 
 			IGNORE_RETURN(ms_includeCache.insert(std::make_pair(std::string(path), cached)));
 
+			// Once per distinct include, because a shader compile error is reported against a
+			// FILE and a LINE, and neither means anything unless it is known which copy of that
+			// file the compiler was given. The corpus has up to eight copies of some includes
+			// across the TRE stack, plus the ones this DLL substitutes and any loose override on
+			// the search path, so "functions.inc line 193" is ambiguous without this.
+			WARNING(true, ("Direct3d11: include '%s' served from this DLL, %d bytes, %d lines.",
+				path, overrideLength, 1 + static_cast<int>(std::count(cached.data, cached.data + overrideLength, '\n'))));
+
 			*data  = cached.data;
 			*bytes = static_cast<UINT>(overrideLength);
 			return S_OK;
@@ -161,6 +172,21 @@ HRESULT STDMETHODCALLTYPE Direct3d11_ShaderCompilerNamespace::IncludeHandler::Op
 	delete [] contents;
 
 	IGNORE_RETURN(ms_includeCache.insert(std::make_pair(std::string(path), cached)));
+
+	// See the note at the override branch: a compile error names a file and a line, and the TRE
+	// stack holds several copies of most of these, so the size and line count are what identify
+	// WHICH copy TreeFile resolved.
+	WARNING(true, ("Direct3d11: include '%s' served from the search path, %d bytes, %d lines%s.",
+		path, cached.length,
+		1 + static_cast<int>(std::count(cached.data, cached.data + cached.length, '\n')),
+		patched ? " (patched by this backend)" : ""));
+
+	// Writing the served text out to logs/ as well was how the hemispheric-lighting failure was
+	// finally pinned down -- the byte count alone matched no copy in the 209 TREs and no loose
+	// file, so only the bytes settled it. That dump is not left in: a shipping client should not
+	// write a file per shader include every run. If another asset-resolution question comes up,
+	// re-adding it is a dozen lines right here, and the line above is what tells you that you
+	// need to.
 
 	*data  = cached.data;
 
@@ -349,21 +375,51 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 
 // ----------------------------------------------------------------------
 
+/**
+ * Refuse a program whose source is not HLSL, naming what it is instead.
+ *
+ * Must be given the program's ORIGINAL text -- the marker it tests for is the first line, and
+ * anything that has already stripped a header will fail this for the wrong reason.
+ *
+ * D3DCompile has no assembler and D3D9 shader assembly is not a D3D11 shader model, so an
+ * assembly program cannot be built at all; scripts/asm2hlsl translates the reachable ones
+ * offline and client-assets carries the results.
+ */
+
+bool Direct3d11_ShaderCompilerNamespace::refuseIfNotHlsl(char const *source, int sourceLength, char const *name)
+{
+	Direct3d11_ShaderSource::Language const language = Direct3d11_ShaderSource::getLanguage(source, sourceLength);
+	if (language == Direct3d11_ShaderSource::L_hlsl)
+		return false;
+
+	WARNING(true, ("Direct3d11: '%s' is %s, which D3DCompile cannot build. It needs translating to HLSL.",
+		name, (language == Direct3d11_ShaderSource::L_assembly) ? "Direct3D 9 shader assembly" : "not recognisable as HLSL or assembly"));
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
 ID3DBlob *Direct3d11_ShaderCompilerNamespace::compilePatched(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target, bool isVertexProgram)
 {
 	NOT_NULL(source);
 
-	// A program that is not HLSL cannot be compiled at all, and saying so by name is the
-	// whole diagnosis: D3DCompile has no assembler, and D3D9 shader assembly is not a
-	// D3D11 shader model. Ninety-seven such programs are reachable at shader capability
-	// 2.0 and each one needs translating to HLSL.
-	Direct3d11_ShaderSource::Language const language = Direct3d11_ShaderSource::getLanguage(source, sourceLength);
-	if (language != Direct3d11_ShaderSource::L_hlsl)
-	{
-		WARNING(true, ("Direct3d11: '%s' is %s, which D3DCompile cannot build. It needs translating to HLSL.",
-			name, (language == Direct3d11_ShaderSource::L_assembly) ? "Direct3D 9 shader assembly" : "not recognisable as HLSL or assembly"));
-		return NULL;
-	}
+	// No language check here, deliberately. It used to be at the top of this function and it
+	// rejected EVERY VERTEX PROGRAM IN THE GAME.
+	//
+	// The language marker is the first line of the file, and a vertex program never reaches this
+	// function with its first line intact: Direct3d11_VertexShaderData::parseHeader consumes the
+	// marker and the leading #define block on purpose -- the block redefines the texture
+	// coordinate set macros the runtime supplies, and leaving it makes seven programs fail
+	// X4532. So by the time the text arrives here the "//hlsl" it would be tested for is gone,
+	// getLanguage returned L_unknown, and the program was refused as "not recognisable".
+	//
+	// The first run of the client showed exactly that: 23 refusals, one per vertex program the
+	// login screen reached, and "a draw was reached with no vertex shader bound" alongside them.
+	// Only 23 because only 23 were reached -- nothing 3D would ever have drawn.
+	//
+	// The check belongs where the original text is, so it now lives in the two callers:
+	// parseHeader validates the vertex side before stripping anything, and compilePixelShader
+	// validates below on the untouched PSRC chunk.
 
 	int patchedLength = 0;
 	char * const patched = Direct3d11_ShaderSource::patchProgramSource(name, source, sourceLength, isVertexProgram, patchedLength);
@@ -380,6 +436,8 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compilePatched(char const *source,
 
 ID3DBlob *Direct3d11_ShaderCompiler::compileVertexShader(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros)
 {
+	// No language check: the text has already had its marker stripped by parseHeader, which is
+	// also what validated it. Testing here would reject every vertex program. See compilePatched.
 	return compilePatched(source, sourceLength, name, macros, cms_vertexShaderTarget, true);
 }
 
@@ -396,6 +454,11 @@ ID3DBlob *Direct3d11_ShaderCompiler::compileGeometryShader(char const *source, i
 
 ID3DBlob *Direct3d11_ShaderCompiler::compilePixelShader(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros)
 {
+	// The pixel side receives the PSRC chunk untouched, so its marker is still the first line and
+	// this is the right place to test it.
+	if (refuseIfNotHlsl(source, sourceLength, name))
+		return NULL;
+
 	return compilePatched(source, sourceLength, name, macros, cms_pixelShaderTarget, false);
 }
 
