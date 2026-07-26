@@ -45,6 +45,7 @@ class StaticVertexBuffer : public HardwareVertexBuffer
 	friend class  Direct3d9;
 	friend class  Direct3d9_StaticVertexBufferData;
 	friend class  Direct3d11;
+	friend class  Direct3d11_StaticVertexBufferData;
 
 public:
 

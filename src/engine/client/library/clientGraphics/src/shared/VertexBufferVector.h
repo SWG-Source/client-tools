@@ -29,6 +29,7 @@ class VertexBufferVector
 	friend class  Direct3d9;
 	friend class  Direct3d9_VertexBufferVectorData;
 	friend class  Direct3d11;
+	friend class  Direct3d11_VertexBufferVectorData;
 
 public:
 

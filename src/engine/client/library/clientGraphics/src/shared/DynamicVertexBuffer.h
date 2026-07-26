@@ -44,6 +44,7 @@ class DynamicVertexBuffer : public HardwareVertexBuffer
 	friend class  Direct3d9;
 	friend class  Direct3d9_DynamicVertexBufferData;
 	friend class  Direct3d11;
+	friend class  Direct3d11_DynamicVertexBufferData;
 
 public:
 
