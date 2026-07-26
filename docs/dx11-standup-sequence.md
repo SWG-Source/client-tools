@@ -1032,3 +1032,82 @@ and the whole texture converter against an independent decoder).
 Writing that much unverifiable code in one stretch, on top of a decision about whether
 the baseline's lighting patches are part of the target, is how a port acquires the
 problems this one has so far avoided.
+
+### Correction: the corpus is present, and the assembly problem is measured
+
+The section above says the shader corpus is not in this repository. That is wrong, and
+the error was mine: `client-assets` is only the project's **overlay**, which is why it
+holds eleven `.sht` files and one TRE and no effects at all. The base asset set is in
+`E:\SWG\64bit-server\_client` -- 209 TRE files including `bottom.tre`, plus all five of
+the `.cfg` files that `client-assets/client.cfg` includes. Nothing needs to be supplied.
+
+Resolved through the search-tree order in those cfg files, the corpus is:
+
+| kind | unique files |
+| --- | --- |
+| `.sht` shaders | 17,192 |
+| `.eft` effects | 258 |
+| `.vsh` vertex programs | 286 |
+| `.psh` pixel programs | 454 |
+| `.inc` shader includes | 27 under the program trees |
+
+`.vsh` files are raw text whose first line declares the language. `.psh` files are IFF
+wrapped, carrying the source in a `PSRC` chunk and precompiled D3D9 bytecode in a `PEXE`
+chunk.
+
+**Language split.** Vertex: 190 HLSL (87 `vs_1_1`, 68 `vs_2_0`, 35 declaring no profile),
+96 assembly. Pixel: 322 HLSL (204 `ps_2_0`, 109 `ps_1_1`, 8 `ps_1_4`, 1 `ps_1_0`), 130
+assembly (124 `ps.1.1`, 5 `ps.1.0`, 1 `ps.1.4`), and 2 whose first line is a comment.
+226 assembly programs in total, so the plan's figure of 96 was the vertex half only.
+
+**Reachability, which is what actually sizes the work.** `ShaderImplementation::load_000N`
+compares each `SCAP` entry against `Graphics::getShaderCapability()` for **exact**
+equality and abandons the whole implementation when none matches. DX9 reports
+`ShaderCapability(2,0)` on any adapter with vs and ps 2.0, which is everything this
+century. Parsing all 258 effects: 814 implementations, of which **355 are live at 2.0**.
+
+The stored `SCAP` value is not the runtime one -- versions 0004 and 0005 go through
+`remapOldInconsistentShaderCapabilityLevels` so our 2.0 is stored as `0x0300`, 0006 uses
+the recent remap, and 0007 and later compare directly. Checked against
+`a_emis_full.eft` by hand: its first implementation stores `[0x200, 0x205, 0x300]`,
+mapping to 1.1/1.4/2.0, and is live; its second stores `[0x100, 0x105]`, is dead at 2.0,
+and is a fixed-function pass with no programs at all.
+
+That last detail is the important one: a single VSPS implementation typically covers 1.1
+through 2.0 rather than there being a separate 2.0 variant. So the older assembly programs
+are **not** superseded on modern hardware -- they are what DX9 runs today, via
+`D3DXAssembleShader` for vertex assembly and via the `PEXE` blob for pixel assembly.
+
+**156 assembly programs are reachable at capability 2.0** -- 92 pixel, 64 vertex. The
+other 70 are referenced only by implementations that never load.
+
+**Size of the translation.** Those 156 programs contain 981 instructions in total, a mean
+of 6.3 each, and the largest is `cloudlayer.vsh` at 35. They use 26 distinct opcodes:
+
+```
+mov 220   tex 199   mul 188   lrp 53   mad 51   mad_sat 19   dp3 17   add 13
+dp3_sat 12   texcoord 9   add_sat 8   texm3x2pad 5   texm3x2tex 5   max 4
+texld 3   m3x3 3   rsq 3   texcrd 2   m4x4 2   m4x3 2   sub 2   mul_x2 1
+add_d2 1   phase 1   exp 1   rcp 1
+```
+
+Almost all of that is a direct mechanical rewrite into HLSL: the ps.1.x model has no flow
+control, at most eight instructions, four texture registers, and fixed modifier
+semantics (`_sat` clamps, `_x2` scales, `_d2` halves). The awkward cases are small and
+enumerable -- `texm3x2pad`/`texm3x2tex` (ten uses across five programs, the 2x2 matrix
+texture-addressing pair) and the single `phase` marker, which is ps.1.4's two-phase
+boundary.
+
+So this is a transpiler plus about five hand-written programs, not 156 hand-written
+shaders. The transpiler's output is also directly checkable: each translated program can
+be compiled with `fxc` and its emitted `$Globals` layout compared against the register
+contract, and the DX9 build can be asked to assemble the original for numerical
+comparison on the same inputs.
+
+**What DX9 does that DX11 must therefore also do.** `Direct3d9_PixelShaderProgramData`
+recompiles the `PSRC` source instead of using the `PEXE` blob, and overrides
+`pixel_program/include/pixel_shader_constants.inc` with an engine-layout version, because
+the TRE copy declares `textureFactor` at `c3` where the engine uploads
+`dot3LightTangentMinusDiffuseColor`. Without the override, recompiled shaders multiply
+colour by a negative value and characters render black. Any DX11 path that compiles from
+source inherits that override as a hard requirement, not an option.
