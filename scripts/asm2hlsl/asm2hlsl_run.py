@@ -343,6 +343,28 @@ class Converter(object):
         text_out.append("//hlsl vs_2_0")
         for index, tag in enumerate(tags):
             text_out.append("#define textureCoordinateSet%-8s textureCoordinateSet%d" % (tag, index))
+
+        if tags:
+            # The macro the input struct uses below, defined HERE rather than assumed to come
+            # from somewhere.
+            #
+            # This is a convention of the hand-written HLSL programs: each one defines
+            # DECLARE_textureCoordinateSets in its own source and then names it inside its input
+            # struct. 166 of the corpus programs do exactly that. The original ASSEMBLY has no
+            # such macro -- it declares inputs with dcl_texcoordN -- so a converted program that
+            # names the macro without defining it does not compile, which is what 28 of these
+            # did.
+            #
+            # float4 per set, not float2. Assembly treats a vertex input as a whole register, and
+            # D3D11 fills components the input layout does not supply with 0 and w with 1, which
+            # is what D3D9 did for an unwritten register component. No ": register(vN)" clause:
+            # the backend strips those from vertex inputs anyway, and the set a tag resolves to
+            # is decided by the input layout from the tag mapping, not by a register number.
+            text_out.append("#define DECLARE_textureCoordinateSets\t\\")
+            for index in range(len(tags)):
+                terminator = "" if index == len(tags) - 1 else "\\"
+                text_out.append("\tfloat4 textureCoordinateSet%d : TEXCOORD%d;%s" % (index, index, terminator))
+
         text_out.append("")
         text_out.append("// Converted from Direct3D 9 vertex assembly by asm2hlsl. The module structure of the")
         text_out.append("// original is preserved: each #include below is a block of statements inside main(),")
