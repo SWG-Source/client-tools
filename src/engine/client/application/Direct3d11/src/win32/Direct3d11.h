@@ -47,6 +47,17 @@ public:
 	static void setCurrentTextureCoordinateSetMapping(int const *mapping, int count);
 	static float getCurrentTimeValue();
 
+	// The three shapes every draw entry point reduces to. topology is a
+	// D3D11_PRIMITIVE_TOPOLOGY, passed as an int so this header does not have to pull in
+	// d3d11.h for callers that only need the declaration.
+	static void  draw(int topology, int firstVertex, int vertexCount, int triangleCount);
+	static void  drawIndexed(int topology, int firstIndex, int indexCount, int baseVertex, int triangleCount);
+	static void  drawFan(int firstVertex, int vertexCount);
+	static void  drawQuads(int firstVertex, int quadCount);
+	static void  drawIndexedFanUnsupported();
+
+	static void  releaseDrawResources();
+
 	// StaticShader keeps its graphics data private and names class Direct3d11 a friend.
 	// A namespace function has no friend access, so the reach-through lives here.
 	static StaticShaderGraphicsData *getStaticShaderGraphicsData(StaticShader const &shader);

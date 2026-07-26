@@ -80,6 +80,17 @@ namespace Direct3d11_DrawNamespace
 	int             ms_currentTextureCoordinateSetMappingCount;
 
 	bool            ms_warnedAboutMissingVertexShader;
+	// The two emulation index buffers, and how many primitives each currently covers.
+	ID3D11Buffer   *ms_fanIndexBuffer;
+	int             ms_fanIndexBufferVertices;
+
+	ID3D11Buffer   *ms_quadIndexBuffer;
+	int             ms_quadIndexBufferQuads;
+
+	bool            ms_warnedAboutIndexedFan;
+
+	bool ensureFanIndexBuffer(int vertexCount);
+	bool ensureQuadIndexBuffer(int quadCount);
 }
 using namespace Direct3d11_DrawNamespace;
 
@@ -376,11 +387,11 @@ bool Direct3d11::prepareToDraw()
 	if (!context)
 		return false;
 
-	// An input layout needs both the stream formats and the vertex shader. The
-	// shader arrives with the static shader data, which is not implemented yet, so
-	// until then this is where a draw stops -- counted and named once, rather than
-	// issuing a draw with no layout that the debug layer would reject and the log
-	// would not explain.
+	// An input layout needs both the stream formats and the vertex shader. The shader
+	// arrives with the static shader data, so a draw reaching here without one means either
+	// no material was applied or its vertex program failed to build -- both of which the
+	// program class has already named. Stopping here, counted, beats issuing a draw with no
+	// layout that the debug layer would reject and the log would not explain.
 	if (!ms_currentVertexShaderBytecode || !ms_streamCount)
 	{
 		++Direct3d11_Metrics::droppedDraws;
@@ -388,7 +399,7 @@ bool Direct3d11::prepareToDraw()
 		if (!ms_warnedAboutMissingVertexShader)
 		{
 			ms_warnedAboutMissingVertexShader = true;
-			WARNING(true, ("Direct3d11: a draw was reached with no vertex shader bound, so no input layout can be built and the draw is being skipped. This is expected until the shader data classes are implemented; every such draw is counted."));
+			WARNING(true, ("Direct3d11: a draw was reached with no vertex shader bound, so no input layout can be built and the draw is being skipped. Every such draw is counted in droppedDraws. Reported once."));
 		}
 
 		return false;
@@ -439,6 +450,322 @@ int Direct3d11::getSliceNumberOfIndices()
 int Direct3d11::getSliceFirstIndex()
 {
 	return ms_sliceFirstIndex;
+}
+
+// ======================================================================
+
+// ======================================================================
+// The draw entry points.
+//
+// Every one funnels through prepareToDraw, which builds the input layout and flushes the
+// constants. Nothing below touches state directly.
+//
+// Three of D3D9's seven primitive types do not exist in D3D11 and are emulated with a
+// shared index buffer of a fixed pattern:
+//
+//   TRIANGLEFAN  no D3D11 equivalent. The engine leans on it: a four vertex fan is the
+//                classic full-screen quad, which Bloom, the post-processing manager and
+//                GlowAppearance all draw. Expanded to a triangle list as (0, i, i+1).
+//
+//   QUADLIST     no D3D9 equivalent either -- DX9 already emulates it exactly this way,
+//                with its own resizeQuadListIndexBuffer -- so this is the same trick with
+//                the same pattern, (0,1,2) (0,2,3) per quad.
+//
+// Both patterns are built once, grown on demand, and never rebuilt in a steady frame. They
+// are 16-bit because every index in this engine is: Index is a typedef for unsigned short,
+// which also caps a fan or quad run at 65535 vertices, the same ceiling D3D9 had.
+//
+// The INDEXED fan is refused rather than emulated, and that is a considered choice. The
+// pattern trick cannot work for it: the fan's vertex order comes from the engine's own index
+// buffer, so expanding it means reading those indices back and rewriting them, which needs a
+// staging copy of a buffer created without CPU access. That is implementable -- copy to a
+// staging buffer once per unique (buffer, first, count) and cache the expansion -- but it is
+// only reachable from asset data that declares SPSPT_indexedTriangleFan, and no code path
+// asks for it. So it reports itself by name and counts the dropped draw, which turns "is this
+// used" into an answer on the first run instead of a guess now.
+// ======================================================================
+
+// ----------------------------------------------------------------------
+/**
+ * Grow the fan expansion buffer to cover a fan of this many vertices.
+ *
+ * Grown in one step to the size asked for rather than doubled: fans in this engine are
+ * either four vertices or a terrain patch, so there is no long ramp to amortise, and a
+ * creation inside a frame is something Direct3d11_Metrics is watching for.
+ */
+
+bool Direct3d11_DrawNamespace::ensureFanIndexBuffer(int vertexCount)
+{
+	if (vertexCount < 3)
+		return false;
+
+	if (ms_fanIndexBuffer && vertexCount <= ms_fanIndexBufferVertices)
+		return true;
+
+	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
+	if (!device)
+		return false;
+
+	FATAL(vertexCount > 65535, ("Direct3d11: a triangle fan of %d vertices cannot be indexed with 16-bit indices.", vertexCount));
+
+	if (ms_fanIndexBuffer)
+	{
+		ms_fanIndexBuffer->Release();
+		ms_fanIndexBuffer = NULL;
+	}
+
+	int const triangles = vertexCount - 2;
+	int const indexCount = triangles * 3;
+
+	uint16 * const indices = new uint16[indexCount];
+	for (int i = 0; i < triangles; ++i)
+	{
+		indices[(i * 3) + 0] = 0;
+		indices[(i * 3) + 1] = static_cast<uint16>(i + 1);
+		indices[(i * 3) + 2] = static_cast<uint16>(i + 2);
+	}
+
+	D3D11_BUFFER_DESC description;
+	Zero(description);
+	description.Usage     = D3D11_USAGE_IMMUTABLE;
+	description.ByteWidth = static_cast<UINT>(indexCount * isizeof(uint16));
+	description.BindFlags = D3D11_BIND_INDEX_BUFFER;
+
+	D3D11_SUBRESOURCE_DATA initial;
+	Zero(initial);
+	initial.pSysMem = indices;
+
+	HRESULT const hresult = device->CreateBuffer(&description, &initial, &ms_fanIndexBuffer);
+	delete [] indices;
+
+	if (FAILED(hresult) || !ms_fanIndexBuffer)
+	{
+		WARNING(true, ("Direct3d11: the triangle fan index buffer for %d vertices could not be created (%s).", vertexCount, Direct3d11_Device::describeHresult(hresult)));
+		ms_fanIndexBuffer = NULL;
+		ms_fanIndexBufferVertices = 0;
+		return false;
+	}
+
+	ms_fanIndexBufferVertices = vertexCount;
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
+bool Direct3d11_DrawNamespace::ensureQuadIndexBuffer(int quadCount)
+{
+	if (quadCount < 1)
+		return false;
+
+	if (ms_quadIndexBuffer && quadCount <= ms_quadIndexBufferQuads)
+		return true;
+
+	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
+	if (!device)
+		return false;
+
+	FATAL(quadCount * 4 > 65535, ("Direct3d11: %d quads need more than 65535 vertices, which 16-bit indices cannot reach.", quadCount));
+
+	if (ms_quadIndexBuffer)
+	{
+		ms_quadIndexBuffer->Release();
+		ms_quadIndexBuffer = NULL;
+	}
+
+	int const indexCount = quadCount * 6;
+	uint16 * const indices = new uint16[indexCount];
+
+	for (int q = 0; q < quadCount; ++q)
+	{
+		uint16 const base = static_cast<uint16>(q * 4);
+		indices[(q * 6) + 0] = static_cast<uint16>(base + 0);
+		indices[(q * 6) + 1] = static_cast<uint16>(base + 1);
+		indices[(q * 6) + 2] = static_cast<uint16>(base + 2);
+		indices[(q * 6) + 3] = static_cast<uint16>(base + 0);
+		indices[(q * 6) + 4] = static_cast<uint16>(base + 2);
+		indices[(q * 6) + 5] = static_cast<uint16>(base + 3);
+	}
+
+	D3D11_BUFFER_DESC description;
+	Zero(description);
+	description.Usage     = D3D11_USAGE_IMMUTABLE;
+	description.ByteWidth = static_cast<UINT>(indexCount * isizeof(uint16));
+	description.BindFlags = D3D11_BIND_INDEX_BUFFER;
+
+	D3D11_SUBRESOURCE_DATA initial;
+	Zero(initial);
+	initial.pSysMem = indices;
+
+	HRESULT const hresult = device->CreateBuffer(&description, &initial, &ms_quadIndexBuffer);
+	delete [] indices;
+
+	if (FAILED(hresult) || !ms_quadIndexBuffer)
+	{
+		WARNING(true, ("Direct3d11: the quad list index buffer for %d quads could not be created (%s).", quadCount, Direct3d11_Device::describeHresult(hresult)));
+		ms_quadIndexBuffer = NULL;
+		ms_quadIndexBufferQuads = 0;
+		return false;
+	}
+
+	ms_quadIndexBufferQuads = quadCount;
+	return true;
+}
+
+// ======================================================================
+// Non-indexed draws.
+// ======================================================================
+
+void Direct3d11::draw(int topology, int firstVertex, int vertexCount, int triangleCount)
+{
+	if (vertexCount <= 0)
+		return;
+
+	if (!prepareToDraw())
+		return;
+
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	Direct3d11_StateCache::setPrimitiveTopology(static_cast<D3D11_PRIMITIVE_TOPOLOGY>(topology));
+
+	// ms_sliceFirstVertex is where the bound buffer's usable range starts. For a dynamic
+	// buffer that is the ring offset, which setVertexBuffer deliberately does NOT put in the
+	// stream byte offset -- doing both would double-count it.
+	context->Draw(static_cast<UINT>(vertexCount), static_cast<UINT>(ms_sliceFirstVertex + firstVertex));
+
+	++Direct3d11_Metrics::drawCalls;
+	Direct3d11_Metrics::triangles += triangleCount;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11::drawIndexed(int topology, int firstIndex, int indexCount, int baseVertex, int triangleCount)
+{
+	if (indexCount <= 0)
+		return;
+
+	if (!prepareToDraw())
+		return;
+
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	Direct3d11_StateCache::setPrimitiveTopology(static_cast<D3D11_PRIMITIVE_TOPOLOGY>(topology));
+
+	context->DrawIndexed(static_cast<UINT>(indexCount), static_cast<UINT>(ms_sliceFirstIndex + firstIndex), ms_sliceFirstVertex + baseVertex);
+
+	++Direct3d11_Metrics::drawIndexedCalls;
+	Direct3d11_Metrics::triangles += triangleCount;
+}
+
+// ----------------------------------------------------------------------
+/**
+ * A fan, expanded to a triangle list through the shared pattern buffer.
+ *
+ * baseVertex carries the fan's first vertex, so the pattern buffer's indices stay relative
+ * to it and one buffer serves every fan regardless of where in the vertex buffer it sits.
+ */
+
+void Direct3d11::drawFan(int firstVertex, int vertexCount)
+{
+	if (vertexCount < 3)
+		return;
+
+	if (!ensureFanIndexBuffer(vertexCount))
+	{
+		++Direct3d11_Metrics::droppedDraws;
+		return;
+	}
+
+	if (!prepareToDraw())
+		return;
+
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+
+	// The engine rebinds its own index buffer before any indexed draw, and this backend's
+	// index bind does not shadow, so borrowing the slot needs no invalidation. DX9 borrows it
+	// the same way for its quad list.
+	context->IASetIndexBuffer(ms_fanIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+	++Direct3d11_Metrics::indexBufferBindCalls;
+	++Direct3d11_Metrics::indexBufferBindMisses;
+
+	Direct3d11_StateCache::setPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	int const triangles = vertexCount - 2;
+	// The pattern buffer's own indices start at zero, so the whole fan is placed by the base
+	// vertex. No slice FIRST INDEX here: the index buffer being read is this backend's, not
+	// the engine's.
+	context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
+
+	++Direct3d11_Metrics::drawIndexedCalls;
+	Direct3d11_Metrics::triangles += triangles;
+}
+
+// ======================================================================
+
+// ----------------------------------------------------------------------
+/**
+ * A quad list, expanded to a triangle list through the shared pattern buffer.
+ *
+ * DX9 emulates this identically -- D3D9 had no quad primitive either -- so the pattern and
+ * the winding are its, (0,1,2) then (0,2,3) per quad, and a quad's four vertices are
+ * consecutive.
+ */
+
+void Direct3d11::drawQuads(int firstVertex, int quadCount)
+{
+	if (quadCount < 1)
+		return;
+
+	if (!ensureQuadIndexBuffer(quadCount))
+	{
+		++Direct3d11_Metrics::droppedDraws;
+		return;
+	}
+
+	if (!prepareToDraw())
+		return;
+
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+
+	context->IASetIndexBuffer(ms_quadIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+	++Direct3d11_Metrics::indexBufferBindCalls;
+	++Direct3d11_Metrics::indexBufferBindMisses;
+
+	Direct3d11_StateCache::setPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	int const triangles = quadCount * 2;
+	context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
+
+	++Direct3d11_Metrics::drawIndexedCalls;
+	Direct3d11_Metrics::triangles += triangles;
+}
+
+// ----------------------------------------------------------------------
+/**
+ * An indexed triangle fan, which this backend does not emulate.
+ *
+ * The pattern trick the non-indexed fan uses cannot work here: the fan's vertex order comes
+ * from the ENGINE's index buffer, so expanding it means reading those indices back and
+ * rewriting them. That is implementable -- copy the range to a staging buffer once per unique
+ * (buffer, first, count) and cache the expansion, which is cheap after the first draw -- but
+ * nothing in the engine calls this. It is reachable only from asset data declaring
+ * SPSPT_indexedTriangleFan, and rather than write and ship an untested readback path for a
+ * case that may not exist, this names itself and counts the dropped draw. If it ever fires,
+ * the log says so and the design above is what to build.
+ */
+
+void Direct3d11::drawIndexedFanUnsupported()
+{
+	++Direct3d11_Metrics::droppedDraws;
+
+	if (!ms_warnedAboutIndexedFan)
+	{
+		ms_warnedAboutIndexedFan = true;
+		WARNING(true, ("Direct3d11: an indexed triangle fan was drawn. D3D11 has no fan primitive and this backend expands only non-indexed fans, so this geometry is missing. Reported once; see Direct3d11_Draw.cpp for what to implement."));
+	}
+}
+
+void Direct3d11::releaseDrawResources()
+{
+	if (ms_fanIndexBuffer)  { ms_fanIndexBuffer->Release();  ms_fanIndexBuffer = NULL;  ms_fanIndexBufferVertices = 0; }
+	if (ms_quadIndexBuffer) { ms_quadIndexBuffer->Release(); ms_quadIndexBuffer = NULL; ms_quadIndexBufferQuads = 0; }
 }
 
 // ======================================================================

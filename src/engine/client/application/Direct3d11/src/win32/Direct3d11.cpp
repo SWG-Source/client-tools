@@ -424,31 +424,38 @@ namespace Direct3d11Namespace
 	}
 
 	// Draws.
-	void drawPointList()                                                   { DX11_NOT_IMPLEMENTED("drawPointList"); }
-	void drawLineList()                                                    { DX11_NOT_IMPLEMENTED("drawLineList"); }
-	void drawLineStrip()                                                   { DX11_NOT_IMPLEMENTED("drawLineStrip"); }
-	void drawTriangleList()                                                { DX11_NOT_IMPLEMENTED("drawTriangleList"); }
-	void drawTriangleStrip()                                               { DX11_NOT_IMPLEMENTED("drawTriangleStrip"); }
-	void drawTriangleFan()                                                 { DX11_NOT_IMPLEMENTED("drawTriangleFan"); }
-	void drawQuadList()                                                    { DX11_NOT_IMPLEMENTED("drawQuadList"); }
-	void drawIndexedPointList()                                            { DX11_NOT_IMPLEMENTED("drawIndexedPointList"); }
-	void drawIndexedLineList()                                             { DX11_NOT_IMPLEMENTED("drawIndexedLineList"); }
-	void drawIndexedLineStrip()                                            { DX11_NOT_IMPLEMENTED("drawIndexedLineStrip"); }
-	void drawIndexedTriangleList()                                         { DX11_NOT_IMPLEMENTED("drawIndexedTriangleList"); }
-	void drawIndexedTriangleStrip()                                        { DX11_NOT_IMPLEMENTED("drawIndexedTriangleStrip"); }
-	void drawIndexedTriangleFan()                                          { DX11_NOT_IMPLEMENTED("drawIndexedTriangleFan"); }
-	void drawPartialPointList(int, int)                                    { DX11_NOT_IMPLEMENTED("drawPartialPointList"); }
-	void drawPartialLineList(int, int)                                     { DX11_NOT_IMPLEMENTED("drawPartialLineList"); }
-	void drawPartialLineStrip(int, int)                                    { DX11_NOT_IMPLEMENTED("drawPartialLineStrip"); }
-	void drawPartialTriangleList(int, int)                                 { DX11_NOT_IMPLEMENTED("drawPartialTriangleList"); }
-	void drawPartialTriangleStrip(int, int)                                { DX11_NOT_IMPLEMENTED("drawPartialTriangleStrip"); }
-	void drawPartialTriangleFan(int, int)                                  { DX11_NOT_IMPLEMENTED("drawPartialTriangleFan"); }
-	void drawPartialIndexedPointList(int, int, int, int, int)              { DX11_NOT_IMPLEMENTED("drawPartialIndexedPointList"); }
-	void drawPartialIndexedLineList(int, int, int, int, int)               { DX11_NOT_IMPLEMENTED("drawPartialIndexedLineList"); }
-	void drawPartialIndexedLineStrip(int, int, int, int, int)              { DX11_NOT_IMPLEMENTED("drawPartialIndexedLineStrip"); }
-	void drawPartialIndexedTriangleList(int, int, int, int, int)           { DX11_NOT_IMPLEMENTED("drawPartialIndexedTriangleList"); }
-	void drawPartialIndexedTriangleStrip(int, int, int, int, int)          { DX11_NOT_IMPLEMENTED("drawPartialIndexedTriangleStrip"); }
-	void drawPartialIndexedTriangleFan(int, int, int, int, int)            { DX11_NOT_IMPLEMENTED("drawPartialIndexedTriangleFan"); }
+	// The primitive counts come from the bound buffers, exactly as they do in DX9: binding a
+	// vertex or index buffer records the slice, and a draw with no arguments covers all of it.
+	// The partial forms carry their own range instead.
+
+	void drawPointList()                                                   { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST,     0, Direct3d11::getSliceNumberOfVertices(), 0); }
+	void drawLineList()                                                    { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_LINELIST,      0, Direct3d11::getSliceNumberOfVertices(), 0); }
+	void drawLineStrip()                                                   { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP,     0, Direct3d11::getSliceNumberOfVertices(), 0); }
+	void drawTriangleList()                                                { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST,  0, Direct3d11::getSliceNumberOfVertices(), Direct3d11::getSliceNumberOfVertices() / 3); }
+	void drawTriangleStrip()                                               { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, 0, Direct3d11::getSliceNumberOfVertices(), Direct3d11::getSliceNumberOfVertices() - 2); }
+	void drawTriangleFan()                                                 { Direct3d11::drawFan(0, Direct3d11::getSliceNumberOfVertices()); }
+	void drawQuadList()                                                    { Direct3d11::drawQuads(0, Direct3d11::getSliceNumberOfVertices() / 4); }
+
+	void drawIndexedPointList()                                            { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST,     0, Direct3d11::getSliceNumberOfIndices(), 0, 0); }
+	void drawIndexedLineList()                                             { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_LINELIST,      0, Direct3d11::getSliceNumberOfIndices(), 0, 0); }
+	void drawIndexedLineStrip()                                            { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP,     0, Direct3d11::getSliceNumberOfIndices(), 0, 0); }
+	void drawIndexedTriangleList()                                         { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST,  0, Direct3d11::getSliceNumberOfIndices(), 0, Direct3d11::getSliceNumberOfIndices() / 3); }
+	void drawIndexedTriangleStrip()                                        { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, 0, Direct3d11::getSliceNumberOfIndices(), 0, Direct3d11::getSliceNumberOfIndices() - 2); }
+	void drawIndexedTriangleFan()                                          { Direct3d11::drawIndexedFanUnsupported(); }
+
+	void drawPartialPointList(int startVertex, int primitiveCount)         { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST,     startVertex, primitiveCount,           0); }
+	void drawPartialLineList(int startVertex, int primitiveCount)          { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_LINELIST,      startVertex, primitiveCount * 2,       0); }
+	void drawPartialLineStrip(int startVertex, int primitiveCount)         { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP,     startVertex, primitiveCount + 1,       0); }
+	void drawPartialTriangleList(int startVertex, int primitiveCount)      { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST,  startVertex, primitiveCount * 3,       primitiveCount); }
+	void drawPartialTriangleStrip(int startVertex, int primitiveCount)     { Direct3d11::draw(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, startVertex, primitiveCount + 2,       primitiveCount); }
+	void drawPartialTriangleFan(int startVertex, int primitiveCount)       { Direct3d11::drawFan(startVertex, primitiveCount + 2); }
+
+	void drawPartialIndexedPointList(int baseIndex, int, int, int startIndex, int primitiveCount)          { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST,     startIndex, primitiveCount,     baseIndex, 0); }
+	void drawPartialIndexedLineList(int baseIndex, int, int, int startIndex, int primitiveCount)           { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_LINELIST,      startIndex, primitiveCount * 2, baseIndex, 0); }
+	void drawPartialIndexedLineStrip(int baseIndex, int, int, int startIndex, int primitiveCount)          { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP,     startIndex, primitiveCount + 1, baseIndex, 0); }
+	void drawPartialIndexedTriangleList(int baseIndex, int, int, int startIndex, int primitiveCount)       { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST,  startIndex, primitiveCount * 3, baseIndex, primitiveCount); }
+	void drawPartialIndexedTriangleStrip(int baseIndex, int, int, int startIndex, int primitiveCount)      { Direct3d11::drawIndexed(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, startIndex, primitiveCount + 2, baseIndex, primitiveCount); }
+	void drawPartialIndexedTriangleFan(int, int, int, int, int)            { Direct3d11::drawIndexedFanUnsupported(); }
 
 	// The resource factories. Fatal rather than null: the engine stores what
 	// these return and dereferences it later, so a null converts a missing
@@ -771,6 +778,7 @@ void Direct3d11Namespace::remove()
 	// Before the state cache, mirroring the install order: draining the global texture
 	// registry can destroy textures, and a texture's destructor unbinds itself through
 	// the cache.
+	Direct3d11::releaseDrawResources();
 	Direct3d11_StaticShaderData::remove();
 	Direct3d11_ShaderImplementationData::remove();
 	Direct3d11_PixelShaderProgramData::remove();
