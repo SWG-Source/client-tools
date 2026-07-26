@@ -11,8 +11,11 @@
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ShaderCompiler.h"
+#include "Direct3d11_ShaderSignature.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_SwapChain.h"
+
+#include <string>
 
 // ======================================================================
 
@@ -36,39 +39,57 @@ namespace Direct3d11_PointSpriteNamespace
 	// "point" is a keyword here, and this backend compiles the shader corpus with a global
 	// macro renaming it because vertex_shader_constants.inc uses it as a field name. This is
 	// compiled with no macros at all, so the keyword survives.
-	char const cms_source[] =
-		"cbuffer SwgPointSprite : register(b2)\n"
-		"{\n"
-		"\tfloat4 swgPointSprite;\n"
-		"};\n"
-		"struct Vertex\n"
-		"{\n"
-		"\tfloat4 position : SV_Position;\n"
-		"\tfloat4 diffuse  : COLOR0;\n"
-		"\tfloat  fog      : FOG;\n"
-		"};\n"
+	// The geometry stage uses the SAME shared interpolant declaration as the other two, and that is
+	// the whole point rather than tidiness.
+	//
+	// This shader was written with its own hand-rolled signature -- SV_Position, COLOR0, and FOG as a
+	// float -- which was correct in isolation and became wrong the moment the vertex and pixel stages
+	// were canonicalised onto twelve float4 slots. A geometry shader sits BETWEEN them, so it has to
+	// satisfy both: its input must match the vertex output and its output must satisfy the pixel
+	// input. It matched neither, and the D3D11 debug layer produced 397 linkage errors in a single
+	// minute in-world:
+	//
+	//   Vertex Shader - Geometry Shader linkage error: Semantic 'FOG' is defined for mismatched
+	//   hardware registers between the output stage and input stage.
+	//   Geometry Shader - Pixel Shader linkage error: The input stage requires Semantic/Index ...
+	//
+	// Every point sprite draw was rejected, so the star field was missing rather than merely
+	// single-pixel. Taking the declaration from Direct3d11_ShaderSignature instead of restating it
+	// means this cannot drift again: there is one definition and three stages use it.
+	//
+	// The body still only touches position -- everything else passes through untouched, which is what
+	// a sprite expander should do.
+	char const cms_sourceTail[] =
 		"[maxvertexcount(4)]\n"
-		"void main(point Vertex input[1], inout TriangleStream<Vertex> stream)\n"
+		"void main(point SwgInterpolants input[1], inout TriangleStream<SwgInterpolants> stream)\n"
 		"{\n"
-		"\tVertex source = input[0];\n"
+		"\tSwgInterpolants source = input[0];\n"
 		"\n"
-		"\t// Multiplying by w cancels the perspective divide, so the quad is a constant pixel\n"
-		"\t// size at any depth. That is D3D9's behaviour with POINTSCALEENABLE off.\n"
-		"\tfloat2 extent = swgPointSprite.xy * source.position.w;\n"
+		"\t// Multiplying by w cancels the perspective divide, so the quad is a constant pixel size at\n"
+		"\t// any depth. That is D3D9's behaviour with POINTSCALEENABLE off.\n"
+		"\tfloat2 extent = swgPointSprite.xy * source.swgPosition.w;\n"
 		"\n"
-		"\tVertex corner = source;\n"
+		"\tSwgInterpolants corner = source;\n"
 		"\n"
-		"\tcorner.position = float4(source.position.x - extent.x, source.position.y - extent.y, source.position.z, source.position.w);\n"
+		"\tcorner.swgPosition = float4(source.swgPosition.x - extent.x, source.swgPosition.y - extent.y, source.swgPosition.z, source.swgPosition.w);\n"
 		"\tstream.Append(corner);\n"
-		"\tcorner.position = float4(source.position.x - extent.x, source.position.y + extent.y, source.position.z, source.position.w);\n"
+		"\tcorner.swgPosition = float4(source.swgPosition.x - extent.x, source.swgPosition.y + extent.y, source.swgPosition.z, source.swgPosition.w);\n"
 		"\tstream.Append(corner);\n"
-		"\tcorner.position = float4(source.position.x + extent.x, source.position.y - extent.y, source.position.z, source.position.w);\n"
+		"\tcorner.swgPosition = float4(source.swgPosition.x + extent.x, source.swgPosition.y - extent.y, source.swgPosition.z, source.swgPosition.w);\n"
 		"\tstream.Append(corner);\n"
-		"\tcorner.position = float4(source.position.x + extent.x, source.position.y + extent.y, source.position.z, source.position.w);\n"
+		"\tcorner.swgPosition = float4(source.swgPosition.x + extent.x, source.swgPosition.y + extent.y, source.swgPosition.z, source.swgPosition.w);\n"
 		"\tstream.Append(corner);\n"
 		"\n"
 		"\tstream.RestartStrip();\n"
 		"}\n";
+
+	// The constant buffer, then the shared declaration, then the body. Assembled at install because
+	// the declaration is not a literal here.
+	char const cms_constantBuffer[] =
+		"cbuffer SwgPointSprite : register(b2)\n"
+		"{\n"
+		"\tfloat4 swgPointSprite;\n"
+		"};\n";
 
 	ID3D11GeometryShader *ms_shader;
 	ID3D11Buffer         *ms_constants;
@@ -102,7 +123,13 @@ void Direct3d11_PointSprite::install()
 	// Compiled once at install rather than on first use. A shader compile inside a frame is
 	// exactly what Direct3d11_Metrics::shaderCompiles exists to catch, and the star field draws
 	// in the first frame of a scene.
-	ID3DBlob * const bytecode = Direct3d11_ShaderCompiler::compileGeometryShader(cms_source, isizeof(cms_source) - 1, "Direct3d11 point sprite expander");
+	std::string source;
+	source.reserve(4096);
+	source.append(cms_constantBuffer);
+	source.append(Direct3d11_ShaderSignature::getInterpolantDeclaration());
+	source.append(cms_sourceTail);
+
+	ID3DBlob * const bytecode = Direct3d11_ShaderCompiler::compileGeometryShader(source.c_str(), static_cast<int>(source.size()), "Direct3d11 point sprite expander");
 
 	if (!bytecode)
 	{

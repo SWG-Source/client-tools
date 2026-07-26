@@ -162,6 +162,17 @@ void SwgCuiLoginScreen::performActivate ()
 	//-- always autoconnect if we are using session authentication
 	//-- otherwise only autoconnect if it is the first time through this screen
 
+	// TEMPORARY DIAGNOSTIC while bringing the DX11 client up against a local server. Remove once
+	// login is confirmed. WARNING and not DEBUG_REPORT_LOG because the only configuration that
+	// links a client here is PRODUCTION, where DEBUG_REPORT_LOG compiles out entirely -- which is
+	// why the reporting already present in this function has been invisible.
+	WARNING(true, ("Login: activate -- autoConnect=%s alreadyAutoConnected=%s sessionId=%s configUser='%s' configPasswordChars=%d",
+		ConfigClientGame::getAutoConnectToLoginServer() ? "true" : "false",
+		m_autoConnected ? "true" : "false",
+		sessionId ? sessionId : "<none>",
+		ConfigClientGame::getLoginClientID() ? ConfigClientGame::getLoginClientID() : "<null>",
+		ConfigClientGame::getLoginClientPassword() ? static_cast<int>(strlen(ConfigClientGame::getLoginClientPassword())) : -1));
+
 	if ((!m_autoConnected && ConfigClientGame::getAutoConnectToLoginServer ()) || (sessionId != 0 && !ConfigClientGame::getEnableAdminLogin()))
 	{
 		m_autoConnected = true;
@@ -230,8 +241,13 @@ void SwgCuiLoginScreen::ok ()
 	
 	const char* const sessionId = CuiLoginManager::getSessionIdKey ();
 
+	WARNING(true, ("Login: ok() -- username='%s' (%d chars), password %d chars, sessionId=%s",
+		Unicode::wideToNarrow(name).c_str(), static_cast<int>(name.size()),
+		static_cast<int>(passwd.size()), sessionId ? "set" : "<none>"));
+
 	if (name.empty () && !sessionId)
 	{
+		WARNING(true, ("Login: refusing -- the username text box is empty, so no connection is attempted."));
 		CuiMessageBox::createInfoBox (CuiStringIdsServer::server_err_no_username.localize ());
 	}
 	else
@@ -288,9 +304,12 @@ void SwgCuiLoginScreen::ok ()
 			while (address);
 		}
 
+		WARNING(true, ("Login: assembled %d address(es) from ClientGame/loginServerAddress<N>.", static_cast<int>(loginServerList.size())));
+
 		if (loginServerList.size ())
 		{
 			const int choice = Random::random (loginServerList.size () - 1);
+			WARNING(true, ("Login: connecting to %s:%d", loginServerList[choice].first.c_str(), static_cast<int>(loginServerList[choice].second)));
 			DEBUG_REPORT_LOG (true, ("Connecting to login server: address=%s, port=%i\n", loginServerList [choice].first.c_str (), loginServerList [choice].second));
 
 			//-- save the choices for later use
@@ -317,6 +336,11 @@ void SwgCuiLoginScreen::receiveMessage(const MessageDispatch::Emitter & source, 
 
 	if(message.isType (LoginConnection::Messages::LoginConnectionOpened))
 	{
+		WARNING(true, ("Login: OUTCOME -- connection to the login server OPENED."));
+	}
+
+	if(message.isType (LoginConnection::Messages::LoginConnectionOpened))
+	{
 		if (m_connecting)
 		{
 			if (m_messageBox != 0)
@@ -332,6 +356,10 @@ void SwgCuiLoginScreen::receiveMessage(const MessageDispatch::Emitter & source, 
 
 	//----------------------------------------------------------------------
 
+	else if(message.isType (LoginConnection::Messages::LoginConnectionClosed))
+	{
+		WARNING(true, ("Login: OUTCOME -- the login server connection CLOSED."));
+	}
 	else if(message.isType (LoginConnection::Messages::LoginConnectionClosed))
 	{
 		if (m_connecting)
@@ -357,6 +385,10 @@ void SwgCuiLoginScreen::receiveMessage(const MessageDispatch::Emitter & source, 
 	}
 	//----------------------------------------------------------------------
 
+	else if (message.isType (LoginConnection::Messages::LoginIncorrectClientId))
+	{
+		WARNING(true, ("Login: OUTCOME -- the login server REJECTED the client id (version mismatch or bad credentials)."));
+	}
 	else if (message.isType (LoginConnection::Messages::LoginIncorrectClientId))
 	{
 #if PRODUCTION != 1
