@@ -124,9 +124,25 @@ Direct3d11_ShaderImplementationData::Direct3d11_ShaderImplementationData(ShaderI
 		target.DestBlendAlpha = Direct3d11_StateTables::getAlphaChannelBlend(target.DestBlend);
 		target.BlendOpAlpha   = target.BlendOp;
 
-		// The engine's write-enable mask is already the D3D9 COLORWRITEENABLE bit layout,
-		// which is bit for bit the D3D11 one: red 1, green 2, blue 4, alpha 8.
-		target.RenderTargetWriteMask = static_cast<UINT8>(source.m_writeEnable & 0x0f);
+		// The engine's write-enable mask is NOT the D3D9 COLORWRITEENABLE layout, which is what
+		// an earlier version of this comment claimed while passing the bits straight through.
+		//
+		// It is ARGB, most significant first -- Direct3d9_ShaderImplementationData.cpp:266-273
+		// spells it out one bit at a time: 1000 is alpha, 0100 red, 0010 green, 0001 blue. D3D11's
+		// mask is RGBA the other way up: red 1, green 2, blue 4, alpha 8. So a raw copy SWAPS RED
+		// AND BLUE, and leaves green and alpha coincidentally correct.
+		//
+		// It survived this long because the default is BINARY1(1111)
+		// (ShaderImplementation.cpp:926) and 0xF is 0xF either way round, as is any mask that
+		// treats red and blue alike. Only a pass that writes one but not the other was wrong, and
+		// then only in a channel swap rather than a missing surface.
+		uint8 const engineMask = source.m_writeEnable;
+		UINT8 mask = 0;
+		if (engineMask & 0x04) mask |= D3D11_COLOR_WRITE_ENABLE_RED;
+		if (engineMask & 0x02) mask |= D3D11_COLOR_WRITE_ENABLE_GREEN;
+		if (engineMask & 0x01) mask |= D3D11_COLOR_WRITE_ENABLE_BLUE;
+		if (engineMask & 0x08) mask |= D3D11_COLOR_WRITE_ENABLE_ALPHA;
+		target.RenderTargetWriteMask = mask;
 
 		pass.blendState = Direct3d11_StateObjectCache::getBlendState(blend);
 

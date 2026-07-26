@@ -12,6 +12,7 @@
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ConstantBuffers.h"
+#include "Direct3d11_ImageWriter.h"
 #include "Direct3d11_RenderTarget.h"
 #include "Direct3d11_SceneTarget.h"
 
@@ -511,6 +512,23 @@ bool Direct3d11_SwapChain::present()
 
 	if (!ms_swapChain)
 		return false;
+
+	// Whatever the debug layer complained about during this frame. No-op unless debugLayer is on.
+	Direct3d11_Device::drainDebugMessages();
+
+	// TEMPORARY DIAGNOSTIC -- remove once the black-screen cause is known.
+	//
+	// The client presents 8694 frames with 134,770 draw calls and 2.3 million triangles, and the
+	// screen is black. Every static check says the pipeline is fine, so the question is no longer
+	// answerable by reading code: is the SCENE TARGET black, or does it have content that the
+	// composite fails to move to the back buffer? Those need opposite fixes.
+	//
+	// screenShot reads the scene target, so one capture answers it.
+	{
+		static int frameCounter = 0;
+		if (++frameCounter == 300)
+			IGNORE_RETURN(Direct3d11_ImageWriter::screenShot(GSSF_tga, 0, "logs/frame300_scenetarget"));
+	}
 
 	// The one place the back buffer is written. Bound here rather than left bound
 	// from the last frame, because the flip model unbinds it at Present.

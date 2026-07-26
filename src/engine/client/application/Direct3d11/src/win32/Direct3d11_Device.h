@@ -81,6 +81,14 @@ public:
 	static void                    fireDeviceRestored();
 
 	static char const             *describeHresult(HRESULT hresult);
+
+	// Move whatever the D3D11 debug layer has queued into the warning log. No-op unless the
+	// debugLayer config key is on.
+	//
+	// Storing messages and never reading them is the same as not enabling the layer: a break on
+	// error in a build with no debugger attached gives a breakpoint exception and no text. Draining
+	// them is what makes the layer answer questions.
+	static void                    drainDebugMessages();
 	static void                    checkForDeviceRemoved(HRESULT hresult, char const *what);
 
 #ifdef _DEBUG

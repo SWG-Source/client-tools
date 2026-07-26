@@ -312,8 +312,16 @@ void Direct3d11_DeviceNamespace::configureDebugLayer()
 	if (FAILED(ms_device->QueryInterface(__uuidof(ID3D11InfoQueue), reinterpret_cast<void **>(&infoQueue))) || !infoQueue)
 		return;
 
+	// Corruption still breaks -- there is nothing useful to do after it. Errors are logged rather
+	// than broken on, which is a change from how this was first written.
+	//
+	// The original intent was that an error should stop the process where it happens instead of
+	// being discovered later as a wrong image. That is right in a debugger and useless without one:
+	// the break arrives as a bare breakpoint exception and the message explaining it stays in the
+	// queue, unread. drainDebugMessages puts the text in the log, which is what actually made the
+	// black-screen investigation tractable.
 	IGNORE_RETURN(infoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE));
-	IGNORE_RETURN(infoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, TRUE));
+	IGNORE_RETURN(infoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, FALSE));
 
 	D3D11_MESSAGE_ID denied[] =
 	{
@@ -329,6 +337,61 @@ void Direct3d11_DeviceNamespace::configureDebugLayer()
 	infoQueue->Release();
 
 	WARNING(true, ("Direct3d11: the D3D11 debug layer is enabled. It costs frame time, so do not measure performance against this run."));
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Device::drainDebugMessages()
+{
+	if (!ConfigDirect3d11::getDebugLayer() || !ms_device)
+		return;
+
+	ID3D11InfoQueue *infoQueue = NULL;
+	if (FAILED(ms_device->QueryInterface(__uuidof(ID3D11InfoQueue), reinterpret_cast<void **>(&infoQueue))) || !infoQueue)
+		return;
+
+	// Bounded per call and over the run. The layer will happily repeat the same complaint once per
+	// draw, and a log with a hundred thousand identical lines answers nothing.
+	static int totalReported = 0;
+	int const cms_perCall = 24;
+	int const cms_perRun  = 400;
+
+	UINT64 const available = infoQueue->GetNumStoredMessages();
+
+	for (UINT64 i = 0; i < available && i < static_cast<UINT64>(cms_perCall); ++i)
+	{
+		SIZE_T length = 0;
+		if (FAILED(infoQueue->GetMessage(i, NULL, &length)) || !length)
+			continue;
+
+		D3D11_MESSAGE * const message = static_cast<D3D11_MESSAGE *>(operator new(length));
+		if (!message)
+			continue;
+
+		if (SUCCEEDED(infoQueue->GetMessage(i, message, &length)) && totalReported < cms_perRun)
+		{
+			++totalReported;
+			WARNING(true, ("Direct3d11 debug layer [%d/%d]: %s",
+				static_cast<int>(message->Severity),
+				static_cast<int>(message->ID),
+				message->pDescription ? message->pDescription : "<no description>"));
+		}
+
+		operator delete(message);
+	}
+
+	infoQueue->ClearStoredMessages();
+	infoQueue->Release();
+
+	if (totalReported >= cms_perRun)
+	{
+		static bool reportedCap = false;
+		if (!reportedCap)
+		{
+			reportedCap = true;
+			WARNING(true, ("Direct3d11: %d debug layer messages reported; further ones are dropped.", cms_perRun));
+		}
+	}
 }
 
 // ======================================================================
