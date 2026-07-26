@@ -6,11 +6,33 @@
 // Every edit this backend makes to shader text before it reaches the compiler, in one
 // place, with the evidence for each.
 //
-// There are six, and they divide cleanly. Four are inherited from the x64 DX9 build --
-// that build is the image this port is measured against, so its source patches are part
-// of the target whether or not one likes them. Two are new, and exist because
+// Nine live in this file. Four are inherited from the x64 DX9 build -- that build is the
+// image this port is measured against, so its source patches are part of the target
+// whether or not one likes them. The rest are new, and exist either because
 // d3dcompiler_47 rejects constructs the June-2010 D3DX compiler accepted and offers no
-// legacy switch to get them back.
+// legacy switch to get them back, or because a D3D9 fixed-function stage has to become
+// shader code.
+//
+// Transforms 1 to 6 are enumerated below. The other three are documented at their
+// implementations rather than here, because each is long enough to need its own argument:
+//
+//   7. functions.inc is served with the constants include prepended, so the pixel
+//      includes stop depending on being included in a particular order.
+//   8. The pixel epilogue -- the alpha test clip, and the fog blend D3D9 did in fixed
+//      function. Adds a FOG input to the entry point.
+//   9. A FOG output for the minority of vertex programs that lack one, which is what
+//      makes 8's input safe to declare universally.
+//
+// THREE MORE TRANSFORMS LIVE OUTSIDE THIS FILE, and anything reasoning about the total set
+// -- a precompiled bytecode cache's key, most obviously -- has to count those too:
+// Direct3d11_VertexShaderData::parseHeader strips the `//hlsl` marker and the leading
+// `#define` block (load-bearing: leaving the header in place makes seven vertex programs
+// fail X4532) and synthesises the texture-coordinate tag macros, and the `point` rename is
+// passed as a compiler macro rather than edited into the text.
+//
+// So: nine here, twelve in total. This count was wrong in an earlier revision of this
+// comment -- it said six, having been written before 7 to 9 existed -- which is a bad thing
+// for it to be wrong about, since it is where someone specifying that cache key would look.
 //
 // ----------------------------------------------------------------------
 // Inherited from the DX9 x64 build
