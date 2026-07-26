@@ -9,7 +9,7 @@
 #include "RecentDirectory.h"
 #include "IncludeHandler.h"
 
-#include "..\..\..\Direct3d9\src\win32\Direct3d9_PixelShaderConstantRegisters.h"
+#include "clientGraphics/ShaderConstantRegisters.h"
 
 
 #ifdef _DEBUG
