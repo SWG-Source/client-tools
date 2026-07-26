@@ -15,6 +15,8 @@
 
 namespace Direct3d11_StateCacheNamespace
 {
+	float                     ms_specularPower = 32.0f;
+
 	ID3D11BlendState         *ms_blendState;
 	float                     ms_blendFactor[4];
 	uint32                    ms_sampleMask;
@@ -56,6 +58,20 @@ void Direct3d11_StateCache::remove()
  * next bind through here will be skipped as redundant when it is not. That is the
  * one way a cache like this produces a wrong image rather than merely a slow one.
  */
+
+void Direct3d11_StateCache::setSpecularPower(float power)
+{
+	ms_specularPower = power;
+}
+
+// ----------------------------------------------------------------------
+
+float Direct3d11_StateCache::getSpecularPower()
+{
+	return ms_specularPower;
+}
+
+// ----------------------------------------------------------------------
 
 void Direct3d11_StateCache::invalidate()
 {

@@ -31,6 +31,7 @@
 
 #include "clientGraphics/StaticShader.h"
 #include "Direct3d11_Metrics.h"
+#include "Direct3d11_LightManager.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_Transforms.h"
 #include "Direct3d11_StaticIndexBufferData.h"
@@ -415,6 +416,11 @@ bool Direct3d11::prepareToDraw()
 	}
 
 	Direct3d11_StateCache::setInputLayout(layout);
+
+	// Pick the eight lights and upload them if anything changed. Ahead of the transform
+	// concatenation only because both write constants and this one is the larger; neither
+	// depends on the other.
+	Direct3d11_LightManager::selectLights();
 
 	// Concatenate the object, camera and projection matrices if any of them moved. This has to
 	// happen before the constant flush below, because it writes the per-object slice that the

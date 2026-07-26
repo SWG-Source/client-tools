@@ -14,6 +14,7 @@
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_PixelShaderProgramData.h"
 #include "Direct3d11_ShaderImplementationData.h"
+#include "Direct3d11_LightManager.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_StateObjectCache.h"
 #include "Direct3d11_StateTables.h"
@@ -491,11 +492,7 @@ void Direct3d11_StaticShaderData::construct(StaticShader const &shader)
 			WARNING(true, ("Direct3d11: a pass asks for a fog colour override, which D3D11 has no state for -- fog has to be applied in the pixel shader from constant buffer b1. Those surfaces fog with the scene colour. Reported once."));
 		}
 
-		if (pass.fullAmbient && !ms_reportedFullAmbient)
-		{
-			ms_reportedFullAmbient = true;
-			WARNING(true, ("Direct3d11: a material carries precalculated vertex lighting and wants full ambient, which the light manager would normally switch on. There is no light manager in this backend yet. Reported once."));
-		}
+		UNREF(ms_reportedFullAmbient);
 	}
 }
 
@@ -574,6 +571,10 @@ bool Direct3d11_StaticShaderData::apply(int passNumber) const
 	// This is where the specialisation DX9 compiled into the shader is handed over.
 	Direct3d11::setCurrentTextureCoordinateSetMapping(pass.textureCoordinateSetMapping, pass.textureCoordinateSetMappingCount);
 
+	// A material carrying precalculated vertex lighting wants the ambient register forced to
+	// white, because its vertex colours already contain the lighting and must not be lit twice.
+	Direct3d11_LightManager::setFullAmbientOn(pass.fullAmbient);
+
 	// ------------------------------------------------------------------
 	// Constants
 
@@ -585,7 +586,12 @@ bool Direct3d11_StaticShaderData::apply(int passNumber) const
 		// layout the power is one component of a register shared with the dot3 light
 		// direction -- so it is written as a component, not a row.
 		Direct3d11_ConstantBuffers::setPixelShaderConstants(PSCR_materialSpecularColor, pass.material + 8, 1);
-		Direct3d11_ConstantBuffers::setPixelShaderConstantComponent(PSCR_dot3LightDirection, 3, pass.material[16]);
+
+		// The power is recorded, not uploaded. In the engine's pixel layout it is the w
+		// component of the dot3 light direction register, which the light manager owns and
+		// rewrites wholesale -- so writing it here as well would be overwritten, and the two
+		// writers would race on which ran last. DX9 records it in exactly the same place.
+		Direct3d11_StateCache::setSpecularPower(pass.material[16]);
 	}
 
 	if (pass.textureFactorValid)

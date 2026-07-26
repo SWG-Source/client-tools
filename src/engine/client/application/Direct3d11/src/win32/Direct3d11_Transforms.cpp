@@ -9,6 +9,7 @@
 #include "Direct3d11_Transforms.h"
 
 #include "Direct3d11_ConstantBuffers.h"
+#include "Direct3d11_LightManager.h"
 #include "Direct3d11_Metrics.h"
 #include "PaddedVector.h"
 #include "clientGraphics/Graphics.def"
@@ -111,6 +112,10 @@ void Direct3d11_Transforms::setWorldToCameraTransform(Transform const &transform
 		for (int column = 0; column < 4; ++column)
 			ms_worldToCamera[(row * 4) + column] = static_cast<float>(source[row][column]);
 
+	// The light manager keeps the camera position in world space to build the object-space
+	// view vector in the dot3 block. DX9 calls this from the same setter.
+	Direct3d11_LightManager::setCameraPosition(cameraPosition);
+
 	PaddedVector const paddedPosition(cameraPosition);
 	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_cameraPosition, &paddedPosition, 1);
 
@@ -168,6 +173,10 @@ void Direct3d11_Transforms::setObjectToWorldTransformAndScale(Transform const &o
 		ms_objectToWorld[(row * 4) + 2] = static_cast<float>(source[row][2]) * axisScale[row];
 		ms_objectToWorld[(row * 4) + 3] = static_cast<float>(source[row][3]);
 	}
+
+	// The light manager needs the unscaled transform, not the matrix built above: it rotates
+	// world-space light directions into object space, and a non-uniform scale would skew them.
+	Direct3d11_LightManager::setObjectToWorldTransform(objectToWorld);
 
 	ms_dirty = true;
 

@@ -55,6 +55,13 @@ public:
 	static void  setShaderResource(int slot, ID3D11ShaderResourceView *view);
 	static void  setSamplerState(int slot, ID3D11SamplerState *sampler);
 
+	// The applied material's specular power. Recorded rather than uploaded: in the shipped
+	// pixel layout the power is the w component of the dot3 light direction register, so the
+	// light manager writes it as part of that register rather than on its own. DX9 keeps it
+	// here for the same reason.
+	static void  setSpecularPower(float power);
+	static float getSpecularPower();
+
 	// A texture is about to be destroyed. Unbind it from every slot holding it and
 	// clear the shadow.
 	//

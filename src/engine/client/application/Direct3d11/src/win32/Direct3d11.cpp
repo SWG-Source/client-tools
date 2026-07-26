@@ -38,6 +38,7 @@
 #include "Direct3d11_StateObjectCache.h"
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_StaticIndexBufferData.h"
+#include "Direct3d11_LightManager.h"
 #include "Direct3d11_StaticShaderData.h"
 #include "Direct3d11_Transforms.h"
 #include "Direct3d11_StaticVertexBufferData.h"
@@ -196,6 +197,7 @@ namespace Direct3d11Namespace
 		Direct3d11_Metrics::beginFrame();
 		Direct3d11_QueryPool::beginFrame();
 		Direct3d11_ConstantBuffers::beginFrame();
+		Direct3d11_LightManager::beginFrame();
 		Direct3d11_DynamicVertexBufferData::beginFrame();
 		Direct3d11_DynamicIndexBufferData::beginFrame();
 		Direct3d11_SwapChain::beginScene();
@@ -383,12 +385,18 @@ namespace Direct3d11Namespace
 		// alphaFadeOpacity as components of packed registers 1 and 2, which shaders read
 		// directly; and the alpha test reference is scaled by the same opacity, exactly as
 		// DX9 does before writing D3DRS_ALPHAREF.
-		Direct3d11_ConstantBuffers::setPixelShaderConstantComponent(PSCR_dot3LightDiffuseColor, 3, enabled ? 1.0f : 0.0f);
-		Direct3d11_ConstantBuffers::setPixelShaderConstantComponent(PSCR_dot3LightSpecularColor, 3, opacity);
+		// The two packed components belong to the light manager, which owns those whole
+		// registers and would otherwise overwrite anything written here. It reads these back
+		// and folds them in on the next selection.
+		Direct3d11_LightManager::setAlphaFadeOpacity(enabled, opacity);
+
+		// The alpha test reference is scaled by the same opacity, exactly as DX9 does before
+		// writing D3DRS_ALPHAREF, and that is this backend's business rather than the light
+		// manager's.
 		Direct3d11_ConstantBuffers::setAlphaFadeOpacity(enabled ? opacity : 1.0f);
 	}
-	void setBloomEnabled(bool)                                             { DX11_NOT_IMPLEMENTED("setBloomEnabled"); }
-	void setLights(const stdvector<const Light*>::fwd &)                   { DX11_NOT_IMPLEMENTED("setLights"); }
+	void setBloomEnabled(bool enabled)                                     { Direct3d11_LightManager::setBloomEnabled(enabled); }
+	void setLights(const stdvector<const Light*>::fwd &lightList)          { Direct3d11_LightManager::setLights(lightList); }
 	void setTextureTransform(int, bool, int, bool, const real *)           { DX11_NOT_IMPLEMENTED("setTextureTransform"); }
 
 	// Textures and shaders.
@@ -410,6 +418,10 @@ namespace Direct3d11Namespace
 		}
 
 		IGNORE_RETURN(static_cast<Direct3d11_StaticShaderData *>(data)->apply(pass));
+
+		// After the apply, because apply is what records the material state the selection
+		// depends on. DX9 orders it the same way.
+		Direct3d11_LightManager::setObeysLightScale(shader.obeysLightScale());
 	}
 
 	// Buffers.
@@ -732,6 +744,7 @@ bool Direct3d11::install(Gl_install *gl_install)
 	Direct3d11_ShaderImplementationData::install();
 	Direct3d11_StaticShaderData::install();
 	Direct3d11_Transforms::install();
+	Direct3d11_LightManager::install();
 	Direct3d11_VertexShaderData::install();
 	Direct3d11_PixelShaderProgramData::install();
 
