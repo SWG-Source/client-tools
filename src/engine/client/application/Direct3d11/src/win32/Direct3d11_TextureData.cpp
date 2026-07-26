@@ -50,6 +50,10 @@ namespace Direct3d11_TextureDataNamespace
 
 	int ms_liveInstanceCount;
 
+	// Said once. A partial write to a compressed level that is not block aligned is refused by the
+	// runtime, so it is a texel-correctness problem worth one line rather than one per texture.
+	bool ms_reportedUnalignedBlockWrite;
+
 	// ----------------------------------------------------------------------
 
 	char const *describeTexture(Texture const &texture)
@@ -862,10 +866,31 @@ void Direct3d11_TextureData::unlock(LockData &lockData)
 
 		int const subresource = getSubresource(lockData.m_cubeFace, lockData.getLevel());
 
-		// The destination box is in the resource's own texels. For a block-compressed
-		// format D3D requires it to be block aligned; every writer in the engine locks
-		// a whole level, so it naturally is, and an unaligned partial write would be
-		// rejected by the runtime rather than corrupt anything.
+		// The destination box is in the resource's own texels, and for a block-compressed format
+		// D3D requires it to be block aligned.
+		//
+		// An earlier version of this comment said every writer locks a whole level so the box "is
+		// naturally aligned". That is wrong, and the D3D11 debug layer said so 24 times per run:
+		//
+		//   UpdateSubresource: ... *pDstBox = {{0,0,0},{2,2,1}}. BC2_UNORM requires alignment of
+		//   coodinates to multiples of {4,4,1}.
+		//
+		// A WHOLE level can be 1x1 or 2x2 -- the tail of any mip chain is smaller than one 4x4
+		// block -- so "whole level" and "block aligned" are different properties, and every
+		// compressed texture with a full mip chain hits it on its last two or three levels.
+		//
+		// A whole-level write therefore passes no box at all. That is not a workaround: it is what
+		// the API wants, and it lets the runtime size the write from the subresource itself rather
+		// than being told a size it has to reject.
+		int levelWidth = 0;
+		int levelHeight = 0;
+		int levelDepth = 0;
+		getLevelSize(lockData.getLevel(), levelWidth, levelHeight, levelDepth);
+
+		bool const wholeLevel =
+			lockData.getX() == 0 && lockData.getY() == 0 && lockData.getZ() == 0 &&
+			width == levelWidth && height == levelHeight && depth == levelDepth;
+
 		D3D11_BOX box;
 		box.left   = static_cast<UINT>(lockData.getX());
 		box.top    = static_cast<UINT>(lockData.getY());
@@ -874,9 +899,34 @@ void Direct3d11_TextureData::unlock(LockData &lockData)
 		box.bottom = static_cast<UINT>(lockData.getY() + height);
 		box.back   = static_cast<UINT>(lockData.getZ() + depth);
 
+		// A partial write into a compressed level still needs aligning, and cannot simply be
+		// rounded: writing a whole block when the caller supplied part of one would put the wrong
+		// texels in the rest of it. Reported rather than corrupted, once, with the numbers.
+		TextureFormatInfo const &storageInfo = TextureFormatInfo::getInfo(m_storageFormat);
+
+		if (!wholeLevel && storageInfo.compressed)
+		{
+			bool const aligned =
+				(box.left   % static_cast<UINT>(storageInfo.blockWidth))  == 0 &&
+				(box.top    % static_cast<UINT>(storageInfo.blockHeight)) == 0 &&
+				((box.right  % static_cast<UINT>(storageInfo.blockWidth))  == 0 || box.right  == static_cast<UINT>(levelWidth)) &&
+				((box.bottom % static_cast<UINT>(storageInfo.blockHeight)) == 0 || box.bottom == static_cast<UINT>(levelHeight));
+
+			if (!aligned && !ms_reportedUnalignedBlockWrite)
+			{
+				ms_reportedUnalignedBlockWrite = true;
+				WARNING(true, ("Direct3d11: a partial write to compressed level %d of '%s' covers texels (%u,%u)-(%u,%u), which is not a multiple of the %dx%d block. D3D11 will reject it and those texels will keep their old contents. Reported once.",
+					lockData.getLevel(), m_texture.getName() ? m_texture.getName() : "<unnamed>",
+					box.left, box.top, box.right, box.bottom,
+					storageInfo.blockWidth, storageInfo.blockHeight));
+			}
+		}
+
+		D3D11_BOX const * const destinationBox = wholeLevel ? NULL : &box;
+
 		if (format == m_storageFormat)
 		{
-			context->UpdateSubresource(m_resource, static_cast<UINT>(subresource), &box, scratch, static_cast<UINT>(lockData.m_pitch), static_cast<UINT>(lockData.m_slicePitch));
+			context->UpdateSubresource(m_resource, static_cast<UINT>(subresource), destinationBox, scratch, static_cast<UINT>(lockData.m_pitch), static_cast<UINT>(lockData.m_slicePitch));
 		}
 		else
 		{
@@ -899,7 +949,7 @@ void Direct3d11_TextureData::unlock(LockData &lockData)
 					width, height);
 			}
 
-			context->UpdateSubresource(m_resource, static_cast<UINT>(subresource), &box, converted, static_cast<UINT>(storagePitch), static_cast<UINT>(storageSlicePitch));
+			context->UpdateSubresource(m_resource, static_cast<UINT>(subresource), destinationBox, converted, static_cast<UINT>(storagePitch), static_cast<UINT>(storageSlicePitch));
 
 			delete [] converted;
 		}

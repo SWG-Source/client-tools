@@ -27,7 +27,12 @@
 	r0.y = ((dot((r10).xyz, (r1).xyz)).xxxx).x;
 	r0.w = (cMaterial_specularPower).x;
 	r0 = lit((r0).x, (r0).y, (r0).w);
-	r7 = cLightData_parallelSpecular_0_diffuseColor * r0.y + r7;
+	r0 = (dot((r10).xyz, (cLightData_parallelSpecular_0_direction).xyz)).xxxx;
+	r7 = cExtLtData_parallelSpec_0_tangentColor + r7;
+	r1 = max(r0, c0_0);
+	r7 = cExtLtData_parallelSpec_0_tangentMinusDiffuse * -(r1.y) + r7;
+	r1 = min(r0, c0_0);
+	r7 = cExtLtData_parallelSpec_0_tangentMinusBack * r1.y + r7;
 	r8 = cLightData_parallelSpecular_0_specularColor * r0.z;
 // ----------------------------------------------------------------------
 // calculate diffuse parallel light 1
