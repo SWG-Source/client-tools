@@ -449,10 +449,17 @@ void Direct3d11_RenderTarget::setRenderTarget(Texture *texture, CubeFace cubeFac
 		if (!view)
 			return;
 
-		// The scene's own depth when the extents agree, which is the exact-parity case and the
+		// The scene's own depth when it is compatible, which is the exact-parity case and the
 		// only one where the scene's depth contents mean anything; a private buffer otherwise.
+		//
+		// Compatible means the extents AND the sample count. A texture render target is always
+		// single-sampled, so with multisampling on, the scene's depth cannot be paired with it
+		// even at the same size -- D3D11 requires the sample counts to match, and this is the
+		// case that would otherwise appear only when a user turned antialiasing on.
 		ID3D11DepthStencilView *depthView = NULL;
-		if (levelWidth == Direct3d11_SceneTarget::getWidth() && levelHeight == Direct3d11_SceneTarget::getHeight())
+		if (levelWidth == Direct3d11_SceneTarget::getWidth() &&
+			levelHeight == Direct3d11_SceneTarget::getHeight() &&
+			Direct3d11_SceneTarget::getSampleCount() == 1)
 			depthView = Direct3d11_SceneTarget::getDepthStencilView();
 		else
 			depthView = acquireDepthStencilView(levelWidth, levelHeight);
@@ -565,6 +572,32 @@ void Direct3d11_RenderTarget::bindCurrent()
 	}
 
 	bind(ms_currentColorView, ms_currentDepthView, ms_currentWidth, ms_currentHeight);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_RenderTarget::sceneTargetRebuilt()
+{
+	// The views are the scene target's own, not cached here, so there is nothing to release --
+	// but ms_currentColorView may still hold a freed one, and setRenderTargetToPrimary skips
+	// the bind when it thinks the primary is already current. Clearing first forces the rebind.
+	ms_currentColorView = NULL;
+	ms_currentDepthView = NULL;
+	ms_primaryTargetSet = false;
+
+	// The private depth buffers are keyed by size and their format follows the scene's, so a
+	// resize leaves stale sizes cached and a format change leaves them wrong. Dropped
+	// wholesale; they are rebuilt on demand and there are only a handful.
+	for (DepthCache::iterator i = ms_depthCache.begin(); i != ms_depthCache.end(); ++i)
+	{
+		if (i->second.view)
+			i->second.view->Release();
+		if (i->second.texture)
+			i->second.texture->Release();
+	}
+	ms_depthCache.clear();
+
+	setRenderTargetToPrimary();
 }
 
 // ----------------------------------------------------------------------

@@ -101,6 +101,10 @@ public:
 	// target the engine bound before it.
 	static void bindCurrent();
 
+	// The scene target's buffers have been replaced -- a resize, or a multisampling change.
+	// Every view this class holds onto it is now stale, so drop them and rebind.
+	static void sceneTargetRebuilt();
+
 	// A texture resource is about to be released. Drop every view cached onto it.
 	//
 	// Not optional: a cached view outliving its resource is a dangling COM pointer that the

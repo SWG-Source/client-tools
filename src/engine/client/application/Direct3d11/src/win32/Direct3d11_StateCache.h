@@ -52,6 +52,10 @@ public:
 	// packs them densely, so the shadow covers what a ps_4_0 program can name.
 	enum { cms_shaderResourceSlots = 16 };
 
+	// A debug lever: draw everything untextured. DX9 has the same switch and uses it the same
+	// way, to tell "the texture is wrong" apart from "the geometry or the shader is wrong".
+	static void  setTexturesEnabled(bool enabled);
+
 	static void  setShaderResource(int slot, ID3D11ShaderResourceView *view);
 	static void  setSamplerState(int slot, ID3D11SamplerState *sampler);
 

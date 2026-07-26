@@ -404,6 +404,7 @@ bool Direct3d11::prepareToDraw()
 			WARNING(true, ("Direct3d11: a draw was reached with no vertex shader bound, so no input layout can be built and the draw is being skipped. Every such draw is counted in droppedDraws. Reported once."));
 		}
 
+		Direct3d11::reportBadVertexBufferVertexShaderCombination();
 		return false;
 	}
 
@@ -411,7 +412,9 @@ bool Direct3d11::prepareToDraw()
 	if (!layout)
 	{
 		// The cache has already explained which format and shader combination could
-		// not be satisfied, and counted it.
+		// not be satisfied, and counted it. Raising the engine's flag is what stops the
+		// appearance asking again every frame.
+		Direct3d11::reportBadVertexBufferVertexShaderCombination();
 		return false;
 	}
 

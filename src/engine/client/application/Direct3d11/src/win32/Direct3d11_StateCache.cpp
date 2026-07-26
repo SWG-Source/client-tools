@@ -16,6 +16,7 @@
 namespace Direct3d11_StateCacheNamespace
 {
 	float                     ms_specularPower = 32.0f;
+	bool                      ms_noTextures = false;
 
 	ID3D11BlendState         *ms_blendState;
 	float                     ms_blendFactor[4];
@@ -306,6 +307,33 @@ void Direct3d11_StateCache::setSamplerState(int slot, ID3D11SamplerState *sample
  * would not actually destroy it, and the texture would appear to leak until something
  * else happened to bind over that slot.
  */
+
+void Direct3d11_StateCache::setTexturesEnabled(bool enabled)
+{
+	if (ms_noTextures == !enabled)
+		return;
+
+	ms_noTextures = !enabled;
+
+	// Unbind what is already bound rather than waiting for the next set, which the shadow would
+	// skip as redundant. DX9 does not need this because its flag is read at bind time and its
+	// cache is invalidated per frame anyway.
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	ID3D11ShaderResourceView *nothing = NULL;
+
+	for (int i = 0; i < cms_shaderResourceSlots; ++i)
+	{
+		if (!ms_shaderResource[i])
+			continue;
+
+		ms_shaderResource[i] = NULL;
+
+		if (context)
+			context->PSSetShaderResources(static_cast<UINT>(i), 1, &nothing);
+	}
+}
+
+// ----------------------------------------------------------------------
 
 void Direct3d11_StateCache::unbindShaderResourcesForResource(ID3D11Resource *resource)
 {

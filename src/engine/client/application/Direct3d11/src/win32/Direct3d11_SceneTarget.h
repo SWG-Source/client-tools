@@ -46,6 +46,19 @@ public:
 	// Chosen by probing at install. Off-screen depth buffers created elsewhere use it so they
 	// cannot disagree with the scene's.
 	static DXGI_FORMAT               getDepthFormat();
+
+	// One when multisampling is off. Anything binding its own colour buffer against the scene's
+	// depth has to match this, because D3D11 requires the sample counts to agree.
+	static int                       getSampleCount();
+
+	// Turn multisampling on or off at runtime, rebuilding the buffers. Returns whether the
+	// buffers are intact afterwards -- a false means the scene target is gone and the frame
+	// cannot be drawn.
+	//
+	// D3D9 did this by recreating the whole device, because the multisample mode was a property
+	// of the swap chain there. Here the swap chain is single-sampled by design and the scene
+	// target is the only multisampled surface, so only it has to be rebuilt.
+	static bool                      setAntialiasEnabled(bool enabled);
 	static int                       getWidth();
 	static int                       getHeight();
 

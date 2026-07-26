@@ -588,6 +588,9 @@ void Direct3d11_SwapChain::resize(int width, int height)
 	IGNORE_RETURN(createBackBufferViews());
 	IGNORE_RETURN(Direct3d11_SceneTarget::resize(width, height));
 
+	// The scene target's views are new, and the render target class is holding the old ones.
+	Direct3d11_RenderTarget::sceneTargetRebuilt();
+
 	Direct3d11_Device::fireDeviceRestored();
 }
 

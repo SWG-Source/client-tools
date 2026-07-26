@@ -58,6 +58,10 @@ public:
 
 	static void  releaseDrawResources();
 
+	// Raise the engine's bad-combination flag for whatever appearance is being drawn, if it
+	// registered one. Called from prepareToDraw when no input layout can be built.
+	static void  reportBadVertexBufferVertexShaderCombination();
+
 	// StaticShader keeps its graphics data private and names class Direct3d11 a friend.
 	// A namespace function has no friend access, so the reach-through lives here.
 	static StaticShaderGraphicsData *getStaticShaderGraphicsData(StaticShader const &shader);

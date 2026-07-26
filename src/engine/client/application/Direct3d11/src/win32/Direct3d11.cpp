@@ -38,9 +38,12 @@
 #include "Direct3d11_StateObjectCache.h"
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_StaticIndexBufferData.h"
+#include "Direct3d11_IndexOptimizer.h"
 #include "Direct3d11_LightManager.h"
 #include "Direct3d11_RenderTarget.h"
+#include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_StaticShaderData.h"
+#include "Direct3d11_VertexBufferVectorData.h"
 #include "Direct3d11_Transforms.h"
 #include "Direct3d11_StaticVertexBufferData.h"
 #include "Direct3d11_TextureData.h"
@@ -71,6 +74,14 @@ namespace Direct3d11Namespace
 	bool                        ms_scissorEnabled;
 
 	float                       ms_currentTime;
+
+	// The engine's "this vertex buffer and this shader cannot be drawn together" reporting. The
+	// flag belongs to the appearance being drawn, so it is a pointer to the appearance's own
+	// bool rather than state of ours; raising it is what stops the appearance retrying every
+	// frame.
+	const StaticShader *ms_badVertexShaderStaticShader;
+	bool               *ms_badVertexBufferVertexShaderCombination;
+	const char         *ms_badVertexBufferAppearanceName;
 
 	bool                        verify();
 	void                        remove();
@@ -126,6 +137,26 @@ unsigned int GetGlApiStructSize()
  * Texture scroll rates are turned into offsets against it, so the material path needs the
  * same value the shader's currentTime register was seeded from rather than a second clock.
  */
+
+void Direct3d11::reportBadVertexBufferVertexShaderCombination()
+{
+	if (!ms_badVertexBufferVertexShaderCombination || *ms_badVertexBufferVertexShaderCombination)
+		return;
+
+	*ms_badVertexBufferVertexShaderCombination = true;
+
+	WARNING(true, ("Direct3d11: the vertex buffer and vertex shader for appearance '%s' cannot be drawn together, so it is being flagged and skipped from here on.",
+		ms_badVertexBufferAppearanceName ? ms_badVertexBufferAppearanceName : "<unnamed>"));
+
+	// DX9 goes further and substitutes ms_badVertexShaderStaticShader so the object renders in
+	// an obvious error material instead of vanishing (Direct3d9.cpp:3972-3997). That is not done
+	// here: the substitution has to re-enter setStaticShader from inside the draw it is
+	// interrupting, and an invisible object that has named itself in the log is a better default
+	// for a shipping client than a bright placeholder. The shader is still recorded, so the
+	// substitution can be added without another plumbing change.
+}
+
+// ----------------------------------------------------------------------
 
 float Direct3d11::getCurrentTimeValue()
 {
@@ -371,7 +402,17 @@ namespace Direct3d11Namespace
 	void setPointScaleEnable(bool)                                         { DX11_NOT_IMPLEMENTED("setPointScaleEnable"); }
 	void setPointScaleFactor(real, real, real)                             { DX11_NOT_IMPLEMENTED("setPointScaleFactor"); }
 	void setPointSpriteEnable(bool)                                        { DX11_NOT_IMPLEMENTED("setPointSpriteEnable"); }
-	void setAntialiasEnabled(bool)                                         { DX11_NOT_IMPLEMENTED("setAntialiasEnabled"); }
+	// Rebuilds the scene target rather than the device, because the swap chain here is
+	// single-sampled by design and the scene target is the only multisampled surface. D3D9 had
+	// to recreate the device, since there the multisample mode belonged to the swap chain.
+	void setAntialiasEnabled(bool enabled)
+	{
+		if (!Direct3d11_Device::supportsAntialias())
+			return;
+
+		IGNORE_RETURN(Direct3d11_SceneTarget::setAntialiasEnabled(enabled));
+		Direct3d11_RenderTarget::sceneTargetRebuilt();
+	}
 
 	// Transforms, lighting and per-draw material state.
 	// The concatenation these three feed is deferred to prepareToDraw; see
@@ -398,14 +439,33 @@ namespace Direct3d11Namespace
 	}
 	void setBloomEnabled(bool enabled)                                     { Direct3d11_LightManager::setBloomEnabled(enabled); }
 	void setLights(const stdvector<const Light*>::fwd &lightList)          { Direct3d11_LightManager::setLights(lightList); }
-	void setTextureTransform(int, bool, int, bool, const real *)           { DX11_NOT_IMPLEMENTED("setTextureTransform"); }
+	// A real no-op, not an unwritten one. DX9's whole body is inside #ifdef FFP -- it sets
+	// D3DTSS_TEXTURETRANSFORMFLAGS and a texture-stage matrix, both fixed-function state -- so
+	// in a shader-only build it already does nothing but UNREF its arguments. Nothing in the
+	// engine calls it either.
+	void setTextureTransform(int, bool, int, bool, const real *)           { }
 
 	// Textures and shaders.
 	void setGlobalTexture(Tag tag, const Texture &texture)                 { Direct3d11_TextureData::setGlobalTexture(tag, texture); }
 	void releaseAllGlobalTextures()                                        { Direct3d11_TextureData::releaseAllGlobalTextures(); }
-	void getOneToOneUVMapping(int, int, real &u0, real &v0, real &u1, real &v1) { DX11_NOT_IMPLEMENTED("getOneToOneUVMapping"); u0 = 0.0f; v0 = 0.0f; u1 = 1.0f; v1 = 1.0f; }
+	// The UV range that samples every texel of a texture exactly once, at texel centres.
+	//
+	// Ported unchanged, and the half-texel here is not the D3D9 one people remember: that was a
+	// rasterisation offset on vertex POSITIONS, which D3D10 removed. This is the texel centre in
+	// UV space, (i + 0.5) / n, which is the same in every API. Nothing in the engine calls it,
+	// but it is four lines and getting it wrong later would show up as a subtle blur.
+	void getOneToOneUVMapping(int textureWidth, int textureHeight, real &u0, real &v0, real &u1, real &v1)
+	{
+		u0 = 0.5f / static_cast<real>(textureWidth);
+		v0 = 0.5f / static_cast<real>(textureHeight);
+		u1 = (static_cast<real>(textureWidth  - 1) + 0.5f) / static_cast<real>(textureWidth);
+		v1 = (static_cast<real>(textureHeight - 1) + 0.5f) / static_cast<real>(textureHeight);
+	}
 	bool setMouseCursor(const Texture &, int, int)                         { DX11_NOT_IMPLEMENTED("setMouseCursor"); return false; }
-	void setBadVertexShaderStaticShader(const StaticShader *)              { DX11_NOT_IMPLEMENTED("setBadVertexShaderStaticShader"); }
+	// The two halves of the engine's "this combination cannot be drawn" reporting. Recorded
+	// here; prepareToDraw raises the flag when an input layout cannot be built, which is this
+	// backend's version of the failure DX9 detects.
+	void setBadVertexShaderStaticShader(const StaticShader *shader)        { ms_badVertexShaderStaticShader = shader; }
 	void setStaticShader(const StaticShader &shader, int pass)
 	{
 		// The material owns everything applied here, including the pass state it asks its
@@ -426,7 +486,9 @@ namespace Direct3d11Namespace
 	}
 
 	// Buffers.
-	void optimizeIndexBuffer(WORD *, int)                                  { DX11_NOT_IMPLEMENTED("optimizeIndexBuffer"); }
+	// D3DX did this in DX9 and does not exist for D3D11, but the operation never needed a
+	// graphics API: it permutes an array of uint16. See Direct3d11_IndexOptimizer.h.
+	void optimizeIndexBuffer(WORD *indices, int numberOfIndices)           { Direct3d11_IndexOptimizer::optimize(reinterpret_cast<uint16 *>(indices), numberOfIndices); }
 	int getMaximumVertexBufferStreamCount()
 	{
 		// Not an accounted stub, and it never should have been one: the engine calls
@@ -481,7 +543,7 @@ namespace Direct3d11Namespace
 	StaticShaderGraphicsData *createStaticShaderGraphicsData(const StaticShader &shader) { return new Direct3d11_StaticShaderData(shader); }
 	StaticVertexBufferGraphicsData *createStaticVertexBufferData(const StaticVertexBuffer &vertexBuffer)          { return new Direct3d11_StaticVertexBufferData(vertexBuffer); }
 	DynamicVertexBufferGraphicsData *createDynamicVertexBufferData(const DynamicVertexBuffer &vertexBuffer)       { return new Direct3d11_DynamicVertexBufferData(vertexBuffer); }
-	VertexBufferVectorGraphicsData *createVertexBufferVectorData(VertexBufferVector const &)                      { DX11_NOT_IMPLEMENTED_FATAL("createVertexBufferVectorData"); return NULL; }
+	VertexBufferVectorGraphicsData *createVertexBufferVectorData(VertexBufferVector const &)                      { return new Direct3d11_VertexBufferVectorData; }
 	StaticIndexBufferGraphicsData *createStaticIndexBufferData(const StaticIndexBuffer &indexBuffer)              { return new Direct3d11_StaticIndexBufferData(indexBuffer); }
 	DynamicIndexBufferGraphicsData *createDynamicIndexBufferData()                                                { return new Direct3d11_DynamicIndexBufferData(); }
 	TextureGraphicsData *createTextureData(const Texture &texture, const TextureFormat *runtimeFormats, int numberOfRuntimeFormats) { return new Direct3d11_TextureData(texture, runtimeFormats, numberOfRuntimeFormats); }
@@ -497,13 +559,17 @@ namespace Direct3d11Namespace
 	// Two of the five are answered by the state and texture work and are honest
 	// absences until then. The other three come from the metrics.
 
-	void setTexturesEnabled(bool)                                          { DX11_NOT_IMPLEMENTED("setTexturesEnabled"); }
+	void setTexturesEnabled(bool enabled)                                  { Direct3d11_StateCache::setTexturesEnabled(enabled); }
 
 	bool ms_showMipmapLevels;
 	void showMipmapLevels(bool enabled)                                    { ms_showMipmapLevels = enabled; }
 	bool getShowMipmapLevels()                                             { return ms_showMipmapLevels; }
 
-	void setBadVertexBufferVertexShaderCombination(bool *, const char *)   { DX11_NOT_IMPLEMENTED("setBadVertexBufferVertexShaderCombination"); }
+	void setBadVertexBufferVertexShaderCombination(bool *flag, const char *appearanceName)
+	{
+		ms_badVertexBufferVertexShaderCombination = flag;
+		ms_badVertexBufferAppearanceName = appearanceName;
+	}
 
 	void getRenderedVerticesPointsLinesTrianglesCalls(int &vertices, int &points, int &lines, int &triangles, int &calls)
 	{

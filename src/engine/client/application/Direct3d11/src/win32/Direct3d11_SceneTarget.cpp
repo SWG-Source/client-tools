@@ -24,6 +24,11 @@ namespace Direct3d11_SceneTargetNamespace
 	int                        ms_height;
 	int                        ms_sampleCount = 1;
 
+	// What was asked for, as opposed to what was achieved. Seeded from the config at install and
+	// then owned by setAntialiasEnabled, so that a rebuild does not silently undo a runtime
+	// toggle by re-reading the config.
+	bool                       ms_antialiasRequested = false;
+
 	ID3D11Texture2D           *ms_colorBuffer;
 	ID3D11RenderTargetView    *ms_colorView;
 	ID3D11ShaderResourceView  *ms_colorResourceView;
@@ -201,7 +206,7 @@ bool Direct3d11_SceneTargetNamespace::createBuffers()
 	// its present parameters set D3DMULTISAMPLE_NONE in both windowed and
 	// fullscreen paths, so nothing has been antialiased for twenty years and
 	// turning it on is a change to measure, not a default to assume.
-	ms_sampleCount = ConfigDirect3d11::getAntiAlias() ? ConfigDirect3d11::getAntiAliasSampleCount() : 1;
+	ms_sampleCount = ms_antialiasRequested ? ConfigDirect3d11::getAntiAliasSampleCount() : 1;
 	if (ms_sampleCount > 1 && !Direct3d11_Device::isSampleCountSupported(ms_sampleCount))
 	{
 		WARNING(true, ("Direct3d11: %dx multisampling is not supported for the scene target format, falling back to none.", ms_sampleCount));
@@ -499,6 +504,8 @@ bool Direct3d11_SceneTarget::install(int width, int height)
 	ms_width  = width;
 	ms_height = height;
 
+	ms_antialiasRequested = ConfigDirect3d11::getAntiAlias();
+
 	// The table has to exist before anything can composite, and Graphics::install
 	// pushes the persisted brightness/contrast/gamma at us right after install
 	// returns anyway.
@@ -541,6 +548,33 @@ bool Direct3d11_SceneTarget::resize(int width, int height)
 ID3D11RenderTargetView *Direct3d11_SceneTarget::getRenderTargetView()
 {
 	return ms_colorView;
+}
+
+// ----------------------------------------------------------------------
+
+int Direct3d11_SceneTarget::getSampleCount()
+{
+	return ms_sampleCount;
+}
+
+// ----------------------------------------------------------------------
+
+bool Direct3d11_SceneTarget::setAntialiasEnabled(bool enabled)
+{
+	if (enabled == ms_antialiasRequested)
+		return true;
+
+	ms_antialiasRequested = enabled;
+
+	releaseBuffers();
+
+	if (!createBuffers())
+	{
+		WARNING(true, ("Direct3d11: the scene target could not be rebuilt after multisampling was turned %s.", enabled ? "on" : "off"));
+		return false;
+	}
+
+	return true;
 }
 
 // ----------------------------------------------------------------------
