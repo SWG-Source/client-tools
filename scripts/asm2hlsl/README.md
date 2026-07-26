@@ -19,21 +19,57 @@ python asm2hlsl_run.py     # convert the reachable assembly
 python verifyconv.py       # compile every conversion with fxc
 ```
 
-`shadercorpus.py` needs `E:\SWG\64bit-server\_client` (the deployed client: 209 TREs plus
-the five `.cfg` files `client.cfg` includes). Everything downstream works from its output.
+`shadercorpus.py` needs `E:\SWG\64bit-server\_client` (the deployed client: 209 `.tre`
+archives, 4 `.toc` indexes, and the five `.cfg` files `client.cfg` includes). It writes the
+corpus to `corpus/` and a provenance table to `corpus-manifest.tsv` (name, size, winning
+node rank, node kind, containing archive). Everything downstream works from its output, and
+`reachable2.py` imports `shadercorpus.search_order()` / `resolve()` rather than keeping its
+own copy.
 
-## Search-tree precedence, which is easy to get backwards
+## Search precedence, which is easy to get backwards
 
-`TreeFile::addSearchNode` keeps its list sorted by priority descending and inserts with
-`std::lower_bound` against an `a->priority > b->priority` comparator. `lower_bound` returns
-the first position whose priority is *not greater*, so an equal-priority node is inserted
-**before** the ones already there: **the last tree added at a given priority is searched
-first.** The doc comment above that function says the opposite, and it matters, because all
-72 trees in `client.cfg` sit at priority 0.
+`shadercorpus.search_order()` models the whole of `TreeFile::install`. Four things have to
+be right at once:
 
-Resolving backwards picks a 601-byte `shared_program/functions.inc` from a base tree instead
-of the 2,398-byte copy in `patch_11_00.tre` that actually defines `intensity()` and
-`tex2DDxt5CompressedNormal()`, and an older `vertex_shader_constants.inc` whose `Dot3Light`
+**`searchTOC` counts, not just `searchTree`.** `live.cfg` carries four
+`searchTOC_<sku>_<priority>` keys at priorities 0–3, naming 198 `.tre` archives between
+them. **137 of the 209 `.tre` files in a deployed client are version `TREE0006` with a
+completely zeroed header** — no internal directory at all — so a `SearchTree` over one finds
+nothing and `tre.py` reports zero files for it. Those archives are reachable *only* through
+a `.toc`, which supplies `(treeFileIndex, offset, length, compressor, compressedLength)`
+externally; `SearchTOC::open` then reads the payload straight out of the `.tre`. A `.toc`
+carries no payload of its own. Reading only the `searchTree` keys hid 89 files outright and
+resolved 436 more from superseded copies.
+
+**Priority, then insertion order.** `TreeFile::addSearchNode` keeps its list sorted by
+priority descending and inserts with `std::lower_bound` against an
+`a->priority > b->priority` comparator. `lower_bound` returns the first position whose
+priority is *not greater*, so an equal-priority node is inserted **before** the ones already
+there: **the last node added at a given priority is searched first.** The doc comment above
+that function says the opposite. Within one sku, `install()` adds paths, then trees, then
+TOCs, so at equal priority a `.toc` beats a `.tre` — an insertion-order artifact, not a type
+precedence. Note also that the trees are *not* all at priority 0: 65 are, but `ILM_sound`,
+`ILM_maps`, `ILM_music`, `ILM_visuals`, `ILM_animation`,
+`disable_wayfar_dearic_snow` and `swgsource_3.0` sit at 2–8, and five of those outrank every
+TOC.
+
+**`SearchAbsolute`.** `install()` always adds one at (highest configured priority + 1), so
+loose files in the working directory beat every archive. 25 loose `.sht` files in the
+deployment directory win that way.
+
+**Zero-length entries mean two different things.** `SearchTree::localExists` sets
+`deleted = true` for a matched entry whose `length == 0`, and `TreeFile::find` loops on
+`!deleted`, so such an entry **aborts the whole search** and the file is reported absent even
+though lower-priority nodes hold a copy. `SearchTOC` never sets `deleted`; its zero-length /
+zero-offset entries are plain misses and the walk continues. Ignoring this wrote two
+zero-byte files into the corpus that the client cannot open at all.
+
+Resolving backwards picks a 12,318-byte `vertex_program/include/functions.inc` from
+`patch_12_00.tre` instead of the 17,375-byte, 473-line copy in `patch_24_client_01.tre` (a
+`TREE0006` archive, reachable only via `sku0_client.toc`) that the running client actually
+compiles and that declares `HemisphericLightData`; a 601-byte `shared_program/functions.inc`
+from a base tree instead of the 2,398-byte copy that defines `intensity()` and
+`tex2DDxt5CompressedNormal()`; and an older `vertex_shader_constants.inc` whose `Dot3Light`
 has its first two fields transposed relative to the C++ struct the engine uploads.
 
 ## What the conversion preserves
@@ -90,8 +126,17 @@ one. The two write disjoint masks, so the pairing carries no semantics worth pre
 overrides the backend applies, and compiles every output with `fxc` at `vs_4_0` / `ps_4_0`
 with `/Gec` — the exact flags `Direct3d11_ShaderCompiler` uses.
 
-All 97 reachable assembly programs compile. Together with 512 of 517 HLSL programs (the five
-failures are unreachable at shader capability 2.0), the whole reachable corpus builds.
+The "all 97 reachable assembly programs compile" result was measured against the
+**pre-`searchTOC`** corpus and has NOT been re-established. The corrected corpus has 99
+reachable assembly programs (37 vertex, 62 pixel), 39 of which are new or changed bytes, and
+`vertex_program/include/functions.inc`, `vertex_shader_constants.inc`, `registers.inc` and
+three `diffuse_specular*.inc` all changed, which affects every compile. Re-run the
+conversion and the compile sweep before trusting any pass rate.
+
+Three program names that a live implementation references —
+`pixel_program/lava_ps14.psh`, `vertex_program/lava_ps14.vsh` and
+`vertex_program/lava_static.vsh` — exist in no archive, no `.toc` and no loose file, so they
+cannot be compiled from anything. They are dangling references in the shipped effect data.
 
 Compiling is not the same as being correct. The real gate is a visual comparison against
 `gl05`, which needs the client running.

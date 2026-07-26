@@ -5,9 +5,19 @@
 # 725 bytes, no .eft reference anywhere in it -- so its pixel program looked unreachable
 # when it is in fact what Bloom::install fetches by name.
 #
-# So this resolves every shader/*.sht and every effect/*.eft through search-tree
-# precedence, finds every implementation FORM carrying a SCAP chunk in either, and
+# So this resolves every shader/*.sht and every effect/*.eft through the engine's real
+# search order, finds every implementation FORM carrying a SCAP chunk in either, and
 # collects the vertex and pixel programs referenced by the ones live at capability 2.0.
+#
+# The search order comes from shadercorpus.search_order(), which models the whole of
+# TreeFile::install: searchPath, searchTree AND searchTOC keys, per sku, per priority, with
+# the lower_bound tie-break. This file used to carry its own searchTree-only copy of that
+# function, which resolved .sht and .eft files from archives the client does not use --
+# 137 of the 209 .tre files are only reachable through a .toc. It now imports the one
+# implementation so the two tools cannot drift apart again.
+#
+# It also picks up the SearchAbsolute node, which matters here specifically: 25 loose .sht
+# files sit in the deployment directory and outrank every archive.
 
 import collections
 import io
@@ -19,9 +29,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-import tre as tremod
+import shadercorpus
 
-ROOT = r"E:\SWG\64bit-server\_client"
+ROOT = shadercorpus.ROOT
 
 TARGET = (2 << 8) | 0
 REMAP_OLD = {0x0100: 0x0002, 0x0105: 0x0003, 0x0200: 0x0101, 0x0205: 0x0104, 0x0300: 0x0200}
@@ -29,29 +39,21 @@ REMAP_RECENT = {0x0002: 0x0002, 0x0003: 0x0003, 0x0100: 0x0101, 0x0104: 0x0104, 
 VERSION_TAGS = {b"%04d" % i for i in range(10)}
 
 NAME_RE = re.compile(rb"[ -~]{4,}")
-PROGRAM_RE = re.compile(r"[a-z0-9_/\.\-]+\.(?:vsh|psh)")
+# Anchored on the directory prefix ON PURPOSE. The previous pattern was
+# `[a-z0-9_/\.\-]+\.(?:vsh|psh)`, whose character class also matches the IFF length byte
+# sitting immediately in front of the name whenever that byte happens to be printable --
+# and for a 46-to-53 character program name it usually is a digit, '.', '-' or '/'. That
+# glued the byte onto the front of the path ("0vertex_program/a_specmap_bump_vs20.vsh"),
+# and since asm-programs.txt holds clean paths, those programs silently never matched.
+# MEASURED on the current corpus: identical total (657 names either way) but 73 of them
+# came out mangled under the old pattern.
+PROGRAM_RE = re.compile(r"(?:vertex_program|pixel_program|shared_program)/"
+                        r"[a-z0-9_\-\.]+\.(?:vsh|psh)")
 
 
-def search_order():
-    entries = []
-    for cfg in ("client.cfg", "live.cfg", "preload.cfg", "options.cfg", "user.cfg", "login.cfg"):
-        path = os.path.join(ROOT, cfg)
-        if not os.path.exists(path):
-            continue
-        for line in open(path, encoding="latin-1", errors="replace"):
-            m = re.match(r"\s*searchTree_(\d+)_(\d+)\s*=\s*(\S+)", line)
-            if m:
-                entries.append((int(m.group(2)), m.group(3)))
-    byPriority = {}
-    for priority, name in entries:
-        byPriority.setdefault(priority, []).append(name)
-    order, seen = [], set()
-    for priority in sorted(byPriority, reverse=True):
-        for name in reversed(byPriority[priority]):
-            if name not in seen:
-                seen.add(name)
-                order.append(name)
-    return order
+def want(name):
+    return ((name.startswith("shader/") and name.endswith(".sht"))
+            or (name.startswith("effect/") and name.endswith(".eft")))
 
 
 def forms(data):
@@ -99,29 +101,18 @@ def programs(data, start, end):
 
 
 def main():
-    order = search_order()
-
-    resolved = {}
-    for tre_name in order:
-        path = os.path.join(ROOT, tre_name)
-        if not os.path.exists(path):
-            continue
-        opened = tremod.read_tre(path)
-        if not opened:
-            continue
-        f, _ver, entries = opened
-        for e in entries:
-            nm = e[0].lower().replace("\\", "/")
-            if not (nm.startswith("shader/") and nm.endswith(".sht")) and not (nm.startswith("effect/") and nm.endswith(".eft")):
-                continue
-            if nm in resolved:
-                continue
-            resolved[nm] = tremod.extract(f, e, None)
-        f.close()
+    nodes = shadercorpus.search_order()
+    winners, tombstoned = shadercorpus.resolve(nodes, want)
+    resolved = {name: shadercorpus.read(w) for name, w in winners.items()}
 
     shts = sum(1 for k in resolved if k.endswith(".sht"))
     efts = sum(1 for k in resolved if k.endswith(".eft"))
-    print("resolved %d shaders and %d effects" % (shts, efts))
+    print("search order: %d nodes" % len(nodes))
+    print("resolved %d shaders and %d effects (%d names killed by a SearchTree tombstone)"
+          % (shts, efts, len(tombstoned)))
+    origin = collections.Counter("%s %s" % (w.node.kind, w.node.name) for w in winners.values())
+    for key, count in origin.most_common(8):
+        print("   %-42s %d" % (key, count))
 
     live = set()
     dead = set()
