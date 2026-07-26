@@ -18,6 +18,10 @@ namespace Direct3d11_StateCacheNamespace
 	float                     ms_specularPower = 32.0f;
 	bool                      ms_noTextures = false;
 
+	// Tracked as a real value rather than a "have we bound one" flag, because null IS the normal
+	// binding and the shadow has to be able to say so.
+	ID3D11GeometryShader     *ms_geometryShader = NULL;
+
 	ID3D11BlendState         *ms_blendState;
 	float                     ms_blendFactor[4];
 	uint32                    ms_sampleMask;
@@ -95,6 +99,9 @@ void Direct3d11_StateCache::invalidate()
 		ms_shaderResource[i] = NULL;
 		ms_samplerState[i] = NULL;
 	}
+
+	// Null is a meaningful value here, so this is set rather than cleared to a sentinel.
+	ms_geometryShader = NULL;
 }
 
 // ======================================================================
@@ -193,6 +200,20 @@ void Direct3d11_StateCache::setVertexShader(ID3D11VertexShader *shader)
 
 	ms_vertexShader = shader;
 	context->VSSetShader(shader, NULL, 0);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_StateCache::setGeometryShader(ID3D11GeometryShader *shader)
+{
+	if (shader == ms_geometryShader)
+		return;
+
+	ms_geometryShader = shader;
+
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	if (context)
+		context->GSSetShader(shader, NULL, 0);
 }
 
 // ----------------------------------------------------------------------

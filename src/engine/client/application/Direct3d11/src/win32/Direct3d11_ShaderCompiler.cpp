@@ -385,6 +385,15 @@ ID3DBlob *Direct3d11_ShaderCompiler::compileVertexShader(char const *source, int
 
 // ----------------------------------------------------------------------
 
+ID3DBlob *Direct3d11_ShaderCompiler::compileGeometryShader(char const *source, int sourceLength, char const *name)
+{
+	// gs_4_0 rather than gs_5_0: this backend targets feature level 10 hardware and up, and
+	// nothing here needs a 5.0 construct.
+	return Direct3d11_ShaderCompilerNamespace::compile(source, sourceLength, name, NULL, "gs_4_0");
+}
+
+// ----------------------------------------------------------------------
+
 ID3DBlob *Direct3d11_ShaderCompiler::compilePixelShader(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros)
 {
 	return compilePatched(source, sourceLength, name, macros, cms_pixelShaderTarget, false);

@@ -44,6 +44,11 @@ public:
 
 	static void  setVertexShader(ID3D11VertexShader *shader);
 	static void  setPixelShader(ID3D11PixelShader *shader);
+
+	// Null for the overwhelming majority of draws. Shadowed like the others so that binding and
+	// unbinding the point sprite expander around one primitive is two calls a frame rather than
+	// two per draw.
+	static void  setGeometryShader(ID3D11GeometryShader *shader);
 	static void  setInputLayout(ID3D11InputLayout *inputLayout);
 	static void  setPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY topology);
 

@@ -41,6 +41,7 @@
 #include "Direct3d11_IndexOptimizer.h"
 #include "Direct3d11_LightManager.h"
 #include "Direct3d11_MouseCursor.h"
+#include "Direct3d11_PointSprite.h"
 #include "Direct3d11_RenderTarget.h"
 #include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_StaticShaderData.h"
@@ -402,12 +403,15 @@ namespace Direct3d11Namespace
 	bool copyRenderTargetToNonRenderTargetTexture()                        { return Direct3d11_RenderTarget::copyRenderTargetToNonRenderTargetTexture(); }
 
 	// Fixed-function-era rasterizer state.
-	void setPointSize(real)                                                { DX11_NOT_IMPLEMENTED("setPointSize"); }
-	void setPointSizeMax(real)                                             { DX11_NOT_IMPLEMENTED("setPointSizeMax"); }
-	void setPointSizeMin(real)                                             { DX11_NOT_IMPLEMENTED("setPointSizeMin"); }
-	void setPointScaleEnable(bool)                                         { DX11_NOT_IMPLEMENTED("setPointScaleEnable"); }
-	void setPointScaleFactor(real, real, real)                             { DX11_NOT_IMPLEMENTED("setPointScaleFactor"); }
-	void setPointSpriteEnable(bool)                                        { DX11_NOT_IMPLEMENTED("setPointSpriteEnable"); }
+	// D3D11 has no point size and no point sprites at all; a geometry shader expands them. See
+	// Direct3d11_PointSprite.h -- including why the four attenuation states are recorded and not
+	// implemented.
+	void setPointSize(real size)                                           { Direct3d11_PointSprite::setSize(static_cast<float>(size)); }
+	void setPointSizeMax(real size)                                        { Direct3d11_PointSprite::setSizeMaximum(static_cast<float>(size)); }
+	void setPointSizeMin(real size)                                        { Direct3d11_PointSprite::setSizeMinimum(static_cast<float>(size)); }
+	void setPointScaleEnable(bool enabled)                                 { Direct3d11_PointSprite::setScaleEnabled(enabled); }
+	void setPointScaleFactor(real a, real b, real c)                       { Direct3d11_PointSprite::setScaleFactor(static_cast<float>(a), static_cast<float>(b), static_cast<float>(c)); }
+	void setPointSpriteEnable(bool enabled)                                { Direct3d11_PointSprite::setEnabled(enabled); }
 	// Rebuilds the scene target rather than the device, because the swap chain here is
 	// single-sampled by design and the scene target is the only multisampled surface. D3D9 had
 	// to recreate the device, since there the multisample mode belonged to the swap chain.
@@ -824,6 +828,10 @@ bool Direct3d11::install(Gl_install *gl_install)
 	// After the swap chain, because the resting render target is the scene target and that does
 	// not exist until the swap chain has built it.
 	Direct3d11_RenderTarget::install();
+
+	// After the shader compiler, which it uses, and at install rather than on first use: a
+	// shader compile inside a frame is what Direct3d11_Metrics::shaderCompiles exists to catch.
+	Direct3d11_PointSprite::install();
 	Direct3d11_VertexShaderData::install();
 	Direct3d11_PixelShaderProgramData::install();
 
@@ -878,6 +886,7 @@ void Direct3d11Namespace::remove()
 	// Before the state cache, mirroring the install order: draining the global texture
 	// registry can destroy textures, and a texture's destructor unbinds itself through
 	// the cache.
+	Direct3d11_PointSprite::remove();
 	Direct3d11_MouseCursor::remove();
 	Direct3d11_RenderTarget::remove();
 	Direct3d11::releaseDrawResources();

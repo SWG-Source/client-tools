@@ -32,6 +32,7 @@
 #include "clientGraphics/StaticShader.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_LightManager.h"
+#include "Direct3d11_PointSprite.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_Transforms.h"
 #include "Direct3d11_StaticIndexBufferData.h"
@@ -641,6 +642,11 @@ void Direct3d11::draw(int topology, int firstVertex, int vertexCount, int triang
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 	Direct3d11_StateCache::setPrimitiveTopology(static_cast<D3D11_PRIMITIVE_TOPOLOGY>(topology));
 
+	// The only place point sprites can apply, and the place that has to take them away
+	// again: a geometry shader left bound would expand the next triangle list's vertices
+	// into quads, which is not a subtle failure.
+	Direct3d11_PointSprite::apply(topology == D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+
 	// ms_sliceFirstVertex is where the bound buffer's usable range starts. For a dynamic
 	// buffer that is the ring offset, which setVertexBuffer deliberately does NOT put in the
 	// stream byte offset -- doing both would double-count it.
@@ -662,6 +668,8 @@ void Direct3d11::drawIndexed(int topology, int firstIndex, int indexCount, int b
 
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 	Direct3d11_StateCache::setPrimitiveTopology(static_cast<D3D11_PRIMITIVE_TOPOLOGY>(topology));
+
+	Direct3d11_PointSprite::apply(topology == D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
 
 	context->DrawIndexed(static_cast<UINT>(indexCount), static_cast<UINT>(ms_sliceFirstIndex + firstIndex), ms_sliceFirstVertex + baseVertex);
 
@@ -701,6 +709,9 @@ void Direct3d11::drawFan(int firstVertex, int vertexCount)
 	++Direct3d11_Metrics::indexBufferBindMisses;
 
 	Direct3d11_StateCache::setPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	// A fan is expanded to a triangle list, so the point expander must not be bound.
+	Direct3d11_PointSprite::apply(false);
 
 	int const triangles = vertexCount - 2;
 	// The pattern buffer's own indices start at zero, so the whole fan is placed by the base
@@ -744,6 +755,8 @@ void Direct3d11::drawQuads(int firstVertex, int quadCount)
 	++Direct3d11_Metrics::indexBufferBindMisses;
 
 	Direct3d11_StateCache::setPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	Direct3d11_PointSprite::apply(false);
 
 	int const triangles = quadCount * 2;
 	context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);

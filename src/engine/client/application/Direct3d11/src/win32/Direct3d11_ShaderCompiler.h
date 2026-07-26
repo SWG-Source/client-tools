@@ -62,6 +62,12 @@ public:
 	static ID3DBlob *compileVertexShader(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros);
 	static ID3DBlob *compilePixelShader(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros);
 
+	// For shaders this backend writes itself rather than loads. No source patching and no
+	// implicit macros: the corpus transforms exist to fix up shipped assets, and applying them
+	// to our own source would only be a way to break it. Notably the "point" rename -- a
+	// geometry shader needs that keyword.
+	static ID3DBlob *compileGeometryShader(char const *source, int sourceLength, char const *name);
+
 	static char const *getVertexShaderTarget();
 	static char const *getPixelShaderTarget();
 
