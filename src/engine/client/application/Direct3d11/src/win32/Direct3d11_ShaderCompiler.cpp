@@ -10,6 +10,7 @@
 
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
+#include "Direct3d11_ShaderSource.h"
 
 #include "fileInterface/AbstractFile.h"
 #include "sharedFile/TreeFile.h"
@@ -53,6 +54,7 @@ namespace Direct3d11_ShaderCompilerNamespace
 	IncludeHandler  ms_includeHandler;
 
 	ID3DBlob       *compile(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target);
+	ID3DBlob       *compilePatched(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target, bool isVertexProgram);
 }
 using namespace Direct3d11_ShaderCompilerNamespace;
 
@@ -93,6 +95,29 @@ HRESULT STDMETHODCALLTYPE Direct3d11_ShaderCompilerNamespace::IncludeHandler::Op
 		return S_OK;
 	}
 
+	// Two includes are served from this DLL rather than from the TRE set, because the
+	// shipped copies are incompatible with a shader compiled from source -- one puts
+	// textureFactor on a register the engine fills with a negative value, the other binds
+	// a register to an aggregate, which d3dcompiler_47 refuses outright. See
+	// Direct3d11_ShaderSource.h for the evidence on both.
+	{
+		int overrideLength = 0;
+		char const * const overrideText = Direct3d11_ShaderSource::getIncludeOverride(path, overrideLength);
+		if (overrideText)
+		{
+			CachedInclude cached;
+			cached.length = overrideLength;
+			cached.data = new char[overrideLength];
+			memcpy(cached.data, overrideText, static_cast<size_t>(overrideLength));
+
+			IGNORE_RETURN(ms_includeCache.insert(std::make_pair(std::string(path), cached)));
+
+			*data  = cached.data;
+			*bytes = static_cast<UINT>(overrideLength);
+			return S_OK;
+		}
+	}
+
 	AbstractFile * const file = TreeFile::open(path, AbstractFile::PriorityData, true);
 	if (!file)
 	{
@@ -115,15 +140,31 @@ HRESULT STDMETHODCALLTYPE Direct3d11_ShaderCompilerNamespace::IncludeHandler::Op
 	}
 
 	CachedInclude cached;
-	cached.length = length;
-	cached.data = new char[length];
-	memcpy(cached.data, contents, length);
+
+	// c_ambient.inc is rewritten on the way in, inherited from the DX9 x64 build.
+	int patchedLength = 0;
+	char * const patched = Direct3d11_ShaderSource::patchIncludeContents(path, reinterpret_cast<char const *>(contents), length, patchedLength);
+	if (patched)
+	{
+		cached.length = patchedLength;
+		cached.data = patched;
+	}
+	else
+	{
+		cached.length = length;
+		cached.data = new char[length];
+		memcpy(cached.data, contents, length);
+	}
+
 	delete [] contents;
 
 	IGNORE_RETURN(ms_includeCache.insert(std::make_pair(std::string(path), cached)));
 
 	*data  = cached.data;
-	*bytes = static_cast<UINT>(length);
+
+	// cached.length, not length: a patched include is longer than the file it came from,
+	// and reporting the file's length truncates the last of the patch.
+	*bytes = static_cast<UINT>(cached.length);
 	return S_OK;
 }
 
@@ -236,16 +277,45 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 
 // ----------------------------------------------------------------------
 
+ID3DBlob *Direct3d11_ShaderCompilerNamespace::compilePatched(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target, bool isVertexProgram)
+{
+	NOT_NULL(source);
+
+	// A program that is not HLSL cannot be compiled at all, and saying so by name is the
+	// whole diagnosis: D3DCompile has no assembler, and D3D9 shader assembly is not a
+	// D3D11 shader model. Ninety-seven such programs are reachable at shader capability
+	// 2.0 and each one needs translating to HLSL.
+	Direct3d11_ShaderSource::Language const language = Direct3d11_ShaderSource::getLanguage(source, sourceLength);
+	if (language != Direct3d11_ShaderSource::L_hlsl)
+	{
+		WARNING(true, ("Direct3d11: '%s' is %s, which D3DCompile cannot build. It needs translating to HLSL.",
+			name, (language == Direct3d11_ShaderSource::L_assembly) ? "Direct3D 9 shader assembly" : "not recognisable as HLSL or assembly"));
+		return NULL;
+	}
+
+	int patchedLength = 0;
+	char * const patched = Direct3d11_ShaderSource::patchProgramSource(name, source, sourceLength, isVertexProgram, patchedLength);
+
+	ID3DBlob * const bytecode = patched
+		? compile(patched, patchedLength, name, macros, target)
+		: compile(source, sourceLength, name, macros, target);
+
+	delete [] patched;
+	return bytecode;
+}
+
+// ----------------------------------------------------------------------
+
 ID3DBlob *Direct3d11_ShaderCompiler::compileVertexShader(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros)
 {
-	return compile(source, sourceLength, name, macros, cms_vertexShaderTarget);
+	return compilePatched(source, sourceLength, name, macros, cms_vertexShaderTarget, true);
 }
 
 // ----------------------------------------------------------------------
 
 ID3DBlob *Direct3d11_ShaderCompiler::compilePixelShader(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros)
 {
-	return compile(source, sourceLength, name, macros, cms_pixelShaderTarget);
+	return compilePatched(source, sourceLength, name, macros, cms_pixelShaderTarget, false);
 }
 
 // ----------------------------------------------------------------------

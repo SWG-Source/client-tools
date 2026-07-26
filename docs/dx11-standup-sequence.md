@@ -1111,3 +1111,120 @@ the TRE copy declares `textureFactor` at `c3` where the engine uploads
 `dot3LightTangentMinusDiffuseColor`. Without the override, recompiled shaders multiply
 colour by a negative value and characters render black. Any DX11 path that compiles from
 source inherits that override as a hard requirement, not an option.
+
+## The HLSL corpus, measured
+
+With the corpus located and search-tree precedence handled correctly, the question "does
+the shipped shader corpus compile under D3D11" stopped being a matter of opinion. Every
+HLSL program in the resolved corpus was compiled with `fxc` at `vs_4_0` / `ps_4_0` with
+`/Gec`, exactly as the backend will, applying every transform the backend applies.
+
+**512 of 517 compile. All five failures are unreachable at shader capability 2.0.**
+
+The five are `a_2blend_dirt_bump_ps11`, `simple_bump_light_pass_ps11` and
+`specmap_bump_light_pass_ps11` (X3017, a float3 assigned to a float4),
+`a_detail_cbmp_ps14` (X4019, a duplicated register), and `saber_blade.vsh` (X3004,
+referring to `cameraPosition` where the resolved include calls it `cameraPosition_w`).
+They are worth fixing eventually; none of them blocks anything.
+
+### Search-tree precedence had to be fixed first, and it changed every number
+
+`TreeFile::addSearchNode` sorts by priority descending and inserts with `std::lower_bound`
+against an `a->priority > b->priority` comparator. `lower_bound` returns the first
+position whose priority is *not greater*, so an equal-priority node is inserted **before**
+the ones already present: **the last tree added at a given priority is searched first.**
+The doc comment above that function says "inserted after the last priority match", which
+is the opposite, and following the comment gets the resolution backwards for the 72 trees
+that all sit at priority 0.
+
+That is not a detail. Resolving in the wrong order picked a 601-byte
+`shared_program/functions.inc` from a base tree instead of the 2,398-byte copy in
+`patch_11_00.tre`, and the difference is that the correct one defines `intensity()` and
+`tex2DDxt5CompressedNormal()`. It also picked an older `vertex_shader_constants.inc` whose
+`Dot3Light` has `direction_o` and `cameraPosition_o` the wrong way round relative to the
+C++ struct the engine uploads, and which declares a single `userConstant` at c46 where the
+engine's enum has `userConstant0..7` at c52-c59. Once precedence was right, the corpus and
+the engine agreed everywhere.
+
+Before the fix: 157 of 541 compiled. After: 318. The rest came from the two transforms
+below.
+
+### Two new transforms, both forced by the compiler
+
+**Flattened vertex constants.** The shipped include binds registers to aggregates --
+`Material material : register(c11)`, `LightData lightData : register(c16)`.
+`d3dcompiler_47` rejects that with X3202 and D3DX rejects it with X4016; DX9's x64 build
+escapes via `D3DXSHADER_USE_LEGACY_D3DX9_31_DLL` and `D3DCompile` has no equivalent
+switch. Without a replacement, 192 vertex programs do not build at all.
+
+The replacement declares one `float4` per register and rebuilds the structs as `static`
+values, leaving shader source untouched -- including `lightData.point[i]` with a loop
+index, which a macro-based flattening cannot express. The register numbers come from the
+C++ structs the engine actually blits (`Direct3d9_LightManager.h`), every member of which
+is a four-float type and therefore owns exactly one register: 1 + 3 + 4 + 4 + 12 + 4 = 28,
+so `lightData` runs c16 to c43, and the shipped include puts `textureFactor` at c44. That
+arithmetic closing exactly is the check that the layout is the engine's and not a guess.
+
+**The vertex register clause.** Programs declare inputs as
+`float4 position : POSITION0 : register(v0);`, and a location semantic on a struct member
+is X3202 as well. Measured before acting: across all 192 vertex programs carrying such a
+clause, every (semantic, vN) pair agrees with the engine's own assignment
+(`VSVR_position` 0, normal 3, pointSize 4, color0 5, color1 6, textureCoordinateSet0..7
+7..14) except in four files. So for the other 188 the semantic already carries the
+binding, D3D11's input layout matches on semantic anyway, and dropping the clause loses
+nothing.
+
+Where they disagree, the register is what DX9 honoured and the semantic was decorative, so
+the semantic is rewritten to the one owning that register rather than the clause being
+dropped silently. Two of the four are reachable (`a_detail_dirt_bump_vs20` and
+`a_detail_specmap_bump_vs20_for_ps20`, both off by one across their texture coordinate
+sets). One binds `POSITION0` to v1, a register the engine never writes -- DX9 read
+undefined data there -- and it is reported rather than guessed at.
+
+### An ordering bug in the corpus that DX9 hides with its PEXE fallback
+
+`pixel_program/include/functions.inc` uses `materialSpecularPower`, which
+`pixel_shader_constants.inc` defines, but several programs include `functions.inc` first,
+so the identifier is undefined at the point of use. DX9 never notices, because a
+source-compile failure falls back to the program's precompiled `PEXE` blob. There is no
+`PEXE` path in D3D11, so the dependency is made explicit: the constants override carries an
+include guard and the served `functions.inc` pulls it in itself. Two of the programs this
+fixes, `2d_bloom.psh` and `2d_blur.psh`, are what `Bloom::install` fetches by name.
+
+### Reachability had to be measured over shaders, not just effects
+
+A first pass scanned `effect/*.eft` only and undercounted, because **43 `.sht` files carry
+their implementation inline** rather than naming an effect -- `shader/2d_bloom.sht` is 725
+bytes with no `.eft` reference anywhere in it. Scanning all 17,192 resolved shaders plus
+258 effects gives 1,095 implementations, 462 of them live at capability 2.0, referencing
+461 programs.
+
+`SCAP` is compared for **exact** equality against `Graphics::getShaderCapability()`, and
+DX9 reports `ShaderCapability(2,0)` on any adapter with vs and ps 2.0. A single VSPS
+implementation usually spans 1.1 through 2.0 rather than there being a separate 2.0
+variant, so the old assembly programs are not superseded on modern hardware -- they are
+what DX9 runs today.
+
+### What is left: 97 assembly programs
+
+Language split across the resolved corpus: 192 HLSL and 94 assembly vertex programs; 325
+HLSL and 128 assembly pixel programs.
+
+Of the 222 assembly programs, **97 are reachable at capability 2.0** -- 36 vertex, 61
+pixel. Together they contain **511 instructions**, a mean of 5.3 each, the largest being
+`cloudlayer.vsh` at 35, over 22 distinct opcodes with no flow control anywhere:
+
+```
+mov 132  tex 112  mul 79  lrp 25  mad 23  dp3 8  add 7  mad_sat 4  texcoord 3
+dp3_sat 3  max 3  add_sat 2  m4x4 2  m3x3 2  rsq 2  mul_x2 1  texm3x2pad 1
+texm3x2tex 1  m4x3 1  sub 1  exp 1  rcp 1
+```
+
+`texm3x2pad`/`texm3x2tex` appear once each, in a single program. There is no `phase`, so
+no ps.1.4 two-phase program is reachable. This is a transpiler plus one awkward file, and
+its output is checkable three ways: `fxc` compiles it, the emitted `$Globals` layout can be
+compared against the register contract, and the DX9 build can assemble the original for
+numerical comparison.
+
+Until that exists the compiler refuses a non-HLSL program by name, so the first run
+enumerates exactly which ones are wanted rather than rendering something wrong.
