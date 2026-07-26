@@ -16,6 +16,7 @@
 #include "sharedFile/TreeFile.h"
 
 #include <d3dcompiler.h>
+#include <windows.h>
 #include <map>
 #include <string>
 
@@ -55,6 +56,7 @@ namespace Direct3d11_ShaderCompilerNamespace
 
 	ID3DBlob       *compile(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target);
 	ID3DBlob       *compilePatched(char const *source, int sourceLength, char const *name, D3D_SHADER_MACRO const *macros, char const *target, bool isVertexProgram);
+	void            reportCompilerVersion();
 }
 using namespace Direct3d11_ShaderCompilerNamespace;
 
@@ -179,10 +181,80 @@ HRESULT STDMETHODCALLTYPE Direct3d11_ShaderCompilerNamespace::IncludeHandler::Cl
 
 // ======================================================================
 
+/**
+ * Report which compiler this process actually loaded.
+ *
+ * Not diagnostics for their own sake. d3dcompiler_47.dll is resolved from the system
+ * directory unless a copy sits beside the executable, and the system copy tracks the
+ * Windows build -- 10.0.26100.8875 on the machine this was written on, against
+ * 10.0.26100.7705 in the Windows SDK that the offline shader sweep used. Two builds of
+ * the same compiler need not emit identical bytecode.
+ *
+ * For a port whose acceptance test is a pixel comparison against gl05, that makes the
+ * shader compiler an uncontrolled variable, and an image difference traced to it would
+ * otherwise be indistinguishable from a port defect. Logging the path and version costs
+ * one line at install and makes the variable attributable; pinning a known copy next to
+ * the executable would remove it, which is a shipping decision rather than a code one.
+ */
+
+void Direct3d11_ShaderCompilerNamespace::reportCompilerVersion()
+{
+	// The module is already loaded: this DLL imports it, so by the time install runs it is
+	// mapped and GetModuleHandle cannot fail for a reason worth handling.
+	HMODULE const module = GetModuleHandleA("d3dcompiler_47.dll");
+	if (!module)
+	{
+		WARNING(true, ("Direct3d11: d3dcompiler_47.dll is not loaded under that name, so its version cannot be reported."));
+		return;
+	}
+
+	char path[MAX_PATH];
+	path[0] = 0;
+	if (!GetModuleFileNameA(module, path, sizeof(path)))
+	{
+		WARNING(true, ("Direct3d11: the path of the loaded d3dcompiler could not be read."));
+		return;
+	}
+
+	DWORD ignored = 0;
+	DWORD const infoSize = GetFileVersionInfoSizeA(path, &ignored);
+	if (!infoSize)
+	{
+		REPORT_LOG_PRINT(true, ("Direct3d11: shader compiler is %s, version unavailable.\n", path));
+		return;
+	}
+
+	uint8 * const info = new uint8[infoSize];
+	VS_FIXEDFILEINFO *fixed = NULL;
+	UINT fixedSize = 0;
+
+	if (GetFileVersionInfoA(path, 0, infoSize, info)
+		&& VerQueryValueA(info, "\\", reinterpret_cast<void **>(&fixed), &fixedSize)
+		&& fixed)
+	{
+		REPORT_LOG_PRINT(true, ("Direct3d11: shader compiler is %s, version %d.%d.%d.%d\n",
+			path,
+			static_cast<int>(HIWORD(fixed->dwFileVersionMS)),
+			static_cast<int>(LOWORD(fixed->dwFileVersionMS)),
+			static_cast<int>(HIWORD(fixed->dwFileVersionLS)),
+			static_cast<int>(LOWORD(fixed->dwFileVersionLS))));
+	}
+	else
+	{
+		REPORT_LOG_PRINT(true, ("Direct3d11: shader compiler is %s, version could not be parsed.\n", path));
+	}
+
+	delete [] info;
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_ShaderCompiler::install()
 {
 	DEBUG_FATAL(ms_installed, ("Direct3d11_ShaderCompiler::install called twice"));
 	ms_installed = true;
+
+	reportCompilerVersion();
 }
 
 // ----------------------------------------------------------------------
