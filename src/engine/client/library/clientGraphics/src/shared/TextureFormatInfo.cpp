@@ -28,6 +28,15 @@ static TextureFormatInfo info[TF_Count] =
 	{  false,     false,     1,     8,  0,  0,  0, 0x000000ff,  0x00000000, 0x00000000, 0x00000000, 0,          0,           0,            "TF_A_8",        }, // TF_A_8,
 	{  false,     false,     1,     0,  8,  0,  0, 0x00000000,  0x000000ff, 0x00000000, 0x00000000, 0,          0,           0,            "TF_L_8",        }, // TF_L_8,
 	{  false,     false,     1,     0,  8,  8,  8, 0x00000000,  0x00000000, 0x00000000, 0x00000000, 1,          1,           1,            "TF_P_8",        }, // TF_P_8,
+
+	// The two floating point formats were missing entirely. TF_Count is 17 and the
+	// initialiser list stopped at 15, so these two were zero-initialised: a null
+	// name, and a pixelByteCount of zero. getInfo() happily returns that -- its only
+	// check is that the enum is in range -- so anything asking the size of a
+	// floating point texture got zero, and anything logging its name dereferenced
+	// null. There are no masks because the components are floats, not bit fields.
+	{  false,     false,     8,    16, 16, 16, 16, 0x00000000,  0x00000000, 0x00000000, 0x00000000, 0,          0,           0,            "TF_ABGR_16F",   }, // TF_ABGR_16F
+	{  false,     false,    16,    32, 32, 32, 32, 0x00000000,  0x00000000, 0x00000000, 0x00000000, 0,          0,           0,            "TF_ABGR_32F",   }, // TF_ABGR_32F
 };
 
 // ======================================================================
