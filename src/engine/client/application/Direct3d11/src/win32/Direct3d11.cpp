@@ -255,10 +255,15 @@ namespace Direct3d11Namespace
 
 	void setFog(bool enabled, real density, PackedArgb const &color)
 	{
-		// The colour is consumed by the pixel epilogue, which arrives with the
-		// alpha test work; the density constant is live now.
-		UNREF(color);
-		Direct3d11_ConstantBuffers::setFog(enabled, static_cast<float>(density));
+		// Both halves are live: the density goes to c10 for the vertex programs' calculateFog,
+		// and the colour plus the enable go to the pixel epilogue, which does the blend D3D9's
+		// fixed-function fog stage used to do.
+		Direct3d11_ConstantBuffers::setFog(
+			enabled,
+			static_cast<float>(density),
+			static_cast<float>(color.getR()) / 255.0f,
+			static_cast<float>(color.getG()) / 255.0f,
+			static_cast<float>(color.getB()) / 255.0f);
 	}
 
 	void setVertexShaderUserConstants(int index, float c0, float c1, float c2, float c3)

@@ -424,36 +424,124 @@ namespace Direct3d11_ShaderSourceNamespace
 	// ABI every shader depends on -- verified: the /Gec register(cN) globals still land at
 	// 16N with this present.
 
+	// ------------------------------------------------------------------
+	// Fog, which shares the epilogue because it is the other thing D3D9 did after the pixel
+	// shader and D3D11 does not do at all.
+	//
+	// D3D9's fog blender is a fixed-function stage: FOGENABLE on, the factor taken from the
+	// vertex shader's oFog output, blended against FOGCOLOR before alpha blending. It survived
+	// into the VSPS path -- DX9 sets FOGVERTEXMODE to NONE on every draw, but that only disables
+	// the fixed-function COMPUTATION of the factor, not the blend, and the corpus computes the
+	// factor itself: 179 of the 192 HLSL vertex programs call calculateFog and write the result
+	// to a FOG output.
+	//
+	// So the vertex half already works and the pixel half was missing entirely. Adding it costs
+	// one lerp, and an input the entry point did not have.
+	//
+	// The factor's sense is D3D9's: calculateFog returns exp(-distanceSquared * density^2),
+	// which is 1 at the camera and falls to 0 with distance, so the blend keeps the surface
+	// colour where the factor is 1. Only rgb is touched -- D3D9's fog never affected alpha.
+	//
+	// swgFogColor.a carries the enable rather than a separate constant, so that disabling fog
+	// forces the factor to 1 and the lerp becomes a no-op the driver can fold away. That also
+	// fixes the previous setFog, which returned early when disabled and left the last density
+	// in c10 behind.
+
 	char const cms_pixelEpiloguePrologue[] =
 		"cbuffer SwgPixelEpilogue : register(b1)\n"
 		"{\n"
 		"\tfloat4 swgAlphaTest;\n"
+		"\tfloat4 swgFogColor;\n"
 		"};\n"
-		"float4 swgPixelEpilogue(float4 swgColour)\n"
+		"float4 swgPixelEpilogue(float4 swgColour, float swgFog)\n"
 		"{\n"
 		"\tclip(swgColour.a * swgAlphaTest.x + swgAlphaTest.y);\n"
+		"\tfloat swgFactor = lerp(1.0f, saturate(swgFog), swgFogColor.a);\n"
+		"\tswgColour.rgb = lerp(swgFogColor.rgb, swgColour.rgb, swgFactor);\n"
 		"\treturn swgColour;\n"
 		"}\n";
 
+	// The name of the fog input this backend adds when a program has none of its own.
+	char const cms_injectedFogName[] = "swgFogFactor";
+
 	// ------------------------------------------------------------------
 	/**
-	 * Wrap every return in the pixel entry point with the epilogue.
+	 * Read an identifier backwards from just past its last character.
 	 *
-	 * The entry's signature is deliberately left alone. Every one of the 386 HLSL pixel
-	 * programs returns float4 with a COLOR semantic, but their parameter lists vary from no
-	 * parameters to ten, and 61 take a single struct while 323 take loose semantic
-	 * parameters -- so a wrapper that had to reproduce a parameter list would be the fragile
-	 * part of this. Rewriting the returns needs none of that, and it does not change the
-	 * shader's inputs at all, which matters because a pixel input has to be satisfiable by
-	 * whatever vertex program is paired with it.
+	 * Used to recover a parameter's name from the text before its semantic colon, and a
+	 * function's return type from the text before its name.
 	 */
 
-	char *injectPixelEpilogue(char const *name, char const *source, int length, int &resultLength)
+	bool readIdentifierBackwards(char const *source, int end, int &identifierStart, int &identifierEnd)
 	{
-		// Find "main", then its parameter list, then its body.
-		char const *entry = NULL;
+		int i = end;
+		while (i > 0 && (source[i - 1] == ' ' || source[i - 1] == '\t' || source[i - 1] == '\n' || source[i - 1] == '\r'))
+			--i;
+
+		identifierEnd = i;
+
+		while (i > 0 && isIdentifierCharacter(source[i - 1]))
+			--i;
+
+		identifierStart = i;
+		return identifierEnd > identifierStart;
+	}
+
+	// ------------------------------------------------------------------
+	/**
+	 * Find the entry point's name, and the parentheses around its parameter list.
+	 *
+	 * "main" followed by an opening parenthesis, which distinguishes the entry point from a
+	 * mention of the word in a comment or an identifier that contains it.
+	 */
+
+	bool findEntryPoint(char const *source, int length, int &nameStart, int &parameterOpen, int &parameterClose)
+	{
+		// Comments are skipped, and that is not defensive tidiness. Every one of the 97 programs
+		// this port converted from assembly carries the line
+		//
+		//   // original is preserved: each #include below is a block of statements inside main(),
+		//
+		// in which "main" is followed by a parenthesis and preceded by the word "inside". A scan
+		// that ignored comments took that as the entry point and "inside" as its return type.
+		bool inLineComment = false;
+		bool inBlockComment = false;
+
 		for (int i = 0; i + 4 <= length; ++i)
 		{
+			if (inLineComment)
+			{
+				if (source[i] == '\n')
+					inLineComment = false;
+				continue;
+			}
+
+			if (inBlockComment)
+			{
+				if (source[i] == '*' && i + 1 < length && source[i + 1] == '/')
+				{
+					inBlockComment = false;
+					++i;
+				}
+				continue;
+			}
+
+			if (source[i] == '/' && i + 1 < length)
+			{
+				if (source[i + 1] == '/')
+				{
+					inLineComment = true;
+					++i;
+					continue;
+				}
+				if (source[i + 1] == '*')
+				{
+					inBlockComment = true;
+					++i;
+					continue;
+				}
+			}
+
 			if (memcmp(source + i, "main", 4) != 0)
 				continue;
 
@@ -462,32 +550,51 @@ namespace Direct3d11_ShaderSourceNamespace
 			if (!startBoundary || !endBoundary)
 				continue;
 
-			// Skip whitespace and require an opening parenthesis: this is the entry point
-			// rather than a mention of the word.
 			int j = i + 4;
 			while (j < length && (source[j] == ' ' || source[j] == '\t' || source[j] == '\n' || source[j] == '\r'))
 				++j;
 
-			if (j < length && source[j] == '(')
+			if (j >= length || source[j] != '(')
+				continue;
+
+			// Match the parenthesis. A parameter list can nest them in a default value or an
+			// array bound, so this counts rather than scanning for the first close.
+			int depth = 0;
+			for (int k = j; k < length; ++k)
 			{
-				entry = source + i;
-				break;
+				if (source[k] == '(')
+					++depth;
+				else if (source[k] == ')')
+				{
+					--depth;
+					if (depth == 0)
+					{
+						nameStart = i;
+						parameterOpen = j;
+						parameterClose = k;
+						return true;
+					}
+				}
 			}
+
+			return false;
 		}
 
-		if (!entry)
-		{
-			WARNING(true, ("Direct3d11: '%s' has no recognisable main, so the alpha test epilogue could not be injected. Alpha-tested pixels will not be discarded.", name));
-			return NULL;
-		}
+		return false;
+	}
 
-		// Walk to the body's opening brace, then find its matching close.
-		int position = static_cast<int>(entry - source);
+	// ------------------------------------------------------------------
+	/**
+	 * Find the braces around a body, starting the search at a given position.
+	 */
+
+	bool findBody(char const *source, int length, int from, int &bodyStart, int &bodyEnd)
+	{
 		int depth = 0;
-		int bodyStart = -1;
-		int bodyEnd = -1;
+		bodyStart = -1;
+		bodyEnd = -1;
 
-		for (int i = position; i < length; ++i)
+		for (int i = from; i < length; ++i)
 		{
 			if (source[i] == '{')
 			{
@@ -501,21 +608,137 @@ namespace Direct3d11_ShaderSourceNamespace
 				if (bodyStart >= 0 && depth == 0)
 				{
 					bodyEnd = i;
-					break;
+					return true;
 				}
 			}
 		}
 
-		if (bodyStart < 0 || bodyEnd < 0)
+		return false;
+	}
+
+	// ------------------------------------------------------------------
+	/**
+	 * Whether a range contains a FOG semantic, and if so what the thing carrying it is called.
+	 *
+	 * Semantics are case insensitive in HLSL, so this is too. The name is what precedes the
+	 * colon, which for a parameter list is the parameter and for a struct member is the member.
+	 */
+
+	bool findFogSemantic(char const *source, int from, int to, int &nameStart, int &nameEnd)
+	{
+		for (int i = from; i + 1 < to; ++i)
 		{
-			WARNING(true, ("Direct3d11: '%s' has a main whose body could not be delimited, so the alpha test epilogue could not be injected.", name));
+			if (source[i] != ':')
+				continue;
+
+			int j = i + 1;
+			while (j < to && (source[j] == ' ' || source[j] == '\t' || source[j] == '\n' || source[j] == '\r'))
+				++j;
+
+			if (j + 3 > to)
+				continue;
+
+			if (!((source[j] == 'F' || source[j] == 'f') &&
+				  (source[j + 1] == 'O' || source[j + 1] == 'o') &&
+				  (source[j + 2] == 'G' || source[j + 2] == 'g')))
+				continue;
+
+			// FOG exactly, not FOGSOMETHING. A trailing index would be a different semantic.
+			if (j + 3 < to && isIdentifierCharacter(source[j + 3]))
+				continue;
+
+			if (readIdentifierBackwards(source, i, nameStart, nameEnd))
+				return true;
+		}
+
+		return false;
+	}
+
+	// ------------------------------------------------------------------
+	/**
+	 * Wrap every return in the pixel entry point with the epilogue, and give it a fog input.
+	 *
+	 * The returns are rewritten rather than the entry being wrapped in a new function. Every one
+	 * of the HLSL pixel programs returns float4 with a COLOR semantic, but their parameter lists
+	 * run from none to ten, so a wrapper that had to reproduce a parameter list would be the
+	 * fragile part of this. Rewriting returns needs none of that.
+	 *
+	 * The signature is touched in exactly one way: a fog input is added when the program does
+	 * not already have one. Two of the 325 do -- water_pass1 and water_pass2_ps20 -- and those
+	 * keep theirs, since a second FOG semantic would not compile.
+	 *
+	 * That input is the reason injectFogOutput exists. D3D11 requires a pixel shader's input
+	 * signature to be a subset of the vertex shader's output signature, and a pixel program is
+	 * paired with different vertex programs by different effects -- so a FOG input here is only
+	 * safe if EVERY vertex program emits FOG. 179 of 192 already do; the other 13 have one
+	 * added.
+	 */
+
+	char *injectPixelEpilogue(char const *name, char const *source, int length, int &resultLength)
+	{
+		int nameStart = 0;
+		int parameterOpen = 0;
+		int parameterClose = 0;
+
+		if (!findEntryPoint(source, length, nameStart, parameterOpen, parameterClose))
+		{
+			WARNING(true, ("Direct3d11: '%s' has no recognisable main, so the alpha test and fog epilogue could not be injected.", name));
 			return NULL;
 		}
 
-		// Worst case: every return grows by the call text, plus the prologue.
+		int bodyStart = -1;
+		int bodyEnd = -1;
+
+		if (!findBody(source, length, parameterClose, bodyStart, bodyEnd))
+		{
+			WARNING(true, ("Direct3d11: '%s' has a main whose body could not be delimited, so the alpha test and fog epilogue could not be injected.", name));
+			return NULL;
+		}
+
+		// Does it already take a fog input? If so its name is what the epilogue call passes,
+		// and nothing is added to the parameter list.
+		int fogNameStart = 0;
+		int fogNameEnd = 0;
+		bool const hasOwnFog = findFogSemantic(source, parameterOpen, parameterClose, fogNameStart, fogNameEnd);
+
+		char fogName[64];
+		if (hasOwnFog)
+		{
+			int const fogNameLength = fogNameEnd - fogNameStart;
+			DEBUG_FATAL(fogNameLength <= 0 || fogNameLength >= isizeof(fogName), ("Direct3d11: '%s' has a fog parameter whose name is %d characters.", name, fogNameLength));
+			memcpy(fogName, source + fogNameStart, static_cast<size_t>(fogNameLength));
+			fogName[fogNameLength] = '\0';
+		}
+		else
+		{
+			strcpy(fogName, cms_injectedFogName);
+		}
+
+		// Whether the parameter list has anything in it decides whether the inserted parameter
+		// needs a leading comma. Two of the corpus programs take none at all.
+		bool listIsEmpty = true;
+		for (int i = parameterOpen + 1; i < parameterClose; ++i)
+			if (source[i] != ' ' && source[i] != '\t' && source[i] != '\n' && source[i] != '\r')
+			{
+				listIsEmpty = false;
+				break;
+			}
+
+		char parameterText[128];
+		parameterText[0] = '\0';
+		if (!hasOwnFog)
+			sprintf(parameterText, "%sin float %s : FOG", listIsEmpty ? "" : ", ", cms_injectedFogName);
+
+		int const parameterTextLength = static_cast<int>(strlen(parameterText));
+
+		// Worst case: every return grows by the call text and the fog argument, plus the
+		// prologue and the inserted parameter.
 		int const prologueLength = static_cast<int>(sizeof(cms_pixelEpiloguePrologue) - 1);
 		char const openText[] = "swgPixelEpilogue(";
 		int const openLength = static_cast<int>(sizeof(openText) - 1);
+
+		// ", " plus the name plus ")" plus ";" -- the closing text of a rewritten return.
+		int const closeLength = 2 + static_cast<int>(strlen(fogName)) + 2;
 
 		int returnCount = 0;
 		for (int i = bodyStart; i < bodyEnd; ++i)
@@ -534,7 +757,7 @@ namespace Direct3d11_ShaderSourceNamespace
 			return NULL;
 		}
 
-		char * const result = new char[prologueLength + length + (returnCount * (openLength + 1)) + 1];
+		char * const result = new char[prologueLength + length + parameterTextLength + (returnCount * (openLength + closeLength)) + 1];
 		char *destination = result;
 
 		memcpy(destination, cms_pixelEpiloguePrologue, static_cast<size_t>(prologueLength));
@@ -543,6 +766,15 @@ namespace Direct3d11_ShaderSourceNamespace
 		int i = 0;
 		while (i < length)
 		{
+			// The fog parameter goes in immediately before the parameter list's closing
+			// parenthesis, which keeps it after any existing parameter and away from the
+			// semantics on them.
+			if (i == parameterClose && parameterTextLength)
+			{
+				memcpy(destination, parameterText, static_cast<size_t>(parameterTextLength));
+				destination += parameterTextLength;
+			}
+
 			bool rewrote = false;
 
 			if (i >= bodyStart && i < bodyEnd && i + 6 <= length && memcmp(source + i, "return", 6) == 0)
@@ -569,8 +801,236 @@ namespace Direct3d11_ShaderSourceNamespace
 						memcpy(destination, source + i + 6, static_cast<size_t>(expressionLength));
 						destination += expressionLength;
 
+						*destination++ = ',';
+						*destination++ = ' ';
+
+						size_t const fogNameLength = strlen(fogName);
+						memcpy(destination, fogName, fogNameLength);
+						destination += fogNameLength;
+
 						*destination++ = ')';
 						*destination++ = ';';
+
+						i = end + 1;
+						rewrote = true;
+					}
+				}
+			}
+
+			if (!rewrote)
+				*destination++ = source[i++];
+		}
+
+		resultLength = static_cast<int>(destination - result);
+		return result;
+	}
+
+	// ------------------------------------------------------------------
+	/**
+	 * Give a vertex program a FOG output if it has none.
+	 *
+	 * Needed because the pixel epilogue reads one. D3D11 requires a pixel shader's input
+	 * signature to be a subset of the bound vertex shader's output signature, and effects pair
+	 * pixel and vertex programs freely, so the fog input is only safe once every vertex program
+	 * emits fog.
+	 *
+	 * 179 of the 192 HLSL vertex programs already do. The 13 that do not are the passes that
+	 * were never fogged in the first place -- 2d, 2d_texture, ui, ui_radar, the bloom mask, the
+	 * screen shader, zwrite_mask, the two texture-renderer passes, dot3_terrain_imp1 and 2,
+	 * membrane and saber_blade -- so they get a constant 1.0, which is the factor's
+	 * no-fog value and leaves them looking exactly as they did.
+	 *
+	 * All 192 return a declared struct, with no out parameters anywhere in the corpus, so the
+	 * member can be added to that struct and assigned through a temporary. The temporary is used
+	 * rather than assigning through the returned expression because it works whatever that
+	 * expression is, not only when it happens to be a local variable.
+	 */
+
+	char *injectFogOutput(char const *name, char const *source, int length, int &resultLength)
+	{
+		int nameStart = 0;
+		int parameterOpen = 0;
+		int parameterClose = 0;
+
+		if (!findEntryPoint(source, length, nameStart, parameterOpen, parameterClose))
+			return NULL;
+
+		// The return type is the identifier before the entry point's name.
+		int typeStart = 0;
+		int typeEnd = 0;
+		if (!readIdentifierBackwards(source, nameStart, typeStart, typeEnd))
+			return NULL;
+
+		int const typeLength = typeEnd - typeStart;
+
+		char typeName[64];
+		if (typeLength <= 0 || typeLength >= isizeof(typeName))
+			return NULL;
+		memcpy(typeName, source + typeStart, static_cast<size_t>(typeLength));
+		typeName[typeLength] = '\0';
+
+		// A void entry point would be writing through out parameters, which nothing in the
+		// corpus does. Reported rather than guessed at, because the fix is a different shape.
+		if (strcmp(typeName, "void") == 0)
+		{
+			WARNING(true, ("Direct3d11: vertex program '%s' returns void, so it must write its outputs through parameters. A fog output cannot be added this way and any pixel program paired with it will fail to bind.", name));
+			return NULL;
+		}
+
+		// Find "struct <typeName>" and its braces.
+		int structBodyStart = -1;
+		int structBodyEnd = -1;
+
+		for (int i = 0; i + 6 <= length; ++i)
+		{
+			if (memcmp(source + i, "struct", 6) != 0)
+				continue;
+			if (i > 0 && isIdentifierCharacter(source[i - 1]))
+				continue;
+			if (isIdentifierCharacter(source[i + 6]))
+				continue;
+
+			int j = i + 6;
+			while (j < length && (source[j] == ' ' || source[j] == '\t' || source[j] == '\n' || source[j] == '\r'))
+				++j;
+
+			if (j + typeLength > length || memcmp(source + j, typeName, static_cast<size_t>(typeLength)) != 0)
+				continue;
+			if (j + typeLength < length && isIdentifierCharacter(source[j + typeLength]))
+				continue;
+
+			if (findBody(source, length, j + typeLength, structBodyStart, structBodyEnd))
+				break;
+		}
+
+		if (structBodyStart < 0 || structBodyEnd < 0)
+		{
+			WARNING(true, ("Direct3d11: vertex program '%s' returns '%s', whose declaration could not be found, so a fog output could not be added.", name, typeName));
+			return NULL;
+		}
+
+		int bodyStart = -1;
+		int bodyEnd = -1;
+		if (!findBody(source, length, parameterClose, bodyStart, bodyEnd))
+		{
+			WARNING(true, ("Direct3d11: vertex program '%s' has a main whose body could not be delimited, so a fog output could not be added.", name));
+			return NULL;
+		}
+
+		// Does the output struct already declare a fog member, and if so is it ever assigned?
+		//
+		// Declared-but-never-assigned is a real case, not a hypothetical: fxc drops an output
+		// element that is never written, so such a program compiles with no FOG in its output
+		// signature and every pixel program paired with it then fails to bind. Two of the
+		// converted programs are like this. So a member that exists but is never written gets
+		// the same constant the missing ones get, under its own name.
+		int fogNameStart = 0;
+		int fogNameEnd = 0;
+		bool const hasMember = findFogSemantic(source, structBodyStart, structBodyEnd, fogNameStart, fogNameEnd);
+
+		char memberName[64];
+		if (hasMember)
+		{
+			int const memberNameLength = fogNameEnd - fogNameStart;
+			if (memberNameLength <= 0 || memberNameLength >= isizeof(memberName))
+				return NULL;
+			memcpy(memberName, source + fogNameStart, static_cast<size_t>(memberNameLength));
+			memberName[memberNameLength] = '\0';
+
+			// Look for ".<member>" followed by a single '=' inside main. A compound assignment
+			// or a comparison does not count as producing the value, but neither appears in the
+			// corpus, and treating them as "not assigned" only adds a redundant store.
+			char pattern[68];
+			sprintf(pattern, ".%s", memberName);
+			int const patternLength = static_cast<int>(strlen(pattern));
+
+			for (int i = bodyStart; i + patternLength < bodyEnd; ++i)
+			{
+				if (memcmp(source + i, pattern, static_cast<size_t>(patternLength)) != 0)
+					continue;
+				if (isIdentifierCharacter(source[i + patternLength]))
+					continue;
+
+				int j = i + patternLength;
+				while (j < bodyEnd && (source[j] == ' ' || source[j] == '\t'))
+					++j;
+
+				if (j < bodyEnd && source[j] == '=' && (j + 1 >= bodyEnd || source[j + 1] != '='))
+					return NULL;   // assigned; nothing to do
+			}
+		}
+		else
+		{
+			strcpy(memberName, "swgFog");
+		}
+
+		char const memberText[] = "\tfloat swgFog : FOG;\n";
+		int const memberLength = hasMember ? 0 : static_cast<int>(sizeof(memberText) - 1);
+
+		// The replacement for "return <expression>;". A block, so it is valid anywhere the
+		// original statement was -- including as the single statement of an unbraced if.
+		char prefixText[128];
+		sprintf(prefixText, "{ %s swgFogOut = ", typeName);
+
+		char suffixText[128];
+		sprintf(suffixText, "; swgFogOut.%s = 1.0f; return swgFogOut; }", memberName);
+
+		int const prefixLength = static_cast<int>(strlen(prefixText));
+		int const suffixLength = static_cast<int>(strlen(suffixText));
+
+		int returnCount = 0;
+		for (int i = bodyStart; i < bodyEnd; ++i)
+		{
+			if (memcmp(source + i, "return", 6) != 0 || i + 6 > bodyEnd)
+				continue;
+			if (isIdentifierCharacter(source[i - 1]) || isIdentifierCharacter(source[i + 6]))
+				continue;
+			++returnCount;
+		}
+
+		if (!returnCount)
+		{
+			WARNING(true, ("Direct3d11: vertex program '%s' has a main with no return statement, so a fog output could not be added.", name));
+			return NULL;
+		}
+
+		char * const result = new char[length + memberLength + (returnCount * (prefixLength + suffixLength)) + 1];
+		char *destination = result;
+
+		int i = 0;
+		while (i < length)
+		{
+			// The new member goes in just before the struct's closing brace.
+			if (i == structBodyEnd)
+			{
+				memcpy(destination, memberText, static_cast<size_t>(memberLength));
+				destination += memberLength;
+			}
+
+			bool rewrote = false;
+
+			if (i >= bodyStart && i < bodyEnd && i + 6 <= length && memcmp(source + i, "return", 6) == 0)
+			{
+				bool const startBoundary = (i == 0) || !isIdentifierCharacter(source[i - 1]);
+				bool const endBoundary = (i + 6 >= length) || !isIdentifierCharacter(source[i + 6]);
+
+				if (startBoundary && endBoundary)
+				{
+					int end = i + 6;
+					while (end < length && source[end] != ';')
+						++end;
+
+					if (end < length)
+					{
+						memcpy(destination, prefixText, static_cast<size_t>(prefixLength));
+						destination += prefixLength;
+
+						int const expressionLength = end - (i + 6);
+						memcpy(destination, source + i + 6, static_cast<size_t>(expressionLength));
+						destination += expressionLength;
+
+						memcpy(destination, suffixText, static_cast<size_t>(suffixLength));
+						destination += suffixLength;
 
 						i = end + 1;
 						rewrote = true;
@@ -833,12 +1293,29 @@ char *Direct3d11_ShaderSource::patchProgramSource(char const *name, char const *
 
 	if (!isVertexProgram)
 	{
-		// Patch 8: the alpha test epilogue. Applied last so that it wraps whatever the
+		// Patch 8: the alpha test and fog epilogue. Applied last so that it wraps whatever the
 		// earlier rewrites produced rather than being rewritten by them.
 		char const * const scanSource = current ? current : source;
 
 		int injectedLength = 0;
 		char * const injected = injectPixelEpilogue(name, scanSource, currentLength, injectedLength);
+		if (injected)
+		{
+			delete [] current;
+			current = injected;
+			currentLength = injectedLength;
+		}
+	}
+	else
+	{
+		// Patch 9: a fog output, for the minority of vertex programs that have none. The pixel
+		// epilogue reads one from every program, so this is what makes that safe -- see
+		// injectFogOutput. Returns null when the program already has a fog output, which is the
+		// common case, and the source is left alone.
+		char const * const scanSource = current ? current : source;
+
+		int injectedLength = 0;
+		char * const injected = injectFogOutput(name, scanSource, currentLength, injectedLength);
 		if (injected)
 		{
 			delete [] current;

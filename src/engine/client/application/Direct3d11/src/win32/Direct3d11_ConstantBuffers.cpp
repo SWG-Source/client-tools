@@ -58,6 +58,10 @@ namespace Direct3d11_ConstantBuffersNamespace
 	// contract for something the backend owns outright.
 	ID3D11Buffer   *ms_pixelEpilogue;
 	float           ms_epilogueShadow[4];
+
+	// The second row of b1: fog colour in rgb, the enable in alpha. Starts fully unfogged so a
+	// scene that never calls setFog is not tinted by a zeroed colour at full strength.
+	float           ms_fogShadow[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	bool            ms_epilogueDirty;
 	bool            ms_epilogueBound;
 
@@ -145,7 +149,8 @@ bool Direct3d11_ConstantBuffersNamespace::createBuffers()
 	}
 	++Direct3d11_Metrics::constantBufferCreations;
 
-	description.ByteWidth = static_cast<UINT>(cms_bytesPerRow);
+	// Two rows: the alpha test pair and the fog colour.
+	description.ByteWidth = static_cast<UINT>(2 * cms_bytesPerRow);
 	hresult = device->CreateBuffer(&description, NULL, &ms_pixelEpilogue);
 	if (FAILED(hresult) || !ms_pixelEpilogue)
 	{
@@ -497,23 +502,26 @@ void Direct3d11_ConstantBuffersNamespace::flushPixelEpilogue()
 				break;
 		}
 
-		if (ms_epilogueShadow[0] != scale || ms_epilogueShadow[1] != bias)
+		ms_epilogueShadow[0] = scale;
+		ms_epilogueShadow[1] = bias;
+		ms_epilogueShadow[2] = 0.0f;
+		ms_epilogueShadow[3] = 0.0f;
+
+		// Two rows: the alpha test pair, then the fog colour with the enable in alpha. Written
+		// together because they share the buffer and a partial map is not a thing.
+		float rows[8];
+		memcpy(rows,     ms_epilogueShadow, sizeof(ms_epilogueShadow));
+		memcpy(rows + 4, ms_fogShadow,      sizeof(ms_fogShadow));
+
+		D3D11_MAPPED_SUBRESOURCE mapped;
+		Zero(mapped);
+		if (SUCCEEDED(context->Map(ms_pixelEpilogue, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		{
-			ms_epilogueShadow[0] = scale;
-			ms_epilogueShadow[1] = bias;
-			ms_epilogueShadow[2] = 0.0f;
-			ms_epilogueShadow[3] = 0.0f;
+			memcpy(mapped.pData, rows, sizeof(rows));
+			context->Unmap(ms_pixelEpilogue, 0);
 
-			D3D11_MAPPED_SUBRESOURCE mapped;
-			Zero(mapped);
-			if (SUCCEEDED(context->Map(ms_pixelEpilogue, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
-			{
-				memcpy(mapped.pData, ms_epilogueShadow, sizeof(ms_epilogueShadow));
-				context->Unmap(ms_pixelEpilogue, 0);
-
-				Direct3d11_Metrics::constantBufferBytes += static_cast<int>(sizeof(ms_epilogueShadow));
-				++Direct3d11_Metrics::constantBufferUpdates;
-			}
+			Direct3d11_Metrics::constantBufferBytes += static_cast<int>(sizeof(rows));
+			++Direct3d11_Metrics::constantBufferUpdates;
 		}
 
 		ms_epilogueDirty = false;
@@ -662,13 +670,26 @@ void Direct3d11_ConstantBuffers::setViewportData(int x, int y, int width, int he
  * would look tidier and would change what every scoped fog disable does.
  */
 
-void Direct3d11_ConstantBuffers::setFog(bool enabled, float density)
+void Direct3d11_ConstantBuffers::setFog(bool enabled, float density, float red, float green, float blue)
 {
-	if (!enabled)
-		return;
-
+	// c10 is what calculateFog reads in the vertex programs: the density in z and its square in
+	// w, which is the layout DX9 uploads. Written even when fog is off, so that turning it off
+	// does not leave the last density behind -- DX9 returned early here and relied on
+	// D3DRS_FOGENABLE to stop the blend, and there is no such state in D3D11.
 	float const fog[4] = { 0.0f, 0.0f, density, density * density };
 	setVertexShaderConstants(VSCR_fog, fog, 1);
+
+	// The colour and the enable go to the pixel epilogue, which is the half D3D9 did in fixed
+	// function. The enable rides in alpha so that the epilogue's lerp collapses to a no-op
+	// rather than needing a branch.
+	if (ms_fogShadow[0] == red && ms_fogShadow[1] == green && ms_fogShadow[2] == blue && ms_fogShadow[3] == (enabled ? 1.0f : 0.0f))
+		return;
+
+	ms_fogShadow[0] = red;
+	ms_fogShadow[1] = green;
+	ms_fogShadow[2] = blue;
+	ms_fogShadow[3] = enabled ? 1.0f : 0.0f;
+	ms_epilogueDirty = true;
 }
 
 // ----------------------------------------------------------------------

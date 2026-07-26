@@ -100,7 +100,7 @@ public:
 	static void  seedBackendOwnedConstants();
 
 	static void  setViewportData(int x, int y, int width, int height);
-	static void  setFog(bool enabled, float density);
+	static void  setFog(bool enabled, float density, float red, float green, float blue);
 	static void  setCurrentTime(float currentTime);
 
 	// The alpha test, which D3D11 has no state for at all. The code injected into every
