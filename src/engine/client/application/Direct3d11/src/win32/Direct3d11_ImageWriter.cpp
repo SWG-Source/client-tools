@@ -26,6 +26,7 @@
 #include "Direct3d11_ImageWriter.h"
 
 #include "Direct3d11_Device.h"
+#include "Direct3d11_Metrics.h"
 #include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_Unimplemented.h"
 #include "WriteTga.h"
@@ -97,6 +98,11 @@ bool Direct3d11_ImageWriter::screenShot(GlScreenShotFormat format, int quality, 
 
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	Zero(mapped);
+	// A read map with no DO_NOT_WAIT flag blocks until the GPU is done with the
+	// copy. That is acceptable for a screen shot, which is a deliberate user
+	// action, and it is counted so it can never hide inside a benchmark frame.
+	++Direct3d11_Metrics::blockingStagingMaps;
+
 	HRESULT const hresult = context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
 	if (FAILED(hresult))
 	{
@@ -174,6 +180,9 @@ bool Direct3d11_ImageWriter::lockBackBuffer(Gl_pixelRect &pixels, RECT const *lo
 
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	Zero(mapped);
+	++Direct3d11_Metrics::backBufferMaps;
+	++Direct3d11_Metrics::blockingStagingMaps;
+
 	HRESULT const hresult = context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
 	if (FAILED(hresult))
 	{

@@ -10,6 +10,7 @@
 
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
+#include "Direct3d11_Metrics.h"
 
 #include <d3dcompiler.h>
 #include <math.h>
@@ -466,6 +467,12 @@ bool Direct3d11_SceneTargetNamespace::createCompositeResources()
 	hresult = device->CreateRasterizerState(&rasterizerState, &ms_compositeRasterizerState);
 	FATAL(FAILED(hresult), ("Direct3d11: the composite rasterizer state could not be created (%s).", Direct3d11_Device::describeHresult(hresult)));
 
+	// Counted even though these are install-time: the invariant is "nothing is
+	// created during a frame", and a counter that is never incremented cannot
+	// demonstrate that.
+	Direct3d11_Metrics::stateObjectCreations += 3;
+	Direct3d11_Metrics::shaderCompiles += 3;
+
 	return true;
 }
 
@@ -598,7 +605,13 @@ void Direct3d11_SceneTarget::composite()
 	context->OMSetBlendState(ms_compositeBlendState, blendFactor, 0xffffffff);
 	context->RSSetState(ms_compositeRasterizerState);
 
+	if (ms_colorCorrectionIsIdentity)
+		++Direct3d11_Metrics::compositesCopied;
+	else
+		++Direct3d11_Metrics::compositesCorrected;
+
 	context->Draw(3, 0);
+	++Direct3d11_Metrics::drawCalls;
 
 	// Leave nothing bound that the next frame's scene would inherit as a
 	// read-write hazard on its own render target.

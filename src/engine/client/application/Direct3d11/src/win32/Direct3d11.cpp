@@ -24,6 +24,8 @@
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
 #include "Direct3d11_ImageWriter.h"
+#include "Direct3d11_Metrics.h"
+#include "Direct3d11_QueryPool.h"
 #include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_Unimplemented.h"
@@ -159,8 +161,19 @@ namespace Direct3d11Namespace
 		Direct3d11_SwapChain::clearViewport(clearColor, colorValue, clearDepth, depthValue, clearStencil, stencilValue);
 	}
 
-	void beginScene()                         { Direct3d11_SwapChain::beginScene(); }
-	void endScene()                           { Direct3d11_SwapChain::endScene(); }
+	void beginScene()
+	{
+		Direct3d11_Metrics::beginFrame();
+		Direct3d11_QueryPool::beginFrame();
+		Direct3d11_SwapChain::beginScene();
+	}
+
+	void endScene()
+	{
+		Direct3d11_SwapChain::endScene();
+		Direct3d11_QueryPool::endFrame();
+	}
+
 	bool present()                            { return Direct3d11_SwapChain::present(); }
 
 	void setViewport(int x, int y, int width, int height, real minZ, real maxZ)
@@ -336,18 +349,33 @@ namespace Direct3d11Namespace
 	ShaderImplementationPassPixelShaderProgramGraphicsData *createPixelShaderProgramData(ShaderImplementationPassPixelShaderProgram const &) { DX11_NOT_IMPLEMENTED_FATAL("createPixelShaderProgramData"); return NULL; }
 
 #ifdef _DEBUG
+	// The five slots that exist only under _DEBUG. Graphics.cpp wraps three of
+	// them in NOT_NULL, so a developer build cannot even load a backend that
+	// leaves them unassigned -- which is why the prior DX11 attempt, which never
+	// defined any of them, was Release-only by construction.
+	//
+	// Two of the five are answered by the state and texture work and are honest
+	// absences until then. The other three come from the metrics.
+
 	void setTexturesEnabled(bool)                                          { DX11_NOT_IMPLEMENTED("setTexturesEnabled"); }
-	void showMipmapLevels(bool)                                            { DX11_NOT_IMPLEMENTED("showMipmapLevels"); }
-	bool getShowMipmapLevels()                                             { DX11_NOT_IMPLEMENTED("getShowMipmapLevels"); return false; }
+
+	bool ms_showMipmapLevels;
+	void showMipmapLevels(bool enabled)                                    { ms_showMipmapLevels = enabled; }
+	bool getShowMipmapLevels()                                             { return ms_showMipmapLevels; }
+
 	void setBadVertexBufferVertexShaderCombination(bool *, const char *)   { DX11_NOT_IMPLEMENTED("setBadVertexBufferVertexShaderCombination"); }
+
 	void getRenderedVerticesPointsLinesTrianglesCalls(int &vertices, int &points, int &lines, int &triangles, int &calls)
 	{
-		DX11_NOT_IMPLEMENTED("getRenderedVerticesPointsLinesTrianglesCalls");
-		vertices = 0;
-		points = 0;
-		lines = 0;
-		triangles = 0;
-		calls = 0;
+		// Points and lines are not counted separately yet -- the draw paths that
+		// would distinguish them do not exist. Reported as zero rather than
+		// folded into triangles, so the display cannot imply a number that was
+		// never measured.
+		vertices  = Direct3d11_Metrics::vertices;
+		points    = 0;
+		lines     = 0;
+		triangles = Direct3d11_Metrics::triangles;
+		calls     = Direct3d11_Metrics::drawCalls + Direct3d11_Metrics::drawIndexedCalls;
 	}
 #endif
 
@@ -555,6 +583,12 @@ bool Direct3d11::install(Gl_install *gl_install)
 	if (Direct3d11_Device::getContext())
 		IGNORE_RETURN(Direct3d11_Device::getContext()->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), reinterpret_cast<void **>(&ms_annotation)));
 
+	Direct3d11_Metrics::install();
+
+	// GPU timing is instrumentation, not a requirement: a driver that will not
+	// give us queries costs us a measurement, not a renderer.
+	IGNORE_RETURN(Direct3d11_QueryPool::install());
+
 	fillApiTable();
 
 	ms_installed = true;
@@ -580,6 +614,8 @@ bool Direct3d11::install(Gl_install *gl_install)
 void Direct3d11Namespace::remove()
 {
 	Direct3d11_UnimplementedSlot::report();
+	Direct3d11_Metrics::remove();
+	Direct3d11_QueryPool::remove();
 
 	if (ms_annotation)
 	{

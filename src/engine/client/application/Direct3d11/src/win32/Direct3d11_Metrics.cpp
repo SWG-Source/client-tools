@@ -1,0 +1,228 @@
+// ======================================================================
+//
+// Direct3d11_Metrics.cpp
+// copyright (c) 2026 Galaxies Reborn
+//
+// ======================================================================
+
+#include "FirstDirect3d11.h"
+#include "Direct3d11_Metrics.h"
+
+#include "sharedDebug/DebugFlags.h"
+
+// ======================================================================
+
+int Direct3d11_Metrics::drawCalls;
+int Direct3d11_Metrics::drawIndexedCalls;
+int Direct3d11_Metrics::vertices;
+int Direct3d11_Metrics::triangles;
+int Direct3d11_Metrics::droppedDraws;
+
+int Direct3d11_Metrics::inputLayoutBindCalls;
+int Direct3d11_Metrics::inputLayoutBindMisses;
+int Direct3d11_Metrics::vertexBufferBindCalls;
+int Direct3d11_Metrics::vertexBufferBindMisses;
+int Direct3d11_Metrics::indexBufferBindCalls;
+int Direct3d11_Metrics::indexBufferBindMisses;
+int Direct3d11_Metrics::vertexShaderBindCalls;
+int Direct3d11_Metrics::vertexShaderBindMisses;
+int Direct3d11_Metrics::pixelShaderBindCalls;
+int Direct3d11_Metrics::pixelShaderBindMisses;
+int Direct3d11_Metrics::blendStateBindCalls;
+int Direct3d11_Metrics::blendStateBindMisses;
+int Direct3d11_Metrics::depthStencilStateBindCalls;
+int Direct3d11_Metrics::depthStencilStateBindMisses;
+int Direct3d11_Metrics::rasterizerStateBindCalls;
+int Direct3d11_Metrics::rasterizerStateBindMisses;
+int Direct3d11_Metrics::samplerBindCalls;
+int Direct3d11_Metrics::samplerBindMisses;
+int Direct3d11_Metrics::shaderResourceBindCalls;
+int Direct3d11_Metrics::shaderResourceBindMisses;
+int Direct3d11_Metrics::viewportSetCalls;
+int Direct3d11_Metrics::scissorSetCalls;
+
+int Direct3d11_Metrics::constantBufferUpdates;
+int Direct3d11_Metrics::constantBufferBytes;
+
+int Direct3d11_Metrics::ringDiscards;
+int Direct3d11_Metrics::ringNoOverwrites;
+int Direct3d11_Metrics::ringBytes;
+
+int Direct3d11_Metrics::renderTargetSwitches;
+int Direct3d11_Metrics::textureBakeReadbacks;
+int Direct3d11_Metrics::backBufferMaps;
+int Direct3d11_Metrics::blockingStagingMaps;
+
+int Direct3d11_Metrics::stateObjectCreations;
+int Direct3d11_Metrics::inputLayoutCreations;
+int Direct3d11_Metrics::constantBufferCreations;
+int Direct3d11_Metrics::shaderCompiles;
+
+int Direct3d11_Metrics::compositesCopied;
+int Direct3d11_Metrics::compositesCorrected;
+
+int Direct3d11_Metrics::presents;
+int Direct3d11_Metrics::presentFailures;
+
+// ======================================================================
+
+namespace Direct3d11_MetricsNamespace
+{
+	// Run totals, accumulated at each beginFrame from the per-frame counters.
+	int  ms_runFrames;
+	int  ms_runDrawCalls;
+	int  ms_runTriangles;
+	int  ms_runStateObjectCreations;
+	int  ms_runInputLayoutCreations;
+	int  ms_runConstantBufferCreations;
+	int  ms_runShaderCompiles;
+	int  ms_runDroppedDraws;
+	int  ms_runTextureBakeReadbacks;
+	int  ms_runBlockingStagingMaps;
+	int  ms_runPresentFailures;
+
+	// Peak in-frame creation count seen after the first few frames. Warm-up is
+	// expected to create things; a steady-state frame is not.
+	int  ms_peakInFrameCreations;
+	int  const cms_warmUpFrames = 60;
+
+	bool ms_reportRequested;
+
+	void reportRoutine();
+}
+using namespace Direct3d11_MetricsNamespace;
+
+// ======================================================================
+
+void Direct3d11_Metrics::install()
+{
+	// A DebugFlags lever so a report can be asked for from the debug menu.
+	// Registered with a report routine, which is the DLLEXPORT overload -- but
+	// note the report routines are only driven by DebugFlags::callReportRoutines,
+	// whose one call site in the game loop is inside a #if 0. Until that is
+	// re-enabled this lever does nothing on its own, which is why the shutdown
+	// summary below does not depend on it.
+	DebugFlags::registerFlag(ms_reportRequested, "Direct3d11", "reportMetrics", reportRoutine);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Metrics::remove()
+{
+	// Unconditional, and through WARNING rather than a debug-only channel: the
+	// zero-invariant counters are worthless if they are only visible in a build
+	// nobody measures.
+	report();
+
+	DebugFlags::unregisterFlag(ms_reportRequested);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_MetricsNamespace::reportRoutine()
+{
+	Direct3d11_Metrics::report();
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Metrics::beginFrame()
+{
+	++ms_runFrames;
+
+	ms_runDrawCalls               += drawCalls + drawIndexedCalls;
+	ms_runTriangles               += triangles;
+	ms_runStateObjectCreations    += stateObjectCreations;
+	ms_runInputLayoutCreations    += inputLayoutCreations;
+	ms_runConstantBufferCreations += constantBufferCreations;
+	ms_runShaderCompiles          += shaderCompiles;
+	ms_runDroppedDraws            += droppedDraws;
+	ms_runTextureBakeReadbacks    += textureBakeReadbacks;
+	ms_runBlockingStagingMaps     += blockingStagingMaps;
+	ms_runPresentFailures         += presentFailures;
+
+	int const inFrameCreations = getInFrameCreationCount();
+	if (ms_runFrames > cms_warmUpFrames && inFrameCreations > ms_peakInFrameCreations)
+		ms_peakInFrameCreations = inFrameCreations;
+
+	drawCalls = 0;
+	drawIndexedCalls = 0;
+	vertices = 0;
+	triangles = 0;
+	droppedDraws = 0;
+
+	inputLayoutBindCalls = 0;
+	inputLayoutBindMisses = 0;
+	vertexBufferBindCalls = 0;
+	vertexBufferBindMisses = 0;
+	indexBufferBindCalls = 0;
+	indexBufferBindMisses = 0;
+	vertexShaderBindCalls = 0;
+	vertexShaderBindMisses = 0;
+	pixelShaderBindCalls = 0;
+	pixelShaderBindMisses = 0;
+	blendStateBindCalls = 0;
+	blendStateBindMisses = 0;
+	depthStencilStateBindCalls = 0;
+	depthStencilStateBindMisses = 0;
+	rasterizerStateBindCalls = 0;
+	rasterizerStateBindMisses = 0;
+	samplerBindCalls = 0;
+	samplerBindMisses = 0;
+	shaderResourceBindCalls = 0;
+	shaderResourceBindMisses = 0;
+	viewportSetCalls = 0;
+	scissorSetCalls = 0;
+
+	constantBufferUpdates = 0;
+	constantBufferBytes = 0;
+
+	ringDiscards = 0;
+	ringNoOverwrites = 0;
+	ringBytes = 0;
+
+	renderTargetSwitches = 0;
+	textureBakeReadbacks = 0;
+	backBufferMaps = 0;
+	blockingStagingMaps = 0;
+
+	stateObjectCreations = 0;
+	inputLayoutCreations = 0;
+	constantBufferCreations = 0;
+	shaderCompiles = 0;
+
+	compositesCopied = 0;
+	compositesCorrected = 0;
+
+	presentFailures = 0;
+}
+
+// ----------------------------------------------------------------------
+
+int Direct3d11_Metrics::getInFrameCreationCount()
+{
+	return stateObjectCreations + inputLayoutCreations + constantBufferCreations + shaderCompiles;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Metrics::report()
+{
+	WARNING(true, ("Direct3d11 metrics: %d frames, %d presents, %d draw calls, %d triangles",
+		ms_runFrames, presents, ms_runDrawCalls, ms_runTriangles));
+
+	WARNING(true, ("Direct3d11 metrics: creations over the run -- state objects %d, input layouts %d, constant buffers %d, shader compiles %d",
+		ms_runStateObjectCreations, ms_runInputLayoutCreations, ms_runConstantBufferCreations, ms_runShaderCompiles));
+
+	// The gate. Anything nonzero here after warm-up means work is being created
+	// inside the frame loop.
+	WARNING(true, ("Direct3d11 metrics: peak creations in a single frame after warm-up: %d (required: 0)", ms_peakInFrameCreations));
+
+	if (ms_runDroppedDraws || ms_runTextureBakeReadbacks || ms_runBlockingStagingMaps || ms_runPresentFailures)
+		WARNING(true, ("Direct3d11 metrics: NONZERO INVARIANTS -- dropped draws %d, bake readbacks %d, blocking staging maps %d, present failures %d",
+			ms_runDroppedDraws, ms_runTextureBakeReadbacks, ms_runBlockingStagingMaps, ms_runPresentFailures));
+
+	WARNING(true, ("Direct3d11 metrics: composite -- %d copied, %d colour corrected", compositesCopied, compositesCorrected));
+}
+
+// ======================================================================

@@ -10,6 +10,7 @@
 
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
+#include "Direct3d11_Metrics.h"
 #include "Direct3d11_SceneTarget.h"
 
 #include "clientGraphics/Gl_dll.def"
@@ -464,6 +465,7 @@ void Direct3d11_SwapChain::beginScene()
 
 	context->OMSetRenderTargets(1, &colorView, depthView);
 	context->RSSetViewports(1, &ms_viewport);
+	++Direct3d11_Metrics::renderTargetSwitches;
 }
 
 // ----------------------------------------------------------------------
@@ -519,6 +521,8 @@ bool Direct3d11_SwapChain::present()
 
 	HRESULT const hresult = ms_swapChain->Present(syncInterval, presentFlags);
 
+	++Direct3d11_Metrics::presents;
+
 	Direct3d11_Device::checkForDeviceRemoved(hresult, "Present");
 
 	if (hresult == DXGI_STATUS_OCCLUDED)
@@ -530,6 +534,7 @@ bool Direct3d11_SwapChain::present()
 
 	if (FAILED(hresult))
 	{
+		++Direct3d11_Metrics::presentFailures;
 		WARNING(true, ("Direct3d11: Present failed (%s).", Direct3d11_Device::describeHresult(hresult)));
 		return false;
 	}
@@ -618,6 +623,7 @@ void Direct3d11_SwapChain::setViewport(int x, int y, int width, int height, real
 	ms_viewport.MaxDepth = static_cast<float>(maxZ);
 
 	context->RSSetViewports(1, &ms_viewport);
+	++Direct3d11_Metrics::viewportSetCalls;
 
 	// The rasterizer half of this is done. The other half is not: the engine's
 	// 2D shaders map pixels to clip space through vertex shader constant
