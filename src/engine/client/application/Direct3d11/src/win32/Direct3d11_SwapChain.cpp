@@ -10,6 +10,7 @@
 
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
+#include "Direct3d11_SceneTarget.h"
 
 #include "clientGraphics/Gl_dll.def"
 
@@ -300,6 +301,9 @@ bool Direct3d11_SwapChain::install(Gl_install *gl_install)
 	if (!createBackBufferViews())
 		return false;
 
+	if (!Direct3d11_SceneTarget::install(ms_width, ms_height))
+		return false;
+
 	// The engine reads width, height and windowed back out of Gl_install and
 	// builds its UI canvas size, mouse clip rectangle and viewport bounds checks
 	// from them. Anything clamped or refused here has to be reported back, or
@@ -319,6 +323,8 @@ bool Direct3d11_SwapChain::install(Gl_install *gl_install)
 
 void Direct3d11_SwapChain::remove()
 {
+	Direct3d11_SceneTarget::remove();
+
 	releaseBackBufferViews();
 
 	if (ms_swapChain)
@@ -380,13 +386,18 @@ void Direct3d11_SwapChain::clearViewport(bool clearColor, uint32 colorValue, boo
 	if (!context)
 		return;
 
+	// Clears go to the scene target, not the back buffer. The back buffer is
+	// written exactly once per frame, by the composite.
+	ID3D11RenderTargetView * const colorView = Direct3d11_SceneTarget::getRenderTargetView();
+	ID3D11DepthStencilView * const depthView = Direct3d11_SceneTarget::getDepthStencilView();
+
 	bool const wholeTarget =
 		ms_viewport.TopLeftX == 0.0f &&
 		ms_viewport.TopLeftY == 0.0f &&
 		ms_viewport.Width    == static_cast<float>(ms_width) &&
 		ms_viewport.Height   == static_cast<float>(ms_height);
 
-	if (clearColor && ms_backBufferView)
+	if (clearColor && colorView)
 	{
 		float const color[4] =
 		{
@@ -397,7 +408,7 @@ void Direct3d11_SwapChain::clearViewport(bool clearColor, uint32 colorValue, boo
 		};
 
 		if (wholeTarget)
-			context->ClearRenderTargetView(ms_backBufferView, color);
+			context->ClearRenderTargetView(colorView, color);
 		else
 		{
 			D3D11_RECT rect;
@@ -405,11 +416,11 @@ void Direct3d11_SwapChain::clearViewport(bool clearColor, uint32 colorValue, boo
 			rect.top    = static_cast<LONG>(ms_viewport.TopLeftY);
 			rect.right  = static_cast<LONG>(ms_viewport.TopLeftX + ms_viewport.Width);
 			rect.bottom = static_cast<LONG>(ms_viewport.TopLeftY + ms_viewport.Height);
-			context->ClearView(ms_backBufferView, color, &rect, 1);
+			context->ClearView(colorView, color, &rect, 1);
 		}
 	}
 
-	if ((clearDepth || clearStencil) && ms_depthStencilView)
+	if ((clearDepth || clearStencil) && depthView)
 	{
 		UINT flags = 0;
 		if (clearDepth)
@@ -423,7 +434,7 @@ void Direct3d11_SwapChain::clearViewport(bool clearColor, uint32 colorValue, boo
 			WARNING(true, ("Direct3d11: a depth/stencil clear was asked for inside a sub-viewport, which D3D11 cannot do directly. The whole depth buffer was cleared instead."));
 		}
 
-		context->ClearDepthStencilView(ms_depthStencilView, flags, static_cast<FLOAT>(depthValue), static_cast<UINT8>(stencilValue));
+		context->ClearDepthStencilView(depthView, flags, static_cast<FLOAT>(depthValue), static_cast<UINT8>(stencilValue));
 	}
 }
 
@@ -443,10 +454,15 @@ void Direct3d11_SwapChain::beginScene()
 	DX11_ASSERT_MAIN_THREAD();
 
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
-	if (!context || !ms_backBufferView)
+	if (!context)
 		return;
 
-	context->OMSetRenderTargets(1, &ms_backBufferView, ms_depthStencilView);
+	ID3D11RenderTargetView *colorView = Direct3d11_SceneTarget::getRenderTargetView();
+	ID3D11DepthStencilView *depthView = Direct3d11_SceneTarget::getDepthStencilView();
+	if (!colorView)
+		return;
+
+	context->OMSetRenderTargets(1, &colorView, depthView);
 	context->RSSetViewports(1, &ms_viewport);
 }
 
@@ -478,6 +494,25 @@ bool Direct3d11_SwapChain::present()
 
 	if (!ms_swapChain)
 		return false;
+
+	// The one place the back buffer is written. Bound here rather than left bound
+	// from the last frame, because the flip model unbinds it at Present.
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	if (context && ms_backBufferView)
+	{
+		context->OMSetRenderTargets(1, &ms_backBufferView, NULL);
+
+		D3D11_VIEWPORT fullTarget;
+		fullTarget.TopLeftX = 0.0f;
+		fullTarget.TopLeftY = 0.0f;
+		fullTarget.Width    = static_cast<float>(ms_width);
+		fullTarget.Height   = static_cast<float>(ms_height);
+		fullTarget.MinDepth = 0.0f;
+		fullTarget.MaxDepth = 1.0f;
+		context->RSSetViewports(1, &fullTarget);
+
+		Direct3d11_SceneTarget::composite();
+	}
 
 	UINT const syncInterval = (ms_swapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) ? 0 : 1;
 	UINT const presentFlags = (ms_swapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) ? DXGI_PRESENT_ALLOW_TEARING : 0;
@@ -538,6 +573,7 @@ void Direct3d11_SwapChain::resize(int width, int height)
 	FATAL(FAILED(hresult), ("Direct3d11: ResizeBuffers to %dx%d failed (%s).", width, height, Direct3d11_Device::describeHresult(hresult)));
 
 	IGNORE_RETURN(createBackBufferViews());
+	IGNORE_RETURN(Direct3d11_SceneTarget::resize(width, height));
 
 	Direct3d11_Device::fireDeviceRestored();
 }

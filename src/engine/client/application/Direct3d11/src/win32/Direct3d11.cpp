@@ -23,6 +23,8 @@
 
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
+#include "Direct3d11_ImageWriter.h"
+#include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_Unimplemented.h"
 #include "SetupDll.h"
@@ -176,13 +178,33 @@ namespace Direct3d11Namespace
 
 	void setBrightnessContrastGamma(float brightness, float contrast, float gamma)
 	{
-		// Identity is not a no-op by omission, it genuinely means "leave the image
-		// alone", so it is implemented. Anything else needs the colour-correction
-		// pass, which lands with the scene target.
-		if (brightness == 1.0f && contrast == 1.0f && gamma == 1.0f)
-			return;
+		// Note this now does something DX9 does not: DX9 calls SetGammaRamp, which
+		// has no effect at all on a windowed swap chain, and the client ships
+		// windowed. So a player who has ever moved these sliders has a persisted
+		// value that has never done anything and will start to. Intended, but a
+		// real behaviour change, and the reason every parity capture pins the
+		// three values to 1.
+		Direct3d11_SceneTarget::setBrightnessContrastGamma(brightness, contrast, gamma);
+	}
 
-		DX11_NOT_IMPLEMENTED("setBrightnessContrastGamma");
+	bool screenShot(GlScreenShotFormat format, int quality, const char *fileName)
+	{
+		return Direct3d11_ImageWriter::screenShot(format, quality, fileName);
+	}
+
+	bool writeImage(char const *fileName, int const width, int const height, int const pitch, int const *pixelsARGB, bool const alphaExtend, Gl_imageFormat const imageFormat, Rectangle2d const *subRect)
+	{
+		return Direct3d11_ImageWriter::writeImage(fileName, width, height, pitch, pixelsARGB, alphaExtend, imageFormat, subRect);
+	}
+
+	bool lockBackBuffer(Gl_pixelRect &pixels, const RECT *lockRect)
+	{
+		return Direct3d11_ImageWriter::lockBackBuffer(pixels, lockRect);
+	}
+
+	bool unlockBackBuffer()
+	{
+		return Direct3d11_ImageWriter::unlockBackBuffer();
 	}
 
 	void setFillMode(GlFillMode fillMode)
@@ -230,10 +252,6 @@ namespace Direct3d11Namespace
 	// so aliasing would present a tool's viewport into the game window instead.
 	// SwgClient never calls it; the nine callers are all editors and viewers.
 	bool presentToWindow(HWND, int, int)                                   { DX11_NOT_IMPLEMENTED("presentToWindow"); return false; }
-	bool lockBackBuffer(Gl_pixelRect &, const RECT *)                      { DX11_NOT_IMPLEMENTED("lockBackBuffer"); return false; }
-	bool unlockBackBuffer()                                                { DX11_NOT_IMPLEMENTED("unlockBackBuffer"); return false; }
-	bool screenShot(GlScreenShotFormat, int, const char *)                 { DX11_NOT_IMPLEMENTED("screenShot"); return false; }
-	bool writeImage(char const *, int const, int const, int const, int const *, bool const, Gl_imageFormat const, Rectangle2d const *) { DX11_NOT_IMPLEMENTED("writeImage"); return false; }
 
 	// Render targets.
 	void setRenderTarget(Texture *, CubeFace, int)                         { DX11_NOT_IMPLEMENTED("setRenderTarget"); }
