@@ -24,6 +24,8 @@
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_ConstantBuffers.h"
 #include "Direct3d11_Device.h"
+#include "Direct3d11_DynamicIndexBufferData.h"
+#include "Direct3d11_DynamicVertexBufferData.h"
 #include "Direct3d11_ImageWriter.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_QueryPool.h"
@@ -174,6 +176,8 @@ namespace Direct3d11Namespace
 		Direct3d11_Metrics::beginFrame();
 		Direct3d11_QueryPool::beginFrame();
 		Direct3d11_ConstantBuffers::beginFrame();
+		Direct3d11_DynamicVertexBufferData::beginFrame();
+		Direct3d11_DynamicIndexBufferData::beginFrame();
 		Direct3d11_SwapChain::beginScene();
 	}
 
@@ -403,10 +407,10 @@ namespace Direct3d11Namespace
 	ShaderImplementationGraphicsData *createShaderImplementationGraphicsData(const ShaderImplementation &)        { DX11_NOT_IMPLEMENTED_FATAL("createShaderImplementationGraphicsData"); return NULL; }
 	StaticShaderGraphicsData *createStaticShaderGraphicsData(const StaticShader &)                                { DX11_NOT_IMPLEMENTED_FATAL("createStaticShaderGraphicsData"); return NULL; }
 	StaticVertexBufferGraphicsData *createStaticVertexBufferData(const StaticVertexBuffer &vertexBuffer)          { return new Direct3d11_StaticVertexBufferData(vertexBuffer); }
-	DynamicVertexBufferGraphicsData *createDynamicVertexBufferData(const DynamicVertexBuffer &)                   { DX11_NOT_IMPLEMENTED_FATAL("createDynamicVertexBufferData"); return NULL; }
+	DynamicVertexBufferGraphicsData *createDynamicVertexBufferData(const DynamicVertexBuffer &vertexBuffer)       { return new Direct3d11_DynamicVertexBufferData(vertexBuffer); }
 	VertexBufferVectorGraphicsData *createVertexBufferVectorData(VertexBufferVector const &)                      { DX11_NOT_IMPLEMENTED_FATAL("createVertexBufferVectorData"); return NULL; }
 	StaticIndexBufferGraphicsData *createStaticIndexBufferData(const StaticIndexBuffer &indexBuffer)              { return new Direct3d11_StaticIndexBufferData(indexBuffer); }
-	DynamicIndexBufferGraphicsData *createDynamicIndexBufferData()                                                { DX11_NOT_IMPLEMENTED_FATAL("createDynamicIndexBufferData"); return NULL; }
+	DynamicIndexBufferGraphicsData *createDynamicIndexBufferData()                                                { return new Direct3d11_DynamicIndexBufferData(); }
 	TextureGraphicsData *createTextureData(const Texture &, const TextureFormat *, int)                           { DX11_NOT_IMPLEMENTED_FATAL("createTextureData"); return NULL; }
 	ShaderImplementationPassVertexShaderGraphicsData *createVertexShaderData(ShaderImplementationPassVertexShader const &) { DX11_NOT_IMPLEMENTED_FATAL("createVertexShaderData"); return NULL; }
 	ShaderImplementationPassPixelShaderProgramGraphicsData *createPixelShaderProgramData(ShaderImplementationPassPixelShaderProgram const &) { DX11_NOT_IMPLEMENTED_FATAL("createPixelShaderProgramData"); return NULL; }
@@ -647,6 +651,8 @@ bool Direct3d11::install(Gl_install *gl_install)
 		IGNORE_RETURN(Direct3d11_Device::getContext()->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), reinterpret_cast<void **>(&ms_annotation)));
 
 	Direct3d11_VertexBufferDescriptorMap::install();
+	Direct3d11_DynamicVertexBufferData::install();
+	Direct3d11_DynamicIndexBufferData::install();
 	Direct3d11_StateObjectCache::install();
 	Direct3d11_StateCache::install();
 	Direct3d11_ShaderCompiler::install();
@@ -701,6 +707,8 @@ void Direct3d11Namespace::remove()
 	Direct3d11_ShaderCompiler::remove();
 	Direct3d11_StateCache::remove();
 	Direct3d11_StateObjectCache::remove();
+	Direct3d11_DynamicIndexBufferData::remove();
+	Direct3d11_DynamicVertexBufferData::remove();
 	Direct3d11_VertexBufferDescriptorMap::remove();
 	Direct3d11_SwapChain::remove();
 	Direct3d11_Device::remove();
