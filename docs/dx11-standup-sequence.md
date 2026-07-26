@@ -673,3 +673,60 @@ be captured, not assumed, and gl11 has to be compared against observed gl05
 behaviour. Enabling POST and HEAT is a deliberate change with its own
 measurement, not a side effect of a renderer swap. It also adds a real `ddraw`
 consumer to the Phase 5 deletion list, which had counted only a header leak.
+
+### The plan was wrong about extendedLightData
+
+C15's description says to drop the extendedLightData upload because it has no live
+references and the C++ side covers only half its rows.
+
+It is uploaded. `Direct3d9_LightManager` writes four rows at vertex c60..c63 from a
+real `ExtendedLightData` struct wrapping a `HemisphericLightData`, with the row
+count computed as `sizeof(ExtendedLightData) / (4 * sizeof(float))` rather than
+written as a literal. Following the plan here would have deleted a live upload and
+left four rows of whatever the register file previously held for any shader that
+reads them.
+
+Carried, not dropped. If it later turns out no shipped shader reads c60..c63, that
+is a separate finding needing its own evidence, and the way to establish it is to
+decode the corpus -- not to infer it from the C++ side looking incomplete.
+
+### The bool registers confirm the prior attempt inverted shipped behaviour
+
+The plan said the `register(bN)` light-enable booleans are never written, and that
+is exactly right: `SetVertexShaderConstantB` has zero callers anywhere in the tree,
+so those registers hold D3D9's device default of FALSE for the entire life of the
+process. There is no `SetVertexShaderConstantI` wrapper either, so i-registers are
+likewise never written.
+
+The consequence is sharper than the plan stated. The prior DX11 attempt's textual
+surgery rewrote those declarations from `register(bN)` to `= true`, which does not
+merely neutralise them -- it INVERTS them, forcing every light-enable branch on
+where the shipped behaviour is off. Any shader whose output depends on one was
+rendering something DX9 never rendered.
+
+### Only four constant rows survive a device rebuild
+
+`Direct3d9_StateCache::restoreDevice` re-establishes exactly four rows: c95 and the
+three unit vectors at c49..c51. c9 comes back indirectly because setViewport is
+called immediately afterwards, and c0..c7 because the transform dirty flag is set.
+Nothing re-uploads c8, c10, c11..c15, c16+, c44, c45, c47, c48, c52..c59 or c60+ --
+they are rewritten by the ordinary drawing flow.
+
+Reproducing that exact set matters more than reseeding everything would: it keeps
+both backends agreeing about which constants are stale after a rebuild, which is
+the difference between a comparable capture and a coincidence.
+
+### The per-draw constant ring needs two capabilities, not one
+
+The plan describes binding a constant ring "with VSSetConstantBuffers1 offsets on
+11_1". That is two independent features, and both are optional on feature level
+11_0 hardware even though the interface exposing them is 11_1:
+
+  ConstantBufferOffsetting                 bind a sub-range of one buffer
+  MapNoOverwriteOnDynamicConstantBuffer    append to a dynamic constant buffer
+                                           without renaming it
+
+A ring needs both. The device queries both at install, and the fallback to rotating
+buffers with DISCARD names whichever one was missing, so a machine that is slower
+for this reason says so instead of looking like a regression in whatever landed
+most recently.
