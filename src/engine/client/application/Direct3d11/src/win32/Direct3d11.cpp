@@ -373,7 +373,16 @@ namespace Direct3d11Namespace
 	void setWorldToCameraTransform(const Transform &, const Vector &)      { DX11_NOT_IMPLEMENTED("setWorldToCameraTransform"); }
 	void setProjectionMatrix(const GlMatrix4x4 &)                          { DX11_NOT_IMPLEMENTED("setProjectionMatrix"); }
 	void setObjectToWorldTransformAndScale(const Transform &, const Vector &) { DX11_NOT_IMPLEMENTED("setObjectToWorldTransformAndScale"); }
-	void setAlphaFadeOpacity(bool, float)                                  { DX11_NOT_IMPLEMENTED("setAlphaFadeOpacity"); }
+	void setAlphaFadeOpacity(bool enabled, float opacity)
+	{
+		// Two consumers. The shipped pixel constants expose alphaFadeOpacityEnabled and
+		// alphaFadeOpacity as components of packed registers 1 and 2, which shaders read
+		// directly; and the alpha test reference is scaled by the same opacity, exactly as
+		// DX9 does before writing D3DRS_ALPHAREF.
+		Direct3d11_ConstantBuffers::setPixelShaderConstantComponent(PSCR_dot3LightDiffuseColor, 3, enabled ? 1.0f : 0.0f);
+		Direct3d11_ConstantBuffers::setPixelShaderConstantComponent(PSCR_dot3LightSpecularColor, 3, opacity);
+		Direct3d11_ConstantBuffers::setAlphaFadeOpacity(enabled ? opacity : 1.0f);
+	}
 	void setBloomEnabled(bool)                                             { DX11_NOT_IMPLEMENTED("setBloomEnabled"); }
 	void setLights(const stdvector<const Light*>::fwd &)                   { DX11_NOT_IMPLEMENTED("setLights"); }
 	void setTextureTransform(int, bool, int, bool, const real *)           { DX11_NOT_IMPLEMENTED("setTextureTransform"); }

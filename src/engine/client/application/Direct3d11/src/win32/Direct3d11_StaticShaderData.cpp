@@ -540,6 +540,15 @@ bool Direct3d11_StaticShaderData::apply(int passNumber) const
 			static_cast<Direct3d11_ShaderImplementationData const *>(m_implementation->m_graphicsData);
 
 		implementationData->apply(passNumber, pass.stencilReferenceValid ? pass.stencilReference : 0);
+
+		// The alpha test needs both halves: the compare function is the effect's and the
+		// reference is this material's. A pass that does not test pushes Always, which the
+		// derivation turns into a clip that never discards -- pushed rather than skipped,
+		// because otherwise the previous material's test would still be in the buffer.
+		if (implementationData->isAlphaTestEnabled(passNumber))
+			Direct3d11_ConstantBuffers::setAlphaTest(implementationData->getAlphaTestFunction(passNumber), static_cast<int>(pass.alphaTestReference));
+		else
+			Direct3d11_ConstantBuffers::setAlphaTest(static_cast<int>(ShaderImplementation::Pass::C_Always), 0);
 	}
 
 	// ------------------------------------------------------------------

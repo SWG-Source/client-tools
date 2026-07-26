@@ -394,6 +394,198 @@ namespace Direct3d11_ShaderSourceNamespace
 	{
 		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 	}
+
+	// ------------------------------------------------------------------
+	// Patch 8: the pixel epilogue -- the alpha test.
+	//
+	// D3D9's ALPHATESTENABLE/ALPHAFUNC/ALPHAREF have no D3D11 equivalent whatsoever; the
+	// test has to become a discard inside the pixel shader. Doing that with a compiled
+	// variant per compare function would reintroduce exactly the specialisation this port
+	// went to some trouble to remove, so it is driven from a constant instead.
+	//
+	// Six of the engine's eight compare functions reduce to a single multiply-add against
+	// the alpha, which is why the constant is a (scale, bias) pair rather than a function
+	// index and a reference:
+	//
+	//   Always          scale  0, bias  +1     clip(+1), never discards
+	//   Never           scale  0, bias  -1     clip(-1), always discards
+	//   GreaterOrEqual  scale +1, bias  -r     keeps a >= r
+	//   Greater         scale +1, bias  -(r+e) keeps a >  r
+	//   LessOrEqual     scale -1, bias  +r     keeps a <= r
+	//   Less            scale -1, bias  +(r-e) keeps a <  r
+	//
+	// e is one step of an eight bit alpha, because that is the precision D3D9 compared at.
+	// Equal and NotEqual cannot be written this way; they are also not something an alpha
+	// test is ever used for, and the backend reports it rather than approximating if one
+	// ever appears.
+	//
+	// So the cost is one mad and one clip per pixel, with no branch and no variant. An
+	// explicit cbuffer at b1 keeps this out of $Globals, whose byte offsets are the register
+	// ABI every shader depends on -- verified: the /Gec register(cN) globals still land at
+	// 16N with this present.
+
+	char const cms_pixelEpiloguePrologue[] =
+		"cbuffer SwgPixelEpilogue : register(b1)\n"
+		"{\n"
+		"\tfloat4 swgAlphaTest;\n"
+		"};\n"
+		"float4 swgPixelEpilogue(float4 swgColour)\n"
+		"{\n"
+		"\tclip(swgColour.a * swgAlphaTest.x + swgAlphaTest.y);\n"
+		"\treturn swgColour;\n"
+		"}\n";
+
+	// ------------------------------------------------------------------
+	/**
+	 * Wrap every return in the pixel entry point with the epilogue.
+	 *
+	 * The entry's signature is deliberately left alone. Every one of the 386 HLSL pixel
+	 * programs returns float4 with a COLOR semantic, but their parameter lists vary from no
+	 * parameters to ten, and 61 take a single struct while 323 take loose semantic
+	 * parameters -- so a wrapper that had to reproduce a parameter list would be the fragile
+	 * part of this. Rewriting the returns needs none of that, and it does not change the
+	 * shader's inputs at all, which matters because a pixel input has to be satisfiable by
+	 * whatever vertex program is paired with it.
+	 */
+
+	char *injectPixelEpilogue(char const *name, char const *source, int length, int &resultLength)
+	{
+		// Find "main", then its parameter list, then its body.
+		char const *entry = NULL;
+		for (int i = 0; i + 4 <= length; ++i)
+		{
+			if (memcmp(source + i, "main", 4) != 0)
+				continue;
+
+			bool const startBoundary = (i == 0) || !isIdentifierCharacter(source[i - 1]);
+			bool const endBoundary = (i + 4 >= length) || !isIdentifierCharacter(source[i + 4]);
+			if (!startBoundary || !endBoundary)
+				continue;
+
+			// Skip whitespace and require an opening parenthesis: this is the entry point
+			// rather than a mention of the word.
+			int j = i + 4;
+			while (j < length && (source[j] == ' ' || source[j] == '\t' || source[j] == '\n' || source[j] == '\r'))
+				++j;
+
+			if (j < length && source[j] == '(')
+			{
+				entry = source + i;
+				break;
+			}
+		}
+
+		if (!entry)
+		{
+			WARNING(true, ("Direct3d11: '%s' has no recognisable main, so the alpha test epilogue could not be injected. Alpha-tested pixels will not be discarded.", name));
+			return NULL;
+		}
+
+		// Walk to the body's opening brace, then find its matching close.
+		int position = static_cast<int>(entry - source);
+		int depth = 0;
+		int bodyStart = -1;
+		int bodyEnd = -1;
+
+		for (int i = position; i < length; ++i)
+		{
+			if (source[i] == '{')
+			{
+				if (bodyStart < 0)
+					bodyStart = i;
+				++depth;
+			}
+			else if (source[i] == '}')
+			{
+				--depth;
+				if (bodyStart >= 0 && depth == 0)
+				{
+					bodyEnd = i;
+					break;
+				}
+			}
+		}
+
+		if (bodyStart < 0 || bodyEnd < 0)
+		{
+			WARNING(true, ("Direct3d11: '%s' has a main whose body could not be delimited, so the alpha test epilogue could not be injected.", name));
+			return NULL;
+		}
+
+		// Worst case: every return grows by the call text, plus the prologue.
+		int const prologueLength = static_cast<int>(sizeof(cms_pixelEpiloguePrologue) - 1);
+		char const openText[] = "swgPixelEpilogue(";
+		int const openLength = static_cast<int>(sizeof(openText) - 1);
+
+		int returnCount = 0;
+		for (int i = bodyStart; i < bodyEnd; ++i)
+		{
+			if (memcmp(source + i, "return", 6) != 0 || i + 6 > bodyEnd)
+				continue;
+			bool const startBoundary = !isIdentifierCharacter(source[i - 1]);
+			bool const endBoundary = !isIdentifierCharacter(source[i + 6]);
+			if (startBoundary && endBoundary)
+				++returnCount;
+		}
+
+		if (!returnCount)
+		{
+			WARNING(true, ("Direct3d11: '%s' has a main with no return statement, so the alpha test epilogue could not be injected.", name));
+			return NULL;
+		}
+
+		char * const result = new char[prologueLength + length + (returnCount * (openLength + 1)) + 1];
+		char *destination = result;
+
+		memcpy(destination, cms_pixelEpiloguePrologue, static_cast<size_t>(prologueLength));
+		destination += prologueLength;
+
+		int i = 0;
+		while (i < length)
+		{
+			bool rewrote = false;
+
+			if (i >= bodyStart && i < bodyEnd && i + 6 <= length && memcmp(source + i, "return", 6) == 0)
+			{
+				bool const startBoundary = (i == 0) || !isIdentifierCharacter(source[i - 1]);
+				bool const endBoundary = (i + 6 >= length) || !isIdentifierCharacter(source[i + 6]);
+
+				if (startBoundary && endBoundary)
+				{
+					// Take the expression up to its terminating semicolon. An HLSL return
+					// expression cannot itself contain one.
+					int end = i + 6;
+					while (end < length && source[end] != ';')
+						++end;
+
+					if (end < length)
+					{
+						memcpy(destination, "return ", 7);
+						destination += 7;
+						memcpy(destination, openText, static_cast<size_t>(openLength));
+						destination += openLength;
+
+						int const expressionLength = end - (i + 6);
+						memcpy(destination, source + i + 6, static_cast<size_t>(expressionLength));
+						destination += expressionLength;
+
+						*destination++ = ')';
+						*destination++ = ';';
+
+						i = end + 1;
+						rewrote = true;
+					}
+				}
+			}
+
+			if (!rewrote)
+				*destination++ = source[i++];
+		}
+
+		resultLength = static_cast<int>(destination - result);
+		return result;
+	}
+
 }
 using namespace Direct3d11_ShaderSourceNamespace;
 
@@ -637,6 +829,22 @@ char *Direct3d11_ShaderSource::patchProgramSource(char const *name, char const *
 		delete [] current;
 		current = stripped;
 		currentLength = static_cast<int>(destination - stripped);
+	}
+
+	if (!isVertexProgram)
+	{
+		// Patch 8: the alpha test epilogue. Applied last so that it wraps whatever the
+		// earlier rewrites produced rather than being rewritten by them.
+		char const * const scanSource = current ? current : source;
+
+		int injectedLength = 0;
+		char * const injected = injectPixelEpilogue(name, scanSource, currentLength, injectedLength);
+		if (injected)
+		{
+			delete [] current;
+			current = injected;
+			currentLength = injectedLength;
+		}
 	}
 
 	if (!current)

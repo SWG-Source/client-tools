@@ -13,6 +13,7 @@
 #include "PaddedVector.h"
 
 #include "clientGraphics/ShaderConstantRegisters.h"
+#include "clientGraphics/ShaderImplementation.h"
 
 #include <math.h>
 
@@ -50,6 +51,23 @@ namespace Direct3d11_ConstantBuffersNamespace
 	ID3D11Buffer   *ms_vertexGlobals;
 	ID3D11Buffer   *ms_pixelGlobals;
 
+	// The pixel epilogue at b1. One row, holding the alpha test as a (scale, bias) pair the
+	// injected shader code applies with a single multiply-add and a clip. It is a separate
+	// buffer rather than a row of $Globals because $Globals byte offsets ARE the register
+	// ABI every shader in the corpus depends on, and there is no reason to move that
+	// contract for something the backend owns outright.
+	ID3D11Buffer   *ms_pixelEpilogue;
+	float           ms_epilogueShadow[4];
+	bool            ms_epilogueDirty;
+	bool            ms_epilogueBound;
+
+	// The state the pair is derived from. Both the material reference and the engine fade
+	// opacity move it, so it is derived at flush from whichever changed rather than at
+	// either call site.
+	int             ms_alphaTestFunction;
+	float           ms_alphaTestReference;
+	float           ms_alphaFadeOpacity = 1.0f;
+
 	// The ring, when the device can offset-bind and no-overwrite it. Otherwise a
 	// small set of single-slice buffers renamed with DISCARD in turn.
 	ID3D11Buffer   *ms_perObjectRing;
@@ -65,6 +83,7 @@ namespace Direct3d11_ConstantBuffersNamespace
 
 	void            markVertexDirty(int firstRow, int rowCount);
 	void            markPixelDirty(int firstRow, int rowCount);
+	void            flushPixelEpilogue();
 	bool            createBuffers();
 	void            releaseBuffers();
 	void            flushPerObject();
@@ -126,6 +145,15 @@ bool Direct3d11_ConstantBuffersNamespace::createBuffers()
 	}
 	++Direct3d11_Metrics::constantBufferCreations;
 
+	description.ByteWidth = static_cast<UINT>(cms_bytesPerRow);
+	hresult = device->CreateBuffer(&description, NULL, &ms_pixelEpilogue);
+	if (FAILED(hresult) || !ms_pixelEpilogue)
+	{
+		WARNING(true, ("Direct3d11: the pixel epilogue constant buffer could not be created (%s).", Direct3d11_Device::describeHresult(hresult)));
+		return false;
+	}
+	++Direct3d11_Metrics::constantBufferCreations;
+
 	// A ring needs both capabilities. Without either, a per-draw slice cannot be
 	// appended and bound by offset, and the fallback is renaming a small buffer
 	// per draw -- which works, costs more, and is reported rather than assumed.
@@ -177,6 +205,7 @@ void Direct3d11_ConstantBuffersNamespace::releaseBuffers()
 
 	if (ms_perObjectRing) { ms_perObjectRing->Release(); ms_perObjectRing = NULL; }
 	if (ms_pixelGlobals)  { ms_pixelGlobals->Release();  ms_pixelGlobals = NULL; }
+	if (ms_pixelEpilogue) { ms_pixelEpilogue->Release(); ms_pixelEpilogue = NULL; }
 	if (ms_vertexGlobals) { ms_vertexGlobals->Release(); ms_vertexGlobals = NULL; }
 }
 
@@ -418,6 +447,113 @@ void Direct3d11_ConstantBuffersNamespace::flushPerObject()
  * span is copied, so an unchanged tail costs nothing to skip.
  */
 
+void Direct3d11_ConstantBuffersNamespace::flushPixelEpilogue()
+{
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	if (!context || !ms_pixelEpilogue)
+		return;
+
+	if (ms_epilogueDirty)
+	{
+		// Six of the engine eight compare functions reduce to clip(a * scale + bias). Equal
+		// and NotEqual do not, and an alpha test has no ordinary use for either; if one ever
+		// appears it is reported and treated as passing, which draws too much rather than
+		// discarding the wrong pixels.
+		//
+		// The reference is scaled by the fade opacity exactly as DX9 does
+		// (Direct3d9.cpp:3939), and normalised: the engine stores it as an 8-bit value while
+		// the shader compares a float.
+		float const reference = (ms_alphaTestReference * ms_alphaFadeOpacity) / 255.0f;
+
+		// One step of an 8-bit alpha, which is the precision D3D9 compared at, so a strict
+		// test differs from a non-strict one by exactly the smallest representable amount.
+		float const epsilon = 1.0f / 255.0f;
+
+		float scale = 0.0f;
+		float bias  = 1.0f;
+
+		switch (ms_alphaTestFunction)
+		{
+			case ShaderImplementation::Pass::C_Never:          scale =  0.0f; bias = -1.0f;                  break;
+			case ShaderImplementation::Pass::C_Always:         scale =  0.0f; bias =  1.0f;                  break;
+			case ShaderImplementation::Pass::C_GreaterOrEqual: scale =  1.0f; bias = -reference;             break;
+			case ShaderImplementation::Pass::C_Greater:        scale =  1.0f; bias = -(reference + epsilon); break;
+			case ShaderImplementation::Pass::C_LessOrEqual:    scale = -1.0f; bias =  reference;             break;
+			case ShaderImplementation::Pass::C_Less:           scale = -1.0f; bias =  reference - epsilon;   break;
+
+			case ShaderImplementation::Pass::C_Equal:
+			case ShaderImplementation::Pass::C_NotEqual:
+			default:
+				{
+					static bool reported = false;
+					if (!reported)
+					{
+						reported = true;
+						WARNING(true, ("Direct3d11: an alpha test asks for compare function %d, which cannot be written as a single multiply-add and which an alpha test has no ordinary use for. Treating it as always passing. Reported once.", ms_alphaTestFunction));
+					}
+					scale = 0.0f;
+					bias  = 1.0f;
+				}
+				break;
+		}
+
+		if (ms_epilogueShadow[0] != scale || ms_epilogueShadow[1] != bias)
+		{
+			ms_epilogueShadow[0] = scale;
+			ms_epilogueShadow[1] = bias;
+			ms_epilogueShadow[2] = 0.0f;
+			ms_epilogueShadow[3] = 0.0f;
+
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			Zero(mapped);
+			if (SUCCEEDED(context->Map(ms_pixelEpilogue, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+			{
+				memcpy(mapped.pData, ms_epilogueShadow, sizeof(ms_epilogueShadow));
+				context->Unmap(ms_pixelEpilogue, 0);
+
+				Direct3d11_Metrics::constantBufferBytes += static_cast<int>(sizeof(ms_epilogueShadow));
+				++Direct3d11_Metrics::constantBufferUpdates;
+			}
+		}
+
+		ms_epilogueDirty = false;
+	}
+
+	// Bound once. Every pixel shader declares the buffer, so the binding never changes and
+	// re-binding it per draw would be pure traffic.
+	if (!ms_epilogueBound)
+	{
+		ms_epilogueBound = true;
+		UINT const slot = Direct3d11_ConstantBuffers::PIXEL_EPILOGUE_SLOT;
+		context->PSSetConstantBuffers(slot, 1, &ms_pixelEpilogue);
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::setAlphaTest(int compareFunction, int reference)
+{
+	if (ms_alphaTestFunction == compareFunction && ms_alphaTestReference == static_cast<float>(reference))
+		return;
+
+	ms_alphaTestFunction = compareFunction;
+	ms_alphaTestReference = static_cast<float>(reference);
+	ms_epilogueDirty = true;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::setAlphaFadeOpacity(float opacity)
+{
+	if (ms_alphaFadeOpacity == opacity)
+		return;
+
+	ms_alphaFadeOpacity = opacity;
+	ms_epilogueDirty = true;
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_ConstantBuffers::flush()
 {
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
@@ -465,6 +601,8 @@ void Direct3d11_ConstantBuffers::flush()
 		ms_pixelDirtyFirst = -1;
 		ms_pixelDirtyLast = -1;
 	}
+
+	flushPixelEpilogue();
 
 	if (!ms_perObjectBoundThisDraw)
 		flushPerObject();

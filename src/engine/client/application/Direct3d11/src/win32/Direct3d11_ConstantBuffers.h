@@ -103,6 +103,13 @@ public:
 	static void  setFog(bool enabled, float density);
 	static void  setCurrentTime(float currentTime);
 
+	// The alpha test, which D3D11 has no state for at all. The code injected into every
+	// pixel program applies it as clip(alpha * scale + bias); the pair is derived inside
+	// this class because both the material reference and the engine fade opacity move it,
+	// and DX9 combined the two the same way.
+	static void  setAlphaTest(int compareFunction, int reference);
+	static void  setAlphaFadeOpacity(float opacity);
+
 private:
 
 	Direct3d11_ConstantBuffers();

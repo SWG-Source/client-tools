@@ -46,16 +46,14 @@
 //   the static shader.
 //
 // ----------------------------------------------------------------------
-// Two states D3D11 cannot express, handled honestly
+// Two states D3D11 cannot express
 //
 //   Alpha test. D3D9's ALPHATESTENABLE/ALPHAFUNC/ALPHAREF have no D3D11 equivalent at all;
-//   the test has to become a discard in the pixel shader. The function is per-pass and is
-//   recorded here, but the reference is dynamic -- DX9 computes it per object from
-//   ms_alphaTestReferenceValue scaled by the alpha fade opacity
-//   (Direct3d9.cpp:3939) -- so it belongs in a constant buffer rather than in a shader
-//   variant. That is what constant buffer slot b1 was reserved for. Until the epilogue
-//   exists, a pass that enables alpha test says so once rather than silently drawing
-//   pixels that should have been discarded.
+//   the test is a discard in the pixel shader instead. The compare function is per-pass and
+//   is recorded here; the reference is material data, and the two are combined by the static
+//   shader and pushed to constant buffer b1, where the code injected into every pixel program
+//   applies them. It is not a shader variant because the reference is dynamic -- DX9 computes
+//   it per object from the reference scaled by the alpha fade opacity (Direct3d9.cpp:3939).
 //
 //   Flat shading. D3D9's SHADEMODE has no state equivalent; flat interpolation is a
 //   `nointerpolation` modifier on the shader output, which means it is a property of the
@@ -100,6 +98,12 @@ public:
 
 	// Whether this pass blends, which the sorter wants to know without applying anything.
 	bool isAlphaBlendEnabled(int passNumber) const;
+
+	// The alpha test this pass asks for. The compare function is effect data and lives here;
+	// the reference is material data and lives on the static shader, which is what combines
+	// the two and pushes them to the pixel epilogue.
+	bool isAlphaTestEnabled(int passNumber) const;
+	int  getAlphaTestFunction(int passNumber) const;
 
 private:
 

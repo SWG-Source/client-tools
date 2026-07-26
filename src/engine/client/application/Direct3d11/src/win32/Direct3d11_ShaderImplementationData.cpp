@@ -26,7 +26,6 @@ namespace Direct3d11_ShaderImplementationDataNamespace
 	// Reported once each rather than per pass. Both are real gaps with designed answers;
 	// what they must not be is silent, and what they equally must not be is a warning per
 	// implementation across a corpus of seventeen thousand shaders.
-	bool ms_reportedAlphaTest;
 	bool ms_reportedFlatShading;
 
 	float const cms_noBlendFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -40,7 +39,6 @@ void Direct3d11_ShaderImplementationData::install()
 	DEBUG_FATAL(ms_installed, ("Direct3d11_ShaderImplementationData::install called twice"));
 	ms_installed = true;
 
-	ms_reportedAlphaTest = false;
 	ms_reportedFlatShading = false;
 }
 
@@ -169,12 +167,6 @@ Direct3d11_ShaderImplementationData::Direct3d11_ShaderImplementationData(ShaderI
 		// ----------------------------------------------------------
 		// The two states D3D11 cannot express
 
-		if (source.m_alphaTestEnable && !ms_reportedAlphaTest)
-		{
-			ms_reportedAlphaTest = true;
-			WARNING(true, ("Direct3d11: a shader pass enables alpha testing, which D3D11 has no state for -- it has to become a discard in the pixel shader, driven from constant buffer b1. Until that epilogue exists, alpha-tested surfaces draw pixels that should be discarded. Reported once."));
-		}
-
 		if (source.m_shadeMode == ShaderImplementation::Pass::SM_Flat && !ms_reportedFlatShading)
 		{
 			ms_reportedFlatShading = true;
@@ -197,6 +189,26 @@ Direct3d11_ShaderImplementationData::~Direct3d11_ShaderImplementationData()
 }
 
 // ======================================================================
+
+bool Direct3d11_ShaderImplementationData::isAlphaTestEnabled(int passNumber) const
+{
+	if (passNumber < 0 || passNumber >= m_passCount)
+		return false;
+
+	return m_passes[passNumber].alphaTestEnable;
+}
+
+// ----------------------------------------------------------------------
+
+int Direct3d11_ShaderImplementationData::getAlphaTestFunction(int passNumber) const
+{
+	if (passNumber < 0 || passNumber >= m_passCount)
+		return static_cast<int>(ShaderImplementation::Pass::C_Always);
+
+	return m_passes[passNumber].alphaTestFunction;
+}
+
+// ----------------------------------------------------------------------
 
 bool Direct3d11_ShaderImplementationData::isAlphaBlendEnabled(int passNumber) const
 {
