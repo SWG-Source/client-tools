@@ -8,6 +8,8 @@
 #include "FirstDirect3d11.h"
 #include "Direct3d11_ShaderSource.h"
 
+#include "Direct3d11_ShaderSignature.h"
+
 #include <string.h>
 
 // ======================================================================
@@ -1341,36 +1343,58 @@ char *Direct3d11_ShaderSource::patchProgramSource(char const *name, char const *
 		currentLength = static_cast<int>(destination - stripped);
 	}
 
-	if (!isVertexProgram)
+	// Patch 8: the canonical interpolant signature, applied last so it wraps whatever the earlier
+	// rewrites produced rather than being rewritten by them.
+	//
+	// This replaces two earlier transforms and is simpler than either. D3D11 links the vertex and
+	// pixel stages by REGISTER, not by semantic name, so two independently compiled programs
+	// disagree about where a semantic lives and every draw is rejected -- which is what made the
+	// first working run of this client render nothing at all. Direct3d11_ShaderSignature gives both
+	// stages one shared declaration, so the registers agree by construction.
+	//
+	// The alpha test and fog blend go in the generated pixel wrapper, which is a better place than
+	// where they used to be: rewriting every `return` inside the original entry point and threading
+	// a FOG parameter into its signature. And the vertex side no longer needs a fog output injected
+	// into its own struct, because the canonical struct always has one.
 	{
-		// Patch 8: the alpha test and fog epilogue. Applied last so that it wraps whatever the
-		// earlier rewrites produced rather than being rewritten by them.
 		char const * const scanSource = current ? current : source;
 
-		int injectedLength = 0;
-		char * const injected = injectPixelEpilogue(name, scanSource, currentLength, injectedLength);
-		if (injected)
+		int wrappedLength = 0;
+		char *wrapped = NULL;
+
+		if (isVertexProgram)
 		{
-			delete [] current;
-			current = injected;
-			currentLength = injectedLength;
+			wrapped = Direct3d11_ShaderSignature::wrapVertexProgram(name, scanSource, currentLength, wrappedLength);
 		}
-	}
-	else
-	{
-		// Patch 9: a fog output, for the minority of vertex programs that have none. The pixel
-		// epilogue reads one from every program, so this is what makes that safe -- see
-		// injectFogOutput. Returns null when the program already has a fog output, which is the
-		// common case, and the source is left alone.
-		char const * const scanSource = current ? current : source;
+		else
+		{
+			// The epilogue's cbuffer and function have to be declared before the wrapper that calls
+			// them, and the wrapper is appended at the end -- so the prologue goes in front of the
+			// whole program first, and the wrap happens over the result.
+			int const prologueLength = isizeof(cms_pixelEpiloguePrologue) - 1;
 
-		int injectedLength = 0;
-		char * const injected = injectFogOutput(name, scanSource, currentLength, injectedLength);
-		if (injected)
+			char * const withPrologue = new char[prologueLength + currentLength + 1];
+			memcpy(withPrologue, cms_pixelEpiloguePrologue, static_cast<size_t>(prologueLength));
+			memcpy(withPrologue + prologueLength, scanSource, static_cast<size_t>(currentLength));
+			withPrologue[prologueLength + currentLength] = '\0';
+
+			wrapped = Direct3d11_ShaderSignature::wrapPixelProgram(name, withPrologue, prologueLength + currentLength, wrappedLength);
+
+			delete [] withPrologue;
+		}
+
+		if (wrapped)
 		{
 			delete [] current;
-			current = injected;
-			currentLength = injectedLength;
+			current = wrapped;
+			currentLength = wrappedLength;
+		}
+		else
+		{
+			// Without a canonical signature the program cannot link to anything, so failing here is
+			// terminal for it. wrapVertexProgram and wrapPixelProgram have already said why.
+			delete [] current;
+			return NULL;
 		}
 	}
 

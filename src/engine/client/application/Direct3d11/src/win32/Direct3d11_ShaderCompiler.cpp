@@ -346,6 +346,32 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 	{
 		char const * const detail = errors ? static_cast<char const *>(errors->GetBufferPointer()) : "no detail available";
 
+		// The exact text that failed, written beside the log.
+		//
+		// The error names a line in a file, and by this point the file is not any file on disk: it
+		// is the asset after every source transform, with a generated signature wrapper appended.
+		// Reasoning about a compile error from the asset instead of from this is how an afternoon
+		// gets spent on the wrong copy of a shader -- the corpus resolves differently offline than
+		// it does in the client, so "it compiles in the harness" and "it compiles here" are
+		// genuinely different claims.
+		{
+			char dumpPath[512];
+			strcpy(dumpPath, "logs/failed_");
+
+			int j = static_cast<int>(strlen(dumpPath));
+			for (int i = 0; name[i] && j < isizeof(dumpPath) - 8; ++i, ++j)
+				dumpPath[j] = (name[i] == '/' || name[i] == '\\' || name[i] == ':') ? '_' : name[i];
+			strcpy(dumpPath + j, ".hlsl");
+
+			FILE * const dump = fopen(dumpPath, "wb");
+			if (dump)
+			{
+				IGNORE_RETURN(fwrite(source, 1, static_cast<size_t>(sourceLength), dump));
+				fclose(dump);
+				WARNING(true, ("Direct3d11: the source that failed is in %s.", dumpPath));
+			}
+		}
+
 #if PRODUCTION == 0
 		FATAL(true, ("Direct3d11: '%s' failed to compile as %s (%s):\n%s", name, target, Direct3d11_Device::describeHresult(hresult), detail));
 #else
