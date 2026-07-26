@@ -940,3 +940,95 @@ The harness lives in the session scratchpad rather than the tree: this codebase 
 unit-test target, and adding one is a change worth proposing on its own rather than
 smuggling in behind a texture commit. `build.ps1`, `main.cpp`, `bccheck.py` and
 `bcmodes.py` reproduce every number above.
+
+## C11 is blocked on inputs, and the blockers are not code
+
+C10 finished with the build green in all three configurations and the full client
+linking. C11 -- the four shader data classes, and the commit that would produce the
+first pixels -- was read out of the DX9 backend in full before being written, and that
+reading turned up two blockers that no amount of implementation clears.
+
+### The shader corpus is not in this repository
+
+`client-assets` contains eleven `.sht` files and one `swgsource_3.0.tre`. It contains no
+`.eft` effects, no `.vsh` vertex programs, no `.psh` pixel programs and no `.inc`
+shader includes. `client.cfg` names only `searchTree_00_8=swgsource_3.0.tre` and
+`.include`s five further config files that are also absent, so the base TRE stack comes
+from an external retail install at runtime.
+
+What that blocks, concretely:
+
+- Nothing can be compiled, so no shader path can be tested at all. The register-ABI work
+  (`/Gec` placing `register(cN)` at `$Globals` byte offset 16N, verified with fxc) is the
+  right mechanism, but whether the real corpus compiles at `vs_4_0` is unknown until the
+  corpus exists.
+- The split between HLSL and assembly programs cannot be counted. An earlier figure of
+  96 assembly programs appears in the plan; it is not verifiable from this tree and
+  should be treated as unknown rather than repeated.
+- `Direct3d11_ShaderCompiler`'s include handler resolves paths out of the TRE set. With
+  no TRE set there is nothing to resolve.
+
+This needs either the base TRE files added to `client-assets`, or a path to an existing
+SWG install to point `client.cfg` at.
+
+### D3D11 has no assembler, and some of the corpus is assembly
+
+Shader program text begins with a marker line that is either `//hlsl vs_1_1` or
+`//asm vs_1_1` (`Direct3d9_VertexShaderData.cpp:362-427`, which documents both forms with
+worked examples). DX9 branches on it: HLSL goes to `D3DXCompileShader`, assembly to
+`D3DXAssembleShader`.
+
+`D3DCompile` compiles HLSL only. `D3DAssemble` is not in `d3dcompiler_47`, and even if it
+were, D3D9 vertex/pixel shader assembly is not a D3D11 shader model. So every `//asm`
+program in the corpus has exactly three possible fates: translate it to HLSL, hand-write
+a replacement, or accept that the effects using it do not render.
+
+That is a content decision over an unknown number of files, and it cannot even be scoped
+until the corpus is available. Until then the DX11 program classes should refuse an
+`//asm` program loudly and name the file, so that the first run produces a listable work
+item instead of a blank screen.
+
+### The DX9 x64 baseline is not vanilla, and parity means inheriting its patches
+
+This one is a decision rather than a blocker, and it changes what "byte-parity with DX9"
+means. The x64 DX9 backend on `x64-dx9-vanilla` patches shader source at load time in
+three places, all inside `Direct3d9_VertexShaderData.cpp`:
+
+1. Every include gets `#define point _pt_lights` prepended, because modern compilers treat
+   `point` as a reserved word and the SOE includes use it as a field name on `LightData`
+   (`Include::Include`, lines 104-108). This one is mechanical and has no visual effect --
+   it should be reproduced without further thought.
+
+2. `c_ambient.inc`'s `mov r7, vColor0` is rewritten to `add r7, vColor0, c16`
+   (lines 110-121). The stated reason: skinned meshes have no baked `vColor0`, so
+   characters received zero ambient and went solid black in some scenes. **This changes
+   the image.**
+
+3. Every occurrence of `lightData.ambient.ambientColor + diffuseSpecular.diffuse` is
+   rewritten to `max(lightData.ambient.ambientColor + diffuseSpecular.diffuse, 0.85)`
+   (lines 430-450). The stated reason: dot3 bump shaders skip the parallel-spec light
+   slot, so outdoor characters rendered dark. **This changes the image, and 0.85 is a
+   tuned constant, not a derived one.**
+
+Patches 2 and 3 are described in their own comments as fixes for dark or black
+characters. They are part of the baseline this port is being measured against, so
+reproducing them is what parity requires -- but they are also exactly the kind of thing
+a port is a good moment to revisit, and 0.85 is a number somebody chose by looking at a
+screen.
+
+`Direct3d11_ShaderCompiler`'s include handler currently applies none of the three. That
+is a deliberate gap, not an oversight: which of them to carry forward is the user's call,
+and guessing would either bake in a hack silently or change the lighting silently.
+
+### Why this is the stopping point rather than a reason to write more
+
+The four classes could be written from the DX9 source and the engine headers without the
+corpus. They would be roughly 3,300 lines with no way to compile a single shader, no way
+to reach the first-pixel gate, and no way to check any of it -- against a standard that
+so far has been to verify every load-bearing claim, empirically where possible (the
+`/Gec` offsets with fxc, the gamma table, the four state tables, the viewport packing,
+and the whole texture converter against an independent decoder).
+
+Writing that much unverifiable code in one stretch, on top of a decision about whether
+the baseline's lighting patches are part of the target, is how a port acquires the
+problems this one has so far avoided.
