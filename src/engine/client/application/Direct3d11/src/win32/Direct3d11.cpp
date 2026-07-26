@@ -33,6 +33,7 @@
 #include "Direct3d11_QueryPool.h"
 #include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_ShaderCompiler.h"
+#include "Direct3d11_ShaderImplementationData.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_StateObjectCache.h"
 #include "Direct3d11_SwapChain.h"
@@ -416,7 +417,7 @@ namespace Direct3d11Namespace
 	// The resource factories. Fatal rather than null: the engine stores what
 	// these return and dereferences it later, so a null converts a missing
 	// feature into an access violation somewhere unrelated.
-	ShaderImplementationGraphicsData *createShaderImplementationGraphicsData(const ShaderImplementation &)        { DX11_NOT_IMPLEMENTED_FATAL("createShaderImplementationGraphicsData"); return NULL; }
+	ShaderImplementationGraphicsData *createShaderImplementationGraphicsData(const ShaderImplementation &implementation) { return new Direct3d11_ShaderImplementationData(implementation); }
 	StaticShaderGraphicsData *createStaticShaderGraphicsData(const StaticShader &)                                { DX11_NOT_IMPLEMENTED_FATAL("createStaticShaderGraphicsData"); return NULL; }
 	StaticVertexBufferGraphicsData *createStaticVertexBufferData(const StaticVertexBuffer &vertexBuffer)          { return new Direct3d11_StaticVertexBufferData(vertexBuffer); }
 	DynamicVertexBufferGraphicsData *createDynamicVertexBufferData(const DynamicVertexBuffer &vertexBuffer)       { return new Direct3d11_DynamicVertexBufferData(vertexBuffer); }
@@ -681,6 +682,7 @@ bool Direct3d11::install(Gl_install *gl_install)
 
 	// After the compiler, which they use, and after the device, which they create shader
 	// objects on.
+	Direct3d11_ShaderImplementationData::install();
 	Direct3d11_VertexShaderData::install();
 	Direct3d11_PixelShaderProgramData::install();
 
@@ -732,6 +734,7 @@ void Direct3d11Namespace::remove()
 	// Before the state cache, mirroring the install order: draining the global texture
 	// registry can destroy textures, and a texture's destructor unbinds itself through
 	// the cache.
+	Direct3d11_ShaderImplementationData::remove();
 	Direct3d11_PixelShaderProgramData::remove();
 	Direct3d11_VertexShaderData::remove();
 
