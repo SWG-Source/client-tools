@@ -41,6 +41,7 @@ public:
 	// the vertex format; a D3D11 input layout is validated against specific shader
 	// bytecode, so it cannot be resolved until both are known.
 	static void setCurrentVertexShaderBytecode(void const *bytecode, unsigned int size);
+	static void setCurrentTextureCoordinateSetMapping(int const *mapping, int count);
 
 	// The single pre-draw chokepoint every draw entry point goes through. Returns
 	// false when the draw must be skipped, having counted and explained it.

@@ -1350,3 +1350,75 @@ those sixteen programs should compute, and there is no defensible default:
 
 Each is a different image, none of them is what DX9 renders today, and DX9 does not render
 anything today for this content -- it fatals. That is a content decision.
+
+## The texture-coordinate key is gone
+
+This is the one deliberate structural departure from DX9 in the shader path, so it gets its
+own section.
+
+### What DX9 does
+
+A vertex program declares its texture coordinate sets by TAG -- MAIN, NRML, DOT3, DTLA --
+and each material decides which of the vertex buffer's numbered sets a given tag reads,
+through `StaticShader::getTextureCoordinateSet`. Under D3D9 vertex inputs were fixed
+registers v7 to v14, so which register a tag lived in had to be settled at COMPILE time.
+
+DX9 therefore packs the per-tag set indices into a 24-bit key
+(`Direct3d9_StaticShaderData.cpp:550-575`), compiles a separate variant of the program for
+every key it encounters, keeps them in a `std::map` per program, and does a map lookup per
+draw behind a one-entry fast path (`Direct3d9_VertexShaderData.cpp:761-770`).
+
+### What this backend does instead
+
+D3D11 binds vertex inputs by semantic NAME and INDEX, resolved by the input layout at bind
+time. The remapping the key encodes is exactly what an input layout does.
+
+So a program is compiled ONCE against a canonical mapping -- tag i becomes `TEXCOORD i` in
+declaration order -- and `Direct3d11_InputLayoutCache` places the element for tag i at the
+offset of whichever set the material pointed that tag at. What the shader computes does not
+change; only which slot it reads from, and the layout compensates.
+
+The mapping becomes part of the layout cache key, which is where it belongs: it describes
+how a material wires a vertex buffer to a program, not anything about the program.
+
+### What that removes
+
+- N compiled variants per program, and the per-program shader map.
+- The per-draw map lookup.
+- A failure mode. DX9 assigns the declared DIMENSION to the set index rather than to the
+  tag, so two tags mapping to one set with different dimensions collide -- which is what
+  `Direct3d9_VertexShaderData.cpp:594`'s "Competing dimensions" assertion guards against.
+  Under canonical indexing each tag owns its own index and the collision cannot arise.
+
+It also makes offline bytecode precompilation tractable, which it was not before: 614
+programs, one blob each, instead of an unbounded key space to enumerate or a persistent
+cache to ship and invalidate.
+
+### Verified before it was built
+
+Every reachable program compiles under the canonical mapping -- 192 HLSL vertex programs and
+36 converted from assembly -- because that is the mapping the fxc sweep already used. The
+declared dimension follows the tag rather than the set: for `a_specmap_bump_vs20.vsh`, tags
+`[MAIN, NRML, DOT3]` produce `float2 TEXCOORD0; float2 TEXCOORD1; float4 TEXCOORD2`,
+independently of any key.
+
+Two behaviours are preserved deliberately:
+
+- A material naming a set the vertex buffer does not carry warns and falls back to set 0,
+  which is what DX9 does at `Direct3d9_StaticShaderData.cpp:564`.
+- A program with no tags at all -- the converted assembly programs that address sets by
+  number, `cloudlayer` being the one -- binds its sets in natural order.
+
+Element widths come from the vertex buffer, not from the shader's declaration. The input
+assembler fills components the buffer does not supply with 0 and w with 1, which is what
+D3D9 did for an unwritten register component, so a two-component set feeding a
+four-component declaration is correct rather than merely legal.
+
+### The remaining gap
+
+`Direct3d11_StaticShaderData` does not exist yet, so nothing calls
+`setCurrentTextureCoordinateSetMapping` and the mapping count is zero at every draw --
+which means sets currently bind in natural order. That is the correct behaviour for a
+tagless program and the wrong behaviour for a tagged one, and it is the next thing to wire.
+The seam is in place so that wiring it is a single call from where the static shader is
+applied.

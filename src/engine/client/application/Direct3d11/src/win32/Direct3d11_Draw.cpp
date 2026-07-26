@@ -69,6 +69,14 @@ namespace Direct3d11_DrawNamespace
 	void const     *ms_currentVertexShaderBytecode;
 	unsigned int    ms_currentVertexShaderBytecodeSize;
 
+	// Which vertex buffer texture coordinate set each of the bound program's tags reads, in
+	// declaration order. This is what DX9 compiled into the shader as a texture coordinate
+	// key; here the program is compiled once and the input layout does the routing, so the
+	// mapping travels with the bind instead. A count of zero means the program addresses its
+	// sets by number rather than by tag.
+	int             ms_currentTextureCoordinateSetMapping[Direct3d11_InputLayoutCache::MAX_TEXTURE_COORDINATE_SETS];
+	int             ms_currentTextureCoordinateSetMappingCount;
+
 	bool            ms_warnedAboutMissingVertexShader;
 }
 using namespace Direct3d11_DrawNamespace;
@@ -317,6 +325,21 @@ void Direct3d11::setCurrentVertexShaderBytecode(void const *bytecode, unsigned i
 }
 
 // ----------------------------------------------------------------------
+
+void Direct3d11::setCurrentTextureCoordinateSetMapping(int const *mapping, int count)
+{
+	if (count > Direct3d11_InputLayoutCache::MAX_TEXTURE_COORDINATE_SETS)
+	{
+		DEBUG_WARNING(true, ("Direct3d11: a program declares %d texture coordinate set tags; only %d are carried.", count, static_cast<int>(Direct3d11_InputLayoutCache::MAX_TEXTURE_COORDINATE_SETS)));
+		count = Direct3d11_InputLayoutCache::MAX_TEXTURE_COORDINATE_SETS;
+	}
+
+	ms_currentTextureCoordinateSetMappingCount = count;
+	for (int i = 0; i < count; ++i)
+		ms_currentTextureCoordinateSetMapping[i] = mapping[i];
+}
+
+// ----------------------------------------------------------------------
 /**
  * Everything that has to happen before any draw, in one place.
  *
@@ -354,7 +377,7 @@ bool Direct3d11::prepareToDraw()
 		return false;
 	}
 
-	ID3D11InputLayout * const layout = Direct3d11_InputLayoutCache::getInputLayout(ms_streamFormatFlags, ms_streamCount, ms_currentVertexShaderBytecode, ms_currentVertexShaderBytecodeSize);
+	ID3D11InputLayout * const layout = Direct3d11_InputLayoutCache::getInputLayout(ms_streamFormatFlags, ms_streamCount, ms_currentVertexShaderBytecode, ms_currentVertexShaderBytecodeSize, ms_currentTextureCoordinateSetMapping, ms_currentTextureCoordinateSetMappingCount);
 	if (!layout)
 	{
 		// The cache has already explained which format and shader combination could

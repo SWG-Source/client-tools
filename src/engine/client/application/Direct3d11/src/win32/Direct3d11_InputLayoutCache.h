@@ -41,7 +41,8 @@ public:
 	{
 		// The vector path binds at most this many streams. D3D11 allows far more;
 		// the engine has never used more than two.
-		MAX_STREAMS = 4
+		MAX_STREAMS = 4,
+		MAX_TEXTURE_COORDINATE_SETS = 8
 	};
 
 public:
@@ -52,7 +53,13 @@ public:
 	// formatFlags holds one VertexBufferFormat::getFlags() per bound stream, in
 	// slot order. Returns null only if the layout genuinely cannot be built, having
 	// already said why.
-	static ID3D11InputLayout  *getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize);
+	// textureCoordinateSetMapping says, for each texture coordinate set TAG the shader
+	// declares in order, which of the vertex buffer's numbered sets it reads. That is the
+	// information DX9 baked into the shader as a compile-time key; keeping it here instead
+	// is what lets one compiled program serve every material -- see
+	// Direct3d11_VertexShaderData.h. Pass a count of zero for a program that addresses sets
+	// by number rather than by tag, and the sets bind in their natural order.
+	static ID3D11InputLayout  *getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, int const *textureCoordinateSetMapping, int mappingCount);
 
 	static int                 getLayoutCount();
 

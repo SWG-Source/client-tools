@@ -28,6 +28,13 @@ namespace Direct3d11_InputLayoutCacheNamespace
 		int     streamCount;
 		uint32  signatureHash;
 
+		// Which vertex buffer texture coordinate set each of the shader's tags reads, in
+		// the shader's declaration order. This is what used to be baked into the shader as
+		// a compile-time key; it belongs here instead, because it describes how a material
+		// wires a vertex buffer to a program rather than anything about the program.
+		int8    textureCoordinateSetMapping[Direct3d11_InputLayoutCache::MAX_TEXTURE_COORDINATE_SETS];
+		int     mappingCount;
+
 		bool operator<(Key const &rhs) const
 		{
 			return memcmp(this, &rhs, sizeof(Key)) < 0;
@@ -37,8 +44,17 @@ namespace Direct3d11_InputLayoutCacheNamespace
 	typedef std::map<Key, ID3D11InputLayout *> LayoutMap;
 	LayoutMap *ms_layouts;
 
+	// Where one vertex buffer texture coordinate set lives.
+	struct SetLocation
+	{
+		int  stream;
+		int  offset;
+		int  dimension;
+	};
+
 	uint32     hashBytes(void const *data, unsigned int size);
-	int        buildElements(uint32 const *formatFlags, int streamCount, D3D11_INPUT_ELEMENT_DESC *elements, int maxElements);
+	int        locateTextureCoordinateSets(uint32 const *formatFlags, int streamCount, SetLocation *locations, int maxLocations);
+	int        buildElements(uint32 const *formatFlags, int streamCount, int const *mapping, int mappingCount, D3D11_INPUT_ELEMENT_DESC *elements, int maxElements);
 }
 using namespace Direct3d11_InputLayoutCacheNamespace;
 
@@ -76,7 +92,9 @@ uint32 Direct3d11_InputLayoutCacheNamespace::hashBytes(void const *data, unsigne
  *   normal     NORMAL0, three floats
  *   point size PSIZE0, one float
  *   colour 0/1 COLOR0 and COLOR1, as B8G8R8A8_UNORM
- *   texcoords  TEXCOORD with a GLOBAL index, at the set's own dimension
+ *   texcoords  TEXCOORD, one per tag the shader declares, at the vertex buffer set's
+ *              own dimension -- see the texture coordinate section below, which is where
+ *              the specialisation DX9 baked into the shader now lives.
  *
  * Two of those repay attention.
  *
@@ -85,18 +103,16 @@ uint32 Direct3d11_InputLayoutCacheNamespace::hashBytes(void const *data, unsigne
  * D3DDECLTYPE_D3DCOLOR consumed. R8G8B8A8 would read the same bytes and hand the
  * shader red and blue exchanged.
  *
- * The texture coordinate index counts across ALL streams and is deliberately not
- * reset per stream. The skinned dot3 path binds a static stream carrying the
- * ordinary sets and a dynamic stream carrying one four-dimensional set, and the
- * shader's own index for that set is its global ordinal. Resetting per stream would
- * emit two TEXCOORD0 elements and no TEXCOORDn, CreateInputLayout would fail, and
- * with it every skinned character would vanish.
+ * Texture coordinate sets are numbered across ALL streams and deliberately not reset per
+ * stream. The skinned dot3 path binds a static stream carrying the ordinary sets and a
+ * dynamic stream carrying one four-dimensional set, and the engine's index for that set
+ * continues the count rather than restarting -- which is why locateTextureCoordinateSets
+ * builds one flat table over every bound stream.
  */
 
-int Direct3d11_InputLayoutCacheNamespace::buildElements(uint32 const *formatFlags, int streamCount, D3D11_INPUT_ELEMENT_DESC *elements, int maxElements)
+int Direct3d11_InputLayoutCacheNamespace::buildElements(uint32 const *formatFlags, int streamCount, int const *mapping, int mappingCount, D3D11_INPUT_ELEMENT_DESC *elements, int maxElements)
 {
 	int elementCount = 0;
-	int textureCoordinate = 0;
 
 	for (int stream = 0; stream < streamCount; ++stream)
 	{
@@ -171,38 +187,113 @@ int Direct3d11_InputLayoutCacheNamespace::buildElements(uint32 const *formatFlag
 			element.InputSlotClass    = D3D11_INPUT_PER_VERTEX_DATA;
 		}
 
+	}
+
+	// ------------------------------------------------------------------
+	// Texture coordinates. This is where the DX9 shader specialisation went.
+	//
+	// A program declares its sets by TAG, and a material decides which of the vertex
+	// buffer's numbered sets each tag reads. D3D9 had to settle that at compile time,
+	// because vertex inputs were fixed registers, so it compiled one shader variant per
+	// mapping. Here the program is compiled once with tag i at TEXCOORD i, and the routing
+	// happens below: the element for tag i is placed at the offset of the set the material
+	// pointed that tag at.
+	//
+	// A program with no tags -- the converted assembly programs that address sets by number
+	// rather than by tag, cloudlayer being the one -- gets the straight global ordering.
+
+	SetLocation locations[Direct3d11_InputLayoutCache::MAX_TEXTURE_COORDINATE_SETS];
+	int const locationCount = locateTextureCoordinateSets(formatFlags, streamCount, locations, isizeof(locations) / isizeof(locations[0]));
+
+	int const emitCount = mappingCount ? mappingCount : locationCount;
+
+	for (int i = 0; i < emitCount; ++i)
+	{
+		int set = mappingCount ? mapping[i] : i;
+
+		if (set < 0 || set >= locationCount)
+		{
+			// DX9 warns and falls back to set 0 when a material names a set the vertex
+			// buffer does not carry (Direct3d9_StaticShaderData.cpp:564). Same behaviour,
+			// so a mismatch looks the same in both backends.
+			DEBUG_WARNING(true, ("Direct3d11: a shader tag asks for texture coordinate set %d but this vertex buffer has %d; using set 0.", set, locationCount));
+			set = 0;
+			if (locationCount <= 0)
+				break;
+		}
+
+		SetLocation const &location = locations[set];
+
+		FATAL(elementCount >= maxElements, ("Direct3d11: too many input elements"));
+		D3D11_INPUT_ELEMENT_DESC &element = elements[elementCount++];
+		Zero(element);
+		element.SemanticName  = "TEXCOORD";
+		element.SemanticIndex = static_cast<UINT>(i);
+
+		// The element's width is the vertex buffer's, not the shader's. The input assembler
+		// fills components the buffer does not supply with 0, and w with 1, so a two
+		// component set feeding a four component declaration is legal and is what D3D9 did
+		// for an unwritten register component.
+		switch (location.dimension)
+		{
+			case 1:  element.Format = DXGI_FORMAT_R32_FLOAT;          break;
+			case 2:  element.Format = DXGI_FORMAT_R32G32_FLOAT;       break;
+			case 3:  element.Format = DXGI_FORMAT_R32G32B32_FLOAT;    break;
+			case 4:  element.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; break;
+			default:
+				FATAL(true, ("Direct3d11: texture coordinate set %d has dimension %d, which is not 1 to 4.", set, location.dimension));
+				break;
+		}
+
+		element.InputSlot         = static_cast<UINT>(location.stream);
+		element.AlignedByteOffset = static_cast<UINT>(location.offset);
+		element.InputSlotClass    = D3D11_INPUT_PER_VERTEX_DATA;
+	}
+
+	return elementCount;
+}
+
+// ----------------------------------------------------------------------
+/**
+ * Where every texture coordinate set in this vertex buffer lives.
+ *
+ * Indexed by the set's GLOBAL ordinal across streams, which is the numbering the engine's
+ * own set indices use: the skinned dot3 path binds a static stream carrying the ordinary
+ * sets and a dynamic stream carrying one four-dimensional set, and that last set's index
+ * continues the count rather than restarting.
+ */
+
+int Direct3d11_InputLayoutCacheNamespace::locateTextureCoordinateSets(uint32 const *formatFlags, int streamCount, SetLocation *locations, int maxLocations)
+{
+	int count = 0;
+
+	for (int stream = 0; stream < streamCount; ++stream)
+	{
+		VertexBufferDescriptor const &descriptor = Direct3d11_VertexBufferDescriptorMap::getDescriptor(formatFlags[stream]);
+
+		VertexBufferFormat format;
+		format.setFlags(formatFlags[stream]);
+
 		int const setCount = format.getNumberOfTextureCoordinateSets();
 		for (int set = 0; set < setCount; ++set)
 		{
 			if (descriptor.offsetTextureCoordinateSet[set] < 0)
 				continue;
 
-			FATAL(elementCount >= maxElements, ("Direct3d11: too many input elements"));
-			D3D11_INPUT_ELEMENT_DESC &element = elements[elementCount++];
-			Zero(element);
-			element.SemanticName  = "TEXCOORD";
-
-			// Global, not per stream. See the comment above.
-			element.SemanticIndex = static_cast<UINT>(textureCoordinate++);
-
-			switch (format.getTextureCoordinateSetDimension(set))
+			if (count >= maxLocations)
 			{
-				case 1:  element.Format = DXGI_FORMAT_R32_FLOAT;          break;
-				case 2:  element.Format = DXGI_FORMAT_R32G32_FLOAT;       break;
-				case 3:  element.Format = DXGI_FORMAT_R32G32B32_FLOAT;    break;
-				case 4:  element.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; break;
-				default:
-					FATAL(true, ("Direct3d11: texture coordinate set %d has dimension %d, which is not 1 to 4.", set, format.getTextureCoordinateSetDimension(set)));
-					break;
+				DEBUG_WARNING(true, ("Direct3d11: more than %d texture coordinate sets across the bound streams; the rest are ignored.", maxLocations));
+				return count;
 			}
 
-			element.InputSlot         = static_cast<UINT>(stream);
-			element.AlignedByteOffset = static_cast<UINT>(descriptor.offsetTextureCoordinateSet[set]);
-			element.InputSlotClass    = D3D11_INPUT_PER_VERTEX_DATA;
+			locations[count].stream    = stream;
+			locations[count].offset    = descriptor.offsetTextureCoordinateSet[set];
+			locations[count].dimension = format.getTextureCoordinateSetDimension(set);
+			++count;
 		}
 	}
 
-	return elementCount;
+	return count;
 }
 
 // ======================================================================
@@ -230,7 +321,7 @@ void Direct3d11_InputLayoutCache::remove()
 
 // ----------------------------------------------------------------------
 
-ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize)
+ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, int const *textureCoordinateSetMapping, int mappingCount)
 {
 	NOT_NULL(ms_layouts);
 	NOT_NULL(formatFlags);
@@ -249,6 +340,16 @@ ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *for
 	key.streamCount = streamCount;
 	for (int i = 0; i < streamCount; ++i)
 		key.formatFlags[i] = formatFlags[i];
+
+	// The tag-to-set mapping is part of the key, because it is what distinguishes two
+	// layouts that serve the same shader and the same vertex buffer for two materials that
+	// wire their texture coordinate sets differently. Under DX9 that distinction lived in
+	// the shader, as a separate compiled variant per mapping.
+	DEBUG_FATAL(mappingCount < 0 || mappingCount > MAX_TEXTURE_COORDINATE_SETS, ("Direct3d11: a shader declares %d texture coordinate set tags; the engine supports %d.", mappingCount, static_cast<int>(MAX_TEXTURE_COORDINATE_SETS)));
+
+	key.mappingCount = mappingCount;
+	for (int i = 0; i < mappingCount && i < MAX_TEXTURE_COORDINATE_SETS; ++i)
+		key.textureCoordinateSetMapping[i] = static_cast<int8>(textureCoordinateSetMapping[i]);
 
 	if (SUCCEEDED(signatureResult) && signature)
 		key.signatureHash = hashBytes(signature->GetBufferPointer(), static_cast<unsigned int>(signature->GetBufferSize()));
@@ -269,7 +370,7 @@ ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *for
 	}
 
 	D3D11_INPUT_ELEMENT_DESC elements[32];
-	int const elementCount = buildElements(formatFlags, streamCount, elements, 32);
+	int const elementCount = buildElements(formatFlags, streamCount, textureCoordinateSetMapping, mappingCount, elements, 32);
 
 	ID3D11InputLayout *layout = NULL;
 

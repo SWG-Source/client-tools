@@ -29,6 +29,7 @@
 #include "Direct3d11_ImageWriter.h"
 #include "Direct3d11_InputLayoutCache.h"
 #include "Direct3d11_Metrics.h"
+#include "Direct3d11_PixelShaderProgramData.h"
 #include "Direct3d11_QueryPool.h"
 #include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_ShaderCompiler.h"
@@ -38,6 +39,7 @@
 #include "Direct3d11_StaticIndexBufferData.h"
 #include "Direct3d11_StaticVertexBufferData.h"
 #include "Direct3d11_TextureData.h"
+#include "Direct3d11_VertexShaderData.h"
 #include "Direct3d11_Unimplemented.h"
 #include "Direct3d11_VertexBufferDescriptorMap.h"
 #include "SetupDll.h"
@@ -422,8 +424,8 @@ namespace Direct3d11Namespace
 	StaticIndexBufferGraphicsData *createStaticIndexBufferData(const StaticIndexBuffer &indexBuffer)              { return new Direct3d11_StaticIndexBufferData(indexBuffer); }
 	DynamicIndexBufferGraphicsData *createDynamicIndexBufferData()                                                { return new Direct3d11_DynamicIndexBufferData(); }
 	TextureGraphicsData *createTextureData(const Texture &texture, const TextureFormat *runtimeFormats, int numberOfRuntimeFormats) { return new Direct3d11_TextureData(texture, runtimeFormats, numberOfRuntimeFormats); }
-	ShaderImplementationPassVertexShaderGraphicsData *createVertexShaderData(ShaderImplementationPassVertexShader const &) { DX11_NOT_IMPLEMENTED_FATAL("createVertexShaderData"); return NULL; }
-	ShaderImplementationPassPixelShaderProgramGraphicsData *createPixelShaderProgramData(ShaderImplementationPassPixelShaderProgram const &) { DX11_NOT_IMPLEMENTED_FATAL("createPixelShaderProgramData"); return NULL; }
+	ShaderImplementationPassVertexShaderGraphicsData *createVertexShaderData(ShaderImplementationPassVertexShader const &vertexShader) { return new Direct3d11_VertexShaderData(vertexShader); }
+	ShaderImplementationPassPixelShaderProgramGraphicsData *createPixelShaderProgramData(ShaderImplementationPassPixelShaderProgram const &program) { return new Direct3d11_PixelShaderProgramData(program); }
 
 #ifdef _DEBUG
 	// The five slots that exist only under _DEBUG. Graphics.cpp wraps three of
@@ -677,6 +679,11 @@ bool Direct3d11::install(Gl_install *gl_install)
 	// until this runs no texture can choose a format at all.
 	Direct3d11_TextureData::install();
 
+	// After the compiler, which they use, and after the device, which they create shader
+	// objects on.
+	Direct3d11_VertexShaderData::install();
+	Direct3d11_PixelShaderProgramData::install();
+
 	// Come up already holding the state the engine believes is set: it
 	// initialises fill to solid and cull to counter-clockwise as statics and never
 	// pushes either down.
@@ -725,6 +732,9 @@ void Direct3d11Namespace::remove()
 	// Before the state cache, mirroring the install order: draining the global texture
 	// registry can destroy textures, and a texture's destructor unbinds itself through
 	// the cache.
+	Direct3d11_PixelShaderProgramData::remove();
+	Direct3d11_VertexShaderData::remove();
+
 	Direct3d11_TextureData::remove();
 
 	Direct3d11_ConstantBuffers::remove();
