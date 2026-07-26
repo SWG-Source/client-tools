@@ -27,6 +27,7 @@
 #include "Direct3d11_DynamicIndexBufferData.h"
 #include "Direct3d11_DynamicVertexBufferData.h"
 #include "Direct3d11_ImageWriter.h"
+#include "Direct3d11_InputLayoutCache.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_QueryPool.h"
 #include "Direct3d11_SceneTarget.h"
@@ -372,7 +373,18 @@ namespace Direct3d11Namespace
 	void setVertexBufferVector(VertexBufferVector const &)                 { DX11_NOT_IMPLEMENTED("setVertexBufferVector"); }
 	void setIndexBuffer(const HardwareIndexBuffer &)                       { DX11_NOT_IMPLEMENTED("setIndexBuffer"); }
 	void optimizeIndexBuffer(WORD *, int)                                  { DX11_NOT_IMPLEMENTED("optimizeIndexBuffer"); }
-	int  getMaximumVertexBufferStreamCount()                               { DX11_NOT_IMPLEMENTED("getMaximumVertexBufferStreamCount"); return 0; }
+	int getMaximumVertexBufferStreamCount()
+	{
+		// Not an accounted stub, and it never should have been one: the engine calls
+		// this during install to size a per-stream shadow array, and gates its
+		// multi-stream skinned path on the answer being above one. Reporting zero
+		// sized that array to nothing and quietly disabled skinned multi-stream.
+		//
+		// DX9 reports the device's MaxStreams with a floor of one. D3D11 has no such
+		// cap -- the input assembler always has 32 slots -- so the honest answer is
+		// what this backend's vector path actually binds.
+		return Direct3d11_InputLayoutCache::MAX_STREAMS;
+	}
 
 	// Draws.
 	void drawPointList()                                                   { DX11_NOT_IMPLEMENTED("drawPointList"); }
@@ -651,6 +663,7 @@ bool Direct3d11::install(Gl_install *gl_install)
 		IGNORE_RETURN(Direct3d11_Device::getContext()->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), reinterpret_cast<void **>(&ms_annotation)));
 
 	Direct3d11_VertexBufferDescriptorMap::install();
+	Direct3d11_InputLayoutCache::install();
 	Direct3d11_DynamicVertexBufferData::install();
 	Direct3d11_DynamicIndexBufferData::install();
 	Direct3d11_StateObjectCache::install();
@@ -709,6 +722,7 @@ void Direct3d11Namespace::remove()
 	Direct3d11_StateObjectCache::remove();
 	Direct3d11_DynamicIndexBufferData::remove();
 	Direct3d11_DynamicVertexBufferData::remove();
+	Direct3d11_InputLayoutCache::remove();
 	Direct3d11_VertexBufferDescriptorMap::remove();
 	Direct3d11_SwapChain::remove();
 	Direct3d11_Device::remove();
