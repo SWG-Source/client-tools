@@ -12,6 +12,9 @@
 #ifndef INCLUDED_Direct3d11_H
 #define INCLUDED_Direct3d11_H
 
+class StaticShader;
+class StaticShaderGraphicsData;
+
 // ======================================================================
 
 struct Gl_install;
@@ -42,6 +45,11 @@ public:
 	// bytecode, so it cannot be resolved until both are known.
 	static void setCurrentVertexShaderBytecode(void const *bytecode, unsigned int size);
 	static void setCurrentTextureCoordinateSetMapping(int const *mapping, int count);
+	static float getCurrentTimeValue();
+
+	// StaticShader keeps its graphics data private and names class Direct3d11 a friend.
+	// A namespace function has no friend access, so the reach-through lives here.
+	static StaticShaderGraphicsData *getStaticShaderGraphicsData(StaticShader const &shader);
 
 	// The single pre-draw chokepoint every draw entry point goes through. Returns
 	// false when the draw must be skipped, having counted and explained it.

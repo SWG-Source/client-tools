@@ -79,6 +79,12 @@ public:
 	static void  setVertexShaderConstants(int index, void const *data, int numberOfConstants);
 	static void  setPixelShaderConstants(int index, void const *data, int numberOfConstants);
 
+	// One component of one pixel register. The engine's pixel layout packs unrelated
+	// values into single registers -- the material's specular power shares register 0
+	// with the dot3 light direction -- so writing it as a whole row would clobber the
+	// other three components. DX9 had a dedicated setSpecularPower for the same reason.
+	static void  setPixelShaderConstantComponent(int index, int component, float value);
+
 	// The two per-draw matrices, in the order and byte layout D3D9 uploaded them
 	// to c0..c7. Sixteen floats each, row-major in memory exactly as D3DXMATRIX
 	// was, because HLSL's default column-major packing reads those same bytes

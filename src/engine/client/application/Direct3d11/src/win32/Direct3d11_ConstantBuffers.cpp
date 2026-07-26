@@ -299,6 +299,21 @@ void Direct3d11_ConstantBuffers::setPixelShaderConstants(int index, void const *
 	markPixelDirty(index, numberOfConstants);
 }
 
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::setPixelShaderConstantComponent(int index, int component, float value)
+{
+	DEBUG_FATAL(index < 0 || index >= cms_pixelRows, ("Direct3d11: pixel constant register %d is outside the %d-row register file.", index, cms_pixelRows));
+	DEBUG_FATAL(component < 0 || component > 3, ("Direct3d11: pixel constant component %d is not 0 to 3.", component));
+
+	float * const destination = ms_pixelShadow + (index * 4) + component;
+	if (*destination == value)
+		return;
+
+	*destination = value;
+	markPixelDirty(index, 1);
+}
+
 // ======================================================================
 
 void Direct3d11_ConstantBuffers::setPerObjectTransforms(float const *objectWorldCameraProjection, float const *objectWorldMatrix)

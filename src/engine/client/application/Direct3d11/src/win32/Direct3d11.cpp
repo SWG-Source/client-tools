@@ -38,6 +38,7 @@
 #include "Direct3d11_StateObjectCache.h"
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_StaticIndexBufferData.h"
+#include "Direct3d11_StaticShaderData.h"
 #include "Direct3d11_StaticVertexBufferData.h"
 #include "Direct3d11_TextureData.h"
 #include "Direct3d11_VertexShaderData.h"
@@ -114,6 +115,19 @@ unsigned int GetGlApiStructSize()
  * graceful decline, so this is not a channel for "not supported here" -- that
  * belongs in install, which can explain itself first.
  */
+
+// ----------------------------------------------------------------------
+/**
+ * The time the engine last gave us, in seconds.
+ *
+ * Texture scroll rates are turned into offsets against it, so the material path needs the
+ * same value the shader's currentTime register was seeded from rather than a second clock.
+ */
+
+float Direct3d11::getCurrentTimeValue()
+{
+	return ms_currentTime;
+}
 
 bool Direct3d11Namespace::verify()
 {
@@ -370,7 +384,20 @@ namespace Direct3d11Namespace
 	void getOneToOneUVMapping(int, int, real &u0, real &v0, real &u1, real &v1) { DX11_NOT_IMPLEMENTED("getOneToOneUVMapping"); u0 = 0.0f; v0 = 0.0f; u1 = 1.0f; v1 = 1.0f; }
 	bool setMouseCursor(const Texture &, int, int)                         { DX11_NOT_IMPLEMENTED("setMouseCursor"); return false; }
 	void setBadVertexShaderStaticShader(const StaticShader *)              { DX11_NOT_IMPLEMENTED("setBadVertexShaderStaticShader"); }
-	void setStaticShader(const StaticShader &, int)                        { DX11_NOT_IMPLEMENTED("setStaticShader"); }
+	void setStaticShader(const StaticShader &shader, int pass)
+	{
+		// The material owns everything applied here, including the pass state it asks its
+		// implementation for, so there is one call rather than two and no chance of applying
+		// them in the wrong order.
+		StaticShaderGraphicsData * const data = Direct3d11::getStaticShaderGraphicsData(shader);
+		if (!data)
+		{
+			++Direct3d11_Metrics::droppedDraws;
+			return;
+		}
+
+		IGNORE_RETURN(static_cast<Direct3d11_StaticShaderData *>(data)->apply(pass));
+	}
 
 	// Buffers.
 	void optimizeIndexBuffer(WORD *, int)                                  { DX11_NOT_IMPLEMENTED("optimizeIndexBuffer"); }
@@ -418,7 +445,7 @@ namespace Direct3d11Namespace
 	// these return and dereferences it later, so a null converts a missing
 	// feature into an access violation somewhere unrelated.
 	ShaderImplementationGraphicsData *createShaderImplementationGraphicsData(const ShaderImplementation &implementation) { return new Direct3d11_ShaderImplementationData(implementation); }
-	StaticShaderGraphicsData *createStaticShaderGraphicsData(const StaticShader &)                                { DX11_NOT_IMPLEMENTED_FATAL("createStaticShaderGraphicsData"); return NULL; }
+	StaticShaderGraphicsData *createStaticShaderGraphicsData(const StaticShader &shader) { return new Direct3d11_StaticShaderData(shader); }
 	StaticVertexBufferGraphicsData *createStaticVertexBufferData(const StaticVertexBuffer &vertexBuffer)          { return new Direct3d11_StaticVertexBufferData(vertexBuffer); }
 	DynamicVertexBufferGraphicsData *createDynamicVertexBufferData(const DynamicVertexBuffer &vertexBuffer)       { return new Direct3d11_DynamicVertexBufferData(vertexBuffer); }
 	VertexBufferVectorGraphicsData *createVertexBufferVectorData(VertexBufferVector const &)                      { DX11_NOT_IMPLEMENTED_FATAL("createVertexBufferVectorData"); return NULL; }
@@ -683,6 +710,7 @@ bool Direct3d11::install(Gl_install *gl_install)
 	// After the compiler, which they use, and after the device, which they create shader
 	// objects on.
 	Direct3d11_ShaderImplementationData::install();
+	Direct3d11_StaticShaderData::install();
 	Direct3d11_VertexShaderData::install();
 	Direct3d11_PixelShaderProgramData::install();
 
@@ -734,6 +762,7 @@ void Direct3d11Namespace::remove()
 	// Before the state cache, mirroring the install order: draining the global texture
 	// registry can destroy textures, and a texture's destructor unbinds itself through
 	// the cache.
+	Direct3d11_StaticShaderData::remove();
 	Direct3d11_ShaderImplementationData::remove();
 	Direct3d11_PixelShaderProgramData::remove();
 	Direct3d11_VertexShaderData::remove();

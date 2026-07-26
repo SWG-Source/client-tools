@@ -28,6 +28,8 @@
 #include "Direct3d11_DynamicIndexBufferData.h"
 #include "Direct3d11_DynamicVertexBufferData.h"
 #include "Direct3d11_InputLayoutCache.h"
+
+#include "clientGraphics/StaticShader.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_StaticIndexBufferData.h"
@@ -322,6 +324,21 @@ void Direct3d11::setCurrentVertexShaderBytecode(void const *bytecode, unsigned i
 {
 	ms_currentVertexShaderBytecode = bytecode;
 	ms_currentVertexShaderBytecodeSize = size;
+}
+
+// ----------------------------------------------------------------------
+
+/**
+ * Reach a static shader's graphics data.
+ *
+ * StaticShader keeps it private and names class Direct3d11 a friend. The Gl_api slot that
+ * needs it is a namespace function, and a namespace function has no friend access, so the
+ * reach-through has to be a member of the class the engine actually befriended.
+ */
+
+StaticShaderGraphicsData *Direct3d11::getStaticShaderGraphicsData(StaticShader const &shader)
+{
+	return shader.m_graphicsData;
 }
 
 // ----------------------------------------------------------------------
