@@ -11,6 +11,7 @@
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
+#include "Direct3d11_StateCache.h"
 
 #include <d3dcompiler.h>
 #include <math.h>
@@ -617,6 +618,13 @@ void Direct3d11_SceneTarget::composite()
 	// read-write hazard on its own render target.
 	ID3D11ShaderResourceView *nothing[2] = { NULL, NULL };
 	context->PSSetShaderResources(0, 2, nothing);
+
+	// This pass binds its blend, depth and rasterizer state straight to the
+	// context rather than through the state cache, so the cache's shadow is now
+	// wrong. Telling it so is not optional: a stale shadow makes the next real
+	// bind look redundant and get skipped, which is the one way a redundancy
+	// cache produces a wrong image instead of merely a slow one.
+	Direct3d11_StateCache::invalidate();
 }
 
 // ----------------------------------------------------------------------

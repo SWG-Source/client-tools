@@ -27,6 +27,8 @@
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_QueryPool.h"
 #include "Direct3d11_SceneTarget.h"
+#include "Direct3d11_StateCache.h"
+#include "Direct3d11_StateObjectCache.h"
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_Unimplemented.h"
 #include "SetupDll.h"
@@ -42,13 +44,14 @@ namespace Direct3d11Namespace
 
 	ID3DUserDefinedAnnotation  *ms_annotation;
 
-	// Fill/cull arrive before there is any rasterizer state to put them in, and
-	// the engine never pushes them again -- it records its own copy after calling
-	// us and does not re-send it, not even after a resize. Remembering them here
-	// is what lets the state objects come up matching when they land.
+	// Fill, cull and scissor-enable together select one rasterizer state object.
+	// They are remembered here because the engine records its own copy AFTER
+	// calling us and never pushes them again, not even after a resize -- and it
+	// initialises its cull mode to GCM_counterClockwise as a static without ever
+	// sending that default down, so the backend has to come up already matching.
 	GlFillMode                  ms_fillMode = GFM_solid;
 	GlCullMode                  ms_cullMode = GCM_counterClockwise;
-	bool                        ms_warnedAboutFillCull;
+	bool                        ms_scissorEnabled;
 
 	float                       ms_currentTime;
 
@@ -142,11 +145,10 @@ namespace Direct3d11Namespace
 	bool supportsDynamicTextures()            { return true; }
 	bool supportsAntialias()                  { return Direct3d11_Device::supportsAntialias(); }
 
-	// Scissoring is a field of the rasterizer state in D3D11, not a state of its
-	// own, so it cannot be answered honestly until the state objects exist.
-	// Reporting false makes the engine skip scissoring rather than ask for
-	// clipping that would not happen.
-	bool supportsScissorRect()                { return false; }
+	// Scissoring is a field of the rasterizer state in D3D11 rather than a state
+	// of its own, and every combination of fill, cull and scissor-enable is now
+	// pre-created, so this can be answered honestly.
+	bool supportsScissorRect()                { return true; }
 
 	// False sends the engine down the OS cursor path it already has, which is
 	// what we want: a hardware cursor here would mean owning cursor textures.
@@ -220,30 +222,54 @@ namespace Direct3d11Namespace
 		return Direct3d11_ImageWriter::unlockBackBuffer();
 	}
 
+	// Fill, cull and scissor are one rasterizer state object in D3D11, so all
+	// three setters converge on the same lookup. The values are remembered
+	// because the engine records its own copy AFTER calling us and never pushes
+	// them again -- not even after a resize -- so this is the only place that
+	// knows what was last asked for.
+	void applyRasterizerState()
+	{
+		Direct3d11_StateCache::setRasterizerState(Direct3d11_StateObjectCache::getRasterizerState(ms_fillMode, ms_cullMode, ms_scissorEnabled));
+	}
+
 	void setFillMode(GlFillMode fillMode)
 	{
 		ms_fillMode = fillMode;
-
-		if (!ms_warnedAboutFillCull)
-		{
-			ms_warnedAboutFillCull = true;
-			WARNING(true, ("Direct3d11: fill and cull mode are recorded but not applied yet; they take effect when the rasterizer states are implemented."));
-		}
+		applyRasterizerState();
 	}
 
 	void setCullMode(GlCullMode cullMode)
 	{
 		// GlCullMode names the winding that is CULLED, not the front face. With
 		// FrontCounterClockwise FALSE, GCM_clockwise becomes D3D11_CULL_FRONT.
-		// Getting this backwards makes the world invisible rather than visibly
-		// wrong, so it is written down where the value is captured.
 		ms_cullMode = cullMode;
+		applyRasterizerState();
+	}
 
-		if (!ms_warnedAboutFillCull)
+	void setScissorRect(bool enabled, int x, int y, int width, int height)
+	{
+		++Direct3d11_Metrics::scissorSetCalls;
+
+		// D3D9 ignored the rectangle when disabling and left the old one in the
+		// device; the enable was a separate render state. Here the enable lives in
+		// the rasterizer state, so it selects a different object.
+		ms_scissorEnabled = enabled;
+
+		if (enabled)
 		{
-			ms_warnedAboutFillCull = true;
-			WARNING(true, ("Direct3d11: fill and cull mode are recorded but not applied yet; they take effect when the rasterizer states are implemented."));
+			ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+			if (context)
+			{
+				D3D11_RECT rect;
+				rect.left   = x;
+				rect.top    = y;
+				rect.right  = x + width;
+				rect.bottom = y + height;
+				context->RSSetScissorRects(1, &rect);
+			}
 		}
+
+		applyRasterizerState();
 	}
 
 	// Debug markers are wired in every configuration, not just developer builds:
@@ -271,7 +297,6 @@ namespace Direct3d11Namespace
 	bool copyRenderTargetToNonRenderTargetTexture()                        { DX11_NOT_IMPLEMENTED("copyRenderTargetToNonRenderTargetTexture"); return false; }
 
 	// Fixed-function-era rasterizer state.
-	void setScissorRect(bool, int, int, int, int)                          { DX11_NOT_IMPLEMENTED("setScissorRect"); }
 	void setPointSize(real)                                                { DX11_NOT_IMPLEMENTED("setPointSize"); }
 	void setPointSizeMax(real)                                             { DX11_NOT_IMPLEMENTED("setPointSizeMax"); }
 	void setPointSizeMin(real)                                             { DX11_NOT_IMPLEMENTED("setPointSizeMin"); }
@@ -583,6 +608,14 @@ bool Direct3d11::install(Gl_install *gl_install)
 	if (Direct3d11_Device::getContext())
 		IGNORE_RETURN(Direct3d11_Device::getContext()->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), reinterpret_cast<void **>(&ms_annotation)));
 
+	Direct3d11_StateObjectCache::install();
+	Direct3d11_StateCache::install();
+
+	// Come up already holding the state the engine believes is set: it
+	// initialises fill to solid and cull to counter-clockwise as statics and never
+	// pushes either down.
+	applyRasterizerState();
+
 	Direct3d11_Metrics::install();
 
 	// GPU timing is instrumentation, not a requirement: a driver that will not
@@ -623,6 +656,8 @@ void Direct3d11Namespace::remove()
 		ms_annotation = NULL;
 	}
 
+	Direct3d11_StateCache::remove();
+	Direct3d11_StateObjectCache::remove();
 	Direct3d11_SwapChain::remove();
 	Direct3d11_Device::remove();
 
