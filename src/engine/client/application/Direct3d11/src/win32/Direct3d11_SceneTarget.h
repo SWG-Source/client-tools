@@ -42,6 +42,10 @@ public:
 
 	static ID3D11RenderTargetView   *getRenderTargetView();
 	static ID3D11DepthStencilView   *getDepthStencilView();
+
+	// Chosen by probing at install. Off-screen depth buffers created elsewhere use it so they
+	// cannot disagree with the scene's.
+	static DXGI_FORMAT               getDepthFormat();
 	static int                       getWidth();
 	static int                       getHeight();
 

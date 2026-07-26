@@ -307,6 +307,40 @@ void Direct3d11_StateCache::setSamplerState(int slot, ID3D11SamplerState *sample
  * else happened to bind over that slot.
  */
 
+void Direct3d11_StateCache::unbindShaderResourcesForResource(ID3D11Resource *resource)
+{
+	if (!resource)
+		return;
+
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	ID3D11ShaderResourceView *nothing = NULL;
+
+	for (int i = 0; i < cms_shaderResourceSlots; ++i)
+	{
+		if (!ms_shaderResource[i])
+			continue;
+
+		// GetResource adds a reference, so it has to be dropped whether or not it matched.
+		ID3D11Resource *bound = NULL;
+		ms_shaderResource[i]->GetResource(&bound);
+
+		bool const matches = (bound == resource);
+
+		if (bound)
+			bound->Release();
+
+		if (!matches)
+			continue;
+
+		ms_shaderResource[i] = NULL;
+
+		if (context)
+			context->PSSetShaderResources(static_cast<UINT>(i), 1, &nothing);
+	}
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_StateCache::destroyShaderResource(ID3D11ShaderResourceView *view)
 {
 	if (!view)

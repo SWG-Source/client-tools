@@ -73,6 +73,16 @@ public:
 	// and it is the single easiest thing to leave out of a port.
 	static void  destroyShaderResource(ID3D11ShaderResourceView *view);
 
+	// A resource is about to become a render target. Unbind every shader resource slot
+	// looking at it, and clear the shadow.
+	//
+	// Same failure as destroyShaderResource guards, arrived at differently: D3D11 will not
+	// let a resource be a render target and a shader resource at once, and it resolves the
+	// conflict by unbinding the shader resource without telling anyone outside the debug
+	// layer. The shadow would then skip the next bind of that view as redundant and the draw
+	// would sample whatever the context really has.
+	static void  unbindShaderResourcesForResource(ID3D11Resource *resource);
+
 private:
 
 	Direct3d11_StateCache();

@@ -545,6 +545,13 @@ ID3D11RenderTargetView *Direct3d11_SceneTarget::getRenderTargetView()
 
 // ----------------------------------------------------------------------
 
+DXGI_FORMAT Direct3d11_SceneTarget::getDepthFormat()
+{
+	return ms_depthFormat;
+}
+
+// ----------------------------------------------------------------------
+
 ID3D11DepthStencilView *Direct3d11_SceneTarget::getDepthStencilView()
 {
 	return ms_depthView;

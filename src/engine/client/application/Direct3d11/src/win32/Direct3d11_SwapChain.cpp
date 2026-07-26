@@ -11,6 +11,8 @@
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
+#include "Direct3d11_ConstantBuffers.h"
+#include "Direct3d11_RenderTarget.h"
 #include "Direct3d11_SceneTarget.h"
 
 #include "clientGraphics/Gl_dll.def"
@@ -39,7 +41,6 @@ namespace Direct3d11_SwapChainNamespace
 	int                       ms_height;
 	UINT                      ms_swapChainFlags;
 	bool                      ms_warnedAboutSubRectDepthClear;
-	bool                      ms_warnedAboutViewportConstants;
 
 	D3D11_VIEWPORT            ms_viewport;
 
@@ -387,16 +388,23 @@ void Direct3d11_SwapChain::clearViewport(bool clearColor, uint32 colorValue, boo
 	if (!context)
 		return;
 
-	// Clears go to the scene target, not the back buffer. The back buffer is
-	// written exactly once per frame, by the composite.
-	ID3D11RenderTargetView * const colorView = Direct3d11_SceneTarget::getRenderTargetView();
-	ID3D11DepthStencilView * const depthView = Direct3d11_SceneTarget::getDepthStencilView();
+	// Whatever is bound, which is the scene target most of the time but is a texture inside a
+	// texture frame. Asking the render target class rather than the scene target directly is
+	// the difference between clearing the surface being drawn into and clearing the scene.
+	//
+	// Never the back buffer either way: that is written exactly once per frame, by the
+	// composite.
+	ID3D11RenderTargetView * const colorView = Direct3d11_RenderTarget::getCurrentRenderTargetView();
+	ID3D11DepthStencilView * const depthView = Direct3d11_RenderTarget::getCurrentDepthStencilView();
+
+	int const targetWidth  = Direct3d11_RenderTarget::getCurrentWidth();
+	int const targetHeight = Direct3d11_RenderTarget::getCurrentHeight();
 
 	bool const wholeTarget =
 		ms_viewport.TopLeftX == 0.0f &&
 		ms_viewport.TopLeftY == 0.0f &&
-		ms_viewport.Width    == static_cast<float>(ms_width) &&
-		ms_viewport.Height   == static_cast<float>(ms_height);
+		ms_viewport.Width    == static_cast<float>(targetWidth) &&
+		ms_viewport.Height   == static_cast<float>(targetHeight);
 
 	if (clearColor && colorView)
 	{
@@ -458,14 +466,14 @@ void Direct3d11_SwapChain::beginScene()
 	if (!context)
 		return;
 
-	ID3D11RenderTargetView *colorView = Direct3d11_SceneTarget::getRenderTargetView();
-	ID3D11DepthStencilView *depthView = Direct3d11_SceneTarget::getDepthStencilView();
-	if (!colorView)
-		return;
+	// Rebind whatever is current rather than the scene target unconditionally. The texture
+	// baker calls beginScene and then setRenderTarget, so binding the scene here is right for
+	// it; but it also calls beginScene once per mip inside a sequence that has a texture bound,
+	// and stomping that would send a mip's geometry to the screen instead of the texture.
+	Direct3d11_RenderTarget::bindCurrent();
 
-	context->OMSetRenderTargets(1, &colorView, depthView);
+	// The engine's viewport, restored on top of the full-target one the bind sets.
 	context->RSSetViewports(1, &ms_viewport);
-	++Direct3d11_Metrics::renderTargetSwitches;
 }
 
 // ----------------------------------------------------------------------
@@ -625,16 +633,11 @@ void Direct3d11_SwapChain::setViewport(int x, int y, int width, int height, real
 	context->RSSetViewports(1, &ms_viewport);
 	++Direct3d11_Metrics::viewportSetCalls;
 
-	// The rasterizer half of this is done. The other half is not: the engine's
-	// 2D shaders map pixels to clip space through vertex shader constant
-	// register 9, which the shipped shader assets have baked in, and nothing
-	// uploads it until the constant buffers land. Said once, because anything
-	// drawn in 2D before then would be wrong and it should not be a surprise.
-	if (!ms_warnedAboutViewportConstants)
-	{
-		ms_warnedAboutViewportConstants = true;
-		WARNING(true, ("Direct3d11: setViewport set the rasterizer viewport but did not upload VSCR_viewportData; 2D geometry will not transform correctly until the constant buffers are implemented."));
-	}
+	// The other half, and it is not optional: the engine's 2D shaders map pixel coordinates to
+	// clip space through vertex constant register 9, which the shipped shader assets have baked
+	// in. Without this every piece of UI transforms from a zeroed register and lands nowhere.
+	Direct3d11_ConstantBuffers::setViewportData(x, y, width, height);
+
 }
 
 // ----------------------------------------------------------------------

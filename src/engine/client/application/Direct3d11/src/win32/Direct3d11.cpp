@@ -39,6 +39,7 @@
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_StaticIndexBufferData.h"
 #include "Direct3d11_LightManager.h"
+#include "Direct3d11_RenderTarget.h"
 #include "Direct3d11_StaticShaderData.h"
 #include "Direct3d11_Transforms.h"
 #include "Direct3d11_StaticVertexBufferData.h"
@@ -360,8 +361,8 @@ namespace Direct3d11Namespace
 	bool presentToWindow(HWND, int, int)                                   { DX11_NOT_IMPLEMENTED("presentToWindow"); return false; }
 
 	// Render targets.
-	void setRenderTarget(Texture *, CubeFace, int)                         { DX11_NOT_IMPLEMENTED("setRenderTarget"); }
-	bool copyRenderTargetToNonRenderTargetTexture()                        { DX11_NOT_IMPLEMENTED("copyRenderTargetToNonRenderTargetTexture"); return false; }
+	void setRenderTarget(Texture *texture, CubeFace cubeFace, int mipmapLevel) { Direct3d11_RenderTarget::setRenderTarget(texture, cubeFace, mipmapLevel); }
+	bool copyRenderTargetToNonRenderTargetTexture()                        { return Direct3d11_RenderTarget::copyRenderTargetToNonRenderTargetTexture(); }
 
 	// Fixed-function-era rasterizer state.
 	void setPointSize(real)                                                { DX11_NOT_IMPLEMENTED("setPointSize"); }
@@ -745,6 +746,10 @@ bool Direct3d11::install(Gl_install *gl_install)
 	Direct3d11_StaticShaderData::install();
 	Direct3d11_Transforms::install();
 	Direct3d11_LightManager::install();
+
+	// After the swap chain, because the resting render target is the scene target and that does
+	// not exist until the swap chain has built it.
+	Direct3d11_RenderTarget::install();
 	Direct3d11_VertexShaderData::install();
 	Direct3d11_PixelShaderProgramData::install();
 
@@ -796,6 +801,7 @@ void Direct3d11Namespace::remove()
 	// Before the state cache, mirroring the install order: draining the global texture
 	// registry can destroy textures, and a texture's destructor unbinds itself through
 	// the cache.
+	Direct3d11_RenderTarget::remove();
 	Direct3d11::releaseDrawResources();
 	Direct3d11_StaticShaderData::remove();
 	Direct3d11_ShaderImplementationData::remove();

@@ -10,6 +10,7 @@
 
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
+#include "Direct3d11_RenderTarget.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_TextureConverter.h"
 #include "Direct3d11_TextureFormatMap.h"
@@ -314,6 +315,10 @@ Direct3d11_TextureData::~Direct3d11_TextureData()
 	if (m_shaderResourceView)
 	{
 		Direct3d11_StateCache::destroyShaderResource(m_shaderResourceView);
+
+	// And any render target view onto this resource, for the same reason: a cached view
+	// outliving its resource is a dangling pointer that the next allocation makes look valid.
+	Direct3d11_RenderTarget::releaseViewsFor(m_resource);
 		m_shaderResourceView->Release();
 		m_shaderResourceView = NULL;
 	}
