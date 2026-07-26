@@ -40,6 +40,7 @@
 #include "Direct3d11_StaticIndexBufferData.h"
 #include "Direct3d11_IndexOptimizer.h"
 #include "Direct3d11_LightManager.h"
+#include "Direct3d11_MouseCursor.h"
 #include "Direct3d11_RenderTarget.h"
 #include "Direct3d11_SceneTarget.h"
 #include "Direct3d11_StaticShaderData.h"
@@ -466,7 +467,9 @@ namespace Direct3d11Namespace
 		u1 = (static_cast<real>(textureWidth  - 1) + 0.5f) / static_cast<real>(textureWidth);
 		v1 = (static_cast<real>(textureHeight - 1) + 0.5f) / static_cast<real>(textureHeight);
 	}
-	bool setMouseCursor(const Texture &, int, int)                         { DX11_NOT_IMPLEMENTED("setMouseCursor"); return false; }
+	// False is a supported answer, not only an error: CuiLayer_CursorInterface draws the cursor
+	// as interface geometry when this declines. See Direct3d11_MouseCursor.h.
+	bool setMouseCursor(const Texture &texture, int hotSpotX, int hotSpotY) { return Direct3d11_MouseCursor::set(texture, hotSpotX, hotSpotY); }
 	// The two halves of the engine's "this combination cannot be drawn" reporting. Recorded
 	// here; prepareToDraw raises the flag when an input layout cannot be built, which is this
 	// backend's version of the failure DX9 detects.
@@ -839,7 +842,10 @@ bool Direct3d11::install(Gl_install *gl_install)
 
 	ms_installed = true;
 
-	WARNING(true, ("Direct3d11: device and swap chain are up at %dx%d %s. Resources, shaders and draws are not implemented yet, so the first asset load will stop with a named slot.",
+	// What is genuinely absent, so the log says it once at install rather than leaving it to be
+	// discovered. Everything not listed here is implemented: resources, shaders, state, draws,
+	// transforms, lighting, render targets and fog.
+	WARNING(true, ("Direct3d11: up at %dx%d %s. Not implemented: point sprites (the star field renders as single pixels), the hardware mouse cursor (the interface draws its own instead), presentToWindow (editors and viewers only, never SwgClient) and the debug video buffers.",
 		Direct3d11_SwapChain::getWidth(), Direct3d11_SwapChain::getHeight(), Direct3d11_SwapChain::isWindowed() ? "windowed" : "fullscreen"));
 
 	return true;
@@ -872,6 +878,7 @@ void Direct3d11Namespace::remove()
 	// Before the state cache, mirroring the install order: draining the global texture
 	// registry can destroy textures, and a texture's destructor unbinds itself through
 	// the cache.
+	Direct3d11_MouseCursor::remove();
 	Direct3d11_RenderTarget::remove();
 	Direct3d11::releaseDrawResources();
 	Direct3d11_StaticShaderData::remove();

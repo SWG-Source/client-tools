@@ -39,6 +39,10 @@ public:
 	static bool  install(Gl_install *gl_install);
 	static void  remove();
 
+	// The window the swap chain is attached to. Needed by anything that has to talk to the
+	// window system rather than to D3D -- the mouse cursor is the only such thing so far.
+	static HWND  getWindow();
+
 	static int   getWidth();
 	static int   getHeight();
 	static bool  isWindowed();

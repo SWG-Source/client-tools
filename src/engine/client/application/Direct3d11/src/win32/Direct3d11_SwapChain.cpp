@@ -340,6 +340,13 @@ void Direct3d11_SwapChain::remove()
 
 // ----------------------------------------------------------------------
 
+HWND Direct3d11_SwapChain::getWindow()
+{
+	return ms_window;
+}
+
+// ----------------------------------------------------------------------
+
 int Direct3d11_SwapChain::getWidth()
 {
 	return ms_width;
