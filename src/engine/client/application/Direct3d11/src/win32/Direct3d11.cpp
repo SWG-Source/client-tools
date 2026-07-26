@@ -369,9 +369,6 @@ namespace Direct3d11Namespace
 	void setStaticShader(const StaticShader &, int)                        { DX11_NOT_IMPLEMENTED("setStaticShader"); }
 
 	// Buffers.
-	void setVertexBuffer(HardwareVertexBuffer const &)                     { DX11_NOT_IMPLEMENTED("setVertexBuffer"); }
-	void setVertexBufferVector(VertexBufferVector const &)                 { DX11_NOT_IMPLEMENTED("setVertexBufferVector"); }
-	void setIndexBuffer(const HardwareIndexBuffer &)                       { DX11_NOT_IMPLEMENTED("setIndexBuffer"); }
 	void optimizeIndexBuffer(WORD *, int)                                  { DX11_NOT_IMPLEMENTED("optimizeIndexBuffer"); }
 	int getMaximumVertexBufferStreamCount()
 	{
@@ -560,12 +557,14 @@ void Direct3d11Namespace::fillApiTable()
 	ms_glApi.createStaticVertexBufferData      = createStaticVertexBufferData;
 	ms_glApi.createDynamicVertexBufferData     = createDynamicVertexBufferData;
 	ms_glApi.createVertexBufferVectorData      = createVertexBufferVectorData;
-	ms_glApi.setVertexBuffer                   = setVertexBuffer;
-	ms_glApi.setVertexBufferVector             = setVertexBufferVector;
+	// Members of the class, not the namespace: they need friend access to read
+	// m_graphicsData out of the engine's buffer objects.
+	ms_glApi.setVertexBuffer                   = Direct3d11::setVertexBuffer;
+	ms_glApi.setVertexBufferVector             = Direct3d11::setVertexBufferVector;
 
 	ms_glApi.createStaticIndexBufferData       = createStaticIndexBufferData;
 	ms_glApi.createDynamicIndexBufferData      = createDynamicIndexBufferData;
-	ms_glApi.setIndexBuffer                    = setIndexBuffer;
+	ms_glApi.setIndexBuffer                    = Direct3d11::setIndexBuffer;
 
 	ms_glApi.getOneToOneUVMapping              = getOneToOneUVMapping;
 	ms_glApi.createTextureData                 = createTextureData;
