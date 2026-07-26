@@ -16,10 +16,13 @@
 
 // ======================================================================
 
+// GlScreenShotFormat and Gl_imageFormat cannot be forward declared: an unscoped
+// enumeration has no known size until it is defined, so the declaration is ill formed
+// and MSVC only warns about it.
+#include "clientGraphics/Graphics.def"
+
 struct Gl_pixelRect;
 class  Rectangle2d;
-enum   GlScreenShotFormat;
-enum   Gl_imageFormat;
 
 // ======================================================================
 

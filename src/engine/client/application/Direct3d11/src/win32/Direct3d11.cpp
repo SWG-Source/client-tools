@@ -37,6 +37,7 @@
 #include "Direct3d11_SwapChain.h"
 #include "Direct3d11_StaticIndexBufferData.h"
 #include "Direct3d11_StaticVertexBufferData.h"
+#include "Direct3d11_TextureData.h"
 #include "Direct3d11_Unimplemented.h"
 #include "Direct3d11_VertexBufferDescriptorMap.h"
 #include "SetupDll.h"
@@ -361,8 +362,8 @@ namespace Direct3d11Namespace
 	void setTextureTransform(int, bool, int, bool, const real *)           { DX11_NOT_IMPLEMENTED("setTextureTransform"); }
 
 	// Textures and shaders.
-	void setGlobalTexture(Tag, const Texture &)                            { DX11_NOT_IMPLEMENTED("setGlobalTexture"); }
-	void releaseAllGlobalTextures()                                        { DX11_NOT_IMPLEMENTED("releaseAllGlobalTextures"); }
+	void setGlobalTexture(Tag tag, const Texture &texture)                 { Direct3d11_TextureData::setGlobalTexture(tag, texture); }
+	void releaseAllGlobalTextures()                                        { Direct3d11_TextureData::releaseAllGlobalTextures(); }
 	void getOneToOneUVMapping(int, int, real &u0, real &v0, real &u1, real &v1) { DX11_NOT_IMPLEMENTED("getOneToOneUVMapping"); u0 = 0.0f; v0 = 0.0f; u1 = 1.0f; v1 = 1.0f; }
 	bool setMouseCursor(const Texture &, int, int)                         { DX11_NOT_IMPLEMENTED("setMouseCursor"); return false; }
 	void setBadVertexShaderStaticShader(const StaticShader *)              { DX11_NOT_IMPLEMENTED("setBadVertexShaderStaticShader"); }
@@ -420,7 +421,7 @@ namespace Direct3d11Namespace
 	VertexBufferVectorGraphicsData *createVertexBufferVectorData(VertexBufferVector const &)                      { DX11_NOT_IMPLEMENTED_FATAL("createVertexBufferVectorData"); return NULL; }
 	StaticIndexBufferGraphicsData *createStaticIndexBufferData(const StaticIndexBuffer &indexBuffer)              { return new Direct3d11_StaticIndexBufferData(indexBuffer); }
 	DynamicIndexBufferGraphicsData *createDynamicIndexBufferData()                                                { return new Direct3d11_DynamicIndexBufferData(); }
-	TextureGraphicsData *createTextureData(const Texture &, const TextureFormat *, int)                           { DX11_NOT_IMPLEMENTED_FATAL("createTextureData"); return NULL; }
+	TextureGraphicsData *createTextureData(const Texture &texture, const TextureFormat *runtimeFormats, int numberOfRuntimeFormats) { return new Direct3d11_TextureData(texture, runtimeFormats, numberOfRuntimeFormats); }
 	ShaderImplementationPassVertexShaderGraphicsData *createVertexShaderData(ShaderImplementationPassVertexShader const &) { DX11_NOT_IMPLEMENTED_FATAL("createVertexShaderData"); return NULL; }
 	ShaderImplementationPassPixelShaderProgramGraphicsData *createPixelShaderProgramData(ShaderImplementationPassPixelShaderProgram const &) { DX11_NOT_IMPLEMENTED_FATAL("createPixelShaderProgramData"); return NULL; }
 
@@ -670,6 +671,12 @@ bool Direct3d11::install(Gl_install *gl_install)
 	Direct3d11_ShaderCompiler::install();
 	Direct3d11_ConstantBuffers::install();
 
+	// After the state cache, because a texture's destructor unbinds itself through it,
+	// and before anything can create a texture. This is also where the engine's
+	// format-support table gets filled in; every entry in it starts unsupported, so
+	// until this runs no texture can choose a format at all.
+	Direct3d11_TextureData::install();
+
 	// Come up already holding the state the engine believes is set: it
 	// initialises fill to solid and cull to counter-clockwise as statics and never
 	// pushes either down.
@@ -714,6 +721,11 @@ void Direct3d11Namespace::remove()
 		ms_annotation->Release();
 		ms_annotation = NULL;
 	}
+
+	// Before the state cache, mirroring the install order: draining the global texture
+	// registry can destroy textures, and a texture's destructor unbinds itself through
+	// the cache.
+	Direct3d11_TextureData::remove();
 
 	Direct3d11_ConstantBuffers::remove();
 	Direct3d11_ShaderCompiler::remove();

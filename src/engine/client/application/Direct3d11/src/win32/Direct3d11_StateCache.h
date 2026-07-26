@@ -47,6 +47,24 @@ public:
 	static void  setInputLayout(ID3D11InputLayout *inputLayout);
 	static void  setPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY topology);
 
+	// Sixteen slots, matching DX9's cms_samplers. The engine's own stage count is
+	// smaller, but the shaders address samplers by register and the reflection pass
+	// packs them densely, so the shadow covers what a ps_4_0 program can name.
+	enum { cms_shaderResourceSlots = 16 };
+
+	static void  setShaderResource(int slot, ID3D11ShaderResourceView *view);
+
+	// A texture is about to be destroyed. Unbind it from every slot holding it and
+	// clear the shadow.
+	//
+	// This is not optional and it is not a debug aid. Without it the shadow keeps a
+	// freed address; the very next texture the allocator hands out at that address
+	// compares equal, the bind is skipped as redundant, and the draw samples whatever
+	// the context still has -- a wrong image with nothing in the log. DX9 gets this
+	// right (Direct3d9_TextureData's destructor calls destroyTexture before Release)
+	// and it is the single easiest thing to leave out of a port.
+	static void  destroyShaderResource(ID3D11ShaderResourceView *view);
+
 private:
 
 	Direct3d11_StateCache();

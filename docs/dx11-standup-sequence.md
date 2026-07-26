@@ -798,3 +798,145 @@ The lesson generalises: a slot whose RETURN VALUE the engine builds structure fr
 needs a real answer from the first commit that can give one, even when the feature
 behind it is unimplemented. Slots whose EFFECT is missing are what the accounting is
 for.
+
+### DX9's format table mismaps three formats, and parity means reproducing that
+
+The plan treated the engine-format to DXGI mapping as a lookup with three awkward
+entries (24-bit, palettised, luminance). Reading DX9's own table changed the answer.
+
+`Direct3d9_TextureData.cpp:39-41` maps **all three** of `TF_RGB_888`, `TF_RGB_565` and
+`TF_RGB_555` to `D3DFMT_R8G8B8` -- three consecutive identical entries, and no D3D9
+driver has ever supported that format. So `CheckDeviceFormat` has always failed for all
+three and their conversion lists have always fallen through: an R5G6B5 `.dds` has always
+loaded as `TF_ARGB_1555`, and an R8G8B8 one as `TF_XRGB_8888`.
+
+`DXGI_FORMAT_B5G6R5_UNORM` matches the engine's 565 row exactly, so mapping it would
+work -- and would halve those textures' memory, and DX9's 24-bit row arithmetic was
+wrong anyway (`filePitch` is computed from the engine's 2-byte `pixelByteCount` while
+the surface would have been 3 bytes per pixel, so the row loop was simply wrong, and
+harmless only because it was dead). But turning it on changes which format real assets
+load in, which is a visual change, and this port earns visual changes only after parity
+is proven. All three are therefore declined, and the header records that 565 is one
+table entry away from being enabled.
+
+`TF_RGB_555` should stay declined even then: D3D9's `X1R5G5B5` ignores bit 15 while
+`B5G5R5A1_UNORM` reads it as alpha, so any asset whose pad bit happens to be zero would
+become fully transparent.
+
+### The engine locks textures in a format they are not stored in, routinely
+
+The plan had no conversion path. DX9 has a substantial one --
+`CreateOffscreenPlainSurface` into `D3DPOOL_SCRATCH`, `D3DXLoadSurfaceFromSurface` in
+whichever direction the lock needs, the surface parked in `LockData::m_reserved` -- and
+it is reached constantly:
+
+- `Texture::load` picks the runtime format from `ms_conversions[sourceFormat]` and then
+  `loadSurface` locks every mip level in the **source file's** format. Whenever the
+  file's format is one the backend declines, every row written is converted.
+- `Texture::computeRepresentativeColor` locks the smallest mip level as `TF_ARGB_8888`
+  and reads one pixel, whatever the texture is stored as. For the DXT textures that are
+  nearly the whole asset set, that is a block decode -- and it drives interface colours
+  and LOD tinting, so a wrong answer is visible rather than academic.
+
+There is no D3DX in D3D11, so `Direct3d11_TextureConverter` implements it: mask-driven
+conversion between any two uncompressed engine formats via a 32-bit BGRA intermediate,
+plus BC1/BC2/BC3 decode. Compression is deliberately absent and fatal if requested --
+nothing in the engine writes a compressed texture in a non-compressed format.
+
+Narrow channels widen by bit replication rather than by a shift, so a 5-bit 31 becomes
+255 and a converted read agrees with what the sampler would have produced.
+
+### The pitch contract rules out a mapped resource, and non-discard locks rule out DYNAMIC
+
+Three constraints together decide the upload path:
+
+1. A lock reports the pitch of the **caller's** format, and `loadSurface` collapses a
+   whole mip level into a single file read when that pitch matches the file's
+   (`Texture.cpp:398-403`). A tight scratch buffer honours that; a mapped staging row
+   pitch would silently force the slow row-by-row branch on every texture.
+2. Cube maps are locked face by face while not flagged dynamic, and a `DYNAMIC` resource
+   can only map its single subresource. `defaultcubemap.dds` -- the first texture the
+   client creates -- is 48 (face, level) locks before the first frame.
+3. Any lock whose format differs from the resource's needs a CPU buffer to convert
+   through regardless.
+
+So every lock allocates a tight scratch buffer, and `unlock` uploads with
+`UpdateSubresource`, converting first when the formats differ. `USAGE_DEFAULT`
+throughout; there is one upload path, not two.
+
+### A non-discarding lock cannot mean "read the texture back"
+
+`loadSurface` passes `discardContents = isDynamic()`, which is **false** for every
+`.dds` in the game. Taken literally, that makes every mip level of every texture at load
+time a staging copy plus a CPU wait -- for contents that are about to be overwritten
+completely. DX9 pays nothing there: a `MANAGED` surface locked without `D3DLOCK_DISCARD`
+just hands back its system-memory copy.
+
+The resolution is to track which subresources have ever been written. A subresource that
+never has holds undefined contents -- exactly what a freshly created D3D9 `MANAGED`
+surface holds -- so its read-back is skipped and the scratch is zeroed. Every genuine
+read-modify-write is still served correctly: the mouse-cursor alpha pass
+(`Graphics.cpp:1315`, which reads the alpha of all 1024 pixels before rewriting them),
+`computeRepresentativeColor`, and the ground-environment strip. Those read-backs are
+counted in `blockingStagingMaps`, so they cannot hide.
+
+### Two DX9 defects in this area that were not copied
+
+`Direct3d9_TextureData::remove` destroys its `MemoryBlockManager` **before** draining the
+global texture list. If the list were not already empty, the drain's final
+`Texture::release` would run `operator delete` against a null manager. It only ever works
+because ExitChain ordering happens to empty the list first. The DX11 version drains
+first.
+
+`Stage::getTextureSortKey` casts the D3D texture pointer to `int`
+(`Direct3d9_StaticShaderData.cpp:388`), which on x64 discards the top 32 bits -- the x64
+DX9 build ships with C4311 and C4302 warnings on that line, so two distinct textures
+batch as one whenever they differ only above bit 31. `getSortKey` folds the whole pointer
+instead.
+
+### The state cache needed its destroy hook before the first texture could die
+
+`Direct3d11_StateCache` had no shader-resource slots, so a texture destructor had nothing
+to unbind from -- which is exactly how a port ends up with a shadow holding a freed
+address, a redundant-bind skip, and a wrong image with nothing in the log. DX9 gets this
+right and it is the easiest thing in the file to leave out. The sixteen slots (matching
+DX9's `cms_samplers`) and `destroyShaderResource` were added in the same commit as the
+texture class, not in the later commit that will start binding them.
+
+## Verification: the texture converter
+
+The block decoder is written from the specification and is load-bearing --
+`computeRepresentativeColor` runs it on nearly every texture in the game -- so it was
+tested rather than reviewed.
+
+The harness compiles the **shipping** `Direct3d11_TextureConverter.cpp` source text
+against a stand-in for the DLL's precompiled header (the file is copied in and verified
+byte-identical by SHA-256 on every run, because a quoted `#include` resolves against its
+own directory first and would otherwise pull in all of `sharedFoundation`), links it with
+the real `TextureFormatInfo.cpp`, and compares against Pillow as an independent decoder.
+
+Results, all bit-exact:
+
+- Every uncompressed format round-trips through `TF_ARGB_8888` losslessly in its used
+  bits: 8888, XRGB_8888, 4444, 1555, 565, A_8, L_8.
+- `TF_L_8` expands to (L, L, L, 255), not (L, 0, 0, 255).
+- `TF_ARGB_1555` 0xffff widens to 255 in all four channels; its cleared alpha bit widens
+  to 0.
+- `TF_XRGB_8888` reads as opaque whatever its pad byte holds.
+- All eleven block-compressed `.dds` files in `client-assets/texture` (six DXT1, five
+  DXT5) decode with a worst per-channel colour difference of **0** and zero alpha
+  mismatches against Pillow.
+- Synthetic blocks cover the modes the shipped assets do not reach, all exact: BC1
+  four-colour (`c0 > c1`); BC1 three-colour, with the punch-through index producing
+  (0,0,0,0); BC2 explicit 4-bit alpha producing the ramp 0, 17, ..., 255, which pins the
+  nibble order; BC3 alpha in the six-interpolant branch (`a0 > a1`); BC3 alpha in the
+  four-interpolant branch (`a0 <= a1`) with index 6 = 0 and index 7 = 255; and 1x1, 2x3
+  and 3x1 levels, where most of the block is clipped away.
+
+The `canConvert` gate was checked to refuse compression, palettised and float pairs, and
+to offer DXT decode, 24-to-32-bit widening and identical pairs.
+
+The harness lives in the session scratchpad rather than the tree: this codebase has no
+unit-test target, and adding one is a change worth proposing on its own rather than
+smuggling in behind a texture commit. `build.ps1`, `main.cpp`, `bccheck.py` and
+`bcmodes.py` reproduce every number above.
