@@ -121,6 +121,9 @@ public:
 	// texture's own kind. Free to ask, so a pixel program's declared dimension can be checked
 	// against it every time a texture is bound.
 	D3D_SRV_DIMENSION       getViewDimension() const;
+
+	// The engine's name for this texture, for diagnostics that have to say WHICH texture.
+	char const             *getTextureName() const;
 	ID3D11Resource           *getResource() const;
 	DXGI_FORMAT               getDxgiFormat() const;
 	Texture const            &getEngineTexture() const;

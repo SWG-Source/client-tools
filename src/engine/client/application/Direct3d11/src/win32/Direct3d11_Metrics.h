@@ -40,6 +40,12 @@ public:
 	// per-run totals and zeroes them.
 	static void beginFrame();
 
+	// Report a frame that took far longer than a frame should, together with everything this
+	// backend created or blocked on during it. Three things can stutter inside a building -- asset
+	// loading, the server, or the renderer -- and a slow frame that created nothing and compiled
+	// nothing rules the renderer out, which is worth more than another guess.
+	static void reportHitches();
+
 	// Write the current frame's counters and the run totals to the log.
 	static void report();
 

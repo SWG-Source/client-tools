@@ -146,8 +146,52 @@ void Direct3d11_MetricsNamespace::reportRoutine()
 
 // ----------------------------------------------------------------------
 
+void Direct3d11_Metrics::reportHitches()
+{
+	// Wall time between successive calls, which is a frame. QueryPerformanceCounter rather than the
+	// engine clock so this measures the same thing a person perceives.
+	static LARGE_INTEGER previous = { 0 };
+	static LARGE_INTEGER frequency = { 0 };
+	// Bounded, but generously: a hitch report is one line and the whole point is to catch the ones
+	// that happen minutes into a session, not only at zone-in.
+	static int reportsRemaining = 200;
+	static int frameNumber = 0;
+
+	if (frequency.QuadPart == 0 && !QueryPerformanceFrequency(&frequency))
+		return;
+
+	LARGE_INTEGER now;
+	if (!QueryPerformanceCounter(&now))
+		return;
+
+	++frameNumber;
+
+	if (previous.QuadPart != 0 && reportsRemaining > 0 && frameNumber > cms_warmUpFrames)
+	{
+		double const milliseconds = static_cast<double>(now.QuadPart - previous.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
+
+		// 40 ms is a hitch anyone notices at 60 Hz and is well clear of ordinary variance.
+		if (milliseconds > 40.0)
+		{
+			--reportsRemaining;
+			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- created %d state object(s), %d input layout(s), %d constant buffer(s), compiled %d shader(s) in %.1f ms, %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
+				frameNumber, milliseconds,
+				stateObjectCreations, inputLayoutCreations, constantBufferCreations,
+				shaderCompiles, static_cast<double>(shaderCompileMicroseconds) / 1000.0,
+				blockingStagingMaps, textureBakeReadbacks, renderTargetSwitches,
+				drawCalls + drawIndexedCalls));
+		}
+	}
+
+	previous = now;
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_Metrics::beginFrame()
 {
+	reportHitches();
+
 	++ms_runFrames;
 
 	ms_runDrawCalls               += drawCalls + drawIndexedCalls;

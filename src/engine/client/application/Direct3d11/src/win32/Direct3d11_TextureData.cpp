@@ -1025,6 +1025,13 @@ void Direct3d11_TextureData::copyFrom(int surfaceLevel, TextureGraphicsData cons
 
 // ----------------------------------------------------------------------
 
+char const *Direct3d11_TextureData::getTextureName() const
+{
+	return describeTexture(m_texture);
+}
+
+// ----------------------------------------------------------------------
+
 D3D_SRV_DIMENSION Direct3d11_TextureData::getViewDimension() const
 {
 	if (m_texture.isCubeMap())
