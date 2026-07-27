@@ -193,7 +193,31 @@ void Direct3d11_Transforms::flush()
 	float objectWorldCameraProjection[16];
 	multiply(objectWorldCameraProjection, ms_worldToProjection, ms_objectToWorld);
 
-	Direct3d11_ConstantBuffers::setPerObjectTransforms(objectWorldCameraProjection, ms_objectToWorld);
+	// Into $Globals, at the registers the shipped assets declare -- NOT into a separate per-object
+	// constant buffer.
+	//
+	// This used to call setPerObjectTransforms, which wrote both matrices into a ring buffer bound
+	// at its own slot. That cannot work, and the reason is the same compiler flag the whole port
+	// rests on. vertex_shader_constants.inc declares
+	//
+	//     float4x4 objectWorldCameraProjectionMatrix : register(c0);
+	//     float4x4 objectWorldMatrix                 : register(c4);
+	//
+	// and under D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY every register(cN) lands in the one
+	// auto-generated $Globals buffer at byte offset 16N. There is no second buffer for a ring to
+	// bind: a shader asking for c0 reads $Globals, so the ring was written every draw and read
+	// never. Every vertex in the game was multiplied by a zero matrix, collapsed to the origin, and
+	// rasterised nothing -- 4.6 million draw calls and 548 million triangles a run, none of them
+	// visible. The interface was unaffected because 2d.vsh reads viewportData at c9, which does go
+	// through here.
+	//
+	// A ring is the right shape for per-draw constants and the wrong shape for THESE constants. It
+	// would need the assets to declare the matrices in an explicit cbuffer at that slot, which
+	// means overriding a shipped include and giving up the register-to-offset correspondence that
+	// Direct3d11_ShaderReflection's guard enforces for everything else. DX9 uploaded these per draw
+	// too, so writing them like every other constant is also what parity asks for.
+	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_objectWorldCameraProjectionMatrix, objectWorldCameraProjection, 4);
+	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_objectWorldMatrix, ms_objectToWorld, 4);
 
 	ms_dirty = false;
 }
