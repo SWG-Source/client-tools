@@ -15,7 +15,7 @@
 // build transform from object space to texture space
 	r0.xyz = (vsInput.textureCoordinateSetDOT3).xyz;
 	r2.xyz = (vNormal).xyz;
-	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).x;
+	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).w;
 	r2.w = ((rsqrt(abs(r2.w))).xxxx).x;
 	r2.xyz = (r2 * r2.w).xyz;
 	r1.xyz = (r2.zxy * r0.yzx).xyz;
@@ -29,11 +29,11 @@
 	vsOutput.texcoord1.xyz = (float3(dot((cLightData_dot3_0_direction).xyz, (r0).xyz), dot((cLightData_dot3_0_direction).xyz, (r1).xyz), dot((cLightData_dot3_0_direction).xyz, (r2).xyz))).xyz;
 // calculate the half angle (H = L + V / |L + V|)
 	r3.xyz = (cLightData_dot3_0_cameraPosition - vPosition).xyz;
-	r3.w = ((dot((r3).xyz, (r3).xyz)).xxxx).x;
+	r3.w = ((dot((r3).xyz, (r3).xyz)).xxxx).w;
 	r3.w = ((rsqrt(abs(r3.w))).xxxx).x;
 	r3.xyz = (r3 * r3.w).xyz;
 	r3.xyz = (r3 + cLightData_dot3_0_direction).xyz;
-	r3.w = ((dot((r3).xyz, (r3).xyz)).xxxx).x;
+	r3.w = ((dot((r3).xyz, (r3).xyz)).xxxx).w;
 	r3.w = ((rsqrt(abs(r3.w))).xxxx).x;
 	r3.xyz = (r3 * r3.w).xyz;
 // transform half angle into texture space

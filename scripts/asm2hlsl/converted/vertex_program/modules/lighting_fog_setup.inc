@@ -19,12 +19,12 @@
 // ----------------------------------------------------------------------
 //  rotate vertex normal into world space and renormalize
 	r10.xyz = (float3(dot((vNormal).xyz, (c[4]).xyz), dot((vNormal).xyz, (c[5]).xyz), dot((vNormal).xyz, (c[6]).xyz))).xyz;
-	r10.w = ((dot((r10).xyz, (r10).xyz)).xxxx).x;
+	r10.w = ((dot((r10).xyz, (r10).xyz)).xxxx).w;
 	r10.w = ((rsqrt(abs(r10.w))).xxxx).x;
 	r10.xyz = (r10 * r10.w).xyz;
 // ----------------------------------------------------------------------
 //  calculate the direction to the viewer
 	r11.xyz = (cCameraPosition - r9).xyz;
-	r11.w = ((dot((r11).xyz, (r11).xyz)).xxxx).x;
+	r11.w = ((dot((r11).xyz, (r11).xyz)).xxxx).w;
 	r0.w = ((rsqrt(abs(r11.w))).xxxx).x;
 	r11.xyz = (r11 * r0.w).xyz;

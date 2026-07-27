@@ -36,8 +36,8 @@ VsOutput main(VsInput vsInput)
 #include "vertex_program/modules/fog.inc"
 #include "vertex_program/modules/ambient.inc"
 #include "vertex_program/modules/diffuse.inc"
-	vsOutput.color0.rgb = (r7 * vColor0).xyz;
-	vsOutput.color0.a = (vColor0).x;
+	vsOutput.color0.rgb = (r7 * vColor0).rgb;
+	vsOutput.color0.a = (vColor0).a;
 
 	return vsOutput;
 }

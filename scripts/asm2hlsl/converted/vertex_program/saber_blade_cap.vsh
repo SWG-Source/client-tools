@@ -36,7 +36,7 @@ VsOutput main(VsInput vsInput)
 	r1.xyz = (float3(dot(vPosition, c[4]), dot(vPosition, c[5]), dot(vPosition, c[6]))).xyz;
 	r2.xyz = (cCameraPosition - r1).xyz;
 //-- normalize direction to eye
-	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).x;
+	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).w;
 	r2.w = ((rsqrt(abs(r2.w))).xxxx).x;
 	r2.xyz = (r2 * r2.w).xyz;
 //-- compute texture coordinates

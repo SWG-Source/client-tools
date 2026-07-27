@@ -39,7 +39,7 @@ VsOutput main(VsInput vsInput)
 	r9.xyz = (float3(dot(vPosition, c[4]), dot(vPosition, c[5]), dot(vPosition, c[6]))).xyz;
 // -- calculate the direction to the viewer
 	r11.xyz = (cCameraPosition - r9).xyz;
-	r11.w = ((dot((r11).xyz, (r11).xyz)).xxxx).x;
+	r11.w = ((dot((r11).xyz, (r11).xyz)).xxxx).w;
 	r0.w = ((rsqrt(abs(r11.w))).xxxx).x;
 	r11.xyz = (r11 * r0.w).xyz;
 // -- calculate fog
@@ -59,9 +59,9 @@ VsOutput main(VsInput vsInput)
 	r1 = r1 * r1;
 	r2 = r1 * cCurrentTime;
 	vsOutput.texcoord0.x = (vsInput.textureCoordinateSetMAIN.x + r2).x;
-	vsOutput.texcoord0.y = (vsInput.textureCoordinateSetMAIN.y + r2).x;
+	vsOutput.texcoord0.y = (vsInput.textureCoordinateSetMAIN.y + r2).y;
 	vsOutput.texcoord1.x = (vsInput.textureCoordinateSetMAIN.x + r2).x;
-	vsOutput.texcoord1.y = (vsInput.textureCoordinateSetMAIN.y + r2).x;
+	vsOutput.texcoord1.y = (vsInput.textureCoordinateSetMAIN.y + r2).y;
 //-- compute alpha
 	vsOutput.color0 = c1_0;
 	vsOutput.color0.w = (cUserConstant.x).x;

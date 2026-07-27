@@ -137,6 +137,51 @@ class Operand(object):
 # ======================================================================
 # Emission helpers
 
+# Whether the value being assigned is a genuine four-component vector. Set per instruction by the
+# translators below.
+#
+# D3D9 replicates a single-component source swizzle across all four channels, so
+# `mul r0.w, r11.w, cFog.w` multiplies two scalars and the result is uniform. Translated to HLSL
+# that is a scalar expression, and the only subscript a scalar accepts is .x -- asking for .w is
+# error X3018. But when a source is a whole register the result really is a four-vector whose
+# components differ, and then the destination mask has to select the MATCHING component:
+# `mov r0.a, c2` means r0.a = c2.a, not c2.x.
+#
+# Both cases used to be emitted as the leading components, which is right only for a mask starting
+# at x. That is how every `mov r0.a, c[alphaFadeOpacity]` in the corpus came to read the dot3
+# light's specular red instead: disassembling the shipped PEXE for a_simple.psh shows the MOV's
+# source is 0xA0FF0002, c2 with swizzle .wwww.
+SOURCE_IS_WIDE = [False]
+
+# Symbolic constants whose registers.inc definition already names a single component, so an operand
+# that carries no swizzle of its own is STILL a scalar. cMaterial_specularPower is c15.x and cLog2e
+# is a bare literal; `mov r0.w, cMaterial_specularPower` reads as unswizzled but cannot take a .w.
+# Filled by the driver when it generates asm_constants.inc, which is the only place that knows.
+SCALAR_CONSTANTS = set()
+
+
+def note_source_width(sources):
+    """A four-vector result needs a component-matched swizzle; a scalar result cannot take one.
+
+    ANY four-vector source makes the whole expression a four-vector, because HLSL promotes the
+    scalar: `t0.a * psC[2]` is a float4 whose components differ, so writing it into r0.a has to take
+    .a. Requiring every source to be wide would get that one wrong -- it was tried, and it left 29
+    programs reading psC[2].x where the assembly means psC[2].w.
+
+    A source is narrow when it carries its own single-component swizzle, or when it is a symbolic
+    constant whose definition already names one component (SCALAR_CONSTANTS). With every source
+    narrow the result is a scalar, and .x is then both correct and the only legal subscript --
+    `mul r0.w, cLog2e, r0.w` cannot take .w.
+    """
+    wide = False
+    for operand in sources:
+        narrow = (operand.mask is not None and len(operand.mask) == 1) or operand.name in SCALAR_CONSTANTS
+        if not narrow:
+            wide = True
+            break
+    SOURCE_IS_WIDE[0] = wide
+
+
 def assign(dst, mask, expression, saturate=False, scale=None):
     if scale is not None:
         expression = "(%s) * %s" % (expression, scale)
@@ -151,13 +196,30 @@ def assign(dst, mask, expression, saturate=False, scale=None):
     if dst.startswith("vsOutput.texcoord") and not mask:
         expression = "asmTexcoord(%s)" % expression
     if mask:
-        # Assigning a scalar or a wider value into a masked destination: HLSL requires the
-        # right-hand side to have the same component count, so a scalar is broadcast
-        # explicitly and a wider value is truncated by swizzle.
+        # Assigning into a masked destination: HLSL requires the right-hand side to have the same
+        # component count, so the source is selected down with a swizzle.
+        #
+        # The swizzle is the DESTINATION MASK'S OWN COMPONENTS, not the leading ones. D3D9 writes
+        # component-wise: destination .w takes source .w, destination .y takes source .y. This used
+        # to emit "xyzw"[:n], the first n components, which is right only when the mask happens to
+        # start at x -- so .rgb and .r were correct and every other narrow mask was wrong.
+        #
+        # `mov r0.a, c[alphaFadeOpacity]` is the case that showed it. alphaFadeOpacity is
+        # packedRegister2.a, so the assembly means r0.a = c2.a; the emitter produced r0.a = c2.x,
+        # which is the dot3 light's specular RED. Disassembling the shipped PEXE for a_simple.psh
+        # settles the intent: the MOV's source is 0xA0FF0002, c2 with swizzle 0xFF = .wwww. 59 of
+        # the 127 converted pixel programs carry that line.
+        #
+        # It is alpha-only in practice, because the composite discards scene alpha, but it is wrong
+        # and it does reach the epilogue's alpha-test clip.
         n = len(mask)
         if n == 4:
             return "\t%s = %s;" % (dst, expression)
-        return "\t%s.%s = (%s).%s;" % (dst, mask, expression, "xyzw"[:n])
+
+        # A uniform result is the same in every channel, so the leading component is both correct
+        # and the only legal subscript.
+        selector = mask if SOURCE_IS_WIDE[0] else "xyzw"[:n]
+        return "\t%s.%s = (%s).%s;" % (dst, mask, expression, selector)
     return "\t%s = %s;" % (dst, expression)
 
 
@@ -207,6 +269,7 @@ def vertex_mapper(name, index):
 
 
 def translate_vertex_instruction(op, operands, origin):
+    note_source_width(operands[1:])
     saturate = op.endswith("_sat")
     if saturate:
         op = op[:-4]
@@ -359,6 +422,7 @@ PIXEL_MASK_MAP = {"rgb": "rgb", "a": "a", "r": "r", "g": "g", "b": "b", "w": "a"
 
 
 def translate_pixel_instruction(op, operands, origin, state):
+    note_source_width(operands[1:])
     saturate = op.endswith("_sat")
     if saturate:
         op = op[:-4]

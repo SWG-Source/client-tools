@@ -84,6 +84,7 @@ def build_constants_include():
             # equivalent for. Emit the literals instead of depending on an upload.
             literal = {"x": "0.0f", "y": "0.5f", "z": "1.0f", "w": "1.4426950408889634f"}[channel]
             lines.append("#define %-46s %s" % (name, literal))
+            T.SCALAR_CONSTANTS.add(name)
             continue
 
         if not channel:
@@ -94,6 +95,8 @@ def build_constants_include():
         target = "c[%d]" % index
         if channel:
             target += "." + channel
+            # Scalar by definition, whatever the operand looks like. See T.SCALAR_CONSTANTS.
+            T.SCALAR_CONSTANTS.add(name)
         lines.append("#define %-46s %s" % (name, target))
 
     lines.append("")

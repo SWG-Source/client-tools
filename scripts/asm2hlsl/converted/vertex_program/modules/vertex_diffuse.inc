@@ -10,5 +10,5 @@
 //   oD0      = diffuse light
 //
 // ======================================================================
-	vsOutput.color0.rgb = (r7 * vColor0).xyz;
-	vsOutput.color0.a = (vColor0).x;
+	vsOutput.color0.rgb = (r7 * vColor0).rgb;
+	vsOutput.color0.a = (vColor0).a;

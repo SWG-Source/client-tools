@@ -29,7 +29,7 @@ VsOutput main(VsInput vsInput)
 
 //-- normalize position
 	r0 = vPosition;
-	r0.w = ((dot((r0).xyz, (r0).xyz)).xxxx).x;
+	r0.w = ((dot((r0).xyz, (r0).xyz)).xxxx).w;
 	r0.w = ((rsqrt(abs(r0.w))).xxxx).x;
 	r0.xyz = (r0.xyz * r0.w).xyz;
 	r1.y = (r0.y).x;

@@ -33,7 +33,7 @@ VsOutput main(VsInput vsInput)
 	r9.xyz = (float3(dot(vPosition, c[4]), dot(vPosition, c[5]), dot(vPosition, c[6]))).xyz;
 // -- calculate the direction to the viewer
 	r11.xyz = (cCameraPosition - r9).xyz;
-	r11.w = ((dot((r11).xyz, (r11).xyz)).xxxx).x;
+	r11.w = ((dot((r11).xyz, (r11).xyz)).xxxx).w;
 	r0.w = ((rsqrt(abs(r11.w))).xxxx).x;
 	r11.xyz = (r11 * r0.w).xyz;
 // -- calculate fog

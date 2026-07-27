@@ -19,14 +19,14 @@
 //  calculate diffuse/specular parallel light 1
 // calculate the half angle (H = L + V / |L + V|)
 	r1.xyz = (cLightData_parallelSpecular_0_direction + r11).xyz;
-	r1.w = ((dot((r1).xyz, (r1).xyz)).xxxx).x;
+	r1.w = ((dot((r1).xyz, (r1).xyz)).xxxx).w;
 	r1.w = ((rsqrt(abs(r1.w))).xxxx).x;
 	r1.xyz = (r1 * r1.w).xyz;
 //H dot N into a UV2 for the specular lookup
 	vsOutput.texcoord2.xyz = ((dot((r1).xyz, (r10).xyz)).xxxx).xyz;
 // calculate diffuse and specular lighting
 	r0.x = ((dot((r10).xyz, (cLightData_parallelSpecular_0_direction).xyz)).xxxx).x;
-	r0.y = ((dot((r10).xyz, (r1).xyz)).xxxx).x;
+	r0.y = ((dot((r10).xyz, (r1).xyz)).xxxx).y;
 	r0.w = (cMaterial_specularPower).x;
 	r0 = lit((r0).x, (r0).y, (r0).w);
 	r0 = (dot((r10).xyz, (cLightData_parallelSpecular_0_direction).xyz)).xxxx;
@@ -59,12 +59,12 @@
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate the half angle (H = L + V / |L + V|)
 	r2.xyz = (r0 + r11).xyz;
-	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).x;
+	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).w;
 	r2.w = ((rsqrt(abs(r2.w))).xxxx).x;
 	r2.xyz = (r2 * r2.w).xyz;
 // calculate diffuse and specular lighting
 	r0.x = ((dot((r10).xyz, (r0).xyz)).xxxx).x;
-	r0.y = ((dot((r10).xyz, (r2).xyz)).xxxx).x;
+	r0.y = ((dot((r10).xyz, (r2).xyz)).xxxx).y;
 	r0.w = (cMaterial_specularPower).x;
 	r0 = lit((r0).x, (r0).y, (r0).w);
 	r0 = r0 * r1;

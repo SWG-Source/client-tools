@@ -15,7 +15,7 @@
 // transform the light direction into texture space, pack into 0..1 range
 	r0.xyz = (vsInput.textureCoordinateSetDOT3).xyz;
 	r2.xyz = (vNormal).xyz;
-	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).x;
+	r2.w = ((dot((r2).xyz, (r2).xyz)).xxxx).w;
 	r2.w = ((rsqrt(abs(r2.w))).xxxx).x;
 	r2.xyz = (r2 * r2.w).xyz;
 	r1.xyz = (r2.zxy * r0.yzx).xyz;

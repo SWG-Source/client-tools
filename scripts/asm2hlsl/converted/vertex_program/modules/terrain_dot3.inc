@@ -15,6 +15,6 @@
 	r9 = -(vNormal.yzxw) * r10.zxyw + r9;
 //m3x3 r5, v0, c[3]
 	r0.x = ((dot((cLightData_dot3_0_direction).xyz, (r9).xyz)).xxxx).x;
-	r0.y = ((dot((cLightData_dot3_0_direction).xyz, (r10).xyz)).xxxx).x;
-	r0.z = ((dot((cLightData_dot3_0_direction).xyz, (vNormal).xyz)).xxxx).x;
+	r0.y = ((dot((cLightData_dot3_0_direction).xyz, (r10).xyz)).xxxx).y;
+	r0.z = ((dot((cLightData_dot3_0_direction).xyz, (vNormal).xyz)).xxxx).z;
 	vsOutput.texcoord2.xyz = (r0 * c0_5 + c0_5).xyz;
