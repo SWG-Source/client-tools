@@ -77,6 +77,7 @@ namespace Direct3d11_ShaderSignatureNamespace
 	void        parseDeclarations(char const *source, int from, int to, std::vector<Declaration> &result);
 	std::string widen(std::string const &expression, int width);
 	std::string narrow(std::string const &expression, int width);
+	std::string readInterpolant(char const *member, int width);
 	char       *duplicate(std::string const &text, int &resultLength);
 }
 
@@ -418,6 +419,35 @@ std::string Direct3d11_ShaderSignatureNamespace::widen(std::string const &expres
 
 // ----------------------------------------------------------------------
 
+std::string Direct3d11_ShaderSignatureNamespace::readInterpolant(char const *member, int width)
+{
+	std::string expression = std::string("swgIn.") + member;
+
+	// A COLOR interpolant is clamped to [0,1]. D3D9 did that in hardware -- anything carrying the
+	// COLOR semantic was saturated at the interpolator, for every pixel shader version -- and
+	// D3D10 removed the clamp. Nothing in the shipped corpus knows that.
+	//
+	// The shipped assembly programs multiply straight by v0 with no saturate of their own:
+	// a_2blend_dirt.psh, which is what the starport's interior walls use, ends
+	//
+	//     mul r0.rgb, r0, v0
+	//
+	// and the vertex side accumulates ambient plus lights into oD0 without clamping either, because
+	// under D3D9 it did not have to. Interior ambient is boosted, so oD0 arrives above one, the
+	// multiply has nothing to hold it down, and the wall saturates to white against an UNORM
+	// target. That is the blown-out interior: the texture is fine and the light is not, and the
+	// missing piece is a clamp the hardware used to do.
+	//
+	// Clamping here rather than in each program covers every program at once -- 349 of them --
+	// including the hand-written HLSL that reads COLOR0 directly.
+	if (strcmp(member, "swgColor0") == 0 || strcmp(member, "swgColor1") == 0)
+		expression = "saturate(" + expression + ")";
+
+	return narrow(expression, width);
+}
+
+// ----------------------------------------------------------------------
+
 std::string Direct3d11_ShaderSignatureNamespace::narrow(std::string const &expression, int width)
 {
 	switch (width)
@@ -725,7 +755,7 @@ char *Direct3d11_ShaderSignature::wrapPixelProgram(char const *name, char const 
 			result.append("\tswgForwarded.");
 			result.append(inputs[i].name);
 			result.append(" = ");
-			result.append(narrow(std::string("swgIn.") + member, width));
+			result.append(readInterpolant(member, width));
 			result.append(";\n");
 		}
 
@@ -752,7 +782,7 @@ char *Direct3d11_ShaderSignature::wrapPixelProgram(char const *name, char const 
 				continue;
 			}
 
-			arguments.append(narrow(std::string("swgIn.") + member, width));
+			arguments.append(readInterpolant(member, width));
 		}
 
 		result.append("\treturn swgPixelEpilogue(swgPixelMain(");
