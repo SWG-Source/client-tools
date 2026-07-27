@@ -469,10 +469,21 @@ void Direct3d11_TextureData::createResource()
 		m_texture.isRenderTarget() ? ", render target" : "",
 		Direct3d11_Device::describeHresult(hresult)));
 
+	// Named so that a capture says which texture this is. Without it every texture in a RenderDoc
+	// capture is a number, and "which texture is bound where the skin renders green" becomes a
+	// correlation exercise instead of a glance.
+	Direct3d11_Device::setDebugNameFormatted(m_resource, "%s (%s%s%s)",
+		describeTexture(m_texture),
+		describeFormat(m_nativeFormat),
+		m_texture.isCubeMap() ? ", cube" : "",
+		m_texture.isRenderTarget() ? ", render target" : "");
+
 	// A default view covers exactly the levels and slices that exist, and for a
 	// resource created with MISC_TEXTURECUBE it is a cube view rather than an array
 	// view. Both are what we want, so the description is left NULL.
 	hresult = device->CreateShaderResourceView(m_resource, NULL, &m_shaderResourceView);
+
+	Direct3d11_Device::setDebugNameFormatted(m_shaderResourceView, "%s view", describeTexture(m_texture));
 	FATAL(FAILED(hresult) || !m_shaderResourceView, ("Direct3d11: the shader view for texture '%s' could not be created (%s).", describeTexture(m_texture), Direct3d11_Device::describeHresult(hresult)));
 }
 

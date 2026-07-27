@@ -82,6 +82,19 @@ public:
 
 	static char const             *describeHresult(HRESULT hresult);
 
+	// Give a D3D11 object a name a capture tool will show.
+	//
+	// Without this every shader, texture and buffer in a RenderDoc capture is an opaque number,
+	// and answering "which program drew this pixel" means correlating creation order by hand. With
+	// it the capture is self-describing and says 'pixel_program/a_specmap_bump_ps20.psh'.
+	//
+	// Always on rather than gated behind the debug layer. Creation happens a few hundred times in
+	// a run -- 39 state objects, 43 input layouts, a couple of hundred shaders -- so the cost is a
+	// few hundred SetPrivateData calls at load, and the alternative is discovering the names are
+	// missing at the moment a capture is needed.
+	static void                    setDebugName(ID3D11DeviceChild *object, char const *name);
+	static void                    setDebugNameFormatted(ID3D11DeviceChild *object, char const *format, ...);
+
 	// Move whatever the D3D11 debug layer has queued into the warning log. No-op unless the
 	// debugLayer config key is on.
 	//

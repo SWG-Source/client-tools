@@ -244,6 +244,18 @@ class Converter(object):
             if low.startswith("dcl") or low in ("target",) or re.match(r"^(ps|vs)[\.\d]", low):
                 continue
             if low.startswith("def "):
+                # Record the literal rather than dropping it. See T.PIXEL_DEFS.
+                dm = re.match(r"^def\s+c(\d+)\s*,(.*)$", code, re.I)
+                if dm and not vertex:
+                    values = [v.strip() for v in dm.group(2).split(",") if v.strip()]
+                    if len(values) == 4:
+                        T.PIXEL_DEFS[int(dm.group(1))] = tuple(values)
+                    else:
+                        self.errors.append((origin, "def with %d components, expected 4  [%s]" % (len(values), code)))
+                elif dm and vertex:
+                    # No vertex program in the corpus uses one; if that changes it needs the same
+                    # treatment and must not be silently dropped.
+                    self.errors.append((origin, "vertex def is not handled  [%s]" % code))
                 continue
 
             # Assembly static branching, as the base diffuse.inc uses.
@@ -478,6 +490,8 @@ class Converter(object):
             self.errors.append((rel, "program missing"))
             return None
 
+        T.PIXEL_DEFS.clear()
+
         state = {"samplers": set(), "texcoords": set(), "m3x2_u": False,
                  "cubeStages": self.cube_stages_for(rel)}
         out = []
@@ -499,6 +513,11 @@ class Converter(object):
         head.append("")
         head.append('#include "pixel_program/include/asm_constants.inc"')
         head.append("")
+        for n in sorted(T.PIXEL_DEFS):
+            head.append("static const float4 psDef%d = float4(%s);" % (n, ", ".join(T.PIXEL_DEFS[n])))
+        if T.PIXEL_DEFS:
+            head.append("")
+
         for n in sorted(state["samplers"]):
             kind = "samplerCUBE" if n in state["cubeStages"] else "sampler"
             head.append("%s pixelSampler%d : register(s%d);" % (kind, n, n))

@@ -57,6 +57,37 @@ using namespace Direct3d11_DeviceNamespace;
  * else is reported as a hex code, which is still better than a bare "failed".
  */
 
+void Direct3d11_Device::setDebugName(ID3D11DeviceChild *object, char const *name)
+{
+	if (!object || !name)
+		return;
+
+	// WKPDID_D3DDebugObjectName takes the length WITHOUT the terminator. Passing the terminator
+	// too makes tools display a trailing NUL, which is the sort of thing that gets noticed later
+	// and blamed on the tool.
+	IGNORE_RETURN(object->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(strlen(name)), name));
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Device::setDebugNameFormatted(ID3D11DeviceChild *object, char const *format, ...)
+{
+	if (!object || !format)
+		return;
+
+	char name[256];
+
+	va_list arguments;
+	va_start(arguments, format);
+	IGNORE_RETURN(vsnprintf(name, sizeof(name), format, arguments));
+	va_end(arguments);
+
+	name[sizeof(name) - 1] = 0;
+	setDebugName(object, name);
+}
+
+// ----------------------------------------------------------------------
+
 char const *Direct3d11_Device::describeHresult(HRESULT hresult)
 {
 	switch (hresult)

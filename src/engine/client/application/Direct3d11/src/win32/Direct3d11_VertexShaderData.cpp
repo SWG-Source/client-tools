@@ -198,6 +198,8 @@ void Direct3d11_VertexShaderData::compile()
 	}
 
 	HRESULT const hresult = device->CreateVertexShader(m_bytecode->GetBufferPointer(), m_bytecode->GetBufferSize(), NULL, &m_shader);
+
+	Direct3d11_Device::setDebugName(m_shader, m_vertexShader.getFilename());
 	if (FAILED(hresult) || !m_shader)
 	{
 		WARNING(true, ("Direct3d11: vertex program '%s' compiled but the shader object could not be created (%s).", m_vertexShader.getFilename(), Direct3d11_Device::describeHresult(hresult)));

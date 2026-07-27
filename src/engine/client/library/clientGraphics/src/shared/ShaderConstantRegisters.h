@@ -105,9 +105,21 @@ enum PixelShaderConstantRegisters
 
 	PSCR_MAX,
 
-	// Rows a pixel constant buffer must have. Unlike the vertex file there is no
-	// tail beyond the enumeration.
-	PSCR_CBUFFER_ROWS = PSCR_MAX
+	// Rows a pixel constant buffer must have.
+	//
+	// There IS a tail beyond the enumeration, and this used to say there was not.
+	// PSCR_userConstant is the FIRST of a run -- its own comment says "so that we can
+	// use multiple user constant registers" -- and the shipped
+	// pixel_program/include/pixel_shader_constants.inc declares that run as
+	//
+	//     float4 userConstants[17] : register(c8);
+	//
+	// which occupies c8 through c24. Sizing the buffer at PSCR_MAX made it nine rows,
+	// so every user constant past the first was outside the buffer: the bloom passes
+	// tripped the range FATAL in Direct3d11.cpp and 2d_blur and 2d_downsample read
+	// registers that were not there.
+	PSCR_userConstantCount = 17,
+	PSCR_CBUFFER_ROWS = PSCR_userConstant + PSCR_userConstantCount
 };
 
 // ======================================================================

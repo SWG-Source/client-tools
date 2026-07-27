@@ -316,6 +316,13 @@ def translate_matrix(op, operands, dst, mask, saturate, scale):
 # ======================================================================
 # Pixel translation
 
+# Literal constants a pixel program declares with `def`, as {register number: (x, y, z, w)}.
+# Module scope for the same reason CONSTANT_REGISTERS is: pixel_mapper is called from the
+# instruction translator, which has no route to per-program state. Cleared per program by the
+# driver.
+PIXEL_DEFS = {}
+
+
 def pixel_mapper(name, index):
     low = name.lower()
     if re.match(r"^r\d+$", low):
@@ -335,7 +342,16 @@ def pixel_mapper(name, index):
         # each name to its whole register instead, which is what the assembly meant.
         return index.strip()
     if re.match(r"^c\d+$", low):
-        return "psC[%d]" % int(low[1:])
+        number = int(low[1:])
+        # A `def cN, x, y, z, w` in the assembly declares an INLINE LITERAL that shadows the
+        # engine's register N for this program only. Reading psC[N] instead reads whatever the
+        # engine happens to have uploaded, which is a different number every frame and has
+        # nothing to do with what the shader meant. bad_vertex_shader.psh defines c0 as magenta
+        # and multiplies the vertex colour by it; without this it multiplied by a live engine
+        # constant and came out an arbitrary flat colour.
+        if number in PIXEL_DEFS:
+            return "psDef%d" % number
+        return "psC[%d]" % number
     return name
 
 

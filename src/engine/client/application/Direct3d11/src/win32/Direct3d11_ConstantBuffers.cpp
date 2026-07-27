@@ -570,11 +570,28 @@ void Direct3d11_ConstantBuffers::flush()
 
 	if (ms_vertexDirtyFirst >= 0)
 	{
+	// MAP_WRITE_DISCARD hands back a FRESH, UNINITIALISED buffer. Whatever was in it is gone, so a
+	// partial copy does not leave the untouched rows alone -- it leaves them undefined.
+	//
+	// This used to copy only rows 0..dirtyLast, in the belief that bounding the upload by the dirty
+	// extent saved bandwidth the way DX9's per-register SetVertexShaderConstantF did. It does not
+	// mean that under DISCARD, and the cost was every constant ABOVE the dirty span, on every draw:
+	// the hemispheric lighting block at c60..c63, the dot3 colours at c42..c43, and the unit
+	// vectors seeded once at install into c49..c51. Any draw whose dirty span happened to stop
+	// below those read garbage. That is why terrain and bump-lit walls rendered lavender while
+	// unlit surfaces in the same frame were correct, and why the wrongness was stable per material
+	// rather than flickering -- a material's dirty span is the same every frame.
+	//
+	// The whole shadow goes up now. It is 96 rows of 16 bytes for the vertex file and 25 for the
+	// pixel one: about 1.5 KB and 400 bytes per flush, which is not worth being clever about. If it
+	// ever is, the answer is UpdateSubresource on a non-dynamic buffer, or a NO_OVERWRITE ring --
+	// not a partial DISCARD, which cannot be made correct.
+
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		Zero(mapped);
 		if (SUCCEEDED(context->Map(ms_vertexGlobals, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		{
-			int const rows = ms_vertexDirtyLast + 1;
+			int const rows = cms_vertexRows;
 			memcpy(mapped.pData, ms_vertexShadow, rows * cms_bytesPerRow);
 			context->Unmap(ms_vertexGlobals, 0);
 
@@ -591,11 +608,12 @@ void Direct3d11_ConstantBuffers::flush()
 
 	if (ms_pixelDirtyFirst >= 0)
 	{
+		// The whole shadow, for the reason given above the vertex upload.
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		Zero(mapped);
 		if (SUCCEEDED(context->Map(ms_pixelGlobals, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		{
-			int const rows = ms_pixelDirtyLast + 1;
+			int const rows = cms_pixelRows;
 			memcpy(mapped.pData, ms_pixelShadow, rows * cms_bytesPerRow);
 			context->Unmap(ms_pixelGlobals, 0);
 
