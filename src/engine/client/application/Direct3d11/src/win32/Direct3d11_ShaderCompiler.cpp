@@ -327,6 +327,12 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 	ID3DBlob *bytecode = NULL;
 	ID3DBlob *errors = NULL;
 
+	// QueryPerformanceCounter rather than the engine's Clock: this runs from whichever thread
+	// loaded the effect, and the engine's frame clock is not that thread's to read.
+	LARGE_INTEGER start;
+	start.QuadPart = 0;
+	IGNORE_RETURN(QueryPerformanceCounter(&start));
+
 	HRESULT const hresult = D3DCompile(
 		source,
 		static_cast<SIZE_T>(sourceLength),
@@ -339,6 +345,17 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 		0,
 		&bytecode,
 		&errors);
+
+	LARGE_INTEGER end;
+	end.QuadPart = 0;
+	IGNORE_RETURN(QueryPerformanceCounter(&end));
+
+	LARGE_INTEGER frequency;
+	frequency.QuadPart = 0;
+	IGNORE_RETURN(QueryPerformanceFrequency(&frequency));
+
+	if (frequency.QuadPart > 0)
+		Direct3d11_Metrics::shaderCompileMicroseconds += static_cast<int>(((end.QuadPart - start.QuadPart) * 1000000) / frequency.QuadPart);
 
 	++Direct3d11_Metrics::shaderCompiles;
 

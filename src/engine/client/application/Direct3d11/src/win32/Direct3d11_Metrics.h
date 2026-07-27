@@ -122,6 +122,10 @@ public:
 	static int  constantBufferCreations;
 	static int  shaderCompiles;
 
+	// Microseconds spent inside D3DCompile. Accumulated per frame like the counts, so the peak
+	// frame's figure is the size of the hitch a first-use compile burst actually causes.
+	static int  shaderCompileMicroseconds;
+
 	// Composite. Confirms the colour correction pass is genuinely skipped at
 	// identity settings rather than running a curve that happens to look right.
 	static int  compositesCopied;

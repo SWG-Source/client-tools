@@ -59,6 +59,7 @@ int Direct3d11_Metrics::stateObjectCreations;
 int Direct3d11_Metrics::inputLayoutCreations;
 int Direct3d11_Metrics::constantBufferCreations;
 int Direct3d11_Metrics::shaderCompiles;
+int Direct3d11_Metrics::shaderCompileMicroseconds;
 
 int Direct3d11_Metrics::compositesCopied;
 int Direct3d11_Metrics::compositesCorrected;
@@ -87,6 +88,16 @@ namespace Direct3d11_MetricsNamespace
 	// Peak in-frame creation count seen after the first few frames. Warm-up is
 	// expected to create things; a steady-state frame is not.
 	int  ms_peakInFrameCreations;
+
+	// The breakdown of the peak frame, and which frame it was. Kept alongside the total because
+	// the total on its own does not say whether the answer is a warm-up pass or a broken cache.
+	int  ms_peakInFrameFrame;
+	int  ms_peakInFrameStateObjects;
+	int  ms_peakInFrameInputLayouts;
+	int  ms_peakInFrameConstantBuffers;
+	int  ms_peakInFrameShaderCompiles;
+	int  ms_peakInFrameCompileMicroseconds;
+	int  ms_runCompileMicroseconds;
 	int  const cms_warmUpFrames = 60;
 
 	bool ms_reportRequested;
@@ -139,6 +150,7 @@ void Direct3d11_Metrics::beginFrame()
 	ms_runInputLayoutCreations    += inputLayoutCreations;
 	ms_runConstantBufferCreations += constantBufferCreations;
 	ms_runShaderCompiles          += shaderCompiles;
+	ms_runCompileMicroseconds     += shaderCompileMicroseconds;
 	ms_runDroppedDraws            += droppedDraws;
 	ms_runUnsatisfiableInputLayouts += unsatisfiableInputLayouts;
 	ms_runTextureBakeReadbacks    += textureBakeReadbacks;
@@ -147,7 +159,15 @@ void Direct3d11_Metrics::beginFrame()
 
 	int const inFrameCreations = getInFrameCreationCount();
 	if (ms_runFrames > cms_warmUpFrames && inFrameCreations > ms_peakInFrameCreations)
+	{
 		ms_peakInFrameCreations = inFrameCreations;
+		ms_peakInFrameFrame = ms_runFrames;
+		ms_peakInFrameStateObjects = stateObjectCreations;
+		ms_peakInFrameInputLayouts = inputLayoutCreations;
+		ms_peakInFrameConstantBuffers = constantBufferCreations;
+		ms_peakInFrameShaderCompiles = shaderCompiles;
+		ms_peakInFrameCompileMicroseconds = shaderCompileMicroseconds;
+	}
 
 	drawCalls = 0;
 	drawIndexedCalls = 0;
@@ -196,6 +216,7 @@ void Direct3d11_Metrics::beginFrame()
 	inputLayoutCreations = 0;
 	constantBufferCreations = 0;
 	shaderCompiles = 0;
+	shaderCompileMicroseconds = 0;
 
 	compositesCopied = 0;
 	compositesCorrected = 0;
@@ -222,7 +243,16 @@ void Direct3d11_Metrics::report()
 
 	// The gate. Anything nonzero here after warm-up means work is being created
 	// inside the frame loop.
-	WARNING(true, ("Direct3d11 metrics: peak creations in a single frame after warm-up: %d (required: 0)", ms_peakInFrameCreations));
+	WARNING(true, ("Direct3d11 metrics: peak creations in a single frame after warm-up: %d (required: 0) -- frame %d, %d state object(s), %d input layout(s), %d constant buffer(s), %d shader compile(s)",
+		ms_peakInFrameCreations, ms_peakInFrameFrame,
+		ms_peakInFrameStateObjects, ms_peakInFrameInputLayouts,
+		ms_peakInFrameConstantBuffers, ms_peakInFrameShaderCompiles));
+
+	WARNING(ms_runShaderCompiles != 0, ("Direct3d11 metrics: shader compilation cost %.1f ms over the run for %d program(s), %.1f ms average; the peak frame spent %.1f ms in D3DCompile.",
+		static_cast<double>(ms_runCompileMicroseconds) / 1000.0,
+		ms_runShaderCompiles,
+		static_cast<double>(ms_runCompileMicroseconds) / (1000.0 * static_cast<double>(ms_runShaderCompiles)),
+		static_cast<double>(ms_peakInFrameCompileMicroseconds) / 1000.0));
 
 	if (ms_runDroppedDraws || ms_runTextureBakeReadbacks || ms_runBlockingStagingMaps || ms_runPresentFailures)
 		WARNING(true, ("Direct3d11 metrics: NONZERO INVARIANTS -- dropped draws %d, bake readbacks %d, blocking staging maps %d, present failures %d",
