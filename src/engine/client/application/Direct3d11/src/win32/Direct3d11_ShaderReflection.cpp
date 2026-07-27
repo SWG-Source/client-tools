@@ -57,20 +57,47 @@ namespace Direct3d11_ShaderReflectionNamespace
 		{ "userConstant5",                     VCSR_userConstant5                     },
 		{ "userConstant6",                     VCSR_userConstant6                     },
 		{ "userConstant7",                     VCSR_userConstant7                     },
-		{ "extendedLightData",                 VCSR_extendedLightData                 }
+		{ "extendedLightData",                 VCSR_extendedLightData                 },
+
+		// The converted assembly half of the corpus does not use these names at all. Its generated
+		// asm_constants.inc declares one flat array -- `float4 c[96] : register(c0)` -- and reaches
+		// the engine's registers through #defines onto c[N], so reflection sees exactly one variable
+		// called "c" at offset 0. Without this entry the guard checked nothing for all 94 converted
+		// vertex programs, which is precisely the half most likely to have a layout mistake.
+		{ "c",                                 VSCR_objectWorldCameraProjectionMatrix }
 	};
 
+	// These are the names the pixel side actually DECLARES, which is not the same as the names the
+	// shaders read.
+	//
+	// Six of the nine entries here used to be unmatchable. The first five were spelled
+	// dot3LightDirection, dot3LightDiffuseColor and so on -- but
+	// pixel_program/include/pixel_shader_constants.inc, and the copy this DLL substitutes for it,
+	// declare five VARIABLES called packedRegister0..4 and then make those friendly names
+	// PREPROCESSOR MACROS onto swizzles of them (dot3LightDirection is packedRegister0.xyz,
+	// materialSpecularPower is packedRegister0.w). A macro leaves no trace in reflection, so
+	// strcmp could never match one. The ninth was "userConstant" against a declaration of
+	// userConstants[17].
+	//
+	// Only textureFactor, textureFactor2 and materialSpecularColor were ever checked, and any
+	// program that reads none of those three tripped the vacuous-guard warning below -- which it
+	// did, for pixel_program/vertex_color.psh.
 	NamedConstant const cms_pixelConstants[] =
 	{
-		{ "dot3LightDirection",                PSCR_dot3LightDirection                },
-		{ "dot3LightDiffuseColor",             PSCR_dot3LightDiffuseColor             },
-		{ "dot3LightSpecularColor",            PSCR_dot3LightSpecularColor            },
-		{ "dot3LightTangentMinusDiffuseColor", PSCR_dot3LightTangentMinusDiffuseColor },
-		{ "dot3LightTangentMinusBackColor",    PSCR_dot3LightTangentMinusBackColor    },
+		{ "packedRegister0",                   PSCR_dot3LightDirection                },
+		{ "packedRegister1",                   PSCR_dot3LightDiffuseColor             },
+		{ "packedRegister2",                   PSCR_dot3LightSpecularColor            },
+		{ "packedRegister3",                   PSCR_dot3LightTangentMinusDiffuseColor },
+		{ "packedRegister4",                   PSCR_dot3LightTangentMinusBackColor    },
 		{ "textureFactor",                     PSCR_textureFactor                     },
 		{ "textureFactor2",                    PSCR_textureFactor2                    },
 		{ "materialSpecularColor",             PSCR_materialSpecularColor             },
-		{ "userConstant",                      PSCR_userConstant                      }
+		{ "userConstants",                     PSCR_userConstant                      },
+
+		// And the converted assembly pixel programs, which declare two flat arrays of their own:
+		// `float4 psC[8] : register(c0)` and `float4 psUserConstants[17] : register(c8)`.
+		{ "psC",                               PSCR_dot3LightDirection                },
+		{ "psUserConstants",                   PSCR_userConstant                      }
 	};
 
 	int const cms_vertexConstantCount = sizeof(cms_vertexConstants) / sizeof(cms_vertexConstants[0]);
