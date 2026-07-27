@@ -33,10 +33,18 @@ public:
 	static void  install();
 	static void  remove();
 
-	// Forget everything. Called when the context state is invalidated from
-	// outside this cache -- after a resize, or after the composite, which binds
-	// its own state deliberately.
-	static void  invalidate();
+	// Compare every shadowed binding against what the device actually has, and report each
+	// disagreement by name. Returns the number found, so a caller can act on it.
+	//
+	// This exists because a redundancy cache that is wrong does not draw slowly, it draws the
+	// wrong thing: a bind the shadow believes is already in place is skipped, and the previous
+	// program stays bound. That failure reaches the log as a vertex/pixel linkage error naming
+	// two anonymous stages, and it cost a long diagnosis once already.
+	//
+	// Called once per present when the debugLayer key is on, which is cheap enough to leave in
+	// and catches any future path that writes device state without going through here -- within
+	// one frame of it being written, rather than whenever someone next reads the log carefully.
+	static int   auditAgainstDevice(char const *what);
 
 	static void  setBlendState(ID3D11BlendState *state, float const blendFactor[4], uint32 sampleMask);
 	static void  setDepthStencilState(ID3D11DepthStencilState *state, uint32 stencilReference);

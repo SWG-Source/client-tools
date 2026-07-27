@@ -79,6 +79,7 @@ namespace Direct3d11_ShaderReflectionNamespace
 	bool ms_warnedAboutVacuousGuard;
 
 	void checkConstantBuffer(ID3D11ShaderReflection *reflection, char const *name, bool isVertexShader, Direct3d11_ShaderReflection::Result &result);
+	void checkInterpolantSignature(ID3D11ShaderReflection *reflection, char const *name, bool isVertexShader);
 	void buildSamplerMap(ID3D11ShaderReflection *reflection, char const *name, Direct3d11_ShaderReflection::Result &result);
 }
 using namespace Direct3d11_ShaderReflectionNamespace;
@@ -208,6 +209,120 @@ void Direct3d11_ShaderReflectionNamespace::buildSamplerMap(ID3D11ShaderReflectio
 
 // ======================================================================
 
+// ======================================================================
+/**
+ * Verify a program's interpolant signature is the canonical one, and name it if not.
+ *
+ * D3D11 links the vertex and pixel stages by REGISTER, so the only thing that makes independently
+ * compiled programs pairable is that every one of them presents an identical signature.
+ * Direct3d11_ShaderSignature wraps both stages to guarantee that -- and a guarantee nothing checks is
+ * a guarantee that quietly stops holding. It already stopped holding once: the point sprite geometry
+ * shader kept a hand-written three-element signature through the change that canonicalised the other
+ * two stages, and the only symptom was 397 debug layer errors a minute in a build most people run
+ * without the debug layer on.
+ *
+ * So this checks the thing that matters, at the moment the bytecode exists, and reports the PROGRAM
+ * NAME. Without a name, a linkage error names two anonymous stages and the search space is the whole
+ * corpus.
+ *
+ * A vertex shader is judged on its OUTPUT signature and a pixel shader on its INPUT signature: those
+ * are the two halves that have to agree. Extra elements are as much of a failure as missing ones,
+ * because a register the consumer does not expect shifts everything after it.
+ */
+
+void Direct3d11_ShaderReflectionNamespace::checkInterpolantSignature(ID3D11ShaderReflection *reflection, char const *name, bool isVertexShader)
+{
+	D3D11_SHADER_DESC description;
+	Zero(description);
+	if (FAILED(reflection->GetDesc(&description)))
+		return;
+
+	// Semantic name and index for each of the twelve canonical slots, in register order. SV_Position
+	// is reported by reflection under that name even though the asset spells it POSITION0.
+	struct Expected
+	{
+		char const *semantic;
+		UINT        index;
+	};
+
+	static Expected const expected[] =
+	{
+		{ "SV_Position", 0 },
+		{ "COLOR",       0 },
+		{ "COLOR",       1 },
+		{ "FOG",         0 },
+		{ "TEXCOORD",    0 },
+		{ "TEXCOORD",    1 },
+		{ "TEXCOORD",    2 },
+		{ "TEXCOORD",    3 },
+		{ "TEXCOORD",    4 },
+		{ "TEXCOORD",    5 },
+		{ "TEXCOORD",    6 },
+		{ "TEXCOORD",    7 },
+	};
+
+	int const expectedCount = isizeof(expected) / isizeof(expected[0]);
+	UINT const actualCount = isVertexShader ? description.OutputParameters : description.InputParameters;
+
+	bool matches = (actualCount == static_cast<UINT>(expectedCount));
+
+	if (matches)
+	{
+		for (int i = 0; i < expectedCount; ++i)
+		{
+			D3D11_SIGNATURE_PARAMETER_DESC parameter;
+			Zero(parameter);
+
+			HRESULT const hresult = isVertexShader
+				? reflection->GetOutputParameterDesc(static_cast<UINT>(i), &parameter)
+				: reflection->GetInputParameterDesc(static_cast<UINT>(i), &parameter);
+
+			if (FAILED(hresult))
+			{
+				matches = false;
+				break;
+			}
+
+			// Register order is what linkage cares about, so the element at index i must be the slot
+			// expected at register i.
+			if (parameter.Register != static_cast<UINT>(i) ||
+				parameter.SemanticIndex != expected[i].index ||
+				!parameter.SemanticName ||
+				_stricmp(parameter.SemanticName, expected[i].semantic) != 0)
+			{
+				matches = false;
+				break;
+			}
+		}
+	}
+
+	if (matches)
+		return;
+
+	// Report every offender by name, not once overall: the set is what needs fixing, and one
+	// example hides the rest. The corpus is a few hundred programs, so the log stays readable.
+	WARNING(true, ("Direct3d11: '%s' does not present the canonical interpolant signature -- it declares %u %s element(s) where the canonical set has %d. Any draw pairing it with a canonical program will be rejected by D3D11 as a linkage error and will not render.",
+		name, actualCount, isVertexShader ? "output" : "input", expectedCount));
+
+	for (UINT i = 0; i < actualCount; ++i)
+	{
+		D3D11_SIGNATURE_PARAMETER_DESC parameter;
+		Zero(parameter);
+
+		HRESULT const hresult = isVertexShader
+			? reflection->GetOutputParameterDesc(i, &parameter)
+			: reflection->GetInputParameterDesc(i, &parameter);
+
+		if (SUCCEEDED(hresult))
+			WARNING(true, ("Direct3d11:     %s: %s%u at register %u mask 0x%x",
+				name,
+				parameter.SemanticName ? parameter.SemanticName : "<null>",
+				parameter.SemanticIndex, parameter.Register, static_cast<unsigned>(parameter.Mask)));
+	}
+}
+
+// ======================================================================
+
 bool Direct3d11_ShaderReflection::reflect(ID3DBlob *bytecode, char const *name, bool isVertexShader, Result &result)
 {
 	NOT_NULL(bytecode);
@@ -223,6 +338,7 @@ bool Direct3d11_ShaderReflection::reflect(ID3DBlob *bytecode, char const *name, 
 
 	checkConstantBuffer(reflection, name, isVertexShader, result);
 	buildSamplerMap(reflection, name, result);
+	checkInterpolantSignature(reflection, name, isVertexShader);
 
 	reflection->Release();
 

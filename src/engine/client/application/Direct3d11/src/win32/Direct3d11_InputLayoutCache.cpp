@@ -386,8 +386,8 @@ ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *for
 			// Name the formats. D3D9 tolerated a shader reading an input the buffer
 			// did not supply; D3D11 refuses to build the layout at all, so this is
 			// the message that has to identify which combination is unsatisfiable.
-			WARNING(true, ("Direct3d11: CreateInputLayout failed (%s) for %d stream(s) with %d element(s); first format flags 0x%08x. A vertex shader is reading an input these buffers do not supply.", Direct3d11_Device::describeHresult(hresult), streamCount, elementCount, formatFlags[0]));
-			++Direct3d11_Metrics::droppedDraws;
+			WARNING(true, ("Direct3d11: CreateInputLayout failed (%s) for %d stream(s) with %d element(s); first format flags 0x%08x. A vertex shader is reading an input these buffers do not supply, which shipping DX9 does not draw either.", Direct3d11_Device::describeHresult(hresult), streamCount, elementCount, formatFlags[0]));
+			++Direct3d11_Metrics::unsatisfiableInputLayouts;
 		}
 		else
 			++Direct3d11_Metrics::inputLayoutCreations;

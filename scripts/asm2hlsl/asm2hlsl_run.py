@@ -524,7 +524,23 @@ def write_pixel_program(path, hlsl):
 # ======================================================================
 
 def main():
-    reachable = [l.strip().replace("\\", "/") for l in open(os.path.join(HERE, "asm-reachable.txt"), encoding="utf-8") if l.strip()]
+    # Every assembly program in the corpus, not the subset a reachability analysis believes the
+    # client will ask for.
+    #
+    # This used to read asm-reachable.txt, which is the closure over the effects the client
+    # loads. That closure was wrong, and it was wrong in the direction that costs a rendering
+    # bug rather than a wasted minute: five programs the client demonstrably asks for at
+    # runtime were not in it -- gradient_sky.vsh and .psh, ui_radar.psh, texren_copy_c1a1.psh
+    # and bad_vertex_shader.psh -- because none of them is reached through an .eft the closure
+    # walks. The sky and the texture renderer name their programs from engine code, and
+    # bad_vertex_shader.psh is what the backend itself reaches for when a material will not
+    # draw. An unconverted vertex program means every draw using it is dropped; an unconverted
+    # pixel program means a pass binds no pixel shader at all.
+    #
+    # Converting all 222 costs about a minute and cannot be wrong. The reachability analysis is
+    # still worth having -- reachable-programs.txt is how the corpus census is checked -- but it
+    # is reporting, not an input to what gets built.
+    programs = [l.strip().replace("\\", "/") for l in open(os.path.join(HERE, "asm-programs.txt"), encoding="utf-8") if l.strip()]
 
     if os.path.exists(OUT):
         shutil.rmtree(OUT)
@@ -544,7 +560,7 @@ def main():
     vertexDone = 0
     pixelDone = 0
 
-    for rel in sorted(reachable):
+    for rel in sorted(programs):
         if rel.endswith(".vsh"):
             result = converter.convert_vertex_program(rel)
             if result is None:

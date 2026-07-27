@@ -38,31 +38,61 @@ namespace Direct3d11_StateCacheNamespace
 
 	ID3D11ShaderResourceView *ms_shaderResource[Direct3d11_StateCache::cms_shaderResourceSlots];
 	ID3D11SamplerState       *ms_samplerState[Direct3d11_StateCache::cms_shaderResourceSlots];
+
+	void resetShadow();
 }
 using namespace Direct3d11_StateCacheNamespace;
 
 // ======================================================================
+/**
+ * Zero the shadow, for the two moments when nothing is bound and that is a fact.
+ *
+ * Deliberately private, and deliberately not exposed as an invalidate(): a caller that has
+ * already bound something behind this cache's back cannot be served by it. See the note above
+ * setBlendState for why that is, and why nothing needs to.
+ */
+
+void Direct3d11_StateCacheNamespace::resetShadow()
+{
+	ms_blendState = NULL;
+	ms_blendFactor[0] = ms_blendFactor[1] = ms_blendFactor[2] = ms_blendFactor[3] = 0.0f;
+	ms_sampleMask = 0;
+
+	ms_depthStencilState = NULL;
+	ms_stencilReference = 0;
+
+	ms_rasterizerState = NULL;
+
+	ms_vertexShader = NULL;
+	ms_pixelShader = NULL;
+	ms_geometryShader = NULL;
+	ms_inputLayout = NULL;
+	ms_primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+
+	for (int i = 0; i < Direct3d11_StateCache::cms_shaderResourceSlots; ++i)
+	{
+		ms_shaderResource[i] = NULL;
+		ms_samplerState[i] = NULL;
+	}
+}
+
+// ----------------------------------------------------------------------
 
 void Direct3d11_StateCache::install()
 {
-	invalidate();
+	// A fresh immediate context has nothing bound, so a zeroed shadow is accurate rather than
+	// merely empty.
+	resetShadow();
 }
 
 // ----------------------------------------------------------------------
 
 void Direct3d11_StateCache::remove()
 {
-	invalidate();
+	resetShadow();
 }
 
 // ----------------------------------------------------------------------
-/**
- * Forget the shadow.
- *
- * Anything that binds state without going through here has to call this, or the
- * next bind through here will be skipped as redundant when it is not. That is the
- * one way a cache like this produces a wrong image rather than merely a slow one.
- */
 
 void Direct3d11_StateCache::setSpecularPower(float power)
 {
@@ -78,32 +108,79 @@ float Direct3d11_StateCache::getSpecularPower()
 
 // ----------------------------------------------------------------------
 
-void Direct3d11_StateCache::invalidate()
+int Direct3d11_StateCache::auditAgainstDevice(char const *what)
 {
-	ms_blendState = NULL;
-	ms_blendFactor[0] = ms_blendFactor[1] = ms_blendFactor[2] = ms_blendFactor[3] = 0.0f;
-	ms_sampleMask = 0;
+	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
+	if (!context)
+		return 0;
 
-	ms_depthStencilState = NULL;
-	ms_stencilReference = 0;
+	ID3D11VertexShader   *vertexShader = NULL;
+	ID3D11PixelShader    *pixelShader = NULL;
+	ID3D11GeometryShader *geometryShader = NULL;
+	ID3D11InputLayout    *inputLayout = NULL;
 
-	ms_rasterizerState = NULL;
+	context->VSGetShader(&vertexShader, NULL, NULL);
+	context->PSGetShader(&pixelShader, NULL, NULL);
+	context->GSGetShader(&geometryShader, NULL, NULL);
+	context->IAGetInputLayout(&inputLayout);
 
-	ms_vertexShader = NULL;
-	ms_pixelShader = NULL;
-	ms_inputLayout = NULL;
-	ms_primitiveTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+	int disagreements = 0;
 
-	for (int i = 0; i < cms_shaderResourceSlots; ++i)
+	if (vertexShader != ms_vertexShader)
 	{
-		ms_shaderResource[i] = NULL;
-		ms_samplerState[i] = NULL;
+		++disagreements;
+		WARNING(true, ("Direct3d11: the state cache disagrees with the device at %s -- vertex shader shadow says %p, device has %p. A bind this cache believes is redundant will be skipped and the wrong program will draw.", what, static_cast<void *>(ms_vertexShader), static_cast<void *>(vertexShader)));
 	}
 
-	// Null is a meaningful value here, so this is set rather than cleared to a sentinel.
-	ms_geometryShader = NULL;
+	if (pixelShader != ms_pixelShader)
+	{
+		++disagreements;
+		WARNING(true, ("Direct3d11: the state cache disagrees with the device at %s -- pixel shader shadow says %p, device has %p. A bind this cache believes is redundant will be skipped and the wrong program will draw.", what, static_cast<void *>(ms_pixelShader), static_cast<void *>(pixelShader)));
+	}
+
+	if (geometryShader != ms_geometryShader)
+	{
+		++disagreements;
+		WARNING(true, ("Direct3d11: the state cache disagrees with the device at %s -- geometry shader shadow says %p, device has %p.", what, static_cast<void *>(ms_geometryShader), static_cast<void *>(geometryShader)));
+	}
+
+	if (inputLayout != ms_inputLayout)
+	{
+		++disagreements;
+		WARNING(true, ("Direct3d11: the state cache disagrees with the device at %s -- input layout shadow says %p, device has %p.", what, static_cast<void *>(ms_inputLayout), static_cast<void *>(inputLayout)));
+	}
+
+	if (vertexShader)
+		vertexShader->Release();
+	if (pixelShader)
+		pixelShader->Release();
+	if (geometryShader)
+		geometryShader->Release();
+	if (inputLayout)
+		inputLayout->Release();
+
+	return disagreements;
 }
 
+// ----------------------------------------------------------------------
+
+// ======================================================================
+// There is deliberately no invalidate().
+//
+// One used to exist, for the benefit of a pass that bound its shaders and states straight to
+// the context and then told the cache its shadows were stale. It could not work. Every field
+// this cache shadows is a pointer, and NULL is a legal value for all of them -- a null pixel
+// shader is what a pass with no pixel program binds, a null input layout is what a shader that
+// reads no vertex buffer binds. So clearing the shadows to NULL did not say "nothing is known",
+// it said "NULL is bound", and the very next bind of NULL was skipped as redundant. The scene
+// target's composite left its own fullscreen pixel shader on the device that way, and the next
+// material with no pixel program inherited it: a two-element interpolant signature against a
+// twelve-element vertex output, which D3D11 rejects as a linkage error and does not draw.
+//
+// Expressing "unknown" properly would mean a sentinel pointer value that cannot occur, or a
+// validity flag beside every field. Both are machinery to support something nothing needs to
+// do. Device state this cache shadows is set through this cache, and then the shadow is right
+// by construction. auditAgainstDevice() is what keeps that true.
 // ======================================================================
 
 void Direct3d11_StateCache::setBlendState(ID3D11BlendState *state, float const blendFactor[4], uint32 sampleMask)

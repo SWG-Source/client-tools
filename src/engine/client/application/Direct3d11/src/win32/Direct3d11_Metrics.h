@@ -57,6 +57,13 @@ public:
 	static int  triangles;
 	static int  droppedDraws;              // gate: must be 0
 
+	// Draws lost to a vertex buffer that does not carry an input its vertex shader reads.
+	// Counted apart from droppedDraws because shipping DX9 does not draw these either: its
+	// substitution of the bad-vertex-shader material is compiled out of every configuration
+	// that links a client, leaving a DrawPrimitive that fails. Matching that is parity, so this
+	// is a property of the assets and not a gate.
+	static int  unsatisfiableInputLayouts;
+
 	// Binds, counted as calls and as misses, so a cache's hit rate is a
 	// measurement rather than an assumption. DX9's own vertex declaration cache
 	// is a permanent 100% miss because forceVertexDeclaration never assigns the

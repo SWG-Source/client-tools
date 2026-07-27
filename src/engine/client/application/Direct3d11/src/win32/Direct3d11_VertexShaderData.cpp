@@ -11,6 +11,7 @@
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ShaderCompiler.h"
+#include "Direct3d11_ShaderReflection.h"
 #include "Direct3d11_ShaderSource.h"
 
 #include "sharedFoundation/Tag.h"
@@ -333,6 +334,22 @@ void Direct3d11_VertexShaderData::compile()
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	if (!device)
 		return;
+
+	// Reflect the vertex side too, which until now nothing did.
+	//
+	// Direct3d11_ShaderReflection::reflect had exactly one caller -- the pixel program -- so two
+	// checks it performs had never run against a vertex shader at all: the constant ABI guard, which
+	// is the thing keeping register(cN) at $Globals offset 16N and which has a vertex name table
+	// written specifically for this call, and the interpolant signature guard. The signature one
+	// matters most: a vertex shader's OUTPUT signature is one half of what D3D11 links, and a
+	// mismatch there is not a compile error, it is a draw the runtime silently refuses.
+	//
+	// The result is discarded because a vertex program has no sampler mapping to keep; it is the
+	// checking that is wanted, not the return value.
+	{
+		Direct3d11_ShaderReflection::Result reflectionResult;
+		IGNORE_RETURN(Direct3d11_ShaderReflection::reflect(m_bytecode, m_vertexShader.getFilename(), true, reflectionResult));
+	}
 
 	HRESULT const hresult = device->CreateVertexShader(m_bytecode->GetBufferPointer(), m_bytecode->GetBufferSize(), NULL, &m_shader);
 	if (FAILED(hresult) || !m_shader)

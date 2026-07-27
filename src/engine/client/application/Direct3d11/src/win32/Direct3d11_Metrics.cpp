@@ -17,6 +17,7 @@ int Direct3d11_Metrics::drawIndexedCalls;
 int Direct3d11_Metrics::vertices;
 int Direct3d11_Metrics::triangles;
 int Direct3d11_Metrics::droppedDraws;
+int Direct3d11_Metrics::unsatisfiableInputLayouts;
 
 int Direct3d11_Metrics::inputLayoutBindCalls;
 int Direct3d11_Metrics::inputLayoutBindMisses;
@@ -78,6 +79,7 @@ namespace Direct3d11_MetricsNamespace
 	int  ms_runConstantBufferCreations;
 	int  ms_runShaderCompiles;
 	int  ms_runDroppedDraws;
+	int  ms_runUnsatisfiableInputLayouts;
 	int  ms_runTextureBakeReadbacks;
 	int  ms_runBlockingStagingMaps;
 	int  ms_runPresentFailures;
@@ -138,6 +140,7 @@ void Direct3d11_Metrics::beginFrame()
 	ms_runConstantBufferCreations += constantBufferCreations;
 	ms_runShaderCompiles          += shaderCompiles;
 	ms_runDroppedDraws            += droppedDraws;
+	ms_runUnsatisfiableInputLayouts += unsatisfiableInputLayouts;
 	ms_runTextureBakeReadbacks    += textureBakeReadbacks;
 	ms_runBlockingStagingMaps     += blockingStagingMaps;
 	ms_runPresentFailures         += presentFailures;
@@ -151,6 +154,7 @@ void Direct3d11_Metrics::beginFrame()
 	vertices = 0;
 	triangles = 0;
 	droppedDraws = 0;
+	unsatisfiableInputLayouts = 0;
 
 	inputLayoutBindCalls = 0;
 	inputLayoutBindMisses = 0;
@@ -223,6 +227,8 @@ void Direct3d11_Metrics::report()
 	if (ms_runDroppedDraws || ms_runTextureBakeReadbacks || ms_runBlockingStagingMaps || ms_runPresentFailures)
 		WARNING(true, ("Direct3d11 metrics: NONZERO INVARIANTS -- dropped draws %d, bake readbacks %d, blocking staging maps %d, present failures %d",
 			ms_runDroppedDraws, ms_runTextureBakeReadbacks, ms_runBlockingStagingMaps, ms_runPresentFailures));
+
+	WARNING(ms_runUnsatisfiableInputLayouts != 0, ("Direct3d11 metrics: %d draw(s) asked a vertex shader to read an input its vertex buffer does not carry. Shipping DX9 does not draw these either -- see Direct3d11_Metrics.h.", ms_runUnsatisfiableInputLayouts));
 
 	WARNING(true, ("Direct3d11 metrics: composite -- %d copied, %d colour corrected", compositesCopied, compositesCorrected));
 }

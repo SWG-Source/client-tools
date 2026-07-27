@@ -10,6 +10,7 @@
 
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_Device.h"
+#include "Direct3d11_StateCache.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ConstantBuffers.h"
 #include "Direct3d11_RenderTarget.h"
@@ -514,6 +515,13 @@ bool Direct3d11_SwapChain::present()
 
 	// Whatever the debug layer complained about during this frame. No-op unless debugLayer is on.
 	Direct3d11_Device::drainDebugMessages();
+
+	// One check per frame that the redundancy cache still describes the device. Costs four
+	// interface calls a frame and only when the debug layer is on; catches any path that writes
+	// device state without going through the cache, in the frame it happens rather than in a
+	// linkage error a thousand draws later.
+	if (ConfigDirect3d11::getDebugLayer())
+		IGNORE_RETURN(Direct3d11_StateCache::auditAgainstDevice("end of frame"));
 
 
 	// The one place the back buffer is written. Bound here rather than left bound

@@ -33,6 +33,11 @@ namespace Direct3d11_QueryPoolNamespace
 	float         ms_gpuFrameTimeMilliseconds = -1.0f;
 	bool          ms_lastFrameDisjoint;
 
+	// Whether the current ring slot was actually started. False when the slot's previous results
+	// were still not ready, in which case this frame is not timed at all.
+	bool          ms_currentFrameStarted;
+	int           ms_framesSkipped;
+
 	void          collect(FrameQueries &frame);
 }
 using namespace Direct3d11_QueryPoolNamespace;
@@ -81,6 +86,12 @@ void Direct3d11_QueryPool::remove()
 		ms_frames[i].inFlight = false;
 	}
 
+	// Worth knowing: a run that skips a lot of frames is a run whose GPU timings are sampled from
+	// the frames that happened to be fast, which is a biased average rather than a missing one.
+	WARNING(ms_framesSkipped != 0, ("Direct3d11: %d frame(s) went untimed because the GPU had not finished with the query ring. The reported GPU frame time is an average over the frames that were timed.", ms_framesSkipped));
+
+	ms_currentFrameStarted = false;
+	ms_framesSkipped = 0;
 	ms_installed = false;
 }
 
@@ -104,6 +115,21 @@ void Direct3d11_QueryPool::beginFrame()
 	if (frame.inFlight)
 		collect(frame);
 
+	// A slot whose results are still not ready cannot be re-used. collect() deliberately does not
+	// flush -- flushing would change the submission pattern it exists to measure -- so it returns
+	// with inFlight still set whenever the GPU is far enough behind that the ring has lapped it.
+	// Beginning that slot again discards results the runtime has not handed over, which is an
+	// error the debug layer reports and, more to the point, throws away the sample either way.
+	// Skipping the frame's timing loses the same sample without the error.
+	if (frame.inFlight)
+	{
+		ms_currentFrameStarted = false;
+		++ms_framesSkipped;
+		return;
+	}
+
+	ms_currentFrameStarted = true;
+
 	context->Begin(frame.disjoint);
 	context->End(frame.startTimestamp);
 }
@@ -117,6 +143,11 @@ void Direct3d11_QueryPool::endFrame()
 
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 	if (!context)
+		return;
+
+	// Nothing was begun, so there is nothing to end. Ending a query that was never begun is its
+	// own debug layer error.
+	if (!ms_currentFrameStarted)
 		return;
 
 	FrameQueries &frame = ms_frames[ms_currentFrame];

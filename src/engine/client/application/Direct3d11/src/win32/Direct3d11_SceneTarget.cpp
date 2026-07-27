@@ -632,20 +632,25 @@ void Direct3d11_SceneTarget::composite()
 	if (!sceneView)
 		return;
 
-	ID3D11ShaderResourceView *resources[2] = { sceneView, ms_colorCorrectionResourceView };
-	context->PSSetShaderResources(0, 2, resources);
-	context->PSSetSamplers(0, 1, &ms_pointSampler);
+	// Every one of these goes through the state cache, including the ones this pass is the only
+	// user of. Binding straight to the context would leave the cache's shadow describing the
+	// material that drew before this pass, and the next draw would skip a bind it needs.
+	Direct3d11_StateCache::setShaderResource(0, sceneView);
+	Direct3d11_StateCache::setShaderResource(1, ms_colorCorrectionResourceView);
+	Direct3d11_StateCache::setSamplerState(0, ms_pointSampler);
 
-	context->IASetInputLayout(NULL);
-	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	context->VSSetShader(ms_compositeVertexShader, NULL, 0);
-	context->PSSetShader(ms_colorCorrectionIsIdentity ? ms_compositeCopyShader : ms_compositeCorrectShader, NULL, 0);
-	context->GSSetShader(NULL, NULL, 0);
+	// No input layout and no vertex buffer: the composite vertex shader builds its own
+	// fullscreen triangle from SV_VertexID.
+	Direct3d11_StateCache::setInputLayout(NULL);
+	Direct3d11_StateCache::setPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	Direct3d11_StateCache::setVertexShader(ms_compositeVertexShader);
+	Direct3d11_StateCache::setPixelShader(ms_colorCorrectionIsIdentity ? ms_compositeCopyShader : ms_compositeCorrectShader);
+	Direct3d11_StateCache::setGeometryShader(NULL);
 
-	context->OMSetDepthStencilState(ms_compositeDepthState, 0);
+	Direct3d11_StateCache::setDepthStencilState(ms_compositeDepthState, 0);
 	float const blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	context->OMSetBlendState(ms_compositeBlendState, blendFactor, 0xffffffff);
-	context->RSSetState(ms_compositeRasterizerState);
+	Direct3d11_StateCache::setBlendState(ms_compositeBlendState, blendFactor, 0xffffffff);
+	Direct3d11_StateCache::setRasterizerState(ms_compositeRasterizerState);
 
 	if (ms_colorCorrectionIsIdentity)
 		++Direct3d11_Metrics::compositesCopied;
@@ -656,16 +661,11 @@ void Direct3d11_SceneTarget::composite()
 	++Direct3d11_Metrics::drawCalls;
 
 	// Leave nothing bound that the next frame's scene would inherit as a
-	// read-write hazard on its own render target.
-	ID3D11ShaderResourceView *nothing[2] = { NULL, NULL };
-	context->PSSetShaderResources(0, 2, nothing);
-
-	// This pass binds its blend, depth and rasterizer state straight to the
-	// context rather than through the state cache, so the cache's shadow is now
-	// wrong. Telling it so is not optional: a stale shadow makes the next real
-	// bind look redundant and get skipped, which is the one way a redundancy
-	// cache produces a wrong image instead of merely a slow one.
-	Direct3d11_StateCache::invalidate();
+	// read-write hazard on its own render target. The shaders and states are left where they
+	// are: the cache knows what they are, so whatever draws next rebinds exactly what it needs
+	// and nothing more.
+	Direct3d11_StateCache::setShaderResource(0, NULL);
+	Direct3d11_StateCache::setShaderResource(1, NULL);
 }
 
 // ----------------------------------------------------------------------

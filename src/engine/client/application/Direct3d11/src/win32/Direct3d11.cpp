@@ -84,6 +84,7 @@ namespace Direct3d11Namespace
 	const StaticShader *ms_badVertexShaderStaticShader;
 	bool               *ms_badVertexBufferVertexShaderCombination;
 	const char         *ms_badVertexBufferAppearanceName;
+	bool                ms_warnedAboutMissingStaticShaderData;
 
 	bool                        verify();
 	void                        remove();
@@ -487,6 +488,17 @@ namespace Direct3d11Namespace
 		if (!data)
 		{
 			++Direct3d11_Metrics::droppedDraws;
+
+			// Named once, because a counter with a required value of zero is only useful if a
+			// nonzero value can be explained. This happens when a material is applied before its
+			// backend data exists, which the engine allows: StaticShader::bindGraphicsData runs
+			// from the loader, and a draw can reach here in the window before it has.
+			if (!ms_warnedAboutMissingStaticShaderData)
+			{
+				ms_warnedAboutMissingStaticShaderData = true;
+				WARNING(true, ("Direct3d11: a material was applied before its backend data existed, so the draw is being skipped and counted in droppedDraws. Reported once."));
+			}
+
 			return;
 		}
 
