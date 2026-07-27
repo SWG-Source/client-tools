@@ -57,6 +57,7 @@
 // ======================================================================
 
 #include "clientGraphics/ShaderImplementation.h"
+#include "Direct3d11_ShaderPrograms.h"
 
 #include <d3d11_1.h>
 
@@ -113,6 +114,10 @@ private:
 	int                                         m_sourceLength;
 
 	TextureCoordinateSetTags                   *m_textureCoordinateSetTags;
+
+	// What the leading block said. Kept because compile() needs the tag order to build the
+	// macros, and parseHeader is where it was read.
+	Direct3d11_ShaderPrograms::Header            m_header;
 
 	ID3DBlob                                   *m_bytecode;
 	ID3D11VertexShader                         *m_shader;

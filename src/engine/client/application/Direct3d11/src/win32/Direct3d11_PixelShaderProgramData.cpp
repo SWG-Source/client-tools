@@ -12,6 +12,7 @@
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ShaderCompiler.h"
 #include "Direct3d11_ShaderReflection.h"
+#include "Direct3d11_ShaderPrograms.h"
 #include "Direct3d11_ShaderSource.h"
 
 #include <vector>
@@ -101,13 +102,10 @@ void Direct3d11_PixelShaderProgramData::compile()
 	char const * const source = m_program.m_source;
 	int const sourceLength = m_program.m_sourceLength;
 
-	std::vector<D3D_SHADER_MACRO> macros;
-	macros.push_back(Direct3d11_ShaderSource::getPointRenameMacro());
+	Direct3d11_ShaderPrograms::Macros macros;
+	macros.buildForPixelProgram();
 
-	D3D_SHADER_MACRO const terminator = { NULL, NULL };
-	macros.push_back(terminator);
-
-	m_bytecode = Direct3d11_ShaderCompiler::compilePixelShader(source, sourceLength, name, &macros.front());
+	m_bytecode = Direct3d11_ShaderCompiler::compilePixelShader(source, sourceLength, name, macros.get());
 	if (!m_bytecode)
 		return;
 
