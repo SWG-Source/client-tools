@@ -145,7 +145,7 @@ public:
 	// have decided. They are covered separately and once, by validating the manifest's recorded
 	// include hashes at install -- see Direct3d11_ShaderCache.h. That split is the whole reason
 	// this key is safe to use as a file name.
-	static Direct3d11ShaderHash  hashCompilerInput(char const *preparedSource, int preparedLength, Macros const &macros, char const *target, unsigned int flags);
+	static Direct3d11ShaderHash  hashCompilerInput(char const *preparedSource, int preparedLength, D3D_SHADER_MACRO const *macros, char const *target, unsigned int flags);
 
 	// FNV-1a over a buffer, for the include manifest. Exposed because the baker records these and
 	// the runtime re-computes them, and both have to agree to the bit.

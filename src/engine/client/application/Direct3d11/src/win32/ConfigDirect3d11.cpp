@@ -19,6 +19,8 @@ namespace ConfigDirect3d11Namespace
 	ConfigDirect3d11::DriverType   ms_driverType = ConfigDirect3d11::DT_hardware;
 	int                            ms_featureLevelCap;
 	bool                           ms_debugLayer;
+	bool                           ms_useCompiledShaders;
+	bool                           ms_bakeCompiledShaders;
 
 	bool                           ms_allowTearing;
 	int                            ms_fullscreenRefreshRate;
@@ -71,6 +73,8 @@ void ConfigDirect3d11::install()
 	// benchmark profile sets this: with it false the present interval pins the
 	// frame rate to the refresh rate and every percentile becomes meaningless.
 	KEY_BOOL(allowTearing, false);
+	KEY_BOOL(useCompiledShaders, true);
+	KEY_BOOL(bakeCompiledShaders, false);
 	KEY_INT (fullscreenRefreshRate, 0);
 
 	// Three buffers is the flip-model default: two leaves the CPU waiting on the
@@ -130,6 +134,20 @@ bool ConfigDirect3d11::getDebugLayer()
 bool ConfigDirect3d11::getAllowTearing()
 {
 	return ms_allowTearing;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d11::getUseCompiledShaders()
+{
+	return ms_useCompiledShaders;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d11::getBakeCompiledShaders()
+{
+	return ms_bakeCompiledShaders;
 }
 
 // ----------------------------------------------------------------------

@@ -12,6 +12,8 @@
 
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
+#include "Direct3d11_ShaderCache.h"
+#include "Direct3d11_ShaderPrograms.h"
 #include "Direct3d11_ShaderSource.h"
 
 #include "fileInterface/AbstractFile.h"
@@ -324,6 +326,23 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 	NOT_NULL(source);
 	NOT_NULL(name);
 
+	// The key is the hash of exactly what would be passed below, so a hit is bytecode compiled
+	// from this text with these macros, this target and these flags -- or nothing.
+	Direct3d11ShaderHash const key = Direct3d11_ShaderPrograms::hashCompilerInput(source, sourceLength, macros, target, cms_compileFlags);
+
+	{
+		ID3DBlob * const cached = Direct3d11_ShaderCache::fetch(key, name);
+		if (cached)
+			return cached;
+	}
+
+	// Named, because a program that compiles at runtime is a program the cache does not cover, and
+	// the cost of that is the stall the cache exists to remove. Three lines in a good run and a
+	// list worth acting on in a bad one; there are only a few hundred programs in the corpus.
+	WARNING(true, ("Direct3d11: '%s' (%s, key %016llx) is being compiled because the precompiled cache %s.",
+		name, target, key,
+		Direct3d11_ShaderCache::isEnabled() ? "does not contain it" : "is not in use"));
+
 	ID3DBlob *bytecode = NULL;
 	ID3DBlob *errors = NULL;
 
@@ -358,6 +377,8 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 		Direct3d11_Metrics::shaderCompileMicroseconds += static_cast<int>(((end.QuadPart - start.QuadPart) * 1000000) / frequency.QuadPart);
 
 	++Direct3d11_Metrics::shaderCompiles;
+
+	Direct3d11_ShaderCache::store(key, name, bytecode);
 
 	if (FAILED(hresult) || !bytecode)
 	{
@@ -503,6 +524,55 @@ ID3DBlob *Direct3d11_ShaderCompiler::compilePixelShader(char const *source, int 
 		return NULL;
 
 	return compilePatched(source, sourceLength, name, macros, cms_pixelShaderTarget, false);
+}
+
+// ----------------------------------------------------------------------
+
+unsigned int Direct3d11_ShaderCompiler::getCompileFlags()
+{
+	return cms_compileFlags;
+}
+
+// ----------------------------------------------------------------------
+
+bool Direct3d11_ShaderCompiler::hashIncludeAsServed(char const *path, Direct3d11ShaderHash &hash)
+{
+	if (!path)
+		return false;
+
+	// Deliberately goes through the include handler rather than reading the file. Two of these are
+	// substituted from this DLL and one is rewritten on the way in, so what is on disk is not what
+	// the compiler is given -- and it is what the compiler is given that the baked bytecode
+	// depends on. Calling Open() is not "the same as" that path; it IS that path.
+	LPCVOID data = NULL;
+	UINT bytes = 0;
+	if (FAILED(ms_includeHandler.Open(D3D_INCLUDE_LOCAL, path, NULL, &data, &bytes)) || !data)
+		return false;
+
+	hash = Direct3d11_ShaderPrograms::hashBytes(data, static_cast<int>(bytes));
+	return true;
+}
+
+// ----------------------------------------------------------------------
+
+int Direct3d11_ShaderCompiler::getServedIncludeCount()
+{
+	return static_cast<int>(ms_includeCache.size());
+}
+
+// ----------------------------------------------------------------------
+
+bool Direct3d11_ShaderCompiler::getServedInclude(int index, char const *&path, Direct3d11ShaderHash &hash)
+{
+	if (index < 0 || index >= static_cast<int>(ms_includeCache.size()))
+		return false;
+
+	IncludeCache::const_iterator i = ms_includeCache.begin();
+	std::advance(i, index);
+
+	path = i->first.c_str();
+	hash = Direct3d11_ShaderPrograms::hashBytes(i->second.data, i->second.length);
+	return true;
 }
 
 // ----------------------------------------------------------------------

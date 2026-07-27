@@ -126,6 +126,19 @@ public:
 	// frame's figure is the size of the hitch a first-use compile burst actually causes.
 	static int  shaderCompileMicroseconds;
 
+	// Programs served from the precompiled cache, and programs it did not have. A miss is not a
+	// fault -- it compiles, exactly as it did before the cache existed -- but a run that is all
+	// misses is a cache that needs rebaking, and that is worth being able to see.
+	// Shaders this backend wrote and compiles itself, at install, outside the asset chokepoint:
+	// the scene target's composite pass. Counted apart from shaderCompiles so that the asset
+	// figure means "programs the precompiled cache did not cover" and can legitimately read zero,
+	// and still folded into the in-frame creation count so that the gate would catch these if they
+	// ever moved into a frame.
+	static int  backendShaderCompiles;
+
+	static int  shaderCacheHits;
+	static int  shaderCacheMisses;
+
 	// Composite. Confirms the colour correction pass is genuinely skipped at
 	// identity settings rather than running a curve that happens to look right.
 	static int  compositesCopied;

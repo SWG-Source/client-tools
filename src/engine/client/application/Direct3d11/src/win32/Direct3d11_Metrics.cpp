@@ -60,6 +60,9 @@ int Direct3d11_Metrics::inputLayoutCreations;
 int Direct3d11_Metrics::constantBufferCreations;
 int Direct3d11_Metrics::shaderCompiles;
 int Direct3d11_Metrics::shaderCompileMicroseconds;
+int Direct3d11_Metrics::backendShaderCompiles;
+int Direct3d11_Metrics::shaderCacheHits;
+int Direct3d11_Metrics::shaderCacheMisses;
 
 int Direct3d11_Metrics::compositesCopied;
 int Direct3d11_Metrics::compositesCorrected;
@@ -81,6 +84,9 @@ namespace Direct3d11_MetricsNamespace
 	int  ms_runShaderCompiles;
 	int  ms_runDroppedDraws;
 	int  ms_runUnsatisfiableInputLayouts;
+	int  ms_runBackendShaderCompiles;
+	int  ms_runShaderCacheHits;
+	int  ms_runShaderCacheMisses;
 	int  ms_runTextureBakeReadbacks;
 	int  ms_runBlockingStagingMaps;
 	int  ms_runPresentFailures;
@@ -151,6 +157,9 @@ void Direct3d11_Metrics::beginFrame()
 	ms_runConstantBufferCreations += constantBufferCreations;
 	ms_runShaderCompiles          += shaderCompiles;
 	ms_runCompileMicroseconds     += shaderCompileMicroseconds;
+	ms_runBackendShaderCompiles   += backendShaderCompiles;
+	ms_runShaderCacheHits         += shaderCacheHits;
+	ms_runShaderCacheMisses       += shaderCacheMisses;
 	ms_runDroppedDraws            += droppedDraws;
 	ms_runUnsatisfiableInputLayouts += unsatisfiableInputLayouts;
 	ms_runTextureBakeReadbacks    += textureBakeReadbacks;
@@ -217,6 +226,9 @@ void Direct3d11_Metrics::beginFrame()
 	constantBufferCreations = 0;
 	shaderCompiles = 0;
 	shaderCompileMicroseconds = 0;
+	backendShaderCompiles = 0;
+	shaderCacheHits = 0;
+	shaderCacheMisses = 0;
 
 	compositesCopied = 0;
 	compositesCorrected = 0;
@@ -228,7 +240,7 @@ void Direct3d11_Metrics::beginFrame()
 
 int Direct3d11_Metrics::getInFrameCreationCount()
 {
-	return stateObjectCreations + inputLayoutCreations + constantBufferCreations + shaderCompiles;
+	return stateObjectCreations + inputLayoutCreations + constantBufferCreations + shaderCompiles + backendShaderCompiles;
 }
 
 // ----------------------------------------------------------------------
@@ -238,8 +250,8 @@ void Direct3d11_Metrics::report()
 	WARNING(true, ("Direct3d11 metrics: %d frames, %d presents, %d draw calls, %d triangles",
 		ms_runFrames, presents, ms_runDrawCalls, ms_runTriangles));
 
-	WARNING(true, ("Direct3d11 metrics: creations over the run -- state objects %d, input layouts %d, constant buffers %d, shader compiles %d",
-		ms_runStateObjectCreations, ms_runInputLayoutCreations, ms_runConstantBufferCreations, ms_runShaderCompiles));
+	WARNING(true, ("Direct3d11 metrics: creations over the run -- state objects %d, input layouts %d, constant buffers %d, shader compiles %d (plus %d this backend compiles itself at install)",
+		ms_runStateObjectCreations, ms_runInputLayoutCreations, ms_runConstantBufferCreations, ms_runShaderCompiles, ms_runBackendShaderCompiles));
 
 	// The gate. Anything nonzero here after warm-up means work is being created
 	// inside the frame loop.
@@ -247,6 +259,9 @@ void Direct3d11_Metrics::report()
 		ms_peakInFrameCreations, ms_peakInFrameFrame,
 		ms_peakInFrameStateObjects, ms_peakInFrameInputLayouts,
 		ms_peakInFrameConstantBuffers, ms_peakInFrameShaderCompiles));
+
+	WARNING((ms_runShaderCacheHits + ms_runShaderCacheMisses) != 0, ("Direct3d11 metrics: precompiled shader cache -- %d hit(s), %d miss(es).",
+		ms_runShaderCacheHits, ms_runShaderCacheMisses));
 
 	WARNING(ms_runShaderCompiles != 0, ("Direct3d11 metrics: shader compilation cost %.1f ms over the run for %d program(s), %.1f ms average; the peak frame spent %.1f ms in D3DCompile.",
 		static_cast<double>(ms_runCompileMicroseconds) / 1000.0,

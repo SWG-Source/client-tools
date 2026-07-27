@@ -317,7 +317,7 @@ Direct3d11ShaderHash Direct3d11_ShaderPrograms::hashBytes(void const *data, int 
 
 // ----------------------------------------------------------------------
 
-Direct3d11ShaderHash Direct3d11_ShaderPrograms::hashCompilerInput(char const *preparedSource, int preparedLength, Macros const &macros, char const *target, unsigned int flags)
+Direct3d11ShaderHash Direct3d11_ShaderPrograms::hashCompilerInput(char const *preparedSource, int preparedLength, D3D_SHADER_MACRO const *macros, char const *target, unsigned int flags)
 {
 	// Folded in a fixed order, and every field separated by its own length, so that two different
 	// inputs cannot produce the same byte stream by running into each other. Without the lengths,
@@ -327,11 +327,17 @@ Direct3d11ShaderHash Direct3d11_ShaderPrograms::hashCompilerInput(char const *pr
 	hash ^= hashBytes(&flags, static_cast<int>(sizeof(flags)));
 	hash *= 1099511628211ULL;
 
-	int const count = macros.getCount();
+	// Counted by walking to the terminator rather than taken from the builder, so that a caller
+	// with a hand-built array -- or none at all -- is keyed identically.
+	int count = 0;
+	if (macros)
+		while (macros[count].Name)
+			++count;
+
 	hash ^= hashBytes(&count, static_cast<int>(sizeof(count)));
 	hash *= 1099511628211ULL;
 
-	D3D_SHADER_MACRO const * const entries = macros.get();
+	D3D_SHADER_MACRO const * const entries = macros;
 	for (int i = 0; i < count; ++i)
 	{
 		int const nameLength = entries[i].Name ? static_cast<int>(strlen(entries[i].Name)) : 0;

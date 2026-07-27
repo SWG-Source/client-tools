@@ -477,7 +477,9 @@ bool Direct3d11_SceneTargetNamespace::createCompositeResources()
 	// created during a frame", and a counter that is never incremented cannot
 	// demonstrate that.
 	Direct3d11_Metrics::stateObjectCreations += 3;
-	Direct3d11_Metrics::shaderCompiles += 3;
+	// backendShaderCompiles, not shaderCompiles: these three are ours, compiled here with a
+	// different flag word on purpose, and they are not what the precompiled asset cache covers.
+	Direct3d11_Metrics::backendShaderCompiles += 3;
 
 	return true;
 }

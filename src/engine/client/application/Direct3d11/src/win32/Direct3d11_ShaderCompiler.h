@@ -3,7 +3,16 @@
 // Direct3d11_ShaderCompiler.h
 // copyright (c) 2026 Galaxies Reborn
 //
-// The single place HLSL becomes bytecode.
+// The single place ASSET HLSL becomes bytecode.
+//
+// Asset, specifically. Two shaders in this backend are written by it rather than shipped with the
+// game -- the scene target's composite pass and the point sprite geometry shader -- and the
+// composite compiles itself, directly, with a different flag word: no
+// ENABLE_BACKWARDS_COMPATIBILITY, because it is modern HLSL rather than a twenty-year-old asset,
+// and WARNINGS_ARE_ERRORS, because there is no excuse for a warning in source we own. Sending it
+// through here would apply the corpus's compatibility flag and its source patches to a file that
+// needs neither, which is only a way to break it. This header used to claim to be the single place
+// full stop, which was not true and cost a diagnosis.
 //
 // One chokepoint, for three reasons. Every shader in the corpus has to be
 // compiled with exactly the same flags or the numerical-equivalence harness is
@@ -44,6 +53,8 @@
 // cannot be forward declared.
 #include <d3dcommon.h>
 
+#include "Direct3d11_ShaderPrograms.h"
+
 // ======================================================================
 
 class Direct3d11_ShaderCompiler
@@ -67,6 +78,20 @@ public:
 	// to our own source would only be a way to break it. Notably the "point" rename -- a
 	// geometry shader needs that keyword.
 	static ID3DBlob *compileGeometryShader(char const *source, int sourceLength, char const *name);
+
+	// The flag word every program is compiled with. Part of the cache key and recorded in the
+	// manifest, because a blob compiled with different flags is a different blob.
+	static unsigned int getCompileFlags();
+
+	// Serve an include exactly as the include handler would -- overrides substituted, contents
+	// patched -- and hash the bytes the compiler would be given. The cache validates its manifest
+	// through this rather than reading the file itself, because what is on disk and what the
+	// compiler sees are not the same thing for three of these files.
+	static bool  hashIncludeAsServed(char const *path, Direct3d11ShaderHash &hash);
+
+	// The includes served so far this run, for the baker's manifest.
+	static int   getServedIncludeCount();
+	static bool  getServedInclude(int index, char const *&path, Direct3d11ShaderHash &hash);
 
 	static char const *getVertexShaderTarget();
 	static char const *getPixelShaderTarget();

@@ -32,6 +32,7 @@
 #include "Direct3d11_PixelShaderProgramData.h"
 #include "Direct3d11_QueryPool.h"
 #include "Direct3d11_SceneTarget.h"
+#include "Direct3d11_ShaderCache.h"
 #include "Direct3d11_ShaderCompiler.h"
 #include "Direct3d11_ShaderImplementationData.h"
 #include "Direct3d11_StateCache.h"
@@ -822,6 +823,9 @@ bool Direct3d11::install(Gl_install *gl_install)
 	Direct3d11_StateObjectCache::install();
 	Direct3d11_StateCache::install();
 	Direct3d11_ShaderCompiler::install();
+
+	// After the compiler: validating the manifest reads includes through its include handler.
+	Direct3d11_ShaderCache::install();
 	Direct3d11_ConstantBuffers::install();
 
 	// After the state cache, because a texture's destructor unbinds itself through it,
@@ -919,6 +923,9 @@ void Direct3d11Namespace::remove()
 	Direct3d11_TextureData::remove();
 
 	Direct3d11_ConstantBuffers::remove();
+	// Before the compiler: writing the manifest reads the compiler's include cache.
+	Direct3d11_ShaderCache::remove();
+
 	Direct3d11_ShaderCompiler::remove();
 	Direct3d11_StateCache::remove();
 	Direct3d11_StateObjectCache::remove();

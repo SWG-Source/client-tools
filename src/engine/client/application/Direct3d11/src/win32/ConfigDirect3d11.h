@@ -39,6 +39,15 @@ public:
 	static DriverType  getDriverType();
 	static int         getFeatureLevelCap();
 	static bool        getDebugLayer();
+
+	// Fetch precompiled DXBC instead of compiling, when a validated cache is present. On by
+	// default: a missing or stale cache falls back to compiling, so there is nothing to opt into.
+	static bool        getUseCompiledShaders();
+
+	// Compile everything and write the blobs out, for tools/dxbcbake. Never both at once -- a run
+	// that used the cache would only bake what missed, which is how a partial cache gets mistaken
+	// for a complete one.
+	static bool        getBakeCompiledShaders();
 	static bool        getAllowTearing();
 	static int         getFullscreenRefreshRate();
 	static int         getSwapChainBufferCount();
