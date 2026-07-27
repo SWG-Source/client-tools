@@ -8,6 +8,8 @@
 #include "FirstDirect3d11.h"
 #include "Direct3d11_StateObjectCache.h"
 
+#include "ConfigDirect3d11.h"
+
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_StateTables.h"

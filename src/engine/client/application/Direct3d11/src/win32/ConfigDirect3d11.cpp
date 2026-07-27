@@ -19,6 +19,8 @@ namespace ConfigDirect3d11Namespace
 	ConfigDirect3d11::DriverType   ms_driverType = ConfigDirect3d11::DT_hardware;
 	int                            ms_featureLevelCap;
 	bool                           ms_debugLayer;
+	int                            ms_debugScreenshotFrame;
+	int                            ms_debugRenderDocFrame;
 	bool                           ms_useCompiledShaders;
 	bool                           ms_bakeCompiledShaders;
 
@@ -73,6 +75,30 @@ void ConfigDirect3d11::install()
 	// benchmark profile sets this: with it false the present interval pins the
 	// frame rate to the refresh rate and every percentile becomes meaningless.
 	KEY_BOOL(allowTearing, false);
+
+	// TEMPORARY DIAGNOSTICS. debugClearColor overrides the colour the scene target is cleared to:
+	// if a distinctive colour shows up behind the interface then the scene target is reaching the
+	// back buffer and the 3D draws are producing nothing, which separates a compositing fault from
+	// a per-draw one in a single run. forceCullNone and forceDepthAlways then separate the two
+	// commonest per-draw causes.
+
+	// TEMPORARY DIAGNOSTIC: swap red and blue in the composite. If the whole scene comes out
+	// right, the fault is one global channel swap upstream; if only some surfaces do, it is not.
+
+	// TEMPORARY DIAGNOSTIC: white ambient and no other lights, so a lit surface renders as its
+	// raw texture. Separates a wrong light colour from a wrong texture.
+
+	// Write a screenshot at this frame number and again periodically after it, through the same
+	// image writer the game's own screenshot key uses. Grabbing the desktop instead is unreliable
+	// on a machine somebody is using: another window comes to the front and the capture is of that
+	// window. This reads the back buffer, so occlusion cannot affect it.
+	KEY_INT(debugScreenshotFrame, 0);
+
+	// Ask RenderDoc to capture the frame after this one. Only does anything when the client was
+	// launched under renderdoccmd, so it is inert in an ordinary run. A keypress trigger is no use
+	// here: it needs the window to have focus, and the window does not reliably have focus on a
+	// machine somebody else is using.
+	KEY_INT(debugRenderDocFrame, 0);
 	KEY_BOOL(useCompiledShaders, true);
 	KEY_BOOL(bakeCompiledShaders, false);
 	KEY_INT (fullscreenRefreshRate, 0);
@@ -134,6 +160,25 @@ bool ConfigDirect3d11::getDebugLayer()
 bool ConfigDirect3d11::getAllowTearing()
 {
 	return ms_allowTearing;
+}
+
+
+
+
+
+
+// ----------------------------------------------------------------------
+
+int ConfigDirect3d11::getDebugScreenshotFrame()
+{
+	return ms_debugScreenshotFrame;
+}
+
+// ----------------------------------------------------------------------
+
+int ConfigDirect3d11::getDebugRenderDocFrame()
+{
+	return ms_debugRenderDocFrame;
 }
 
 // ----------------------------------------------------------------------

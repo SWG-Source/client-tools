@@ -9,6 +9,7 @@
 #include "Direct3d11_LightManager.h"
 
 #include "Direct3d11.h"
+#include "ConfigDirect3d11.h"
 #include "Direct3d11_ConstantBuffers.h"
 #include "Direct3d11_StateCache.h"
 #include "clientGraphics/Light.h"
@@ -638,6 +639,9 @@ void Direct3d11_LightManager::applyLights_vertexShader()
 		point.attenuation.k3 = 0.0f;
 	}
 
+	// TEMPORARY DIAGNOSTIC: white ambient, every other light black. A lit surface then renders as
+	// its raw texture, which says whether a wrong colour is coming from the lighting or from the
+	// texture without having to guess which.
 	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_lightData, &lightData, isizeof(LightData) / cms_registerBytes);
 	Direct3d11_ConstantBuffers::setVertexShaderConstants(VCSR_extendedLightData, &extendedLightData, isizeof(ExtendedLightData) / cms_registerBytes);
 }

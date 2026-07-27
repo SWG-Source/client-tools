@@ -197,9 +197,15 @@ void Direct3d11_ShaderReflectionNamespace::buildSamplerMap(ID3D11ShaderReflectio
 	if (FAILED(reflection->GetDesc(&shaderDescription)))
 		return;
 
-	int samplerSlots[Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS];
-	int textureSlots[Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS];
-	D3D_SRV_DIMENSION textureDimensions[Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS];
+	enum { MAX_SLOTS = Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS };
+
+	// Name and bind point for each, because the pairing is BY NAME. See the note below.
+	enum { NAME_BYTES = 96 };
+	char samplerNames[MAX_SLOTS][NAME_BYTES];
+	char textureNames[MAX_SLOTS][NAME_BYTES];
+	int  samplerSlots[MAX_SLOTS];
+	int  textureSlots[MAX_SLOTS];
+	D3D_SRV_DIMENSION textureDimensions[MAX_SLOTS];
 	int samplerCount = 0;
 	int textureCount = 0;
 
@@ -212,15 +218,23 @@ void Direct3d11_ShaderReflectionNamespace::buildSamplerMap(ID3D11ShaderReflectio
 
 		if (bindDescription.Type == D3D_SIT_SAMPLER)
 		{
-			if (samplerCount < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
-				samplerSlots[samplerCount++] = static_cast<int>(bindDescription.BindPoint);
+			if (samplerCount < MAX_SLOTS)
+			{
+				strncpy(samplerNames[samplerCount], bindDescription.Name ? bindDescription.Name : "", NAME_BYTES - 1);
+				samplerNames[samplerCount][NAME_BYTES - 1] = 0;
+				samplerSlots[samplerCount] = static_cast<int>(bindDescription.BindPoint);
+				++samplerCount;
+			}
 		}
 		else if (bindDescription.Type == D3D_SIT_TEXTURE)
 		{
-			if (textureCount < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
+			if (textureCount < MAX_SLOTS)
 			{
+				strncpy(textureNames[textureCount], bindDescription.Name ? bindDescription.Name : "", NAME_BYTES - 1);
+				textureNames[textureCount][NAME_BYTES - 1] = 0;
 				textureDimensions[textureCount] = bindDescription.Dimension;
-				textureSlots[textureCount++] = static_cast<int>(bindDescription.BindPoint);
+				textureSlots[textureCount] = static_cast<int>(bindDescription.BindPoint);
+				++textureCount;
 			}
 		}
 	}
@@ -232,17 +246,60 @@ void Direct3d11_ShaderReflectionNamespace::buildSamplerMap(ID3D11ShaderReflectio
 	// this mapping cannot express -- worth knowing before it renders wrong.
 	WARNING(samplerCount != textureCount, ("Direct3d11: '%s' declares %d sampler(s) and %d texture(s). The stage-to-slot mapping assumes one texture per sampler.", name, samplerCount, textureCount));
 
-	int const pairCount = (samplerCount < textureCount) ? samplerCount : textureCount;
-	for (int i = 0; i < pairCount; ++i)
+	// Pair a sampler with its texture BY NAME, never by position.
+	//
+	// Under D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY a legacy `sampler` becomes a SamplerState and
+	// a Texture2D that share one name, and fxc assigns the two kinds on DIFFERENT orderings:
+	// samplers in DECLARATION order, textures in order of FIRST USE. terrain_dot3_ps20_blend0_spec
+	// is the proof, straight out of fxc's own binding table:
+	//
+	//   samplerDiffuse0   sampler   s0        samplerNormal0    texture   t0
+	//   samplerNormal0    sampler   s1        samplerDiffuse0   texture   t1
+	//   samplerAux0       sampler   s2        samplerAux0       texture   t2
+	//
+	// It declares diffuse, normal, aux in that order but SAMPLES the normal first, inside
+	// computeLayerColorEmissiveSpecular. So samplerDiffuse0 is s0 paired with t1, not t0.
+	//
+	// This used to pair the two lists positionally, which produced s0 -> t0 and therefore bound the
+	// terrain's NORMAL map where its diffuse belonged. The result was sand rendering rgb(110,98,192)
+	// -- a flat normal (128,128,255) scaled by the light term -- and every bump-mapped wall face the
+	// same periwinkle. The arithmetic is what pins it down: the shipped
+	// calculateHemisphericLightingVertexColor ends in saturate(), so the light term cannot exceed
+	// one and the output cannot exceed the diffuse texture. Sand's blue is about 130, so an output
+	// blue of 192 cannot have come from the sand texture at all.
+	//
+	// Positional pairing happened to be right for every program whose samplers are used in
+	// declaration order, which is most of them, and the runtime dump of 75 live programs showing
+	// "identity" was reading that coincidence as confirmation.
+	int paired = 0;
+	for (int i = 0; i < samplerCount; ++i)
 	{
 		int const samplerSlot = samplerSlots[i];
-		if (samplerSlot >= 0 && samplerSlot < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
-			result.samplerToTexture[samplerSlot] = textureSlots[i];
+		if (samplerSlot < 0 || samplerSlot >= MAX_SLOTS)
+			continue;
 
-		int const textureSlot = textureSlots[i];
-		if (textureSlot >= 0 && textureSlot < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
-			result.textureDimension[textureSlot] = textureDimensions[i];
+		for (int t = 0; t < textureCount; ++t)
+		{
+			if (strcmp(samplerNames[i], textureNames[t]) != 0)
+				continue;
+
+			result.samplerToTexture[samplerSlot] = textureSlots[t];
+			++paired;
+			break;
+		}
 	}
+
+	for (int t = 0; t < textureCount; ++t)
+	{
+		int const textureSlot = textureSlots[t];
+		if (textureSlot >= 0 && textureSlot < MAX_SLOTS)
+			result.textureDimension[textureSlot] = textureDimensions[t];
+	}
+
+	// Falling back to positional would reintroduce the bug silently, so it is not done. A program
+	// whose samplers and textures do not share names is one this mapping cannot express, and the
+	// draw wants to be visibly wrong and named rather than subtly wrong and anonymous.
+	WARNING(paired != samplerCount, ("Direct3d11: '%s' has %d sampler(s) but only %d could be matched to a texture by name. Those samplers will read nothing. The compiler no longer names a sampler and its texture identically, so the pairing needs revisiting.", name, samplerCount, paired));
 }
 
 // ======================================================================

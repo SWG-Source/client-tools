@@ -12,6 +12,7 @@
 #include "Direct3d11_PixelShaderProgramData.h"
 #include "Direct3d11_StateCache.h"
 #include "Direct3d11_StateObjectCache.h"
+#include "ConfigDirect3d11.h"
 #include "Direct3d11_StateTables.h"
 
 #include <vector>

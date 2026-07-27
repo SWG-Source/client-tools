@@ -120,6 +120,8 @@ void Direct3d11_PixelShaderProgramData::compile()
 	IGNORE_RETURN(Direct3d11_ShaderReflection::reflect(m_bytecode, name, false, m_reflection));
 
 	HRESULT const hresult = device->CreatePixelShader(m_bytecode->GetBufferPointer(), m_bytecode->GetBufferSize(), NULL, &m_shader);
+
+	Direct3d11_Device::setDebugName(m_shader, name);
 	if (FAILED(hresult) || !m_shader)
 	{
 		WARNING(true, ("Direct3d11: pixel program '%s' compiled but the shader object could not be created (%s).", name, Direct3d11_Device::describeHresult(hresult)));
