@@ -94,7 +94,10 @@ Direct3d11_ShaderReflection::Result::Result()
 	checkedConstantCount(0)
 {
 	for (int i = 0; i < MAX_SAMPLER_SLOTS; ++i)
+	{
 		samplerToTexture[i] = -1;
+		textureDimension[i] = D3D_SRV_DIMENSION_UNKNOWN;
+	}
 }
 
 // ======================================================================
@@ -169,6 +172,7 @@ void Direct3d11_ShaderReflectionNamespace::buildSamplerMap(ID3D11ShaderReflectio
 
 	int samplerSlots[Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS];
 	int textureSlots[Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS];
+	D3D_SRV_DIMENSION textureDimensions[Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS];
 	int samplerCount = 0;
 	int textureCount = 0;
 
@@ -187,7 +191,10 @@ void Direct3d11_ShaderReflectionNamespace::buildSamplerMap(ID3D11ShaderReflectio
 		else if (bindDescription.Type == D3D_SIT_TEXTURE)
 		{
 			if (textureCount < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
+			{
+				textureDimensions[textureCount] = bindDescription.Dimension;
 				textureSlots[textureCount++] = static_cast<int>(bindDescription.BindPoint);
+			}
 		}
 	}
 
@@ -204,6 +211,10 @@ void Direct3d11_ShaderReflectionNamespace::buildSamplerMap(ID3D11ShaderReflectio
 		int const samplerSlot = samplerSlots[i];
 		if (samplerSlot >= 0 && samplerSlot < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
 			result.samplerToTexture[samplerSlot] = textureSlots[i];
+
+		int const textureSlot = textureSlots[i];
+		if (textureSlot >= 0 && textureSlot < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
+			result.textureDimension[textureSlot] = textureDimensions[i];
 	}
 }
 

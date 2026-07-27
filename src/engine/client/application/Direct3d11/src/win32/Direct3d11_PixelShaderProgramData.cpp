@@ -56,7 +56,8 @@ Direct3d11_PixelShaderProgramData::Direct3d11_PixelShaderProgramData(ShaderImple
 	m_program(program),
 	m_bytecode(NULL),
 	m_shader(NULL),
-	m_reflection()
+	m_reflection(),
+	m_reportedDimensionMismatch(0)
 {
 	++ms_liveInstanceCount;
 	compile();

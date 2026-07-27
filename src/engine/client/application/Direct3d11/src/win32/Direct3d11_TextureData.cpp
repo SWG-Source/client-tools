@@ -1012,4 +1012,17 @@ void Direct3d11_TextureData::copyFrom(int surfaceLevel, TextureGraphicsData cons
 	markSubresourceInitialised(destinationSubresource);
 }
 
+// ----------------------------------------------------------------------
+
+D3D_SRV_DIMENSION Direct3d11_TextureData::getViewDimension() const
+{
+	if (m_texture.isCubeMap())
+		return D3D_SRV_DIMENSION_TEXTURECUBE;
+
+	if (m_texture.isVolumeMap())
+		return D3D_SRV_DIMENSION_TEXTURE3D;
+
+	return D3D_SRV_DIMENSION_TEXTURE2D;
+}
+
 // ======================================================================

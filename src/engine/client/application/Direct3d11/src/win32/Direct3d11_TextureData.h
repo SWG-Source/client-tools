@@ -117,6 +117,10 @@ public:
 
 	// Reached through class Direct3d11, which is the friend of Texture.
 	ID3D11ShaderResourceView *getShaderResourceView() const;
+	// The dimension the shader resource view was created with, which follows from the engine
+	// texture's own kind. Free to ask, so a pixel program's declared dimension can be checked
+	// against it every time a texture is bound.
+	D3D_SRV_DIMENSION       getViewDimension() const;
 	ID3D11Resource           *getResource() const;
 	DXGI_FORMAT               getDxgiFormat() const;
 	Texture const            &getEngineTexture() const;
@@ -140,6 +144,7 @@ private:
 	void                    chooseFormat(TextureFormat const *runtimeFormats, int numberOfRuntimeFormats);
 	void                    createResource();
 	int                     getSubresource(CubeFace cubeFace, int level) const;
+
 	int                     getSubresourceCount() const;
 	void                    getLevelSize(int level, int &width, int &height, int &depth) const;
 	bool                    isSubresourceInitialised(int subresource) const;

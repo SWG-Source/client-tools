@@ -124,6 +124,24 @@ namespace Direct3d11_StaticShaderDataNamespace
 
 		description.ComparisonFunc = D3D11_COMPARISON_NEVER;
 	}
+
+	// ------------------------------------------------------------------
+
+	char const *describeSrvDimension(D3D_SRV_DIMENSION dimension)
+	{
+		switch (dimension)
+		{
+			case D3D_SRV_DIMENSION_TEXTURE2D:      return "Texture2D";
+			case D3D_SRV_DIMENSION_TEXTURECUBE:    return "TextureCube";
+			case D3D_SRV_DIMENSION_TEXTURE3D:      return "Texture3D";
+			case D3D_SRV_DIMENSION_TEXTURE1D:      return "Texture1D";
+			case D3D_SRV_DIMENSION_TEXTURE2DMS:    return "Texture2DMS";
+			case D3D_SRV_DIMENSION_UNKNOWN:        return "nothing";
+			default:                               break;
+		}
+
+		return "an unrecognised resource type";
+	}
 }
 using namespace Direct3d11_StaticShaderDataNamespace;
 
@@ -642,7 +660,27 @@ bool Direct3d11_StaticShaderData::apply(int passNumber) const
 
 		ID3D11ShaderResourceView *view = NULL;
 		if (stage.texture && *stage.texture)
-			view = (*stage.texture)->getShaderResourceView();
+		{
+			Direct3d11_TextureData const * const textureData = *stage.texture;
+			view = textureData->getShaderResourceView();
+
+			// D3D11 links a texture read to a declared resource type. D3D9 before ps_2_0 did
+			// not: `tex t1` sampled whatever kind of texture happened to be bound, so a
+			// converted program has no dimension to carry over and gets Texture2D by default.
+			// Where the engine then binds a cube map, every draw is rejected -- and the debug
+			// layer's report names a slot number and no program, which is not enough to act on.
+			D3D_SRV_DIMENSION const declared = pixelData->getTextureDimensionForSlot(textureSlot);
+			D3D_SRV_DIMENSION const actual = textureData->getViewDimension();
+
+			if (declared != D3D_SRV_DIMENSION_UNKNOWN && declared != actual && !pixelData->hasReportedDimensionMismatch(textureSlot))
+			{
+				pixelData->noteReportedDimensionMismatch(textureSlot);
+				WARNING(true, ("Direct3d11: '%s' declares %s for texture slot %d (D3D9 sampler stage %d) but the bound texture is %s. D3D11 rejects the read, so this draw does not render. The program's sampler declaration has to match the kind of texture the materials using it bind.",
+					pass.pixelShaderProgram->getFileName(),
+					describeSrvDimension(declared), textureSlot, stage.samplerSlot,
+					describeSrvDimension(actual)));
+			}
+		}
 
 		Direct3d11_StateCache::setShaderResource(textureSlot, view);
 

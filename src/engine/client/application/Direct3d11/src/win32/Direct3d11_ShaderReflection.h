@@ -61,6 +61,16 @@ public:
 		// For each sampler slot, the texture slot it pairs with, or -1.
 		int   samplerToTexture[MAX_SAMPLER_SLOTS];
 
+		// For each TEXTURE slot, the resource dimension the compiled program declared for it,
+		// or D3D_SRV_DIMENSION_UNKNOWN where the slot carries nothing.
+		//
+		// This is the one property of a sampler that a converted ps_1_x program cannot recover
+		// from its source: D3D9 assembly declared no dimension before ps_2_0, so tex t1 sampled
+		// whatever kind of texture was bound. HLSL has to commit -- Texture2D or TextureCube --
+		// and D3D11 refuses the read when the view disagrees with the declaration. Recording it
+		// here is what lets the bind site say which program and which slot.
+		D3D_SRV_DIMENSION textureDimension[MAX_SAMPLER_SLOTS];
+
 		int   samplerCount;
 		int   textureCount;
 

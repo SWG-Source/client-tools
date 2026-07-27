@@ -358,6 +358,11 @@ def translate_pixel_instruction(op, operands, origin, state):
         n = int(re.sub(r"\D", "", target.name))
         state["samplers"].add(n)
         state["texcoords"].add(n)
+        if n in state.get("cubeStages", ()):
+            # A cube read takes a direction, not a pair. The assembly said nothing about which
+            # this was -- ps_1_x had no sampler dimension and D3D9 took it from whatever texture
+            # was bound -- so the kind comes from the effect's texture tag. See envmap_stages.py.
+            return "\t%s = texCUBE(pixelSampler%d, psInput.texcoord%d.xyz);" % (pixel_mapper(target.name, None), n, n)
         return "\t%s = tex2D(pixelSampler%d, psInput.texcoord%d);" % (pixel_mapper(target.name, None), n, n)
 
     if op == "texcoord":
@@ -371,6 +376,8 @@ def translate_pixel_instruction(op, operands, origin, state):
         n = int(re.sub(r"\D", "", target.name))
         state["samplers"].add(n)
         coord = operands[1].value(pixel_mapper)
+        if n in state.get("cubeStages", ()):
+            return "\t%s = texCUBE(pixelSampler%d, (%s).xyz);" % (pixel_mapper(target.name, None), n, coord)
         return "\t%s = tex2D(pixelSampler%d, (%s).xy);" % (pixel_mapper(target.name, None), n, coord)
 
     if op == "texm3x2pad":
@@ -387,6 +394,13 @@ def translate_pixel_instruction(op, operands, origin, state):
         n = int(re.sub(r"\D", "", target.name))
         state["samplers"].add(n)
         state["texcoords"].add(n)
+        # A texm3x2 pair produces a 2D coordinate by construction, so this one cannot be a
+        # cube read. Asserted rather than assumed: a cube-tagged stage reaching here means the
+        # tag table and the assembly disagree about what the stage is, which is worth stopping
+        # for rather than silently sampling the wrong thing.
+        assert n not in state.get("cubeStages", ()), (
+            "%s: stage %d is tagged as a cube map but is read through texm3x2tex, "
+            "which produces a two-component coordinate" % (origin, n))
         return ("\ttexm3x2v = dot(psInput.texcoord%d.xyz, (%s).xyz);\n"
                 "\t%s = tex2D(pixelSampler%d, float2(texm3x2u, texm3x2v));"
                 % (n, operands[1].value(pixel_mapper), pixel_mapper(target.name, None), n))

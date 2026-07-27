@@ -69,6 +69,15 @@ public:
 	// stage, so the translation has to come from reflection.
 	int  getTextureSlotForSampler(int samplerSlot) const;
 
+	// The resource dimension this program declared for a texture slot. The engine's texture
+	// knows its own kind, so a disagreement is a free comparison at bind time rather than a
+	// debug layer error at draw time -- and this one names the program.
+	D3D_SRV_DIMENSION getTextureDimensionForSlot(int textureSlot) const;
+
+	// One report per slot, not one per draw: the same material redraws every frame.
+	bool  hasReportedDimensionMismatch(int textureSlot) const;
+	void  noteReportedDimensionMismatch(int textureSlot) const;
+
 	// Bytes of $Globals this program declares. Bounding a constant upload by this rather
 	// than by the whole register file is the difference between per-draw constant traffic
 	// that matches DX9 and traffic an order of magnitude worse.
@@ -90,6 +99,11 @@ private:
 	ID3D11PixelShader *m_shader;
 
 	Direct3d11_ShaderReflection::Result m_reflection;
+
+	// Which texture slots have already had a declared-versus-bound dimension mismatch reported.
+	// Mutable because the report happens on a const apply path, and the alternative is either a
+	// line per draw or a non-const apply for the sake of a diagnostic.
+	mutable unsigned int m_reportedDimensionMismatch;
 };
 
 // ======================================================================
@@ -107,6 +121,34 @@ inline int Direct3d11_PixelShaderProgramData::getTextureSlotForSampler(int sampl
 		return -1;
 
 	return m_reflection.samplerToTexture[samplerSlot];
+}
+
+// ----------------------------------------------------------------------
+
+inline D3D_SRV_DIMENSION Direct3d11_PixelShaderProgramData::getTextureDimensionForSlot(int textureSlot) const
+{
+	if (textureSlot < 0 || textureSlot >= Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
+		return D3D_SRV_DIMENSION_UNKNOWN;
+
+	return m_reflection.textureDimension[textureSlot];
+}
+
+// ----------------------------------------------------------------------
+
+inline bool Direct3d11_PixelShaderProgramData::hasReportedDimensionMismatch(int textureSlot) const
+{
+	if (textureSlot < 0 || textureSlot >= Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
+		return true;
+
+	return (m_reportedDimensionMismatch & (1u << textureSlot)) != 0;
+}
+
+// ----------------------------------------------------------------------
+
+inline void Direct3d11_PixelShaderProgramData::noteReportedDimensionMismatch(int textureSlot) const
+{
+	if (textureSlot >= 0 && textureSlot < Direct3d11_ShaderReflection::MAX_SAMPLER_SLOTS)
+		m_reportedDimensionMismatch |= (1u << textureSlot);
 }
 
 // ----------------------------------------------------------------------

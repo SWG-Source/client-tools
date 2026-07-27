@@ -14,10 +14,36 @@ assembly program, which is the point: no DX9 shader artefacts left in the runnin
 ```
 python shadercorpus.py     # resolve and extract the corpus from the TRE stack
 python classify.py         # split programs by declared language
-python reachable2.py       # which programs a live implementation can reach
-python asm2hlsl_run.py     # convert the reachable assembly
+python reachable2.py       # which programs a live implementation can reach  (reporting only)
+python envmap_stages.py    # which sampler stages are fed a cube map
+python asm2hlsl_run.py     # convert ALL the assembly
 python verifyconv.py       # compile every conversion with fxc
 ```
+
+Two of those steps are load-bearing in ways that are easy to get wrong.
+
+**`asm2hlsl_run.py` converts every assembly program, not the reachable subset.** It reads
+`asm-programs.txt` (222 programs), not `asm-reachable.txt` (97). The closure in
+`reachable2.py` walks the effects a live implementation loads, and five programs the client
+demonstrably asks for are not reachable that way at all: `gradient_sky.vsh` / `.psh`,
+`ui_radar.psh`, `texren_copy_c1a1.psh` and `bad_vertex_shader.psh`. The sky and the texture
+renderer name their programs from engine code, and `bad_vertex_shader.psh` is what the backend
+itself reaches for when a material will not draw. An unconverted vertex program means every
+draw using it is dropped — the missing sky program alone was 12,665 dropped draws in a 6,300
+frame run. `reachable-programs.txt` is still worth having as a census; it is not an input to
+what gets built.
+
+**`envmap_stages.py` recovers the one thing the assembly does not say.** D3D9 assembly before
+`ps_2_0` declared no sampler dimension: `tex t1` sampled whatever kind of texture happened to
+be bound. HLSL has to commit to `sampler` or `samplerCUBE`, and D3D11 rejects a read whose
+declared type disagrees with the bound view — the draw does not render, and the debug layer
+reports a slot number with no program attached. The dimension comes from the effects: each
+pixel shader FORM carries a `PTXM` entry per stage holding the stage index and its texture
+tag, and one tag is special. `ENVM` is not supplied by the material at all —
+`ShaderPrimitiveSorter` pushes it as a global per cell and its default is a cube map — so an
+`ENVM` stage is always a cube and everything else is 2D. Nine converted programs need it.
+Regenerate `envmap-stages.tsv` whenever the corpus changes; `asm2hlsl_run.py` refuses to run
+without it rather than silently declaring every environment stage 2D.
 
 `shadercorpus.py` needs `E:\SWG\64bit-server\_client` (the deployed client: 209 `.tre`
 archives, 4 `.toc` indexes, and the five `.cfg` files `client.cfg` includes). It writes the
