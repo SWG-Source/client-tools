@@ -15,6 +15,7 @@
 #include "clientGame/ClientCombatPlaybackManager.h"
 #include "clientGame/ClientObject.h"
 #include "clientGame/ConfigClientGame.h"
+#include "sharedFoundation/ConfigFile.h"
 #include "clientGame/ContainerInterface.h"
 #include "clientGame/CreatureObject.h"
 #include "clientGame/CreatureInfo.h"
@@ -269,7 +270,8 @@ void ClientControllerNamespace::handleCombatActionMessage (const MessageQueueCom
 ClientController::ClientController (Object* newOwner) :
 	NetworkController (newOwner),
 	m_initialized(false),
-	m_sequenceNumber (0)
+	m_sequenceNumber (0),
+	m_lastTransformSendStamp (0)
 {
 	// objects' controllers created by the client are authoritative by default
 	// objects created as a result of a server CREATE_OBJECT message should
@@ -312,6 +314,43 @@ void ClientController::sendTransform (const Transform& transform_p, const bool r
 	Object* const attachedTo = getOwner ()->getAttachedTo ();
 
 	uint32 syncStamp = GameNetwork::getServerSyncStampLong();
+
+	// Hold the send cadence to a fixed rate rather than letting it follow the frame rate.
+	//
+	// The server validates each transform against the last one it verified:
+	//
+	//     maxDistSqr = sqr(maxSpeed * timeDiffMs / 1000.0f)
+	//
+	// so the distance it will accept shrinks as the interval between sends shrinks. This client
+	// runs at 180-240 fps where a 2003 one ran at 30-60, and a send per frame means intervals of
+	// 4-5 ms instead of 16-33. At that point ordinary float jitter exceeds the allowed distance,
+	// the server calls handleInvalidMove and corrects the player, and the correction arrives back
+	// as a warp -- PlayerCreatureController::handleNetUpdateTransform applies it through
+	// CollisionWorld::objectWarped. The symptom is the player's own movement and animation
+	// stalling while NPCs keep moving and the frame rate never drops, because NPCs come through
+	// RemoteCreatureController and never take the warp path, and a warp costs no time.
+	//
+	// Throttling here rather than throttling the simulation: an earlier attempt stepped
+	// GameScheduler::alter and IoWinManager::processEvents on a fixed accumulator, which fixed the
+	// stall but also throttled input dispatch -- processEvents both dispatches queued input and
+	// enqueues IOET_Update -- and that broke clicking on NPCs. This is the one thing the server
+	// actually measures, so it is the only thing that needs a fixed cadence.
+	//
+	// Reliable sends are never dropped: teleport acknowledgements and similar must arrive.
+	{
+		static float const rate = ConfigFile::getKeyFloat("ClientGame", "transformSendRate", 60.0f);
+
+		if (!reliable && rate > 0.f && m_lastTransformSendStamp != 0)
+		{
+			uint32 const minimumIntervalMs = static_cast<uint32>(1000.0f / rate);
+
+			// Unsigned arithmetic, so a stamp rollover wraps to a small delta rather than a huge one.
+			if (static_cast<uint32>(syncStamp - m_lastTransformSendStamp) < minimumIntervalMs)
+				return;
+		}
+
+		m_lastTransformSendStamp = syncStamp;
+	}
 	uint32 flags     = GameControllerMessageFlags::SEND | GameControllerMessageFlags::DEST_AUTH_SERVER;
 	if(reliable)
 		flags = flags | GameControllerMessageFlags::RELIABLE;
