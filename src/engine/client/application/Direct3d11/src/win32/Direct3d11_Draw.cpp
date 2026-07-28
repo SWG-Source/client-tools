@@ -675,7 +675,10 @@ void Direct3d11::draw(int topology, int firstVertex, int vertexCount, int triang
 	// ms_sliceFirstVertex is where the bound buffer's usable range starts. For a dynamic
 	// buffer that is the ring offset, which setVertexBuffer deliberately does NOT put in the
 	// stream byte offset -- doing both would double-count it.
-	context->Draw(static_cast<UINT>(vertexCount), static_cast<UINT>(ms_sliceFirstVertex + firstVertex));
+	{
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		context->Draw(static_cast<UINT>(vertexCount), static_cast<UINT>(ms_sliceFirstVertex + firstVertex));
+	}
 
 	++Direct3d11_Metrics::drawCalls;
 	Direct3d11_Metrics::triangles += triangleCount;
@@ -696,7 +699,10 @@ void Direct3d11::drawIndexed(int topology, int firstIndex, int indexCount, int b
 
 	Direct3d11_PointSprite::apply(topology == D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
 
-	context->DrawIndexed(static_cast<UINT>(indexCount), static_cast<UINT>(ms_sliceFirstIndex + firstIndex), ms_sliceFirstVertex + baseVertex);
+	{
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		context->DrawIndexed(static_cast<UINT>(indexCount), static_cast<UINT>(ms_sliceFirstIndex + firstIndex), ms_sliceFirstVertex + baseVertex);
+	}
 
 	++Direct3d11_Metrics::drawIndexedCalls;
 	Direct3d11_Metrics::triangles += triangleCount;
@@ -744,7 +750,10 @@ void Direct3d11::drawFan(int firstVertex, int vertexCount)
 	// The pattern buffer's own indices start at zero, so the whole fan is placed by the base
 	// vertex. No slice FIRST INDEX here: the index buffer being read is this backend's, not
 	// the engine's.
-	context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
+	{
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
+	}
 
 	++Direct3d11_Metrics::drawIndexedCalls;
 	Direct3d11_Metrics::triangles += triangles;
@@ -787,7 +796,10 @@ void Direct3d11::drawQuads(int firstVertex, int quadCount)
 	Direct3d11_PointSprite::apply(false);
 
 	int const triangles = quadCount * 2;
-	context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
+	{
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
+	}
 
 	++Direct3d11_Metrics::drawIndexedCalls;
 	Direct3d11_Metrics::triangles += triangles;

@@ -182,6 +182,13 @@ public:
 	// to tell which.
 	static int  drawPrepareMicroseconds;
 
+	// Microseconds inside Draw and DrawIndexed themselves. A 36 ms scene of 261 draws that spent
+	// 0.1 ms in prepareToDraw, with the GPU idle at 0.8 ms and nothing created or streamed, means
+	// one call inside the scene blocked -- and scene time on its own cannot say whether that was a
+	// submit or one of the binds around it. This is what separates them: submits here, everything
+	// else in the difference between this plus prepareToDraw and the scene total.
+	static int  drawSubmitMicroseconds;
+
 	// Where a frame's wall time goes, which the counters above cannot answer. A 51 ms frame that
 	// created nothing, streamed nothing and spent 0.0 ms in prepareToDraw has still spent 51 ms
 	// somewhere, and until the frame is split there is no evidence for which side of the DLL
