@@ -25,6 +25,7 @@ namespace ConfigDirect3d11Namespace
 	bool                           ms_bakeCompiledShaders;
 
 	bool                           ms_allowTearing;
+	bool                           ms_reportFrameTiming;
 	int                            ms_fullscreenRefreshRate;
 	int                            ms_swapChainBufferCount;
 
@@ -80,6 +81,10 @@ void ConfigDirect3d11::install()
 	// image writer the game's own screenshot key uses. Grabbing the desktop instead is unreliable
 	// on a machine somebody is using: another window comes to the front and the capture is of that
 	// window. This reads the back buffer, so occlusion cannot affect it.
+	// Per-frame hitch and distribution reporting. Off by default: the lines are diagnostics and
+	// emitting them is file I/O on the main thread.
+	KEY_BOOL(reportFrameTiming, false);
+
 	KEY_INT(debugScreenshotFrame, 0);
 
 	// Ask RenderDoc to capture the frame after this one. Only does anything when the client was
@@ -148,6 +153,13 @@ bool ConfigDirect3d11::getDebugLayer()
 bool ConfigDirect3d11::getAllowTearing()
 {
 	return ms_allowTearing;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d11::getReportFrameTiming()
+{
+	return ms_reportFrameTiming;
 }
 
 

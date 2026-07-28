@@ -8,6 +8,7 @@
 #include "FirstDirect3d11.h"
 #include "Direct3d11_Metrics.h"
 
+#include "ConfigDirect3d11.h"
 #include "Direct3d11_QueryPool.h"
 
 #include "sharedDebug/DebugFlags.h"
@@ -182,6 +183,8 @@ void Direct3d11_MetricsNamespace::reportRoutine()
 
 // ----------------------------------------------------------------------
 
+#if DX11_TIMING_ENABLED
+
 Direct3d11_Metrics::ScopedTimer::ScopedTimer(long long &ticks)
 :
 	m_ticks(ticks),
@@ -202,6 +205,8 @@ Direct3d11_Metrics::ScopedTimer::~ScopedTimer()
 	if (m_start && QueryPerformanceCounter(&now))
 		m_ticks += now.QuadPart - m_start;
 }
+
+#endif
 
 // ----------------------------------------------------------------------
 
@@ -286,6 +291,11 @@ void Direct3d11_Metrics::reportHitches()
 	// that happen minutes into a session, not only at zone-in.
 	static int reportsRemaining = 200;
 	static int frameNumber = 0;
+
+	// Both lines this function can emit are diagnostics, and writing them is main-thread file
+	// I/O. Off unless asked for, so a shipping client logs neither.
+	if (!ConfigDirect3d11::getReportFrameTiming())
+		return;
 
 	if (frequency.QuadPart == 0 && !QueryPerformanceFrequency(&frequency))
 		return;

@@ -2356,49 +2356,6 @@ void PlayerCreatureController::handleNetUpdateTransform (const MessageQueueDataT
 	DEBUG_REPORT_LOG (ms_logServerMovementData && (message.getSequenceNumber () <  m_serverSequenceNumber), ("PlayerCreatureController::handleNetUpdateTransform [%s]: disregarding older packet %i\n", getOwner ()->getNetworkId ().getValueString ().c_str (), m_serverSequenceNumber));
 	DEBUG_REPORT_LOG (ms_logServerMovementData && (message.getSequenceNumber () == m_serverSequenceNumber), ("PlayerCreatureController::handleNetUpdateTransform [%s]: received same packet %i multiple times\n", getOwner ()->getNetworkId ().getValueString ().c_str (), m_serverSequenceNumber));
 
-	// Always-on, because the two reports above are DEBUG_REPORT_LOG and compile out of Release --
-	// the only configuration that links a client -- so what they describe has never been visible in
-	// a build anybody runs.
-	//
-	// Every message accepted here is applied as a warp: doClientHandleNetUpdateTransform followed by
-	// CollisionWorld::objectWarped. The guard that would drop an out-of-order or repeated one is
-	// #if 0 below, so a stale packet warps the player back to an old position. That is what a
-	// player-only movement and animation stall at an unchanged frame rate looks like, and NPCs are
-	// unaffected because they are driven by RemoteCreatureController and never come through here.
-	//
-	// Counted rather than fixed, deliberately. The #if 0 is in the original source rather than
-	// something this fork switched off, the comment above says the warp behaviour is what makes
-	// elevators work, and the server uses negative sequence numbers to mean something else
-	// entirely (see the isInitialized test below). Enabling the guard blind could break elevators
-	// and teleports, so first establish whether stale packets actually arrive, how often, and what
-	// sequence numbers genuine warps carry.
-	{
-		static int received = 0;
-		static int older = 0;
-		static int duplicate = 0;
-		static int negative = 0;
-		static int reportsRemaining = 60;
-		int const cms_reportEvery = 120;
-
-		++received;
-
-		int const sequenceNumber = message.getSequenceNumber ();
-
-		if (sequenceNumber < 0)
-			++negative;
-		else if (sequenceNumber < m_serverSequenceNumber)
-			++older;
-		else if (sequenceNumber == m_serverSequenceNumber)
-			++duplicate;
-
-		if (reportsRemaining > 0 && (received % cms_reportEvery) == 0)
-		{
-			--reportsRemaining;
-			WARNING(true, ("PlayerCreatureController: %d server transform(s) for the player -- %d older than the last accepted, %d repeats, %d with a negative sequence number. This one is %d against a last-accepted %d.",
-				received, older, duplicate, negative, sequenceNumber, m_serverSequenceNumber));
-		}
-	}
-
 #if 0
 	if (message.getSequenceNumber () <= m_serverSequenceNumber)
 		return;

@@ -52,6 +52,10 @@ public:
 	// for a complete one.
 	static bool        getBakeCompiledShaders();
 	static bool        getAllowTearing();
+
+	// Whether to emit the per-frame hitch and distribution lines. Off by default: they are
+	// diagnostics and writing them is main-thread file I/O.
+	static bool        getReportFrameTiming();
 	static int         getFullscreenRefreshRate();
 	static int         getSwapChainBufferCount();
 	static bool        getAntiAlias();

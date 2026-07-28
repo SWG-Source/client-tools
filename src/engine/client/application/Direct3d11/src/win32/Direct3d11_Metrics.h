@@ -28,6 +28,15 @@
 #define INCLUDED_Direct3d11_Metrics_H
 
 // ======================================================================
+// Per-call timing. Zero for a shipping client, one when diagnosing.
+//
+// This governs ScopedTimer only. The counters are unaffected: they are what the port's
+// zero-invariant gates are written against and they cost nothing worth measuring.
+// ======================================================================
+
+#define DX11_TIMING_ENABLED 0
+
+// ======================================================================
 
 class Direct3d11_Metrics
 {
@@ -60,16 +69,29 @@ public:
 	// which is every prepareToDraw and every Draw submit -- lost its remainder to truncation. At
 	// a thousand draws a frame that discards most of the total and reports 0.0 ms for work that
 	// is really there. One conversion at report time has no such error.
+	//
+	// Compiled out by default. Unlike the counters, which are integer increments next to D3D calls
+	// that dwarf them, these are two QueryPerformanceCounter calls per occurrence: once per draw
+	// for prepareToDraw and the submit, once per shader bind, once per dynamic buffer lock and
+	// unlock. That is around 0.2 ms a frame at 2300 draws before counting the binds and rings --
+	// a real cost to carry for a measurement nobody is reading. Every call site stays where it is,
+	// so setting this to 1 restores the whole breakdown in one line.
 	class ScopedTimer
 	{
 	public:
+#if DX11_TIMING_ENABLED
 		explicit ScopedTimer(long long &ticks);
 		~ScopedTimer();
+#else
+		explicit ScopedTimer(long long &) {}
+#endif
 	private:
 		ScopedTimer(ScopedTimer const &);
 		ScopedTimer &operator =(ScopedTimer const &);
+#if DX11_TIMING_ENABLED
 		long long &m_ticks;
 		long long  m_start;
+#endif
 	};
 
 	// Ticks to milliseconds, for the report. Public because the hitch line is the only consumer
