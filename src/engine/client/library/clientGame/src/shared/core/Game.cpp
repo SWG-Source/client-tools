@@ -1151,7 +1151,56 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 		    ConfigFile::getKeyBool("ClientGame", "runWithoutFocus", false))
 		{
 			NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "GameScheduler update");
-			GameScheduler::alter(elapsedTime);
+
+			// Fixed-step simulation, decoupled from the frame rate.
+			//
+			// This used to be a bare GameScheduler::alter(elapsedTime), which stepped the
+			// simulation once per rendered frame. The player's movement, and the transform it
+			// sends the server, come out of that step -- so at 240 fps the server received
+			// updates roughly 4 ms apart instead of 16. It validates each one with
+			//
+			//     maxDistSqr = sqr(maxSpeed * timeDiffMs / 1000.0f)
+			//
+			// whose tolerance shrinks with the interval, so above some frame rate ordinary float
+			// jitter exceeds the allowed distance, the server corrects the player, and the
+			// correction reaches the client as a warp. The symptom is the player's movement and
+			// animation stalling while NPCs keep moving and the frame rate never drops -- NPCs go
+			// through RemoteCreatureController and never take the warp path. Capping the client at
+			// 144 fps removed it, which is what identified the coupling as the cause.
+			//
+			// simulationRate is in hertz. Zero restores the old per-frame behaviour, which is
+			// worth keeping reachable because it is what every previous measurement was taken
+			// against.
+			static float const ms_simulationRate = ConfigFile::getKeyFloat("ClientGame", "simulationRate", 60.0f);
+
+			if (ms_simulationRate <= 0.f)
+				GameScheduler::alter(elapsedTime);
+			else
+			{
+				float const step = 1.f / ms_simulationRate;
+
+				// Real time still governs: only the cadence of the steps is fixed. Sync stamps
+				// come from Clock rather than from this delta, so the timestamps the server
+				// compares are unaffected.
+				static float accumulatedTime = 0.f;
+				accumulatedTime += elapsedTime;
+
+				// Bounded catch-up. Each step costs time, so a machine that cannot sustain the
+				// rate must drop steps rather than queue more of them and fall further behind
+				// every frame.
+				int const cms_maximumStepsPerFrame = 4;
+				int steps = 0;
+
+				while (accumulatedTime >= step && steps < cms_maximumStepsPerFrame)
+				{
+					GameScheduler::alter(step);
+					accumulatedTime -= step;
+					++steps;
+				}
+
+				if (steps == cms_maximumStepsPerFrame)
+					accumulatedTime = 0.f;
+			}
 		}
 
 		NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "directInput update");
