@@ -187,6 +187,13 @@ public:
 	static long long textureCreateTicks;
 	static long long textureUploadTicks;   // lock + unlock: staging, conversion, UpdateSubresource
 
+	// The upload, broken down. Three passes over the pixels are possible per locked mip -- zero the
+	// scratch, convert into a second buffer, hand it to the driver -- and they have unrelated fixes,
+	// so the total cannot direct the work.
+	static long long textureZeroTicks;
+	static long long textureConvertTicks;
+	static long long textureUpdateTicks;
+
 	// Microseconds spent inside prepareToDraw, which every draw funnels through: input layout
 	// lookup, light selection, transform concatenation and the constant flush. A 40 ms frame of
 	// 2000 draws is either this or it is upstream of this backend, and measuring is the only way

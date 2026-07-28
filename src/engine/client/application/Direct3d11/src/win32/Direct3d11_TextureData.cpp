@@ -842,7 +842,10 @@ void Direct3d11_TextureData::lock(LockData &lockData)
 	// it is about to overwrite completely. A subresource that has never been written
 	// has undefined contents, exactly as a freshly created D3D9 MANAGED surface does,
 	// so zero is a legitimate answer for it.
-	memset(scratch, 0, static_cast<size_t>(bytes));
+	{
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureZeroTicks);
+		memset(scratch, 0, static_cast<size_t>(bytes));
+	}
 
 	int const subresource = getSubresource(lockData.m_cubeFace, lockData.getLevel());
 
@@ -945,6 +948,7 @@ void Direct3d11_TextureData::unlock(LockData &lockData)
 
 		if (format == m_storageFormat)
 		{
+			Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureUpdateTicks);
 			context->UpdateSubresource(m_resource, static_cast<UINT>(subresource), destinationBox, scratch, static_cast<UINT>(lockData.m_pitch), static_cast<UINT>(lockData.m_slicePitch));
 		}
 		else
@@ -960,15 +964,22 @@ void Direct3d11_TextureData::unlock(LockData &lockData)
 			// silently truncate a volume write.
 			uint8 * const converted = new uint8[storageSlicePitch * depth];
 
-			for (int slice = 0; slice < depth; ++slice)
 			{
-				Direct3d11_TextureConverter::convert(
-					format, scratch + (static_cast<size_t>(slice) * lockData.m_slicePitch), lockData.m_pitch,
-					m_storageFormat, converted + (static_cast<size_t>(slice) * storageSlicePitch), storagePitch,
-					width, height);
+				Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureConvertTicks);
+
+				for (int slice = 0; slice < depth; ++slice)
+				{
+					Direct3d11_TextureConverter::convert(
+						format, scratch + (static_cast<size_t>(slice) * lockData.m_slicePitch), lockData.m_pitch,
+						m_storageFormat, converted + (static_cast<size_t>(slice) * storageSlicePitch), storagePitch,
+						width, height);
+				}
 			}
 
-			context->UpdateSubresource(m_resource, static_cast<UINT>(subresource), destinationBox, converted, static_cast<UINT>(storagePitch), static_cast<UINT>(storageSlicePitch));
+			{
+				Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureUpdateTicks);
+				context->UpdateSubresource(m_resource, static_cast<UINT>(subresource), destinationBox, converted, static_cast<UINT>(storagePitch), static_cast<UINT>(storageSlicePitch));
+			}
 
 			delete [] converted;
 		}
