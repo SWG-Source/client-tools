@@ -407,7 +407,7 @@ void Direct3d11::setCurrentTextureCoordinateSetMapping(int const *mapping, int c
 
 bool Direct3d11::prepareToDraw()
 {
-	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawPrepareMicroseconds);
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawPrepareTicks);
 
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 	if (!context)
@@ -676,7 +676,7 @@ void Direct3d11::draw(int topology, int firstVertex, int vertexCount, int triang
 	// buffer that is the ring offset, which setVertexBuffer deliberately does NOT put in the
 	// stream byte offset -- doing both would double-count it.
 	{
-		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitTicks);
 		context->Draw(static_cast<UINT>(vertexCount), static_cast<UINT>(ms_sliceFirstVertex + firstVertex));
 	}
 
@@ -700,7 +700,7 @@ void Direct3d11::drawIndexed(int topology, int firstIndex, int indexCount, int b
 	Direct3d11_PointSprite::apply(topology == D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
 
 	{
-		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitTicks);
 		context->DrawIndexed(static_cast<UINT>(indexCount), static_cast<UINT>(ms_sliceFirstIndex + firstIndex), ms_sliceFirstVertex + baseVertex);
 	}
 
@@ -751,7 +751,7 @@ void Direct3d11::drawFan(int firstVertex, int vertexCount)
 	// vertex. No slice FIRST INDEX here: the index buffer being read is this backend's, not
 	// the engine's.
 	{
-		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitTicks);
 		context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
 	}
 
@@ -797,7 +797,7 @@ void Direct3d11::drawQuads(int firstVertex, int quadCount)
 
 	int const triangles = quadCount * 2;
 	{
-		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitMicroseconds);
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawSubmitTicks);
 		context->DrawIndexed(static_cast<UINT>(triangles * 3), 0, ms_sliceFirstVertex + firstVertex);
 	}
 

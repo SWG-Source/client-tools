@@ -66,11 +66,11 @@ int Direct3d11_Metrics::backendShaderCompiles;
 int Direct3d11_Metrics::vertexBufferCreations;
 int Direct3d11_Metrics::indexBufferCreations;
 int Direct3d11_Metrics::textureCreations;
-int Direct3d11_Metrics::bufferCreateMicroseconds;
-int Direct3d11_Metrics::textureCreateMicroseconds;
-int Direct3d11_Metrics::textureUploadMicroseconds;
-int Direct3d11_Metrics::drawPrepareMicroseconds;
-int Direct3d11_Metrics::drawSubmitMicroseconds;
+long long Direct3d11_Metrics::bufferCreateTicks;
+long long Direct3d11_Metrics::textureCreateTicks;
+long long Direct3d11_Metrics::textureUploadTicks;
+long long Direct3d11_Metrics::drawPrepareTicks;
+long long Direct3d11_Metrics::drawSubmitTicks;
 int Direct3d11_Metrics::sceneMicroseconds;
 int Direct3d11_Metrics::presentMicroseconds;
 int Direct3d11_Metrics::beforePresentMicroseconds;
@@ -177,9 +177,9 @@ void Direct3d11_MetricsNamespace::reportRoutine()
 
 // ----------------------------------------------------------------------
 
-Direct3d11_Metrics::ScopedTimer::ScopedTimer(int &microseconds)
+Direct3d11_Metrics::ScopedTimer::ScopedTimer(long long &ticks)
 :
-	m_microseconds(microseconds),
+	m_ticks(ticks),
 	m_start(0)
 {
 	LARGE_INTEGER now;
@@ -191,10 +191,22 @@ Direct3d11_Metrics::ScopedTimer::ScopedTimer(int &microseconds)
 
 Direct3d11_Metrics::ScopedTimer::~ScopedTimer()
 {
+	// No division and no conversion: just the tick delta. This runs once per draw, so anything
+	// that rounds here is lost a thousand times a frame.
 	LARGE_INTEGER now;
+	if (m_start && QueryPerformanceCounter(&now))
+		m_ticks += now.QuadPart - m_start;
+}
+
+// ----------------------------------------------------------------------
+
+double Direct3d11_Metrics::ticksToMilliseconds(long long ticks)
+{
 	LARGE_INTEGER frequency;
-	if (m_start && QueryPerformanceCounter(&now) && QueryPerformanceFrequency(&frequency) && frequency.QuadPart)
-		m_microseconds += static_cast<int>(((now.QuadPart - m_start) * 1000000) / frequency.QuadPart);
+	if (ticks <= 0 || !QueryPerformanceFrequency(&frequency) || !frequency.QuadPart)
+		return 0.0;
+
+	return static_cast<double>(ticks) * 1000.0 / static_cast<double>(frequency.QuadPart);
 }
 
 // ----------------------------------------------------------------------
@@ -373,18 +385,18 @@ void Direct3d11_Metrics::reportHitches()
 				static_cast<double>(Direct3d11_QueryPool::getGpuFrameTimeMilliseconds()),
 				maxLightsInList, lightBatchesWithLights, lightBatches,
 				drawCalls + drawIndexedCalls,
-				static_cast<double>(drawPrepareMicroseconds) / 1000.0,
-				static_cast<double>(drawSubmitMicroseconds) / 1000.0,
+				ticksToMilliseconds(drawPrepareTicks),
+				ticksToMilliseconds(drawSubmitTicks),
 				constantBufferUpdates, constantBufferBytes, ringDiscards,
 				inputLayoutBindMisses, vertexBufferBindMisses, indexBufferBindMisses,
 				vertexShaderBindMisses, pixelShaderBindMisses, blendStateBindMisses,
 				depthStencilStateBindMisses, rasterizerStateBindMisses,
 				samplerBindMisses, shaderResourceBindMisses,
 				vertexBufferCreations, indexBufferCreations, textureCreations,
-				static_cast<double>(bufferCreateMicroseconds + textureCreateMicroseconds + textureUploadMicroseconds) / 1000.0,
-				static_cast<double>(bufferCreateMicroseconds) / 1000.0,
-				static_cast<double>(textureCreateMicroseconds) / 1000.0,
-				static_cast<double>(textureUploadMicroseconds) / 1000.0,
+				ticksToMilliseconds(bufferCreateTicks + textureCreateTicks + textureUploadTicks),
+				ticksToMilliseconds(bufferCreateTicks),
+				ticksToMilliseconds(textureCreateTicks),
+				ticksToMilliseconds(textureUploadTicks),
 				stateObjectCreations, inputLayoutCreations, constantBufferCreations,
 				shaderCompiles, static_cast<double>(shaderCompileMicroseconds) / 1000.0,
 				blockingStagingMaps, textureBakeReadbacks, renderTargetSwitches,
@@ -490,11 +502,11 @@ void Direct3d11_Metrics::beginFrame()
 	vertexBufferCreations = 0;
 	indexBufferCreations = 0;
 	textureCreations = 0;
-	bufferCreateMicroseconds = 0;
-	textureCreateMicroseconds = 0;
-	textureUploadMicroseconds = 0;
-	drawPrepareMicroseconds = 0;
-	drawSubmitMicroseconds = 0;
+	bufferCreateTicks = 0;
+	textureCreateTicks = 0;
+	textureUploadTicks = 0;
+	drawPrepareTicks = 0;
+	drawSubmitTicks = 0;
 	sceneMicroseconds = 0;
 	presentMicroseconds = 0;
 	beforePresentMicroseconds = 0;

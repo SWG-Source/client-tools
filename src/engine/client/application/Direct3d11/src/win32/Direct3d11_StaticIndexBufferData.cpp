@@ -57,7 +57,7 @@ Direct3d11_StaticIndexBufferData::~Direct3d11_StaticIndexBufferData()
 
 void Direct3d11_StaticIndexBufferData::createBuffer()
 {
-	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::bufferCreateMicroseconds);
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::bufferCreateTicks);
 
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	NOT_NULL(device);

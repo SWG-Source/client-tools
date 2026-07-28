@@ -401,7 +401,7 @@ void Direct3d11_TextureData::chooseFormat(TextureFormat const *runtimeFormats, i
 
 void Direct3d11_TextureData::createResource()
 {
-	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureCreateMicroseconds);
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureCreateTicks);
 
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	NOT_NULL(device);
@@ -797,7 +797,7 @@ void Direct3d11_TextureData::readBackRegion(LockData const &lockData, uint8 *des
 
 void Direct3d11_TextureData::lock(LockData &lockData)
 {
-	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureUploadMicroseconds);
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureUploadTicks);
 
 	DEBUG_FATAL(lockData.m_pixelData, ("Direct3d11: this texture region is already locked."));
 	DEBUG_FATAL(lockData.getWidth() <= 0 || lockData.getHeight() <= 0, ("Direct3d11: a lock of texture '%s' asked for a %dx%d region.", describeTexture(m_texture), lockData.getWidth(), lockData.getHeight()));
@@ -863,7 +863,7 @@ void Direct3d11_TextureData::lock(LockData &lockData)
 
 void Direct3d11_TextureData::unlock(LockData &lockData)
 {
-	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureUploadMicroseconds);
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::textureUploadTicks);
 
 	uint8 * const scratch = static_cast<uint8 *>(lockData.m_reserved);
 

@@ -51,19 +51,30 @@ public:
 	static void markSceneBegin();
 	static void markSceneEnd();
 
-	// Adds the elapsed time of the scope it is declared in to the counter it is given. Nested
-	// instances aimed at the same counter would double-count, so each counter has one scope.
+	// Adds the elapsed time of the scope it is declared in to the counter it is given, in raw
+	// QueryPerformanceCounter ticks. Nested instances aimed at the same counter would
+	// double-count, so each counter has one scope.
+	//
+	// Ticks rather than microseconds because these counters are accumulated per draw. Converting
+	// in the destructor meant an integer division per call, and every call below a microsecond --
+	// which is every prepareToDraw and every Draw submit -- lost its remainder to truncation. At
+	// a thousand draws a frame that discards most of the total and reports 0.0 ms for work that
+	// is really there. One conversion at report time has no such error.
 	class ScopedTimer
 	{
 	public:
-		explicit ScopedTimer(int &microseconds);
+		explicit ScopedTimer(long long &ticks);
 		~ScopedTimer();
 	private:
 		ScopedTimer(ScopedTimer const &);
 		ScopedTimer &operator =(ScopedTimer const &);
-		int       &m_microseconds;
+		long long &m_ticks;
 		long long  m_start;
 	};
+
+	// Ticks to milliseconds, for the report. Public because the hitch line is the only consumer
+	// and it lives in this class.
+	static double ticksToMilliseconds(long long ticks);
 
 	// Write the current frame's counters and the run totals to the log.
 	static void report();
@@ -172,22 +183,22 @@ public:
 	// enough to act on: it could not distinguish a driver allocating 1438 buffers from this backend
 	// memsetting and converting mip data on the way to UpdateSubresource, and those have opposite
 	// fixes -- pooling for the first, removing a redundant copy for the second.
-	static int  bufferCreateMicroseconds;
-	static int  textureCreateMicroseconds;
-	static int  textureUploadMicroseconds;   // lock + unlock: staging, conversion, UpdateSubresource
+	static long long bufferCreateTicks;
+	static long long textureCreateTicks;
+	static long long textureUploadTicks;   // lock + unlock: staging, conversion, UpdateSubresource
 
 	// Microseconds spent inside prepareToDraw, which every draw funnels through: input layout
 	// lookup, light selection, transform concatenation and the constant flush. A 40 ms frame of
 	// 2000 draws is either this or it is upstream of this backend, and measuring is the only way
 	// to tell which.
-	static int  drawPrepareMicroseconds;
+	static long long drawPrepareTicks;
 
 	// Microseconds inside Draw and DrawIndexed themselves. A 36 ms scene of 261 draws that spent
 	// 0.1 ms in prepareToDraw, with the GPU idle at 0.8 ms and nothing created or streamed, means
 	// one call inside the scene blocked -- and scene time on its own cannot say whether that was a
 	// submit or one of the binds around it. This is what separates them: submits here, everything
 	// else in the difference between this plus prepareToDraw and the scene total.
-	static int  drawSubmitMicroseconds;
+	static long long drawSubmitTicks;
 
 	// Where a frame's wall time goes, which the counters above cannot answer. A 51 ms frame that
 	// created nothing, streamed nothing and spent 0.0 ms in prepareToDraw has still spent 51 ms
