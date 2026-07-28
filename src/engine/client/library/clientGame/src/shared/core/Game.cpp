@@ -159,6 +159,63 @@
 
 //-----------------------------------------------------------------
 
+// ======================================================================
+// Fixed-step simulation schedule.
+//
+// The world used to advance once per rendered frame, which tied the simulation rate to the frame
+// rate. That is not a cosmetic problem: the player's movement, and the transform the client sends
+// the server, come out of that step, and the server validates each one with
+//
+//     maxDistSqr = sqr(maxSpeed * timeDiffMs / 1000.0f)
+//
+// whose tolerance shrinks as the interval between updates shrinks. Above roughly 144 fps ordinary
+// float jitter exceeds the allowed distance, handleInvalidMove corrects the player, and the
+// correction arrives at the client as a warp -- so the player's movement and animation stall while
+// NPCs keep moving and the frame rate never changes.
+//
+// Two calls advance the world and they must stay in lockstep, so the step count is computed once
+// per frame here and used by both.
+// ======================================================================
+
+namespace GameSimulationSchedule
+{
+	float ms_accumulatedTime;
+
+	// Steps to run this frame, and the delta each one gets. A rate of zero restores the old
+	// behaviour of a single step of real elapsed time, which is what every measurement taken
+	// before this change was made against.
+	int computeSteps(float elapsedTime, float &step)
+	{
+		static float const rate = ConfigFile::getKeyFloat("ClientGame", "simulationRate", 60.0f);
+
+		if (rate <= 0.f)
+		{
+			step = elapsedTime;
+			return 1;
+		}
+
+		step = 1.f / rate;
+		ms_accumulatedTime += elapsedTime;
+
+		// Bounded catch-up. Each step costs time, so a machine that cannot sustain the rate has to
+		// drop steps rather than queue another one every frame and fall further behind for as long
+		// as it runs.
+		int const cms_maximumStepsPerFrame = 4;
+
+		int steps = 0;
+		while (ms_accumulatedTime >= step && steps < cms_maximumStepsPerFrame)
+		{
+			ms_accumulatedTime -= step;
+			++steps;
+		}
+
+		if (steps == cms_maximumStepsPerFrame)
+			ms_accumulatedTime = 0.f;
+
+		return steps;
+	}
+}
+
 namespace GameNamespace
 {
 	namespace Transceivers
@@ -1104,6 +1161,10 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 
 		elapsedTime = Clock::frameTime ();
 
+		// Computed once, used by both calls that advance the world.
+		float simulationStep = elapsedTime;
+		int const simulationSteps = GameSimulationSchedule::computeSteps(elapsedTime, simulationStep);
+
 		ms_bytesAllocated[0] = ms_bytesAllocated[1];
 		ms_bytesAllocated[1] = ms_bytesAllocated[2];
 		ms_bytesAllocated[2] = ms_bytesAllocated[3];
@@ -1152,55 +1213,8 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 		{
 			NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "GameScheduler update");
 
-			// Fixed-step simulation, decoupled from the frame rate.
-			//
-			// This used to be a bare GameScheduler::alter(elapsedTime), which stepped the
-			// simulation once per rendered frame. The player's movement, and the transform it
-			// sends the server, come out of that step -- so at 240 fps the server received
-			// updates roughly 4 ms apart instead of 16. It validates each one with
-			//
-			//     maxDistSqr = sqr(maxSpeed * timeDiffMs / 1000.0f)
-			//
-			// whose tolerance shrinks with the interval, so above some frame rate ordinary float
-			// jitter exceeds the allowed distance, the server corrects the player, and the
-			// correction reaches the client as a warp. The symptom is the player's movement and
-			// animation stalling while NPCs keep moving and the frame rate never drops -- NPCs go
-			// through RemoteCreatureController and never take the warp path. Capping the client at
-			// 144 fps removed it, which is what identified the coupling as the cause.
-			//
-			// simulationRate is in hertz. Zero restores the old per-frame behaviour, which is
-			// worth keeping reachable because it is what every previous measurement was taken
-			// against.
-			static float const ms_simulationRate = ConfigFile::getKeyFloat("ClientGame", "simulationRate", 60.0f);
-
-			if (ms_simulationRate <= 0.f)
-				GameScheduler::alter(elapsedTime);
-			else
-			{
-				float const step = 1.f / ms_simulationRate;
-
-				// Real time still governs: only the cadence of the steps is fixed. Sync stamps
-				// come from Clock rather than from this delta, so the timestamps the server
-				// compares are unaffected.
-				static float accumulatedTime = 0.f;
-				accumulatedTime += elapsedTime;
-
-				// Bounded catch-up. Each step costs time, so a machine that cannot sustain the
-				// rate must drop steps rather than queue more of them and fall further behind
-				// every frame.
-				int const cms_maximumStepsPerFrame = 4;
-				int steps = 0;
-
-				while (accumulatedTime >= step && steps < cms_maximumStepsPerFrame)
-				{
-					GameScheduler::alter(step);
-					accumulatedTime -= step;
-					++steps;
-				}
-
-				if (steps == cms_maximumStepsPerFrame)
-					accumulatedTime = 0.f;
-			}
+			for (int step = 0; step < simulationSteps; ++step)
+				GameScheduler::alter(simulationStep);
 		}
 
 		NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "directInput update");
@@ -1232,7 +1246,16 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 
 		NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "update");
 		CutScene::update();
-		IoWinManager::processEvents(elapsedTime);
+
+		// The real driver of the world's update: processEvents enqueues IOET_Update, which reaches
+		// GroundScene::update and from there ClientWorld::update, which alters every object
+		// including the player. Stepping this at the frame rate is what tied the player's movement
+		// and its transform sends to the frame rate, so it runs on the shared schedule too.
+		//
+		// Input events are queued by the message pump regardless, so processing them on the
+		// simulation step costs at most one step of latency rather than losing anything.
+		for (int step = 0; step < simulationSteps; ++step)
+			IoWinManager::processEvents(simulationStep);
 
 		// I wish I had a better place to put this....
 		if (Graphics::getLastError() != StringId::cms_invalid)
