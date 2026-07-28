@@ -76,18 +76,6 @@ void ConfigDirect3d11::install()
 	// frame rate to the refresh rate and every percentile becomes meaningless.
 	KEY_BOOL(allowTearing, false);
 
-	// TEMPORARY DIAGNOSTICS. debugClearColor overrides the colour the scene target is cleared to:
-	// if a distinctive colour shows up behind the interface then the scene target is reaching the
-	// back buffer and the 3D draws are producing nothing, which separates a compositing fault from
-	// a per-draw one in a single run. forceCullNone and forceDepthAlways then separate the two
-	// commonest per-draw causes.
-
-	// TEMPORARY DIAGNOSTIC: swap red and blue in the composite. If the whole scene comes out
-	// right, the fault is one global channel swap upstream; if only some surfaces do, it is not.
-
-	// TEMPORARY DIAGNOSTIC: white ambient and no other lights, so a lit surface renders as its
-	// raw texture. Separates a wrong light colour from a wrong texture.
-
 	// Write a screenshot at this frame number and again periodically after it, through the same
 	// image writer the game's own screenshot key uses. Grabbing the desktop instead is unreliable
 	// on a machine somebody is using: another window comes to the front and the capture is of that

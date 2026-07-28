@@ -46,6 +46,11 @@ public:
 	// nothing rules the renderer out, which is worth more than another guess.
 	static void reportHitches();
 
+	// Bracket the part of the frame that is inside this backend. Not a ScopedTimer because the
+	// interval spans two separate calls from the engine rather than a C++ scope.
+	static void markSceneBegin();
+	static void markSceneEnd();
+
 	// Adds the elapsed time of the scope it is declared in to the counter it is given. Nested
 	// instances aimed at the same counter would double-count, so each counter has one scope.
 	class ScopedTimer
@@ -173,12 +178,28 @@ public:
 	// to tell which.
 	static int  drawPrepareMicroseconds;
 
+	// Where a frame's wall time goes, which the counters above cannot answer. A 51 ms frame that
+	// created nothing, streamed nothing and spent 0.0 ms in prepareToDraw has still spent 51 ms
+	// somewhere, and until the frame is split there is no evidence for which side of the DLL
+	// boundary it went to. sceneMicroseconds is beginScene to endScene; presentMicroseconds is
+	// Present, which blocks on vsync and on a GPU that is behind; and the wall time left over
+	// after subtracting both is engine work this backend never sees.
+	static int  sceneMicroseconds;
+	static int  presentMicroseconds;
+
 	// What the engine handed this backend through setLights, which it calls once per batch. The
 	// MAX over the frame, not the last value: a batch with no lights is ordinary (a UI pass, a
 	// self-illuminated pass), so the last call says nothing about whether the scene is lit.
 	static int  maxLightsInList;
 	static int  lightBatches;
 	static int  lightBatchesWithLights;
+
+	// The scene's own ambient, over batches that have lights. Ambient is accumulated out of the
+	// light list, so an unlit batch has zero ambient by construction and would only dilute this.
+	// Kept after the 0.3 floor was removed because it is what says whether an interior's ambient is
+	// plausible, which is the question the floor used to hide.
+	static int  litBatches;
+	static int  maxAmbientMilli;           // thousandths, so this stays an int like its neighbours
 
 	static int  shaderCacheHits;
 	static int  shaderCacheMisses;

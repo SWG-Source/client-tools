@@ -237,15 +237,26 @@ namespace Direct3d11Namespace
 		Direct3d11_DynamicVertexBufferData::beginFrame();
 		Direct3d11_DynamicIndexBufferData::beginFrame();
 		Direct3d11_SwapChain::beginScene();
+
+		// Last, so the per-frame reset above does not clear the interval that starts here.
+		Direct3d11_Metrics::markSceneBegin();
 	}
 
 	void endScene()
 	{
 		Direct3d11_SwapChain::endScene();
 		Direct3d11_QueryPool::endFrame();
+
+		Direct3d11_Metrics::markSceneEnd();
 	}
 
-	bool present()                            { return Direct3d11_SwapChain::present(); }
+	bool present()
+	{
+		// Present blocks: on vsync, and on a GPU that has fallen behind the queue. Timed apart from
+		// the scene so a slow frame can be attributed to one or the other.
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::presentMicroseconds);
+		return Direct3d11_SwapChain::present();
+	}
 
 	void setViewport(int x, int y, int width, int height, real minZ, real maxZ)
 	{

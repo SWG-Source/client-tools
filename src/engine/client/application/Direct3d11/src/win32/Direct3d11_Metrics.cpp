@@ -8,6 +8,8 @@
 #include "FirstDirect3d11.h"
 #include "Direct3d11_Metrics.h"
 
+#include "Direct3d11_QueryPool.h"
+
 #include "sharedDebug/DebugFlags.h"
 
 // ======================================================================
@@ -66,9 +68,13 @@ int Direct3d11_Metrics::indexBufferCreations;
 int Direct3d11_Metrics::textureCreations;
 int Direct3d11_Metrics::resourceCreationMicroseconds;
 int Direct3d11_Metrics::drawPrepareMicroseconds;
+int Direct3d11_Metrics::sceneMicroseconds;
+int Direct3d11_Metrics::presentMicroseconds;
 int Direct3d11_Metrics::maxLightsInList;
 int Direct3d11_Metrics::lightBatches;
 int Direct3d11_Metrics::lightBatchesWithLights;
+int Direct3d11_Metrics::litBatches;
+int Direct3d11_Metrics::maxAmbientMilli;
 int Direct3d11_Metrics::shaderCacheHits;
 int Direct3d11_Metrics::shaderCacheMisses;
 
@@ -115,6 +121,9 @@ namespace Direct3d11_MetricsNamespace
 	int  const cms_warmUpFrames = 60;
 
 	bool ms_reportRequested;
+
+	// Start of the current beginScene..endScene interval, in QueryPerformanceCounter ticks.
+	long long ms_sceneStart;
 
 	void reportRoutine();
 }
@@ -176,6 +185,26 @@ Direct3d11_Metrics::ScopedTimer::~ScopedTimer()
 
 // ----------------------------------------------------------------------
 
+void Direct3d11_Metrics::markSceneBegin()
+{
+	LARGE_INTEGER now;
+	ms_sceneStart = QueryPerformanceCounter(&now) ? now.QuadPart : 0;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Metrics::markSceneEnd()
+{
+	LARGE_INTEGER now;
+	LARGE_INTEGER frequency;
+	if (ms_sceneStart && QueryPerformanceCounter(&now) && QueryPerformanceFrequency(&frequency) && frequency.QuadPart)
+		sceneMicroseconds += static_cast<int>(((now.QuadPart - ms_sceneStart) * 1000000) / frequency.QuadPart);
+
+	ms_sceneStart = 0;
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_Metrics::reportHitches()
 {
 	// Wall time between successive calls, which is a frame. QueryPerformanceCounter rather than the
@@ -196,16 +225,85 @@ void Direct3d11_Metrics::reportHitches()
 
 	++frameNumber;
 
-	if (previous.QuadPart != 0 && reportsRemaining > 0 && frameNumber > cms_warmUpFrames)
+	if (previous.QuadPart != 0 && frameNumber > cms_warmUpFrames)
 	{
 		double const milliseconds = static_cast<double>(now.QuadPart - previous.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
 
+		// A frame-time distribution, because "stutter" and "low frame rate" feel similar and the
+		// 40 ms gate below cannot tell them apart: a room that renders at a steady 33 ms trips it
+		// never, and a room that alternates 12 ms and 45 ms trips it every other frame. One line per
+		// window says which, and carries the average split so the answer is not just "slow".
+		{
+			int const cms_windowFrames = 600;
+
+			static int windowFrames;
+			static int windowUnder17;
+			static int windowUnder25;
+			static int windowUnder34;
+			static int windowUnder50;
+			static int windowOver50;
+			static double windowMilliseconds;
+			static double windowWorst;
+			static double windowScene;
+			static double windowPresent;
+
+			++windowFrames;
+			windowMilliseconds += milliseconds;
+			if (milliseconds > windowWorst)
+				windowWorst = milliseconds;
+			windowScene += static_cast<double>(sceneMicroseconds) / 1000.0;
+			windowPresent += static_cast<double>(presentMicroseconds) / 1000.0;
+
+			if (milliseconds < 17.0)      ++windowUnder17;
+			else if (milliseconds < 25.0) ++windowUnder25;
+			else if (milliseconds < 34.0) ++windowUnder34;
+			else if (milliseconds < 50.0) ++windowUnder50;
+			else                          ++windowOver50;
+
+			if (windowFrames >= cms_windowFrames)
+			{
+				double const window = static_cast<double>(windowFrames);
+				double const averageMilliseconds = windowMilliseconds / window;
+				double const averageScene = windowScene / window;
+				double const averagePresent = windowPresent / window;
+
+				WARNING(true, ("Direct3d11 FRAMES: last %d frames averaged %.1f ms (%.0f fps), worst %.1f ms; distribution <17 ms %d, <25 ms %d, <34 ms %d, <50 ms %d, >=50 ms %d; average %.1f ms in scene, %.1f ms in Present, %.1f ms outside this backend; GPU recently %.1f ms; %d draw(s) last frame; last frame had %d lit batch(es), highest scene ambient %.3f",
+					windowFrames, averageMilliseconds, (averageMilliseconds > 0.0) ? (1000.0 / averageMilliseconds) : 0.0, windowWorst,
+					windowUnder17, windowUnder25, windowUnder34, windowUnder50, windowOver50,
+					averageScene, averagePresent, averageMilliseconds - averageScene - averagePresent,
+					static_cast<double>(Direct3d11_QueryPool::getGpuFrameTimeMilliseconds()),
+					drawCalls + drawIndexedCalls,
+					litBatches, static_cast<double>(maxAmbientMilli) / 1000.0));
+
+				windowFrames = 0;
+				windowUnder17 = 0;
+				windowUnder25 = 0;
+				windowUnder34 = 0;
+				windowUnder50 = 0;
+				windowOver50 = 0;
+				windowMilliseconds = 0.0;
+				windowWorst = 0.0;
+				windowScene = 0.0;
+				windowPresent = 0.0;
+			}
+		}
+
 		// 40 ms is a hitch anyone notices at 60 Hz and is well clear of ordinary variance.
-		if (milliseconds > 40.0)
+		if (milliseconds > 40.0 && reportsRemaining > 0)
 		{
 			--reportsRemaining;
-			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- at most %d light(s) in any batch, %d of %d batch(es) lit; %d draw(s) spent %.1f ms in prepareToDraw; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms; created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
-				frameNumber, milliseconds, maxLightsInList, lightBatchesWithLights, lightBatches,
+			// The split first, because it is what decides whether this backend is even the subject.
+			// The GPU figure comes from the query ring and is therefore a few frames old; it says
+			// what the GPU has recently been costing, not what this particular frame cost it.
+			double const sceneMilliseconds = static_cast<double>(sceneMicroseconds) / 1000.0;
+			double const presentMilliseconds = static_cast<double>(presentMicroseconds) / 1000.0;
+			double const outsideMilliseconds = milliseconds - sceneMilliseconds - presentMilliseconds;
+
+			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- %.1f ms in scene, %.1f ms in Present, %.1f ms outside this backend; GPU recently %.1f ms; at most %d light(s) in any batch, %d of %d batch(es) lit; %d draw(s) spent %.1f ms in prepareToDraw; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms; created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
+				frameNumber, milliseconds,
+				sceneMilliseconds, presentMilliseconds, outsideMilliseconds,
+				static_cast<double>(Direct3d11_QueryPool::getGpuFrameTimeMilliseconds()),
+				maxLightsInList, lightBatchesWithLights, lightBatches,
 				drawCalls + drawIndexedCalls, static_cast<double>(drawPrepareMicroseconds) / 1000.0,
 				constantBufferUpdates, constantBufferBytes, ringDiscards,
 				inputLayoutBindMisses, vertexBufferBindMisses, indexBufferBindMisses,
@@ -314,9 +412,13 @@ void Direct3d11_Metrics::beginFrame()
 	textureCreations = 0;
 	resourceCreationMicroseconds = 0;
 	drawPrepareMicroseconds = 0;
+	sceneMicroseconds = 0;
+	presentMicroseconds = 0;
 	maxLightsInList = 0;
 	lightBatches = 0;
 	lightBatchesWithLights = 0;
+	litBatches = 0;
+	maxAmbientMilli = 0;
 	shaderCacheHits = 0;
 	shaderCacheMisses = 0;
 
