@@ -59,7 +59,12 @@ public:
 	// is what lets one compiled program serve every material -- see
 	// Direct3d11_VertexShaderData.h. Pass a count of zero for a program that addresses sets
 	// by number rather than by tag, and the sets bind in their natural order.
-	static ID3D11InputLayout  *getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, int const *textureCoordinateSetMapping, int mappingCount);
+	// Hash a vertex shader's input signature. Call this ONCE per shader, when its bytecode is
+	// created: it parses the DXBC container and allocates a blob, which is far too much work to
+	// repeat per draw. The result is what getInputLayout wants as signatureHash.
+	static uint32              hashVertexShaderSignature(void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize);
+
+	static ID3D11InputLayout  *getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, uint32 signatureHash, int const *textureCoordinateSetMapping, int mappingCount);
 
 	static int                 getLayoutCount();
 

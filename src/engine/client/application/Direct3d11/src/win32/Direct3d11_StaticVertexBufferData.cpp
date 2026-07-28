@@ -92,6 +92,8 @@ Direct3d11_StaticVertexBufferData::~Direct3d11_StaticVertexBufferData()
 
 void Direct3d11_StaticVertexBufferData::createBuffer()
 {
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::resourceCreationMicroseconds);
+
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	NOT_NULL(device);
 
@@ -102,6 +104,8 @@ void Direct3d11_StaticVertexBufferData::createBuffer()
 	description.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 
 	HRESULT const hresult = device->CreateBuffer(&description, NULL, &m_buffer);
+
+	++Direct3d11_Metrics::vertexBufferCreations;
 	FATAL(FAILED(hresult) || !m_buffer, ("Direct3d11: a %d-byte static vertex buffer could not be created (%s).", m_shadowBytes, Direct3d11_Device::describeHresult(hresult)));
 }
 

@@ -95,6 +95,10 @@ public:
 	void const               *getBytecode() const;
 	unsigned int              getBytecodeSize() const;
 
+	// The input-layout cache's key. Computed once here rather than per draw, because parsing the
+	// DXBC container is not something to do two thousand times a frame.
+	uint32                    getSignatureHash() const;
+
 private:
 
 	Direct3d11_VertexShaderData();
@@ -120,6 +124,7 @@ private:
 	Direct3d11_ShaderPrograms::Header            m_header;
 
 	ID3DBlob                                   *m_bytecode;
+	uint32                                      m_signatureHash;
 	ID3D11VertexShader                         *m_shader;
 };
 

@@ -321,19 +321,44 @@ void Direct3d11_InputLayoutCache::remove()
 
 // ----------------------------------------------------------------------
 
-ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, int const *textureCoordinateSetMapping, int mappingCount)
+uint32 Direct3d11_InputLayoutCache::hashVertexShaderSignature(void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize)
+{
+	if (!vertexShaderBytecode || !vertexShaderBytecodeSize)
+		return 0;
+
+	// Key on the shader's INPUT SIGNATURE, so two shaders whose bodies differ but whose inputs
+	// match share one layout. Keying on the bytecode pointer would let a freed blob's address
+	// alias a live entry, which is why this hashes bytes rather than an address.
+	ID3DBlob *signature = NULL;
+	HRESULT const signatureResult = D3DGetInputSignatureBlob(vertexShaderBytecode, vertexShaderBytecodeSize, &signature);
+
+	uint32 result;
+
+	if (SUCCEEDED(signatureResult) && signature)
+	{
+		result = hashBytes(signature->GetBufferPointer(), static_cast<unsigned int>(signature->GetBufferSize()));
+		signature->Release();
+	}
+	else
+	{
+		// Falling back to the whole bytecode is correct but coarser: two shaders
+		// with identical inputs get separate layouts.
+		DEBUG_WARNING(true, ("Direct3d11: a vertex shader's input signature could not be extracted; keying the input layout on its whole bytecode instead."));
+		result = hashBytes(vertexShaderBytecode, vertexShaderBytecodeSize);
+	}
+
+	return result;
+}
+
+// ----------------------------------------------------------------------
+
+ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, uint32 signatureHash, int const *textureCoordinateSetMapping, int mappingCount)
 {
 	NOT_NULL(ms_layouts);
 	NOT_NULL(formatFlags);
 	NOT_NULL(vertexShaderBytecode);
 
 	FATAL(streamCount <= 0 || streamCount > MAX_STREAMS, ("Direct3d11: %d vertex streams were bound; this backend handles 1 to %d.", streamCount, static_cast<int>(MAX_STREAMS)));
-
-	// Key on the shader's INPUT SIGNATURE, so two shaders whose bodies differ but
-	// whose inputs match share one layout. Keying on the bytecode pointer would let
-	// a freed blob's address alias a live entry.
-	ID3DBlob *signature = NULL;
-	HRESULT const signatureResult = D3DGetInputSignatureBlob(vertexShaderBytecode, vertexShaderBytecodeSize, &signature);
 
 	Key key;
 	Zero(key);
@@ -351,23 +376,11 @@ ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *for
 	for (int i = 0; i < mappingCount && i < MAX_TEXTURE_COORDINATE_SETS; ++i)
 		key.textureCoordinateSetMapping[i] = static_cast<int8>(textureCoordinateSetMapping[i]);
 
-	if (SUCCEEDED(signatureResult) && signature)
-		key.signatureHash = hashBytes(signature->GetBufferPointer(), static_cast<unsigned int>(signature->GetBufferSize()));
-	else
-	{
-		// Falling back to the whole bytecode is correct but coarser: two shaders
-		// with identical inputs get separate layouts.
-		DEBUG_WARNING(true, ("Direct3d11: a vertex shader's input signature could not be extracted; keying the input layout on its whole bytecode instead."));
-		key.signatureHash = hashBytes(vertexShaderBytecode, vertexShaderBytecodeSize);
-	}
+	key.signatureHash = signatureHash;
 
 	LayoutMap::const_iterator const existing = ms_layouts->find(key);
 	if (existing != ms_layouts->end())
-	{
-		if (signature)
-			signature->Release();
 		return existing->second;
-	}
 
 	D3D11_INPUT_ELEMENT_DESC elements[32];
 	int const elementCount = buildElements(formatFlags, streamCount, textureCoordinateSetMapping, mappingCount, elements, 32);
@@ -392,9 +405,6 @@ ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *for
 		else
 			++Direct3d11_Metrics::inputLayoutCreations;
 	}
-
-	if (signature)
-		signature->Release();
 
 	// Cached either way, including a null. Retrying a creation that cannot succeed
 	// once per draw would be a per-frame cost for a permanent condition -- but the

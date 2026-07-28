@@ -401,6 +401,8 @@ void Direct3d11_TextureData::chooseFormat(TextureFormat const *runtimeFormats, i
 
 void Direct3d11_TextureData::createResource()
 {
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::resourceCreationMicroseconds);
+
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	NOT_NULL(device);
 
@@ -468,6 +470,8 @@ void Direct3d11_TextureData::createResource()
 		m_texture.isVolumeMap() ? ", volume" : "",
 		m_texture.isRenderTarget() ? ", render target" : "",
 		Direct3d11_Device::describeHresult(hresult)));
+
+	++Direct3d11_Metrics::textureCreations;
 
 	// Named so that a capture says which texture this is. Without it every texture in a RenderDoc
 	// capture is a number, and "which texture is bound where the skin renders green" becomes a
@@ -793,6 +797,8 @@ void Direct3d11_TextureData::readBackRegion(LockData const &lockData, uint8 *des
 
 void Direct3d11_TextureData::lock(LockData &lockData)
 {
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::resourceCreationMicroseconds);
+
 	DEBUG_FATAL(lockData.m_pixelData, ("Direct3d11: this texture region is already locked."));
 	DEBUG_FATAL(lockData.getWidth() <= 0 || lockData.getHeight() <= 0, ("Direct3d11: a lock of texture '%s' asked for a %dx%d region.", describeTexture(m_texture), lockData.getWidth(), lockData.getHeight()));
 
@@ -857,6 +863,8 @@ void Direct3d11_TextureData::lock(LockData &lockData)
 
 void Direct3d11_TextureData::unlock(LockData &lockData)
 {
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::resourceCreationMicroseconds);
+
 	uint8 * const scratch = static_cast<uint8 *>(lockData.m_reserved);
 
 	if (!scratch)

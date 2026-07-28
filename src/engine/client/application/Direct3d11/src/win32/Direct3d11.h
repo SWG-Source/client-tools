@@ -43,7 +43,7 @@ public:
 	// declaration when the buffer was bound, because a declaration depends only on
 	// the vertex format; a D3D11 input layout is validated against specific shader
 	// bytecode, so it cannot be resolved until both are known.
-	static void setCurrentVertexShaderBytecode(void const *bytecode, unsigned int size);
+	static void setCurrentVertexShaderBytecode(void const *bytecode, unsigned int size, uint32 signatureHash);
 	static void setCurrentTextureCoordinateSetMapping(int const *mapping, int count);
 	static float getCurrentTimeValue();
 

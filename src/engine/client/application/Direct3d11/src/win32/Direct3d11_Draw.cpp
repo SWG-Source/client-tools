@@ -73,6 +73,7 @@ namespace Direct3d11_DrawNamespace
 
 	void const     *ms_currentVertexShaderBytecode;
 	unsigned int    ms_currentVertexShaderBytecodeSize;
+	uint32          ms_currentVertexShaderSignatureHash;
 
 	// Which vertex buffer texture coordinate set each of the bound program's tags reads, in
 	// declaration order. This is what DX9 compiled into the shader as a texture coordinate
@@ -334,10 +335,11 @@ void Direct3d11::setIndexBuffer(HardwareIndexBuffer const &indexBuffer)
 
 // ======================================================================
 
-void Direct3d11::setCurrentVertexShaderBytecode(void const *bytecode, unsigned int size)
+void Direct3d11::setCurrentVertexShaderBytecode(void const *bytecode, unsigned int size, uint32 signatureHash)
 {
 	ms_currentVertexShaderBytecode = bytecode;
 	ms_currentVertexShaderBytecodeSize = size;
+	ms_currentVertexShaderSignatureHash = signatureHash;
 }
 
 // ----------------------------------------------------------------------
@@ -386,6 +388,8 @@ void Direct3d11::setCurrentTextureCoordinateSetMapping(int const *mapping, int c
 
 bool Direct3d11::prepareToDraw()
 {
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::drawPrepareMicroseconds);
+
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 	if (!context)
 		return false;
@@ -409,7 +413,7 @@ bool Direct3d11::prepareToDraw()
 		return false;
 	}
 
-	ID3D11InputLayout * const layout = Direct3d11_InputLayoutCache::getInputLayout(ms_streamFormatFlags, ms_streamCount, ms_currentVertexShaderBytecode, ms_currentVertexShaderBytecodeSize, ms_currentTextureCoordinateSetMapping, ms_currentTextureCoordinateSetMappingCount);
+	ID3D11InputLayout * const layout = Direct3d11_InputLayoutCache::getInputLayout(ms_streamFormatFlags, ms_streamCount, ms_currentVertexShaderBytecode, ms_currentVertexShaderBytecodeSize, ms_currentVertexShaderSignatureHash, ms_currentTextureCoordinateSetMapping, ms_currentTextureCoordinateSetMappingCount);
 	if (!layout)
 	{
 		// The cache has already explained which format and shader combination could

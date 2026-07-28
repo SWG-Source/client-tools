@@ -61,6 +61,12 @@ int Direct3d11_Metrics::constantBufferCreations;
 int Direct3d11_Metrics::shaderCompiles;
 int Direct3d11_Metrics::shaderCompileMicroseconds;
 int Direct3d11_Metrics::backendShaderCompiles;
+int Direct3d11_Metrics::vertexBufferCreations;
+int Direct3d11_Metrics::indexBufferCreations;
+int Direct3d11_Metrics::textureCreations;
+int Direct3d11_Metrics::resourceCreationMicroseconds;
+int Direct3d11_Metrics::drawPrepareMicroseconds;
+int Direct3d11_Metrics::lightsInList;
 int Direct3d11_Metrics::shaderCacheHits;
 int Direct3d11_Metrics::shaderCacheMisses;
 
@@ -146,6 +152,28 @@ void Direct3d11_MetricsNamespace::reportRoutine()
 
 // ----------------------------------------------------------------------
 
+Direct3d11_Metrics::ScopedTimer::ScopedTimer(int &microseconds)
+:
+	m_microseconds(microseconds),
+	m_start(0)
+{
+	LARGE_INTEGER now;
+	if (QueryPerformanceCounter(&now))
+		m_start = now.QuadPart;
+}
+
+// ----------------------------------------------------------------------
+
+Direct3d11_Metrics::ScopedTimer::~ScopedTimer()
+{
+	LARGE_INTEGER now;
+	LARGE_INTEGER frequency;
+	if (m_start && QueryPerformanceCounter(&now) && QueryPerformanceFrequency(&frequency) && frequency.QuadPart)
+		m_microseconds += static_cast<int>(((now.QuadPart - m_start) * 1000000) / frequency.QuadPart);
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_Metrics::reportHitches()
 {
 	// Wall time between successive calls, which is a frame. QueryPerformanceCounter rather than the
@@ -174,8 +202,16 @@ void Direct3d11_Metrics::reportHitches()
 		if (milliseconds > 40.0)
 		{
 			--reportsRemaining;
-			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- created %d state object(s), %d input layout(s), %d constant buffer(s), compiled %d shader(s) in %.1f ms, %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
-				frameNumber, milliseconds,
+			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- %d light(s) in the list; %d draw(s) spent %.1f ms in prepareToDraw; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms; created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
+				frameNumber, milliseconds, lightsInList,
+				drawCalls + drawIndexedCalls, static_cast<double>(drawPrepareMicroseconds) / 1000.0,
+				constantBufferUpdates, constantBufferBytes, ringDiscards,
+				inputLayoutBindMisses, vertexBufferBindMisses, indexBufferBindMisses,
+				vertexShaderBindMisses, pixelShaderBindMisses, blendStateBindMisses,
+				depthStencilStateBindMisses, rasterizerStateBindMisses,
+				samplerBindMisses, shaderResourceBindMisses,
+				vertexBufferCreations, indexBufferCreations, textureCreations,
+				static_cast<double>(resourceCreationMicroseconds) / 1000.0,
 				stateObjectCreations, inputLayoutCreations, constantBufferCreations,
 				shaderCompiles, static_cast<double>(shaderCompileMicroseconds) / 1000.0,
 				blockingStagingMaps, textureBakeReadbacks, renderTargetSwitches,
@@ -271,6 +307,11 @@ void Direct3d11_Metrics::beginFrame()
 	shaderCompiles = 0;
 	shaderCompileMicroseconds = 0;
 	backendShaderCompiles = 0;
+	vertexBufferCreations = 0;
+	indexBufferCreations = 0;
+	textureCreations = 0;
+	resourceCreationMicroseconds = 0;
+	drawPrepareMicroseconds = 0;
 	shaderCacheHits = 0;
 	shaderCacheMisses = 0;
 

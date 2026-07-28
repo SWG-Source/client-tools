@@ -9,6 +9,7 @@
 #include "Direct3d11_VertexShaderData.h"
 
 #include "Direct3d11_Device.h"
+#include "Direct3d11_InputLayoutCache.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ShaderCompiler.h"
 #include "Direct3d11_ShaderPrograms.h"
@@ -86,6 +87,7 @@ Direct3d11_VertexShaderData::~Direct3d11_VertexShaderData()
 	{
 		m_bytecode->Release();
 		m_bytecode = NULL;
+		m_signatureHash = 0;
 	}
 
 	delete m_textureCoordinateSetTags;
@@ -177,6 +179,10 @@ void Direct3d11_VertexShaderData::compile()
 	if (!m_bytecode)
 		return;
 
+	// Once, here. The bytecode is immutable for the life of this object, so its input signature
+	// is too, and the draw path can just carry the number.
+	m_signatureHash = Direct3d11_InputLayoutCache::hashVertexShaderSignature(m_bytecode->GetBufferPointer(), static_cast<unsigned int>(m_bytecode->GetBufferSize()));
+
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	if (!device)
 		return;
@@ -219,6 +225,13 @@ void const *Direct3d11_VertexShaderData::getBytecode() const
 unsigned int Direct3d11_VertexShaderData::getBytecodeSize() const
 {
 	return m_bytecode ? static_cast<unsigned int>(m_bytecode->GetBufferSize()) : 0;
+}
+
+// ----------------------------------------------------------------------
+
+uint32 Direct3d11_VertexShaderData::getSignatureHash() const
+{
+	return m_signatureHash;
 }
 
 // ======================================================================

@@ -582,9 +582,9 @@ bool Direct3d11_StaticShaderData::apply(int passNumber) const
 	Direct3d11_StateCache::setVertexShader(vertexShader);
 
 	if (vertexData)
-		Direct3d11::setCurrentVertexShaderBytecode(vertexData->getBytecode(), vertexData->getBytecodeSize());
+		Direct3d11::setCurrentVertexShaderBytecode(vertexData->getBytecode(), vertexData->getBytecodeSize(), vertexData->getSignatureHash());
 	else
-		Direct3d11::setCurrentVertexShaderBytecode(NULL, 0);
+		Direct3d11::setCurrentVertexShaderBytecode(NULL, 0, 0);
 
 	// This is where the specialisation DX9 compiled into the shader is handed over.
 	Direct3d11::setCurrentTextureCoordinateSetMapping(pass.textureCoordinateSetMapping, pass.textureCoordinateSetMappingCount);

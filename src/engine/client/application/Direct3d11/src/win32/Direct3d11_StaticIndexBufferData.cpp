@@ -52,6 +52,8 @@ Direct3d11_StaticIndexBufferData::~Direct3d11_StaticIndexBufferData()
 
 void Direct3d11_StaticIndexBufferData::createBuffer()
 {
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::resourceCreationMicroseconds);
+
 	ID3D11Device1 * const device = Direct3d11_Device::getDevice();
 	NOT_NULL(device);
 
@@ -64,6 +66,8 @@ void Direct3d11_StaticIndexBufferData::createBuffer()
 	description.BindFlags = D3D11_BIND_INDEX_BUFFER;
 
 	HRESULT const hresult = device->CreateBuffer(&description, NULL, &m_buffer);
+
+	++Direct3d11_Metrics::indexBufferCreations;
 	FATAL(FAILED(hresult) || !m_buffer, ("Direct3d11: a %d-index static index buffer could not be created (%s).", indices, Direct3d11_Device::describeHresult(hresult)));
 }
 

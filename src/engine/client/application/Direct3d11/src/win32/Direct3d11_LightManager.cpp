@@ -11,6 +11,7 @@
 #include "Direct3d11.h"
 #include "ConfigDirect3d11.h"
 #include "Direct3d11_ConstantBuffers.h"
+#include "Direct3d11_Metrics.h"
 #include "Direct3d11_StateCache.h"
 #include "clientGraphics/Light.h"
 #include "clientGraphics/ShaderConstantRegisters.h"
@@ -221,6 +222,10 @@ void Direct3d11_LightManager::beginFrame()
 void Direct3d11_LightManager::setLights(LightList const &lightList)
 {
 	ms_lightList = lightList;
+
+	// Reported in the hitch line: a slow frame's light count is part of its description, and an
+	// empty list in a lit interior is a bug rather than a performance note.
+	Direct3d11_Metrics::lightsInList = static_cast<int>(ms_lightList.size());
 	ms_dirty = true;
 }
 
@@ -465,6 +470,26 @@ void Direct3d11_LightManager::applyLights_vertexShader()
 	if (lightData.ambient.r < 0.0f) lightData.ambient.r = 0.0f;
 	if (lightData.ambient.g < 0.0f) lightData.ambient.g = 0.0f;
 	if (lightData.ambient.b < 0.0f) lightData.ambient.b = 0.0f;
+
+	// Report what the floor is doing before it does it. The floor exists for scenes whose real
+	// ambient is near zero, and an interior is exactly such a scene, so the question "is this
+	// hack what washes out the starport" is answered by the size of the correction, not by
+	// reading the code. Bounded, and only when the floor actually changes something.
+	{
+		// Every Nth firing rather than the first N. The first N are all loading screen, where an
+		// empty light list is expected and says nothing about a starport.
+		static int firings = 0;
+		static int reportsRemaining = 40;
+		int const cms_reportEvery = 600;
+		bool const floored = (lightData.ambient.r < cms_minimumAmbient) || (lightData.ambient.g < cms_minimumAmbient) || (lightData.ambient.b < cms_minimumAmbient);
+		if (floored && reportsRemaining > 0 && ((firings++ % cms_reportEvery) == 0))
+		{
+			--reportsRemaining;
+			WARNING(true, ("Direct3d11 AMBIENT: scene ambient is %.4f %.4f %.4f and the %.2f floor is raising it. %d light(s) in the list.",
+				lightData.ambient.r, lightData.ambient.g, lightData.ambient.b, cms_minimumAmbient,
+				static_cast<int>(ms_lightList.size())));
+		}
+	}
 
 	if (lightData.ambient.r < cms_minimumAmbient) lightData.ambient.r = cms_minimumAmbient;
 	if (lightData.ambient.g < cms_minimumAmbient) lightData.ambient.g = cms_minimumAmbient;

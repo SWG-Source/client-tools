@@ -46,6 +46,20 @@ public:
 	// nothing rules the renderer out, which is worth more than another guess.
 	static void reportHitches();
 
+	// Adds the elapsed time of the scope it is declared in to the counter it is given. Nested
+	// instances aimed at the same counter would double-count, so each counter has one scope.
+	class ScopedTimer
+	{
+	public:
+		explicit ScopedTimer(int &microseconds);
+		~ScopedTimer();
+	private:
+		ScopedTimer(ScopedTimer const &);
+		ScopedTimer &operator =(ScopedTimer const &);
+		int       &m_microseconds;
+		long long  m_start;
+	};
+
 	// Write the current frame's counters and the run totals to the log.
 	static void report();
 
@@ -141,6 +155,27 @@ public:
 	// and still folded into the in-frame creation count so that the gate would catch these if they
 	// ever moved into a frame.
 	static int  backendShaderCompiles;
+
+	// Resources asset streaming creates. Counted because the hitch report was blind to them and
+	// therefore said "created nothing" about frames that were streaming a mesh or a texture in.
+	static int  vertexBufferCreations;
+	static int  indexBufferCreations;
+	static int  textureCreations;
+
+	// Microseconds spent inside ID3D11Device::Create* for streamed resources, and inside the mip
+	// uploads that follow. Without this a hitch line says a frame created 184 textures but not
+	// whether that is where its two and a half seconds went.
+	static int  resourceCreationMicroseconds;
+
+	// Microseconds spent inside prepareToDraw, which every draw funnels through: input layout
+	// lookup, light selection, transform concatenation and the constant flush. A 40 ms frame of
+	// 2000 draws is either this or it is upstream of this backend, and measuring is the only way
+	// to tell which.
+	static int  drawPrepareMicroseconds;
+
+	// How many lights the engine handed this backend. Not reset per frame -- it is the last value
+	// setLights was given, which is the state a frame was rendered under.
+	static int  lightsInList;
 
 	static int  shaderCacheHits;
 	static int  shaderCacheMisses;
