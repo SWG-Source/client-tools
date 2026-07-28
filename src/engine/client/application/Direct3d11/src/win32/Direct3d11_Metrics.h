@@ -167,10 +167,14 @@ public:
 	static int  indexBufferCreations;
 	static int  textureCreations;
 
-	// Microseconds spent inside ID3D11Device::Create* for streamed resources, and inside the mip
-	// uploads that follow. Without this a hitch line says a frame created 184 textures but not
-	// whether that is where its two and a half seconds went.
-	static int  resourceCreationMicroseconds;
+	// Microseconds spent getting streamed resources onto the GPU, split by what is doing the work.
+	// A single lumped figure was enough to show that a 138 ms frame spent 27 ms of it here, and not
+	// enough to act on: it could not distinguish a driver allocating 1438 buffers from this backend
+	// memsetting and converting mip data on the way to UpdateSubresource, and those have opposite
+	// fixes -- pooling for the first, removing a redundant copy for the second.
+	static int  bufferCreateMicroseconds;
+	static int  textureCreateMicroseconds;
+	static int  textureUploadMicroseconds;   // lock + unlock: staging, conversion, UpdateSubresource
 
 	// Microseconds spent inside prepareToDraw, which every draw funnels through: input layout
 	// lookup, light selection, transform concatenation and the constant flush. A 40 ms frame of
