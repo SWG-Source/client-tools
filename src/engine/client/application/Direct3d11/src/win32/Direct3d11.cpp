@@ -276,9 +276,31 @@ namespace Direct3d11Namespace
 		// Both halves are live: the density goes to c10 for the vertex programs' calculateFog,
 		// and the colour plus the enable go to the pixel epilogue, which does the blend D3D9's
 		// fixed-function fog stage used to do.
+		// What the engine is actually asking for. The backend's own handling is already ruled out --
+		// the conversion divides by 255, the shadow keeps r/g/b/enable in order, and the upload puts
+		// it in the second row of SwgPixelEpilogue where swgFogColor is declared -- so if distant
+		// geometry comes out the wrong colour, the value arriving here is the thing to look at.
+		// Sampled rather than per-call: setFog is called often and this is a diagnostic.
+		if (ConfigDirect3d11::getReportFrameTiming())
+		{
+			static int calls = 0;
+			static int reportsRemaining = 20;
+
+			if (reportsRemaining > 0 && ((calls++ % 300) == 0))
+			{
+				--reportsRemaining;
+				WARNING(true, ("Direct3d11 FOG: enabled %d, density %.4f, colour %u %u %u (%.3f %.3f %.3f).",
+					enabled ? 1 : 0, static_cast<double>(density),
+					color.getR(), color.getG(), color.getB(),
+					static_cast<double>(color.getR()) / 255.0,
+					static_cast<double>(color.getG()) / 255.0,
+					static_cast<double>(color.getB()) / 255.0));
+			}
+		}
+
 		Direct3d11_ConstantBuffers::setFog(
 			enabled && !ConfigDirect3d11::getDebugDisableFog(),
-			static_cast<float>(density),
+			static_cast<float>(density) * ConfigDirect3d11::getFogDensityScale(),
 			static_cast<float>(color.getR()) / 255.0f,
 			static_cast<float>(color.getG()) / 255.0f,
 			static_cast<float>(color.getB()) / 255.0f);

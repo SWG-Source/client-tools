@@ -501,16 +501,11 @@ void Direct3d11_StaticShaderData::construct(StaticShader const &shader)
 			}
 		}
 
-		// ----------------------------------------------------------
-		// What cannot be honoured yet
-
-		if (pass.fogMode != static_cast<int>(ShaderImplementation::Pass::FM_Normal) && !ms_reportedFogColor)
-		{
-			ms_reportedFogColor = true;
-			WARNING(true, ("Direct3d11: a pass asks for a fog colour override, which D3D11 has no state for -- fog has to be applied in the pixel shader from constant buffer b1. Those surfaces fog with the scene colour. Reported once."));
-		}
+		// A pass's fog colour override is honoured now, in the pixel epilogue's constant buffer --
+		// see Direct3d11_ConstantBuffers::setFogColorMode, pushed per pass in apply().
 
 		UNREF(ms_reportedFullAmbient);
+		UNREF(ms_reportedFogColor);
 	}
 }
 
@@ -568,6 +563,11 @@ bool Direct3d11_StaticShaderData::apply(int passNumber) const
 			Direct3d11_ConstantBuffers::setAlphaTest(implementationData->getAlphaTestFunction(passNumber), static_cast<int>(pass.alphaTestReference));
 		else
 			Direct3d11_ConstantBuffers::setAlphaTest(static_cast<int>(ShaderImplementation::Pass::C_Always), 0);
+
+		// The pass's fog colour override, pushed unconditionally for the same reason the alpha test
+		// is: a pass that wants the scene colour has to say so, or it inherits whatever the previous
+		// material left behind.
+		Direct3d11_ConstantBuffers::setFogColorMode(pass.fogMode);
 	}
 
 	// ------------------------------------------------------------------

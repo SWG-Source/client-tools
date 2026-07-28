@@ -101,6 +101,12 @@ public:
 
 	static void  setViewportData(int x, int y, int width, int height);
 	static void  setFog(bool enabled, float density, float red, float green, float blue);
+
+	// A pass's fog colour override, as a ShaderImplementation::Pass::FogMode. FM_Black and
+	// FM_White are what additive and multiplicative passes need so that fog contributes nothing or
+	// multiplies by one; without them every blended layer fogs with the scene colour and those
+	// contributions stack, which is what made distant multi-pass terrain patchy.
+	static void  setFogColorMode(int fogMode);
 	static void  setCurrentTime(float currentTime);
 
 	// The alpha test, which D3D11 has no state for at all. The code injected into every

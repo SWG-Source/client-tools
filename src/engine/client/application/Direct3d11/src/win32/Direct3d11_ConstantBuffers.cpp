@@ -62,6 +62,15 @@ namespace Direct3d11_ConstantBuffersNamespace
 	// The second row of b1: fog colour in rgb, the enable in alpha. Starts fully unfogged so a
 	// scene that never calls setFog is not tinted by a zeroed colour at full strength.
 	float           ms_fogShadow[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+	// What the engine last asked for, kept apart from ms_fogShadow -- which is what is actually
+	// uploaded -- so a pass's FM_Black or FM_White override can be applied and then lifted
+	// without having lost the scene's own colour.
+	float           ms_fogSceneColor[3] = { 0.0f, 0.0f, 0.0f };
+	bool            ms_fogSceneEnabled = false;
+	int             ms_fogColorMode = 0;   // ShaderImplementation::Pass::FogMode
+
+	void            applyFogColor();
 	bool            ms_epilogueDirty;
 	bool            ms_epilogueBound;
 
@@ -688,6 +697,59 @@ void Direct3d11_ConstantBuffers::setViewportData(int x, int y, int width, int he
  * would look tidier and would change what every scoped fog disable does.
  */
 
+/**
+ * Resolve the scene colour and any pass override into the colour the epilogue reads.
+ *
+ * FM_Black and FM_White are what an additive or multiplicative pass needs so that fog contributes
+ * nothing or multiplies by one respectively. Without them every blended layer fogs with the scene
+ * colour and the contributions stack.
+ */
+
+void Direct3d11_ConstantBuffersNamespace::applyFogColor()
+{
+	float red   = ms_fogSceneColor[0];
+	float green = ms_fogSceneColor[1];
+	float blue  = ms_fogSceneColor[2];
+
+	switch (ms_fogColorMode)
+	{
+		case ShaderImplementation::Pass::FM_Black:
+			red = green = blue = 0.0f;
+			break;
+
+		case ShaderImplementation::Pass::FM_White:
+			red = green = blue = 1.0f;
+			break;
+
+		default:
+			break;
+	}
+
+	float const alpha = ms_fogSceneEnabled ? 1.0f : 0.0f;
+
+	if (ms_fogShadow[0] == red && ms_fogShadow[1] == green && ms_fogShadow[2] == blue && ms_fogShadow[3] == alpha)
+		return;
+
+	ms_fogShadow[0] = red;
+	ms_fogShadow[1] = green;
+	ms_fogShadow[2] = blue;
+	ms_fogShadow[3] = alpha;
+	ms_epilogueDirty = true;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_ConstantBuffers::setFogColorMode(int fogMode)
+{
+	if (ms_fogColorMode == fogMode)
+		return;
+
+	ms_fogColorMode = fogMode;
+	applyFogColor();
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_ConstantBuffers::setFog(bool enabled, float density, float red, float green, float blue)
 {
 	// c10 is what calculateFog reads in the vertex programs: the density in z and its square in
@@ -700,14 +762,13 @@ void Direct3d11_ConstantBuffers::setFog(bool enabled, float density, float red, 
 	// The colour and the enable go to the pixel epilogue, which is the half D3D9 did in fixed
 	// function. The enable rides in alpha so that the epilogue's lerp collapses to a no-op
 	// rather than needing a branch.
-	if (ms_fogShadow[0] == red && ms_fogShadow[1] == green && ms_fogShadow[2] == blue && ms_fogShadow[3] == (enabled ? 1.0f : 0.0f))
-		return;
+	ms_fogSceneColor[0] = red;
+	ms_fogSceneColor[1] = green;
+	ms_fogSceneColor[2] = blue;
+	ms_fogSceneEnabled  = enabled;
 
-	ms_fogShadow[0] = red;
-	ms_fogShadow[1] = green;
-	ms_fogShadow[2] = blue;
-	ms_fogShadow[3] = enabled ? 1.0f : 0.0f;
-	ms_epilogueDirty = true;
+	// Whatever pass override is in force still applies; this only changes what "normal" resolves to.
+	applyFogColor();
 }
 
 // ----------------------------------------------------------------------

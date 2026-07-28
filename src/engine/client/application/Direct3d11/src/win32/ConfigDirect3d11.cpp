@@ -27,6 +27,7 @@ namespace ConfigDirect3d11Namespace
 	bool                           ms_allowTearing;
 	bool                           ms_reportFrameTiming;
 	bool                           ms_debugDisableFog;
+	int                            ms_fogDensityPercent;
 	int                            ms_fullscreenRefreshRate;
 	int                            ms_swapChainBufferCount;
 
@@ -90,6 +91,22 @@ void ConfigDirect3d11::install()
 	// early at an extended draw distance, or an unclamped vertex colour blowing out the multiply
 	// in terrain_base.psh. With fog off, the first cause disappears and the second does not.
 	KEY_BOOL(debugDisableFog, false);
+
+	// Multiplier on the fog density the engine asks for. One is parity and is the default.
+	//
+	// The shipped curve is fog = 1 / e^((distance * density)^2), and the densities measured coming
+	// through setFog on Tatooine at dusk are 0.0008 to 0.002. The lower one is 93% fogged at 2048
+	// metres; the higher is essentially fully fogged before 1000. Past that the pixel epilogue
+	// outputs pure fog colour with no shading left, which is what turns distant terrain into flat
+	// silhouettes. Retail never showed it because retail stopped drawing before the curve got
+	// there. A raised cameraFarPlane draws well past it.
+	//
+	// Lowering this stretches the same curve over the longer view, keeping haze -- unlike
+	// debugDisableFog, which removes fog outright and is only a diagnostic. Nothing here is a
+	// defect: the fog is tuned for a shorter draw distance than this client is configured for.
+	// A percentage rather than a float because ConfigFile::getKeyFloat is not linked into this
+	// backend -- only the int and bool accessors are. 100 is parity.
+	KEY_INT(fogDensityPercent, 100);
 
 	KEY_INT(debugScreenshotFrame, 0);
 
@@ -173,6 +190,13 @@ bool ConfigDirect3d11::getReportFrameTiming()
 bool ConfigDirect3d11::getDebugDisableFog()
 {
 	return ms_debugDisableFog;
+}
+
+// ----------------------------------------------------------------------
+
+float ConfigDirect3d11::getFogDensityScale()
+{
+	return static_cast<float>(ms_fogDensityPercent) / 100.0f;
 }
 
 

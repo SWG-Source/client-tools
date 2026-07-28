@@ -60,6 +60,10 @@ public:
 	// Diagnostic: suppress fog entirely, so its contribution to distant terrain can be seen by
 	// its absence.
 	static bool        getDebugDisableFog();
+
+	// Multiplier on the engine's fog density, from fogDensityPercent. 1.0 is parity; lower
+	// stretches the fog curve over a longer draw distance rather than removing haze.
+	static float       getFogDensityScale();
 	static int         getFullscreenRefreshRate();
 	static int         getSwapChainBufferCount();
 	static bool        getAntiAlias();
