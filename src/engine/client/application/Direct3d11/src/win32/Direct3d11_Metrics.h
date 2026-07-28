@@ -200,6 +200,13 @@ public:
 	// else in the difference between this plus prepareToDraw and the scene total.
 	static long long drawSubmitTicks;
 
+	// The rest of the scene. Every bind this backend does goes through the static shader's apply,
+	// and every dynamic buffer unlock does a Map/memcpy/Unmap on a ring. Neither was timed, which
+	// left a 52 ms scene with nothing to attribute it to once prepareToDraw and the submits had
+	// been ruled out.
+	static long long shaderApplyTicks;
+	static long long ringMapTicks;
+
 	// Where a frame's wall time goes, which the counters above cannot answer. A 51 ms frame that
 	// created nothing, streamed nothing and spent 0.0 ms in prepareToDraw has still spent 51 ms
 	// somewhere, and until the frame is split there is no evidence for which side of the DLL

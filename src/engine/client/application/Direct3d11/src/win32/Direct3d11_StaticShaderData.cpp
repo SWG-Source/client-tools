@@ -543,6 +543,10 @@ int Direct3d11_StaticShaderData::getTextureSortKey() const
 
 bool Direct3d11_StaticShaderData::apply(int passNumber) const
 {
+	// Every bind this backend performs is downstream of here: vertex and pixel shaders, the
+	// four state objects, samplers and shader resource views.
+	Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::shaderApplyTicks);
+
 	if (passNumber < 0 || passNumber >= m_passCount)
 		return false;
 

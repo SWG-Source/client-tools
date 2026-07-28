@@ -71,6 +71,8 @@ long long Direct3d11_Metrics::textureCreateTicks;
 long long Direct3d11_Metrics::textureUploadTicks;
 long long Direct3d11_Metrics::drawPrepareTicks;
 long long Direct3d11_Metrics::drawSubmitTicks;
+long long Direct3d11_Metrics::shaderApplyTicks;
+long long Direct3d11_Metrics::ringMapTicks;
 int Direct3d11_Metrics::sceneMicroseconds;
 int Direct3d11_Metrics::presentMicroseconds;
 int Direct3d11_Metrics::beforePresentMicroseconds;
@@ -379,7 +381,7 @@ void Direct3d11_Metrics::reportHitches()
 			double const afterPresentMilliseconds = static_cast<double>(afterPresentMicroseconds) / 1000.0;
 			double const residualMilliseconds = milliseconds - sceneMilliseconds - presentMilliseconds - beforePresentMilliseconds - afterPresentMilliseconds;
 
-			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- %.1f ms in scene, %.1f ms engine before Present, %.1f ms in Present, %.1f ms engine after Present, %.1f ms unaccounted; GPU recently %.1f ms; at most %d light(s) in any batch, %d of %d batch(es) lit; %d draw(s) spent %.1f ms in prepareToDraw and %.1f ms in Draw itself; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms (%.1f creating buffers, %.1f creating textures, %.1f uploading mips); created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
+			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- %.1f ms in scene, %.1f ms engine before Present, %.1f ms in Present, %.1f ms engine after Present, %.1f ms unaccounted; GPU recently %.1f ms; at most %d light(s) in any batch, %d of %d batch(es) lit; %d draw(s) spent %.1f ms in prepareToDraw, %.1f ms in Draw itself, %.1f ms binding shaders; %d constant upload(s) of %d byte(s); ring %d discard(s) and %d append(s) of %d byte(s) taking %.1f ms; bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms (%.1f creating buffers, %.1f creating textures, %.1f uploading mips); created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
 				frameNumber, milliseconds,
 				sceneMilliseconds, beforePresentMilliseconds, presentMilliseconds, afterPresentMilliseconds, residualMilliseconds,
 				static_cast<double>(Direct3d11_QueryPool::getGpuFrameTimeMilliseconds()),
@@ -387,7 +389,9 @@ void Direct3d11_Metrics::reportHitches()
 				drawCalls + drawIndexedCalls,
 				ticksToMilliseconds(drawPrepareTicks),
 				ticksToMilliseconds(drawSubmitTicks),
-				constantBufferUpdates, constantBufferBytes, ringDiscards,
+				ticksToMilliseconds(shaderApplyTicks),
+				constantBufferUpdates, constantBufferBytes,
+				ringDiscards, ringNoOverwrites, ringBytes, ticksToMilliseconds(ringMapTicks),
 				inputLayoutBindMisses, vertexBufferBindMisses, indexBufferBindMisses,
 				vertexShaderBindMisses, pixelShaderBindMisses, blendStateBindMisses,
 				depthStencilStateBindMisses, rasterizerStateBindMisses,
@@ -507,6 +511,8 @@ void Direct3d11_Metrics::beginFrame()
 	textureUploadTicks = 0;
 	drawPrepareTicks = 0;
 	drawSubmitTicks = 0;
+	shaderApplyTicks = 0;
+	ringMapTicks = 0;
 	sceneMicroseconds = 0;
 	presentMicroseconds = 0;
 	beforePresentMicroseconds = 0;

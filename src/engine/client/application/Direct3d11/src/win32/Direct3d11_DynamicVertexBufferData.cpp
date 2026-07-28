@@ -195,6 +195,8 @@ void *Direct3d11_DynamicVertexBufferData::lock(int numberOfVertices, bool forceD
 		ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 		if (context && ms_ring)
 		{
+			Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::ringMapTicks);
+
 			D3D11_MAPPED_SUBRESOURCE mapped;
 			Zero(mapped);
 			HRESULT const hresult = context->Map(ms_ring, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
@@ -234,6 +236,8 @@ void Direct3d11_DynamicVertexBufferData::unlock(int numberOfVertices)
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 	if (context && ms_ring && bytes > 0)
 	{
+		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::ringMapTicks);
+
 		// NO_OVERWRITE: this slice was not written this frame, so appending cannot
 		// disturb anything the GPU is still reading.
 		D3D11_MAPPED_SUBRESOURCE mapped;
