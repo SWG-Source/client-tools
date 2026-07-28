@@ -675,12 +675,25 @@ void Direct3d11_ConstantBuffers::setViewportData(int x, int y, int width, int he
 	float const xOffset = (static_cast<float>(x) * 2.0f) / static_cast<float>(width);
 	float const yOffset = (static_cast<float>(y) * 2.0f) / static_cast<float>(height);
 
+	// The half-pixel shift D3D9 got from its rasteriser and D3D10 removed.
+	//
+	// D3D9 sampled pixel centres at integer coordinates; D3D10 and later sample at half-integers.
+	// The engine's 2D geometry is authored for the former, so under D3D11 adjacent quads no longer
+	// meet: the loading screen, which is drawn as tiles, showed a hard one-pixel line of background
+	// along every tile boundary. Shifting the mapping half a pixel puts the edges back where D3D9
+	// put them.
+	//
+	// In x the scale is 2/width, so half a pixel is 1/width; in y the scale is negative, so the
+	// correction is added rather than subtracted.
+	float const halfPixelX = 1.0f / static_cast<float>(width);
+	float const halfPixelY = 1.0f / static_cast<float>(height);
+
 	float const viewportData[4] =
 	{
 		 2.0f / static_cast<float>(width),
 		-2.0f / static_cast<float>(height),
-		-1.0f - xOffset,
-		 1.0f + yOffset
+		-1.0f - xOffset - halfPixelX,
+		 1.0f + yOffset + halfPixelY
 	};
 
 	setVertexShaderConstants(VSCR_viewportData, viewportData, 1);
