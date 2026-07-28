@@ -223,9 +223,20 @@ void Direct3d11_LightManager::setLights(LightList const &lightList)
 {
 	ms_lightList = lightList;
 
-	// Reported in the hitch line: a slow frame's light count is part of its description, and an
-	// empty list in a lit interior is a bug rather than a performance note.
-	Direct3d11_Metrics::lightsInList = static_cast<int>(ms_lightList.size());
+	// Reported in the hitch line: an empty light list in a lit interior is a bug rather than a
+	// performance note. Tracked as a max across the frame's batches, because a single batch
+	// having no lights is ordinary and says nothing on its own.
+	{
+		int const lights = static_cast<int>(ms_lightList.size());
+
+		++Direct3d11_Metrics::lightBatches;
+		if (lights > 0)
+		{
+			++Direct3d11_Metrics::lightBatchesWithLights;
+			if (lights > Direct3d11_Metrics::maxLightsInList)
+				Direct3d11_Metrics::maxLightsInList = lights;
+		}
+	}
 	ms_dirty = true;
 }
 
@@ -485,7 +496,7 @@ void Direct3d11_LightManager::applyLights_vertexShader()
 		if (floored && reportsRemaining > 0 && ((firings++ % cms_reportEvery) == 0))
 		{
 			--reportsRemaining;
-			WARNING(true, ("Direct3d11 AMBIENT: scene ambient is %.4f %.4f %.4f and the %.2f floor is raising it. %d light(s) in the list.",
+			WARNING(true, ("Direct3d11 AMBIENT: this batch's ambient is %.4f %.4f %.4f and the %.2f floor is raising it. %d light(s) in this batch.",
 				lightData.ambient.r, lightData.ambient.g, lightData.ambient.b, cms_minimumAmbient,
 				static_cast<int>(ms_lightList.size())));
 		}

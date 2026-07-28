@@ -66,7 +66,9 @@ int Direct3d11_Metrics::indexBufferCreations;
 int Direct3d11_Metrics::textureCreations;
 int Direct3d11_Metrics::resourceCreationMicroseconds;
 int Direct3d11_Metrics::drawPrepareMicroseconds;
-int Direct3d11_Metrics::lightsInList;
+int Direct3d11_Metrics::maxLightsInList;
+int Direct3d11_Metrics::lightBatches;
+int Direct3d11_Metrics::lightBatchesWithLights;
 int Direct3d11_Metrics::shaderCacheHits;
 int Direct3d11_Metrics::shaderCacheMisses;
 
@@ -202,8 +204,8 @@ void Direct3d11_Metrics::reportHitches()
 		if (milliseconds > 40.0)
 		{
 			--reportsRemaining;
-			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- %d light(s) in the list; %d draw(s) spent %.1f ms in prepareToDraw; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms; created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
-				frameNumber, milliseconds, lightsInList,
+			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- at most %d light(s) in any batch, %d of %d batch(es) lit; %d draw(s) spent %.1f ms in prepareToDraw; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms; created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
+				frameNumber, milliseconds, maxLightsInList, lightBatchesWithLights, lightBatches,
 				drawCalls + drawIndexedCalls, static_cast<double>(drawPrepareMicroseconds) / 1000.0,
 				constantBufferUpdates, constantBufferBytes, ringDiscards,
 				inputLayoutBindMisses, vertexBufferBindMisses, indexBufferBindMisses,
@@ -312,6 +314,9 @@ void Direct3d11_Metrics::beginFrame()
 	textureCreations = 0;
 	resourceCreationMicroseconds = 0;
 	drawPrepareMicroseconds = 0;
+	maxLightsInList = 0;
+	lightBatches = 0;
+	lightBatchesWithLights = 0;
 	shaderCacheHits = 0;
 	shaderCacheMisses = 0;
 

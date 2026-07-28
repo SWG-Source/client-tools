@@ -173,9 +173,12 @@ public:
 	// to tell which.
 	static int  drawPrepareMicroseconds;
 
-	// How many lights the engine handed this backend. Not reset per frame -- it is the last value
-	// setLights was given, which is the state a frame was rendered under.
-	static int  lightsInList;
+	// What the engine handed this backend through setLights, which it calls once per batch. The
+	// MAX over the frame, not the last value: a batch with no lights is ordinary (a UI pass, a
+	// self-illuminated pass), so the last call says nothing about whether the scene is lit.
+	static int  maxLightsInList;
+	static int  lightBatches;
+	static int  lightBatchesWithLights;
 
 	static int  shaderCacheHits;
 	static int  shaderCacheMisses;
