@@ -252,10 +252,13 @@ namespace Direct3d11Namespace
 
 	bool present()
 	{
-		// Present blocks: on vsync, and on a GPU that has fallen behind the queue. Timed apart from
-		// the scene so a slow frame can be attributed to one or the other.
-		Direct3d11_Metrics::ScopedTimer timer(Direct3d11_Metrics::presentMicroseconds);
-		return Direct3d11_SwapChain::present();
+		// Present blocks: on vsync, and on a GPU that has fallen behind the queue. Bracketed rather
+		// than scope-timed so that the engine's work between endScene and here is measurable too.
+		Direct3d11_Metrics::markPresentBegin();
+		bool const presented = Direct3d11_SwapChain::present();
+		Direct3d11_Metrics::markPresentDone();
+
+		return presented;
 	}
 
 	void setViewport(int x, int y, int width, int height, real minZ, real maxZ)

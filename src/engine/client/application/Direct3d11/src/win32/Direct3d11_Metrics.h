@@ -191,6 +191,20 @@ public:
 	static int  sceneMicroseconds;
 	static int  presentMicroseconds;
 
+	// The two gaps that make the accounting add up instead of leaving a residual. A frame is
+	// beginScene..endScene, then whatever the engine does before it presents, then Present, then
+	// whatever it does before the next beginScene -- and those last two are both engine work but
+	// not the same engine work. A 45 ms frame that streamed nothing, created nothing and left the
+	// GPU idle at 0.4 ms spent its time in one of these, and which one narrows the search from
+	// "the client" to a specific half of the game loop.
+	static int  beforePresentMicroseconds;   // endScene -> Present
+	static int  afterPresentMicroseconds;    // Present -> next beginScene
+
+	// Called by the present wrapper either side of Present. Bracketing it explicitly rather than
+	// timing the wrapper's scope is what lets endScene..Present be measured too.
+	static void markPresentBegin();
+	static void markPresentDone();
+
 	// What the engine handed this backend through setLights, which it calls once per batch. The
 	// MAX over the frame, not the last value: a batch with no lights is ordinary (a UI pass, a
 	// self-illuminated pass), so the last call says nothing about whether the scene is lit.

@@ -72,6 +72,8 @@ int Direct3d11_Metrics::textureUploadMicroseconds;
 int Direct3d11_Metrics::drawPrepareMicroseconds;
 int Direct3d11_Metrics::sceneMicroseconds;
 int Direct3d11_Metrics::presentMicroseconds;
+int Direct3d11_Metrics::beforePresentMicroseconds;
+int Direct3d11_Metrics::afterPresentMicroseconds;
 int Direct3d11_Metrics::maxLightsInList;
 int Direct3d11_Metrics::lightBatches;
 int Direct3d11_Metrics::lightBatchesWithLights;
@@ -126,6 +128,15 @@ namespace Direct3d11_MetricsNamespace
 
 	// Start of the current beginScene..endScene interval, in QueryPerformanceCounter ticks.
 	long long ms_sceneStart;
+
+	// When endScene returned and when Present returned, so the two engine gaps either side of
+	// Present can be measured rather than inferred by subtraction.
+	long long ms_sceneEnd;
+	long long ms_presentStart;
+	long long ms_presentDone;
+
+	long long  nowTicks();
+	int        elapsedMicroseconds(long long from, long long to);
 
 	void reportRoutine();
 }
@@ -187,22 +198,62 @@ Direct3d11_Metrics::ScopedTimer::~ScopedTimer()
 
 // ----------------------------------------------------------------------
 
-void Direct3d11_Metrics::markSceneBegin()
+long long Direct3d11_MetricsNamespace::nowTicks()
 {
 	LARGE_INTEGER now;
-	ms_sceneStart = QueryPerformanceCounter(&now) ? now.QuadPart : 0;
+	return QueryPerformanceCounter(&now) ? now.QuadPart : 0;
+}
+
+// ----------------------------------------------------------------------
+
+int Direct3d11_MetricsNamespace::elapsedMicroseconds(long long from, long long to)
+{
+	LARGE_INTEGER frequency;
+	if (!from || !to || to <= from || !QueryPerformanceFrequency(&frequency) || !frequency.QuadPart)
+		return 0;
+
+	return static_cast<int>(((to - from) * 1000000) / frequency.QuadPart);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Metrics::markSceneBegin()
+{
+	ms_sceneStart = nowTicks();
 }
 
 // ----------------------------------------------------------------------
 
 void Direct3d11_Metrics::markSceneEnd()
 {
-	LARGE_INTEGER now;
-	LARGE_INTEGER frequency;
-	if (ms_sceneStart && QueryPerformanceCounter(&now) && QueryPerformanceFrequency(&frequency) && frequency.QuadPart)
-		sceneMicroseconds += static_cast<int>(((now.QuadPart - ms_sceneStart) * 1000000) / frequency.QuadPart);
-
+	ms_sceneEnd = nowTicks();
+	sceneMicroseconds += elapsedMicroseconds(ms_sceneStart, ms_sceneEnd);
 	ms_sceneStart = 0;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Metrics::markPresentBegin()
+{
+	long long const now = nowTicks();
+
+	// Whatever the engine did between finishing the scene and asking to present.
+	beforePresentMicroseconds += elapsedMicroseconds(ms_sceneEnd, now);
+
+	ms_presentStart = now;
+	ms_sceneEnd = 0;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_Metrics::markPresentDone()
+{
+	long long const now = nowTicks();
+
+	presentMicroseconds += elapsedMicroseconds(ms_presentStart, now);
+
+	ms_presentDone = now;
+	ms_presentStart = 0;
 }
 
 // ----------------------------------------------------------------------
@@ -248,6 +299,8 @@ void Direct3d11_Metrics::reportHitches()
 			static double windowWorst;
 			static double windowScene;
 			static double windowPresent;
+			static double windowBeforePresent;
+			static double windowAfterPresent;
 
 			++windowFrames;
 			windowMilliseconds += milliseconds;
@@ -255,6 +308,8 @@ void Direct3d11_Metrics::reportHitches()
 				windowWorst = milliseconds;
 			windowScene += static_cast<double>(sceneMicroseconds) / 1000.0;
 			windowPresent += static_cast<double>(presentMicroseconds) / 1000.0;
+			windowBeforePresent += static_cast<double>(beforePresentMicroseconds) / 1000.0;
+			windowAfterPresent += static_cast<double>(afterPresentMicroseconds) / 1000.0;
 
 			if (milliseconds < 17.0)      ++windowUnder17;
 			else if (milliseconds < 25.0) ++windowUnder25;
@@ -268,11 +323,13 @@ void Direct3d11_Metrics::reportHitches()
 				double const averageMilliseconds = windowMilliseconds / window;
 				double const averageScene = windowScene / window;
 				double const averagePresent = windowPresent / window;
+				double const averageBeforePresent = windowBeforePresent / window;
+				double const averageAfterPresent = windowAfterPresent / window;
 
-				WARNING(true, ("Direct3d11 FRAMES: last %d frames averaged %.1f ms (%.0f fps), worst %.1f ms; distribution <17 ms %d, <25 ms %d, <34 ms %d, <50 ms %d, >=50 ms %d; average %.1f ms in scene, %.1f ms in Present, %.1f ms outside this backend; GPU recently %.1f ms; %d draw(s) last frame; last frame had %d lit batch(es), highest scene ambient %.3f",
+				WARNING(true, ("Direct3d11 FRAMES: last %d frames averaged %.1f ms (%.0f fps), worst %.1f ms; distribution <17 ms %d, <25 ms %d, <34 ms %d, <50 ms %d, >=50 ms %d; average %.1f ms in scene, %.1f ms engine before Present, %.1f ms in Present, %.1f ms engine after Present; GPU recently %.1f ms; %d draw(s) last frame; last frame had %d lit batch(es), highest scene ambient %.3f",
 					windowFrames, averageMilliseconds, (averageMilliseconds > 0.0) ? (1000.0 / averageMilliseconds) : 0.0, windowWorst,
 					windowUnder17, windowUnder25, windowUnder34, windowUnder50, windowOver50,
-					averageScene, averagePresent, averageMilliseconds - averageScene - averagePresent,
+					averageScene, averageBeforePresent, averagePresent, averageAfterPresent,
 					static_cast<double>(Direct3d11_QueryPool::getGpuFrameTimeMilliseconds()),
 					drawCalls + drawIndexedCalls,
 					litBatches, static_cast<double>(maxAmbientMilli) / 1000.0));
@@ -287,6 +344,8 @@ void Direct3d11_Metrics::reportHitches()
 				windowWorst = 0.0;
 				windowScene = 0.0;
 				windowPresent = 0.0;
+				windowBeforePresent = 0.0;
+				windowAfterPresent = 0.0;
 			}
 		}
 
@@ -295,15 +354,21 @@ void Direct3d11_Metrics::reportHitches()
 		{
 			--reportsRemaining;
 			// The split first, because it is what decides whether this backend is even the subject.
+			// The four parts are measured, not inferred, and the residual is printed rather than
+			// folded into one of them -- a large residual would mean the frame boundary is not where
+			// this backend thinks it is, which is worth seeing rather than hiding.
+			//
 			// The GPU figure comes from the query ring and is therefore a few frames old; it says
 			// what the GPU has recently been costing, not what this particular frame cost it.
 			double const sceneMilliseconds = static_cast<double>(sceneMicroseconds) / 1000.0;
 			double const presentMilliseconds = static_cast<double>(presentMicroseconds) / 1000.0;
-			double const outsideMilliseconds = milliseconds - sceneMilliseconds - presentMilliseconds;
+			double const beforePresentMilliseconds = static_cast<double>(beforePresentMicroseconds) / 1000.0;
+			double const afterPresentMilliseconds = static_cast<double>(afterPresentMicroseconds) / 1000.0;
+			double const residualMilliseconds = milliseconds - sceneMilliseconds - presentMilliseconds - beforePresentMilliseconds - afterPresentMilliseconds;
 
-			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- %.1f ms in scene, %.1f ms in Present, %.1f ms outside this backend; GPU recently %.1f ms; at most %d light(s) in any batch, %d of %d batch(es) lit; %d draw(s) spent %.1f ms in prepareToDraw; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms (%.1f creating buffers, %.1f creating textures, %.1f uploading mips); created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
+			WARNING(true, ("Direct3d11 HITCH: frame %d took %.1f ms -- %.1f ms in scene, %.1f ms engine before Present, %.1f ms in Present, %.1f ms engine after Present, %.1f ms unaccounted; GPU recently %.1f ms; at most %d light(s) in any batch, %d of %d batch(es) lit; %d draw(s) spent %.1f ms in prepareToDraw; %d constant upload(s) of %d byte(s), %d ring discard(s); bind misses layout %d vb %d ib %d vs %d ps %d blend %d depth %d rast %d samp %d srv %d; streamed in %d vertex buffer(s), %d index buffer(s), %d texture(s) taking %.1f ms (%.1f creating buffers, %.1f creating textures, %.1f uploading mips); created %d state object(s), %d input layout(s), %d constant buffer(s); compiled %d shader(s) in %.1f ms; %d blocking staging map(s), %d bake readback(s), %d render target switch(es), %d draw(s)",
 				frameNumber, milliseconds,
-				sceneMilliseconds, presentMilliseconds, outsideMilliseconds,
+				sceneMilliseconds, beforePresentMilliseconds, presentMilliseconds, afterPresentMilliseconds, residualMilliseconds,
 				static_cast<double>(Direct3d11_QueryPool::getGpuFrameTimeMilliseconds()),
 				maxLightsInList, lightBatchesWithLights, lightBatches,
 				drawCalls + drawIndexedCalls, static_cast<double>(drawPrepareMicroseconds) / 1000.0,
@@ -331,6 +396,13 @@ void Direct3d11_Metrics::reportHitches()
 
 void Direct3d11_Metrics::beginFrame()
 {
+	// The gap since Present returned is engine work -- input, network, animation, the object update
+	// -- and it belongs to the frame that just ended, not the one starting now. So it has to be
+	// added here, before reportHitches reads the counters and before they are zeroed. Doing it in
+	// markSceneBegin instead would put it in the next frame's bucket, because beginScene calls this
+	// function first and markSceneBegin last.
+	afterPresentMicroseconds += elapsedMicroseconds(ms_presentDone, nowTicks());
+
 	reportHitches();
 
 	++ms_runFrames;
@@ -421,6 +493,8 @@ void Direct3d11_Metrics::beginFrame()
 	drawPrepareMicroseconds = 0;
 	sceneMicroseconds = 0;
 	presentMicroseconds = 0;
+	beforePresentMicroseconds = 0;
+	afterPresentMicroseconds = 0;
 	maxLightsInList = 0;
 	lightBatches = 0;
 	lightBatchesWithLights = 0;
