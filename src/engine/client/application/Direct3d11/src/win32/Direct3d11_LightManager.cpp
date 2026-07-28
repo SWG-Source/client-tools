@@ -70,10 +70,11 @@ namespace Direct3d11_LightManagerNamespace
 	bool ms_disableLightCaching;
 #endif
 
-	// The minimum scene ambient, and the two hemisphere ratios. Named rather than left as
-	// literals because all three are tuning values inherited from the x64 DX9 build, and a
-	// parity comparison needs to be able to find them.
-	float const cms_minimumAmbient        = 0.3f;
+	// The two hemisphere ratios. Named rather than left as literals because both are tuning values
+	// inherited from the x64 DX9 build, and a parity comparison needs to be able to find them.
+	//
+	// The x64 DX9 build has a third, a 0.3 minimum scene ambient. See applyLights_vertexShader for
+	// why this port does not.
 	float const cms_syntheticTangentScale = 0.65f;
 	float const cms_syntheticBackScale    = 0.30f;
 
@@ -469,12 +470,23 @@ void Direct3d11_LightManager::applyLights_vertexShader()
 	Zero(extendedLightData);
 
 	// ----------------------------------------------------------
-	// Ambient, clamped non-negative and then floored.
+	// Ambient, clamped non-negative. Nothing else: the scene's ambient is used as the scene gives
+	// it.
 	//
-	// The floor is inherited from the x64 DX9 build. Its comment records why: skinned
-	// customizable meshes arrive with vColor0 at zero and, in a scene whose parallel sun is
-	// near zero, have nothing else to be lit by. A half-grey floor is roughly what the
-	// GroundEnvironment ramps produced in normal play.
+	// The x64 DX9 build additionally floors every channel at 0.3, and this port inherited that
+	// verbatim. It is not SOE behaviour -- it arrives with the fork, in "Add self-contained x64 DX9
+	// client builds" -- and its own comment explains it as a fix for skinned customizable meshes
+	// that arrive with vColor0 at zero and go black when the parallel sun is near zero.
+	//
+	// It is removed here because measurement showed what it costs. A lit Mos Eisley starport batch
+	// reports a real ambient of 0.125 0.130 0.135, and the floor rewrote all three to 0.30 -- 7 of
+	// the frame's 12 lit batches. The hack was written for scenes with NO ambient, but an interior
+	// is a scene with LOW ambient, so the floor does not fill a gap there, it discards the lighting
+	// the scene asked for and flattens the room to a uniform grey. That is the washed-out interior.
+	//
+	// If the black-character case it was papering over is still live, it is a real bug in its own
+	// right -- a vertex colour or a light selection, not an ambient one -- and it needs fixing where
+	// it happens rather than by brightening every interior in the game to hide it.
 
 	lightData.ambient = ms_currentLights.ambient;
 
@@ -482,29 +494,18 @@ void Direct3d11_LightManager::applyLights_vertexShader()
 	if (lightData.ambient.g < 0.0f) lightData.ambient.g = 0.0f;
 	if (lightData.ambient.b < 0.0f) lightData.ambient.b = 0.0f;
 
-	// Report what the floor is doing before it does it. The floor exists for scenes whose real
-	// ambient is near zero, and an interior is exactly such a scene, so the question "is this
-	// hack what washes out the starport" is answered by the size of the correction, not by
-	// reading the code. Bounded, and only when the floor actually changes something.
+	// What the scene's own ambient actually is, per frame, over batches that have lights. A batch
+	// with an empty light list has zero ambient by construction, because ambient is accumulated
+	// FROM that list, so counting those would only measure the arithmetic.
+	if (!ms_lightList.empty())
 	{
-		// Every Nth firing rather than the first N. The first N are all loading screen, where an
-		// empty light list is expected and says nothing about a starport.
-		static int firings = 0;
-		static int reportsRemaining = 40;
-		int const cms_reportEvery = 600;
-		bool const floored = (lightData.ambient.r < cms_minimumAmbient) || (lightData.ambient.g < cms_minimumAmbient) || (lightData.ambient.b < cms_minimumAmbient);
-		if (floored && reportsRemaining > 0 && ((firings++ % cms_reportEvery) == 0))
-		{
-			--reportsRemaining;
-			WARNING(true, ("Direct3d11 AMBIENT: this batch's ambient is %.4f %.4f %.4f and the %.2f floor is raising it. %d light(s) in this batch.",
-				lightData.ambient.r, lightData.ambient.g, lightData.ambient.b, cms_minimumAmbient,
-				static_cast<int>(ms_lightList.size())));
-		}
-	}
+		++Direct3d11_Metrics::litBatches;
 
-	if (lightData.ambient.r < cms_minimumAmbient) lightData.ambient.r = cms_minimumAmbient;
-	if (lightData.ambient.g < cms_minimumAmbient) lightData.ambient.g = cms_minimumAmbient;
-	if (lightData.ambient.b < cms_minimumAmbient) lightData.ambient.b = cms_minimumAmbient;
+		// Kept in thousandths so this stays an int counter like the rest of them.
+		int const ambientMilli = static_cast<int>(lightData.ambient.r * 1000.0f);
+		if (ambientMilli > Direct3d11_Metrics::maxAmbientMilli)
+			Direct3d11_Metrics::maxAmbientMilli = ambientMilli;
+	}
 
 	// ----------------------------------------------------------
 	// Parallel lights with specular. Slot zero doubles as the dot3 light, which is where the
@@ -675,9 +676,6 @@ void Direct3d11_LightManager::applyLights_vertexShader()
 		point.attenuation.k3 = 0.0f;
 	}
 
-	// TEMPORARY DIAGNOSTIC: white ambient, every other light black. A lit surface then renders as
-	// its raw texture, which says whether a wrong colour is coming from the lighting or from the
-	// texture without having to guess which.
 	Direct3d11_ConstantBuffers::setVertexShaderConstants(VSCR_lightData, &lightData, isizeof(LightData) / cms_registerBytes);
 	Direct3d11_ConstantBuffers::setVertexShaderConstants(VCSR_extendedLightData, &extendedLightData, isizeof(ExtendedLightData) / cms_registerBytes);
 }
