@@ -38,6 +38,12 @@ public:
 	static void setVertexBufferVector(VertexBufferVector const &vertexBufferVector);
 	static void setIndexBuffer(HardwareIndexBuffer const &indexBuffer);
 
+	// Drop the index-buffer redundancy shadow if it names this buffer. Called when an index buffer
+	// is destroyed: the allocator can hand the same address back for the next one, and a shadow
+	// still holding it would let the redundancy test skip a bind that has to happen. Passing NULL
+	// clears the shadow unconditionally, which is what a device ClearState needs.
+	static void forgetIndexBuffer(void *buffer);
+
 	// Recorded by the static shader data when it binds a vertex shader, and
 	// consumed at draw time to resolve an input layout. DX9 could pick its vertex
 	// declaration when the buffer was bound, because a declaration depends only on

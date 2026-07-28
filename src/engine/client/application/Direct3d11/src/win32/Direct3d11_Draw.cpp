@@ -61,6 +61,13 @@ namespace Direct3d11_DrawNamespace
 	int             ms_sliceNumberOfIndices;
 	int             ms_sliceFirstIndex;
 
+	// What is actually on the context, as opposed to what the slice state says the next draw wants.
+	// The format is always R16_UINT and the offset always zero, so the buffer identity is the whole
+	// of the binding and a pointer compare is a complete redundancy test. Every site that calls
+	// IASetIndexBuffer -- here, the two primitive-emulation paths, and a device ClearState -- has to
+	// keep this in step, or a skipped bind draws through the previous buffer.
+	ID3D11Buffer   *ms_boundIndexBuffer;
+
 	// How many streams were bound last time. Still needed, and for a sharper
 	// reason than in DX9: binding stream 0 does not unbind streams 1..N, and in
 	// D3D11 a stale stream referenced by a later input layout is a hard error where
@@ -328,9 +335,21 @@ void Direct3d11::setIndexBuffer(HardwareIndexBuffer const &indexBuffer)
 	}
 
 	// Always R16_UINT: Index is an unsigned short throughout the engine.
-	context->IASetIndexBuffer(ms_savedIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
 	++Direct3d11_Metrics::indexBufferBindCalls;
-	++Direct3d11_Metrics::indexBufferBindMisses;
+	if (ms_savedIndexBuffer != ms_boundIndexBuffer)
+	{
+		context->IASetIndexBuffer(ms_savedIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+		ms_boundIndexBuffer = ms_savedIndexBuffer;
+		++Direct3d11_Metrics::indexBufferBindMisses;
+	}
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11::forgetIndexBuffer(void *buffer)
+{
+	if (!buffer || ms_boundIndexBuffer == buffer)
+		ms_boundIndexBuffer = NULL;
 }
 
 // ======================================================================
@@ -530,6 +549,7 @@ bool Direct3d11_DrawNamespace::ensureFanIndexBuffer(int vertexCount)
 
 	if (ms_fanIndexBuffer)
 	{
+		Direct3d11::forgetIndexBuffer(ms_fanIndexBuffer);
 		ms_fanIndexBuffer->Release();
 		ms_fanIndexBuffer = NULL;
 	}
@@ -588,6 +608,7 @@ bool Direct3d11_DrawNamespace::ensureQuadIndexBuffer(int quadCount)
 
 	if (ms_quadIndexBuffer)
 	{
+		Direct3d11::forgetIndexBuffer(ms_quadIndexBuffer);
 		ms_quadIndexBuffer->Release();
 		ms_quadIndexBuffer = NULL;
 	}
@@ -705,10 +726,12 @@ void Direct3d11::drawFan(int firstVertex, int vertexCount)
 
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 
-	// The engine rebinds its own index buffer before any indexed draw, and this backend's
-	// index bind does not shadow, so borrowing the slot needs no invalidation. DX9 borrows it
-	// the same way for its quad list.
+	// Borrowing the engine's index slot for this backend's own pattern buffer. The shadow has to
+	// follow, or the next setIndexBuffer sees its own last buffer still recorded, skips the bind,
+	// and draws that geometry through the fan pattern. DX9 borrows the slot the same way for its
+	// quad list, and gets away without this only because it never shadowed the binding.
 	context->IASetIndexBuffer(ms_fanIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+	ms_boundIndexBuffer = ms_fanIndexBuffer;
 	++Direct3d11_Metrics::indexBufferBindCalls;
 	++Direct3d11_Metrics::indexBufferBindMisses;
 
@@ -755,6 +778,7 @@ void Direct3d11::drawQuads(int firstVertex, int quadCount)
 	ID3D11DeviceContext1 * const context = Direct3d11_Device::getContext();
 
 	context->IASetIndexBuffer(ms_quadIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+	ms_boundIndexBuffer = ms_quadIndexBuffer;
 	++Direct3d11_Metrics::indexBufferBindCalls;
 	++Direct3d11_Metrics::indexBufferBindMisses;
 
@@ -796,6 +820,9 @@ void Direct3d11::drawIndexedFanUnsupported()
 
 void Direct3d11::releaseDrawResources()
 {
+	ms_boundIndexBuffer = NULL;
+	ms_savedIndexBuffer = NULL;
+
 	if (ms_fanIndexBuffer)  { ms_fanIndexBuffer->Release();  ms_fanIndexBuffer = NULL;  ms_fanIndexBufferVertices = 0; }
 	if (ms_quadIndexBuffer) { ms_quadIndexBuffer->Release(); ms_quadIndexBuffer = NULL; ms_quadIndexBufferQuads = 0; }
 }

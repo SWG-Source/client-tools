@@ -8,6 +8,7 @@
 #include "FirstDirect3d11.h"
 #include "Direct3d11_StaticIndexBufferData.h"
 
+#include "Direct3d11.h"
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
 
@@ -40,6 +41,10 @@ Direct3d11_StaticIndexBufferData::~Direct3d11_StaticIndexBufferData()
 
 	if (m_buffer)
 	{
+		// Before the Release, while the address still identifies this buffer. The draw path shadows
+		// the index binding, and the allocator can return this same address for the next buffer.
+		Direct3d11::forgetIndexBuffer(m_buffer);
+
 		m_buffer->Release();
 		m_buffer = NULL;
 	}

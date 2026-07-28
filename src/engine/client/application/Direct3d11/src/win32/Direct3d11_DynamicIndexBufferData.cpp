@@ -8,6 +8,7 @@
 #include "FirstDirect3d11.h"
 #include "Direct3d11_DynamicIndexBufferData.h"
 
+#include "Direct3d11.h"
 #include "Direct3d11_Device.h"
 #include "Direct3d11_Metrics.h"
 
@@ -67,6 +68,7 @@ void Direct3d11_DynamicIndexBufferData::remove()
 
 	if (ms_ring)
 	{
+		Direct3d11::forgetIndexBuffer(ms_ring);
 		ms_ring->Release();
 		ms_ring = NULL;
 	}
