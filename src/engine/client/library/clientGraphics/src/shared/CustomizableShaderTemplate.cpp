@@ -1016,7 +1016,29 @@ bool CustomizableShaderTemplate::TextureFactorIntOperation::applyCustomization(c
 	bool error = false;
 	const PackedArgb &color             = palette->getEntry(paletteEntryIndex, error);
 
-	WARNING(error, ("CustomizableShaderTemplate::TextureFactorIntOperation::execute error"));
+	// An out-of-range index is a data bug in the object template's customization values, and
+	// PaletteArgb::getEntry has already recovered by clamping to entry 0 -- its own warning says as
+	// much: "Designer/Art bug ... clamping to 0: update object template customization data". So a
+	// colour was applied and this operation did not fail; the part is simply the wrong colour.
+	//
+	// This function used to end in "return !error", reporting failure for a case the engine had
+	// already handled. That propagates through applyShaderSettings into
+	// "CustomizableShader::prepareToView() failed", which reads as though the shader is unusable.
+	// It is not -- prepareToView logs and returns the base shader regardless -- and the wording was
+	// misleading enough to be mistaken for the cause of creatures not appearing while diagnosing
+	// something unrelated.
+	//
+	// So report the data bug with enough detail to act on, once, and do not call it a failure.
+	if (error)
+	{
+		static bool reported = false;
+		if (!reported)
+		{
+			reported = true;
+			WARNING(true, ("CustomizableShaderTemplate: palette '%s' holds %d entry(s) and customization index %d is outside it, so entry 0 was used and this part renders the wrong colour. The fix is in the object template's customization data. Reported once.",
+				palette->getName().getString(), palette->getEntryCount(), paletteEntryIndex));
+		}
+	}
 
 	DEBUG_REPORT_LOG(ms_debugLogChanges, ("|- setting tfactor (r=%u,g=%u,b=%u,a=%u) [%d]\n", color.getR(), color.getG(), color.getB(), color.getA(), paletteEntryIndex));
 	shader.setTextureFactor(m_tfactorTag, color.getArgb());
@@ -1024,7 +1046,7 @@ bool CustomizableShaderTemplate::TextureFactorIntOperation::applyCustomization(c
 	//-- release the palette
 	palette->release();
 
-	return !error;
+	return true;
 }
 
 // ======================================================================
