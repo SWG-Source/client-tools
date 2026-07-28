@@ -56,6 +56,10 @@ public:
 	// Whether to emit the per-frame hitch and distribution lines. Off by default: they are
 	// diagnostics and writing them is main-thread file I/O.
 	static bool        getReportFrameTiming();
+
+	// Diagnostic: suppress fog entirely, so its contribution to distant terrain can be seen by
+	// its absence.
+	static bool        getDebugDisableFog();
 	static int         getFullscreenRefreshRate();
 	static int         getSwapChainBufferCount();
 	static bool        getAntiAlias();

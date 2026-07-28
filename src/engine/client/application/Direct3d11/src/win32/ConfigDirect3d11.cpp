@@ -26,6 +26,7 @@ namespace ConfigDirect3d11Namespace
 
 	bool                           ms_allowTearing;
 	bool                           ms_reportFrameTiming;
+	bool                           ms_debugDisableFog;
 	int                            ms_fullscreenRefreshRate;
 	int                            ms_swapChainBufferCount;
 
@@ -84,6 +85,11 @@ void ConfigDirect3d11::install()
 	// Per-frame hitch and distribution reporting. Off by default: the lines are diagnostics and
 	// emitting them is file I/O on the main thread.
 	KEY_BOOL(reportFrameTiming, false);
+
+	// Force fog off, to separate two explanations for washed-out distant terrain: fog saturating
+	// early at an extended draw distance, or an unclamped vertex colour blowing out the multiply
+	// in terrain_base.psh. With fog off, the first cause disappears and the second does not.
+	KEY_BOOL(debugDisableFog, false);
 
 	KEY_INT(debugScreenshotFrame, 0);
 
@@ -160,6 +166,13 @@ bool ConfigDirect3d11::getAllowTearing()
 bool ConfigDirect3d11::getReportFrameTiming()
 {
 	return ms_reportFrameTiming;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d11::getDebugDisableFog()
+{
+	return ms_debugDisableFog;
 }
 
 

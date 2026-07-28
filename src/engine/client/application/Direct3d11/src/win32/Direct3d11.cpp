@@ -277,7 +277,7 @@ namespace Direct3d11Namespace
 		// and the colour plus the enable go to the pixel epilogue, which does the blend D3D9's
 		// fixed-function fog stage used to do.
 		Direct3d11_ConstantBuffers::setFog(
-			enabled,
+			enabled && !ConfigDirect3d11::getDebugDisableFog(),
 			static_cast<float>(density),
 			static_cast<float>(color.getR()) / 255.0f,
 			static_cast<float>(color.getG()) / 255.0f,
