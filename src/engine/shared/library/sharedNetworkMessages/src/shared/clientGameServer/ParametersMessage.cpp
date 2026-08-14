@@ -10,34 +10,20 @@
 
 // ======================================================================
 
-ParametersMessage::ParametersMessage(int weatherUpdateInterval, int entertainerCaptchaPercent) :
-		GameNetworkMessage("ParametersMessage"),
-		m_weatherUpdateInterval(weatherUpdateInterval),
-		m_entertainerCaptchaPercent(entertainerCaptchaPercent)
+ParametersMessage::ParametersMessage(int weatherUpdateInterval) : GameNetworkMessage("ParametersMessage"),
+																  m_weatherUpdateInterval(weatherUpdateInterval)
 {
 	addVariable(m_weatherUpdateInterval);
-	addVariable(m_entertainerCaptchaPercent);
 }
 
 //-----------------------------------------------------------------------
 
-ParametersMessage::ParametersMessage(Archive::ReadIterator & source) :
-		GameNetworkMessage("ParametersMessage"),
-		m_weatherUpdateInterval(),
-		m_entertainerCaptchaPercent(40)
+ParametersMessage::ParametersMessage(Archive::ReadIterator &source) : GameNetworkMessage("ParametersMessage"),
+																	  m_weatherUpdateInterval()
 {
 	addVariable(m_weatherUpdateInterval);
-	addVariable(m_entertainerCaptchaPercent);
 
-	unsigned short packedSize = 0;
-	Archive::get(source, packedSize);
-
-	unsigned short unpackedSize = 0;
-	std::vector<Archive::AutoVariableBase *>::iterator i;
-	for(i = members.begin(); i != members.end() && unpackedSize < packedSize; ++i, ++unpackedSize)
-	{
-		(*i)->unpack(source);
-	}
+	unpack(source);
 }
 
 // ----------------------------------------------------------------------

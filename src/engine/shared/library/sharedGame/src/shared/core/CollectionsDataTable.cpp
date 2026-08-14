@@ -1,4 +1,4 @@
-// ======================================================================
+﻿// ======================================================================
 //
 // CollectionsDataTable.cpp
 // Copyright 2006 Sony Online Entertainment LLC (SOE)
@@ -151,7 +151,7 @@ using namespace CollectionsDataTableNamespace;
 void CollectionsDataTable::install()
 {
 	DataTable * table = DataTableManager::getTable(cs_collectionsDataTableName, true);
-	if (table)
+	if (table && table->getNumRows() > 0)
 	{
 		int const columnBookName = table->findColumnNumber("bookName");
 		int const columnPageName = table->findColumnNumber("pageName");
@@ -217,20 +217,20 @@ void CollectionsDataTable::install()
 			columnAlternateTitle.push_back(columnNumber);
 		}
 
-		FATAL((columnBookName < 0), ("column \"bookName\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnPageName < 0), ("column \"pageName\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnCollectionName < 0), ("column \"collectionName\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnSlotName < 0), ("column \"slotName\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnBeginSlotId < 0), ("column \"beginSlotId\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnEndSlotId < 0), ("column \"endSlotId\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnMaxSlotValue < 0), ("column \"maxSlotValue\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnIcon < 0), ("column \"icon\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnMusic < 0), ("column \"music\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnShowIfNotYetEarned < 0), ("column \"showIfNotYetEarned\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnHidden < 0), ("column \"hidden\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnNoReward < 0), ("column \"noReward\" not found in %s", cs_collectionsDataTableName));
-		FATAL((columnTrackServerFirst < 0), ("column \"trackServerFirst\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnBookName < 0), ("column \"bookName\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnPageName < 0), ("column \"pageName\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnCollectionName < 0), ("column \"collectionName\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnSlotName < 0), ("column \"slotName\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnBeginSlotId < 0), ("column \"beginSlotId\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnEndSlotId < 0), ("column \"endSlotId\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnMaxSlotValue < 0), ("column \"maxSlotValue\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnIcon < 0), ("column \"icon\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnMusic < 0), ("column \"music\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnShowIfNotYetEarned < 0), ("column \"showIfNotYetEarned\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnHidden < 0), ("column \"hidden\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnNoReward < 0), ("column \"noReward\" not found in %s", cs_collectionsDataTableName));
+		DEBUG_FATAL((columnTrackServerFirst < 0), ("column \"trackServerFirst\" not found in %s", cs_collectionsDataTableName));
 
 		CollectionsDataTable::CollectionInfoBook const * currentBook = NULL;
 		CollectionsDataTable::CollectionInfoPage const * currentPage = NULL;
@@ -636,7 +636,9 @@ void CollectionsDataTable::install()
 	}
 	else
 	{
-		FATAL(true, ("collection datatable %s not found", cs_collectionsDataTableName));
+		// Vanilla NGE retail TRE pack doesn't include the collection
+		// datatable (it was added in a later live patch). Skip rather than FATAL.
+		DEBUG_WARNING(true, ("CollectionsDataTable::install: %s not found - collections feature disabled.\n", cs_collectionsDataTableName));
 	}
 
 	ExitChain::add(remove, "CollectionsDataTable::remove");

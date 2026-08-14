@@ -577,8 +577,7 @@ void BitArray::setFromDbTextString(const char * text)
 std::string BitArray::getDebugString() const
 {
 	std::string s = FormattedString<512>().sprintf("%6d: ", m_numInUseBits);
-	int i;
-	for (i = 0; i < m_numInUseBits; ++i)
+	for (int i = 0; i < m_numInUseBits; ++i)
 	{
 		if ((i > 0) && ((i % 8) == 0))
 			s += " ";

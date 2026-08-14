@@ -25,7 +25,7 @@
 #include "swgClientUserInterface/SwgCuiHudFactory.h"
 #include "swgClientUserInterface/SwgCuiWebBrowserWindow.h"
 
-#if DEBUG=0
+#if DEBUG == 0
 #include "libMozilla/libMozilla.h"
 #endif
 
@@ -38,7 +38,7 @@
 
 // ======================================================================
 
-#if DEBUG=0
+#if DEBUG == 0
 namespace browserNamespace
 {
 	std::string s_homePage = "beta.stellabellum.net";
@@ -256,9 +256,13 @@ libMozilla::Window* SwgCuiWebBrowserWidget::getMozillaWindow()
 
 			m_MozillaWindow->setCallback(m_Callbacks);
 
-			m_MozillaWindow->navigateTo(Unicode::narrowToWide(s_homePage).c_str());
-		}
+			Unicode::String uri16 = Unicode::narrowToWide(s_homePage);
 
+			m_MozillaWindow->navigateTo(
+				reinterpret_cast<const wchar_t *>(uri16.c_str()),
+				nullptr,
+				0);
+		}
 	}
 
 	return m_MozillaWindow;
@@ -311,8 +315,12 @@ void SwgCuiWebBrowserWidget::setURL( std::string url, const char * postData, int
 	if(!m_MozillaWindow)
 		return;
 
-	m_MozillaWindow->navigateTo(Unicode::narrowToWide(url).c_str(), postData, postDataLength);
+	Unicode::String uri16 = Unicode::narrowToWide(url);
 
+	m_MozillaWindow->navigateTo(
+		reinterpret_cast<const wchar_t *>(uri16.c_str()),
+		postData,
+		postDataLength);
 }
 
 void SwgCuiWebBrowserWidget::OnSizeChanged(const UISize &newSize, const UISize &oldSize)
@@ -338,7 +346,6 @@ void SwgCuiWebBrowserWidget::OnSizeChanged(const UISize &newSize, const UISize &
 
 		m_Texture = const_cast<Texture*>(TextureList::fetch(static_cast<int>(0), GetWidth(), GetHeight(), 1, runtimeFormats, numberOfRuntimeFormats));
 	}
-
 }
 
 bool SwgCuiWebBrowserWidget::ProcessMessage(const UIMessage & msg)

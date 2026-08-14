@@ -69,6 +69,5 @@ const UIPropertyDescriptor *UIPropertyGroup::find(const char *i_propertyName) co
       iter=(ubound+lbound)/2;
    }
 
-   return false;
-
+   return nullptr;
 }

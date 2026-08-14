@@ -109,9 +109,11 @@ void AppearanceTemplateList::install(bool useTimedTemplates, bool ensureDefaultA
 	ms_keepTime          = ConfigSharedObject::getAppearanceTemplateListKeepTime();
 	ms_keepEpsilon       = ConfigSharedObject::getAppearanceTemplateListKeepEpsilon();
 
-	//-- verify the default appearance exists
-	if (ensureDefaultAppearanceExists)
-		FATAL(!TreeFile::exists(getDefaultAppearanceTemplateName()), ("%s could not be found. Are your paths set up correctly?", getDefaultAppearanceTemplateName()));
+	//-- verify the default appearance exists. Demoted to a warning - some
+	// fan TRE packs (e.g. Restoration) omit defaultappearance.apt; the
+	// runtime fallback path returns a placeholder appearance instead.
+	if (ensureDefaultAppearanceExists && !TreeFile::exists(getDefaultAppearanceTemplateName()))
+		DEBUG_WARNING(true, ("%s could not be found in the TRE pack; continuing without a default appearance.\n", getDefaultAppearanceTemplateName()));
 
 	if (TreeFile::isLoggingFiles())
 		delete TreeFile::open(getDefaultAppearanceTemplateName(), AbstractFile::PriorityData, true);

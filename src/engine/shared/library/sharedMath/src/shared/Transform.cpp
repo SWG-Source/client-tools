@@ -22,7 +22,13 @@
 #include "sharedMath/Quaternion.h"
 
 #undef TRY_FOR_SSE
-#define TRY_FOR_SSE WIN32
+// Was `#define TRY_FOR_SSE WIN32`. WIN32 is defined on both x86 and x64
+// Windows builds, but the SSE path below is implemented in x86 inline
+// asm (sse_xf_matrix_3x4) which MSVC doesn't accept on x64. Gate on
+// _M_IX86 so the x64 build falls back to the scalar multiply path; a
+// future port can rewrite the SSE loop with intrinsics and re-enable
+// it for both architectures.
+#define TRY_FOR_SSE _M_IX86
 
 #if TRY_FOR_SSE
 #include "sharedMath/SseMath.h"

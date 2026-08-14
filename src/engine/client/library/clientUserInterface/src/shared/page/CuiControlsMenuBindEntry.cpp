@@ -167,16 +167,20 @@ IoResult CuiControlsMenuBindEntry::BindWin::processEvent (IoEvent *event)
 
 	if (InputMap::IT_None == m_bindEntry->m_bindInfo.type)
 	{
-		//-- joystick axes & sliders need special handling
+		//-- joystick axes & sliders need special handling.  arg1 is the physical
+		//-- device number; resolve it to the input map's joystick slot so the
+		//-- binding is recorded against the specific device that produced it.
 		if (IOET_JoystickMove == event->type)
 		{
 			m_bindEntry->m_bindInfo.type = InputMap::IT_JoyAxis;
 			m_bindEntry->m_bindInfo.value = event->arg2;
+			m_bindEntry->m_bindInfo.device = m_bindEntry->m_inputMap->getJoystickSlotForNumber(event->arg1);
 		}
 		else if (IOET_JoystickSlider == event->type)
 		{
 			m_bindEntry->m_bindInfo.type = InputMap::IT_JoySlider;
 			m_bindEntry->m_bindInfo.value = event->arg2;
+			m_bindEntry->m_bindInfo.device = m_bindEntry->m_inputMap->getJoystickSlotForNumber(event->arg1);
 		}
 	}
 
@@ -216,7 +220,7 @@ m_oldDiscardIdenticalJoystickMotionEvents(false)
 
 	m_bindText->SetPreLocalized (true);
 
-	Zero (m_bindInfo);
+	m_bindInfo = InputMap::BindInfo(); // default device = -1 (any), not Zero() which would mean slot 0
 
 	registerMediatorObject (*m_cancelButton, true);
 	registerMediatorObject (*m_okButton,     true);
@@ -246,8 +250,8 @@ void CuiControlsMenuBindEntry::performActivate ()
 	setPointerInputActive  (true);
 	setKeyboardInputActive (true);
 	setInputToggleActive   (false);
-	
-	Zero (m_bindInfo);
+
+	m_bindInfo = InputMap::BindInfo(); // default device = -1 (any), not Zero() which would mean slot 0
 
 	UIRect rect;
 	m_bindResultText->GetWorldRect (rect);
@@ -326,7 +330,7 @@ void CuiControlsMenuBindEntry::setCommand (InputMap * imap, const InputMap::Comm
 	if (imap == 0 || cmd == 0)
 		return;
 
-	Zero (m_bindInfo);
+	m_bindInfo = InputMap::BindInfo(); // default device = -1 (any), not Zero() which would mean slot 0
 
 	const Unicode::String & localizedCmdName = CuiInputNames::getLocalizedCommandName (m_command->name);
 	Unicode::String bindText;
@@ -360,9 +364,14 @@ void CuiControlsMenuBindEntry::updateBindResultText ()
 
 bool CuiControlsMenuBindEntry::doAddBinding ()
 {
-	
+
 	NOT_NULL (m_inputMap);
 	NOT_NULL (m_command);
+
+	//-- release-safe guard: never dereference a null command/map (e.g. when the
+	//-- selected keymap row has no resolvable command).  NOT_NULL above is debug-only.
+	if (m_inputMap == 0 || m_command == 0)
+		return false;
 
 	//-----------------------------------------------------------------
 	//-- check appropriate type

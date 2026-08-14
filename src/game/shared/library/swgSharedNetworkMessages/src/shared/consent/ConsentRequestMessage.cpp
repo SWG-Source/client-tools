@@ -5,6 +5,7 @@
 //
 // ======================================================================
 
+#include "sharedGame/ProsePackageArchive.h"
 #include "swgSharedNetworkMessages/FirstSwgSharedNetworkMessages.h"
 #include "swgSharedNetworkMessages/ConsentRequestMessage.h"
 

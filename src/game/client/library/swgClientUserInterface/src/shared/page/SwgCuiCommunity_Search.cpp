@@ -52,33 +52,38 @@ SwgCuiCommunity::Search::Search(UIPage &page, SwgCuiCommunity const &communityMe
 {
 	m_callBack->connect(*this, &SwgCuiCommunity::Search::onCharacterMatchRetrieved, static_cast<PlayerCreatureController::Messages::CharacterMatchRetrieved *>(0));
 
-	getCodeDataObject(TUIButton, m_searchButton, "buttonSearch");
-	getCodeDataObject(TUITable, m_table, "table");
+	getCodeDataObject(TUIButton, m_searchButton, "buttonSearch", true);
+	getCodeDataObject(TUITable, m_table, "table", true);
 
-	UITableModelDefault * const model = safe_cast<UITableModelDefault *>(m_table->GetTableModel ());
+	if (m_table)
+	{
+		UITableModelDefault *const model = safe_cast<UITableModelDefault *>(m_table->GetTableModel());
+		if (model)
+			model->ClearTable();
+	}
 
-	if (model)
-		model->ClearTable();
-
-	getCodeDataObject(TUIButton, m_buttonTell, "buttonTell");
-	getCodeDataObject(TUIButton, m_buttonInvite, "buttonInvite");
-	getCodeDataObject(TUIButton, m_buttonTellAndInvite, "buttonTellAndInvite");
-	getCodeDataObject(TUITextbox, m_tellTextbox, "tellbox");
-	getCodeDataObject(TUIText, m_bioTextbox, "biotext");
-	getCodeDataObject(TUIText, m_tooManyResultsText, "toomanyresults");
+	getCodeDataObject(TUIButton, m_buttonTell, "buttonTell", true);
+	getCodeDataObject(TUIButton, m_buttonInvite, "buttonInvite", true);
+	getCodeDataObject(TUIButton, m_buttonTellAndInvite, "buttonTellAndInvite", true);
+	getCodeDataObject(TUITextbox, m_tellTextbox, "tellbox", true);
+	getCodeDataObject(TUIText, m_bioTextbox, "biotext", true);
+	getCodeDataObject(TUIText, m_tooManyResultsText, "toomanyresults", true);
 
 	UIPage *lfgPage = NULL;
-	getCodeDataObject(TUIPage, lfgPage, "pagelfg");
-	m_Lfg = new SwgCuiLfg(*lfgPage);
-	
-	if (m_Lfg)
+	getCodeDataObject(TUIPage, lfgPage, "pagelfg", true);
+	if (lfgPage)
 	{
-		m_Lfg->fetch();
+		m_Lfg = new SwgCuiLfg(*lfgPage);
 
-		lfgPage->Link();
-		lfgPage->SetVisible(true);
-		lfgPage->SetEnabled(true);
-	}		
+		if (m_Lfg)
+		{
+			m_Lfg->fetch();
+
+			lfgPage->Link();
+			lfgPage->SetVisible(true);
+			lfgPage->SetEnabled(true);
+		}
+	}
 }
 
 //-----------------------------------------------------------------
@@ -112,7 +117,8 @@ void SwgCuiCommunity::Search::performActivate()
 
 void SwgCuiCommunity::Search::performDeactivate()
 {
-	m_Lfg->saveOrLoadBackup(true);
+	if (m_Lfg)
+		m_Lfg->saveOrLoadBackup(true);
 }
 
 //-----------------------------------------------------------------

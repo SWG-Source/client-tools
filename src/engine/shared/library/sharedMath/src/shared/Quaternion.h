@@ -26,44 +26,42 @@ public:
 	static const Quaternion identity;
 
 public:
+  float w;
+  float x;
+  float y;
+  float z;
 
-	real w;
-	real x;
-	real y;
-	real z;
+  public:
+  Quaternion(void);
+  explicit Quaternion(const Transform &transform);
+  Quaternion(float angle, const Vector &vector);
+  Quaternion(float newW, float newX, float newY, float newZ);
+  ~Quaternion(void);
 
-public:
+  bool operator==(const Quaternion &rhs);
+  bool operator!=(const Quaternion &rhs);
 
-	Quaternion(void);
-	explicit Quaternion(const Transform &transform);
-	Quaternion(real angle, const Vector &vector);
-	Quaternion(real newW, real newX, real newY, real newZ);
-	~Quaternion(void);
+  const Quaternion operator-(void) const;
+  Quaternion &operator+=(const Quaternion &rhs);
+  Quaternion &operator-=(const Quaternion &rhs);
+  Quaternion &operator*=(const Quaternion &rhs);
 
-	bool               operator ==(const Quaternion &rhs);
-	bool               operator !=(const Quaternion &rhs);
+  const Quaternion operator+(const Quaternion &rhs) const;
+  const Quaternion operator-(const Quaternion &rhs) const;
+  const Quaternion operator*(const Quaternion &rhs) const;
 
-	const Quaternion   operator -(void) const;
-	Quaternion        &operator +=(const Quaternion &rhs);
-	Quaternion        &operator -=(const Quaternion &rhs);
-	Quaternion        &operator *=(const Quaternion &rhs);
+  void getTransform(Transform *transform) const;
+  void getTransformPreserveTranslation(Transform *transform) const;
+  float getMagnitudeSquared(void) const;
 
-	const Quaternion   operator +(const Quaternion &rhs) const;
-	const Quaternion   operator -(const Quaternion &rhs) const;
-	const Quaternion   operator *(const Quaternion &rhs) const;
+  const Quaternion slerp(const Quaternion &other, float fractionOfOther) const;
 
-	void               getTransform(Transform *transform) const;
-	void               getTransformPreserveTranslation(Transform *transform) const;
-	real               getMagnitudeSquared(void) const;
+  void normalize(void);
 
-	const Quaternion   slerp(const Quaternion &other, real fractionOfOther) const;
+  Quaternion getComplexConjugate() const;
 
-	void               normalize(void);
-
-	Quaternion         getComplexConjugate() const;
-
-	void               debugDump() const;
-	real dot(Quaternion const & rhs) const;
+  void debugDump() const;
+  float dot(Quaternion const &rhs) const;
 };
 
 // ======================================================================
@@ -97,8 +95,7 @@ inline bool Quaternion::operator !=(const Quaternion &rhs)
 	return !(*this == rhs);
 }
 
-
-inline real Quaternion::dot(Quaternion const & rhs) const
+inline float Quaternion::dot(Quaternion const &rhs) const
 {
 	return w * rhs.w + x * rhs.x + y * rhs.y + z * rhs.z;
 }

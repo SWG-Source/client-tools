@@ -102,6 +102,20 @@ public:
 	static int                           getFrameBufferMaxHeight();
 	static int                           getCurrentRenderTargetWidth();
 	static int                           getCurrentRenderTargetHeight();
+
+	// UI canvas scaling (ultrawide / hi-DPI support, 2026-05-16).
+	// CuiManager::install() sets this from [ClientUserInterface] uiScale
+	// in client.cfg. Defaults to 1.0 (no scaling). When != 1.0:
+	//   - getUiCanvasWidth/Height return frameBufferMax / scale -- the
+	//     LOGICAL canvas the UI thinks it's rendering into. Mouse cursor
+	//     bounds, right/bottom-anchored widgets, and anything else doing
+	//     screen-edge math should query these instead of FrameBufferMax.
+	//   - 3D engine consumers of getFrameBufferMaxWidth (Bloom, CutScene,
+	//     PostProcessingEffectsManager) keep getting physical pixels.
+	static float getUiCanvasScale();
+	static void setUiCanvasScale(float scale);
+	static int getUiCanvasWidth();
+	static int getUiCanvasHeight();
 	static int                           getCurrentRenderTargetMaxWidth();
 	static int                           getCurrentRenderTargetMaxHeight();
 	static int                           getStencilBufferBitDepth();
@@ -209,7 +223,6 @@ public:
 	static VertexBufferVectorGraphicsData    *createVertexBufferVectorData(VertexBufferVector const & vertexBufferVector);
 
 	// index buffer routines
-	static void                              setDynamicIndexBufferSize(int numberOfIndices);
 	static void                              setIndexBuffer(const HardwareIndexBuffer &indexBuffer);
 	static StaticIndexBufferGraphicsData    *createIndexBufferData(const StaticIndexBuffer &indexBuffer);
 	static DynamicIndexBufferGraphicsData   *createIndexBufferData();

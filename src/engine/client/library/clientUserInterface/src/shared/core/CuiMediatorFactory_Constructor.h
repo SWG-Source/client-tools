@@ -9,7 +9,9 @@
 #define INCLUDED_CuiMediatorFactory_Constructor_H
 
 #include "clientUserInterface/CuiMediatorFactory_ConstructorBase.h"
+#include "clientUserInterface/CuiMediator.h"
 #include "UIPage.h"
+#include "UIManager.h"
 
 // ======================================================================
 
@@ -33,7 +35,11 @@ public:
 			UIPage * const root = NON_NULL (UIManager::gUIManager ().GetRootPage ());
 			UIPage * const page = GET_UI_OBJ ((*root), UIPage, m_path.c_str ());
 
-			FATAL(NULL == page, ("CuiMediatorFactory_Constructor null page [%s]", m_path.c_str()));
+			if (NULL == page)
+			{
+				WARNING(true, ("CuiMediatorFactory_Constructor null page [%s] - skipping mediator creation", m_path.c_str()));
+				return 0;
+			}
 
 			m_mediator = this->create (*page);
 			m_mediator->fetch ();
@@ -88,7 +94,12 @@ inline const type_info & CuiMediatorFactory::Constructor<T>::getTypeId () const
 template <typename T>
 inline CuiMediator * CuiMediatorFactory::Constructor<T>::createInto (UIPage & page) const
 {
-	UIPage * const dupe = NON_NULL (UIPage::DuplicateInto (page, m_path.c_str ()));
+	UIPage *const dupe = UIPage::DuplicateInto(page, m_path.c_str());
+	if (!dupe)
+	{
+		WARNING(true, ("CuiMediatorFactory::Constructor::createInto [%s] - DuplicateInto returned null, skipping", m_path.c_str()));
+		return 0;
+	}
 	return new T (*dupe);
 }
 

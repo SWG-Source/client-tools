@@ -1116,10 +1116,41 @@ float CreatureObject::alter (float deltaTime)
 #endif
 	m_verifyAppearanceTimer.updateNoReset(deltaTime);
 
-	if((m_initAppearanceWearables || m_verifyAppearanceTimer.isExpired()) && getAppearanceInventoryObject())
+	// x64 fix: "dressed" NPC clothing comes from the NPC's ClientDataFile
+	// (the WEAR/MESH chunks), applied by ClientDataFile::apply() at
+	// endBaselines time - but the creature's skeletal appearance is usually
+	// not loaded yet at that point, so the wearables were silently dropped
+	// and the NPC rendered naked. Retry every alter until applyWearables()
+	// succeeds: it's idempotent and sets a flag on the ClientObject once it
+	// sticks, after which this is a cheap one-bool no-op.
+	if (!getClientDataFileWearablesApplied())
 	{
-		verifyWornAppearanceItems();
-		checkWearingUnderWear();
+		ClientDataFile const *const clientDataFile = getClientData();
+		if (clientDataFile)
+			IGNORE_RETURN(clientDataFile->applyWearables(this));
+		else
+			setClientDataFileWearablesApplied(true); // no client data file - nothing to apply
+	}
+
+	if (m_initAppearanceWearables || m_verifyAppearanceTimer.isExpired())
+	{
+		// x64 fix: re-attach regular worn clothing whose appearance was not
+		// loaded yet at container-add time. This must NOT be gated on the
+		// appearance-inventory object (getAppearanceInventoryObject) - that's
+		// the separate NGE cosmetic-overlay system. The player was rendering
+		// "naked" (clothing correctly equipped server-side, just not attached
+		// to the skeletal appearance) because the only periodic re-verify,
+		// verifyWornAppearanceItems(), bailed whenever the appearance-inventory
+		// object was null (and on this TRE set it fails to create). See
+		// CreatureObject::verifyWornItems.
+		verifyWornItems();
+
+		if (getAppearanceInventoryObject())
+		{
+			verifyWornAppearanceItems();
+			checkWearingUnderWear();
+		}
+
 		m_initAppearanceWearables = false;
 		m_verifyAppearanceTimer.reset();
 	}
@@ -1342,7 +1373,6 @@ void CreatureObject::endBaselines()
 			{
 				DEBUG_WARNING(ms_logAppearanceTabMessages, ("Failed to create wearable %s", cc.getString()));
 			}
-
 		}
 		
 		if(getAppearanceInventoryObject())
@@ -2848,7 +2878,6 @@ void CreatureObject::wearablesOnInsert (const unsigned , const WearableEntry &w)
 		{
 			DEBUG_WARNING(true, ("Failed to create wearable %s", cc.getString()));
 		}
-
 		this->setDupedCreaturesDirty(true);
 	}
 }
@@ -2923,7 +2952,7 @@ void CreatureObject::skillModsOnErase         (const std::string &, const std::p
 
 //----------------------------------------------------------------------
 
-void CreatureObject::attributesOnSet (const size_t elem, const Attributes::Value & oldValue, const Attributes::Value & newValue)
+void CreatureObject::attributesOnSet(const unsigned int elem, const Attributes::Value &oldValue, const Attributes::Value &newValue)
 {
 	if (newValue > oldValue)
 		return;
@@ -6634,7 +6663,7 @@ void CreatureObject::verifyWornAppearanceItems()
 			for(int i = 0; i < skeleAppearance->getWearableCount(); ++i)
 			{
 				TangibleObject const * currentItem = dynamic_cast<TangibleObject const *>(skeleAppearance->getWearableObject(i));
-				wornAppearanceMap.insert(std::make_pair<NetworkId, TangibleObject const *>(currentItem->getNetworkId(), currentItem));
+				wornAppearanceMap.insert(std::make_pair(currentItem->getNetworkId(), currentItem));
 			}
 
 			for (unsigned int k = 0; k < m_wearableAppearanceData.size(); ++k) // go through our streamed wearables

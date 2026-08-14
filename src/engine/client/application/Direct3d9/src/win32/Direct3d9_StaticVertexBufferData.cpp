@@ -35,12 +35,15 @@ void Direct3d9_StaticVertexBufferData::remove()
 
 // ----------------------------------------------------------------------
 
+static int s_liveInstanceCount = 0; // MEMPROBE: live instance counter (strip with MEMPROBE)
+
 void *Direct3d9_StaticVertexBufferData::operator new(size_t size)
 {
 	UNREF(size);
 	NOT_NULL(ms_memoryBlockManager);
 	DEBUG_FATAL(size != sizeof(Direct3d9_StaticVertexBufferData), ("wrong new called"));
 	DEBUG_FATAL(size != static_cast<size_t> (ms_memoryBlockManager->getElementSize()), ("installed with bad size"));
+	++s_liveInstanceCount; // MEMPROBE
 	return ms_memoryBlockManager->allocate();
 }
 
@@ -49,7 +52,15 @@ void *Direct3d9_StaticVertexBufferData::operator new(size_t size)
 void Direct3d9_StaticVertexBufferData::operator delete(void *memory)
 {
 	NOT_NULL(ms_memoryBlockManager);
+	--s_liveInstanceCount; // MEMPROBE
 	ms_memoryBlockManager->free(memory);
+}
+
+// ----------------------------------------------------------------------
+
+int Direct3d9_StaticVertexBufferData::getLiveInstanceCount()
+{
+	return s_liveInstanceCount;
 }
 
 // ======================================================================

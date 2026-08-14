@@ -368,7 +368,7 @@ struct StrEqualsNoCase
 
 	bool                    operator() (const SwgCuiCommandParserDefault::AliasMap_t::value_type & t) const
 	{
-		return !_wcsicmp (str.c_str (), t.first.c_str ());
+		return !UIUnicode::icmp(str.c_str(), t.first.c_str());
 	}
 
 	                        StrEqualsNoCase (const StrEqualsNoCase & rhs) : str (rhs.str) {}
@@ -392,7 +392,7 @@ struct StrEqualsNoCaseSet
 
 	bool                    operator() (const SwgCuiCommandParserDefault::AliasGuardSet_t::value_type & t) const
 	{
-		return !_wcsicmp (str.c_str (), t.c_str ());
+		return !UIUnicode::icmp(str.c_str(), t.c_str());
 	}
 
 	                        StrEqualsNoCaseSet (const StrEqualsNoCaseSet & rhs) : str (rhs.str) {}
@@ -499,11 +499,20 @@ m_aliasHandler  (0)
 		s_vectorAllTraderSubProfessions.push_back(s_mapLowercaseSingleArgToSearchAttribute[Unicode::narrowToWide("munitions")]);
 		s_vectorAllTraderSubProfessions.push_back(s_mapLowercaseSingleArgToSearchAttribute[Unicode::narrowToWide("structures")]);
 
-		for (std::map<Unicode::String, LfgDataTable::LfgNode const *>::const_iterator iter = s_mapLowercaseSingleArgToSearchAttribute.begin(); iter != s_mapLowercaseSingleArgToSearchAttribute.end(); ++iter)
-			FATAL((iter->second == NULL), ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s)", Unicode::wideToNarrow(iter->first).c_str()));
+		for (std::map<Unicode::String, LfgDataTable::LfgNode const *>::iterator iter = s_mapLowercaseSingleArgToSearchAttribute.begin(); iter != s_mapLowercaseSingleArgToSearchAttribute.end();)
+		{
+			if (iter->second == NULL)
+			{
+				WARNING(true, ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s) - skipping", Unicode::wideToNarrow(iter->first).c_str()));
+				iter = s_mapLowercaseSingleArgToSearchAttribute.erase(iter);
+			}
+			else
+				++iter;
+		}
 
-		for (std::vector<LfgDataTable::LfgNode const *>::const_iterator iter2 = s_vectorAllTraderSubProfessions.begin(); iter2 != s_vectorAllTraderSubProfessions.end(); ++iter2)
-			FATAL((*iter2 == NULL), ("no leaf LfgDataTable::LfgNode found for /who for an entry in the trader sub-professions list search attribute"));
+		s_vectorAllTraderSubProfessions.erase(
+			std::remove(s_vectorAllTraderSubProfessions.begin(), s_vectorAllTraderSubProfessions.end(), static_cast<LfgDataTable::LfgNode const *>(NULL)),
+			s_vectorAllTraderSubProfessions.end());
 	}
 
 	if (s_mapLowercaseDoubleArgToSearchAttribute.empty())
@@ -515,8 +524,16 @@ m_aliasHandler  (0)
 		// profession search group
 		s_mapLowercaseDoubleArgToSearchAttribute[std::make_pair(Unicode::narrowToWide("bounty"), Unicode::narrowToWide("hunter"))] = LfgDataTable::getLfgLeafNodeByName("prof_bh");
 
-		for (std::map<std::pair<Unicode::String, Unicode::String>, LfgDataTable::LfgNode const *>::const_iterator iter = s_mapLowercaseDoubleArgToSearchAttribute.begin(); iter != s_mapLowercaseDoubleArgToSearchAttribute.end(); ++iter)
-			FATAL((iter->second == NULL), ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s %s)", Unicode::wideToNarrow(iter->first.first).c_str(), Unicode::wideToNarrow(iter->first.second).c_str()));
+		for (std::map<std::pair<Unicode::String, Unicode::String>, LfgDataTable::LfgNode const *>::iterator iter = s_mapLowercaseDoubleArgToSearchAttribute.begin(); iter != s_mapLowercaseDoubleArgToSearchAttribute.end();)
+		{
+			if (iter->second == NULL)
+			{
+				WARNING(true, ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s %s) - skipping", Unicode::wideToNarrow(iter->first.first).c_str(), Unicode::wideToNarrow(iter->first.second).c_str()));
+				iter = s_mapLowercaseDoubleArgToSearchAttribute.erase(iter);
+			}
+			else
+				++iter;
+		}
 	}
 	// begin data setup for Commands::who command handling
 }
@@ -710,7 +727,9 @@ bool SwgCuiCommandParserDefault::performParsing (const NetworkId & userId, const
 
 		for  (size_t i = 0; i < argv.size (); ++i)
 		{
-			IGNORE_RETURN (s.append (argv [i].begin (), argv[i].end ()).append (1, ' '));
+			const Unicode::NarrowString argN = Unicode::wideToNarrow(argv[i]);
+			s.append(argN);
+			s.push_back(' ');
 		}
 
 		ConGenericMessage m (s);

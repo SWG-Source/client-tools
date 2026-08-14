@@ -69,6 +69,35 @@ namespace
 		return true;
 	}
 
+	bool getInputNameJoystick(int32 device, int32 code, const NameMap_t &nameMap, Unicode::String &name)
+	{
+		NameMap_t::const_iterator find_it = nameMap.find(code);
+
+		if (find_it == nameMap.end())
+			return false;
+
+		const Unicode::NarrowString &canonicalName = (*find_it).second;
+
+		if (s_stringTable)
+		{
+			const LocalizedString *locstr = s_stringTable->getLocalizedString(canonicalName);
+
+			if (locstr == 0)
+				name = Unicode::narrowToWide(canonicalName);
+			else
+				name = locstr->getString();
+		}
+		else
+		{
+			name = Unicode::narrowToWide(canonicalName);
+		}
+
+		name.insert(0, Unicode::narrowToWide(" - "));
+		name.insert(0, Unicode::narrowToWide(std::to_string(device)));
+
+		return true;
+	}
+
 	//-----------------------------------------------------------------
 	struct InputNameCollection
 	{
@@ -190,19 +219,19 @@ namespace
 		}
 		else if (binfo.type == InputMap::IT_JoyButton)
 		{
-			found = getInputName (binfo.value, m_joyButtonNameMap, str);
+			found = getInputNameJoystick(binfo.device, binfo.value, m_joyButtonNameMap, str);
 		}
 		else if (binfo.type == InputMap::IT_JoyAxis)
 		{
-			found = getInputName (binfo.value, m_joyAxisNameMap, str);
+			found = getInputNameJoystick(binfo.device, binfo.value, m_joyAxisNameMap, str);
 		}
 		else if (binfo.type == InputMap::IT_JoySlider)
 		{
-			found = getInputName(binfo.value, m_joySliderNameMap, str);
+			found = getInputNameJoystick(binfo.device, binfo.value, m_joySliderNameMap, str);
 		}
 		else if (binfo.type == InputMap::IT_JoyPovHat)
 		{
-			found = getInputName (binfo.value, m_joyHatNameMap, str);
+			found = getInputNameJoystick(binfo.device, binfo.value, m_joyHatNameMap, str);
 		}
 		else if (binfo.type == InputMap::IT_None)
 		{
@@ -359,7 +388,7 @@ void CuiInputNames::setInputShifts (const InputMap::Shifts & shifts)
 		
 		for (i = 0; i < joy.numberOfJoystickButtons; ++i)
 		{
-			if (!getInputName (joy.joystickButton [i].button, s_inputNames->m_keyNameMap, name))
+			if (!getInputNameJoystick(j, joy.joystickButton[i].button, s_inputNames->m_keyNameMap, name))
 				name = Unicode::narrowToWide ("UNKNOWN");
 			
 			const std::pair<ShiftNameMap_t::iterator, bool> retval = s_shiftNameMap->insert (std::make_pair (joy.joystickButton [i].bits, name));
@@ -367,7 +396,7 @@ void CuiInputNames::setInputShifts (const InputMap::Shifts & shifts)
 			//-- shift state is already in map, look for an equivalent name
 			if (!retval.second)
 			{
-				if (getInputName (shifts.key [i].button, s_equivalentInputNames->m_keyNameMap, name))
+				if (getInputNameJoystick(j, shifts.key[i].button, s_equivalentInputNames->m_keyNameMap, name))
 				{
 					s_shiftNameMap->erase (retval.first);
 					IGNORE_RETURN (s_shiftNameMap->insert (std::make_pair (shifts.key [i].bits, name)));

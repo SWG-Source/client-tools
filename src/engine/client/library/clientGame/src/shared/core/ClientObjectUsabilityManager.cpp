@@ -217,21 +217,13 @@ bool ClientObjectUsabilityManager::isUsable(TangibleObject const * const target)
 
 bool ClientObjectUsabilityManager::canUse(CreatureObject const * const user, TangibleObject const * const target)
 {
-	if(!user || !target)
-		return true;
-	ObjectAttributeManager::AttributeVector av;
-	ObjectAttributeManager::getAttributes(target->getNetworkId(), av, false, false);
-
-	ObjectAttributeManager::AttributePair const * const combatLevelAttributePair = ObjectAttributeManager::findAttribute(av, cms_combatLevelAttributeName);
-	if(combatLevelAttributePair)
-	{
-		int16 const combatLevel = user->getLevel();
-		std::string const & requiredLevelStr = Unicode::wideToNarrow(combatLevelAttributePair->second);
-		int const requiredLevel = atoi(requiredLevelStr.c_str());
-		if(requiredLevel > combatLevel)
-			return false;
-	}
-
+	(void)user;
+	(void)target;
+	// Pre-CU: there are NO combat levels -- the NGE 'healing_combat_level_required'
+	// use-gate on consumables (stimpacks) is removed, so items are usable regardless
+	// of the player's level. The attribute is ALSO stripped server-side from
+	// item_stats.tab (so the "Combat Level Required" examine line disappears at its
+	// source); this client guard makes already-created items usable immediately.
 	return true;
 }
 

@@ -207,7 +207,16 @@ void ActionsGame::onReloadTerrain() const
 void ActionsGame::onToggleConsole(bool b) const
 {
 	UNREF(b);
-	CuiMediator * const theConsole = NON_NULL(CuiMediatorFactory::get(CuiMediatorTypes::Console));
+	// NON_NULL is a no-op in Release; the in-game /Console UI page is
+	// missing from the NGE-retail UI bundle this fork ships, so
+	// CuiMediatorFactory::get(Console) returns NULL and the next-line
+	// isActive() call crashed the GodClient when toggling console (` key
+	// or Ctrl+F8 menu). Null-guard and silently no-op; for a working
+	// console use the Qt-hosted GodClient ConsoleWindow (View menu)
+	// instead, which doesn't depend on the in-game CuiMediator system.
+	CuiMediator *const theConsole = CuiMediatorFactory::get(CuiMediatorTypes::Console);
+	if (!theConsole)
+		return;
 
 	if(theConsole->isActive())
 		theConsole->deactivate();

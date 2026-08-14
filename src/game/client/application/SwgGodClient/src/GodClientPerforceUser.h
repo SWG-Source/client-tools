@@ -10,13 +10,19 @@
 
 // ======================================================================
 
+#if !defined(SWG_DISABLE_PERFORCE)
 #pragma warning (disable:4100) // unreferenced formal parameters abound in the perforce clientAPI
 #include "ClientApi.h"
 #pragma warning (default:4100)
+#endif
 
 //-----------------------------------------------------------------
 
-class GodClientPerforceUser : public ClientUser, public MessageDispatch::Emitter
+class GodClientPerforceUser :
+#if !defined(SWG_DISABLE_PERFORCE)
+	public ClientUser,
+#endif
+	public MessageDispatch::Emitter
 {
 public:
 
@@ -43,8 +49,10 @@ private:
 	std::vector<int>    m_filteredErrors;
 	std::string         m_return_value;
 
+#if !defined(SWG_DISABLE_PERFORCE)
 	virtual void        HandleError        (Error*err);
 	virtual void        Prompt             (const StrPtr& msg, StrBuf& rsp, int noEcho, Error* e);
+#endif
 
 private:
 	//disabled

@@ -1,4 +1,4 @@
-// ======================================================================
+﻿// ======================================================================
 //
 // PortalPropertyTemplate.cpp
 // Copyright 2002, Sony Online Entertainment Inc.
@@ -104,7 +104,7 @@ int PortalPropertyTemplateNamespace::getRequiredColumnNumberFromNamedTable(char 
 	NOT_NULL(columnName);
 
 	int const columnNumber = table->findColumnNumber(columnName);
-	FATAL(columnNumber < 0, ("failed to find column name [%s] in PortalPropertyTemplate ejection transform file [%s].", columnName, filename));
+	DEBUG_FATAL((columnNumber < 0), ("failed to find column name [%s] in PortalPropertyTemplate ejection transform file [%s].", columnName, filename));
 
 	return columnNumber;
 }

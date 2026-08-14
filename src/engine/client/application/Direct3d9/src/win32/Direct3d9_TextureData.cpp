@@ -127,6 +127,15 @@ void Direct3d9_TextureData::remove(void)
 
 // ----------------------------------------------------------------------
 
+static int s_liveInstanceCount = 0; // MEMPROBE: live instance counter (strip with MEMPROBE)
+
+int Direct3d9_TextureData::getLiveInstanceCount()
+{
+	return s_liveInstanceCount;
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d9_TextureData::releaseAllGlobalTextures(void)
 {
 	while (!ms_globalTextureList->empty())
@@ -145,6 +154,7 @@ void *Direct3d9_TextureData::operator new(size_t size)
 	DEBUG_FATAL(size != sizeof (Direct3d9_TextureData), ("bad size"));
 	DEBUG_FATAL(size != static_cast<size_t> (ms_memoryBlockManager->getElementSize()), ("installed with bad size"));
 
+	++s_liveInstanceCount; // MEMPROBE
 	return ms_memoryBlockManager->allocate();
 }
 
@@ -153,6 +163,7 @@ void *Direct3d9_TextureData::operator new(size_t size)
 void Direct3d9_TextureData::operator delete(void *pointer)
 {
 	NOT_NULL(ms_memoryBlockManager);
+	--s_liveInstanceCount; // MEMPROBE
 	ms_memoryBlockManager->free(pointer);
 }
 

@@ -70,7 +70,7 @@
 #include "LocalizationManager.h"
 
 #include <cstdio>
-#include <hash_map>
+#include <unordered_map>
 #include <list>
 #include <map>
 #include <set>
@@ -152,69 +152,68 @@ namespace SwgCuiCommandParserUINamespace
 		const char * const testLootBox         = "testLootBox";
 		const char * const debugStringIds      = "debugStringIds";
 		const char * const debugStringIdColor  = "debugStringIdColor";
-#if DEBUG=0
+#if DEBUG == 0
 		const char * const debugBrowserOutput  = "mozillaBrowserOutput";
 #endif
 #endif
 	}
 
 	const CommandParser::CmdInfo cmds[] =
-	{
-		{CommandNames::reticleDeadZone,        0, "[<x> [y]]",   "Get or set the HUD reticle dead zone."},
-		{CommandNames::cameraInertia,          0, "[float]",     "Get or set the game camera static inertia."},
+		{
+			{CommandNames::reticleDeadZone, 0, "[<x> [y]]", "Get or set the HUD reticle dead zone."},
+			{CommandNames::cameraInertia, 0, "[float]", "Get or set the game camera static inertia."},
 #ifdef _DEBUG
-		{CommandNames::action,                 0, "[string]",    "Perform a ui action by name. If string is blank or not a valid action, lists available actions."},
+			{CommandNames::action, 0, "[string]", "Perform a ui action by name. If string is blank or not a valid action, lists available actions."},
 #else
 		{CommandNames::action,                 1, "<string>",    "Perform a ui action by name."},
 #endif
-		{CommandNames::hudReset,               0, "",            "Reset hud positions & sizes (not toolbar etc...)."},
-		{CommandNames::palette,                0, "[palette]",   "Set ui palette"},
-		{CommandNames::pointerModeMouseCamera, 0, "[0/1]",       "Enable or toggle"},
-		{CommandNames::inputScheme,            0, "[scheme]",    "Reset or list"},
-		{CommandNames::reticleSelect,          1, "[reticle #]", "Select the current reticle."},
-		{CommandNames::radarSelect,            1, "[radar #]",   "Select the current reticle."},
+			{CommandNames::hudReset, 0, "", "Reset hud positions & sizes (not toolbar etc...)."},
+			{CommandNames::palette, 0, "[palette]", "Set ui palette"},
+			{CommandNames::pointerModeMouseCamera, 0, "[0/1]", "Enable or toggle"},
+			{CommandNames::inputScheme, 0, "[scheme]", "Reset or list"},
+			{CommandNames::reticleSelect, 1, "[reticle #]", "Select the current reticle."},
+			{CommandNames::radarSelect, 1, "[radar #]", "Select the current reticle."},
 		//{CommandNames::browser,                0, "<url>",       "Opens a web browser. If no URL is specified, you will be sent to the SWG home page."},
 		//{CommandNames::url,                    1, "<URL>", "Passes the specified URL to the Web Browser."		},
 #if PRODUCTION == 0
-		{CommandNames::debugPrint,            1, "<1|0>",       "."},
-		{CommandNames::list,                  0, "",            "List all UI Pages."},
-		{CommandNames::set,                   2, "<property> <value>", "Set a UI object property."},
-		{CommandNames::activate,              1, "<page>",      "Activate UI Page."},
-		{CommandNames::deactivate,            1, "<page>",      "Deactivate UI Page."},
-		{CommandNames::reset,                 0, "",            "Reload UI from disk."},
-		{CommandNames::locale_reset,          0, "",            "Reset all locale specific strings."},
-		{CommandNames::pixel_offset,          0, "[offset]",    "Set or get the pixel offset."},
-		{CommandNames::hudServerOutput,       0, "[1|0]",       "Get or set the HUD showing server messages."},
-		{CommandNames::colorTest,             1, "<id>",        "Color Test."},
-		{CommandNames::hueObjectTest,         3, "<id>, maxIndex1, maxIndex2", "Hue Object Test"},
-		{CommandNames::allowTargetAnything,   1, "<1|0>",       "."},
-		{CommandNames::debugExamine,          1, "<1|0>",       "."},
-		{CommandNames::debugClipboardExamine, 1, "<1|0>",       "Copy debug info to clipboard"},
-		{CommandNames::systemMessage,         1, "<msg>",       "fake system message"},
-		{CommandNames::combatSpam,            6, "<id> <id> <id> <int> <float> <msg>",       "test combatspam"},
-		{CommandNames::testResourceIcon,      3, "<viewer widget> <class/type flag> <class>", ""},
-		{CommandNames::setCollideAll,         1, "<1|0>",       "collide against all geometry"},
-		{CommandNames::testTrade,             0, "",            "client-side trade with lookat target"},
-		{CommandNames::testSkillSystem,       1, "<1|0>",       "test. verbose or not"},
-		{CommandNames::consent,               0, "",            "show a consent window"},
-		{CommandNames::playUiEffect,          0, "",            "play a simulated server-triggered UI effect."},
-		{CommandNames::spaceConvoTest,        0
-		, "<SharedObjectTemplate name>", "Test the space conversation viewer UI"},
-		{CommandNames::dumpCommandsToHtml,    2, "<html file path> <true|false>", "Dump all commands with icons to this path. false = short, true = long"},
-		{CommandNames::dumpCollectionsImages, 1, "<file path>", "Dump all collection icons this path."},
-		{CommandNames::debugBuffs,            1, "<buff duration>", "Creates some client-side buffs for testing."},
-		{CommandNames::reloadPixelShader,     1, "<shader name>", "Reloads shader."},
-		{CommandNames::reloadVertexShader,    1, "<shader name>", "Reloads shader."},
-		{CommandNames::testProfession,        0, "", "Tests the profession selection window."},
-		{CommandNames::skinEdit,              1, "<command> [value]", "Skin system editing tools."},
-		{CommandNames::testLootBox,           1, "[objectId]...", "Test the loot box with existing object ids."},
-		{CommandNames::debugStringIds,        0, "[1|0]", "Debug the source string id table and entry."},
-		{CommandNames::debugStringIdColor,    0, "<ui color string>", "Set the color of the debug StringId string."},
-#if DEBUG=0
-		{CommandNames::debugBrowserOutput,    0, "", "Prints out debug information related to the Mozilla browser."		},
+			{CommandNames::debugPrint, 1, "<1|0>", "."},
+			{CommandNames::list, 0, "", "List all UI Pages."},
+			{CommandNames::set, 2, "<property> <value>", "Set a UI object property."},
+			{CommandNames::activate, 1, "<page>", "Activate UI Page."},
+			{CommandNames::deactivate, 1, "<page>", "Deactivate UI Page."},
+			{CommandNames::reset, 0, "", "Reload UI from disk."},
+			{CommandNames::locale_reset, 0, "", "Reset all locale specific strings."},
+			{CommandNames::pixel_offset, 0, "[offset]", "Set or get the pixel offset."},
+			{CommandNames::hudServerOutput, 0, "[1|0]", "Get or set the HUD showing server messages."},
+			{CommandNames::colorTest, 1, "<id>", "Color Test."},
+			{CommandNames::hueObjectTest, 3, "<id>, maxIndex1, maxIndex2", "Hue Object Test"},
+			{CommandNames::allowTargetAnything, 1, "<1|0>", "."},
+			{CommandNames::debugExamine, 1, "<1|0>", "."},
+			{CommandNames::debugClipboardExamine, 1, "<1|0>", "Copy debug info to clipboard"},
+			{CommandNames::systemMessage, 1, "<msg>", "fake system message"},
+			{CommandNames::combatSpam, 6, "<id> <id> <id> <int> <float> <msg>", "test combatspam"},
+			{CommandNames::testResourceIcon, 3, "<viewer widget> <class/type flag> <class>", ""},
+			{CommandNames::setCollideAll, 1, "<1|0>", "collide against all geometry"},
+			{CommandNames::testTrade, 0, "", "client-side trade with lookat target"},
+			{CommandNames::testSkillSystem, 1, "<1|0>", "test. verbose or not"},
+			{CommandNames::consent, 0, "", "show a consent window"},
+			{CommandNames::playUiEffect, 0, "", "play a simulated server-triggered UI effect."},
+			{CommandNames::spaceConvoTest, 0, "<SharedObjectTemplate name>", "Test the space conversation viewer UI"},
+			{CommandNames::dumpCommandsToHtml, 2, "<html file path> <true|false>", "Dump all commands with icons to this path. false = short, true = long"},
+			{CommandNames::dumpCollectionsImages, 1, "<file path>", "Dump all collection icons this path."},
+			{CommandNames::debugBuffs, 1, "<buff duration>", "Creates some client-side buffs for testing."},
+			{CommandNames::reloadPixelShader, 1, "<shader name>", "Reloads shader."},
+			{CommandNames::reloadVertexShader, 1, "<shader name>", "Reloads shader."},
+			{CommandNames::testProfession, 0, "", "Tests the profession selection window."},
+			{CommandNames::skinEdit, 1, "<command> [value]", "Skin system editing tools."},
+			{CommandNames::testLootBox, 1, "[objectId]...", "Test the loot box with existing object ids."},
+			{CommandNames::debugStringIds, 0, "[1|0]", "Debug the source string id table and entry."},
+			{CommandNames::debugStringIdColor, 0, "<ui color string>", "Set the color of the debug StringId string."},
+#if DEBUG == 0
+			{CommandNames::debugBrowserOutput, 0, "", "Prints out debug information related to the Mozilla browser."},
 #endif
 #endif
-		{"", 0, "", ""} // this must be last
+			{"", 0, "", ""} // this must be last
 	};
 	
 	
@@ -1090,8 +1089,8 @@ bool SwgCuiCommandParserUI::performParsing (const NetworkId & userId, const Stri
 		LocalizationManager::debugDisplayStringColor(color);
 		return true;
 	}
-#if DEBUG=0
-	else if(isCommand(argv[0], CommandNames::debugBrowserOutput))
+#if DEBUG == 0
+	else if (isCommand(argv[0], CommandNames::debugBrowserOutput))
 	{
 		SwgCuiWebBrowserManager::debugOutput();
 		return true;

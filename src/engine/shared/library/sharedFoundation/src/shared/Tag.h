@@ -10,6 +10,8 @@
 #ifndef TAG_H
 #define TAG_H
 
+#include "sharedFoundation/FirstSharedFoundation.h"
+
 // ======================================================================
 
 #define TAG_DIGIT_NULL   00

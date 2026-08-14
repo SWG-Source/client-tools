@@ -8,9 +8,6 @@
 #include "sharedGame/FirstSharedGame.h"
 #include "sharedGame/WearableEntry.h"
 
-#include "sharedFoundation/NetworkIdArchive.h"
-
-
 // ======================================================================
 
 WearableEntry::WearableEntry(const std::string& appearance, int arrangement, const NetworkId& id, int sharedTemplate) :

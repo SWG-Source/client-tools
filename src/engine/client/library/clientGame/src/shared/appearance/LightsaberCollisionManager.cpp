@@ -22,7 +22,7 @@
 #include "sharedObject/Object.h"
 #include "sharedRandom/Random.h"
 
-#include <hash_map>
+#include <unordered_map>
 #include <limits>
 #include <string>
 #include <vector>
@@ -96,7 +96,7 @@ namespace LightsaberCollisionManagerNamespace
 	bool             s_installed;
 	BladeInfoVector  s_blades;
 
-	typedef std::hash_map<NetworkId, float, NetworkId::Hash> ClashList;
+	typedef std::unordered_map<NetworkId, float, NetworkId::Hash> ClashList;
 	ClashList s_clashList;
 	const float s_clashTimeMin = 0.2f;
 	const float s_clashTimeMax = 0.5f;

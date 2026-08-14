@@ -12,6 +12,7 @@
 
 #include "sharedNetworkMessages/ChatAvatarId.h"
 #include "unicodeArchive/UnicodeArchive.h"
+#include "sharedFoundationTypes/FoundationTypes.h"
 
 #include <vector>
 

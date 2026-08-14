@@ -11,8 +11,7 @@
 #include "RecentDirectory.h"
 #include "IncludeHandler.h"
 
-#include "..\..\..\Direct3d9\src\win32\Direct3d9_VertexShaderConstantRegisters.h"
-#include "..\..\..\Direct3d9\src\win32\Direct3d9_VertexShaderVertexRegisters.h"
+#include "clientGraphics/ShaderConstantRegisters.h"
 
 #include <map>
 

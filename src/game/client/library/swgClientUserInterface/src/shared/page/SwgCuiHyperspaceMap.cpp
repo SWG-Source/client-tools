@@ -141,56 +141,56 @@ m_selectedHyperspacePoint()
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_tatooine] using codeData value [gcwTatooine]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_tatooine_12", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_tatooine_12", gcwButton));
 
 		gcwButton = NULL;
 		getCodeDataObject(TUIButton, gcwButton, "gcwCorellia");
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_corellia] using codeData value [gcwCorellia]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_corellia_14", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_corellia_14", gcwButton));
 
 		gcwButton = NULL;
 		getCodeDataObject(TUIButton, gcwButton, "gcwDantooine");
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_dantooine] using codeData value [gcwDantooine]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_dantooine_17", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_dantooine_17", gcwButton));
 
 		gcwButton = NULL;
 		getCodeDataObject(TUIButton, gcwButton, "gcwDathomir");
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_dathomir] using codeData value [gcwDathomir]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_dathomir_12", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_dathomir_12", gcwButton));
 
 		gcwButton = NULL;
 		getCodeDataObject(TUIButton, gcwButton, "gcwEndor");
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_endor] using codeData value [gcwEndor]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_endor_16", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_endor_16", gcwButton));
 
 		gcwButton = NULL;
 		getCodeDataObject(TUIButton, gcwButton, "gcwLok");
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_lok] using codeData value [gcwLok]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_lok_14", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_lok_14", gcwButton));
 
 		gcwButton = NULL;
 		getCodeDataObject(TUIButton, gcwButton, "gcwNaboo");
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_naboo] using codeData value [gcwNaboo]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_naboo_14", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_naboo_14", gcwButton));
 
 		gcwButton = NULL;
 		getCodeDataObject(TUIButton, gcwButton, "gcwYavin4");
 		if (!gcwButton)
 			DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for space zone [space_yavin4] using codeData value [gcwYavin4]"));
 		else
-			ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>("gcw_region_yavin4_18", gcwButton));
+			ms_gcwButtons.insert(std::make_pair("gcw_region_yavin4_18", gcwButton));
 	}
 }
 

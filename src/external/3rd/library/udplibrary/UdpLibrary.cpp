@@ -2878,7 +2878,7 @@ void UdpConnection::GetChannelStatus(UdpChannel channel, ChannelStatus *channelS
 const char *UdpConnection::DisconnectReasonText(DisconnectReason reason)
 {
 	static bool sInitialized = false;
-	static char *sDisconnectReason[cDisconnectReasonCount];
+	static const char *sDisconnectReason[cDisconnectReasonCount];
 	
 	if (!sInitialized)
 	{

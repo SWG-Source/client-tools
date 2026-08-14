@@ -31,17 +31,15 @@
 class ParametersMessage : public GameNetworkMessage
 {
   public:
-	ParametersMessage(int weatherUpdateInterval, int entertainerCaptchaPercent = 40);
-	explicit ParametersMessage(Archive::ReadIterator & source);
-	virtual ~ParametersMessage();
+	  ParametersMessage(int weatherUpdateInterval);
+	  explicit ParametersMessage(Archive::ReadIterator &source);
+	  virtual ~ParametersMessage();
 
   public:
 	int getWeatherUpdateInterval() const;
-	int getEntertainerCaptchaPercent() const;
 	
   private:
 	Archive::AutoVariable<int> m_weatherUpdateInterval;
-	Archive::AutoVariable<int> m_entertainerCaptchaPercent;
 
 	ParametersMessage();
 	ParametersMessage(const ParametersMessage&);
@@ -53,13 +51,6 @@ class ParametersMessage : public GameNetworkMessage
 inline int ParametersMessage::getWeatherUpdateInterval() const
 {
 	return m_weatherUpdateInterval.get();
-}
-
-// ----------------------------------------------------------------------
-
-inline int ParametersMessage::getEntertainerCaptchaPercent() const
-{
-	return m_entertainerCaptchaPercent.get();
 }
 
 // ======================================================================

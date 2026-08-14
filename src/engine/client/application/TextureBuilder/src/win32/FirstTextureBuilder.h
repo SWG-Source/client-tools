@@ -29,6 +29,8 @@
 #include <memory>               // for std::auto_ptr
 
 #define BOOST_SMART_PTR_CONVERSION
+// Disable deprecated auto_ptr support for modern C++
+#define BOOST_NO_AUTO_PTR
 #include "boost/smart_ptr.hpp"  // for boost::shared_ptr and friends
 
 // ======================================================================

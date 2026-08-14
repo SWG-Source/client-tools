@@ -74,41 +74,41 @@
 
 void Fatal(const char *, ...)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void DebugFatal(const char *, ...)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void Warning(const char *, ...)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 void Report::setFlags(int)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void Report::vprintf(const char *, va_list)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void Report::printf(const char *, ...)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 bool ExitChain::isFataling()
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
@@ -116,7 +116,7 @@ bool ExitChain::isFataling()
 
 bool ConfigSharedFoundation::getVerboseHardwareLogging()
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
@@ -124,51 +124,51 @@ bool ConfigSharedFoundation::getVerboseHardwareLogging()
 
 Mutex::Mutex()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 Mutex::~Mutex()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 const TextureFormatInfo &TextureFormatInfo::getInfo(TextureFormat)
 {
-	__asm int 3;
+	__debugbreak();
 	static TextureFormatInfo dummy;
 	return dummy;
 }
 
 void TextureFormatInfo::setSupported(TextureFormat, bool)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 void *MemoryManager::allocate(size_t, uint32, bool, bool)
 {
-	__asm int 3;
+	__debugbreak();
 	return NULL;
 }
 
 void  MemoryManager::free(void *, bool)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void  MemoryManager::own(void *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 bool DataLint::isEnabled()
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
@@ -176,31 +176,31 @@ bool DataLint::isEnabled()
 
 void DebugFlags::registerFlag(bool &, const char *, const char *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void DebugFlags::registerFlag(bool &, const char *, const char *, ReportRoutine1, int)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void DebugFlags::unregisterFlag(bool &)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 void DebugKey::registerFlag(bool &, const char *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ----------------------------------------------------------------------
 
 bool DebugKey::isPressed(int)
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
@@ -208,7 +208,7 @@ bool DebugKey::isPressed(int)
 
 bool DebugKey::isDown(int)
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
@@ -216,54 +216,54 @@ bool DebugKey::isDown(int)
 
 Material::Material()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 Material::~Material()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 MemoryBlockManager::MemoryBlockManager(const char *, bool, int, int, int, int)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 MemoryBlockManager::~MemoryBlockManager()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 int MemoryBlockManager::getElementSize() const
 {
-	__asm int 3;
+	__debugbreak();
 	return 0;
 }
 
 void *MemoryBlockManager::allocate(bool)
 {
-	__asm int 3;
+	__debugbreak();
 	return 0;
 }
 
 void MemoryBlockManager::free(void *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 bool Os::isMainThread(void)
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 Os::ThreadId Os::getThreadId()
 {
-	__asm int 3;
+	__debugbreak();
 	return 0;
 }
 
@@ -273,68 +273,68 @@ Transform const Transform::identity;
 
 void Transform::multiply(const Transform &, const Transform &)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 const char *Shader::getName() const
 {
-	__asm int 3;
+	__debugbreak();
 	return NULL;
 }
 
 bool StaticShader::getMaterial(Tag, Material &) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::getTextureData(Tag, StaticShaderTemplate::TextureData &) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::getTexture(Tag, const Texture *&) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::getTextureCoordinateSet(Tag, uint8 &) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::getTextureFactor(Tag, uint32 &) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::getTextureScroll(Tag, StaticShaderTemplate::TextureScroll &) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::getAlphaTestReferenceValue(Tag, uint8 &) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::getStencilReferenceValue(Tag, uint32 &) const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
 bool StaticShader::containsPrecalculatedVertexLighting() const
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
@@ -342,97 +342,97 @@ bool StaticShader::containsPrecalculatedVertexLighting() const
 
 void Texture::fetch() const
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void Texture::release() const
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 DynamicIndexBufferGraphicsData::~DynamicIndexBufferGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 DynamicVertexBufferGraphicsData::~DynamicVertexBufferGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 HardwareIndexBuffer::~HardwareIndexBuffer()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 StaticIndexBuffer::StaticIndexBuffer(int)
 : HardwareIndexBuffer(T_static)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 StaticIndexBuffer::~StaticIndexBuffer()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 StaticIndexBufferGraphicsData::~StaticIndexBufferGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 StaticShaderGraphicsData::~StaticShaderGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 ShaderImplementationGraphicsData::~ShaderImplementationGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 StaticVertexBufferGraphicsData::~StaticVertexBufferGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 TextureGraphicsData::~TextureGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 VertexBufferVectorGraphicsData::~VertexBufferVectorGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 ShaderImplementationPassVertexShaderGraphicsData::~ShaderImplementationPassVertexShaderGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 ShaderImplementationPassPixelShaderProgramGraphicsData::~ShaderImplementationPassPixelShaderProgramGraphicsData()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 char const * ShaderImplementationPassPixelShaderProgram::getFileName() const
 {
-	__asm int 3;
+	__debugbreak();
 	return 0;
 }
 
 int ShaderImplementationPassPixelShaderProgram::getVersionMajor() const
 {
-	__asm int 3;
+	__debugbreak();
 	return 0;
 }
 
 int ShaderImplementationPassPixelShaderProgram::getVersionMinor() const
 {
-	__asm int 3;
+	__debugbreak();
 	return 0;
 }
 
@@ -440,13 +440,13 @@ int ShaderImplementationPassPixelShaderProgram::getVersionMinor() const
 
 int ConfigFile::getKeyInt(const char *, const char *, int, bool)
 {
-	__asm int 3;
+	__debugbreak();
 	return 0;
 }
 
 bool  ConfigFile::getKeyBool  (const char *, const char *, bool, bool)
 {
-	__asm int 3;
+	__debugbreak();
 	return false;
 }
 
@@ -454,7 +454,7 @@ bool  ConfigFile::getKeyBool  (const char *, const char *, bool, bool)
 
 real Clock::frameTime()
 {
-	__asm int 3;
+	__debugbreak();
 	return 0.0f;
 }
 
@@ -462,24 +462,24 @@ real Clock::frameTime()
 
 void Profiler::enter(char const *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void Profiler::leave(char const *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void Profiler::transfer(char const *, char const *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 AbstractFile *TreeFile::open(const char *, AbstractFile::PriorityType, bool)
 {
-	__asm int 3;
+	__debugbreak();
 	return NULL;
 }
 
@@ -487,12 +487,12 @@ AbstractFile *TreeFile::open(const char *, AbstractFile::PriorityType, bool)
 
 CrcString::CrcString()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 CrcString::~CrcString()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 bool CrcString::operator < (CrcString const &) const
@@ -504,81 +504,81 @@ bool CrcString::operator < (CrcString const &) const
 
 PersistentCrcString::PersistentCrcString(CrcString const &)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 PersistentCrcString::~PersistentCrcString()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 
 char const * PersistentCrcString::getString() const
 {
-	__asm int 3;
+	__debugbreak();
 	return NULL;
 }
 
 void PersistentCrcString::clear()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void PersistentCrcString::set(char const *, bool)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void PersistentCrcString::set(char const *, uint32)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 TemporaryCrcString::TemporaryCrcString(char const *, bool)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 TemporaryCrcString::~TemporaryCrcString()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 char const * TemporaryCrcString::getString() const
 {
-	__asm int 3;
+	__debugbreak();
 	return NULL;
 }
 
 void TemporaryCrcString::clear()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void TemporaryCrcString::set(char const *, bool)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void TemporaryCrcString::set(char const *, uint32)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 void Graphics::setLastError(char const *, char const *)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 // ======================================================================
 
 bool Graphics::writeImage(char const *, int const, int const, int const, int const *, bool const, Gl_imageFormat const, Rectangle2d const *)
 {
-	__asm int 3;
+	__debugbreak();
 	return true;
 }
 
@@ -586,7 +586,7 @@ bool Graphics::writeImage(char const *, int const, int const, int const, int con
 
 void CrashReportInformation::addStaticText(char const *, ...)
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 
@@ -594,32 +594,32 @@ void CrashReportInformation::addStaticText(char const *, ...)
 
 PerformanceTimer::PerformanceTimer()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 PerformanceTimer::~PerformanceTimer()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void PerformanceTimer::start()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void PerformanceTimer::resume()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 void PerformanceTimer::stop()
 {
-	__asm int 3;
+	__debugbreak();
 }
 
 float PerformanceTimer::getElapsedTime() const
 {
-	__asm int 3;
+	__debugbreak();
 	return 0.0f;
 }
 
@@ -627,7 +627,7 @@ float PerformanceTimer::getElapsedTime() const
 
 Transform const & Object::getTransform_o2w() const
 {
-	__asm int 3;
+	__debugbreak();
 	return Transform::identity;
 }
 

@@ -61,6 +61,7 @@ public:
 	virtual void preloadAssets () const;
 
 	void apply(Object * object) const;
+	bool applyWearables(Object *object) const;
 	void applyGlows(Object & object, bool skipSelfGlows) const;
 
 	void applyDamage (Object* object, bool on, float currentDamageLevel, float desiredDamageLevel) const;

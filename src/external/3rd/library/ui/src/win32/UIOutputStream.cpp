@@ -34,9 +34,9 @@ void UIOutputStream::ExplicitDestroy ()
 
 UIOutputStream::UIOutputStream ()
 {
-	fl = fopen ("ui.log", "w");
+	fl = fopen ("logs/ext/ui.log", "w");
 	if (!fl)
-		UI_REPORT_LOG_PRINT (true, ("UIOutputStream: Unable to open file ui.log for writing."));
+		UI_REPORT_LOG_PRINT (true, ("UIOutputStream: Unable to open file logs/ext/ui.log for writing."));
 }
 
 //----------------------------------------------------------------------

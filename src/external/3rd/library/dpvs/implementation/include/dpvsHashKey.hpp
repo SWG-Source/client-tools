@@ -59,27 +59,27 @@ template <class Key> DPVS_FORCE_INLINE unsigned int HashKey<Key>::getHashValue (
 
 // Specialization for floating point hash values (as the default dword-
 // casting yields a very bad hash function)
-template <> unsigned int HashKey<float>::getHashValue (const float& s)
+template <> DPVS_FORCE_INLINE unsigned int HashKey<float>::getHashValue (const float& s)
 {
 	UINT32 z = *(reinterpret_cast<const UINT32*>(&s));
 	return ((z>>22)+(z>>12)+(z));
 }
 
-template <> unsigned int HashKey<Vector2i>::getHashValue (const Vector2i& s)
+template <> DPVS_FORCE_INLINE unsigned int HashKey<Vector2i>::getHashValue (const Vector2i& s)
 {
 	UINT32 a = (reinterpret_cast<const UINT32*>(&s))[0];
 	UINT32 b = (reinterpret_cast<const UINT32*>(&s))[1];
 	return a + (a>>12) + b*173;
 }
 
-template <> unsigned int HashKey<Vector3>::getHashValue (const Vector3& s)
+template <> DPVS_FORCE_INLINE unsigned int HashKey<Vector3>::getHashValue (const Vector3& s)
 {
 	const UINT32* h = (reinterpret_cast<const UINT32*>(&s));
 	UINT32 foo = h[0]+h[1]*11-(h[2]*17);
 	return (foo>>22)^(foo>>12)^(foo);
 }
 
-template <> unsigned int HashKey<Vector4>::getHashValue (const Vector4& s)
+template <> DPVS_FORCE_INLINE unsigned int HashKey<Vector4>::getHashValue (const Vector4& s)
 {
 	const UINT32* h = (reinterpret_cast<const UINT32*>(&s));
 	UINT32 foo = h[0]+h[1]-(h[2]*17)+h[3]*7;

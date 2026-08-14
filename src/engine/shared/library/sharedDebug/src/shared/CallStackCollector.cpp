@@ -49,7 +49,7 @@ namespace CallStackCollectorNamespace
 		~Node();
 
 		CrcString const & getName() const;
-		void addCallStack(uint32 * callStack);
+		void addCallStack(uint64 *callStack);
 
 		void debugReport() const;
 
@@ -62,9 +62,8 @@ namespace CallStackCollectorNamespace
 			static bool compare(CallStackEntry const * a, CallStackEntry const * b);
 
 		public:
-
-			uint32 * m_callStack;
-			int m_calls;
+		  uint64 *m_callStack;
+		  int m_calls;
 		};
 
 	private:
@@ -125,7 +124,7 @@ CrcString const & CallStackCollectorNamespace::Node::getName() const
 
 // ----------------------------------------------------------------------
 
-void CallStackCollectorNamespace::Node::addCallStack(uint32 * const callStack)
+void CallStackCollectorNamespace::Node::addCallStack(uint64 *const callStack)
 {
 	//-- Compute crc of memory
 	uint32 const crc = Crc::calculate(callStack, sizeof(uint32) * CALLSTACK_DEPTH);
@@ -140,7 +139,7 @@ void CallStackCollectorNamespace::Node::addCallStack(uint32 * const callStack)
 	else
 	{
 		//-- Create new callstack
-		uint32 * const newCallStack = new uint32[CALLSTACK_DEPTH];
+		uint64 *const newCallStack = new uint64[CALLSTACK_DEPTH];
 		memcpy(newCallStack, callStack, sizeof(uint32) * CALLSTACK_DEPTH);
 
 		CallStackEntry callStackEntry;
@@ -180,7 +179,7 @@ void CallStackCollectorNamespace::Node::debugReport() const
 			if (DebugHelp::lookupAddress(callStackEntry->m_callStack[j], libName, fileName, sizeof(fileName), line))
 				REPORT_LOG(true, ("  %s(%d) : caller %d\n", fileName, line, j - 1));
 			else
-				REPORT_LOG(true, ("  unknown(0x%08X) : caller %d\n", static_cast<int>(callStackEntry->m_callStack[j]), j - 1));
+				REPORT_LOG(true, ("  unknown(0x%016llX) : caller %d\n", static_cast<unsigned long long>(callStackEntry->m_callStack[j]), j - 1));
 		}
 	}
 }
@@ -218,7 +217,7 @@ void CallStackCollector::sample(char const * const name)
 	}
 
 	//-- Sample the callstack
-	uint32 callStack[CALLSTACK_DEPTH];
+	uint64 callStack[CALLSTACK_DEPTH];
 	DebugHelp::getCallStack(&callStack[0], CALLSTACK_DEPTH);
 
 	//-- Add to the node

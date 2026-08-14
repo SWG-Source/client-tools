@@ -23,13 +23,12 @@ class TextureRendererShaderPrimitive;
 class ShaderPrimitive
 {
 public:
-
-	typedef enum SkinningMode
-	{
-		SM_noSkinning,
-		SM_hardSkinning,
-		SM_softSkinning
-	};
+  enum SkinningMode
+  {
+	  SM_noSkinning,
+	  SM_hardSkinning,
+	  SM_softSkinning
+  };
 
 public:
 

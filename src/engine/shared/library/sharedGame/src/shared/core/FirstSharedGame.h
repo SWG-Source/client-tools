@@ -10,6 +10,7 @@
 
 // ======================================================================
 
+#include "sharedFoundation/NetworkIdArchive.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/FirstSharedFoundation.h"
 #include "sharedDebug/FirstSharedDebug.h"
 #include "sharedMemoryManager/FirstSharedMemoryManager.h"

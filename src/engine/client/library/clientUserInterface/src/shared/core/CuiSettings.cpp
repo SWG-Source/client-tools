@@ -311,9 +311,15 @@ namespace CuiSettingsNamespace
 	void load_form_0006 (Iff & iff)
 	{			
 		bool localSizeLocationOk = true;
-		
-		const UISize currentResolution (Graphics::getCurrentRenderTargetWidth (), Graphics::getCurrentRenderTargetHeight ());
-		
+
+		// Use the LOGICAL UI canvas size (= frameBufferMax / uiCanvasScale),
+		// not the physical render target. Saved widget positions are in
+		// logical canvas coords; if we stamped/checked physical pixels, a
+		// scale change wouldn't invalidate stale positions and widgets
+		// would land off-screen after the canvas Scale render.
+		// (2026-05-16, ultrawide UI scale work.)
+		const UISize currentResolution(Graphics::getUiCanvasWidth(), Graphics::getUiCanvasHeight());
+
 		if (iff.enterChunk (Tags::RESO, true))
 		{
 			s_screenResolution.x = iff.read_int32 ();
@@ -507,7 +513,13 @@ namespace CuiSettingsNamespace
 		iff.insertForm (Tags::UIST);
 		iff.insertForm (TAG_0006);
 
-		const UISize currentResolution (Graphics::getCurrentRenderTargetWidth (), Graphics::getCurrentRenderTargetHeight ());
+		// Use the LOGICAL UI canvas size (= frameBufferMax / uiCanvasScale),
+		// not the physical render target. Saved widget positions are in
+		// logical canvas coords; if we stamped/checked physical pixels, a
+		// scale change wouldn't invalidate stale positions and widgets
+		// would land off-screen after the canvas Scale render.
+		// (2026-05-16, ultrawide UI scale work.)
+		const UISize currentResolution(Graphics::getUiCanvasWidth(), Graphics::getUiCanvasHeight());
 
 		iff.insertChunk (Tags::RESO);
 		{

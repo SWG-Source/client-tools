@@ -251,24 +251,22 @@ void GameNetwork::Listener::receiveMessage(const MessageDispatch::Emitter & , co
 
 //-----------------------------------------------------------------------
 
-GameNetwork::GameNetwork     () :
-m_listener                   (new Listener),
-m_connectionServer           (0),
-m_loginServer                (0),
-m_loginToken                 (0),
-m_userName                   (ConfigClientGame::getLoginClientID()),
-m_userPassword               (ConfigClientGame::getLoginClientPassword()),
-m_userIpAddress              (),
-m_centralServerName          (),
-m_pendingCentralServerName   (),
-m_guid						 (),
-m_loginTokenLength           (0),
-m_userPort                   (0),
-m_acceptSceneCommand         (false),
-m_stationId                  (static_cast<StationId>(ConfigFile::getKeyInt("Station", "stationId", 0))),
-m_taskConnection             (0),
-m_weatherUpdateInterval      (0),
-m_entertainerCaptchaPercent  (40)
+GameNetwork::GameNetwork() : m_listener(new Listener),
+							 m_connectionServer(0),
+							 m_loginServer(0),
+							 m_loginToken(0),
+							 m_userName(ConfigClientGame::getLoginClientID()),
+							 m_userPassword(ConfigClientGame::getLoginClientPassword()),
+							 m_userIpAddress(),
+							 m_centralServerName(),
+							 m_pendingCentralServerName(),
+							 m_guid(),
+							 m_loginTokenLength(0),
+							 m_userPort(0),
+							 m_acceptSceneCommand(false),
+							 m_stationId(static_cast<StationId>(ConfigFile::getKeyInt("Station", "stationId", 0))),
+							 m_taskConnection(0),
+							 m_weatherUpdateInterval(0)
 {
 	uint16 taskConnectionPort = ConfigClientGame::getTaskConnectionPort();
 	if(taskConnectionPort)
@@ -688,7 +686,6 @@ void GameNetwork::receiveParametersMessage (const ParametersMessage & msg)
 {
 	DEBUG_FATAL(s_instance == 0, ("GameNetwork not installed"));
 	m_weatherUpdateInterval = msg.getWeatherUpdateInterval();
-	m_entertainerCaptchaPercent = msg.getEntertainerCaptchaPercent();
 }
 
 //----------------------------------------------------------------------
@@ -858,14 +855,6 @@ int GameNetwork::getWeatherUpdateInterval()
 {
 	DEBUG_FATAL(s_instance == 0, ("GameNetwork not installed"));
 	return s_instance->m_weatherUpdateInterval;
-}
-
-//-------------------------------------------------------------------
-
-int GameNetwork::getEntertainerCaptchaPercent()
-{
-	DEBUG_FATAL(s_instance == 0, ("GameNetwork not installed"));
-	return s_instance->m_entertainerCaptchaPercent;
 }
 
 //-------------------------------------------------------------------

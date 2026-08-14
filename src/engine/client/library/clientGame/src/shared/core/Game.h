@@ -40,36 +40,35 @@ namespace GameNamespace
 class Game
 {
 public:
+  typedef Unicode::String UnicodeString;
+  struct Messages
+  {
+	  static const char *const SCENE_CHANGED;
 
-	typedef std::basic_string<unsigned short, std::char_traits<unsigned short>, std::allocator<unsigned short> > UnicodeString;
-	struct Messages
-	{
-		static const char * const SCENE_CHANGED;
+	  struct ChatStartInput
+	  {
+		  typedef Unicode::String Payload;
+	  };
 
-		struct ChatStartInput
-		{
-			typedef Unicode::String Payload;
-		};
+	  struct DebugPrintUi
+	  {
+		  typedef UnicodeString Payload;
+	  };
 
-		struct DebugPrintUi
-		{
-			typedef UnicodeString Payload;
-		};
+	  struct SceneChanged
+	  {
+		  typedef bool Payload;
+	  };
 
-		struct SceneChanged
-		{
-			typedef bool Payload;
-		};
+	  struct CollectionServerFirstChanged
+	  {
+		  typedef std::string Payload;
+	  };
 
-		struct CollectionServerFirstChanged
-		{
-			typedef std::string Payload;
-		};
-
-		struct CollectionShowServerFirstOptionChanged
-		{
-			typedef bool Payload;
-		};
+	  struct CollectionShowServerFirstOptionChanged
+	  {
+		  typedef bool Payload;
+	  };
 	};
 
 	enum Application

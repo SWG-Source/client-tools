@@ -11,10 +11,9 @@
 
 // ======================================================================
 
-#include "Archive/AutoDeltaByteStream.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
 #include "sharedMath/Transform.h"
 #include "sharedUtility/PackedPosition.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 // ======================================================================
 

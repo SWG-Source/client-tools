@@ -512,14 +512,37 @@ void UICanvas::BltFromNoScaleOrRotate( const UICanvas * const src, const UIPoint
 
 	}
 
-	s_theVertices[0].x = (float)DestRect.left;
-	s_theVertices[0].y = (float)DestRect.top;
-	s_theVertices[1].x = (float)DestRect.right;
-	s_theVertices[1].y = s_theVertices[0].y;
-	s_theVertices[2].x = s_theVertices[0].x;
-	s_theVertices[2].y = (float)DestRect.bottom;
-	s_theVertices[3].x = s_theVertices[1].x;
-	s_theVertices[3].y = s_theVertices[2].y;
+	// Ultrawide UI-scale support (2026-05-16): when a canvas Scale is active
+	// (TranslationOnly == false), this "NoScaleOrRotate" fast path was
+	// silently ignoring the scale matrix -- vertices written from raw
+	// DestRect coords -- so text glyphs (only caller is UITextStyle.cpp
+	// per-glyph blits, lines 985/1001/1021) rendered at original pixel
+	// size while widget panels (using regular BltFrom, which DOES apply
+	// the matrix) rendered scaled. Fix: when TranslationOnly is false,
+	// rebase DestRect to widget-local coords (subtract raw Translation
+	// just like BltFrom does at its line ~197) and apply the full
+	// transformation matrix via TransformFP. Fast path preserved when
+	// TranslationOnly is true (normal scale-1.0 case) -- zero overhead
+	// for default UI scale.
+	if (!mState.TranslationOnly)
+	{
+		DestRect -= mState.Translation;
+		s_theVertices[0] = TransformFP(static_cast<float>(DestRect.left),  static_cast<float>(DestRect.top));
+		s_theVertices[1] = TransformFP(static_cast<float>(DestRect.right), static_cast<float>(DestRect.top));
+		s_theVertices[2] = TransformFP(static_cast<float>(DestRect.left),  static_cast<float>(DestRect.bottom));
+		s_theVertices[3] = TransformFP(static_cast<float>(DestRect.right), static_cast<float>(DestRect.bottom));
+	}
+	else
+	{
+		s_theVertices[0].x = (float)DestRect.left;
+		s_theVertices[0].y = (float)DestRect.top;
+		s_theVertices[1].x = (float)DestRect.right;
+		s_theVertices[1].y = s_theVertices[0].y;
+		s_theVertices[2].x = s_theVertices[0].x;
+		s_theVertices[2].y = (float)DestRect.bottom;
+		s_theVertices[3].x = s_theVertices[1].x;
+		s_theVertices[3].y = s_theVertices[2].y;
+	}
 
 	if ( src )
 	{
@@ -539,10 +562,10 @@ void UICanvas::BltFromNoScaleOrRotate( const UICanvas * const src, const UIPoint
 
 		s_theUVs[1].x = (float)SourceRect.right * invSrcWidth;
 		s_theUVs[1].y = s_theUVs[0].y;
-		
+
 		s_theUVs[2].x = s_theUVs[0].x;
 		s_theUVs[2].y = (float)SourceRect.bottom * invSrcHeight;
-		
+
 		s_theUVs[3].x = s_theUVs[1].x;
 		s_theUVs[3].y = s_theUVs[2].y;
 	}

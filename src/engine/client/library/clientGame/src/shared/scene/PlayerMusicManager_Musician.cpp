@@ -500,7 +500,7 @@ void PlayerMusicManager::Musician::stopPlaying()
 
 		// Only send the posture change request to the server for the local client
 
-		if (Game::getPlayerCreature() == m_creatureObject)
+		if (Game::getPlayerCreature() == m_creatureObject.getPointer())
 		{
 			m_creatureObject->requestServerPostureChange(Postures::Upright);
 		}

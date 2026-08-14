@@ -1,48 +1,26 @@
 // ======================================================================
 //
 // Direct3d9_VertexShaderVertexRegisters.h
-// Copyright 2001 Sony Online Entertainment Inc.
-// All Rights Reserved.
+// Copyright 2001-2002 Sony Online Entertainment Inc.
+//
+// ======================================================================
+//
+// The vertex shader input registers moved to clientGraphics/ShaderConstantRegisters.h. They describe
+// an asset format rather than anything specific to a Direct3D 9 backend, and a
+// second backend needs the same numbers -- two copies of an ABI is a divergence
+// waiting to happen.
+//
+// This file remains only so existing includes keep resolving. It will go when
+// the Direct3d9 backend does.
 //
 // ======================================================================
 
 #ifndef INCLUDED_Direct3d9_VertexShaderVertexRegisters_H
 #define INCLUDED_Direct3d9_VertexShaderVertexRegisters_H
 
-#include <d3d9.h>
-
 // ======================================================================
 
-// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
-
-// These values are encoded into the vertex shader data files.  Changing these
-// may invalidate all the vertex shaders and require them to be recompiled.
-
-// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
-
-enum Direct3d9_VertexShaderVertexRegisters
-{
-	VSVR_position               = 0,
-	VSVR_normal                 = 3,
-	VSVR_pointSize              = 4,
-	VSVR_color0                 = 5,
-	VSVR_color1                 = 6,
-	VSVR_textureCoordinateSet0  = 7,
-	VSVR_textureCoordinateSet1  = 8,
-	VSVR_textureCoordinateSet2  = 9,
-	VSVR_textureCoordinateSet3  = 10,
-	VSVR_textureCoordinateSet4  = 11,
-	VSVR_textureCoordinateSet5  = 12,
-	VSVR_textureCoordinateSet6  = 13,
-	VSVR_textureCoordinateSet7  = 14,
-};
-
-// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
-
-// These values are encoded into the vertex shader data files.  Changing these
-// may invalidate all the vertex shaders and require them to be recompiled.
-
-// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
+#include "clientGraphics/ShaderConstantRegisters.h"
 
 // ======================================================================
 

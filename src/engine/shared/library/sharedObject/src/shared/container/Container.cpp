@@ -64,9 +64,8 @@ using namespace ContainerNamespace;
 
 //-----------------------------------------------------------------------
 
-ContainerIterator::ContainerIterator() :
-m_iterator(0),
-m_owner(0)
+ContainerIterator::ContainerIterator() : m_iterator(),
+										 m_owner(0)
 {
 }
 //-----------------------------------------------------------------------
@@ -153,9 +152,8 @@ ContainerIterator& ContainerIterator::operator++()
 
 //-----------------------------------------------------------------------
 
-ContainerConstIterator::ContainerConstIterator() :
-m_iterator(0),
-m_owner(0)
+ContainerConstIterator::ContainerConstIterator() : m_iterator(),
+												   m_owner(0)
 {
 }
 //-----------------------------------------------------------------------

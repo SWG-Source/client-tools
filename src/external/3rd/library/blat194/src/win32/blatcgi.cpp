@@ -138,7 +138,7 @@ BOOL GetFileSize(LPCSTR lpFn,DWORD &dwSize)
 //
 // Works like _getenv(), but uses win32 functions instead.
 //
-char * GetEnv(LPSTR lpszEnvVar) {
+char * GetEnv(LPCSTR lpszEnvVar) {
 
 	char *var,dummy;
 	DWORD dwLen;

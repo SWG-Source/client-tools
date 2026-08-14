@@ -204,14 +204,14 @@ namespace
 			return clusterTimeZone;
 	}
 
-	static const Unicode::String::value_type *s_colorRed     = L"\\#ff0000";
-	static const Unicode::String::value_type *s_colorGreen   = L"\\#00ff00";
-	static const Unicode::String::value_type *s_colorBlue    = L"\\#0000ff";
-	static const Unicode::String::value_type *s_colorMagenta = L"\\#ff00ff";
-	static const Unicode::String::value_type *s_colorYellow  = L"\\#ffff00";
-	static const Unicode::String::value_type *s_colorCyan    = L"\\#00ffff";
-	static const Unicode::String::value_type *s_colorWhite   = L"\\#ffffff";
-	static const Unicode::String::value_type *s_colorBlack   = L"\\#000000";
+	static const Unicode::String::value_type *s_colorRed = u"\\#ff0000";
+	static const Unicode::String::value_type *s_colorGreen = u"\\#00ff00";
+	static const Unicode::String::value_type *s_colorBlue = u"\\#0000ff";
+	static const Unicode::String::value_type *s_colorMagenta = u"\\#ff00ff";
+	static const Unicode::String::value_type *s_colorYellow = u"\\#ffff00";
+	static const Unicode::String::value_type *s_colorCyan = u"\\#00ffff";
+	static const Unicode::String::value_type *s_colorWhite = u"\\#ffffff";
+	static const Unicode::String::value_type *s_colorBlack = u"\\#000000";
 }
 
 //----------------------------------------------------------------------
@@ -262,9 +262,11 @@ m_hasRecommended         (false)
 	m_table->SetVisible (true);
 
 	getCodeDataObject (TUIPage,      m_sampleBar,        "sampleBar");
-	m_sampleBar->SetVisible (false);
+	if (m_sampleBar)
+		m_sampleBar->SetVisible(false);
 
-	registerMediatorObject(*m_changeGalaxy, true);
+	if (m_changeGalaxy)
+		registerMediatorObject(*m_changeGalaxy, true);
 }
 
 //-----------------------------------------------------------------
@@ -328,8 +330,10 @@ void SwgCuiClusterSelection::performActivate ()
 
 	m_model->clearSortingHistory ();
 
-	m_main->SetVisible(false);
-	m_main2->SetVisible(true);
+	if (m_main)
+		m_main->SetVisible(false);
+	if (m_main2)
+		m_main2->SetVisible(true);
 
 	setIsUpdating (true);
 
@@ -414,7 +418,7 @@ void SwgCuiClusterSelection::refreshList ()
 			}
 
 			char buffer[64];
-			name = color + name + L" [" + Unicode::narrowToWide(clusterInfo.branch) + L"." + Unicode::narrowToWide(_itoa(clusterInfo.version, buffer, 10)) + L"]";
+			name = color + name + u" [" + Unicode::narrowToWide(clusterInfo.branch) + u"." + Unicode::narrowToWide(_itoa(clusterInfo.version, buffer, 10)) + u"]";
 		}
 	}
 
@@ -503,7 +507,7 @@ void SwgCuiClusterSelection::updateServerStatus ()
 					{
 						if (clusterInfo.isAdmin)
 						{
-							Unicode::String lockedFlag = L"\\#00ff00 (God Mode)";
+							Unicode::String lockedFlag = u"\\#00ff00 (God Mode)";
 							statusStr = CuiStringIdsServer::server_locked.localize() + lockedFlag;
 						}
 						else
@@ -536,9 +540,9 @@ void SwgCuiClusterSelection::updateServerStatus ()
 					statusStr = CuiStringIdsServer::server_offline.localize ();
 					statusSortStr.push_back ('6');
 				}
-				if(clusterInfo.isAdmin && clusterInfo.isSecret)
+				if (clusterInfo.isAdmin && clusterInfo.isSecret)
 				{
-					Unicode::String secretFlag = L"\\#ff00ff (Secret)";
+					Unicode::String secretFlag = u"\\#ff00ff (Secret)";
 					statusStr += secretFlag;
 				}
 
@@ -701,7 +705,8 @@ void SwgCuiClusterSelection::updateServerStatus ()
 			smallestPopulationRow = std::max (0, smallestPopulationRow);
 			m_table->SelectRow(smallestPopulationRow);
 			Unicode::String name(Unicode::narrowToWide(smallestPopulationName));
-			m_recommendedGalaxy->SetLocalText(name);
+			if (m_recommendedGalaxy)
+				m_recommendedGalaxy->SetLocalText(name);
 		}
 	}
 
@@ -806,8 +811,10 @@ void SwgCuiClusterSelection::OnButtonPressed(UIWidget *context)
 	}
 	else if (context == m_changeGalaxy)
 	{
-		m_main->SetVisible(true);
-		m_main2->SetVisible(false);
+		if (m_main)
+			m_main->SetVisible(true);
+		if (m_main2)
+			m_main2->SetVisible(false);
 	}
 } //lint !e818 //stfu noob
 
@@ -851,7 +858,13 @@ void SwgCuiClusterSelection::update (float deltaTimeSecs)
 			return;
 		}
 
-		CuiTransition::startTransition(CuiMediatorTypes::ClusterSelection, CuiMediatorTypes::AvatarSimple);
+		// AvatarSimple is a post-NGE intermediate "simple avatar select" page
+		// at UI path /AvSimple - the vanilla NGE-retail UI bundle doesn't
+		// ship that page, so the mediator factory FATALs with
+		// "CuiMediatorFactory_Constructor null page [/AvSimple]". Route to
+		// /AvSel (the standard avatar/character-list selection page) which
+		// is present in NGE retail.
+		CuiTransition::startTransition(CuiMediatorTypes::ClusterSelection, CuiMediatorTypes::AvatarSelection);
 		//CuiTransition::startTransition(CuiMediatorTypes::ClusterSelection, CuiMediatorTypes::AvatarCreation);
 
 		GameNetwork::disconnectLoginServer ();

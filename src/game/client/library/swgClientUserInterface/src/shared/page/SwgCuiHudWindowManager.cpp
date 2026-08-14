@@ -186,112 +186,163 @@ m_doubleToolbar(0)
 	{
 		UIPage * mediatorPage = 0;
 
+		// Each HUD sub-page is wrapped in a null-guard. The NGE-retail HUD
+		// XML doesn't have many of these post-NGE additions (Toolbar/
+		// DoubleToolbar/Notifications/Highlight/ButtonBar/incap/ChatWindow/
+		// questHelper/SystemMessage). With getCodeDataObject demoted to
+		// warning-on-miss earlier in the session, mediatorPage stays at its
+		// previous value (or 0) when a page is missing - dereferencing it
+		// AVs. Skipping the block when the page isn't present means the
+		// HUD just doesn't have that sub-element, but the world loads.
+
 		//-----------------------------------------------------------------
 		{
+			mediatorPage = 0;
 			hud.getCodeDataObject (TUIPage,     mediatorPage,           "SystemMessage");
-			mediatorPage->SetEnabled (false);
-			SwgCuiSystemMessage * const sysMessage = new SwgCuiSystemMessage (*mediatorPage);
-			sysMessage->setStickyVisible (true);
-			sysMessage->activate         ();
-			m_workspace->addMediator     (*sysMessage);
+			if (mediatorPage)
+			{
+				mediatorPage->SetEnabled(false);
+				SwgCuiSystemMessage *const sysMessage = new SwgCuiSystemMessage(*mediatorPage);
+				sysMessage->setStickyVisible(true);
+				sysMessage->activate();
+				m_workspace->addMediator(*sysMessage);
+			}
 		} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
 
 		//-----------------------------------------------------------------
 		{
+			mediatorPage = 0;
 			hud.getCodeDataObject (TUIPage,     mediatorPage,           "SystemMessageNoob");
-			mediatorPage->SetEnabled (false);
-			SwgCuiSystemMessage * const sysMessageNoob = new SwgCuiSystemMessage (*mediatorPage, SwgCuiSystemMessage::T_noob);
-			sysMessageNoob->setStickyVisible (true);
-			sysMessageNoob->activate         ();
-			m_workspace->addMediator     (*sysMessageNoob);
+			if (mediatorPage)
+			{
+				mediatorPage->SetEnabled(false);
+				SwgCuiSystemMessage *const sysMessageNoob = new SwgCuiSystemMessage(*mediatorPage, SwgCuiSystemMessage::T_noob);
+				sysMessageNoob->setStickyVisible(true);
+				sysMessageNoob->activate();
+				m_workspace->addMediator(*sysMessageNoob);
+			}
 		} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
 
 		//-----------------------------------------------------------------
 		{
+			m_singleToolbarPage = 0;
+			m_doubleToolbarPage = 0;
 			hud.getCodeDataObject (TUIPage,     m_singleToolbarPage,    "Toolbar");
 			hud.getCodeDataObject (TUIPage,     m_doubleToolbarPage,    "DoubleToolbar");
-			m_singleToolbarPage->SetVisible(false);
-			m_doubleToolbarPage->SetVisible(false);
-			m_toolbarMediator = new SwgCuiToolbar (*getToolbarPage(), Game::getHudSceneType());
-			m_toolbarMediator->setSettingsAutoSizeLocation (false, true);
-			m_toolbarMediator->setStickyVisible(!Game::isHudSceneTypeSpace());
-			m_toolbarMediator->setShowFocusedGlowRect(false);
-			m_toolbarMediator->fetch ();
-			m_toolbarMediator->activate ();
-			m_toolbarMediator->startProcessingActions();
-			m_workspace->addMediator (*m_toolbarMediator);
-			cacheToolbar();
+			if (m_singleToolbarPage)
+				m_singleToolbarPage->SetVisible(false);
+			if (m_doubleToolbarPage)
+				m_doubleToolbarPage->SetVisible(false);
+			if (m_singleToolbarPage || m_doubleToolbarPage)
+			{
+				m_toolbarMediator = new SwgCuiToolbar(*getToolbarPage(), Game::getHudSceneType());
+				m_toolbarMediator->setSettingsAutoSizeLocation(false, true);
+				m_toolbarMediator->setStickyVisible(!Game::isHudSceneTypeSpace());
+				m_toolbarMediator->setShowFocusedGlowRect(false);
+				m_toolbarMediator->fetch();
+				m_toolbarMediator->activate();
+				m_toolbarMediator->startProcessingActions();
+				m_workspace->addMediator(*m_toolbarMediator);
+				cacheToolbar();
+			}
 		}
 
 		//-----------------------------------------------------------------
 		{
-			hud.getCodeDataObject (TUIPage,     mediatorPage,           "Notifications");
-			m_notificationsMediator = new SwgCuiNotifications (*mediatorPage, Game::getHudSceneType());
-			m_notificationsMediator->setSettingsAutoSizeLocation (true, true);
-			m_notificationsMediator->setStickyVisible(!Game::isHudSceneTypeSpace());
-			m_notificationsMediator->setShowFocusedGlowRect(false);
-			m_notificationsMediator->fetch ();
-			m_notificationsMediator->activate ();
-			m_workspace->addMediator (*m_notificationsMediator);
+			mediatorPage = 0;
+			hud.getCodeDataObject(TUIPage, mediatorPage, "Notifications");
+			if (mediatorPage)
+			{
+				m_notificationsMediator = new SwgCuiNotifications(*mediatorPage, Game::getHudSceneType());
+				m_notificationsMediator->setSettingsAutoSizeLocation(true, true);
+				m_notificationsMediator->setStickyVisible(!Game::isHudSceneTypeSpace());
+				m_notificationsMediator->setShowFocusedGlowRect(false);
+				m_notificationsMediator->fetch();
+				m_notificationsMediator->activate();
+				m_workspace->addMediator(*m_notificationsMediator);
+			}
 		}
 
 		//-----------------------------------------------------------------
 		{
-			hud.getCodeDataObject (TUIPage,     mediatorPage,           "Highlight");
-			m_highlightMediator = new SwgCuiHighlight (*mediatorPage, Game::getHudSceneType());
-			m_highlightMediator->setSettingsAutoSizeLocation (true, true);
-			m_highlightMediator->setStickyVisible(!Game::isHudSceneTypeSpace());
-			m_highlightMediator->setShowFocusedGlowRect(false);
-			m_highlightMediator->fetch ();
-			m_highlightMediator->activate ();
-			m_workspace->addMediator (*m_highlightMediator);
+			mediatorPage = 0;
+			hud.getCodeDataObject(TUIPage, mediatorPage, "Highlight");
+			if (mediatorPage)
+			{
+				m_highlightMediator = new SwgCuiHighlight(*mediatorPage, Game::getHudSceneType());
+				m_highlightMediator->setSettingsAutoSizeLocation(true, true);
+				m_highlightMediator->setStickyVisible(!Game::isHudSceneTypeSpace());
+				m_highlightMediator->setShowFocusedGlowRect(false);
+				m_highlightMediator->fetch();
+				m_highlightMediator->activate();
+				m_workspace->addMediator(*m_highlightMediator);
+			}
 		}
 
 		//-----------------------------------------------------------------
 		{
-			hud.getCodeDataObject (TUIPage,     mediatorPage,           "ButtonBar");
-			m_buttonBar = new SwgCuiButtonBar (*mediatorPage);
-			m_buttonBar->setSettingsAutoSizeLocation (true, true);
-			m_buttonBar->setStickyVisible(!Game::isHudSceneTypeSpace());
-			m_buttonBar->setShowFocusedGlowRect(false);
-			m_buttonBar->fetch ();
-			m_buttonBar->activate ();
-			m_workspace->addMediator (*m_buttonBar);
+			mediatorPage = 0;
+			hud.getCodeDataObject(TUIPage, mediatorPage, "ButtonBar");
+			if (mediatorPage)
+			{
+				m_buttonBar = new SwgCuiButtonBar(*mediatorPage);
+				m_buttonBar->setSettingsAutoSizeLocation(true, true);
+				m_buttonBar->setStickyVisible(!Game::isHudSceneTypeSpace());
+				m_buttonBar->setShowFocusedGlowRect(false);
+				m_buttonBar->fetch();
+				m_buttonBar->activate();
+				m_workspace->addMediator(*m_buttonBar);
+			}
 		}
 
 		//----------------------------------------------------------------------
 		{
-			hud.getCodeDataObject (TUIPage,     mediatorPage,           "incap");
-			mediatorPage->SetEnabled (false);
-			SwgCuiIncap * const incap = new SwgCuiIncap (*mediatorPage);
-			incap->setSettingsAutoSizeLocation (true, true);
-			incap->setStickyVisible (true);
-			m_workspace->addMediator (*incap);
+			mediatorPage = 0;
+			hud.getCodeDataObject(TUIPage, mediatorPage, "incap");
+			if (mediatorPage)
+			{
+				mediatorPage->SetEnabled(false);
+				SwgCuiIncap *const incap = new SwgCuiIncap(*mediatorPage);
+				incap->setSettingsAutoSizeLocation(true, true);
+				incap->setStickyVisible(true);
+				m_workspace->addMediator(*incap);
+			}
 		} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
 
 		//-----------------------------------------------------------------
 		{
-			hud.getCodeDataObject (TUIPage,     mediatorPage,           "ChatWindow");
-			mediatorPage->SetVisible(false);
-			mediatorPage->SetEnabled (false);
-			m_chatWindowMediator = SwgCuiChatWindow::createInto(m_workspace, Game::getHudSceneType());
-			m_chatWindowMediator->setSettingsAutoSizeLocation (true, true);
-			m_chatWindowMediator->setStickyVisible (true);
-			m_chatWindowMediator->fetch();
-			m_workspace->addMediator (*m_chatWindowMediator);
-			m_chatWindowMediator->activate();
+			mediatorPage = 0;
+			hud.getCodeDataObject(TUIPage, mediatorPage, "ChatWindow");
+			if (mediatorPage)
+			{
+				mediatorPage->SetVisible(false);
+				mediatorPage->SetEnabled(false);
+				m_chatWindowMediator = SwgCuiChatWindow::createInto(m_workspace, Game::getHudSceneType());
+				if (m_chatWindowMediator)
+				{
+					m_chatWindowMediator->setSettingsAutoSizeLocation(true, true);
+					m_chatWindowMediator->setStickyVisible(true);
+					m_chatWindowMediator->fetch();
+					m_workspace->addMediator(*m_chatWindowMediator);
+					m_chatWindowMediator->activate();
+				}
+			}
 		}
 
 		//-----------------------------------------------------------------
 		{
+			mediatorPage = 0;
 			hud.getCodeDataObject(TUIPage, mediatorPage, "questHelper");
-			m_questHelper = new SwgCuiQuestHelper(*mediatorPage);
-			m_questHelper->setSettingsAutoSizeLocation(true, true);
-			m_questHelper->setStickyVisible(true);
-			m_questHelper->setShowFocusedGlowRect(false);
-			m_questHelper->fetch();
-			m_questHelper->activate();
-			m_workspace->addMediator(*m_questHelper);
+			if (mediatorPage)
+			{
+				m_questHelper = new SwgCuiQuestHelper(*mediatorPage);
+				m_questHelper->setSettingsAutoSizeLocation(true, true);
+				m_questHelper->setStickyVisible(true);
+				m_questHelper->setShowFocusedGlowRect(false);
+				m_questHelper->fetch();
+				m_questHelper->activate();
+				m_workspace->addMediator(*m_questHelper);
+			}
 		}
 	}  //lint !e429 //custodial pointer
 

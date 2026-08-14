@@ -496,7 +496,9 @@ typedef DWORD   FOURCC;         /* a four character code */
     #define DXDEF __declspec(dllexport)
   #else
 
-    #ifdef __BORLANDC__
+    #if defined(SWG_JUCE_BACKEND)
+      #define DXDEC extern
+    #elif defined(__BORLANDC__)
       #define DXDEC extern
     #else
       #define DXDEC __declspec(dllimport)

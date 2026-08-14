@@ -120,20 +120,26 @@ m_verifyPage          (0)
 	m_buttonClose                          = NON_NULL (GET_UI_OBJ ((*m_innerPage),    UIButton,    "bg.mmc.close"));
 	m_buttonClose->AddCallback (this);
 
-	m_runner                               = NON_NULL (GET_UI_OBJ ((*m_composite),   UIRunner,    "runner"));
-	m_runner->SetVisible (false);
+	// runner/inputText/inputPage/verifyPage were all added in post-2008
+	// live patches. Vanilla NGE retail UI omits them - keep working without.
+	m_runner = GET_UI_OBJ((*m_composite), UIRunner, "runner");
+	if (m_runner)
+		m_runner->SetVisible(false);
 
-	m_inputPage							   = NON_NULL (GET_UI_OBJ ((*m_composite),   UIPage,      "inputText"));
-	m_inputText							   = NON_NULL (GET_UI_OBJ ((*m_composite),    UIText,     "inputText.text"));
+	m_inputPage = GET_UI_OBJ((*m_composite), UIPage, "inputText");
+	m_inputText = GET_UI_OBJ((*m_composite), UIText, "inputText.text");
+	m_image = GET_UI_OBJ((*m_composite), UIImage, "verifyPage.image");
+	m_verifyPage = GET_UI_OBJ((*m_composite), UIPage, "verifyPage");
 
-	m_image								   = NON_NULL (GET_UI_OBJ ((*m_composite),  UIImage,  "verifyPage.image"));
-	m_verifyPage						   = NON_NULL (GET_UI_OBJ ((*m_composite),   UIPage,      "verifyPage"));
-
-	m_inputPage->SetVisible(false);
-	m_inputText->SetVisible(false);
-	m_inputText->AddCallback(this);
-
-	m_verifyPage->SetVisible(false);
+	if (m_inputPage)
+		m_inputPage->SetVisible(false);
+	if (m_inputText)
+	{
+		m_inputText->SetVisible(false);
+		m_inputText->AddCallback(this);
+	}
+	if (m_verifyPage)
+		m_verifyPage->SetVisible(false);
 
 	m_composite->SetProperty        (UIWidget::PropertyName::PackLocation, Unicode::emptyString);
 	m_composite->SetProperty        (UIWidget::PropertyName::PackSize, Unicode::emptyString);
@@ -151,8 +157,9 @@ m_verifyPage          (0)
 
 	m_mainPage->SetEnabled (true);
 	m_mainPage->SetVisible (true);
-	
-	m_image->SetVisible (false);
+
+	if (m_image)
+		m_image->SetVisible(false);
 
 	m_innerPage->SetFocus ();
 	m_buttonClose->SetFocus ();
@@ -614,17 +621,19 @@ void CuiMessageBox::layout ()
 {
 	long widthRequired = 0;
 
-	if (m_inputPage->IsVisible())
+	// All three of these widgets were added in post-2008 live patches and
+	// are absent from vanilla NGE retail UI. Skip if not present.
+	if (m_inputPage && m_inputPage->IsVisible())
 	{
 		widthRequired = m_inputPage->GetWidth();
 	}
 
-	if(m_verifyPage->IsVisible())
+	if (m_verifyPage && m_verifyPage->IsVisible())
 	{
 		widthRequired = std::max(m_verifyPage->GetWidth(), widthRequired);
 	}
 
-	if (m_runner->IsVisible ())
+	if (m_runner && m_runner->IsVisible())
 	{
 		widthRequired = m_runner->GetWidth ();
 	}
@@ -860,6 +869,8 @@ void CuiMessageBox::setCallbackFunc (CallbackFunc func)
 
 void CuiMessageBox::setRunner       (bool b, bool doLayout)
 {
+	if (!m_runner)
+		return; // NGE retail UI lacks the runner widget; just no-op.
 	if (b)
 	{
 		m_runner->SetVisible  (true);
@@ -882,9 +893,13 @@ void CuiMessageBox::setRunner       (bool b, bool doLayout)
 
 void CuiMessageBox::enableInputField(bool b)
 {
-	m_inputPage->SetVisible(b);
-	m_inputText->SetVisible(b);
-	m_inputText->SetLocalText(UIString());
+	if (m_inputPage)
+		m_inputPage->SetVisible(b);
+	if (m_inputText)
+	{
+		m_inputText->SetVisible(b);
+		m_inputText->SetLocalText(UIString());
+	}
 }
 
 //----------------------------------------------------------------------

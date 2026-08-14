@@ -11,6 +11,7 @@
 #include "clientAudio/Audio.h"
 #include "clientGame/Game.h"
 #include "clientGraphics/ConfigClientGraphics.h"
+#include "clientGraphics/Graphics.h"
 #include "clientUserInterface/CuiPreferences.h"
 #include "sharedFoundation/NetworkIdArchive.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
@@ -319,8 +320,12 @@ void SwgCuiNotifications::positionPage(UIPage *page, int verticalPosition)
 {
 	int width = page->GetWidth();
 	int height = page->GetHeight();
-	int screenHeight = ConfigClientGraphics::getScreenHeight();
-	int screenWidth = ConfigClientGraphics::getScreenWidth();
+	// Use UI canvas size so right-anchored notifications land at the screen
+	// edge after canvas Scale (2026-05-16 ultrawide fix). ConfigClientGraphics
+	// returns the configured resolution (physical pixels); at uiScale > 1
+	// those go off-screen.
+	int screenHeight = Graphics::getUiCanvasHeight();
+	int screenWidth = Graphics::getUiCanvasWidth();
 	UIPoint newPosition(screenWidth - width - 5, screenHeight - (screenHeight / 5) - (height + 25) * (verticalPosition + 1));
 	page->SetLocation(newPosition);
 }
@@ -332,8 +337,9 @@ void SwgCuiNotifications::positionIconPage(UIPage *page, int verticalPosition)
 {
 	int width = page->GetWidth();
 	int height = page->GetHeight();
-	int screenHeight = ConfigClientGraphics::getScreenHeight();
-	int screenWidth = ConfigClientGraphics::getScreenWidth();
+	// UI canvas size (see positionPage comment).
+	int screenHeight = Graphics::getUiCanvasHeight();
+	int screenWidth = Graphics::getUiCanvasWidth();
 	UIPoint newPosition(screenWidth - (width + 5) * (verticalPosition + 1) - 60, screenHeight - (height + 15));
 	page->SetLocation(newPosition);
 }

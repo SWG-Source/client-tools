@@ -84,7 +84,7 @@ namespace ClientBuffManagerNamespace
 	const std::string ms_columnIsDispellable("DISPELL_PLAYER");
 	const std::string ms_columnDisplayOrder("DISPLAY_ORDER");
 
-	std::hash_map<uint32, BuffRecord> ms_buffRecords;
+	std::unordered_map<uint32, BuffRecord> ms_buffRecords;
 
 	struct EffectRecord
 	{
@@ -222,7 +222,7 @@ void ClientBuffManager::remove()
 
 int ClientBuffManager::getBuffState(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -236,7 +236,7 @@ int ClientBuffManager::getBuffState(uint32 buffNameCrc)
 
 float ClientBuffManager::getBuffDefaultDuration(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -250,7 +250,7 @@ float ClientBuffManager::getBuffDefaultDuration(uint32 buffNameCrc)
 
 bool ClientBuffManager::getBuffIsDebuff(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -264,7 +264,7 @@ bool ClientBuffManager::getBuffIsDebuff(uint32 buffNameCrc)
 
 bool ClientBuffManager::getBuffIsGroupVisible(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -278,7 +278,7 @@ bool ClientBuffManager::getBuffIsGroupVisible(uint32 buffNameCrc)
 
 bool ClientBuffManager::getBuffGroupAndPriority(uint32 buffNameCrc, uint32 & group1Crc, uint32 & group2Crc, int & priority)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -295,7 +295,7 @@ bool ClientBuffManager::getBuffGroupAndPriority(uint32 buffNameCrc, uint32 & gro
 
 int ClientBuffManager::getBuffMaxStacks(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -309,7 +309,7 @@ int ClientBuffManager::getBuffMaxStacks(uint32 buffNameCrc)
 
 bool ClientBuffManager::getBuffIsCelestial(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -323,7 +323,7 @@ bool ClientBuffManager::getBuffIsCelestial(uint32 buffNameCrc)
 
 bool ClientBuffManager::getBuffIsDispellable(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -337,7 +337,7 @@ bool ClientBuffManager::getBuffIsDispellable(uint32 buffNameCrc)
 
 int ClientBuffManager::getBuffDisplayOrder(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -352,7 +352,7 @@ int ClientBuffManager::getBuffDisplayOrder(uint32 buffNameCrc)
 
 UIImageStyle * ClientBuffManager::getBuffIconStyle(uint32 buffNameCrc)
 {
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buffNameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buffNameCrc));
@@ -375,7 +375,7 @@ void ClientBuffManager::getBuffDescription(Buff const & buff, Unicode::String &r
 	// Start with the default description, looked up from the default buff string file
 	// Then add a line for each effect, based on a prose package with a %DF and using the effect's value
 
-	std::hash_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buff.m_nameCrc);
+	std::unordered_map<uint32, BuffRecord>::const_iterator it = ms_buffRecords.find(buff.m_nameCrc);
 	if(it == ms_buffRecords.end())
 	{
 		WARNING(true, ("Unknown buff crc %d\n", buff.m_nameCrc));

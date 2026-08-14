@@ -25,8 +25,8 @@ int main(int argc, char ** argv)
 	splashScreen->raise();
 	splashScreen->show();
 	QApplication::flush();
- 
-	//get the main window ready
+
+	// get the main window ready
 	MainFrame mainFrame (0, "SWG GOD CLIENT");
 	application.setMainWidget(&mainFrame);
 	mainFrame.setCaption ("SWG God Client");

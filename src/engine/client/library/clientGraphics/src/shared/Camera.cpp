@@ -117,11 +117,50 @@ void Camera::setup(void)
 		else
 			oneOverViewportHeight = std::numeric_limits<float>::max();
 
-		// calculate the vertical FOV based on the horizontal fov
-		verticalFieldOfView    = horizontalFieldOfView * real(viewportHeight) / real(viewportWidth);
+		// Ultrawide support (2026-05-16): the engine's original formula
+		// (verticalFOV = horizontalFOV * h/w) is the small-angle
+		// approximation of `tan(v/2) = tan(h/2) * h/w` -- happens to land
+		// near the correct value at 4:3, but goes very wrong at wide aspect
+		// ratios. At 32:9 with the original 60deg horizontal it computed
+		// a 16.875deg vertical FOV (horizontal mail slot, most of screen is
+		// floor/sky). The original is also "Vert-" -- horizontal FOV
+		// anchored, so wider aspect = LESS vertical content. The opposite
+		// of what ultrawide wants.
+		//
+		// New behavior: interpret the caller's horizontalFieldOfView as the
+		// value at the 4:3 REFERENCE aspect ratio (matches what every
+		// existing call site already assumes). Derive a stable vertical FOV
+		// from that reference, then expand the effective horizontal FOV to
+		// match the actual viewport aspect using correct perspective math.
+		//
+		// CRITICAL: do NOT write the expanded horizontal FOV back into the
+		// horizontalFieldOfView member. setup() may be called more than
+		// once with the same logical FOV, and if we mutate the input the
+		// next call would treat the already-expanded value as a fresh input
+		// and re-expand it (runaway: 60->114->153->170 deg, projection
+		// matrix `w = cot(hFOV/2)` collapses toward 0, world projects to a
+		// dot in the center, observed in-game as "way zoomed out, nothing
+		// rendering" 2026-05-16 first-test bug). The cached
+		// tanOfHalfHorizontalFov holds the expanded value; the projection
+		// matrix below derives w/h from those caches directly so it doesn't
+		// matter that horizontalFieldOfView itself stays at the input.
+		// External getHorizontalFieldOfView() callers also continue to see
+		// the API-set value, matching the original semantic.
+		//
+		// Effective hFOV (the FOV actually rendered) at common ARs given a
+		// 60deg horizontalFieldOfView input:
+		//   AR 4:3  -> 60h x 47.4v (matches retail look)
+		//   AR 16:9 -> 75h x 47.4v
+		//   AR 21:9 -> 90h x 47.4v
+		//   AR 32:9 -> 114h x 47.4v (vertical preserved, horizontal grows)
+		const real referenceAspectInverse = real(3) / real(4);
+		const real tanHalfInputHorz = tan(horizontalFieldOfView * CONST_REAL(0.5));
+		tanOfHalfVerticalFov = tanHalfInputHorz * referenceAspectInverse;
+		verticalFieldOfView = real(2) * atan(tanOfHalfVerticalFov);
 
-		tanOfHalfHorizontalFov = tan(horizontalFieldOfView * CONST_REAL(0.5));
-		tanOfHalfVerticalFov   = tan(verticalFieldOfView * CONST_REAL(0.5));
+		const real currentAspect = real(viewportWidth) / real(viewportHeight);
+		tanOfHalfHorizontalFov = tanOfHalfVerticalFov * currentAspect;
+		// NOTE: horizontalFieldOfView intentionally NOT mutated; see comment above.
 
 		const real xTan  = tanOfHalfHorizontalFov;
 		const real yTan  = tanOfHalfVerticalFov;
@@ -148,8 +187,13 @@ void Camera::setup(void)
 
 		// the following code was ripped out of the DX 6.0 help
 		// DirectX Foundation/Direct3D Immediate Mode/D3D Immediate Mode Essentials/The Geometry Pipeline/The Projection Transformation/Setting Up a Projection Matrix
-		const real   w          = cot(horizontalFieldOfView * 0.5f);
-		const real   h          = cot(verticalFieldOfView * 0.5f);
+		// Use the cached tan values (which carry the AR-expanded effective
+		// FOV from the ultrawide block above) instead of re-trig-ing
+		// horizontalFieldOfView -- the latter is the API-set input, not the
+		// rendered FOV, so cot(horizontalFieldOfView/2) would be wrong on
+		// non-4:3 ARs. cot = 1/tan.
+		const real w = real(1) / tanOfHalfHorizontalFov;
+		const real h = real(1) / tanOfHalfVerticalFov;
 		const real   Q          = farPlane/(farPlane - nearPlane);
 
 		projectionMatrix.matrix[0][0] = w;

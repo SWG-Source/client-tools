@@ -10,17 +10,19 @@
 
 //======================================================================
 
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
-#include "sharedUtility/InstallationResourceData.h"
+#include "sharedFoundation/NetworkIdArchive.h"
 #include "unicodeArchive/UnicodeArchive.h"
+#include "Archive/Archive.h"
+
+#include "sharedUtility/InstallationResourceData.h"
 
 //-----------------------------------------------------------------------
 
 namespace Archive
 {
 	//-----------------------------------------------------------------------
-	
-	inline void get(ReadIterator & source, InstallationResourceData & target)
+
+	inline void get(ReadIterator &source, InstallationResourceData &target)
 	{
 		get(source, target.m_id);
 		get(source, target.m_name);
@@ -29,8 +31,8 @@ namespace Archive
 	}
 	
 	//-----------------------------------------------------------------------
-	
-	inline void put(ByteStream & target, const InstallationResourceData & source)
+
+	inline void put(ByteStream &target, const InstallationResourceData &source)
 	{
 		put(target, source.m_id);
 		put(target, source.m_name);

@@ -163,6 +163,7 @@
 #include "sharedObject/AppearanceTemplateList.h"
 #include "sharedObject/CellProperty.h"
 #include "sharedObject/ContainedByProperty.h"
+#include "sharedObject/PortalProperty.h"
 #include "sharedObject/DebugNotification.h"
 #include "sharedObject/NetworkIdManager.h"
 #include "sharedObject/ObjectTemplate.h"
@@ -874,48 +875,48 @@ void GroundScene::init (const char* const terrainFilename, CreatureObject* const
 *
 */
 GroundScene::GroundScene(
-	const char *const     terrainFilename, 
-	const char *const     playerFilename,
-	CreatureObject *const customizedPlayer
-	)
-:	NetworkScene("GroundScene"),
-	m_inputMap (0),
-	m_debugPortalCameraInputMap (0),
-	m_structurePlacementCameraInputMap (0),
-	m_freeCameraInputMap (0),
-	m_mouseCursor (new MouseCursor (0, MouseCursor::S_relative)),
-	m_lastYawPitchMod (new Vector2d),
-	m_cockpitCamera(0),
-	m_shipTurretCamera(0),
-	m_freeChaseCamera (0),
-	m_freeCamera (0),
-	m_debugPortalCamera (0),
-	m_structurePlacementCamera (0),
-	m_flyByCamera(NULL),
-	m_currentView (-1),
-	m_disableWorldSnapshot(ConfigClientGame::getDisableWorldSnapshot()),
-	m_usingGodClientCamera(false),
-	m_usingGodClientInteriorCamera(false),
-	m_loading (true),
-	m_sentSceneChannel(false),
-	m_receivedSceneReady(true), // in single player the server doesn't need to be ready
-	m_noDraw(false),
-	m_currentLoadCount (0),
-	m_debugKeyContext (0),
-	m_debugKeySubContext (),
-	m_debugKeyContextWeaponObjectTemplate (0),
-	m_serverTimeOffset (0),
-	m_overheadMap (new OverheadMap),
-	m_modeCallback (0),
-	m_context (0),
-	m_currentMode (false),
-	m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
-	m_clientPathObject (0),
-	m_debugPointList (new PointList),
-	m_debugLineList (new LineList),
-	m_isTutorial (false),
-	m_destroyObjectSet(new DestroyObjectSet),
-	m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
+	const char *const terrainFilename,
+	const char *const playerFilename,
+	CreatureObject *const customizedPlayer)
+	: NetworkScene("GroundScene"),
+	  m_inputMap(0),
+	  m_debugPortalCameraInputMap(0),
+	  m_structurePlacementCameraInputMap(0),
+	  m_freeCameraInputMap(0),
+	  m_mouseCursor(new MouseCursor(0, MouseCursor::S_relative)),
+	  m_lastYawPitchMod(new Vector2d),
+	  m_cockpitCamera(0),
+	  m_shipTurretCamera(0),
+	  m_freeChaseCamera(0),
+	  m_freeCamera(0),
+	  m_debugPortalCamera(0),
+	  m_structurePlacementCamera(0),
+	  m_flyByCamera(NULL),
+	  m_currentView(-1),
+	  m_disableWorldSnapshot(ConfigClientGame::getDisableWorldSnapshot()),
+	  m_usingGodClientCamera(false),
+	  m_usingGodClientInteriorCamera(false),
+	  m_loading(true),
+	  m_sentSceneChannel(false),
+	  m_receivedSceneReady(true), // in single player the server doesn't need to be ready
+	  m_noDraw(false),
+	  m_currentLoadCount(0),
+	  m_loadingElapsedTime(0.0f),
+	  m_debugKeyContext(0),
+	  m_debugKeySubContext(),
+	  m_debugKeyContextWeaponObjectTemplate(0),
+	  m_serverTimeOffset(0),
+	  m_overheadMap(new OverheadMap),
+	  m_modeCallback(0),
+	  m_context(0),
+	  m_currentMode(false),
+	  m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
+	  m_clientPathObject(0),
+	  m_debugPointList(new PointList),
+	  m_debugLineList(new LineList),
+	  m_isTutorial(false),
+	  m_destroyObjectSet(new DestroyObjectSet),
+	  m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
 {
 	Audio::setLargePreMixBuffer();
 	Audio::silenceAllNonBackgroundMusic();
@@ -979,52 +980,52 @@ GroundScene::GroundScene(
 */
 
 GroundScene::GroundScene(
-	const char *const terrainFilename, 
-	const NetworkId & playerOID, 
-	const char *const templateName, 
-	const Vector &    startPosition, 
-	const float       startYaw, 
-	const float       timeInSeconds, 
-	const bool        disableSnapshot
-	)
-:	NetworkScene ("GroundScene"),
-	m_inputMap (0),
-	m_debugPortalCameraInputMap (0),
-	m_structurePlacementCameraInputMap (0),
-	m_freeCameraInputMap (0),
-	m_mouseCursor (new MouseCursor (0, MouseCursor::S_relative)),
-	m_lastYawPitchMod (new Vector2d),
-	m_cockpitCamera(0),
-	m_shipTurretCamera(0),
-	m_freeChaseCamera (0),
-	m_freeCamera (0),
-	m_debugPortalCamera (0),
-	m_structurePlacementCamera (0),
-	m_flyByCamera(NULL),
-	m_currentView (-1),
-	m_disableWorldSnapshot(disableSnapshot),
-	m_usingGodClientCamera(false),
-	m_usingGodClientInteriorCamera(false),
-	m_loading (true),
-	m_sentSceneChannel(false),
-	m_receivedSceneReady(false),
-	m_noDraw(false),
-	m_currentLoadCount (0),
-	m_debugKeyContext (0),
-	m_debugKeySubContext (),
-	m_debugKeyContextWeaponObjectTemplate (0),
-	m_serverTimeOffset (0),
-	m_overheadMap (new OverheadMap),
-	m_modeCallback (0),
-	m_context (0),
-	m_currentMode (false),
-	m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
-	m_clientPathObject (0),
-	m_debugPointList (new PointList),
-	m_debugLineList (new LineList),
-	m_isTutorial (false),
-	m_destroyObjectSet(new DestroyObjectSet),
-	m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
+	const char *const terrainFilename,
+	const NetworkId &playerOID,
+	const char *const templateName,
+	const Vector &startPosition,
+	const float startYaw,
+	const float timeInSeconds,
+	const bool disableSnapshot)
+	: NetworkScene("GroundScene"),
+	  m_inputMap(0),
+	  m_debugPortalCameraInputMap(0),
+	  m_structurePlacementCameraInputMap(0),
+	  m_freeCameraInputMap(0),
+	  m_mouseCursor(new MouseCursor(0, MouseCursor::S_relative)),
+	  m_lastYawPitchMod(new Vector2d),
+	  m_cockpitCamera(0),
+	  m_shipTurretCamera(0),
+	  m_freeChaseCamera(0),
+	  m_freeCamera(0),
+	  m_debugPortalCamera(0),
+	  m_structurePlacementCamera(0),
+	  m_flyByCamera(NULL),
+	  m_currentView(-1),
+	  m_disableWorldSnapshot(disableSnapshot),
+	  m_usingGodClientCamera(false),
+	  m_usingGodClientInteriorCamera(false),
+	  m_loading(true),
+	  m_sentSceneChannel(false),
+	  m_receivedSceneReady(false),
+	  m_noDraw(false),
+	  m_currentLoadCount(0),
+	  m_loadingElapsedTime(0.0f),
+	  m_debugKeyContext(0),
+	  m_debugKeySubContext(),
+	  m_debugKeyContextWeaponObjectTemplate(0),
+	  m_serverTimeOffset(0),
+	  m_overheadMap(new OverheadMap),
+	  m_modeCallback(0),
+	  m_context(0),
+	  m_currentMode(false),
+	  m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
+	  m_clientPathObject(0),
+	  m_debugPointList(new PointList),
+	  m_debugLineList(new LineList),
+	  m_isTutorial(false),
+	  m_destroyObjectSet(new DestroyObjectSet),
+	  m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
 {
 	Audio::setLargePreMixBuffer();
 	Audio::silenceAllNonBackgroundMusic();
@@ -1833,12 +1834,16 @@ bool GroundScene::isFinishedLoading() const
 	}
 	bool const hasPlayerObject = (Game::getPlayerObject() != NULL);
 
-	return (cachedFileManagerDone
-			&& spacePreloadedAssetManagerDone
-			&& worldSnapshotDone
-			&& loaderIsIdle
-			&& terrainGenerationStabilized
-			&& hasPlayerObject);
+	// Timeout fallback (graduated): if we've been loading too long, force
+	// the screen down even if the loader/player/terrain isn't fully
+	// settled. Tutorial scene with post-NGE TRE has missing assets that
+	// cause hasPlayerObject/terrain to never go true.
+	//   45s: force-finish if player + terrain ready
+	//   90s: force-finish unconditionally (escape hatch)
+	bool const softTimeout = (m_loadingElapsedTime > 45.0f) && hasPlayerObject && terrainGenerationStabilized;
+	bool const hardTimeout = (m_loadingElapsedTime > 90.0f);
+
+	return hardTimeout || softTimeout || (cachedFileManagerDone && spacePreloadedAssetManagerDone && worldSnapshotDone && loaderIsIdle && terrainGenerationStabilized && hasPlayerObject);
 }
 
 //----------------------------------------------------------------------
@@ -1874,11 +1879,31 @@ void GroundScene::updateCuiLoading()
 
 	if(!terrainGenerationStabilized)
 	{
-		CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::generatingterrain.localize());
+		// Hint at hard timeout when terrain won't generate (missing tutorial assets)
+		if (m_loadingElapsedTime > 30.0f)
+		{
+			char buf[80];
+			snprintf(buf, sizeof(buf), "Generating terrain... (%.0fs, will force-skip at 90s)", m_loadingElapsedTime);
+			CuiLoadingManager::setFullscreenLoadingString(Unicode::narrowToWide(buf));
+		}
+		else
+		{
+			CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::generatingterrain.localize());
+		}
 	}
 	else if (!loaderIsIdle)
 	{
-		CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::loadingobjects.localize());
+		// If we've been at "Loading objects..." for a long time, hint that a timeout is approaching
+		if (m_loadingElapsedTime > 30.0f)
+		{
+			char buf[80];
+			snprintf(buf, sizeof(buf), "Loading objects... (%.0fs, will skip at 45s)", m_loadingElapsedTime);
+			CuiLoadingManager::setFullscreenLoadingString(Unicode::narrowToWide(buf));
+		}
+		else
+		{
+			CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::loadingobjects.localize());
+		}
 	}
 }
 
@@ -1936,14 +1961,40 @@ void GroundScene::update(float elapsedTime)
 	{
 		Vector const playerPosition = getPlayer()->getPosition_w();
 		snprintf(ms_playerPosition, sizeof(ms_playerPosition), "Player: %5.2f %5.2f %5.2f\n", playerPosition.x, playerPosition.y, playerPosition.z);
-		WorldSnapshot::update(getPlayer()->getParentCell(), playerPosition);
+		// If the player's parent cell is a "phantom" cell (its building's .pob
+		// asset was missing from the post-NGE TRE, so PortalProperty::cellLoaded
+		// -> CellProperty::initialize never ran and the cell was never bound to a
+		// PortalProperty), reset it to the world cell so outdoor rendering works.
+		// Otherwise the camera thinks it's inside a non-existent cell and the
+		// outdoor world gets culled away.
+		//
+		// Test the CELL's own portal binding -- playerCell->getPortalProperty().
+		// Do NOT test cellOwner.getPortalProperty(): a cell's owner IS the
+		// CellObject, which never carries a PortalProperty (that property lives on
+		// the building/POB, not on the cell). The old cellOwner test was therefore
+		// NULL for EVERY real interior cell, so it kicked the player out to the
+		// world cell every frame indoors and culled the whole interior away.
+		// CellProperty::getPortalProperty() is non-NULL exactly when the cell
+		// finished loading (initialize() sets m_portalProperty), so it is NULL
+		// only for a genuine phantom cell -- which is what we want to catch here.
+		CellProperty const *playerCell = getPlayer()->getParentCell();
+		if (playerCell && playerCell != CellProperty::getWorldCellProperty())
+		{
+			if (playerCell->getPortalProperty() == NULL)
+			{
+				WARNING(true, ("GroundScene::update - player parent cell is phantom (no PortalProperty), resetting to world cell for rendering"));
+				getPlayer()->setParentCell(CellProperty::getWorldCellProperty());
+				playerCell = CellProperty::getWorldCellProperty();
+			}
+		}
+		WorldSnapshot::update(playerCell, playerPosition);
 	}
 
 	//-- Handle destruction of any queued objects
 	if (m_destroyObjectTimer.updateZero(elapsedTime))
 	{
 		m_destroyObjectTimer.setExpireTime(Random::randomReal(0.5f, 1.f));
-		
+
 		if (!m_destroyObjectSet->empty())
 		{
 			NetworkId const & networkId = *m_destroyObjectSet->begin();
@@ -2038,6 +2089,9 @@ void GroundScene::update(float elapsedTime)
 		}
 	}
 
+	if (m_loading)
+		m_loadingElapsedTime += elapsedTime;
+
 	updateLoading();
 }
 
@@ -2045,7 +2099,7 @@ void GroundScene::update(float elapsedTime)
 
 void GroundScene::updateLoading()
 {
-		//-- update the loading screen
+	//-- update the loading screen
 	if (!m_loading)
 		return;
 	
@@ -2055,13 +2109,25 @@ void GroundScene::updateLoading()
 	
 	if ((!Game::isClient() || (!ms_loadingScreenRender && finishedLoading)) && !m_sentSceneChannel)
 	{
-		WorldSnapshot::update(getPlayer()->getCellProperty(), getPlayer()->getPosition_w());
+		// getPlayer() may be NULL when the hard timeout fires (e.g., tutorial
+		// scene that never delivered a valid player creature). Guard the
+		// snapshot update so we still get past loading.
+		Object *const localPlayer = getPlayer();
+		if (localPlayer)
+		{
+			WorldSnapshot::update(localPlayer->getCellProperty(), localPlayer->getPosition_w());
+		}
+		else
+		{
+			WARNING(true, ("GroundScene::updateLoading: hard-timeout fired with no player object; skipping initial WorldSnapshot::update"));
+			WorldSnapshot::update(CellProperty::getWorldCellProperty(), Vector::zero);
+		}
 		GameNetwork::setSceneChannel();
 		m_sentSceneChannel = true;
-		
+
 		// remove all mods; the server send us the list of mods
 		CuiModifierManager::removeAllModifiers();
-		
+
 		// request for updated list of commodities item type if the list has changed
 		AuctionManagerClient::requestItemTypeList();
 		AuctionManagerClient::requestResourceTypeList();
@@ -2117,7 +2183,6 @@ void GroundScene::updateLoading()
 			}
 		}
 	}
-	
 }
 
 //-------------------------------------------------------------------
@@ -2543,7 +2608,6 @@ void GroundScene::receiveMessage(const MessageDispatch::Emitter &, const Message
 					controller->setAuthoritative (false);
 				if (!clientObject->isInitialized())
 					clientObject->beginBaselines();
-
 				ShipObject * const shipObject = clientObject->asShipObject();
 				if ((shipObject != 0) && (shipObject != Game::getPlayerContainingShip()))
 				{

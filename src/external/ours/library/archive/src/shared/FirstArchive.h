@@ -10,6 +10,9 @@
 #pragma warning ( disable : 4514 ) // unreferenced inline function has been removed
 #pragma warning ( disable : 4710 ) // not inlined
 #pragma warning ( disable : 4702 ) // unreachable code
+// Register all user archive adapters here
+#include "Archive\ArchiveUserRegistry.h"
+
 #include "Archive.h"
 #include "ByteStream.h"
 #include <string>

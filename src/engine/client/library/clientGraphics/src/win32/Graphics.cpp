@@ -128,6 +128,13 @@ namespace GraphicsNamespace
 	float                                     ms_contrast = Graphics::getDefaultContrast();
 	float                                     ms_gamma = Graphics::getDefaultGamma();
 
+	// UI canvas scale (set by CuiManager::install from [ClientUserInterface]
+	// uiScale in client.cfg). 1.0 = no scaling. See Graphics.h for full
+	// semantics. Stored here in Graphics so MouseCursor, SwgCuiInventory,
+	// SwgCuiNotifications etc. can query without circular deps on
+	// clientUserInterface.
+	float ms_uiCanvasScale = 1.0f;
+
 	int                                       ms_screenShotFormat = static_cast<int>(GSSF_jpg);
 	int                                       ms_screenShotQuality = 100;
 
@@ -206,8 +213,22 @@ bool Graphics::install()
 		ms_rasterMajor = 5;
 	}
 
-	if (ms_rasterMajor >= 5 && ms_rasterMajor <= 7)
+	if (ms_rasterMajor == 0)
 	{
+		// rasterMajor=0 selects the Headless stub graphics driver (gl00_r.dll).
+		// No DX path is enabled; the renderer is a no-op.
+		GraphicsOptionTags::set(TAG_DX8, false);
+		GraphicsOptionTags::set(TAG_DX9, false);
+	}
+	else if (ms_rasterMajor >= 5 && ms_rasterMajor <= 7)
+	{
+		GraphicsOptionTags::set(TAG_DX8, false);
+		GraphicsOptionTags::set(TAG_DX9, true);
+	}
+	else if (ms_rasterMajor == 11)
+	{
+		// DX11 backend (gl11_r.dll). Shader-capable path; reuse the DX9 option
+		// tag so the engine keeps shader features (DOT3 / POST / HEAT) enabled.
 		GraphicsOptionTags::set(TAG_DX8, false);
 		GraphicsOptionTags::set(TAG_DX9, true);
 	}
@@ -235,6 +256,17 @@ bool Graphics::install()
 	typedef const Gl_api *(*GetApi)();
 	GetApi getApi = reinterpret_cast<GetApi>(GetProcAddress(ms_dll, "GetApi"));
 	DEBUG_FATAL(!getApi, ("GetProcAddress returned NULL"));
+
+	// Confirm the backend was compiled against this exact Gl_api layout before
+	// calling through any of its slots.  The five #ifdef _DEBUG slots and the
+	// four #if PRODUCTION == 0 slots mean the struct has three layouts, chosen
+	// by the _r/_o/_d suffix above, and a mismatched pair loads without
+	// complaint and then calls the wrong function through every shifted slot.
+	typedef unsigned int (*GetGlApiStructSize)();
+	GetGlApiStructSize getGlApiStructSize = reinterpret_cast<GetGlApiStructSize>(GetProcAddress(ms_dll, "GetGlApiStructSize"));
+	FATAL(!getGlApiStructSize, ("%s does not export GetGlApiStructSize, so its Gl_api layout cannot be verified.  Rebuild and restage the raster DLLs.", library));
+	const unsigned int backendGlApiStructSize = getGlApiStructSize();
+	FATAL(backendGlApiStructSize != sizeof(Gl_api), ("%s was built against a %u-byte Gl_api but this client expects %u bytes.  The DEBUG_LEVEL of the client and the raster DLL disagree; rebuild both at the same level.", library, backendGlApiStructSize, static_cast<unsigned int>(sizeof(Gl_api))));
 
 	// call the getApi function
 	ms_api = getApi();
@@ -435,6 +467,34 @@ int Graphics::getFrameBufferMaxWidth()
 int Graphics::getFrameBufferMaxHeight()
 {
 	return ms_frameBufferMaxHeight;
+}
+
+// ----------------------------------------------------------------------
+
+float Graphics::getUiCanvasScale()
+{
+	return ms_uiCanvasScale;
+}
+
+void Graphics::setUiCanvasScale(float scale)
+{
+	// Mirror the clamp in CuiManager::install -- defense in depth in case
+	// something else tries to set this directly.
+	if (scale < 0.5f)
+		scale = 0.5f;
+	if (scale > 4.0f)
+		scale = 4.0f;
+	ms_uiCanvasScale = scale;
+}
+
+int Graphics::getUiCanvasWidth()
+{
+	return static_cast<int>(static_cast<float>(ms_frameBufferMaxWidth) / ms_uiCanvasScale);
+}
+
+int Graphics::getUiCanvasHeight()
+{
+	return static_cast<int>(static_cast<float>(ms_frameBufferMaxHeight) / ms_uiCanvasScale);
 }
 
 // ----------------------------------------------------------------------
@@ -999,10 +1059,10 @@ bool Graphics::lockBackBuffer(Gl_pixelRect &o_pixels, const Gl_rect *i_lockRect)
 	RECT lockRect;
 	if (i_lockRect)
 	{
-		lockRect.left   =i_lockRect->x0;
-		lockRect.top    =i_lockRect->y0;
-		lockRect.bottom =i_lockRect->x1;
-		lockRect.right  =i_lockRect->y1;
+		lockRect.left = i_lockRect->x0;
+		lockRect.top = i_lockRect->y0;
+		lockRect.right = i_lockRect->x1;
+		lockRect.bottom = i_lockRect->y1;
 		pLockRect=&lockRect;
 	}
 	return ms_api->lockBackBuffer(o_pixels, pLockRect);
@@ -1636,18 +1696,6 @@ DynamicIndexBufferGraphicsData *Graphics::createIndexBufferData()
 	NOT_NULL(ms_api);
 	NOT_NULL(ms_api->createDynamicIndexBufferData);
 	return ms_api->createDynamicIndexBufferData();
-}
-
-// ----------------------------------------------------------------------
-/**
- * Set the max number of indices in a dynamic index buffer.
- *
- * @param numberOfIndices The number of vertices in the dynamic vertex buffer.
- */
-
-void Graphics::setDynamicIndexBufferSize(int numberOfIndices)
-{
-	ms_api->setDynamicIndexBufferSize(numberOfIndices);
 }
 
 // ----------------------------------------------------------------------

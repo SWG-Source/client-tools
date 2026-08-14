@@ -301,7 +301,7 @@ Texture const * TextureList::create(CrcString const & filename, bool const creat
 			// add to list
 			NamedContainer::value_type newValue(&(newTexture->getCrcString()), newTexture);
 			std::pair<NamedContainer::iterator, bool> insertResult = ms_namedTextures->insert(newValue);
-			DEBUG_FATAL(!insertResult.second, ("both find and insert failed for [%s]", filename));
+			DEBUG_FATAL(!insertResult.second, ("both find and insert failed for [%s]", filename.getString()));
 
 			// set iterator
 			it = insertResult.first;

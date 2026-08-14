@@ -5,9 +5,9 @@
 //
 //======================================================================
 
-#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/ChatAvatarId.h"
 #include "UnicodeUtils.h"
+#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 
 //======================================================================
 

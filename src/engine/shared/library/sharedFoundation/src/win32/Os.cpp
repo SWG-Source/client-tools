@@ -802,7 +802,7 @@ bool Os::handleDebugMenu()
 		b = ClientToScreen(ms_window, &p);
 		DEBUG_FATAL(!b, ("ClientToScreen failed"));
 
-		typedef std::map<char *, HMENU, StringCompare> Map;
+		typedef std::map<const char *, HMENU, StringCompare> Map;
 		Map map;
 
 		// create the menu
@@ -887,7 +887,7 @@ bool Os::handleDebugMenu()
 		while (!map.empty())
 		{
 			Map::iterator i = map.begin();
-			char *value = i->first;
+			const char *value = i->first;
 			map.erase(i);
 			delete [] value;
 		}
@@ -1354,7 +1354,11 @@ void Os::setThreadName(ThreadId threadID, const char* threadName)
 	__try
 	{
 		// use the magic exception number MS picked for this purpose
-		RaiseException(0x406D1388, 0, sizeof(info) / sizeof(DWORD), reinterpret_cast<DWORD *>(&info));
+		// RaiseException's 4th arg is `const ULONG_PTR *` (pointer-sized).
+		// Was cast to DWORD * which is fine on Win32 but mismatches on x64.
+		RaiseException(0x406D1388, 0,
+					   sizeof(info) / sizeof(ULONG_PTR),
+					   reinterpret_cast<const ULONG_PTR *>(&info));
 	}
 	__except (EXCEPTION_CONTINUE_EXECUTION)
 	{

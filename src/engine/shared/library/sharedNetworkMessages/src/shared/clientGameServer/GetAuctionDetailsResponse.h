@@ -11,10 +11,10 @@
 
 //-----------------------------------------------------------------------
 
+#include "AuctionDataArchive.h"
+#include "sharedNetworkMessages/AuctionData.h"
 #include "Archive/AutoDeltaByteStream.h"
-#include "sharedNetworkMessages/AuctionData.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "sharedNetworkMessages/AuctionData.h"
 
 //-----------------------------------------------------------------------
 
@@ -43,14 +43,6 @@ private:
 inline Auction::ItemDataDetails GetAuctionDetailsResponse::getDetails() const
 {
 	return m_details.get();
-}
-
-// ----------------------------------------------------------------------
-
-namespace Archive
-{
-	void get(ReadIterator &source, Auction::ItemDataDetails &target);
-	void put(ByteStream &target, Auction::ItemDataDetails const &source);
 }
 
 // ----------------------------------------------------------------------

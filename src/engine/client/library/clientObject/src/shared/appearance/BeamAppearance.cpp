@@ -491,6 +491,11 @@ void BeamAppearance::useAlternateShader(int index)
 void BeamAppearanceNamespace::LoadAlternateShaders()
 {
 	DataTable * altShaders = DataTableManager::getTable(ms_alternateShaderDataTable, true);
+	if (!altShaders)
+	{
+		DEBUG_WARNING(true, ("BeamAppearance: %s missing - alternate lightsaber shaders disabled.\n", ms_alternateShaderDataTable.c_str()));
+		return;
+	}
 
 	for( int i = 0; i < altShaders->getNumRows(); ++i)
 	{

@@ -84,7 +84,7 @@ namespace RoadmapManagerNamespace
 
 	int m_numberOfRoadmaps;
 
-	char *NEW_CHARACTER_WORKING_SKILL = "new_character_no_skill";
+	const char *NEW_CHARACTER_WORKING_SKILL = "new_character_no_skill";
 
 	const int NUM_SPACE_TEMPLATES = 3;
 	std::string const s_spaceTemplateNames[] = {"space_pilot_rebel", "space_pilot_imperial", "space_pilot_neutral"};

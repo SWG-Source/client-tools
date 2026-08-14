@@ -42,6 +42,9 @@
 #include "UIWidget.h"
 #include "UIImage.h"
 #include "UIMessage.h"
+
+#include "unicodeArchive/UnicodeArchive.h"
+#include "Unicode.h"
 #include "UnicodeUtils.h"
 
 #include <algorithm>

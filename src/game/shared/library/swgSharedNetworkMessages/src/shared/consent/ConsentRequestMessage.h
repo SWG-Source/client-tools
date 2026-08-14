@@ -10,8 +10,8 @@
 
 // ======================================================================
 
-#include "sharedGame/ProsePackage.h"
 #include "sharedGame/ProsePackageArchive.h"
+#include "sharedGame/ProsePackage.h"
 
 #include "sharedNetworkMessages/GameNetworkMessage.h"
 

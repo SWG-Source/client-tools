@@ -282,10 +282,20 @@ unsigned int ServerCommander::deleteObject(ClientObject* obj, bool pushUndo)
 {
 	//-- zero networkid (!isValid()) indicates a client-only object such as an ILF object
 
-	if(Game::getSinglePlayer() || !obj->getNetworkId().isValid())
+	// Buildout objects (negative NetworkIds) are loaded once at PlanetServer
+	// startup from datatables/buildout/<scene>/<area>_{server,client}.iff and
+	// aren't registered in the server's NetworkIdManager, so
+	// "object destroy <negative_id>" returns ERR_INVALID_OBJECT (silent
+	// in release - the user sees the confirm dialog but the building stays).
+	// Route these through BuildoutAreaSupport, same as the single-player path,
+	// then "Save Buildout Area" from the Buildout menu writes the .tab files
+	// back to the server via "server clientSaveBuildoutArea".
+	bool const isBuildoutObject = (obj->getNetworkId() < NetworkId::cms_invalid);
+
+	if (Game::getSinglePlayer() || !obj->getNetworkId().isValid() || isBuildoutObject)
 	{
 		GroundScene* const gs = dynamic_cast<GroundScene*>(Game::getScene());
-		
+
 		// @todo: do not delete ANY player objects?
 		if(gs && gs->getPlayer() == obj)
 			return 0;

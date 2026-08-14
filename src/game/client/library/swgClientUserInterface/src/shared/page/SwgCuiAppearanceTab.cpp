@@ -238,23 +238,22 @@ m_dragTimer(1.0f)
 			if (!slotCodeData->GetPropertyNarrow (prop_viewer, path_viewer))
 				DEBUG_FATAL (true, ("SwgCuiAppearanceTab viewer page prop [%s] not found", prop_viewer.c_str ()));
 
+			CuiWidget3dObjectListViewer *const objectListViewer = safe_cast<CuiWidget3dObjectListViewer *>(p->GetObjectFromPath(path_viewer.c_str(), TUIWidget));
+			UIText *const text = safe_cast<UIText *>(p->GetObjectFromPath(path_text.c_str(), TUIText));
 
-			CuiWidget3dObjectListViewer * const viewer = safe_cast<CuiWidget3dObjectListViewer *>(p->GetObjectFromPath (path_viewer.c_str (), TUIWidget));
-			UIText * const text                        = safe_cast<UIText *>(p->GetObjectFromPath (path_text.c_str (), TUIText));
+			DEBUG_FATAL(!objectListViewer, ("SwgCuiAppearanceTab viewer not found [%s]", path_viewer.c_str()));
+			DEBUG_FATAL(!text, ("SwgCuiAppearanceTab text not found [%s]", path_text.c_str()));
 
-			DEBUG_FATAL (!viewer,      ("SwgCuiAppearanceTab viewer not found [%s]",      path_viewer.c_str      ()));
-			DEBUG_FATAL (!text,        ("SwgCuiAppearanceTab text not found [%s]",        path_text.c_str        ()));
-
-			viewer->setCameraLookAtCenter (true);
-			viewer->setPaused             (false);
-			viewer->setCameraForceTarget  (true);
-			viewer->setCameraLodBias      (3.0f);
-			viewer->setCameraLodBiasOverride(true);
+			objectListViewer->setCameraLookAtCenter(true);
+			objectListViewer->setPaused(false);
+			objectListViewer->setCameraForceTarget(true);
+			objectListViewer->setCameraLodBias(3.0f);
+			objectListViewer->setCameraLodBiasOverride(true);
 
 			text->SetPreLocalized        (true);
 
-			m_slotViewers.push_back      (viewer);
-			m_slotText.push_back        (text);
+			m_slotViewers.push_back(objectListViewer);
+			m_slotText.push_back(text);
 
 			registerMediatorObject(*viewer, true);
 		}	

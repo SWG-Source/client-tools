@@ -56,6 +56,11 @@ void TemplateCommandMappingManager::install()
 	s_templateCommandMap.clear();
 	
 	ms_datatable = DataTableManager::getTable("datatables/timer/template_command_mapping.iff", true);
+	if (!ms_datatable)
+	{
+		DEBUG_WARNING(true, ("TemplateCommandMappingManager: datatables/timer/template_command_mapping.iff missing - feature disabled.\n"));
+		return;
+	}
 
 	unsigned int const numRows = static_cast<unsigned int>(ms_datatable->getNumRows());
 	int templateColumn = ms_datatable->findColumnNumber(ms_columnTemplate);

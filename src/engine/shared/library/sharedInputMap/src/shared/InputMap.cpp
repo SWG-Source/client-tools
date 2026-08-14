@@ -29,12 +29,13 @@
 
 namespace
 {
-	
-	const Tag TAG_MAP  = TAG3 (M,A,P);	
+
+	const Tag TAG_MAP = TAG3(M, A, P);
 	const Tag TAG_IMAP = TAG (I,M,A,P);
 	const Tag TAG_SHFT = TAG (S,H,F,T);
 	const Tag TAG_CMDS = TAG (C,M,D,S);
-	
+	const Tag TAG_JYID = TAG(J, Y, I, D); // joystick slot -> stable device identity table (version 0007)
+
 	/**
 	* Functor for sorting command list
 	*/
@@ -76,11 +77,12 @@ struct InputMap::Repeat
 		uint                shiftBits;
 		int                 value;
 		InputType           type;
+		int device;
 		float               repeatStartCountdown;
-		
+
 		bool operator==(const Button & rhs) const
 		{
-			return rhs.type == type && rhs.value == value;
+			return rhs.type == type && rhs.value == value && rhs.device == device;
 		}
 	};
 	
@@ -146,8 +148,8 @@ m_commandFilename   (),
 m_commandCategories (new StringVector)
 {	
 	memset(m_shiftStateBitCount, 0, sizeof(m_shiftStateBitCount));
-	Zero(m_joystickNumber);
-	m_joystickNumber[0] = ConfigFile::getKeyInt("ClientDirectInput", "useJoystick", 0, 0);
+	for (int j = 0; j < MAX_JOYSTICKS; ++j)
+		m_joystickNumber[j] = (j == 0) ? ConfigFile::getKeyInt("ClientDirectInput", "useJoystick", 0, 0) : -1;
 }
 
 // ======================================================================
@@ -375,7 +377,7 @@ void InputMap::write (Iff & iff) const
 
 	iff.insertForm (TAG_IMAP);
 	{
-		iff.insertForm (TAG_0006);
+		iff.insertForm(TAG_0007);
 		{
 			iff.insertForm (TAG_CMDS);
 			{
@@ -396,18 +398,38 @@ void InputMap::write (Iff & iff) const
 			}
 			iff.exitForm (TAG_SHFT);
 
+			//-- persist the stable identity of each bound joystick slot so bindings
+			//-- can be re-attached to the same physical device next session / after replug
+			iff.insertForm(TAG_JYID);
+			{
+				for (int j = 0; j < MAX_JOYSTICKS; ++j)
+				{
+					if (m_joystickIdentity[j].guid.empty() && m_joystickIdentity[j].name.empty())
+						continue;
+
+					iff.insertChunk(TAG_DATA);
+					{
+						iff.insertChunkData(static_cast<int32>(j));
+						iff.insertChunkString(m_joystickIdentity[j].guid.c_str());
+						iff.insertChunkString(m_joystickIdentity[j].name.c_str());
+					}
+					iff.exitChunk(TAG_DATA);
+				}
+			}
+			iff.exitForm(TAG_JYID);
+
 			const SparseMap * sm = 0;
 
 			for (sm = m_firstSparseMap; sm; sm = sm->next)
 			{
 				iff.insertForm (TAG_MAP);
 				{
-					sm->write_0006 (iff);
+					sm->write_0007(iff);
 				}
 				iff.exitForm (TAG_MAP);
 			}
 		}
-		iff.exitForm (TAG_0006);
+		iff.exitForm(TAG_0007);
 	}
 	iff.exitForm (TAG_IMAP);
 }
@@ -431,20 +453,29 @@ bool InputMap::load (Iff & iff, bool allowFail)
 	
 	switch(iff.getCurrentName())
 	{
-	case TAG_0006:
-		iff.enterForm(TAG_0006);
-		{
-			load_0006(iff);
-			ok = true;
-		}
-		iff.exitForm(TAG_0006);
-		break;
+		case TAG_0007:
+			iff.enterForm(TAG_0007);
+			{
+				load_0007(iff);
+				ok = true;
+			}
+			iff.exitForm(TAG_0007);
+			break;
 
-	case TAG_0005:
-		WARNING (true, ("InputMap skipping old version 0005 [%s]", iff.getFileName ()));
-		break;
-		
-	default:
+		case TAG_0006:
+			iff.enterForm(TAG_0006);
+			{
+				load_0006(iff);
+				ok = true;
+			}
+			iff.exitForm(TAG_0006);
+			break;
+
+		case TAG_0005:
+			WARNING(true, ("InputMap skipping old version 0005 [%s]", iff.getFileName()));
+			break;
+
+		default:
 		{
 			char buffer[512];
 			iff.formatLocation(buffer, sizeof(buffer));
@@ -516,6 +547,87 @@ void InputMap::load_0006(Iff & iff)
 			m_lastSparseMap = newMap;
 		}
 		iff.exitForm (TAG_MAP);
+	}
+}
+
+// ------------------------------------------------------------------
+/**
+ * Load version 0007 of the input map (adds per-binding joystick device slots
+ * and a slot->device identity table for multi-device support).
+ *
+ * @param iff  [In] The Iff to load the map from
+ */
+
+void InputMap::load_0007(Iff &iff)
+{
+	iff.enterForm(TAG_CMDS);
+	{
+		NOT_NULL(m_cmds);
+		NOT_NULL(m_commandCategories);
+
+		iff.enterChunk(TAG_NAME);
+		{
+			m_commandFilename = iff.read_stdstring();
+			if (!Command::load_0006_from_file(m_commandFilename, *m_cmds, *m_commandCategories))
+				WARNING(true, ("Unable to load commands from file [%s]", m_commandFilename.c_str()));
+		}
+		iff.exitChunk(TAG_NAME);
+
+		Command::load_0006_all(iff, *m_cmds, *m_commandCategories);
+	}
+	iff.exitForm(TAG_CMDS);
+
+	// check for shifting inputs
+	if (iff.enterForm(TAG_SHFT, true))
+	{
+		NOT_NULL(m_shifts);
+		m_shifts->load_0006(*this, iff);
+		iff.exitForm(TAG_SHFT);
+	}
+
+	// read the stable identity of each bound joystick slot
+	if (iff.enterForm(TAG_JYID, true))
+	{
+		while (!iff.atEndOfForm())
+		{
+			iff.enterChunk(TAG_DATA);
+			{
+				const int32 slot = iff.read_int32();
+				const std::string guid = iff.read_stdstring();
+				const std::string name = iff.read_stdstring();
+
+				if (slot >= 0 && slot < MAX_JOYSTICKS)
+				{
+					m_joystickIdentity[slot].guid = guid;
+					m_joystickIdentity[slot].name = name;
+				}
+			}
+			iff.exitChunk(TAG_DATA);
+		}
+		iff.exitForm(TAG_JYID);
+	}
+
+	// read in all the maps
+	while (!iff.atEndOfForm())
+	{
+		iff.enterForm(TAG_MAP);
+		{
+			// create a new map and link it into the sparse map chain
+			SparseMap *const newMap = new SparseMap;
+			newMap->load_0007(*this, iff);
+
+			//-- the default sparse map is the one without a shift state
+			if (newMap->shiftState == 0)
+				m_defaultSparseMap = newMap;
+
+			newMap->next = NULL;
+			if (m_lastSparseMap)
+				m_lastSparseMap->next = newMap;
+			else
+				m_firstSparseMap = newMap;
+			m_lastSparseMap = newMap;
+		}
+		iff.exitForm(TAG_MAP);
 	}
 }
 // ----------------------------------------------------------------------
@@ -697,12 +809,12 @@ void InputMap::activateNewShiftState ()
 
 // ----------------------------------------------------------------------
 
-void InputMap::processButtonPress(const Map::Button &mapButton, InputType type, int value)
+void InputMap::processButtonPress(const Map::Button &mapButton, InputType type, int value, int device)
 {
 	NOT_NULL (m_repeat);
 
-	Repeat::Button repeatButton = { Repeat::JustPressed, 0, 0, value, type, 0.0f };
-	
+	Repeat::Button repeatButton = {Repeat::JustPressed, 0, 0, value, type, device, 0.0f};
+
 	// send the message if appropriate
 	if (m_messageQueue && mapButton.cmd)
 		IGNORE_RETURN(mapButton.cmd->pressEvent.execute (*m_messageQueue, 0));
@@ -734,9 +846,9 @@ void InputMap::processButtonPress(const Map::Button &mapButton, InputType type, 
 
 // ----------------------------------------------------------------------
 
-void InputMap::processButtonRelease (InputType type, int value)
+void InputMap::processButtonRelease(InputType type, int value, int device)
 {
-	const Repeat::Button buttonFinder = { Repeat::JustPressed, 0, 0, value, type, 0.0f };
+	const Repeat::Button buttonFinder = {Repeat::JustPressed, 0, 0, value, type, device, 0.0f};
 
 	NOT_NULL (m_repeat);
 	Repeat::ButtonContainer_t::iterator fit = std::find (m_repeat->buttons.begin (), m_repeat->buttons.end (), buttonFinder);
@@ -854,7 +966,7 @@ void InputMap::processEvent(const IoEvent *event)
 			for (int j = 0; j < MAX_JOYSTICKS; ++j)
 				if (event->arg1 == m_joystickNumber[j])
 				{
-					processButtonPress(m_currentMap.joystick[j].joystickButton[event->arg2], IT_JoyButton, event->arg2);
+					processButtonPress(m_currentMap.joystick[j].joystickButton[event->arg2], IT_JoyButton, event->arg2, j);
 				}
 		}
 		break;
@@ -866,7 +978,7 @@ void InputMap::processEvent(const IoEvent *event)
 			for (int j = 0; j < MAX_JOYSTICKS; ++j)
 				if (event->arg1 == m_joystickNumber[j])
 				{
-					processButtonRelease(IT_JoyButton, event->arg2);	
+					processButtonRelease(IT_JoyButton, event->arg2, j);
 				}
 		}
 		break;
@@ -1295,6 +1407,7 @@ InputMap::BindInfo InputMap::getBindInfo () const
 			bi.shiftState = m_shiftState;
 			bi.type       = (*rit).type;//lint !e1702 //stl
 			bi.value      = (*rit).value;//lint !e1702 //stl
+			bi.device = (*rit).device;	 // lint !e1702 //stl
 			return bi;
 		}
 	}
@@ -1304,6 +1417,7 @@ InputMap::BindInfo InputMap::getBindInfo () const
 		bi.shiftState = m_shiftState & ~(btn->shiftBits);
 		bi.value      = btn->value;
 		bi.type       = btn->type;
+		bi.device = btn->device;
 	}
 
 	//-----------------------------------------------------------------
@@ -1321,7 +1435,8 @@ InputMap::BindInfo InputMap::getBindInfo () const
 				if (joy.joystickPovHat [i].state != Repeat::Up)
 				{
 					bi.value = static_cast<int32>(i);
-					bi.type  = IT_JoyPovHat;
+					bi.type = IT_JoyPovHat;
+					bi.device = static_cast<int32>(j);
 					break;
 				}
 			}
@@ -1437,7 +1552,10 @@ InputMap * InputMap::getRebindingMap () const
 
 	uint32 j;
 	for (j = 0; j < MAX_JOYSTICKS; ++j)
-		rbm->m_joystickNumber [j] = m_joystickNumber [j];
+	{
+		rbm->m_joystickNumber[j] = m_joystickNumber[j];
+		rbm->m_joystickIdentity[j] = m_joystickIdentity[j];
+	}
 
 	//-- we must _not_ delete the cmds
 	rbm->m_ownsCmds = false;
@@ -1570,6 +1688,70 @@ void InputMap::setJoystick (int joystickIndex, int newJoystickNumber)
 	DEBUG_FATAL(joystickIndex < 0 || joystickIndex >= MAX_JOYSTICKS, ("bad joystick index %d", joystickIndex));
 	DEBUG_FATAL(newJoystickNumber < -1, ("bad joystick number %d", newJoystickNumber));
 	m_joystickNumber[joystickIndex] = newJoystickNumber;
+}
+
+//----------------------------------------------------------------------
+
+int InputMap::getJoystickNumber(int slot) const
+{
+	if (slot < 0 || slot >= MAX_JOYSTICKS)
+		return -1;
+	return m_joystickNumber[slot];
+}
+
+//----------------------------------------------------------------------
+
+void InputMap::setJoystickIdentity(int slot, const char *guid, const char *name)
+{
+	if (slot < 0 || slot >= MAX_JOYSTICKS)
+		return;
+	m_joystickIdentity[slot].guid = (guid ? guid : "");
+	m_joystickIdentity[slot].name = (name ? name : "");
+}
+
+//----------------------------------------------------------------------
+
+bool InputMap::getJoystickIdentity(int slot, std::string &guid, std::string &name) const
+{
+	if (slot < 0 || slot >= MAX_JOYSTICKS)
+		return false;
+	guid = m_joystickIdentity[slot].guid;
+	name = m_joystickIdentity[slot].name;
+	return !guid.empty() || !name.empty();
+}
+
+//----------------------------------------------------------------------
+
+int InputMap::getJoystickSlotForNumber(int number) const
+{
+	if (number < 0)
+		return -1;
+	for (int j = 0; j < MAX_JOYSTICKS; ++j)
+		if (m_joystickNumber[j] == number)
+			return j;
+	return -1;
+}
+
+//----------------------------------------------------------------------
+
+int InputMap::findJoystickSlotByGuid(const char *guid) const
+{
+	if (!guid || !*guid)
+		return -1;
+	for (int j = 0; j < MAX_JOYSTICKS; ++j)
+		if (m_joystickIdentity[j].guid == guid)
+			return j;
+	return -1;
+}
+
+//----------------------------------------------------------------------
+
+int InputMap::findFreeJoystickSlot() const
+{
+	for (int j = 0; j < MAX_JOYSTICKS; ++j)
+		if (m_joystickIdentity[j].guid.empty() && m_joystickIdentity[j].name.empty() && m_joystickNumber[j] < 0)
+			return j;
+	return -1;
 }
 
 //----------------------------------------------------------------------

@@ -16,20 +16,20 @@ class DataTable;
 class SkillManager
 {
 public:
-	typedef stdhash_map<std::string, SkillObject *>::fwd SkillMap;
-	typedef stdhash_map<std::string, uint32>::fwd        XpLimitMap;
+	typedef stdhash_map<std::string, SkillObject *> SkillMap;
+	typedef stdhash_map<std::string, uint32> XpLimitMap;
 
-	virtual              ~SkillManager ();
+	virtual ~SkillManager();
 
-	const SkillObject *   getSkill     (const std::string & skillName);
-	const SkillMap &      getSkillMap  () const;
-	const SkillObject *   getRoot      ();
-	uint32                getDefaultXpLimit(const std::string & experienceType);
+	const SkillObject *getSkill(const std::string &skillName);
+	const SkillMap &getSkillMap() const;
+	const SkillObject *getRoot();
+	uint32 getDefaultXpLimit(const std::string &experienceType);
 
-	static SkillManager & getInstance  ();
+	static SkillManager &getInstance();
 
-	static void           install      ();
-	static void           remove       ();
+	static void install();
+	static void remove();
 
 protected:
 	                      SkillManager ();

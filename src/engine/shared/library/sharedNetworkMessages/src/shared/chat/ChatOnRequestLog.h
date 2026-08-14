@@ -7,45 +7,12 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/GameNetworkMessage.h"
 #include "unicodeArchive/UnicodeArchive.h"
 #include "UnicodeUtils.h"
+#include "ChatLogEntryArchive.h"
+#include "ChatLogEntry.h"
 
-//-----------------------------------------------------------------------
-
-
-struct ChatLogEntry
-{
-	ChatLogEntry()
-     : m_from()
-	 , m_to()
-	 , m_channel()
-	 , m_message()
-	 , m_time(0)
-	{
-	}
-
-    ChatLogEntry(Unicode::String const &from, Unicode::String const &to, Unicode::String const &channel, Unicode::String const &message, time_t time)
-	 : m_from(from)
-	 , m_to(to)
-	 , m_channel(channel)
-	 , m_message(message)
-	 , m_time(time)
-	 {
-	 }
-
-    Unicode::String m_from;
-    Unicode::String m_to;
-    Unicode::String m_channel;
-    Unicode::String m_message;
-    time_t m_time;
-};
-
-namespace Archive
-{
-	void get (ReadIterator & source, ChatLogEntry & target);
-	void put (ByteStream & target, const ChatLogEntry & source);
-}
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 

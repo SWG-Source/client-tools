@@ -2,7 +2,7 @@
 //
 // BlueprintTextureRendererTemplate.cpp
 // copyright 2001 Sony Online Entertainment
-// 
+//
 // ======================================================================
 
 #include "clientTextureRenderer/FirstClientTextureRenderer.h"
@@ -60,83 +60,82 @@ namespace BlueprintTextureRendererTemplateNamespace
 {
 	// this converts from the old texture format table to the new table
 	TextureFormat const textureFormatConversionTable[] =
-	{
-		TF_RGB_555,     // TF_RGB_555
-		TF_RGB_565,     // TF_RGB_565
-		TF_ARGB_1555,   // TF_ARGB_1555
-		TF_ARGB_4444,   // TF_ARGB_4444
-		TF_RGB_888,     // TF_RGB_888
-		TF_XRGB_8888,   // TF_RGB_888_32
-		TF_ARGB_8888,   // TF_ARGB_8888
-		TF_L_8,         // TF_Luminance_8
-		TF_Count,       // TF_Luminance_Alpha_88
-		TF_Count,       // TF_Luminance_Alpha_44
-		TF_DXT1,        // TF_DXT1
-		TF_DXT2,        // TF_DXT2
-		TF_DXT3,        // TF_DXT3
-		TF_DXT4,        // TF_DXT4
-		TF_DXT5,        // TF_DXT5
-		TF_A_8,         // TF_A_8
-		TF_Count,       // TF_I_8
-		TF_Count,       // TF_RGB_332
-		TF_Count,       // TF_ARGB_8332
-		TF_P_8,         // TF_RGB_P8
-		TF_Count,       // TF_RG_44
-		TF_Count,       // TF_RG_88
-		TF_Count,       // TF_ARG_555
-		TF_Count,       // TF_ARG_655
-		TF_Count,       // TF_ARG_888
+		{
+			TF_RGB_555,	  // TF_RGB_555
+			TF_RGB_565,	  // TF_RGB_565
+			TF_ARGB_1555, // TF_ARGB_1555
+			TF_ARGB_4444, // TF_ARGB_4444
+			TF_RGB_888,	  // TF_RGB_888
+			TF_XRGB_8888, // TF_RGB_888_32
+			TF_ARGB_8888, // TF_ARGB_8888
+			TF_L_8,		  // TF_Luminance_8
+			TF_Count,	  // TF_Luminance_Alpha_88
+			TF_Count,	  // TF_Luminance_Alpha_44
+			TF_DXT1,	  // TF_DXT1
+			TF_DXT2,	  // TF_DXT2
+			TF_DXT3,	  // TF_DXT3
+			TF_DXT4,	  // TF_DXT4
+			TF_DXT5,	  // TF_DXT5
+			TF_A_8,		  // TF_A_8
+			TF_Count,	  // TF_I_8
+			TF_Count,	  // TF_RGB_332
+			TF_Count,	  // TF_ARGB_8332
+			TF_P_8,		  // TF_RGB_P8
+			TF_Count,	  // TF_RG_44
+			TF_Count,	  // TF_RG_88
+			TF_Count,	  // TF_ARG_555
+			TF_Count,	  // TF_ARG_655
+			TF_Count,	  // TF_ARG_888
 	};
-}
+} // namespace BlueprintTextureRendererTemplateNamespace
 using namespace BlueprintTextureRendererTemplateNamespace;
 
 // ======================================================================
 // lint supression
 // ======================================================================
-//lint -esym(754, BlueprintTextureRendererCamera::BlueprintTextureRendererCamera)
-//lint -esym(754, BlueprintTextureRendererCamera::operator=)
-//lint -esym(754, ClearFrameBufferRenderCommand::ClearFrameBufferRenderCommand)
-//lint -esym(754, ClearFrameBufferRenderCommand::operator=)
-//lint -esym(754, ParallelProjectionCameraSetup::ParallelProjectionCameraSetup)
-//lint -esym(754, ParallelProjectionCameraSetup::operator=)
-//lint -esym(754, PrepareCommand::PrepareCommand);
-//lint -esym(754, PrepareCommand::operator=);
-//lint -esym(754, RenderCommand::RenderCommand)
-//lint -esym(754, RenderCommand::operator=)
-//lint -esym(754, ShaderRenderSetCommand::ShaderRenderSetCommand)
-//lint -esym(754, ShaderRenderSetCommand::operator=)
-//lint -esym(754, TriListIndexedRenderCommand::TriListIndexedRenderCommand)
-//lint -esym(754, TriListIndexedRenderCommand::operator=)
-//lint -esym(754, TriFanRenderCommand::TriFanRenderCommand)
-//lint -esym(754, TriFanRenderCommand::operator=)
+// lint -esym(754, BlueprintTextureRendererCamera::BlueprintTextureRendererCamera)
+// lint -esym(754, BlueprintTextureRendererCamera::operator=)
+// lint -esym(754, ClearFrameBufferRenderCommand::ClearFrameBufferRenderCommand)
+// lint -esym(754, ClearFrameBufferRenderCommand::operator=)
+// lint -esym(754, ParallelProjectionCameraSetup::ParallelProjectionCameraSetup)
+// lint -esym(754, ParallelProjectionCameraSetup::operator=)
+// lint -esym(754, PrepareCommand::PrepareCommand);
+// lint -esym(754, PrepareCommand::operator=);
+// lint -esym(754, RenderCommand::RenderCommand)
+// lint -esym(754, RenderCommand::operator=)
+// lint -esym(754, ShaderRenderSetCommand::ShaderRenderSetCommand)
+// lint -esym(754, ShaderRenderSetCommand::operator=)
+// lint -esym(754, TriListIndexedRenderCommand::TriListIndexedRenderCommand)
+// lint -esym(754, TriListIndexedRenderCommand::operator=)
+// lint -esym(754, TriFanRenderCommand::TriFanRenderCommand)
+// lint -esym(754, TriFanRenderCommand::operator=)
 
-//lint -e66 // bad type, having problem compiling for_each(ShaderTemplateContainer)
+// lint -e66 // bad type, having problem compiling for_each(ShaderTemplateContainer)
 
 // ======================================================================
 
-const Tag TAG_AND  = TAG3(A,N,D);
-const Tag TAG_BTRT = TAG(B,T,R,T);
-const Tag TAG_COND = TAG(C,O,N,D);
-const Tag TAG_CVTP = TAG(C,V,T,P);
-const Tag TAG_DEST = TAG(D,E,S,T);
-const Tag TAG_FALS = TAG(F,A,L,S);
-const Tag TAG_FOPS = TAG(F,O,P,S);
-const Tag TAG_NONE = TAG(N,O,N,E);
-const Tag TAG_NOP  = TAG3(N,O,P);
-const Tag TAG_OR   = TAG2(O,R);
-const Tag TAG_PCMD = TAG(P,C,M,D);
-const Tag TAG_PCMS = TAG(P,C,M,S);
-const Tag TAG_RTFC = TAG(R,T,F,C);
-const Tag TAG_RTLI = TAG(R,T,L,I);
-const Tag TAG_SST1 = TAG(S,S,T,1);
-const Tag TAG_SST2 = TAG(S,S,T,2);
-const Tag TAG_SSTC = TAG(S,S,T,C);
-const Tag TAG_STF  = TAG3(S,T,F);
-const Tag TAG_STFA = TAG(S,T,F,A);
-const Tag TAG_STFP = TAG(S,T,F,P);
-const Tag TAG_TOPS = TAG(T,O,P,S);
-const Tag TAG_TRUE = TAG(T,R,U,E);
-
+const Tag TAG_AND = TAG3(A, N, D);
+const Tag TAG_BTRT = TAG(B, T, R, T);
+const Tag TAG_COND = TAG(C, O, N, D);
+const Tag TAG_CVTP = TAG(C, V, T, P);
+const Tag TAG_DEST = TAG(D, E, S, T);
+const Tag TAG_FALS = TAG(F, A, L, S);
+const Tag TAG_FOPS = TAG(F, O, P, S);
+const Tag TAG_NONE = TAG(N, O, N, E);
+const Tag TAG_NOP = TAG3(N, O, P);
+const Tag TAG_OR = TAG2(O, R);
+const Tag TAG_PCMD = TAG(P, C, M, D);
+const Tag TAG_PCMS = TAG(P, C, M, S);
+const Tag TAG_RTFC = TAG(R, T, F, C);
+const Tag TAG_RTLI = TAG(R, T, L, I);
+const Tag TAG_SST1 = TAG(S, S, T, 1);
+const Tag TAG_SST2 = TAG(S, S, T, 2);
+const Tag TAG_SSTC = TAG(S, S, T, C);
+const Tag TAG_STF = TAG3(S, T, F);
+const Tag TAG_STFA = TAG(S, T, F, A);
+const Tag TAG_STFP = TAG(S, T, F, P);
+const Tag TAG_TOPS = TAG(T, O, P, S);
+const Tag TAG_TRUE = TAG(T, R, U, E);
 
 // ======================================================================
 // embedded entity declarations
@@ -146,14 +145,13 @@ namespace
 {
 	class Condition;
 	class PrepareOperation;
-}
+} // namespace
 
 // ======================================================================
 
 class BlueprintTextureRendererTemplate::PrepareCommand
 {
 public:
-
 	PrepareCommand();
 	~PrepareCommand();
 
@@ -162,19 +160,17 @@ public:
 	void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 
 private:
-
-	typedef std::vector<PrepareOperation*> PrepareOperationContainer;
+	typedef std::vector<PrepareOperation *> PrepareOperationContainer;
 
 private:
-
-	Condition                 *m_condition;
+	Condition *m_condition;
 	PrepareOperationContainer *m_trueOperations;
 	PrepareOperationContainer *m_falseOperations;
 
 private:
 	// disabled
-	PrepareCommand(const PrepareCommand&);
-	PrepareCommand &operator =(const PrepareCommand&);
+	PrepareCommand(const PrepareCommand &);
+	PrepareCommand &operator=(const PrepareCommand &);
 };
 
 // ======================================================================
@@ -182,21 +178,23 @@ private:
 class BlueprintTextureRendererTemplate::RenderCommand
 {
 public:
-
 	static RenderCommand *createRenderCommand_0001(Iff *iff);
 	static RenderCommand *createRenderPrimitive_0001(Iff *iff);
 
 public:
+	RenderCommand()
+	{
+	}
+	virtual ~RenderCommand()
+	{
+	}
 
-	RenderCommand() {}
-	virtual ~RenderCommand() {}
-	
 	virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const = 0;
 
 private:
 	// disabled
-	RenderCommand(const RenderCommand&);
-	RenderCommand &operator =(const RenderCommand&);
+	RenderCommand(const RenderCommand &);
+	RenderCommand &operator=(const RenderCommand &);
 };
 
 // ======================================================================
@@ -204,16 +202,17 @@ private:
 class BlueprintTextureRendererTemplate::CameraSetup
 {
 public:
-
 	static CameraSetup *create_0001(Iff *iff);
 
 public:
-
-	CameraSetup() {}
-	virtual ~CameraSetup() {}
+	CameraSetup()
+	{
+	}
+	virtual ~CameraSetup()
+	{
+	}
 
 	virtual const Camera *getCamera(const Texture &destTexture, const IntVector &intValues, int mipmapLevel) const = 0;
-	
 };
 
 // ======================================================================
@@ -221,76 +220,63 @@ public:
 class BlueprintTextureRendererTemplate::VariableFactory
 {
 public:
-
 	virtual ~VariableFactory();
 
 	virtual CustomizationVariable *createCustomizationVariable() const = 0;
 
 	const std::string &getName() const;
-	bool               isPrivate() const;
+	bool isPrivate() const;
 
 protected:
-
 	explicit VariableFactory(const std::string &name, bool isPrivate);
 
 private:
-
 	// disabled
 	VariableFactory();
 
 private:
-
-	std::string  m_name;
-	bool         m_isPrivate;
-
+	std::string m_name;
+	bool m_isPrivate;
 };
 
 // ----------------------------------------------------------------------
 
-class BlueprintTextureRendererTemplate::BasicRangedIntVariableFactory: public BlueprintTextureRendererTemplate::VariableFactory
+class BlueprintTextureRendererTemplate::BasicRangedIntVariableFactory : public BlueprintTextureRendererTemplate::VariableFactory
 {
 public:
-
 	BasicRangedIntVariableFactory(const std::string &name, bool isPrivate, int minValueInclusive, int maxValueExclusive);
 
 	virtual CustomizationVariable *createCustomizationVariable() const;
 
 private:
-
 	// disabled
 	BasicRangedIntVariableFactory();
-	BasicRangedIntVariableFactory(const BasicRangedIntVariableFactory&);             //lint -esym(754, BasicRangedIntVariableFactory::BasicRangedIntVariableFactory) // not referenced // defensive disabling
-	BasicRangedIntVariableFactory &operator =(const BasicRangedIntVariableFactory&); //lint -esym(754, BasicRangedIntVariableFactory::operator=) // not referenced // defensive disabling
+	BasicRangedIntVariableFactory(const BasicRangedIntVariableFactory &);			 // lint -esym(754, BasicRangedIntVariableFactory::BasicRangedIntVariableFactory) // not referenced // defensive disabling
+	BasicRangedIntVariableFactory &operator=(const BasicRangedIntVariableFactory &); // lint -esym(754, BasicRangedIntVariableFactory::operator=) // not referenced // defensive disabling
 
 private:
-
-	int  m_minValueInclusive;
-	int  m_maxValueExclusive;
-
+	int m_minValueInclusive;
+	int m_maxValueExclusive;
 };
 
 // ----------------------------------------------------------------------
 
-class BlueprintTextureRendererTemplate::PaletteColorVariableFactory: public BlueprintTextureRendererTemplate::VariableFactory
+class BlueprintTextureRendererTemplate::PaletteColorVariableFactory : public BlueprintTextureRendererTemplate::VariableFactory
 {
 public:
-
 	PaletteColorVariableFactory(const std::string &name, bool isPrivate, const PaletteArgb *palette);
 	virtual ~PaletteColorVariableFactory();
 
 	virtual CustomizationVariable *createCustomizationVariable() const;
 
 private:
-
 	// disabled
 	PaletteColorVariableFactory();
-	PaletteColorVariableFactory(const PaletteColorVariableFactory&);             //lint -esym(754, PaletteColorVariableFactory::PaletteColorVariableFactory) // not referenced // defensive disabling
-	PaletteColorVariableFactory &operator =(const PaletteColorVariableFactory&); //lint -esym(754, PaletteColorVariableFactory::operator=) // not referenced // must be disabled
-	
+	PaletteColorVariableFactory(const PaletteColorVariableFactory &);			 // lint -esym(754, PaletteColorVariableFactory::PaletteColorVariableFactory) // not referenced // defensive disabling
+	PaletteColorVariableFactory &operator=(const PaletteColorVariableFactory &); // lint -esym(754, PaletteColorVariableFactory::operator=) // not referenced // must be disabled
+
 private:
-
 	const PaletteArgb *const m_palette;
-
 };
 
 // ======================================================================
@@ -299,110 +285,101 @@ namespace
 {
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	typedef stdvector<int>::fwd      IntVector;
-	typedef stdvector<Shader*>::fwd  ShaderVector;
+	typedef stdvector<int>::fwd IntVector;
+	typedef stdvector<Shader *>::fwd ShaderVector;
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class ClearFrameBufferRenderCommand: public BlueprintTextureRendererTemplate::RenderCommand
+	class ClearFrameBufferRenderCommand : public BlueprintTextureRendererTemplate::RenderCommand
 	{
 	public:
-
 		ClearFrameBufferRenderCommand();
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
-		void         load_0001(Iff *iff);
+		void load_0001(Iff *iff);
 
 	private:
+		bool m_clearColor;
+		uint32 m_colorValue;
 
-		bool    m_clearColor;
-		uint32  m_colorValue;
+		bool m_clearDepth;
+		real m_depthValue;
 
-		bool    m_clearDepth;
-		real    m_depthValue;
-
-		bool    m_clearStencil;
-		uint32  m_stencilValue;
+		bool m_clearStencil;
+		uint32 m_stencilValue;
 
 	private:
 		// disabled
-		ClearFrameBufferRenderCommand(const ClearFrameBufferRenderCommand&);
-		ClearFrameBufferRenderCommand &operator =(const ClearFrameBufferRenderCommand&);
+		ClearFrameBufferRenderCommand(const ClearFrameBufferRenderCommand &);
+		ClearFrameBufferRenderCommand &operator=(const ClearFrameBufferRenderCommand &);
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class ShaderRenderSetCommand: public BlueprintTextureRendererTemplate::RenderCommand
+	class ShaderRenderSetCommand : public BlueprintTextureRendererTemplate::RenderCommand
 	{
 	public:
-
 		ShaderRenderSetCommand();
 		virtual ~ShaderRenderSetCommand();
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
-		void         load_0001(Iff *iff);
+		void load_0001(Iff *iff);
 
 	private:
-
-		typedef std::vector<BlueprintTextureRendererTemplate::RenderCommand*> RenderCommandContainer;
-		typedef RenderCommandContainer::const_iterator                        RCConstIterator;
+		typedef std::vector<BlueprintTextureRendererTemplate::RenderCommand *> RenderCommandContainer;
+		typedef RenderCommandContainer::const_iterator RCConstIterator;
 
 	private:
-
-		int                     m_shaderIndex;
-		RenderCommandContainer  m_renderCommands;
+		int m_shaderIndex;
+		RenderCommandContainer m_renderCommands;
 
 	private:
 		// disabled
-		ShaderRenderSetCommand(const ShaderRenderSetCommand&);
-		ShaderRenderSetCommand &operator =(const ShaderRenderSetCommand&);
+		ShaderRenderSetCommand(const ShaderRenderSetCommand &);
+		ShaderRenderSetCommand &operator=(const ShaderRenderSetCommand &);
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class TriListIndexedRenderCommand: public BlueprintTextureRendererTemplate::RenderCommand
+	class TriListIndexedRenderCommand : public BlueprintTextureRendererTemplate::RenderCommand
 	{
 	public:
-
 		TriListIndexedRenderCommand();
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
-		void         load_0001(Iff *iff);
+		void load_0001(Iff *iff);
 
 	private:
-
-		int  m_vertexBufferIndex;
-		int  m_indexBufferIndex;
-		int  m_vertexBufferMinimumIndex;
-		int  m_vertexBufferNumberOfVertices;
-		int  m_indexBufferStartIndex;
-		int  m_primitiveCount;
+		int m_vertexBufferIndex;
+		int m_indexBufferIndex;
+		int m_vertexBufferMinimumIndex;
+		int m_vertexBufferNumberOfVertices;
+		int m_indexBufferStartIndex;
+		int m_primitiveCount;
 
 	private:
 		// disabled
-		TriListIndexedRenderCommand(const TriListIndexedRenderCommand&);
-		TriListIndexedRenderCommand &operator =(const TriListIndexedRenderCommand&);
+		TriListIndexedRenderCommand(const TriListIndexedRenderCommand &);
+		TriListIndexedRenderCommand &operator=(const TriListIndexedRenderCommand &);
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class TriFanRenderCommand: public BlueprintTextureRendererTemplate::RenderCommand
+	class TriFanRenderCommand : public BlueprintTextureRendererTemplate::RenderCommand
 	{
 	public:
-
 		TriFanRenderCommand();
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
-		void         load_0001(Iff *iff);
+		void load_0001(Iff *iff);
 
 	private:
-
-		int  m_vertexBufferIndex;
+		int m_vertexBufferIndex;
 
 	private:
 		// disabled
-		TriFanRenderCommand(const TriFanRenderCommand&);
-		TriFanRenderCommand &operator =(const TriFanRenderCommand&);
+		TriFanRenderCommand(const TriFanRenderCommand &);
+		TriFanRenderCommand &operator=(const TriFanRenderCommand &);
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -410,83 +387,75 @@ namespace
 	class Condition
 	{
 	public:
-
 		static Condition *create_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 
 	public:
-
-		Condition() {}
-		virtual ~Condition() {}
+		Condition()
+		{
+		}
+		virtual ~Condition()
+		{
+		}
 
 		virtual bool evaluate(const IntVector &intValues) const = 0;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class TrueAlwaysCondition: public Condition
+	class TrueAlwaysCondition : public Condition
 	{
 	public:
-
 		TrueAlwaysCondition();
 
-		void         load_0001(Iff *iff) const;
+		void load_0001(Iff *iff) const;
 		virtual bool evaluate(const IntVector &intValues) const;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class FalseAlwaysCondition: public Condition
+	class FalseAlwaysCondition : public Condition
 	{
 	public:
-
 		FalseAlwaysCondition();
 
-		void         load_0001(Iff *iff) const;
+		void load_0001(Iff *iff) const;
 		virtual bool evaluate(const IntVector &intValues) const;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class OrCondition: public Condition
+	class OrCondition : public Condition
 	{
 	public:
-
 		OrCondition();
 		virtual ~OrCondition();
 
-		void         load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
+		void load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 		virtual bool evaluate(const IntVector &intValues) const;
 
 	private:
-
-		typedef std::vector<Condition*> ConditionContainer;
+		typedef std::vector<Condition *> ConditionContainer;
 
 	private:
-
-		ConditionContainer  m_conditions;
-
+		ConditionContainer m_conditions;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class AndCondition: public Condition
+	class AndCondition : public Condition
 	{
 	public:
-
 		AndCondition();
 		virtual ~AndCondition();
 
-		void         load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
+		void load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 		virtual bool evaluate(const IntVector &intValues) const;
 
 	private:
-
-		typedef std::vector<Condition*> ConditionContainer;
+		typedef std::vector<Condition *> ConditionContainer;
 
 	private:
-
-		ConditionContainer  m_conditions;
-
+		ConditionContainer m_conditions;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -494,183 +463,168 @@ namespace
 	class PrepareOperation
 	{
 	public:
-
 		static PrepareOperation *create_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 
 	public:
-
-		PrepareOperation() {}
-		virtual ~PrepareOperation() {}
+		PrepareOperation()
+		{
+		}
+		virtual ~PrepareOperation()
+		{
+		}
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const = 0;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class NoOperation: public PrepareOperation
+	class NoOperation : public PrepareOperation
 	{
 	public:
-
 		NoOperation();
 
-		void         load_0001(Iff *iff) const;
+		void load_0001(Iff *iff) const;
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class SetShaderConstantTextureOperation: public PrepareOperation
+	class SetShaderConstantTextureOperation : public PrepareOperation
 	{
 	public:
-
 		SetShaderConstantTextureOperation();
 		virtual ~SetShaderConstantTextureOperation();
 
-		void         load_0001(Iff *iff);
+		void load_0001(Iff *iff);
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 
 	private:
-
-		int  m_shaderIndex;
-		Tag  m_textureTag;
-		int  m_textureIndex;
+		int m_shaderIndex;
+		Tag m_textureTag;
+		int m_textureIndex;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class SetShaderTexture1dOperation: public PrepareOperation
+	class SetShaderTexture1dOperation : public PrepareOperation
 	{
 	public:
-
 		SetShaderTexture1dOperation();
 		virtual ~SetShaderTexture1dOperation();
 
-		void         load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
+		void load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 
 	private:
+		int m_shaderIndex;
+		Tag m_textureTag;
+		int m_baseTextureIndex;
 
-		int  m_shaderIndex;
-		Tag  m_textureTag;
-		int  m_baseTextureIndex;
-
-		int  m_textureIndexVariableId;
-		int  m_entryCountSubscript0;
-	
+		int m_textureIndexVariableId;
+		int m_entryCountSubscript0;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class SetShaderTexture2dOperation: public PrepareOperation
+	class SetShaderTexture2dOperation : public PrepareOperation
 	{
 	public:
-
 		SetShaderTexture2dOperation();
 		virtual ~SetShaderTexture2dOperation();
 
-		void         load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
+		void load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 
 	private:
+		int m_shaderIndex;
+		Tag m_textureTag;
+		int m_baseTextureIndex;
 
-		int  m_shaderIndex;
-		Tag  m_textureTag;
-		int  m_baseTextureIndex;
+		int m_subscript0VariableId;
+		int m_entryCountSubscript0;
 
-		int  m_subscript0VariableId;
-		int  m_entryCountSubscript0;
-
-		int  m_subscript1VariableId;
-		int  m_entryCountSubscript1;
-
+		int m_subscript1VariableId;
+		int m_entryCountSubscript1;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class SetShaderTextureFactorOperation: public PrepareOperation
+	class SetShaderTextureFactorOperation : public PrepareOperation
 	{
 	public:
-
 		SetShaderTextureFactorOperation();
 		virtual ~SetShaderTextureFactorOperation();
 
-		void         load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
+		void load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 
 	private:
-
-		int         m_shaderIndex;
-		Tag         m_textureFactorTag;
-		int         m_textureFactorVariableId;
+		int m_shaderIndex;
+		Tag m_textureFactorTag;
+		int m_textureFactorVariableId;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class SetShaderTextureFactorAlphaOperation: public PrepareOperation
+	class SetShaderTextureFactorAlphaOperation : public PrepareOperation
 	{
 	public:
-
 		SetShaderTextureFactorAlphaOperation();
 		virtual ~SetShaderTextureFactorAlphaOperation();
 
-		void         load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
+		void load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 
 	private:
-
-		int         m_shaderIndex;
-		Tag         m_textureFactorTag;
-		int         m_alphaVariableId;
-		PackedArgb  m_constantColor;
+		int m_shaderIndex;
+		Tag m_textureFactorTag;
+		int m_alphaVariableId;
+		PackedArgb m_constantColor;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class SetShaderTextureFactorFromPaletteOperation: public PrepareOperation
+	class SetShaderTextureFactorFromPaletteOperation : public PrepareOperation
 	{
 	public:
-
 		SetShaderTextureFactorFromPaletteOperation();
 		virtual ~SetShaderTextureFactorFromPaletteOperation();
 
-		void         load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
+		void load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTemplate);
 
 		virtual void execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &intValues, ShaderVector &shaders) const;
 
 	private:
-
-		int                m_shaderIndex;
-		Tag                m_textureFactorNameTag;
+		int m_shaderIndex;
+		Tag m_textureFactorNameTag;
 		const PaletteArgb *m_palette;
-		int                m_variableIndex; // index into intValues for the palette entry variable (the variable has the value, this is not the value).
-		// bool               m_variableIsPrivate;
+		int m_variableIndex; // index into intValues for the palette entry variable (the variable has the value, this is not the value).
+							 // bool               m_variableIsPrivate;
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	class ParallelProjectionCameraSetup: public BlueprintTextureRendererTemplate::CameraSetup
+	class ParallelProjectionCameraSetup : public BlueprintTextureRendererTemplate::CameraSetup
 	{
 	public:
-
 		ParallelProjectionCameraSetup();
 
 		virtual const Camera *getCamera(const Texture &destTexture, const IntVector &intValues, int mipmapLevel) const;
-		void                  load_0001(Iff *iff);
+		void load_0001(Iff *iff);
 
 	private:
-
 		real m_normalizedLength;
 
 	private:
 		// disabled
-		ParallelProjectionCameraSetup(const ParallelProjectionCameraSetup&);
-		ParallelProjectionCameraSetup &operator =(const ParallelProjectionCameraSetup&);
+		ParallelProjectionCameraSetup(const ParallelProjectionCameraSetup &);
+		ParallelProjectionCameraSetup &operator=(const ParallelProjectionCameraSetup &);
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -684,36 +638,33 @@ namespace
 	 * anything different than Camera.
 	 */
 
-	class BlueprintTextureRendererCamera: public Camera
+	class BlueprintTextureRendererCamera : public Camera
 	{
 	public:
-
 		BlueprintTextureRendererCamera();
 
 	protected:
-
 		virtual void drawScene(void) const;
 
 	private:
 		// disabled
-		BlueprintTextureRendererCamera(const BlueprintTextureRendererCamera&);
-		const BlueprintTextureRendererCamera &operator =(const BlueprintTextureRendererCamera&);
+		BlueprintTextureRendererCamera(const BlueprintTextureRendererCamera &);
+		const BlueprintTextureRendererCamera &operator=(const BlueprintTextureRendererCamera &);
 	};
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	bool                            ms_installed;
+	bool ms_installed;
 	BlueprintTextureRendererCamera *ms_camera;
 
-}
+} // namespace
 
 // ======================================================================
 // class BlueprintTextureRendererCamera
 // ======================================================================
 
 BlueprintTextureRendererCamera::BlueprintTextureRendererCamera()
-:
-	Camera()
+	: Camera()
 {
 }
 
@@ -729,14 +680,13 @@ void BlueprintTextureRendererCamera::drawScene(void) const
 // ======================================================================
 
 ClearFrameBufferRenderCommand::ClearFrameBufferRenderCommand()
-:
-	RenderCommand(),
-	m_clearColor(true),
-	m_colorValue(PackedArgb::solidBlack.getArgb()),
-	m_clearDepth(true),
-	m_depthValue(CONST_REAL(1)),
-	m_clearStencil(true),
-	m_stencilValue(0)
+	: RenderCommand(),
+	  m_clearColor(true),
+	  m_colorValue(PackedArgb::solidBlack.getArgb()),
+	  m_clearDepth(true),
+	  m_depthValue(CONST_REAL(1)),
+	  m_clearStencil(true),
+	  m_stencilValue(0)
 {
 }
 
@@ -753,18 +703,18 @@ void ClearFrameBufferRenderCommand::load_0001(Iff *iff)
 {
 	NOT_NULL(iff);
 
-	iff->enterChunk(TAG(C,F,B,C));
+	iff->enterChunk(TAG(C, F, B, C));
 
-		m_clearColor   = (iff->read_int32() != 0);
-		m_colorValue   = iff->read_uint32();
+	m_clearColor = (iff->read_int32() != 0);
+	m_colorValue = iff->read_uint32();
 
-		m_clearDepth   = (iff->read_int32() != 0);
-		m_depthValue   = iff->read_float();
+	m_clearDepth = (iff->read_int32() != 0);
+	m_depthValue = iff->read_float();
 
-		m_clearStencil = (iff->read_int32() != 0);
-		m_stencilValue = iff->read_uint32();
+	m_clearStencil = (iff->read_int32() != 0);
+	m_stencilValue = iff->read_uint32();
 
-	iff->exitChunk(TAG(C,F,B,C));
+	iff->exitChunk(TAG(C, F, B, C));
 }
 
 // ======================================================================
@@ -772,9 +722,9 @@ void ClearFrameBufferRenderCommand::load_0001(Iff *iff)
 // ======================================================================
 
 ShaderRenderSetCommand::ShaderRenderSetCommand()
-: RenderCommand(),
-	m_shaderIndex(0),
-	m_renderCommands()
+	: RenderCommand(),
+	  m_shaderIndex(0),
+	  m_renderCommands()
 {
 }
 
@@ -810,38 +760,37 @@ void ShaderRenderSetCommand::load_0001(Iff *iff)
 {
 	NOT_NULL(iff);
 
-	iff->enterForm(TAG(S,R,S,C));
+	iff->enterForm(TAG(S, R, S, C));
 
-		iff->enterChunk(TAG_INFO);
-		
-			m_shaderIndex                = iff->read_int32();
-			const int renderCommandCount = iff->read_int32();
+	iff->enterChunk(TAG_INFO);
 
-			m_renderCommands.reserve(static_cast<size_t>(renderCommandCount));
+	m_shaderIndex = iff->read_int32();
+	const int renderCommandCount = iff->read_int32();
 
-		iff->exitChunk(TAG_INFO);
+	m_renderCommands.reserve(static_cast<size_t>(renderCommandCount));
 
-		for (int i = 0; i < renderCommandCount; ++i)
-		{
-			RenderCommandContainer::value_type renderCommand(BlueprintTextureRendererTemplate::RenderCommand::createRenderPrimitive_0001(iff));
-			m_renderCommands.push_back(renderCommand);
-		}
+	iff->exitChunk(TAG_INFO);
 
-	iff->exitForm(TAG(S,R,S,C));
+	for (int i = 0; i < renderCommandCount; ++i)
+	{
+		RenderCommandContainer::value_type renderCommand(BlueprintTextureRendererTemplate::RenderCommand::createRenderPrimitive_0001(iff));
+		m_renderCommands.push_back(renderCommand);
+	}
+
+	iff->exitForm(TAG(S, R, S, C));
 }
 
 // ======================================================================
 // class TriListIndexedRenderCommand
 // ======================================================================
 
-TriListIndexedRenderCommand::TriListIndexedRenderCommand() :
-	RenderCommand(),
-	m_vertexBufferIndex(0),
-	m_indexBufferIndex(0),
-	m_vertexBufferMinimumIndex(0),
-	m_vertexBufferNumberOfVertices(0),
-	m_indexBufferStartIndex(0),
-	m_primitiveCount(0)
+TriListIndexedRenderCommand::TriListIndexedRenderCommand() : RenderCommand(),
+															 m_vertexBufferIndex(0),
+															 m_indexBufferIndex(0),
+															 m_vertexBufferMinimumIndex(0),
+															 m_vertexBufferNumberOfVertices(0),
+															 m_indexBufferStartIndex(0),
+															 m_primitiveCount(0)
 {
 }
 
@@ -850,7 +799,7 @@ TriListIndexedRenderCommand::TriListIndexedRenderCommand() :
 void TriListIndexedRenderCommand::execute(const BlueprintTextureRendererTemplate &trTemplate, const IntVector &, ShaderVector &) const
 {
 	const StaticVertexBuffer &vb = trTemplate.getVertexBuffer(m_vertexBufferIndex);
-	const StaticIndexBuffer  &ib = trTemplate.getIndexBuffer(m_indexBufferIndex);
+	const StaticIndexBuffer &ib = trTemplate.getIndexBuffer(m_indexBufferIndex);
 
 	Graphics::setVertexBuffer(vb);
 	Graphics::setIndexBuffer(ib);
@@ -898,12 +847,12 @@ void TriListIndexedRenderCommand::load_0001(Iff *iff)
 {
 	iff->enterChunk(TAG_RTLI);
 
-		m_vertexBufferIndex            = iff->read_int32();
-		m_indexBufferIndex             = iff->read_int32();
-		m_vertexBufferMinimumIndex     = iff->read_int32();
-		m_vertexBufferNumberOfVertices = iff->read_int32();
-		m_indexBufferStartIndex        = iff->read_int32();
-		m_primitiveCount               = iff->read_int32();
+	m_vertexBufferIndex = iff->read_int32();
+	m_indexBufferIndex = iff->read_int32();
+	m_vertexBufferMinimumIndex = iff->read_int32();
+	m_vertexBufferNumberOfVertices = iff->read_int32();
+	m_indexBufferStartIndex = iff->read_int32();
+	m_primitiveCount = iff->read_int32();
 
 	iff->exitChunk(TAG_RTLI);
 }
@@ -913,9 +862,8 @@ void TriListIndexedRenderCommand::load_0001(Iff *iff)
 // ======================================================================
 
 TriFanRenderCommand::TriFanRenderCommand()
-:
-	RenderCommand(),
-	m_vertexBufferIndex(0)
+	: RenderCommand(),
+	  m_vertexBufferIndex(0)
 {
 }
 
@@ -935,7 +883,7 @@ void TriFanRenderCommand::load_0001(Iff *iff)
 {
 	iff->enterChunk(TAG_RTFC);
 
-		m_vertexBufferIndex = static_cast<int>(iff->read_int32());
+	m_vertexBufferIndex = static_cast<int>(iff->read_int32());
 
 	iff->exitChunk(TAG_RTFC);
 }
@@ -950,25 +898,25 @@ BlueprintTextureRendererTemplate::RenderCommand *BlueprintTextureRendererTemplat
 
 	switch (iff->getCurrentName())
 	{
-		case TAG(C,F,B,C):
-			{
-				ClearFrameBufferRenderCommand *const renderCommand = NON_NULL(new ClearFrameBufferRenderCommand());
-				renderCommand->load_0001(iff);
-				return renderCommand;
-			}
-		case TAG(S,R,S,C):
-			{
-				ShaderRenderSetCommand *const renderCommand = NON_NULL(new ShaderRenderSetCommand());
-				renderCommand->load_0001(iff);
-				return renderCommand;
-			}
+		case TAG(C, F, B, C):
+		{
+			ClearFrameBufferRenderCommand *const renderCommand = NON_NULL(new ClearFrameBufferRenderCommand());
+			renderCommand->load_0001(iff);
+			return renderCommand;
+		}
+		case TAG(S, R, S, C):
+		{
+			ShaderRenderSetCommand *const renderCommand = NON_NULL(new ShaderRenderSetCommand());
+			renderCommand->load_0001(iff);
+			return renderCommand;
+		}
 		default:
-			{
-				char name[256];
-				iff->formatLocation(name, sizeof(name));
-				FATAL(true, ("unsupported BlueprintTextureRenderer render command [%s]", name));
-				return 0; //lint !e527 // unreachable // yes, joyful MSVC
-			}
+		{
+			char name[256];
+			iff->formatLocation(name, sizeof(name));
+			FATAL(true, ("unsupported BlueprintTextureRenderer render command [%s]", name));
+			return 0; // lint !e527 // unreachable // yes, joyful MSVC
+		}
 	}
 }
 
@@ -981,24 +929,24 @@ BlueprintTextureRendererTemplate::RenderCommand *BlueprintTextureRendererTemplat
 	switch (iff->getCurrentName())
 	{
 		case TAG_RTLI:
-			{
-				TriListIndexedRenderCommand *const renderCommand = NON_NULL(new TriListIndexedRenderCommand());
-				renderCommand->load_0001(iff);
-				return renderCommand;
-			}
+		{
+			TriListIndexedRenderCommand *const renderCommand = NON_NULL(new TriListIndexedRenderCommand());
+			renderCommand->load_0001(iff);
+			return renderCommand;
+		}
 		case TAG_RTFC:
-			{
-				TriFanRenderCommand *const renderCommand = NON_NULL(new TriFanRenderCommand());
-				renderCommand->load_0001(iff);
-				return renderCommand;
-			}
+		{
+			TriFanRenderCommand *const renderCommand = NON_NULL(new TriFanRenderCommand());
+			renderCommand->load_0001(iff);
+			return renderCommand;
+		}
 		default:
-			{
-				char name[256];
-				iff->formatLocation(name, sizeof(name));
-				FATAL(true, ("unsupported BlueprintTextureRenderer render command [%s]", name));
-				return 0; //lint !e527 // unreachable // yes, joyful MSVC
-			}
+		{
+			char name[256];
+			iff->formatLocation(name, sizeof(name));
+			FATAL(true, ("unsupported BlueprintTextureRenderer render command [%s]", name));
+			return 0; // lint !e527 // unreachable // yes, joyful MSVC
+		}
 	}
 }
 
@@ -1007,9 +955,9 @@ BlueprintTextureRendererTemplate::RenderCommand *BlueprintTextureRendererTemplat
 // ======================================================================
 
 BlueprintTextureRendererTemplate::PrepareCommand::PrepareCommand()
-:	m_condition(0),
-	m_trueOperations(0),
-	m_falseOperations(0)
+	: m_condition(0),
+	  m_trueOperations(0),
+	  m_falseOperations(0)
 {
 }
 
@@ -1025,7 +973,7 @@ void BlueprintTextureRendererTemplate::PrepareCommand::load_0001(Iff *iff, Bluep
 		if (iff->getCurrentName() == TAG_COND)
 		{
 			iff->enterForm(TAG_COND);
-				m_condition = Condition::create_0001(iff, trTemplate);
+			m_condition = Condition::create_0001(iff, trTemplate);
 			iff->exitForm(TAG_COND);
 		}
 
@@ -1034,7 +982,7 @@ void BlueprintTextureRendererTemplate::PrepareCommand::load_0001(Iff *iff, Bluep
 		{
 			// get # ops
 			iff->enterChunk(TAG_INFO);
-				const int opCount = iff->read_int32();
+			const int opCount = iff->read_int32();
 			iff->exitChunk(TAG_INFO);
 
 			// load ops
@@ -1051,7 +999,7 @@ void BlueprintTextureRendererTemplate::PrepareCommand::load_0001(Iff *iff, Bluep
 		{
 			// get # ops
 			iff->enterChunk(TAG_INFO);
-				const int opCount = iff->read_int32();
+			const int opCount = iff->read_int32();
 			iff->exitChunk(TAG_INFO);
 
 			// load ops
@@ -1071,7 +1019,7 @@ void BlueprintTextureRendererTemplate::PrepareCommand::load_0001(Iff *iff, Bluep
 BlueprintTextureRendererTemplate::PrepareCommand::~PrepareCommand()
 {
 	delete m_condition;
-	
+
 	if (m_trueOperations)
 	{
 		std::for_each(m_trueOperations->begin(), m_trueOperations->end(), PointerDeleter());
@@ -1116,9 +1064,8 @@ void BlueprintTextureRendererTemplate::PrepareCommand::execute(const BlueprintTe
 // ======================================================================
 
 ParallelProjectionCameraSetup::ParallelProjectionCameraSetup()
-:
-	CameraSetup(),
-	m_normalizedLength(CONST_REAL(1))
+	: CameraSetup(),
+	  m_normalizedLength(CONST_REAL(1))
 {
 }
 
@@ -1131,11 +1078,11 @@ const Camera *ParallelProjectionCameraSetup::getCamera(const Texture &destTextur
 	NOT_NULL(ms_camera);
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, mipmapLevel, destTexture.getMipmapLevelCount());
 
-	const uint  uMipmapLevel   = static_cast<uint>(mipmapLevel);
-	const uint  uTextureWidth  = static_cast<uint>(destTexture.getWidth());
-	const uint  uTextureHeight = static_cast<uint>(destTexture.getHeight());
+	const uint uMipmapLevel = static_cast<uint>(mipmapLevel);
+	const uint uTextureWidth = static_cast<uint>(destTexture.getWidth());
+	const uint uTextureHeight = static_cast<uint>(destTexture.getHeight());
 
-	const int viewportWidth  = std::max(1, static_cast<int>(uTextureWidth >> uMipmapLevel));
+	const int viewportWidth = std::max(1, static_cast<int>(uTextureWidth >> uMipmapLevel));
 	const int viewportHeight = std::max(1, static_cast<int>(uTextureHeight >> uMipmapLevel));
 	ms_camera->setViewport(0, 0, viewportWidth, viewportHeight);
 
@@ -1150,11 +1097,11 @@ void ParallelProjectionCameraSetup::load_0001(Iff *iff)
 {
 	NOT_NULL(iff);
 
-	iff->enterChunk(TAG(P,C,A,M));
+	iff->enterChunk(TAG(P, C, A, M));
 	{
 		m_normalizedLength = iff->read_float();
 	}
-	iff->exitChunk(TAG(P,C,A,M));
+	iff->exitChunk(TAG(P, C, A, M));
 }
 
 // ======================================================================
@@ -1167,24 +1114,24 @@ BlueprintTextureRendererTemplate::CameraSetup *BlueprintTextureRendererTemplate:
 
 	switch (iff->getCurrentName())
 	{
-		case TAG(P,C,A,M):
-			{
-				ParallelProjectionCameraSetup *const cameraSetup = NON_NULL(new ParallelProjectionCameraSetup());
-				cameraSetup->load_0001(iff);
-				return cameraSetup;
-			}
-		case TAG(U,C,A,M):
-			{
-				FATAL(true, ("add support"));  // -TRF-
-				return 0; //lint !e527 // unreachable
-			}
+		case TAG(P, C, A, M):
+		{
+			ParallelProjectionCameraSetup *const cameraSetup = NON_NULL(new ParallelProjectionCameraSetup());
+			cameraSetup->load_0001(iff);
+			return cameraSetup;
+		}
+		case TAG(U, C, A, M):
+		{
+			FATAL(true, ("add support")); // -TRF-
+			return 0;					  // lint !e527 // unreachable
+		}
 		default:
-			{
-				char name[256];
-				iff->formatLocation(name, sizeof(name));
-				FATAL(true, ("unsupported BlueprintTextureRendererTemplate camera [%s]", name));
-				return 0; //lint !e527 // unreachable
-			}
+		{
+			char name[256];
+			iff->formatLocation(name, sizeof(name));
+			FATAL(true, ("unsupported BlueprintTextureRendererTemplate camera [%s]", name));
+			return 0; // lint !e527 // unreachable
+		}
 	}
 }
 
@@ -1212,9 +1159,8 @@ inline bool BlueprintTextureRendererTemplate::VariableFactory::isPrivate() const
 
 // ======================================================================
 
-BlueprintTextureRendererTemplate::VariableFactory::VariableFactory(const std::string &name, bool newIsPrivate) :
-	m_name(name),
-	m_isPrivate(newIsPrivate)
+BlueprintTextureRendererTemplate::VariableFactory::VariableFactory(const std::string &name, bool newIsPrivate) : m_name(name),
+																												 m_isPrivate(newIsPrivate)
 {
 }
 
@@ -1222,10 +1168,9 @@ BlueprintTextureRendererTemplate::VariableFactory::VariableFactory(const std::st
 // class BlueprintTextureRendererTemplate::BasicRangedIntVariableFactory
 // ======================================================================
 
-BlueprintTextureRendererTemplate::BasicRangedIntVariableFactory::BasicRangedIntVariableFactory(const std::string &name, bool newIsPrivate, int minValueInclusive, int maxValueExclusive) :
-	VariableFactory(name, newIsPrivate),
-	m_minValueInclusive(minValueInclusive),
-	m_maxValueExclusive(maxValueExclusive)
+BlueprintTextureRendererTemplate::BasicRangedIntVariableFactory::BasicRangedIntVariableFactory(const std::string &name, bool newIsPrivate, int minValueInclusive, int maxValueExclusive) : VariableFactory(name, newIsPrivate),
+																																														   m_minValueInclusive(minValueInclusive),
+																																														   m_maxValueExclusive(maxValueExclusive)
 {
 }
 
@@ -1233,7 +1178,7 @@ BlueprintTextureRendererTemplate::BasicRangedIntVariableFactory::BasicRangedIntV
 
 CustomizationVariable *BlueprintTextureRendererTemplate::BasicRangedIntVariableFactory::createCustomizationVariable() const
 {
-	// create the customization variable.  
+	// create the customization variable.
 	// note: we set the default value to the min value.
 	return new BasicRangedIntCustomizationVariable(m_minValueInclusive, m_minValueInclusive, m_maxValueExclusive);
 }
@@ -1242,9 +1187,8 @@ CustomizationVariable *BlueprintTextureRendererTemplate::BasicRangedIntVariableF
 // class BlueprintTextureRendererTemplate::PaletteColorVariableFactory
 // ======================================================================
 
-BlueprintTextureRendererTemplate::PaletteColorVariableFactory::PaletteColorVariableFactory(const std::string &name, bool newIsPrivate, const PaletteArgb *palette) :
-	VariableFactory(name, newIsPrivate),
-	m_palette(palette)
+BlueprintTextureRendererTemplate::PaletteColorVariableFactory::PaletteColorVariableFactory(const std::string &name, bool newIsPrivate, const PaletteArgb *palette) : VariableFactory(name, newIsPrivate),
+																																									 m_palette(palette)
 {
 	//-- fetch local reference to palette
 	NOT_NULL(m_palette);
@@ -1256,7 +1200,7 @@ BlueprintTextureRendererTemplate::PaletteColorVariableFactory::PaletteColorVaria
 BlueprintTextureRendererTemplate::PaletteColorVariableFactory::~PaletteColorVariableFactory()
 {
 	//-- release local reference
-	//lint -esym(1540, PaletteColorVariableFactory::m_palette) // neither freed nor zero'ed // we're releasing, equivalent
+	// lint -esym(1540, PaletteColorVariableFactory::m_palette) // neither freed nor zero'ed // we're releasing, equivalent
 	m_palette->release();
 }
 
@@ -1272,12 +1216,11 @@ CustomizationVariable *BlueprintTextureRendererTemplate::PaletteColorVariableFac
 // ======================================================================
 
 TrueAlwaysCondition::TrueAlwaysCondition()
-:	Condition()
+	: Condition()
 {
 }
 
 // ----------------------------------------------------------------------
-
 
 void TrueAlwaysCondition::load_0001(Iff *iff) const
 {
@@ -1289,7 +1232,7 @@ void TrueAlwaysCondition::load_0001(Iff *iff) const
 
 // ----------------------------------------------------------------------
 
-bool TrueAlwaysCondition::evaluate(const IntVector&) const
+bool TrueAlwaysCondition::evaluate(const IntVector &) const
 {
 	return true;
 }
@@ -1299,12 +1242,11 @@ bool TrueAlwaysCondition::evaluate(const IntVector&) const
 // ======================================================================
 
 FalseAlwaysCondition::FalseAlwaysCondition()
-:	Condition()
+	: Condition()
 {
 }
 
 // ----------------------------------------------------------------------
-
 
 void FalseAlwaysCondition::load_0001(Iff *iff) const
 {
@@ -1316,7 +1258,7 @@ void FalseAlwaysCondition::load_0001(Iff *iff) const
 
 // ----------------------------------------------------------------------
 
-bool FalseAlwaysCondition::evaluate(const IntVector&) const
+bool FalseAlwaysCondition::evaluate(const IntVector &) const
 {
 	return false;
 }
@@ -1326,8 +1268,8 @@ bool FalseAlwaysCondition::evaluate(const IntVector&) const
 // ======================================================================
 
 OrCondition::OrCondition()
-:	Condition(),
-	m_conditions()
+	: Condition(),
+	  m_conditions()
 {
 }
 
@@ -1346,13 +1288,13 @@ void OrCondition::load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTempla
 
 	iff->enterForm(TAG_OR);
 
-		iff->enterChunk(TAG_INFO);
-			const size_t conditionCount = static_cast<size_t>(iff->read_uint32());
-		iff->exitChunk(TAG_INFO);
+	iff->enterChunk(TAG_INFO);
+	const size_t conditionCount = static_cast<size_t>(iff->read_uint32());
+	iff->exitChunk(TAG_INFO);
 
-		m_conditions.reserve(conditionCount);
-		for (size_t i = 0; i < conditionCount; ++i)
-			m_conditions.push_back(Condition::create_0001(iff, trTemplate));
+	m_conditions.reserve(conditionCount);
+	for (size_t i = 0; i < conditionCount; ++i)
+		m_conditions.push_back(Condition::create_0001(iff, trTemplate));
 
 	iff->exitForm(TAG_OR);
 }
@@ -1376,8 +1318,8 @@ bool OrCondition::evaluate(const IntVector &intValues) const
 // ======================================================================
 
 AndCondition::AndCondition()
-:	Condition(),
-	m_conditions()
+	: Condition(),
+	  m_conditions()
 {
 }
 
@@ -1396,13 +1338,13 @@ void AndCondition::load_0001(Iff *iff, BlueprintTextureRendererTemplate &trTempl
 
 	iff->enterForm(TAG_AND);
 
-		iff->enterChunk(TAG_INFO);
-			const size_t conditionCount = static_cast<size_t>(iff->read_uint32());
-		iff->exitChunk(TAG_INFO);
+	iff->enterChunk(TAG_INFO);
+	const size_t conditionCount = static_cast<size_t>(iff->read_uint32());
+	iff->exitChunk(TAG_INFO);
 
-		m_conditions.reserve(conditionCount);
-		for (size_t i = 0; i < conditionCount; ++i)
-			m_conditions.push_back(Condition::create_0001(iff, trTemplate));
+	m_conditions.reserve(conditionCount);
+	for (size_t i = 0; i < conditionCount; ++i)
+		m_conditions.push_back(Condition::create_0001(iff, trTemplate));
 
 	iff->exitForm(TAG_AND);
 }
@@ -1414,7 +1356,7 @@ bool AndCondition::evaluate(const IntVector &intValues) const
 	//-- return false if any of the conditions are false
 	const ConditionContainer::const_iterator itEnd = m_conditions.end();
 	for (ConditionContainer::const_iterator it = m_conditions.begin(); it != itEnd; ++it)
-		if (! ((*it)->evaluate(intValues)) )
+		if (!((*it)->evaluate(intValues)))
 			return false;
 
 	//-- if we get here, nothing was false, so return true
@@ -1432,43 +1374,43 @@ Condition *Condition::create_0001(Iff *iff, BlueprintTextureRendererTemplate &tr
 	switch (iff->getCurrentName())
 	{
 		case TAG_TRUE:
-			{
-				TrueAlwaysCondition *const condition = new TrueAlwaysCondition;
-				condition->load_0001(iff);
-				return condition;
-			}
+		{
+			TrueAlwaysCondition *const condition = new TrueAlwaysCondition;
+			condition->load_0001(iff);
+			return condition;
+		}
 		case TAG_FALS:
-			{
-				FalseAlwaysCondition *const condition = new FalseAlwaysCondition;
-				condition->load_0001(iff);
-				return condition;
-			}
+		{
+			FalseAlwaysCondition *const condition = new FalseAlwaysCondition;
+			condition->load_0001(iff);
+			return condition;
+		}
 		case TAG_CVTP:
-			{
-				// depracated (, should no longer be generated.  For now will always generate true
-				TrueAlwaysCondition *const condition = new TrueAlwaysCondition;
-				condition->load_0001(iff);
-				return condition;
-			}
+		{
+			// depracated (, should no longer be generated.  For now will always generate true
+			TrueAlwaysCondition *const condition = new TrueAlwaysCondition;
+			condition->load_0001(iff);
+			return condition;
+		}
 		case TAG_OR:
-			{
-				OrCondition *const condition = new OrCondition;
-				condition->load_0001(iff, trTemplate);
-				return condition;
-			}
+		{
+			OrCondition *const condition = new OrCondition;
+			condition->load_0001(iff, trTemplate);
+			return condition;
+		}
 		case TAG_AND:
-			{
-				AndCondition *const condition = new AndCondition;
-				condition->load_0001(iff, trTemplate);
-				return condition;
-			}
+		{
+			AndCondition *const condition = new AndCondition;
+			condition->load_0001(iff, trTemplate);
+			return condition;
+		}
 		default:
-			{
-				char name[5];
-				ConvertTagToString(iff->getCurrentName(), name);
-				FATAL(true, ("unsupported condition type [%s]", name));
-				return 0; //lint !e527 // unreachable // right, for MSVC
-			}
+		{
+			char name[5];
+			ConvertTagToString(iff->getCurrentName(), name);
+			FATAL(true, ("unsupported condition type [%s]", name));
+			return 0; // lint !e527 // unreachable // right, for MSVC
+		}
 	}
 }
 
@@ -1477,7 +1419,7 @@ Condition *Condition::create_0001(Iff *iff, BlueprintTextureRendererTemplate &tr
 // ======================================================================
 
 NoOperation::NoOperation()
-:	PrepareOperation()
+	: PrepareOperation()
 {
 }
 
@@ -1503,10 +1445,10 @@ void NoOperation::execute(const BlueprintTextureRendererTemplate &, const IntVec
 // ======================================================================
 
 SetShaderConstantTextureOperation::SetShaderConstantTextureOperation()
-:	PrepareOperation(),
-	m_shaderIndex(-1),
-	m_textureTag(TAG(N,O,N,E)),
-	m_textureIndex(-1)
+	: PrepareOperation(),
+	  m_shaderIndex(-1),
+	  m_textureTag(TAG(N, O, N, E)),
+	  m_textureIndex(-1)
 {
 }
 
@@ -1524,10 +1466,10 @@ void SetShaderConstantTextureOperation::load_0001(Iff *iff)
 
 	iff->enterChunk(TAG_SSTC);
 
-		m_shaderIndex  = iff->read_int32();
-		m_textureTag   = static_cast<Tag>(iff->read_uint32());
-		m_textureIndex = iff->read_int32();
-		
+	m_shaderIndex = iff->read_int32();
+	m_textureTag = static_cast<Tag>(iff->read_uint32());
+	m_textureIndex = iff->read_int32();
+
 	iff->exitChunk(TAG_SSTC);
 }
 
@@ -1540,7 +1482,7 @@ void SetShaderConstantTextureOperation::execute(const BlueprintTextureRendererTe
 	//-- get the shader
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, m_shaderIndex, static_cast<int>(shaders.size()));
 
-	StaticShader *const shader = safe_cast<StaticShader*>(shaders[static_cast<size_t>(m_shaderIndex)]);
+	StaticShader *const shader = safe_cast<StaticShader *>(shaders[static_cast<size_t>(m_shaderIndex)]);
 	NOT_NULL(shader);
 
 	//-- get the texture
@@ -1558,13 +1500,12 @@ void SetShaderConstantTextureOperation::execute(const BlueprintTextureRendererTe
 // class SetShaderTexture1dOperation
 // ======================================================================
 
-SetShaderTexture1dOperation::SetShaderTexture1dOperation() :
-	PrepareOperation(),
-	m_shaderIndex(-1),
-	m_textureTag(TAG(N,O,N,E)),
-	m_baseTextureIndex(-1),
-	m_textureIndexVariableId(-1),
-	m_entryCountSubscript0(-1)
+SetShaderTexture1dOperation::SetShaderTexture1dOperation() : PrepareOperation(),
+															 m_shaderIndex(-1),
+															 m_textureTag(TAG(N, O, N, E)),
+															 m_baseTextureIndex(-1),
+															 m_textureIndexVariableId(-1),
+															 m_entryCountSubscript0(-1)
 {
 }
 
@@ -1582,23 +1523,23 @@ void SetShaderTexture1dOperation::load_0001(Iff *iff, BlueprintTextureRendererTe
 
 	iff->enterChunk(TAG_SST1);
 
-		m_shaderIndex = static_cast<int>(iff->read_int32());
-		DEBUG_FATAL(m_shaderIndex < 0, ("bad m_shaderIndex %d", m_shaderIndex));
+	m_shaderIndex = static_cast<int>(iff->read_int32());
+	DEBUG_FATAL(m_shaderIndex < 0, ("bad m_shaderIndex %d", m_shaderIndex));
 
-		m_textureTag       = static_cast<Tag>(iff->read_uint32());
+	m_textureTag = static_cast<Tag>(iff->read_uint32());
 
-		m_baseTextureIndex = static_cast<int>(iff->read_int32());
-		DEBUG_FATAL(m_baseTextureIndex < 0, ("bad m_baseTextureIndex %d", m_shaderIndex));
+	m_baseTextureIndex = static_cast<int>(iff->read_int32());
+	DEBUG_FATAL(m_baseTextureIndex < 0, ("bad m_baseTextureIndex %d", m_shaderIndex));
 
-		//-- get texture variable name and range info
-		char name[MAX_PATH];
-		iff->read_string(name, MAX_PATH-1);
+	//-- get texture variable name and range info
+	char name[MAX_PATH];
+	iff->read_string(name, MAX_PATH - 1);
 
-		m_entryCountSubscript0 = static_cast<int>(iff->read_int32());
-		DEBUG_FATAL(m_entryCountSubscript0 < 1, ("bad m_entryCountSubscript0 %d", m_entryCountSubscript0));
+	m_entryCountSubscript0 = static_cast<int>(iff->read_int32());
+	DEBUG_FATAL(m_entryCountSubscript0 < 1, ("bad m_entryCountSubscript0 %d", m_entryCountSubscript0));
 
-		//-- tell the template about the variable
-		m_textureIndexVariableId = trTemplate.submitRangedIntVariable(name, 0, m_entryCountSubscript0);
+	//-- tell the template about the variable
+	m_textureIndexVariableId = trTemplate.submitRangedIntVariable(name, 0, m_entryCountSubscript0);
 
 	iff->exitChunk(TAG_SST1);
 }
@@ -1610,7 +1551,7 @@ void SetShaderTexture1dOperation::execute(const BlueprintTextureRendererTemplate
 	//-- get the shader
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, m_shaderIndex, static_cast<int>(shaders.size()));
 
-	StaticShader *const shader = safe_cast<StaticShader*>(shaders[static_cast<size_t>(m_shaderIndex)]);
+	StaticShader *const shader = safe_cast<StaticShader *>(shaders[static_cast<size_t>(m_shaderIndex)]);
 	NOT_NULL(shader);
 
 	//-- get value for texture index 0
@@ -1639,15 +1580,14 @@ void SetShaderTexture1dOperation::execute(const BlueprintTextureRendererTemplate
 // class SetShaderTexture2dOperation
 // ======================================================================
 
-SetShaderTexture2dOperation::SetShaderTexture2dOperation() :
-	PrepareOperation(),
-	m_shaderIndex(-1),
-	m_textureTag(TAG(N,O,N,E)),
-	m_baseTextureIndex(-1),
-	m_subscript0VariableId(-1),
-	m_entryCountSubscript0(-1),
-	m_subscript1VariableId(-1),
-	m_entryCountSubscript1(-1)
+SetShaderTexture2dOperation::SetShaderTexture2dOperation() : PrepareOperation(),
+															 m_shaderIndex(-1),
+															 m_textureTag(TAG(N, O, N, E)),
+															 m_baseTextureIndex(-1),
+															 m_subscript0VariableId(-1),
+															 m_entryCountSubscript0(-1),
+															 m_subscript1VariableId(-1),
+															 m_entryCountSubscript1(-1)
 {
 }
 
@@ -1665,31 +1605,31 @@ void SetShaderTexture2dOperation::load_0001(Iff *iff, BlueprintTextureRendererTe
 
 	iff->enterChunk(TAG_SST2);
 
-		m_shaderIndex      = static_cast<int>(iff->read_int32());
-		m_textureTag       = static_cast<Tag>(iff->read_uint32());
-		m_baseTextureIndex = static_cast<int>(iff->read_int32());
+	m_shaderIndex = static_cast<int>(iff->read_int32());
+	m_textureTag = static_cast<Tag>(iff->read_uint32());
+	m_baseTextureIndex = static_cast<int>(iff->read_int32());
 
-		// construct the subscript variable ids from the given name.
-		// assume it must be a VT_int
+	// construct the subscript variable ids from the given name.
+	// assume it must be a VT_int
 
-		char name[1024];
+	char name[1024];
 
-		//-- handle variable subscript zero
-		iff->read_string(name, sizeof(name)-1);
+	//-- handle variable subscript zero
+	iff->read_string(name, sizeof(name) - 1);
 
-		m_entryCountSubscript0 = static_cast<int>(iff->read_int32());
-		DEBUG_FATAL(m_entryCountSubscript0 < 1, ("bad m_entryCountSubscript0 %d", m_entryCountSubscript0));
+	m_entryCountSubscript0 = static_cast<int>(iff->read_int32());
+	DEBUG_FATAL(m_entryCountSubscript0 < 1, ("bad m_entryCountSubscript0 %d", m_entryCountSubscript0));
 
-		m_subscript0VariableId = trTemplate.submitRangedIntVariable(name, 0, m_entryCountSubscript0);
+	m_subscript0VariableId = trTemplate.submitRangedIntVariable(name, 0, m_entryCountSubscript0);
 
-		//-- handle variable subscript one
-		iff->read_string(name, sizeof(name)-1);
+	//-- handle variable subscript one
+	iff->read_string(name, sizeof(name) - 1);
 
-		m_entryCountSubscript1 = static_cast<int>(iff->read_int32());
-		DEBUG_FATAL(m_entryCountSubscript1 < 1, ("bad m_entryCountSubscript1 %d", m_entryCountSubscript1));
+	m_entryCountSubscript1 = static_cast<int>(iff->read_int32());
+	DEBUG_FATAL(m_entryCountSubscript1 < 1, ("bad m_entryCountSubscript1 %d", m_entryCountSubscript1));
 
-		m_subscript1VariableId = trTemplate.submitRangedIntVariable(name, 0, m_entryCountSubscript1);
-		
+	m_subscript1VariableId = trTemplate.submitRangedIntVariable(name, 0, m_entryCountSubscript1);
+
 	iff->exitChunk(TAG_SST2);
 }
 
@@ -1700,7 +1640,7 @@ void SetShaderTexture2dOperation::execute(const BlueprintTextureRendererTemplate
 	//-- get the shader
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, m_shaderIndex, static_cast<int>(shaders.size()));
 
-	StaticShader *const shader = safe_cast<StaticShader*>(shaders[static_cast<size_t>(m_shaderIndex)]);
+	StaticShader *const shader = safe_cast<StaticShader *>(shaders[static_cast<size_t>(m_shaderIndex)]);
 	NOT_NULL(shader);
 
 	//-- get value for texture subscript 0
@@ -1738,11 +1678,10 @@ void SetShaderTexture2dOperation::execute(const BlueprintTextureRendererTemplate
 // class SetShaderTextureFactorOperation
 // ======================================================================
 
-SetShaderTextureFactorOperation::SetShaderTextureFactorOperation() :
-	PrepareOperation(),
-	m_shaderIndex(-1),
-	m_textureFactorTag(TAG(N,O,N,E)),
-	m_textureFactorVariableId(-1)
+SetShaderTextureFactorOperation::SetShaderTextureFactorOperation() : PrepareOperation(),
+																	 m_shaderIndex(-1),
+																	 m_textureFactorTag(TAG(N, O, N, E)),
+																	 m_textureFactorVariableId(-1)
 {
 }
 
@@ -1759,17 +1698,17 @@ void SetShaderTextureFactorOperation::load_0001(Iff *iff, BlueprintTextureRender
 	NOT_NULL(iff);
 
 	iff->enterChunk(TAG_STF);
-	
-		m_shaderIndex      = iff->read_int32();
-		m_textureFactorTag = static_cast<Tag>(iff->read_uint32());
-		
-		// construct the texture variable id from the given name.
-		// assume it must be a VT_int
-		char name[MAX_PATH];
-		iff->read_string(name, MAX_PATH-1);
 
-		// @todo: this is wrong, as it does not let us assign the max value
-		m_textureFactorVariableId = trTemplate.submitRangedIntVariable(name, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+	m_shaderIndex = iff->read_int32();
+	m_textureFactorTag = static_cast<Tag>(iff->read_uint32());
+
+	// construct the texture variable id from the given name.
+	// assume it must be a VT_int
+	char name[MAX_PATH];
+	iff->read_string(name, MAX_PATH - 1);
+
+	// @todo: this is wrong, as it does not let us assign the max value
+	m_textureFactorVariableId = trTemplate.submitRangedIntVariable(name, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
 
 	iff->exitChunk(TAG_STF);
 }
@@ -1783,11 +1722,11 @@ void SetShaderTextureFactorOperation::execute(const BlueprintTextureRendererTemp
 	//-- get the texture factor value
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, m_textureFactorVariableId, static_cast<int>(intValues.size()));
 	int textureFactor = intValues[static_cast<size_t>(m_textureFactorVariableId)];
-	
+
 	//-- get the shader
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, m_shaderIndex, static_cast<int>(shaders.size()));
 
-	StaticShader *const shader = safe_cast<StaticShader*>(shaders[static_cast<size_t>(m_shaderIndex)]);
+	StaticShader *const shader = safe_cast<StaticShader *>(shaders[static_cast<size_t>(m_shaderIndex)]);
 	NOT_NULL(shader);
 
 	shader->setTextureFactor(m_textureFactorTag, static_cast<uint32>(textureFactor));
@@ -1797,12 +1736,11 @@ void SetShaderTextureFactorOperation::execute(const BlueprintTextureRendererTemp
 // class SetShaderTextureFactorAlphaOperation
 // ======================================================================
 
-SetShaderTextureFactorAlphaOperation::SetShaderTextureFactorAlphaOperation() :
-	PrepareOperation(),
-	m_shaderIndex(-1),
-	m_textureFactorTag(TAG_NONE),
-	m_alphaVariableId(-1),
-	m_constantColor()
+SetShaderTextureFactorAlphaOperation::SetShaderTextureFactorAlphaOperation() : PrepareOperation(),
+																			   m_shaderIndex(-1),
+																			   m_textureFactorTag(TAG_NONE),
+																			   m_alphaVariableId(-1),
+																			   m_constantColor()
 {
 }
 
@@ -1820,19 +1758,19 @@ void SetShaderTextureFactorAlphaOperation::load_0001(Iff *iff, BlueprintTextureR
 
 	iff->enterChunk(TAG_STFA);
 
-		m_shaderIndex      = iff->read_int32();
-		m_textureFactorTag = static_cast<Tag>(iff->read_uint32());
-	
-		m_constantColor.setR(iff->read_uint8());
-		m_constantColor.setG(iff->read_uint8());
-		m_constantColor.setB(iff->read_uint8());
+	m_shaderIndex = iff->read_int32();
+	m_textureFactorTag = static_cast<Tag>(iff->read_uint32());
 
-		// construct the texture variable id from the given name.
-		// assume it must be a VT_int
-		char name[MAX_PATH];
-		iff->read_string(name, MAX_PATH-1);
+	m_constantColor.setR(iff->read_uint8());
+	m_constantColor.setG(iff->read_uint8());
+	m_constantColor.setB(iff->read_uint8());
 
-		m_alphaVariableId = trTemplate.submitRangedIntVariable(name, 0, 256);
+	// construct the texture variable id from the given name.
+	// assume it must be a VT_int
+	char name[MAX_PATH];
+	iff->read_string(name, MAX_PATH - 1);
+
+	m_alphaVariableId = trTemplate.submitRangedIntVariable(name, 0, 256);
 
 	iff->exitChunk(TAG_STFA);
 }
@@ -1854,7 +1792,7 @@ void SetShaderTextureFactorAlphaOperation::execute(const BlueprintTextureRendere
 	//-- get the shader
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, m_shaderIndex, static_cast<int>(shaders.size()));
 
-	StaticShader *const shader = safe_cast<StaticShader*>(shaders[static_cast<size_t>(m_shaderIndex)]);
+	StaticShader *const shader = safe_cast<StaticShader *>(shaders[static_cast<size_t>(m_shaderIndex)]);
 	NOT_NULL(shader);
 
 	shader->setTextureFactor(m_textureFactorTag, newTextureFactor.getArgb());
@@ -1864,12 +1802,11 @@ void SetShaderTextureFactorAlphaOperation::execute(const BlueprintTextureRendere
 // class SetShaderTextureFactorFromPaletteOperation
 // ======================================================================
 
-SetShaderTextureFactorFromPaletteOperation::SetShaderTextureFactorFromPaletteOperation() :
-	PrepareOperation(),
-	m_shaderIndex(-1),
-	m_textureFactorNameTag(TAG_NONE),
-	m_palette(0),
-	m_variableIndex(-1)
+SetShaderTextureFactorFromPaletteOperation::SetShaderTextureFactorFromPaletteOperation() : PrepareOperation(),
+																						   m_shaderIndex(-1),
+																						   m_textureFactorNameTag(TAG_NONE),
+																						   m_palette(0),
+																						   m_variableIndex(-1)
 {
 }
 
@@ -1892,24 +1829,24 @@ void SetShaderTextureFactorFromPaletteOperation::load_0001(Iff *iff, BlueprintTe
 
 	iff->enterChunk(TAG_STFP);
 
-		m_shaderIndex          = static_cast<int>(iff->read_int16());
-		m_textureFactorNameTag = static_cast<Tag>(iff->read_uint32());
+	m_shaderIndex = static_cast<int>(iff->read_int16());
+	m_textureFactorNameTag = static_cast<Tag>(iff->read_uint32());
 
-		//-- Load the palette.
-		char palettePath[4 * MAX_PATH];
+	//-- Load the palette.
+	char palettePath[4 * MAX_PATH];
 
-		iff->read_string(palettePath, sizeof(palettePath) - 1);
-		m_palette = PaletteArgbList::fetch(TemporaryCrcString(palettePath, true));
+	iff->read_string(palettePath, sizeof(palettePath) - 1);
+	m_palette = PaletteArgbList::fetch(TemporaryCrcString(palettePath, true));
 
-		//-- Load the customization variable name and private status.
-		char variableName[MAX_PATH];
+	//-- Load the customization variable name and private status.
+	char variableName[MAX_PATH];
 
-		iff->read_string(variableName, sizeof(variableName) - 1);
-		const bool variableIsPrivate = (iff->read_int8() != 0);
+	iff->read_string(variableName, sizeof(variableName) - 1);
+	const bool variableIsPrivate = (iff->read_int8() != 0);
 
-		//-- Indicate the need for this customization variable.
-		// @todo fix this.
-		m_variableIndex = trTemplate.submitPaletteColorVariable(variableName, palettePath, variableIsPrivate);
+	//-- Indicate the need for this customization variable.
+	// @todo fix this.
+	m_variableIndex = trTemplate.submitPaletteColorVariable(variableName, palettePath, variableIsPrivate);
 
 	iff->exitChunk(TAG_STFP);
 }
@@ -1930,7 +1867,7 @@ void SetShaderTextureFactorFromPaletteOperation::execute(const BlueprintTextureR
 	int const paletteEntryCount = m_palette->getEntryCount();
 	if ((paletteEntryIndex < 0) || (paletteEntryIndex >= paletteEntryCount))
 	{
-		DEBUG_WARNING(true, ("palette index [%d] for variable [%s] is out of valid [0..%d], setting to [%d].", paletteEntryIndex, trTemplate.getCustomizationVariableName(m_variableIndex).c_str(), paletteEntryCount-1, paletteEntryCount-1));
+		DEBUG_WARNING(true, ("palette index [%d] for variable [%s] is out of valid [0..%d], setting to [%d].", paletteEntryIndex, trTemplate.getCustomizationVariableName(m_variableIndex).c_str(), paletteEntryCount - 1, paletteEntryCount - 1));
 		paletteEntryIndex = paletteEntryCount - 1;
 	}
 
@@ -1941,7 +1878,7 @@ void SetShaderTextureFactorFromPaletteOperation::execute(const BlueprintTextureR
 	//-- Get the shader.
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, m_shaderIndex, static_cast<int>(shaders.size()));
 
-	StaticShader *const shader = safe_cast<StaticShader*>(shaders[static_cast<size_t>(m_shaderIndex)]);
+	StaticShader *const shader = safe_cast<StaticShader *>(shaders[static_cast<size_t>(m_shaderIndex)]);
 	NOT_NULL(shader);
 
 	//-- Set the texture factor.
@@ -1959,54 +1896,54 @@ PrepareOperation *PrepareOperation::create_0001(Iff *iff, BlueprintTextureRender
 	switch (iff->getCurrentName())
 	{
 		case TAG_NOP:
-			{
-				NoOperation *const operation = new NoOperation;
-				operation->load_0001(iff);
-				return operation;
-			}
+		{
+			NoOperation *const operation = new NoOperation;
+			operation->load_0001(iff);
+			return operation;
+		}
 		case TAG_SSTC:
-			{
-				SetShaderConstantTextureOperation *const operation = new SetShaderConstantTextureOperation();
-				operation->load_0001(iff);
-				return operation;
-			}
+		{
+			SetShaderConstantTextureOperation *const operation = new SetShaderConstantTextureOperation();
+			operation->load_0001(iff);
+			return operation;
+		}
 		case TAG_SST1:
-			{
-				SetShaderTexture1dOperation *const operation = new SetShaderTexture1dOperation();
-				operation->load_0001(iff, trTemplate);
-				return operation;
-			}
+		{
+			SetShaderTexture1dOperation *const operation = new SetShaderTexture1dOperation();
+			operation->load_0001(iff, trTemplate);
+			return operation;
+		}
 		case TAG_SST2:
-			{
-				SetShaderTexture2dOperation *const operation = new SetShaderTexture2dOperation();
-				operation->load_0001(iff, trTemplate);
-				return operation;
-			}
+		{
+			SetShaderTexture2dOperation *const operation = new SetShaderTexture2dOperation();
+			operation->load_0001(iff, trTemplate);
+			return operation;
+		}
 		case TAG_STF:
-			{
-				SetShaderTextureFactorOperation *const operation = new SetShaderTextureFactorOperation();
-				operation->load_0001(iff, trTemplate);
-				return operation;
-			}
+		{
+			SetShaderTextureFactorOperation *const operation = new SetShaderTextureFactorOperation();
+			operation->load_0001(iff, trTemplate);
+			return operation;
+		}
 		case TAG_STFA:
-			{
-				SetShaderTextureFactorAlphaOperation *const operation = new SetShaderTextureFactorAlphaOperation();
-				operation->load_0001(iff, trTemplate);
-				return operation;
-			}
+		{
+			SetShaderTextureFactorAlphaOperation *const operation = new SetShaderTextureFactorAlphaOperation();
+			operation->load_0001(iff, trTemplate);
+			return operation;
+		}
 		case TAG_STFP:
-			{
-				SetShaderTextureFactorFromPaletteOperation *const operation = new SetShaderTextureFactorFromPaletteOperation();
-				operation->load_0001(iff, trTemplate);
-				return operation;
-			}
+		{
+			SetShaderTextureFactorFromPaletteOperation *const operation = new SetShaderTextureFactorFromPaletteOperation();
+			operation->load_0001(iff, trTemplate);
+			return operation;
+		}
 		default:
-			{
-				char name[5];
-				ConvertTagToString(iff->getCurrentName(), name);
-				FATAL(true, ("unsupported operation type [%s]", name));
-				return 0; //lint !e527 // unreachable // right, for MSVC
-			}
+		{
+			char name[5];
+			ConvertTagToString(iff->getCurrentName(), name);
+			FATAL(true, ("unsupported operation type [%s]", name));
+			return 0; // lint !e527 // unreachable // right, for MSVC
+		}
 	}
 }
 
@@ -2073,7 +2010,7 @@ bool BlueprintTextureRendererTemplate::isCustomizationVariablePrivate(int index)
 
 // ----------------------------------------------------------------------
 /**
- * Add a new ranged int variable referenced by this 
+ * Add a new ranged int variable referenced by this
  * BlueprintTextureRendererTemplate instance.
  *
  * This function will find and return the variable offset for the given
@@ -2099,12 +2036,12 @@ int BlueprintTextureRendererTemplate::submitRangedIntVariable(const std::string 
 {
 	//-- check if any variable matches this name
 	VariableFactory *variableFactory = 0;
-	int              factoryIndex    = -1;
+	int factoryIndex = -1;
 
 	if (findVariableFactory(variableName, variableIsPrivate, variableFactory, factoryIndex))
 	{
 		// A VariableFactory already exists with this name.  Ensure it is the right type.
-		DEBUG_FATAL(!dynamic_cast<BasicRangedIntVariableFactory*>(variableFactory), ("template tried to submit customization variable [%s] with different types", variableName.c_str()));
+		DEBUG_FATAL(!dynamic_cast<BasicRangedIntVariableFactory *>(variableFactory), ("template tried to submit customization variable [%s] with different types", variableName.c_str()));
 		VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, factoryIndex, getCustomizationVariableCount());
 
 		return factoryIndex;
@@ -2123,12 +2060,12 @@ int BlueprintTextureRendererTemplate::submitPaletteColorVariable(const std::stri
 {
 	//-- check if any variable matches this name
 	VariableFactory *variableFactory = 0;
-	int              factoryIndex    = -1;
+	int factoryIndex = -1;
 
 	if (findVariableFactory(variableName, variableIsPrivate, variableFactory, factoryIndex))
 	{
 		// A VariableFactory already exists with this name.  Ensure it is the right type.
-		DEBUG_FATAL(!dynamic_cast<PaletteColorVariableFactory*>(variableFactory), ("template tried to submit customization variable [%s] with different types", variableName.c_str()));
+		DEBUG_FATAL(!dynamic_cast<PaletteColorVariableFactory *>(variableFactory), ("template tried to submit customization variable [%s] with different types", variableName.c_str()));
 		VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, factoryIndex, getCustomizationVariableCount());
 
 		return factoryIndex;
@@ -2164,7 +2101,7 @@ int BlueprintTextureRendererTemplate::submitPaletteColorVariable(const std::stri
  *
  * NOTE: the caller should not use the release() call on the
  * returned TextureRenderer.  Instead, use releaseSharedTextureRendere().
- * This is because the implementation of the list requires this 
+ * This is because the implementation of the list requires this
  * template instance to know when the shared texture no longer is used.
  * @todo consider fixing this so the caller cannot misuse it.
  *
@@ -2244,17 +2181,17 @@ TextureRendererTemplate *BlueprintTextureRendererTemplate::create(Iff *iff, cons
 // ======================================================================
 
 BlueprintTextureRendererTemplate::BlueprintTextureRendererTemplate(Iff *iff, const char *name)
-:	TextureRendererTemplate(name),
-	m_cameraSetup(0),
-	m_prepareCommands(new PrepareCommandContainer()),
-	m_renderCommands(new RenderCommandContainer()),
-	m_shaderTemplates(new ShaderTemplateContainer()),
-	m_textureNames(new StringContainer()),
-	m_textures(new TextureContainer()),
-	m_vertexBuffers(new VertexBufferContainer()),
-	m_indexBuffers(new IndexBufferContainer()),
-	m_variableFactories(new VariableFactoryVector()),
-	m_sharedTextureRendererMap(new SharedTextureRendererMap())
+	: TextureRendererTemplate(name),
+	  m_cameraSetup(0),
+	  m_prepareCommands(new PrepareCommandContainer()),
+	  m_renderCommands(new RenderCommandContainer()),
+	  m_shaderTemplates(new ShaderTemplateContainer()),
+	  m_textureNames(new StringContainer()),
+	  m_textures(new TextureContainer()),
+	  m_vertexBuffers(new VertexBufferContainer()),
+	  m_indexBuffers(new IndexBufferContainer()),
+	  m_variableFactories(new VariableFactoryVector()),
+	  m_sharedTextureRendererMap(new SharedTextureRendererMap())
 {
 	DEBUG_FATAL(!ms_installed, ("BlueprintTextureRendererTemplate not installed"));
 
@@ -2269,11 +2206,11 @@ BlueprintTextureRendererTemplate::BlueprintTextureRendererTemplate(Iff *iff, con
 				load_0002(iff);
 				break;
 			default:
-				{
-					char version[5];
-					ConvertTagToString(iff->getCurrentName(), version);
-					FATAL(true, ("render blueprint template version [%s] not supported", version));
-				}
+			{
+				char version[5];
+				ConvertTagToString(iff->getCurrentName(), version);
+				FATAL(true, ("render blueprint template version [%s] not supported", version));
+			}
 		}
 	}
 	iff->exitForm(TAG_BTRT);
@@ -2319,7 +2256,7 @@ BlueprintTextureRendererTemplate::~BlueprintTextureRendererTemplate()
 
 	delete m_textureNames;
 
-	IGNORE_RETURN( std::for_each(m_shaderTemplates->begin(), m_shaderTemplates->end(), VoidMemberFunction(&ShaderTemplate::release)) );
+	IGNORE_RETURN(std::for_each(m_shaderTemplates->begin(), m_shaderTemplates->end(), VoidMemberFunction(&ShaderTemplate::release)));
 	delete m_shaderTemplates;
 
 	IGNORE_RETURN(std::for_each(m_renderCommands->begin(), m_renderCommands->end(), PointerDeleter()));
@@ -2338,10 +2275,10 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 	NOT_NULL(iff);
 
 	int shaderTemplateCount = 0;
-	int textureCount        = 0; 
-	int vertexBufferCount   = 0;
-	int indexBufferCount    = 0;
-	int renderCommandCount  = 0;
+	int textureCount = 0;
+	int vertexBufferCount = 0;
+	int indexBufferCount = 0;
+	int renderCommandCount = 0;
 	int prepareCommandCount = 0;
 
 	iff->enterForm(TAG_0001);
@@ -2357,7 +2294,7 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 		//-- load destination texture info
 		iff->enterChunk(TAG_DEST);
 		{
-			const int destinationPreferredWidth  = iff->read_int32();
+			const int destinationPreferredWidth = iff->read_int32();
 			setDestinationPreferredWidth(destinationPreferredWidth);
 
 			const int destinationPreferredHeight = iff->read_int32();
@@ -2382,7 +2319,7 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 		iff->exitChunk(TAG_DEST);
 
 		//-- load shader templates
-		iff->enterForm(TAG(S,H,T,M));
+		iff->enterForm(TAG(S, H, T, M));
 		{
 			// get # shader templates
 			iff->enterChunk(TAG_INFO);
@@ -2400,16 +2337,16 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 				m_shaderTemplates->push_back(shaderTemplate);
 			}
 		}
-		iff->exitForm(TAG(S,H,T,M));
+		iff->exitForm(TAG(S, H, T, M));
 
 		//-- load texture names
-		iff->enterForm(TAG(T,X,T,S));
+		iff->enterForm(TAG(T, X, T, S));
 		{
 			iff->enterChunk(TAG_INFO);
 			{
 				// get # textures
 				textureCount = iff->read_int32();
-	
+
 				// load texture names
 				m_textureNames->reserve(static_cast<size_t>(textureCount));
 				m_textures->reserve(static_cast<size_t>(textureCount));
@@ -2418,7 +2355,7 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 				{
 					// get the texture name, but...
 					char textureName[MAX_PATH];
-					iff->read_string(textureName, sizeof(textureName)-1);
+					iff->read_string(textureName, sizeof(textureName) - 1);
 					m_textureNames->push_back(std::string(textureName));
 
 					// don't fetch the texture until we need it.
@@ -2427,10 +2364,10 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 			}
 			iff->exitChunk(TAG_INFO);
 		}
-		iff->exitForm(TAG(T,X,T,S));
+		iff->exitForm(TAG(T, X, T, S));
 
 		//-- load vertex buffers
-		iff->enterForm(TAG3(V,B,S));
+		iff->enterForm(TAG3(V, B, S));
 		{
 			// get # vertex buffers
 			iff->enterChunk(TAG_INFO);
@@ -2447,10 +2384,10 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 				m_vertexBuffers->push_back(vb);
 			}
 		}
-		iff->exitForm(TAG3(V,B,S));
+		iff->exitForm(TAG3(V, B, S));
 
 		//-- load index buffers
-		iff->enterForm(TAG3(I,B,S));
+		iff->enterForm(TAG3(I, B, S));
 		{
 			// get # index buffers
 			iff->enterChunk(TAG_INFO);
@@ -2463,7 +2400,7 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 			m_indexBuffers->reserve(static_cast<size_t>(indexBufferCount));
 			for (int i = 0; i < indexBufferCount; ++i)
 			{
-				iff->enterChunk(TAG(I,D,A,T));
+				iff->enterChunk(TAG(I, D, A, T));
 				{
 					// get # indices in this buffer
 					const int indexCount = iff->read_int32();
@@ -2478,20 +2415,19 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 						iff->read_uint16(indexCount, index);
 					}
 					ib->unlock();
-
 				}
-				iff->exitChunk(TAG(I,D,A,T));
+				iff->exitChunk(TAG(I, D, A, T));
 			}
 		}
-		iff->exitForm(TAG3(I,B,S));
+		iff->exitForm(TAG3(I, B, S));
 
 		//-- load camera setup
-		iff->enterForm(TAG3(C,A,M));
-			m_cameraSetup = CameraSetup::create_0001(iff);
-		iff->exitForm(TAG3(C,A,M));
+		iff->enterForm(TAG3(C, A, M));
+		m_cameraSetup = CameraSetup::create_0001(iff);
+		iff->exitForm(TAG3(C, A, M));
 
 		//-- load render commands
-		iff->enterForm(TAG(R,C,M,S));
+		iff->enterForm(TAG(R, C, M, S));
 		{
 			// get # render commands
 			iff->enterChunk(TAG_INFO);
@@ -2505,7 +2441,7 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 			for (int i = 0; i < renderCommandCount; ++i)
 				m_renderCommands->push_back(RenderCommand::createRenderCommand_0001(iff));
 		}
-		iff->exitForm(TAG(R,C,M,S));
+		iff->exitForm(TAG(R, C, M, S));
 
 		//-- load prepare commands
 		iff->enterForm(TAG_PCMS);
@@ -2522,7 +2458,7 @@ void BlueprintTextureRendererTemplate::load_0001(Iff *iff)
 				PrepareCommand *const prepareCommand = new PrepareCommand;
 				prepareCommand->load_0001(iff, *this);
 				m_prepareCommands->push_back(prepareCommand);
-			} //lint !e429 // prepareCommand neither freed nor returned // right, it's in a list
+			} // lint !e429 // prepareCommand neither freed nor returned // right, it's in a list
 		}
 		iff->exitForm(TAG_PCMS);
 	}
@@ -2536,10 +2472,10 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 	NOT_NULL(iff);
 
 	int shaderTemplateCount = 0;
-	int textureCount        = 0; 
-	int vertexBufferCount   = 0;
-	int indexBufferCount    = 0;
-	int renderCommandCount  = 0;
+	int textureCount = 0;
+	int vertexBufferCount = 0;
+	int indexBufferCount = 0;
+	int renderCommandCount = 0;
 	int prepareCommandCount = 0;
 
 	iff->enterForm(TAG_0001);
@@ -2555,7 +2491,7 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 		//-- load destination texture info
 		iff->enterChunk(TAG_DEST);
 		{
-			const int destinationPreferredWidth  = iff->read_int32();
+			const int destinationPreferredWidth = iff->read_int32();
 			setDestinationPreferredWidth(destinationPreferredWidth);
 
 			const int destinationPreferredHeight = iff->read_int32();
@@ -2574,7 +2510,7 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 		iff->exitChunk(TAG_DEST);
 
 		//-- load shader templates
-		iff->enterForm(TAG(S,H,T,M));
+		iff->enterForm(TAG(S, H, T, M));
 		{
 			// get # shader templates
 			iff->enterChunk(TAG_INFO);
@@ -2592,16 +2528,16 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 				m_shaderTemplates->push_back(shaderTemplate);
 			}
 		}
-		iff->exitForm(TAG(S,H,T,M));
+		iff->exitForm(TAG(S, H, T, M));
 
 		//-- load texture names
-		iff->enterForm(TAG(T,X,T,S));
+		iff->enterForm(TAG(T, X, T, S));
 		{
 			iff->enterChunk(TAG_INFO);
 			{
 				// get # textures
 				textureCount = iff->read_int32();
-	
+
 				// load texture names
 				m_textureNames->reserve(static_cast<size_t>(textureCount));
 				m_textures->reserve(static_cast<size_t>(textureCount));
@@ -2610,7 +2546,7 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 				{
 					// get the texture name, but...
 					char textureName[MAX_PATH];
-					iff->read_string(textureName, sizeof(textureName)-1);
+					iff->read_string(textureName, sizeof(textureName) - 1);
 					m_textureNames->push_back(std::string(textureName));
 
 					// don't fetch the texture until we need it.
@@ -2619,10 +2555,10 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 			}
 			iff->exitChunk(TAG_INFO);
 		}
-		iff->exitForm(TAG(T,X,T,S));
+		iff->exitForm(TAG(T, X, T, S));
 
 		//-- load vertex buffers
-		iff->enterForm(TAG3(V,B,S));
+		iff->enterForm(TAG3(V, B, S));
 		{
 			// get # vertex buffers
 			iff->enterChunk(TAG_INFO);
@@ -2639,10 +2575,10 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 				m_vertexBuffers->push_back(vb);
 			}
 		}
-		iff->exitForm(TAG3(V,B,S));
+		iff->exitForm(TAG3(V, B, S));
 
 		//-- load index buffers
-		iff->enterForm(TAG3(I,B,S));
+		iff->enterForm(TAG3(I, B, S));
 		{
 			// get # index buffers
 			iff->enterChunk(TAG_INFO);
@@ -2655,7 +2591,7 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 			m_indexBuffers->reserve(static_cast<size_t>(indexBufferCount));
 			for (int i = 0; i < indexBufferCount; ++i)
 			{
-				iff->enterChunk(TAG(I,D,A,T));
+				iff->enterChunk(TAG(I, D, A, T));
 				{
 					// get # indices in this buffer
 					const int indexCount = iff->read_int32();
@@ -2670,20 +2606,19 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 						iff->read_uint16(indexCount, index);
 					}
 					ib->unlock();
-
 				}
-				iff->exitChunk(TAG(I,D,A,T));
+				iff->exitChunk(TAG(I, D, A, T));
 			}
 		}
-		iff->exitForm(TAG3(I,B,S));
+		iff->exitForm(TAG3(I, B, S));
 
 		//-- load camera setup
-		iff->enterForm(TAG3(C,A,M));
-			m_cameraSetup = CameraSetup::create_0001(iff);
-		iff->exitForm(TAG3(C,A,M));
+		iff->enterForm(TAG3(C, A, M));
+		m_cameraSetup = CameraSetup::create_0001(iff);
+		iff->exitForm(TAG3(C, A, M));
 
 		//-- load render commands
-		iff->enterForm(TAG(R,C,M,S));
+		iff->enterForm(TAG(R, C, M, S));
 		{
 			// get # render commands
 			iff->enterChunk(TAG_INFO);
@@ -2697,7 +2632,7 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 			for (int i = 0; i < renderCommandCount; ++i)
 				m_renderCommands->push_back(RenderCommand::createRenderCommand_0001(iff));
 		}
-		iff->exitForm(TAG(R,C,M,S));
+		iff->exitForm(TAG(R, C, M, S));
 
 		//-- load prepare commands
 		iff->enterForm(TAG_PCMS);
@@ -2714,7 +2649,7 @@ void BlueprintTextureRendererTemplate::load_0002(Iff *iff)
 				PrepareCommand *const prepareCommand = new PrepareCommand;
 				prepareCommand->load_0001(iff, *this);
 				m_prepareCommands->push_back(prepareCommand);
-			} //lint !e429 // prepareCommand neither freed nor returned // right, it's in a list
+			} // lint !e429 // prepareCommand neither freed nor returned // right, it's in a list
 		}
 		iff->exitForm(TAG_PCMS);
 	}
@@ -2749,7 +2684,7 @@ bool BlueprintTextureRendererTemplate::findVariableFactory(const std::string &va
 
 		// @todo eliminate variance due to text case here --- normally we're using CrcLowerStrings
 		//       but we're not here.
-		if ((vf->getName() == variableName) && (vf->isPrivate() == variableIsPrivate)) //lint !e731 // Info -- Boolean argument to equal/not equal // intentional.
+		if ((vf->getName() == variableName) && (vf->isPrivate() == variableIsPrivate)) // lint !e731 // Info -- Boolean argument to equal/not equal // intentional.
 		{
 			// found it
 			variableFactory = vf;
@@ -2759,7 +2694,7 @@ bool BlueprintTextureRendererTemplate::findVariableFactory(const std::string &va
 
 	//-- didn't find it
 	variableFactory = 0;
-	factoryIndex    = -1;
+	factoryIndex = -1;
 
 	return false;
 }
@@ -2837,12 +2772,12 @@ bool BlueprintTextureRendererTemplate::render(Texture *destinationTexture, const
 			// set the camera
 			camera->beginScene();
 
-				Graphics::setObjectToWorldTransformAndScale(Transform::identity, Vector::xyz111);
-				Graphics::setCullMode(GCM_counterClockwise);
+			Graphics::setObjectToWorldTransformAndScale(Transform::identity, Vector::xyz111);
+			Graphics::setCullMode(GCM_counterClockwise);
 
-				const RenderCommandContainer::const_iterator itEnd = m_renderCommands->end();
-				for (RenderCommandContainer::const_iterator it = m_renderCommands->begin(); it != itEnd; ++it)
-					(*it)->execute(*this, intValues, shaders);
+			const RenderCommandContainer::const_iterator itEnd = m_renderCommands->end();
+			for (RenderCommandContainer::const_iterator it = m_renderCommands->begin(); it != itEnd; ++it)
+				(*it)->execute(*this, intValues, shaders);
 
 			// release the camera
 			camera->endScene();
@@ -2850,9 +2785,7 @@ bool BlueprintTextureRendererTemplate::render(Texture *destinationTexture, const
 		Graphics::endScene();
 		endFrameSucceeded = Graphics::copyRenderTargetToNonRenderTargetTexture();
 		Graphics::setRenderTarget(NULL, CF_none, 0);
-
 	}
-
 	return endFrameSucceeded;
 }
 

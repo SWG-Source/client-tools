@@ -5,6 +5,7 @@
 //
 //======================================================================
 
+#include "NebulaLightningArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/CreateNebulaLightningMessage.h"
 

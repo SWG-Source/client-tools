@@ -116,7 +116,12 @@ WORD FloatingPointUnit::getControlWord(void)
 {
 	WORD controlWord = 0;
 
+#if defined(_M_IX86)
+	// x87 FPU control word - x86 only. On x64, MSVC uses SSE for
+	// floating-point by default; the x87 FPU is mostly unused and there
+	// is no per-thread x87 control word to read.
 	__asm fnstcw controlWord;
+#endif
 	return controlWord;
 }
 
@@ -125,7 +130,12 @@ WORD FloatingPointUnit::getControlWord(void)
 void FloatingPointUnit::setControlWord(WORD controlWord)
 {
 	UNREF(controlWord);
+#if defined(_M_IX86)
 	__asm fldcw controlWord;
+#endif
+	// No-op on x64 - SSE rounding/precision is configured via
+	// _controlfp_s, not via x87 fldcw, and we don't need to tune it
+	// for the SWG client.
 }
 
 // ----------------------------------------------------------------------

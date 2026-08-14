@@ -1,0 +1,74 @@
+// Minimal stub for Miles Sound System x64 (mss64.dll). The 32-bit
+// codebase shipped with mss32.lib only; this fork still calls into
+// the AIL_* API but has no 64-bit lib to link against. These no-op
+// stubs let the client link and load - audio is silent until a real
+// 64-bit Miles is dropped in. Signatures are deliberately minimal:
+// on the Windows x64 ABI extra arguments live in registers/stack the
+// stub never reads, so a trivial signature satisfies any caller.
+
+#define STUB(name)                                          \
+	extern "C" __declspec(dllexport) int __cdecl name(void) \
+	{                                                       \
+		return 0;                                           \
+	}
+
+STUB(AIL_allocate_sample_handle)
+STUB(AIL_close_stream)
+STUB(AIL_digital_CPU_percent)
+STUB(AIL_digital_latency)
+STUB(AIL_end_sample)
+STUB(AIL_file_error)
+STUB(AIL_file_type)
+STUB(AIL_get_preference)
+STUB(AIL_get_timer_highest_delay)
+STUB(AIL_last_error)
+STUB(AIL_lock)
+STUB(AIL_open_digital_driver)
+STUB(AIL_open_stream)
+STUB(AIL_register_EOS_callback)
+STUB(AIL_register_stream_callback)
+STUB(AIL_release_sample_handle)
+STUB(AIL_room_type)
+STUB(AIL_sample_ms_position)
+STUB(AIL_sample_playback_rate)
+STUB(AIL_sample_position)
+STUB(AIL_sample_reverb_levels)
+STUB(AIL_sample_status)
+STUB(AIL_sample_volume_levels)
+STUB(AIL_serve)
+STUB(AIL_set_3D_rolloff_factor)
+STUB(AIL_set_file_callbacks)
+STUB(AIL_set_listener_3D_orientation)
+STUB(AIL_set_listener_3D_position)
+STUB(AIL_set_listener_3D_velocity_vector)
+STUB(AIL_set_named_sample_file)
+STUB(AIL_set_preference)
+STUB(AIL_set_redist_directory)
+STUB(AIL_set_room_type)
+STUB(AIL_set_sample_3D_distances)
+STUB(AIL_set_sample_3D_position)
+STUB(AIL_set_sample_3D_velocity_vector)
+STUB(AIL_set_sample_file)
+STUB(AIL_set_sample_loop_block)
+STUB(AIL_set_sample_loop_count)
+STUB(AIL_set_sample_ms_position)
+STUB(AIL_set_sample_obstruction)
+STUB(AIL_set_sample_occlusion)
+STUB(AIL_set_sample_playback_rate)
+STUB(AIL_set_sample_position)
+STUB(AIL_set_sample_reverb_levels)
+STUB(AIL_set_sample_volume_levels)
+STUB(AIL_set_stream_loop_block)
+STUB(AIL_set_stream_loop_count)
+STUB(AIL_set_stream_ms_position)
+STUB(AIL_shutdown)
+STUB(AIL_speaker_configuration)
+STUB(AIL_start_sample)
+STUB(AIL_start_stream)
+STUB(AIL_startup)
+STUB(AIL_stop_sample)
+STUB(AIL_stream_ms_position)
+STUB(AIL_stream_sample_handle)
+STUB(AIL_stream_status)
+STUB(AIL_unlock)
+STUB(AIL_WAV_info)

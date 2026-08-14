@@ -124,7 +124,13 @@ void SharedBuffBuilderManager::install ()
 	
 	{
 		DataTable const * const buffBuilderDataTable = DataTableManager::getTable("datatables/buff/buff_builder.iff", true);
-		FATAL(!buffBuilderDataTable,("buff_builder data table could not be opened."));
+		if (!buffBuilderDataTable)
+		{
+			// Vanilla NGE retail TRE pack predates the buff_builder feature
+			// (added in a later live patch). Skip rather than FATAL.
+			DEBUG_WARNING(true, ("SharedBuffBuilderManager: datatables/buff/buff_builder.iff missing - buff builder feature disabled.\n"));
+			return;
+		}
 		int const numRows = buffBuilderDataTable->getNumRows();
 		for (int row=0; row<numRows; ++row)
 		{

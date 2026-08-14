@@ -8,6 +8,8 @@
 #include "clientSkeletalAnimation/FirstClientSkeletalAnimation.h"
 #include "clientSkeletalAnimation/CompositeMesh.h"
 
+// Disable deprecated auto_ptr support for modern C++
+#define BOOST_NO_AUTO_PTR
 #include "boost/smart_ptr.hpp"
 #include "clientGraphics/Graphics.h"
 #include "clientSkeletalAnimation/MeshConstructionHelper.h"

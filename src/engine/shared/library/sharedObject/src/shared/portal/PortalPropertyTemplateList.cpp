@@ -57,6 +57,14 @@ const PortalPropertyTemplate *PortalPropertyTemplateList::fetch(const CrcString 
 	TemplateList::iterator i = ms_templateList.find(&name);
 	if (i == ms_templateList.end())
 	{
+		// Bail out gracefully if the .pob file isn't in the loaded TRE
+		// (post-NGE TRE may not have NPE/tutorial assets like
+		// thm_npe_hangar_start.pob). Old behavior: Iff ctor FATALs.
+		if (!TreeFile::exists(name.getString()))
+		{
+			WARNING(true, ("PortalPropertyTemplateList::fetch: '%s' not found in TreeFile, returning NULL template", name.getString()));
+			return NULL;
+		}
 		result = new PortalPropertyTemplate(name);
 		const bool inserted = ms_templateList.insert(TemplateList::value_type(&result->getCrcString(), result)).second;
 		UNREF(inserted);

@@ -210,8 +210,27 @@ void Report::vprintf(const char *format, va_list va)
 		buffer[sizeof(buffer)-3] = '+';
 		buffer[sizeof(buffer)-2] = '\n';
 	}
-	
+
 	puts(buffer);
+
+	// Also tee to logs/warning.log so issues are visible after the fact.
+	// Open lazily on first call; keep it open for the lifetime of the
+	// process so we don't pay open()/close() per WARNING.
+	static FILE *s_warningLog = NULL;
+	static bool s_warningLogTried = false;
+	if (!s_warningLogTried)
+	{
+		s_warningLogTried = true;
+		s_warningLog = fopen("logs/warning.log", "w");
+	}
+	if (s_warningLog)
+	{
+		fputs(buffer, s_warningLog);
+		size_t const len = strlen(buffer);
+		if (len == 0 || buffer[len - 1] != '\n')
+			fputc('\n', s_warningLog);
+		fflush(s_warningLog);
+	}
 }
 
 // ----------------------------------------------------------------------

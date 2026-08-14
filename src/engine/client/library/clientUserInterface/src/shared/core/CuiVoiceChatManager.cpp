@@ -134,46 +134,24 @@ bool CuiVoiceChatManager::ms_voiceChatManagerInstalled = false;
 CuiVoiceChatManager::DebugOutputLevel CuiVoiceChatManager::ms_debugOutputLevel = CuiVoiceChatManager::DOL_Error;
 int CuiVoiceChatManager::ms_vivoxLogLevel = 0;
 
-
 CuiVoiceChatManager::CuiVoiceChatManager()
-: MessageDispatch::Receiver(),
-  m_callback (new MessageDispatch::Callback),
-  m_messageProcessors(),
-  m_eventHandler(new SwgVivoxEventHandler()),
-  m_userInfo (),
-  m_knownChannelData (),
-  m_shortlistedChannels (),
-  m_listeningToChannels (),
-  m_speakingToChannel (),
-  m_pushToTalkKeyDown(true),
-  m_theSessionGroupHandle(),
-  m_someoneWasSpeakingLastUpdate(false),
-  m_disabledByServer(false),
-  m_preventAutoLogin(false),
-  m_localLogoutRequest(false),
-  m_otherPlayer(false)
+	: MessageDispatch::Receiver(),
+	  m_callback(new MessageDispatch::Callback),
+	  m_messageProcessors(),
+	  m_eventHandler(new SwgVivoxEventHandler()),
+	  m_userInfo(),
+	  m_knownChannelData(),
+	  m_shortlistedChannels(),
+	  m_listeningToChannels(),
+	  m_speakingToChannel(),
+	  m_pushToTalkKeyDown(true),
+	  m_theSessionGroupHandle(),
+	  m_someoneWasSpeakingLastUpdate(false),
+	  m_disabledByServer(false),
+	  m_preventAutoLogin(false),
+	  m_localLogoutRequest(false),
+	  m_otherPlayer(false)
 {
-	DEBUG_FATAL(!SwgVivox::isInstalled(), ("Vivox wrapper must be installed before an instance of CuiVoiceChatManager can be created"));
-
-	connectToMessage(VoiceChatChannelInfo::cms_name);
-	connectToMessage(VoiceChatOnGetAccount::cms_name);
-	connectToMessage(VoiceChatOnGetChannel::cms_name);
-	connectToMessage(VoiceChatInvite::cms_name);
-	connectToMessage(VoiceChatKick::cms_name);
-	connectToMessage(VoiceChatStatus::cms_name);
-	connectToMessage("VCBroadcastMessage");
-
-	//toggle the key to make sure everything is in a good state
-	pushToTalkKeyPressed(true);
-	pushToTalkKeyPressed(false);
-
-	setHandsOff(false);
-	setOtherPlayer(false);
-
-	m_callback->connect(*this, &CuiVoiceChatManager::onConnectionServerConnectionChanged, static_cast<GameNetwork::Messages::ConnectionServerConnectionChanged*>(0));
-	m_callback->connect(*this, &CuiVoiceChatManager::onIgnoreListChanged, static_cast<CommunityManager::Messages::IgnoreListChanged*>(0));
-
-	setUpMessageProcessors();
 }
 
 //----------------------------------------------------------------------------
@@ -229,6 +207,31 @@ CuiVoiceChatManager::~CuiVoiceChatManager()
 
 	//TODO: clean up invitations
 
+}
+
+void CuiVoiceChatManager::PostInstall()
+{
+	DEBUG_FATAL(!SwgVivox::isInstalled(), ("Vivox wrapper must be installed before an instance of CuiVoiceChatManager can be created"));
+
+	connectToMessage(VoiceChatChannelInfo::cms_name);
+	connectToMessage(VoiceChatOnGetAccount::cms_name);
+	connectToMessage(VoiceChatOnGetChannel::cms_name);
+	connectToMessage(VoiceChatInvite::cms_name);
+	connectToMessage(VoiceChatKick::cms_name);
+	connectToMessage(VoiceChatStatus::cms_name);
+	connectToMessage("VCBroadcastMessage");
+
+	// toggle the key to make sure everything is in a good state
+	pushToTalkKeyPressed(true);
+	pushToTalkKeyPressed(false);
+
+	setHandsOff(false);
+	setOtherPlayer(false);
+
+	m_callback->connect(*this, &CuiVoiceChatManager::onConnectionServerConnectionChanged, static_cast<GameNetwork::Messages::ConnectionServerConnectionChanged *>(0));
+	m_callback->connect(*this, &CuiVoiceChatManager::onIgnoreListChanged, static_cast<CommunityManager::Messages::IgnoreListChanged *>(0));
+
+	setUpMessageProcessors();
 }
 
 //----------------------------------------------------------------------------

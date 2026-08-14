@@ -7,7 +7,7 @@
 #include "sharedRandom/Random.h"
 
 #include <algorithm>
-
+#include <random>
 
 //----------------------------------------------------------------------
 
@@ -223,9 +223,14 @@ void MahjongGame::randomizeTiles()
 		}
 	}
 
-	std::random_shuffle(inPlayTileValues.begin(), inPlayTileValues.begin() + inPlayCount);
+	static std::mt19937 rng{std::random_device{}()};
 
-	for(int i = 0; i < inPlayCount; ++i)
+	std::shuffle(
+		inPlayTileValues.begin(),
+		inPlayTileValues.begin() + inPlayCount,
+		rng);
+
+	for (int i = 0; i < inPlayCount; ++i)
 	{
 		TileId const id = inPlayTileIds[i];
 		TileValue const newVal = inPlayTileValues[i];

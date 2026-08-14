@@ -12,6 +12,7 @@
 // ======================================================================
 
 #include "AutoDeltaByteStream.h"
+#include <cstdint>
 
 // ======================================================================
 
@@ -166,7 +167,7 @@ inline typename AutoDeltaSet<ValueType, ObjectType>::const_iterator AutoDeltaSet
 template<typename ValueType, typename ObjectType>
 inline typename AutoDeltaSet<ValueType, ObjectType>::const_iterator AutoDeltaSet<ValueType, ObjectType>::erase(ValueType const &value)
 {
-	SetType::const_iterator i(find(value));
+	typename SetType::const_iterator i(find(value));
 
 	return erase(i);
 }
@@ -251,9 +252,9 @@ inline void AutoDeltaSet<ValueType, ObjectType>::onChanged()
 	{
 		if (m_onChangedCallback->first)
 		{
-			ObjectType &owner = *m_onChangedCallback->first;
+			ObjectType &callbackOwner = *m_onChangedCallback->first;
 			void (ObjectType::*cb)() = m_onChangedCallback->second;
-			(owner.*cb)();
+			(callbackOwner.*cb)();
 		}
 	}
 }
@@ -267,9 +268,9 @@ inline void AutoDeltaSet<ValueType, ObjectType>::onErase(ValueType const &value)
 	{
 		if (m_onEraseCallback->first)
 		{
-			ObjectType &owner = *m_onEraseCallback->first;
+			ObjectType &callbackOwner = *m_onEraseCallback->first;
 			void (ObjectType::*cb)(ValueType const &) = m_onEraseCallback->second;
-			(owner.*cb)(value);
+			(callbackOwner.*cb)(value);
 		}
 	}
 }
@@ -283,9 +284,9 @@ inline void AutoDeltaSet<ValueType, ObjectType>::onInsert(ValueType const &value
 	{
 		if (m_onInsertCallback->first)
 		{
-			ObjectType &owner = *m_onInsertCallback->first;
+			ObjectType &callbackOwner = *m_onInsertCallback->first;
 			void (ObjectType::*cb)(ValueType const &) = m_onInsertCallback->second;
-			(owner.*cb)(value);
+			(callbackOwner.*cb)(value);
 		}
 	}
 }
@@ -295,10 +296,14 @@ inline void AutoDeltaSet<ValueType, ObjectType>::onInsert(ValueType const &value
 template<typename ValueType, typename ObjectType>
 inline void AutoDeltaSet<ValueType, ObjectType>::pack(ByteStream &target) const
 {
-	Archive::put(target, m_set.size());
-	Archive::put(target, m_baselineCommandCount);
+	using Archive::put;
+
+	// Fixed 4-byte size on the wire - server (32-bit) packs size_t as 4 bytes
+	// but x64 client's size_t is 8 bytes which would corrupt the wire format.
+	put(target, static_cast<uint32_t>(m_set.size()));
+	put(target, static_cast<uint32_t>(m_baselineCommandCount));
 	for (typename SetType::const_iterator i = m_set.begin(); i != m_set.end(); ++i)
-		Archive::put(target, *i);
+		put(target, *i);
 }
 
 // ----------------------------------------------------------------------
@@ -306,10 +311,12 @@ inline void AutoDeltaSet<ValueType, ObjectType>::pack(ByteStream &target) const
 template<typename ValueType, typename ObjectType>
 inline void AutoDeltaSet<ValueType, ObjectType>::pack(ByteStream &target, std::set<ValueType> const &data)
 {
-	Archive::put(target, data.size());
-	Archive::put(target, static_cast<size_t>(0)); // baselineCommandCount
+	using Archive::put;
+
+	put(target, static_cast<uint32_t>(data.size()));
+	put(target, static_cast<uint32_t>(0)); // baselineCommandCount
 	for (typename std::set<ValueType>::const_iterator i = data.begin(); i != data.end(); ++i)
-		Archive::put(target, *i);
+		put(target, *i);
 }
 
 //-----------------------------------------------------------------------
@@ -317,17 +324,19 @@ inline void AutoDeltaSet<ValueType, ObjectType>::pack(ByteStream &target, std::s
 template<typename ValueType, typename ObjectType>
 inline void AutoDeltaSet<ValueType, ObjectType>::packDelta(ByteStream &target) const
 {
-	Archive::put(target, m_commands.size());
-	Archive::put(target, m_baselineCommandCount);
+	using Archive::put;
+
+	put(target, static_cast<uint32_t>(m_commands.size()));
+	put(target, static_cast<uint32_t>(m_baselineCommandCount));
 	for (typename std::vector<Command>::iterator i = m_commands.begin(); i != m_commands.end(); ++i)
 	{
 		Command const &c = *i;
-		Archive::put(target, c.cmd);
+		put(target, c.cmd);
 		switch (c.cmd)
 		{
 		case Command::ERASE:
 		case Command::INSERT:
-			Archive::put(target, c.value);
+			put(target, c.value);
 			break;
 		case Command::CLEAR:
 			break;
@@ -403,21 +412,26 @@ inline const size_t AutoDeltaSet<ValueType, ObjectType>::size() const
 
 //-----------------------------------------------------------------------
 
-template<typename ValueType, typename ObjectType>
-inline void AutoDeltaSet<ValueType, ObjectType>::unpack(ReadIterator &source) 
+template <typename ValueType, typename ObjectType>
+inline void AutoDeltaSet<ValueType, ObjectType>::unpack(ReadIterator &source)
 {
+	using Archive::get;
+
 	m_set.clear();
 	clearDelta();
 
-	size_t commandCount;
+	// Fixed 4-byte size on the wire (matches 32-bit server's size_t)
+	uint32_t commandCount;
+	uint32_t baselineCmdCount;
 	ValueType value;
 
-	Archive::get(source, commandCount);
-	Archive::get(source, m_baselineCommandCount);
+	get(source, commandCount);
+	get(source, baselineCmdCount);
+	m_baselineCommandCount = baselineCmdCount;
 
-	for (size_t i = 0; i < commandCount; ++i)
+	for (uint32_t i = 0; i < commandCount; ++i)
 	{
-		Archive::get(source, value);
+		get(source, value);
 		m_set.insert(value);
 	}
 
@@ -430,15 +444,17 @@ template<typename ValueType, typename ObjectType>
 inline void AutoDeltaSet<ValueType, ObjectType>::unpack(ReadIterator &source, std::vector<Command> &data)
 {
 	Command c;
-	size_t commandCount, targetBaselineCommandCount;
+	uint32_t commandCount, targetBaselineCommandCount;
 
-	Archive::get(source, commandCount);
-	Archive::get(source, targetBaselineCommandCount);
+	using Archive::get;
+
+	get(source, commandCount);
+	get(source, targetBaselineCommandCount);
 
 	c.cmd = Command::INSERT;
-	for (size_t i = 0; i < commandCount; ++i)
+	for (uint32_t i = 0; i < commandCount; ++i)
 	{
-		Archive::get(source,c.value);
+		get(source, c.value);
 		data.push_back(c);
 	}
 }
@@ -449,19 +465,21 @@ template<typename ValueType, typename ObjectType>
 inline void AutoDeltaSet<ValueType, ObjectType>::unpackDelta(ReadIterator &source, std::vector<Command> &data)
 {
 	Command c;
-	size_t commandCount, targetBaselineCommandCount;
+	uint32_t commandCount, targetBaselineCommandCount;
 
-	Archive::get(source, commandCount);
-	Archive::get(source, targetBaselineCommandCount);
+	using Archive::get;
 
-	for (size_t i = 0 ; i < commandCount; ++i)
+	get(source, commandCount);
+	get(source, targetBaselineCommandCount);
+
+	for (uint32_t i = 0; i < commandCount; ++i)
 	{
-		Archive::get(source, c.cmd);
+		get(source, c.cmd);
 		switch (c.cmd)
 		{
 			case Command::ERASE:
 			case Command::INSERT:
-				Archive::get(source, c.value);
+				get(source, c.value);
 				break;
 			case Command::CLEAR:
 				break;
@@ -470,7 +488,7 @@ inline void AutoDeltaSet<ValueType, ObjectType>::unpackDelta(ReadIterator &sourc
 				break;
 		}
 		data.push_back(c);
-	}	
+	}
 }
 
 //-----------------------------------------------------------------------
@@ -479,10 +497,12 @@ template<typename ValueType, typename ObjectType>
 inline void AutoDeltaSet<ValueType, ObjectType>::unpackDelta(ReadIterator &source)
 {
 	Command c;
-	size_t skipCount, commandCount, targetBaselineCommandCount;
+	uint32_t skipCount, commandCount, targetBaselineCommandCount;
 
-	Archive::get(source, commandCount);
-	Archive::get(source, targetBaselineCommandCount);
+	using Archive::get;
+
+	get(source, commandCount);
+	get(source, targetBaselineCommandCount);
 
 	// if (commandCount+baselineCommandCount) < targetBaselineCommandCount, it
 	// means that we have missed some changes and are behind; when this happens,
@@ -496,12 +516,12 @@ inline void AutoDeltaSet<ValueType, ObjectType>::unpackDelta(ReadIterator &sourc
 	if (skipCount > commandCount)
 		skipCount = commandCount;
 
-	size_t i = 0;
+	uint32_t i = 0;
 	for ( ; i < skipCount; ++i)
 	{
-		Archive::get(source, c.cmd);
+		get(source, c.cmd);
 		if (c.cmd != Command::CLEAR)
-			Archive::get(source, c.value);
+			get(source, c.value);
 	}
 	for ( ; i < commandCount; ++i)
 	{
@@ -509,11 +529,11 @@ inline void AutoDeltaSet<ValueType, ObjectType>::unpackDelta(ReadIterator &sourc
 		switch (c.cmd)
 		{
 		case Command::ERASE:
-			Archive::get(source, c.value);
+			get(source, c.value);
 			AutoDeltaSet::erase(c.value);
 			break;
 		case Command::INSERT:
-			Archive::get(source, c.value);
+			get(source, c.value);
 			AutoDeltaSet::insert(c.value);
 			break;
 		case Command::CLEAR:

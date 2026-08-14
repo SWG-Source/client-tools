@@ -10,8 +10,9 @@
 
 // ======================================================================
 
-#include "Archive/AutoDeltaPackedMap.h"
 #include "Unicode.h"
+#include "UnicodeArchive.h"
+#include "Archive/AutoDeltaPackedMap.h"
 
 // ======================================================================
 

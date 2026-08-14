@@ -10,6 +10,7 @@
 
 #include "clientDirectInput/ConfigClientDirectInput.h"
 #include "clientDirectInput/ForceFeedbackEffectTemplate.h"
+#include "clientDirectInput/SdlJoystickInput.h"
 
 #include "sharedDebug/DebugKey.h"
 #include "sharedDebug/InstallTimer.h"
@@ -542,10 +543,10 @@ void KeyboardDevice::loadTranslationTable()
 			if (_stricmp(keyboardLayoutName, layoutId.c_str()) == 0)
 			{
 				int const fromScanCode = dataTable.getIntValue("FromScanCode", row);
-				int const toScanCode = dataTable.getIntValue("ToScanCode", row);
+				uint8 const toScanCode = static_cast<uint8>(dataTable.getIntValue("ToScanCode", row));
 				std::string const &fromKeyName = dataTable.getStringValue("FromKeyName", row);
 
-				m_translationTable[fromScanCode] = static_cast<uint8>(toScanCode);
+				m_translationTable[fromScanCode] = toScanCode;
 				s_scanCodeToKeyNameMap.insert(std::make_pair(toScanCode, fromKeyName));
 
 				DEBUG_REPORT_LOG(true, ("fromScanCode: %d toScanCode: %d fromKeyName: %s\n", fromScanCode, toScanCode, fromKeyName.c_str()));
@@ -1691,6 +1692,13 @@ BOOL CALLBACK DirectInputNamespace::EnumEffectsInFileIntoTemplateProc(LPCDIFILEE
 void DirectInputNamespace::installJoystickDevices()
 {
 	InstallTimer const installTimer("DirectInputNamespace::installJoystickDevices");
+
+	// When the SDL backend owns joysticks/gamepads, do NOT also enumerate them
+	// through DirectInput8 -- a second exclusive owner would double-feed input
+	// and could fail to acquire devices.  Keyboard/mouse stay on DirectInput.
+	if (ConfigClientDirectInput::getUseSdlInput() && SdlJoystickInput::isInstalled())
+		return;
+
 	if (ConfigClientDirectInput::getUseJoysticks())
 	{
 		NOT_NULL(ms_directInput);
@@ -1965,6 +1973,11 @@ void DirectInput::update()
 
 	if (ms_suspended)
 		return;
+
+	// poll SDL joysticks/gamepads (when the SDL backend owns them) and queue
+	// their events alongside the DirectInput keyboard/mouse events this frame
+	if (SdlJoystickInput::isInstalled())
+		SdlJoystickInput::update();
 
 	// update each device
 	{
@@ -2333,6 +2346,11 @@ void DirectInput::setJoystickSliderSaturation(int joystickIndex, int sliderIndex
 
 void DirectInput::reaquireJoystick()
 {
+	if (ConfigClientDirectInput::getUseSdlInput() && SdlJoystickInput::isInstalled())
+	{
+		SdlJoystickInput::rescan();
+		return;
+	}
 	DirectInputNamespace::installJoystickDevices();
 }
 // ----------------------------------------------------------------------

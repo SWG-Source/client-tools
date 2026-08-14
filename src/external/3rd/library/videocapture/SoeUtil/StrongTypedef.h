@@ -51,12 +51,16 @@ template <typename T, typename T_SIGNATURE, bool T_ZERO_INIT> class StrongType
         T m_value;
 };
 
-template <typename T, typename T_SIGNATURE> class StrongType<T, T_SIGNATURE, true> : public StrongType<T, T_SIGNATURE, false>
+template <typename T, typename T_SIGNATURE>
+class StrongType<T, T_SIGNATURE, true> : public StrongType<T, T_SIGNATURE, false>
 {
-    public:
-        StrongType(const SelfType &source) : StrongType<T, T_SIGNATURE, false>(source) { }
-        StrongType() : StrongType<T, T_SIGNATURE, false>(0) { }
-        StrongType(const T &value) : StrongType<T, T_SIGNATURE, false>(value) { }
+    using Base = StrongType<T, T_SIGNATURE, false>;
+    using SelfType = StrongType<T, T_SIGNATURE, true>;
+
+public:
+    StrongType(SelfType const& source) : Base(source) {}
+    StrongType() : Base(0) {}                 // consider Base(T{}) if not numeric
+    StrongType(T const& value) : Base(value) {}
 };
 
 

@@ -16,17 +16,17 @@
 
 // ======================================================================
 
-bool                               Direct3d9_DynamicIndexBufferData::ms_newFrame;
-MemoryBlockManager                *Direct3d9_DynamicIndexBufferData::ms_memoryBlockManager;
-int                                Direct3d9_DynamicIndexBufferData::ms_numberOfIndices;
-int                                Direct3d9_DynamicIndexBufferData::ms_usedNumberOfIndices;
-IDirect3DIndexBuffer9             *Direct3d9_DynamicIndexBufferData::ms_d3dIndexBuffer;
-int                                Direct3d9_DynamicIndexBufferData::ms_locksSinceBeginFrame;
-int                                Direct3d9_DynamicIndexBufferData::ms_discardsSinceBeginFrame;
-int                                Direct3d9_DynamicIndexBufferData::ms_locksSinceResourceCreation;
-int                                Direct3d9_DynamicIndexBufferData::ms_discardsSinceResourceCreation;
-int                                Direct3d9_DynamicIndexBufferData::ms_locksEver;
-int                                Direct3d9_DynamicIndexBufferData::ms_discardsEver;
+bool Direct3d9_DynamicIndexBufferData::ms_newFrame;
+MemoryBlockManager *Direct3d9_DynamicIndexBufferData::ms_memoryBlockManager;
+int Direct3d9_DynamicIndexBufferData::ms_numberOfIndices;
+int Direct3d9_DynamicIndexBufferData::ms_usedNumberOfIndices;
+IDirect3DIndexBuffer9 *Direct3d9_DynamicIndexBufferData::ms_d3dIndexBuffer;
+int Direct3d9_DynamicIndexBufferData::ms_locksSinceBeginFrame;
+int Direct3d9_DynamicIndexBufferData::ms_discardsSinceBeginFrame;
+int Direct3d9_DynamicIndexBufferData::ms_locksSinceResourceCreation;
+int Direct3d9_DynamicIndexBufferData::ms_discardsSinceResourceCreation;
+int Direct3d9_DynamicIndexBufferData::ms_locksEver;
+int Direct3d9_DynamicIndexBufferData::ms_discardsEver;
 
 // ======================================================================
 
@@ -65,8 +65,8 @@ void *Direct3d9_DynamicIndexBufferData::operator new(size_t size)
 {
 	UNREF(size);
 	NOT_NULL(ms_memoryBlockManager);
-	DEBUG_FATAL(size != sizeof (Direct3d9_DynamicIndexBufferData), ("bad size"));
-	DEBUG_FATAL(size != static_cast<size_t> (ms_memoryBlockManager->getElementSize()), ("installed with bad size"));
+	DEBUG_FATAL(size != sizeof(Direct3d9_DynamicIndexBufferData), ("bad size"));
+	DEBUG_FATAL(size != static_cast<size_t>(ms_memoryBlockManager->getElementSize()), ("installed with bad size"));
 
 	return ms_memoryBlockManager->allocate();
 }
@@ -77,18 +77,6 @@ void Direct3d9_DynamicIndexBufferData::operator delete(void *memory)
 {
 	NOT_NULL(ms_memoryBlockManager);
 	ms_memoryBlockManager->free(memory);
-}
-
-// ----------------------------------------------------------------------
-
-void Direct3d9_DynamicIndexBufferData::setSize(int numberOfIndices)
-{
-	if (ms_numberOfIndices != numberOfIndices)
-	{
-		lostDevice();
-		ms_numberOfIndices = numberOfIndices;
-		restoreDevice();
-	}
 }
 
 // ----------------------------------------------------------------------
@@ -120,9 +108,8 @@ void Direct3d9_DynamicIndexBufferData::restoreDevice()
 // ======================================================================
 
 Direct3d9_DynamicIndexBufferData::Direct3d9_DynamicIndexBufferData()
-:
-	m_offset(0),
-	m_numberOfIndices(0)
+	: m_offset(0),
+	  m_numberOfIndices(0)
 {
 }
 
@@ -171,7 +158,7 @@ Index *Direct3d9_DynamicIndexBufferData::lock(int numberOfIndices)
 	}
 
 	// use up indices from this dynamic vb
-	m_offset                = ms_usedNumberOfIndices;
+	m_offset = ms_usedNumberOfIndices;
 	ms_usedNumberOfIndices += numberOfIndices;
 
 	void *data = NULL;

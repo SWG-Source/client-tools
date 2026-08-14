@@ -114,7 +114,10 @@ void TcpServer::update()
 	OVERLAPPED * overlapped = 0;
 	OverlappedTcp * op = 0;
 	unsigned long int bytesTransferred = 0;
-	unsigned long int completionKey = 0;
+	// IOCP's completionKey is pointer-sized: ULONG_PTR is 4 bytes on Win32,
+	// 8 bytes on x64. Was unsigned long int, which mismatches PULONG_PTR
+	// on x64.
+	ULONG_PTR completionKey = 0;
 	bool success = false;
 
 	do

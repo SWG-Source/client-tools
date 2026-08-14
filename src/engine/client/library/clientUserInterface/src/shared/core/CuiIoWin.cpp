@@ -745,19 +745,29 @@ IoResult CuiIoWin::processEvent (IoEvent * event)
 				const GroundScene * const gs = dynamic_cast<const GroundScene *>(Game::getScene ());
 				const bool isFirstPerson = gs ? gs->isFirstPerson () : 0;
 
+				// UI scale: dead-zone math and mouse-edge clamps live in
+				// LOGICAL canvas coords here because msg.MouseCoords (sourced
+				// from m_mouseCursor->getX/Y) is already logical post-
+				// MouseCursor::processEvent scaling. Mixing physical render-
+				// target dims into clamps was producing reticle-at-bottom-
+				// right because center got computed as physical (2560,720)
+				// which is the bottom-right corner of the logical canvas.
+				const long uiCanvasWidth = Graphics::getUiCanvasWidth();
+				const long uiCanvasHeight = Graphics::getUiCanvasHeight();
+
 				UIRect deadZone;
-				
+
 				if (!m_pointerInputActive)
 				{
 					deadZone = m_deadZone;
 
 					if (isFirstPerson)
 					{
-						deadZone.left = deadZone.right  = Graphics::getCurrentRenderTargetWidth () / 2L;
-						deadZone.top  = deadZone.bottom = Graphics::getCurrentRenderTargetHeight () / 2L;
+						deadZone.left = deadZone.right = uiCanvasWidth / 2L;
+						deadZone.top = deadZone.bottom = uiCanvasHeight / 2L;
 					}
 
-					else 
+					else
 					{
 						if (GroundScene::getInvertMouseLook ())
 						{
@@ -772,12 +782,12 @@ IoResult CuiIoWin::processEvent (IoEvent * event)
 				}
 				else
 				{
-					deadZone.bottom = Graphics::getCurrentRenderTargetHeight () - 2L;
-					deadZone.right  = Graphics::getCurrentRenderTargetWidth  () - 2L;
+					deadZone.bottom = uiCanvasHeight - 2L;
+					deadZone.right = uiCanvasWidth - 2L;
 				}
 
-				deadZone.bottom = std::min(deadZone.bottom, Graphics::getCurrentRenderTargetHeight() - 2L);
-				deadZone.right = std::min(deadZone.right, Graphics::getCurrentRenderTargetWidth() - 2L);
+				deadZone.bottom = std::min(deadZone.bottom, uiCanvasHeight - 2L);
+				deadZone.right = std::min(deadZone.right, uiCanvasWidth - 2L);
 				deadZone.top = std::max(deadZone.top, 0L);
 				deadZone.left = std::max(deadZone.left, 0L);
 
@@ -792,18 +802,18 @@ IoResult CuiIoWin::processEvent (IoEvent * event)
 					}
 					else
 					{
-						msg.MouseCoords.y = Graphics::getCurrentRenderTargetHeight () / 2L;
-						msg.MouseCoords.x = Graphics::getCurrentRenderTargetWidth () / 2L;
+						msg.MouseCoords.y = uiCanvasHeight / 2L;
+						msg.MouseCoords.x = uiCanvasWidth / 2L;
 					}
-					
+
 					m_mouseCursor->gotoXY (msg.MouseCoords.x, msg.MouseCoords.y);
 				}
-				
+
 				IGNORE_RETURN (uiManager->ProcessMessage (msg));
-				
+
 				CuiManager::InputManager::setPointerMotionCapturedByUiX (true);
 				CuiManager::InputManager::setPointerMotionCapturedByUiY (true);
-				
+
 				if ( gs && !CuiPreferences::getUseModelessInterface() )
 				{
 					if ( !CuiManager::getPointerInputActive () || (CuiPreferences::getPointerModeMouseCameraEnabled () && CuiMediator::getCountPointerInputActive () <= 0) )
@@ -818,7 +828,7 @@ IoResult CuiIoWin::processEvent (IoEvent * event)
 								msg.MouseCoords.x <= deadZone.left  ||
 								msg.MouseCoords.x >= deadZone.right)
 								CuiManager::InputManager::setPointerMotionCapturedByUiX (false);
-							
+
 							if (
 								msg.MouseCoords.y <= deadZone.top   ||
 								msg.MouseCoords.y >= deadZone.bottom)
@@ -834,8 +844,8 @@ IoResult CuiIoWin::processEvent (IoEvent * event)
 					return IOR_Pass;
 				}
 
-				if (msg.MouseCoords.x <= 0 || (msg.MouseCoords.x >= Graphics::getCurrentRenderTargetWidth () - 2) ||
-					msg.MouseCoords.y <= 0 || (msg.MouseCoords.y >= Graphics::getCurrentRenderTargetHeight () - 2))
+				if (msg.MouseCoords.x <= 0 || (msg.MouseCoords.x >= uiCanvasWidth - 2) ||
+					msg.MouseCoords.y <= 0 || (msg.MouseCoords.y >= uiCanvasHeight - 2))
 				{
 					m_emitter->emitMessage (MessageDispatch::MessageBase (Messages::MOUSE_HIT_EDGE));
 				}
@@ -1396,7 +1406,11 @@ void CuiIoWin::getScreenCenter (UIPoint & screenCenter) const
 	{
 		if (!Game::isHudSceneTypeSpace())
 		{
-			screenCenter.Set (Graphics::getCurrentRenderTargetWidth() / 2, Graphics::getCurrentRenderTargetHeight() / 2);
+			// UI scale: screen center MUST be in LOGICAL canvas coords because
+			// callers feed this into UI widget SetLocation (which then goes
+			// through the canvas Scale matrix). Using physical-pixel center
+			// here causes widgets to land at bottom-right at uiScale>1.
+			screenCenter.Set(Graphics::getUiCanvasWidth() / 2, Graphics::getUiCanvasHeight() / 2);
 			return;
 		}
 	}
@@ -1434,7 +1448,8 @@ void CuiIoWin::setScreenCenter (UIPoint const & screenCenter, bool keepMouseOffs
 
 void CuiIoWin::resetScreenCenter ()
 {
-	UIPoint screenCenter (Graphics::getCurrentRenderTargetWidth() / 2, Graphics::getCurrentRenderTargetHeight() / 2);
+	// UI scale: LOGICAL canvas coords; see getScreenCenter() comment.
+	UIPoint screenCenter(Graphics::getUiCanvasWidth() / 2, Graphics::getUiCanvasHeight() / 2);
 	setScreenCenter (screenCenter, false);
 }
 
@@ -1442,7 +1457,8 @@ void CuiIoWin::resetScreenCenter ()
 
 void CuiIoWin::getScreenCenterDefault(UIPoint & screenCenter) const
 {
-	screenCenter.Set(Graphics::getCurrentRenderTargetWidth() / 2, Graphics::getCurrentRenderTargetHeight() / 2);
+	// UI scale: LOGICAL canvas coords; see getScreenCenter() comment.
+	screenCenter.Set(Graphics::getUiCanvasWidth() / 2, Graphics::getUiCanvasHeight() / 2);
 }
 
 //----------------------------------------------------------------------

@@ -793,6 +793,9 @@ void SwgCuiAvatarCustomizationBase::update (float const deltaTimeSecs)
 {
 	CuiMediator::update (deltaTimeSecs);
 
+	if (!m_objectViewer)
+		return;
+
 	Object * const player     = m_objectViewer->getLastObject ();
 
 	if (!player)
@@ -802,20 +805,31 @@ void SwgCuiAvatarCustomizationBase::update (float const deltaTimeSecs)
 	{
 		bool finished = true;
 
-		for (ClientObjectSet::const_iterator it = m_ownedHairSet->begin (); it != m_ownedHairSet->end (); ++it)
+		// x64 crash fix: human-female customize crashed here with AV read of
+		// 0x38 at update+0x84. Object::getAppearance() is inline and reads
+		// m_appearance at offset 0x38 - a null entry in m_ownedHairSet hits
+		// that exact AV. Entries can be null/stale during avatar customize
+		// (transient hair objects swapped on species/style changes). Also
+		// guard the container pointer itself defensively.
+		if (m_ownedHairSet)
 		{
-			const ClientObject * const hair = *it;
-			
-			const Appearance * const app = hair->getAppearance ();
-			if (app)
+			for (ClientObjectSet::const_iterator it = m_ownedHairSet->begin(); it != m_ownedHairSet->end(); ++it)
 			{
-				const SkeletalAppearance2 * const skelApp = app->asSkeletalAppearance2 ();
-				if (skelApp)
+				const ClientObject *const hair = *it;
+				if (!hair)
+					continue;
+
+				const Appearance *const app = hair->getAppearance();
+				if (app)
 				{
-					//-- preload all lod assets
-					const int count = skelApp->getDetailLevelCount ();
-					for (int i = 0; i < count; ++i)
-						finished == skelApp->isDetailLevelAvailable (i) && finished;
+					const SkeletalAppearance2 *const skelApp = app->asSkeletalAppearance2();
+					if (skelApp)
+					{
+						//-- preload all lod assets
+						const int count = skelApp->getDetailLevelCount();
+						for (int i = 0; i < count; ++i)
+							finished == skelApp->isDetailLevelAvailable(i) && finished;
+					}
 				}
 			}
 		}
@@ -1570,7 +1584,7 @@ namespace
 {
 	template <typename T> void detachFromMorphWidgetVector (T & v)
 	{
-		for (T::iterator it = v.begin (); it != v.end (); ++it)
+		for (typename T::iterator it = v.begin(); it != v.end(); ++it)
 		{
 			UIWidget * const widget = *it;
 			widget->Detach (0);

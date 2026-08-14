@@ -11,12 +11,14 @@
 
 //-----------------------------------------------------------------------
 
-#include "Archive/Archive.h"
-#include "Unicode.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkId.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
 #include "unicodeArchive/UnicodeArchive.h"
+#include "Unicode.h"
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "sharedFoundation/NetworkId.h"
+#include "sharedNetworkMessages/SuiCreatePageCommandArchive.h"
+#include "sharedNetworkMessages/SuiCreatePageCommand.h"
+#include "sharedFoundation/StlForwardDeclaration.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 
@@ -43,23 +45,6 @@ private:
 	//the identifier for this client to use for the page
 	Archive::AutoVariable<int> m_clientPageId;
 };
-
-//-----------------------------------------------------------------------
-
-struct SuiCreatePage_Command
-{
-	enum Type
-	{
-		CLEAR_DATA_SOURCE,
-		ADD_CHILD_WIDGET,
-		SET_PROPERTY,
-		ADD_DATA_ITEM,
-		SUBSCRIBE_TO_PROPERTY
-	} m_type;
-	std::vector<Unicode::String> m_parameters;
-};
-
-//-----------------------------------------------------------------------
 
 /**
  * This network message is used to communicate down to the client the information about
@@ -185,37 +170,6 @@ private:
 	Archive::AutoVariable<Unicode::String> m_propertyValue;
 };
 
-//-----------------------------------------------------------------
-
-//tell Archive how to pack/unpack my custom types
-namespace Archive
-{
-	//a SuiCreatePage_Command::Type is an enum, so treat it like an int
-	inline void put(ByteStream& target, const SuiCreatePage_Command::Type& source)
-	{
-		put(target, static_cast<int>(source));
-	}
-
-	inline void get(ReadIterator& source, SuiCreatePage_Command::Type& target)
-	{
-		signed int tmp;
-		get(source, tmp);
-		target = static_cast<SuiCreatePage_Command::Type>(tmp);
-	}
-
-	//SuiCreatePage_Command is a struct, so just pack/unpack each piece
-	inline void put(ByteStream& target, const SuiCreatePage_Command& source)
-	{
-		put(target, source.m_type);
-		put(target, source.m_parameters);
-	}
-
-	inline void get(ReadIterator& source, SuiCreatePage_Command& target)
-	{
-		get(source, target.m_type);
-		get(source, target.m_parameters);
-	}
-}
 //-----------------------------------------------------------------
 
 #endif

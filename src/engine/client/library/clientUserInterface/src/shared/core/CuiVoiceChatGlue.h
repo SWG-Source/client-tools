@@ -1,6 +1,9 @@
 #ifndef SWGVIVOX_H
 #define SWGVIVOX_H
 
+#ifndef VIVOX_VERSION
+#define VIVOX_VERSION 3
+#endif
 
 #pragma warning(disable:4100 4244)
 #include "vivoxSharedWrapper/Vivox.h"

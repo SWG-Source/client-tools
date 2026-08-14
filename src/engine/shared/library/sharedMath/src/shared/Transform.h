@@ -25,6 +25,7 @@ class Transform
 {
 	friend class Direct3d8;
 	friend class Direct3d9;
+	friend class Direct3d11;
 	friend class Iff;
 	friend class MayaUtility;
 	friend class OpenGL;

@@ -12,13 +12,13 @@
 //-----------------------------------------------------------------------
 
 #include "Archive/AutoDeltaVariableCallback.h"
+#include "localizationArchive/StringIdArchive.h"
 #include "StringId.h"
+#include "unicodeArchive/UnicodeArchive.h"
 #include "Unicode.h"
 #include "clientGame/ClientWorld.h"
-#include "localizationArchive/StringIdArchive.h"
 #include "sharedObject/Object.h"
 #include "sharedTerrain/TerrainGenerator.h"
-#include "unicodeArchive/UnicodeArchive.h"
 
 //-----------------------------------------------------------------------
 
@@ -162,6 +162,14 @@ public:
 
 	const ClientDataFile* getClientData () const;
 
+	// x64 fix: tracks whether this object's ClientDataFile-baked wearables
+	// (the WEAR/MESH chunks - how "dressed" NPCs get their clothing) have been
+	// successfully applied. ClientDataFile::apply() runs once at endBaselines
+	// time, but the skeletal appearance is often not ready then; this flag
+	// lets a periodic catch-up retry applyWearables() idempotently.
+	bool getClientDataFileWearablesApplied() const;
+	void setClientDataFileWearablesApplied(bool applied);
+
 	TerrainGenerator::Layer* getLayer () const;
 	void                     setLayer(TerrainGenerator::Layer* layer);
 
@@ -295,6 +303,7 @@ private:
 	Archive::AutoDeltaVariableCallback<int, Callbacks::BankBalance, ClientObject> m_bankBalance;
 
 	bool                             m_clientCached : 1;
+	bool m_clientDataFileWearablesApplied : 1;
 	uint32                           m_uniqueId;
 	ObjectVector                    *m_auxilliaryObjectVector;
 

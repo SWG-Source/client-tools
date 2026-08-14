@@ -57,6 +57,26 @@ inline void get(ReadIterator & source, signed int & target)
 }
 
 //---------------------------------------------------------------------
+// 64-bit overloads. On MSVC `unsigned long long` and `unsigned __int64`
+// (the engine's `uint64` typedef) are the same type, and on x64 `size_t`
+// is also `unsigned __int64` - so this single overload covers all three
+// and makes AutoDeltaMap/Set/Vector etc. compile on x64. NetworkIdArchive
+// used to define these out-of-line for `uint64`/`int64`; those were
+// removed to avoid a duplicate-symbol clash at link time.
+
+inline void get(ReadIterator &source, unsigned long long &target)
+{
+	source.get(&target, 8);
+}
+
+//---------------------------------------------------------------------
+
+inline void get(ReadIterator &source, signed long long &target)
+{
+	source.get(&target, 8);
+}
+
+//---------------------------------------------------------------------
 
 inline void get(ReadIterator & source, unsigned short int & target)
 {
@@ -95,6 +115,12 @@ inline void get(ReadIterator & source, std::string & target)
 		size = len;
 	else
 		get(source, size);
+	// Sanity-bail: claimed size exceeds remaining buffer. Without this,
+	// std::string(c, size) memcpy's past valid memory and AVs.
+	if (size > source.getSize())
+	{
+		throw ReadException("std::string get: size exceeds remaining buffer");
+	}
 	const char * c = reinterpret_cast<const char * const>(source.getBuffer());
 	target = std::string(c, size);
 	source.advance(size);
@@ -113,6 +139,16 @@ inline void get(ReadIterator & source, ByteStream & target)
 {
 	unsigned int s;
 	get(source, s);
+	// ReadIterator::getSize() already returns the remaining (unread) bytes.
+	const unsigned int remaining = source.getSize();
+	if (s > remaining)
+	{
+		// Sanity-bail: claimed size exceeds remaining buffer, almost
+		// certainly malformed input. Throwing ReadException unwinds the
+		// AutoByteStream::unpack chain so the message gets dropped instead
+		// of allocating garbage and corrupting the heap.
+		throw ReadException("ByteStream get: size exceeds remaining buffer");
+	}
 	target.put(source.getBuffer(), s);
 	source.advance(s);
 }
@@ -190,10 +226,12 @@ template<typename A> inline void get_ptr(ReadIterator & source, std::vector<cons
 
 template<typename Key, typename Value> inline void get(ReadIterator & source, std::map<Key, Value> & target)
 {
-	size_t numKeys;
+	// Wire format is a 4-byte length, matching vector/set/deque. Using `int`
+	// here (instead of size_t) keeps the get/put overload selection unambiguous
+	// on x64, where size_t is 8 bytes and would need a separate uint64 overload.
+	int numKeys;
 	get(source, numKeys);
-	size_t i;
-	for(i = 0; i < numKeys; ++i)
+	for (int i = 0; i < numKeys; ++i)
 	{
 		Key k;
 		get(source, k);
@@ -253,6 +291,21 @@ inline void put(ByteStream & target, const unsigned int & source)
 inline void put(ByteStream & target, const signed int & source)
 {
 	target.put(&source, 4);
+}
+
+//---------------------------------------------------------------------
+// 64-bit put overloads - matched pair to the get() side above.
+
+inline void put(ByteStream &target, const unsigned long long &source)
+{
+	target.put(&source, 8);
+}
+
+//---------------------------------------------------------------------
+
+inline void put(ByteStream &target, const signed long long &source)
+{
+	target.put(&source, 8);
 }
 
 //---------------------------------------------------------------------
@@ -379,7 +432,7 @@ template<typename A> inline void put(ByteStream & target, const std::deque<A> & 
 
 template<typename Key, typename Value> inline void put(ByteStream & target, const std::map<Key, Value> & source)
 {
-	size_t numKeys = source.size();
+	int numKeys = static_cast<int>(source.size());
 	put(target, numKeys);
 	for (typename std::map<Key, Value>::const_iterator i = source.begin(); i != source.end(); ++i)
 	{

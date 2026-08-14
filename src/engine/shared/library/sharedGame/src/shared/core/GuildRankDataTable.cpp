@@ -1,4 +1,4 @@
-// ======================================================================
+﻿// ======================================================================
 //
 // GuildRankDataTable.cpp
 // Copyright 2006 Sony Online Entertainment LLC (SOE)
@@ -61,9 +61,9 @@ void GuildRankDataTable::install()
 			columnAlternateTitle.push_back(columnNumber);
 		}
 
-		FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_guildRankDataTableName));
-		FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_guildRankDataTableName));
-		FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_guildRankDataTableName));
+		DEBUG_FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_guildRankDataTableName));
+		DEBUG_FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_guildRankDataTableName));
+		DEBUG_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_guildRankDataTableName));
 
 		GuildRankDataTable::GuildRank const * currentRank = NULL;
 
@@ -157,7 +157,7 @@ void GuildRankDataTable::install()
 	}
 	else
 	{
-		FATAL(true, ("guild rank datatable %s not found", cs_guildRankDataTableName));
+		DEBUG_WARNING(true, ("guild rank datatable %s not found - feature disabled (likely NGE-retail TRE pack pre-dates it).\n", cs_guildRankDataTableName));
 	}
 
 	ExitChain::add(remove, "GuildRankDataTable::remove");

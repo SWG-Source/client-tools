@@ -275,7 +275,7 @@ m_callback                 (new MessageDispatch::Callback)
 				if(!gcwButton)
 					DEBUG_WARNING(true, ("Failed to find Galactic Map GCW Button for planet [%s] using codeData value [%s]", planet.c_str(), buttonName.c_str()));
 				else
-					ms_gcwButtons.insert(std::make_pair<std::string, UIButton *>(planet, gcwButton));
+					ms_gcwButtons.insert(std::make_pair(planet, gcwButton));
 			}
 
 			DataTableManager::close(cs_PlanetWidthDataTable);

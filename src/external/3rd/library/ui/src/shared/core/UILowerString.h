@@ -9,7 +9,7 @@
 #define INCLUDED_UILowerString_H
 
 //======================================================================
-#include <hash_map>
+#include <unordered_map>
 
 class UILowerString
 {
@@ -51,7 +51,7 @@ private:
 	size_t m_hashQuick;
 	size_t m_hashEqu;
 
-	typedef std::hash_map<size_t, std::string> UILowerStringHashMap;
+	typedef std::unordered_map<size_t, std::string> UILowerStringHashMap;
 	static UILowerStringHashMap* ms_hashMap;
 };
 

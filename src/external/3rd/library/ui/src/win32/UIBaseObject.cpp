@@ -11,8 +11,8 @@
 
 #include <algorithm>
 #include <cassert>
-#include <hash_map>
-#include <hash_set>
+#include <unordered_map>
+#include <unordered_Set>
 #include <list>
 #include <map>
 #include <set>
@@ -60,8 +60,8 @@ namespace UIBaseObjectNamespace
 		}
 	};
 
-	typedef std::hash_map<UIBaseObject const * /*child*/, UIBaseObject * /*root*/, UIBaseObjectHash> UIRootObjectMap;
-	typedef std::hash_set<UIBaseObject * /*child*/, UIBaseObjectHash> UIObjectHashSet;
+	typedef std::unordered_map<UIBaseObject const * /*child*/, UIBaseObject * /*root*/, UIBaseObjectHash> UIRootObjectMap;
+	typedef std::unordered_set<UIBaseObject * /*child*/, UIBaseObjectHash> UIObjectHashSet;
 	size_t const s_defaultWidgetObjects = 8192;
 	UIRootObjectMap s_uiRootObjectMap(s_defaultWidgetObjects);
 	UIObjectHashSet s_deletedObjects;

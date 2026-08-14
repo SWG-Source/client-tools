@@ -11,7 +11,9 @@
 #include "clientDirectInput/DirectInput.h"
 #include "clientDirectInput/ConfigClientDirectInput.h"
 #include "clientDirectInput/ForceFeedbackEffectTemplateList.h"
+#include "clientDirectInput/SdlJoystickInput.h"
 #include "sharedDebug/InstallTimer.h"
+#include "sharedFoundation/ExitChain.h"
 #include "sharedFoundation/Os.h"
 
 //-------------------------------------------------------------------
@@ -35,6 +37,17 @@ void SetupClientDirectInput::install(HINSTANCE instanceHandle, HWND window, DWOR
 	InstallTimer const installTimer("SetupClientDirectInput::install");
 
 	ConfigClientDirectInput::install();
+
+	// Install the SDL joystick/gamepad backend BEFORE DirectInput so that
+	// DirectInput's joystick enumeration knows to stand down (keyboard/mouse
+	// stay on DirectInput).  Falls back to DirectInput joysticks if SDL fails.
+	if (ConfigClientDirectInput::getUseSdlInput())
+	{
+		SdlJoystickInput::install();
+		if (SdlJoystickInput::isInstalled())
+			ExitChain::add(SdlJoystickInput::remove, "SdlJoystickInput");
+	}
+
 	DirectInput::install(instanceHandle, window, menuKey, isWindowedMode);
 
 	Os::setInputLanguageChangedHookFunction(inputLanguageChangedHook);

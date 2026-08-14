@@ -189,7 +189,7 @@ void TcpClient::commit(const unsigned char * const buffer, const int bufferLen)
 		if(sent == SOCKET_ERROR)
 		{
 			int errCode = WSAGetLastError();
-			char * err;
+			const char *err;
 			if(errCode != WSA_IO_PENDING)
 			{
 				switch(errCode)
@@ -421,7 +421,7 @@ void TcpClient::queueReceive()
 	if(result == SOCKET_ERROR)
 	{
 		int errCode = WSAGetLastError();
-		char * err;
+		const char *err;
 		if(errCode != WSA_IO_PENDING)
 		{
 			switch(errCode)
@@ -520,7 +520,10 @@ void TcpClient::update()
 	OVERLAPPED * overlapped = 0;
 	OverlappedTcp * op = 0;
 	unsigned long int bytesTransferred = 0;
-	unsigned long int completionKey = 0;
+	// IOCP's completionKey is pointer-sized: ULONG_PTR is 4 bytes on Win32,
+	// 8 bytes on x64. Was unsigned long int, which mismatches PULONG_PTR
+	// on x64.
+	ULONG_PTR completionKey = 0;
 	bool success = false;
 
 	if (m_connected)
