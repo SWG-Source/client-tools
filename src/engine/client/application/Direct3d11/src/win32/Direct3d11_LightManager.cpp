@@ -704,6 +704,16 @@ void Direct3d11_LightManager::applyLights_vertexShader()
  * collapses to vertexDiffuse + max(0,dp)*diffuse -- every surface facing away from the sun
  * falls to the ambient floor. Synthesising a hemisphere from the light's own diffuse gives the
  * shader something sensible to subtract instead of subtracting the light away.
+ *
+ * But vertexDiffuse + max(0,dp)*diffuse IS the stock arithmetic -- a light authored without
+ * hemispheric colours is asking for plain Lambert, shade side and all. Working the synthesis
+ * through the same expression: at dp=0 it hands every character 65% of the key light for free,
+ * and the shade side never falls below it, which reads as characters missing their shadowing.
+ * Measured on a cantina A/B (Capture220 pair, same fragment, same interpolated vertex lighting
+ * 0.24): stock renderer 0.19, this branch 0.41 -- the whole 2x character brightness residual
+ * after the ShaderSource patches were gated. So the synthesis is opt-in via [Direct3d11]
+ * synthesizeHemisphericLight, off by default, same rule as the other inherited compensations:
+ * the data renders as authored unless a knob says otherwise.
  */
 
 void Direct3d11_LightManager::setExtendedLightData(
@@ -717,6 +727,7 @@ void Direct3d11_LightManager::setExtendedLightData(
 	VectorArgb diffuseBackColor = light->getDiffuseBackColor();
 	VectorArgb diffuseTangentColor = light->getDiffuseTangentColor();
 
+	if (ConfigDirect3d11::getSynthesizeHemisphericLight())
 	{
 		float const tangentMagnitude = diffuseTangentColor.r + diffuseTangentColor.g + diffuseTangentColor.b;
 		float const backMagnitude = diffuseBackColor.r + diffuseBackColor.g + diffuseBackColor.b;

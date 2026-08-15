@@ -72,6 +72,12 @@ public:
 	// the DX9 build's tuned value was 85, and 0 disables the patch entirely.
 	static bool getAmbientBoost();
 	static float getDiffuseLightingFloor();
+
+	// The third inherited compensation: synthesize hemispheric colours (tangent 65% /
+	// back 30% of the key light's diffuse) for lights authored without them. Off by
+	// default -- a light authored without a hemisphere is asking for plain Lambert,
+	// and the synthesis erases the shade side of every character it touches.
+	static bool getSynthesizeHemisphericLight();
 	static int getFullscreenRefreshRate();
 	static int getSwapChainBufferCount();
 	static bool getAntiAlias();

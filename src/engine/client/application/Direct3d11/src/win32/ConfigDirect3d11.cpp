@@ -36,6 +36,7 @@ namespace ConfigDirect3d11Namespace
 
 	bool ms_ambientBoost;
 	int ms_diffuseFloorPercent;
+	bool ms_synthesizeHemisphericLight;
 
 	int ms_shaderCapabilityOverride;
 } // namespace ConfigDirect3d11Namespace
@@ -155,6 +156,9 @@ void ConfigDirect3d11::install()
 	KEY_INT(diffuseFloorPercent, 0);
 	FATAL(ms_diffuseFloorPercent < 0 || ms_diffuseFloorPercent > 100, ("[Direct3d11] diffuseFloorPercent %d is invalid [0..100]", ms_diffuseFloorPercent));
 	WARNING(ms_diffuseFloorPercent != 0, ("[Direct3d11] diffuseFloorPercent %d floors diffuse+ambient lighting. This changes the image.", ms_diffuseFloorPercent));
+
+	KEY_BOOL(synthesizeHemisphericLight, false);
+	WARNING(ms_synthesizeHemisphericLight, ("[Direct3d11] synthesizeHemisphericLight fills in hemispheric colours for lights authored without them. This changes the image."));
 
 	CrashReportInformation::addStaticText("D3d11 adapter: %d driverType: %d featureLevelCap: %d\n", ms_adapter, static_cast<int>(ms_driverType), ms_featureLevelCap);
 	CrashReportInformation::addStaticText("D3d11 allowTearing: %d bufferCount: %d antiAlias: %d/%d\n", ms_allowTearing ? 1 : 0, ms_swapChainBufferCount, ms_antiAlias ? 1 : 0, ms_antiAliasSampleCount);
@@ -291,6 +295,13 @@ bool ConfigDirect3d11::getAmbientBoost()
 float ConfigDirect3d11::getDiffuseLightingFloor()
 {
 	return static_cast<float>(ms_diffuseFloorPercent) / 100.0f;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d11::getSynthesizeHemisphericLight()
+{
+	return ms_synthesizeHemisphericLight;
 }
 
 // ======================================================================
