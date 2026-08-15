@@ -121,7 +121,13 @@ void Direct3d11_SwapChainNamespace::updateWindowSettings()
 			y = 0;
 	}
 
-	IGNORE_RETURN(SetWindowPos(ms_window, NULL, x, y, windowWidth, windowHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED));
+	// The reveal must ACTIVATE. This is the call that first shows the hidden
+	// popup Os created, and D3D9 reveals with SWP_SHOWWINDOW and no
+	// SWP_NOACTIVATE -- the show itself grants focus. Passing SWP_NOACTIVATE
+	// here left the client behind whatever else the desktop had focused at
+	// startup (the trailing ShowWindow(SW_SHOW) does not reliably activate a
+	// window that SetWindowPos just made visible without activation).
+	IGNORE_RETURN(SetWindowPos(ms_window, NULL, x, y, windowWidth, windowHeight, SWP_NOZORDER | SWP_SHOWWINDOW | SWP_FRAMECHANGED));
 	IGNORE_RETURN(ShowWindow(ms_window, SW_SHOW));
 	IGNORE_RETURN(UpdateWindow(ms_window));
 }
