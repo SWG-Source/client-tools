@@ -28,6 +28,7 @@
 #include "clientTerrain/ClientProceduralTerrainAppearance_LevelOfDetail.h"
 #include "clientTerrain/ClientProceduralTerrainAppearance_Radar.h"
 #include "clientTerrain/ClientProceduralTerrainAppearance_ShaderCache.h"
+#include "clientTerrain/ClientProceduralTerrainAppearanceTemplate.h"
 #include "clientTerrain/ClientStaticRadialFloraManager.h"
 #include "clientTerrain/ClientTerrainSorter.h"
 #include "clientTerrain/ConfigClientTerrain.h"
@@ -356,6 +357,8 @@ ClientProceduralTerrainAppearance::ClientProceduralTerrainAppearance (const Proc
 	m_waterManagerList (NON_NULL (new WaterManagerList)),
 	m_localWaterManager (0),
 	m_shaderCache (0),
+	m_clientTerrainAppearanceTemplate (dynamic_cast<const ClientProceduralTerrainAppearanceTemplate*> (appearanceTemplate)),
+	m_terrainWarmupComplete (false),
 	m_levelOfDetail (0),
 	m_worldFrustum (6),
 	m_lastRefPosition_w(0,0,0),
@@ -852,6 +855,13 @@ ClientProceduralTerrainAppearance::ClientChunk *ClientProceduralTerrainAppearanc
 
 void ClientProceduralTerrainAppearance::createChunk (const int x, const int z, const int chunkSize, unsigned hasLargerNeighborFlags)
 {
+	//-- CONSULT-59: no chunk creation before the warm-up populated the
+	//   ShaderCache (createTileShader reads its slots with no miss-fetch).
+	//   Callers already tolerate a missing chunk -- identical to the normal
+	//   "request still pending" state under multithreaded generation.
+	if (!m_terrainWarmupComplete)
+		return;
+
 	//-- make sure indices are valid
 	if (!areValidChunkIndices (x, z))
 		return;
@@ -880,7 +890,13 @@ float ClientProceduralTerrainAppearance::alter (const float elapsedTime)
 	//-- Verify that we have only one reference object
 	DEBUG_FATAL (getNumberOfReferenceObjects () > 1, ("ClientProceduralTerrainAppearance::alter - there should really be only one reference object\n"));
 
-	if (getRenderedThisFrame ())
+	//-- CONSULT-59: pump the budgeted warm-up; no chunk creation (LOD requests,
+	//   forced creates) until it completes -- ShaderCache slots are read from
+	//   the worker thread with no lock, so they must be fully populated first.
+	if (!m_terrainWarmupComplete)
+		IGNORE_RETURN (updateTerrainWarmup ());
+
+	if (m_terrainWarmupComplete && getRenderedThisFrame ())
 		calculateLod ();
 
 	//-- Update terrain rebuild requests
@@ -1945,11 +1961,46 @@ bool ClientProceduralTerrainAppearance::hasHighLevelOfDetailTerrain (const Vecto
 
 bool ClientProceduralTerrainAppearance::terrainGenerationStabilized () const
 {
+	// CONSULT-59 Guard B: while the warm-up is still pumping, no chunk requests
+	// exist yet, so the empty request map would read as "stabilized" and drop
+	// the loading screen onto ungenerated terrain. Hold until warm-up completes.
+	if (!m_terrainWarmupComplete)
+		return false;
+
 	const_cast<ClientProceduralTerrainAppearance*>(this)->m_requestCriticalSection.enter ();
 	bool const done = m_pendingChunkRequestInfoMap->empty ();
 	const_cast<ClientProceduralTerrainAppearance*>(this)->m_requestCriticalSection.leave ();
 
 	return done;
+}
+
+//-----------------------------------------------------------------
+
+bool ClientProceduralTerrainAppearance::updateTerrainWarmup ()
+{
+	if (m_terrainWarmupComplete)
+		return true;
+
+	//-- pump the template's incremental preload; a null template (non-client
+	//   template path, e.g. tools) has no incremental preload -- fall straight
+	//   through to the ShaderCache fill (one-shot, old behavior)
+	if (m_clientTerrainAppearanceTemplate && !m_clientTerrainAppearanceTemplate->preloadAssetsStep ())
+		return false;
+
+	//-- all assets fetched: populate the ShaderCache slots (pure cache hits)
+	//   BEFORE any chunk creation request can be submitted
+	NOT_NULL (m_shaderCache);
+	m_shaderCache->preloadShaders ();
+	m_terrainWarmupComplete = true;
+
+	return true;
+}
+
+//-----------------------------------------------------------------
+
+bool ClientProceduralTerrainAppearance::isTerrainWarmupComplete () const
+{
+	return m_terrainWarmupComplete;
 }
 
 //-----------------------------------------------------------------

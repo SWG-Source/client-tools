@@ -109,8 +109,6 @@ private:
 
 private:
 
-	void preloadShaders () const;
-		
 	void setupShaderData(StaticShader & shader, BlendedShaderCacheNode & node, ShaderData const & shaderData, Material const * materials, bool useSpecularBlendingShader) const;
 
 
@@ -124,6 +122,17 @@ public:
 
 	explicit ShaderCache (const ShaderGroup& shaderGroup);
 	~ShaderCache ();
+
+	// CONSULT-59: no longer called by the constructor (it froze the main loop
+	// loading the whole planet's shaders+textures up front -- the original
+	// "@todo avoid loading textures for entire planet up front"). Idempotent
+	// per-slot fill; ClientProceduralTerrainAppearance calls it ONCE after the
+	// template's incremental preload completes (all cache hits at that point),
+	// BEFORE any chunk creation request is submitted. cache[][] slots are read
+	// from the ClientTerrain worker thread with no lock -- the populate-fully-
+	// before-first-use ordering is what keeps that safe. Do NOT call this
+	// concurrently with chunk generation.
+	void               preloadShaders () const;
 
 	void               getTextures (const ShaderGroup::Info& sgi, StaticShader const *& baseInputShader, const Texture *&shader, const Texture *&normalTexture) const;
 	const Shader*      createBlendedShader (const ShaderData& shaderData) const;

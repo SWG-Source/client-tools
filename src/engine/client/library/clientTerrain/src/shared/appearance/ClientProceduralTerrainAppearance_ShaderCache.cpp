@@ -196,9 +196,11 @@ ClientProceduralTerrainAppearance::ShaderCache::ShaderCache (const ShaderGroup& 
 	}
 
 
-	//-- preload shaders
-	// @todo avoid loading textures for entire planet up front
-	preloadShaders ();
+	//-- CONSULT-59: preloadShaders() is no longer called here (it synchronously
+	//   loaded every terrain shader + texture for the whole planet, the bulk of
+	//   the 3-4.5s scene-constructor freeze). ClientProceduralTerrainAppearance
+	//   calls it once its template's incremental preload completes, before any
+	//   chunk creation request is submitted.
 }
 
 //-------------------------------------------------------------------

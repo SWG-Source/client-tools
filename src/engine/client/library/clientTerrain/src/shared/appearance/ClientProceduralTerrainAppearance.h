@@ -24,6 +24,7 @@ class AffectorRibbon;
 class Camera;
 class ClientDynamicRadialFloraManager;
 class ClientLocalWaterManager;
+class ClientProceduralTerrainAppearanceTemplate;
 class ClientStaticRadialFloraManager;
 class EnvironmentBlock;
 class GroundEnvironment;
@@ -257,6 +258,11 @@ private:
 	ClientLocalWaterManager*         m_localWaterManager;
 	ShaderCache*                     m_shaderCache;
 
+	//-- CONSULT-59 budgeted terrain warm-up (null template = non-client
+	//   template path, e.g. tools; warm-up then just fills the ShaderCache)
+	const ClientProceduralTerrainAppearanceTemplate* m_clientTerrainAppearanceTemplate;
+	bool                             m_terrainWarmupComplete;
+
 	//-- level of detail
 	LevelOfDetail*                   m_levelOfDetail;
 	mutable Volume                   m_worldFrustum;
@@ -403,6 +409,14 @@ public:
 	virtual int          getNumberOfChunks () const;
 	virtual bool         hasHighLevelOfDetailTerrain (const Vector& position_o) const;
 	virtual bool         terrainGenerationStabilized() const;
+
+	// CONSULT-59: budgeted terrain warm-up. Pumps the template's incremental
+	// asset preload, then populates the ShaderCache once (all cache hits), and
+	// only then allows chunk creation. Returns true once warm-up is complete.
+	// Called every frame from alter() (and from GroundScene's loading pump);
+	// no-op after completion.
+	bool                 updateTerrainWarmup ();
+	bool                 isTerrainWarmupComplete () const;
 
 	virtual bool            getPauseEnvironment () const;
 	virtual void            setPauseEnvironment (bool pauseEnvironment);
