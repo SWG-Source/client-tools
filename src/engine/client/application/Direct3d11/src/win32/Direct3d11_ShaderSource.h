@@ -43,15 +43,19 @@
 //      include it serves; this passes the same rename as a global macro, which reaches
 //      the program source as well. No visual effect.
 //
-//   2. c_ambient.inc's `mov r7, vColor0` becomes `add r7, vColor0, c16`. DX9's stated
-//      reason: skinned meshes have no baked vColor0, so characters received zero
-//      ambient and went black in scenes where the parallel sun is weak. CHANGES THE
-//      IMAGE.
+//   2. c_ambient.inc's `mov r7, vColor0` becomes an add of scene ambient (c16) --
+//      colour channels only, alpha pinned to the baked value. DX9's stated reason:
+//      skinned meshes have no baked vColor0, so characters received zero ambient and
+//      went black in scenes where the parallel sun is weak. CHANGES THE IMAGE, so it
+//      is OFF by default and opts in via [Direct3d11] ambientBoost; on well-formed
+//      data the add brightens interiors past what the baked lighting says (the
+//      unpinned DX9 shape also drove COLOR.a to a measured 1.85).
 //
 //   3. `lightData.ambient.ambientColor + diffuseSpecular.diffuse` is wrapped in
-//      max(..., 0.85). DX9's stated reason: dot3 bump shaders skip the parallel-spec
-//      light slot, so outdoor characters rendered dark. CHANGES THE IMAGE, and 0.85 is
-//      a constant somebody tuned by eye.
+//      max(..., floor). DX9's stated reason: dot3 bump shaders skip the parallel-spec
+//      light slot, so outdoor characters rendered dark. CHANGES THE IMAGE, and the
+//      DX9 constant (0.85) was tuned by eye -- so it is OFF by default and opts in
+//      via [Direct3d11] diffuseFloorPercent (85 reproduces the DX9 look).
 //
 //   4. pixel_program/include/pixel_shader_constants.inc is replaced wholesale with the
 //      engine's own register layout. The TRE copy declares textureFactor at c3, where
