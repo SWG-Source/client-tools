@@ -16,6 +16,7 @@
 #include "sharedFile/ConfigSharedFile.h"
 #include "sharedFile/FileManifest.h"
 #include "sharedFile/FileStreamer.h"
+#include "sharedFile/MemoryFile.h"
 #include "sharedFoundation/ConfigFile.h"
 #include "sharedFoundation/ExitChain.h"
 #include "sharedFoundation/Os.h"
@@ -1039,7 +1040,25 @@ int TreeFile::cacheFile(char const * const fileName)
 AbstractFile* TreeFile::TreeFileFactory::createFile(const char *filename, const char *open_type)
 {
 	UNREF(open_type);
-	return open(filename, AbstractFile::PriorityData, true);
+	AbstractFile *file = open(filename, AbstractFile::PriorityData, true);
+
+	// CONSULT-68: this factory's consumers (LocalizedStringTable via
+	// LocalizationManager::fetchStringTable) parse with thousands of tiny
+	// reads, and each read on a streamed file is a blocking round-trip to the
+	// FileStreamer I/O thread -- the stall stack sampler measured 500-800ms
+	// zone-in stalls inside fetchStringTable. Buffer the whole file in ONE
+	// read and let the parser run against memory.
+	if (file && file->isOpen() && file->length() > 0)
+	{
+		MemoryFile *memoryFile = new MemoryFile(file);
+		delete file;
+		if (memoryFile->isOpen())
+			return memoryFile;
+		// buffering failed (e.g. allocation); fall back to a fresh streamed handle
+		delete memoryFile;
+		return open(filename, AbstractFile::PriorityData, true);
+	}
+	return file;
 }
 
 // ======================================================================
