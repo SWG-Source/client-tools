@@ -180,6 +180,15 @@ public:
 	bool getAppliedInteriorLayout() const;
 	void setAppliedInteriorLayout() const;
 
+	// CONSULT-46 fix #2: resume cursor for the throttled interior-layout creation
+	// (ClientInteriorLayoutManager). Counts how many of this cell's layout objects have
+	// been created so far this load. Lives ON the cell (NOT a manager-side pointer map) so
+	// it can never dangle, and is reset to 0 in removeFromWorld() on the SAME event that
+	// resets m_appliedInteriorLayout and deletes the created objects -> ABA-safe by
+	// construction (a reused address gets a fresh 0 from the ctor).
+	int  getInteriorLayoutCreatedCount() const;
+	void setInteriorLayoutCreatedCount(int count) const;
+
 private:
 
 	typedef stdvector<PortalObjectEntry>::fwd PortalObjectList;
@@ -227,6 +236,7 @@ private:
 	PackedArgb                        m_fogColor;
 	float                             m_fogDensity;
 	bool mutable m_appliedInteriorLayout;
+	int  mutable m_interiorLayoutCreatedCount;   // CONSULT-46 fix #2: throttle resume cursor (see header accessors)
 
 	mutable RenderHookFunctionList   *m_preVisibilityTraversalRenderHookFunctionList;
 	mutable RenderHookFunctionList   *m_enterRenderHookFunctionList;

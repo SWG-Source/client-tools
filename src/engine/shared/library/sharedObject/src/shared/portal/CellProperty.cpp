@@ -356,6 +356,7 @@ CellProperty::CellProperty(Object &owner)
 	m_fogColor(0),
 	m_fogDensity(0.f),
 	m_appliedInteriorLayout(false),
+	m_interiorLayoutCreatedCount(0),   // CONSULT-46 fix #2: throttle resume cursor
 	m_preVisibilityTraversalRenderHookFunctionList(NULL),
 	m_enterRenderHookFunctionList(NULL),
 	m_preDrawRenderHookFunctionList(NULL),
@@ -577,6 +578,10 @@ void CellProperty::removeFromWorld()
 	}
 
 	m_appliedInteriorLayout = false;
+	// CONSULT-46 fix #2: reset the throttle resume cursor on the SAME unload event that
+	// resets the applied flag and (in TangibleObject::removeFromWorld) deletes the created
+	// interior objects -> cursor and object list snap to 0/empty together (no dangle/dup).
+	m_interiorLayoutCreatedCount = 0;
 }
 
 // ----------------------------------------------------------------------
@@ -1263,6 +1268,20 @@ bool CellProperty::getAppliedInteriorLayout() const
 void CellProperty::setAppliedInteriorLayout() const
 {
 	m_appliedInteriorLayout = true;
+}
+
+// ----------------------------------------------------------------------
+
+int CellProperty::getInteriorLayoutCreatedCount() const
+{
+	return m_interiorLayoutCreatedCount;
+}
+
+// ----------------------------------------------------------------------
+
+void CellProperty::setInteriorLayoutCreatedCount(int count) const
+{
+	m_interiorLayoutCreatedCount = count;
 }
 
 // ----------------------------------------------------------------------
