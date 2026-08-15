@@ -1339,6 +1339,8 @@ void SoftwareBlendSkeletalShaderPrimitive::fillConstantVertexBufferData(const Me
 
 	//-- Extract data for each vertex.
 	float textureCoordinate[4];
+	int zeroArgbCount = 0;
+
 	for (int vertexIndex = 0; vertexIndex < m_vertexCount; ++vertexIndex, ++destVertexIt)
 	{
 		const MeshConstructionHelper::VertexData &vertexData = mesh.getVertexData(meshPerShaderData, vertexIndex);
@@ -1352,7 +1354,22 @@ void SoftwareBlendSkeletalShaderPrimitive::fillConstantVertexBufferData(const Me
 			const PackedArgb &argb = mesh.getDiffuseColor(vertexData);
 			uint32 const packed = argb.getArgb();
 			if (packed == 0u)
-				destVertexIt.setColor0(0xffffffff);
+			{
+				// ARGB==0 with a colour stream PRESENT is almost always colour
+				// data that has not filled in yet: customization applies after
+				// the first build, and the rebuild it triggers carries the real
+				// values. Strict (default): pass the zeros through -- the first
+				// build renders dark for the frames until the rebuild, which is
+				// stock D3D9 behaviour. strictData=false: rewrite to opaque
+				// white, the compensation for data packs whose colours never
+				// arrive at all. On GOOD data that compensation paints every
+				// not-yet-filled character white for those same frames, and
+				// with the bloom post-process enabled it reads as a bright
+				// saturation flash on first sight -- worse the higher the frame
+				// rate, because a busier render loop starves the async fill.
+				++zeroArgbCount;
+				destVertexIt.setColor0(StrictData() ? packed : 0xffffffff);
+			}
 			else
 				destVertexIt.setColor0(packed);
 		}
@@ -1413,6 +1430,14 @@ void SoftwareBlendSkeletalShaderPrimitive::fillConstantVertexBufferData(const Me
 			}
 		}
 	}
+
+	//-- fires per BUILD (and per customization-driven rebuild), not per frame,
+	//   so this cannot storm. On good data expect a handful of these at each
+	//   character/NPC first sight, then silence once the rebuild carries the
+	//   real colours; a build where they never stop is a data pack whose
+	//   colours never arrive (the case the lenient white rewrite exists for).
+	if (zeroArgbCount > 0)
+		WARNING(true, ("SoftwareBlendSkeletalShaderPrimitive: %d/%d vertices had ARGB==0 at build for shader [%s]%s", zeroArgbCount, m_vertexCount, mesh.getShaderTemplateName(meshPerShaderData).getString(), StrictData() ? "" : " - rewritten to white (strictData=false)"));
 }
 
 // ===========================================================================
