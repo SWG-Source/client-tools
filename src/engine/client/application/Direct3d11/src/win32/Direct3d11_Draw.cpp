@@ -175,6 +175,7 @@ void Direct3d11::setVertexBuffer(HardwareVertexBuffer const &vertexBuffer)
 	ms_streamCount = 1;
 
 	context->IASetVertexBuffers(0, 1, &buffer, &stride, &byteOffset);
+	Direct3d11_InputLayoutCache::bindPhantomStream(context);
 	++Direct3d11_Metrics::vertexBufferBindCalls;
 	++Direct3d11_Metrics::vertexBufferBindMisses;
 
@@ -278,6 +279,7 @@ void Direct3d11::setVertexBufferVector(VertexBufferVector const &vertexBufferVec
 	FATAL(!stream, ("Direct3d11: a vertex buffer vector bound no streams at all."));
 
 	context->IASetVertexBuffers(0, static_cast<UINT>(stream), buffers, strides, offsets);
+	Direct3d11_InputLayoutCache::bindPhantomStream(context);
 	++Direct3d11_Metrics::vertexBufferBindCalls;
 	++Direct3d11_Metrics::vertexBufferBindMisses;
 

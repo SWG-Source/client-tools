@@ -15,6 +15,7 @@
 #include "clientGraphics/VertexBufferDescriptor.h"
 #include "clientGraphics/VertexBufferFormat.h"
 
+#include <cstring>
 #include <d3dcompiler.h>
 #include <map>
 
@@ -47,6 +48,23 @@ namespace Direct3d11_InputLayoutCacheNamespace
 
 	typedef std::map<Key, ID3D11InputLayout *> LayoutMap;
 	LayoutMap *ms_layouts;
+
+	// The phantom stream: a stride-zero buffer of zeros that backs vertex shader
+	// inputs the bound buffers do not supply. Slot 15 is far above MAX_STREAMS, so
+	// the stale-stream unbind loops in Direct3d11_Draw.cpp never touch it. Created
+	// the first time a layout actually needs it; NULL until then.
+	ID3D11Buffer *ms_phantomBuffer;
+	constexpr int cs_phantomStreamSlot = 15;
+	constexpr int cs_maxPhantomElements = 8;
+	constexpr UINT cs_phantomWhiteOffset = 16;   // float4(1,1,1,1) lives at bytes 16..31
+
+	// Semantic-name storage for phantom elements. CreateInputLayout copies the
+	// descriptors it is given, but only during the call -- and the reflection
+	// interface that produced the names is released before the caller retries the
+	// creation, so the names are copied here rather than pointed at.
+	char ms_phantomNames[cs_maxPhantomElements][32];
+
+	int appendPhantomElements(void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, D3D11_INPUT_ELEMENT_DESC *elements, int elementCount, int maxElements);
 
 	// Where one vertex buffer texture coordinate set lives.
 	struct SetLocation
@@ -307,6 +325,86 @@ int Direct3d11_InputLayoutCacheNamespace::locateTextureCoordinateSets(uint32 con
 	return count;
 }
 
+// ----------------------------------------------------------------------
+/**
+ * Append an element on the phantom stream for every shader input the built
+ * elements do not cover.
+ *
+ * Every phantom element is a four-component float at offset zero of the
+ * stride-zero phantom buffer, so the shader reads (0,0,0,0) -- which is what
+ * D3D9 handed a register whose declaration element was absent. Width does not
+ * need to match the shader's declared type: the input assembler widens and
+ * narrows freely, and every source byte is zero regardless.
+ *
+ * Returns the new element count; returns elementCount unchanged when
+ * reflection fails or nothing was missing.
+ */
+
+int Direct3d11_InputLayoutCacheNamespace::appendPhantomElements(void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, D3D11_INPUT_ELEMENT_DESC *elements, int elementCount, int maxElements)
+{
+	ID3D11ShaderReflection *reflection = NULL;
+	if (FAILED(D3DReflect(vertexShaderBytecode, vertexShaderBytecodeSize, __uuidof(ID3D11ShaderReflection), reinterpret_cast<void **>(&reflection))) || !reflection)
+		return elementCount;
+
+	D3D11_SHADER_DESC shaderDescription;
+	Zero(shaderDescription);
+	if (FAILED(reflection->GetDesc(&shaderDescription)))
+	{
+		reflection->Release();
+		return elementCount;
+	}
+
+	int result = elementCount;
+	int phantomCount = 0;
+
+	for (UINT parameter = 0; parameter < shaderDescription.InputParameters; ++parameter)
+	{
+		D3D11_SIGNATURE_PARAMETER_DESC parameterDescription;
+		Zero(parameterDescription);
+		if (FAILED(reflection->GetInputParameterDesc(parameter, &parameterDescription)) || !parameterDescription.SemanticName)
+			continue;
+
+		// System values (SV_VertexID and friends) are not fed by the input assembler.
+		if (_strnicmp(parameterDescription.SemanticName, "SV_", 3) == 0)
+			continue;
+
+		bool covered = false;
+		for (int i = 0; i < result && !covered; ++i)
+			covered = elements[i].SemanticIndex == parameterDescription.SemanticIndex
+				&& _stricmp(elements[i].SemanticName, parameterDescription.SemanticName) == 0;
+		if (covered)
+			continue;
+
+		if (result >= maxElements || phantomCount >= cs_maxPhantomElements)
+		{
+			WARNING(true, ("Direct3d11: more phantom input elements needed than fit; the layout will stay unsatisfiable."));
+			break;
+		}
+
+		char *const name = ms_phantomNames[phantomCount++];
+		strncpy(name, parameterDescription.SemanticName, sizeof(ms_phantomNames[0]) - 1);
+		name[sizeof(ms_phantomNames[0]) - 1] = '\0';
+
+		D3D11_INPUT_ELEMENT_DESC &element = elements[result++];
+		Zero(element);
+		element.SemanticName = name;
+		element.SemanticIndex = parameterDescription.SemanticIndex;
+		element.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		element.InputSlot = static_cast<UINT>(cs_phantomStreamSlot);
+		// D3D9's defaults for an unsupplied input differed by usage: COLOR read back
+		// opaque white, everything else zeros -- and shipped data leans on the white
+		// (the space nebula quads multiply their texture by an unsupplied COLOR0;
+		// zeros would draw them fully transparent). The phantom buffer carries zeros
+		// at offset 0 and float4(1,1,1,1) at offset 16; route by semantic.
+		element.AlignedByteOffset = (_stricmp(name, "COLOR") == 0) ? cs_phantomWhiteOffset : 0;
+		element.InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA;
+		element.InstanceDataStepRate = 0;
+	}
+
+	reflection->Release();
+	return result;
+}
+
 // ======================================================================
 
 void Direct3d11_InputLayoutCache::install()
@@ -319,6 +417,12 @@ void Direct3d11_InputLayoutCache::install()
 
 void Direct3d11_InputLayoutCache::remove()
 {
+	if (ms_phantomBuffer)
+	{
+		ms_phantomBuffer->Release();
+		ms_phantomBuffer = NULL;
+	}
+
 	if (ms_layouts)
 	{
 		for (LayoutMap::iterator i = ms_layouts->begin(); i != ms_layouts->end(); ++i)
@@ -328,6 +432,25 @@ void Direct3d11_InputLayoutCache::remove()
 		delete ms_layouts;
 		ms_layouts = NULL;
 	}
+}
+
+// ----------------------------------------------------------------------
+/**
+ * Bind the phantom stream, if any layout has ever needed it.
+ *
+ * Called by Direct3d11_Draw with every vertex buffer bind: the slot itself is
+ * out of reach of the stale-stream unbind loops, but a device ClearState wipes
+ * it like everything else, and rebinding one slot is cheaper than tracking that.
+ * A no-op until the first phantom layout exists.
+ */
+
+void Direct3d11_InputLayoutCache::bindPhantomStream(ID3D11DeviceContext1 *context)
+{
+	if (!ms_phantomBuffer || !context)
+		return;
+
+	UINT const zero = 0;
+	context->IASetVertexBuffers(static_cast<UINT>(cs_phantomStreamSlot), 1, &ms_phantomBuffer, &zero, &zero);
 }
 
 // ----------------------------------------------------------------------
@@ -407,11 +530,65 @@ ID3D11InputLayout *Direct3d11_InputLayoutCache::getInputLayout(uint32 const *for
 
 		if (FAILED(hresult) || !layout)
 		{
-			// Name the formats. D3D9 tolerated a shader reading an input the buffer
-			// did not supply; D3D11 refuses to build the layout at all, so this is
-			// the message that has to identify which combination is unsatisfiable.
-			WARNING(true, ("Direct3d11: CreateInputLayout failed (%s) for %d stream(s) with %d element(s); first format flags 0x%08x. A vertex shader is reading an input these buffers do not supply, which shipping DX9 does not draw either.", Direct3d11_Device::describeHresult(hresult), streamCount, elementCount, formatFlags[0]));
-			++Direct3d11_Metrics::unsatisfiableInputLayouts;
+			// D3D9 tolerated a shader reading an input the buffers did not supply: the
+			// register read back zeros, and shipped data depends on it -- the space nebula
+			// quads (position/color/texcoord) feed a_vertexlit.vsh, which also declares a
+			// normal, and retail drew them. D3D11 refuses the layout outright, so build
+			// D3D9's behaviour explicitly: reflect the shader's inputs, back every
+			// unsatisfied one with an element on the phantom stream (slot 15, a
+			// stride-zero buffer of zeros, bound by Direct3d11_Draw with the real
+			// streams), and create the layout again.
+			int const augmentedCount = appendPhantomElements(vertexShaderBytecode, vertexShaderBytecodeSize, elements, elementCount, cs_maxInputElements);
+			if (augmentedCount > elementCount)
+			{
+				HRESULT const retryResult = device->CreateInputLayout(elements, static_cast<UINT>(augmentedCount), vertexShaderBytecode, vertexShaderBytecodeSize, &layout);
+				if (SUCCEEDED(retryResult) && layout)
+				{
+					if (!ms_phantomBuffer)
+					{
+						D3D11_BUFFER_DESC description;
+						Zero(description);
+						description.ByteWidth = 32;
+						description.Usage = D3D11_USAGE_IMMUTABLE;
+						description.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+
+						// Bytes 0..15 zeros; 16..31 float4(1,1,1,1) for COLOR semantics.
+						float const contents[8] = {0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+						D3D11_SUBRESOURCE_DATA initial;
+						Zero(initial);
+						initial.pSysMem = contents;
+
+						HRESULT const bufferResult = device->CreateBuffer(&description, &initial, &ms_phantomBuffer);
+						if (FAILED(bufferResult) || !ms_phantomBuffer)
+						{
+							// Without the backing buffer the layout would read an unbound
+							// slot; drop the layout and fall through to the old skip.
+							WARNING(true, ("Direct3d11: the phantom stream buffer could not be created (%s).", Direct3d11_Device::describeHresult(bufferResult)));
+							layout->Release();
+							layout = NULL;
+							ms_phantomBuffer = NULL;
+						}
+					}
+
+					if (layout)
+					{
+						// The current draw's streams are already bound; make the phantom
+						// stream current too rather than waiting for the next bind.
+						Direct3d11_InputLayoutCache::bindPhantomStream(Direct3d11_Device::getContext());
+
+						WARNING(true, ("Direct3d11: input layout needed %d phantom element(s) reading zeros -- a vertex shader reads input(s) these %d stream(s) do not supply (first format flags 0x%08x). D3D9 handed such registers zeros and drew; the phantom stream reproduces that.", augmentedCount - elementCount, streamCount, formatFlags[0]));
+						++Direct3d11_Metrics::inputLayoutCreations;
+					}
+				}
+			}
+
+			if (!layout)
+			{
+				// Name the formats. This is the message that has to identify which
+				// combination is genuinely unsatisfiable even with phantom elements.
+				WARNING(true, ("Direct3d11: CreateInputLayout failed (%s) for %d stream(s) with %d element(s); first format flags 0x%08x. A vertex shader is reading an input these buffers do not supply and the phantom-element retry did not satisfy it.", Direct3d11_Device::describeHresult(hresult), streamCount, elementCount, formatFlags[0]));
+				++Direct3d11_Metrics::unsatisfiableInputLayouts;
+			}
 		}
 		else
 			++Direct3d11_Metrics::inputLayoutCreations;

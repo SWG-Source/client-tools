@@ -61,6 +61,11 @@ public:
 
 	static ID3D11InputLayout *getInputLayout(uint32 const *formatFlags, int streamCount, void const *vertexShaderBytecode, unsigned int vertexShaderBytecodeSize, uint32 signatureHash, int const *textureCoordinateSetMapping, int mappingCount);
 
+	// Bind the stride-zero zero buffer that backs phantom input elements (slot 15).
+	// No-op until some layout has actually needed one. Direct3d11_Draw calls this
+	// with every vertex buffer bind; see the implementation note for why.
+	static void bindPhantomStream(ID3D11DeviceContext1 *context);
+
 	static int getLayoutCount();
 
 private:
