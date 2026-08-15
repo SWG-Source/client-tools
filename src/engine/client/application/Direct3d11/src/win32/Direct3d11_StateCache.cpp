@@ -9,6 +9,7 @@
 #include "Direct3d11_StateCache.h"
 
 #include "Direct3d11_Device.h"
+#include "Direct3d11_LightManager.h"
 #include "Direct3d11_Metrics.h"
 
 // ======================================================================
@@ -25,6 +26,11 @@ namespace Direct3d11_StateCacheNamespace
 	ID3D11BlendState *ms_blendState;
 	float ms_blendFactor[4];
 	uint32 ms_sampleMask;
+
+	// The current pass's blend state and its alpha-fade variant, stashed at
+	// pass apply and selected per draw (see the header note).
+	ID3D11BlendState *ms_passBlendState = NULL;
+	ID3D11BlendState *ms_passFadeBlendState = NULL;
 
 	ID3D11DepthStencilState *ms_depthStencilState;
 	uint32 ms_stencilReference;
@@ -210,6 +216,33 @@ void Direct3d11_StateCache::setBlendState(ID3D11BlendState *state, float const b
 	ms_sampleMask = sampleMask;
 
 	context->OMSetBlendState(state, blendFactor, sampleMask);
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_StateCache::setPassBlendStates(ID3D11BlendState *normal, ID3D11BlendState *fade)
+{
+	ms_passBlendState = normal;
+	ms_passFadeBlendState = fade;
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d11_StateCache::applyPassBlendStateForDraw()
+{
+	// Select by the fade flag AT DRAW TIME -- the engine sets the alpha fade
+	// per primitive, so the choice cannot be made once at pass apply (that is
+	// why DX9 does this in its draw path, Direct3d9.cpp:3953-3961). The
+	// pointer-identity early-out in setBlendState makes the common no-change
+	// case free.
+	ID3D11BlendState *const wanted =
+		(Direct3d11_LightManager::getAlphaFadeOpacityEnabled() && ms_passFadeBlendState) ? ms_passFadeBlendState : ms_passBlendState;
+
+	if (wanted)
+	{
+		static float const cms_noBlendFactor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+		setBlendState(wanted, cms_noBlendFactor, 0xffffffff);
+	}
 }
 
 // ----------------------------------------------------------------------

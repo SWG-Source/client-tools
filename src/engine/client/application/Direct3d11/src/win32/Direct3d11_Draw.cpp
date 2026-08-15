@@ -458,6 +458,12 @@ bool Direct3d11::prepareToDraw()
 	// per-object slice either way.
 	Direct3d11_ConstantBuffers::flush();
 
+	// Select the pass blend state or its alpha-fade variant by the fade flag
+	// AT DRAW TIME -- the engine sets the fade per primitive, a pass apply
+	// covers a whole sorted shader group. Mirrors DX9's draw-time overrides
+	// (Direct3d9.cpp:3953-3961); free when nothing changed.
+	Direct3d11_StateCache::applyPassBlendStateForDraw();
+
 	Direct3d11_Metrics::vertices += ms_sliceNumberOfVertices;
 
 	return true;

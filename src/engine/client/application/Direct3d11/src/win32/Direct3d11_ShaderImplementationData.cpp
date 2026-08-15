@@ -82,6 +82,7 @@ Direct3d11_ShaderImplementationData::Direct3d11_ShaderImplementationData(ShaderI
 		Pass &pass = m_passes[i];
 
 		pass.blendState = NULL;
+		pass.fadeBlendState = NULL;
 		pass.depthStencilState = NULL;
 		pass.pixelShaderProgram = NULL;
 		pass.alphaBlendEnable = source.m_alphaBlendEnable;
@@ -149,6 +150,34 @@ Direct3d11_ShaderImplementationData::Direct3d11_ShaderImplementationData(ShaderI
 		target.RenderTargetWriteMask = mask;
 
 		pass.blendState = Direct3d11_StateObjectCache::getBlendState(blend);
+
+		// ----------------------------------------------------------
+		// Alpha-fade variant of the blend state.
+		//
+		// DX9 overrides two states at draw time while an object is fading
+		// (Direct3d9.cpp:3953-3961): ALPHABLENDENABLE is forced on -- the
+		// fade opacity the shaders write into output alpha has to actually
+		// blend -- and, for a pass that is NOT already translucent, the alpha
+		// colour-write is masked. The mask is the load-bearing half: the bloom
+		// chain reads the render target's alpha as per-pixel glow intensity
+		// (2d_bloom composites base + bloom * bloom.a), so letting a fading
+		// character write its ramping fade opacity into RT alpha paints its
+		// whole silhouette as a glow mask -- with the bloom post-process
+		// enabled, every appearing character and NPC flares into an
+		// oversaturated, haloed version of itself for the duration of the
+		// fade-in, worse the higher the frame rate. A pass that already
+		// blends keeps its own write mask, exactly as DX9 does.
+		//
+		// Built once here as a second cached state object; apply() selects it
+		// while the engine's alpha fade is active.
+		{
+			D3D11_BLEND_DESC fadeBlend = blend;
+			D3D11_RENDER_TARGET_BLEND_DESC &fadeTarget = fadeBlend.RenderTarget[0];
+			fadeTarget.BlendEnable = TRUE;
+			if (!source.m_alphaBlendEnable)
+				fadeTarget.RenderTargetWriteMask = static_cast<UINT8>(fadeTarget.RenderTargetWriteMask & ~D3D11_COLOR_WRITE_ENABLE_ALPHA);
+			pass.fadeBlendState = Direct3d11_StateObjectCache::getBlendState(fadeBlend);
+		}
 
 		// ----------------------------------------------------------
 		// Depth and stencil
@@ -260,7 +289,13 @@ void Direct3d11_ShaderImplementationData::apply(int passNumber, uint32 stencilRe
 
 	// The blend factor is unused: no engine blend mode names BLENDFACTOR, so any constant
 	// value is equivalent and a fixed one keeps the state cache's comparison meaningful.
+	// Both the pass state and its fade variant are stashed; prepareToDraw selects between
+	// them PER DRAW, because the engine sets the alpha fade per primitive while this apply
+	// covers a whole sorted shader group (DX9 makes the same choice at draw time,
+	// Direct3d9.cpp:3953-3961). The normal state is also bound here so non-primitive
+	// consumers of the pass state see it immediately.
 	Direct3d11_StateCache::setBlendState(pass.blendState, cms_noBlendFactor, 0xffffffff);
+	Direct3d11_StateCache::setPassBlendStates(pass.blendState, pass.fadeBlendState);
 	Direct3d11_StateCache::setDepthStencilState(pass.depthStencilState, stencilReference);
 
 	ID3D11PixelShader *pixelShader = NULL;

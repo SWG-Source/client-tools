@@ -46,6 +46,18 @@ public:
 	static int auditAgainstDevice(char const *what);
 
 	static void setBlendState(ID3D11BlendState *state, float const blendFactor[4], uint32 sampleMask);
+
+	// The current pass's blend state and its alpha-fade variant (blend forced
+	// on; alpha colour-write masked for opaque passes -- see
+	// Direct3d11_ShaderImplementationData). Stashed at pass apply; selected
+	// per DRAW in prepareToDraw, because the engine sets the alpha fade per
+	// PRIMITIVE while a pass apply covers a whole sorted shader group --
+	// exactly why DX9 applies its fade overrides at draw time
+	// (Direct3d9.cpp:3953-3961), and selecting at apply time would leak one
+	// object's fade onto its shader-sharing neighbours.
+	static void setPassBlendStates(ID3D11BlendState *normal, ID3D11BlendState *fade);
+	static void applyPassBlendStateForDraw();
+
 	static void setDepthStencilState(ID3D11DepthStencilState *state, uint32 stencilReference);
 	static void setRasterizerState(ID3D11RasterizerState *state);
 

@@ -124,6 +124,7 @@ public:
 	// here rather than through the constant buffers because this class rewrites those whole
 	// registers and would otherwise clobber them.
 	static void setAlphaFadeOpacity(bool enabled, float opacity);
+	static bool getAlphaFadeOpacityEnabled();
 	static void setBloomEnabled(bool enabled);
 
 public:

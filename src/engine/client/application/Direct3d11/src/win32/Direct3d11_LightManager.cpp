@@ -310,6 +310,13 @@ void Direct3d11_LightManager::setAlphaFadeOpacity(bool enabled, float opacity)
 
 // ----------------------------------------------------------------------
 
+bool Direct3d11_LightManager::getAlphaFadeOpacityEnabled()
+{
+	return ms_alphaFadeOpacityEnabled;
+}
+
+// ----------------------------------------------------------------------
+
 void Direct3d11_LightManager::setBloomEnabled(bool enabled)
 {
 	ms_alphaFadeAndBloom.g = enabled ? 1.0f : 0.0f;
