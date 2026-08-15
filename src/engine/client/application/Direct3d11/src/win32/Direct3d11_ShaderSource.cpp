@@ -85,6 +85,14 @@ namespace Direct3d11_ShaderSourceNamespace
 	// last-added-first, which is the opposite of what TreeFile's own comment claims.
 
 	char const cms_vertexShaderConstants[] =
+		// Feature marker, mirroring D3D11_PIXEL_SHADER_CONSTANTS in the pixel include:
+		// lets a shader source that must compile on more than one backend detect that
+		// THIS include already declares the extended blocks (notably the hemispheric
+		// c60..c63 registers) and alias them instead of redeclaring the registers --
+		// a raw redeclaration is X4019 here and correct on a backend whose include
+		// stops at c59.
+		"#define D3D11_VERTEX_SHADER_CONSTANTS\n"
+		"\n"
 		"struct Material\n"
 		"{\n"
 		"	float4   diffuseColor;\n"
