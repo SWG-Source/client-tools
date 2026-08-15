@@ -121,6 +121,16 @@ namespace WorldSnapshotNamespace
 	int ms_maximumNumberOfCreatesPerFrame = 1000;
 	int ms_maximumNumberOfDeletesPerFrame = 1000;
 
+	// Per-frame wall-time budget (ms) for the update() create/delete drain
+	// (0 = unlimited). The count caps above bound ITEMS, but a create's cost
+	// varies ~1000x (a building pulls templates + appearances + collision
+	// buckets + portal/pathfinding from cold disk) -- the zone-in burst ran
+	// 300ms in one frame. Un-drained nodes stay pending and re-enter next
+	// frame's diff (the update() early-out already yields to non-empty pending
+	// lists), nearest-first. Checked BETWEEN items, so one cold item can still
+	// overshoot -- this bounds the accumulation, not the worst single create.
+	int ms_createTimeBudgetMs = 6;
+
 	//-- KILL SWITCH for the restored delete drain ([ClientGame/WorldSnapshot]
 	//   streamOutSnapshotObjects, default true). The drain below had never
 	//   actually deleted anything -- its guard read a distance key nothing
@@ -387,6 +397,7 @@ void WorldSnapshot::install ()
 	ms_updateDistanceSquared = sqr (ConfigFile::getKeyFloat ("ClientGame/WorldSnapshot", "updateDistance", 4.f));
 	ms_maximumNumberOfCreatesPerFrame = ConfigFile::getKeyInt("ClientGame/WorldSnapshot", "maximumNumberOfCreatesPerFrame", ms_maximumNumberOfCreatesPerFrame);
 	ms_maximumNumberOfDeletesPerFrame = ConfigFile::getKeyInt("ClientGame/WorldSnapshot", "maximumNumberOfDeletesPerFrame", ms_maximumNumberOfDeletesPerFrame);
+	ms_createTimeBudgetMs = ConfigFile::getKeyInt("ClientGame/WorldSnapshot", "createTimeBudgetMs", ms_createTimeBudgetMs);
 	ms_streamOutSnapshotObjects = ConfigFile::getKeyBool("ClientGame/WorldSnapshot", "streamOutSnapshotObjects", ms_streamOutSnapshotObjects);
 
 	ExitChain::add (remove, "WorldSnapshot::remove");
@@ -973,6 +984,14 @@ void WorldSnapshot::update(CellProperty const * const cellProperty, Vector const
 			VTune::resume();
 #endif
 
+		//-- wall-time budget for the create/delete drain below (shared timer:
+		//   creates spend first, deletes get whatever remains but always make
+		//   >=1 item of progress). Checked at the TOP of each iteration so the
+		//   item that exceeds the budget still completes -- never a torn create.
+		PerformanceTimer drainTimer;
+		if (ms_createTimeBudgetMs > 0)
+			drainTimer.start ();
+
 		//-- create all pending creates
 		{
 			std::sort (ms_pendingCreateList.begin (), ms_pendingCreateList.end (), compareNodesForCreate);
@@ -980,6 +999,9 @@ void WorldSnapshot::update(CellProperty const * const cellProperty, Vector const
 			size_t const n = std::min(ms_pendingCreateList.size(), static_cast<size_t>(ms_maximumNumberOfCreatesPerFrame));
 			for (size_t i = 0; i < n; ++i)
 			{
+				if (i > 0 && ms_createTimeBudgetMs > 0 && drainTimer.getSplitTime () * 1000.f >= static_cast<float> (ms_createTimeBudgetMs))
+					break;
+
 				const WorldSnapshotReaderWriter::Node* const node = ms_pendingCreateList [i];
 				
 				// If one of our pending creates is an Event based node - we hold on to it for now.
@@ -1097,6 +1119,9 @@ void WorldSnapshot::update(CellProperty const * const cellProperty, Vector const
 			size_t const n = std::min(ms_pendingDeleteList.size(), static_cast<size_t>(ms_maximumNumberOfDeletesPerFrame));
 			for (size_t i = 0; i < n; ++i)
 			{
+				if (i > 0 && ms_createTimeBudgetMs > 0 && drainTimer.getSplitTime () * 1000.f >= static_cast<float> (ms_createTimeBudgetMs))
+					break;
+
 				const WorldSnapshotReaderWriter::Node* const node = ms_pendingDeleteList [i];
 
 				//-- Enlarge the radius at which an object will be deleted by 128 meters of it
