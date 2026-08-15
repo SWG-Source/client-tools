@@ -216,8 +216,14 @@ m_callbackReceiverExpMonitor (0)
 	getCodeDataObject (TUICheckbox, checkbox, "checkDoubleToolbar");
 	registerCheckbox (*checkbox, CuiPreferences::setUseDoubleToolbar, CuiPreferences::getUseDoubleToolbar, SwgCuiOptBase::getFalse);
 
-	getCodeDataObject(TUICheckbox, checkbox, "checkShowToolbarCommandCooldownTimer");
-	registerCheckbox(*checkbox, CuiPreferences::setShowToolbarCooldownTimer, CuiPreferences::getShowToolbarCooldownTimer, SwgCuiOptBase::getFalse);
+	// Optional: Options UI assets from before the late-NGE patches predate this
+	// checkbox, and a hard getCodeDataObject FATALs on the missing widget --
+	// killing the entire Options window against an older ui data set. Treat it
+	// as optional and skip registration when absent so Options still opens.
+	checkbox = 0;
+	getCodeDataObject(TUICheckbox, checkbox, "checkShowToolbarCommandCooldownTimer", true);
+	if (checkbox)
+		registerCheckbox(*checkbox, CuiPreferences::setShowToolbarCooldownTimer, CuiPreferences::getShowToolbarCooldownTimer, SwgCuiOptBase::getFalse);
 	
 	getCodeDataObject (TUICheckbox, checkbox, "checkLocationDisplay");
 	registerCheckbox (*checkbox, CuiPreferences::setLocationDisplayEnabled, CuiPreferences::getLocationDisplayEnabled, SwgCuiOptBase::getTrue);
@@ -334,23 +340,31 @@ m_callbackReceiverExpMonitor (0)
 		CuiPreferences::getVariableTargetingReticlePercentageMinimumSize(),
 		CuiPreferences::getVariableTargetingReticlePercentageMaximumSize());
 
-	getCodeDataObject(TUICheckbox, checkbox, "checkRenderVariableTargetingReticle");
-	registerCheckbox(*checkbox,
-		CuiPreferences::setRenderVariableTargetingReticle,
-		CuiPreferences::getRenderVariableTargetingReticle,
-		getFalse);
+	// Optional (late-NGE widgets; tolerate absence so Options still opens -- see
+	// the checkShowToolbarCommandCooldownTimer note above).
+	checkbox = 0;
+	getCodeDataObject(TUICheckbox, checkbox, "checkRenderVariableTargetingReticle", true);
+	if (checkbox)
+		registerCheckbox(*checkbox,
+			CuiPreferences::setRenderVariableTargetingReticle,
+			CuiPreferences::getRenderVariableTargetingReticle,
+			getFalse);
 
-	getCodeDataObject(TUICheckbox, checkbox, "checkAutoSortInventoryContents");
-	registerCheckbox(*checkbox,
-		CuiPreferences::setAutoSortInventoryContents,
-		CuiPreferences::getAutoSortInventoryContents,
-		getTrue);
+	checkbox = 0;
+	getCodeDataObject(TUICheckbox, checkbox, "checkAutoSortInventoryContents", true);
+	if (checkbox)
+		registerCheckbox(*checkbox,
+			CuiPreferences::setAutoSortInventoryContents,
+			CuiPreferences::getAutoSortInventoryContents,
+			getTrue);
 
-	getCodeDataObject(TUICheckbox, checkbox, "checkAutoSortDataPadContents");
-	registerCheckbox(*checkbox,
-		CuiPreferences::setAutoSortDataPadContents,
-		CuiPreferences::getAutoSortDataPadContents,
-		getTrue);
+	checkbox = 0;
+	getCodeDataObject(TUICheckbox, checkbox, "checkAutoSortDataPadContents", true);
+	if (checkbox)
+		registerCheckbox(*checkbox,
+			CuiPreferences::setAutoSortDataPadContents,
+			CuiPreferences::getAutoSortDataPadContents,
+			getTrue);
 
 	getCodeDataObject (TUICheckbox, checkbox, "checkExpMonitor");
 	registerCheckbox (*checkbox, CuiPreferences::setUseExpMonitor, CuiPreferences::getUseExpMonitor, SwgCuiOptBase::getTrue);
@@ -373,26 +387,40 @@ m_callbackReceiverExpMonitor (0)
 	getCodeDataObject (TUICheckbox, checkbox, "checkShowVisibleEnemyDamagerArrow");
 	registerCheckbox (*checkbox, CuiPreferences::setVisibleEnemyDamagerArrow, CuiPreferences::getVisibleEnemyDamagerArrow, SwgCuiOptBase::getTrue);
 
-	getCodeDataObject(TUICheckbox, checkbox, "checkNewVendorExamine");
-	registerCheckbox (*checkbox, CuiPreferences::setNewVendorDoubleClickExamine, CuiPreferences::getNewVendorDoubleClickExamine, ConfigClientUserInterface::GetEnableNewVendorExamine);
+	// Optional (late-NGE widgets; tolerate absence so Options still opens -- see
+	// the checkShowToolbarCommandCooldownTimer note above).
+	checkbox = 0;
+	getCodeDataObject(TUICheckbox, checkbox, "checkNewVendorExamine", true);
+	if (checkbox)
+		registerCheckbox (*checkbox, CuiPreferences::setNewVendorDoubleClickExamine, CuiPreferences::getNewVendorDoubleClickExamine, ConfigClientUserInterface::GetEnableNewVendorExamine);
 
-	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizeStatus");
-	registerSlider(*slider, CuiPreferences::setBuffIconSizeStatus, CuiPreferences::getBuffIconSizeStatus, CuiPreferences::getBuffIconSizeStatusDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
+	slider = 0;
+	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizeStatus", true);
+	if (slider)
+		registerSlider(*slider, CuiPreferences::setBuffIconSizeStatus, CuiPreferences::getBuffIconSizeStatus, CuiPreferences::getBuffIconSizeStatusDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
 
-	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizeTarget");
-	registerSlider(*slider, CuiPreferences::setBuffIconSizeTarget, CuiPreferences::getBuffIconSizeTarget, CuiPreferences::getBuffIconSizeTargetDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
+	slider = 0;
+	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizeTarget", true);
+	if (slider)
+		registerSlider(*slider, CuiPreferences::setBuffIconSizeTarget, CuiPreferences::getBuffIconSizeTarget, CuiPreferences::getBuffIconSizeTargetDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
 
-	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizeSecondaryTarget");
-	registerSlider(*slider, CuiPreferences::setBuffIconSizeSecondaryTarget, CuiPreferences::getBuffIconSizeSecondaryTarget, CuiPreferences::getBuffIconSizeSecondaryTargetDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
+	slider = 0;
+	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizeSecondaryTarget", true);
+	if (slider)
+		registerSlider(*slider, CuiPreferences::setBuffIconSizeSecondaryTarget, CuiPreferences::getBuffIconSizeSecondaryTarget, CuiPreferences::getBuffIconSizeSecondaryTargetDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
 
-	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizePet");
-	registerSlider(*slider, CuiPreferences::setBuffIconSizePet, CuiPreferences::getBuffIconSizePet, CuiPreferences::getBuffIconSizePetDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
+	slider = 0;
+	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizePet", true);
+	if (slider)
+		registerSlider(*slider, CuiPreferences::setBuffIconSizePet, CuiPreferences::getBuffIconSizePet, CuiPreferences::getBuffIconSizePetDefault, CuiPreferences::getBuffIconSizeSliderMin(), CuiPreferences::getBuffIconSizeSliderMax());
 
 	//getCodeDataObject(TUISliderbar, slider, "sliderBuffIconSizeGroup");
 	//registerSlider(*slider, CuiPreferences::setBuffIconSizeGroup, CuiPreferences::getBuffIconSizeGroup, ConfigClientUserInterface::getBuffIconSizeGroup, ConfigClientUserInterface::getBuffIconSizeSliderMin(), ConfigClientUserInterface::getBuffIconSizeSliderMax());
 
-	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconWhirlygigOpacity");
-	registerSlider(*slider, CuiPreferences::setBuffIconWhirlygigOpacity, CuiPreferences::getBuffIconWhirlygigOpacity, CuiPreferences::getBuffIconWhirlygigOpacityDefault, 0.0f, 1.0f);
+	slider = 0;
+	getCodeDataObject(TUISliderbar, slider, "sliderBuffIconWhirlygigOpacity", true);
+	if (slider)
+		registerSlider(*slider, CuiPreferences::setBuffIconWhirlygigOpacity, CuiPreferences::getBuffIconWhirlygigOpacity, CuiPreferences::getBuffIconWhirlygigOpacityDefault, 0.0f, 1.0f);
 
 	getCodeDataObject (TUICheckbox, checkbox, "checkShowQuestHelper");
 	registerCheckbox (*checkbox, CuiPreferences::setShowQuestHelper, CuiPreferences::getShowQuestHelper, SwgCuiOptBase::getTrue);
