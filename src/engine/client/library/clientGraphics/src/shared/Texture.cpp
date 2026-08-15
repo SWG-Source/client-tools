@@ -17,6 +17,7 @@
 #include "clientGraphics/TextureList.h"
 #include "sharedDebug/DataLint.h"
 #include "sharedFile/Iff.h"
+#include "sharedFile/MemoryFile.h"
 #include "sharedFile/TreeFile.h"
 #include "sharedFoundation/ExitChain.h"
 #include "sharedFoundation/MemoryBlockManager.h"
@@ -488,6 +489,38 @@ void Texture::load(const char * fileName)
 		WARNING(true, ("Could not open texture %s", fileName));
 		load(TextureList::getDefaultTextureName());
 		return;
+	}
+
+	// 2026-08-15 (cold-singles perf arc): buffer the whole .dds in ONE read.
+	// This function reads magic + header + one read per mip -- per ROW when the
+	// file and surface pitches mismatch -- and on a streamed file every read()
+	// is a blocking submitRequest + Gate::wait round-trip to the FileStreamer
+	// I/O thread (FileStreamer.cpp:238), so a first-use texture paid a
+	// dozen-plus thread ping-pongs mid-frame (stall-sampled inside
+	// TextureList::create, 2026-08-15). Same idiom as
+	// TreeFile::TreeFileFactory::createFile (CONSULT-68) and Iff::open: one
+	// bulk read, then the parse runs against memory. Already-RAM-backed
+	// sources (SearchCache, async cached files, compressed TRE entries) pay
+	// one redundant memcpy -- negligible next to the streamed case it cures.
+	if (fileInterface->isOpen() && fileInterface->length() > 0)
+	{
+		MemoryFile *memoryFile = new MemoryFile(fileInterface);
+		delete fileInterface;
+		if (memoryFile->isOpen())
+			fileInterface = memoryFile;
+		else
+		{
+			// buffering failed (e.g. allocation); fall back to a fresh streamed handle
+			delete memoryFile;
+			fileInterface = TreeFile::open(fileName, AbstractFile::PriorityData, true);
+			if (!fileInterface)
+			{
+				DEBUG_FATAL(fileName == TextureList::getDefaultTextureName(), ("Could not re-open default texture"));
+				WARNING(true, ("Could not re-open texture %s after buffering failure", fileName));
+				load(TextureList::getDefaultTextureName());
+				return;
+			}
+		}
 	}
 
 	TextureFormat sourceFormat = TF_Count;
