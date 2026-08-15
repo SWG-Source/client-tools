@@ -12,6 +12,7 @@
 #include "sharedDebug/DataLint.h"
 #include "sharedDebug/DebugHelp.h"
 #include "sharedDebug/PixCounter.h"
+#include "sharedFoundation/ConfigFile.h"
 #include "sharedFoundation/ConfigSharedFoundation.h"
 #include "sharedFoundation/Crc.h"
 #include "sharedFoundation/ExitChain.h"
@@ -32,6 +33,8 @@ namespace FatalNamespace
 	bool  ms_throwExceptions;
 	int   ms_numberOfWarnings = 0;
 	bool  ms_strict = false;
+	bool  ms_strictData = true;
+	bool  ms_strictDataRead = false;
 
 	WarningCallback s_warningCallback = NULL;
 
@@ -373,6 +376,37 @@ void WarningStrictFatal(const char *format, ...)
 	va_start(va, format);
 
 		if (ms_strict)
+			InternalFatal(format, va);
+		else
+			InternalWarning(format, 0, va);
+
+	va_end(va);
+}
+
+// ----------------------------------------------------------------------
+
+bool StrictData()
+{
+	// Cached after the first successful read. Anything asking before the
+	// config file is installed gets the strict answer, which is the default
+	// anyway - the opt-out only exists for operators who explicitly set
+	// [SharedFoundation] strictData=false to run an incomplete TRE pack.
+	if (!ms_strictDataRead && ConfigFile::isInstalled())
+	{
+		ms_strictData = ConfigFile::getKeyBool("SharedFoundation", "strictData", true);
+		ms_strictDataRead = true;
+	}
+	return ms_strictData;
+}
+
+// ----------------------------------------------------------------------
+
+void StrictDataFatal(const char *format, ...)
+{
+	va_list va;
+	va_start(va, format);
+
+		if (StrictData())
 			InternalFatal(format, va);
 		else
 			InternalWarning(format, 0, va);

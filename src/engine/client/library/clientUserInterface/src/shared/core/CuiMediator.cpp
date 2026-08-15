@@ -1467,16 +1467,17 @@ UIBaseObject * CuiMediator::getCodeDataObject (UIPage *rootPage, const UIData * 
 		
 		if (!result)
 		{
-			//-- demoted from FATAL to WARNING so vanilla NGE-retail UIs that
-			// don't have all post-launch widgets keep working.
-			WARNING(true, ("Unable to find CodeData object '%s' [%s] from [%s] for [%s]", name, path.c_str(), rootPage->GetFullPath().c_str(), m_mediatorDebugName.c_str()));
+			// Strict (default): stock FATAL. strictData=false: warn and return
+			// NULL so vanilla NGE-retail UIs missing post-launch widgets keep
+			// working through callers' existing null checks.
+			STRICT_DATA_FATAL(!optional, ("Unable to find CodeData object '%s' [%s] from [%s] for [%s]", name, path.c_str(), rootPage->GetFullPath().c_str(), m_mediatorDebugName.c_str()));
 
 			return 0;
 		}
-		
+
 		if (result && !result->IsA (id))
 		{
-			WARNING(true, ("CodeData object request type mismatch from '%s'. Requested '%s', type %d [%s], found type %s - returning NULL\n",
+			STRICT_DATA_FATAL(true, ("CodeData object request type mismatch from '%s'. Requested '%s', type %d [%s], found type %s - returning NULL",
 						   rootPage->GetFullPath().c_str(), name, id, path.c_str(), result->GetTypeName()));
 			result = 0;
 		}
@@ -1484,14 +1485,13 @@ UIBaseObject * CuiMediator::getCodeDataObject (UIPage *rootPage, const UIData * 
 	else
 	{
 		result = rootPage->GetChild (name);
-		// Vanilla NGE-retail UIs are missing many widgets that post-2008
-		// patches added. Demote the FATAL to a warning so individual UI
-		// mediators don't have to be patched one-by-one - they'll see a
-		// NULL `result` and (mostly) fall back via existing null checks
-		// or our subsequent patches.
+		// Strict (default): stock FATAL. strictData=false: warn and hand the
+		// caller a NULL - vanilla NGE-retail UIs are missing many widgets that
+		// post-2008 patches added, and callers (mostly) fall back via existing
+		// null checks.
 		if (!result && !optional)
 		{
-			DEBUG_WARNING(true, ("Unable to find CodeData property '%s' from [%s] for [%s]\n", name, m_thePage.GetFullPath().c_str(), m_mediatorDebugName.c_str()));
+			STRICT_DATA_FATAL(true, ("Unable to find CodeData property '%s' from [%s] for [%s]", name, m_thePage.GetFullPath().c_str(), m_mediatorDebugName.c_str()));
 		}
 	}
 

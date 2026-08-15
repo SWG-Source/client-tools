@@ -354,18 +354,18 @@ void LfgDataTable::install()
 		int const columnMaxValue = table->findColumnNumber("maxValue");
 		int const columnDefaultMatchCondition = table->findColumnNumber("defaultMatchCondition");
 
-		DEBUG_FATAL((columnTier1 < 0), ("column \"tier1\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnTier2 < 0), ("column \"tier2\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnTier3 < 0), ("column \"tier3\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnTier4 < 0), ("column \"tier4\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnInternalAttribute < 0), ("column \"internalAttribute\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnMinValueBeginSlotId < 0), ("column \"minValueBeginSlotId\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnMinValueEndSlotId < 0), ("column \"minValueEndSlotId\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnMaxValueBeginSlotId < 0), ("column \"maxValueBeginSlotId\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnMaxValueEndSlotId < 0), ("column \"maxValueEndSlotId\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnMinValue < 0), ("column \"minValue\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnMaxValue < 0), ("column \"maxValue\" not found in %s", cs_lfgDataTableName));
-		DEBUG_FATAL((columnDefaultMatchCondition < 0), ("column \"defaultMatchCondition\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnTier1 < 0), ("column \"tier1\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnTier2 < 0), ("column \"tier2\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnTier3 < 0), ("column \"tier3\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnTier4 < 0), ("column \"tier4\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnInternalAttribute < 0), ("column \"internalAttribute\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnMinValueBeginSlotId < 0), ("column \"minValueBeginSlotId\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnMinValueEndSlotId < 0), ("column \"minValueEndSlotId\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnMaxValueBeginSlotId < 0), ("column \"maxValueBeginSlotId\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnMaxValueEndSlotId < 0), ("column \"maxValueEndSlotId\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnMinValue < 0), ("column \"minValue\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnMaxValue < 0), ("column \"maxValue\" not found in %s", cs_lfgDataTableName));
+		STRICT_DATA_FATAL((columnDefaultMatchCondition < 0), ("column \"defaultMatchCondition\" not found in %s", cs_lfgDataTableName));
 
 		int const numRows = table->getNumRows();
 
@@ -633,7 +633,7 @@ void LfgDataTable::install()
 	}
 	else
 	{
-		DEBUG_WARNING(true, ("lfg datatable %s not found - feature disabled (likely NGE-retail TRE pack pre-dates it).\n", cs_lfgDataTableName));
+		STRICT_DATA_FATAL(true, ("lfg datatable %s not found (set [SharedFoundation] strictData=false to continue with the feature disabled)", cs_lfgDataTableName));
 	}
 
 	ExitChain::add(remove, "LfgDataTable::remove");

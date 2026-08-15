@@ -166,7 +166,12 @@ void NetworkHandler::dispatch()
 				}
 				catch(const Archive::ReadException & readException)
 				{
-					// Drop the malformed message and continue - do NOT re-throw.
+					// Diagnose, then RE-THROW. Swallowing a malformed message here
+					// turns every truncated or misaligned packet into silent loss
+					// and unbounded client/server state divergence - the connection
+					// is byte-synchronized, so one bad decode means everything
+					// after it is suspect. Fail loudly; fix the message or the
+					// sender, not the symptom.
 					// Layout based on observation: 2-byte connection-layer prefix,
 					// then the GameNetworkMessage CRC at bytes [2..5], then for
 					// BaselinesMessage: target NetworkId at [6..13], typeId Tag
@@ -189,8 +194,9 @@ void NetworkHandler::dispatch()
 							if (tagStr[k] < 32 || tagStr[k] > 126)
 								tagStr[k] = '.';
 					}
-					WARNING(true, ("Archive read error (%s) on connection - dropping message [size=%u, msgCRC=0x%08x, typeId=%s] and continuing",
+					WARNING(true, ("Archive read error (%s) on connection [size=%u, msgCRC=0x%08x, typeId=%s] - rethrowing",
 								   readException.what(), sz, msgCrc, tagStr));
+					throw;
 				}
 			}
 

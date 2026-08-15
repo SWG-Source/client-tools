@@ -217,20 +217,20 @@ void CollectionsDataTable::install()
 			columnAlternateTitle.push_back(columnNumber);
 		}
 
-		DEBUG_FATAL((columnBookName < 0), ("column \"bookName\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnPageName < 0), ("column \"pageName\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnCollectionName < 0), ("column \"collectionName\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnSlotName < 0), ("column \"slotName\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnBeginSlotId < 0), ("column \"beginSlotId\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnEndSlotId < 0), ("column \"endSlotId\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnMaxSlotValue < 0), ("column \"maxSlotValue\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnIcon < 0), ("column \"icon\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnMusic < 0), ("column \"music\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnShowIfNotYetEarned < 0), ("column \"showIfNotYetEarned\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnHidden < 0), ("column \"hidden\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnNoReward < 0), ("column \"noReward\" not found in %s", cs_collectionsDataTableName));
-		DEBUG_FATAL((columnTrackServerFirst < 0), ("column \"trackServerFirst\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnBookName < 0), ("column \"bookName\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnPageName < 0), ("column \"pageName\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnCollectionName < 0), ("column \"collectionName\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnSlotName < 0), ("column \"slotName\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnBeginSlotId < 0), ("column \"beginSlotId\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnEndSlotId < 0), ("column \"endSlotId\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnMaxSlotValue < 0), ("column \"maxSlotValue\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnIcon < 0), ("column \"icon\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnMusic < 0), ("column \"music\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnShowIfNotYetEarned < 0), ("column \"showIfNotYetEarned\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnHidden < 0), ("column \"hidden\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnNoReward < 0), ("column \"noReward\" not found in %s", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL((columnTrackServerFirst < 0), ("column \"trackServerFirst\" not found in %s", cs_collectionsDataTableName));
 
 		CollectionsDataTable::CollectionInfoBook const * currentBook = NULL;
 		CollectionsDataTable::CollectionInfoPage const * currentPage = NULL;
@@ -636,9 +636,7 @@ void CollectionsDataTable::install()
 	}
 	else
 	{
-		// Vanilla NGE retail TRE pack doesn't include the collection
-		// datatable (it was added in a later live patch). Skip rather than FATAL.
-		DEBUG_WARNING(true, ("CollectionsDataTable::install: %s not found - collections feature disabled.\n", cs_collectionsDataTableName));
+		STRICT_DATA_FATAL(true, ("collection datatable %s not found (set [SharedFoundation] strictData=false to continue with the feature disabled)", cs_collectionsDataTableName));
 	}
 
 	ExitChain::add(remove, "CollectionsDataTable::remove");

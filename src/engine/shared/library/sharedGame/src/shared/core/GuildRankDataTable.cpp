@@ -61,9 +61,9 @@ void GuildRankDataTable::install()
 			columnAlternateTitle.push_back(columnNumber);
 		}
 
-		DEBUG_FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_guildRankDataTableName));
-		DEBUG_FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_guildRankDataTableName));
-		DEBUG_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_guildRankDataTableName));
+		STRICT_DATA_FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_guildRankDataTableName));
+		STRICT_DATA_FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_guildRankDataTableName));
+		STRICT_DATA_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_guildRankDataTableName));
 
 		GuildRankDataTable::GuildRank const * currentRank = NULL;
 
@@ -157,7 +157,7 @@ void GuildRankDataTable::install()
 	}
 	else
 	{
-		DEBUG_WARNING(true, ("guild rank datatable %s not found - feature disabled (likely NGE-retail TRE pack pre-dates it).\n", cs_guildRankDataTableName));
+		STRICT_DATA_FATAL(true, ("guild rank datatable %s not found (set [SharedFoundation] strictData=false to continue with the feature disabled)", cs_guildRankDataTableName));
 	}
 
 	ExitChain::add(remove, "GuildRankDataTable::remove");

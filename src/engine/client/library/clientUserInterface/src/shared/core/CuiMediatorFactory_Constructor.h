@@ -37,7 +37,9 @@ public:
 
 			if (NULL == page)
 			{
-				WARNING(true, ("CuiMediatorFactory_Constructor null page [%s] - skipping mediator creation", m_path.c_str()));
+				// Strict (default): stock FATAL. strictData=false: skip creating
+				// the mediator so retail-era UI packs missing this page still run.
+				STRICT_DATA_FATAL(true, ("CuiMediatorFactory_Constructor null page [%s] - skipping mediator creation", m_path.c_str()));
 				return 0;
 			}
 
