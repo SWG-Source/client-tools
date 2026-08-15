@@ -121,6 +121,14 @@ namespace WorldSnapshotNamespace
 	int ms_maximumNumberOfCreatesPerFrame = 1000;
 	int ms_maximumNumberOfDeletesPerFrame = 1000;
 
+	//-- KILL SWITCH for the restored delete drain ([ClientGame/WorldSnapshot]
+	//   streamOutSnapshotObjects, default true). The drain below had never
+	//   actually deleted anything -- its guard read a distance key nothing
+	//   recomputed (see the note in update()) -- so restoring it turns on a
+	//   streaming path with no field history. Set false to get the
+	//   never-stream-out behaviour back without a rebuild.
+	bool ms_streamOutSnapshotObjects = true;
+
 	//------------------------------------------------------------------------------------------------------------------
 
 	const SharedObjectTemplate *fetchObjectTemplate(const WorldSnapshotReaderWriter& reader, const WorldSnapshotReaderWriter::Node* const node)
@@ -351,6 +359,7 @@ void WorldSnapshot::install ()
 	ms_updateDistanceSquared = sqr (ConfigFile::getKeyFloat ("ClientGame/WorldSnapshot", "updateDistance", 4.f));
 	ms_maximumNumberOfCreatesPerFrame = ConfigFile::getKeyInt("ClientGame/WorldSnapshot", "maximumNumberOfCreatesPerFrame", ms_maximumNumberOfCreatesPerFrame);
 	ms_maximumNumberOfDeletesPerFrame = ConfigFile::getKeyInt("ClientGame/WorldSnapshot", "maximumNumberOfDeletesPerFrame", ms_maximumNumberOfDeletesPerFrame);
+	ms_streamOutSnapshotObjects = ConfigFile::getKeyBool("ClientGame/WorldSnapshot", "streamOutSnapshotObjects", ms_streamOutSnapshotObjects);
 
 	ExitChain::add (remove, "WorldSnapshot::remove");
 }
@@ -879,6 +888,26 @@ void WorldSnapshot::update(CellProperty const * const cellProperty, Vector const
 				}
 			}
 		}
+
+		//-- the incremental merge walk above replaced the two-binary_search form
+		//   kept in the #else below, and DROPPED its computeDistanceSquaredTo
+		//   calls. Nothing else ever writes m_distanceSquaredTo (initialised to
+		//   0.f, WorldSnapshotReaderWriter.cpp:110), so every node reported
+		//   distance 0 forever: the delete guard further down read
+		//   0.f < sqr(radius) + 128.f -- ALWAYS true -- so the drain deleted
+		//   NOTHING and snapshot objects were never streamed out (memory grew
+		//   monotonically with everywhere the player had been), and both sort
+		//   keys were constant, making the "nearest first" ordering a no-op.
+		//   Compute exactly the set the #else computes: the nodes that go into
+		//   the two lists.
+		{
+			size_t i;
+			for (i = 0; i < ms_pendingCreateList.size (); ++i)
+				ms_pendingCreateList [i]->computeDistanceSquaredTo (position_w);
+
+			for (i = 0; i < ms_pendingDeleteList.size (); ++i)
+				ms_pendingDeleteList [i]->computeDistanceSquaredTo (position_w);
+		}
 #else
 		//-- anything in the query list that is not in the loaded list must be created
 		ms_pendingCreateList.clear ();
@@ -1023,8 +1052,19 @@ void WorldSnapshot::update(CellProperty const * const cellProperty, Vector const
 		}
 
 		//-- delete all pending deletes
+		if (ms_streamOutSnapshotObjects)
 		{
 			std::sort (ms_pendingDeleteList.begin (), ms_pendingDeleteList.end (), compareNodesForDelete);
+
+			//-- standing probe for the restored drain. This path had never
+			//   executed, so it has no field history at all -- report what it
+			//   actually does, in the build everyone runs. Reading rule: deleted
+			//   should track how far the player has moved; refused is
+			//   server-superseded POBs and is expected to be small and steady.
+			//   A createObject failure with CEC_objectAlreadyExists appearing
+			//   AFTER a line here is the "stream-out broke re-entry" signature.
+			int deleted = 0;
+			int refused = 0;
 
 			size_t const n = std::min(ms_pendingDeleteList.size(), static_cast<size_t>(ms_maximumNumberOfDeletesPerFrame));
 			for (size_t i = 0; i < n; ++i)
@@ -1035,32 +1075,54 @@ void WorldSnapshot::update(CellProperty const * const cellProperty, Vector const
 				if (node->getDistanceSquaredTo() < sqr(node->getRadius()) + 128.f)
 					continue;
 
-				node->removeFromWorld ();
-
 				//-- find the object
 				Object* const object = NetworkIdManager::getObjectById (NetworkId (static_cast<NetworkId::NetworkIdType> (node->getNetworkIdInt ())));
+
+				//-- resolve and REFUSE before any teardown. Until the distance key
+				//   was restored (see the note above) this loop always hit the guard,
+				//   so its ordering had never executed: it used to call
+				//   removeFromWorld() and drop the node from ms_loadedList even when
+				//   the delete was then refused, leaving the object ALIVE still
+				//   holding its NetworkId. The next approach re-creates, hits
+				//   CEC_objectAlreadyExists, and strips the node from the sphere tree
+				//   PERMANENTLY. A refused node stays loaded and in the world, and is
+				//   simply retried on a later update. asClientObject() rather than
+				//   safe_cast because safe_cast is a bare static_cast in Release.
+				ClientObject* const clientObject = object ? object->asClientObject () : 0;
+				if (object && (!clientObject || !ContainerInterface::isClientCachedOnly (*clientObject)))
+				{
+					++refused;
+					continue;
+				}
+
+				node->removeFromWorld ();
 
 				//-- destroy the object
 				if (object)
 				{
-					//-- prevent objects that have non-client cached objects within them from being deleted
-					if (ContainerInterface::isClientCachedOnly (*safe_cast<ClientObject*> (object)))
-					{
-						if (object->isInWorld ())
-							object->removeFromWorld ();
-						else
-							DEBUG_WARNING (true, ("WorldSnapshot::update - deleting client cached object %i which is not in the world\n", node->getNetworkIdInt ()));
+					if (object->isInWorld ())
+						object->removeFromWorld ();
+					else
+						DEBUG_WARNING (true, ("WorldSnapshot::update - deleting client cached object %i which is not in the world\n", node->getNetworkIdInt ()));
 
-						delete object;
-					}
+					delete object;
 				}
 				else
 					DEBUG_WARNING (true, ("WorldSnapshot::update - attempted to delete client cached object %i which does not exist\n", node->getNetworkIdInt ()));
 
 				//-- the object is now deleted
 				NodeList::iterator iter = std::find (ms_loadedList.begin (), ms_loadedList.end (), node);
-				IGNORE_RETURN (ms_loadedList.erase (iter));
+				if (iter != ms_loadedList.end ())
+					IGNORE_RETURN (ms_loadedList.erase (iter));
+
+				++deleted;
 			}
+
+			//-- only on an actual state change: a refused node is retried every
+			//   update (server-superseded POBs never become deletable), so logging
+			//   those too would be steady per-frame noise.
+			if (deleted)
+				REPORT_LOG (true, ("WorldSnapshot: stream-out deleted=%d refused=%d pending=%d loaded=%d\n", deleted, refused, static_cast<int> (ms_pendingDeleteList.size ()), static_cast<int> (ms_loadedList.size ())));
 		}
 #if PRODUCTION == 0
 		if (ms_vtuneWorldSnapshotCreates)
@@ -1204,7 +1266,12 @@ void WorldSnapshot::detailLevelChanged ()
 		uint i;
 		for (i = 0; i < saveList.size (); ++i)
 		{
-			const WorldSnapshotReaderWriter::Node* const node = ms_reader.getNode (i);
+			//-- was ms_reader.getNode(i): a READER index walked over the saveList
+			//   RANGE -- two different index spaces. It re-added the reader's first
+			//   saveList.size() nodes (children included) instead of the nodes that
+			//   were actually removed above. Latent because only the dev-console
+			//   detail-level command reaches this function.
+			const WorldSnapshotReaderWriter::Node* const node = saveList [i];
 			node->setSpatialSubdivisionHandle (ms_sphereTree.addObject (node));
 		}
 
