@@ -407,11 +407,15 @@ ID3DBlob *Direct3d11_ShaderCompilerNamespace::compile(char const *source, int so
 			}
 		}
 
-#if PRODUCTION == 0
-		FATAL(true, ("Direct3d11: '%s' failed to compile as %s (%s):\n%s", name, target, Direct3d11_Device::describeHresult(hresult), detail));
-#else
+		// A WARNING in every build flavour, not a development FATAL. A shader source is
+		// DATA -- it arrives from the corpus, a TRE, or a loose override -- and stock's
+		// contract for data that fails to build is warn-and-skip: DX9's
+		// D3DXCompileShader failure is a WARNING and the object simply loses that
+		// program (the production branch below already relied on exactly that -- every
+		// caller handles the NULL return by skipping the draw). A FATAL here is
+		// stricter than stock and turns one bad loose file into a dead client;
+		// the dump above plus this message is the diagnostic, same as DX9.
 		WARNING(true, ("Direct3d11: '%s' failed to compile as %s (%s): %s", name, target, Direct3d11_Device::describeHresult(hresult), detail));
-#endif
 
 		if (errors)
 			errors->Release();
