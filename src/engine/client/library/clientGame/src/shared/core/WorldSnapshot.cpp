@@ -140,7 +140,22 @@ namespace WorldSnapshotNamespace
 			WARNING(true, ("WorldSnapshot unable to load template [%s]", objectTemplateName));
 			return 0;
 		}
-		return safe_cast<const SharedObjectTemplate*> (ot);	
+		//-- ObjectTemplateList::fetch resolves ANY template class, and safe_cast is a
+		//   bare static_cast in Release (SafeCast.h) -- so a node naming a class outside
+		//   the SharedObjectTemplate hierarchy yielded a non-null WRONGLY-TYPED pointer
+		//   that instantiateObject then dereferenced (getPortalLayoutFilename, then
+		//   createObject). Narrow with the virtual asSharedObjectTemplate (0 in the
+		//   base) and fail closed; the caller strips the node from the sphere tree, so
+		//   this cannot storm.
+		SharedObjectTemplate const * const sharedObjectTemplate = ot->asSharedObjectTemplate ();
+		if (!sharedObjectTemplate)
+		{
+			WARNING(true, ("WorldSnapshot WRONG CLASS template [%s] -- not a SharedObjectTemplate; node skipped", objectTemplateName));
+			ot->releaseReference ();
+			return 0;
+		}
+
+		return sharedObjectTemplate;
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
@@ -186,7 +201,20 @@ namespace WorldSnapshotNamespace
 		}
 
 		//-- instantiate the object
-		ClientObject *const object = safe_cast<ClientObject*> (objectTemplate->createObject());
+		//-- a template class that does not override createObject() gets the BASE
+		//   new Object(this, cms_invalid) (ObjectTemplate.cpp:155-158) -- a plain
+		//   Object, not a ClientObject -- which the Release safe_cast would not catch.
+		//   Narrow with the virtual asClientObject (0 in the base) and delete the
+		//   wrongly-classed object rather than hand it to the caller's setClientCached/
+		//   addToWorld chain; it was never added to the world, so plain delete is safe.
+		Object *const created = objectTemplate->createObject();
+		ClientObject *const object = created ? created->asClientObject() : 0;
+		if (created && !object)
+		{
+			WARNING(true, ("WorldSnapshot WRONG CLASS object from template [%s] -- not a ClientObject; node skipped", objectTemplate->getName()));
+			delete created;
+		}
+
 		objectTemplate->releaseReference();
 		objectTemplate=0;
 
