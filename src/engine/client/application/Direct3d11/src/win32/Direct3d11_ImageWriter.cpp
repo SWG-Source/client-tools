@@ -190,20 +190,43 @@ bool Direct3d11_ImageWriterNamespace::writeWithWic(char const *fileName, int wid
 	if (SUCCEEDED(hresult))
 		hresult = frame->SetSize(static_cast<UINT>(width), static_cast<UINT>(height));
 
-	if (SUCCEEDED(hresult))
-	{
-		// The source is opaque, and asking for a format the container cannot store makes the
-		// encoder convert rather than fail. BGRA in, whatever the container needs out.
-		WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
-		hresult = frame->SetPixelFormat(&pixelFormat);
-	}
+	IWICBitmap *sourceBitmap = NULL;
+	IWICFormatConverter *converter = NULL;
 
 	if (SUCCEEDED(hresult))
-		hresult = frame->WritePixels(
-			static_cast<UINT>(height),
-			static_cast<UINT>(pitch),
-			static_cast<UINT>(pitch * height),
-			const_cast<BYTE *>(pixelsBgra));
+	{
+		// SetPixelFormat NEGOTIATES: it rewrites pixelFormat to the closest format
+		// the container can store and returns success -- and WritePixels then
+		// interprets the caller's raw bytes as THAT format, converting nothing.
+		// JPEG has no 32bpp encoding, so it comes back 24bppBGR, and feeding it
+		// 32bpp rows re-slices every 3 source pixels into 4: a 4/3 horizontal
+		// stretch, period-4 vertical striping, and alpha bytes rotating through
+		// the colour channels (the first live F12 screenshot, measured luminance
+		// cycle 146/157/201/173). So the conversion is done explicitly: wrap the
+		// pixels in a WIC bitmap and let a format converter feed WriteSource
+		// whatever format the encoder negotiated.
+		WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+		hresult = frame->SetPixelFormat(&pixelFormat);
+
+		if (SUCCEEDED(hresult))
+			hresult = factory->CreateBitmapFromMemory(
+				static_cast<UINT>(width),
+				static_cast<UINT>(height),
+				GUID_WICPixelFormat32bppBGRA,
+				static_cast<UINT>(pitch),
+				static_cast<UINT>(pitch * height),
+				const_cast<BYTE *>(pixelsBgra),
+				&sourceBitmap);
+
+		if (SUCCEEDED(hresult))
+			hresult = factory->CreateFormatConverter(&converter);
+
+		if (SUCCEEDED(hresult))
+			hresult = converter->Initialize(sourceBitmap, pixelFormat, WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
+
+		if (SUCCEEDED(hresult))
+			hresult = frame->WriteSource(converter, NULL);
+	}
 
 	if (SUCCEEDED(hresult))
 		hresult = frame->Commit();
@@ -216,6 +239,10 @@ bool Direct3d11_ImageWriterNamespace::writeWithWic(char const *fileName, int wid
 	if (!succeeded)
 		WARNING(true, ("Direct3d11: WIC could not write '%s' (%s).", fileName, Direct3d11_Device::describeHresult(hresult)));
 
+	if (converter)
+		converter->Release();
+	if (sourceBitmap)
+		sourceBitmap->Release();
 	if (options)
 		options->Release();
 	if (frame)
