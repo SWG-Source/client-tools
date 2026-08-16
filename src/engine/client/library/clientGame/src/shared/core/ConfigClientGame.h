@@ -156,6 +156,7 @@ public:
 	static bool                getAutoInviteReject ();
 
 	static bool                getPreloadWorldSnapshot();
+	static int                 getWorldSnapshotParseBudgetMs();
 	static bool                getShowMatchMakingDebug();
 
 	static float               getHackMovementSpeed();

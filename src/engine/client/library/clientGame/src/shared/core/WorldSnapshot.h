@@ -42,6 +42,15 @@ public:
 
 
 	static void load               (char const *sceneName);
+
+	// CONSULT-60: load() now only performs the cheap prologue (unload, open the
+	// .ws, load the buildout-area LIST); the heavy parse (node tree, per-area
+	// buildout tables, sphere tree) runs in budgeted loadStep() calls pumped
+	// from GroundScene's loading update ([ClientGame] worldSnapshotParseBudgetMs,
+	// <=0 restores the old fully-synchronous load). donePreloading() stays false
+	// until the parse completes; consumers that need complete data mid-parse
+	// finish the remaining parse synchronously (exactness valve).
+	static void loadStep           ();
 	static void setExcludeArea     (char const *areaName);
 	static void update             (CellProperty const * cellProperty, Vector const & position_w);
 	static bool isClientCached     (int64 networkIdInt);

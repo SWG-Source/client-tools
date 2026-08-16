@@ -138,6 +138,16 @@ public:
 	bool             save (const char* filename) const;
 	void             save (Iff& iff) const;
 
+	// CONSULT-60: incremental load. beginIncrementalLoad enters the WSNP/0001/
+	// NODS forms (returns false if there is nothing to parse); each
+	// stepIncrementalLoad call parses whole top-level node subtrees under
+	// budgetMs (<=0 = run to completion), inserting each subtree into the
+	// networkId map as it lands, and returns true once the OTNL table is read
+	// and all forms are exited. The caller owns the Iff and must keep it alive
+	// between calls. The synchronous load(filename) path is unchanged.
+	bool             beginIncrementalLoad (Iff& iff);
+	bool             stepIncrementalLoad (Iff& iff, float budgetMs);
+
 	//-- creation interface
 	void             clear ();
 	const Node*      addObject (int64 networkIdInt, int64 containedByNetworkIdInt, CrcString const &objectTemplateName, int cellIndex, const Transform& transform_p, float radius, uint32 portalLayoutCrc, const std::string & eventName = "");
@@ -159,6 +169,7 @@ public:
 private:
 
 	void             load_0001 (Iff& iff);
+	void             insertSubtreeIntoNetworkIdMap (Node* root);
 
 	void             preSave () const;
 

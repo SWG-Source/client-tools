@@ -2104,9 +2104,13 @@ void GroundScene::updateLoading()
 		return;
 	
 	bool const finishedLoading = isFinishedLoading();
-	
+
 	updateCuiLoading();
-	
+
+	//-- CONSULT-60: pump the phased world-snapshot parse (node tree +
+	//   buildout tables + sphere tree) under its per-frame budget
+	WorldSnapshot::loadStep();
+
 	if ((!Game::isClient() || (!ms_loadingScreenRender && finishedLoading)) && !m_sentSceneChannel)
 	{
 		// getPlayer() may be NULL when the hard timeout fires (e.g., tutorial
