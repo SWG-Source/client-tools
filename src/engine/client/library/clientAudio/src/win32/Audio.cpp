@@ -153,6 +153,15 @@ namespace AudioNamespace
 	float                        s_globalAudioFadeVolume = 1.0f;
 	float                        s_allAudioFadeFactor = 0.5f;
 	float                        s_nonBuffereMusicFadeVolume = 1.0f;
+
+	// Background music's OWN smoothed fade. It previously multiplied by
+	// s_globalAudioFadeVolume only while its count-gate said so -- so when the
+	// zone-in duck released at load-end, the theme instantly inherited the
+	// STALE ducked-to-zero global fade and then crawled back up: a
+	// deterministic snap at every loading-screen -> scene handoff. This
+	// variable ramps toward the same targets, so gate flips can never step the
+	// volume.
+	float                        s_backgroundMusicFadeVolume = 1.0f;
 	QueuedSamplesToStartList s_centerBucket;
 	SoundBucketList s_leftBucket;
 	SoundBucketList s_rightBucket;
@@ -785,9 +794,12 @@ float AudioNamespace::getSoundCategoryVolume(Audio::SoundCategory const soundCat
 		{
 			result *= s_globalAudioFadeVolume;
 		}
-		else if (soundCategory == Audio::SC_backGroundMusic && (s_nonBackgroundFadeCount == 0 || s_allAudioFadeCount != 0) )
+		else if (soundCategory == Audio::SC_backGroundMusic)
 		{
-			result *= s_globalAudioFadeVolume;
+			// Use the dedicated smoothed fade (see its comment). Multiplying by
+			// s_globalAudioFadeVolume only when the count-gate opened stepped
+			// background music straight to the stale ducked value.
+			result *= s_backgroundMusicFadeVolume;
 		}
 		else if (soundCategory == Audio::SC_voiceover && (s_nonBackgroundFadeCount != 0 || s_allAudioFadeCount != 0) )
 		{
@@ -2415,6 +2427,31 @@ void Audio::alter(float const deltaTime, Object const *listener)
 			static float const fadeOutRate = 10.0f;	// one over fade time
 
 			s_globalAudioFadeVolume = clamp(fadeTarget, s_globalAudioFadeVolume - (deltaTime * fadeOutRate), 1.0f);
+		}
+
+		// Background music's own smoothed fade. Same targets as the branch
+		// background music is ELIGIBLE for (global fade applies to bg music only
+		// when no non-background duck is active, or during an all-audio fade),
+		// but ramped continuously so a count-gate flip can't step the volume to
+		// a stale ducked value (the deterministic load-end music snap).
+		{
+			float bgFadeTarget = 1.0f;
+
+			if (s_nonBackgroundFadeCount == 0 || s_allAudioFadeCount != 0)
+				bgFadeTarget = fadeTarget;
+
+			if (s_backgroundMusicFadeVolume < bgFadeTarget)
+			{
+				static float const fadeInRate = 1.5f;   // one over fade time
+
+				s_backgroundMusicFadeVolume = clamp(0.0f, s_backgroundMusicFadeVolume + (deltaTime * fadeInRate), bgFadeTarget);
+			}
+			else if (s_backgroundMusicFadeVolume > bgFadeTarget)
+			{
+				static float const fadeOutRate = 10.0f;	// one over fade time
+
+				s_backgroundMusicFadeVolume = clamp(bgFadeTarget, s_backgroundMusicFadeVolume - (deltaTime * fadeOutRate), 1.0f);
+			}
 		}
 
 	}
