@@ -18,6 +18,9 @@ class MemoryBlockManager;
 #include "sharedFile/TreeFile.h"
 #include "sharedFile/FileStreamer.h"
 #include "sharedSynchronization/Mutex.h"
+
+#include <string>
+#include <unordered_set>
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/LessPointerComparator.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Os.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Tag.h"
@@ -78,6 +81,19 @@ public:
 
 	const char           *getPathName() const; //lint !e1411  // Warning -- member with different signature hides virtual member (bug in PC-Lint, incorrect warning)
 
+	// Clear the negative-cache entry (and insert into a built manifest) for one
+	// fixed-up engine-relative name -- the hook TreeFile::forgetMissingFile
+	// broadcasts after something WRITES a loose file mid-session.
+	void forgetMissing(const char *fileName) const;
+
+	// 2026-08-15: Release-visible A/B probe (compare-the-numbers telemetry).
+	// One REPORT_LOG line per loose node at exit: how many REAL filesystem
+	// probes ran vs how many the manifest / negative cache answered from
+	// memory. A/B recipe = same binary, one session with
+	// [SharedFile] searchPathFileManifest=false (pre-fix behavior) vs default
+	// on, same route -- realProbes is the number the fix exists to shrink.
+	void reportProbeCounters() const;
+
 private:
 
 	SearchPath();
@@ -85,11 +101,51 @@ private:
 	SearchPath &operator =(const SearchPath &);
 
 	void makeAbsolutePath(const char *fileName, char *buffer) const;
+	bool cachedMissing(const char *fileName) const;
+	void noteMissing(const char *fileName) const;
+	bool mayContain(const char *fileName) const;
 
 private:
 
 	char  *m_pathName;
 	int    m_pathNameLength;
+
+	// CONSULT-59 deferred item (2026-07-06): loose-searchPath stat-storm fix. Nearly every
+	// TreeFile::open resolves inside a TRE/TOC, but loose SearchPath nodes sit ABOVE the TOCs
+	// (stage/override must keep winning), so each open first paid one CreateFileA kernel
+	// round-trip MISS per loose path -- the watchdog-sampled dominant cost of the world-entry
+	// load path. Cache the misses per node: a fixed-up name that missed once is answered from
+	// this set without touching the disk. Misses ONLY -- an existing file never enters the set,
+	// so override-wins semantics are unchanged. Consequence: a loose file dropped into the
+	// directory mid-session stays invisible for names already probed (restart the client, or
+	// set [SharedFile] searchPathNegativeCache=false). Leaf mutex -- nodes run OUTSIDE
+	// TreeFile::ms_criticalSection via the snapshot walk, concurrently from the main and
+	// asynchronous-loader threads.
+	mutable std::unordered_set<std::string> m_missingFiles;
+	mutable Mutex m_missingFilesMutex;
+	mutable int   m_missingFilesHits;
+
+	// 2026-08-15 (cold-singles perf arc): loose-directory FILE MANIFEST -- the
+	// first-touch completion of the negative cache above. The miss cache only
+	// helps names probed BEFORE; a zone preload or a novel in-world asset still
+	// paid one real CreateFileA/GetFileAttributes MISS per loose path per NEW
+	// name (watchdog-sampled 643ms space-preload exists() storm + the loose-probe
+	// prefix of every cold-single texture open, 2026-08-15). On first probe the
+	// node enumerates its directory tree ONCE (lowercase/forward-slash relative
+	// names -- the fixUpFileName convention) and every later probe answers
+	// absent-from-manifest with ZERO syscalls, first-touch included. Misses that
+	// slip past a stale manifest still land in m_missingFiles (self-healing for
+	// mid-session deletions); forgetMissing() INSERTS into a built manifest so a
+	// freshly written loose file becomes visible without a restart. A loose
+	// file added mid-session by anything else stays invisible for this node
+	// (same restart-or-disable caveat as the miss cache; kill switch
+	// [SharedFile] searchPathFileManifest=false). Guarded by
+	// m_missingFilesMutex (one leaf lock per node; the build runs under it once,
+	// blocking a concurrent prober for the walk's few ms at first touch only).
+	mutable std::unordered_set<std::string> m_manifest;
+	mutable bool m_manifestBuilt;
+	mutable int  m_manifestSkips;
+	mutable int  m_realProbes;   // real syscall-backed probes (exists/getFileSize/open reaching the disk)
 };
 
 // ======================================================================

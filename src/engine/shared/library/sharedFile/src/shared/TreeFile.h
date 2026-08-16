@@ -64,6 +64,17 @@ public:
 	static void install(uint32 skuBits);
 	static void remove();
 
+	//-- A/B telemetry: per-loose-node probe counters. ExitChain-registered at
+	//   priority 100 so it outruns the SharedLog teardown (see the definition).
+	static void reportProbeCounters();
+
+	// Clear the searchPath negative-cache entry (and update a built manifest)
+	// for one engine-relative name on every loose SearchPath node. Call after
+	// WRITING a loose file mid-session (the misses-only cache otherwise keeps a
+	// previously-probed name invisible until restart -- the CONSULT-59
+	// trade-off, TreeFile_SearchNode.h). No-op for names never probed.
+	static void          forgetMissingFile(const char *fileName);
+
 	static bool isLoggingFiles();
 
 #ifdef _DEBUG

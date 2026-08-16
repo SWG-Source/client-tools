@@ -13,6 +13,7 @@
 #include "sharedCompression/Compressor.h"
 #include "sharedCompression/ZlibCompressor.h"
 #include "sharedDebug/DebugFlags.h"
+#include "sharedFile/ConfigSharedFile.h"
 #include "sharedFile/FileStreamerFile.h"
 #include "sharedFile/FileStreamer.h"
 #include "sharedFile/MemoryFile.h"
@@ -28,6 +29,8 @@
 #include "sharedSynchronization/Mutex.h"
 
 #include <algorithm>
+#include <cctype>
+#include <io.h>      // _findfirst/_findnext -- SearchPath manifest directory walk (no <windows.h> in this shared TU)
 #include <map>
 #include <vector>
 
@@ -35,6 +38,48 @@
 
 const Tag TAG_TREE = TAG(T,R,E,E);
 const Tag TAG_TOC  = TAG3(T,O,C);
+
+// ======================================================================
+// SearchPath manifest walk (2026-08-15 cold-singles arc; see the member
+// comment in TreeFile_SearchNode.h). Recursive CRT _findfirst enumeration of
+// a loose search directory; every found FILE is stored as a relative path
+// normalized to the fixUpFileName convention (lowercase, forward slashes) so
+// membership tests hit against exactly the names exists()/open() probe with.
+
+static void searchPathManifestWalk(std::string const &absoluteDir, std::string const &relativePrefix, std::unordered_set<std::string> &out)
+{
+	std::string pattern(absoluteDir);
+	pattern += "/*";
+
+	_finddata_t entry;
+	intptr_t const handle = _findfirst(pattern.c_str(), &entry);
+	if (handle == -1)
+		return;
+
+	do
+	{
+		if (entry.name[0] == '.' && (entry.name[1] == '\0' || (entry.name[1] == '.' && entry.name[2] == '\0')))
+			continue;
+
+		std::string relative(relativePrefix);
+		for (char const *c = entry.name; *c; ++c)
+			relative += static_cast<char>(tolower(static_cast<unsigned char>(*c)));
+
+		if (entry.attrib & _A_SUBDIR)
+		{
+			std::string subAbsolute(absoluteDir);
+			subAbsolute += '/';
+			subAbsolute += entry.name;
+			relative += '/';
+			searchPathManifestWalk(subAbsolute, relative, out);
+		}
+		else
+			IGNORE_RETURN(out.insert(relative));
+	}
+	while (_findnext(handle, &entry) == 0);
+
+	IGNORE_RETURN(_findclose(handle));
+}
 
 // ======================================================================
 
@@ -54,7 +99,14 @@ TreeFile::SearchNode::~SearchNode(void)
 TreeFile::SearchPath::SearchPath(int priority, const char *path)
 : SearchNode(priority),
 	m_pathName(NULL),
-	m_pathNameLength(0)
+	m_pathNameLength(0),
+	m_missingFiles(),
+	m_missingFilesMutex(),
+	m_missingFilesHits(0),
+	m_manifest(),
+	m_manifestBuilt(false),
+	m_manifestSkips(0),
+	m_realProbes(0)
 {
 	NOT_NULL(path);
 	DEBUG_FATAL(!path[0], ("empty path"));
@@ -87,8 +139,18 @@ TreeFile::SearchPath::~SearchPath(void)
 
 void TreeFile::SearchPath::debugPrint(void)
 {
-	DEBUG_REPORT_PRINT(true, ("  %d=priority %s=path\n", getPriority(), m_pathName));
-	DEBUG_OUTPUT_STATIC_VIEW("Foundation\\Treefile", ("  %d=priority %s=path\n", getPriority(), m_pathName));
+	m_missingFilesMutex.enter();
+	int const missingEntries = static_cast<int>(m_missingFiles.size());
+	int const missingHits = m_missingFilesHits;
+	int const manifestEntries = m_manifestBuilt ? static_cast<int>(m_manifest.size()) : -1;
+	int const manifestSkips = m_manifestSkips;
+	m_missingFilesMutex.leave();
+	UNREF(missingEntries);
+	UNREF(missingHits);
+	UNREF(manifestEntries);
+	UNREF(manifestSkips);
+	DEBUG_REPORT_PRINT(true, ("  %d=priority %s=path [negCache %d entries, %d probes skipped] [manifest %d files, %d probes skipped]\n", getPriority(), m_pathName, missingEntries, missingHits, manifestEntries, manifestSkips));
+	DEBUG_OUTPUT_STATIC_VIEW("Foundation\\Treefile", ("  %d=priority %s=path [negCache %d entries, %d probes skipped] [manifest %d files, %d probes skipped]\n", getPriority(), m_pathName, missingEntries, missingHits, manifestEntries, manifestSkips));
 }
 
 // ----------------------------------------------------------------------
@@ -106,20 +168,121 @@ void TreeFile::SearchPath::makeAbsolutePath(const char *fileName, char *buffer) 
 
 // ----------------------------------------------------------------------
 
-bool TreeFile::SearchPath::exists(const char *fileName, bool &) const 
+bool TreeFile::SearchPath::cachedMissing(const char *fileName) const
 {
-	char buffer[Os::MAX_PATH_LENGTH];
-	makeAbsolutePath(fileName, buffer);
-	return FileStreamer::exists(buffer);
+	if (!ConfigSharedFile::getSearchPathNegativeCache())
+		return false;
+
+	m_missingFilesMutex.enter();
+	bool const missing = m_missingFiles.find(fileName) != m_missingFiles.end();
+	if (missing)
+		++m_missingFilesHits;
+	m_missingFilesMutex.leave();
+	return missing;
 }
 
 // ----------------------------------------------------------------------
 
-int TreeFile::SearchPath::getFileSize(const char *fileName, bool &) const 
+void TreeFile::SearchPath::noteMissing(const char *fileName) const
 {
+	if (!ConfigSharedFile::getSearchPathNegativeCache())
+		return;
+
+	m_missingFilesMutex.enter();
+	IGNORE_RETURN(m_missingFiles.insert(fileName));
+	m_missingFilesMutex.leave();
+}
+
+// ----------------------------------------------------------------------
+
+void TreeFile::SearchPath::forgetMissing(const char *fileName) const
+{
+	m_missingFilesMutex.enter();
+	IGNORE_RETURN(m_missingFiles.erase(fileName));
+	//-- a freshly WRITTEN loose file must also enter a built manifest or it
+	//   stays invisible until restart. This hook is broadcast to every
+	//   SearchPath node, so nodes that do NOT hold the file gain a conservative
+	//   false-positive -- safe by design: "in the manifest" only admits the REAL
+	//   disk probe, which misses once and lands in m_missingFiles.
+	//   False-negatives are the only dangerous direction and this never creates
+	//   one.
+	if (m_manifestBuilt)
+		IGNORE_RETURN(m_manifest.insert(fileName));
+	m_missingFilesMutex.leave();
+}
+
+// ----------------------------------------------------------------------
+
+void TreeFile::SearchPath::reportProbeCounters() const
+{
+	m_missingFilesMutex.enter();
+	int const realProbes = m_realProbes;
+	int const manifestFiles = m_manifestBuilt ? static_cast<int>(m_manifest.size()) : -1;
+	int const manifestSkips = m_manifestSkips;
+	int const negCacheSkips = m_missingFilesHits;
+	m_missingFilesMutex.leave();
+	//-- counters are incremented without the mutex at the probe sites (plain int,
+	//   worst case an off-by-a-few readback) -- this is an A/B telemetry line,
+	//   not an invariant. manifestFiles -1 = manifest never built (node never probed
+	//   or key off).
+	REPORT_LOG(true, ("[treefile.probe] %s: realProbes=%d manifestFiles=%d manifestSkips=%d negCacheSkips=%d\n",
+		m_pathName, realProbes, manifestFiles, manifestSkips, negCacheSkips));
+}
+
+// ----------------------------------------------------------------------
+
+bool TreeFile::SearchPath::mayContain(const char *fileName) const
+{
+	if (!ConfigSharedFile::getSearchPathFileManifest())
+		return true;
+
+	m_missingFilesMutex.enter();
+	if (!m_manifestBuilt)
+	{
+		//-- one-time walk under the leaf lock: a concurrent prober blocks for the
+		//   walk's few ms exactly once, at this node's first-ever probe (during
+		//   install/boot in practice). Building outside the lock would need a
+		//   publish dance for no measurable gain.
+		searchPathManifestWalk(std::string(m_pathName), std::string(), m_manifest);
+		m_manifestBuilt = true;
+	}
+	bool const present = m_manifest.find(fileName) != m_manifest.end();
+	if (!present)
+		++m_manifestSkips;
+	m_missingFilesMutex.leave();
+	return present;
+}
+
+// ----------------------------------------------------------------------
+
+bool TreeFile::SearchPath::exists(const char *fileName, bool &) const
+{
+	if (!mayContain(fileName) || cachedMissing(fileName))
+		return false;
+
 	char buffer[Os::MAX_PATH_LENGTH];
 	makeAbsolutePath(fileName, buffer);
-	return FileStreamer::getFileSize(buffer);
+	++m_realProbes;
+	bool const found = FileStreamer::exists(buffer);
+	if (!found)
+		noteMissing(fileName);
+	return found;
+}
+
+// ----------------------------------------------------------------------
+
+int TreeFile::SearchPath::getFileSize(const char *fileName, bool &) const
+{
+	if (!mayContain(fileName) || cachedMissing(fileName))
+		return -1;
+
+	char buffer[Os::MAX_PATH_LENGTH];
+	makeAbsolutePath(fileName, buffer);
+	++m_realProbes;
+	int const size = FileStreamer::getFileSize(buffer);
+	if (size < 0)
+		noteMissing(fileName);
+	return size;
 }
 
 // ----------------------------------------------------------------------
@@ -141,11 +304,18 @@ void TreeFile::SearchPath::getPathName(const char *fileName, char *outPathName, 
 
 AbstractFile *TreeFile::SearchPath::open(const char *fileName, AbstractFile::PriorityType priority, bool &)
 {
+	if (!mayContain(fileName) || cachedMissing(fileName))
+		return NULL;
+
 	char buffer[Os::MAX_PATH_LENGTH];
 	makeAbsolutePath(fileName, buffer);
+	++m_realProbes;
 	FileStreamer::File *file = FileStreamer::open(buffer);
 	if (!file)
+	{
+		noteMissing(fileName);
 		return NULL;
+	}
 	return new FileStreamerFile(priority, *file);
 }
 

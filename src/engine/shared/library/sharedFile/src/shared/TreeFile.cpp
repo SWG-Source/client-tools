@@ -105,6 +105,14 @@ void TreeFile::install(uint32 skuBits)
 
 	ExitChain::add(TreeFile::remove, "TreeFile::remove", 0, true);
 
+	//-- 2026-08-15: the A/B probe line MUST be emitted while SharedLog is still
+	//   alive. SetupSharedFile::install runs BEFORE SetupSharedLog::install, and
+	//   equal-priority ExitChain entries run LIFO -- so the log teardown fires
+	//   BEFORE TreeFile::remove and every REPORT_LOG from inside remove() is
+	//   written to a dead sink. A priority above 0 runs ahead of ALL priority-0
+	//   entries, i.e. before the log dies.
+	ExitChain::add(TreeFile::reportProbeCounters, "TreeFile::reportProbeCounters", 100, false);
+
 	// the value 20 is used here for legacy support
 	int const maxPriority = ConfigFile::getKeyInt("SharedFile", "maxSearchPriority", 20);
 
@@ -205,6 +213,32 @@ void TreeFile::install(uint32 skuBits)
 	DebugFlags::registerFlag(ms_debugLogSynchronousOnly,        "SharedFile", "logTreeFileOpensSynchronousOnly");
 	DebugFlags::registerFlag(ms_warnTreeFileOpens, "SharedFile", "warnTreeFileOpens");
 #endif
+}
+
+// ----------------------------------------------------------------------
+/**
+ * Emit the per-loose-node A/B probe counters (manifest vs negative-cache vs
+ * real syscall probes) for the file-manifest fix.
+ *
+ * Registered on the ExitChain at priority 100 by install() rather than called
+ * from remove(): remove() runs after the report-log sink has been torn down,
+ * so a REPORT_LOG from there reaches nothing. Priority 100 runs ahead of every
+ * priority-0 entry, while the sink is still live.
+ */
+
+void TreeFile::reportProbeCounters(void)
+{
+	ms_criticalSection.enter();
+
+		const SearchNodes::const_iterator iEnd = ms_searchNodes.end();
+		for (SearchNodes::const_iterator i = ms_searchNodes.begin(); i != iEnd; ++i)
+		{
+			const SearchPath *const searchPath = dynamic_cast<const SearchPath*>(*i);
+			if (searchPath != NULL)
+				searchPath->reportProbeCounters();
+		}
+
+	ms_criticalSection.leave();
 }
 
 // ----------------------------------------------------------------------
@@ -831,6 +865,26 @@ AbstractFile* TreeFile::open(const char *fileName, AbstractFile::PriorityType pr
 #endif
 
 	return file;
+}
+
+// ----------------------------------------------------------------------
+
+void TreeFile::forgetMissingFile(const char *fileName)
+{
+	//-- the caches key on the FIXED-UP engine-relative name (the same form
+	//   exists()/open() probe with)
+	char fixedFileName[Os::MAX_PATH_LENGTH];
+	fixUpFileName(fixedFileName, fileName, false);
+
+	SearchNode *snapshot[cms_searchNodeSnapshotMax];
+	int const nodeCount = copySearchNodes(snapshot, cms_searchNodeSnapshotMax);
+
+	for (int i = 0; i < nodeCount; ++i)
+	{
+		const SearchPath *searchPath = dynamic_cast<const SearchPath*>(snapshot[i]);
+		if (searchPath != NULL)
+			searchPath->forgetMissing(fixedFileName);
+	}
 }
 
 // ----------------------------------------------------------------------
