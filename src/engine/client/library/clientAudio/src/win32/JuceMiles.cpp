@@ -14,6 +14,9 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <cstdarg>
+#include <share.h>
+#include <thread>
 
 #pragma push_macro("U8")
 #pragma push_macro("U16")
@@ -78,6 +81,10 @@ namespace JuceMilesNamespace
 
 		HDIGDRIVER driver = nullptr;
 		juce::AudioBuffer<float> pcm;
+		// Streamed assets: the pcm buffer is allocated FULL SIZE (zeroed) at open with the
+		// metadata already correct from the header; a worker fills it in chunks behind the
+		// play cursor. fillToken guards against release-or-reassign mid-fill.
+		std::uint64_t fillToken = 0;
 		std::vector<U8> encodedData;
 		FrameIndex totalFrames = 0;
 		FrameIndex seekFrame = 0;
@@ -256,6 +263,118 @@ namespace JuceMilesNamespace
 			position += 8 + declaredLength + (declaredLength & 1u);
 		}
 		return false;
+	}
+
+	// [audio.decode] verification log. _fsopen/_SH_DENYWR so it can be read while the
+	// client runs. One line per decode; cheap enough to leave on.
+	void audioDecodeLog(char const *format, ...)
+	{
+		static FILE *s_log = _fsopen("audio-decode.log", "a", _SH_DENYWR);
+		if (!s_log)
+			return;
+		va_list va;
+		va_start(va, format);
+		vfprintf(s_log, format, va);
+		va_end(va);
+		fputc('\n', s_log);
+		fflush(s_log);
+	}
+
+	std::uint64_t s_nextFillToken = 1;
+
+	// Streamed open: HEADER-FIRST. The engine snapshots a sample's metadata the moment
+	// AIL_open_stream returns -- Audio.cpp:3031 reads playbackRate ONCE into the Sound2 and
+	// Sound2d::alter re-applies that captured value EVERY frame -- so metadata that is wrong
+	// at open stays wrong forever (a pending-decode rate of 0 renders music at the 0.0625x
+	// mixer clamp: four octaves down, measured 2026-08-15). The PCM DATA, by contrast, may
+	// arrive late: nothing engine-side abandons a slow stream, and the mixer reads whatever
+	// is in the buffer.
+	//
+	// So: parse the header synchronously (cheap -- no DCT work), set totalFrames/rate/
+	// channels/playbackRate correctly, allocate the FULL pcm buffer zeroed, decode the
+	// first block inline so play starts with real audio, then fill the rest on a worker.
+	// The buffer is never resized after this, so the audio callback's pointers stay
+	// valid; the worker decodes each chunk OUTSIDE the lock into scratch and takes the
+	// lock only for the copy-in and token check. Worst case on any failure is silence in
+	// the un-filled tail -- never wrong metadata, never a state the engine cannot handle.
+	bool openStreamedSample(SampleState &sample, HSAMPLE handle, char const *name)
+	{
+		double const t0 = juce::Time::getMillisecondCounterHiRes();
+
+		auto headerStream = std::make_unique<juce::MemoryInputStream>(sample.encodedData.data(), sample.encodedData.size(), false);
+		std::unique_ptr<juce::AudioFormatReader> reader(s_formatManager.createReaderFor(std::move(headerStream)));
+		if (!reader || reader->numChannels == 0 || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0)
+			return false;                       // caller falls back to the synchronous path
+		if (reader->lengthInSamples > static_cast<juce::int64>((std::numeric_limits<int>::max)()))
+			return false;
+
+		//-- metadata: correct BEFORE the engine can look
+		sample.sourceChannels    = static_cast<S32>((std::min)(reader->numChannels, 2u));
+		sample.sourceSampleRate  = static_cast<S32>(reader->sampleRate + 0.5);
+		sample.sourceBits        = static_cast<S32>(reader->bitsPerSample);
+		sample.totalFrames       = static_cast<FrameIndex>(reader->lengthInSamples);
+		sample.playbackRate      = sample.sourceSampleRate;
+		sample.encodedBlockAlign = (std::max)(1, sample.sourceChannels * (std::max)(1, sample.sourceBits / 8));
+		sample.seekFrame         = 0;
+		sample.cursorFrame       = 0.0;
+		sample.completed.store(false, std::memory_order_release);
+		sample.status            = SMP_DONE;   // normal loaded-not-started, same as the sync path
+
+		//-- full-size buffer, zero-filled; NEVER resized again
+		sample.pcm.setSize(sample.sourceChannels, static_cast<int>(sample.totalFrames), false, true, false);
+
+		//-- first block inline so playback opens on real audio, not zeros (~1 second)
+		int const firstBlock = static_cast<int>((std::min)(sample.totalFrames, static_cast<FrameIndex>(sample.sourceSampleRate)));
+		if (firstBlock > 0 && !reader->read(&sample.pcm, 0, firstBlock, 0, true, sample.sourceChannels > 1))
+			return false;
+
+		std::uint64_t const token = s_nextFillToken++;
+		sample.fillToken = token;
+
+		double const openMs = juce::Time::getMillisecondCounterHiRes() - t0;
+		audioDecodeLog("[audio.stream] open=%.1fms frames=%d ch=%d rate=%d firstBlock=%d name=%s",
+			openMs, static_cast<int>(sample.totalFrames), static_cast<int>(sample.sourceChannels),
+			static_cast<int>(sample.sourceSampleRate), firstBlock, (name && *name) ? name : "(unnamed)");
+
+		//-- background fill for the remainder. The reader (over a COPY of the encoded
+		//   bytes) lives on the worker; SampleState is only touched under the lock, per
+		//   chunk, after a token check.
+		if (static_cast<FrameIndex>(firstBlock) < sample.totalFrames)
+		{
+			FrameIndex const total = sample.totalFrames;
+			S32 const channels = sample.sourceChannels;
+			std::vector<U8> encodedCopy = sample.encodedData;
+			std::string nameCopy = (name && *name) ? name : "";
+			std::thread([handle, token, total, channels, firstBlock,
+			             encodedCopy = std::move(encodedCopy), nameCopy = std::move(nameCopy)]() mutable
+			{
+				double const w0 = juce::Time::getMillisecondCounterHiRes();
+				auto fillStream = std::make_unique<juce::MemoryInputStream>(encodedCopy.data(), encodedCopy.size(), false);
+				std::unique_ptr<juce::AudioFormatReader> fillReader(s_formatManager.createReaderFor(std::move(fillStream)));
+				if (!fillReader)
+					return;                     // tail stays silent; metadata is still correct
+
+				int const chunkFrames = 262144;
+				juce::AudioBuffer<float> scratch(channels, chunkFrames);
+				FrameIndex position = static_cast<FrameIndex>(firstBlock);
+				while (position < total)
+				{
+					int const n = static_cast<int>((std::min)(total - position, static_cast<FrameIndex>(chunkFrames)));
+					if (!fillReader->read(&scratch, 0, n, static_cast<juce::int64>(position), true, channels > 1))
+						return;
+
+					std::lock_guard<std::recursive_mutex> lock(s_mutex);
+					auto const iter = s_samples.find(handle);
+					if (iter == s_samples.end() || iter->second->fillToken != token)
+						return;                 // released or reassigned: stop, touch nothing
+					for (int ch = 0; ch < channels; ++ch)
+						iter->second->pcm.copyFrom(ch, static_cast<int>(position), scratch, ch, 0, n);
+					position += static_cast<FrameIndex>(n);
+				}
+				audioDecodeLog("[audio.stream] fill=%.1fms name=%s", juce::Time::getMillisecondCounterHiRes() - w0, nameCopy.c_str());
+			}).detach();
+		}
+		return true;
 	}
 
 	bool decodeAudio(SampleState &sample)
@@ -777,6 +896,8 @@ namespace JuceMilesNamespace
 		auto const iter = s_samples.find(sampleHandle);
 		if (iter == s_samples.end())
 			return;
+		// stop any in-flight background fill from touching this (soon-freed) sample
+		iter->second->fillToken = 0;
 		destroyVoice(*iter->second);
 		delete sampleHandle;
 		s_samples.erase(iter);
@@ -1053,6 +1174,7 @@ extern "C"
 			return 0;
 		}
 		destroyVoice(*sample);
+		sample->fillToken = 0;   // supersede any background fill still in flight
 		sample->encodedData.assign(static_cast<U8 const *>(fileImage), static_cast<U8 const *>(fileImage) + fileSize);
 		return decodeAudio(*sample) && createVoice(*sample) ? 1 : 0;
 	}
@@ -1314,12 +1436,28 @@ extern "C"
 		if (!findDriver(driver) || !filename || !readStreamFile(filename, fileData))
 			return nullptr;
 		HSAMPLE const sampleHandle = AIL_allocate_sample_handle(driver);
-		char const *extension = std::strrchr(filename, '.');
-		if (!sampleHandle || !AIL_set_named_sample_file(sampleHandle, extension ? extension : "", fileData.data(), static_cast<U32>(fileData.size()), 0))
-		{
-			if (sampleHandle)
-				AIL_release_sample_handle(sampleHandle);
+		if (!sampleHandle)
 			return nullptr;
+
+		// Header-first open (metadata correct immediately, PCM filled in the background --
+		// see openStreamedSample). If the header parse fails, fall back to the original
+		// fully synchronous decode so behaviour is never worse than before.
+		SampleState *const sample = findSample(sampleHandle);
+		bool opened = false;
+		if (sample)
+		{
+			destroyVoice(*sample);
+			sample->encodedData = fileData;   // keep fileData for the sync fallback
+			opened = openStreamedSample(*sample, sampleHandle, filename);
+		}
+		if (!opened)
+		{
+			char const *extension = std::strrchr(filename, '.');
+			if (!AIL_set_named_sample_file(sampleHandle, extension ? extension : "", fileData.data(), static_cast<U32>(fileData.size()), 0))
+			{
+				AIL_release_sample_handle(sampleHandle);
+				return nullptr;
+			}
 		}
 		HSTREAM token = new _STREAM;
 		std::memset(token, 0, sizeof(*token));
