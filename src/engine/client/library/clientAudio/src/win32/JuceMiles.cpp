@@ -282,6 +282,12 @@ namespace JuceMilesNamespace
 
 	std::uint64_t s_nextFillToken = 1;
 
+	// Dropout metric: the device callback outputs SILENCE for any block where it
+	// cannot take s_mutex (try_to_lock below). Every miss is therefore one audible
+	// gap. Counted here, reported from AIL_serve (never from the callback itself).
+	std::atomic<std::uint64_t> s_callbackBlocks{0};
+	std::atomic<std::uint64_t> s_callbackLockMisses{0};
+
 	// Streamed open: HEADER-FIRST. The engine snapshots a sample's metadata the moment
 	// AIL_open_stream returns -- Audio.cpp:3031 reads playbackRate ONCE into the Sound2 and
 	// Sound2d::alter re-applies that captured value EVERY frame -- so metadata that is wrong
@@ -795,8 +801,15 @@ namespace JuceMilesNamespace
 				juce::FloatVectorOperations::clear(outputChannelData[channel], numSamples);
 		}
 
+		s_callbackBlocks.fetch_add(1, std::memory_order_relaxed);
 		std::unique_lock<std::recursive_mutex> lock(s_mutex, std::try_to_lock);
-		if (!lock.owns_lock() || numOutputChannels <= 0 || numSamples <= 0)
+		if (!lock.owns_lock())
+		{
+			// this block plays as SILENCE -- the audible dropout unit
+			s_callbackLockMisses.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		if (numOutputChannels <= 0 || numSamples <= 0)
 			return;
 
 		if (wetBuffer.getNumSamples() < numSamples)
@@ -1668,6 +1681,24 @@ extern "C"
 	void AILCALL AIL_serve(void)
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+
+		// Dropout report: one line whenever new callback lock-misses appeared,
+		// throttled to ~5s. A miss = one silent output block = one audible gap.
+		{
+			static std::uint64_t s_lastReportedMisses = 0;
+			static double s_lastReportMs = 0.0;
+			double const nowMs = juce::Time::getMillisecondCounterHiRes();
+			std::uint64_t const misses = s_callbackLockMisses.load(std::memory_order_relaxed);
+			if (misses != s_lastReportedMisses && (nowMs - s_lastReportMs) >= 5000.0)
+			{
+				audioDecodeLog("[audio.dropout] lockMisses=%llu of %llu callback blocks (+%llu since last report)",
+					static_cast<unsigned long long>(misses),
+					static_cast<unsigned long long>(s_callbackBlocks.load(std::memory_order_relaxed)),
+					static_cast<unsigned long long>(misses - s_lastReportedMisses));
+				s_lastReportedMisses = misses;
+				s_lastReportMs = nowMs;
+			}
+		}
 		std::vector<HSAMPLE> completed;
 		for (auto const &entry : s_samples)
 			if (entry.second->completed.exchange(false, std::memory_order_acq_rel))
