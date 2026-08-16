@@ -509,6 +509,69 @@ bool VisibilityQuery::performStencilOP(ImpCamera* sc, ImpPhysicalPortal* sp,Rang
  *
  *****************************************************************************/
 
+// SWG CONSULT-64 diagnostic: per-frame portal-rejection reason counters, read and
+// reset each frame by the engine's portal-cull probe (RenderWorld.cpp). Indices:
+// [0]=portal backface cull (dpvsVisibilityQuery_Test.cpp), [1]=calculateTransition,
+// [2]=testTransition (recursion solver), [3]=getTestRectangle, [4]=createFrustumFromRectangle,
+// [5]=portal skipped because its VISIBILITY PARENT was hidden (Test.cpp:58-62 --
+// fires BEFORE any counted reject; the round-6 all-zero collapse suspect),
+// [6]=portals TESTED at all (entered isObjectVisible_INTERNAL) -- 0 on a collapse
+// frame means the database traversal never enumerated them.
+// Round 7 (tested:0 CONFIRMED on all collapse frames): portal DATABASE lifecycle --
+// [7]=Database::updateObject on a portal, [8]=Database::removeObject on a portal,
+// [9]=Database::addObject on a portal (dpvsDatabase.cpp).
+// Accessed via the exported FUNCTION below because Win32 builds dpvs as a DLL
+// (data exports would need dllimport on the consumer; function imports do not)
+// while x64 links it statically (dllexport is benign there).
+// CONSULT-66 round 2 (2026-07-07): indices [10..13] attribute the SILENT culling
+// routes to PORTAL objects specifically (the STUCK0 probe proved a live, enabled,
+// in-database portal goes untested while staring at it -- these name the guilty
+// stage): [10]=portal killed by the object AABB-vs-frustum test (dpvsDatabase.cpp
+// traverseNode object loop), [11]=portal killed by the exact OBB test
+// (isObjectInViewFrustum), [12]=portal inside a node returned NODE_HIDDEN by the
+// node view-frustum test, [13]=portal inside a node returned NODE_HIDDEN by the
+// timestamp-skip or occlusion path.
+extern "C" unsigned int g_swgDpvsPortalRejects[14] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+extern "C" __declspec(dllexport) unsigned int * swgDpvsGetPortalRejects(void)
+{
+	return g_swgDpvsPortalRejects;
+}
+
+// SWG CONSULT-66 diagnostic: is this object currently INSTANCED in a cell database?
+// ImpCell::enableObject() REMOVES a disabled object's DB instances and re-adds them on
+// enable (dpvsImpCell.cpp), so the engine-side ENABLED flag and actual database
+// membership can disagree -- that disagreement is what the STUCK0 probe discriminates
+// (enabled-but-absent = membership loss; enabled-and-present-but-untested = a silent
+// node/object view-frustum cull). Function export for the same DLL/static-link reason
+// as swgDpvsGetPortalRejects above.
+extern "C" __declspec(dllexport) int swgDpvsObjectInDatabase(DPVS::Object *object)
+{
+	if (!object)
+		return 0;
+	ImpObject const * const imp = object->getImplementation();
+	return (imp && imp->getFirstInstance()) ? 1 : 0;
+}
+
+// SWG CONSULT-66 diagnostic: the object's cell-space test bounding volume (m_TBV).
+// The 2026-07-07 sighting behaves like a spatial REGION the camera eye sits inside
+// ("consistent distance like a viewport", clears on any eye translation) -- printing
+// the affected portal's box next to the camera position shows on sight whether the
+// box is wrong/inflated and whether pos-in-box tracks the hole. Returns 1 and fills
+// out[minX,minY,minZ,maxX,maxY,maxZ] on success.
+extern "C" __declspec(dllexport) int swgDpvsGetObjectCellSpaceAABB(DPVS::Object *object, float out[6])
+{
+	if (!object || !out)
+		return 0;
+	ImpObject const * const imp = object->getImplementation();
+	if (!imp)
+		return 0;
+	AABB const &box = imp->getCellSpaceAABB();
+	out[0] = box.getMin().x; out[1] = box.getMin().y; out[2] = box.getMin().z;
+	out[3] = box.getMax().x; out[4] = box.getMax().y; out[5] = box.getMax().z;
+	return 1;
+}
+
 bool VisibilityQuery::traversePortal(ImpCamera* targetCamera, Cell* userTargetCell, UINT32 clipMask)
 {
 	DPVS_ASSERT(VQData::get().testProperties(VQData::FLOW_ACTIVE));
@@ -534,14 +597,20 @@ bool VisibilityQuery::traversePortal(ImpCamera* targetCamera, Cell* userTargetCe
 	Matrix4x3 m(NO_CONSTRUCTOR);
 
 	if(!p->calculateTransition(s,d, m,targetCell))
+	{
+		++g_swgDpvsPortalRejects[1];
 		return false;
+	}
 
 	//---------------------------------------------------------------
 	// test transition using recursion solver
 	//---------------------------------------------------------------
 
 	if(!testTransition(s,d,targetCell,transitionFlags))
+	{
+		++g_swgDpvsPortalRejects[2];
 		return false;
+	}
 
 	//---------------------------------------------------------------
 	// set data to target camera
@@ -556,11 +625,17 @@ bool VisibilityQuery::traversePortal(ImpCamera* targetCamera, Cell* userTargetCe
 
 	FloatRectangle	portalRectangle;
 	if(!p->getTestRectangle(portalRectangle))
+	{
+		++g_swgDpvsPortalRejects[3];
 		return false;
+	}
 
 	Frustum frustum;
 	if(!targetCamera->createFrustumFromRectangle(frustum,portalRectangle))		// create a new view frustum
+	{
+		++g_swgDpvsPortalRejects[4];
 		return false;
+	}
 
 	targetCamera->setFrustumPlanesAndMatrix	(frustum);
 

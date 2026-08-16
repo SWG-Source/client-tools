@@ -508,7 +508,15 @@ bool ImpMeshModel::backFaceCull (const Vector4& tlat) const
 
 	for(int i=0;i<cnt;i++)
 	{
-		const float    EPSILON	= 0.0f;										// assign negative values to give some leeway to the calculation..
+		// SWG CONSULT-65 fix 4 (2026-07-06): was 0.0f. A camera eye sitting ON a
+		// portal's plane (knife-edge at a cell boundary -- probe signature
+		// tested:1/bf:1 with the whole neighbor cell culled) flip-flops this test
+		// on float noise; the original comment below already documents negative
+		// values as the intended leeway. -0.05 (model-space, ~5cm for portals)
+		// keeps a portal traversable while the eye is marginally behind its
+		// plane; for ordinary backface-cullable meshes this is merely a slightly
+		// conservative cull (a few extra edge-on faces drawn -- safe).
+		const float    EPSILON	= -0.05f;									// assign negative values to give some leeway to the calculation..
 		const Vector4& p		= plEq[i];									// access to plEq
 		float          dist		= tlat.x*p.x + tlat.y*p.y + tlat.z*p.z + tlat.w * p.w;
 
