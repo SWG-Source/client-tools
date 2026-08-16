@@ -272,6 +272,9 @@ namespace JuceMilesNamespace
 		static FILE *s_log = _fsopen("audio-decode.log", "a", _SH_DENYWR);
 		if (!s_log)
 			return;
+		SYSTEMTIME st;
+		GetLocalTime(&st);
+		fprintf(s_log, "%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 		va_list va;
 		va_start(va, format);
 		vfprintf(s_log, format, va);
@@ -1721,21 +1724,19 @@ extern "C"
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 
-		// Dropout report: one line whenever new callback lock-misses appeared,
-		// throttled to ~5s. A miss = one silent output block = one audible gap.
+		// Dropout report: UNTHROTTLED -- one timestamped line per miss event, so a
+		// listener's "tiny pop at T" can be correlated against a specific miss.
+		// AIL_serve runs every ~50 ms, so each line pins its miss to +/-50 ms.
 		{
 			static std::uint64_t s_lastReportedMisses = 0;
-			static double s_lastReportMs = 0.0;
-			double const nowMs = juce::Time::getMillisecondCounterHiRes();
 			std::uint64_t const misses = s_callbackLockMisses.load(std::memory_order_relaxed);
-			if (misses != s_lastReportedMisses && (nowMs - s_lastReportMs) >= 5000.0)
+			if (misses != s_lastReportedMisses)
 			{
-				audioDecodeLog("[audio.dropout] lockMisses=%llu of %llu callback blocks (+%llu since last report)",
+				audioDecodeLog("[audio.dropout] +%llu miss(es), total %llu of %llu blocks",
+					static_cast<unsigned long long>(misses - s_lastReportedMisses),
 					static_cast<unsigned long long>(misses),
-					static_cast<unsigned long long>(s_callbackBlocks.load(std::memory_order_relaxed)),
-					static_cast<unsigned long long>(misses - s_lastReportedMisses));
+					static_cast<unsigned long long>(s_callbackBlocks.load(std::memory_order_relaxed)));
 				s_lastReportedMisses = misses;
-				s_lastReportMs = nowMs;
 			}
 		}
 		std::vector<HSAMPLE> completed;
