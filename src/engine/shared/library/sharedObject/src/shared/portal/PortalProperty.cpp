@@ -481,16 +481,21 @@ void PortalProperty::cellLoaded(int cellIndex, Object &cellObject, bool shouldCr
 		WARNING(true, ("CellProblem for portal %s cell index %d already loaded", getOwner().getNetworkId().getValueString().c_str(), cellIndex));
 	}
 
-	// attach the cell as a child of the portal object.
-	// asChildObject MUST be true so that when the building (parent) later gets
-	// addToWorld(), Object::addToWorld iterates m_attachedObjects and adds
-	// each cell via `if ((*i)->isChildObject() && !(*i)->isInWorld())`. With
-	// asChildObject=false the cell would never be added in the multiplayer-
-	// client SceneCreate flow (cells' SceneEndBaselines arrive before the
-	// building's, so the conditional addToWorld in handleEndBaselines is
-	// skipped on the containedBy->isInWorld() check, and nothing later picks
-	// them up).
-	cellObject.attachToObject_p(&getOwner(), true);
+	// attach the cell as a child of the portal object -- asChildObject FALSE,
+	// the stock value. A previous change flipped this to true, reasoning that a
+	// cell whose SceneEndBaselines arrives before its building's is skipped by
+	// handleEndBaselines' containedBy->isInWorld() check and "nothing later
+	// picks them up". Something does: when the BUILDING is added,
+	// Object::addToWorld runs the property loop, PortalProperty::addToWorld
+	// ends in Container::addToWorld, and that walks this container's CONTENTS
+	// -- which the cells are, via containment, independent of the child-attach
+	// flag -- and adds every exposed cell. That is the shipped design, it is
+	// why retail ran false for two decades of multiplayer, and the sibling
+	// tree runs it live daily. asChildObject=true additionally made every
+	// network-owned CellObject parent-destructor-deleted AND network-deleted
+	// -- a latent double-delete on building teardown -- and parent-alter-driven
+	// instead of world-driven.
+	cellObject.attachToObject_p(&getOwner(), false);
 
 	// get the cell property from the cell object
 	CellProperty *cell = cellObject.getCellProperty();
