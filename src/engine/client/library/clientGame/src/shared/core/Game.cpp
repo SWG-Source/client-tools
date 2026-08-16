@@ -111,6 +111,7 @@
 #include "sharedFoundation/ExitChain.h"
 #include "sharedFoundation/Os.h"
 
+#include <share.h>    // _SH_DENYWR -- the stall log stays readable while the client runs
 #include <dbghelp.h>   // stall watchdog stack sampler (StackWalk64 types; the system dll is loaded at runtime)
 #include "sharedFoundation/Production.h"
 #include "sharedGame/GameScheduler.h"
@@ -1518,8 +1519,11 @@ namespace StallWatchdogNamespace
 				LARGE_INTEGER qpcFrequency;
 				QueryPerformanceFrequency(&qpcFrequency);
 				s_qpcFrequency = qpcFrequency.QuadPart;
-				if (fopen_s(&s_stallLog, "stall-watchdog.log", "a") != 0)
-					s_stallLog = NULL;
+				// _fsopen with _SH_DENYWR, NOT fopen_s: fopen_s opens EXCLUSIVE, which
+				// makes the log unreadable until the client exits -- exactly wrong for
+				// "it is stalling right now, look at the log". Deny other writers, allow
+				// readers. Every stallLog() line is fflush'd, so a live tail is current.
+				s_stallLog = _fsopen("stall-watchdog.log", "a", _SH_DENYWR);
 				HANDLE const thread = CreateThread(NULL, 0, stallWatchdogThreadProc, NULL, 0, NULL);
 				if (thread)
 				{
