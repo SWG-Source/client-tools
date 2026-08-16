@@ -178,9 +178,21 @@ foreach ($platform in $platforms) {
     Write-Host "Solution: $solution"
     Write-Host "Build: $Configuration|$platform; renderers=$Renderer; audio=$AudioBackend; toolset=$PlatformToolset"
 
-    & $msbuild @arguments
+    $buildLog = Join-Path ([IO.Path]::GetTempPath()) ("swg-build-{0}-{1}-{2}.log" -f $Configuration, $platform, $PID)
+    & $msbuild @arguments | Tee-Object -FilePath $buildLog
     if ($LASTEXITCODE -ne 0) {
         throw "The $Configuration|$platform client build failed with exit code $LASTEXITCODE."
+    }
+
+    # SwgClient links with ForceFileOutput (/FORCE), which downgrades LNK2019/
+    # LNK2001 unresolved-external errors to warnings and still emits a binary --
+    # so MSBuild exit 0 is NOT a clean link. A binary linked this way boots into
+    # undefined behavior at the first call through a stubbed symbol. Gate: the
+    # build log must contain ZERO unresolved external references.
+    $unresolved = @(Select-String -Path $buildLog -Pattern 'unresolved external symbol' -SimpleMatch)
+    if ($unresolved.Count -gt 0) {
+        $unresolved | Select-Object -First 10 | ForEach-Object { Write-Host $_.Line }
+        throw "The $Configuration|$platform link left $($unresolved.Count) unresolved external symbol reference(s); /FORCE emitted a binary anyway -- treating the build as FAILED. Full log: $buildLog"
     }
 
     $expectedMachine = if ($platform -eq "x64") { 0x8664 } else { 0x014c }

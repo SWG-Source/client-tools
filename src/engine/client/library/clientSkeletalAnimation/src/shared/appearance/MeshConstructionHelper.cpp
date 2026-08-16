@@ -553,7 +553,7 @@ void MeshConstructionHelper::prepareForReading(void)
 			{
 				// get the VertexData for this shader vertex
 				const size_t vertexDataIndex = psd->m_vertexIndices[shaderVertexIndex];
-				VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0U, vertexDataIndex, m_vertexData->m_container.size()); //lint !e1703 // arbitrarily chosen template function
+				VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(static_cast<size_t>(0), vertexDataIndex, m_vertexData->m_container.size()); //lint !e1703 // arbitrarily chosen template function
 
 				VertexData &vertexData = m_vertexData->m_container[vertexDataIndex];
 
@@ -1402,7 +1402,7 @@ const MeshConstructionHelper::TriStripHeader &MeshConstructionHelper::getTriStri
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE( 0, triStripIndex, static_cast<int>(perShaderData->m_triStripIndices.size()) );
 
 	const size_t triStripHeaderIndex = perShaderData->m_triStripIndices[static_cast<size_t>(triStripIndex)];
-	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE( 0U, triStripHeaderIndex, m_triStripHeaders->m_container.size() ); //lint !e1703
+	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE( static_cast<size_t>(0), triStripHeaderIndex, m_triStripHeaders->m_container.size() ); //lint !e1703
 
 	return m_triStripHeaders->m_container[triStripHeaderIndex];
 }
@@ -1429,7 +1429,7 @@ int MeshConstructionHelper::getTriStripVertexIndex(const TriStripHeader &triStri
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, vertexIndex, triStripHeader.m_indexCount);
 
 	const size_t indexIntoTriStripIndex = static_cast<size_t>(triStripHeader.m_firstTriStripIndex + vertexIndex);
-	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0U, indexIntoTriStripIndex, m_triStripIndices->m_container.size() ); //lint !e1703
+	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(static_cast<size_t>(0), indexIntoTriStripIndex, m_triStripIndices->m_container.size() ); //lint !e1703
 
 	return static_cast<int>(m_triStripIndices->m_container[indexIntoTriStripIndex]);
 }
@@ -1451,7 +1451,7 @@ const MeshConstructionHelper::TriListHeader &MeshConstructionHelper::getTriList(
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, triListIndex, static_cast<int>(perShaderData->m_triListIndices.size()));
 
 	const size_t triListHeaderIndex = perShaderData->m_triListIndices[static_cast<size_t>(triListIndex)];
-	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0U, triListHeaderIndex, m_triListHeaders->m_container.size()); //lint !e1703 // template arbitrarily selected
+	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(static_cast<size_t>(0), triListHeaderIndex, m_triListHeaders->m_container.size()); //lint !e1703 // template arbitrarily selected
 
 	return m_triListHeaders->m_container[triListHeaderIndex];
 }
@@ -1472,7 +1472,7 @@ void MeshConstructionHelper::getTriListTriangle(const PerShaderData *perShaderDa
 	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, triIndex, triListHeader.m_triangleCount);
 
 	const size_t indexedTriangleIndex = triListHeader.m_firstTriangleIndex + static_cast<size_t>(triIndex);
-	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0U, indexedTriangleIndex, m_indexedTriangles->size() / 3); //lint !e1703 // template arbitrarily selected
+	VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(static_cast<size_t>(0), indexedTriangleIndex, m_indexedTriangles->size() / 3); //lint !e1703 // template arbitrarily selected
 
 	//const IndexedTriangle &triangle = (*m_indexedTriangles)[indexedTriangleIndex];
 
