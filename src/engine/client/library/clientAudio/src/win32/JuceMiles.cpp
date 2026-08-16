@@ -40,6 +40,33 @@ namespace JuceMilesNamespace
 
 	struct SampleState;
 
+	// A Vector3 whose components are written lock-free by the game thread's
+	// per-frame setters and read by the device callback. Components load/store
+	// relaxed and independently; a block mixing from a listener position torn
+	// between two consecutive frames is inaudible, a lock hold is not.
+	struct AtomicVector3
+	{
+		AtomicVector3(F32 initialX = 0.0f, F32 initialY = 0.0f, F32 initialZ = 0.0f) : x(initialX), y(initialY), z(initialZ)
+		{
+		}
+
+		std::atomic<F32> x;
+		std::atomic<F32> y;
+		std::atomic<F32> z;
+
+		Vector3 get() const
+		{
+			return {x.load(std::memory_order_relaxed), y.load(std::memory_order_relaxed), z.load(std::memory_order_relaxed)};
+		}
+
+		void set(F32 newX, F32 newY, F32 newZ)
+		{
+			x.store(newX, std::memory_order_relaxed);
+			y.store(newY, std::memory_order_relaxed);
+			z.store(newZ, std::memory_order_relaxed);
+		}
+	};
+
 	struct DriverState final : public juce::AudioIODeviceCallback
 	{
 		HDIGDRIVER handle = nullptr;
@@ -51,15 +78,21 @@ namespace JuceMilesNamespace
 		S32 bufferSize = 0;
 		MSS_MC_SPEC channelSpec = MSS_MC_STEREO;
 		S32 roomType = ENVIRONMENT_GENERIC;
-		F32 rolloffFactor = 1.0f;
-		F32 masterVolume = 1.0f;
-		F32 masterDryLevel = 1.0f;
-		F32 masterWetLevel = 1.0f;
-		Vector3 listenerPosition;
-		Vector3 listenerVelocity;
-		Vector3 listenerFront = {0.0f, 0.0f, -1.0f};
-		Vector3 listenerUp = {0.0f, 1.0f, 0.0f};
+		std::atomic<F32> rolloffFactor = 1.0f;
+		std::atomic<F32> masterVolume = 1.0f;
+		std::atomic<F32> masterDryLevel = 1.0f;
+		std::atomic<F32> masterWetLevel = 1.0f;
+		AtomicVector3 listenerPosition;
+		AtomicVector3 listenerVelocity;
+		AtomicVector3 listenerFront{0.0f, 0.0f, -1.0f};
+		AtomicVector3 listenerUp{0.0f, 1.0f, 0.0f};
 		std::atomic<bool> deviceRunning = false;
+		// Miss masking: the last successfully mixed block, replayed (fading) on a
+		// lock-miss so a residual miss is stale audio instead of a silent gap.
+		// Touched ONLY by the device callback thread.
+		juce::AudioBuffer<float> lastBlock;
+		int lastBlockSamples = 0;
+		F32 lastBlockRepeatGain = 1.0f;
 
 		void audioDeviceIOCallbackWithContext(
 			float const *const *,
@@ -93,21 +126,23 @@ namespace JuceMilesNamespace
 		S32 sourceSampleRate = 0;
 		S32 sourceBits = 0;
 		S32 encodedBlockAlign = 1;
-		S32 playbackRate = 0;
-		F32 leftVolume = 1.0f;
-		F32 rightVolume = 1.0f;
-		F32 dryLevel = 1.0f;
-		F32 wetLevel = 0.0f;
-		F32 obstruction = 0.0f;
-		F32 occlusion = 0.0f;
-		F32 positionX = 0.0f;
-		F32 positionY = 0.0f;
-		F32 positionZ = 0.0f;
-		F32 velocityX = 0.0f;
-		F32 velocityY = 0.0f;
-		F32 velocityZ = 0.0f;
-		F32 minDistance = 1.0f;
-		F32 maxDistance = 100.0f;
+		// The atomics below are the per-frame HOT mix parameters: the engine sets
+		// them per sound per frame, and every lock those setters held was a chance
+		// for the device callback's try_to_lock to miss (one audible pop each --
+		// the ~0.13%-of-blocks drip measured 2026-08-15). They are written WITHOUT
+		// s_mutex (relaxed stores from the game thread) and snapshotted per block
+		// by the callback. Everything structural stays under s_mutex.
+		std::atomic<S32> playbackRate = 0;
+		std::atomic<F32> leftVolume = 1.0f;
+		std::atomic<F32> rightVolume = 1.0f;
+		std::atomic<F32> dryLevel = 1.0f;
+		std::atomic<F32> wetLevel = 0.0f;
+		std::atomic<F32> obstruction = 0.0f;
+		std::atomic<F32> occlusion = 0.0f;
+		AtomicVector3 position;
+		AtomicVector3 velocity;
+		std::atomic<F32> minDistance = 1.0f;
+		std::atomic<F32> maxDistance = 100.0f;
 		F32 filterLeft = 0.0f;
 		F32 filterRight = 0.0f;
 		S32 loopCount = 1;
@@ -118,8 +153,8 @@ namespace JuceMilesNamespace
 		AILSAMPLECB eosCallback = nullptr;
 		HSTREAM ownerStream = nullptr;
 		std::atomic<bool> completed = false;
-		U32 status = SMP_DONE;
-		bool spatialized = false;
+		std::atomic<U32> status = SMP_DONE;
+		std::atomic<bool> spatialized = false;
 	};
 
 	struct StreamState
@@ -133,6 +168,14 @@ namespace JuceMilesNamespace
 	using SampleMap = std::unordered_map<HSAMPLE, std::unique_ptr<SampleState>>;
 	using StreamMap = std::unordered_map<HSTREAM, std::unique_ptr<StreamState>>;
 
+	// s_mutex guards the handle maps and all structural sample state. The device
+	// callback takes it with try_to_lock, and every hold on any other thread is a
+	// chance for that to miss (= one masked-or-audible dropout block). The
+	// per-frame HOT entry points (volume/rate/3D/status polls) therefore take no
+	// lock at all: the engine calls every AIL_ function from the game thread only
+	// -- the maps' sole mutator -- so an unlocked map FIND on the game thread
+	// cannot race the (still locked) insert/erase paths, and the values written
+	// are relaxed atomics: stale by one block is fine, a lock hold is not.
 	std::recursive_mutex s_mutex;
 	DriverMap s_drivers;
 	SampleMap s_samples;
@@ -346,19 +389,20 @@ namespace JuceMilesNamespace
 		sample.sourceSampleRate  = decoded.sampleRate;
 		sample.sourceBits        = decoded.bits;
 		sample.totalFrames       = decoded.totalFrames;
-		sample.playbackRate      = decoded.sampleRate;
+		sample.playbackRate.store(decoded.sampleRate, std::memory_order_relaxed);
 		sample.encodedBlockAlign = decoded.blockAlign;
 		sample.pcm               = std::move(decoded.pcm);
 		sample.seekFrame         = 0;
 		sample.cursorFrame       = 0.0;
 		sample.completed.store(false, std::memory_order_release);
-		sample.status            = SMP_DONE;
+		sample.status.store(SMP_DONE, std::memory_order_relaxed);
 	}
 
 
-	// Dropout metric: the device callback outputs SILENCE for any block where it
-	// cannot take s_mutex (try_to_lock below). Every miss is therefore one audible
-	// gap. Counted here, reported from AIL_serve (never from the callback itself).
+	// Dropout metric: any block where the device callback cannot take s_mutex
+	// (try_to_lock below) is a dropout -- masked by replaying the previous block,
+	// but still counted, because misses ~ 0 remains the verifiable clean bar.
+	// Reported from AIL_serve (never from the callback itself).
 	std::atomic<std::uint64_t> s_callbackBlocks{0};
 	std::atomic<std::uint64_t> s_callbackLockMisses{0};
 
@@ -393,12 +437,12 @@ namespace JuceMilesNamespace
 		sample.sourceSampleRate  = static_cast<S32>(reader->sampleRate + 0.5);
 		sample.sourceBits        = static_cast<S32>(reader->bitsPerSample);
 		sample.totalFrames       = static_cast<FrameIndex>(reader->lengthInSamples);
-		sample.playbackRate      = sample.sourceSampleRate;
+		sample.playbackRate.store(sample.sourceSampleRate, std::memory_order_relaxed);
 		sample.encodedBlockAlign = (std::max)(1, sample.sourceChannels * (std::max)(1, sample.sourceBits / 8));
 		sample.seekFrame         = 0;
 		sample.cursorFrame       = 0.0;
 		sample.completed.store(false, std::memory_order_release);
-		sample.status            = SMP_DONE;   // normal loaded-not-started, same as the sync path
+		sample.status.store(SMP_DONE, std::memory_order_relaxed);   // normal loaded-not-started, same as the sync path
 
 		//-- full-size buffer, zero-filled; NEVER resized again
 		sample.pcm.setSize(sample.sourceChannels, static_cast<int>(sample.totalFrames), false, true, false);
@@ -659,9 +703,9 @@ namespace JuceMilesNamespace
 
 	F32 calculateDoppler(DriverState const &driver, SampleState const &sample, Vector3 const &direction)
 	{
-		Vector3 const sourceVelocity = {sample.velocityX, sample.velocityY, sample.velocityZ};
+		Vector3 const sourceVelocity = sample.velocity.get();
 		F32 const speedOfSound = 343.0f;
-		F32 const listenerRadial = dot(driver.listenerVelocity, direction);
+		F32 const listenerRadial = dot(driver.listenerVelocity.get(), direction);
 		F32 const sourceRadial = dot(sourceVelocity, direction);
 		F32 const numerator = clampValue(speedOfSound - listenerRadial, speedOfSound * 0.25f, speedOfSound * 4.0f);
 		F32 const denominator = clampValue(speedOfSound - sourceRadial, speedOfSound * 0.25f, speedOfSound * 4.0f);
@@ -670,7 +714,7 @@ namespace JuceMilesNamespace
 
 	void finishSample(SampleState &sample)
 	{
-		sample.status = SMP_DONE;
+		sample.status.store(SMP_DONE, std::memory_order_relaxed);
 		sample.completed.store(true, std::memory_order_release);
 	}
 
@@ -683,41 +727,56 @@ namespace JuceMilesNamespace
 		float *wetLeft,
 		float *wetRight)
 	{
-		if (sample.status != SMP_PLAYING || sample.totalFrames == 0 || sample.pcm.getNumSamples() == 0)
+		if (sample.status.load(std::memory_order_relaxed) != SMP_PLAYING || sample.totalFrames == 0 || sample.pcm.getNumSamples() == 0)
 			return;
 
-		Vector3 const sourcePosition = {sample.positionX, sample.positionY, sample.positionZ};
-		Vector3 const relative = subtract(sourcePosition, driver.listenerPosition);
+		//-- the hot parameters are relaxed atomics written lock-free by the game
+		//   thread's per-frame setters; snapshot once so the block mixes coherently
+		bool const spatialized = sample.spatialized.load(std::memory_order_relaxed);
+		F32 const sampleLeftVolume = sample.leftVolume.load(std::memory_order_relaxed);
+		F32 const sampleRightVolume = sample.rightVolume.load(std::memory_order_relaxed);
+		F32 const sampleDryLevel = sample.dryLevel.load(std::memory_order_relaxed);
+		F32 const sampleWetLevel = sample.wetLevel.load(std::memory_order_relaxed);
+		F32 const obstruction = sample.obstruction.load(std::memory_order_relaxed);
+		F32 const occlusion = sample.occlusion.load(std::memory_order_relaxed);
+		F32 const masterVolume = driver.masterVolume.load(std::memory_order_relaxed);
+		F32 const masterDryLevel = driver.masterDryLevel.load(std::memory_order_relaxed);
+		F32 const masterWetLevel = driver.masterWetLevel.load(std::memory_order_relaxed);
+		Vector3 const listenerFront = driver.listenerFront.get();
+		Vector3 const listenerUp = driver.listenerUp.get();
+
+		Vector3 const sourcePosition = sample.position.get();
+		Vector3 const relative = subtract(sourcePosition, driver.listenerPosition.get());
 		F32 const distance = length(relative);
-		Vector3 const direction = normalize(relative, driver.listenerFront);
-		Vector3 const right = normalize(cross(driver.listenerFront, driver.listenerUp), {1.0f, 0.0f, 0.0f});
+		Vector3 const direction = normalize(relative, listenerFront);
+		Vector3 const right = normalize(cross(listenerFront, listenerUp), {1.0f, 0.0f, 0.0f});
 		F32 const sidePan = clampValue(dot(direction, right), -1.0f, 1.0f);
-		F32 const frontness = clampValue((dot(direction, normalize(driver.listenerFront, {0.0f, 0.0f, -1.0f})) + 1.0f) * 0.5f, 0.0f, 1.0f);
+		F32 const frontness = clampValue((dot(direction, normalize(listenerFront, {0.0f, 0.0f, -1.0f})) + 1.0f) * 0.5f, 0.0f, 1.0f);
 
 		F32 attenuation = 1.0f;
-		if (sample.spatialized)
+		if (spatialized)
 		{
-			F32 const maximumDistance = (std::max)(sample.maxDistance, 1.0f);
-			F32 const minimumDistance = clampValue(sample.minDistance, 0.0f, maximumDistance);
+			F32 const maximumDistance = (std::max)(sample.maxDistance.load(std::memory_order_relaxed), 1.0f);
+			F32 const minimumDistance = clampValue(sample.minDistance.load(std::memory_order_relaxed), 0.0f, maximumDistance);
 			if (distance >= maximumDistance)
 				attenuation = 0.0f;
 			else if (distance > minimumDistance && maximumDistance > minimumDistance)
 			{
 				F32 const normalizedDistance = (distance - minimumDistance) / (maximumDistance - minimumDistance);
-				attenuation = std::pow(1.0f - normalizedDistance, (std::max)(driver.rolloffFactor, 0.05f));
+				attenuation = std::pow(1.0f - normalizedDistance, (std::max)(driver.rolloffFactor.load(std::memory_order_relaxed), 0.05f));
 			}
 		}
 
-		F32 const blocked = clampValue((std::max)(sample.obstruction, sample.occlusion), 0.0f, 1.0f);
-		F32 const blockedGain = clampValue(1.0f - sample.obstruction * 0.35f - sample.occlusion * 0.20f, 0.0f, 1.0f);
+		F32 const blocked = clampValue((std::max)(obstruction, occlusion), 0.0f, 1.0f);
+		F32 const blockedGain = clampValue(1.0f - obstruction * 0.35f - occlusion * 0.20f, 0.0f, 1.0f);
 		F32 const cutoff = 20000.0f - blocked * 18500.0f;
 		F32 const filterAlpha = std::exp(-2.0f * 3.14159265358979323846f * cutoff / static_cast<F32>((std::max)(driver.sampleRate, 1.0)));
 		F32 const panLeft = std::sqrt(0.5f * (1.0f - sidePan));
 		F32 const panRight = std::sqrt(0.5f * (1.0f + sidePan));
-		F32 const spatialVolume = (sample.leftVolume + sample.rightVolume) * 0.5f * attenuation * blockedGain * driver.masterVolume;
-		F32 const doppler = sample.spatialized ? calculateDoppler(driver, sample, direction) : 1.0f;
+		F32 const spatialVolume = (sampleLeftVolume + sampleRightVolume) * 0.5f * attenuation * blockedGain * masterVolume;
+		F32 const doppler = spatialized ? calculateDoppler(driver, sample, direction) : 1.0f;
 		double const step = clampValue(
-			static_cast<double>((std::max)(sample.playbackRate, 1)) / (std::max)(driver.sampleRate, 1.0) * doppler,
+			static_cast<double>((std::max)(sample.playbackRate.load(std::memory_order_relaxed), 1)) / (std::max)(driver.sampleRate, 1.0) * doppler,
 			0.0625,
 			8.0);
 
@@ -746,10 +805,10 @@ namespace JuceMilesNamespace
 			left = sample.filterLeft;
 			rightSample = sample.filterRight;
 
-			if (sample.spatialized)
+			if (spatialized)
 			{
 				F32 const mono = (left + rightSample) * 0.5f;
-				F32 const dryGain = spatialVolume * sample.dryLevel * driver.masterDryLevel;
+				F32 const dryGain = spatialVolume * sampleDryLevel * masterDryLevel;
 				F32 const frontGain = outputChannels >= 4 ? std::sqrt(frontness) : 1.0f;
 				F32 const rearGain = outputChannels >= 4 ? std::sqrt(1.0f - frontness) : 0.0f;
 				if (outputChannels > 0 && outputs[0])
@@ -777,20 +836,20 @@ namespace JuceMilesNamespace
 							outputs[7][outputFrame] += mono * panRight * dryGain * 0.5f;
 					}
 				}
-				F32 const wetGain = spatialVolume * sample.wetLevel * driver.masterWetLevel;
+				F32 const wetGain = spatialVolume * sampleWetLevel * masterWetLevel;
 				wetLeft[outputFrame] += mono * panLeft * wetGain;
 				wetRight[outputFrame] += mono * panRight * wetGain;
 			}
 			else
 			{
-				F32 const dryGain = sample.dryLevel * driver.masterDryLevel * driver.masterVolume;
+				F32 const dryGain = sampleDryLevel * masterDryLevel * masterVolume;
 				if (outputChannels > 0 && outputs[0])
-					outputs[0][outputFrame] += left * sample.leftVolume * dryGain;
+					outputs[0][outputFrame] += left * sampleLeftVolume * dryGain;
 				if (outputChannels > 1 && outputs[1])
-					outputs[1][outputFrame] += rightSample * sample.rightVolume * dryGain;
-				F32 const wetGain = sample.wetLevel * driver.masterWetLevel * driver.masterVolume;
-				wetLeft[outputFrame] += left * sample.leftVolume * wetGain;
-				wetRight[outputFrame] += rightSample * sample.rightVolume * wetGain;
+					outputs[1][outputFrame] += rightSample * sampleRightVolume * dryGain;
+				F32 const wetGain = sampleWetLevel * masterWetLevel * masterVolume;
+				wetLeft[outputFrame] += left * sampleLeftVolume * wetGain;
+				wetRight[outputFrame] += rightSample * sampleRightVolume * wetGain;
 			}
 
 			sample.cursorFrame += step;
@@ -829,10 +888,23 @@ namespace JuceMilesNamespace
 		std::unique_lock<std::recursive_mutex> lock(s_mutex, std::try_to_lock);
 		if (!lock.owns_lock())
 		{
-			// this block plays as SILENCE -- the audible dropout unit
 			s_callbackLockMisses.fetch_add(1, std::memory_order_relaxed);
+			// Masking: replay the previous block instead of leaving silence --
+			// stale data, never no data (Miles semantics). The cursor did not
+			// advance, so the next mixed block continues where this one would
+			// have started; the replay is ~one block of doubled audio, not a
+			// gap. Consecutive misses fade so a long lock hold decays to
+			// silence instead of buzzing at the block period.
+			int const replayFrames = (std::min)(numSamples, lastBlockSamples);
+			for (int channel = 0; channel < numOutputChannels && channel < lastBlock.getNumChannels(); ++channel)
+			{
+				if (outputChannelData[channel] && replayFrames > 0)
+					juce::FloatVectorOperations::copyWithMultiply(outputChannelData[channel], lastBlock.getReadPointer(channel), lastBlockRepeatGain, replayFrames);
+			}
+			lastBlockRepeatGain *= 0.6f;
 			return;
 		}
+		lastBlockRepeatGain = 1.0f;
 		if (numOutputChannels <= 0 || numSamples <= 0)
 			return;
 
@@ -855,6 +927,17 @@ namespace JuceMilesNamespace
 			juce::FloatVectorOperations::add(outputChannelData[0], wetLeft, numSamples);
 		if (numOutputChannels > 1 && outputChannelData[1])
 			juce::FloatVectorOperations::add(outputChannelData[1], wetRight, numSamples);
+
+		//-- snapshot the finished block for lock-miss masking (grows once, then reuses)
+		lastBlock.setSize(numOutputChannels, numSamples, false, false, true);
+		for (int channel = 0; channel < numOutputChannels; ++channel)
+		{
+			if (outputChannelData[channel])
+				lastBlock.copyFrom(channel, 0, outputChannelData[channel], numSamples);
+			else
+				lastBlock.clear(channel, 0, numSamples);
+		}
+		lastBlockSamples = numSamples;
 	}
 
 	void DriverState::audioDeviceAboutToStart(juce::AudioIODevice *device)
@@ -900,7 +983,7 @@ namespace JuceMilesNamespace
 
 	void destroyVoice(SampleState &sample)
 	{
-		sample.status = SMP_DONE;
+		sample.status.store(SMP_DONE, std::memory_order_relaxed);
 		sample.completed.store(false, std::memory_order_release);
 	}
 
@@ -924,7 +1007,7 @@ namespace JuceMilesNamespace
 		sample.filterLeft = 0.0f;
 		sample.filterRight = 0.0f;
 		sample.completed.store(false, std::memory_order_release);
-		sample.status = SMP_PLAYING;
+		sample.status.store(SMP_PLAYING, std::memory_order_relaxed);
 		return true;
 	}
 
@@ -1150,38 +1233,38 @@ extern "C"
 
 	void AILCALL AIL_set_digital_master_volume_level(HDIGDRIVER driverHandle, F32 volume)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
 		if (driver)
-			driver->masterVolume = clampValue(volume, 0.0f, 1.0f);
+			driver->masterVolume.store(clampValue(volume, 0.0f, 1.0f), std::memory_order_relaxed);
 	}
 
 	F32 AILCALL AIL_digital_master_volume_level(HDIGDRIVER driverHandle)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot poll -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
-		return driver ? driver->masterVolume : 0.0f;
+		return driver ? driver->masterVolume.load(std::memory_order_relaxed) : 0.0f;
 	}
 
 	void AILCALL AIL_set_digital_master_reverb_levels(HDIGDRIVER driverHandle, F32 dry, F32 wet)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
 		if (driver)
 		{
-			driver->masterDryLevel = clampValue(dry, 0.0f, 1.0f);
-			driver->masterWetLevel = clampValue(wet, 0.0f, 1.0f);
+			driver->masterDryLevel.store(clampValue(dry, 0.0f, 1.0f), std::memory_order_relaxed);
+			driver->masterWetLevel.store(clampValue(wet, 0.0f, 1.0f), std::memory_order_relaxed);
 		}
 	}
 
 	void AILCALL AIL_digital_master_reverb_levels(HDIGDRIVER driverHandle, F32 *dry, F32 *wet)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot poll -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
 		if (dry)
-			*dry = driver ? driver->masterDryLevel : 0.0f;
+			*dry = driver ? driver->masterDryLevel.load(std::memory_order_relaxed) : 0.0f;
 		if (wet)
-			*wet = driver ? driver->masterWetLevel : 0.0f;
+			*wet = driver ? driver->masterWetLevel.load(std::memory_order_relaxed) : 0.0f;
 	}
 
 	HSAMPLE AILCALL AIL_allocate_sample_handle(HDIGDRIVER driver)
@@ -1259,8 +1342,8 @@ extern "C"
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 		SampleState *sample = findSample(sampleHandle);
-		if (sample && sample->status == SMP_PLAYING)
-			sample->status = SMP_STOPPED;
+		if (sample && sample->status.load(std::memory_order_relaxed) == SMP_PLAYING)
+			sample->status.store(SMP_STOPPED, std::memory_order_relaxed);
 	}
 
 	void AILCALL AIL_end_sample(HSAMPLE sampleHandle)
@@ -1269,83 +1352,83 @@ extern "C"
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
 		{
-			sample->status = SMP_DONE;
+			sample->status.store(SMP_DONE, std::memory_order_relaxed);
 			sample->completed.store(false, std::memory_order_release);
 		}
 	}
 
 	U32 AILCALL AIL_sample_status(HSAMPLE sampleHandle)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot poll -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
-		return sample ? sample->status : SMP_FREE;
+		return sample ? sample->status.load(std::memory_order_relaxed) : SMP_FREE;
 	}
 
 	S32 AILCALL AIL_active_sample_count(HDIGDRIVER driver)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot poll -- lock-free by design (see s_mutex comment)
 		S32 count = 0;
 		for (auto const &entry : s_samples)
-			if (entry.second->driver == driver && entry.second->status == SMP_PLAYING)
+			if (entry.second->driver == driver && entry.second->status.load(std::memory_order_relaxed) == SMP_PLAYING)
 				++count;
 		return count;
 	}
 
 	void AILCALL AIL_set_sample_playback_rate(HSAMPLE sampleHandle, S32 playbackRate)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
-			sample->playbackRate = playbackRate;
+			sample->playbackRate.store(playbackRate, std::memory_order_relaxed);
 	}
 
 	S32 AILCALL AIL_sample_playback_rate(HSAMPLE sampleHandle)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot poll -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
-		return sample ? sample->playbackRate : 0;
+		return sample ? sample->playbackRate.load(std::memory_order_relaxed) : 0;
 	}
 
 	void AILCALL AIL_set_sample_volume_levels(HSAMPLE sampleHandle, F32 left, F32 right)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
 		{
-			sample->leftVolume = left;
-			sample->rightVolume = right;
+			sample->leftVolume.store(left, std::memory_order_relaxed);
+			sample->rightVolume.store(right, std::memory_order_relaxed);
 		}
 	}
 
 	void AILCALL AIL_sample_volume_levels(HSAMPLE sampleHandle, F32 *left, F32 *right)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot poll -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (left)
-			*left = sample ? sample->leftVolume : 0.0f;
+			*left = sample ? sample->leftVolume.load(std::memory_order_relaxed) : 0.0f;
 		if (right)
-			*right = sample ? sample->rightVolume : 0.0f;
+			*right = sample ? sample->rightVolume.load(std::memory_order_relaxed) : 0.0f;
 	}
 
 	void AILCALL AIL_set_sample_reverb_levels(HSAMPLE sampleHandle, F32 dry, F32 wet)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
 		{
-			sample->dryLevel = clampValue(dry, 0.0f, 1.0f);
-			sample->wetLevel = clampValue(wet, 0.0f, 1.0f);
+			sample->dryLevel.store(clampValue(dry, 0.0f, 1.0f), std::memory_order_relaxed);
+			sample->wetLevel.store(clampValue(wet, 0.0f, 1.0f), std::memory_order_relaxed);
 		}
 	}
 
 	void AILCALL AIL_sample_reverb_levels(HSAMPLE sampleHandle, F32 *dry, F32 *wet)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot poll -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (dry)
-			*dry = sample ? sample->dryLevel : 0.0f;
+			*dry = sample ? sample->dryLevel.load(std::memory_order_relaxed) : 0.0f;
 		if (wet)
-			*wet = sample ? sample->wetLevel : 0.0f;
+			*wet = sample ? sample->wetLevel.load(std::memory_order_relaxed) : 0.0f;
 	}
 
 	void AILCALL AIL_set_sample_loop_count(HSAMPLE sampleHandle, S32 count)
@@ -1395,7 +1478,7 @@ extern "C"
 			static_cast<FrameIndex>((std::max)(milliseconds, 0)) * sample->sourceSampleRate / 1000,
 			0,
 			sample->totalFrames ? sample->totalFrames - 1 : 0);
-		if (sample->status == SMP_PLAYING)
+		if (sample->status.load(std::memory_order_relaxed) == SMP_PLAYING)
 			startSample(*sample);
 		else
 			sample->cursorFrame = static_cast<double>(sample->seekFrame);
@@ -1418,7 +1501,7 @@ extern "C"
 		if (!sample)
 			return;
 		sample->seekFrame = mapEncodedOffsetToFrame(*sample, static_cast<S32>(position));
-		if (sample->status == SMP_PLAYING)
+		if (sample->status.load(std::memory_order_relaxed) == SMP_PLAYING)
 			startSample(*sample);
 		else
 			sample->cursorFrame = static_cast<double>(sample->seekFrame);
@@ -1433,55 +1516,50 @@ extern "C"
 
 	void AILCALL AIL_set_sample_3D_position(HSAMPLE sampleHandle, F32 x, F32 y, F32 z)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
 		{
-			sample->spatialized = true;
-			sample->positionX = x;
-			sample->positionY = y;
-			sample->positionZ = z;
+			sample->spatialized.store(true, std::memory_order_relaxed);
+			sample->position.set(x, y, z);
 		}
 	}
 
 	void AILCALL AIL_set_sample_3D_velocity_vector(HSAMPLE sampleHandle, F32 x, F32 y, F32 z)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
-		{
-			sample->velocityX = x;
-			sample->velocityY = y;
-			sample->velocityZ = z;
-		}
+			sample->velocity.set(x, y, z);
 	}
 
 	void AILCALL AIL_set_sample_3D_distances(HSAMPLE sampleHandle, F32 maxDistance, F32 minDistance, S32)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
 		{
-			sample->maxDistance = (std::max)(maxDistance, 1.0f);
-			sample->minDistance = clampValue(minDistance, 0.0f, sample->maxDistance);
-			sample->spatialized = true;
+			F32 const boundedMax = (std::max)(maxDistance, 1.0f);
+			sample->maxDistance.store(boundedMax, std::memory_order_relaxed);
+			sample->minDistance.store(clampValue(minDistance, 0.0f, boundedMax), std::memory_order_relaxed);
+			sample->spatialized.store(true, std::memory_order_relaxed);
 		}
 	}
 
 	void AILCALL AIL_set_sample_obstruction(HSAMPLE sampleHandle, F32 value)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
-			sample->obstruction = clampValue(value, 0.0f, 1.0f);
+			sample->obstruction.store(clampValue(value, 0.0f, 1.0f), std::memory_order_relaxed);
 	}
 
 	void AILCALL AIL_set_sample_occlusion(HSAMPLE sampleHandle, F32 value)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		SampleState *sample = findSample(sampleHandle);
 		if (sample)
-			sample->occlusion = clampValue(value, 0.0f, 1.0f);
+			sample->occlusion.store(clampValue(value, 0.0f, 1.0f), std::memory_order_relaxed);
 	}
 
 	HSTREAM AILCALL AIL_open_stream(HDIGDRIVER driver, char const *filename, S32)
@@ -1551,9 +1629,9 @@ extern "C"
 		if (!sample)
 			return;
 		if (onoff)
-			sample->status = SMP_STOPPED;
-		else if (sample->status == SMP_STOPPED)
-			sample->status = SMP_PLAYING;
+			sample->status.store(SMP_STOPPED, std::memory_order_relaxed);
+		else if (sample->status.load(std::memory_order_relaxed) == SMP_STOPPED)
+			sample->status.store(SMP_PLAYING, std::memory_order_relaxed);
 	}
 
 	void AILCALL AIL_set_stream_loop_count(HSTREAM stream, S32 count)
@@ -1649,36 +1727,38 @@ extern "C"
 
 	void AILCALL AIL_set_3D_rolloff_factor(HDIGDRIVER driverHandle, F32 factor)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
 		if (driver)
-			driver->rolloffFactor = factor;
+			driver->rolloffFactor.store(factor, std::memory_order_relaxed);
 	}
 
 	void AILCALL AIL_set_listener_3D_position(HDIGDRIVER driverHandle, F32 x, F32 y, F32 z)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
 		if (driver)
-			driver->listenerPosition = {x, y, z};
+			driver->listenerPosition.set(x, y, z);
 	}
 
 	void AILCALL AIL_set_listener_3D_velocity_vector(HDIGDRIVER driverHandle, F32 x, F32 y, F32 z)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
 		if (driver)
-			driver->listenerVelocity = {x, y, z};
+			driver->listenerVelocity.set(x, y, z);
 	}
 
 	void AILCALL AIL_set_listener_3D_orientation(HDIGDRIVER driverHandle, F32 faceX, F32 faceY, F32 faceZ, F32 upX, F32 upY, F32 upZ)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// per-frame hot setter -- lock-free by design (see s_mutex comment)
 		DriverState *driver = findDriver(driverHandle);
 		if (driver)
 		{
-			driver->listenerFront = normalize({faceX, faceY, faceZ}, {0.0f, 0.0f, -1.0f});
-			driver->listenerUp = normalize({upX, upY, upZ}, {0.0f, 1.0f, 0.0f});
+			Vector3 const front = normalize({faceX, faceY, faceZ}, {0.0f, 0.0f, -1.0f});
+			Vector3 const up = normalize({upX, upY, upZ}, {0.0f, 1.0f, 0.0f});
+			driver->listenerFront.set(front.x, front.y, front.z);
+			driver->listenerUp.set(up.x, up.y, up.z);
 		}
 	}
 
@@ -1709,7 +1789,7 @@ extern "C"
 		if (logicalChannels)
 			*logicalChannels = driver ? driver->outputChannels : 0;
 		if (falloffPower)
-			*falloffPower = driver ? driver->rolloffFactor : 1.0f;
+			*falloffPower = driver ? driver->rolloffFactor.load(std::memory_order_relaxed) : 1.0f;
 		if (channelSpec)
 			*channelSpec = driver ? driver->channelSpec : MSS_MC_STEREO;
 		return nullptr;
@@ -1732,7 +1812,7 @@ extern "C"
 			std::uint64_t const misses = s_callbackLockMisses.load(std::memory_order_relaxed);
 			if (misses != s_lastReportedMisses)
 			{
-				audioDecodeLog("[audio.dropout] +%llu miss(es), total %llu of %llu blocks",
+				audioDecodeLog("[audio.dropout] +%llu miss(es) (masked by last-block replay), total %llu of %llu blocks",
 					static_cast<unsigned long long>(misses - s_lastReportedMisses),
 					static_cast<unsigned long long>(misses),
 					static_cast<unsigned long long>(s_callbackBlocks.load(std::memory_order_relaxed)));
