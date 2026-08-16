@@ -151,9 +151,12 @@ namespace Direct3d11_ShaderCacheNamespace
 			}
 			else if (strcmp(keyword, "program") == 0)
 			{
+				// The name is the REMAINDER of the line -- it can contain spaces (the
+				// backend's own install-time programs do), so %s would truncate it.
 				unsigned long long key = 0;
-				if (sscanf(line.c_str(), "%63s %llx %511s", keyword, &key, first) == 3)
-					IGNORE_RETURN(programs.insert(std::make_pair(static_cast<Direct3d11ShaderHash>(key), std::string(first))));
+				int nameOffset = 0;
+				if (sscanf(line.c_str(), "%63s %llx %n", keyword, &key, &nameOffset) == 2 && nameOffset > 0 && nameOffset < static_cast<int>(line.size()))
+					IGNORE_RETURN(programs.insert(std::make_pair(static_cast<Direct3d11ShaderHash>(key), line.substr(static_cast<size_t>(nameOffset)))));
 			}
 		}
 
