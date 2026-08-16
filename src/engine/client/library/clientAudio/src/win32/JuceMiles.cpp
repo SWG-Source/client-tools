@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdarg>
+#include <emmintrin.h>
 #include <share.h>
 #include <thread>
 
@@ -400,11 +401,15 @@ namespace JuceMilesNamespace
 
 
 	// Dropout metric: any block where the device callback cannot take s_mutex
-	// (try_to_lock below) is a dropout -- masked by replaying the previous block,
-	// but still counted, because misses ~ 0 remains the verifiable clean bar.
-	// Reported from AIL_serve (never from the callback itself).
+	// (even after the bounded wait below) is a dropout -- masked by replaying the
+	// previous block, but still counted, because misses ~ 0 remains the verifiable
+	// clean bar. A failed first try_to_lock that the bounded wait RECOVERS is
+	// counted as a wait, not a miss -- the block plays normally. Reported from
+	// AIL_serve (never from the callback itself).
 	std::atomic<std::uint64_t> s_callbackBlocks{0};
 	std::atomic<std::uint64_t> s_callbackLockMisses{0};
+	std::atomic<std::uint64_t> s_callbackLockWaits{0};
+	std::atomic<std::uint32_t> s_callbackMaxWaitUs{0};
 
 	// Streamed open: HEADER-FIRST. The engine snapshots a sample's metadata the moment
 	// AIL_open_stream returns -- Audio.cpp:3031 reads playbackRate ONCE into the Sound2 and
@@ -883,6 +888,32 @@ namespace JuceMilesNamespace
 
 		s_callbackBlocks.fetch_add(1, std::memory_order_relaxed);
 		std::unique_lock<std::recursive_mutex> lock(s_mutex, std::try_to_lock);
+		if (!lock.owns_lock())
+		{
+			// Bounded wait before declaring a dropout: after the I/O eviction,
+			// every remaining hold should be MICROSECONDS, so a failed try_to_lock
+			// is a photo-finish against a short hold -- waiting a moment recovers
+			// the block instead of masking it. Budget 1 ms of the ~10 ms block
+			// period; _mm_pause keeps the spin polite. Waits and misses are
+			// counted separately, so the log shows which world we are in: a miss
+			// surviving a 1 ms wait means a genuinely long holder still exists.
+			double const waitStart = juce::Time::getMillisecondCounterHiRes();
+			double waitedMs = 0.0;
+			do
+			{
+				_mm_pause();
+				if (lock.try_lock())
+					break;
+				waitedMs = juce::Time::getMillisecondCounterHiRes() - waitStart;
+			} while (waitedMs < 1.0);
+			if (lock.owns_lock())
+			{
+				s_callbackLockWaits.fetch_add(1, std::memory_order_relaxed);
+				std::uint32_t const waitedUs = static_cast<std::uint32_t>(waitedMs * 1000.0 + 0.5);
+				if (waitedUs > s_callbackMaxWaitUs.load(std::memory_order_relaxed))
+					s_callbackMaxWaitUs.store(waitedUs, std::memory_order_relaxed);
+			}
+		}
 		if (!lock.owns_lock())
 		{
 			s_callbackLockMisses.fetch_add(1, std::memory_order_relaxed);
@@ -1824,6 +1855,21 @@ extern "C"
 					static_cast<unsigned long long>(misses),
 					static_cast<unsigned long long>(s_callbackBlocks.load(std::memory_order_relaxed)));
 				s_lastReportedMisses = misses;
+			}
+		}
+		// Recovered-wait report: same pattern as the dropout line. These blocks
+		// PLAYED normally after a bounded wait -- the line exists so the residual
+		// contention stays visible even when misses read zero.
+		{
+			static std::uint64_t s_lastReportedWaits = 0;
+			std::uint64_t const waits = s_callbackLockWaits.load(std::memory_order_relaxed);
+			if (waits != s_lastReportedWaits)
+			{
+				audioDecodeLog("[audio.lockwait] +%llu recovered wait(s), total %llu, maxWaitUs=%u",
+					static_cast<unsigned long long>(waits - s_lastReportedWaits),
+					static_cast<unsigned long long>(waits),
+					s_callbackMaxWaitUs.exchange(0, std::memory_order_relaxed));
+				s_lastReportedWaits = waits;
 			}
 		}
 		std::vector<HSAMPLE> completed;
