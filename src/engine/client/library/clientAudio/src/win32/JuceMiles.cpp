@@ -893,19 +893,26 @@ namespace JuceMilesNamespace
 			// Bounded wait before declaring a dropout: after the I/O eviction,
 			// every remaining hold should be MICROSECONDS, so a failed try_to_lock
 			// is a photo-finish against a short hold -- waiting a moment recovers
-			// the block instead of masking it. Budget 1 ms of the ~10 ms block
-			// period; _mm_pause keeps the spin polite. Waits and misses are
-			// counted separately, so the log shows which world we are in: a miss
-			// surviving a 1 ms wait means a genuinely long holder still exists.
+			// the block instead of masking it (measured 2026-08-16: 30/34 collisions
+			// recovered in <=84us). Two phases: _mm_pause first for the running-
+			// holder case, then yield -- a hold that outlives the spin means the
+			// holder was PREEMPTED and needs our timeslice to finish, so spinning
+			// against it is anti-productive. Budget 3 ms of the ~10 ms block
+			// period. Waits and misses are counted separately, so the log shows
+			// which world we are in: a miss surviving the full wait means a
+			// genuinely long holder still exists.
 			double const waitStart = juce::Time::getMillisecondCounterHiRes();
 			double waitedMs = 0.0;
 			do
 			{
-				_mm_pause();
+				if (waitedMs < 0.1)
+					_mm_pause();
+				else
+					std::this_thread::yield();
 				if (lock.try_lock())
 					break;
 				waitedMs = juce::Time::getMillisecondCounterHiRes() - waitStart;
-			} while (waitedMs < 1.0);
+			} while (waitedMs < 3.0);
 			if (lock.owns_lock())
 			{
 				s_callbackLockWaits.fetch_add(1, std::memory_order_relaxed);
