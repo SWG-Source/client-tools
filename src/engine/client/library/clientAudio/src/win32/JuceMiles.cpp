@@ -461,15 +461,20 @@ namespace JuceMilesNamespace
 			static_cast<int>(sample.sourceSampleRate), firstBlock, (name && *name) ? name : "(unnamed)");
 
 		//-- background fill for the remainder. The reader (over a COPY of the encoded
-		//   bytes) lives on the worker; SampleState is only touched under the lock, per
-		//   chunk, after a token check.
+		//   bytes) lives on the worker. The worker decodes the WHOLE track into a
+		//   private buffer and swaps it in under the lock in O(1): the previous
+		//   per-chunk copy-in held the lock for a 2MB memcpy per chunk, and the
+		//   measured dropout bursts sat exactly inside long fills. Decoding from
+		//   frame 0 re-does the inline first second redundantly but keeps the buffer
+		//   seam-free. The 1s first block covers the swap comfortably: fills measure
+		//   55-316ms (decode ~24M frames/s), so only a ~9-minute track could outrun it.
 		if (static_cast<FrameIndex>(firstBlock) < sample.totalFrames)
 		{
 			FrameIndex const total = sample.totalFrames;
 			S32 const channels = sample.sourceChannels;
 			std::vector<U8> encodedCopy = sample.encodedData;
 			std::string nameCopy = (name && *name) ? name : "";
-			std::thread([handle, token, total, channels, firstBlock,
+			std::thread([handle, token, total, channels,
 			             encodedCopy = std::move(encodedCopy), nameCopy = std::move(nameCopy)]() mutable
 			{
 				double const w0 = juce::Time::getMillisecondCounterHiRes();
@@ -478,24 +483,16 @@ namespace JuceMilesNamespace
 				if (!fillReader)
 					return;                     // tail stays silent; metadata is still correct
 
-				int const chunkFrames = 262144;
-				juce::AudioBuffer<float> scratch(channels, chunkFrames);
-				FrameIndex position = static_cast<FrameIndex>(firstBlock);
-				while (position < total)
-				{
-					int const n = static_cast<int>((std::min)(total - position, static_cast<FrameIndex>(chunkFrames)));
-					if (!fillReader->read(&scratch, 0, n, static_cast<juce::int64>(position), true, channels > 1))
-						return;
-
-					std::lock_guard<std::recursive_mutex> lock(s_mutex);
-					auto const iter = s_samples.find(handle);
-					if (iter == s_samples.end() || iter->second->fillToken != token)
-						return;                 // released or reassigned: stop, touch nothing
-					for (int ch = 0; ch < channels; ++ch)
-						iter->second->pcm.copyFrom(ch, static_cast<int>(position), scratch, ch, 0, n);
-					position += static_cast<FrameIndex>(n);
-				}
+				juce::AudioBuffer<float> full(channels, static_cast<int>(total));
+				if (!fillReader->read(&full, 0, static_cast<int>(total), 0, true, channels > 1))
+					return;                     // keep the inline first block; tail stays silent
 				audioDecodeLog("[audio.stream] fill=%.1fms name=%s", juce::Time::getMillisecondCounterHiRes() - w0, nameCopy.c_str());
+
+				std::lock_guard<std::recursive_mutex> lock(s_mutex);
+				auto const iter = s_samples.find(handle);
+				if (iter == s_samples.end() || iter->second->fillToken != token)
+					return;                     // released or reassigned: stop, touch nothing
+				iter->second->pcm = std::move(full);   // O(1) pointer move -- the only in-lock work
 			}).detach();
 		}
 		return true;
@@ -1564,7 +1561,13 @@ extern "C"
 
 	HSTREAM AILCALL AIL_open_stream(HDIGDRIVER driver, char const *filename, S32)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		// No function-wide lock: the TreeFile read, header parse, and inline
+		// first-second decode below were the audio lock's single largest remaining
+		// hold (0.1-2.2ms plus file I/O at every music/ambience change -- each
+		// open a near-certain dropout block). Safe unlocked on the game thread:
+		// the fresh sample stays SMP_DONE until AIL_start_stream, and mixSample's
+		// status check returns before it touches pcm or metadata. The map
+		// mutations (allocate/release/stream insert) still lock internally.
 		std::vector<U8> fileData;
 		if (!findDriver(driver) || !filename || !readStreamFile(filename, fileData))
 			return nullptr;
@@ -1597,8 +1600,11 @@ extern "C"
 		auto stream = std::make_unique<StreamState>();
 		stream->sample = sampleHandle;
 		stream->filename = filename;
-		s_streams.emplace(token, std::move(stream));
-		findSample(sampleHandle)->ownerStream = token;
+		{
+			std::lock_guard<std::recursive_mutex> lock(s_mutex);
+			s_streams.emplace(token, std::move(stream));
+			findSample(sampleHandle)->ownerStream = token;
+		}
 		return token;
 	}
 
@@ -1802,11 +1808,12 @@ extern "C"
 
 	void AILCALL AIL_serve(void)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
-
-		// Dropout report: UNTHROTTLED -- one timestamped line per miss event, so a
-		// listener's "tiny pop at T" can be correlated against a specific miss.
-		// AIL_serve runs every ~50 ms, so each line pins its miss to +/-50 ms.
+		// Dropout report BEFORE the lock: the fprintf+fflush is disk I/O, and
+		// holding the lock across it was itself a dropout window (each report
+		// widened the next miss's odds). UNTHROTTLED -- one timestamped line per
+		// miss event, so a listener's "tiny pop at T" can be correlated against a
+		// specific miss. AIL_serve runs every ~50 ms, so each line pins its miss
+		// to +/-50 ms.
 		{
 			static std::uint64_t s_lastReportedMisses = 0;
 			std::uint64_t const misses = s_callbackLockMisses.load(std::memory_order_relaxed);
@@ -1820,9 +1827,16 @@ extern "C"
 			}
 		}
 		std::vector<HSAMPLE> completed;
-		for (auto const &entry : s_samples)
-			if (entry.second->completed.exchange(false, std::memory_order_acq_rel))
-				completed.push_back(entry.first);
+		{
+			std::lock_guard<std::recursive_mutex> lock(s_mutex);
+			for (auto const &entry : s_samples)
+				if (entry.second->completed.exchange(false, std::memory_order_acq_rel))
+					completed.push_back(entry.first);
+		}
+		// End-of-sample callbacks fire OUTSIDE the lock: they are engine code that
+		// restarts loops and reopens streams (TreeFile I/O), and Miles fired them
+		// without our lock too. Handles re-verified unlocked (game thread is the
+		// maps' sole mutator; an earlier callback may release a later handle).
 		for (HSAMPLE sampleHandle : completed)
 		{
 			SampleState *sample = findSample(sampleHandle);
