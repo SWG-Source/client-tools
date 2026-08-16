@@ -12,6 +12,11 @@
 #include "FirstDirect3d9.h"
 #include "Direct3d9.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <windows.h>
+
 #include "ConfigDirect3d9.h"
 #include "Direct3d9_DynamicIndexBufferData.h"
 #include "Direct3d9_DynamicVertexBufferData.h"
@@ -55,10 +60,8 @@
 #include "sharedMath/VectorRgba.h"
 
 #include <ddraw.h>
-#include <d3dx9.h>
+#include <DirectXMath.h>
 #include <stdio.h>
-#include <psapi.h>
-#pragma comment(lib, "psapi.lib")
 
 #pragma warning (disable: 4201)
 #include <mmsystem.h>
@@ -89,8 +92,6 @@ WINUSERAPI BOOL WINAPI GetMonitorInfoW(HMONITOR hMonitor, LPMONITORINFO lpmi);
 #endif // !UNICODE
 
 }
-
-// ======================================================================
 
 #if !defined(FFP) && !defined(VSPS)
 #error must define FFP, VSPS, or both
@@ -221,6 +222,7 @@ namespace Direct3d9Namespace
 
 	StaticIndexBufferGraphicsData *    createIndexBufferData(const StaticIndexBuffer &indexBuffer);
 	DynamicIndexBufferGraphicsData *   createIndexBufferData();
+	void                               setDynamicIndexBufferSize(int numberOfIndices);
 
 	void                               getOneToOneUVMapping(int textureWidth, int textureHeight, float &u0, float &v0, float &u1, float &v1);
 	TextureGraphicsData *              createTextureData(const Texture &texture, const TextureFormat *runtimeFormats, int numberOfRuntimeFormats);
@@ -272,6 +274,7 @@ namespace Direct3d9Namespace
 	void                               pixSetMarker(WCHAR const * markerName);
 	void                               pixBeginEvent(WCHAR const * eventName);
 	void                               pixEndEvent(WCHAR const * eventName);
+
 	bool                               writeImage(char const * file, int const width, int const height, int const pitch, int const * pixelsARGB, bool const alphaExtend, Gl_imageFormat const imageFormat, Rectangle2d const * subRect);
 
 	void                               _queryVideoMemory();
@@ -427,10 +430,16 @@ namespace Direct3d9Namespace
 	bool                                ms_usingVertexShader;
 #endif
 
-	D3DXMATRIX                          ms_cachedObjectToWorldMatrix;
-	D3DXMATRIX                          ms_cachedWorldToCameraMatrix;
-	D3DXMATRIX                          ms_cachedProjectionMatrix;
-	D3DXMATRIX                          ms_cachedWorldToProjectionMatrix;
+	// Plan 33-03: matrix cache off D3DX onto DirectXMath (header-only, x64-native).
+	// XMFLOAT4X4 is binary-layout-identical to D3DMATRIX / the old D3DX matrix type (16 contiguous
+	// row-major floats with the same _11.._44 named members), so the per-element
+	// member writes below keep working unchanged, and a reinterpret_cast bridges the
+	// D3DMATRIX* boundaries (convertTransformToMatrix / SetTransform). File-static,
+	// NOT in a shared header -> no shared-header ABI cascade.
+	DirectX::XMFLOAT4X4                 ms_cachedObjectToWorldMatrix;
+	DirectX::XMFLOAT4X4                 ms_cachedWorldToCameraMatrix;
+	DirectX::XMFLOAT4X4                 ms_cachedProjectionMatrix;
+	DirectX::XMFLOAT4X4                 ms_cachedWorldToProjectionMatrix;
 
 #if DEBUG_LEVEL == DEBUG_LEVEL_DEBUG
 	int                                 ms_drawCall = 0;
@@ -500,14 +509,9 @@ using namespace Direct3d9Namespace;
 
 extern "C" __declspec(dllexport) Gl_api const * GetApi();
 
-// The engine calls this before it trusts a single Gl_api slot.  Gl_api has three
-// distinct binary layouts -- five slots are #ifdef _DEBUG and four more are
-// #if PRODUCTION == 0 -- discriminated only by the _r/_o/_d suffix in the DLL
-// name.  A mismatched pair loads cleanly and then calls the wrong function
-// through every slot past the first conditional one, so the size is reported
-// out of band and checked in Graphics::install.  It cannot be a struct field:
-// Headless.cpp blanket-fills Gl_api as void** over sizeof(Gl_api)/sizeof(void*)
-// and would overwrite it.
+// The engine calls this before it trusts a single Gl_api slot. Reported out of
+// band rather than as a struct field so the size check itself cannot shift with
+// the layout it is checking. Graphics::install FATALs on a mismatch.
 extern "C" __declspec(dllexport) unsigned int GetGlApiStructSize();
 
 // ======================================================================
@@ -1002,6 +1006,12 @@ bool Direct3d9::install(Gl_install *gl_install)
 	ms_glApi.remove                            = Direct3d9Namespace::remove;
 	ms_glApi.displayModeChanged                = displayModeChanged;
 
+	// Consumer overlay callbacks (2026-08-15, toolkit x64 round-2): D3D11-only
+	// semantics -- the injected overlay renders through the D3D11 device
+	// (rasterMajor=11 is its requirement), so the D3D9 line accepts the
+	// registration and never invokes it (one Release-visible line so a
+	// mis-raster'd session is diagnosable, not silent).
+
 	ms_glApi.getShaderCapability               = getShaderCapability;
 	ms_glApi.requiresVertexAndPixelShaders     = requiresVertexAndPixelShaders;
 	ms_glApi.getOtherAdapterRects              = getOtherAdapterRects;
@@ -1376,6 +1386,7 @@ bool Direct3d9::install(Gl_install *gl_install)
 
 					if (SUCCEEDED(hresult))
 					{
+
 						IDirect3DSurface9 *depthStencilSurface = NULL;
 						hresult = ms_device->GetDepthStencilSurface(&depthStencilSurface);
 						FATAL_DX_HR("GetDepthStencilSurface failed %s", hresult);
@@ -2638,7 +2649,7 @@ bool Direct3d9Namespace::applyGammaCorrectionToXRGBSurface( IDirect3DSurface9 *s
 	for( unsigned nLine = 0; nLine != desc.Height; nLine++ )
 	{
 		// get the start of the line
-		PackedArgb * pBuffer = (PackedArgb *)((unsigned int)lockedRect.pBits + lockedRect.Pitch * nLine);
+		PackedArgb * pBuffer = (PackedArgb *)((size_t)lockedRect.pBits + lockedRect.Pitch * nLine);   // Phase 33 (BITS-02): pointer-width arithmetic (was (unsigned int), x64-truncating under /we4311/4312)
 
 		// color correct the line
 		PackedArgb * pBufferEol = pBuffer + desc.Width;
@@ -2658,6 +2669,60 @@ bool Direct3d9Namespace::applyGammaCorrectionToXRGBSurface( IDirect3DSurface9 *s
 }
 
 // ----------------------------------------------------------------------
+
+namespace
+{
+	// CONSULT-63 (2026-07-05): libjpeg destination manager that performs ALL file I/O
+	// through THIS module's CRT. jpeg_stdio_dest hands our FILE* to jpeg62.dll, whose
+	// x64 build fwrites through the DYNAMIC UCRT while this plugin links the static
+	// CRT -- a foreign FILE* trips ucrtbase's invalid-parameter fail-fast (0xc0000409:
+	// screenshot key = instant crash). The Win32 jpeg62 is fully static-CRT and the
+	// legacy CRT never validated foreign FILE*s, which is why 32-bit survived for years.
+	// (Same fix as Direct3d11.cpp screenShot_impl.)
+	struct EngineJpegDestination
+	{
+		jpeg_destination_mgr pub;
+		FILE *file;
+		JOCTET buffer[16384];
+	};
+
+	void engineJpegInitDestination(j_compress_ptr cinfo)
+	{
+		EngineJpegDestination * const dest = reinterpret_cast<EngineJpegDestination *>(cinfo->dest);
+		dest->pub.next_output_byte = dest->buffer;
+		dest->pub.free_in_buffer = sizeof(dest->buffer);
+	}
+
+	boolean engineJpegEmptyOutputBuffer(j_compress_ptr cinfo)
+	{
+		// A short write (disk full) is tolerated -- truncated screenshot, never a crash.
+		EngineJpegDestination * const dest = reinterpret_cast<EngineJpegDestination *>(cinfo->dest);
+		fwrite(dest->buffer, 1, sizeof(dest->buffer), dest->file);
+		dest->pub.next_output_byte = dest->buffer;
+		dest->pub.free_in_buffer = sizeof(dest->buffer);
+		return TRUE;
+	}
+
+	void engineJpegTermDestination(j_compress_ptr cinfo)
+	{
+		EngineJpegDestination * const dest = reinterpret_cast<EngineJpegDestination *>(cinfo->dest);
+		size_t const remaining = sizeof(dest->buffer) - dest->pub.free_in_buffer;
+		if (remaining != 0)
+			fwrite(dest->buffer, 1, remaining, dest->file);
+		fflush(dest->file);
+	}
+
+	void engineJpegSetDestination(j_compress_ptr cinfo, EngineJpegDestination *dest, FILE *file)
+	{
+		dest->pub.init_destination    = engineJpegInitDestination;
+		dest->pub.empty_output_buffer = engineJpegEmptyOutputBuffer;
+		dest->pub.term_destination    = engineJpegTermDestination;
+		dest->pub.next_output_byte    = dest->buffer;
+		dest->pub.free_in_buffer      = sizeof(dest->buffer);
+		dest->file = file;
+		cinfo->dest = &dest->pub;
+	}
+}
 
 bool Direct3d9Namespace::screenShot(GlScreenShotFormat format, int quality, const char *fileName)
 {
@@ -2772,22 +2837,26 @@ bool Direct3d9Namespace::screenShot(GlScreenShotFormat format, int quality, cons
 
 		case GSSF_bmp:
 		{
-			char buffer[Os::MAX_PATH_LENGTH];
-			sprintf(buffer, "%s.bmp", fileName);
-
-			RECT r;
-			r.left   = (clientTopLeft.x - monitorCoordinates.left);
-			r.top    = (clientTopLeft.y - monitorCoordinates.top);
-			r.right  = r.left + ms_width;
-			r.bottom = r.top + ms_height;
-
-			hresult = D3DXSaveSurfaceToFile(buffer, D3DXIFF_BMP, surface, NULL, &r);
+			// Phase 33-03 / D-04a: own-impl via the existing WriteTGA path
+			// (reviews fix #10d) -- d3dx9 has no x64 static lib, so the
+			// D3DXSaveSurfaceToFile(D3DXIFF_BMP) call is replaced. The output is
+			// a TGA, so the filename must end .tga, NOT .bmp (otherwise a TGA
+			// would be written under a .bmp name). Mirrors the GSSF_tga case.
+			D3DLOCKED_RECT lockedRect;
+			hresult = surface->LockRect(&lockedRect, NULL, D3DLOCK_READONLY);
 			if (FAILED(hresult))
 			{
 				Graphics::setLastError("engine", "screenshot_failed_write_problem");
 				surface->Release();
 				return false;
 			}
+
+			char buffer[Os::MAX_PATH_LENGTH];
+			sprintf(buffer, "%s.tga", fileName);
+			WriteTGA::write(buffer, ms_width, ms_height, reinterpret_cast<const byte *>(lockedRect.pBits) + offset, true, lockedRect.Pitch);
+
+			hresult = surface->UnlockRect();
+			FATAL_DX_HR("Unlock failed %s", hresult);
 			break;
 		}
 
@@ -2819,7 +2888,10 @@ bool Direct3d9Namespace::screenShot(GlScreenShotFormat format, int quality, cons
 			jpeg_error_mgr jerr;
 			cinfo.err = jpeg_std_error(&jerr);
 			jpeg_create_compress(&cinfo);
-			jpeg_stdio_dest(&cinfo, outputFile);
+			// CONSULT-63: NOT jpeg_stdio_dest -- our FILE* must never cross into
+			// jpeg62.dll's CRT (x64 = dynamic UCRT, this plugin = static CRT).
+			EngineJpegDestination jpegDest;
+			engineJpegSetDestination(&cinfo, &jpegDest, outputFile);
 			cinfo.image_width = ms_width;
 			cinfo.image_height = ms_height;
 			cinfo.input_components = 3;
@@ -3082,17 +3154,7 @@ bool Direct3d9Namespace::setMouseCursor(Texture const & mouseCursorTexture, int 
 		FATAL_DX_HR("Could not get top surface %s", hresult);
 
 		hresult = ms_device->SetCursorProperties(hotSpotX, hotSpotY, surface);
-		if (FAILED(hresult))
-		{
-			static bool s_loggedOnce = false;
-			if (!s_loggedOnce)
-			{
-				s_loggedOnce = true;
-				DEBUG_REPORT_LOG(true, ("setMouseCursor: SetCursorProperties failed %s; falling back to OS cursor.\n", DXGetErrorString9(hresult)));
-			}
-			surface->Release();
-			return false;
-		}
+		FATAL_DX_HR("Could not set cursor properties %s", hresult);
 		surface->Release();
 
 		return true;
@@ -3181,18 +3243,19 @@ void Direct3d9Namespace::setWorldToCameraTransform(const Transform &transform, c
 
 	Direct3d9_LightManager::setCameraPosition(cameraPosition);
 
-	Direct3d9::convertTransformToMatrix(transform, ms_cachedWorldToCameraMatrix);
+	Direct3d9::convertTransformToMatrix(transform, *reinterpret_cast<D3DMATRIX *>(&ms_cachedWorldToCameraMatrix));
 
 #ifdef FFP
 	// setup the world-to-camera transform
-	const HRESULT hresult = ms_device->SetTransform(D3DTS_VIEW, &ms_cachedWorldToCameraMatrix);
+	const HRESULT hresult = ms_device->SetTransform(D3DTS_VIEW, reinterpret_cast<const D3DMATRIX *>(&ms_cachedWorldToCameraMatrix));
 	FATAL_DX_HR("SetTransform(view) failed %s", hresult);
 #endif
 
 #ifdef VSPS
 	PaddedVector paddedPosition(cameraPosition);
 	Direct3d9_StateCache::setVertexShaderConstants(VSCR_cameraPosition, &paddedPosition, 1);
-	D3DXMatrixMultiply(&ms_cachedWorldToProjectionMatrix, &ms_cachedProjectionMatrix, &ms_cachedWorldToCameraMatrix);
+	// Plan 33-03: matrix-multiply(out, A, B) -> XMMatrixMultiply(XMLoad(A), XMLoad(B)); exact A,B order preserved.
+	DirectX::XMStoreFloat4x4(&ms_cachedWorldToProjectionMatrix, DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&ms_cachedProjectionMatrix), DirectX::XMLoadFloat4x4(&ms_cachedWorldToCameraMatrix)));
 #endif
 
 #ifdef _DEBUG
@@ -3253,14 +3316,17 @@ void Direct3d9Namespace::setProjectionMatrix(const GlMatrix4x4 &projectionMatrix
 #endif
 
 #ifdef FFP
-	const HRESULT hresult = ms_device->SetTransform(D3DTS_PROJECTION, &ms_cachedProjectionMatrix);
+	const HRESULT hresult = ms_device->SetTransform(D3DTS_PROJECTION, reinterpret_cast<const D3DMATRIX *>(&ms_cachedProjectionMatrix));
 	FATAL_DX_HR("SetTransform(projection) failed %s", hresult);
 #endif
 
+	// Plan 33-03: each branch keeps its EXACT A,B operand order (note: this FFP+VSPS
+	// branch uses worldToCamera * projection; the VSPS-only branch reverses to
+	// projection * worldToCamera -- copied verbatim, not normalized).
 #if defined(FFP) && defined(VSPS)
-	D3DXMatrixMultiply(&ms_cachedWorldToProjectionMatrix, &ms_cachedWorldToCameraMatrix, &ms_cachedProjectionMatrix);
+	DirectX::XMStoreFloat4x4(&ms_cachedWorldToProjectionMatrix, DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&ms_cachedWorldToCameraMatrix), DirectX::XMLoadFloat4x4(&ms_cachedProjectionMatrix)));
 #elif defined(VSPS)
-	D3DXMatrixMultiply(&ms_cachedWorldToProjectionMatrix, &ms_cachedProjectionMatrix, &ms_cachedWorldToCameraMatrix);
+	DirectX::XMStoreFloat4x4(&ms_cachedWorldToProjectionMatrix, DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&ms_cachedProjectionMatrix), DirectX::XMLoadFloat4x4(&ms_cachedWorldToCameraMatrix)));
 #endif
 
 #ifdef _DEBUG
@@ -3311,10 +3377,10 @@ void Direct3d9Namespace::setObjectToWorldTransformAndScale(const Transform &tran
 #endif
 
 	ms_transformDirty = true;
-	Direct3d9::convertScaleAndTransformToMatrix(scale, transform, ms_cachedObjectToWorldMatrix);
+	Direct3d9::convertScaleAndTransformToMatrix(scale, transform, *reinterpret_cast<D3DMATRIX *>(&ms_cachedObjectToWorldMatrix));
 
 #ifdef FFP
-	const HRESULT hresult = ms_device->SetTransform(D3DTS_WORLD, &ms_cachedObjectToWorldMatrix);
+	const HRESULT hresult = ms_device->SetTransform(D3DTS_WORLD, reinterpret_cast<const D3DMATRIX *>(&ms_cachedObjectToWorldMatrix));
 	FATAL_DX_HR("SetTransform failed %s", hresult);
 #endif
 
@@ -3566,6 +3632,13 @@ StaticIndexBufferGraphicsData *Direct3d9Namespace::createIndexBufferData(const S
 DynamicIndexBufferGraphicsData *Direct3d9Namespace::createIndexBufferData()
 {
 	return new Direct3d9_DynamicIndexBufferData();
+}
+
+// ----------------------------------------------------------------------
+
+void Direct3d9Namespace::setDynamicIndexBufferSize(int numberOfIndices)
+{
+	Direct3d9_DynamicIndexBufferData::setSize(numberOfIndices);
 }
 
 // ----------------------------------------------------------------------
@@ -3922,13 +3995,18 @@ inline bool Direct3d9::drawPrimitive()
 
 		if (ms_transformDirty)
 		{
-			D3DXMATRIX matrices[2];
+			// Plan 33-03: local matrix pair feeding the VS constant upload (8 float4
+			// rows). XMFLOAT4X4 keeps the exact 16-float row-major layout, so the
+			// setVertexShaderConstants(matrices, 8) raw-bytes contract is unchanged.
+			DirectX::XMFLOAT4X4 matrices[2];
 
 #ifdef FFP
-			D3DXMatrixMultiplyTranspose(matrices+0, &ms_cachedObjectToWorldMatrix, &ms_cachedWorldToProjectionMatrix);
-			D3DXMatrixTranspose(matrices+1, &ms_cachedObjectToWorldMatrix);
+			// PRESERVE THE TRANSPOSE EXACTLY (Pitfall 1, the #1 render risk):
+			// the old MatrixMultiplyTranspose(out, A, B) == transpose(A*B).
+			DirectX::XMStoreFloat4x4(matrices+0, DirectX::XMMatrixTranspose(DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&ms_cachedObjectToWorldMatrix), DirectX::XMLoadFloat4x4(&ms_cachedWorldToProjectionMatrix))));
+			DirectX::XMStoreFloat4x4(matrices+1, DirectX::XMMatrixTranspose(DirectX::XMLoadFloat4x4(&ms_cachedObjectToWorldMatrix)));
 #else
-			D3DXMatrixMultiply(matrices+0, &ms_cachedWorldToProjectionMatrix, &ms_cachedObjectToWorldMatrix);
+			DirectX::XMStoreFloat4x4(matrices+0, DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&ms_cachedWorldToProjectionMatrix), DirectX::XMLoadFloat4x4(&ms_cachedObjectToWorldMatrix)));
 			matrices[1] = ms_cachedObjectToWorldMatrix;
 #endif
 
@@ -4513,67 +4591,26 @@ float Direct3d9::stopPerformanceTimer()
 
 void Direct3d9Namespace::optimizeIndexBuffer(WORD *indices, int numIndices)
 {
-	ID3DXMesh* pD3DXMesh;
-	HRESULT hRslt;
-	WORD* indexData = NULL;
-
-	if(numIndices == 0 || !indices)
-		return;
-
-	DEBUG_FATAL(numIndices % 3 != 0, ("Fatal: can't optimize a buffer that doesn't contain triangle face data"));
-	hRslt = D3DXCreateMeshFVF(numIndices / 3,
-							  numIndices,
-							  D3DXMESH_SYSTEMMEM,
-							  D3DFVF_XYZ,
-							  ms_device,
-							  &pD3DXMesh);
-
-	if(hRslt != D3D_OK)
-	{
-		WARNING_DEBUG_FATAL(true, ("Could not optimize index buffer"));
-		return;
-	}
-
-	hRslt = pD3DXMesh->LockIndexBuffer(0, (void**)&indexData);
-
-	if(hRslt != D3D_OK)
-	{
-		WARNING_DEBUG_FATAL(true, ("Could not optimize index buffer"));
-		return;
-	}
-
-	memcpy(indexData, indices, sizeof(WORD) * numIndices);
-
-	pD3DXMesh->UnlockIndexBuffer();
-
-	if(hRslt != D3D_OK)
-	{
-		WARNING_DEBUG_FATAL(true, ("Could not optimize index buffer"));
-		return;
-	}
-
-	DWORD* adjacencyTable = new DWORD[numIndices];
-	pD3DXMesh->GenerateAdjacency(0.0f, adjacencyTable);
-	for(int j = 0; j < numIndices; j++)
-	{
-		adjacencyTable[j] = 0xFFFFFFFF;
-	}
-
-	pD3DXMesh->OptimizeInplace(D3DXMESHOPT_IGNOREVERTS | D3DXMESHOPT_VERTEXCACHE,
-		adjacencyTable, NULL, NULL, NULL);
-
-	hRslt = pD3DXMesh->LockIndexBuffer(0, (void**)&indexData);
-
-	if(hRslt != D3D_OK)
-	{
-		WARNING_DEBUG_FATAL(true, ("Could not optimize index buffer"));
-		return;
-	}
-
-	memcpy(indices, indexData, sizeof(WORD) * numIndices);
-	pD3DXMesh->UnlockIndexBuffer();
-	delete [] adjacencyTable;
-	pD3DXMesh->Release();
+	// Phase 33-03 / D-04a: callable empty-body STUB (mirrors the D3D11
+	// STUB(optimizeIndexBuffer) at Direct3d11.cpp:1185). This is a real GL-API
+	// function-pointer slot (Gl_dll.def:220, registered Direct3d9.cpp:1258,
+	// exposed Graphics.cpp:3379, called from the 32-bit skeletal path at
+	// SoftwareBlendSkeletalShaderPrimitive.cpp:1421). The slot MUST stay
+	// callable -- leaving it null would null-ptr crash the skeletal path on
+	// boot (reviews fix #1, SC#4).
+	//
+	// The original body used D3DXCreateMeshFVF/ID3DXMesh::OptimizeInplace to
+	// reorder the index buffer for GPU vertex-cache locality -- a pure
+	// performance nicety: it is a same-length WORD-index REORDER, not a
+	// geometry/topology/LOD/collision change, so the un-reordered indices are
+	// still fully correct (verified: the body only memcpy'd indices in/out and
+	// reordered for cache, output triangle set unchanged). d3dx9 has no x64
+	// static lib (D-04a), so the D3DX mesh path is dropped; the empty
+	// pass-through leaves `indices` untouched (= the identity, no-reorder
+	// optimization). NvTriStrip is a phantom -- GenerateStrips/PrimitiveGroup
+	// are not in this plugin's source; do not chase it.
+	UNREF(indices);
+	UNREF(numIndices);
 }
 
 // ----------------------------------------------------------------------
@@ -4692,9 +4729,20 @@ bool Direct3d9Namespace::writeImage(char const * file, int const width, int cons
 			}
 		}
 
-		texturePointer->UnlockRect(0);
+		// Phase 33-03 / D-04a: own-impl via WriteTGA (reviews fix #10d) -- d3dx9
+		// has no x64 static lib, so D3DXSaveTextureToFile is replaced. This is a
+		// debug-only image-dump path (SwgCuiCommandParserUI); TGA is the single
+		// own-impl writer, so the output is a .tga regardless of the requested
+		// imageFormat. Write the logical (textureWidth x textureHeight) region
+		// from the still-locked ARGB_8888 buffer, then unlock.
+		UNREF(imageFormat);
+		{
+			char tgaFile[Os::MAX_PATH_LENGTH];
+			sprintf(tgaFile, "%s.tga", file);
+			WriteTGA::write(tgaFile, textureWidth, textureHeight, reinterpret_cast<uint8 const *>(lockedRect.pBits), true, lockedRect.Pitch);
+		}
 
-		D3DXSaveTextureToFile(file, static_cast<D3DXIMAGE_FILEFORMAT>(imageFormat), texturePointer, NULL);
+		texturePointer->UnlockRect(0);
 
 		texturePointer->Release();
 

@@ -14,6 +14,9 @@
 
 #include "sharedFoundation/MemoryBlockManager.h"
 
+#include <cstdint>
+#include <functional>
+
 // ======================================================================
 
 MemoryBlockManager * Direct3d9_StaticVertexBufferData::ms_memoryBlockManager;
@@ -35,15 +38,12 @@ void Direct3d9_StaticVertexBufferData::remove()
 
 // ----------------------------------------------------------------------
 
-static int s_liveInstanceCount = 0; // MEMPROBE: live instance counter (strip with MEMPROBE)
-
 void *Direct3d9_StaticVertexBufferData::operator new(size_t size)
 {
 	UNREF(size);
 	NOT_NULL(ms_memoryBlockManager);
 	DEBUG_FATAL(size != sizeof(Direct3d9_StaticVertexBufferData), ("wrong new called"));
 	DEBUG_FATAL(size != static_cast<size_t> (ms_memoryBlockManager->getElementSize()), ("installed with bad size"));
-	++s_liveInstanceCount; // MEMPROBE
 	return ms_memoryBlockManager->allocate();
 }
 
@@ -52,15 +52,7 @@ void *Direct3d9_StaticVertexBufferData::operator new(size_t size)
 void Direct3d9_StaticVertexBufferData::operator delete(void *memory)
 {
 	NOT_NULL(ms_memoryBlockManager);
-	--s_liveInstanceCount; // MEMPROBE
 	ms_memoryBlockManager->free(memory);
-}
-
-// ----------------------------------------------------------------------
-
-int Direct3d9_StaticVertexBufferData::getLiveInstanceCount()
-{
-	return s_liveInstanceCount;
 }
 
 // ======================================================================
@@ -139,7 +131,10 @@ void Direct3d9_StaticVertexBufferData::unlock()
 
 int Direct3d9_StaticVertexBufferData::getSortKey()
 {
-	return reinterpret_cast<int>(m_d3dVertexBuffer);
+	// Stable hash-to-int of the D3D vertex-buffer pointer (D-06 review #3): the
+	// int return is preserved so the virtual getSortKey() interface does not
+	// widen, and the full 64-bit pointer entropy survives on x64.
+	return static_cast<int>(std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>(m_d3dVertexBuffer)));
 }
 
 // ----------------------------------------------------------------------

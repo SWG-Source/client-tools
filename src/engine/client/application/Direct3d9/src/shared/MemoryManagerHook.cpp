@@ -8,7 +8,7 @@
 
 #include "FirstDirect3d9.h"
 
-#include <intrin.h> // _ReturnAddress
+#include <intrin.h>
 
 // ======================================================================
 
@@ -16,68 +16,58 @@
 #pragma warning(disable: 4100)
 
 // ======================================================================
-//
-// Was: each `operator new`/`operator new[]` overload below was an x86
-// naked function written in inline asm to read the caller's return
-// address from [ebp+4] and forward it to localAllocate as the
-// memory-owner tag. MSVC dropped support for naked + inline asm on
-// x64. The `_ReturnAddress` intrinsic does the same thing portably and
-// the compiler emits the prolog/epilog itself.
+// Phase 31 (BITS-01, B-GAP-1): these per-DLL operator new overloads were
+// __declspec(naked) x86 inline-asm trampolines (illegal on x64, C4235) that
+// forwarded to MemoryManager::allocate, passing the CALLER's return address as
+// the leak-tracking `owner` (the original read `[ebp+4]`). Each is replaced by a
+// normal operator new that captures the same owner via the _ReturnAddress()
+// intrinsic at the operator-new entry point -- so the leak owner stays the real
+// allocation call site -- preserving the per-routine (array, leakTest) flags the
+// asm encoded. Compiles on both x86 and x64 (no #ifdef fork).
 
 static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
 {
 	return MemoryManager::allocate(size, owner, array, leakTest);
 }
 
-namespace
-{
-	inline uint32 callerOwner()
-	{
-		// Truncate the (possibly 64-bit) return address to the 32-bit
-		// owner-tag type. The tag is opaque to MemoryManager; only the
-		// leak tracker reads it for diagnostics.
-		return static_cast<uint32>(reinterpret_cast<uintptr_t>(_ReturnAddress()));
-	}
-}
-
 // ======================================================================
 
 void *operator new(size_t size, MemoryManagerNotALeak)
 {
-	// localAllocate(size, [return address], array=false, leakTest=false)
-	return localAllocate(size, callerOwner(), false, false);
+	uint32 const owner = static_cast<uint32>(reinterpret_cast<uintptr_t>(_ReturnAddress()));
+	return localAllocate(size, owner, false, false);
 }
 
 // ----------------------------------------------------------------------
 
 void *operator new(size_t size)
 {
-	// localAllocate(size, [return address], array=false, leakTest=true)
-	return localAllocate(size, callerOwner(), false, true);
+	uint32 const owner = static_cast<uint32>(reinterpret_cast<uintptr_t>(_ReturnAddress()));
+	return localAllocate(size, owner, false, true);
 }
 
 // ----------------------------------------------------------------------
 
 void *operator new[](size_t size)
 {
-	// localAllocate(size, [return address], array=true, leakTest=true)
-	return localAllocate(size, callerOwner(), true, true);
+	uint32 const owner = static_cast<uint32>(reinterpret_cast<uintptr_t>(_ReturnAddress()));
+	return localAllocate(size, owner, true, true);
 }
 
 // ----------------------------------------------------------------------
 
 void *operator new(size_t size, const char *file, int line)
 {
-	// localAllocate(size, [return address], array=false, leakTest=true)
-	return localAllocate(size, callerOwner(), false, true);
+	uint32 const owner = static_cast<uint32>(reinterpret_cast<uintptr_t>(_ReturnAddress()));
+	return localAllocate(size, owner, false, true);
 }
 
 // ----------------------------------------------------------------------
 
 void *operator new[](size_t size, const char *file, int line)
 {
-	// localAllocate(size, [return address], array=true, leakTest=true)
-	return localAllocate(size, callerOwner(), true, true);
+	uint32 const owner = static_cast<uint32>(reinterpret_cast<uintptr_t>(_ReturnAddress()));
+	return localAllocate(size, owner, true, true);
 }
 
 // ----------------------------------------------------------------------

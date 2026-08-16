@@ -15,7 +15,12 @@
 #include "Direct3d9_VertexDeclarationMap.h"
 
 #include "clientGraphics/VertexBuffer.h"
+#include "sharedDebug/PerformanceTimer.h"
+#include "sharedFoundation/ConfigFile.h"
 #include "sharedFoundation/MemoryBlockManager.h"
+
+#include <cstdint>
+#include <functional>
 
 // ======================================================================
 
@@ -204,7 +209,25 @@ void *Direct3d9_DynamicVertexBufferData::lock(int numberOfVertices, bool forceDi
 	}
 
 	void *data = NULL;
+	// [Direct3d9] logDynamicBufferLockMs (default 0 = OFF): standing probe for the
+	// skeletal first-draw Lock stall class (815ms in the 2026-07-13 stack-sampler
+	// session). Logs any dynamic-buffer Lock blocking >= the threshold (ms) with
+	// the lock flag + ring state -- distinguishes DISCARD rename pressure (discard=1,
+	// high discardsSinceBeginFrame) from driver-sync blocks on NOOVERWRITE.
+	static int const s_logLockMs = ConfigFile::getKeyInt("Direct3d9", "logDynamicBufferLockMs", 0);
+	PerformanceTimer lockTimer;
+	if (s_logLockMs > 0)
+		lockTimer.start();
 	HRESULT const hresult = ms_d3dVertexBuffer->Lock(ms_used, length, &data, lockFlag);
+	if (s_logLockMs > 0)
+	{
+		lockTimer.stop();
+		float const lockMs = lockTimer.getElapsedTime() * 1000.f;
+		if (lockMs >= static_cast<float>(s_logLockMs))
+			REPORT_LOG(true, ("VBLOCK %8.3fms discard=%d offset=%d length=%d locks=%d/%d discards=%d/%d\n",
+				lockMs, discard, ms_used, length, ms_locksSinceBeginFrame, ms_locksSinceResourceCreation,
+				ms_discardsSinceBeginFrame, ms_discardsSinceResourceCreation));
+	}
 	FATAL(FAILED(hresult), ("Could not lock dynamic %s %d=err %d=discard %d=offset %d=length %d/%d/%d=locks %d/%d/%d=discards", "vb", HRESULT_CODE(hresult), discard, ms_used, length, ms_locksSinceBeginFrame, ms_locksSinceResourceCreation, ms_locksEver, ms_discardsSinceBeginFrame, ms_discardsSinceResourceCreation, ms_discardsEver));
 	NOT_NULL(data);
 
@@ -259,7 +282,10 @@ int Direct3d9_DynamicVertexBufferData::getNumberOfLockableDynamicVertices(bool w
 
 int Direct3d9_DynamicVertexBufferData::getSortKey()
 {
-	return reinterpret_cast<int>(ms_d3dVertexBuffer);
+	// Stable hash-to-int of the shared D3D vertex-buffer pointer (D-06 review #3):
+	// int return preserved (no virtual-interface widening), full pointer entropy
+	// kept on x64.
+	return static_cast<int>(std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>(ms_d3dVertexBuffer)));
 }
 
 // ----------------------------------------------------------------------

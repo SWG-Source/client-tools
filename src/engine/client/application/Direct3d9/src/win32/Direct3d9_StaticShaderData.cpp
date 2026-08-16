@@ -27,10 +27,11 @@
 #include "sharedFoundation/CrcLowerString.h"
 
 #include <d3d9.h>
-#include <d3dx9.h>
 #include <stdio.h>
 
 #ifdef _DEBUG
+#include <cstdint>
+#include <functional>
 #include <string>
 #endif
 
@@ -385,7 +386,9 @@ bool Direct3d9_StaticShaderData::Stage::getTextureSortKey(int &value) const
 {
 	if (m_texture)
 	{
-		value = reinterpret_cast<int>((*m_texture)->getBaseTexture());
+		// Stable hash-to-int of the base-texture pointer (D-06 review #3): the
+		// out-param stays int, full 64-bit pointer entropy preserved on x64.
+		value = static_cast<int>(std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>((*m_texture)->getBaseTexture())));
 		return true;
 	}
 
@@ -555,7 +558,6 @@ void Direct3d9_StaticShaderData::Pass::construct(const StaticShader &shader, con
 		{
 			const int numberOfTextureCoordinateSetTags = textureCoordinateSetTags->size();
 			DEBUG_FATAL(numberOfTextureCoordinateSetTags > 8, ("too many texture coordinate sets"));
-
 			for (int i = 0; i < numberOfTextureCoordinateSetTags ; ++i)
 			{
 				uint8 textureCoordinate = 0;
@@ -564,7 +566,7 @@ void Direct3d9_StaticShaderData::Pass::construct(const StaticShader &shader, con
 					DEBUG_WARNING(true, ("Missing texture coordinate set tag %s for shader %s, defaulting to 0", ConvertTagToStaticString((*textureCoordinateSetTags)[i]), shader.getShaderTemplate().getName().getString()));
 					textureCoordinate = 0;
 				}
-
+				
 				if (textureCoordinate > 7)
 				{
 					DEBUG_WARNING(true, ("shader [%s]: texture coordinate out of range 0/%d/7, resetting to 0", shader.getName() ? shader.getName() : "<NULL shader name>", static_cast<int>(textureCoordinate)));
@@ -700,7 +702,7 @@ void Direct3d9_StaticShaderData::Pass::construct(const StaticShader &shader, con
 			m_textureFactorData[1].a = static_cast<float>((textureFactor2 >> 24) & 0xff) / 255.0f;
 		}
 		else
-			DEBUG_WARNING(true, ("Could not find texture factor %s in %s", ConvertTagToStaticString(pass.m_textureFactorTag2), shader.getShaderTemplate().getName().getString()));
+			DEBUG_WARNING(true, ("Could not find texture factor %s in %s", ConvertTagToStaticString(pass.m_textureFactorTag), shader.getShaderTemplate().getName().getString()));
 #endif
 	}
 
