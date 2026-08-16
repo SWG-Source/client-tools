@@ -11,6 +11,7 @@
 #include "Direct3d11_ShaderCompiler.h"
 
 #include "Direct3d11_Device.h"
+#include "Direct3d11_EmbeddedShaderCorpus.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ShaderCache.h"
 #include "Direct3d11_ShaderPrograms.h"
@@ -21,6 +22,7 @@
 
 #include <d3dcompiler.h>
 #include <windows.h>
+#include <cstring>
 #include <map>
 #include <string>
 
@@ -522,7 +524,18 @@ ID3DBlob *Direct3d11_ShaderCompiler::compilePixelShader(char const *source, int 
 	// The pixel side receives the PSRC chunk untouched, so its marker is still the first line and
 	// this is the right place to test it.
 	if (refuseIfNotHlsl(source, sourceLength, name))
+	{
+		// Stock-data escape hatch: the shelf dataset still ships 224 of its shader programs
+		// as D3D9 assembly (ui.psh among them). Substitute the embedded corpus translation
+		// so a corpus-less client still draws, and say so in the log.
+		char const *const builtin = Direct3d11_EmbeddedShaderCorpus::lookupProgram(name);
+		if (builtin)
+		{
+			WARNING(true, ("Direct3d11: '%s' substituted with the embedded corpus translation (stock-data assembly program).", name));
+			return compilePatched(builtin, static_cast<int>(strlen(builtin)), name, macros, cms_pixelShaderTarget, false);
+		}
 		return NULL;
+	}
 
 	return compilePatched(source, sourceLength, name, macros, cms_pixelShaderTarget, false);
 }
