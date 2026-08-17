@@ -606,6 +606,32 @@ void Graphics::setBrightnessContrastGamma(float brightness, float contrast, floa
 	ms_api->setBrightnessContrastGamma(brightness, contrast, gamma);
 }
 
+// Consumer overlay callbacks (2026-08-15, toolkit x64 round-2). Unlike the
+// engine-driven setters above these are CONSUMER-driven, so the timing is not
+// ours: guard-and-WARN instead of NOT_NULL so an early registration (before
+// Graphics::install binds ms_api) degrades loudly rather than crashing the
+// host process. Register from a live session (any time after install).
+
+void Graphics::setFrameCallback(void (*fn)())
+{
+	if (!ms_api || !ms_api->setFrameCallback)
+	{
+		WARNING(true, ("Graphics::setFrameCallback before install (or plugin lacks the slot) -- registration DROPPED; register after graphics install"));
+		return;
+	}
+	ms_api->setFrameCallback(fn);
+}
+
+void Graphics::setResizeCallback(void (*fn)(int phase, int width, int height))
+{
+	if (!ms_api || !ms_api->setResizeCallback)
+	{
+		WARNING(true, ("Graphics::setResizeCallback before install (or plugin lacks the slot) -- registration DROPPED; register after graphics install"));
+		return;
+	}
+	ms_api->setResizeCallback(fn);
+}
+
 //----------------------------------------------------------------------
 
 float Graphics::getBrightness()

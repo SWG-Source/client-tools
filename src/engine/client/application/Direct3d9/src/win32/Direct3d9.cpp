@@ -969,6 +969,25 @@ const D3DFORMAT *Direct3d9Namespace::getMatchingDepthStencilFormats(int z, int s
 }
 
 // ----------------------------------------------------------------------
+// Consumer overlay callback slots (2026-08-15, toolkit x64 round-2):
+// D3D11-only feature -- the injected overlay draws through the D3D11
+// device, so on the D3D9 line registration is accepted-and-ignored with a
+// Release-visible line (a consumer registering here has the wrong
+// rasterMajor and should see why its overlay never draws).
+
+static void setFrameCallbackIgnored(void (*fn)())
+{
+	UNREF(fn);
+	REPORT_LOG(true, ("Direct3d9: consumer frame callback registration IGNORED -- overlay callbacks are D3D11-only (rasterMajor=11)\n"));
+}
+
+static void setResizeCallbackIgnored(void (*fn)(int phase, int width, int height))
+{
+	UNREF(fn);
+	REPORT_LOG(true, ("Direct3d9: consumer resize callback registration IGNORED -- overlay callbacks are D3D11-only (rasterMajor=11)\n"));
+}
+
+// ----------------------------------------------------------------------
 
 bool Direct3d9::install(Gl_install *gl_install)
 {
@@ -1011,6 +1030,9 @@ bool Direct3d9::install(Gl_install *gl_install)
 	// (rasterMajor=11 is its requirement), so the D3D9 line accepts the
 	// registration and never invokes it (one Release-visible line so a
 	// mis-raster'd session is diagnosable, not silent).
+
+	ms_glApi.setFrameCallback                  = setFrameCallbackIgnored;
+	ms_glApi.setResizeCallback                 = setResizeCallbackIgnored;
 
 	ms_glApi.getShaderCapability               = getShaderCapability;
 	ms_glApi.requiresVertexAndPixelShaders     = requiresVertexAndPixelShaders;
