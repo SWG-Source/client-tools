@@ -193,6 +193,15 @@ public:
 	virtual InteriorLayoutReaderWriter const * getInteriorLayout() const;
 	void addClientOnlyInteriorLayoutObject(Object * object);
 
+	// Per-building interior REFRESH (2026-08-04). Deletes ONLY the objects this building's
+	// interior-layout creator made and clears the list. Deliberately NOT "every client-cached
+	// object in my cells": the toolkit's unpersisted placements are wsAddObject-minted snapshot
+	// nodes living in the same cells, and sweeping those would silently discard a modder's
+	// in-session work. The two populations are disjoint and this is the narrow one.
+	// Watcher<Object> entries that already died are skipped. Returns how many were deleted.
+	int clearClientOnlyInteriorLayoutObjects();
+
+
 	bool isPassiveRevealPlayerCharacter(NetworkId const & target) const;
 
 	virtual void getObjectInfo(stdmap<std::string, stdmap<std::string, Unicode::String>::fwd >::fwd & propertyMap) const;

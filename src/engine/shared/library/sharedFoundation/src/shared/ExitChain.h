@@ -74,6 +74,35 @@ public:
 	static bool           isRunning(void);
 	static DLLEXPORT bool isFataling(void);
 
+	// ------------------------------------------------------------------
+	// Process-wide shutdown phase (2026-08-01).
+	//
+	// DELIBERATELY DISTINCT FROM isRunning(): that one returns
+	// PerThreadData::getExitChainRunning() -- PER-THREAD state -- so any
+	// thread other than the one actually unwinding always reads false. That
+	// makes it structurally unusable as a shutdown signal for an attached
+	// external consumer (e.g. SWG-Toolkit), which polls from its own thread.
+	//
+	// This is a plain process-wide int: monotonic (only ever raised, never
+	// decreases, never resets), no locks, no dependent subsystem state, so it
+	// stays safe to read from ANY thread at ANY time -- including during
+	// ExitChain teardown and CRT exit, which is exactly the window where
+	// Game::isOver() stops being safe (it dereferences IoWinManager/Os state).
+	//
+	// Advertised to consumers as game::getShutdownPhase (contract v26).
+	// Consumer rule: >= SP_requested  -> stop queueing new work;
+	//                >= SP_unwinding  -> issue no advertised calls at all.
+	// ------------------------------------------------------------------
+	enum ShutdownPhase
+	{
+		SP_running   = 0,   // normal operation
+		SP_requested = 1,   // quit decided; teardown has NOT started yet
+		SP_unwinding = 2    // ExitChain::run() entered; destructors are firing
+	};
+
+	static int            getShutdownPhase(void);
+	static void           raiseShutdownPhase(int phase);   // monotonic -- only ever raises
+
 	static void           debugReport();
 	static void           debugReport(bool log);
 };

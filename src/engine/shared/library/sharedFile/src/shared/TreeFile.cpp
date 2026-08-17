@@ -926,6 +926,35 @@ const char *TreeFile::getSearchPath(int index)
 	return NULL;
 }
 
+
+// ----------------------------------------------------------------------
+
+void TreeFile::enumerateFiles(void (*callback)(const char *fileName, void *context), void *context)
+{
+	// Walk every registered node and yield each contained filename. Only SearchTree
+	// and SearchTOC carry a flat TOC name table (the union the client can open());
+	// SearchPath (loose dir), SearchAbsolute and SearchCache hold no enumerable name
+	// list and are intentionally skipped. RTTI-discriminate per node, mirroring
+	// getSearchPath. ms_criticalSection guards the ms_searchNodes traversal (the
+	// debugReportPaths idiom) -- the callback therefore runs UNDER the lock and must
+	// not re-enter TreeFile; the consumer's Repository append is allocation-only, safe.
+	if (!callback)
+		return;
+
+	ms_criticalSection.enter();
+
+		const SearchNodes::iterator iEnd = ms_searchNodes.end();
+		for (SearchNodes::iterator i = ms_searchNodes.begin(); i != iEnd; ++i)
+		{
+			if (const SearchTree *searchTree = dynamic_cast<const SearchTree*>(*i))
+				searchTree->enumerateFiles(callback, context);
+			else if (const SearchTOC *searchTOC = dynamic_cast<const SearchTOC*>(*i))
+				searchTOC->enumerateFiles(callback, context);
+		}
+
+	ms_criticalSection.leave();
+}
+
 //-----------------------------------------------------------------
 /**
  * This function will return the shortest trailing path of its input that

@@ -9,6 +9,8 @@
 #include "clientGame/ClientInteriorLayoutManager.h"
 
 #include "clientGame/TangibleObject.h"
+#include "clientGame/ClientBuildingObjectTemplate.h"   // v32 refresh: reloadInteriorLayout (the layout is cached on the TEMPLATE)
+#include "sharedObject/NetworkIdManager.h"         // v32 refresh: resolve the building by id
 #include "clientGraphics/RenderWorld.h"
 #include "sharedDebug/InstallTimer.h"
 #include "sharedDebug/DebugFlags.h"
@@ -233,6 +235,82 @@ void ClientInteriorLayoutManager::applyInteriorLayout(TangibleObject * const tan
 		else
 			DEBUG_WARNING(true, ("Object template %s specified building layout %s which specified invalid cell name %s.  Object will be skipped.", tangibleObject->getObjectTemplateName(), fileName, cellName.getString()));
 	}
+}
+
+// ======================================================================
+// v32: per-building interior REFRESH -- re-apply a changed .ilf to ONE building
+// without a scene reload.
+//
+// WHY THIS EXISTS: the alternative was the toolkit's full "reload current scene",
+// which tears down and rebuilds the whole snapshot. That is a sledgehammer for a
+// moved chair, and after the unload guard it leaves occupied buildings showing
+// their PRE-EDIT on-disk state (a kept root collides with the re-parsed node and
+// loses its sphere handle). This path retires that residual: nothing is torn down,
+// so nothing is kept, so nothing goes stale.
+//
+// THREE THINGS MUST HAPPEN, and missing any one is a silent no-op:
+//   1. the building's client-only interior objects are deleted -- and ONLY those.
+//      NOT "every client-cached object in the cells": the consumer's unpersisted
+//      placements are wsAddObject-minted snapshot nodes living in the same cells,
+//      with no on-disk copy, and sweeping them would look exactly like the editor
+//      discarding a modder's work.
+//   2. the TEMPLATE's cached InteriorLayoutReaderWriter is reloaded. The layout is
+//      cached on ClientBuildingObjectTemplate, not on the object, so steps 1+3
+//      alone would faithfully rebuild the OLD .ilf -- the exact failure mode that
+//      makes the whole feature useless.
+//   3. each cell's applied-latch is cleared AND its resume cursor reset. The latch
+//      alone would still resume at the old cursor and create nothing.
+//
+// Re-creation itself is left to the existing budgeted update(), so a large cantina
+// spreads across frames under maxInteriorCreatesPerFrame instead of hitching --
+// which is the other reason this beats a reload.
+//
+// 1 = refreshed · 0 = no such object / not a POB / no layout · -1 = layout reload failed.
+// ======================================================================
+
+extern "C" int __cdecl engine_refreshInteriorLayout (__int64 buildingNetworkId)
+{
+	Object * const object = NetworkIdManager::getObjectById (NetworkId (static_cast<NetworkId::NetworkIdType> (buildingNetworkId)));
+	if (!object)
+		return 0;
+
+	ClientObject * const clientObject = object->asClientObject ();
+	TangibleObject * const tangibleObject = clientObject ? clientObject->asTangibleObject () : 0;
+	if (!tangibleObject)
+		return 0;
+
+	PortalProperty * const portalProperty = tangibleObject->getPortalProperty ();
+	if (!portalProperty)
+		return 0;
+
+	//-- (2) reload the TEMPLATE's cached layout first, so the re-create in (3) reads the new file
+	const ClientBuildingObjectTemplate * const buildingTemplate = dynamic_cast<const ClientBuildingObjectTemplate *> (tangibleObject->getObjectTemplate ());
+	if (!buildingTemplate)
+		return 0;
+
+	if (!buildingTemplate->reloadInteriorLayout ())
+		return -1;
+
+	//-- (1) delete ONLY this building's interior-layout objects
+	int const deleted = tangibleObject->clearClientOnlyInteriorLayoutObjects ();
+
+	//-- (3) re-arm every cell so the budgeted update() re-creates from the reloaded layout
+	int cellsArmed = 0;
+	int const numberOfCells = portalProperty->getNumberOfCells ();
+	for (int i = 0; i < numberOfCells; ++i)
+	{
+		CellProperty const * const cellProperty = portalProperty->getCell (i);
+		if (!cellProperty)
+			continue;
+
+		cellProperty->clearAppliedInteriorLayout ();
+		cellProperty->setInteriorLayoutCreatedCount (0);
+		++cellsArmed;
+	}
+
+	REPORT_LOG (true, ("[editor.ilf] refreshInteriorLayout OK id=%I64d deleted=%d cellsArmed=%d\n", buildingNetworkId, deleted, cellsArmed));
+
+	return 1;
 }
 
 // ======================================================================

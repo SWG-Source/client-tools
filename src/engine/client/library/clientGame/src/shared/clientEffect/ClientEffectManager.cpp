@@ -12,6 +12,7 @@
 #include "clientGame/CellObject.h"
 #include "clientGame/ClientCommandQueue.h"
 #include "clientGame/ClientEffect.h"
+#include "clientGame/ClientEffectTemplate.h"        // Utinni Bucket B-2: replay template existence-check / release()
 #include "clientGame/ClientEffectTemplateList.h"
 #include "clientGame/ClientWeaponObjectTemplate.h"
 #include "clientGame/ClientWorld.h"
@@ -35,6 +36,7 @@
 #include "sharedCollision/Floor.h"
 #include "sharedCollision/FloorLocator.h"
 #include "sharedDebug/InstallTimer.h"
+#include "sharedDebug/Report.h"                     // Utinni Bucket B: retrigger instrumentation (REPORT_LOG)
 #include "sharedFoundation/ConstCharCrcLowerString.h"
 #include "sharedFoundation/CrcLowerString.h"
 #include "sharedFoundation/ExitChain.h"
@@ -45,8 +47,10 @@
 #include "sharedMessageDispatch/Receiver.h"
 #include "sharedNetworkMessages/ClientEffectMessages.h"
 #include "sharedObject/Appearance.h"
+#include "sharedObject/AppearanceTemplateList.h"   // Utinni Bucket B: retrigger template refresh
 #include "sharedObject/CellProperty.h"
 #include "sharedObject/NetworkIdManager.h"
+#include "sharedObject/Object.h"                    // Utinni Bucket B: getAppearance() in the retrigger walk
 #include "sharedObject/ObjectTemplateList.h"
 #include "sharedTerrain/TerrainObject.h"
 
@@ -1342,3 +1346,156 @@ void ClientEffectManager::createClientTrackingProjectileLocationToObject(const s
 }
 
 // ======================================================================
+
+// ======================================================================
+// Utinni Bucket B (2026-06-26) -- Effects-editor live-preview retrigger.
+//
+// Advertised to the injected Utinni overlay as "particlePreview::retrigger"
+// (engine_advertise.cpp / engine_hookpoints.inc). The Effects editor's basic
+// edit+save is pure managed I/O and already works on the advertised client; what
+// was dark is the live "Preview in client" path -- hot-reloading a just-saved
+// particle template and seeing live scene instances restart. The reachability
+// spike found ClientEffectManager owns the live instances (m_particleSystems) but
+// its add/remove/list surface is PRIVATE with no public enumerate-and-restart
+// entry, so the provider exposes this friend free function.
+//
+// CONTRACT (matches the consumer's utinni::ParticlePreview seam):
+//   * GAME-THREAD ONLY; called ONCE per editor save/reload (NEVER per frame).
+//   * ALLOCATION-FREE on any per-frame path: this is a read-only walk of the
+//     existing vector -- no container growth, no per-call heap (the
+//     project_rh_snapshot_no_heap_alloc lesson: a per-frame reserve() once
+//     fragmented SWG's allocator and crashed scene change at 0x0051fb0a).
+//   * Matches live PARTICLE instances by their appearance-template name (the .prt);
+//     case-insensitive. .cef-level re-play is out of scope (re-play via the public
+//     playClientEffect path if needed) -- flagged in the handback.
+//
+// Both platforms (x64 port 2026-08-15; was 32-bit only).
+// ======================================================================
+void engine_retriggerClientEffect(char const * const logicalName)
+{
+	if (!logicalName || !*logicalName)
+		return;
+
+	// Refresh the (timed-)template cache so an auto-reloading TimedTemplate re-reads the
+	// just-saved content. fetch(name, found) is the SAFE overload -- found=false instead
+	// of FATAL if the name is not a known appearance template. Balanced release below;
+	// the live instances keep their own references, so this never dangles them.
+	bool found = false;
+	AppearanceTemplate const * const refreshed = AppearanceTemplateList::fetch(logicalName, found);
+
+	// --- Bucket B retrigger instrumentation (REPORT_LOG -> always-compiled, Release-visible) ---
+	// We want to see, per editor save: how many live instances exist, how many are particle
+	// appearances at all, what each candidate's actual template name is (to compare against the
+	// logicalName format we were handed), and how many actually matched + restarted.
+	int const totalInstances = static_cast<int>(ClientEffectManager::m_particleSystems.size());
+	int particleAppearanceCount = 0;
+	int matchCount = 0;
+	int restartCount = 0;
+	REPORT_LOG(true, ("[effect.retrigger] BEGIN logicalName=\"%s\" templateRefreshed=%s m_particleSystems.size=%d\n",
+		logicalName, (refreshed ? "yes" : "no"), totalInstances));
+
+	// Restart every live particle instance whose appearance template matches.
+	for (ClientEffectManager::ParticleList::const_iterator it = ClientEffectManager::m_particleSystems.begin(); it != ClientEffectManager::m_particleSystems.end(); ++it)
+	{
+		ClientEffectManager::ManagedParticleSystem const * const mps = *it;
+		if (!mps || !mps->particleSystem)
+			continue;
+		Object * const obj = mps->particleSystem;              // Watcher<Object> -> Object*
+		Appearance * const appearance = obj ? obj->getAppearance() : 0;
+		if (!appearance)
+			continue;
+		ParticleEffectAppearance * const pea = ParticleEffectAppearance::asParticleEffectAppearance(appearance);
+		if (!pea)
+			continue;
+		++particleAppearanceCount;
+		char const * const name = appearance->getAppearanceTemplateName();
+		bool const isMatch = (name && _stricmp(name, logicalName) == 0);
+		REPORT_LOG(true, ("[effect.retrigger]   candidate #%d name=\"%s\" match=%s\n",
+			particleAppearanceCount, (name ? name : "<null>"), (isMatch ? "YES" : "no")));
+		if (!isMatch)
+			continue;
+		++matchCount;
+		pea->restart();                                        // re-fire from m_age=0; rewinds all emitter groups
+		++restartCount;
+	}
+
+	REPORT_LOG(true, ("[effect.retrigger] END particleAppearances=%d matches=%d restarted=%d (of %d total instances)\n",
+		particleAppearanceCount, matchCount, restartCount, totalInstances));
+
+	if (refreshed)
+		AppearanceTemplateList::release(refreshed);
+}
+
+// ======================================================================
+// Utinni Bucket B-2 (2026-06-28) -- Effects-editor live RE-PLAY for .cef authoring.
+//
+// Advertised as "particlePreview::replayClientEffect". Sibling to the Bucket B
+// retrigger above. Bucket B's restart() only covers SUSTAINED, currently-playing
+// .cef-spawned instances; transient .cef effects (muzzle/hit/explosion) are gone
+// before the editor saves, so there is nothing to restart. The high-value preview
+// primitive for .cef authoring is therefore RE-PLAY: spawn the effect fresh, with
+// the just-saved edit, on the local player.
+//
+// REFRESH semantics (honest about what is / is not guaranteed):
+//   * A transient .cef that has finished playing is NO LONGER cached -- its last
+//     ClientEffect released the ClientEffectTemplate -> refcount 0 ->
+//     ClientEffectTemplateList::stopTracking evicted it. So the play below is a
+//     guaranteed cache-MISS that reloads the .cef from disk, and that reload
+//     re-fetches every referenced appearance/particle (.prt) and sound template via
+//     AppearanceTemplateList::fetch / SoundTemplateList::fetch -> the edit is
+//     visible. This (transient effects) is the case this wave targets.
+//   * There is NO clean public way to force-reload a .cef that is STILL cached:
+//     ClientEffectTemplate::load() APPENDS rather than replaces, and stopTracking()
+//     is private. A currently-sustained .cef being edited stays on Bucket B's
+//     restart path / the editor's scene-change reload tier -- out of scope here.
+//   * The fetch()+release() below is an existence check + the templateRefreshed log
+//     signal (and, for the uncached case, the reload trigger); the actual play does
+//     its own fetch.
+//
+// CONTRACT (matches the consumer's utinni::ParticlePreview replay seam):
+//   * GAME-THREAD ONLY; called ONCE per editor save/preview (NEVER per frame).
+//   * ALLOCATION-FREE on any per-frame path (this is not a per-frame path).
+//   * Plays ON the local player (Game::getPlayer()) at its origin (no hardpoint).
+//     Bails false (no crash) if there is no player / no scene.
+//
+// 32-bit-only: mirrors the whole engine_advertise.cpp Win32-only export body.
+// ======================================================================
+// NOTE: parameter is plain `char const *` (NO top-level const) to match the
+// forward-header declaration's mangling exactly. Unlike engine_retriggerClientEffect
+// (a friend of ClientEffectManager, so its decl is visible here and reconciles the
+// name), this free fn has no declaration visible in this TU -- and MSVC mangles a
+// standalone definition's top-level-const param into the symbol (QBD vs PBD),
+// producing an LNK2001 against the advertise TU's PBD reference.
+bool engine_replayClientEffect(char const * clientEffectName)
+{
+	if (!clientEffectName || !*clientEffectName)
+		return false;
+
+	// Resolve the play target: the local player. No player == no scene loaded -> bail (no crash).
+	Object * const player = Game::getPlayer();
+	if (!player)
+	{
+		REPORT_LOG(true, ("[effect.replay] BEGIN name=\"%s\" -> NO PLAYER (no scene); bailing played=no\n", clientEffectName));
+		return false;
+	}
+
+	CrcLowerString const effectName(clientEffectName);
+
+	// Refresh / existence-check. For a not-currently-cached (transient) effect this
+	// reloads the .cef from disk and re-fetches its referenced templates, so the edit
+	// is visible on the play below. Release immediately -- the play does its own fetch,
+	// and any resulting live ClientEffect holds its own reference.
+	ClientEffectTemplate const * const cet = ClientEffectTemplateList::fetch(effectName);
+	bool const templateRefreshed = (cet != 0);
+	if (cet)
+		cet->release();
+
+	REPORT_LOG(true, ("[effect.replay] BEGIN name=\"%s\" target=player(%p) templateRefreshed=%s\n",
+		clientEffectName, static_cast<void *>(player), (templateRefreshed ? "yes" : "no")));
+
+	// Play the effect fresh, attached to the player object at its origin.
+	bool const played = ClientEffectManager::playClientEffect(effectName, player, CrcLowerString::empty);
+
+	REPORT_LOG(true, ("[effect.replay] END name=\"%s\" played=%s\n", clientEffectName, (played ? "yes" : "no")));
+	return played;
+}

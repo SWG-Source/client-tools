@@ -98,6 +98,9 @@ public:
 
 		void             load (Iff& iff);
 		void             save (Iff& iff) const;
+		// Goal B Wave 3 (2026-07-18): save skipping DELETED children recursively
+		// (tombstones from removeNode would otherwise serialize with zeroed ids)
+		void             saveFiltered (Iff& iff) const;
 
 		void             load_0000 (Iff& iff);
 
@@ -138,6 +141,22 @@ public:
 	bool             save (const char* filename) const;
 	void             save (Iff& iff) const;
 
+	// Goal B Wave 3 (2026-07-18): filtered save -- the editor's Save writes
+	// authored content only. Skips DELETED (tombstoned) nodes recursively and
+	// any TOP-LEVEL node for which includeTopLevelNode returns false (the
+	// caller's provenance filter, e.g. buildout-row exclusion). The OTNL
+	// template-name table is written WHOLE (excluded nodes may leave unused
+	// names; surviving nodes' indices stay valid without a remap). Additive
+	// API -- no layout change; Node::save/saveFiltered remain the sole format
+	// writers.
+	// The callback receives the NODE POINTER, not the id -- provenance must be
+	// identity-keyed (a buildout row and an authored node can share an id; the
+	// 2026-07-18 self-test caught the id-keyed filter refusing every
+	// buildout-planet save).
+	typedef bool (*IncludeTopLevelNodeFunction) (const Node* node, void* context);
+	bool             saveFiltered (const char* filename, IncludeTopLevelNodeFunction includeTopLevelNode, void* context) const;
+	void             saveFiltered (Iff& iff, IncludeTopLevelNodeFunction includeTopLevelNode, void* context) const;
+
 	// CONSULT-60: incremental load. beginIncrementalLoad enters the WSNP/0001/
 	// NODS forms (returns false if there is nothing to parse); each
 	// stepIncrementalLoad call parses whole top-level node subtrees under
@@ -151,6 +170,7 @@ public:
 	//-- creation interface
 	void             clear ();
 	const Node*      addObject (int64 networkIdInt, int64 containedByNetworkIdInt, CrcString const &objectTemplateName, int cellIndex, const Transform& transform_p, float radius, uint32 portalLayoutCrc, const std::string & eventName = "");
+	int              internObjectTemplateName (CrcString const &objectTemplateName);   // find-or-append in the OTNL table; returns the index (the addObject intern path, exposed for in-place node re-pointing -- v23 wsSetNodeTemplateName)
 
 	//-- query interface
 	int              getNumberOfNodes () const;

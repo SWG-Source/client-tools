@@ -137,6 +137,15 @@ private:
 
 	static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
+	// Utinni engine entry-point advertisement (38-02, EPA-06): grant the
+	// external-linkage shim in Os.cpp member access to the PRIVATE WindowProc.
+	// Same-TU is NOT enough for private access in C++ (only members/friends
+	// qualify -- a free function in Os.cpp hits C2248); a friend declaration is
+	// the ABI-neutral fix (adds no data member / no vtable entry, so the Os
+	// layout is byte-identical and no gl0X plugin cascade). Both platforms since
+	// the 2026-08-15 x64 port (CALLBACK/__stdcall is inert on x64).
+	friend LRESULT CALLBACK engine_osWindowProc(HWND, UINT, WPARAM, LPARAM);
+
 private:
 private:
 

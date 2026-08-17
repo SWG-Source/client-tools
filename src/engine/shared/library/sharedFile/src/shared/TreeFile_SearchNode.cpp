@@ -687,6 +687,44 @@ AbstractFile *TreeFile::SearchTree::open(const char *fileName, AbstractFile::Pri
 	if (localExists(fileName, &tableOfContentsIndex, deleted))
 	{
 		const TableOfContentsEntry &entry = m_tableOfContents[tableOfContentsIndex];
+
+		// Plan 11-09.15 Iter-31B: log which TRE serves each font file
+		// lookup. CODEX+Cursor consult had a wrong hypothesis (cross-format
+		// BGRA8->DXT5 upload mismatch); Iter-31A2 raw-byte dump revealed the
+		// engine reads a genuinely DXT5 file for verdana_14_000.dds while
+		// ALL 4 TRE versions extracted with TreeFileExtractor.exe are BGRA8.
+		// One of (a) extraction tool is buggy for some entries, (b) the
+		// CRC-based TOC binary search picks a duplicate entry the -l listing
+		// doesn't surface, or (c) the engine reads from a TRE we haven't
+		// scanned. This logger writes the TRE filename + TOC index + entry
+		// stats to a file every time a `texture/font/` asset is opened from
+		// a TRE.
+		if (fileName && strstr(fileName, "texture/font/"))
+		{
+			static int s_iter31bCount = 0;
+			if (s_iter31bCount < 30)
+			{
+				++s_iter31bCount;
+				static bool s_iter31bFirstWrite = true;
+				char const * const mode = s_iter31bFirstWrite ? "wb" : "ab";
+				s_iter31bFirstWrite = false;
+				FILE *fp = nullptr;
+				fopen_s(&fp, "stage/iter31b-tree-open.txt", mode);
+				if (fp)
+				{
+					fprintf(fp,
+						"font_open#%d file='%s' fromTRE='%s' tocIdx=%d "
+						"entry.offset=%d entry.length=%d entry.compressedLength=%d entry.compressor=%d\n",
+						s_iter31bCount, fileName,
+						m_treeFileName ? m_treeFileName : "<null>",
+						tableOfContentsIndex,
+						entry.offset, entry.length, entry.compressedLength,
+						static_cast<int>(entry.compressor));
+					fclose(fp);
+				}
+			}
+		}
+
 		if (!TreeFile::SearchTree::isCompressed(entry.compressor))
 			return new FileStreamerFile(priority, *m_treeFile, entry.offset, entry.length);
 
@@ -700,6 +738,18 @@ AbstractFile *TreeFile::SearchTree::open(const char *fileName, AbstractFile::Pri
 	}
 
 	return NULL;
+}
+
+// ----------------------------------------------------------------------
+
+void TreeFile::SearchTree::enumerateFiles(void (*callback)(const char *fileName, void *context), void *context) const
+{
+	// Yield every TOC filename: the name block m_fileNames holds the null-terminated
+	// engine-relative paths (e.g. "terrain/tatooine.trn"); each entry indexes it by
+	// fileNameOffset. m_numberOfFiles is int here (uint32 on SearchTOC).
+	if (m_fileNames && m_tableOfContents)
+		for (int i = 0; i < m_numberOfFiles; ++i)
+			callback(m_fileNames + m_tableOfContents[i].fileNameOffset, context);
 }
 
 // ======================================================================
@@ -1060,6 +1110,41 @@ AbstractFile *TreeFile::SearchTOC::open(const char *fileName, AbstractFile::Prio
 	{
 		const TableOfContentsEntry &entry = m_tableOfContents[tableOfContentsIndex];
 
+		// Plan 11-09.15 Iter-31B (TOC variant): log which TRE inside this
+		// TOC's TRE-set serves each font file lookup. Iter-31B SearchTree
+		// logger fired ZERO times -- the engine reads fonts via SearchTOC,
+		// not SearchTree. This logger captures the same data: physical TRE
+		// filename + TOC index + entry stats.
+		if (fileName && strstr(fileName, "texture/font/"))
+		{
+			static int s_iter31bTocCount = 0;
+			if (s_iter31bTocCount < 30)
+			{
+				++s_iter31bTocCount;
+				static bool s_iter31bTocFirstWrite = true;
+				char const * const mode = s_iter31bTocFirstWrite ? "wb" : "ab";
+				s_iter31bTocFirstWrite = false;
+				FILE *fp = nullptr;
+				fopen_s(&fp, "stage/iter31b-tree-open.txt", mode);
+				if (fp)
+				{
+					char const * const treeName =
+						(entry.treeFileIndex >= 0 && m_treeFileNamePointers && m_treeFileNamePointers[entry.treeFileIndex])
+							? m_treeFileNamePointers[entry.treeFileIndex]
+							: "<null>";
+					fprintf(fp,
+						"toc_open#%d file='%s' fromTRE='%s' tocIdx=%d treeFileIdx=%d "
+						"entry.offset=%d entry.length=%d entry.compressedLength=%d entry.compressor=%d\n",
+						s_iter31bTocCount, fileName, treeName,
+						tableOfContentsIndex,
+						entry.treeFileIndex,
+						entry.offset, entry.length, entry.compressedLength,
+						static_cast<int>(entry.compressor));
+					fclose(fp);
+				}
+			}
+		}
+
 		if (!isCompressed(entry.compressor))
 			return new FileStreamerFile(priority, *m_treeFiles[entry.treeFileIndex], entry.offset, entry.length);
 
@@ -1073,6 +1158,18 @@ AbstractFile *TreeFile::SearchTOC::open(const char *fileName, AbstractFile::Prio
 	}
 
 	return NULL;
+}
+
+// ----------------------------------------------------------------------
+
+void TreeFile::SearchTOC::enumerateFiles(void (*callback)(const char *fileName, void *context), void *context) const
+{
+	// Same shape as SearchTree::enumerateFiles, but m_numberOfFiles is uint32 here.
+	// fileNameOffset was rewritten from on-disk lengths to running byte offsets at
+	// construction (see ctor), so it indexes m_fileNames directly.
+	if (m_fileNames && m_tableOfContents)
+		for (uint32 i = 0; i < m_numberOfFiles; ++i)
+			callback(m_fileNames + m_tableOfContents[i].fileNameOffset, context);
 }
 
 // ======================================================================

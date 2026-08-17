@@ -673,3 +673,25 @@ bool DebugHelp::writeMiniDump(char const *miniDumpFileName, PEXCEPTION_POINTERS 
 }
 
 // ======================================================================
+// Utinni engine entry-point advertisement (38-02, EPA-06): an external-linkage
+// shim over DebugHelp::writeMiniDump [DebugHelp.h:36]. writeMiniDump is a PUBLIC
+// static, but it is declared in sharedDebug/src/win32/DebugHelp.h (a win32-private
+// dir NOT on the SwgClient exe include path; the public sharedDebug/include/public
+// DebugHelp.h does NOT declare writeMiniDump). So rather than expose the
+// win32-private header to the exe, the shim is compiled here (where the win32
+// DebugHelp.h is visible) -- consistent with the client::wndProc shim in Os.cpp.
+//
+// The default args (=0) are dropped in the shim signature -- defaults do not
+// affect the function address; both args are passed straight through. Utinni-side
+// typedef: bool(*)(char const*, PEXCEPTION_POINTERS).
+//
+// Both platforms (x64 port 2026-08-15). Declared in the exe-local
+// engine_clientShims_forward.h (SwgClient/src/win32) -- not a shared header, so no
+// gl0X plugin pulls it (no ABI cascade; AGENTS.md).
+// ======================================================================
+bool engine_writeMiniDump(char const * fileName, PEXCEPTION_POINTERS ep)
+{
+	return DebugHelp::writeMiniDump(fileName, ep);
+}
+
+// ======================================================================

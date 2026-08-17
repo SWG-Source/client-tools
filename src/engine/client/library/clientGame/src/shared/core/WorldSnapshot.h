@@ -56,6 +56,7 @@ public:
 	static bool isClientCached     (int64 networkIdInt);
 	static void moveObject         (int64 networkIdInt, Transform const &transform_p);
 	static void removeObject       ( int64 networkIdInt);
+	static void suppressObject     (int64 networkIdInt);
 	static void loadIfClientCached (NetworkId const &networkId);
 	static void preloadSomeAssets  ();
 	static int  getLoadingPercent  ();
@@ -67,10 +68,14 @@ public:
 	static void removeEventObjects (std::string const & eventName);
 	static void addEventObjects    (std::string const & eventName);
 
+	// Goal B Wave 3 (2026-07-18): promoted private -> public for the editor's
+	// engine_wsUnloadSnapshot shim (same TU as the singleton state, but shims
+	// are extern "C" free functions with no member access). No layout change.
+	static void unload ();
+
 private:
 
 	static void remove ();
-	static void unload ();
 
 private:
 
