@@ -17953,7 +17953,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -18056,7 +18060,8 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
-	r0.xyz = (cLightData_point_3_position - r9).xyz;
+)SWGCORPUS"
+R"SWGCORPUS(	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
@@ -18065,8 +18070,7 @@ VsOutput main(VsInput vsInput)
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
-)SWGCORPUS"
-R"SWGCORPUS(	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
+	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
@@ -18309,7 +18313,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -18410,7 +18418,8 @@ VsOutput main(VsInput vsInput)
 	r0 = r0 * r1;
 	r7 = cLightData_point_2_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
-//  calculate diffuse point light 4
+)SWGCORPUS"
+R"SWGCORPUS(//  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
@@ -18418,8 +18427,7 @@ VsOutput main(VsInput vsInput)
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
-)SWGCORPUS"
-R"SWGCORPUS(	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
+	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
@@ -18660,7 +18668,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -18768,7 +18780,8 @@ VsOutput main(VsInput vsInput)
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
-	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
+)SWGCORPUS"
+R"SWGCORPUS(	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
@@ -18776,8 +18789,7 @@ VsOutput main(VsInput vsInput)
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
-)SWGCORPUS"
-R"SWGCORPUS(// ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 //  store final diffuse and specular lighting colors, add in material emissive color
 	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
@@ -19015,7 +19027,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -19116,7 +19132,8 @@ VsOutput main(VsInput vsInput)
 	r0 = r0 * r1;
 	r7 = cLightData_point_2_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
-//  calculate diffuse point light 4
+)SWGCORPUS"
+R"SWGCORPUS(//  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
@@ -19124,8 +19141,7 @@ VsOutput main(VsInput vsInput)
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
-)SWGCORPUS"
-R"SWGCORPUS(	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
+	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
@@ -19367,7 +19383,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -19474,7 +19494,8 @@ VsOutput main(VsInput vsInput)
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
-// calculate attenuation
+)SWGCORPUS"
+R"SWGCORPUS(// calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
@@ -19483,8 +19504,7 @@ VsOutput main(VsInput vsInput)
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
-)SWGCORPUS"
-R"SWGCORPUS(// ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 //  store final diffuse and specular lighting colors, add in material emissive color
 	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
@@ -19733,7 +19753,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -19839,7 +19863,8 @@ VsOutput main(VsInput vsInput)
 	r7 = cLightData_point_1_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
-// calculate unit vector from vertex to light and set up for attenuation calculation
+)SWGCORPUS"
+R"SWGCORPUS(// calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
@@ -19848,8 +19873,7 @@ VsOutput main(VsInput vsInput)
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(// calculate diffuse and  lighting
+// calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
@@ -20118,7 +20142,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -20225,7 +20253,8 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
-	r0.xyz = (cLightData_point_2_position - r9).xyz;
+)SWGCORPUS"
+R"SWGCORPUS(	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
@@ -20233,8 +20262,7 @@ VsOutput main(VsInput vsInput)
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(// calculate diffuse and  lighting
+// calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
@@ -20489,7 +20517,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -20592,7 +20624,8 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
-	r0.xyz = (cLightData_point_3_position - r9).xyz;
+)SWGCORPUS"
+R"SWGCORPUS(	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
@@ -20601,8 +20634,7 @@ VsOutput main(VsInput vsInput)
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
-)SWGCORPUS"
-R"SWGCORPUS(	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
+	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
@@ -20843,7 +20875,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -20946,14 +20982,14 @@ VsOutput main(VsInput vsInput)
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
-	r7 = cLightData_point_1_diffuseColor * r0 + r7;
+)SWGCORPUS"
+R"SWGCORPUS(	r7 = cLightData_point_1_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(	r2 = (rsqrt(abs(r1.w))).xxxx;
+	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
@@ -21211,7 +21247,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -21320,7 +21360,8 @@ VsOutput main(VsInput vsInput)
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
-	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
+)SWGCORPUS"
+R"SWGCORPUS(	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
@@ -21328,8 +21369,7 @@ VsOutput main(VsInput vsInput)
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
-)SWGCORPUS"
-R"SWGCORPUS(//  store final diffuse and specular lighting colors, add in material emissive color
+//  store final diffuse and specular lighting colors, add in material emissive color
 	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
 // ======================================================================
@@ -21573,7 +21613,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -21683,7 +21727,8 @@ VsOutput main(VsInput vsInput)
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
-	r1 = ((1.0f / (r1.w))).xxxx;
+)SWGCORPUS"
+R"SWGCORPUS(	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
@@ -21691,8 +21736,7 @@ VsOutput main(VsInput vsInput)
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  store final diffuse and specular lighting colors, add in material emissive color
-)SWGCORPUS"
-R"SWGCORPUS(	r7 = r7 + cMaterial_emissiveColor;
+	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
 // ======================================================================
 	vsOutput.texcoord0 = asmTexcoord(vsInput.textureCoordinateSetMAIN);
@@ -22289,7 +22333,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -22399,7 +22447,8 @@ VsOutput main(VsInput vsInput)
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
-	r1 = ((1.0f / (r1.w))).xxxx;
+)SWGCORPUS"
+R"SWGCORPUS(	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
@@ -22407,8 +22456,7 @@ VsOutput main(VsInput vsInput)
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  store final diffuse and specular lighting colors, add in material emissive color
-)SWGCORPUS"
-R"SWGCORPUS(	r7 = r7 + cMaterial_emissiveColor;
+	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
 // ======================================================================
 	vsOutput.texcoord0 = asmTexcoord(vsInput.textureCoordinateSetOPEN);
@@ -22641,7 +22689,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/dot3_diffuse.inc inlined]
 // Generated from vertex_program/modules/dot3_diffuse.inc by asm2hlsl. Included inside main().
 
@@ -22745,7 +22797,8 @@ VsOutput main(VsInput vsInput)
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
-// calculate diffuse and  lighting
+)SWGCORPUS"
+R"SWGCORPUS(// calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
@@ -22753,8 +22806,7 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  store final diffuse and specular lighting colors, add in material emissive color
 //mov oD0, r7
-)SWGCORPUS"
-R"SWGCORPUS(	vsOutput.color0 = r7 + cMaterial_emissiveColor;
+	vsOutput.color0 = r7 + cMaterial_emissiveColor;
 // ======================================================================
 // [embedded corpus: vertex_program/modules/dot3_3x2spec.inc inlined]
 // Generated from vertex_program/modules/dot3_3x2spec.inc by asm2hlsl. Included inside main().
@@ -23027,7 +23079,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -23132,7 +23188,8 @@ VsOutput main(VsInput vsInput)
 	r0 = r0 * r1;
 	r7 = cLightData_point_1_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
-//  calculate diffuse point light 3
+)SWGCORPUS"
+R"SWGCORPUS(//  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
@@ -23140,8 +23197,7 @@ VsOutput main(VsInput vsInput)
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
-)SWGCORPUS"
-R"SWGCORPUS(	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
+	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
@@ -23973,7 +24029,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -24079,7 +24139,8 @@ VsOutput main(VsInput vsInput)
 	r7 = cLightData_point_1_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
-// calculate unit vector from vertex to light and set up for attenuation calculation
+)SWGCORPUS"
+R"SWGCORPUS(// calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
@@ -24088,8 +24149,7 @@ VsOutput main(VsInput vsInput)
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(// calculate diffuse and  lighting
+// calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
@@ -24750,7 +24810,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -24854,7 +24918,8 @@ VsOutput main(VsInput vsInput)
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_1_diffuseColor * r0 + r7;
-// ----------------------------------------------------------------------
+)SWGCORPUS"
+R"SWGCORPUS(// ----------------------------------------------------------------------
 //  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_2_position - r9).xyz;
@@ -24862,8 +24927,7 @@ VsOutput main(VsInput vsInput)
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
-)SWGCORPUS"
-R"SWGCORPUS(	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
+	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
@@ -28631,7 +28695,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular_lookup.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular_lookup.inc by asm2hlsl. Included inside main().
 
@@ -28737,15 +28805,15 @@ VsOutput main(VsInput vsInput)
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
-	r7 = cLightData_point_1_diffuseColor * r0 + r7;
+)SWGCORPUS"
+R"SWGCORPUS(	r7 = cLightData_point_1_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(	r0.xyz = (r0 * r2).xyz;
+	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
@@ -36215,7 +36283,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -36325,7 +36397,8 @@ VsOutput main(VsInput vsInput)
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
-	r1 = ((1.0f / (r1.w))).xxxx;
+)SWGCORPUS"
+R"SWGCORPUS(	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
@@ -36333,8 +36406,7 @@ VsOutput main(VsInput vsInput)
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  store final diffuse and specular lighting colors, add in material emissive color
-)SWGCORPUS"
-R"SWGCORPUS(	r7 = r7 + cMaterial_emissiveColor;
+	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
 // ======================================================================
 	vsOutput.texcoord0 = asmTexcoord(vsInput.textureCoordinateSetMAIN);
@@ -36563,7 +36635,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -36671,7 +36747,8 @@ VsOutput main(VsInput vsInput)
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
-	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
+)SWGCORPUS"
+R"SWGCORPUS(	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
@@ -36679,8 +36756,7 @@ VsOutput main(VsInput vsInput)
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
-)SWGCORPUS"
-R"SWGCORPUS(// ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 //  store final diffuse and specular lighting colors, add in material emissive color
 	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
@@ -36915,7 +36991,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -37018,7 +37098,8 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
-	r0.xyz = (cLightData_point_3_position - r9).xyz;
+)SWGCORPUS"
+R"SWGCORPUS(	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
@@ -37027,8 +37108,7 @@ VsOutput main(VsInput vsInput)
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
-)SWGCORPUS"
-R"SWGCORPUS(	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
+	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
@@ -37271,7 +37351,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -37372,7 +37456,8 @@ VsOutput main(VsInput vsInput)
 	r0 = r0 * r1;
 	r7 = cLightData_point_2_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
-//  calculate diffuse point light 4
+)SWGCORPUS"
+R"SWGCORPUS(//  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
@@ -37380,8 +37465,7 @@ VsOutput main(VsInput vsInput)
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
-)SWGCORPUS"
-R"SWGCORPUS(	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
+	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
@@ -37628,7 +37712,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -37729,7 +37817,8 @@ VsOutput main(VsInput vsInput)
 	r0 = r0 * r1;
 	r7 = cLightData_point_2_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
-//  calculate diffuse point light 4
+)SWGCORPUS"
+R"SWGCORPUS(//  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
@@ -37737,8 +37826,7 @@ VsOutput main(VsInput vsInput)
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
-)SWGCORPUS"
-R"SWGCORPUS(	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
+	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
@@ -37988,7 +38076,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -38087,15 +38179,15 @@ VsOutput main(VsInput vsInput)
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
-	r7 = cLightData_point_2_diffuseColor * r0 + r7;
+)SWGCORPUS"
+R"SWGCORPUS(	r7 = cLightData_point_2_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 4
 // calculate unit vector from vertex to light and set up for attenuation calculation
 	r0.xyz = (cLightData_point_3_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(	r0.xyz = (r0 * r2).xyz;
+	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
@@ -38338,7 +38430,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse.inc inlined]
 // Generated from vertex_program/modules/diffuse.inc by asm2hlsl. Included inside main().
 
@@ -38447,7 +38543,8 @@ VsOutput main(VsInput vsInput)
 	r0.xyz = (r0 * r2).xyz;
 // calculate attenuation
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
-	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
+)SWGCORPUS"
+R"SWGCORPUS(	r1 = (dot((r1).xyz, (cLightData_point_3_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
@@ -38455,8 +38552,7 @@ VsOutput main(VsInput vsInput)
 	r0 = r0 * r1;
 	r7 = cLightData_point_3_diffuseColor * r0 + r7;
 // ----------------------------------------------------------------------
-)SWGCORPUS"
-R"SWGCORPUS(//  store final diffuse and specular lighting colors, add in material emissive color
+//  store final diffuse and specular lighting colors, add in material emissive color
 	r7 = r7 + cMaterial_emissiveColor;
 	vsOutput.color0 = r7;
 // ======================================================================
@@ -38701,7 +38797,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -38808,7 +38908,8 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
-	r0.xyz = (cLightData_point_2_position - r9).xyz;
+)SWGCORPUS"
+R"SWGCORPUS(	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
@@ -38817,8 +38918,7 @@ VsOutput main(VsInput vsInput)
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
 // calculate diffuse and  lighting
-)SWGCORPUS"
-R"SWGCORPUS(	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
+	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
 	r7 = cLightData_point_2_diffuseColor * r0 + r7;
@@ -39068,7 +39168,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -39175,7 +39279,8 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
-	r0.xyz = (cLightData_point_2_position - r9).xyz;
+)SWGCORPUS"
+R"SWGCORPUS(	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
@@ -39183,8 +39288,7 @@ VsOutput main(VsInput vsInput)
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(// calculate diffuse and  lighting
+// calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
@@ -39436,7 +39540,11 @@ VsOutput main(VsInput vsInput)
 // ======================================================================
 // ----------------------------------------------------------------------
 //  calculate cell light
-	r7 = vColor0 + cLightData_ambient_ambientColor;
+	r7 = vColor0;   // stock `mov r7, vColor0`: the baked colour IS the cell lighting.
+	                // The corpus drop's `vColor0 + ambient` was compensation for
+	                // zeroed vertex-colour streams and washes out every interior on
+	                // well-formed data (scene ambient is white). [Direct3d11]
+	                // ambientBoost is the opt-in that puts the add back.
 // [embedded corpus: vertex_program/modules/diffuse_specular.inc inlined]
 // Generated from vertex_program/modules/diffuse_specular.inc by asm2hlsl. Included inside main().
 
@@ -39543,7 +39651,8 @@ VsOutput main(VsInput vsInput)
 // ----------------------------------------------------------------------
 //  calculate diffuse point light 3
 // calculate unit vector from vertex to light and set up for attenuation calculation
-	r0.xyz = (cLightData_point_2_position - r9).xyz;
+)SWGCORPUS"
+R"SWGCORPUS(	r0.xyz = (cLightData_point_2_position - r9).xyz;
 	r1 = (dot((r0).xyz, (r0).xyz)).xxxx;
 	r2 = (rsqrt(abs(r1.w))).xxxx;
 	r0.xyz = (r0 * r2).xyz;
@@ -39551,8 +39660,7 @@ VsOutput main(VsInput vsInput)
 	r1 = float4(1.0f, (r1).y * (r2).y, (r1).z, (r2).w);
 	r1 = (dot((r1).xyz, (cLightData_point_2_attenuation).xyz)).xxxx;
 	r1 = ((1.0f / (r1.w))).xxxx;
-)SWGCORPUS"
-R"SWGCORPUS(// calculate diffuse and  lighting
+// calculate diffuse and  lighting
 	r0 = (dot((r10).xyz, (r0).xyz)).xxxx;
 	r0 = max(r0, c0_0);
 	r0 = r0 * r1;
