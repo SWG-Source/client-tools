@@ -34,6 +34,10 @@ namespace ConfigDirect3d11Namespace
 	bool ms_antiAlias;
 	int ms_antiAliasSampleCount;
 
+	bool ms_ambientBoost;
+	int ms_diffuseFloorPercent;
+	bool ms_synthesizeHemisphericLight;
+
 	int ms_shaderCapabilityOverride;
 } // namespace ConfigDirect3d11Namespace
 using namespace ConfigDirect3d11Namespace;
@@ -138,6 +142,23 @@ void ConfigDirect3d11::install()
 	// all.
 	KEY_INT(shaderCapabilityOverride, 0);
 	WARNING(ms_shaderCapabilityOverride != 0, ("[Direct3d11] shaderCapabilityOverride is set to 0x%04x. Shader implementation selection tests this for exact equality.", ms_shaderCapabilityOverride));
+
+	// The x64 DX9 build's two eye-tuned lighting patches (Direct3d11_ShaderSource
+	// transforms 2 and 3), off by default. They existed to compensate for vertex
+	// data that build's TRE layer was starving; on well-formed data they brighten
+	// characters and interiors past what the data says. Both are loud when set,
+	// because a run with either enabled is not comparable to one without.
+	KEY_BOOL(ambientBoost, false);
+	WARNING(ms_ambientBoost, ("[Direct3d11] ambientBoost adds scene ambient on top of baked vertex colour. This changes the image."));
+
+	// A percentage because ConfigFile::getKeyFloat is not linked into this backend
+	// (see fogDensityPercent). The DX9 build's tuned value was 85; 0 is stock.
+	KEY_INT(diffuseFloorPercent, 0);
+	FATAL(ms_diffuseFloorPercent < 0 || ms_diffuseFloorPercent > 100, ("[Direct3d11] diffuseFloorPercent %d is invalid [0..100]", ms_diffuseFloorPercent));
+	WARNING(ms_diffuseFloorPercent != 0, ("[Direct3d11] diffuseFloorPercent %d floors diffuse+ambient lighting. This changes the image.", ms_diffuseFloorPercent));
+
+	KEY_BOOL(synthesizeHemisphericLight, false);
+	WARNING(ms_synthesizeHemisphericLight, ("[Direct3d11] synthesizeHemisphericLight fills in hemispheric colours for lights authored without them. This changes the image."));
 
 	CrashReportInformation::addStaticText("D3d11 adapter: %d driverType: %d featureLevelCap: %d\n", ms_adapter, static_cast<int>(ms_driverType), ms_featureLevelCap);
 	CrashReportInformation::addStaticText("D3d11 allowTearing: %d bufferCount: %d antiAlias: %d/%d\n", ms_allowTearing ? 1 : 0, ms_swapChainBufferCount, ms_antiAlias ? 1 : 0, ms_antiAliasSampleCount);
@@ -260,6 +281,27 @@ int ConfigDirect3d11::getAntiAliasSampleCount()
 int ConfigDirect3d11::getShaderCapabilityOverride()
 {
 	return ms_shaderCapabilityOverride;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d11::getAmbientBoost()
+{
+	return ms_ambientBoost;
+}
+
+// ----------------------------------------------------------------------
+
+float ConfigDirect3d11::getDiffuseLightingFloor()
+{
+	return static_cast<float>(ms_diffuseFloorPercent) / 100.0f;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d11::getSynthesizeHemisphericLight()
+{
+	return ms_synthesizeHemisphericLight;
 }
 
 // ======================================================================

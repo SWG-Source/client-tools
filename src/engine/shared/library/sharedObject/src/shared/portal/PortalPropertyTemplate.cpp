@@ -104,7 +104,7 @@ int PortalPropertyTemplateNamespace::getRequiredColumnNumberFromNamedTable(char 
 	NOT_NULL(columnName);
 
 	int const columnNumber = table->findColumnNumber(columnName);
-	DEBUG_FATAL((columnNumber < 0), ("failed to find column name [%s] in PortalPropertyTemplate ejection transform file [%s].", columnName, filename));
+	STRICT_DATA_FATAL((columnNumber < 0), ("failed to find column name [%s] in PortalPropertyTemplate ejection transform file [%s].", columnName, filename));
 
 	return columnNumber;
 }

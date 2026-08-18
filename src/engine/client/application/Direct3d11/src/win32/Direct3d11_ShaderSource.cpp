@@ -8,8 +8,10 @@
 #include "FirstDirect3d11.h"
 #include "Direct3d11_ShaderSource.h"
 
+#include "ConfigDirect3d11.h"
 #include "Direct3d11_ShaderSignature.h"
 
+#include <stdio.h>
 #include <string.h>
 
 // ======================================================================
@@ -85,6 +87,14 @@ namespace Direct3d11_ShaderSourceNamespace
 	// last-added-first, which is the opposite of what TreeFile's own comment claims.
 
 	char const cms_vertexShaderConstants[] =
+		// Feature marker, mirroring D3D11_PIXEL_SHADER_CONSTANTS in the pixel include:
+		// lets a shader source that must compile on more than one backend detect that
+		// THIS include already declares the extended blocks (notably the hemispheric
+		// c60..c63 registers) and alias them instead of redeclaring the registers --
+		// a raw redeclaration is X4019 here and correct on a backend whose include
+		// stops at c59.
+		"#define D3D11_VERTEX_SHADER_CONSTANTS\n"
+		"\n"
 		"struct Material\n"
 		"{\n"
 		"	float4   diffuseColor;\n"
@@ -341,11 +351,17 @@ namespace Direct3d11_ShaderSourceNamespace
 	char const *const cms_vertexConstantsPath = "vertex_program/include/vertex_shader_constants.inc";
 	char const *const cms_ambientPath = "c_ambient.inc";
 
+	// Transforms 2 and 3, opt-in via [Direct3d11] ambientBoost and diffuseFloorPercent
+	// since both change the image (the DX9 build applied them unconditionally; see the
+	// header). The ambient replacement boosts colour only and pins alpha to the baked
+	// value -- the DX9 shape added c16 to all four channels, and the measured result was
+	// COLOR.a arriving at the pixel shader as 1.85, which is a hazard for every consumer
+	// that treats alpha as opacity. The diffuse-floor replacement is built at the call
+	// site because the floor value comes from configuration.
 	char const cms_ambientSearch[] = "mov r7, vColor0";
-	char const cms_ambientReplace[] = "add r7, vColor0, c16";
+	char const cms_ambientReplace[] = "add r7.xyz, vColor0, c16\n\tmov r7.w, vColor0.w";
 
 	char const cms_diffuseSearch[] = "lightData.ambient.ambientColor + diffuseSpecular.diffuse";
-	char const cms_diffuseReplace[] = "max(lightData.ambient.ambientColor + diffuseSpecular.diffuse, 0.85)";
 
 	D3D_SHADER_MACRO const cms_pointRename = {"point", "_pt_lights"};
 
@@ -1172,6 +1188,11 @@ char *Direct3d11_ShaderSource::patchIncludeContents(char const *path, char const
 
 	if (endsWith(path, cms_ambientPath))
 	{
+		// Off by default: rendering the baked colour as authored is stock. See the
+		// constants above for what the boost is and why alpha is pinned.
+		if (!ConfigDirect3d11::getAmbientBoost())
+			return NULL;
+
 		return replaceAll(contents, length,
 						  cms_ambientSearch, static_cast<int>(sizeof(cms_ambientSearch) - 1),
 						  cms_ambientReplace, static_cast<int>(sizeof(cms_ambientReplace) - 1),
@@ -1206,11 +1227,19 @@ char *Direct3d11_ShaderSource::patchProgramSource(char const *name, char const *
 	char *current = NULL;
 	int currentLength = length;
 
+	float const diffuseFloor = ConfigDirect3d11::getDiffuseLightingFloor();
+	if (diffuseFloor > 0.0f)
 	{
+		// Built here rather than as a constant because the floor value is configuration.
+		// "max(" + the 56-character search text + ", 0.00)" is 68 characters.
+		char diffuseReplace[96];
+		int const diffuseReplaceLength = snprintf(diffuseReplace, sizeof(diffuseReplace),
+												  "max(%s, %.2f)", cms_diffuseSearch, diffuseFloor);
+
 		int replacedLength = 0;
 		char *const replaced = replaceAll(source, length,
 										  cms_diffuseSearch, static_cast<int>(sizeof(cms_diffuseSearch) - 1),
-										  cms_diffuseReplace, static_cast<int>(sizeof(cms_diffuseReplace) - 1),
+										  diffuseReplace, diffuseReplaceLength,
 										  replacedLength);
 
 		if (replaced)

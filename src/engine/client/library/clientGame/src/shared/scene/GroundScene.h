@@ -45,6 +45,49 @@ class Vector;
 
 class GroundScene : public NetworkScene
 {
+	// ------------------------------------------------------------------
+	// Utinni engine entry-point advertisement (Phase 38-01, EPA-05; both
+	// platforms since the 2026-08-15 x64 port).
+	// GroundScene::{init,update,handleInputMapUpdate,handleInputMapEvent} are
+	// PRIVATE; the advertised __fastcall forwarders are DEFINED in GroundScene.cpp
+	// and need member access. A free function in the same TU does NOT get private
+	// access (C2248) -- friendship is required. These friend declarations add NO
+	// data member and NO virtual, so the struct/vtable ABI is byte-identical (no
+	// shared-header plugin cascade; AGENTS.md).
+	// Per-platform signatures (must match the ENGINE_THIS seam in the definitions
+	// exactly -- a shared header defines no exe-local macros): Win32 emulates
+	// __thiscall as __fastcall(pThis, dummy EDX, ...); x64's single convention
+	// takes no dummy (it would shift every real arg one register right).
+	// ------------------------------------------------------------------
+#if defined(_WIN64)
+	friend void __fastcall engine_groundSceneInit(GroundScene * pThis,
+		const char * terrainFilename, CreatureObject * player, float timeInSeconds);
+	friend void __fastcall engine_groundSceneHandleInputMapUpdate(GroundScene * pThis);
+#else
+	friend void __fastcall engine_groundSceneInit(GroundScene * pThis, int /*edx*/,
+		const char * terrainFilename, CreatureObject * player, float timeInSeconds);
+	friend void __fastcall engine_groundSceneHandleInputMapUpdate(GroundScene * pThis, int /*edx*/);
+#endif
+	// (38-05) the update / handleInputMapEvent CALL-THROUGH forwarder friends were
+	// REMOVED -- those two are DETOURED, so they are advertised by the REAL engine
+	// entry via the real-entry accessor friends below, not a forwarder.
+	// 38-05 (address-correctness): real-entry accessors for the two DETOURED private
+	// methods (update [:103], handleInputMapEvent [:194]). The PMF can only be taken in a TU with
+	// member access, so these in-TU accessors extract the real engine code entry
+	// (delta==0 verified) for Utinni to detour directly -- NOT the call-through
+	// forwarder above (a detour on a forwarder is silently dead). friend decls are
+	// ABI-neutral (no member/vtable change; no plugin cascade).
+	friend void * engine_groundSceneUpdateRealEntry();
+	friend void * engine_groundSceneHandleInputMapEventRealEntry();
+	// FREE-CAM wave (v13): CALLED accessor over the PRIVATE m_debugPortalCameraInputMap [:111]
+	// so the consumer stops reading the hardcoded InputMap+0xC. ABI-neutral friend (no member /
+	// no vtable change -> no plugin cascade). Defined in GroundScene.cpp.
+#if defined(_WIN64)
+	friend class MessageQueue * __fastcall engine_groundSceneGetDebugPortalCameraMessageQueue(GroundScene * pThis);
+#else
+	friend class MessageQueue * __fastcall engine_groundSceneGetDebugPortalCameraMessageQueue(GroundScene * pThis, int /*edx*/);
+#endif
+
 public:
 
 	static void install ();

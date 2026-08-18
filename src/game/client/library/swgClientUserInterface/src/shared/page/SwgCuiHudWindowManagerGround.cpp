@@ -714,13 +714,26 @@ void SwgCuiHudWindowManagerGround::handlePerformDeactivate()
 {
 	SwgCuiHudWindowManager::handlePerformDeactivate();
 
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::IntendedTargetChanged*>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::LookAtTargetChanged*>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<PlayerCreatureController::Messages::AutoAimToggled*>(0));
+	// crash-guard (2026-06-23, stage/SwgClient_r.exe-unknown.0-20260623152839.mdmp): m_callback (owned and
+	// deleted by the base SwgCuiHudWindowManager dtor) can be NULL when this override runs on a torn-down
+	// manager (CuiMediator::garbageCollect -> deactivate during ExitChain shutdown / focus churn). The base
+	// SwgCuiHudWindowManager::handlePerformDeactivate is self-guarded (early-returns on !m_WindowManagerActive);
+	// this Ground override never mirrored that guard and null-derefed at the first disconnect. Finding-1 family
+	// (same crash class as the 38-06 m_objectCallbackVector guard, different member).
+	if (m_callback)
+	{
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::IntendedTargetChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::LookAtTargetChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<PlayerCreatureController::Messages::AutoAimToggled*>(0));
 
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPlayerSetup, static_cast<CreatureObject::Messages::PlayerSetup *>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onJediStateChanged, static_cast<PlayerObject::Messages::JediStateChanged*>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPetChanged, static_cast<PlayerObject::Messages::PetChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPlayerSetup, static_cast<CreatureObject::Messages::PlayerSetup *>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onJediStateChanged, static_cast<PlayerObject::Messages::JediStateChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPetChanged, static_cast<PlayerObject::Messages::PetChanged*>(0));
+	}
+	else
+	{
+		WARNING(true, ("SwgCuiHudWindowManagerGround::handlePerformDeactivate: m_callback already torn down -- skipped disconnects (deactivate on a destructed manager)"));
+	}
 }
 
 //======================================================================

@@ -59,9 +59,9 @@ void CitizenRankDataTable::install()
 			columnAlternateTitle.push_back(columnNumber);
 		}
 
-		DEBUG_FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_citizenRankDataTableName));
-		DEBUG_FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_citizenRankDataTableName));
-		DEBUG_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_citizenRankDataTableName));
+		STRICT_DATA_FATAL((columnRankName < 0), ("column \"rankName\" not found in %s", cs_citizenRankDataTableName));
+		STRICT_DATA_FATAL((columnRankSlotId < 0), ("column \"rankSlotId\" not found in %s", cs_citizenRankDataTableName));
+		STRICT_DATA_FATAL((columnTitle < 0), ("column \"title\" not found in %s", cs_citizenRankDataTableName));
 
 		CitizenRankDataTable::CitizenRank const * currentRank = NULL;
 
@@ -150,7 +150,7 @@ void CitizenRankDataTable::install()
 	}
 	else
 	{
-		DEBUG_WARNING(true, ("citizen rank datatable %s not found - feature disabled (likely NGE-retail TRE pack pre-dates it).\n", cs_citizenRankDataTableName));
+		STRICT_DATA_FATAL(true, ("citizen rank datatable %s not found (set [SharedFoundation] strictData=false to continue with the feature disabled)", cs_citizenRankDataTableName));
 	}
 
 	ExitChain::add(remove, "CitizenRankDataTable::remove");

@@ -8,6 +8,8 @@
 #include "clientGame/FirstClientGame.h"
 #include "clientGame/ClientBuildingObjectTemplate.h"
 
+#include "sharedFile/TreeFile.h"                    // reloadInteriorLayout: forgetMissingFile (CONSULT-59 negative cache)
+
 #include "clientGame/BuildingObject.h"
 #include "clientGame/ClientInteriorLayoutManager.h"
 #include "clientGame/ClientLotManagerNotification.h"
@@ -189,6 +191,39 @@ void ClientBuildingObjectTemplate::postLoad ()
 	if (fileName && *fileName && !m_interiorLayoutReader->load (fileName))
 		DEBUG_WARNING (true, ("object template %s specified invalid building layout %s", getName (), fileName));
 }	
+
+// ----------------------------------------------------------------------
+/**
+ * Re-read this template's interior layout from disk (2026-08-04, per-building refresh).
+ *
+ * The layout is cached HERE, on the template -- not on the object -- so clearing a cell's
+ * applied-latch and resume cursor alone would faithfully rebuild the PREVIOUS .ilf. This
+ * is the step that makes an edited layout actually appear.
+ *
+ * forgetMissingFile() first: the CONSULT-59 searchPath NEGATIVE cache remembers a miss, and
+ * an editor writes the .ilf seconds before asking for the refresh, so a prior miss on that
+ * exact path would otherwise shadow the new file. Same trap wsSetNodeTemplateName hit.
+ *
+ * @return true if a layout was reloaded, false if this template names no layout file or the
+ *         load failed (the previous contents are left alone on failure).
+ */
+
+bool ClientBuildingObjectTemplate::reloadInteriorLayout () const
+{
+	const char* const fileName = getInteriorLayoutFileName ().c_str ();
+	if (!fileName || !*fileName)
+		return false;
+
+	TreeFile::forgetMissingFile (fileName);
+
+	if (!m_interiorLayoutReader->load (fileName))
+	{
+		DEBUG_WARNING (true, ("ClientBuildingObjectTemplate::reloadInteriorLayout: %s failed to reload layout %s", getName (), fileName));
+		return false;
+	}
+
+	return true;
+}
 
 // ======================================================================
 // STATIC PRIVATE ClientBuildingObjectTemplate

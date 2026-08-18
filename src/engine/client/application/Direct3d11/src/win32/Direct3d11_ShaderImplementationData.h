@@ -112,6 +112,14 @@ private:
 	struct Pass
 	{
 		ID3D11BlendState *blendState;
+
+		// The pass's state with D3D9's alpha-fade overrides applied: blending
+		// forced on, and -- for a pass that is not already translucent -- the
+		// alpha colour-write masked so the fade opacity never reaches the render
+		// target's alpha channel, which the bloom chain reads as glow intensity.
+		// Selected at apply() time while Graphics::setAlphaFadeOpacity is active.
+		ID3D11BlendState *fadeBlendState;
+
 		ID3D11DepthStencilState *depthStencilState;
 
 		// The program rather than the resolved shader, so that a development-time reload of

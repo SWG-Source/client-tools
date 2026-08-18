@@ -164,9 +164,14 @@ void Direct3d11_ShaderReflectionNamespace::checkConstantBuffer(ID3D11ShaderRefle
 		if (FAILED(variable->GetDesc(&variableDescription)) || !variableDescription.Name)
 			continue;
 
-		// Every constant in this buffer must start on a sixteen-byte row,
-		// recognised or not: the register file is addressed in rows.
-		FATAL((variableDescription.StartOffset & (cs_constantRegisterBytes - 1)) != 0, ("Direct3d11: in '%s', constant '%s' starts at byte %u, which is not a multiple of 16. The register file is addressed in 16-byte rows, so this constant cannot be addressed by any register number.", name, variableDescription.Name, variableDescription.StartOffset));
+		// A constant off the sixteen-byte row grid cannot be addressed by any
+		// register number -- which only matters for constants this backend
+		// actually addresses by register: the named tables below, whose exact
+		// placement the FATAL inside the table loop still enforces. A content
+		// shader's own loose globals (a packed float2 texture-coordinate set,
+		// say) land mid-row routinely, are uploaded by nothing here, and read
+		// zeros; that is a wrong-looking shader, not a dead client.
+		WARNING((variableDescription.StartOffset & (cs_constantRegisterBytes - 1)) != 0, ("Direct3d11: in '%s', constant '%s' starts at byte %u (mid-row); no register number can address it, so nothing this backend uploads will ever reach it.", name, variableDescription.Name, variableDescription.StartOffset));
 
 		for (int t = 0; t < tableCount; ++t)
 			if (strcmp(variableDescription.Name, table[t].name) == 0)

@@ -12,6 +12,8 @@
 #include "clientGraphics/ShaderTemplate.h"
 #include "sharedObject/AlterResult.h"
 
+#include <intrin.h>   // _InterlockedIncrement/_InterlockedDecrement (m_users -- see Shader.h threading note)
+
 // ======================================================================
 
 Shader::Shader(const ShaderTemplate &shaderTemplate)
@@ -42,9 +44,16 @@ Shader::~Shader()
 
 // ----------------------------------------------------------------------
 
+void Shader::fetch() const
+{
+	(void)_InterlockedIncrement(&m_users);
+}
+
+// ----------------------------------------------------------------------
+
 void Shader::release() const
 {
-	if (--m_users <= 0)
+	if (_InterlockedDecrement(&m_users) <= 0)
 		delete this; //lint !e605 // Warning -- Increase in pointer capability
 }
 

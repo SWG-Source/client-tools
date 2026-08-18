@@ -13,71 +13,63 @@
 
 #include "Direct3d9.h"
 #include "ConfigDirect3d9.h"
+#include "Direct3d9_ShaderCache.h"
 #include "clientGraphics/ShaderCapability.h"
 #include "clientGraphics/ShaderImplementation.h"
 #include "sharedFile/TreeFile.h"
 
 #include <d3d9.h>
-#include <d3dx9.h>
+#include <d3dcompiler.h>
+#include <float.h>
 #include <string.h>
+#include <vector>
 
 // ======================================================================
-// x64 character-rendering fix.
+// Recompile-from-PSRC pixel path (D3DX-free).
 //
-// The .psh files in our TRE set carry BOTH the HLSL source (PSRC chunk) and
-// a precompiled ps_2_0 binary (PEXE chunk). The original engine ignored the
-// source and used the PEXE blob directly. That precompiled blob is stale /
-// mismatched relative to the (runtime-recompiled) vertex shaders, which is
-// why customizable humanoid characters rendered dark even though the source
-// math + our vertex-shader fixes say they should be lit.
+// This tree's shader corpus (the asm2hlsl-converted set) carries the real
+// program as HLSL text in the PSRC chunk and only a STUB in the PEXE chunk
+// (vertex_color.psh: 4 bytes) -- the DX11 pipeline compiles from source and
+// never needed the bytecode. Handing such a stub to CreatePixelShader is an
+// AV inside the d3d9 runtime's shader validator (it walks tokens off the
+// end of the allocation; that was the wholesale-replacement wave's boot
+// crash on BOTH datasets, crash-dump-confirmed at
+// Direct3DShaderValidatorCreate9+0x9cd loading 2d_vertexcolor.sht).
 //
-// Recompiling the HLSL PSRC source fresh, with the same modern d3dx9 the
-// vertex shaders already use, makes the two sides agree. Assembly pixel
-// shaders (`//asm` / `ps.1.1`) keep using their PEXE blob - those work fine
-// (e.g. a_simple.psh for NPC armor).
+// So the D3D9 pixel path compiles from source whenever the PSRC carries an
+// `//hlsl` directive, exactly the design the pre-wave tree ran -- but
+// through D3DCompile (d3dcompiler_47, the same DLL the vertex path already
+// uses) instead of D3DXCompileShader, keeping the x64 line D3DX-free. The
+// PEXE blob remains the path for plain-asm programs (stock data carries
+// real bytecode there). Compiled bytecode round-trips through
+// Direct3d9_ShaderCache, so a warm session creates from cached bytes
+// without touching the compiler at all.
 // ======================================================================
 
 namespace Direct3d9_PixelShaderProgramDataNamespace
 {
+	// Bump when anything in this file changes the emitted bytecode
+	// (prefix text, include override, target defaulting) -- it feeds the
+	// ShaderCache hash so stale cache entries self-invalidate.
+	uint32_t const cms_pixelRewriteVersion = 1;
+
 	// ==================================================================
-	// x64 black-character fix - pixel_shader_constants.inc register layout.
+	// pixel_shader_constants.inc register-layout override.
 	//
-	// THE BUG: the TRE's `pixel_program/include/pixel_shader_constants.inc`
-	// (the live copy is in patch_11_00.tre) declares the PS constant
-	// registers in a layout that does NOT match the engine's hard-coded
-	// `Direct3d9_PixelShaderConstantRegisters` enum.
-	//
-	//   TRE inc layout        engine PSCR_* enum / upload layout
-	//   --------------        ----------------------------------
-	//   c0 dot3LightDirection      c0 dot3LightDirection      (.w=specPower)
-	//   c1 dot3LightDiffuseColor   c1 dot3LightDiffuseColor
-	//   c2 dot3LightSpecularColor  c2 dot3LightSpecularColor
-	//   c3 textureFactor   <--->   c3 dot3LightTangentMinusDiffuseColor
-	//   c4 textureFactor2  <--->   c4 dot3LightTangentMinusBackColor
-	//   c5 materialSpecular <-->   c5 textureFactor
-	//   c6 materialSpecPower<-->   c6 textureFactor2
-	//   c7 alphaFadeHolder <--->   c7 materialSpecularColor
-	//   c8 userConstants[17]       c8 userConstants[17]
-	//
+	// THE BUG (inherited finding, kept verbatim from the pre-wave tree):
+	// the TRE's `pixel_program/include/pixel_shader_constants.inc` declares
+	// the PS constant registers in a layout that does NOT match the
+	// engine's hard-coded `Direct3d9_PixelShaderConstantRegisters` enum.
 	// The original engine never tripped on this because it used the
 	// precompiled PEXE bytecode, which was built against the engine layout.
-	// Once we recompile from PSRC source (the x64 character fix), the
-	// recompiled shader reads `textureFactor` from c3 - but the engine's
-	// Direct3d9_LightManager uploads `dot3LightTangentMinusDiffuseColor`
-	// there, and that value is NEGATIVE (~-0.35) for the synthesised
-	// hemispheric suns. h_specmap_bump_ps20.psh does
-	//   result.rgb = diffuseColor * allDiffuseLight * textureFactor.rgb
-	// so a negative textureFactor.rgb drives result.rgb negative -> the GPU
-	// clamps it to 0 -> humanoid characters and clothing render solid black
-	// (in-world AND in inventory icon viewers - same shader).
+	// Once we compile from PSRC source, the compiled shader would read
+	// `textureFactor` from c3 -- where the engine uploads
+	// `dot3LightTangentMinusDiffuseColor` (negative for hemispheric suns),
+	// driving result.rgb negative -> clamped black characters.
 	//
 	// THE FIX: when the compiler asks for pixel_shader_constants.inc, hand
-	// back the canonical engine-layout version (identical to the
-	// swg-main/serverdata copy, which matches the PSCR_* enum exactly)
-	// instead of the mismatched TRE file. Every other include passes
-	// through from the TRE unchanged. This makes recompiled-from-PSRC
-	// shaders binary-compatible with the engine's constant uploads, exactly
-	// like the PEXE blobs were.
+	// back the canonical engine-layout version (matches the PSCR_* enum
+	// exactly). Every other include passes through from the TRE unchanged.
 	// ==================================================================
 	char const ENGINE_PIXEL_SHADER_CONSTANTS_INC[] =
 		"float4    packedRegister0        : register(c0);\n"
@@ -105,30 +97,12 @@ namespace Direct3d9_PixelShaderProgramDataNamespace
 		"#define timeElapsed             packedRegister4.a\n";
 
 	// ==================================================================
-	// x64 black-face fix - texren_copy_c1a1.psh.
-	//
-	// Customizable face/head textures are baked at runtime by
-	// BlueprintTextureRenderer, which composites layers (base skin, brows,
-	// beard, freckles) into a render-target texture. Every layer is drawn
-	// with texren_copy_c1a1.sht / texren_alphablend_c1a1.sht, and BOTH of
-	// those .sht effects use the SAME pixel program: texren_copy_c1a1.psh.
-	//
-	// That .psh is a ps.1.1 ASSEMBLY shader:
-	//     ps.1.1
-	//     tex t0
-	//     mul r0.rgb, t0, c2   +   mov r0.a, t0.a
-	// i.e. result = sourceTexture * tint, where the tint is read from
-	// constant register c2. But the engine uploads the texture factor (the
-	// skin/feature tint) to c5 (PSCR_textureFactor), NOT c2. The ps.1.1
-	// PEXE blob can't be recompiled (modern d3dx rejects ps_1_x asm), so it
-	// kept reading c2 - which holds dot3LightSpecularColor (~0 in a texture
-	// bake context). result = sourceTexture * 0 = BLACK -> every baked face
-	// texture came out black -> humanoid faces render as a black mask while
-	// the body/scalp (static textures, h_specmap_bump) render fine.
-	//
-	// Fix: substitute an HLSL ps_2_0 equivalent that reads `textureFactor`
-	// from the engine-layout register (c5, via the pixel_shader_constants.inc
-	// override above). Triggered by filename in the ctor below.
+	// texren_copy_c1a1.psh face-bake substitution (inherited fix, kept
+	// verbatim). The stock program is ps.1.1 ASM reading its tint from c2
+	// while the engine uploads the texture factor to c5 -- every runtime-
+	// baked face texture came out black. ps_1_x asm cannot be recompiled
+	// by the modern toolchain, so substitute a ps_2_0 HLSL equivalent that
+	// reads textureFactor from the engine-layout register.
 	// ==================================================================
 	char const TEXREN_COPY_C1A1_PS20_HLSL[] =
 		"#include \"pixel_program/include/pixel_shader_constants.inc\"\n"
@@ -142,22 +116,18 @@ namespace Direct3d9_PixelShaderProgramDataNamespace
 		"\treturn result;\n"
 		"}\n";
 
-	// Minimal D3DX include handler for the pixel-shader compile. The pixel
-	// program includes (`pixel_program/include/*.inc`, `shared_program/*.inc`)
-	// are plain text in the TRE; just open and hand them back - except for
-	// pixel_shader_constants.inc, which we override (see note above).
-	class PixelIncludeHandler : public ID3DXInclude
+	// Include handler for the D3DCompile path: includes are plain text in
+	// the TRE; open and hand them back -- except pixel_shader_constants.inc,
+	// which is overridden with the engine-layout version above.
+	class PixelIncludeHandler : public ID3DInclude
 	{
 	public:
-		STDMETHOD(Open)(D3DXINCLUDE_TYPE, LPCSTR pFileName, LPCVOID, LPCVOID *ppData, UINT *pBytes)
+		STDMETHOD(Open)(D3D_INCLUDE_TYPE, LPCSTR pFileName, LPCVOID, LPCVOID *ppData, UINT *pBytes)
 		{
 			// command-line-compiler style relative includes
 			if (pFileName && strncmp(pFileName, "../../", 6) == 0)
 				pFileName += 6;
 
-			// x64 fix: override pixel_shader_constants.inc with the
-			// engine-layout version so the recompiled shader's constant
-			// registers line up with the engine's PSCR_* uploads.
 			if (pFileName && strstr(pFileName, "pixel_shader_constants.inc"))
 			{
 				int const len = static_cast<int>(sizeof(ENGINE_PIXEL_SHADER_CONSTANTS_INC) - 1);
@@ -205,18 +175,13 @@ Direct3d9_PixelShaderProgramData::Direct3d9_PixelShaderProgramData(ShaderImpleme
 	{
 		if (Direct3d9::supportsPixelShaders())
 		{
-#ifdef _DEBUG
-			int const pixelShaderVersionRequested = ShaderCapability(pixelShaderProgram.getVersionMajor(), pixelShaderProgram.getVersionMinor());
-			DEBUG_FATAL(pixelShaderVersionRequested > Direct3d9::getShaderCapability(), ("%s is compiled for %d.%d but we only support %d.%d", pixelShaderProgram.getFileName(), GetShaderCapabilityMajor(pixelShaderVersionRequested), GetShaderCapabilityMinor(pixelShaderVersionRequested), GetShaderCapabilityMajor(Direct3d9::getShaderCapability()), GetShaderCapabilityMinor(Direct3d9::getShaderCapability())));
-#endif
-
 			bool created = false;
 
-			// ---- x64 fix: recompile from HLSL PSRC source when available ----
+			// ---- compile from PSRC source when it carries an //hlsl directive ----
 			char const *const source = pixelShaderProgram.m_source;
 			if (source && pixelShaderProgram.m_sourceLength > 0)
 			{
-				// Parse the leading "//hlsl ps_X_X" / "//asm ..." directive.
+				// Parse the leading "//hlsl ps_X_X" directive.
 				char const *p = source;
 				while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
 					++p;
@@ -237,12 +202,7 @@ Direct3d9_PixelShaderProgramData::Direct3d9_PixelShaderProgramData(ShaderImpleme
 						strcpy(target, "ps_2_0");
 				}
 
-				// x64 black-face fix: the texren_copy_c1a1.psh face-bake shader
-				// is ps.1.1 ASM that reads its tint from the wrong constant
-				// register (c2, vs the engine's c5). It can't be recompiled as
-				// asm, so substitute a hand-written HLSL ps_2_0 equivalent that
-				// reads textureFactor from the engine-layout register. See the
-				// TEXREN_COPY_C1A1_PS20_HLSL note above.
+				// Face-bake substitution: filename-triggered, see note above.
 				bool useTexrenReplacement = false;
 				{
 					char const *const fileName = pixelShaderProgram.getFileName();
@@ -256,15 +216,14 @@ Direct3d9_PixelShaderProgramData::Direct3d9_PixelShaderProgramData(ShaderImpleme
 
 				if (isHlsl)
 				{
-					// The pixel-program includes (vertex_shader_constants-style)
-					// can use `point` as a struct field which collides with the
-					// modern HLSL `point` reserved word - prepend the same
-					// #define the vertex-shader path uses. Harmless if unused.
+					// Some pixel-program includes use `point` as a field name,
+					// which collides with the HLSL reserved word -- same
+					// prefix define the vertex-shader path uses.
 					static char const PREFIX[] = "#define point _pt_lights\n";
 
-					char const *compileText = NULL; // text handed to the compiler
+					char const *compileText = NULL;
 					int compileLen = 0;
-					char *ownedText = NULL; // non-NULL only when we allocated
+					char *ownedText = NULL;
 
 					if (useTexrenReplacement)
 					{
@@ -274,7 +233,7 @@ Direct3d9_PixelShaderProgramData::Direct3d9_PixelShaderProgramData(ShaderImpleme
 					else
 					{
 						int const prefixLen = static_cast<int>(sizeof(PREFIX) - 1);
-						int const srcLen = pixelShaderProgram.m_sourceLength;
+						int const srcLen = static_cast<int>(strlen(source));
 
 						ownedText = new char[prefixLen + srcLen + 1];
 						memcpy(ownedText, PREFIX, prefixLen);
@@ -285,48 +244,69 @@ Direct3d9_PixelShaderProgramData::Direct3d9_PixelShaderProgramData(ShaderImpleme
 						compileLen = prefixLen + srcLen;
 					}
 
-					PixelIncludeHandler includeHandler;
-					ID3DXBuffer *compiledShader = NULL;
-					ID3DXBuffer *errorMessages = NULL;
-					HRESULT const compileResult = D3DXCompileShader(
-						compileText, compileLen,
-						NULL, &includeHandler,
-						"main", target, 0,
-						&compiledShader, &errorMessages, NULL);
+					// Warm start: bytecode cache keyed on the exact compile
+					// input. A hit skips the compiler entirely.
+					uint64_t const sourceHash = Direct3d9_ShaderCache::hashSource(
+						compileText, static_cast<std::size_t>(compileLen), NULL, target, cms_pixelRewriteVersion);
 
-					// d3dx leaves the FPU in a bad state on some shaders.
-					_clearfp();
-
-					if (SUCCEEDED(compileResult) && compiledShader)
+					std::vector<unsigned char> cachedBytes;
+					if (Direct3d9_ShaderCache::tryLoad(sourceHash, cachedBytes) && !cachedBytes.empty())
 					{
 						HRESULT const createResult = Direct3d9::getDevice()->CreatePixelShader(
-							reinterpret_cast<DWORD const *>(compiledShader->GetBufferPointer()), &m_pixelShader);
+							reinterpret_cast<DWORD const *>(&cachedBytes[0]), &m_pixelShader);
 						if (SUCCEEDED(createResult) && m_pixelShader)
-						{
 							created = true;
+					}
+
+					if (!created)
+					{
+						PixelIncludeHandler includeHandler;
+						ID3DBlob *compiledShader = NULL;
+						ID3DBlob *errorMessages = NULL;
+						HRESULT const compileResult = D3DCompile(
+							compileText, static_cast<SIZE_T>(compileLen),
+							pixelShaderProgram.getFileName(),
+							NULL, &includeHandler,
+							"main", target, 0, 0,
+							&compiledShader, &errorMessages);
+
+						// the compiler can leave the FPU in a bad state on some shaders.
+						_clearfp();
+
+						if (SUCCEEDED(compileResult) && compiledShader)
+						{
+							HRESULT const createResult = Direct3d9::getDevice()->CreatePixelShader(
+								reinterpret_cast<DWORD const *>(compiledShader->GetBufferPointer()), &m_pixelShader);
+							if (SUCCEEDED(createResult) && m_pixelShader)
+							{
+								created = true;
+								Direct3d9_ShaderCache::store(sourceHash, compiledShader->GetBufferPointer(), compiledShader->GetBufferSize());
+							}
+							else
+							{
+								WARNING(true, ("Direct3d9_PixelShaderProgramData: CreatePixelShader failed for recompiled %s (0x%08x) - falling back to PEXE\n",
+											   pixelShaderProgram.getFileName(), static_cast<unsigned>(createResult)));
+							}
 						}
 						else
 						{
-							WARNING(true, ("Direct3d9_PixelShaderProgramData: CreatePixelShader failed for recompiled %s (0x%08x) - falling back to PEXE\n",
-										   pixelShaderProgram.getFileName(), static_cast<unsigned>(createResult)));
+							WARNING(true, ("Direct3d9_PixelShaderProgramData: D3DCompile failed for %s: %s - falling back to PEXE\n",
+										   pixelShaderProgram.getFileName(),
+										   errorMessages ? static_cast<char const *>(errorMessages->GetBufferPointer()) : "(no error text)"));
 						}
-					}
-					else
-					{
-						WARNING(true, ("Direct3d9_PixelShaderProgramData: D3DXCompileShader failed for %s: %s - falling back to PEXE\n",
-									   pixelShaderProgram.getFileName(),
-									   errorMessages ? static_cast<char const *>(errorMessages->GetBufferPointer()) : "(no error text)"));
+
+						if (compiledShader)
+							compiledShader->Release();
+						if (errorMessages)
+							errorMessages->Release();
 					}
 
-					if (compiledShader)
-						compiledShader->Release();
-					if (errorMessages)
-						errorMessages->Release();
 					delete[] ownedText;
 				}
 			}
 
-			// ---- fallback: use the precompiled PEXE blob ----
+			// ---- fallback: the precompiled PEXE blob (plain-asm programs;
+			// stock data carries real bytecode here) ----
 			if (!created)
 			{
 				HRESULT const hresult = Direct3d9::getDevice()->CreatePixelShader(pixelShaderProgram.m_exe, &m_pixelShader);

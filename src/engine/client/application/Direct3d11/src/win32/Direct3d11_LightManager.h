@@ -56,13 +56,18 @@
 // Inherited fixes, carried deliberately
 //
 // The x64 DX9 build this ports from carries five local lighting fixes over the SOE original,
-// each with a diagnosis in its comment. They are reproduced exactly, because the gate for this
-// backend is matching that build and not the 2003 one:
+// each with a diagnosis in its comment. The image-changing ones are no longer reproduced
+// unconditionally -- the rule became: the data renders as authored, and each compensation is
+// a config opt-in (see ConfigDirect3d11):
 //
-//   1. Light colours are clamped non-negative at upload.
-//   2. Scene ambient has a 0.3 floor.
+//   1. Light colours are clamped non-negative at upload. (Kept: correctness, not tuning.)
+//   2. Scene ambient has a 0.3 floor. (REMOVED -- see applyLights_vertexShader; it flattened
+//      every low-ambient interior to grey.)
 //   3. A missing parallel-specular light falls back to ambient for the pixel dot3 diffuse.
+//      (Kept: a fallback for an absent light, not a rewrite of a present one.)
 //   4. A light with no hemispheric colours gets a synthesised hemisphere at 0.65/0.30.
+//      (Opt-in via [Direct3d11] synthesizeHemisphericLight, default off -- it erased the
+//      shade side of every character; measurement at setExtendedLightData.)
 //   5. obeysLightScale is ignored; the unscaled accessors are always used.
 //
 // Number 5 is why this class has no function-pointer indirection where DX9 has six. DX9 swaps
@@ -124,6 +129,7 @@ public:
 	// here rather than through the constant buffers because this class rewrites those whole
 	// registers and would otherwise clobber them.
 	static void setAlphaFadeOpacity(bool enabled, float opacity);
+	static bool getAlphaFadeOpacityEnabled();
 	static void setBloomEnabled(bool enabled);
 
 public:

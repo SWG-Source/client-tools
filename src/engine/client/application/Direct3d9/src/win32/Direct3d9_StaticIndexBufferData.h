@@ -30,9 +30,6 @@ public:
 	static void install();
 	static void remove();
 
-	// MEMPROBE: live D3D static-index-buffer instance count (leak diagnostic). Strip with MEMPROBE.
-	static int getLiveInstanceCount();
-
 public:
 
 	explicit Direct3d9_StaticIndexBufferData(const StaticIndexBuffer &indexBuffer);

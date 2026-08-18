@@ -40,6 +40,7 @@ public:
 	void          chooseIndexBuffer(unsigned newHasLargerNeighborFlags, int numberOfTilesPerChunk);
 
 	const Shader* getShader (void) const;
+	int           getNumberOfPrimitives (void) const;
 	void          render (const Camera* camera, const Shader* lotShader, const Shader* terrainCloudShader) const;
 	void          renderNormals (void) const;
 

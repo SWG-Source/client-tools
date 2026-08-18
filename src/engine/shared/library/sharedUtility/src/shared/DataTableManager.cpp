@@ -142,8 +142,19 @@ DataTable *DataTableManager::getTable(const std::string &table, bool openIfNotFo
 			DataTable * dt = open(table);
 			if (!dt)
 			{
-				DEBUG_WARNING(true, ("Could not find table [%s] - returning empty sentinel.\n", table.c_str()));
-				return DataTableManagerNamespace::getEmptySentinel();
+				// Missing table. Strict (default): return NULL -- exact stock
+				// semantics. Callers that REQUIRE their table carry their own
+				// STRICT_DATA_FATALs at the install sites, while optional-content
+				// probes (e.g. the mahjong layout list names files that never
+				// shipped) handle NULL as they always did -- a FATAL here killed
+				// boot on the first such probe. strictData=false: hand back the
+				// static 0-row sentinel so even null-unaware callers fail soft.
+				// Either way, say so in the log: a missing table sailing silently
+				// is how data gaps go unnoticed.
+				WARNING(true, ("DataTableManager::getTable: could not open table [%s]%s", table.c_str(), StrictData() ? "" : " - returning empty sentinel (strictData=false)"));
+				if (!StrictData())
+					return DataTableManagerNamespace::getEmptySentinel();
+				return NULL;
 			}
 			else
 			{

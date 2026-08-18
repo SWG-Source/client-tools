@@ -45,6 +45,8 @@ namespace ConfigDirect3d9Namespace
 
 	bool ms_antiAlias;
 
+	bool ms_shaderCachePreload;
+
 	ConfigDirect3d9::VertexProcessingMode ms_vertexProcessingMode = ConfigDirect3d9::VPM_default;
 }
 using namespace ConfigDirect3d9Namespace;
@@ -85,6 +87,10 @@ void ConfigDirect3d9::install()
 	KEY_BOOL(discardDynamicBuffersAtBeginningOfFrame, false);
 	
 	KEY_BOOL(antiAlias, true);
+
+	// CONSULT-68 sibling: RAM-preload the disk shader-cache off-thread at install
+	// so the draw path never pays a per-hit fopen/fread (kill switch).
+	KEY_BOOL(shaderCachePreload, true);
 
 	int const vertexProcessingMode = ConfigFile::getKeyInt("Direct3d9", "vertexProcessingMode", 0);
 	FATAL(vertexProcessingMode < 0 || vertexProcessingMode > 2, ("vertexProcessingMode setting invalid %d [0..2]", vertexProcessingMode));
@@ -196,6 +202,13 @@ int ConfigDirect3d9::getDynamicVertexBufferSize()
 bool ConfigDirect3d9::getAntiAlias()
 {
 	return ms_antiAlias;
+}
+
+// ----------------------------------------------------------------------
+
+bool ConfigDirect3d9::getShaderCachePreload()
+{
+	return ms_shaderCachePreload;
 }
 
 // ----------------------------------------------------------------------

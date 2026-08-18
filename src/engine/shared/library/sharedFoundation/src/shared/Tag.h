@@ -117,7 +117,7 @@ inline Tag ConvertStringToTag(const char *value)
 {
 	Tag result = 0;
 	
-	const int length = strlen(value);
+	const int length = static_cast<int>(strlen(value));
 	for (int i = 0; i < 4; ++i)
 	{
 		const uint32 ch = static_cast<uint32>((i >= length) ? ' ' : value[i]);

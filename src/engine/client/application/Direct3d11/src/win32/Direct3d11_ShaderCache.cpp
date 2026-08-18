@@ -19,6 +19,7 @@
 #include <map>
 #include <stdio.h>
 #include <string>
+#include <vector>
 
 // ======================================================================
 
@@ -39,6 +40,10 @@ namespace Direct3d11_ShaderCacheNamespace
 	// same program's graphics data more than once across a shader template reload.
 	std::map<Direct3d11ShaderHash, std::string> ms_baked;
 
+	// Include lines carried forward from a seeded manifest (see the bake branch of install):
+	// includes the previous bake served that this run may not serve itself.
+	std::vector<std::pair<std::string, unsigned long long> > ms_carriedIncludes;
+
 	// ------------------------------------------------------------------
 
 	void formatKey(Direct3d11ShaderHash key, char *destination, int destinationSize)
@@ -53,6 +58,116 @@ namespace Direct3d11_ShaderCacheNamespace
 		char hex[32];
 		formatKey(key, hex, isizeof(hex));
 		IGNORE_RETURN(snprintf(destination, static_cast<size_t>(destinationSize), "%s/%s.cso", cms_directory, hex));
+	}
+
+	// ------------------------------------------------------------------
+	// Seed the baker from the existing manifest, so a re-bake UNIONS with prior coverage
+	// instead of replacing it. Without this, a bake session that visits less content than
+	// the last one silently SHRINKS the cache -- the manifest lists only what that session
+	// compiled, so filling a small gap (the first field gap was the sky and cloud programs)
+	// would have required a session that also re-covered everything already baked. Seeding
+	// applies the same validation a using run applies -- version, flags, and every recorded
+	// include hash against the live data -- and a manifest that fails ANY check is not
+	// carried forward: a stale entry must never be re-listed as current. Seeded programs'
+	// blobs already exist on disk, and store() skips keys already in ms_baked, so this run
+	// only writes what is genuinely new.
+
+	void seedBakerFromExistingManifest()
+	{
+		AbstractFile *const file = TreeFile::open(cms_manifestName, AbstractFile::PriorityData, true);
+		if (!file)
+			return;                       // nothing to carry forward
+
+		int const length = file->length();
+		byte *const contents = file->readEntireFileAndClose();
+		delete file;
+
+		if (!contents || length <= 0)
+		{
+			delete[] contents;
+			return;
+		}
+
+		std::string text(reinterpret_cast<char const *>(contents), static_cast<size_t>(length));
+		delete[] contents;
+
+		bool versionSeen = false;
+		bool flagsSeen = false;
+		std::map<Direct3d11ShaderHash, std::string> programs;
+		std::vector<std::pair<std::string, unsigned long long> > includes;
+
+		size_t at = 0;
+		while (at < text.size())
+		{
+			size_t const eol = text.find('\n', at);
+			std::string line = text.substr(at, (eol == std::string::npos) ? std::string::npos : eol - at);
+			at = (eol == std::string::npos) ? text.size() : eol + 1;
+
+			while (!line.empty() && (line[line.size() - 1] == '\r' || line[line.size() - 1] == ' '))
+				line.erase(line.size() - 1);
+
+			if (line.empty() || line[0] == '#')
+				continue;
+
+			char keyword[64];
+			char first[512];
+
+			if (sscanf(line.c_str(), "%63s", keyword) != 1)
+				continue;
+
+			if (strcmp(keyword, "version") == 0)
+			{
+				int version = 0;
+				if (sscanf(line.c_str(), "%63s %d", keyword, &version) != 2 || version != cms_manifestVersion)
+				{
+					WARNING(true, ("Direct3d11: the existing manifest is version %d and this build understands %d; baking from scratch.", version, cms_manifestVersion));
+					return;
+				}
+				versionSeen = true;
+			}
+			else if (strcmp(keyword, "flags") == 0)
+			{
+				unsigned int flags = 0;
+				if (sscanf(line.c_str(), "%63s 0x%x", keyword, &flags) != 2 || flags != Direct3d11_ShaderCompiler::getCompileFlags())
+				{
+					WARNING(true, ("Direct3d11: the existing manifest was baked with compile flags 0x%08x and this build uses 0x%08x; baking from scratch.", flags, Direct3d11_ShaderCompiler::getCompileFlags()));
+					return;
+				}
+				flagsSeen = true;
+			}
+			else if (strcmp(keyword, "include") == 0)
+			{
+				unsigned long long recorded = 0;
+				if (sscanf(line.c_str(), "%63s %511s %llx", keyword, first, &recorded) != 3)
+					continue;
+
+				Direct3d11ShaderHash live = 0;
+				if (!Direct3d11_ShaderCompiler::hashIncludeAsServed(first, live) || live != recorded)
+				{
+					WARNING(true, ("Direct3d11: include '%s' no longer matches the existing manifest; baking from scratch.", first));
+					return;
+				}
+				includes.push_back(std::make_pair(std::string(first), recorded));
+			}
+			else if (strcmp(keyword, "program") == 0)
+			{
+				// The name is the REMAINDER of the line -- it can contain spaces (the
+				// backend's own install-time programs do), so %s would truncate it.
+				unsigned long long key = 0;
+				int nameOffset = 0;
+				if (sscanf(line.c_str(), "%63s %llx %n", keyword, &key, &nameOffset) == 2 && nameOffset > 0 && nameOffset < static_cast<int>(line.size()))
+					IGNORE_RETURN(programs.insert(std::make_pair(static_cast<Direct3d11ShaderHash>(key), line.substr(static_cast<size_t>(nameOffset)))));
+			}
+		}
+
+		if (!versionSeen || !flagsSeen)
+			return;
+
+		ms_baked.insert(programs.begin(), programs.end());
+		ms_carriedIncludes.swap(includes);
+
+		REPORT_LOG_PRINT(true, ("Direct3d11: baker seeded with %d program(s) and %d include hash(es) from the existing manifest; this run's compiles union in.\n",
+			static_cast<int>(ms_baked.size()), static_cast<int>(ms_carriedIncludes.size())));
 	}
 } // namespace Direct3d11_ShaderCacheNamespace
 using namespace Direct3d11_ShaderCacheNamespace;
@@ -79,6 +194,7 @@ void Direct3d11_ShaderCache::install()
 		// cache gets mistaken for a complete one.
 		WARNING(true, ("Direct3d11: baking compiled shaders to '%s'. The cache is not used this run, so every program is compiled and written.", cms_directory));
 		IGNORE_RETURN(CreateDirectoryA(cms_directory, NULL));
+		seedBakerFromExistingManifest();
 		return;
 	}
 
@@ -217,6 +333,7 @@ void Direct3d11_ShaderCache::remove()
 		writeManifest();
 
 	ms_baked.clear();
+	ms_carriedIncludes.clear();
 	ms_enabled = false;
 	ms_baking = false;
 	ms_installed = false;
@@ -346,14 +463,26 @@ void Direct3d11_ShaderCache::writeManifest()
 	IGNORE_RETURN(fprintf(out, "vertexTarget %s\n", Direct3d11_ShaderCompiler::getVertexShaderTarget()));
 	IGNORE_RETURN(fprintf(out, "pixelTarget %s\n", Direct3d11_ShaderCompiler::getPixelShaderTarget()));
 
-	int const includeCount = Direct3d11_ShaderCompiler::getServedIncludeCount();
-	for (int i = 0; i < includeCount; ++i)
+	// Includes: everything served this run, plus lines carried from the seeded manifest
+	// that this run did not serve itself -- their hashes were validated against the live
+	// data at seed time, so they are equally current. Served entries win on a path both
+	// lists carry (the values are identical when the seed validated).
+	std::map<std::string, unsigned long long> includeLines;
 	{
-		char const *includePath = NULL;
-		Direct3d11ShaderHash hash = 0;
-		if (Direct3d11_ShaderCompiler::getServedInclude(i, includePath, hash) && includePath)
-			IGNORE_RETURN(fprintf(out, "include %s %016llx\n", includePath, hash));
+		int const servedCount = Direct3d11_ShaderCompiler::getServedIncludeCount();
+		for (int i = 0; i < servedCount; ++i)
+		{
+			char const *includePath = NULL;
+			Direct3d11ShaderHash hash = 0;
+			if (Direct3d11_ShaderCompiler::getServedInclude(i, includePath, hash) && includePath)
+				includeLines[includePath] = hash;
+		}
+		for (size_t i = 0; i < ms_carriedIncludes.size(); ++i)
+			IGNORE_RETURN(includeLines.insert(ms_carriedIncludes[i]));
 	}
+
+	for (std::map<std::string, unsigned long long>::const_iterator i = includeLines.begin(); i != includeLines.end(); ++i)
+		IGNORE_RETURN(fprintf(out, "include %s %016llx\n", i->first.c_str(), i->second));
 
 	for (std::map<Direct3d11ShaderHash, std::string>::const_iterator i = ms_baked.begin(); i != ms_baked.end(); ++i)
 		IGNORE_RETURN(fprintf(out, "program %016llx %s\n", i->first, i->second.c_str()));
@@ -361,7 +490,7 @@ void Direct3d11_ShaderCache::writeManifest()
 	IGNORE_RETURN(fclose(out));
 
 	WARNING(true, ("Direct3d11: baked %d compiled shader(s) and %d include hash(es) to '%s'.",
-				   static_cast<int>(ms_baked.size()), includeCount, cms_directory));
+				   static_cast<int>(ms_baked.size()), static_cast<int>(includeLines.size()), cms_directory));
 }
 
 // ======================================================================

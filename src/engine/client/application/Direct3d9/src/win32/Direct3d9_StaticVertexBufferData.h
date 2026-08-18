@@ -31,9 +31,6 @@ public:
 	static void install();
 	static void remove();
 
-	// MEMPROBE: live D3D static-vertex-buffer instance count (leak diagnostic). Strip with MEMPROBE.
-	static int getLiveInstanceCount();
-
 public:
 
 	explicit Direct3d9_StaticVertexBufferData(const StaticVertexBuffer &vertexBuffer);

@@ -10,6 +10,7 @@
 
 #include "clientTerrain/ClientProceduralTerrainAppearance.h"
 #include "sharedSynchronization/Mutex.h"
+#include "sharedSynchronization/RecursiveMutex.h"
 
 class StaticShader;
 class ShaderEffect;
@@ -88,13 +89,26 @@ private:
 
 	mutable ArrayList<BlendedShaderCacheNode> nodeList;
 
+	// nodeList is mutated from BOTH the ClientTerrain worker thread (findCachedShader /
+	// createBlendedShader -> nodeList.add, reached from ClientChunk::createTileShader) and the
+	// main thread (alter / destroyShader / flushCache, plus the synchronous LevelOfDetail
+	// createChunk fallback). ArrayList::add re-allocates its buffer (new[]/copy/delete[]), so a
+	// concurrent iterate-vs-add or add-vs-add stale-frees the buffer -> allocator freelist
+	// poisoned -> a later small allocation (typically a loader path string) lands on TOP of a
+	// live object (observed 2026-07-03: a StaticShaderTemplate MaterialMap overwritten with
+	// "...ader file..." text -> AV in std::map::find on the terrain thread). The Mutex.h include
+	// above predates this fix but no lock was ever added -- this member completes it. Leaf lock,
+	// same shape as the TreeFile::SearchCache fix (9c03f53c5). RECURSIVE because
+	// createBlendedShader legitimately re-enters via findCachedShader; Guard-idiom RAII matches
+	// ShaderTemplateList. Ordering: taken only around nodeList access, so it always precedes
+	// ShaderTemplateList::ms_criticalSection (reached via fetchModifiable) -- no inversion.
+	mutable RecursiveMutex m_nodeListLock;
+
 	Texture const * m_whiteTexture;
 	Texture const * m_blackTexture;
 
 private:
 
-	void preloadShaders () const;
-		
 	void setupShaderData(StaticShader & shader, BlendedShaderCacheNode & node, ShaderData const & shaderData, Material const * materials, bool useSpecularBlendingShader) const;
 
 
@@ -108,6 +122,17 @@ public:
 
 	explicit ShaderCache (const ShaderGroup& shaderGroup);
 	~ShaderCache ();
+
+	// CONSULT-59: no longer called by the constructor (it froze the main loop
+	// loading the whole planet's shaders+textures up front -- the original
+	// "@todo avoid loading textures for entire planet up front"). Idempotent
+	// per-slot fill; ClientProceduralTerrainAppearance calls it ONCE after the
+	// template's incremental preload completes (all cache hits at that point),
+	// BEFORE any chunk creation request is submitted. cache[][] slots are read
+	// from the ClientTerrain worker thread with no lock -- the populate-fully-
+	// before-first-use ordering is what keeps that safe. Do NOT call this
+	// concurrently with chunk generation.
+	void               preloadShaders () const;
 
 	void               getTextures (const ShaderGroup::Info& sgi, StaticShader const *& baseInputShader, const Texture *&shader, const Texture *&normalTexture) const;
 	const Shader*      createBlendedShader (const ShaderData& shaderData) const;

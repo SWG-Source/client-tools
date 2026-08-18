@@ -503,7 +503,9 @@ m_aliasHandler  (0)
 		{
 			if (iter->second == NULL)
 			{
-				WARNING(true, ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s) - skipping", Unicode::wideToNarrow(iter->first).c_str()));
+				// Strict (default): stock FATAL - a null leaf means the lfg
+				// datatable is malformed. strictData=false: drop the entry.
+				STRICT_DATA_FATAL(true, ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s) - skipping", Unicode::wideToNarrow(iter->first).c_str()));
 				iter = s_mapLowercaseSingleArgToSearchAttribute.erase(iter);
 			}
 			else
@@ -528,7 +530,8 @@ m_aliasHandler  (0)
 		{
 			if (iter->second == NULL)
 			{
-				WARNING(true, ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s %s) - skipping", Unicode::wideToNarrow(iter->first.first).c_str(), Unicode::wideToNarrow(iter->first.second).c_str()));
+				// See the single-arg loop above - strict FATALs, lenient drops.
+				STRICT_DATA_FATAL(true, ("no leaf LfgDataTable::LfgNode found for /who search attribute (%s %s) - skipping", Unicode::wideToNarrow(iter->first.first).c_str(), Unicode::wideToNarrow(iter->first.second).c_str()));
 				iter = s_mapLowercaseDoubleArgToSearchAttribute.erase(iter);
 			}
 			else

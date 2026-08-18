@@ -1447,6 +1447,118 @@ void PlayerCreatureController::setCurrentSpeed (float const currentSpeed)
 
 //----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// playerCreatureController::warpClient -- client-initiated teleport (v30).
+//
+// WHY A ROW: a consumer writing the player's transform directly (object::
+// setTransform_o2w) performs an UNSEQUENCED local write the server never hears
+// about, so the next authoritative update legitimately overwrites it -- observed
+// live as "lands correctly, yanked back after ~1s" on a server session and NOT
+// offline, because offline there is no server to correct it.
+//
+// warpClient is the engine's own client-initiated teleport (its other caller is
+// DebugPortalCamera.cpp:314). It stamps m_previousTransform_p so local movement
+// reconciliation does not fight the move, mints a CLIENT-side sequence number,
+// and appends CM_netUpdateTransform with SEND|RELIABLE|DEST_AUTH_SERVER|
+// DEST_AUTH_CLIENT -- so the server is told AND the local apply runs through
+// handleNetUpdateTransform, which brings CollisionWorld::objectWarped and the
+// FreeChaseCamera retarget with it.
+//
+// NOTE the engine's server->client teleport path (handleNetUpdateTransform ->
+// ackTeleport) is NOT this: its sequence number comes from the server and the
+// client only ACKs it. A client cannot fabricate that; warpClient is the correct
+// client-initiated direction.
+//
+// ⚠ v31 REWRITE -- the v30 body was wrong in a way only a live server could show.
+// It called PlayerCreatureController::warpClient, which sends
+// MessageQueueDataTransform / CM_netUpdateTransform: the NO-PARENT variant. Its
+// handler, ClientController::handleNetUpdateTransform [ClientController.cpp:433],
+// OPENS with "transfer from cell to world" --
+//     if (getOwner()->getAttachedTo() != NULL)
+//         getOwner()->setParentCell(CellProperty::getWorldCellProperty());
+// -- so that message STRUCTURALLY UN-PARENTS the object by design. warpClient can
+// never place a player inside a cell, and the setParentCell the caller was told to
+// make first was undone by the local apply. Compounding it, the v30 shim converted
+// world -> cell space and then shipped the result in the world-space message, so an
+// interior target landed at its cell-relative magnitudes near the origin (consumer
+// measured: target (3448,4,-4824) -> player at (15,193,5)).
+//
+// The correct notification primitive is ClientController::sendTransform
+// [ClientController.h:44 / .cpp:311-340], which branches on getAttachedTo() and
+// emits MessageQueueDataTransformWithParent + CM_netUpdateTransformWithParent
+// carrying the CELL id when attached, plain otherwise. That is the piece a bare
+// local transform write was always missing.
+//
+// This shim now performs the whole engine-idiomatic sequence and RESOLVES THE
+// DESTINATION CELL ITSELF. The caller must therefore NOT wrap it in its own
+// setParentCell -- an external reparent fights the message-variant choice.
+// Accepts WORLD coords (what a bookmark stores).
+//
+// 1 = ok · 0 = no player · -1 = player has no PlayerCreatureController.
+// Defined here because the exe TU cannot include CreatureObject.h (see
+// engine_creatureObject_forward.h). Game-thread-only.
+// ----------------------------------------------------------------------
+extern "C" int __cdecl engine_warpPlayer(float x_w, float y_w, float z_w)
+{
+	CreatureObject * const player = Game::getPlayerCreature();
+	if (!player)
+		return 0;
+
+	ClientController * const controller = dynamic_cast<ClientController *>(player->getController());
+	if (!controller)
+		return -1;
+
+	//-- 1. Resolve the destination cell from the world point. Doing it HERE means
+	//      the caller no longer needs a separate setParentCell -- and must not,
+	//      because step 5's message is chosen from the parentage set here.
+	Vector const position_w(x_w, y_w, z_w);
+	CellProperty * destinationCell = CellProperty::getWorldCellProperty();
+	{
+		Object const * const cellObject = ClientWorld::findClosestCellObjectFromWorldPosition(position_w);
+		if (cellObject)
+		{
+			CellProperty const * const foundCell = cellObject->getCellProperty();
+			if (foundCell)
+				destinationCell = const_cast<CellProperty *>(foundCell);
+		}
+	}
+
+	//-- 2. Reparent first, so getAttachedTo() reflects the DESTINATION.
+	player->setParentCell(destinationCell);
+
+	//-- 3. World -> parent space (identity when the destination is the world cell).
+	Transform transform_w = player->getTransform_o2w();
+	transform_w.setPosition_p(position_w);
+
+	Transform transform_p = transform_w;
+	if (destinationCell != CellProperty::getWorldCellProperty())
+	{
+		Transform worldToCell;
+		worldToCell.invert(destinationCell->getOwner().getTransform_o2w());
+		transform_p.multiply(worldToCell, transform_w);
+	}
+
+	//-- 4. Apply locally with the portal sweep suppressed (the engine's own idiom,
+	//      GroundScene.cpp:1492-1497), then reconcile collision.
+	CellProperty::setPortalTransitionsEnabled(false);
+		player->setTransform_o2p(transform_p);
+	CellProperty::setPortalTransitionsEnabled(true);
+
+	CollisionWorld::objectWarped(player);
+
+	//-- 5. TELL THE SERVER. This is the piece a local transform write is missing,
+	//      and sendTransform [ClientController.h:44] picks the correct message
+	//      from the object's parentage: MessageQueueDataTransformWithParent +
+	//      CM_netUpdateTransformWithParent (carrying the CELL id) when attached,
+	//      plain MessageQueueDataTransform otherwise. See its own body,
+	//      ClientController.cpp:311-340.
+	controller->sendTransform(transform_p, true /* reliable */);
+
+	return 1;
+}
+
+// ----------------------------------------------------------------------
+
 void PlayerCreatureController::warpClient (const Transform& transform_p)
 {
 	m_previousTransform_p = transform_p;

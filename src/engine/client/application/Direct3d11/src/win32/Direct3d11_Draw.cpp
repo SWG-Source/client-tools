@@ -175,6 +175,7 @@ void Direct3d11::setVertexBuffer(HardwareVertexBuffer const &vertexBuffer)
 	ms_streamCount = 1;
 
 	context->IASetVertexBuffers(0, 1, &buffer, &stride, &byteOffset);
+	Direct3d11_InputLayoutCache::bindPhantomStream(context);
 	++Direct3d11_Metrics::vertexBufferBindCalls;
 	++Direct3d11_Metrics::vertexBufferBindMisses;
 
@@ -278,6 +279,7 @@ void Direct3d11::setVertexBufferVector(VertexBufferVector const &vertexBufferVec
 	FATAL(!stream, ("Direct3d11: a vertex buffer vector bound no streams at all."));
 
 	context->IASetVertexBuffers(0, static_cast<UINT>(stream), buffers, strides, offsets);
+	Direct3d11_InputLayoutCache::bindPhantomStream(context);
 	++Direct3d11_Metrics::vertexBufferBindCalls;
 	++Direct3d11_Metrics::vertexBufferBindMisses;
 
@@ -457,6 +459,12 @@ bool Direct3d11::prepareToDraw()
 	// Push whatever constants changed. At most one flush per stage, and the
 	// per-object slice either way.
 	Direct3d11_ConstantBuffers::flush();
+
+	// Select the pass blend state or its alpha-fade variant by the fade flag
+	// AT DRAW TIME -- the engine sets the fade per primitive, a pass apply
+	// covers a whole sorted shader group. Mirrors DX9's draw-time overrides
+	// (Direct3d9.cpp:3953-3961); free when nothing changed.
+	Direct3d11_StateCache::applyPassBlendStateForDraw();
 
 	Direct3d11_Metrics::vertices += ms_sliceNumberOfVertices;
 

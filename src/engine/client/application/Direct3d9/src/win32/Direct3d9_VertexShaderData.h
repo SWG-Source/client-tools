@@ -55,7 +55,6 @@ private:
 	char                                             m_hlslTarget[8];
 	const char *                                     m_compileText;
 	int                                              m_compileTextLength;
-	char *m_ownedCompileBuffer; // diagnostic: patched source buffer, freed in dtor
 	TextureCoordinateSetTags *                       m_textureCoordinateSetTags;
 
 	mutable Container *                              m_container;

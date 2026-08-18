@@ -163,9 +163,10 @@ DataTableColumnType const &DataTable::getDataTypeForColumn(const std::string& co
 	int const columnIndex = findColumnNumber(column);
 	if (columnIndex < 0 || columnIndex >= getNumColumns())
 	{
-		// Return a process-wide empty column type so callers don't crash on
-		// `m_types[(size_t)-1]` when the named column is missing (vanilla
-		// NGE-retail tables omit some post-launch columns).
+		// Strict (default): fail fast, in Release too - the stock DEBUG_FATAL
+		// compiled out and left `m_types[(size_t)-1]` undefined behaviour.
+		// strictData=false: warn and return a process-wide empty column type.
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getDataTypeForColumn(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
 		static DataTableColumnType const s_empty("i");
 		return s_empty;
 	}
@@ -178,6 +179,7 @@ DataTableColumnType const &DataTable::getDataTypeForColumn(int column) const
 {
 	if (column < 0 || column >= getNumColumns())
 	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getDataTypeForColumn(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
 		static DataTableColumnType const s_empty("i");
 		return s_empty;
 	}
@@ -191,10 +193,7 @@ int DataTable::getIntValue(const std::string & column, int row) const
 	int const columnIndex = findColumnNumber(column);
 	if (columnIndex < 0 || columnIndex >= getNumColumns())
 	{
-		// Vanilla NGE retail data tables don't always carry every column the
-		// post-launch code expects (e.g. useClipRect, isolated). Return 0
-		// rather than crashing on `m_types[(size_t)-1]->getBasicType()`.
-		DEBUG_WARNING(true, ("DataTable [%s] getIntValue(): missing column [%s], returning 0.\n", m_name.c_str(), column.c_str()));
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getIntValue(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
 		return 0;
 	}
 	return getIntValue(columnIndex, row);
@@ -206,7 +205,7 @@ int DataTable::getIntValue(int column, int row) const
 {
 	if (row < 0 || row >= getNumRows() || column < 0 || column >= getNumColumns())
 	{
-		DEBUG_WARNING(true, ("DataTable [%s] getIntValue(): out-of-range col=%d/%d row=%d/%d, returning 0.\n",
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getIntValue(): out-of-range col=%d/%d row=%d/%d",
 							 m_name.c_str(), column, getNumColumns(), row, getNumRows()));
 		return 0;
 	}
@@ -256,7 +255,7 @@ float DataTable::getFloatValue(const std::string & column, int row) const
 	int const columnIndex = findColumnNumber(column);
 	if (columnIndex < 0 || columnIndex >= getNumColumns())
 	{
-		DEBUG_WARNING(true, ("DataTable [%s] getFloatValue(): missing column [%s], returning 0.0f.\n", m_name.c_str(), column.c_str()));
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getFloatValue(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
 		return 0.0f;
 	}
 	return getFloatValue(columnIndex, row);
@@ -267,16 +266,22 @@ float DataTable::getFloatValue(const std::string & column, int row) const
 float DataTable::getFloatValue(int column, int row) const
 {
 	if (row < 0 || row >= getNumRows() || column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getFloatValue(): out-of-range col=%d/%d row=%d/%d", m_name.c_str(), column, getNumColumns(), row, getNumRows()));
 		return 0.0f;
+	}
 	if (m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_Float)
 	{
-		DEBUG_WARNING(true, ("DataTable [%s] getFloatValue(): col %d type mismatch, returning 0.0f.\n", m_name.c_str(), column));
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getFloatValue(): Wrong data type for column %d", m_name.c_str(), column));
 		return 0.0f;
 	}
 
 	const DataTableCell *cell = getDataTableCell(column, row);
 	if (!cell || cell->getType() != DataTableCell::CT_float)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] could not convert row %d column %d to float value", m_name.c_str(), row, column));
 		return 0.0f;
+	}
 	return cell->getFloatValue();
 }
 
@@ -307,7 +312,7 @@ const char *DataTable::getStringValue(const std::string & column, int row) const
 	int const columnIndex = findColumnNumber(column);
 	if (columnIndex < 0 || columnIndex >= getNumColumns())
 	{
-		DEBUG_WARNING(true, ("DataTable [%s] getStringValue(): missing column [%s], returning \"\".\n", m_name.c_str(), column.c_str()));
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringValue(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
 		return "";
 	}
 	return getStringValue(columnIndex, row);
@@ -318,16 +323,22 @@ const char *DataTable::getStringValue(const std::string & column, int row) const
 const char *DataTable::getStringValue(int column, int row) const
 {
 	if (row < 0 || row >= getNumRows() || column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringValue(): out-of-range col=%d/%d row=%d/%d", m_name.c_str(), column, getNumColumns(), row, getNumRows()));
 		return "";
+	}
 	if (m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_String)
 	{
-		DEBUG_WARNING(true, ("DataTable [%s] getStringValue(): col %d not a string, returning \"\".\n", m_name.c_str(), column));
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringValue(): Wrong data type for column %d", m_name.c_str(), column));
 		return "";
 	}
 
 	const DataTableCell * const cell = getDataTableCell(column, row);
 	if (!cell || cell->getType() != DataTableCell::CT_string)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] could not convert row %d column %d to string value", m_name.c_str(), row, column));
 		return "";
+	}
 	return cell->getStringValue();
 }
 
@@ -337,7 +348,10 @@ std::string DataTable::getStringDefaultForColumn(const std::string & column) con
 {
 	int const columnIndex = findColumnNumber(column);
 	if (columnIndex < 0 || columnIndex >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringDefaultForColumn(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
 		return std::string();
+	}
 	return getStringDefaultForColumn(columnIndex);
 }
 
@@ -346,9 +360,15 @@ std::string DataTable::getStringDefaultForColumn(const std::string & column) con
 std::string DataTable::getStringDefaultForColumn(int column) const
 {
 	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringDefaultForColumn(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
 		return std::string();
+	}
 	if (m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_String)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringDefaultForColumn(): Wrong data type for column %d", m_name.c_str(), column));
 		return std::string();
+	}
 	std::string value;
 	IGNORE_RETURN( getDataTypeForColumn(column).mangleValue(value) );
 	return value;
@@ -645,17 +665,16 @@ void DataTable::load_0001(Iff & iff)
 
 int DataTable::searchColumnString( int column, const std::string & searchValue ) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] searchColumnString(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
-
-	// Release-time bounds guard. DataTableManager::getTable returns a static
-	// empty-table sentinel on miss (so callers can fail-soft on missing
-	// .iff data tables). The sentinel has 0 columns and an empty m_index
-	// vector; without this check, m_index[0] is undefined behavior and
-	// crashes with AV. Common path: AvatarCustomize2::randomize ->
-	// CustomizationGroup::randomize -> searchColumnString(0, ...) when
-	// the random_customization_ranges datatable is missing from the TRE.
+	// Bounds guard, compiled into Release. Under strictData=false,
+	// DataTableManager::getTable returns a 0-column empty sentinel on miss;
+	// without this check m_index[0] is undefined behaviour (AV). Common path:
+	// AvatarCustomize2::randomize -> CustomizationGroup::randomize ->
+	// searchColumnString(0, ...) when random_customization_ranges is missing.
 	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] searchColumnString(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
 		return -1;
+	}
 
 	int retval = -1;
 
@@ -694,12 +713,13 @@ int DataTable::searchColumnString( int column, const std::string & searchValue )
 
 int DataTable::searchColumnFloat( int column, float searchValue ) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] searchColumnFloat(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
-
-	// See searchColumnString above - release-time bounds guard for the
-	// empty-DataTable sentinel returned by DataTableManager::getTable on miss.
+	// See searchColumnString above - bounds guard for the empty-DataTable
+	// sentinel returned by DataTableManager::getTable under strictData=false.
 	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] searchColumnFloat(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
 		return -1;
+	}
 
 	int retval = -1;
 
@@ -735,12 +755,13 @@ int DataTable::searchColumnFloat( int column, float searchValue ) const
 
 int DataTable::searchColumnInt( int column, int searchValue ) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] searchColumnInt(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
-
-	// See searchColumnString above - release-time bounds guard for the
-	// empty-DataTable sentinel returned by DataTableManager::getTable on miss.
+	// See searchColumnString above - bounds guard for the empty-DataTable
+	// sentinel returned by DataTableManager::getTable under strictData=false.
 	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] searchColumnInt(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
 		return -1;
+	}
 
 	int retval = -1;
 	DataTableColumnType::DataType columnType = m_types[static_cast<size_t>(column)]->getBasicType();

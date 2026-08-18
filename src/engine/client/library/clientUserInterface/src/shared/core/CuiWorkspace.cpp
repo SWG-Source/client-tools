@@ -197,13 +197,28 @@ void CuiWorkspace::updateMediatorEnabledStates (bool force)
 
 	m_iteratingEnabledStates = true;
 
+	// 2026-06-19 FIX (iterator invalidation): a mediator's activate()/deactivate() below can re-enter
+	// CuiWorkspace::removeMediator, which erases from m_mediators AND release()es the mediator -- freeing
+	// the std::set node this loop's iterator points at. On x64 MSVC STL the next ++it derefs a freed node
+	// = hard c0000005 (latent UB on 32-bit STLport; the add/removeMediator DEBUG_FATAL guards are no-ops
+	// in Release). Iterate a fetch()'d snapshot so re-entrant removal can't invalidate the loop or free a
+	// mediator mid-pass; skip any mediator removed from the live set during the pass; release() after.
+	std::vector<CuiMediator *> snapshot (m_mediators->begin (), m_mediators->end ());
+	for (std::vector<CuiMediator *>::const_iterator sit = snapshot.begin (); sit != snapshot.end (); ++sit)
+		(*sit)->fetch ();
+
 	//----------------------------------------------------------------------
 	//-- activate handles and enable all mediators
 	if (force || pointerVisible)
 	{
-		for (MediatorSet::iterator it = m_mediators->begin (); it != m_mediators->end (); ++it)
+		for (std::vector<CuiMediator *>::const_iterator it = snapshot.begin (); it != snapshot.end (); ++it)
 		{
+			// NB: do NOT re-query the live m_mediators set here (e.g. find()) -- during teardown
+			// deactivate() frees nodes out of it, so any traversal can hit a freed node (c0000005).
+			// The up-front fetch() keeps every snapshot entry alive, so acting on one that was removed
+			// mid-pass is harmless (it's a detached-but-live object).
 			CuiMediator * const mediator = NON_NULL (*it);
+
 			if (mediator->wasVisible () && !mediator->hasState (CuiMediator::MS_closeNextFrame))
 			{
 				if (pointerVisible || (force && mediator->isStickyVisible ()))
@@ -219,9 +234,13 @@ void CuiWorkspace::updateMediatorEnabledStates (bool force)
 	else
 	{			
 		//-- disable all mediators
-		for (MediatorSet::iterator it = m_mediators->begin (); it != m_mediators->end (); ++it)
+		for (std::vector<CuiMediator *>::const_iterator it = snapshot.begin (); it != snapshot.end (); ++it)
 		{
+			// NB: do NOT re-query the live m_mediators set here (see note in the activate loop above) --
+			// deactivate() below frees set nodes during teardown; the fetch() ref keeps each snapshot
+			// entry alive so we can safely deactivate it even after it was removed from the set.
 			CuiMediator * const mediator = NON_NULL (*it);
+
 			if (!m_enabled || !mediator->isStickyVisible ())
 			{
 				if (mediator->isActive ())
@@ -235,6 +254,9 @@ void CuiWorkspace::updateMediatorEnabledStates (bool force)
 				mediator->setEnabled (false);
 		}
 	}
+
+	for (std::vector<CuiMediator *>::const_iterator sit = snapshot.begin (); sit != snapshot.end (); ++sit)
+		(*sit)->release ();
 
 	m_iteratingEnabledStates = false;
 }

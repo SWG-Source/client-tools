@@ -111,6 +111,19 @@ namespace ClientMainNamespace
 
 using namespace ClientMainNamespace;
 
+// ----------------------------------------------------------------------
+// Utinni engine entry-point advertisement (37-01): distinctly-named,
+// external-linkage forwarding shim for the file-local crash-fixer. Additive
+// -- touches no existing caller and does not change installConfigFileOverride
+// behavior. The ClientMainNamespace:: qualifier is explicit so there is no
+// ambiguity under the using-namespace above. engine_advertise.cpp wraps this
+// in the config::loadOverrideConfig thunk row (EPA-02). Declared in ClientMain.h.
+// ----------------------------------------------------------------------
+void engine_installConfigFileOverride()
+{
+	ClientMainNamespace::installConfigFileOverride();
+}
+
 // ======================================================================
 // Entry point for the application
 //
@@ -236,6 +249,15 @@ int ClientMain(
 		}
 
 		installConfigFileOverride();
+
+		// Utinni hookpoint coverage self-check (37-01, EPA-04). Debug-boot only
+		// (PRODUCTION == 0); both platforms since the 2026-08-15 x64 port of the
+		// advertise surface. NOTE: the codebase macro is PRODUCTION (Production.h),
+		// not the plan's literal _PRODUCTION (which is never defined here and
+		// would wrongly run in production) -- [Rule 1] corrected to PRODUCTION == 0.
+#if PRODUCTION == 0
+		IGNORE_RETURN(engine_verifyNoNullNoDup());
+#endif
 
 		//-- math
 		SetupSharedMath::install();

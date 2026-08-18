@@ -121,7 +121,13 @@ void Direct3d11_SwapChainNamespace::updateWindowSettings()
 			y = 0;
 	}
 
-	IGNORE_RETURN(SetWindowPos(ms_window, NULL, x, y, windowWidth, windowHeight, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED));
+	// The reveal must ACTIVATE. This is the call that first shows the hidden
+	// popup Os created, and D3D9 reveals with SWP_SHOWWINDOW and no
+	// SWP_NOACTIVATE -- the show itself grants focus. Passing SWP_NOACTIVATE
+	// here left the client behind whatever else the desktop had focused at
+	// startup (the trailing ShowWindow(SW_SHOW) does not reliably activate a
+	// window that SetWindowPos just made visible without activation).
+	IGNORE_RETURN(SetWindowPos(ms_window, NULL, x, y, windowWidth, windowHeight, SWP_NOZORDER | SWP_SHOWWINDOW | SWP_FRAMECHANGED));
 	IGNORE_RETURN(ShowWindow(ms_window, SW_SHOW));
 	IGNORE_RETURN(UpdateWindow(ms_window));
 }
@@ -513,6 +519,32 @@ void Direct3d11_SwapChain::endScene()
  * window and an empty log. Failures are reported here instead.
  */
 
+// ----------------------------------------------------------------------
+// Consumer overlay callbacks (Gl_api v35 tail slots) -- see the header note.
+// Written from the consumer's thread at registration, read on the render
+// thread: a raw aligned pointer store, and each invoke site snapshots it.
+
+namespace Direct3d11_SwapChainConsumerCallbacks
+{
+	void (*s_frameCallback)() = 0;
+	void (*s_resizeCallback)(int phase, int width, int height) = 0;
+}
+using namespace Direct3d11_SwapChainConsumerCallbacks;
+
+void Direct3d11_SwapChain::setConsumerFrameCallback(void (*fn)())
+{
+	s_frameCallback = fn;
+	REPORT_LOG(true, ("Direct3d11: consumer frame callback %s\n", fn ? "REGISTERED" : "cleared"));
+}
+
+void Direct3d11_SwapChain::setConsumerResizeCallback(void (*fn)(int phase, int width, int height))
+{
+	s_resizeCallback = fn;
+	REPORT_LOG(true, ("Direct3d11: consumer resize callback %s\n", fn ? "REGISTERED" : "cleared"));
+}
+
+// ----------------------------------------------------------------------
+
 bool Direct3d11_SwapChain::present()
 {
 	DX11_ASSERT_MAIN_THREAD();
@@ -607,6 +639,15 @@ bool Direct3d11_SwapChain::present()
 		}
 	}
 
+	// Consumer overlay draw point (Gl_api v35): the back buffer holds the finished
+	// frame -- after the composite/gamma writes and the debug screenshot read,
+	// before Present. Snapshot so a concurrent clear cannot fault mid-call.
+	{
+		void (*const frameCallback)() = s_frameCallback;
+		if (frameCallback)
+			frameCallback();
+	}
+
 	UINT const syncInterval = (ms_swapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) ? 0 : 1;
 	UINT const presentFlags = (ms_swapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) ? DXGI_PRESENT_ALLOW_TEARING : 0;
 
@@ -659,6 +700,15 @@ void Direct3d11_SwapChain::resize(int width, int height)
 	// let go before the buffers change and rebuild afterwards.
 	Direct3d11_Device::fireDeviceLost();
 
+	// Consumer resize phase 0 (Gl_api v35): the consumer must release every
+	// back-buffer-referencing view NOW -- an outstanding reference fails
+	// ResizeBuffers.
+	{
+		void (*const resizeCallback)(int, int, int) = s_resizeCallback;
+		if (resizeCallback)
+			resizeCallback(0, width, height);
+	}
+
 	releaseBackBufferViews();
 
 	ms_width = width;
@@ -675,6 +725,13 @@ void Direct3d11_SwapChain::resize(int width, int height)
 	Direct3d11_RenderTarget::sceneTargetRebuilt();
 
 	Direct3d11_Device::fireDeviceRestored();
+
+	// Consumer resize phase 1 (Gl_api v35): the new views exist -- rebuild.
+	{
+		void (*const resizeCallback)(int, int, int) = s_resizeCallback;
+		if (resizeCallback)
+			resizeCallback(1, width, height);
+	}
 }
 
 // ----------------------------------------------------------------------

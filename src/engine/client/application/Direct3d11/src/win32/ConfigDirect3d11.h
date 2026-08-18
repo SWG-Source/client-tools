@@ -62,6 +62,22 @@ public:
 	// Multiplier on the engine's fog density, from fogDensityPercent. 1.0 is parity; lower
 	// stretches the fog curve over a longer draw distance rather than removing haze.
 	static float getFogDensityScale();
+
+	// The two image-changing lighting patches inherited from the x64 DX9 build
+	// (Direct3d11_ShaderSource transforms 2 and 3), opt-in. Rendering the data as
+	// authored is the default: that build tuned both by eye to compensate for vertex
+	// data its TRE layer was starving, and on well-formed data they over-brighten.
+	// ambientBoost re-enables the c_ambient scene-ambient add (colour only -- alpha
+	// stays the baked value). getDiffuseLightingFloor comes from diffuseFloorPercent;
+	// the DX9 build's tuned value was 85, and 0 disables the patch entirely.
+	static bool getAmbientBoost();
+	static float getDiffuseLightingFloor();
+
+	// The third inherited compensation: synthesize hemispheric colours (tangent 65% /
+	// back 30% of the key light's diffuse) for lights authored without them. Off by
+	// default -- a light authored without a hemisphere is asking for plain Lambert,
+	// and the synthesis erases the shade side of every character it touches.
+	static bool getSynthesizeHemisphericLight();
 	static int getFullscreenRefreshRate();
 	static int getSwapChainBufferCount();
 	static bool getAntiAlias();

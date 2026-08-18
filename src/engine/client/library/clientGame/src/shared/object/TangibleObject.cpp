@@ -1085,6 +1085,49 @@ void TangibleObject::addClientOnlyInteriorLayoutObject(Object * const object)
 	m_clientOnlyInteriorLayoutObjectList->push_back(Watcher<Object>(object));
 }
 
+// ----------------------------------------------------------------------
+/**
+ * Delete the interior-layout objects this building created and clear the list, so
+ * ClientInteriorLayoutManager::update() can re-create them from a reloaded layout.
+ *
+ * SCOPE IS DELIBERATE. This touches ONLY the objects the layout creator made. It is
+ * emphatically not "delete the client-cached contents of my cells": the toolkit's
+ * unpersisted placements are wsAddObject-minted snapshot nodes sitting in the same
+ * cells, and sweeping those would silently discard a modder's in-session work with no
+ * on-disk copy to recover from. The two populations are disjoint by construction --
+ * these objects are never given a NetworkId (ClientInteriorLayoutManager.cpp) while the
+ * snapshot nodes always have one.
+ *
+ * @return number of live objects deleted.
+ */
+
+int TangibleObject::clearClientOnlyInteriorLayoutObjects()
+{
+	if (!m_clientOnlyInteriorLayoutObjectList)
+		return 0;
+
+	int deleted = 0;
+
+	for (ClientOnlyInteriorLayoutObjectList::iterator i = m_clientOnlyInteriorLayoutObjectList->begin(); i != m_clientOnlyInteriorLayoutObjectList->end(); ++i)
+	{
+		//-- Watcher nulls itself when the object dies elsewhere; those entries are already gone.
+		Object * const object = i->getPointer();
+		if (!object)
+			continue;
+
+		if (object->isInWorld())
+			object->removeFromWorld();
+
+		delete object;
+		++deleted;
+	}
+
+	m_clientOnlyInteriorLayoutObjectList->clear();
+
+	return deleted;
+}
+
+
 //----------------------------------------------------------------------
 
 void TangibleObject::handleConditionModified (int oldCondition, int newCondition)

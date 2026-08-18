@@ -1,17 +1,8 @@
 // ======================================================================
 //
 // Direct3d9_PixelShaderConstantRegisters.h
-// Copyright 2001-2002 Sony Online Entertainment Inc.
-//
-// ======================================================================
-//
-// The pixel shader constant registers moved to clientGraphics/ShaderConstantRegisters.h. They describe
-// an asset format rather than anything specific to a Direct3D 9 backend, and a
-// second backend needs the same numbers -- two copies of an ABI is a divergence
-// waiting to happen.
-//
-// This file remains only so existing includes keep resolving. It will go when
-// the Direct3d9 backend does.
+// Copyright 2002 Sony Online Entertainment Inc.
+// All Rights Reserved.
 //
 // ======================================================================
 
@@ -20,7 +11,36 @@
 
 // ======================================================================
 
-#include "clientGraphics/ShaderConstantRegisters.h"
+// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
+
+// These values are encoded into the pixel shader data files.  Changing these
+// may invalidate all the pixel shaders and require them to be recompiled.
+
+// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
+
+enum Direct3d9_PixelShaderConstantRegisters
+{
+	PSCR_dot3LightDirection,
+	PSCR_dot3LightDiffuseColor,
+	PSCR_dot3LightSpecularColor,
+	PSCR_dot3LightTangentMinusDiffuseColor,
+	PSCR_dot3LightTangentMinusBackColor,
+	PSCR_textureFactor,
+	PSCR_textureFactor2,
+	PSCR_materialSpecularColor,
+
+	// keep this constant last, so that we can use multiple user constant registers
+	PSCR_userConstant,
+
+	PSCR_MAX
+};
+
+// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
+
+// These values are encoded into the pixel shader data files.  Changing these
+// may invalidate all the pixel shaders and require them to be recompiled.
+
+// ** WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING **
 
 // ======================================================================
 

@@ -23,6 +23,8 @@
 #include <map>
 #include <vector>
 #include <algorithm>
+#include <cstdint>
+#include <functional>
 
 // ======================================================================
 
@@ -286,7 +288,14 @@ int StaticShader::getTextureSortKey() const
 
 int StaticShader::getShaderTemplateSortKey() const
 {
-	return reinterpret_cast<int>(&getStaticShaderTemplate());
+	// Stable hash-to-int of the template pointer. Keeping the int return means
+	// the virtual interface, ShaderPrimitiveSorter::Entry.shaderTemplateSortKey
+	// (an int field) and its comparators do NOT widen -- no shared-header ABI
+	// cascade (D-06 review #3). On x64 a pointer is 64-bit; the old direct
+	// pointer-to-int cast dropped the high 32 bits (collision risk). The hash
+	// keeps the full pointer entropy; collisions cost only sort stability, never
+	// correctness.
+	return static_cast<int>(std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>(&getStaticShaderTemplate())));
 }
 
 // ----------------------------------------------------------------------

@@ -20,6 +20,7 @@
 #include "clientObject/InteriorEnvironmentBlock.h"
 #include "clientTerrain/ClientProceduralTerrainAppearance.h"
 #include "clientTerrain/EnvironmentBlock.h"
+#include "clientUserInterface/CuiManager.h"
 #include "sharedDebug/InstallTimer.h"
 #include "sharedFile/Iff.h"
 #include "sharedFoundation/PersistentCrcString.h"
@@ -98,6 +99,14 @@ namespace GameMusicManagerNamespace
 	bool ms_lastCombatState;
 	bool ms_lastDay;
 	bool ms_lastSpaceCombatState;
+
+	// Age of the current scene's music manager. The server's time-of-day sync
+	// lands seconds into the load and flips isDay() -- treating that as a real
+	// sunrise/sunset killed the planet first-play theme mid-load every zone-in.
+	// Day flips inside this window latch silently instead of firing
+	// E_sunrise/E_sunset.
+	float ms_sceneTime = 0.f;
+	float const ms_dayNightEventSuppressTime = 15.f;
 	float const s_spaceCombatMusicMinDistance = 1024.0f;
 	Timer ms_spaceCombatStateTimer(5.0f);
 	size_t ms_lastSpaceCombatEnterIndex = 0;
@@ -314,6 +323,7 @@ void GameMusicManager::remove ()
 	ms_lastDay = false;
 	ms_lastSpaceCombatState = false;
 	ms_overrideMusic = false;
+	ms_sceneTime = 0.f;
 }
 
 // ----------------------------------------------------------------------
@@ -373,6 +383,8 @@ void GameMusicManager::update(float const elapsedTime)
 	const TerrainObject* const terrainObject = TerrainObject::getConstInstance ();
 	if (!terrainObject)
 		return;
+
+	ms_sceneTime += elapsedTime;
 
 	const ClientProceduralTerrainAppearance* const clientProceduralTerrainAppearance = dynamic_cast<const ClientProceduralTerrainAppearance*> (terrainObject->getAppearance ());
 	EnvironmentBlock const * const currentEnvironmentBlock = clientProceduralTerrainAppearance ? clientProceduralTerrainAppearance->getCurrentEnvironmentBlock() : 0;
@@ -483,7 +495,7 @@ void GameMusicManager::update(float const elapsedTime)
 									ms_event = E_exit;
 							}
 							else
-								if (!combatState && (day != ms_lastDay))
+								if (!combatState && (day != ms_lastDay) && ms_sceneTime > ms_dayNightEventSuppressTime)
 								{
 									if (day)
 										ms_event = E_sunrise;
@@ -501,6 +513,18 @@ void GameMusicManager::update(float const elapsedTime)
 
 		if (ms_event != E_none || !(ms_currentMusicSoundId.isValid () && Audio::isSoundPlaying (ms_currentMusicSoundId)))
 		{
+			//-- scene-change music handoff: while the UI/title music is still
+			//   audible (including its stopMusic fade-out window), defer starting
+			//   the next track -- selection re-runs next frame with no state
+			//   consumed (first-played lists append below, ms_event clears below).
+			//   This preserves the fade-completes-THEN-new-track sequencing the
+			//   old blocking 1s pump in SwgCuiManager's scene-change listener
+			//   enforced; the pump itself is gone (a ~1.4s main-thread mega-stall
+			//   per zone-in). Inert in normal play -- the UI music is only
+			//   audible around scene changes.
+			if (CuiManager::isMusicPlaying ())
+				return;
+
 			const char* playMusicSoundTemplateName = 0;
 
 			switch (ms_event)

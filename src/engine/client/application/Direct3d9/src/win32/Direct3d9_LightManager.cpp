@@ -29,7 +29,10 @@
 #ifdef FIELD_OFFSET
 #undef FIELD_OFFSET
 #endif
-#define FIELD_OFFSET(type, field)    ((int)&(((type *)0)->field))
+// Phase 33 (X64-02 / BITS-02): cast the member pointer through pointer-width (size_t) before
+// narrowing to int -- the offset value is small (struct-relative) so the int result is unchanged on
+// both x86 and x64, but the direct (int)pointer cast truncated under /we4311 on x64.
+#define FIELD_OFFSET(type, field)    ((int)(size_t)&(((type *)0)->field))
 
 // ======================================================================
 
@@ -317,23 +320,26 @@ void Direct3d9_LightManager::setLights(const LightList &lightList)
 
 void Direct3d9_LightManager::setObeysLightScale(const bool obeysLightScale)
 {
-	// Diagnostic showed: with obeysLightScale=true, the parallelSpecular[0]
-	// slot gets a dim cool light (0.298,0.422,0.425) instead of the actual
-	// warm sun (0.769,0.624,0.435) that arrives when obeysLightScale=false.
-	// The scaled-intensity selection picks a different winner because the
-	// auxiliary light's scaled specular outranks the sun's. Character skin
-	// shaders set obeysLightScale=true, so they end up with the wrong, dim
-	// light and render dark. Force the unscaled path always: at noon the
-	// day/night ramp is ~1.0 anyway, and the missing scaling at deep night
-	// is preferable to characters going pitch-black at midday.
 	ms_obeysLightScale = obeysLightScale;
-	getPossiblyScaledDiffuseIntensity = &Light::getDiffuseIntensity;
-	getPossiblyScaledDiffuseColor = &Light::getDiffuseColor;
-	getPossiblyScaledDiffuseBackColor = &Light::getDiffuseBackColor;
-	getPossiblyScaledDiffuseTangentColor = &Light::getDiffuseTangentColor;
-	getPossiblyScaledSpecularIntensity = &Light::getSpecularIntensity;
-	getPossiblyScaledSpecularColor = &Light::getSpecularColor;
-	ms_dirty = true;
+	if (ms_obeysLightScale)
+	{
+		getPossiblyScaledDiffuseIntensity   = &Light::getScaledDiffuseIntensity;
+		getPossiblyScaledDiffuseColor       = &Light::getScaledDiffuseColor;
+		getPossiblyScaledDiffuseBackColor   = &Light::getScaledDiffuseBackColor;
+		getPossiblyScaledDiffuseTangentColor= &Light::getScaledDiffuseTangentColor;
+		getPossiblyScaledSpecularIntensity  = &Light::getScaledSpecularIntensity;
+		getPossiblyScaledSpecularColor      = &Light::getScaledSpecularColor;
+	}
+	else
+	{
+		getPossiblyScaledDiffuseIntensity   = &Light::getDiffuseIntensity;
+		getPossiblyScaledDiffuseColor       = &Light::getDiffuseColor;
+		getPossiblyScaledDiffuseBackColor   = &Light::getDiffuseBackColor;
+		getPossiblyScaledDiffuseTangentColor= &Light::getDiffuseTangentColor;
+		getPossiblyScaledSpecularIntensity  = &Light::getSpecularIntensity;
+		getPossiblyScaledSpecularColor      = &Light::getSpecularColor;
+	}
+	ms_dirty = true;	
 }
 
 // ----------------------------------------------------------------------
@@ -522,22 +528,6 @@ void Direct3d9_LightManager::selectLights()
 
 #ifdef VSPS
 
-namespace
-{
-	// Light colors should be non-negative; a negative diffuse coming out of
-	// the day/night ramp interpolator or an unscaled scene transition turns
-	// surfaces black (or worse, subtracts from ambient) in the HLSL because
-	// the diffuse term skips the saturate. Clamp at GPU upload so the bug
-	// surfaces as flat-lit instead of fully-black geometry.
-	inline void copyClampedRgb(VectorRgba &dst, VectorArgb const &src)
-	{
-		dst.r = src.r > 0.0f ? src.r : 0.0f;
-		dst.g = src.g > 0.0f ? src.g : 0.0f;
-		dst.b = src.b > 0.0f ? src.b : 0.0f;
-		dst.a = src.a;
-	}
-} // namespace
-
 void Direct3d9_LightManager::applyLights_vertexShader()
 {
 	LightData lightData;
@@ -547,25 +537,6 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 
 	{
 		lightData.ambient = ms_currentLights.ambient;
-		// Clamp negative -> 0 (physically impossible diffuse), then enforce a
-		// minimum scene ambient so characters whose shader pipeline relies on
-		// ambient (e.g. skinned customizable meshes with vColor0=0 and
-		// near-zero parallel sun) stay visible. Half-gray floor matches what
-		// SOE shipped via the GroundEnvironment ramps in normal play.
-		if (lightData.ambient.r < 0.0f)
-			lightData.ambient.r = 0.0f;
-		if (lightData.ambient.g < 0.0f)
-			lightData.ambient.g = 0.0f;
-		if (lightData.ambient.b < 0.0f)
-			lightData.ambient.b = 0.0f;
-		// Reasonable ambient floor for scenes that produce near-zero ambient.
-		float const minAmbient = 0.3f;
-		if (lightData.ambient.r < minAmbient)
-			lightData.ambient.r = minAmbient;
-		if (lightData.ambient.g < minAmbient)
-			lightData.ambient.g = minAmbient;
-		if (lightData.ambient.b < minAmbient)
-			lightData.ambient.b = minAmbient;
 	}
 
 	{
@@ -582,10 +553,16 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 				parallelSpecular.direction.z = -direction.z;
 
 				const VectorArgb &diffuseColor = (light->*getPossiblyScaledDiffuseColor)();
-				copyClampedRgb(parallelSpecular.diffuseColor, diffuseColor);
+				parallelSpecular.diffuseColor.r = diffuseColor.r;
+				parallelSpecular.diffuseColor.g = diffuseColor.g;
+				parallelSpecular.diffuseColor.b = diffuseColor.b;
+				parallelSpecular.diffuseColor.a = diffuseColor.a;
 
 				const VectorArgb &specularColor = (light->*getPossiblyScaledSpecularColor)();
-				copyClampedRgb(parallelSpecular.specularColor, specularColor);
+				parallelSpecular.specularColor.r = specularColor.r;
+				parallelSpecular.specularColor.g = specularColor.g;
+				parallelSpecular.specularColor.b = specularColor.b;
+				parallelSpecular.specularColor.a = specularColor.a;
 
 				if (i == 0)
 				{
@@ -642,19 +619,6 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 
 					VectorRgba alphaFadeAndBloomSettings = Direct3d9::getAlphaFadeAndBloomSettings();
 
-					// x64 character-lighting fix: when there is no parallel-spec
-					// light, the original code left dot3LightDiffuseColor at zero.
-					// h_specmap_bump.eft (humanoid skin/clothing) does
-					//   allDiffuseLight = saturate(vertexDiffuse + dot3LightDiffuseColor + ...)
-					// so a zero dot3 diffuse leaves characters lit only by the
-					// small vertexDiffuse term => very dark "unlit" look. Fall
-					// back to the scene ambient colour so characters get at least
-					// ambient-level lighting in scenes without a parallel-spec
-					// light, matching how the ambient term is used elsewhere.
-					pixelDot3Data.diffuseColor.r = lightData.ambient.r;
-					pixelDot3Data.diffuseColor.g = lightData.ambient.g;
-					pixelDot3Data.diffuseColor.b = lightData.ambient.b;
-
 					pixelDot3Data.diffuseColor.a = alphaFadeAndBloomSettings.r; //alphaFadeOpacityEnabled in diffuseColor.a
 					pixelDot3Data.specularColor.a = alphaFadeAndBloomSettings.a; //alphaFadeOpacity in specularColor.a
 					pixelDot3Data.tangentMinusDiffuseColor.a = alphaFadeAndBloomSettings.g; //bloomEnabled in tangentMinusDiffuseColor.a
@@ -680,7 +644,10 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 				parallel.direction.z = -direction.z;
 
 				const VectorArgb &diffuseColor = (light->*getPossiblyScaledDiffuseColor)();
-				copyClampedRgb(parallel.diffuseColor, diffuseColor);
+				parallel.diffuseColor.r = diffuseColor.r;
+				parallel.diffuseColor.g = diffuseColor.g;
+				parallel.diffuseColor.b = diffuseColor.b;
+				parallel.diffuseColor.a = diffuseColor.a;
 			}
 		}
 	}
@@ -700,7 +667,10 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 				pointSpecular.position.w = 1.0f;
 
 				const VectorArgb &diffuseColor = (light->*getPossiblyScaledDiffuseColor)();
-				copyClampedRgb(pointSpecular.diffuseColor, diffuseColor);
+				pointSpecular.diffuseColor.r = diffuseColor.r;
+				pointSpecular.diffuseColor.g = diffuseColor.g;
+				pointSpecular.diffuseColor.b = diffuseColor.b;
+				pointSpecular.diffuseColor.a = diffuseColor.a;
 
 				pointSpecular.attenuation.k0 = light->getConstantAttenuation();
 				pointSpecular.attenuation.k1 = light->getLinearAttenuation();
@@ -708,7 +678,10 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 				pointSpecular.attenuation.k3 = 0.0f;
 
 				const VectorArgb &specularColor = (light->*getPossiblyScaledSpecularColor)();
-				copyClampedRgb(pointSpecular.specularColor, specularColor);
+				pointSpecular.specularColor.r = specularColor.r;
+				pointSpecular.specularColor.g = specularColor.g;
+				pointSpecular.specularColor.b = specularColor.b;
+				pointSpecular.specularColor.a = specularColor.a;
 			}
 			else
 			{
@@ -732,7 +705,10 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 				point.position.w = 1.0f;
 
 				const VectorArgb &diffuseColor = (light->*getPossiblyScaledDiffuseColor)();
-				copyClampedRgb(point.diffuseColor, diffuseColor);
+				point.diffuseColor.r = diffuseColor.r;
+				point.diffuseColor.g = diffuseColor.g;
+				point.diffuseColor.b = diffuseColor.b;
+				point.diffuseColor.a = diffuseColor.a;
 
 				point.attenuation.k0 = light->getConstantAttenuation();
 				point.attenuation.k1 = light->getLinearAttenuation();
@@ -757,52 +733,19 @@ void Direct3d9_LightManager::applyLights_vertexShader()
 #ifdef VSPS
 
 void Direct3d9_LightManager::_vsps_setExtendedLightData(
-	HemisphericLightData &extendedParallelSpecular,
-	const Light *light,
-	const VectorArgb &diffuseColor,
-	float bloomEnabled)
+	HemisphericLightData &extendedParallelSpecular, 
+	const Light *light, 
+	const VectorArgb &diffuseColor, 
+	float bloomEnabled
+	)
 {
-	VectorArgb diffuseBackColor = (light->*getPossiblyScaledDiffuseBackColor)();
-	VectorArgb diffuseTangentColor = (light->*getPossiblyScaledDiffuseTangentColor)();
-
-	// x64 character-lighting fix.
-	// The h_specmap_bump.eft pixel shader's calculateHemisphericLighting() does:
-	//   light = vertexDiffuse + tmd + dot3Diffuse - max(0,dp)*tmd + min(0,dp)*tmb
-	// where tmd = tangentColor - diffuseColor, tmb = tangentColor - backColor.
-	// When the scene's parallel-spec light (the sun) is a plain directional
-	// light with NO hemispheric tangent/back colours set, both come back as
-	// (0,0,0). That makes tmd = -diffuseColor (e.g. -1.0), and the formula
-	// collapses to (vertexDiffuse + max(0,dp)*diffuseColor): every surface
-	// facing away from the sun renders at just the ~0.3 ambient floor, i.e.
-	// the "very dark / unlit" character look.
-	// When no hemispheric colours are supplied, synthesise a gentle ambient
-	// hemisphere from the light's own diffuse colour so the shader gets a
-	// sensible bright-but-shaded result instead of subtracting the light away.
-	{
-		float const tangentMag = diffuseTangentColor.r + diffuseTangentColor.g + diffuseTangentColor.b;
-		float const backMag = diffuseBackColor.r + diffuseBackColor.g + diffuseBackColor.b;
-		if (tangentMag <= 0.001f && backMag <= 0.001f)
-		{
-			// Horizon ~65% of the key light, ground bounce ~30%. This keeps the
-			// shadow side near (vertexDiffuse + 0.65*diffuse) ~ visible, while
-			// the lit side still reaches full diffuse.
-			diffuseTangentColor.r = diffuseColor.r * 0.65f;
-			diffuseTangentColor.g = diffuseColor.g * 0.65f;
-			diffuseTangentColor.b = diffuseColor.b * 0.65f;
-			diffuseTangentColor.a = diffuseColor.a;
-
-			diffuseBackColor.r = diffuseColor.r * 0.30f;
-			diffuseBackColor.g = diffuseColor.g * 0.30f;
-			diffuseBackColor.b = diffuseColor.b * 0.30f;
-			diffuseBackColor.a = diffuseColor.a;
-		}
-	}
-
+	const VectorArgb &diffuseBackColor = (light->*getPossiblyScaledDiffuseBackColor)();
 	extendedParallelSpecular.backColor.r = diffuseBackColor.r;
 	extendedParallelSpecular.backColor.g = diffuseBackColor.g;
 	extendedParallelSpecular.backColor.b = diffuseBackColor.b;
 	extendedParallelSpecular.backColor.a = diffuseBackColor.a;
 
+	const VectorArgb &diffuseTangentColor = (light->*getPossiblyScaledDiffuseTangentColor)();
 	extendedParallelSpecular.tangentColor.r = diffuseTangentColor.r;
 	extendedParallelSpecular.tangentColor.g = diffuseTangentColor.g;
 	extendedParallelSpecular.tangentColor.b = diffuseTangentColor.b;

@@ -14,7 +14,6 @@
 #include "sharedFoundation/PointerDeleter.h"
 #include "clientGraphics/Texture.h"
 
-#include <d3dx9.h>
 #include <algorithm>
 #include <map>
 
@@ -313,9 +312,10 @@ bool Direct3d9_RenderTarget::copyRenderTargetToNonRenderTargetTexture()
 			rMoveRect.right = ms_copyWidth;
 			rMoveRect.bottom = ms_copyHeight;
 
-			// copy the system memory surface to the user surface
-			hresult = D3DXLoadSurfaceFromSurface(ms_userSurface, NULL, &rMoveRect, ms_systemMemorySurface, NULL, &rMoveRect, D3DX_FILTER_NONE, 0);
-			FATAL_DX_HR("D3DXLoadSurfaceFromSurface failed %s", hresult);
+			// copy the system memory surface to the user surface (own-impl,
+			// Phase 33-03 / D-04a -- same dims, point copy; the helper FATALs
+			// on an unproven format pair, D-06 loud-fail)
+			Direct3d9_ownImplCopySurface(ms_userSurface, &rMoveRect, ms_systemMemorySurface, &rMoveRect);
 		}
 	}
 	

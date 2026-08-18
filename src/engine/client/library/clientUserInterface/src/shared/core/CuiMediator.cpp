@@ -928,24 +928,47 @@ void CuiMediator::release ()
 
 void CuiMediator::garbageCollect (bool force)
 {
-	for (MediatorVector::iterator it = s_mediators.begin (); it != s_mediators.end ();)
+	// CONSULT-48 (2026-06-23): RE-ENTRANCY GUARD -- the measured root of the intermittent shutdown UAF
+	// (eip=0 null-vtable call in deactivate()). A deactivate() running inside
+	// CuiWorkspace::updateMediatorEnabledStates (m_iteratingEnabledStates) cascades into
+	// SwgCuiAllTargets::removeUnusedStatusPages, which calls garbageCollect RE-ENTRANTLY; the nested
+	// delete -> CuiWorkspace::removeMediator violates that iteration invariant (DEBUG_FATAL in Debug, a
+	// use-after-free in Release). Block re-entry: a nested call defers to the outer/next pass -- refcount-0
+	// mediators are reaped by the continuing loop (force=true at shutdown) or the next frame's collect.
+	// Normal (non-re-entrant) collection is unchanged.
+	static bool s_collecting = false;
+	if (s_collecting)
+		return;
+	s_collecting = true;
+
+	// Fix2 (CONSULT-48 robustness): erase the entry BEFORE deactivate()/delete (which can mutate
+	// s_mediators via a cascade), and restart the scan after each removal so a re-entrant erase can never
+	// invalidate a live iterator. O(n^2) worst-case but n is small (teardown / a few collects per frame).
+	bool removedAny = true;
+	while (removedAny)
 	{
-		CuiMediator * const mediator = NON_NULL (*it);
-
-		if (mediator->getRefCount () == 0 && (force || !mediator->isOpenNextFrame ()))
+		removedAny = false;
+		for (MediatorVector::iterator it = s_mediators.begin (); it != s_mediators.end (); ++it)
 		{
-			REPORT_LOG_PRINT (s_debugMediatorCollection, 
-				(" :: CuiMediator::garbageCollect () mediator on [%s] [%s]\n", mediator->getMediatorDebugName ().c_str (), mediator->getPage ().GetFullPath ().c_str ()));
+			CuiMediator * const mediator = NON_NULL (*it);
 
-			mediator->deactivate ();
-			it = s_mediators.erase (it);
-			delete mediator;
+			if (mediator->getRefCount () == 0 && (force || !mediator->isOpenNextFrame ()))
+			{
+				REPORT_LOG_PRINT (s_debugMediatorCollection,
+					(" :: CuiMediator::garbageCollect () mediator on [%s] [%s]\n", mediator->getMediatorDebugName ().c_str (), mediator->getPage ().GetFullPath ().c_str ()));
+
+				s_mediators.erase (it);   // erase BEFORE deactivate/delete (cascade-safe; the re-entrancy guard already blocks nested GC)
+				mediator->deactivate ();
+				delete mediator;
+				removedAny = true;
+				break;                    // s_mediators may have mutated -> restart the scan
+			}
 		}
-		else
-			++it;
 	}
 
-	if (UIManager::isUIReady()) 
+	s_collecting = false;
+
+	if (UIManager::isUIReady())
 	{
 		UIManager::gUIManager().garbageCollect();
 	}
@@ -1467,16 +1490,17 @@ UIBaseObject * CuiMediator::getCodeDataObject (UIPage *rootPage, const UIData * 
 		
 		if (!result)
 		{
-			//-- demoted from FATAL to WARNING so vanilla NGE-retail UIs that
-			// don't have all post-launch widgets keep working.
-			WARNING(true, ("Unable to find CodeData object '%s' [%s] from [%s] for [%s]", name, path.c_str(), rootPage->GetFullPath().c_str(), m_mediatorDebugName.c_str()));
+			// Strict (default): stock FATAL. strictData=false: warn and return
+			// NULL so vanilla NGE-retail UIs missing post-launch widgets keep
+			// working through callers' existing null checks.
+			STRICT_DATA_FATAL(!optional, ("Unable to find CodeData object '%s' [%s] from [%s] for [%s]", name, path.c_str(), rootPage->GetFullPath().c_str(), m_mediatorDebugName.c_str()));
 
 			return 0;
 		}
-		
+
 		if (result && !result->IsA (id))
 		{
-			WARNING(true, ("CodeData object request type mismatch from '%s'. Requested '%s', type %d [%s], found type %s - returning NULL\n",
+			STRICT_DATA_FATAL(true, ("CodeData object request type mismatch from '%s'. Requested '%s', type %d [%s], found type %s - returning NULL",
 						   rootPage->GetFullPath().c_str(), name, id, path.c_str(), result->GetTypeName()));
 			result = 0;
 		}
@@ -1484,14 +1508,13 @@ UIBaseObject * CuiMediator::getCodeDataObject (UIPage *rootPage, const UIData * 
 	else
 	{
 		result = rootPage->GetChild (name);
-		// Vanilla NGE-retail UIs are missing many widgets that post-2008
-		// patches added. Demote the FATAL to a warning so individual UI
-		// mediators don't have to be patched one-by-one - they'll see a
-		// NULL `result` and (mostly) fall back via existing null checks
-		// or our subsequent patches.
+		// Strict (default): stock FATAL. strictData=false: warn and hand the
+		// caller a NULL - vanilla NGE-retail UIs are missing many widgets that
+		// post-2008 patches added, and callers (mostly) fall back via existing
+		// null checks.
 		if (!result && !optional)
 		{
-			DEBUG_WARNING(true, ("Unable to find CodeData property '%s' from [%s] for [%s]\n", name, m_thePage.GetFullPath().c_str(), m_mediatorDebugName.c_str()));
+			STRICT_DATA_FATAL(true, ("Unable to find CodeData property '%s' from [%s] for [%s]", name, m_thePage.GetFullPath().c_str(), m_mediatorDebugName.c_str()));
 		}
 	}
 

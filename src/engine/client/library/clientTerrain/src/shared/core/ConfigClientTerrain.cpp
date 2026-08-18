@@ -33,6 +33,7 @@ namespace
 
 	bool  ms_enableFlora;
 	bool  ms_preloadGroups;
+	int   ms_terrainPreloadBudgetMs;
 
 	bool  ms_disableTerrainClouds;
 
@@ -137,6 +138,13 @@ bool ConfigClientTerrain::getEnableFlora ()
 bool ConfigClientTerrain::getPreloadGroups ()
 {
 	return ms_preloadGroups;
+}
+
+//-------------------------------------------------------------------
+
+int ConfigClientTerrain::getTerrainPreloadBudgetMs ()
+{
+	return ms_terrainPreloadBudgetMs;
 }
 
 //-------------------------------------------------------------------
@@ -281,6 +289,13 @@ void ConfigClientTerrain::install()
 	KEY_FLOAT  (heightBiasFactor,                    8);
 	KEY_BOOL   (enableFlora,                         true);
 	KEY_BOOL   (preloadGroups,                       PRODUCTION ? true : false);
+
+	// CONSULT-59: per-frame time budget (ms) for the incremental terrain asset
+	// preload (shader templates + flora appearances) during scene load. The old
+	// behavior -- the ENTIRE planet preloaded synchronously inside the GroundScene
+	// constructor -- froze the main loop 3-4.5s (watchdog-convicted 2026-07-04).
+	// 0 (or negative) restores the old single-shot synchronous preload.
+	KEY_INT    (terrainPreloadBudgetMs,              40);
 
 	KEY_BOOL   (disableTerrainClouds,                true);
 

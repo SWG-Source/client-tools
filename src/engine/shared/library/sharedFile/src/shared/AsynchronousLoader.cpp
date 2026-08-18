@@ -114,6 +114,7 @@ namespace AsynchronousLoaderNamespace
 #endif
 	int                                         ms_numberOfCachedBytes;
 	int                                         ms_numberOfPostponedRequests;
+	bool                                        ms_drainAllCallbacks;
 	int const                                   cms_postponeThreshold = 8 * 1024 * 1024;
 	int                                         ms_enabled;
 	ThreadHandle                                ms_threadHandle;
@@ -242,7 +243,10 @@ void AsynchronousLoaderNamespace::remove()
 
 	submitRequest(request);
 
-	// wait for all the requests to be serviced
+	// wait for all the requests to be serviced (bypass the per-frame
+	// callback budgets or this drain-to-empty loop can take unbounded time)
+	ms_drainAllCallbacks = true;
+
 	bool empty = false;
 	while (!empty)
 	{
@@ -253,6 +257,8 @@ void AsynchronousLoaderNamespace::remove()
 			empty = ms_pendingRequests.empty() && ms_completedRequests.empty();
 		ms_mutex.leave();
 	}
+
+	ms_drainAllCallbacks = false;
 
 	// make sure the thread is dead
 	ms_threadHandle->wait();
@@ -586,7 +592,9 @@ void AsynchronousLoader::processCallbacks()
 	if (!ms_suspendCallbacks)
 #endif
 	{
-		int callbacksAllowed = ConfigSharedFile::getAsynchronousLoaderCallbacksPerFrame();
+		int callbacksAllowed = ms_drainAllCallbacks ? 0 : ConfigSharedFile::getAsynchronousLoaderCallbacksPerFrame();
+		int const timeBudgetMs = ms_drainAllCallbacks ? 0 : ConfigSharedFile::getAsynchronousLoaderCallbackTimeBudgetMs();
+		unsigned long const drainStartMs = timeBudgetMs > 0 ? Clock::timeMs() : 0;
 
 		// look for completed requests to service
 		for (;;)
@@ -684,6 +692,9 @@ void AsynchronousLoader::processCallbacks()
 			ms_requestMemoryBlockManager->free(request);
 
 			if (callbacksAllowed && --callbacksAllowed == 0)
+				break;
+
+			if (timeBudgetMs > 0 && (Clock::timeMs() - drainStartMs) >= static_cast<unsigned long>(timeBudgetMs))
 				break;
 		}
 	}

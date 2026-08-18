@@ -35,6 +35,13 @@ public:
 	virtual void        preloadAssets () const;
 	virtual void        garbageCollect () const;
 
+	// CONSULT-59: incremental preload. preloadAssets() only captures the asset
+	// name lists (cheap); preloadAssetsStep() performs fetches under the
+	// [ClientTerrain] terrainPreloadBudgetMs per-frame budget and returns true
+	// once everything is fetched. Pumped by ClientProceduralTerrainAppearance.
+	bool                preloadAssetsStep () const;
+	bool                isPreloadComplete () const;
+
 private:
 
 	static void remove ();

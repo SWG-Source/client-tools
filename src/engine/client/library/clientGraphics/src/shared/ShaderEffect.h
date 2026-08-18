@@ -17,6 +17,9 @@ class VertexBufferFormat;
 
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/PersistentCrcString.h"
 
+#include <cstdint>
+#include <functional>
+
 // ======================================================================
 
 class ShaderEffect
@@ -90,7 +93,11 @@ inline bool ShaderEffect::containsPrecalculatedVertexLighting() const
 
 inline int ShaderEffect::getShaderImplementationSortKey() const
 {
-	return reinterpret_cast<int>(m_implementation);
+	// Stable hash-to-int of the implementation pointer. The body changes but the
+	// signature/return type does NOT, so consumers (and the sort comparators) are
+	// unaffected -- no ABI cascade (D-06 review #3). Avoids the x64 high-32-bit
+	// truncation of the old direct pointer-to-int cast.
+	return static_cast<int>(std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>(m_implementation)));
 }
 
 // ======================================================================

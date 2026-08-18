@@ -54,6 +54,8 @@ public:
 
 	static bool getAntiAlias();
 
+	static bool getShaderCachePreload();
+
 };
 
 // ======================================================================

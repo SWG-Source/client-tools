@@ -3345,4 +3345,25 @@ void SwgCuiChatWindow::setGroundHudChatWindowOpacities(float val)
 	}
 }
 
+//----------------------------------------------------------------------
+//
+// Engine-hookpoint advertisement -- PRIVATE construction-funnel address provider
+// (24-§4 4d). SwgCuiChatWindow::createNewWindow is PRIVATE [SwgCuiChatWindow.h:258],
+// so &createNewWindow can only be taken in a TU with member access (this TU -- via
+// the friend decl in SwgCuiChatWindow.h). The contract advertises this real entry as
+// a DETOUR target so Utinni intercepts every chat-window construction (the requested
+// ctor real-entry is infeasible -- you cannot address a ctor in C++; createNewWindow
+// is the sole funnel to `new SwgCuiChatWindow` at line 1549). createNewWindow is
+// STATIC -> &fn is a plain function pointer (no multiple-inheritance PMF inflation,
+// no this-adjust delta), so unlike the GroundScene MI real-entry accessors this needs
+// no MI-PMF decode -- just return the address. Declared extern in the exe-local
+// engine_chatWindow_forward.h (NOT pulled by any gl0X plugin TU -- no shared-header
+// ABI cascade). Both platforms (x64 port 2026-08-15).
+//----------------------------------------------------------------------
+
+void * engine_chatWindowCreateNewWindowEntry()
+{
+	return (void *)&SwgCuiChatWindow::createNewWindow;   // private static [SwgCuiChatWindow.h:258]; legal in this TU (friend)
+}
+
 //======================================================================

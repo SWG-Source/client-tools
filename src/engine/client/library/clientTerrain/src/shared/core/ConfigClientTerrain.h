@@ -33,6 +33,7 @@ public:
 
 	static bool  getEnableFlora ();
 	static bool  getPreloadGroups ();
+	static int   getTerrainPreloadBudgetMs ();
 
 	static bool  getDisableTerrainClouds ();
 	static bool  getDisableTimeOfDay ();

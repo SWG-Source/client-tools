@@ -9,6 +9,7 @@
 #include "Direct3d11_VertexShaderData.h"
 
 #include "Direct3d11_Device.h"
+#include "Direct3d11_EmbeddedShaderCorpus.h"
 #include "Direct3d11_InputLayoutCache.h"
 #include "Direct3d11_Metrics.h"
 #include "Direct3d11_ShaderCompiler.h"
@@ -18,6 +19,7 @@
 
 #include "sharedFoundation/Tag.h"
 
+#include <cstring>
 #include <vector>
 
 // ======================================================================
@@ -120,15 +122,33 @@ void Direct3d11_VertexShaderData::parseHeader()
 		return;
 	}
 
+	char const *text = m_vertexShader.m_text;
+
 	if (header.language != Direct3d11_ShaderPrograms::L_hlsl)
 	{
-		// Refused loudly rather than half-compiled. The asset pipeline converts these offline
-		// and client-assets carries the results, so an assembly program arriving here means
-		// the converted overlay is not deployed.
-		WARNING(true, ("Direct3d11: vertex program '%s' is %s. D3DCompile has no assembler; the converted HLSL in client-assets is missing from the search path.",
-					   m_vertexShader.getFilename(),
-					   (header.language == Direct3d11_ShaderPrograms::L_assembly) ? "Direct3D 9 assembly" : "not marked as HLSL"));
-		return;
+		// Stock-data escape hatch: the shelf dataset still ships many vertex programs as
+		// D3D9 assembly. The embedded corpus carries the converted HLSL; its copy is
+		// re-parsed because the tag block that drives the TEXCOORD mapping belongs to the
+		// translation, not to the assembly it replaces. A mounted corpus never gets here --
+		// its copies arrive from TreeFile already marked //hlsl.
+		char const *const builtin = Direct3d11_EmbeddedShaderCorpus::lookupProgram(m_vertexShader.getFilename());
+		if (builtin
+			&& Direct3d11_ShaderPrograms::parseHeader(builtin, static_cast<int>(strlen(builtin)), header)
+			&& header.language == Direct3d11_ShaderPrograms::L_hlsl)
+		{
+			WARNING(true, ("Direct3d11: '%s' substituted with the embedded corpus translation (stock-data assembly program).", m_vertexShader.getFilename()));
+			text = builtin;
+		}
+		else
+		{
+			// Refused loudly rather than half-compiled. The asset pipeline converts these offline
+			// and client-assets carries the results, so an assembly program arriving here means
+			// the converted overlay is not deployed and the embedded corpus has no translation.
+			WARNING(true, ("Direct3d11: vertex program '%s' is %s. D3DCompile has no assembler; the converted HLSL in client-assets is missing from the search path.",
+						   m_vertexShader.getFilename(),
+						   (header.language == Direct3d11_ShaderPrograms::L_assembly) ? "Direct3D 9 assembly" : "not marked as HLSL"));
+			return;
+		}
 	}
 
 	DEBUG_WARNING(header.tooManyTags, ("Direct3d11: vertex program '%s' declares more than %d texture coordinate sets; the engine supports %d.",
@@ -151,7 +171,7 @@ void Direct3d11_VertexShaderData::parseHeader()
 		m_textureCoordinateSetTags->push_back(ConvertStringToTag(tagName));
 	}
 
-	m_source = m_vertexShader.m_text + header.sourceOffset;
+	m_source = text + header.sourceOffset;
 	m_sourceLength = header.sourceLength;
 	m_header = header;
 }

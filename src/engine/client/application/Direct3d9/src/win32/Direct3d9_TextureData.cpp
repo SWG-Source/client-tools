@@ -17,7 +17,6 @@
 #include "sharedFoundation/Os.h"
 #include "clientGraphics/TextureFormatInfo.h"
 
-#include <d3dx9tex.h>
 #include <map>
 
 // ======================================================================
@@ -29,6 +28,131 @@ const Tag TAG_ENVM = TAG(E,N,V,M);
 Direct3d9_TextureData::PixelFormatInfo     Direct3d9_TextureData::ms_pixelFormatInfoArray[TF_Count];
 MemoryBlockManager                        *Direct3d9_TextureData::ms_memoryBlockManager;
 Direct3d9_TextureData::GlobalTextureList  *Direct3d9_TextureData::ms_globalTextureList;
+
+// ======================================================================
+// Own-impl D3DXLoadSurfaceFromSurface replacement (Phase 33-03 / D-04a).
+// See Direct3d9_TextureData.h for the contract. D3D11-parity bridge: same
+// per-format handling as the proven Direct3d11_TextureData lock-bridge
+// (same-format memcpy + the one runtime 24bpp->32bpp expansion), loud-FATAL
+// on every other pair so an unproven runtime case trips the wire (D-06)
+// instead of silently corrupting.
+
+void Direct3d9_ownImplCopySurface(
+	IDirect3DSurface9 *dst, RECT const *dstRect,
+	IDirect3DSurface9 *src, RECT const *srcRect)
+{
+	NOT_NULL(dst);
+	NOT_NULL(src);
+
+	D3DSURFACE_DESC srcDesc;
+	D3DSURFACE_DESC dstDesc;
+	HRESULT hr = src->GetDesc(&srcDesc);
+	FATAL_DX_HR("Direct3d9_ownImplCopySurface: src GetDesc failed %s", hr);
+	hr = dst->GetDesc(&dstDesc);
+	FATAL_DX_HR("Direct3d9_ownImplCopySurface: dst GetDesc failed %s", hr);
+
+	// resolve the copy region (NULL rect == whole surface)
+	LONG const srcLeft   = srcRect ? srcRect->left   : 0;
+	LONG const srcTop    = srcRect ? srcRect->top    : 0;
+	LONG const srcRight  = srcRect ? srcRect->right  : static_cast<LONG>(srcDesc.Width);
+	LONG const srcBottom = srcRect ? srcRect->bottom : static_cast<LONG>(srcDesc.Height);
+	LONG const dstLeft   = dstRect ? dstRect->left   : 0;
+	LONG const dstTop    = dstRect ? dstRect->top    : 0;
+	LONG const dstRight  = dstRect ? dstRect->right  : static_cast<LONG>(dstDesc.Width);
+	LONG const dstBottom = dstRect ? dstRect->bottom : static_cast<LONG>(dstDesc.Height);
+
+	LONG const copyWidth  = srcRight  - srcLeft;
+	LONG const copyHeight = srcBottom - srcTop;
+
+	// size-mismatch is a scaled blit -- unsupported (mirrors
+	// Direct3d11_TextureData.cpp:979 FATAL-on-size-mismatch).
+	FATAL((dstRight - dstLeft) != copyWidth || (dstBottom - dstTop) != copyHeight,
+		("Direct3d9_ownImplCopySurface: src/dst rect size mismatch (scaled blit) not supported; %ldx%ld -> %ldx%ld",
+		 static_cast<long>(copyWidth), static_cast<long>(copyHeight),
+		 static_cast<long>(dstRight - dstLeft), static_cast<long>(dstBottom - dstTop)));
+
+	bool const sameFormat = (srcDesc.Format == dstDesc.Format);
+	// Any pair within the uncompressed B8G8R8(+X8/A8) family is a byte-order-
+	// identical repack: in memory all three are B,G,R[,X|A] on little-endian, so
+	// only bytes-per-pixel and the high (X/alpha) byte differ -- never a channel
+	// swap. This covers every lock readback/writeback translationTable pair that
+	// fires at runtime in either direction: R8G8B8 <-> X8R8G8B8 <-> A8R8G8B8
+	// (24<->32 expand/contract, X8<->A8 repack). Mirrors the D3D11 bridge
+	// (Direct3d11_TextureData.cpp:633-639,839-842). Genuinely-encoded formats
+	// (DXT*, 16-bit packed, float) still FATAL -- the engine pre-decompresses
+	// those to a native format before the lock, so they must not reach here.
+	bool const srcBGRFamily =
+		   srcDesc.Format == D3DFMT_R8G8B8
+		|| srcDesc.Format == D3DFMT_X8R8G8B8
+		|| srcDesc.Format == D3DFMT_A8R8G8B8;
+	bool const dstBGRFamily =
+		   dstDesc.Format == D3DFMT_R8G8B8
+		|| dstDesc.Format == D3DFMT_X8R8G8B8
+		|| dstDesc.Format == D3DFMT_A8R8G8B8;
+	bool const bgrRepack = !sameFormat && srcBGRFamily && dstBGRFamily;
+
+	FATAL(!sameFormat && !bgrRepack,
+		("Direct3d9_ownImplCopySurface: unsupported format pair src=0x%08x dst=0x%08x -- own-impl bridge handles same-format and the uncompressed B8G8R8/X8R8G8B8/A8R8G8B8 repack family only (D-06 loud-fail; DXT/16-bit/float must be pre-decompressed before lock -- extend the bridge, do NOT silently corrupt)",
+		 static_cast<unsigned>(srcDesc.Format), static_cast<unsigned>(dstDesc.Format)));
+
+	RECT srcLockRect = { srcLeft, srcTop, srcRight, srcBottom };
+	RECT dstLockRect = { dstLeft, dstTop, dstRight, dstBottom };
+
+	D3DLOCKED_RECT srcLocked;
+	D3DLOCKED_RECT dstLocked;
+	hr = src->LockRect(&srcLocked, &srcLockRect, D3DLOCK_READONLY);
+	FATAL_DX_HR("Direct3d9_ownImplCopySurface: src LockRect failed %s", hr);
+	hr = dst->LockRect(&dstLocked, &dstLockRect, 0);
+	if (FAILED(hr))
+	{
+		src->UnlockRect();
+		FATAL_DX_HR("Direct3d9_ownImplCopySurface: dst LockRect failed %s", hr);
+	}
+
+	uint8 const * srcBase = static_cast<uint8 const *>(srcLocked.pBits);
+	uint8       * dstBase = static_cast<uint8 *>(dstLocked.pBits);
+
+	if (sameFormat)
+	{
+		// straight row-by-row copy honoring each surface's pitch. D3DX_FILTER_NONE
+		// == point copy, so a byte-exact span copy is correct. rowBytes is the
+		// logical span width, not the (padded) pitch. The same-format sites in
+		// this plugin are 32bpp (XRGB/ARGB) RT/texture copies; the 24bpp case is
+		// also handled for completeness.
+		int const bytesPerPixel = (srcDesc.Format == D3DFMT_R8G8B8) ? 3 : 4;
+		size_t const rowBytes = static_cast<size_t>(copyWidth) * static_cast<size_t>(bytesPerPixel);
+		for (LONG y = 0; y < copyHeight; ++y)
+		{
+			memcpy(dstBase + static_cast<size_t>(y) * static_cast<size_t>(dstLocked.Pitch),
+			       srcBase + static_cast<size_t>(y) * static_cast<size_t>(srcLocked.Pitch),
+			       rowBytes);
+		}
+	}
+	else // bgrRepack: B8G8R8(+X8/A8) family -- byte order identical, only bpp/alpha differ
+	{
+		int const srcBpp = (srcDesc.Format == D3DFMT_R8G8B8) ? 3 : 4;
+		int const dstBpp = (dstDesc.Format == D3DFMT_R8G8B8) ? 3 : 4;
+		bool const srcHasAlpha = (srcDesc.Format == D3DFMT_A8R8G8B8);
+		for (LONG y = 0; y < copyHeight; ++y)
+		{
+			uint8 const * srcRow = srcBase + static_cast<size_t>(y) * static_cast<size_t>(srcLocked.Pitch);
+			uint8       * dstRow = dstBase + static_cast<size_t>(y) * static_cast<size_t>(dstLocked.Pitch);
+			for (LONG x = 0; x < copyWidth; ++x)
+			{
+				dstRow[x * dstBpp + 0] = srcRow[x * srcBpp + 0];  // B
+				dstRow[x * dstBpp + 1] = srcRow[x * srcBpp + 1];  // G
+				dstRow[x * dstBpp + 2] = srcRow[x * srcBpp + 2];  // R
+				if (dstBpp == 4)                                   // dst is X8/A8R8G8B8:
+					dstRow[x * dstBpp + 3] = srcHasAlpha ? srcRow[x * srcBpp + 3] : 0xFF;  // preserve src A, else opaque
+			}
+		}
+	}
+
+	hr = dst->UnlockRect();
+	FATAL_DX_HR("Direct3d9_ownImplCopySurface: dst UnlockRect failed %s", hr);
+	hr = src->UnlockRect();
+	FATAL_DX_HR("Direct3d9_ownImplCopySurface: src UnlockRect failed %s", hr);
+}
 
 static const D3DFORMAT translationTable[] =
 {
@@ -127,15 +251,6 @@ void Direct3d9_TextureData::remove(void)
 
 // ----------------------------------------------------------------------
 
-static int s_liveInstanceCount = 0; // MEMPROBE: live instance counter (strip with MEMPROBE)
-
-int Direct3d9_TextureData::getLiveInstanceCount()
-{
-	return s_liveInstanceCount;
-}
-
-// ----------------------------------------------------------------------
-
 void Direct3d9_TextureData::releaseAllGlobalTextures(void)
 {
 	while (!ms_globalTextureList->empty())
@@ -154,7 +269,6 @@ void *Direct3d9_TextureData::operator new(size_t size)
 	DEBUG_FATAL(size != sizeof (Direct3d9_TextureData), ("bad size"));
 	DEBUG_FATAL(size != static_cast<size_t> (ms_memoryBlockManager->getElementSize()), ("installed with bad size"));
 
-	++s_liveInstanceCount; // MEMPROBE
 	return ms_memoryBlockManager->allocate();
 }
 
@@ -163,7 +277,6 @@ void *Direct3d9_TextureData::operator new(size_t size)
 void Direct3d9_TextureData::operator delete(void *pointer)
 {
 	NOT_NULL(ms_memoryBlockManager);
-	--s_liveInstanceCount; // MEMPROBE
 	ms_memoryBlockManager->free(pointer);
 }
 
@@ -556,9 +669,13 @@ void Direct3d9_TextureData::lock(LockData &lockData)
 			source.right  = lockData.getX() + lockData.getWidth();
 			source.bottom = lockData.getY() + lockData.getHeight();
 
-			// copy and convert the texture bits
-			hresult = D3DXLoadSurfaceFromSurface(plainSurface, NULL, NULL, surface, NULL, &source, D3DX_FILTER_NONE, 0);
-			FATAL_DX_HR("D3DXLoadSurfaceFromSurface failed %s", hresult);
+			// copy and convert the texture bits into the user-format scratch
+			// surface (own-impl, Phase 33-03 / D-04a). The helper handles
+			// same-format + the TF_RGB_888->XRGB/ARGB_8888 24->32 expansion and
+			// FATALs on any other pair (D-06 loud-fail) -- the texture was
+			// already created in m_destFormat, so at runtime this is either a
+			// same-format readback or the 24->32 promotion.
+			Direct3d9_ownImplCopySurface(plainSurface, NULL, surface, &source);
 
 			// release the d3d surface
 			surface->Release();
@@ -611,8 +728,11 @@ void Direct3d9_TextureData::unlock(LockData &lockData)
 		dest.top    = lockData.getY();
 		dest.right  = lockData.getX() + lockData.getWidth();
 		dest.bottom = lockData.getY() + lockData.getHeight();
-		hresult = D3DXLoadSurfaceFromSurface(surface, NULL, &dest, plainSurface, NULL, NULL, D3DX_FILTER_NONE, 0);
-		FATAL_DX_HR("D3DXLoadSurfaceFromSurface failed %s", hresult);
+		// own-impl (Phase 33-03 / D-04a): write the user-format scratch surface
+		// back into the GPU texture surface. Same-format or the TF_RGB_888->
+		// XRGB/ARGB_8888 24->32 expansion (engine fills 24bpp, GPU stores 32bpp);
+		// the helper FATALs on any other pair (D-06 loud-fail).
+		Direct3d9_ownImplCopySurface(surface, &dest, plainSurface, NULL);
 
 		// free the resources
 		surface->Release();
@@ -689,8 +809,12 @@ void  Direct3d9_TextureData::copyFrom(int surfaceLevel, TextureGraphicsData cons
 		FATAL_DX_HR("Direct3d9_TextureData::copyFrom() GetSurfaceLevel dst failed %s", hresult);
 	}
 
-	HRESULT const hresult = D3DXLoadSurfaceFromSurface(surfaceDst, NULL, &rectDst, surfaceSrc, NULL, &rectSrc, D3DX_FILTER_NONE, 0);
-	FATAL_DX_HR("Direct3d9_TextureData::copyFrom() D3DXLoadSurfaceFromSurface failed %s", hresult); 
+	// own-impl (Phase 33-03 / D-04a): tex->tex point copy. The sole caller
+	// (ShaderPrimitiveSorter.cpp:569, PostProcessingEffectsManager scratch-buffer
+	// copy) passes identical src/dst dims and the same ARGB_8888 format both
+	// sides; the helper FATALs on a size mismatch (mirrors
+	// Direct3d11_TextureData.cpp:979) or an unproven format pair (D-06).
+	Direct3d9_ownImplCopySurface(surfaceDst, &rectDst, surfaceSrc, &rectSrc);
 
 	surfaceDst->Release();
 	surfaceSrc->Release();

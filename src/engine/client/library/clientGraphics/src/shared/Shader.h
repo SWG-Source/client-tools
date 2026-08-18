@@ -66,16 +66,16 @@ private:
 
 private:
 
-	mutable int            m_users;
+	// THREADING (2026-07-03): fetch/release run on BOTH the main thread (render-path
+	// PrimitiveNode fetch/release, ShaderCache::alter releases) and the ClientTerrain
+	// worker (fetchModifiable clones during chunk builds). A plain ++/-- can lose an
+	// update and drive a live shader to `delete this`. Interlocked in Shader.cpp --
+	// fetch() moved out-of-line (a header inline would need <intrin.h> in a shared
+	// header the gl0X plugins compile). volatile long is layout-identical to int on
+	// Win32/x64 -- no ABI change, but rebuild ALL plugin DLLs (AGENTS.md cascade trap).
+	mutable volatile long  m_users;
 	const ShaderTemplate &m_template;
 };
-
-// ======================================================================
-
-inline void Shader::fetch() const
-{
-	++m_users;
-}
 
 // ----------------------------------------------------------------------
 

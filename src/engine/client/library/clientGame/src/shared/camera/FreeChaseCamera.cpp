@@ -857,6 +857,76 @@ float FreeChaseCamera::alter (float elapsedTime)
 			move_o (Vector::negativeUnitZ * m_currentZoom);
 	}
 
+	//-- CONSULT-65 round 2 (2026-07-06): derive the camera's CELL from its own FINAL
+	//   position instead of leaving it force-copied from the target (the copy at the
+	//   top of this function). The chase camera lags meters behind the player, so
+	//   running through a doorway leaves a window where the camera is TAGGED in the
+	//   player's new cell while its eye is still in the old one -- dPVS then roots
+	//   visibility at the wrong cell for the eye (the doorway portal backface-culls)
+	//   and whole cells, including the avatar, vanish until the camera physically
+	//   catches up. Signature: stable while standing still, cuts in/out on movement
+	//   through portals; the camera collision ray sees no obstruction (open doorway)
+	//   so no pull-in fires. Walk the short player->camera segment through the portal
+	//   graph -- the same loop CellProperty::Notification::positionChanged uses -- so
+	//   the player's authoritative cell anchors the derivation and the camera's
+	//   per-frame teleports cannot desync it. The camera is never MOVED by this
+	//   block, only re-tagged -- it does not change camera feel.
+	if (m_target)
+	{
+		CellProperty * currentCell = const_cast<CellProperty *>(m_target->getParentCell ());
+		if (currentCell)
+		{
+			Vector start = m_target->getPosition_w ();
+			Vector end = getPosition_w ();
+
+			//-- lift the segment slightly so doorway portals sitting on the terrain
+			//   are not missed (same trick as the portal-crossing notification)
+			start.y += 0.1f;
+			end.y += 0.1f;
+
+			CellProperty * lastCell = NULL;
+			CellProperty * derivedCell = currentCell;
+
+			while (currentCell)
+			{
+				Vector const cellStart = currentCell->getOwner ().rotateTranslate_w2o (start);
+				Vector const cellEnd = currentCell->getOwner ().rotateTranslate_w2o (end);
+
+				float time = 0.0f;
+				CellProperty * const nextCell = currentCell->getDestinationCell (cellStart, cellEnd, time);
+
+				if (time == 1.0f || !nextCell || nextCell == currentCell || nextCell == lastCell)
+					break;
+
+				//-- CONSULT-65 fix 5: knife-edge hysteresis. If the portal plane sits
+				//   within 20cm of the camera eye (the crossing happens essentially AT
+				//   the segment end), do NOT take the crossing -- keep the near-side
+				//   (player-side) cell. Re-tagging exactly at the plane made the
+				//   boundary portal backface-cull from the far root (probe signature
+				//   tested:1/bf:1) and the whole neighbor cell vanished. Stateless, so
+				//   there is no dangling-cell bookkeeping across zone changes.
+				Vector const crossing_w = Vector::linearInterpolate (start, end, time);
+				if (crossing_w.magnitudeBetween (end) < 0.20f)
+					break;
+
+				lastCell = currentCell;
+				currentCell = nextCell;
+				derivedCell = currentCell;
+				start = crossing_w;
+			}
+
+			if (derivedCell != getParentCell ())
+			{
+				//-- preserve the camera's world pose across the cell re-tag
+				Transform const cameraToWorld (getTransform_o2w ());
+				CellProperty::setPortalTransitionsEnabled (false);
+				setParentCell (derivedCell);
+				setTransform_o2w (cameraToWorld);
+				CellProperty::setPortalTransitionsEnabled (true);
+			}
+		}
+	}
+
 	//-- handle the mode callback
 	if (m_modeCallback)
 	{

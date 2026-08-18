@@ -39,6 +39,13 @@ friend ClientEffect;
 friend ObjectClientEffect;
 friend PositionClientEffect;
 
+// Utinni Bucket B (2026-06-26, Effects-editor live preview): the particle-retrigger
+// entry walks the PRIVATE static m_particleSystems and the PRIVATE nested
+// ManagedParticleSystem, so it must be a friend to name them. ABI-neutral (a friend
+// declaration changes no object layout / vtable). Defined in
+// ClientEffectManager.cpp; advertised to Utinni as particlePreview::retrigger.
+friend void engine_retriggerClientEffect(char const * logicalName);
+
 private:
 
 	struct ManagedParticleSystem;

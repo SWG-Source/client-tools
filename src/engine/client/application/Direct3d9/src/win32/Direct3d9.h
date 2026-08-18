@@ -22,7 +22,9 @@ class  Vector;
 class  VertexBufferVector;
 
 #include <d3d9.h>
+#if !defined(_M_X64)
 #include <dxerr9.h>
+#endif
 
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Tag.h"
 #include "clientGraphics/Texture.def"
@@ -31,6 +33,11 @@ class VectorRgba;
 
 // ======================================================================
 // Fancy FATAL_DX_HR macro with debug string.
+#if defined(_M_X64)
+// Phase 33 (X64-02): dxerr9 (DXGetErrorString9) is a legacy DXSDK helper with no x64 import lib.
+// On x64 fall back to the raw HRESULT in the FATAL message (the error is still loud + diagnosable).
+#define DXGetErrorString9(hr)  "<HRESULT> (dxerr9 unavailable on x64)"
+#endif
 #define FATAL_DX_HR(a,b)       FATAL(FAILED(b), (a, DXGetErrorString9(b)))
 
 class Direct3d9

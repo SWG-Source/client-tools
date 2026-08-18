@@ -35,6 +35,7 @@ public:
 	virtual void    garbageCollect() const;
 
 	InteriorLayoutReaderWriter const * getInteriorLayout() const;
+	bool reloadInteriorLayout() const;   // per-building refresh: re-read the .ilf (forgetMissingFile first -- the layout is cached HERE, not on the object)
 	void applyInteriorLayout (BuildingObject* buildingObject) const;
 
 protected:
