@@ -1021,6 +1021,11 @@ void Game::quit()
 	PixCounter::disable();
 #endif
 	ms_done = true;
+
+	// Tell attached external consumers the quit decision is made, BEFORE any
+	// teardown starts (advertised as game::getShutdownPhase). ExitChain::run()
+	// raises this to SP_unwinding later; monotonic, so ordering is safe.
+	ExitChain::raiseShutdownPhase(ExitChain::SP_requested);
 }
 
 //-------------------------------------------------------------------
@@ -1041,6 +1046,54 @@ bool Game::isOver(void)
 	return ms_done || !IoWinManager::haveWindow() || Os::isGameOver();
 }
 
+//-------------------------------------------------------------------
+// Out-of-line (ODR-emitted) twin of the inline getLoopCount(). The inline
+// accessor has no taken-address; this one does, so the engine-hookpoint
+// advertisement contract can advertise the per-frame loop counter by &address
+// (game::g_mainLoopCounter). ms_loops is ++'d once per runGameLoopOnce().
+
+int Game::getMainLoopCount(void)
+{
+	return ms_loops;
+}
+
+//-------------------------------------------------------------------
+/**
+ * Out-of-line forwarder so the engine-hookpoint contract can advertise the
+ * process-wide shutdown phase by &address (game::getShutdownPhase, v26).
+ *
+ * 0 = running, 1 = shutdown requested, 2 = ExitChain unwinding. Monotonic.
+ * Prefer this over the already-advertised game::g_runningFlags (&Game::isOver)
+ * for teardown gating: isOver() dereferences IoWinManager/Os state and so goes
+ * unsafe exactly when teardown begins. See ExitChain.h for the full rationale.
+ */
+
+int Game::getShutdownPhase(void)
+{
+	return ExitChain::getShutdownPhase();
+}
+
+//-------------------------------------------------------------------
+// Consumer tick callback (toolkit x64 round-2, advertised as
+// game::registerTickCallback). Single-slot plain function pointer --
+// one consumer, last-write-wins, null clears; invoked at the top of
+// runGameLoopOnce (see the call site for the outside-render guarantee).
+// Written from the consumer's thread at registration, read on the game
+// thread: a raw aligned pointer store, and the call site snapshots it,
+// so a concurrent clear can never fault mid-invocation.
+
+namespace GameTickCallbackNamespace
+{
+	void (*s_externalTickCallback)() = 0;
+}
+using GameTickCallbackNamespace::s_externalTickCallback;
+
+void Game::setExternalTickCallback(void (*fn)())
+{
+	s_externalTickCallback = fn;
+	REPORT_LOG(true, ("Game: consumer tick callback %s\n", fn ? "REGISTERED" : "cleared"));
+}
+
 
 //-------------------------------------------------------------------
 
@@ -1058,6 +1111,15 @@ void Game::run(void)
 	{
 		runGameLoopOnce(false, NULL, 0, 0);
 	}
+
+	// UNIVERSAL loop-exit marker (game::getShutdownPhase). The Game::quit() and
+	// ms_done raises cover only ONE of isOver()'s three terms; the other two --
+	// !IoWinManager::haveWindow() and Os::isGameOver() -- never touch ms_done,
+	// so a window-close/OS quit would otherwise skip SP_requested entirely and
+	// jump straight to SP_unwinding with no early-warning edge at all. This is
+	// the one place every exit path provably passes through. Monotonic, so the
+	// earlier quit() raise still wins when it fired first.
+	ExitChain::raiseShutdownPhase(ExitChain::SP_requested);
 	// -------------------------------------------
 
 	// -------------------------------------------
@@ -1553,6 +1615,18 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 {
 	StallWatchdogNamespace::stallWatchdogFrameTick();
 
+	// Consumer tick callback (toolkit x64 round-2, game::registerTickCallback):
+	// top of the frame, before Os::update -- the previous frame is fully
+	// presented and no render state is on the stack, so this is the safe drain
+	// point for consumer-deferred work (e.g. a scene swap) that must never run
+	// inside the render-path frame callback. Snapshot so a concurrent clear
+	// cannot fault mid-call.
+	{
+		void (*const tickCallback)() = s_externalTickCallback;
+		if (tickCallback)
+			tickCallback();
+	}
+
 	bool result;
 	float elapsedTime = 0.0f;
 
@@ -1620,6 +1694,9 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 		if (!result)
 		{
 			ms_done = true;
+			// second ms_done site -- mirror the quit() marker so a loop-driven
+			// exit signals consumers identically (game::getShutdownPhase).
+			ExitChain::raiseShutdownPhase(ExitChain::SP_requested);
 			return;
 		}
 

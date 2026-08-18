@@ -56,6 +56,19 @@ public:
 	static void setViewport(int x, int y, int width, int height, real minZ, real maxZ);
 	static void flushResources(bool fullReset);
 
+	// Consumer overlay callbacks (toolkit x64 round-2; Gl_api v35 tail slots).
+	// The injected overlay (SWG-Toolkit) registers these through
+	// Graphics::setFrameCallback / setResizeCallback. Frame fires in present(),
+	// after every provider write to the back buffer and before the swap-chain
+	// Present -- the overlay draws over the finished frame without patching the
+	// DXGI vtable. Resize fires in resize(): phase 0 before ResizeBuffers (the
+	// consumer must release its back-buffer-referencing views or ResizeBuffers
+	// fails) and phase 1 once the new views exist (rebuild), both with the new
+	// client size. Single-slot, last-write-wins, null clears; the invoke sites
+	// snapshot the pointer so a concurrent clear cannot fault mid-call.
+	static void setConsumerFrameCallback(void (*fn)());
+	static void setConsumerResizeCallback(void (*fn)(int phase, int width, int height));
+
 private:
 	Direct3d11_SwapChain();
 	Direct3d11_SwapChain(Direct3d11_SwapChain const &);

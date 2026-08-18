@@ -146,6 +146,14 @@ public:
 	static void                          toggleWindowedMode();
 	static bool                          isWindowed();
 
+	// consumer overlay callbacks (2026-08-15, toolkit x64 round-2): forwarded to
+	// the renderer plugin (D3D11 invokes them; D3D9 accepts and ignores). Frame =
+	// render thread, post-BCG, pre-Present. Resize = phase 0 before ResizeBuffers
+	// (release back-buffer views) / phase 1 after (rebuild). Single-slot; null
+	// clears. Advertised as graphics::registerFrameCallback / registerResizeCallback.
+	static void                          setFrameCallback(void (*fn)());
+	static void                          setResizeCallback(void (*fn)(int phase, int width, int height));
+
 	static GlFillMode                    getFillMode();
 	static void                          setFillMode(GlFillMode newFillMode);
 	static GlCullMode                    getCullMode();

@@ -1272,6 +1272,13 @@ void CellProperty::setAppliedInteriorLayout() const
 
 // ----------------------------------------------------------------------
 
+void CellProperty::clearAppliedInteriorLayout() const
+{
+	m_appliedInteriorLayout = false;
+}
+
+// ----------------------------------------------------------------------
+
 int CellProperty::getInteriorLayoutCreatedCount() const
 {
 	return m_interiorLayoutCreatedCount;

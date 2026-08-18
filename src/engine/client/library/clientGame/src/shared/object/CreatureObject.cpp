@@ -6941,3 +6941,64 @@ void CreatureObject::appearanceWearablesOnChanged ()
 		}
 	}
 }
+
+// ======================================================================
+// Utinni Bucket A (2026-06-28) -- creatureObject::setTarget real-entry address provider.
+//
+// engine_advertise.cpp cannot #include CreatureObject.h (it transitively pulls
+// sharedSkillSystem/SkillObjectArchive.h, whose include dir is not on the exe project's
+// path), so the PMF real-entry is computed HERE -- CreatureObject's own TU, where the
+// header builds -- mirroring the engine_groundScene*RealEntry() accessors in GroundScene.cpp.
+//
+// The contract row creatureObject::setTarget maps (MISMATCH name) to the PUBLIC non-virtual
+// setLookAtTarget(const NetworkId&) [CreatureObject.h:311] -- the "current target" setter
+// (m_lookAtTarget). CreatureObject is MULTIPLE-INHERITANCE (TangibleObject : public
+// ClientObject, public CallbackReceiver) so &CreatureObject::setLookAtTarget is an inflated
+// PMF { void* pfn; int delta; }. It is an OWN method of the most-derived class -> primary
+// base at offset 0 -> delta MUST be 0 and pfn IS the real engine entry the engine's own call
+// reaches with `this` in ECX (the address Utinni detours). delta!=0 -> return nullptr so the
+// exe-side engine_verifyNoNullNoDup() fails loudly (never advertise a wrong/silent-dead entry).
+// Declared in the exe-local engine_creatureObject_forward.h. PUBLIC method -> no friend grant,
+// CreatureObject.h unchanged (no shared-header ABI cascade). Both platforms (x64 port
+// 2026-08-15): x64 MI-PMF keeps pfn at offset 0 / int adjustor at offset 8, so MiPmf reads
+// both correctly under either pointer size.
+// ======================================================================
+
+#include <cstring>   // memcpy -- MI-PMF real-entry code-component extraction
+
+void * engine_creatureSetTargetRealEntry()
+{
+	void (CreatureObject::* pmf)(const NetworkId &) = &CreatureObject::setLookAtTarget;   // PUBLIC [CreatureObject.h:311]
+	static_assert(sizeof(pmf) >= sizeof(void *) + sizeof(int), "PMF smaller than expected MI layout");
+	struct MiPmf { void * pfn; int delta; };
+	MiPmf m{};
+	std::memcpy(&m, &pmf, sizeof(MiPmf));
+	DEBUG_FATAL(m.delta != 0, ("engine: non-zero PMF delta for CreatureObject::setLookAtTarget real-entry row -- not directly detour-able"));
+	return (m.delta != 0) ? 0 : m.pfn;
+}
+
+// ----------------------------------------------------------------------
+// game::getPlayerLookAtTargetId shim (2026-07-09 lookAtTarget-accessor request, v16).
+//
+// Returns the PLAYER's lookAt/selection-target NetworkId VALUE (full 64 bits,
+// cluster-id bits included) -- the same m_lookAtTarget slot the advertised
+// creatureObject::setTarget row (setLookAtTarget, above) writes; NOT the NGE
+// intended/combat target (getIntendedTarget is a distinct member). 0 = no
+// player / no target (NetworkId::cms_invalid is NetworkId(0)).
+//
+// WHY an extern "C" primitive shim (the sysmsg rev-2 ABI RULE): only primitives
+// and pointers cross the advertised boundary on CALLED endpoints.
+// CreatureObject::getLookAtTarget() is INLINE [CreatureObject.h:882] (no ODR
+// address to advertise) and returns const CachedNetworkId& -- CachedNetworkId
+// embeds a mutable Watcher<Object> the consumer does not model; reading through
+// that reference is the sysmsg layout trap in the read direction. The shim
+// collapses it to an __int64 in EDX:EAX -- nothing but a primitive crosses.
+// Player-scoped -> no `this`, no MI real-entry subtlety. Lives HERE (not
+// engine_advertise.cpp) because the exe TU cannot include CreatureObject.h
+// (see the accessor note above). Game-thread-only, on-demand (not per-frame).
+// ----------------------------------------------------------------------
+extern "C" __int64 __cdecl engine_getPlayerLookAtTargetId(void)
+{
+	CreatureObject const * const player = Game::getPlayerCreature();
+	return player ? player->getLookAtTarget().getValue() : 0;
+}

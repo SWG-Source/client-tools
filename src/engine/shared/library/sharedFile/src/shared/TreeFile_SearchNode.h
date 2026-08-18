@@ -203,6 +203,10 @@ public:
 	virtual void          getPathName(const char *fileName, char *pathName, int pathNameLength) const;
 	virtual AbstractFile *open(const char *fileName, AbstractFile::PriorityType priority, bool &deleted);
 
+	// Engine-hookpoint advertisement (treeFile::enumerateFiles): yield every TOC
+	// filename in this tree. Member because m_fileNames/m_tableOfContents are private.
+	void                  enumerateFiles(void (*callback)(const char *fileName, void *context), void *context) const;
+
 private:
 
 	// disabled
@@ -290,6 +294,10 @@ public:
 	virtual int           getFileSize(const char *fileName, bool &deleted) const;
 	virtual void          getPathName(const char *fileName, char *pathName, int pathNameLength) const;
 	virtual AbstractFile *open(const char *fileName, AbstractFile::PriorityType priority, bool &deleted);
+
+	// Engine-hookpoint advertisement (treeFile::enumerateFiles): yield every TOC
+	// filename in this TOC. Member because m_fileNames/m_tableOfContents are private.
+	void                  enumerateFiles(void (*callback)(const char *fileName, void *context), void *context) const;
 
 private:
 

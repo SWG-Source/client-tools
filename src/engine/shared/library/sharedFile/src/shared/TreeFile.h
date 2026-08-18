@@ -105,6 +105,12 @@ public:
 	static int           getNumberOfSearchPaths();
 	static const char   *getSearchPath(int index);
 
+	// Engine-hookpoint advertisement (treeFile::enumerateFiles): invoke callback once
+	// per filename across all registered SearchTree/SearchTOC nodes (engine-relative
+	// paths, e.g. "terrain/tatooine.trn"). Order/dedup unspecified. The callback runs
+	// while ms_criticalSection is held -- it MUST NOT re-enter TreeFile.
+	static void          enumerateFiles(void (*callback)(const char *fileName, void *context), void *context);
+
 	static void          addCachedFile(const char *fileName, AbstractFile *file);
 	static void          clearCachedFiles();
 
