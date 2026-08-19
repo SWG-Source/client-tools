@@ -65,7 +65,8 @@ PortalProperty::PortalProperty(Object &owner, const char *fileName)
 #endif // _DEBUG
 
 	m_template = PortalPropertyTemplateList::fetch(CrcLowerString(fileName));
-	m_cellList->resize(static_cast<CellList::size_type>(m_template->getNumberOfCells()), NULL);
+	if (m_template)
+		m_cellList->resize(static_cast<CellList::size_type>(m_template->getNumberOfCells()), NULL);
 
 #ifdef _DEBUG
 	DataLint::popAsset();
@@ -480,7 +481,20 @@ void PortalProperty::cellLoaded(int cellIndex, Object &cellObject, bool shouldCr
 		WARNING(true, ("CellProblem for portal %s cell index %d already loaded", getOwner().getNetworkId().getValueString().c_str(), cellIndex));
 	}
 
-	// attach the cell as a child of the portal object
+	// attach the cell as a child of the portal object -- asChildObject FALSE,
+	// the stock value. A previous change flipped this to true, reasoning that a
+	// cell whose SceneEndBaselines arrives before its building's is skipped by
+	// handleEndBaselines' containedBy->isInWorld() check and "nothing later
+	// picks them up". Something does: when the BUILDING is added,
+	// Object::addToWorld runs the property loop, PortalProperty::addToWorld
+	// ends in Container::addToWorld, and that walks this container's CONTENTS
+	// -- which the cells are, via containment, independent of the child-attach
+	// flag -- and adds every exposed cell. That is the shipped design, it is
+	// why retail ran false for two decades of multiplayer, and the sibling
+	// tree runs it live daily. asChildObject=true additionally made every
+	// network-owned CellObject parent-destructor-deleted AND network-deleted
+	// -- a latent double-delete on building teardown -- and parent-alter-driven
+	// instead of world-driven.
 	cellObject.attachToObject_p(&getOwner(), false);
 
 	// get the cell property from the cell object

@@ -5,6 +5,7 @@
 //
 // ======================================================================
 
+#include "unicodeArchive/UnicodeArchive.h"
 #include "swgSharedNetworkMessages/FirstSwgSharedNetworkMessages.h"
 #include "swgSharedNetworkMessages/PermissionListCreateMessage.h"
 

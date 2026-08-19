@@ -38,6 +38,7 @@
 #include "sharedFoundation/GameControllerMessage.h"
 #include "sharedFoundation/PointerDeleter.h"
 #include "sharedFoundation/Production.h"
+#include "sharedFoundation/NetworkIdArchive.h"
 #include "sharedGame/CityData.h"
 #include "sharedGame/GameLanguageManager.h"
 #include "sharedGame/Quest.h"

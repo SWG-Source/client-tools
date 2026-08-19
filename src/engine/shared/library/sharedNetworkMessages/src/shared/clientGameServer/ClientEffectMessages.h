@@ -11,14 +11,13 @@
 
 //-----------------------------------------------------------------------
 
-#include "Archive/Archive.h"
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "sharedMathArchive/TransformArchive.h"
+#include "unicodeArchive/UnicodeArchive.h"
 #include "Unicode.h"
-#include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
 #include "sharedMath/Transform.h"
 #include "sharedMath/Vector.h"
-#include "sharedMathArchive/TransformArchive.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "unicodeArchive/UnicodeArchive.h"
 
 //-----------------------------------------------------------------------
 

@@ -9,6 +9,8 @@
 #ifndef INCLUDED_SafeCast_H
 #define INCLUDED_SafeCast_H
 
+#include <assert.h>
+
 // ======================================================================
 
 #if DEBUG_LEVEL == DEBUG_LEVEL_RELEASE
@@ -24,7 +26,7 @@
 			return 0;
 
 		T t = dynamic_cast<T>(u);
-		NOT_NULL(t);
+		assert((t) != nullptr);
 		return t;
 	}
 

@@ -70,6 +70,10 @@ private:
 
 	bool m_initialized;
 	int m_sequenceNumber;
+
+	// Server sync stamp of the last unreliable transform sent, so the send rate can be held to a
+	// fixed cadence instead of following the frame rate. Zero means none has been sent yet.
+	uint32 m_lastTransformSendStamp;
 };
 
 //-----------------------------------------------------------------------

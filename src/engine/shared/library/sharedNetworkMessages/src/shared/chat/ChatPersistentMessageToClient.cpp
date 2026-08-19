@@ -4,9 +4,13 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
-#include "sharedNetworkMessages/ChatPersistentMessageToClient.h"
+#include "localizationArchive/StringIdArchive.h"
+#include "unicodeArchive/UnicodeArchive.h"
+#include "sharedFoundation/NetworkIdArchive.h"
+#include "sharedNetworkMessages/ClientCentralMessagesArchive.h"
 #include "sharedNetworkMessages/ChatPersistentMessageToClientDataArchive.h"
+#include "sharedNetworkMessages/ChatPersistentMessageToClient.h"
+#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 
 //-----------------------------------------------------------------------
 

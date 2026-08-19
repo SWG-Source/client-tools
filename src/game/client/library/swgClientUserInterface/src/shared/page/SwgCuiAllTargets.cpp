@@ -31,11 +31,11 @@
 #include "sharedCollision/BoxExtent.h"
 #include "sharedFoundation/Crc.h"
 #include "sharedFoundation/Timer.h"
+#include "sharedFoundation/PlatformGlue.h"
 #include "sharedGame/Command.h"
 #include "sharedGame/CommandChecks.h"
 #include "sharedGame/CommandTable.h"
 #include "sharedGame/SharedBuildingObjectTemplate.h"
-#include "sharedGame/SharedCreatureObjectTemplate.h"
 #include "sharedGame/SharedCreatureObjectTemplate.h"
 #include "sharedMath/Sphere.h"
 #include "sharedMath/Volume.h"
@@ -112,14 +112,13 @@ namespace SwgCuiAllTargetsNamespace
 		std::vector<UIPage *> *        m_waypointArrowPages;
 	};
 
-	struct TextOpacityZero: public std::unary_function<UISmartPointer<UIText>, bool>
+	struct TextOpacityZero
 	{
-		bool operator() (UISmartPointer<UIText> const & t) const 
+		bool operator()(UISmartPointer<UIText> const &t) const
 		{
 			return t.pointer() && (t->GetOpacity() <= 0.0f);
 		}
 	};
-
 
 	//--------------------------------------------------------------------
 	
@@ -311,8 +310,14 @@ void SwgCuiAllTargets::performDeactivate ()
 {
 	removeUnusedStatusPages(true);
 	setIsUpdating(false);
-	m_reticleLookAt->deactivate ();
-	m_reticleCombat->deactivate ();
+	// The reticles are created lazily (first activate, ~:211/:223) and nulled on teardown (:285/:286),
+	// so performDeactivate can run with them NULL (e.g. the HUD is deactivated at char-select before it
+	// was ever activated). Deref-without-guard was a first-chance AV the main-loop SEH caught on x86;
+	// the x64 boot exercises the same path -- guard it so it degrades cleanly instead of faulting.
+	if (m_reticleLookAt)
+		m_reticleLookAt->deactivate ();
+	if (m_reticleCombat)
+		m_reticleCombat->deactivate ();
 }
 
 //----------------------------------------------------------------------
@@ -367,7 +372,8 @@ void SwgCuiAllTargets::updateStatusOpacity(CachedNetworkId const & id)
 
 		for (it = m_statii->begin(); it != m_statii->end(); ++it)
 		{
-			if (it->second && it->second != status)
+			SwgCuiStatusGround *other = it->second;
+			if (other && other != status)
 			{
 				if (status->isStatusBarVisibleAndOverlapping(it->second))
 				{
@@ -524,9 +530,9 @@ void SwgCuiAllTargets::update(const Camera & camera)
 						static char buffer[128];
 						int64 const value = tangible->getNetworkId().getValue();
 						unsigned const long procId = tangible->getAuthServerProcessId();
-						
-						snprintf(buffer, sizeof(buffer), "(%d) "INT64_FORMAT_SPECIFIER, procId, value);
-						
+
+						snprintf(buffer, sizeof(buffer), "(%d) " INT64_FORMAT_SPECIFIER, procId, value);
+
 						status->setDebugInformation(buffer);
 					}
 				}

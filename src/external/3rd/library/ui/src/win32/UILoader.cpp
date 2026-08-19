@@ -166,7 +166,7 @@ bool UILoader::LoadFromResource( const UINarrowString &ResourceName, UIObjectLis
 	UI_UNREF (tickStart);
 
 #if UI_LOADER_PROFILE
-	*GetUIOutputStream() << " :: UI_LOAD_TIME " << ResourceName << " " << (tickEnd - tickStart) << "\n";
+	*GetUIOutputStream() << " :: UI_LOAD_TIME " << ResourceName << " " << int(tickEnd - tickStart) << "\n";
 #endif
 
 	return rc;
@@ -190,7 +190,11 @@ bool UILoader::LoadFromString( const UINarrowString &data, UIObjectList &TopLeve
 				continue;
 			else
 			{
-				*GetUIOutputStream() << " :: Bad data at position " << std::distance (data.begin (), p) << "\n";
+				// std::distance returns ptrdiff_t (8 bytes on x64), which makes
+				// stream operator<< overload resolution ambiguous on MSVC.
+				// Cast down to int explicitly - parse offsets are well within
+				// int range.
+				*GetUIOutputStream() << " :: Bad data at position " << static_cast<int>(std::distance (data.begin (), p)) << "\n";
 				*GetUIOutputStream() << " :: " << ParseError << '\n';
 				return false;
 			}
@@ -219,8 +223,7 @@ bool UILoader::LoadFromString( const UINarrowString &data, UIObjectList &TopLeve
 			{
 				if( !LoadFromResource( narrowHeader, TopLevelObjects, SetSourceFileProperty ) )
 				{
-					*GetUIOutputStream() << " :: Failed to load data from included resource: " << narrowHeader << "\n";
-					return false;
+					*GetUIOutputStream() << " :: Failed to load data from included resource: " << narrowHeader << " (skipping, continuing parse)\n";
 				}
 			}
 			else

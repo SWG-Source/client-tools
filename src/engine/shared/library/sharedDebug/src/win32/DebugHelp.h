@@ -23,9 +23,9 @@ public:
 
 	static bool loadSymbolsForDll(const char *name);
 
-	static void getCallStack(uint32 *callStack, int sizeOfCallStack);
+	static void getCallStack(uint64 *callStack, int sizeOfCallStack);
 	static void reportCallStack(int const maxStackDepth = 4);
-	static bool lookupAddress(uint32 address, char *libName, char *fileName, int fileNameLength, int &line);
+	static bool lookupAddress(uint64 address, char *libName, char *fileName, int fileNameLength, int &line);
 
 	static bool writeMiniDump(char const *miniDumpFileName=0, PEXCEPTION_POINTERS exceptionPointers=0);
 };

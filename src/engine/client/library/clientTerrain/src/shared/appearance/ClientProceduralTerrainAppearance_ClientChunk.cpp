@@ -169,6 +169,18 @@ ClientProceduralTerrainAppearance::ClientChunk::~ClientChunk ()
 		ShaderSetList::iterator ssi;
 		for (ssi=m_shaderSetList.begin();ssi!=m_shaderSetList.end();++ssi)
 		{
+			// CONSULT-56 follow-up: balance the per-tile createBlendedShader reference
+			// bumps (one per primitive -- see create()'s tile loop) so the cache node's
+			// referenceCount can return to 0 and ShaderCache::alter's 5s-idle eviction
+			// can reclaim unused blended shaders. destroyShader had ZERO callers since
+			// the original SOE import -- this wires the missing consumer half.
+			if (shaderCache)
+			{
+				int const primitiveCount = (*ssi)->getNumberOfPrimitives ();
+				for (int i = 0; i < primitiveCount; ++i)
+					shaderCache->destroyShader ((*ssi)->getShader ());
+			}
+
 			delete *ssi;
 		}
 		m_shaderSetList.clear();

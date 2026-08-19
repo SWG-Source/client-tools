@@ -89,7 +89,7 @@ private:
 	CuiMediatorVector * const m_radarMediators;
 	int m_radarActiveIndex;
 
-	typedef stdhash_map<int, UIImage *>::fwd StationToImageMap;
+	typedef stdhash_map<int, UIImage *> StationToImageMap;
 	StationToImageMap * m_stationImageMap;
 	UIImage * m_stationImageCurrent;
 };

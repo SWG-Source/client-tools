@@ -65,6 +65,13 @@ typedef std::stack<FloorTri*, std::vector<FloorTri*> > FloorTriStack;
 
 float wallEpsilon = 0.01f;
 
+// Door-snap fix: a WalkOk footprint-circle graze of an uncrossable LATERAL seam is suppressed only
+// when its penetration is below this depth (a shallow graze). Measured: 1041 cantina door-seam grazes
+// all came in at ~0.000 m penetration, cleanly separated from any real blocking contact — so 0.05 m
+// (5 cm) suppresses the seam with large margin while KEEPING anything deeper (real walls, narrow
+// gaps/pillars the body must be stopped by) blocked. Tunable.
+float const cs_seamGrazeEpsilon = 0.05f;
+
 float gs_hopTolerance = 0.3f;
 float gs_clearTolerance = 0.001f;
 float gs_hitPastTolerance = 0.2f; // how far (meters) in the past a hit can occur and still be considered a hit
@@ -2862,6 +2869,25 @@ PathWalkResult FloorMesh::pathWalkCircleGetIds ( FloorLocator const & inStartLoc
 				Vector contactNormal = endPoint - contactPoint;
 
 				contactNormal.y = 0.0f;
+
+				// ---- Door-snap fix (avatar floor-seam rubberband), shallow-graze gated ----
+				// PWR_WalkOk means the circle CENTER traversed crossable-connected walkable floor
+				// end-to-end (pathWalkPoint only returns WalkOk when the move lands inside a triangle
+				// reached across CROSSABLE edges), so an uncrossable edge the circle still grazes here
+				// is a LATERAL seam (e.g. a doorway / floor-mesh seam), NOT a clearance gate athwart the
+				// path. (NB: it is NOT that "a real wall blocks the center too" — a point can miss a thin
+				// athwart wall; the soundness is that WalkOk certifies crossable-connected floor.)
+				// Suppress the spurious contact ONLY when the body merely GRAZES the seam (shallow
+				// penetration). A real lateral wall, or a narrow gap/pillar the body must be stopped by,
+				// produces a DEEPER penetration and is kept blocked. Affects ALL footprinted movers.
+				if(centerWalkResult == PWR_WalkOk)
+				{
+					float const penetration = startLoc.getRadius() - contactNormal.magnitude();
+					if(penetration < cs_seamGrazeEpsilon)
+					{
+						continue;
+					}
+				}
 
 				if(contactNormal.dot(V) >= 0.0f)
 				{

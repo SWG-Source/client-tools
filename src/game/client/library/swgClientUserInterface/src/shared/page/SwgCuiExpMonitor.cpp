@@ -28,7 +28,7 @@
 #include "UIString.h"
 #include "UIText.h"
 
-#include <hash_map>
+#include <unordered_map>
 #include <map>
 #include <vector>
 
@@ -109,8 +109,8 @@ SwgCuiExpMonitor::SwgCuiExpMonitor(UIPage & page)
 , m_colorDefault(UIColor::yellow)
 , m_imageTick(0)
 {
-	getCodeDataObject(TUIText, m_textSkill, "textSkill");
-	getCodeDataObject(TUIPage, m_pageBar, "pageBar");
+	getCodeDataObject(TUIText, m_textSkill, "textSkill", true);
+	getCodeDataObject(TUIPage, m_pageBar, "pageBar", true);
 	getCodeDataObject(TUIImage, m_imageTick, "tick", true);
 
 	const UIData * const codeData = getCodeData();
@@ -120,7 +120,8 @@ SwgCuiExpMonitor::SwgCuiExpMonitor(UIPage & page)
 		codeData->GetPropertyColorOrPalette(UILowerString("colorDefault"), m_colorDefault);
 	}
 
-	m_textSkill->SetPreLocalized(true);
+	if (m_textSkill)
+		m_textSkill->SetPreLocalized(true);
 
 	setIsUpdating(true);
 }
@@ -178,18 +179,20 @@ void SwgCuiExpMonitor::updateSkillText()
 		return;
 	
 	SkillObject const * const skill = CuiSkillManager::getWorkingSkillObject();
-	if (skill) 
-	{		
+	if (skill)
+	{
 		getPage().SetVisible(true);
 		Unicode::String localizedSkillName;
 		CuiSkillManager::localizeSkillName(*skill, localizedSkillName);
-		m_textSkill->SetLocalText(localizedSkillName);
+		if (m_textSkill)
+			m_textSkill->SetLocalText(localizedSkillName);
 	}
 	else
 	{
 		getPage().SetVisible(false);
 		StringId noSkill("ui", "exp_monitor_no_skill_yet");
-		m_textSkill->SetLocalText(noSkill.localize());
+		if (m_textSkill)
+			m_textSkill->SetLocalText(noSkill.localize());
 	}
 
 	updateBar();
@@ -199,6 +202,8 @@ void SwgCuiExpMonitor::updateSkillText()
 
 void SwgCuiExpMonitor::updateBar()
 {
+	if (!m_pageBar)
+		return;
 	UIWidget * const parent = NON_NULL(m_pageBar->GetParentWidget());
 
 	m_pageBar->SetWidth(0L);
@@ -296,7 +301,8 @@ void SwgCuiExpMonitor::updateBar()
 
 	tmp.clear();
 	CuiSkillManager::localizeExpName(expName, tmp);
-	m_textSkill->SetLocalTooltip(tmp);
+	if (m_textSkill)
+		m_textSkill->SetLocalTooltip(tmp);
 }
 
 //----------------------------------------------------------------------
@@ -358,7 +364,7 @@ bool SwgCuiExpMonitor::close()
 
 void SwgCuiExpMonitor::placeTicks()
 {
-	if(!m_imageTick)
+	if (!m_imageTick || !m_pageBar)
 		return;
 	UIWidget * const parent = NON_NULL(m_pageBar->GetParentWidget());
 

@@ -12,8 +12,8 @@
 //========================================================================
 // class DynamicVariableList - a list of DynamicVariables
 
-#include "Archive/AutoDeltaMap.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/DynamicVariable.h"
+#include "Archive/AutoDeltaMap.h"
 
 //@todo: this should be removed
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/DynamicVariableListNestedList.h"

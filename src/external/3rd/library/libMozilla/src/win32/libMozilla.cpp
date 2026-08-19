@@ -76,7 +76,7 @@
 
 #include <windows.h>
 
-static char *s_nullString = "";
+static char s_nullString[] = "";
 static bool  s_bEnableMemoryCache = true;
 static bool  s_bEnableDiskCache = true;
 static unsigned s_uMaxDiskCacheSizeKB = 1024 * 10;
@@ -217,7 +217,7 @@ static struct
 namespace libMozilla
 {
     Manager *g_pManager = 0;
-    char *aCommandTable[ NUM_COMMANDS ] = {};
+    char const *aCommandTable[ NUM_COMMANDS ] = {};
 
     void initCommandTable()
     {

@@ -120,10 +120,28 @@ void TextManagerNamespace::getAppropriateWord(Unicode::String &text)
 			// Sub-string search time for words that are listed for sub-string searches
 
 			Unicode::String lowerText(Unicode::toLower(text));
-			unsigned int findStartPosition = 0;
+			// Use size_t to match basic_string::find/npos. The old code used
+			// `unsigned int`, which on x64 truncates npos (8 bytes) to
+			// 0xFFFFFFFF (4 bytes), making "is not found" checks always
+			// false and causing out-of-bounds writes to text[index+i].
+			size_t findStartPosition = 0;
+			size_t const textSize = text.size();
+
+			// Hard backstop on outer iterations - if we ever fail to make forward
+			// progress (e.g. due to a zero-length cuss word or any other reason)
+			// we must NOT loop forever. Two passes per character is more than
+			// enough since each successful pass advances findStartPosition.
+			size_t const maxOuterIterations = (textSize + 1) * 2 + 16;
+			size_t outerIterations = 0;
 
 			for (;;)
 			{
+				if (++outerIterations > maxOuterIterations)
+					break;
+
+				if (findStartPosition >= textSize)
+					break;
+
 				bool done = true;
 				CussWords::iterator iterCussWords = s_cussWords.begin();
 
@@ -137,24 +155,56 @@ void TextManagerNamespace::getAppropriateWord(Unicode::String &text)
 						continue;
 					}
 
-					unsigned int index = lowerText.find(cussWord, findStartPosition);
+					// Skip empty cuss words - find() returns findStartPosition for
+					// an empty needle which would infinite-loop here.
+					if (cussWord.empty())
+					{
+						continue;
+					}
+
+					size_t index = lowerText.find(cussWord, findStartPosition);
 
 					if (index != Unicode::String::npos)
 					{
+						// Defensive: index must lie within text. Both lowerText and
+						// text should be the same size (toLower preserves length)
+						// but never trust that on x64 after the historic truncation
+						// bugs we've found.
+						if (index >= textSize)
+						{
+							findStartPosition = textSize;
+							done = true;
+							break;
+						}
+
 						findStartPosition = index;
 
 						// Found a bad word, replace the word
 
-						unsigned int const letterCount = cussWord.size();
+						size_t const letterCount = cussWord.size();
 						Unicode::String filterLetter;
 
-						for (unsigned int i = 0; i < letterCount; ++i)
+						// Cap the replacement at the actual remaining text size.
+						// Avoid underflow if index > textSize (shouldn't happen given
+						// the guard above, but belt-and-suspenders).
+						size_t const remaining = (textSize > index) ? (textSize - index) : 0;
+						size_t const upperLimit = (letterCount < remaining) ? letterCount : remaining;
+						for (size_t i = 0; i < upperLimit; ++i)
 						{
+							// Hard bounds check to prevent any oob write.
+							if ((index + i) >= textSize)
+								break;
+
 							getFilterLetter(filterLetter);
 
-							text[index + i] = filterLetter[0];
-							++findStartPosition;
+							if (!filterLetter.empty())
+								text[index + i] = filterLetter[0];
 						}
+
+						// Advance findStartPosition past this match by at least 1
+						// so we always make forward progress, even when letterCount
+						// was zero or upperLimit was clipped.
+						findStartPosition = index + (upperLimit > 0 ? upperLimit : 1);
 
 						// We are not done with a clean run so start over in case
 						// there are multiple cuss words in the same string
@@ -217,14 +267,19 @@ bool TextManagerNamespace::isAlpha(Unicode::unicode_char_t const character)
 // ----------------------------------------------------------------------------
 void TextManagerNamespace::checkText(Unicode::String &text, int const startIndex, int const endIndex)
 {
+	// Defensive bounds checks: avoid std::out_of_range from substr/operator[].
+	if (startIndex < 0 || endIndex <= startIndex || static_cast<size_t>(endIndex) > text.size())
+		return;
+
 	int const length = endIndex - startIndex;
 	Unicode::String subString(text.substr(startIndex, length));
 
 	getAppropriateWord(subString);
 
-	// Put the fixed text back into the string
-
-	for (int index = 0; index < (endIndex - startIndex); ++index)
+	// Put the fixed text back into the string - cap the loop at the subString size
+	// in case getAppropriateWord shrank it.
+	int const upper = std::min<int>(length, static_cast<int>(subString.size()));
+	for (int index = 0; index < upper; ++index)
 	{
 		text[startIndex + index] = subString[index];
 	}
@@ -265,11 +320,10 @@ void TextManager::install()
 			std::string const &word = dataTable.getStringValue(0, index);
 			bool const allowSubStringMatch = (dataTable.getIntValue(1, index) != 0);
 
-			Unicode::UTF16 wordBuf[50];
+			Unicode::UTF16 wordBuf[50]{};
+			Unicode::UTF8_convertToUTF16(const_cast<char *>(word.c_str()), wordBuf, std::size(wordBuf));
 
-			Unicode::UTF8_convertToUTF16(const_cast<char *>(word.c_str()), wordBuf, sizeof(wordBuf)/sizeof(wordBuf[0]));
-
-			Unicode::String const &unicodeWord = Unicode::String(wordBuf);
+			Unicode::String unicodeWord(reinterpret_cast<const char16_t *>(wordBuf));
 
 			s_cussWords.insert(std::make_pair(Unicode::toLower(unicodeWord), allowSubStringMatch));
 		}
@@ -297,7 +351,14 @@ Unicode::String TextManager::filterText(Unicode::String const &text)
 {
 	Unicode::String result(text);
 	Unicode::String::const_iterator iterText = text.begin();
-	int startIndex = Unicode::String::npos;
+	// Use -1 as the "unset" sentinel for the int index. The old code stored
+	// Unicode::String::npos in an int, which is fine on x86 (npos==0xFFFFFFFF)
+	// but on x64 (npos==0xFFFFFFFFFFFFFFFF) the value truncates to -1 in int,
+	// and the subsequent unsigned-vs-size_t compare `static_cast<unsigned>(-1) ==
+	// npos` is FALSE because 0x00000000FFFFFFFF != 0xFFFFFFFFFFFFFFFF. That broke
+	// the "is unset" check entirely on x64 and let stale indices pass into
+	// substr()/operator[] causing std::out_of_range in checkText.
+	int startIndex = -1;
 	int currentIndex = 0;
 
 	{
@@ -309,17 +370,15 @@ Unicode::String TextManager::filterText(Unicode::String const &text)
 		{
 			Unicode::unicode_char_t const character = (*iterText);
 
-			if (   (static_cast<unsigned>(startIndex) == Unicode::String::npos)
-			    && isAlpha(character))
+			if (startIndex < 0 && isAlpha(character))
 			{
 				startIndex = currentIndex;
 			}
-			else if (   (static_cast<unsigned>(startIndex) != Unicode::String::npos)
-				     && !isAlpha(character))
+			else if (startIndex >= 0 && !isAlpha(character))
 			{
 				checkText(result, startIndex, currentIndex);
 
-				startIndex = Unicode::String::npos;
+				startIndex = -1;
 			}
 
 			++currentIndex;
@@ -327,7 +386,7 @@ Unicode::String TextManager::filterText(Unicode::String const &text)
 
 		// Possibly check the last word
 
-		if (static_cast<unsigned>(startIndex) != Unicode::String::npos)
+		if (startIndex >= 0)
 		{
 			checkText(result, startIndex, currentIndex);
 		}
@@ -339,24 +398,22 @@ Unicode::String TextManager::filterText(Unicode::String const &text)
 		// all non-alphabet is skipped and preserved.
 
 		iterText = text.begin();
-		startIndex = Unicode::String::npos;
+		startIndex = -1;
 		currentIndex = 0;
 
 		for (; iterText != text.end(); ++iterText)
 		{
 			Unicode::unicode_char_t const character = (*iterText);
 
-			if (   (static_cast<unsigned>(startIndex) == Unicode::String::npos)
-			    && character != static_cast<Unicode::unicode_char_t>(' '))
+			if (startIndex < 0 && character != static_cast<Unicode::unicode_char_t>(' '))
 			{
 				startIndex = currentIndex;
 			}
-			else if (   (static_cast<unsigned>(startIndex) != Unicode::String::npos)
-			         && character == static_cast<Unicode::unicode_char_t>(' '))
+			else if (startIndex >= 0 && character == static_cast<Unicode::unicode_char_t>(' '))
 			{
 				checkText(result, startIndex, currentIndex);
 
-				startIndex = Unicode::String::npos;
+				startIndex = -1;
 			}
 
 			++currentIndex;
@@ -364,7 +421,7 @@ Unicode::String TextManager::filterText(Unicode::String const &text)
 
 		// Possibly check the last word
 
-		if (static_cast<unsigned>(startIndex) != Unicode::String::npos)
+		if (startIndex >= 0)
 		{
 			checkText(result, startIndex, currentIndex);
 		}

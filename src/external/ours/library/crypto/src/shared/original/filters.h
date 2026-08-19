@@ -446,7 +446,7 @@ class StringStore : public Store
 {
 public:
 	StringStore(const char *string)
-		: m_store((const byte *)string), m_length(strlen(string)), m_count(0) {}
+		: m_store((const byte *)string), m_length((unsigned int)strlen(string)), m_count(0) {}
 	StringStore(const byte *string, unsigned int length)
 		: m_store(string), m_length(length), m_count(0) {}
 	template <class T> StringStore(const T &string)

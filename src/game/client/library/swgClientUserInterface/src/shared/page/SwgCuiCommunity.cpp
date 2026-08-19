@@ -48,46 +48,76 @@ SwgCuiCommunity::SwgCuiCommunity(UIPage &page)
  , m_tabs(NULL)
  , m_matchMakingTypeIndexes(NULL)
 {
+	// Each lookup must zero subPage first: getCodeDataObject leaves the
+	// previous value in place on miss, so a failed lookup followed by
+	// `new Mediator(*subPage, ...)` would dereference the WRONG page.
 	UIPage *subPage = NULL;
 
-	getCodeDataObject(TUIPage, subPage, "pagePersonal");
-	m_personalMediator = new Personal(*subPage, *this);
-	m_personalMediator->fetch();
-	m_mediators[M_personal] = m_personalMediator;
+	subPage = NULL;
+	getCodeDataObject(TUIPage, subPage, "pagePersonal", true);
+	if (subPage)
+	{
+		m_personalMediator = new Personal(*subPage, *this);
+		m_personalMediator->fetch();
+		m_mediators[M_personal] = m_personalMediator;
+	}
 
-	getCodeDataObject(TUIPage, subPage, "pageHistory");
-	m_historyMediator = new History(*subPage, *this);
-	m_historyMediator->fetch();
-	m_mediators[M_history] = m_historyMediator;
+	subPage = NULL;
+	getCodeDataObject(TUIPage, subPage, "pageHistory", true);
+	if (subPage)
+	{
+		m_historyMediator = new History(*subPage, *this);
+		m_historyMediator->fetch();
+		m_mediators[M_history] = m_historyMediator;
+	}
 
-	getCodeDataObject(TUIPage, subPage, "pageCharacter");
-	m_characterMediator = new Character(*subPage, *this);
-	m_characterMediator->fetch();
-	m_mediators[M_character] = m_characterMediator;
+	subPage = NULL;
+	getCodeDataObject(TUIPage, subPage, "pageCharacter", true);
+	if (subPage)
+	{
+		m_characterMediator = new Character(*subPage, *this);
+		m_characterMediator->fetch();
+		m_mediators[M_character] = m_characterMediator;
+	}
 
-	getCodeDataObject(TUIPage, subPage, "pageSearch");
-	m_searchMediator = new Search(*subPage, *this);
-	m_searchMediator->fetch();
-	m_mediators[M_search] = m_searchMediator;
+	subPage = NULL;
+	getCodeDataObject(TUIPage, subPage, "pageSearch", true);
+	if (subPage)
+	{
+		m_searchMediator = new Search(*subPage, *this);
+		m_searchMediator->fetch();
+		m_mediators[M_search] = m_searchMediator;
+	}
 
-	getCodeDataObject(TUIPage, subPage, "pageFriend");
-	m_friendMediator = new Friend(*subPage, *this);
-	m_friendMediator->fetch();
-	m_mediators[M_friend] = m_friendMediator;
+	subPage = NULL;
+	getCodeDataObject(TUIPage, subPage, "pageFriend", true);
+	if (subPage)
+	{
+		m_friendMediator = new Friend(*subPage, *this);
+		m_friendMediator->fetch();
+		m_mediators[M_friend] = m_friendMediator;
+	}
 
-	getCodeDataObject(TUIPage, subPage, "pageIgnore");
-	m_ignoreMediator = new Ignore(*subPage, *this);
-	m_ignoreMediator->fetch();
-	m_mediators[M_ignore] = m_ignoreMediator;
+	subPage = NULL;
+	getCodeDataObject(TUIPage, subPage, "pageIgnore", true);
+	if (subPage)
+	{
+		m_ignoreMediator = new Ignore(*subPage, *this);
+		m_ignoreMediator->fetch();
+		m_mediators[M_ignore] = m_ignoreMediator;
+	}
 
-	getCodeDataObject(TUIButton, m_doneButton, "buttonDone");
-	registerMediatorObject(*m_doneButton, true);
+	getCodeDataObject(TUIButton, m_doneButton, "buttonDone", true);
+	if (m_doneButton)
+		registerMediatorObject(*m_doneButton, true);
 
-	getCodeDataObject (TUITabbedPane, m_tabs, "tabs");
-	registerMediatorObject(*m_tabs, true);
-
-	m_tabs->SetActiveTab(-1);
-	m_tabs->SetActiveTab(0);
+	getCodeDataObject(TUITabbedPane, m_tabs, "tabs", true);
+	if (m_tabs)
+	{
+		registerMediatorObject(*m_tabs, true);
+		m_tabs->SetActiveTab(-1);
+		m_tabs->SetActiveTab(0);
+	}
 
 	IGNORE_RETURN(setState(MS_closeable));
 	IGNORE_RETURN(setState(MS_closeDeactivates));

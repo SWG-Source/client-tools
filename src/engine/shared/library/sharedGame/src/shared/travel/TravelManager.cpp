@@ -375,7 +375,7 @@ bool TravelManagerNamespace::getPlanetAnyHopLeastCost(int planetIndex1, int plan
 		std::swap (planetIndex1, planetIndex2);
 
 	AnyHopLeastCostRouteList::const_iterator iterFind = ms_anyHopLeastCostRouteList.find(std::make_pair(planetIndex1, planetIndex2));
-	if (iterFind != ms_singleHopRouteList.end())
+	if (iterFind != ms_anyHopLeastCostRouteList.end())
 	{
 		planetCost = iterFind->second.first;
 		return true;

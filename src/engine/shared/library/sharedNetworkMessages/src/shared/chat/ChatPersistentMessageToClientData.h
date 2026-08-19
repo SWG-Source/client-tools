@@ -8,6 +8,9 @@
 #ifndef INCLUDED_ChatPersistentMessageToClientData_H
 #define INCLUDED_ChatPersistentMessageToClientData_H
 
+#include "Unicode.h"
+#include <string>
+
 //======================================================================
 
 struct ChatPersistentMessageToClientData

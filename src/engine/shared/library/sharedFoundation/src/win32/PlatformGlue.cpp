@@ -92,6 +92,7 @@ char *strsep(char **string, const char *delim)
 
 // ----------------------------------------------------------------------
 
+#if defined(_MSC_VER) && _MSC_VER < 1900
 int snprintf(char *buffer, size_t count, const char *format, ...)
 {
 	va_list va;
@@ -102,6 +103,7 @@ int snprintf(char *buffer, size_t count, const char *format, ...)
 
 	return result;
 }
+#endif
 
 // ----------------------------------------------------------------------
 

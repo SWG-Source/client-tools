@@ -42,6 +42,8 @@ class ShaderImplementation
 	friend class Direct3d8_StaticShaderData;
 	friend class Direct3d9_ShaderImplementationData;
 	friend class Direct3d9_StaticShaderData;
+	friend class Direct3d11_ShaderImplementationData;
+	friend class Direct3d11_StaticShaderData;
 
 public:
 
@@ -676,6 +678,12 @@ public:
 
 	PersistentCrcString                                      m_fileName;
 	DWORD                                                   *m_exe;
+	// x64 fix: the embedded HLSL/asm SOURCE (PSRC chunk), null-terminated.
+	// The precompiled PEXE bytecode in our TRE set is stale/mismatched and
+	// renders characters dark; the graphics layer recompiles from m_source
+	// when it is available. NULL if the .psh had no PSRC chunk.
+	char *m_source;
+	int m_sourceLength;
 	ShaderImplementationPassPixelShaderProgramGraphicsData  *m_graphicsData;
 };
 

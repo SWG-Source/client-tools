@@ -145,7 +145,7 @@ int
     unsigned long     ip_address;
     struct sockaddr_in    sa_in;
     unsigned short           our_port;
-    int           not = 0;
+    int           notVal = 0;
     int           retval, err_code;
     unsigned long     ioctl_blocking = 1;
     char          message[512];
@@ -214,7 +214,7 @@ int
     setsockopt(the_socket,
                SOL_SOCKET,
                SO_DONTLINGER,
-               (char *) &not, sizeof(not));
+               (char *) &notVal, sizeof(notVal));
 
     // get a connection
 

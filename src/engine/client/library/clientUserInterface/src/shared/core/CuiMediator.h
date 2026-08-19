@@ -277,7 +277,9 @@ public:
 			return var;
 		}
 
-		FATAL (!optional, ("Unable to find CodeData object '%s' from '%s'", name, rootPage->GetFullPath ().c_str ()));
+		// Strict (default): stock FATAL. strictData=false: warn so callers see
+		// NULL - vanilla NGE-retail UIs are missing widgets later patches added.
+		STRICT_DATA_FATAL(!optional, ("Unable to find CodeData object '%s' from '%s'", name, rootPage->GetFullPath().c_str()));
 
 		return 0;
 	}

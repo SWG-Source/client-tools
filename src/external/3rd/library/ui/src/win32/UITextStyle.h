@@ -13,7 +13,7 @@ class UITextStyle : public UIStyle
 {
 public:
 
-	typedef ui_stdhash_map<long, UIFontCharacter *>::fwd      GlyphMap_t;
+	using GlyphMap_t = ui_stdhash_map<long, UIFontCharacter*>;
 	typedef ui_stdvector<UIString::const_iterator>::fwd       UIStringConstIteratorVector;
 
 	typedef UITextStyleWrappedText WrappedText;

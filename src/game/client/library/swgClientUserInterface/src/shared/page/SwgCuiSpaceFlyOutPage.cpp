@@ -60,7 +60,7 @@ namespace SwgCuiSpaceFlyOutPageNamespace
 
 	// Enable weapon group flyout sounds.
 	bool const s_useWeaponGroupFlyoutSounds = false;
-	UIString const s_noSoundModifier(L"_group");
+	UIString const s_noSoundModifier(u"_group");
 
 	// Show the weapon group after the player stops shooting.
 	int s_selectedWeaponGroup = -1;

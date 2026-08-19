@@ -38,7 +38,7 @@ public:
 	{}
 
 	// @todo: this modifierdata should probably be a bitvector
-	bool and (const UIMessageModifierData & rhs) const
+	bool Matches(const UIMessageModifierData & rhs) const
 	{
 		if ((rhs.LeftShift       && ! LeftShift) ||
 			(rhs.RightShift      && ! RightShift) ||

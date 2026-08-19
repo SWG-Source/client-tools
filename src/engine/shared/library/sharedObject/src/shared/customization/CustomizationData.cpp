@@ -1158,42 +1158,84 @@ void CustomizationData::saveToByteVector(ByteVector &data, bool persistRemoteDat
 	// version 1.
 	data.push_back(2);
 
-	// Write # variables.
+	// Write # variables. Strict (default): an unmappable/suspect variable is a
+	// FATAL - this payload is the server-persisted appearance, and skipping
+	// entries silently truncates it. strictData=false: skip unmappable
+	// variables (NGE-retail CustomizationIdManager doesn't know palettes added
+	// later, e.g. `/alette/npc_ortolan.pal`) so character creation completes.
+	// Because the lenient path may skip entries inside the loop, write a
+	// placeholder count here and back-patch with the written count below.
 	int const variableCount = static_cast<int>(variables.size());
 	FATAL(variableCount > 255, ("CustomizationData persistence format must be upgraded.  version 1 only supports 255 persisted variables but object id [%s] has %d variables.", getOwnerObject().getNetworkId().getValueString().c_str(), variableCount));
 	data.reserve(static_cast<ByteVector::size_type>(3 + variableCount * 2));
-	data.push_back(static_cast<byte>(variableCount));
+	ByteVector::size_type const countByteIndex = data.size();
+	data.push_back(static_cast<byte>(0)); // placeholder; back-patched below
 
 	//-- Write per-variable data.
+	int writtenCount = 0;
 	for (int i = 0; i < variableCount; ++i)
 	{
 		CustomizationVariable const *variable = variables[static_cast<CustomizationVariableConstVector::size_type>(i)].second;
-		NOT_NULL(variable);
+		if (!variable)
+		{
+			// Strict (default): this payload persists the character's appearance -
+			// silently dropping a variable here truncates server-persisted state.
+			STRICT_DATA_FATAL(true, ("CustomizationData::saveToByteVector: null customization variable while persisting object id [%s]", getOwnerObject().getNetworkId().getValueString().c_str()));
+			continue;
+		}
 
 		std::string const &variableName = variables[static_cast<CustomizationVariableConstVector::size_type>(i)].first;
-		DEBUG_FATAL(variableName.length() < 1, ("zero-length variable name: logic error."));
+
+		// Defend against corrupted variable name buffers. Some preview-creature
+		// CustomizationData trees in the NGE-retail TRE pack contain dangling
+		// or partially-overwritten std::string entries (truncated palette
+		// path names like '/alette/npc_ortolan.pal' and worse - garbage
+		// strings 100s of KB long with no null terminator). Reading c_str()
+		// on those crashes downstream consumers. Bail on anything that looks
+		// suspect: too short, too long, or doesn't start with the expected '/'.
+		if (variableName.length() < 1 || variableName.length() > 256 || variableName[0] != '/')
+		{
+			STRICT_DATA_FATAL(true, ("CustomizationData::saveToByteVector: suspect customization variable name (length %d) while persisting object id [%s]", static_cast<int>(variableName.length()), getOwnerObject().getNetworkId().getValueString().c_str()));
+			continue;
+		}
 
 		// Lookup variable id from name.
 		int variableId = -1;
 		bool const mapSuccessful = CustomizationIdManager::mapStringToId(variableName.c_str(), variableId);
-		
-		FATAL(!mapSuccessful, ("object id [%s] failed to map customization variable name [%s] to a customization variable id. Somebody forgot to run the customization id update process. Will not try to save incomplete data.", getOwnerObject().getNetworkId().getValueString().c_str(), variableName.c_str()));
-		DEBUG_FATAL((variableId < 0) || (variableId >= 128), ("logic error: CustomizationIdManager returned an out-of-range value [%d] for customization data format 0.", variableId));
+
+		if (!mapSuccessful)
+		{
+			STRICT_DATA_FATAL(true, ("object id [%s] failed to map customization variable name [%s] to a customization variable id. Somebody forgot to run the customization id update process. Will not try to save incomplete data.", getOwnerObject().getNetworkId().getValueString().c_str(), variableName.c_str()));
+			continue;
+		}
+		if ((variableId < 0) || (variableId >= 128))
+		{
+			STRICT_DATA_FATAL(true, ("CustomizationIdManager returned an out-of-range value [%d] for customization data format 0 (object id [%s], variable [%s])", variableId, getOwnerObject().getNetworkId().getValueString().c_str(), variableName.c_str()));
+			continue;
+		}
 
 		// Find out if variable is stored as 1 byte unsigned or 2 byte signed.
 		int const persistedDataSize = variable->getPersistedDataByteCount();
-		VALIDATE_RANGE_INCLUSIVE_INCLUSIVE(1, persistedDataSize, 2);
+		if (persistedDataSize < 1 || persistedDataSize > 2)
+		{
+			STRICT_DATA_FATAL(true, ("CustomizationData::saveToByteVector: variable [%s] has unsupported persisted size [%d]", variableName.c_str(), persistedDataSize));
+			continue;
+		}
 
 		//-- Write variable declaration.
 		byte combinedId = static_cast<byte>(variableId);
 		if (persistedDataSize == 2)
 			combinedId |= 0x80;
-		
+
 		data.push_back(combinedId);
 
 		//-- Write variable data.
 		variable->saveToByteVector(data);
+		++writtenCount;
 	}
+
+	// Back-patch the count.
+	data[countByteIndex] = static_cast<byte>(writtenCount);
 }
 
 // ----------------------------------------------------------------------

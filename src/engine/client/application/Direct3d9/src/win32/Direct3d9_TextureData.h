@@ -17,6 +17,25 @@ class MemoryBlockManager;
 #include <d3d9.h>
 
 // ======================================================================
+// Own-impl replacement for D3DXLoadSurfaceFromSurface (Phase 33-03 / D-04a:
+// d3dx9 has no x64 static lib, so every D3DX symbol must be removed before
+// the x64 link). Point-copies a same-dims rect from src to dst via LockRect.
+//
+// D3D11-parity bridge (Option A): mirrors the proven, shipped-at-parity
+// Direct3d11_TextureData lock-bridge design. Handles ONLY:
+//   (a) same-D3DFORMAT copies (straight row-by-row memcpy honoring pitch), and
+//   (b) the TF_RGB_888 (D3DFMT_R8G8B8, 24bpp) -> XRGB_8888/ARGB_8888
+//       (D3DFMT_X8R8G8B8/A8R8G8B8, 32bpp) byte-order-identical stride
+//       expansion (3->4 byte, 0xFF in byte 3).
+// Loud-FATALs on every other format pair (D-06 loud-fail trip-wire) and on a
+// src/dst rect size mismatch (mirrors Direct3d11_TextureData.cpp:979). The
+// FATAL surfaces any unproven runtime pair during the Task-4 A/B rather than
+// silently corrupting. srcRect/dstRect NULL == whole surface.
+void Direct3d9_ownImplCopySurface(
+	IDirect3DSurface9 *dst, RECT const *dstRect,
+	IDirect3DSurface9 *src, RECT const *srcRect);
+
+// ======================================================================
 
 class Direct3d9_TextureData: public TextureGraphicsData
 {

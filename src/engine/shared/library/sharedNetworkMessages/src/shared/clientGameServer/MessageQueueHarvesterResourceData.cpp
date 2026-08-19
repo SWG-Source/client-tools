@@ -5,13 +5,13 @@
 //
 //======================================================================
 
+#include "sharedUtility/InstallationResourceDataArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "sharedNetworkMessages/MessageQueueHarvesterResourceData.h"
 #include "sharedFoundation/MemoryBlockManager.h"
 #include "sharedFoundation/ExitChain.h"
 #include "sharedFoundation/GameControllerMessage.h"
 #include "sharedNetworkMessages/ControllerMessageFactory.h"
-#include "sharedUtility/InstallationResourceDataArchive.h"
 
 //===================================================================
 

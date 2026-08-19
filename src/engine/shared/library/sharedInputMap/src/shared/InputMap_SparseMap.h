@@ -84,7 +84,10 @@ struct InputMap::SparseMap
 	
 	void            load_0006  (const InputMap & imap, Iff & iff);
 	void            write_0006 (Iff & iff) const;
-	
+
+	void load_0007(const InputMap &imap, Iff &iff);
+	void write_0007(Iff &iff) const;
+
 	bool            addBinding (const BindInfo & binfo, const Command * cmd);
 	void            removeBindings (const Command * cmd);
 	

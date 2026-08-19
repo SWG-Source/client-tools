@@ -12,6 +12,7 @@
 #include "sharedDebug/DataLint.h"
 #include "sharedDebug/DebugHelp.h"
 #include "sharedDebug/PixCounter.h"
+#include "sharedFoundation/ConfigFile.h"
 #include "sharedFoundation/ConfigSharedFoundation.h"
 #include "sharedFoundation/Crc.h"
 #include "sharedFoundation/ExitChain.h"
@@ -32,6 +33,8 @@ namespace FatalNamespace
 	bool  ms_throwExceptions;
 	int   ms_numberOfWarnings = 0;
 	bool  ms_strict = false;
+	bool  ms_strictData = true;
+	bool  ms_strictDataRead = false;
 
 	WarningCallback s_warningCallback = NULL;
 
@@ -62,7 +65,7 @@ static void formatMessage(char *buffer, int bufferLength, int stackDepth, const 
 
 	// look up the call stack information
 	const int callStackSize = callStackOffset + stackDepth;
-	uint32 callStack[callStackOffset + maxStackDepth];
+	uint64 callStack[callStackOffset + maxStackDepth];
 
 	// allow complete disable of the call stack lookup
 	if (stackDepth < 0)
@@ -82,7 +85,7 @@ static void formatMessage(char *buffer, int bufferLength, int stackDepth, const 
 		if (ConfigSharedFoundation::getLookUpCallStackNames() && DebugHelp::lookupAddress(callStack[callStackOffset], lib, file, sizeof(file), line))
 			snprintf(buffer, bufferLength, "%s(%d) : %s %08x: ", file, line, type, static_cast<int>(Crc::calculate(format)));
 		else
-			snprintf(buffer, bufferLength, "unknown(0x%08X) : %s %08x: ", static_cast<int>(callStack[callStackOffset]), type, static_cast<int>(Crc::calculate(format)));
+			snprintf(buffer, bufferLength, "unknown(0x%016llX) : %s %08x: ", static_cast<unsigned long long>(callStack[callStackOffset]), type, static_cast<int>(Crc::calculate(format)));
 	}
 	else
 	{
@@ -126,7 +129,7 @@ static void formatMessage(char *buffer, int bufferLength, int stackDepth, const 
 				if (ConfigSharedFoundation::getLookUpCallStackNames() && DebugHelp::lookupAddress(callStack[i], lib, file, sizeof(file), line))
 					snprintf(buffer, bufferLength, "  %s(%d) : caller %d\n", file, line, i-callStackOffset);
 				else
-					snprintf(buffer, bufferLength, "  unknown(0x%08X) : caller %d\n", static_cast<int>(callStack[i]), i-callStackOffset);
+					snprintf(buffer, bufferLength, "  unknown(0x%016llX) : caller %d\n", static_cast<unsigned long long>(callStack[i]), i - callStackOffset);
 
 				const int length = strlen(buffer);
 				buffer += length;
@@ -170,9 +173,10 @@ static void InternalFatal(const char *format, va_list va)
 		throw FatalException(ms_buffer, FatalException::ZeroSourceString); //lint !e1549 // Function not declared to throw
 
 #ifdef _WIN32
-	{
-		__asm int 3;
-	}
+	// Was: `__asm int 3;` - inline asm is x86-only in MSVC. Use the
+	// portable intrinsic, which lowers to int 3 on x86/x64 and the
+	// equivalent BKPT/UDF on ARM.
+	__debugbreak();
 #endif
 
 	DEBUG_OUTPUT_CHANNEL("Foundation\\Fatal", ("%s", ms_buffer));
@@ -372,6 +376,37 @@ void WarningStrictFatal(const char *format, ...)
 	va_start(va, format);
 
 		if (ms_strict)
+			InternalFatal(format, va);
+		else
+			InternalWarning(format, 0, va);
+
+	va_end(va);
+}
+
+// ----------------------------------------------------------------------
+
+bool StrictData()
+{
+	// Cached after the first successful read. Anything asking before the
+	// config file is installed gets the strict answer, which is the default
+	// anyway - the opt-out only exists for operators who explicitly set
+	// [SharedFoundation] strictData=false to run an incomplete TRE pack.
+	if (!ms_strictDataRead && ConfigFile::isInstalled())
+	{
+		ms_strictData = ConfigFile::getKeyBool("SharedFoundation", "strictData", true);
+		ms_strictDataRead = true;
+	}
+	return ms_strictData;
+}
+
+// ----------------------------------------------------------------------
+
+void StrictDataFatal(const char *format, ...)
+{
+	va_list va;
+	va_start(va, format);
+
+		if (StrictData())
 			InternalFatal(format, va);
 		else
 			InternalWarning(format, 0, va);

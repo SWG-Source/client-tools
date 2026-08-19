@@ -147,7 +147,8 @@ protected:
 class AbstractFileFactory
 {
 public:
-	virtual AbstractFile* createFile(const char *filename, const char *openType) = 0;
+	virtual ~AbstractFileFactory() = default;
+	virtual AbstractFile *createFile(const char *filename, const char *openType) = 0;
 };
 
 // ======================================================================

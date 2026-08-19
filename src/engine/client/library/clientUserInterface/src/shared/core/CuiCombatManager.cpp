@@ -1888,7 +1888,9 @@ void CuiCombatManager::processCombatSpam (const MessageQueueCombatSpam & spamMsg
 
 void CuiCombatManager::fillSpamOrder(short spamOrder[], Unicode::String spamTemplate)
 {
-	unsigned int pos = 0;
+	// size_t to match Unicode::getFirstToken's `size_t & endpos` reference.
+	// On x86 size_t was the same as unsigned int; on x64 it's 8 bytes.
+	size_t pos = 0;
 	Unicode::NarrowString token;
 	Unicode::NarrowString narrowTemplate = Unicode::wideToNarrow(spamTemplate);
 	for (int i = 0; pos != narrowTemplate.npos; i++)
@@ -2522,21 +2524,25 @@ void CuiCombatManager::buildAttackMessage(Unicode::String & result)
 	// Remove excess spaces and toUpper() the first character
 	preformatted = Unicode::trim(preformatted);
 	preformatted = Unicode::toUpper(preformatted.substr(0,1)) + preformatted.substr(1);
-	int length = preformatted.length();
-	int periodPos = preformatted.find(ms_period);
-	if (periodPos != preformatted.npos &&
+	size_t length = preformatted.length();
+	size_t periodPos = preformatted.find(ms_period);
+	if (periodPos != Unicode::String::npos &&
+		length > 0 &&
 		periodPos < length - 1)
 	{
-		int toUpperPos = preformatted.find_first_not_of(' ', periodPos+1);
-		preformatted = preformatted.substr(0, toUpperPos-1) +
-		               Unicode::toUpper(preformatted.substr(toUpperPos, 1)) +
-		               preformatted.substr(toUpperPos+1);
+		size_t toUpperPos = preformatted.find_first_not_of(' ', periodPos + 1);
+		if (toUpperPos != Unicode::String::npos)
+		{
+			preformatted = preformatted.substr(0, toUpperPos - 1) +
+						   Unicode::toUpper(preformatted.substr(toUpperPos, 1)) +
+						   preformatted.substr(toUpperPos + 1);
+		}
 	}
 
 	// Remove spaces prior to characters that shouldn't have spaces before them
 	int pos = 0;
 	const Unicode::unicode_char_t *chars = preformatted.c_str();
-	for (i = 0; i < length - 1; i++)
+	for (i = 0; i + 1 < static_cast<int>(length); i++)
 	{
 		if (isSpace(chars[i]) &&
 		  !shouldHaveSpacesBefore(chars[i+1]))
@@ -2553,7 +2559,8 @@ void CuiCombatManager::buildAttackMessage(Unicode::String & result)
 			resultChars[pos++] = chars[i];
 		}
 	}
-	resultChars[pos++] = chars[length-1];
+	if (length > 0)
+		resultChars[pos++] = chars[length - 1];
 	resultChars[pos] = 0;
 
 	result = Unicode::String(resultChars);
@@ -2580,21 +2587,25 @@ void CuiCombatManager::buildAttackMessageBrief(Unicode::String & result)
 	// Remove excess spaces and toUpper() the first character
 	preformatted = Unicode::trim(preformatted);
 	preformatted = Unicode::toUpper(preformatted.substr(0,1)) + preformatted.substr(1);
-	int length = preformatted.length();
-	int periodPos = preformatted.find(ms_period);
-	if (periodPos != preformatted.npos &&
+	size_t length = preformatted.length();
+	size_t periodPos = preformatted.find(ms_period);
+	if (periodPos != Unicode::String::npos &&
+		length > 0 &&
 		periodPos < length - 1)
 	{
-		int toUpperPos = preformatted.find_first_not_of(' ', periodPos+1);
-		preformatted = preformatted.substr(0, toUpperPos-1) +
-		               Unicode::toUpper(preformatted.substr(toUpperPos, 1)) +
-		               preformatted.substr(toUpperPos+1);
+		size_t toUpperPos = preformatted.find_first_not_of(' ', periodPos + 1);
+		if (toUpperPos != Unicode::String::npos)
+		{
+			preformatted = preformatted.substr(0, toUpperPos - 1) +
+						   Unicode::toUpper(preformatted.substr(toUpperPos, 1)) +
+						   preformatted.substr(toUpperPos + 1);
+		}
 	}
 
 	// Remove spaces prior to characters that shouldn't have spaces before them
 	int pos = 0;
 	const Unicode::unicode_char_t *chars = preformatted.c_str();
-	for (i = 0; i < length - 1; i++)
+	for (i = 0; i + 1 < static_cast<int>(length); i++)
 	{
 		if (isSpace(chars[i]) &&
 		    !shouldHaveSpacesBefore(chars[i+1]))
@@ -2611,7 +2622,8 @@ void CuiCombatManager::buildAttackMessageBrief(Unicode::String & result)
 			resultChars[pos++] = chars[i];
 		}
 	}
-	resultChars[pos++] = chars[length-1];
+	if (length > 0)
+		resultChars[pos++] = chars[length - 1];
 	resultChars[pos] = 0;
 
 	result = Unicode::String(resultChars);
@@ -2750,11 +2762,22 @@ void CuiCombatManager::updateDeferredCombatActions(float deltaTime)
 		// if there are no more combat actions for this key, remove it
 		combatActions = (*itr).second;
 
+		// 2026-06-12 crash fix: erase() invalidates itr; the old code erased and
+		// then unconditionally ++itr'd the dead iterator (c0000005 in
+		// updateDeferredCombatActions the frame a defender's action list empties,
+		// e.g. the target dies mid-combat). Latent since retail -- STLport's
+		// pooled node allocator usually survived the post-erase increment; the
+		// Phase 9 MSVC-STL migration frees the node to the heap, so combat-frame
+		// churn reuses it and the increment faults. map::erase returns the
+		// successor since C++11; use it and skip the increment.
 		if (combatActions.begin() == combatActions.end())
 		{
-			s_delayedDamageAction.erase(itr);
+			itr = s_delayedDamageAction.erase(itr);
 		}
-		++itr;
+		else
+		{
+			++itr;
+		}
 	}
 }
 

@@ -73,109 +73,140 @@ m_petStatusPage(NULL)
 	UIPage * mediatorPage = NULL;
 
 	{
-		hud.getCodeDataObject (TUIPage,     mediatorPage,           "RadarPage");
-		mediatorPage->SetEnabled (true);
-		mediatorPage->SetEnabled (false);
-		m_groundRadarMediator = new SwgCuiGroundRadar (*mediatorPage);
-		m_groundRadarMediator->setSettingsAutoSizeLocation (true, true);
-		m_groundRadarMediator->setStickyVisible (true);
-		m_groundRadarMediator->fetch ();
-		m_groundRadarMediator->activate ();
-		getWorkspace().addMediator (*m_groundRadarMediator);
-	}
-
-	{
-		hud.getCodeDataObject (TUIPage,     mediatorPage,           "AllTargets");
-		mediatorPage->SetEnabled (false);
-		SwgCuiAllTargets * const allTargets = new SwgCuiAllTargetsGround(*mediatorPage);
-		allTargets->setStickyVisible (true);
-		allTargets->activate ();
-		getWorkspace().addMediator (*allTargets);
-	} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
-
-	{
-		hud.getCodeDataObject(TUIPage, mediatorPage, "group");
-		mediatorPage->SetEnabled(false);
-		SwgCuiGroup * const group = new SwgCuiGroup(*mediatorPage);
-		group->setSettingsAutoSizeLocation(true, true);
-		group->setStickyVisible(true);
-		group->activate();
-		getWorkspace().addMediator(*group);
-	} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
-
-	{
-		hud.getCodeDataObject (TUIPage, mediatorPage, "TargetsPage");
-		m_targetStatusPage = new SwgCuiStatusGround(*mediatorPage, SwgCuiStatusGround::ST_intendedTarget);
-		if (m_targetStatusPage != NULL)
+		mediatorPage = NULL;
+		hud.getCodeDataObject(TUIPage, mediatorPage, "RadarPage", true);
+		if (mediatorPage)
 		{
-			mediatorPage->SetEnabled(false);
 			mediatorPage->SetEnabled(true);
-
-			CreatureObject * const player = Game::getPlayerCreature();
-			NOT_NULL(player);
-			// double tap for widget state
-			m_targetStatusPage->setTarget(player);
-			m_targetStatusPage->setTarget(NetworkId::cms_invalid);
-			m_targetStatusPage->setSettingsAutoSizeLocation(true, true);
-			m_targetStatusPage->setStickyVisible(true);
-			m_targetStatusPage->fetch();
-			m_targetStatusPage->activate();
-			m_targetStatusPage->setShowFocusedGlowRect(false);
-			getWorkspace().addMediator(*m_targetStatusPage);
+			mediatorPage->SetEnabled(false);
+			m_groundRadarMediator = new SwgCuiGroundRadar(*mediatorPage);
+			m_groundRadarMediator->setSettingsAutoSizeLocation(true, true);
+			m_groundRadarMediator->setStickyVisible(true);
+			m_groundRadarMediator->fetch();
+			m_groundRadarMediator->activate();
+			getWorkspace().addMediator(*m_groundRadarMediator);
+		}
+		else
+		{
+			WARNING(true, ("SwgCuiHudWindowManagerGround: /RadarPage missing, skipping radar"));
 		}
 	}
 
 	{
-		hud.getCodeDataObject (TUIPage, mediatorPage, "Pet");
-		m_petStatusPage = new SwgCuiStatusGround(*mediatorPage, SwgCuiStatusGround::ST_pet);
-		if (m_petStatusPage != NULL)
+		mediatorPage = NULL;
+		hud.getCodeDataObject(TUIPage, mediatorPage, "AllTargets", true);
+		if (mediatorPage)
 		{
 			mediatorPage->SetEnabled(false);
-			mediatorPage->SetEnabled(true);
+			SwgCuiAllTargets *const allTargets = new SwgCuiAllTargetsGround(*mediatorPage);
+			allTargets->setStickyVisible(true);
+			allTargets->activate();
+			getWorkspace().addMediator(*allTargets);
+		}
+	} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
 
-			CreatureObject * const player = Game::getPlayerCreature();
-			NOT_NULL(player);
-			// double tap for widget state
-			m_petStatusPage->setTarget(player);
-			m_petStatusPage->setTarget(NetworkId::cms_invalid);
-			m_petStatusPage->setSettingsAutoSizeLocation(false, true);
-			m_petStatusPage->setStickyVisible(true);
-			m_petStatusPage->fetch();
-			m_petStatusPage->activate();
-			m_petStatusPage->setShowFocusedGlowRect(false);
+	{
+		mediatorPage = NULL;
+		hud.getCodeDataObject(TUIPage, mediatorPage, "group", true);
+		if (mediatorPage)
+		{
+			mediatorPage->SetEnabled(false);
+			SwgCuiGroup *const group = new SwgCuiGroup(*mediatorPage);
+			group->setSettingsAutoSizeLocation(true, true);
+			group->setStickyVisible(true);
+			group->activate();
+			getWorkspace().addMediator(*group);
+		}
+	} //lint !e429 custodial pointer not freed or returned.  The Workspace owns it.
 
-			getWorkspace().addMediator(*m_petStatusPage);
-			if(Game::getPlayerObject())
-				onPetChanged(*Game::getPlayerObject());
+	{
+		mediatorPage = NULL;
+		hud.getCodeDataObject(TUIPage, mediatorPage, "TargetsPage", true);
+		if (mediatorPage)
+		{
+			m_targetStatusPage = new SwgCuiStatusGround(*mediatorPage, SwgCuiStatusGround::ST_intendedTarget);
+			if (m_targetStatusPage != NULL)
+			{
+				mediatorPage->SetEnabled(false);
+				mediatorPage->SetEnabled(true);
 
+				CreatureObject *const player = Game::getPlayerCreature();
+				if (player)
+				{
+					m_targetStatusPage->setTarget(player);
+					m_targetStatusPage->setTarget(NetworkId::cms_invalid);
+				}
+				m_targetStatusPage->setSettingsAutoSizeLocation(true, true);
+				m_targetStatusPage->setStickyVisible(true);
+				m_targetStatusPage->fetch();
+				m_targetStatusPage->activate();
+				m_targetStatusPage->setShowFocusedGlowRect(false);
+				getWorkspace().addMediator(*m_targetStatusPage);
+			}
 		}
 	}
 
 	{
-		hud.getCodeDataObject (TUIPage, mediatorPage, "SecondaryTargetsPage");
-		m_secondaryTargetStatusPage = new SwgCuiStatusGround(*mediatorPage, SwgCuiStatusGround::ST_lookAtTarget);
-		if (m_secondaryTargetStatusPage != NULL)
+		mediatorPage = NULL;
+		hud.getCodeDataObject(TUIPage, mediatorPage, "Pet", true);
+		if (mediatorPage)
 		{
-			mediatorPage->SetEnabled(false);
-			mediatorPage->SetEnabled(true);
+			m_petStatusPage = new SwgCuiStatusGround(*mediatorPage, SwgCuiStatusGround::ST_pet);
+			if (m_petStatusPage != NULL)
+			{
+				mediatorPage->SetEnabled(false);
+				mediatorPage->SetEnabled(true);
 
-			CreatureObject * const player = Game::getPlayerCreature();
-			NOT_NULL(player);
-			// double tap for widget state
-			m_secondaryTargetStatusPage->setTarget(player);
-			m_secondaryTargetStatusPage->setTarget(NetworkId::cms_invalid);
-			m_secondaryTargetStatusPage->setSettingsAutoSizeLocation(true, true);
-			m_secondaryTargetStatusPage->setStickyVisible(true);
-			m_secondaryTargetStatusPage->fetch();
-			m_secondaryTargetStatusPage->activate();
-			m_secondaryTargetStatusPage->setShowFocusedGlowRect(false);
-			getWorkspace().addMediator(*m_secondaryTargetStatusPage);
+				CreatureObject *const player = Game::getPlayerCreature();
+				if (player)
+				{
+					m_petStatusPage->setTarget(player);
+					m_petStatusPage->setTarget(NetworkId::cms_invalid);
+				}
+				m_petStatusPage->setSettingsAutoSizeLocation(false, true);
+				m_petStatusPage->setStickyVisible(true);
+				m_petStatusPage->fetch();
+				m_petStatusPage->activate();
+				m_petStatusPage->setShowFocusedGlowRect(false);
+
+				getWorkspace().addMediator(*m_petStatusPage);
+				if (Game::getPlayerObject())
+					onPetChanged(*Game::getPlayerObject());
+			}
+		}
+	}
+
+	{
+		mediatorPage = NULL;
+		hud.getCodeDataObject(TUIPage, mediatorPage, "SecondaryTargetsPage", true);
+		if (mediatorPage)
+		{
+			m_secondaryTargetStatusPage = new SwgCuiStatusGround(*mediatorPage, SwgCuiStatusGround::ST_lookAtTarget);
+			if (m_secondaryTargetStatusPage != NULL)
+			{
+				mediatorPage->SetEnabled(false);
+				mediatorPage->SetEnabled(true);
+
+				CreatureObject *const player = Game::getPlayerCreature();
+				if (player)
+				{
+					m_secondaryTargetStatusPage->setTarget(player);
+					m_secondaryTargetStatusPage->setTarget(NetworkId::cms_invalid);
+				}
+				m_secondaryTargetStatusPage->setSettingsAutoSizeLocation(true, true);
+				m_secondaryTargetStatusPage->setStickyVisible(true);
+				m_secondaryTargetStatusPage->fetch();
+				m_secondaryTargetStatusPage->activate();
+				m_secondaryTargetStatusPage->setShowFocusedGlowRect(false);
+				getWorkspace().addMediator(*m_secondaryTargetStatusPage);
+			}
 		}
 	}
 
 	UIPage * statusPage = 0;
-	hud.getCodeDataObject(TUIPage, statusPage, "MfdStatusPage");
-	statusPage->SetVisible(false);
+	hud.getCodeDataObject(TUIPage, statusPage, "MfdStatusPage", true);
+	if (statusPage)
+		statusPage->SetVisible(false);
 
 	connectToMessage(ResourceListForSurveyMessage::MessageType);
 	connectToMessage(SurveyMessage::MessageType);
@@ -187,21 +218,33 @@ m_petStatusPage(NULL)
 
 SwgCuiHudWindowManagerGround::~SwgCuiHudWindowManagerGround ()
 {
-	getWorkspace().removeMediator(*m_groundRadarMediator);
-	m_groundRadarMediator->release();
-	m_groundRadarMediator = 0;
+	if (m_groundRadarMediator)
+	{
+		getWorkspace().removeMediator(*m_groundRadarMediator);
+		m_groundRadarMediator->release();
+		m_groundRadarMediator = 0;
+	}
 
-	getWorkspace().removeMediator(*m_targetStatusPage);
-	m_targetStatusPage->release();
-	m_targetStatusPage = 0;
+	if (m_targetStatusPage)
+	{
+		getWorkspace().removeMediator(*m_targetStatusPage);
+		m_targetStatusPage->release();
+		m_targetStatusPage = 0;
+	}
 
-	getWorkspace().removeMediator(*m_secondaryTargetStatusPage);
-	m_secondaryTargetStatusPage->release();
-	m_secondaryTargetStatusPage = 0;
+	if (m_secondaryTargetStatusPage)
+	{
+		getWorkspace().removeMediator(*m_secondaryTargetStatusPage);
+		m_secondaryTargetStatusPage->release();
+		m_secondaryTargetStatusPage = 0;
+	}
 
-	getWorkspace().removeMediator(*m_petStatusPage);
-	m_petStatusPage->release();
-	m_petStatusPage = 0;
+	if (m_petStatusPage)
+	{
+		getWorkspace().removeMediator(*m_petStatusPage);
+		m_petStatusPage->release();
+		m_petStatusPage = 0;
+	}
 
 	removePlayerStatusPage();
 }
@@ -397,17 +440,20 @@ void SwgCuiHudWindowManagerGround::receiveMessage(const MessageDispatch::Emitter
 
 		if (newbieTutorialEnableHudElement.getName () == cms_newbieTutorialEnableHudElementRadar || newbieTutorialEnableHudElement.getName () == cms_newbieTutorialEnableHudElementAll)
 		{
-			setBlinkingMediator (*m_groundRadarMediator, newbieTutorialEnableHudElement.getBlinkTime ());
+			if (m_groundRadarMediator)
+			{
+				setBlinkingMediator(*m_groundRadarMediator, newbieTutorialEnableHudElement.getBlinkTime());
 
-			if (newbieTutorialEnableHudElement.getEnable ())
-			{
-				if (!m_groundRadarMediator->isActive ())
-					m_groundRadarMediator->activate ();
-			}
-			else
-			{
-				if (m_groundRadarMediator->isActive ())
-					m_groundRadarMediator->deactivate ();
+				if (newbieTutorialEnableHudElement.getEnable())
+				{
+					if (!m_groundRadarMediator->isActive())
+						m_groundRadarMediator->activate();
+				}
+				else
+				{
+					if (m_groundRadarMediator->isActive())
+						m_groundRadarMediator->deactivate();
+				}
 			}
 		}
 	}
@@ -596,14 +642,22 @@ void SwgCuiHudWindowManagerGround::createPlayerStatusPage()
 		bool const isJedi = playerObject && playerObject->isJedi();
 		
 		UIPage * statusPage = NULL;
-		hud->getCodeDataObject(TUIPage, statusPage, "MfdStatusPage");
-		statusPage->SetVisible(false);
-		
+		hud->getCodeDataObject(TUIPage, statusPage, "MfdStatusPage", true);
+		if (statusPage)
+			statusPage->SetVisible(false);
+
 		UIPage * statusPageJedi = NULL;
-		hud->getCodeDataObject(TUIPage, statusPageJedi, "MFDStatusJedi");
-		statusPageJedi->SetVisible(false);
-		
+		hud->getCodeDataObject(TUIPage, statusPageJedi, "MFDStatusJedi", true);
+		if (statusPageJedi)
+			statusPageJedi->SetVisible(false);
+
 		UIPage * const mediatorPage = isJedi ? statusPageJedi : statusPage;
+		if (!mediatorPage)
+		{
+			WARNING(true, ("SwgCuiHudWindowManagerGround::createPlayerStatusPage: status page missing, skipping"));
+			setStatusMediator(NULL);
+			return;
+		}
 		m_playerStatusPage = new SwgCuiStatusGround(*mediatorPage, SwgCuiStatusGround::ST_player);
 		if (m_playerStatusPage != NULL)
 		{
@@ -660,13 +714,26 @@ void SwgCuiHudWindowManagerGround::handlePerformDeactivate()
 {
 	SwgCuiHudWindowManager::handlePerformDeactivate();
 
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::IntendedTargetChanged*>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::LookAtTargetChanged*>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<PlayerCreatureController::Messages::AutoAimToggled*>(0));
+	// crash-guard (2026-06-23, stage/SwgClient_r.exe-unknown.0-20260623152839.mdmp): m_callback (owned and
+	// deleted by the base SwgCuiHudWindowManager dtor) can be NULL when this override runs on a torn-down
+	// manager (CuiMediator::garbageCollect -> deactivate during ExitChain shutdown / focus churn). The base
+	// SwgCuiHudWindowManager::handlePerformDeactivate is self-guarded (early-returns on !m_WindowManagerActive);
+	// this Ground override never mirrored that guard and null-derefed at the first disconnect. Finding-1 family
+	// (same crash class as the 38-06 m_objectCallbackVector guard, different member).
+	if (m_callback)
+	{
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::IntendedTargetChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<CreatureObject::Messages::LookAtTargetChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onTargetChanged, static_cast<PlayerCreatureController::Messages::AutoAimToggled*>(0));
 
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPlayerSetup, static_cast<CreatureObject::Messages::PlayerSetup *>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onJediStateChanged, static_cast<PlayerObject::Messages::JediStateChanged*>(0));
-	m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPetChanged, static_cast<PlayerObject::Messages::PetChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPlayerSetup, static_cast<CreatureObject::Messages::PlayerSetup *>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onJediStateChanged, static_cast<PlayerObject::Messages::JediStateChanged*>(0));
+		m_callback->disconnect(*this, &SwgCuiHudWindowManagerGround::onPetChanged, static_cast<PlayerObject::Messages::PetChanged*>(0));
+	}
+	else
+	{
+		WARNING(true, ("SwgCuiHudWindowManagerGround::handlePerformDeactivate: m_callback already torn down -- skipped disconnects (deactivate on a destructed manager)"));
+	}
 }
 
 //======================================================================

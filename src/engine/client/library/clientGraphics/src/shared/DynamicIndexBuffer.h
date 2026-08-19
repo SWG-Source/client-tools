@@ -33,6 +33,8 @@ class DynamicIndexBuffer : public HardwareIndexBuffer
 	friend class  Direct3d8_StaticIndexBufferData;
 	friend class  Direct3d9;
 	friend class  Direct3d9_StaticIndexBufferData;
+	friend class Direct3d11;
+	friend class Direct3d11_DynamicIndexBufferData;
 
 public:
 

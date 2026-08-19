@@ -52,6 +52,8 @@
 #include <sstream>
 
 // boost includes
+// Disable deprecated auto_ptr support for modern C++
+#define BOOST_NO_AUTO_PTR
 #include "boost/smart_ptr.hpp"
 
 // maya includes

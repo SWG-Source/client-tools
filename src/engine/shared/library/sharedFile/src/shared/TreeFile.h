@@ -64,6 +64,17 @@ public:
 	static void install(uint32 skuBits);
 	static void remove();
 
+	//-- A/B telemetry: per-loose-node probe counters. ExitChain-registered at
+	//   priority 100 so it outruns the SharedLog teardown (see the definition).
+	static void reportProbeCounters();
+
+	// Clear the searchPath negative-cache entry (and update a built manifest)
+	// for one engine-relative name on every loose SearchPath node. Call after
+	// WRITING a loose file mid-session (the misses-only cache otherwise keeps a
+	// previously-probed name invisible until restart -- the CONSULT-59
+	// trade-off, TreeFile_SearchNode.h). No-op for names never probed.
+	static void          forgetMissingFile(const char *fileName);
+
 	static bool isLoggingFiles();
 
 #ifdef _DEBUG
@@ -94,6 +105,12 @@ public:
 	static int           getNumberOfSearchPaths();
 	static const char   *getSearchPath(int index);
 
+	// Engine-hookpoint advertisement (treeFile::enumerateFiles): invoke callback once
+	// per filename across all registered SearchTree/SearchTOC nodes (engine-relative
+	// paths, e.g. "terrain/tatooine.trn"). Order/dedup unspecified. The callback runs
+	// while ms_criticalSection is held -- it MUST NOT re-enter TreeFile.
+	static void          enumerateFiles(void (*callback)(const char *fileName, void *context), void *context);
+
 	static void          addCachedFile(const char *fileName, AbstractFile *file);
 	static void          clearCachedFiles();
 
@@ -118,6 +135,7 @@ private:
 	static void        addSearchCache(int priority);
 	static bool        searchNodePriorityOrder(const SearchNode *a, const SearchNode *b);
 	static void        addSearchNode(SearchNode *newNode);
+	static int         copySearchNodes(SearchNode **snapshot, int maxNodes);
 	static SearchNode *find(const char *fileName);
 
 	static void        fixUpFileName(char *output, const char *filename, bool warning);

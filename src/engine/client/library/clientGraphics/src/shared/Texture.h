@@ -32,6 +32,8 @@ public:
 		friend class Texture;
 		friend class Direct3d8_TextureData;
 		friend class Direct3d9_TextureData;
+		friend class Direct3d11_TextureData;
+		friend class Headless_TextureGraphicsData;
 
 	public:
 
@@ -106,6 +108,8 @@ class Texture
 	friend class Direct3d8_RenderTarget;
 	friend class Direct3d9;
 	friend class Direct3d9_RenderTarget;
+	friend class Direct3d11;
+	friend class Direct3d11_RenderTarget;
 	friend class TextureList;
 	friend class Graphics;
 
@@ -115,6 +119,9 @@ public:
 
 private:
 
+	// CONSULT-56 follow-up: mutated ONLY under TextureList's critical section (the
+	// ShaderEffect/ShaderImplementation idiom) -- the ClientTerrain worker's StaticShader
+	// clone fetch/release races main-thread render fetch/release and by-name resurrection.
 	mutable int                              m_referenceCount;
 	PersistentCrcString                      m_crcString;
 

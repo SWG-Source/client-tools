@@ -11,8 +11,8 @@
 
 // Efficiently handle memory mangagement for rapidly allocated and deleted objects.
 
-#include <hash_map>
-#include <hash_set>
+#include <unordered_map>
+#include <unordered_Set>
 
 class UiMemoryBlockManager
 {
@@ -42,7 +42,7 @@ private:
 
 private:
 	// name of this UiMemoryBlockManager
-	char * m_name;
+	std::string m_name;
 
 	template<class T>
 	struct HashPointer
@@ -54,13 +54,13 @@ private:
 	};
 
 #ifdef _DEBUG
-	typedef std::hash_set<void * /*data*/, HashPointer<void *> > MemorySet;
+	typedef std::unordered_set<void * /*data*/, HashPointer<void *> > MemorySet;
 	int m_bytesAllocated;
 	MemorySet * m_allAllocations;
 #endif
 
 	// convert to hash multi-map.
-	typedef std::hash_multimap<int /*elementSize*/, void * /*data*/> MemoryMap;
+	typedef std::unordered_multimap<int /*elementSize*/, void * /*data*/> MemoryMap;
 	MemoryMap * m_memoryMap;
 
 	// Memory pool.
@@ -94,7 +94,7 @@ private:
 
 inline const char *UiMemoryBlockManager::getName() const
 {
-	return m_name;
+	return m_name.c_str();
 }
 
 // ======================================================================

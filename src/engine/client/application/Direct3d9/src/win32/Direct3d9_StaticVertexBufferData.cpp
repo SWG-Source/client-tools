@@ -14,6 +14,9 @@
 
 #include "sharedFoundation/MemoryBlockManager.h"
 
+#include <cstdint>
+#include <functional>
+
 // ======================================================================
 
 MemoryBlockManager * Direct3d9_StaticVertexBufferData::ms_memoryBlockManager;
@@ -128,7 +131,10 @@ void Direct3d9_StaticVertexBufferData::unlock()
 
 int Direct3d9_StaticVertexBufferData::getSortKey()
 {
-	return reinterpret_cast<int>(m_d3dVertexBuffer);
+	// Stable hash-to-int of the D3D vertex-buffer pointer (D-06 review #3): the
+	// int return is preserved so the virtual getSortKey() interface does not
+	// widen, and the full 64-bit pointer entropy survives on x64.
+	return static_cast<int>(std::hash<uintptr_t>{}(reinterpret_cast<uintptr_t>(m_d3dVertexBuffer)));
 }
 
 // ----------------------------------------------------------------------

@@ -301,7 +301,7 @@ Texture const * TextureList::create(CrcString const & filename, bool const creat
 			// add to list
 			NamedContainer::value_type newValue(&(newTexture->getCrcString()), newTexture);
 			std::pair<NamedContainer::iterator, bool> insertResult = ms_namedTextures->insert(newValue);
-			DEBUG_FATAL(!insertResult.second, ("both find and insert failed for [%s]", filename));
+			DEBUG_FATAL(!insertResult.second, ("both find and insert failed for [%s]", filename.getString()));
 
 			// set iterator
 			it = insertResult.first;
@@ -425,6 +425,8 @@ void TextureList::removeFromList(const Texture *texture)
 		return;
 	}
 
+	// Callers on the Texture::release path already hold ms_criticalSection; it is a
+	// recursive CRITICAL_SECTION, so this nested enter is safe.
 	ms_criticalSection.enter();
 
 		NamedContainer::iterator it = ms_namedTextures->find(&crcString);
@@ -435,6 +437,20 @@ void TextureList::removeFromList(const Texture *texture)
 			DEBUG_FATAL(it != ms_namedTextures->end(), ("named texture [%s] not in named texture map", crcString.getString()));
 		}
 
+	ms_criticalSection.leave();
+}
+
+// ----------------------------------------------------------------------
+
+void TextureList::enterCriticalSection()
+{
+	ms_criticalSection.enter();
+}
+
+// ----------------------------------------------------------------------
+
+void TextureList::leaveCriticalSection()
+{
 	ms_criticalSection.leave();
 }
 

@@ -7,7 +7,9 @@
 #include "hashtable.hpp"
 
 #if defined(WIN32)
-	typedef unsigned int SOCKET;	// avoids us having to include winsock.h just for this
+	#include <basetsd.h>          // UINT_PTR - lighter than full winsock.h
+	typedef UINT_PTR SOCKET;       // matches WinSock's SOCKET type
+                                  // (4 bytes on Win32, 8 bytes on x64)
 	typedef __int64 udp_int64;
 #else
 	typedef int SOCKET;

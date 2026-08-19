@@ -1,4 +1,4 @@
-// ======================================================================
+﻿// ======================================================================
 //
 // CommoditiesAdvancedSearchAttribute.cpp
 // Copyright 2006 Sony Online Entertainment LLC (SOE)
@@ -43,9 +43,9 @@ void CommoditiesAdvancedSearchAttribute::install()
 		int const columnSearchAttributeName = table->findColumnNumber("Search Attribute Name");
 		int const columnSearchAttributeDataType = table->findColumnNumber("Search Attribute Data Type");
 
-		FATAL((columnGameObjectType < 0), ("column \"Game Object Type\" not found in %s", cs_advancedSearchAttributeDataTableName));
-		FATAL((columnSearchAttributeName < 0), ("column \"Search Attribute Name\" not found in %s", cs_advancedSearchAttributeDataTableName));
-		FATAL((columnSearchAttributeDataType < 0), ("column \"Search Attribute Data Type\" not found in %s", cs_advancedSearchAttributeDataTableName));
+		STRICT_DATA_FATAL((columnGameObjectType < 0), ("column \"Game Object Type\" not found in %s", cs_advancedSearchAttributeDataTableName));
+		STRICT_DATA_FATAL((columnSearchAttributeName < 0), ("column \"Search Attribute Name\" not found in %s", cs_advancedSearchAttributeDataTableName));
+		STRICT_DATA_FATAL((columnSearchAttributeDataType < 0), ("column \"Search Attribute Data Type\" not found in %s", cs_advancedSearchAttributeDataTableName));
 
 		// the can be a variable number of "Default Search Value" columns, as long as the columns are
 		// named "Default Search Value 1", "Default Search Value 2", "Default Search Value 3", and so on
@@ -279,7 +279,7 @@ void CommoditiesAdvancedSearchAttribute::install()
 	}
 	else
 	{
-		FATAL(true, ("commodities advanced search attribute datatable %s not found", cs_advancedSearchAttributeDataTableName));
+		STRICT_DATA_FATAL(true, ("commodities advanced search attribute datatable %s not found (set [SharedFoundation] strictData=false to continue with the feature disabled)", cs_advancedSearchAttributeDataTableName));
 	}
 
 	ExitChain::add(remove, "CommoditiesAdvancedSearchAttribute::remove");

@@ -513,7 +513,7 @@ void UIPie::RenderCenter (UICanvas & canvas) const
 		s_uvsScratchBuf.push_back (uvs);
 	}
 
-	canvas.RenderTriangles (imageStyle->GetSourceCanvas (), mNumSegments, s_triangleScratchBuf.begin (), s_uvsScratchBuf.begin ());
+	canvas.RenderTriangles (imageStyle->GetSourceCanvas(), mNumSegments, s_triangleScratchBuf.data(), s_uvsScratchBuf.data());
 }
 
 //----------------------------------------------------------------------
@@ -685,7 +685,7 @@ void UIPie::RenderRing (UICanvas & canvas) const
 		lastInnerPoint = innerPoint;
 	}
 
-	canvas.RenderTriangles (imageStyle->GetSourceCanvas (), mNumSegments * 2, s_triangleScratchBuf.begin (), s_uvsScratchBuf.begin ());
+	canvas.RenderTriangles (imageStyle->GetSourceCanvas (), mNumSegments * 2, s_triangleScratchBuf.data(), s_uvsScratchBuf.data());
 }
 
 //----------------------------------------------------------------------

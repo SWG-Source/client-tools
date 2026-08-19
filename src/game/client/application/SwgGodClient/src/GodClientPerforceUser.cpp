@@ -9,6 +9,8 @@
 #include "GodClientPerforceUser.h"
 #include "GodClientPerforce.h"
 
+#if !defined(SWG_DISABLE_PERFORCE)
+
 #include "errornum.h"
 
 #include <qinputdialog.h>
@@ -179,3 +181,42 @@ bool GodClientPerforceUser::runCommand (const char * command, const StringVector
 }
 
 //-----------------------------------------------------------------
+
+#else
+
+GodClientPerforceUser::GodClientPerforceUser()
+	: MessageDispatch::Emitter(),
+	  m_errorOccurred(false),
+	  m_lastError(0),
+	  m_filteredErrors(),
+	  m_return_value()
+{
+}
+
+void GodClientPerforceUser::OutputInfo(char level, char *data)
+{
+	(void)level;
+	if (data)
+		m_return_value += data;
+}
+
+bool GodClientPerforceUser::runCommand(const char *command, const char *arg1)
+{
+	StringVector args;
+	if (arg1)
+		args.push_back(arg1);
+	return runCommand(command, args);
+}
+
+bool GodClientPerforceUser::runCommand(const char *command, const StringVector &args)
+{
+	(void)command;
+	(void)args;
+	m_errorOccurred = true;
+	m_lastError = -1;
+	m_lastErrorText = "Perforce integration is unavailable in the x64 God client.";
+	m_return_value.clear();
+	return false;
+}
+
+#endif

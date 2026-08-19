@@ -32,6 +32,7 @@ class StaticShader : public Shader
 	friend class Direct3d8;
 	friend class Direct3d8_StaticShaderData;
 	friend class Direct3d9;
+	friend class Direct3d11;
 	friend class StaticShaderTemplate;
 
 public:

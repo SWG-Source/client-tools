@@ -60,6 +60,14 @@ public SwgCuiLockableMediator,
 public UINotification,
 public MessageDispatch::Receiver
 {
+	// Engine-hookpoint advertisement (24-§4 4d): the PRIVATE static createNewWindow
+	// construction funnel is advertised as a DETOUR target (the ctor itself is
+	// unaddressable in C++). This friend lets the address provider in
+	// SwgCuiChatWindow.cpp take &createNewWindow. Adds NO struct ABI change; the
+	// accessor is exe-local (both platforms since the 2026-08-15 x64 port).
+	// See engine_chatWindow_forward.h.
+	friend void * engine_chatWindowCreateNewWindowEntry();
+
 public:
  	//----------------------------------------------------------------------
 

@@ -69,7 +69,7 @@ private:
 	LocalShaderPrimitive(LocalShaderPrimitive const &);
 	LocalShaderPrimitive & operator=(LocalShaderPrimitive const &);
 
-	VertexBufferFormat LocalShaderPrimitive::getVertexBufferFormat() const;
+	VertexBufferFormat getVertexBufferFormat() const;
 
 private:
 

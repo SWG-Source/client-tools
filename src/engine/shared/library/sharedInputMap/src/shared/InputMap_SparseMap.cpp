@@ -23,6 +23,7 @@ namespace
 	const Tag TAG_KEYS = TAG (K,E,Y,S);
 	const Tag TAG_JOYX = TAG (J,O,Y,X);
 	const Tag TAG_JOYS = TAG (J,O,Y,S);
+	const Tag TAG_JYDV = TAG(J, Y, D, V); // per-device joystick binding block (version 0007)
 
 	//-- todo: remove this by making all the sparsemap structs the same type
 
@@ -305,6 +306,151 @@ void InputMap::SparseMap::write_0006 (Iff & iff) const
 
 //-----------------------------------------------------------------
 /**
+ * Write version 0007: one JYDV sub-form per joystick slot that has bindings,
+ * each carrying the slot index then the unchanged JOYB/JOYX/JOYS/POV bodies.
+ */
+void InputMap::SparseMap::write_0007(Iff &iff) const
+{
+	iff.insertChunk(TAG_INFO);
+	{
+		iff.insertChunkData(shiftState);
+		iff.insertChunkData(static_cast<uint8>(absorbDefaultShiftMaps));
+	}
+	iff.exitChunk(TAG_INFO);
+
+	if (numberOfKeys)
+	{
+		iff.insertForm(TAG_KEYS, true);
+		writeShiftStuff(iff, numberOfKeys, key);
+		iff.exitForm(TAG_KEYS);
+	}
+
+	if (numberOfMouseButtons)
+	{
+		iff.insertForm(TAG_MOSB, true);
+		writeShiftStuff(iff, numberOfMouseButtons, mouseButton);
+		iff.exitForm(TAG_MOSB);
+	}
+
+	for (uint32 j = 0; j < MAX_JOYSTICKS; ++j)
+	{
+		const Joystick &joy = joystick[j];
+
+		if (!joy.numberOfJoystickButtons && !joy.numberOfJoystickAxis && !joy.numberOfJoystickSliders && !joy.numberOfJoystickPovHats)
+			continue;
+
+		iff.insertForm(TAG_JYDV);
+		{
+			iff.insertChunk(TAG_INFO);
+			{
+				iff.insertChunkData(static_cast<int32>(j));
+			}
+			iff.exitChunk(TAG_INFO);
+
+			if (joy.numberOfJoystickButtons)
+			{
+				iff.insertForm(TAG_JOYB, true);
+				writeShiftStuff(iff, joy.numberOfJoystickButtons, joy.joystickButton);
+				iff.exitForm(TAG_JOYB);
+			}
+			if (joy.numberOfJoystickAxis)
+			{
+				iff.insertForm(TAG_JOYX, true);
+				writeShiftStuff(iff, joy.numberOfJoystickAxis, joy.joystickAxis);
+				iff.exitForm(TAG_JOYX);
+			}
+			if (joy.numberOfJoystickSliders)
+			{
+				iff.insertForm(TAG_JOYS, true);
+				writeShiftStuff(iff, joy.numberOfJoystickSliders, joy.joystickSlider);
+				iff.exitForm(TAG_JOYS);
+			}
+			if (joy.numberOfJoystickPovHats)
+			{
+				iff.insertForm(TAG_POV, true);
+				writeShiftStuff(iff, joy.numberOfJoystickPovHats, joy.joystickPovHat);
+				iff.exitForm(TAG_POV);
+			}
+		}
+		iff.exitForm(TAG_JYDV);
+	}
+}
+
+//-----------------------------------------------------------------
+/**
+ * Load version 0007: read per-slot JYDV sub-forms into joystick[slot].
+ */
+void InputMap::SparseMap::load_0007(const InputMap &imap, Iff &iff)
+{
+	iff.enterChunk(TAG_INFO);
+	{
+		shiftState = iff.read_uint32();
+		absorbDefaultShiftMaps = iff.read_uint8() != 0;
+	}
+	iff.exitChunk(TAG_INFO);
+
+	if (iff.enterForm(TAG_KEYS, true))
+	{
+		const int failCount = loadShiftStuff(imap, iff, shiftState, Command::T_BUTTON, numberOfKeys, key);
+		WARNING(failCount > 0, ("InputMap::SparseMap failed to load %d key bindings for shift state %d", failCount, shiftState));
+		iff.exitForm(TAG_KEYS);
+	}
+
+	if (iff.enterForm(TAG_MOSB, true))
+	{
+		const int failCount = loadShiftStuff(imap, iff, shiftState, Command::T_BUTTON, numberOfMouseButtons, mouseButton);
+		WARNING(failCount > 0, ("InputMap::SparseMap failed to load %d mouse button bindings", failCount, shiftState));
+		iff.exitForm(TAG_MOSB);
+	}
+
+	while (!iff.atEndOfForm())
+	{
+		if (!iff.enterForm(TAG_JYDV, true))
+			break;
+
+		int32 slot = 0;
+		iff.enterChunk(TAG_INFO);
+		{
+			slot = iff.read_int32();
+		}
+		iff.exitChunk(TAG_INFO);
+
+		if (slot < 0 || slot >= static_cast<int32>(MAX_JOYSTICKS))
+			slot = 0;
+
+		Joystick &joy = joystick[slot];
+
+		if (iff.enterForm(TAG_JOYB, true))
+		{
+			const int failCount = loadShiftStuff(imap, iff, shiftState, Command::T_BUTTON, joy.numberOfJoystickButtons, joy.joystickButton);
+			WARNING(failCount > 0, ("InputMap::SparseMap failed to load %d joystick button bindings", failCount, shiftState));
+			iff.exitForm(TAG_JOYB);
+		}
+		if (iff.enterForm(TAG_JOYX, true))
+		{
+			const int failCount = loadShiftStuff(imap, iff, shiftState, Command::T_AXIS, joy.numberOfJoystickAxis, joy.joystickAxis);
+			WARNING(failCount > 0, ("InputMap::SparseMap failed to load %d joystick axis bindings", failCount, shiftState));
+			iff.exitForm(TAG_JOYX);
+		}
+		if (iff.enterForm(TAG_JOYS, true))
+		{
+			const int failCount = loadShiftStuff(imap, iff, shiftState, Command::T_SLIDER, joy.numberOfJoystickSliders, joy.joystickSlider);
+			WARNING(failCount > 0, ("InputMap::SparseMap failed to load %d joystick slider bindings", failCount, shiftState));
+			iff.exitForm(TAG_JOYS);
+		}
+		if (iff.enterForm(TAG_POV, true))
+		{
+			const int failCount = loadShiftStuff(imap, iff, shiftState, Command::T_POVHAT, joy.numberOfJoystickPovHats, joy.joystickPovHat);
+			WARNING(failCount > 0, ("InputMap::SparseMap failed to load %d joystick pov bindings", failCount, shiftState));
+			iff.exitForm(TAG_POV);
+		}
+
+		iff.exitForm(TAG_JYDV);
+	}
+}
+
+//-----------------------------------------------------------------
+/**
 * Remove all bindings for the given command
 */
 void InputMap::SparseMap::removeBindings (const Command * cmd)
@@ -375,44 +521,48 @@ bool InputMap::SparseMap::addBinding (const BindInfo & binfo, const Command * cm
 
 	case IT_JoyButton:
 		{
-			for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
-			{
-				insertInfo (binfo, cmd, joystick [i].joystickButton, joystick [i].numberOfJoystickButtons);
-			}
+			if (binfo.device >= 0 && binfo.device < static_cast<int32>(MAX_JOYSTICKS))
+				insertInfo(binfo, cmd, joystick[binfo.device].joystickButton, joystick[binfo.device].numberOfJoystickButtons);
+			else
+				for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
+					insertInfo(binfo, cmd, joystick[i].joystickButton, joystick[i].numberOfJoystickButtons);
 		}
 		break;
 
 	case IT_JoyPovHat:
 		{
-			for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
-			{
-				insertInfo (binfo, cmd, joystick [i].joystickPovHat, joystick [i].numberOfJoystickPovHats);
-			}
+			if (binfo.device >= 0 && binfo.device < static_cast<int32>(MAX_JOYSTICKS))
+				insertInfo(binfo, cmd, joystick[binfo.device].joystickPovHat, joystick[binfo.device].numberOfJoystickPovHats);
+			else
+				for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
+					insertInfo(binfo, cmd, joystick[i].joystickPovHat, joystick[i].numberOfJoystickPovHats);
 		}
 
 		break;
 
 	case IT_JoyAxis:
 		{
-			for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
-			{
-				insertInfo (binfo, cmd, joystick [i].joystickAxis, joystick [i].numberOfJoystickAxis);
-			}
+			if (binfo.device >= 0 && binfo.device < static_cast<int32>(MAX_JOYSTICKS))
+				insertInfo(binfo, cmd, joystick[binfo.device].joystickAxis, joystick[binfo.device].numberOfJoystickAxis);
+			else
+				for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
+					insertInfo(binfo, cmd, joystick[i].joystickAxis, joystick[i].numberOfJoystickAxis);
 		}
-		break;	
-		
-	case IT_JoySlider:
-		{
-			for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
-			{
-				insertInfo (binfo, cmd, joystick [i].joystickSlider, joystick [i].numberOfJoystickSliders);
-			}
-		}
-		break;	
+		break;
 
-	case IT_None:
-	default:
-		return false;
+		case IT_JoySlider:
+		{
+			if (binfo.device >= 0 && binfo.device < static_cast<int32>(MAX_JOYSTICKS))
+				insertInfo(binfo, cmd, joystick[binfo.device].joystickSlider, joystick[binfo.device].numberOfJoystickSliders);
+			else
+				for (uint32 i = 0; i < MAX_JOYSTICKS; ++i)
+					insertInfo(binfo, cmd, joystick[i].joystickSlider, joystick[i].numberOfJoystickSliders);
+		}
+		break;
+
+		case IT_None:
+		default:
+			return false;
 	}
 
 	return true;
@@ -471,11 +621,13 @@ const InputMap::Command * InputMap::SparseMap::getCommandByBinding (const BindIn
 		
 		for (j = 0; j< MAX_JOYSTICKS; ++j)
 		{
+			if (binfo.device >= 0 && static_cast<int32>(j) != binfo.device)
+				continue;
 			const Joystick & joy = joystick [j];
 					
 			if (joy.numberOfJoystickButtons == 0)
-				break;
-			
+				continue;
+
 			NOT_NULL (key);
 
 			for (i = 0; i < joy.numberOfJoystickButtons; ++i)
@@ -493,11 +645,13 @@ const InputMap::Command * InputMap::SparseMap::getCommandByBinding (const BindIn
 		
 		for (j = 0; j< MAX_JOYSTICKS; ++j)
 		{
+			if (binfo.device >= 0 && static_cast<int32>(j) != binfo.device)
+				continue;
 			const Joystick & joy = joystick [j];
 					
 			if (joy.numberOfJoystickAxis == 0)
-				break;
-			
+				continue;
+
 			NOT_NULL (key);
 
 			for (i = 0; i < joy.numberOfJoystickAxis; ++i)
@@ -515,11 +669,13 @@ const InputMap::Command * InputMap::SparseMap::getCommandByBinding (const BindIn
 		
 		for (j = 0; j< MAX_JOYSTICKS; ++j)
 		{
+			if (binfo.device >= 0 && static_cast<int32>(j) != binfo.device)
+				continue;
 			const Joystick & joy = joystick [j];
 					
 			if (joy.numberOfJoystickSliders == 0)
-				break;
-			
+				continue;
+
 			NOT_NULL (key);
 
 			for (i = 0; i < joy.numberOfJoystickSliders; ++i)
@@ -537,11 +693,13 @@ const InputMap::Command * InputMap::SparseMap::getCommandByBinding (const BindIn
 		
 		for (j = 0; j< MAX_JOYSTICKS; ++j)
 		{
+			if (binfo.device >= 0 && static_cast<int32>(j) != binfo.device)
+				continue;
 			const Joystick & joy = joystick [j];
 			
 			if (joy.numberOfJoystickPovHats == 0)
-				break;
-			
+				continue;
+
 			NOT_NULL (key);
 
 			for (i = 0; i < joy.numberOfJoystickPovHats; ++i)
@@ -603,25 +761,25 @@ void InputMap::SparseMap::getCommandBindings (std::vector<BindInfo> & biv, const
 		for (k = 0; k < joy.numberOfJoystickButtons; ++k)
 		{
 			if (joy.joystickButton [k].cmd == cmd)
-				biv.push_back (BindInfo (shiftState, IT_JoyButton, joy.joystickButton [k].id));
+				biv.push_back(BindInfo(shiftState, IT_JoyButton, joy.joystickButton[k].id, static_cast<int32>(j)));
 		}
 		
 		for (k = 0; k < joy.numberOfJoystickAxis; ++k)
 		{
 			if (joy.joystickAxis [k].cmd== cmd)
-				biv.push_back (BindInfo (shiftState, IT_JoyAxis, joy.joystickAxis [k].id));
+				biv.push_back(BindInfo(shiftState, IT_JoyAxis, joy.joystickAxis[k].id, static_cast<int32>(j)));
 		}
 
 		for (k = 0; k < joy.numberOfJoystickSliders; ++k)
 		{
 			if (joy.joystickSlider [k].cmd== cmd)
-				biv.push_back (BindInfo (shiftState, IT_JoySlider, joy.joystickSlider [k].id));
+				biv.push_back(BindInfo(shiftState, IT_JoySlider, joy.joystickSlider[k].id, static_cast<int32>(j)));
 		}
 		
 		for (k = 0; k < joy.numberOfJoystickPovHats; ++k)
 		{
 			if (joy.joystickPovHat [k].cmd == cmd)
-				biv.push_back (BindInfo (shiftState, IT_JoyPovHat, joy.joystickPovHat [k].id));
+				biv.push_back(BindInfo(shiftState, IT_JoyPovHat, joy.joystickPovHat[k].id, static_cast<int32>(j)));
 		}
 	}
 }

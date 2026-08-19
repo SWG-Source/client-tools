@@ -53,9 +53,10 @@ namespace
 	 */
 	struct ObjectListItem : public QListViewItem
 	{
-		ObjectListItem(QListView* theParent, ClientObject* obj)
-		: QListViewItem(theParent),
-		  m_objPtr(obj)
+		ObjectListItem(QListView *theParent, ClientObject *obj)
+			: QListViewItem(theParent),
+			  m_networkId(obj->getNetworkId()),
+			  m_objPtr(obj)
 		{
 			NOT_NULL(obj);
 			//TODO optionally show name, networkId, short template name, long template name, short client template name, long client template name
@@ -126,6 +127,7 @@ namespace
 			QListViewItem::setText(0, shortTemplateName.c_str());
 		}
 
+		NetworkId m_networkId;
 		ClientObject* m_objPtr;
 	private:
 		//disabled
@@ -507,7 +509,7 @@ void TreeBrowser::onObjectDoubleClicked(QListViewItem* item)
 	else
 	{
 		char buf [128];
-		IGNORE_RETURN(_snprintf(buf, 128, "Object id %d not found in world.", moli->m_objPtr->getNetworkId()));
+		IGNORE_RETURN(_snprintf(buf, 128, "Object id %s not found in world.", moli->m_networkId.getValueString().c_str()));
 		IGNORE_RETURN(QMessageBox::warning(this, "Warning", buf));
 		return;
 	}

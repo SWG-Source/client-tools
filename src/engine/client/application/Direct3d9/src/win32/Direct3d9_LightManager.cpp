@@ -29,7 +29,10 @@
 #ifdef FIELD_OFFSET
 #undef FIELD_OFFSET
 #endif
-#define FIELD_OFFSET(type, field)    ((int)&(((type *)0)->field))
+// Phase 33 (X64-02 / BITS-02): cast the member pointer through pointer-width (size_t) before
+// narrowing to int -- the offset value is small (struct-relative) so the int result is unchanged on
+// both x86 and x64, but the direct (int)pointer cast truncated under /we4311 on x64.
+#define FIELD_OFFSET(type, field)    ((int)(size_t)&(((type *)0)->field))
 
 // ======================================================================
 

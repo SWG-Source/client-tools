@@ -42,11 +42,21 @@ public:
 
 
 	static void load               (char const *sceneName);
+
+	// CONSULT-60: load() now only performs the cheap prologue (unload, open the
+	// .ws, load the buildout-area LIST); the heavy parse (node tree, per-area
+	// buildout tables, sphere tree) runs in budgeted loadStep() calls pumped
+	// from GroundScene's loading update ([ClientGame] worldSnapshotParseBudgetMs,
+	// <=0 restores the old fully-synchronous load). donePreloading() stays false
+	// until the parse completes; consumers that need complete data mid-parse
+	// finish the remaining parse synchronously (exactness valve).
+	static void loadStep           ();
 	static void setExcludeArea     (char const *areaName);
 	static void update             (CellProperty const * cellProperty, Vector const & position_w);
 	static bool isClientCached     (int64 networkIdInt);
 	static void moveObject         (int64 networkIdInt, Transform const &transform_p);
 	static void removeObject       ( int64 networkIdInt);
+	static void suppressObject     (int64 networkIdInt);
 	static void loadIfClientCached (NetworkId const &networkId);
 	static void preloadSomeAssets  ();
 	static int  getLoadingPercent  ();
@@ -58,10 +68,14 @@ public:
 	static void removeEventObjects (std::string const & eventName);
 	static void addEventObjects    (std::string const & eventName);
 
+	// Goal B Wave 3 (2026-07-18): promoted private -> public for the editor's
+	// engine_wsUnloadSnapshot shim (same TU as the singleton state, but shims
+	// are extern "C" free functions with no member access). No layout change.
+	static void unload ();
+
 private:
 
 	static void remove ();
-	static void unload ();
 
 private:
 

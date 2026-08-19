@@ -9,6 +9,8 @@
 #include "sharedRegex/FirstSharedRegex.h"
 #include "sharedRegex/RegexServices.h"
 
+#include <intrin.h> // _ReturnAddress
+
 // ======================================================================
 
 static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
@@ -16,28 +18,20 @@ static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool 
 	return MemoryManager::allocate(size, owner, array, leakTest);
 }
 
-static __declspec(naked) void * regexAllocate(size_t)
+// ----------------------------------------------------------------------
+//
+// Was: an x86 naked function that read the caller's return address from
+// [ebp+4] and passed it to localAllocate as the memory-owner tag. The
+// `_ReturnAddress` intrinsic does the same thing portably and the
+// compiler skips emitting any prolog/epilog itself, so we no longer
+// need the naked declaration. Truncating the 64-bit return address to
+// the 32-bit `owner` is fine - it's an opaque identifier used only by
+// the leak tracker.
+
+static void *regexAllocate(size_t size)
 {
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// MemoryManager::alloc(size, [return address], false, true)
-		push    1
-		push    0
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
+	const uintptr_t returnAddress = reinterpret_cast<uintptr_t>(_ReturnAddress());
+	return localAllocate(size, static_cast<uint32>(returnAddress), false, true);
 }
 
 // ----------------------------------------------------------------------

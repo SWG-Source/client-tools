@@ -178,7 +178,7 @@ template<typename T, int T_SIZE> class IStringFixed : public IString<T>
         virtual void Free(byte *data);
 
     private:
-        byte m_fixedData[(T_SIZE * sizeof(T)) + sizeof(RefType)];
+        byte m_fixedData[(T_SIZE * sizeof(T)) + sizeof(IString<T>::RefType)];
 };
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -194,19 +194,19 @@ template<typename T> class IStringNoShare : public IString<T>
 
         IStringNoShare<T> &operator=(const IStringNoShare<T> &other)
         { 
-            Copy(other); 
+            IString<T>::Copy(other);
             return(*this); 
         }
 
         IStringNoShare<T> &operator=(const IString<T> &other)
         { 
-            Copy(other); 
+            IString<T>::Copy(other);
             return(*this); 
         }
 
         IStringNoShare<T> &operator=(const char *other)
         { 
-            Copy(other); 
+            IString<T>::Copy(other);
             return(*this); 
         }
 
@@ -1057,34 +1057,34 @@ template<typename T, int T_SIZE> IStringFixed<T, T_SIZE>::IStringFixed() : IStri
 
 template<typename T, int T_SIZE> IStringFixed<T, T_SIZE>::~IStringFixed()
 {
-    Clear();
+    IString<T>::Clear();
 }
 
 template<typename T, int T_SIZE> IStringFixed<T, T_SIZE>::IStringFixed(const IString<T> &source) : IString<T>()
 {
         // must default construct first, then assign, otherwise the Alloc virtual function won't be mapped to the derived class yet
-    Copy(source);
+    IString<T>::Copy(source);
 }
 
 template<typename T, int T_SIZE> IStringFixed<T, T_SIZE>::IStringFixed(const T *source) : IString<T>()
 {
         // must default construct first, then assign, otherwise the Alloc virtual function won't be mapped to the derived class yet
-    Copy(source);
+    IString<T>::Copy(source);
 }
 
 template<typename T, int T_SIZE> IStringFixed<T, T_SIZE>::IStringFixed(const IStringFixed<T, T_SIZE> &source) : IString<T>()
 {
-    Copy(source);
+    IString<T>::Copy(source);
 }
 
 template<typename T, int T_SIZE> IStringFixed<T, T_SIZE> &IStringFixed<T, T_SIZE>::operator=(const IStringFixed<T, T_SIZE> &other)
 {
-    Copy(other);
+    IString<T>::Copy(other);
 }
 
 template<typename T, int T_SIZE> IStringFixed<T, T_SIZE> &IStringFixed<T, T_SIZE>::operator=(const IString<T> &other)
 {
-    Copy(other);
+    IString<T>::Copy(other);
 }
 
 template<typename T, int T_SIZE> byte *IStringFixed<T, T_SIZE>::Alloc(int rawSpaceNeeded, int *rawSpaceAllocated, bool *shareable)
@@ -1125,19 +1125,19 @@ template<int T_SIZE> class StringFixed : public IStringFixed<char, T_SIZE>
 
         StringFixed<T_SIZE> &operator=(const StringFixed<T_SIZE> &other)
         { 
-            Copy(other); 
+            IString<char>::Copy(other);
             return(*this); 
         }
 
         StringFixed<T_SIZE> &operator=(const IString<char> &other)
         { 
-            Copy(other); 
+            IString<char>::Copy(other);
             return(*this); 
         }
 
         StringFixed<T_SIZE> &operator=(const char *other)
         { 
-            Copy(other); 
+            IString<char>::Copy(other);
             return(*this); 
         }
 };
@@ -1152,19 +1152,19 @@ template<int T_SIZE> class WideStringFixed : public IStringFixed<wchar_t, T_SIZE
 
         WideStringFixed<T_SIZE> &operator=(const WideStringFixed<T_SIZE> &other)
         { 
-            Copy(other); 
+            IString<wchar_t>::Copy(other);
             return(*this); 
         }
 
         WideStringFixed<T_SIZE> &operator=(const IString<wchar_t> &other)
         { 
-            Copy(other); 
+            IString<wchar_t>::Copy(other);
             return(*this); 
         }
 
         WideStringFixed<T_SIZE> &operator=(const wchar_t *other)
         { 
-            Copy(other); 
+            IString<wchar_t>::Copy(other);
             return(*this); 
         }
 };

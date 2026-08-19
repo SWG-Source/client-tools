@@ -24,7 +24,7 @@
 #include <algorithm>
 #include <map>
 #include <vector>
-#include <hash_map>
+#include <unordered_map>
 
 //===================================================================
 
@@ -451,6 +451,41 @@ void WorldSnapshotReaderWriter::Node::save (Iff& iff) const
 
 //-------------------------------------------------------------------
 
+void WorldSnapshotReaderWriter::Node::saveFiltered (Iff& iff) const
+{
+	iff.insertForm (TAG_NODE);
+		iff.insertForm (TAG_0000);
+
+			//-- save node data
+			iff.insertChunk (TAG_DATA);
+
+				iff.insertChunkData ((int32)getNetworkIdInt ());
+				iff.insertChunkData ((int32)getContainedByNetworkIdInt ());
+				iff.insertChunkData (getObjectTemplateNameIndex ());
+				iff.insertChunkData (getCellIndex ());
+
+				const Quaternion q (getTransform_p ());
+				iff.insertChunkFloatQuaternion (q);
+				iff.insertChunkFloatVector (getTransform_p ().getPosition_p ());
+				iff.insertChunkData (getRadius ());
+				iff.insertChunkData (getPortalLayoutCrc ());
+
+			iff.exitChunk (TAG_DATA);
+
+			//-- save non-tombstoned children (a deleted node's whole subtree is
+			//   skipped -- removeNode zeroes its id; serializing it would write
+			//   phantom id-0 rows)
+			int i;
+			for (i = 0; i < getNumberOfNodes (); ++i)
+				if (!getNode (i)->isDeleted ())
+					getNode (i)->saveFiltered (iff);
+
+		iff.exitForm (TAG_0000);
+	iff.exitForm (TAG_NODE);
+}
+
+//-------------------------------------------------------------------
+
 void WorldSnapshotReaderWriter::Node::load_0000 (Iff& iff)
 {
 	iff.enterForm (TAG_0000);
@@ -594,6 +629,112 @@ bool WorldSnapshotReaderWriter::load (const char* sceneName)
 
 //-------------------------------------------------------------------
 
+bool WorldSnapshotReaderWriter::beginIncrementalLoad (Iff& iff)
+{
+	if (!iff.enterForm (TAG_WSNP, true))
+		return false;
+
+	switch (iff.getCurrentName ())
+	{
+	case TAG_0000:
+		iff.exitForm (TAG_WSNP, true);
+		return false;
+
+	case TAG_0001:
+		iff.enterForm (TAG_0001);
+		iff.enterForm (TAG_NODS);
+		return true;
+
+	default:
+		{
+			char tagBuffer [5];
+			ConvertTagToString (iff.getCurrentName (), tagBuffer);
+
+			char buffer [128];
+			iff.formatLocation (buffer, sizeof (buffer));
+			DEBUG_FATAL (true, ("WorldSnapshotReaderWriter::beginIncrementalLoad invalid version %s/%s", buffer, tagBuffer));
+		}
+		iff.exitForm (TAG_WSNP, true);
+		return false;
+	}
+}
+
+//-------------------------------------------------------------------
+
+bool WorldSnapshotReaderWriter::stepIncrementalLoad (Iff& iff, float const budgetMs)
+{
+	PerformanceTimer timer;
+	timer.start ();
+
+	//-- read children: one whole top-level subtree per iteration (Node::load
+	//   recurses its children internally, so this is the only safe suspend point)
+	while (iff.getNumberOfBlocksLeft ())
+	{
+		Node* const node = new Node;
+		node->load (iff);
+
+#ifdef _DEBUG
+		if (ms_loadSingleNetworkId && node->getNetworkIdInt() != ms_loadSingleNetworkId)
+			delete node;
+		else
+#endif
+		{
+			m_nodeList->push_back(node);
+			insertSubtreeIntoNetworkIdMap (node);
+		}
+
+		if (budgetMs > 0.f && timer.getSplitTime () * 1000.f >= budgetMs)
+			return false;
+	}
+
+	iff.exitForm (TAG_NODS);
+
+	//-- the object template name table (small relative to the node list)
+	iff.enterChunk (TAG_OTNL);
+
+		{
+			const int n = iff.read_int32 ();
+			int i;
+			for (i = 0; i < n; ++i)
+			{
+				char * const objectTemplateName = iff.read_string();
+				(*m_objectTemplateCrcMap)[Crc::calculate(objectTemplateName)] = m_objectTemplateNameList->size();
+				m_objectTemplateNameList->push_back(objectTemplateName);
+			}
+		}
+
+	iff.exitChunk (TAG_OTNL);
+
+	iff.exitForm (TAG_0001);
+	iff.exitForm (TAG_WSNP, true);
+
+	return true;
+}
+
+//-------------------------------------------------------------------
+
+void WorldSnapshotReaderWriter::insertSubtreeIntoNetworkIdMap (Node* const root)
+{
+	NodeList nodeStack;
+	nodeStack.push_back (root);
+
+	while (!nodeStack.empty ())
+	{
+		Node* const node = nodeStack.back ();
+		nodeStack.pop_back ();
+
+		std::pair<NetworkIdNodeMap::iterator, bool> result = m_networkIdNodeMap->insert (std::make_pair (node->getNetworkIdInt (), node));
+		UNREF(result);
+		DEBUG_FATAL (!result.second, ("WorldSnapshotReaderWriter::insertSubtreeIntoNetworkIdMap: could not insert %i into networkIdNodeMap", node->getNetworkIdInt ()));
+
+		int i;
+		for (i = 0; i < node->getNumberOfNodes (); ++i)
+			nodeStack.push_back (const_cast<Node*> (node->getNode (i)));
+	}
+}
+
+//-------------------------------------------------------------------
+
 void WorldSnapshotReaderWriter::load (Iff& iff)
 {
 	if (iff.enterForm (TAG_WSNP, true))
@@ -675,6 +816,67 @@ void WorldSnapshotReaderWriter::save (Iff& iff) const
 
 //-------------------------------------------------------------------
 
+bool WorldSnapshotReaderWriter::saveFiltered (const char* filename, IncludeTopLevelNodeFunction includeTopLevelNode, void* context) const
+{
+	Iff iff (65536);
+	saveFiltered (iff, includeTopLevelNode, context);
+
+	return iff.write (filename, true);
+}
+
+//-------------------------------------------------------------------
+
+void WorldSnapshotReaderWriter::saveFiltered (Iff& iff, IncludeTopLevelNodeFunction includeTopLevelNode, void* context) const
+{
+	iff.insertForm (TAG_WSNP);
+		iff.insertForm (TAG_0001);
+
+			//-- insert the node list: non-tombstoned top-level nodes that pass
+			//   the caller's provenance filter (children recurse inside
+			//   Node::saveFiltered with the tombstone skip)
+			iff.insertForm (TAG_NODS);
+
+				{
+					NOT_NULL (m_nodeList);
+
+					uint i;
+					for (i = 0; i < m_nodeList->size (); ++i)
+					{
+						const Node* const node = (*m_nodeList) [i];
+						if (node->isDeleted ())
+							continue;
+						if (includeTopLevelNode && !includeTopLevelNode (node, context))
+							continue;
+
+						node->saveFiltered (iff);
+					}
+				}
+
+			iff.exitForm (TAG_NODS);
+
+			//-- insert the WHOLE object template name table (excluded nodes may
+			//   leave unused names -- harmless; surviving nodes' indices stay
+			//   valid without a remap pass)
+			iff.insertChunk (TAG_OTNL);
+
+				{
+					NOT_NULL (m_objectTemplateNameList);
+
+					iff.insertChunkData (static_cast<int> (m_objectTemplateNameList->size ()));
+
+					ObjectTemplateNameList::iterator iter = m_objectTemplateNameList->begin ();
+					for (; iter != m_objectTemplateNameList->end (); ++iter)
+						iff.insertChunkString (*iter);
+				}
+
+			iff.exitChunk (TAG_OTNL);
+
+		iff.exitForm (TAG_0001);
+	iff.exitForm (TAG_WSNP);
+}
+
+//-------------------------------------------------------------------
+
 void WorldSnapshotReaderWriter::clear ()
 {
 	const bool deleteNetworkIdNodeMap = m_nodeList->empty ();
@@ -690,6 +892,28 @@ void WorldSnapshotReaderWriter::clear ()
 		IGNORE_RETURN (std::for_each (m_networkIdNodeMap->begin (), m_networkIdNodeMap->end (), PointerDeleterPairSecond ()));
 
 	m_networkIdNodeMap->clear ();
+}
+
+//-------------------------------------------------------------------
+// Find-or-append a template name in the OTNL table, returning its index.
+// Extracted from addObject (v23) so an existing node can be re-pointed at a
+// new template name IN PLACE (wsSetNodeTemplateName) without add/remove.
+// Append-only by construction -- existing indices never move, so no other
+// node is disturbed and save/saveFiltered serialize the grown table as-is.
+
+int WorldSnapshotReaderWriter::internObjectTemplateName (CrcString const &objectTemplateName)
+{
+	NOT_NULL (m_objectTemplateNameList);
+
+	std::unordered_map<uint32, uint>::const_iterator i = m_objectTemplateCrcMap->find(objectTemplateName.getCrc());
+	if (i != m_objectTemplateCrcMap->end())
+		return static_cast<int> ((*i).second);
+
+	uint const objectTemplateNameIndex = m_objectTemplateNameList->size();
+	(*m_objectTemplateCrcMap)[objectTemplateName.getCrc()] = objectTemplateNameIndex;
+	m_objectTemplateNameList->push_back(DuplicateString(objectTemplateName.getString()));
+
+	return static_cast<int> (objectTemplateNameIndex);
 }
 
 //-------------------------------------------------------------------
@@ -710,7 +934,7 @@ WorldSnapshotReaderWriter::Node const *WorldSnapshotReaderWriter::addObject (
 	//-- find objectTemplateNameIndex
 	uint objectTemplateNameIndex = 0;
 
-	std::hash_map<uint32, uint>::const_iterator i = m_objectTemplateCrcMap->find(objectTemplateName.getCrc());
+	std::unordered_map<uint32, uint>::const_iterator i = m_objectTemplateCrcMap->find(objectTemplateName.getCrc());
 	if (i != m_objectTemplateCrcMap->end())
 		objectTemplateNameIndex = (*i).second;
 	else

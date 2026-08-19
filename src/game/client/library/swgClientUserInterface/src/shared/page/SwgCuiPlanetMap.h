@@ -94,89 +94,94 @@ protected:
 	void                         onWaypointChange          (const ClientWaypointObject & waypoint);
 
 private:
+	// Real implementations - wrapped by saveSettings/loadSettings under SEH
+	// so an AV from a stale widget pointer during mediator teardown does not
+	// crash the client (see SwgCuiPlanetMap.cpp).
+	void saveSettingsImpl() const;
+	void loadSettingsImpl();
 
-	SwgCuiPlanetMap (const SwgCuiPlanetMap & rhs);
-	SwgCuiPlanetMap & operator= (const SwgCuiPlanetMap & rhs);
+	SwgCuiPlanetMap(const SwgCuiPlanetMap &rhs);
+	SwgCuiPlanetMap &operator=(const SwgCuiPlanetMap &rhs);
 
-	void                         updateZoom            ();
-	void                         computeCenterPoint    (const UIPoint & center);
-	UIPoint                      getTargetPoint        () const;
-	void                         reset                 ();
-	void                         handleCheckbox        (const UICheckbox & box);
-	void                         updateMarkers         ();
-	void                         updateLabelVisibility () const;
-	void                         setupMarkersForType   (uint8 category, uint8 subCategory, const NetworkId & networkId, bool activeWaypointsOnly, bool skipActiveWaypoints, std::string const locationName = "");
-	UIPopupMenu *                createPopupForEntry   (const Vector2d & pos, const Unicode::String & entryName, const NetworkId & id);
-	void                         setupCurrentZone      ();
-	void                         clearMarkers          ();
-	void                         updatePlayerIcon      ();
-	void                         setZoneSupermapMode   (bool active);
-	
-	UIPage *                     m_pagePlanet;
-	UISliderbar *                m_sliderZoom;
+	void updateZoom();
+	void computeCenterPoint(const UIPoint &center);
+	UIPoint getTargetPoint() const;
+	void reset();
+	void handleCheckbox(const UICheckbox &box);
+	void updateMarkers();
+	void updateLabelVisibility() const;
+	void setupMarkersForType(uint8 category, uint8 subCategory, const NetworkId &networkId, bool activeWaypointsOnly, bool skipActiveWaypoints, std::string const locationName = "");
+	UIPopupMenu *createPopupForEntry(const Vector2d &pos, const Unicode::String &entryName, const NetworkId &id);
+	void setupCurrentZone();
+	void clearMarkers();
+	void updatePlayerIcon();
+	void setZoneSupermapMode(bool active);
 
-	UISize                       m_maxPlanetScrollExtent;
+	UIPage *m_pagePlanet;
+	UISliderbar *m_sliderZoom;
 
-	UIPoint                      m_lastScrollLocation;
-	UIFloatPoint                 m_centerPointTarget;
-	UIFloatPoint                 m_centerPoint;
-	bool                         m_interpolating;
-	bool                         m_ignoreNextScroll;
-	UIPoint                      m_centerPointOffset;
+	UISize m_maxPlanetScrollExtent;
 
-	UICheckbox *                 m_checkShowCities;
-	UICheckbox *                 m_checkShowWaypoints;
-	UICheckbox *                 m_checkShowNames;
-	UICheckbox *				 m_checkShowGCWRegions;
+	UIPoint m_lastScrollLocation;
+	UIFloatPoint m_centerPointTarget;
+	UIFloatPoint m_centerPoint;
+	bool m_interpolating;
+	bool m_ignoreNextScroll;
+	UIPoint m_centerPointOffset;
 
-	UITreeView *                 m_treeLocations;
+	UICheckbox *m_checkShowCities;
+	UICheckbox *m_checkShowWaypoints;
+	UICheckbox *m_checkShowNames;
+	UICheckbox *m_checkShowGCWRegions;
 
-	UIWidget *                   m_iconHere;
+	UITreeView *m_treeLocations;
 
-	UIFloatPoint                 m_zoneSize;
+	UIWidget *m_iconHere;
 
-	UIButton *                   m_buttonSample;
-	UIText *                     m_textSample;
-	UIPage *                     m_pageMarkers;
+	UIFloatPoint m_zoneSize;
 
-	UIText *                     m_textPosition;
-	UIText *                     m_textHeadingRange;
+	UIButton *m_buttonSample;
+	UIText *m_textSample;
+	UIPage *m_pageMarkers;
 
-	UIColorEffector *            m_effectorWaypointFlash;
+	UIText *m_textPosition;
+	UIText *m_textHeadingRange;
+
+	UIColorEffector *m_effectorWaypointFlash;
 
 	typedef stdvector<UIButton *>::fwd ButtonVector;
-	typedef stdvector<UIText *>::fwd   TextVector;
+	typedef stdvector<UIText *>::fwd TextVector;
 
-	ButtonVector *               m_freeListButton;
-	TextVector *                 m_freeListText;
+	ButtonVector *m_freeListButton;
+	TextVector *m_freeListText;
 
-	UIText *                     m_textPlanetName;
+	UIText *m_textPlanetName;
 
-	UIPage *                     m_pageMaps;
-	MessageDispatch::Callback *  m_callback;
+	UIPage *m_pageMaps;
+	MessageDispatch::Callback *m_callback;
 
-	UISize                       m_lastSize;
+	UISize m_lastSize;
 
-	std::string                  m_lastZone;
-	std::string                  m_lastSelectedLocationPath;
+	std::string m_lastZone;
+	std::string m_lastSelectedLocationPath;
 
 	typedef stdmap<UIButton *, UIText *>::fwd ButtonTextMap;
-	ButtonTextMap *              m_buttonTextMap;
+	ButtonTextMap *m_buttonTextMap;
 
-	UIButton *                   m_buttonRefresh;
+	UIButton *m_buttonRefresh;
 
 	typedef stdmap<uint8, UIButton *>::fwd SampleButtonMap;
-	SampleButtonMap *            m_sampleButtonMap;
+	SampleButtonMap *m_sampleButtonMap;
 
-	Unicode::String              m_iconPathInactive;
-	Unicode::String              m_iconPathActive;
+	Unicode::String m_iconPathInactive;
+	Unicode::String m_iconPathActive;
 
-	UIButton *                   m_buttonZoom;
-	ZoomLevel                    m_zoomLevel;
+	UIButton *m_buttonZoom;
+	ZoomLevel m_zoomLevel;
 
 	Vector m_zoneWorldCoordinateOffset;
 
-	bool                         m_entriesRequested;
+	bool m_entriesRequested;
 };
 
 //======================================================================

@@ -21,6 +21,7 @@
 #include "clientGame/ClientEffectManager.h"
 #include "clientGame/ClientInteriorLayoutManager.h"
 #include "clientGame/ClientMissionObject.h"
+#include "clientGame/ClientObject.h"
 #include "clientGame/ClientObjectTerrainModificationNotification.h"
 #include "clientGame/ClientPathObject.h"
 #include "clientGame/ClientSecureTradeManager.h"
@@ -163,6 +164,7 @@
 #include "sharedObject/AppearanceTemplateList.h"
 #include "sharedObject/CellProperty.h"
 #include "sharedObject/ContainedByProperty.h"
+#include "sharedObject/PortalProperty.h"
 #include "sharedObject/DebugNotification.h"
 #include "sharedObject/NetworkIdManager.h"
 #include "sharedObject/ObjectTemplate.h"
@@ -874,48 +876,48 @@ void GroundScene::init (const char* const terrainFilename, CreatureObject* const
 *
 */
 GroundScene::GroundScene(
-	const char *const     terrainFilename, 
-	const char *const     playerFilename,
-	CreatureObject *const customizedPlayer
-	)
-:	NetworkScene("GroundScene"),
-	m_inputMap (0),
-	m_debugPortalCameraInputMap (0),
-	m_structurePlacementCameraInputMap (0),
-	m_freeCameraInputMap (0),
-	m_mouseCursor (new MouseCursor (0, MouseCursor::S_relative)),
-	m_lastYawPitchMod (new Vector2d),
-	m_cockpitCamera(0),
-	m_shipTurretCamera(0),
-	m_freeChaseCamera (0),
-	m_freeCamera (0),
-	m_debugPortalCamera (0),
-	m_structurePlacementCamera (0),
-	m_flyByCamera(NULL),
-	m_currentView (-1),
-	m_disableWorldSnapshot(ConfigClientGame::getDisableWorldSnapshot()),
-	m_usingGodClientCamera(false),
-	m_usingGodClientInteriorCamera(false),
-	m_loading (true),
-	m_sentSceneChannel(false),
-	m_receivedSceneReady(true), // in single player the server doesn't need to be ready
-	m_noDraw(false),
-	m_currentLoadCount (0),
-	m_debugKeyContext (0),
-	m_debugKeySubContext (),
-	m_debugKeyContextWeaponObjectTemplate (0),
-	m_serverTimeOffset (0),
-	m_overheadMap (new OverheadMap),
-	m_modeCallback (0),
-	m_context (0),
-	m_currentMode (false),
-	m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
-	m_clientPathObject (0),
-	m_debugPointList (new PointList),
-	m_debugLineList (new LineList),
-	m_isTutorial (false),
-	m_destroyObjectSet(new DestroyObjectSet),
-	m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
+	const char *const terrainFilename,
+	const char *const playerFilename,
+	CreatureObject *const customizedPlayer)
+	: NetworkScene("GroundScene"),
+	  m_inputMap(0),
+	  m_debugPortalCameraInputMap(0),
+	  m_structurePlacementCameraInputMap(0),
+	  m_freeCameraInputMap(0),
+	  m_mouseCursor(new MouseCursor(0, MouseCursor::S_relative)),
+	  m_lastYawPitchMod(new Vector2d),
+	  m_cockpitCamera(0),
+	  m_shipTurretCamera(0),
+	  m_freeChaseCamera(0),
+	  m_freeCamera(0),
+	  m_debugPortalCamera(0),
+	  m_structurePlacementCamera(0),
+	  m_flyByCamera(NULL),
+	  m_currentView(-1),
+	  m_disableWorldSnapshot(ConfigClientGame::getDisableWorldSnapshot()),
+	  m_usingGodClientCamera(false),
+	  m_usingGodClientInteriorCamera(false),
+	  m_loading(true),
+	  m_sentSceneChannel(false),
+	  m_receivedSceneReady(true), // in single player the server doesn't need to be ready
+	  m_noDraw(false),
+	  m_currentLoadCount(0),
+	  m_loadingElapsedTime(0.0f),
+	  m_debugKeyContext(0),
+	  m_debugKeySubContext(),
+	  m_debugKeyContextWeaponObjectTemplate(0),
+	  m_serverTimeOffset(0),
+	  m_overheadMap(new OverheadMap),
+	  m_modeCallback(0),
+	  m_context(0),
+	  m_currentMode(false),
+	  m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
+	  m_clientPathObject(0),
+	  m_debugPointList(new PointList),
+	  m_debugLineList(new LineList),
+	  m_isTutorial(false),
+	  m_destroyObjectSet(new DestroyObjectSet),
+	  m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
 {
 	Audio::setLargePreMixBuffer();
 	Audio::silenceAllNonBackgroundMusic();
@@ -979,52 +981,52 @@ GroundScene::GroundScene(
 */
 
 GroundScene::GroundScene(
-	const char *const terrainFilename, 
-	const NetworkId & playerOID, 
-	const char *const templateName, 
-	const Vector &    startPosition, 
-	const float       startYaw, 
-	const float       timeInSeconds, 
-	const bool        disableSnapshot
-	)
-:	NetworkScene ("GroundScene"),
-	m_inputMap (0),
-	m_debugPortalCameraInputMap (0),
-	m_structurePlacementCameraInputMap (0),
-	m_freeCameraInputMap (0),
-	m_mouseCursor (new MouseCursor (0, MouseCursor::S_relative)),
-	m_lastYawPitchMod (new Vector2d),
-	m_cockpitCamera(0),
-	m_shipTurretCamera(0),
-	m_freeChaseCamera (0),
-	m_freeCamera (0),
-	m_debugPortalCamera (0),
-	m_structurePlacementCamera (0),
-	m_flyByCamera(NULL),
-	m_currentView (-1),
-	m_disableWorldSnapshot(disableSnapshot),
-	m_usingGodClientCamera(false),
-	m_usingGodClientInteriorCamera(false),
-	m_loading (true),
-	m_sentSceneChannel(false),
-	m_receivedSceneReady(false),
-	m_noDraw(false),
-	m_currentLoadCount (0),
-	m_debugKeyContext (0),
-	m_debugKeySubContext (),
-	m_debugKeyContextWeaponObjectTemplate (0),
-	m_serverTimeOffset (0),
-	m_overheadMap (new OverheadMap),
-	m_modeCallback (0),
-	m_context (0),
-	m_currentMode (false),
-	m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
-	m_clientPathObject (0),
-	m_debugPointList (new PointList),
-	m_debugLineList (new LineList),
-	m_isTutorial (false),
-	m_destroyObjectSet(new DestroyObjectSet),
-	m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
+	const char *const terrainFilename,
+	const NetworkId &playerOID,
+	const char *const templateName,
+	const Vector &startPosition,
+	const float startYaw,
+	const float timeInSeconds,
+	const bool disableSnapshot)
+	: NetworkScene("GroundScene"),
+	  m_inputMap(0),
+	  m_debugPortalCameraInputMap(0),
+	  m_structurePlacementCameraInputMap(0),
+	  m_freeCameraInputMap(0),
+	  m_mouseCursor(new MouseCursor(0, MouseCursor::S_relative)),
+	  m_lastYawPitchMod(new Vector2d),
+	  m_cockpitCamera(0),
+	  m_shipTurretCamera(0),
+	  m_freeChaseCamera(0),
+	  m_freeCamera(0),
+	  m_debugPortalCamera(0),
+	  m_structurePlacementCamera(0),
+	  m_flyByCamera(NULL),
+	  m_currentView(-1),
+	  m_disableWorldSnapshot(disableSnapshot),
+	  m_usingGodClientCamera(false),
+	  m_usingGodClientInteriorCamera(false),
+	  m_loading(true),
+	  m_sentSceneChannel(false),
+	  m_receivedSceneReady(false),
+	  m_noDraw(false),
+	  m_currentLoadCount(0),
+	  m_loadingElapsedTime(0.0f),
+	  m_debugKeyContext(0),
+	  m_debugKeySubContext(),
+	  m_debugKeyContextWeaponObjectTemplate(0),
+	  m_serverTimeOffset(0),
+	  m_overheadMap(new OverheadMap),
+	  m_modeCallback(0),
+	  m_context(0),
+	  m_currentMode(false),
+	  m_spaceTargetBracketOverlay(new SpaceTargetBracketOverlay),
+	  m_clientPathObject(0),
+	  m_debugPointList(new PointList),
+	  m_debugLineList(new LineList),
+	  m_isTutorial(false),
+	  m_destroyObjectSet(new DestroyObjectSet),
+	  m_destroyObjectTimer(Random::randomReal(0.5f, 1.f))
 {
 	Audio::setLargePreMixBuffer();
 	Audio::silenceAllNonBackgroundMusic();
@@ -1833,12 +1835,16 @@ bool GroundScene::isFinishedLoading() const
 	}
 	bool const hasPlayerObject = (Game::getPlayerObject() != NULL);
 
-	return (cachedFileManagerDone
-			&& spacePreloadedAssetManagerDone
-			&& worldSnapshotDone
-			&& loaderIsIdle
-			&& terrainGenerationStabilized
-			&& hasPlayerObject);
+	// Timeout fallback (graduated): if we've been loading too long, force
+	// the screen down even if the loader/player/terrain isn't fully
+	// settled. Tutorial scene with post-NGE TRE has missing assets that
+	// cause hasPlayerObject/terrain to never go true.
+	//   45s: force-finish if player + terrain ready
+	//   90s: force-finish unconditionally (escape hatch)
+	bool const softTimeout = (m_loadingElapsedTime > 45.0f) && hasPlayerObject && terrainGenerationStabilized;
+	bool const hardTimeout = (m_loadingElapsedTime > 90.0f);
+
+	return hardTimeout || softTimeout || (cachedFileManagerDone && spacePreloadedAssetManagerDone && worldSnapshotDone && loaderIsIdle && terrainGenerationStabilized && hasPlayerObject);
 }
 
 //----------------------------------------------------------------------
@@ -1874,11 +1880,31 @@ void GroundScene::updateCuiLoading()
 
 	if(!terrainGenerationStabilized)
 	{
-		CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::generatingterrain.localize());
+		// Hint at hard timeout when terrain won't generate (missing tutorial assets)
+		if (m_loadingElapsedTime > 30.0f)
+		{
+			char buf[80];
+			snprintf(buf, sizeof(buf), "Generating terrain... (%.0fs, will force-skip at 90s)", m_loadingElapsedTime);
+			CuiLoadingManager::setFullscreenLoadingString(Unicode::narrowToWide(buf));
+		}
+		else
+		{
+			CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::generatingterrain.localize());
+		}
 	}
 	else if (!loaderIsIdle)
 	{
-		CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::loadingobjects.localize());
+		// If we've been at "Loading objects..." for a long time, hint that a timeout is approaching
+		if (m_loadingElapsedTime > 30.0f)
+		{
+			char buf[80];
+			snprintf(buf, sizeof(buf), "Loading objects... (%.0fs, will skip at 45s)", m_loadingElapsedTime);
+			CuiLoadingManager::setFullscreenLoadingString(Unicode::narrowToWide(buf));
+		}
+		else
+		{
+			CuiLoadingManager::setFullscreenLoadingString(CuiStringIds::loadingobjects.localize());
+		}
 	}
 }
 
@@ -1936,14 +1962,40 @@ void GroundScene::update(float elapsedTime)
 	{
 		Vector const playerPosition = getPlayer()->getPosition_w();
 		snprintf(ms_playerPosition, sizeof(ms_playerPosition), "Player: %5.2f %5.2f %5.2f\n", playerPosition.x, playerPosition.y, playerPosition.z);
-		WorldSnapshot::update(getPlayer()->getParentCell(), playerPosition);
+		// If the player's parent cell is a "phantom" cell (its building's .pob
+		// asset was missing from the post-NGE TRE, so PortalProperty::cellLoaded
+		// -> CellProperty::initialize never ran and the cell was never bound to a
+		// PortalProperty), reset it to the world cell so outdoor rendering works.
+		// Otherwise the camera thinks it's inside a non-existent cell and the
+		// outdoor world gets culled away.
+		//
+		// Test the CELL's own portal binding -- playerCell->getPortalProperty().
+		// Do NOT test cellOwner.getPortalProperty(): a cell's owner IS the
+		// CellObject, which never carries a PortalProperty (that property lives on
+		// the building/POB, not on the cell). The old cellOwner test was therefore
+		// NULL for EVERY real interior cell, so it kicked the player out to the
+		// world cell every frame indoors and culled the whole interior away.
+		// CellProperty::getPortalProperty() is non-NULL exactly when the cell
+		// finished loading (initialize() sets m_portalProperty), so it is NULL
+		// only for a genuine phantom cell -- which is what we want to catch here.
+		CellProperty const *playerCell = getPlayer()->getParentCell();
+		if (playerCell && playerCell != CellProperty::getWorldCellProperty())
+		{
+			if (playerCell->getPortalProperty() == NULL)
+			{
+				WARNING(true, ("GroundScene::update - player parent cell is phantom (no PortalProperty), resetting to world cell for rendering"));
+				getPlayer()->setParentCell(CellProperty::getWorldCellProperty());
+				playerCell = CellProperty::getWorldCellProperty();
+			}
+		}
+		WorldSnapshot::update(playerCell, playerPosition);
 	}
 
 	//-- Handle destruction of any queued objects
 	if (m_destroyObjectTimer.updateZero(elapsedTime))
 	{
 		m_destroyObjectTimer.setExpireTime(Random::randomReal(0.5f, 1.f));
-		
+
 		if (!m_destroyObjectSet->empty())
 		{
 			NetworkId const & networkId = *m_destroyObjectSet->begin();
@@ -2038,6 +2090,9 @@ void GroundScene::update(float elapsedTime)
 		}
 	}
 
+	if (m_loading)
+		m_loadingElapsedTime += elapsedTime;
+
 	updateLoading();
 }
 
@@ -2045,23 +2100,39 @@ void GroundScene::update(float elapsedTime)
 
 void GroundScene::updateLoading()
 {
-		//-- update the loading screen
+	//-- update the loading screen
 	if (!m_loading)
 		return;
 	
 	bool const finishedLoading = isFinishedLoading();
-	
+
 	updateCuiLoading();
-	
+
+	//-- CONSULT-60: pump the phased world-snapshot parse (node tree +
+	//   buildout tables + sphere tree) under its per-frame budget
+	WorldSnapshot::loadStep();
+
 	if ((!Game::isClient() || (!ms_loadingScreenRender && finishedLoading)) && !m_sentSceneChannel)
 	{
-		WorldSnapshot::update(getPlayer()->getCellProperty(), getPlayer()->getPosition_w());
+		// getPlayer() may be NULL when the hard timeout fires (e.g., tutorial
+		// scene that never delivered a valid player creature). Guard the
+		// snapshot update so we still get past loading.
+		Object *const localPlayer = getPlayer();
+		if (localPlayer)
+		{
+			WorldSnapshot::update(localPlayer->getCellProperty(), localPlayer->getPosition_w());
+		}
+		else
+		{
+			WARNING(true, ("GroundScene::updateLoading: hard-timeout fired with no player object; skipping initial WorldSnapshot::update"));
+			WorldSnapshot::update(CellProperty::getWorldCellProperty(), Vector::zero);
+		}
 		GameNetwork::setSceneChannel();
 		m_sentSceneChannel = true;
-		
+
 		// remove all mods; the server send us the list of mods
 		CuiModifierManager::removeAllModifiers();
-		
+
 		// request for updated list of commodities item type if the list has changed
 		AuctionManagerClient::requestItemTypeList();
 		AuctionManagerClient::requestResourceTypeList();
@@ -2117,7 +2188,6 @@ void GroundScene::updateLoading()
 			}
 		}
 	}
-	
 }
 
 //-------------------------------------------------------------------
@@ -2543,7 +2613,6 @@ void GroundScene::receiveMessage(const MessageDispatch::Emitter &, const Message
 					controller->setAuthoritative (false);
 				if (!clientObject->isInitialized())
 					clientObject->beginBaselines();
-
 				ShipObject * const shipObject = clientObject->asShipObject();
 				if ((shipObject != 0) && (shipObject != Game::getPlayerContainingShip()))
 				{
@@ -3841,6 +3910,139 @@ void GroundScene::turnOffOverheadMap()
 	NOT_NULL(m_overheadMap);
 	if(m_overheadMap->getRenderMap())
 		m_overheadMap->toggle();
+}
+
+//----------------------------------------------------------------------
+
+//----------------------------------------------------------------------
+//
+// Utinni engine entry-point advertisement -- PRIVATE-method helpers (Phase 38-01
+// EPA-05; 38-05 detour-correctness split). GroundScene::{init,update,
+// handleInputMapUpdate,handleInputMapEvent} are PRIVATE [GroundScene.h:173,103,170,194],
+// so a free thunk authored in engine_advertise.cpp would hit C2248. These helpers are
+// compiled HERE -- inside GroundScene.cpp, the class's own TU, where the private
+// members are visible -- exactly as engine_installConfigFileOverride() lives in
+// ClientMain.cpp to reach a file-local target (the 37-01 shim pattern).
+//
+// TWO MECHANISMS (38-05): init + handleInputMapUpdate are CALLED/unused rows -> kept
+// as call-through __fastcall forwarders (Utinni invokes them, they forward). update +
+// handleInputMapEvent are DETOURED by Utinni -> their call-through forwarders were
+// REMOVED and replaced by the engine_groundScene*RealEntry() address providers below,
+// which return the REAL engine code entry (delta==0 verified) the engine's own call
+// path reaches. A detour on a call-through forwarder is silently dead -- the engine
+// calls the real method directly, never the forwarder (the Utinni review finding,
+// .planning/handoff/2026-06-22-utinni-detour-vs-call-followup.md).
+//
+// CALLING CONVENTION: GroundScene is a MULTIPLE-INHERITANCE class
+// (NetworkScene : public Scene, public MessageDispatch::Receiver), so a raw
+// &GroundScene::member PMF is inflated and trips the pmfToVoid sizeof guard
+// (C2338). Each forwarder is authored as __fastcall(GroundScene * pThis /*ECX*/,
+// int /*EDX*/, args) -- the ABI-correct emulation of __thiscall on a free
+// function (MSVC v145 forbids __thiscall on a free function, C3865; a dummy EDX
+// makes __fastcall byte-identical to __thiscall). One function is therefore BOTH
+// in-TU (member access) AND the correct MI-class thunk in a single definition.
+// Declared extern in the exe-local engine_groundScene_forward.h (NOT pulled by
+// any gl0X plugin TU -- no shared-header ABI cascade); advertised in the table.
+//
+// Both platforms (x64 port 2026-08-15; was 32-bit only). ENGINE_THIS mirrors the
+// engine_advertise.cpp / engine_groundScene_forward.h seam: Win32 __thiscall
+// emulation carries the __fastcall dummy EDX; x64's single convention must not
+// (the dummy would shift every real argument one register right). Identical
+// #ifndef-guarded block because the exe-local forward header is not on
+// clientGame's include path; a drift is an unresolved external at link.
+//----------------------------------------------------------------------
+
+#include <cstring>   // memcpy -- 38-05 real-entry MI-PMF code-component extraction
+
+#ifndef ENGINE_THIS
+#if defined(_WIN64)
+	#define ENGINE_THIS(ClassPtrType) ClassPtrType pThis
+#else
+	#define ENGINE_THIS(ClassPtrType) ClassPtrType pThis, int /*edx*/
+#endif
+#endif
+
+void __fastcall engine_groundSceneInit(ENGINE_THIS(GroundScene *),
+	const char * terrainFilename, CreatureObject * player, float timeInSeconds)
+{
+	pThis->init(terrainFilename, player, timeInSeconds);   // private [GroundScene.h:173]; legal in this TU
+}
+
+void __fastcall engine_groundSceneHandleInputMapUpdate(ENGINE_THIS(GroundScene *))
+{
+	pThis->handleInputMapUpdate();                         // private [GroundScene.h:170]
+}
+
+// FREE-CAM wave (v13): CALLED accessor over the PRIVATE m_debugPortalCameraInputMap
+// [GroundScene.h:111]. Returns the debug-portal-camera input MessageQueue (the consumer's
+// "free camera" is OUR DebugPortalCamera -- cm_Free == CI_debugPortal) that the consumer
+// previously read at the hardcoded InputMap+0xC; now encapsulated so the offset cannot drift.
+// The InputMap-output MQ aliases the camera's drained m_queue (init wires
+// camera->setMessageQueue(inputMap->getMessageQueue()), GroundScene.cpp:803), so this is the
+// SAME pointer gameCamera::getMessageQueue returns while free-cam is active. Null-safe (the
+// input maps are only constructed in init(), GroundScene.cpp:775). __fastcall == __thiscall
+// (MI class -> dummy EDX). Declared extern in engine_groundScene_forward.h.
+MessageQueue * __fastcall engine_groundSceneGetDebugPortalCameraMessageQueue(ENGINE_THIS(GroundScene *))
+{
+	return pThis->m_debugPortalCameraInputMap ? pThis->m_debugPortalCameraInputMap->getMessageQueue() : 0;
+}
+
+// NOTE (38-05): the call-through forwarders for update / handleInputMapEvent were
+// REMOVED -- those two rows are DETOURED by Utinni and now advertise the REAL engine
+// entry via the engine_groundScene*RealEntry() accessors below (a detour on a
+// call-through forwarder is silently dead). init + handleInputMapUpdate stay as
+// forwarders (CALLED/unused rows -- a forwarder is correct there).
+
+//----------------------------------------------------------------------
+//
+// Utinni real-entry accessors -- 38-05 (address-correctness fix). GroundScene::
+// {update,handleInputMapEvent} are DETOURED by Utinni (hkUpdateLoop /
+// hkHandleInputEvent), so they must be advertised by the REAL engine code entry,
+// NOT the call-through __fastcall forwarders above. A DetourXS prologue patch on a
+// forwarder fires only when someone calls the FORWARDER; the engine calls the real
+// method directly, so a forwarder-advertised detour is silently dead (links,
+// exports, boots, hook never fires). See the Utinni review finding
+// .planning/handoff/2026-06-22-utinni-detour-vs-call-followup.md.
+//
+// The two methods are PRIVATE, so &GroundScene::update / &GroundScene::handleInputMapEvent
+// can be taken only in a TU with member access (this TU -- via the friend decls in
+// GroundScene.h). GroundScene is MULTIPLE-INHERITANCE (NetworkScene : public Scene,
+// public MessageDispatch::Receiver) so the PMF is inflated -- MSVC 32-bit layout
+// { void * pfn; int delta; ... }. Both methods are OWN non-virtual methods of the
+// most-derived class -> the primary base is at offset 0 -> delta MUST be 0 and pfn
+// IS the real engine entry Utinni's __thiscall trampoline reaches with `this` in
+// ECX. The delta==0 hard gate is the safety check: if delta != 0 (a secondary-base
+// method whose `this` needs adjustment, NOT directly detour-able) we return nullptr
+// so the exe-side engine_verifyNoNullNoDup() catches it as a null row and FAILS
+// loudly -- never advertise a wrong / silent-dead entry. (This mirrors the exe-side
+// pmfRealEntry() helper in engine_advertise.cpp; inlined here because the PRIVATE
+// PMF can only be taken in this TU.)
+//
+// Both platforms (x64 port 2026-08-15): the x64 MI non-virtual PMF layout keeps
+// pfn at offset 0 and the int adjustor at offset 8 -- MiPmf{void*,int} reads
+// both correctly under either pointer size, and the static_assert still gates.
+//----------------------------------------------------------------------
+
+void * engine_groundSceneUpdateRealEntry()
+{
+	void (GroundScene::* pmf)(float) = &GroundScene::update;   // private [GroundScene.h:103]; legal in this TU
+	static_assert(sizeof(pmf) >= sizeof(void *) + sizeof(int), "PMF smaller than expected MI layout");
+	struct MiPmf { void * pfn; int delta; };
+	MiPmf m{};
+	std::memcpy(&m, &pmf, sizeof(MiPmf));
+	DEBUG_FATAL(m.delta != 0, ("engine: non-zero PMF delta for GroundScene::update real-entry row -- not directly detour-able"));
+	return (m.delta != 0) ? 0 : m.pfn;
+}
+
+void * engine_groundSceneHandleInputMapEventRealEntry()
+{
+	void (GroundScene::* pmf)(IoEvent *) = &GroundScene::handleInputMapEvent;   // private [GroundScene.h:194]; legal in this TU
+	static_assert(sizeof(pmf) >= sizeof(void *) + sizeof(int), "PMF smaller than expected MI layout");
+	struct MiPmf { void * pfn; int delta; };
+	MiPmf m{};
+	std::memcpy(&m, &pmf, sizeof(MiPmf));
+	DEBUG_FATAL(m.delta != 0, ("engine: non-zero PMF delta for GroundScene::handleInputMapEvent real-entry row -- not directly detour-able"));
+	return (m.delta != 0) ? 0 : m.pfn;
 }
 
 //----------------------------------------------------------------------

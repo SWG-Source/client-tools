@@ -9,6 +9,7 @@
 #include "swgClientUserInterface/SetupSwgClientUserInterface.h"
 
 #include "swgClientUserInterface/ConfigSwgClientUserInterface.h"
+#include "swgClientUserInterface/SwgCuiPlayerQuestConversation.h"
 #include "swgClientUserInterface/SwgCuiSpaceConversation.h"
 #include "swgClientUserInterface/SwgCuiToolbar.h"
 #include "swgClientUserInterface/SwgCuiMahjongDataTable.h"
@@ -26,6 +27,7 @@ void SetupSwgClientUserInterface::install()
 	ConfigSwgClientUserInterface::install();
 	SwgCuiToolbar::install();
 	SwgCuiSpaceConversation::install();
+	SwgCuiPlayerQuestConversation::install();
 	SwgCuiMahjongDataTable::install();
 	ExitChain::add(SetupSwgClientUserInterface::remove, "SetupSwgClientUserInterface::remove");
 }

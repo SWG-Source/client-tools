@@ -23,6 +23,7 @@
 #include <cstdio>
 
 #ifdef _WIN32
+#include <windows.h> // LEAK-HUNT: RtlCaptureStackBackTrace
 #include <io.h>
 #include <crtdbg.h>
 #else
@@ -33,6 +34,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <new>
+#include <stdint.h> // uintptr_t
+#include <cstdlib>	// x64 leak fix: CRT malloc/free/realloc bypass
 
 #define DISABLE_MEMORY_MANAGER 0
 
@@ -44,22 +47,25 @@
 // 
 #define DISABLED                0
 
-
-#define DO_TRACK               0
-#define DO_SCALAR              0
-#define DO_GUARDS              0
-#define DO_INITIALIZE_FILLS    0
+#define DO_TRACK 0 // Per-allocation call stack capture. Debugging aid only: costs a stack walk on every allocation.
+#define DO_SCALAR 0
+#define DO_GUARDS 0 // Guard bands around every allocation. Debugging aid only: adds 32 bytes per block and sweeps the whole heap every 512 alloc/free.
+#define DO_INITIALIZE_FILLS 0
 #define DO_FREE_FILLS          0
 
 #ifdef PLATFORM_LINUX
 	#undef DO_TRACK
-	#define DO_TRACK 5
+#define DO_TRACK 0
 #endif
 
 // ======================================================================
 
 namespace MemoryManagerNamespace
 {
+	constexpr int cs_allocationStackFrameOffset = 0;
+	constexpr int cs_allocationStackFramesToSkip = 1;
+	constexpr int cs_ownerStackFrameOffset = 2;
+
 	class Block;
 
 	class SystemAllocation
@@ -158,11 +164,11 @@ namespace MemoryManagerNamespace
 #endif
 
 #if DO_TRACK
-		bool  checkForLeaks() const;
-		void  setCheckForLeaks(bool checkForLeaks);
+		bool checkForLeaks() const;
+		void setCheckForLeaks(bool checkForLeaks);
 
-		uint32 getOwner(int index) const;
-		void   setOwner(int index, uint32 owner);
+		uintptr_t getOwner(int index) const;
+		void setOwner(int index, uintptr_t owner);
 		void   fillOwnerWithFreePattern();
 
 #endif
@@ -173,9 +179,8 @@ namespace MemoryManagerNamespace
 #endif
 
 	private:
-
 #if DO_TRACK
-		uint32         m_owner[DO_TRACK];
+	  uintptr_t m_owner[DO_TRACK];
 #endif
 	};
 
@@ -463,14 +468,14 @@ inline void AllocatedBlock::setCheckForLeaks(bool checkForLeaks)
 
 // ----------------------------------------------------------------------
 
-inline uint32 AllocatedBlock::getOwner(int index) const
+inline uintptr_t AllocatedBlock::getOwner(int index) const
 {
 	return m_owner[index];
 }
 
 // ----------------------------------------------------------------------
 
-inline void AllocatedBlock::setOwner(int index, uint32 owner)
+inline void AllocatedBlock::setOwner(int index, uintptr_t owner)
 {
 	m_owner[index] = owner;
 }
@@ -594,15 +599,17 @@ MemoryManager::MemoryManager()
 	*/
 #endif
 
-	OsMemory::install();
-	DebugHelp::install();
-
 #if !DISABLED
 
-	// this buffer must remain local to this function, otherwise it will get clobbered.
-	// the problem is this function gets called before the library gets properly initialized,
-	// and then when the library gets initialized, it will clear the global memory, thus
-	// wiping out our mutex.
+	// On x64 (and any modern build) OsMemory::install / DebugHelp::install
+	// can transitively allocate memory, which routes through operator new
+	// -> MemoryManager::allocate -> back into this constructor. The
+	// original code only set ms_criticalSection / ms_installed AFTER those
+	// installs, so reentrant allocates would race the unset mutex and the
+	// next ::free saw ms_criticalSection == null and crashed in
+	// EnterCriticalSection (offset 0x10 = OwningThread). Initialize the
+	// mutex and flip ms_installed FIRST so reentrant allocate calls take
+	// the steady-state path.
 	static char s_criticalSectionBuffer[sizeof(RecursiveMutex)];
 	ms_criticalSection = new(s_criticalSectionBuffer) RecursiveMutex;
 
@@ -611,6 +618,9 @@ MemoryManager::MemoryManager()
 //	ms_logEachAlloc = false;
 
 #endif
+
+	OsMemory::install();
+	DebugHelp::install();
 }
 
 // ----------------------------------------------------------------------
@@ -1161,6 +1171,15 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 	UNREF(array);
 	UNREF(leakTest);
 
+#if defined(_WIN64)
+	// ===== x64 LEAK FIX =====
+	// The custom pool's free-list has 32-bit pointer/bitfield/address assumptions
+	// that corrupt on x64, which is why free() was no-op'd (leaking EVERYTHING).
+	// Bypass the pool entirely and use the CRT allocator, which frees correctly.
+	// Paired with the matching free()/reallocate() bypass below.
+	return ::malloc(size ? size : 1);
+#endif
+
 #if DISABLED
 	return operator new(size);
 #else
@@ -1176,8 +1195,7 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 	if (ms_debugProfileAllocate)
 		PROFILER_BLOCK_ENTER(ms_allocateProfilerBlock);
 
-	if (ms_debugVerifyGuardPatterns || ms_debugVerifyFreePatterns)
-		verify(ms_debugVerifyGuardPatterns, ms_debugVerifyFreePatterns);
+	verify(true, ms_debugVerifyFreePatterns); // TEMP: always sweep guards (DO_GUARDS); throttled inside verify()
 
 	if (ms_debugReportAllocations || ms_debugLogAllocations)
 	{
@@ -1255,13 +1273,19 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 #endif
 #if DO_TRACK > 1
 		{
-			enum { OFFSET = 3 };
-			uint32 owners[DO_TRACK + OFFSET];
-			DebugHelp::getCallStack(owners, DO_TRACK + OFFSET);
+			// LEAK-HUNT: fast x64 backtrace; StackWalk64 (DebugHelp::getCallStack) was far too slow per-alloc.
+			// Skipping the allocation frame leaves operator new first, then the real allocation site and its callers.
+			uintptr_t owners[DO_TRACK + cs_allocationStackFrameOffset];
+			{
+				void *fr_[DO_TRACK + cs_allocationStackFrameOffset];
+				USHORT const cap_ = RtlCaptureStackBackTrace(cs_allocationStackFramesToSkip, static_cast<ULONG>(DO_TRACK + cs_allocationStackFrameOffset), fr_, NULL);
+				for (int z_ = 0; z_ < DO_TRACK + cs_allocationStackFrameOffset; ++z_)
+					owners[z_] = (z_ < static_cast<int>(cap_)) ? reinterpret_cast<uintptr_t>(fr_[z_]) : static_cast<uintptr_t>(0);
+			}
 
 			for (int i = 1; i < DO_TRACK; ++i)
 			{
- 				best->setOwner(i, owners[i + OFFSET]);
+				best->setOwner(i, owners[i + cs_allocationStackFrameOffset]);
 
 #ifdef _DEBUG
 				if (ms_debugReportAllocations || ms_debugLogAllocations)
@@ -1269,13 +1293,13 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 					char libName[256];
 					char fileName[256];
 					int line;
-					if (ms_allowNameLookup && DebugHelp::lookupAddress(owners[i + OFFSET], libName, fileName, sizeof(fileName), line))
+					if (ms_allowNameLookup && DebugHelp::lookupAddress(owners[i + cs_allocationStackFrameOffset], libName, fileName, sizeof(fileName), line))
 					{
 						DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("  %s(%d): caller %d\n", fileName, line, i));
 					}
 					else
 					{
-						DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("  %08x: caller %d\n", static_cast<int>(owners[i + OFFSET]), i));
+						DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("  %08x: caller %d\n", static_cast<int>(owners[i + cs_allocationStackFrameOffset]), i));
 					}
 				}
 #endif
@@ -1343,6 +1367,11 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 
 void *MemoryManager::reallocate(void *userPointer, size_t newSize)
 {
+#if defined(_WIN64)
+	// x64 LEAK FIX: pool bypassed in allocate(); delegate to CRT realloc.
+	return ::realloc(userPointer, newSize);
+#endif
+
 	AllocatedBlock *allocatedBlock = 0;
 	bool array = false;
 	int oldSize = 0;
@@ -1350,9 +1379,9 @@ void *MemoryManager::reallocate(void *userPointer, size_t newSize)
 	if (userPointer)
 	{
 		allocatedBlock = reinterpret_cast<AllocatedBlock *>(reinterpret_cast<byte *>(userPointer) - (cms_allocatedBlockSize + cms_guardBandSize));
-		#if DO_SCALAR
+#if DO_SCALAR
 		array = allocatedBlock->isAllocatedAsArray();
-		#endif
+#endif
 		if (!newSize)
 		{
 			MemoryManager::free(userPointer, array);
@@ -1361,22 +1390,22 @@ void *MemoryManager::reallocate(void *userPointer, size_t newSize)
 
 			return 0;
 		}
-		#if DO_TRACK || DO_GUARDS
+#if DO_TRACK || DO_GUARDS
 		oldSize = allocatedBlock->getRequestedSize();
-		#else
+#else
 		oldSize = allocatedBlock->getSize()-cms_allocatedBlockSize;
-		#endif
+#endif
 	}
 
 	if (newSize <= static_cast<size_t>(oldSize))
 	{
-//		DEBUG_REPORT_LOG(ms_logEachAlloc, ("MemoryManager::reallocate() new_requested_size=%d, org ptr=%p, new ptr=%p\n", newSize, userPointer, userPointer));
+		//		DEBUG_REPORT_LOG(ms_logEachAlloc, ("MemoryManager::reallocate() new_requested_size=%d, org ptr=%p, new ptr=%p\n", newSize, userPointer, userPointer));
 
 		return userPointer;
 	}
 
 #if DO_TRACK
-	uint32 owner = allocatedBlock->getOwner(0);
+	uint32 owner = static_cast<uint32>(allocatedBlock->getOwner(0));
 	bool leakTest = allocatedBlock->checkForLeaks();
 #else
 	uint32 owner = 0;
@@ -1415,17 +1444,31 @@ void MemoryManager::free(void * userPointer, bool array)
 	return;
 #else
 
+	if (!ms_installed)
+		new (ms_memoryManagerBuffer) MemoryManager;
+	if (!ms_criticalSection)
+		return;
+
 	DEBUG_FATAL(!ms_installed, ("not installed"));
 	NOT_NULL(userPointer);
 
+	// ===== x64 LEAK FIX =====
+	// allocate() bypasses the custom pool on x64 (returns a CRT malloc block),
+	// because the pool's free-list has 32-bit pointer/bitfield/address assumptions
+	// that corrupt on x64. So free the CRT block directly here. (Previously this
+	// just returned and leaked EVERYTHING - the root cause of the unbounded growth.)
+	// On x86 the Block layout is unchanged, so fall through to the real pool free.
+#if defined(_WIN64) || defined(__x86_64__) || defined(__LP64__)
+	UNREF(array);
+	::free(userPointer);
+	return;
+#endif
+
 #ifdef _DEBUG
-	if (ms_debugVerifyGuardPatterns || ms_debugVerifyFreePatterns)
-		verify(ms_debugVerifyGuardPatterns, ms_debugVerifyFreePatterns);
+	verify(true, ms_debugVerifyFreePatterns); // TEMP: always sweep guards (DO_GUARDS); throttled inside verify()
 #endif
 
 	DEBUG_REPORT_LOG_PRINT(ms_debugReportLogMemoryAllocFreePointers, ("MM::free %08x\n", reinterpret_cast<int>(userPointer)));
-
-	UNREF(array);
 
 	ms_criticalSection->enter();
 
@@ -1629,18 +1672,17 @@ void MemoryManager::own(void * userPointer)
 	ms_criticalSection->enter();
 
 		// fetch the block pointer
-		AllocatedBlock * block = reinterpret_cast<AllocatedBlock *>(reinterpret_cast<byte *>(userPointer) - (cms_allocatedBlockSize + cms_guardBandSize));
-		DEBUG_FATAL(block->isFree(), ("cannot own a free block"));
+	AllocatedBlock *block = reinterpret_cast<AllocatedBlock *>(reinterpret_cast<byte *>(userPointer) - (cms_allocatedBlockSize + cms_guardBandSize));
+	DEBUG_FATAL(block->isFree(), ("cannot own a free block"));
 
-		// update the owners
-		{
-			enum { OFFSET = 2 };
-			uint32 owners[DO_TRACK + OFFSET];
-			DebugHelp::getCallStack(owners, DO_TRACK + OFFSET);
+	// update the owners
+	{
+		uint64 owners[DO_TRACK + cs_ownerStackFrameOffset];
+		DebugHelp::getCallStack(owners, DO_TRACK + cs_ownerStackFrameOffset);
 
-			for (int i = 0; i < DO_TRACK; ++i)
- 				block->setOwner(i, owners[i + OFFSET]);
-		}
+		for (int i = 0; i < DO_TRACK; ++i)
+			block->setOwner(i, owners[i + cs_ownerStackFrameOffset]);
+	}
 
 	ms_criticalSection->leave();
 #endif
@@ -1654,6 +1696,15 @@ void MemoryManager::verify(bool guardPatterns, bool freePatterns)
 	UNREF(freePatterns);
 
 #if DO_FREE_FILLS || DO_GUARDS
+
+	// TEMP throttle: a full guard-band sweep is O(live blocks); running it on EVERY
+	// alloc/free is O(n^2) and never finishes during world load. Sweep every Nth call
+	// instead - the corruption is still caught within N allocations of the bad write.
+	{
+		static int s_throttle = 0;
+		if ((++s_throttle & 511) != 0)
+			return;
+	}
 
 	ms_criticalSection->enter();
 
@@ -1716,9 +1767,29 @@ void MemoryManager::verify(bool guardPatterns, bool freePatterns)
 
 						if (corrupt)
 						{
-							MemoryManagerNamespace::report(static_cast<AllocatedBlock *>(block), false);
-							ms_criticalSection->leave();
-							DEBUG_FATAL(true, ("corrupted guard pattern"));
+							// TEMP gl11 overflow hunt: write the overflowed block's size + 5-deep allocation
+							// call stack ONCE to logs/ext/memguard.txt via raw _write (alloc-free, so it's
+							// safe inside the allocator lock). Non-fatal so it flushes; the throttled sweep
+							// keeps running but s_reported suppresses spam. Symbolize the addresses against
+							// the .exe/.pdb afterward to name the allocator of the overflowed buffer.
+							static bool s_reported = false;
+							if (!s_reported)
+							{
+								s_reported = true;
+								AllocatedBlock *const ab = static_cast<AllocatedBlock *>(block);
+								static int s_fd = _open("logs/ext/memguard.txt", O_CREAT | O_TRUNC | O_WRONLY, S_IREAD | S_IWRITE);
+								if (s_fd >= 0)
+								{
+									char buffer[256];
+									int const n = sprintf(buffer, "MEMGUARD: overflowed allocation size=%d bytes  callstack: %p %p %p %p %p\n",
+														  ab->getRequestedSize(),
+														  reinterpret_cast<void *>(ab->getOwner(0)), reinterpret_cast<void *>(ab->getOwner(1)),
+														  reinterpret_cast<void *>(ab->getOwner(2)), reinterpret_cast<void *>(ab->getOwner(3)),
+														  reinterpret_cast<void *>(ab->getOwner(4)));
+									IGNORE_RETURN(_write(s_fd, buffer, static_cast<unsigned>(n)));
+									_commit(s_fd);
+								}
+							}
 						}
 #endif
 					}
@@ -1733,12 +1804,12 @@ void MemoryManager::verify(bool guardPatterns, bool freePatterns)
  * @internal
  */
 
-void MemoryManagerNamespace::report(AllocatedBlock const * block, bool leak)
+void MemoryManagerNamespace::report(AllocatedBlock const *block, bool leak)
 {
 #if DO_TRACK
-	uint32 const owner = block->getOwner(0);
+	uintptr_t const owner = block->getOwner(0);
 #else
-	uint32 const owner = 0;
+	uintptr_t const owner = 0;
 #endif
 #if DO_TRACK || DO_GUARDS
 	int const requestedSize = block->getRequestedSize();;
@@ -1758,7 +1829,7 @@ void MemoryManagerNamespace::report(AllocatedBlock const * block, bool leak)
 	}
 	else
 	{
-		sprintf(buffer, "unknown(0x%08X) : %08X memory %s, %d bytes\n", static_cast<unsigned int>(owner), memory, leak ? "leak" : "allocation", static_cast<int>(requestedSize));
+		sprintf(buffer, "unknown(0x%p) : %08X memory %s, %d bytes\n", reinterpret_cast<void *>(owner), memory, leak ? "leak" : "allocation", static_cast<int>(requestedSize));
 	}
 
 	(*LogMessage)(buffer);
@@ -1768,10 +1839,10 @@ void MemoryManagerNamespace::report(AllocatedBlock const * block, bool leak)
 		for (int i = 1; i < DO_TRACK; ++i)
 			if (block->getOwner(i))
 			{
-				if (ms_allowNameLookup && DebugHelp::lookupAddress(block->getOwner(i), libName, fileName, sizeof(fileName), line))
+				if (ms_allowNameLookup && DebugHelp::lookupAddress(static_cast<uint32>(block->getOwner(i)), libName, fileName, sizeof(fileName), line))
 					sprintf(buffer, "  %s(%d) : caller %d\n", fileName, line, i);
 				else
-					sprintf(buffer, "  0x%08X : caller %d\n", static_cast<int>(block->getOwner(i)), i);
+					sprintf(buffer, "  0x%p : caller %d\n", reinterpret_cast<void *>(block->getOwner(i)), i);
 				(*LogMessage)(buffer);
 			}
 	}

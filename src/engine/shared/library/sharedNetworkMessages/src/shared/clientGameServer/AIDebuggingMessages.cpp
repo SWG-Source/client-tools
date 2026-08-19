@@ -7,8 +7,14 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
+#include "sharedMathArchive/TransformArchive.h"
+#include "sharedNetworkMessages/AIDebuggingMessagesArchive.h"
+#include "AIDebuggingMessagesArchiveTypes.h"
+#include "sharedNetworkMessages/ClientCentralMessagesArchive.h"
+#include "unicodeArchive/UnicodeArchive.h"
+#include "localizationArchive/StringIdArchive.h"
 #include "sharedNetworkMessages/AIDebuggingMessages.h"
+#include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 
 //-----------------------------------------------------------------------
 
@@ -232,26 +238,6 @@ void AIPathInfo::setNodes(std::vector<AIPathInfo_NodeInfo> const &n)
 AIPathInfo::~AIPathInfo()
 {
 }
-
-
-//----------------------------------------------------------------------
-
-namespace Archive
-{
-	void put(ByteStream & target, AIPathInfo_NodeInfo const &n)
-	{
-		put(target, n.node);
-		unsigned char state = static_cast<unsigned char>(n.state);
-		put(target, state);
-	}
-	void get(ReadIterator & source, AIPathInfo_NodeInfo &n)
-	{
-		get(source, n.node);
-		unsigned char state;
-		get(source, state);
-		n.state = static_cast<AIPathInfo_NodeInfo::eState>(state);
-	}
-};
 
 //-----------------------------------------------------------------------
 

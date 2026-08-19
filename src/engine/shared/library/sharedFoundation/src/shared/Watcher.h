@@ -86,6 +86,7 @@ public:
 	bool operator <  ( Watcher<T> const & rhs ) const;
 	
 	T *getPointer() const;
+	// TODO: Make explicit, `explicit operator T*() const;` This eliminates many ambiguous comparisons across the codebase, then update call sites to use getPointer() (or operator->) where needed.
 	operator T*() const;
 	T *operator ->() const;
 };

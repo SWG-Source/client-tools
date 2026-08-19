@@ -36,6 +36,8 @@
 #include "dpvsPriorityQueue.hpp"
 #include "dpvsEvaluation.hpp"
 #include "dpvsMesh.hpp"
+
+#include <stdio.h>   // SWG CONSULT-66 round 3: snprintf for the portal-kill detail string
 #if defined (DPVS_DEBUG)
 #	include "dpvsMemory.hpp"
 #endif
@@ -1243,11 +1245,85 @@ DPVS_FORCE_INLINE int Database::getObjectDeltaTimeStamp (ImpObject* ob) const
  *
  *****************************************************************************/
 
+// SWG CONSULT-64 diagnostic counters (defined in dpvsVisibilityQuery_Traverse.cpp)
+extern "C" unsigned int g_swgDpvsPortalRejects[14];
+
+// ----------------------------------------------------------------------
+// SWG CONSULT-66 round 3 diagnostics. The sighting is extremely rare (12
+// dry relogs), so the probes must capture EVERYTHING in one hit:
+//
+// swgDpvsGetObjectNodeInfo: node-state readout for an object -- the BSP
+// node's test bounds (getTestBounds = m_tightBounds ? *m_tightBounds :
+// m_bounds -- either source can be the stale one) + leaf/dirty flags +
+// instance counts. Lets the engine-side CELLSTATE probe detect a broken
+// node WITHOUT waiting for the visual window.
+//
+// g_swgLastPortalKillString: at each portal-attributed kill site the exact
+// math inputs (which site, the tested box, the active clip mask, and every
+// active frustum plane equation) are formatted into a static string the
+// engine probe prints -- one sighting yields the failing test's operands.
+// Diagnostic-only path (fires only when a PORTAL is culled).
+// ----------------------------------------------------------------------
+
+extern "C" __declspec(dllexport) int swgDpvsGetObjectNodeInfo(DPVS::Object *object, float nodeBounds[6], int outInfo[4])
+{
+	if (!object || !nodeBounds || !outInfo)
+		return 0;
+	ImpObject const * const imp = object->getImplementation();
+	if (!imp)
+		return 0;
+	ObInstance const * const inst = imp->getFirstInstance();
+	if (!inst || !inst->m_node)
+		return 0;
+
+	Node const * const node = inst->m_node;
+	const AABB &b = node->getTestBounds();
+	nodeBounds[0] = b.getMin().x; nodeBounds[1] = b.getMin().y; nodeBounds[2] = b.getMin().z;
+	nodeBounds[3] = b.getMax().x; nodeBounds[4] = b.getMax().y; nodeBounds[5] = b.getMax().z;
+
+	int instanceNodes = 0;
+	for (ObInstance const *i = inst; i; i = i->m_obNext)
+		++instanceNodes;
+
+	outInfo[0] = node->isLeaf() ? 1 : 0;
+	outInfo[1] = node->isDirty() ? 1 : 0;
+	outInfo[2] = node->getInstanceCount();
+	outInfo[3] = instanceNodes;
+	return 1;
+}
+
+static char g_swgLastPortalKillString[640] = { 0 };
+
+extern "C" __declspec(dllexport) const char * swgDpvsGetLastPortalKillString(void)
+{
+	return g_swgLastPortalKillString;
+}
+
+static void swgRecordPortalKill(const char *site, const AABB &box, unsigned int activeMask, const Vector4 *planes)
+{
+	int off = snprintf(g_swgLastPortalKillString, sizeof(g_swgLastPortalKillString),
+		"site=%s box=%.2f,%.2f,%.2f..%.2f,%.2f,%.2f mask=0x%x",
+		site,
+		box.getMin().x, box.getMin().y, box.getMin().z,
+		box.getMax().x, box.getMax().y, box.getMax().z,
+		activeMask);
+	for (int i = 0; i < 12 && off > 0 && off < static_cast<int>(sizeof(g_swgLastPortalKillString)) - 64; ++i)
+	{
+		if (activeMask & (1u << i))
+			off += snprintf(g_swgLastPortalKillString + off, sizeof(g_swgLastPortalKillString) - static_cast<size_t>(off),
+				" p%d=%.4f,%.4f,%.4f,%.4f", i, planes[i].x, planes[i].y, planes[i].z, planes[i].w);
+	}
+}
+
 DB_INLINE void Database::removeObject (ImpObject* ob)
 {
 	DPVS_ASSERT (ob);
 	if (!ob || !ob->getFirstInstance())				// object not in database
 		return;
+
+	// SWG CONSULT-64 round 7: count portal database removals ([8]).
+	if (ob->isPortal())
+		++g_swgDpvsPortalRejects[8];
 
 	while (ob->getFirstInstance())					// kill all instances
 		deleteInstance(ob->getFirstInstance());
@@ -1459,6 +1535,10 @@ DB_INLINE void Database::addObject (ImpObject* ob)
 	DPVS_ASSERT (ob);
 	DPVS_ASSERT (!ob->getFirstInstance());
 
+	// SWG CONSULT-64 round 7: count portal database insertions ([9]).
+	if (ob->isPortal())
+		++g_swgDpvsPortalRejects[9];
+
 
 	if (ob->isUnbounded())
 	{
@@ -1524,6 +1604,9 @@ DB_INLINE void Database::updateObject (ImpObject* ob)
 {
 	DPVS_ASSERT (ob);
 
+	// SWG CONSULT-64 round 7: count portal database updates ([7]).
+	if (ob->isPortal())
+		++g_swgDpvsPortalRejects[7];
 
 	DPVS_PROFILE(Statistics::incStatistic(Library::STAT_DATABASEOBSUPDATED,1));
 
@@ -1782,9 +1865,29 @@ void Database::splitInstance (ObInstance* instance)
 		// If object is assumed to stay static, we perform a more exact
 		// mesh vs. AABB test to determine if the object actually overlaps
 		// both of the child nodes.
+		//
+		// SWG CONSULT-66 FIX (2026-07-07): NEVER take this refinement for
+		// PORTALS. A portal is a zero-thickness quad that routinely lies
+		// EXACTLY on a node-region boundary plane (region bounds derive from
+		// object bounds, and split values land on large flat surfaces), and
+		// the exact triangle-vs-AABB test is zero-epsilon on a box face --
+		// the vendor's own comment below concedes "extremely nasty
+		// floating-point accuracy errors". A false negative here silently
+		// DROPS the portal's instance from a child that its box overlaps;
+		// field-convicted state (CONSULT-66 round 3, STUCK0/CELLSTATE/
+		// KILLDETAIL probes): the foyer1->foyer2 portal (y -0.19..4.39,
+		// coplanar with the region's x-min face) kept ONE instance in a
+		// y>=4.34 sliver leaf whose clamped tight bounds excluded 99% of the
+		// portal -> node VF-culled at ordinary camera poses -> the portal was
+		// never enumerated (tested:0, all rejects zero) -> whole visible-cell
+		// set beyond it collapsed to skybox. Per-session (split placement
+		// depends on streaming order; cold disk cache shifts it), then
+		// deterministic by camera pose. Portals keep the conservative
+		// box-based child mask: guaranteed coverage of every child the box
+		// overlaps, at the cost of at most a few extra flat-quad instances.
 		//--------------------------------------------------------------------
 
-		if (ob->isStatic())
+		if (ob->isStatic() && !ob->isPortal())
 		{
 		//	DPVS_ASSERT(ob->intersectCellSpaceAABB(v->getAABB()));
 
@@ -2995,6 +3098,23 @@ Database::NodeStatus Database::traverseNode (Node* v, unsigned int& frustumMask)
 		DPVS_PROFILE(Statistics::incStatistic(Library::STAT_DATABASELEAFNODESTRAVERSED,1));
 
 	//--------------------------------------------------------------------
+	// SWG CONSULT-65 FIX (2026-07-06): update a dirty node BEFORE the view
+	// frustum test below, not after it. The original order frustum-tested
+	// the node against its STALE getTestBounds() and only refreshed the
+	// bounds (updateDirtyNode) for nodes that survived the test -- so a
+	// straddling leaf whose bounds were due to grow could be transiently
+	// classified NODE_HIDDEN for exactly one query, silently dropping every
+	// object instance inside it (whole-cell portal/geometry flicker at a
+	// static camera; instrumented counters showed the skipped objects were
+	// never enumerated: tested:0 with zero rejects and zero database
+	// remove/add events). This is a pure reordering of work the function
+	// already did; NODE_KILLED is handled identically by the caller.
+	//--------------------------------------------------------------------
+
+	if (v->isDirty() && (!updateDirtyNode (v)))
+		return NODE_KILLED;
+
+	//--------------------------------------------------------------------
 	// If non-zero frustum mask (parent node crosses at least one
 	// clip plane), perform a view frustum test. If node is not inside
 	// the VF, we can return at this point. Otherwise, update the
@@ -3006,9 +3126,18 @@ Database::NodeStatus Database::traverseNode (Node* v, unsigned int& frustumMask)
 		DPVS_PROFILE	(Statistics::incStatistic(Library::STAT_DATABASENODESVFTESTED,1));
 
 		const AABB& aabb = v->getTestBounds();
+		unsigned int const swgPreNodeMask = frustumMask;   // SWG CONSULT-66 round 3
 		if (!intersectAABBFrustum(aabb, VQData::get().getViewFrustumPlanes(), frustumMask, frustumMask))
 		{
 			DPVS_PROFILE(Statistics::incStatistic(Library::STAT_DATABASENODESVFCULLED,1));
+			// SWG CONSULT-66 round 2: attribute portals silently dropped inside a
+			// VF-culled node (this node's own instances only; children not walked).
+			for (ObInstance* swgInst = v->getFirstInstance(); swgInst; swgInst = swgInst->m_vNext)
+				if (swgInst->m_ob->isPortal())
+				{
+					++g_swgDpvsPortalRejects[12];
+					swgRecordPortalKill("nodeVF", aabb, swgPreNodeMask, VQData::get().getViewFrustumPlanes());
+				}
 			return NODE_HIDDEN;
 		}
 	}
@@ -3034,6 +3163,13 @@ Database::NodeStatus Database::traverseNode (Node* v, unsigned int& frustumMask)
 		{
 			v->setLastOcclusionTestVisible (false);
 			v->m_anyObjectsProcessed = false;
+			// SWG CONSULT-66 round 2: attribute portals inside a timestamp-skipped node.
+			for (ObInstance* swgInst = v->getFirstInstance(); swgInst; swgInst = swgInst->m_vNext)
+				if (swgInst->m_ob->isPortal())
+				{
+					++g_swgDpvsPortalRejects[13];
+					swgRecordPortalKill("nodeSkip", v->getTestBounds(), 0, VQData::get().getViewFrustumPlanes());
+				}
 			return NODE_HIDDEN;
 		}
 	}
@@ -3059,6 +3195,13 @@ Database::NodeStatus Database::traverseNode (Node* v, unsigned int& frustumMask)
 		{
 			v->m_anyObjectsProcessed = false;
 			DPVS_PROFILE(Statistics::incStatistic(Library::STAT_DATABASENODESOCCLUSIONCULLED,1));
+			// SWG CONSULT-66 round 2: attribute portals inside an occlusion-culled node.
+			for (ObInstance* swgInst = v->getFirstInstance(); swgInst; swgInst = swgInst->m_vNext)
+				if (swgInst->m_ob->isPortal())
+				{
+					++g_swgDpvsPortalRejects[13];
+					swgRecordPortalKill("nodeOcc", v->getTestBounds(), 0, VQData::get().getViewFrustumPlanes());
+				}
 			return NODE_HIDDEN;
 		}
 	}
@@ -3066,15 +3209,10 @@ Database::NodeStatus Database::traverseNode (Node* v, unsigned int& frustumMask)
 		DPVS_PROFILE(Statistics::incStatistic(Library::STAT_DATABASENODESSKIPPED,1));
 
 	//--------------------------------------------------------------------
-	// If node is 'dirty', perform updates. This may cause collapsing
-	// the sub-branches or splitting of the node. If the
-	// updateDirtyNode() functions returns 'false', the node got
-	// destroyed in the process and we must return immediately (node
-	// data isn't valid anymore).
+	// SWG CONSULT-65: the dirty-node update that used to live here was
+	// hoisted above the view frustum test (see the fix comment at the top
+	// of this function).
 	//--------------------------------------------------------------------
-
-	if (v->isDirty() && (!updateDirtyNode (v)))
-		return NODE_KILLED;
 
 	//--------------------------------------------------------------------
 	// Update statistics
@@ -3185,9 +3323,16 @@ Database::NodeStatus Database::traverseNode (Node* v, unsigned int& frustumMask)
 						// frustum calculation later.
 						//--------------------------------------------------------
 
+						unsigned int const swgPreObMask = mask;   // SWG CONSULT-66 round 3
 						if (intersectAABBFrustum(o->getCellSpaceAABB(), VQData::get().getViewFrustumPlanes(),  mask, mask) == false)
 						{
 							DPVS_PROFILE(Statistics::incStatistic(Library::STAT_DATABASEOBSVFCULLED,1));
+							// SWG CONSULT-66 round 2: portal killed by the object AABB test.
+							if (o->isPortal())
+							{
+								++g_swgDpvsPortalRejects[10];
+								swgRecordPortalKill("obVF", o->getCellSpaceAABB(), swgPreObMask, VQData::get().getViewFrustumPlanes());
+							}
 							o->setStatus (ImpObject::HIDDEN, camIDMask);
 							continue;										// ...skip to next object
 						}
@@ -3208,6 +3353,12 @@ Database::NodeStatus Database::traverseNode (Node* v, unsigned int& frustumMask)
 							if (!isObjectInViewFrustum(o,mask))
 							{
 								DPVS_PROFILE(Statistics::incStatistic(Library::STAT_DATABASEOBSVFEXACTCULLED,1));
+								// SWG CONSULT-66 round 2: portal killed by the exact OBB test.
+								if (o->isPortal())
+								{
+									++g_swgDpvsPortalRejects[11];
+									swgRecordPortalKill("obXVF", o->getCellSpaceAABB(), mask, VQData::get().getViewFrustumPlanes());
+								}
 								o->setStatus(ImpObject::HIDDEN, camIDMask);
 								continue;
 							}

@@ -7,11 +7,11 @@
 
 //-----------------------------------------------------------------------
 
-#include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "sharedNetworkMessages/ChatAvatarId.h"
 #include "sharedNetworkMessages/ChatAvatarIdArchive.h"
-#include "sharedNetworkMessages/ChatRoomData.h"
+#include "sharedNetworkMessages/ChatAvatarId.h"
 #include "sharedNetworkMessages/ChatRoomDataArchive.h"
+#include "sharedNetworkMessages/ChatRoomData.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 
 //-----------------------------------------------------------------------
 

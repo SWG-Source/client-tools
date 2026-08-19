@@ -197,8 +197,7 @@ bool SwgCuiContainerProviderDefault::populateFromContainer (const ClientObject &
 
 	const Filter * const filter = getFilter ();
 
-	ContainerConstIterator containerIterator = container->begin();
-	for (; containerIterator != container->end(); ++containerIterator)
+	for (ContainerConstIterator containerIterator = container->begin(); containerIterator != container->end(); ++containerIterator)
 	{
 		const CachedNetworkId & id = *containerIterator;
 		ClientObject * const obj = dynamic_cast<ClientObject *>(id.getObject ());
@@ -238,8 +237,7 @@ bool SwgCuiContainerProviderDefault::populateFromContainer (const ClientObject &
 			*m_containerTertiaryId = *appearanceInv;
 
 		const Container * const appContainer = ContainerInterface::getContainer (*appearanceInv);
-		ContainerConstIterator containerIterator = appContainer->begin();
-		for (; containerIterator != appContainer->end(); ++containerIterator)
+		for (ContainerConstIterator containerIterator = appContainer->begin(); containerIterator != appContainer->end(); ++containerIterator)
 		{
 			const CachedNetworkId & id = *containerIterator;
 			ClientObject * const obj = dynamic_cast<ClientObject *>(id.getObject ());

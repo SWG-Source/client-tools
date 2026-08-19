@@ -24,39 +24,32 @@ VeTime - Useful time/date class
 #include <sys/time.h>
 #endif
 
+static const char *DAYS[] =
+	{
+		"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
+static const char *FULLDAYS[] =
+	{
+		"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
-static char* DAYS[] =
-{
-    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
-};
+static const char *MONTHS[] =
+	{
+		"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
-static char* FULLDAYS[] =
-{
-    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
-};
-
-static char* MONTHS[] =
-{
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-};
-
-static char* FULLMONTHS[] =
-{
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December"
-};
-
+static const char *FULLMONTHS[] =
+	{
+		"January",
+		"February",
+		"March",
+		"April",
+		"May",
+		"June",
+		"July",
+		"August",
+		"September",
+		"October",
+		"November",
+		"December"};
 
 #define IS_LEAP(y) ((y) % 4) == 0 && (! ((y) % 100) == 0 || ((y) % 400) == 0)
 #define LEAPS_THRU_END_OF(y) ((y) / 4 - (y) / 100 + (y) / 400)
@@ -105,16 +98,16 @@ static int32 Get_Day( int month, int day, int year )
 //
 static bool Get_Date_From_Day( int32 days,  int& year,  int& yday )
 {
-    register long int y;
+	long int y;
 
-    if ( days <= 365 )
+	if ( days <= 365 )
     {
         year = 0;
         yday = days + 1;  // 1 based
         return( true );
-    }
+	}
 
-    y = 1;
+	y = 1;
     days -= 365;
 
     days--;  // zero based

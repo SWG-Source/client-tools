@@ -11,10 +11,11 @@
 
 // ======================================================================
 
-#include "Archive/Archive.h"
+#include "PackedArchive.h"
 #include "sharedMath/Transform.h"
 #include "sharedUtility/PackedQuaternion.h"
 #include "sharedUtility/PackedPosition.h"
+#include "Archive/Archive.h"
 
 // ======================================================================
 
@@ -86,29 +87,6 @@ inline void PackedTransform::pack(Archive::ByteStream &target) const
 {
 	Archive::put(target, m_q);
 	Archive::put(target, m_p);
-}
-
-// ======================================================================
-
-namespace Archive
-{
-
-	// ----------------------------------------------------------------------
-
-	inline void get(ReadIterator &source, PackedTransform &target)
-	{
-		target.unpack(source);
-	}
-
-	// ----------------------------------------------------------------------
-
-	inline void put(ByteStream &target, PackedTransform const &source)
-	{
-		source.pack(target);
-	}
-
-	// ----------------------------------------------------------------------
-
 }
 
 // ======================================================================

@@ -226,11 +226,21 @@ bool ClientDataFile::Wearable::apply(Object *wearerObject) const
 				}
 			}
 		}
-		
+
+		// x64 fix: force the runtime-built SkeletalAppearanceTemplate to
+		// preload its mesh generators. Without this, in-world NPCs whose CDF
+		// wearables are applied via the catch-up retry (not the original
+		// endBaselines timing) have their .lmg/.mgn meshes never finish
+		// loading: areAllMeshGeneratorsReadyForDetailLevel returns false
+		// forever, the wearer's skeletal-composite rebuild is deferred
+		// indefinitely, and the NPC renders naked while the body shows fine.
+		// Kicking preloadAssets() makes the load progress reliably.
+		m_appearanceTemplate->preloadAssets();
+
 		//-- Create the wearable appearance.
 		Appearance *const wearableAppearance = m_appearanceTemplate->createAppearance();
 		NOT_NULL(wearableAppearance);
-		
+
 		wearableObject->setAppearance(wearableAppearance);
 		
 		//-- Set wearable appearance's customization data.
@@ -238,7 +248,7 @@ bool ClientDataFile::Wearable::apply(Object *wearerObject) const
 		
 		//-- Cause the wearer appearance to wear the wearable object.
 		wearerAppearance->wear(wearableObject);
-		
+
 		//-- Release local references.
 		wearableCustomizationData->release();
 		if (wearerCustomizationData)

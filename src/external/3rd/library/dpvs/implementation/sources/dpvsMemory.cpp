@@ -145,8 +145,8 @@ void* Memory::allocate (int sz)
 	id[0] = sz;																		// store size of allocation
 	id[1] = (UINT32)(0xaf342910);	// MAGIC NUMBER 1
 	id[2] = (UINT32)(0x34984398);	// MAGIC NUMBER 2
-	id[3] = (UINT32)(id);
-	*id2  = (UINT32)(id2);			// store own address
+	id[3] = (UINT32)(UPTR)(id);
+	*id2  = (UINT32)(UPTR)(id2);			// store own address (UPTR: pointer-width-safe; low-32 guard tag intentional)
 
 	if (s_setGuard.m_addToSet)
 	{
@@ -271,8 +271,8 @@ void Memory::checkInternal (const void* p)
 
 	DPVS_API_ASSERT((id[1] == ((UINT32)(0xaf342910))) && "DPVS::Memory::checkInternal() - memory overwrite detected (front guard magic failure)");
 	DPVS_API_ASSERT((id[2] == ((UINT32)(0x34984398))) && "DPVS::Memory::checkInternal() - memory overwrite detected (front guard magic failure)");
-	DPVS_API_ASSERT((id[3] == ((UINT32)id))			  && "DPVS::Memory::checkInternal() - memory overwrite detected (front guard failure)");
-	DPVS_API_ASSERT((*id2  == ((UINT32)id2))		  && "DPVS::Memory::checkInternal() - memory overwrite detected (rear guard failure)");
+	DPVS_API_ASSERT((id[3] == ((UINT32)(UPTR)id))			  && "DPVS::Memory::checkInternal() - memory overwrite detected (front guard failure)");
+	DPVS_API_ASSERT((*id2  == ((UINT32)(UPTR)id2))		  && "DPVS::Memory::checkInternal() - memory overwrite detected (rear guard failure)");
 }
 #else
 void Memory::checkInternal (const void*) {}

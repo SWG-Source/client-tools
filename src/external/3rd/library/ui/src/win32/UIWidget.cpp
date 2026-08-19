@@ -4457,7 +4457,7 @@ void UIWidget::SetDeformer(UIDeformer * deformer)
 		mDeformer = new UIWatcher<UIDeformer>;
 	}
 
-	if (mDeformer && ((*mDeformer) != deformer))
+	if (mDeformer && (mDeformer->getPointer() != deformer))
 	{
 		*mDeformer = deformer;
 	}

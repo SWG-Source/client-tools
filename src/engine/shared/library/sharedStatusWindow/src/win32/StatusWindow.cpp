@@ -93,7 +93,11 @@ LRESULT CALLBACK StatusWindow::globalWindowProc(
 	LPARAM lParam
 	)
 {
-	StatusWindow *statusWindow = reinterpret_cast<StatusWindow*>(GetWindowLong(hwnd, GWL_USERDATA));
+	// GWL_USERDATA is the 32-bit slot; on x64 SetWindowLongPtr/GetWindowLongPtr
+	// + GWLP_USERDATA hold a pointer-sized value. The Ptr variants compile
+	// identically on Win32 (mapped to 32-bit operations) so we use them
+	// unconditionally.
+	StatusWindow *statusWindow = reinterpret_cast<StatusWindow *>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 	if (!statusWindow)
 		return DefWindowProc(hwnd, uMsg, wParam, lParam);
 	else
@@ -140,8 +144,10 @@ StatusWindow::StatusWindow(bool closeSendsQuit, const char *title, bool disableC
 	FATAL(!m_hwndStatus, ("failed to create status window"));
 
 	// save object (this) in window's user data area
+	// SetWindowLongPtr / GWLP_USERDATA store a pointer-sized value
+	// (LONG_PTR = 8 bytes on x64, 4 on x86).
 	SetLastError(0);
-	const LONG swlResult = SetWindowLong(m_hwndStatus, GWL_USERDATA, reinterpret_cast<LONG>(this));
+	const LONG_PTR swlResult = SetWindowLongPtr(m_hwndStatus, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 	FATAL (!swlResult && GetLastError(), ("failed to set user data for StatusWindow"));
 
 

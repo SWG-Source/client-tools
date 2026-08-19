@@ -1426,14 +1426,11 @@ void SwgCuiStatusGround::updateCreatureLevel(CreatureObject const & creature, bo
 		int const playerLevel = m_statusType == ST_group ? player->getGroupLevel() : player->getLevel();
 		if(m_textLevel != NULL)
 		{
-			IGNORE_RETURN(pageSetVisible(m_textLevel, shouldShowLevel));
-
-			if(shouldShowLevel)
-			{
-				Unicode::String level;
-				Unicode::intToWide(creatureLevel, level);
-				m_textLevel->SetLocalText(level);
-			}
+			// Pre-CU: no numeric combat level shown next to names. The con-color difficulty
+			// icon (m_iconDifficulty) and the lower/higher/even arrows (m_conIcons) below still
+			// convey RELATIVE difficulty (the grey->green->...->red->purple hierarchy). Always
+			// hide the numeric level text. (creatureLevel left declared; harmless unused.)
+			IGNORE_RETURN(pageSetVisible(m_textLevel, false));
 		}
 
 		if(shouldShowLevel && !m_isThePlayer)

@@ -171,6 +171,10 @@ public:
 	CuiVoiceChatManager();
 	~CuiVoiceChatManager();
 
+protected:
+	virtual void PostInstall() override;
+
+public:
 	// Receiver interface
 	virtual void receiveMessage(MessageDispatch::Emitter const & source, MessageDispatch::MessageBase const & message);
 
@@ -351,7 +355,7 @@ private:
 	void processVoiceChatStatus(MessageDispatch::Emitter const &, MessageDispatch::MessageBase const & message);
 	void processVCBroadcastMessage(MessageDispatch::Emitter const &, MessageDispatch::MessageBase const & message);
 
-	static void CuiVoiceChatManager::handleConsentWindow(int id, bool response);
+	static void handleConsentWindow(int id, bool response);
 
 	void onConnectionServerConnectionChanged(bool const &);
 	void onIgnoreListChanged(bool const & status);

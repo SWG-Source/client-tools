@@ -221,7 +221,7 @@ m_regionImperialIconStyle(NULL)
 				rebelBar->SetVisible(false);
 				imperialBar->SetVisible(false);
 
-				m_historyBars.push_back(std::make_pair<UIPage *, UIPage *>(rebelBar, imperialBar));
+				m_historyBars.emplace_back(rebelBar, imperialBar);
 			}
 		}
 	}
@@ -312,8 +312,7 @@ m_regionImperialIconStyle(NULL)
 
 			registerMediatorObject(*planetBtn, true);
 
-			m_galaxyButtons.insert(std::make_pair<std::string, std::pair<UIButton *, UIButton*> >(planet, std::make_pair<UIButton *, UIButton*>(planetBtn, gcwBtn)));
-
+			m_galaxyButtons.insert(std::make_pair(planet, std::make_pair(planetBtn, gcwBtn)));
 		}
 
 		DataTableManager::close(cs_PlanetWidthDataTable);
@@ -718,8 +717,8 @@ void SwgCuiGalacticCivilWar::updateGalaxyWideScore()
 
 	std::map<std::pair<std::string, std::string>, int> const & otherGalaxiesMap = GuildObject::getGuildObject()->getGcwGroupImperialScorePercentileOtherGalaxies();
 
-	std::map<std::pair<std::string, std::string>, int>::const_iterator SWGGalaxy = otherGalaxiesMap.find(std::make_pair<std::string, std::string>("SWG","galaxy"));
-	if(SWGGalaxy == otherGalaxiesMap.end())
+	std::map<std::pair<std::string, std::string>, int>::const_iterator SWGGalaxy = otherGalaxiesMap.find(std::make_pair("SWG", "galaxy"));
+	if (SWGGalaxy == otherGalaxiesMap.end())
 	{
 		DEBUG_WARNING(true, ("SwgCuiGalacticCivilWar - Failed to find 'SWG' Galaxy"));
 		
@@ -780,8 +779,8 @@ void SwgCuiGalacticCivilWar::updateServerSpecificScore()
 	{
 		std::map<std::pair<std::string, std::string>, int> const & otherGalaxiesMap = GuildObject::getGuildObject()->getGcwGroupImperialScorePercentileOtherGalaxies();
 
-		std::map<std::pair<std::string, std::string>, int>::const_iterator OtherGalaxy = otherGalaxiesMap.find(std::make_pair<std::string, std::string>(selectedServer, "galaxy"));
-		if(OtherGalaxy == otherGalaxiesMap.end())
+		std::map<std::pair<std::string, std::string>, int>::const_iterator OtherGalaxy = otherGalaxiesMap.find(std::make_pair(selectedServer, "galaxy"));
+		if (OtherGalaxy == otherGalaxiesMap.end())
 		{
 			DEBUG_WARNING(true, ("SwgCuiGalacticCivilWar - Failed to find [%s] Galaxy score with key [galaxy]", selectedServer.c_str()));
 			return;
@@ -1137,8 +1136,8 @@ void SwgCuiGalacticCivilWar::updatePlanetRegions(std::string & planetName)
 	
 	if(buttonCounter < m_regionButtons.size())
 	{
-		ButtonVector::iterator hideIter = &m_regionButtons[buttonCounter];
-		for(; hideIter != m_regionButtons.end(); ++hideIter)
+		ButtonVector::iterator hideIter = m_regionButtons.begin() + buttonCounter;
+		for (; hideIter != m_regionButtons.end(); ++hideIter)
 		{
 			(*hideIter)->SetVisible(false);
 		}
@@ -1146,8 +1145,8 @@ void SwgCuiGalacticCivilWar::updatePlanetRegions(std::string & planetName)
 
 	if(textCounter < m_regionTextLabels.size())
 	{
-		TextVector::iterator hideIter = &m_regionTextLabels[textCounter];
-		for(; hideIter != m_regionTextLabels.end(); ++hideIter)
+		TextVector::iterator hideIter = m_regionTextLabels.begin() + textCounter;
+		for (; hideIter != m_regionTextLabels.end(); ++hideIter)
 			(*hideIter)->SetVisible(false);
 	}
 
@@ -1399,7 +1398,7 @@ void SwgCuiGalacticCivilWar::populateServerComboBox()
 			m_serverComboBox->AddItem(Unicode::narrowToWide(serverName), serverName);
 		}
 
-		iter = otherGalaxies.lower_bound(std::make_pair<std::string, std::string>(serverName, maxGroupName));
+		iter = otherGalaxies.lower_bound(std::make_pair(serverName, maxGroupName));
 	}
 }
 
@@ -1532,8 +1531,8 @@ void SwgCuiGalacticCivilWar::updateGalaxyMapIcons()
 		{
 			std::map<std::pair<std::string, std::string>, int> const & otherGalaxiesMap = GuildObject::getGuildObject()->getGcwGroupImperialScorePercentileOtherGalaxies();
 
-			std::map<std::pair<std::string, std::string>, int>::const_iterator OtherGalaxy = otherGalaxiesMap.find(std::make_pair<std::string, std::string>(selectedServer, planet));
-			if(OtherGalaxy == otherGalaxiesMap.end())
+			std::map<std::pair<std::string, std::string>, int>::const_iterator OtherGalaxy = otherGalaxiesMap.find(std::make_pair(selectedServer, planet));
+			if (OtherGalaxy == otherGalaxiesMap.end())
 			{
 				gcwIcon->SetVisible(false);
 				DEBUG_WARNING(true, ("SwgCuiGalacticCivilWar - Failed to find [%s] Galaxy score with key [%s]", selectedServer.c_str(), planet.c_str()));

@@ -37,6 +37,7 @@ namespace BloomNamespace
 
 	bool ms_enable = true;
 	bool ms_enabled;
+	bool ms_disableViaConfig = false;
 #ifdef _DEBUG
 	bool ms_viewOriginalAlpha;
 	bool ms_viewBlurredAlpha;
@@ -79,6 +80,12 @@ void Bloom::install()
 	ms_standardDeviation = ConfigFile::getKeyFloat ("ClientGame/Bloom", "standardDeviation", 6.0f);
 	ms_weightMultiplier = ConfigFile::getKeyFloat ("ClientGame/Bloom",  "weightMultiplier", 1.75f);
 
+	// client.cfg override: [ClientGame/Bloom] disable=true forces bloom off
+	// regardless of the saved preference / options-menu state.
+	ms_disableViaConfig = ConfigFile::getKeyBool("ClientGame/Bloom", "disable", false);
+	if (ms_disableViaConfig)
+		ms_enable = false;
+
 	if (ms_enable)
 		enable();
 }
@@ -108,6 +115,11 @@ bool Bloom::isEnabled()
 
 void Bloom::setEnabled(bool const enable)
 {
+	if (ms_disableViaConfig)
+	{
+		ms_enable = false;
+		return;
+	}
 	ms_enable = enable;
 }
 
@@ -115,6 +127,13 @@ void Bloom::setEnabled(bool const enable)
 
 void Bloom::enable()
 {
+	if (ms_disableViaConfig)
+	{
+		ms_enable = false;
+		ms_enabled = false;
+		return;
+	}
+
 	if (!ms_enabled)
 	{
 		if (Bloom::isSupported())

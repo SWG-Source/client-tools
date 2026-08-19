@@ -154,8 +154,7 @@ class ParticleEmitter::LocalShaderPrimitive : public ShaderPrimitive
 friend class ParticleEmitter;
 
 public:
-
-	static VertexBufferFormat LocalShaderPrimitive::getVertexBufferFormat();
+  static VertexBufferFormat getVertexBufferFormat();
 
 public:
 

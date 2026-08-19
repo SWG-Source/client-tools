@@ -1574,7 +1574,7 @@ void GodClientData::unlockSelectedObjects()
 
 int GodClientData::killGhosts()
 {
-	bool numKilled = 0;
+	int numKilled = 0;
 
 	for(SelectedObjectList_t::iterator it = m_selectedObjects.begin(); it != m_selectedObjects.end(); ++it) 
 	{

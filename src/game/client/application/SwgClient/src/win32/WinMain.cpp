@@ -49,22 +49,23 @@ static bool SetUserSelectedMemoryManagerTarget()
 
 static void SetDefaultMemoryManagerTargetSize()
 {
-	// we use 75% of the available ram, up to 1536mb in the case of 2gb (32 bit without PAE limit)
 	MEMORYSTATUSEX memoryStatus = { sizeof memoryStatus };
 	GlobalMemoryStatusEx(&memoryStatus);
-	int ramMB = (memoryStatus.ullTotalPhys / 1048576);
+	int const ramMB = static_cast<int>(memoryStatus.ullTotalPhys / 1048576);
 
-	// without PAE enabled 2048 is the max we can do, but SWG crashes if we give it all the RAM sometimes
-	if (ramMB >= 2048)
-	{
-		ramMB = 1536;
-	}
-	else 
-	{
-		ramMB = (ramMB * .75);
-	}
+	// x64 client: the original code capped the target at 1536MB whenever RAM>=2048.
+	// That was a 32-bit no-PAE ~2GB address-space workaround ("SWG crashes if we
+	// give it all the RAM") and is OBSOLETE on this 64-bit build. The cap caused a
+	// perf cliff once tracked allocations crossed 1536MB (the soft MemoryManager
+	// target shown in the DebugInfo overlay as /1536MB). Use 75% of physical RAM as
+	// the soft target (hardLimit=false), clamped to a 12288MB ceiling so very large
+	// machines don't get a pathological target. Low-RAM boxes keep the old 75%.
+	// Override at runtime with env var SWGCLIENT_MEMORY_SIZE_MB (uncapped).
+	int targetMB = static_cast<int>(ramMB * 0.75);
+	if (targetMB > 12288)
+		targetMB = 12288;
 
-	MemoryManager::setLimit(ramMB, false, false);
+	MemoryManager::setLimit(targetMB, false, false);
 }
 
 void externalCommandHandler(const char* command)
@@ -85,9 +86,12 @@ void externalCommandHandler(const char* command)
 
 		HINSTANCE result = ShellExecute(NULL, "open", url8.c_str(), NULL, NULL, SW_SHOWNORMAL);
 
-		if (reinterpret_cast<int>(result) < 32) //Pulled straight from MSDN -ARH
+		// ShellExecute returns HINSTANCE-typed errors: value <= 32 means failure.
+		// On x64 HINSTANCE is 8 bytes; casting to int truncates the upper 32 bits
+		// and produces nonsense comparisons. Use intptr_t for the cast.
+		if (reinterpret_cast<intptr_t>(result) <= 32) // Pulled straight from MSDN -ARH
 		{
-			WARNING(true, ("could not launch external application (%d)", reinterpret_cast<int>(result)));
+			WARNING(true, ("could not launch external application (%p)", result));
 		}
 		else
 		{

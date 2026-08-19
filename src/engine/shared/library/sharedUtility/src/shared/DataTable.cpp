@@ -13,7 +13,7 @@
 #include "sharedUtility/DataTableCell.h"
 
 #include <map>
-#include <hash_map>
+#include <unordered_map>
 
 //----------------------------------------------------------------------------
 
@@ -161,8 +161,15 @@ DataTableColumnType DataTable::getDataType(const std::string & type)
 DataTableColumnType const &DataTable::getDataTypeForColumn(const std::string& column) const
 {
 	int const columnIndex = findColumnNumber(column);
-	DEBUG_FATAL(columnIndex < 0 || columnIndex >= getNumColumns(), ("DataTable [%s] getDataTypeForColumn(): Column name [%s] is invalid\n", m_name.c_str(), column.c_str()));
-
+	if (columnIndex < 0 || columnIndex >= getNumColumns())
+	{
+		// Strict (default): fail fast, in Release too - the stock DEBUG_FATAL
+		// compiled out and left `m_types[(size_t)-1]` undefined behaviour.
+		// strictData=false: warn and return a process-wide empty column type.
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getDataTypeForColumn(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
+		static DataTableColumnType const s_empty("i");
+		return s_empty;
+	}
 	return getDataTypeForColumn(columnIndex);
 }
 
@@ -170,7 +177,12 @@ DataTableColumnType const &DataTable::getDataTypeForColumn(const std::string& co
 
 DataTableColumnType const &DataTable::getDataTypeForColumn(int column) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] getDataTypeForColumn(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
+	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getDataTypeForColumn(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
+		static DataTableColumnType const s_empty("i");
+		return s_empty;
+	}
 	return *m_types[static_cast<size_t>(column)];
 }
 
@@ -179,7 +191,11 @@ DataTableColumnType const &DataTable::getDataTypeForColumn(int column) const
 int DataTable::getIntValue(const std::string & column, int row) const
 {
 	int const columnIndex = findColumnNumber(column);
-	DEBUG_FATAL(columnIndex < 0 || columnIndex >= getNumColumns(), ("DataTable [%s] getIntValue(): Column name [%s] is invalid\n", m_name.c_str(), column.c_str()));
+	if (columnIndex < 0 || columnIndex >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getIntValue(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
+		return 0;
+	}
 	return getIntValue(columnIndex, row);
 }
 
@@ -187,9 +203,13 @@ int DataTable::getIntValue(const std::string & column, int row) const
 
 int DataTable::getIntValue(int column, int row) const
 {
-	DEBUG_FATAL(row < 0 || row >= getNumRows(), ("DataTable [%s] getIntValue(): Invalid row number [%d].  Rows=[%d]\n", m_name.c_str(), row, getNumRows()));
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] getIntValue(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
-	
+	if (row < 0 || row >= getNumRows() || column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getIntValue(): out-of-range col=%d/%d row=%d/%d",
+							 m_name.c_str(), column, getNumColumns(), row, getNumRows()));
+		return 0;
+	}
+
 	// we can return the value of an int column or the crc value of a string column
 	if (m_types[static_cast<size_t>(column)]->getBasicType() == DataTableColumnType::DT_Int)
 	{
@@ -233,7 +253,11 @@ int DataTable::getIntDefaultForColumn(int column) const
 float DataTable::getFloatValue(const std::string & column, int row) const
 {
 	int const columnIndex = findColumnNumber(column);
-	DEBUG_FATAL(columnIndex < 0 || columnIndex >= getNumColumns(), ("DataTable Column [%s] is invalid", column.c_str()));
+	if (columnIndex < 0 || columnIndex >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getFloatValue(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
+		return 0.0f;
+	}
 	return getFloatValue(columnIndex, row);
 }
 
@@ -241,14 +265,24 @@ float DataTable::getFloatValue(const std::string & column, int row) const
 
 float DataTable::getFloatValue(int column, int row) const
 {
-	DEBUG_FATAL(row < 0 || row >= getNumRows(), ("Row is invalid."));
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] getFloatValue(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
-	DEBUG_FATAL(m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_Float, ("Wrong data type for column %d.", column));
+	if (row < 0 || row >= getNumRows() || column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getFloatValue(): out-of-range col=%d/%d row=%d/%d", m_name.c_str(), column, getNumColumns(), row, getNumRows()));
+		return 0.0f;
+	}
+	if (m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_Float)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getFloatValue(): Wrong data type for column %d", m_name.c_str(), column));
+		return 0.0f;
+	}
 
 	const DataTableCell *cell = getDataTableCell(column, row);
-	DEBUG_FATAL(cell->getType()!=DataTableCell::CT_float, ("Could not convert row %d column %d to float value", row, column));
+	if (!cell || cell->getType() != DataTableCell::CT_float)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] could not convert row %d column %d to float value", m_name.c_str(), row, column));
+		return 0.0f;
+	}
 	return cell->getFloatValue();
-
 }
 
 //----------------------------------------------------------------------------
@@ -276,7 +310,11 @@ float DataTable::getFloatDefaultForColumn(int column) const
 const char *DataTable::getStringValue(const std::string & column, int row) const
 {
 	int const columnIndex = findColumnNumber(column);
-	DEBUG_FATAL(columnIndex < 0 || columnIndex >= getNumColumns(), ("DataTable Column [%s] is invalid", column.c_str()));
+	if (columnIndex < 0 || columnIndex >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringValue(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
+		return "";
+	}
 	return getStringValue(columnIndex, row);
 }
 
@@ -284,14 +322,24 @@ const char *DataTable::getStringValue(const std::string & column, int row) const
 
 const char *DataTable::getStringValue(int column, int row) const
 {
-	DEBUG_FATAL(row < 0 || row >= getNumRows(), ("Row [%d] is invalid.", row));
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("Column [%d] is invalid.", column));
-	DEBUG_FATAL(m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_String, ("Wrong data type for column %s (%d). Current data type is %s", getColumnName(column).c_str(), column, getDataTypeForColumn(column).getTypeSpecString().c_str()));
+	if (row < 0 || row >= getNumRows() || column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringValue(): out-of-range col=%d/%d row=%d/%d", m_name.c_str(), column, getNumColumns(), row, getNumRows()));
+		return "";
+	}
+	if (m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_String)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringValue(): Wrong data type for column %d", m_name.c_str(), column));
+		return "";
+	}
 
 	const DataTableCell * const cell = getDataTableCell(column, row);
-	DEBUG_FATAL(cell->getType()!=DataTableCell::CT_string, ("Could not convert row %d column %d to string value", row, column));
+	if (!cell || cell->getType() != DataTableCell::CT_string)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] could not convert row %d column %d to string value", m_name.c_str(), row, column));
+		return "";
+	}
 	return cell->getStringValue();
-
 }
 
 //----------------------------------------------------------------------------
@@ -299,7 +347,11 @@ const char *DataTable::getStringValue(int column, int row) const
 std::string DataTable::getStringDefaultForColumn(const std::string & column) const
 {
 	int const columnIndex = findColumnNumber(column);
-	DEBUG_FATAL(columnIndex < 0 || columnIndex >= getNumColumns(), ("DataTable Column [%s] is invalid", column.c_str()));
+	if (columnIndex < 0 || columnIndex >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringDefaultForColumn(): Column name [%s] is invalid", m_name.c_str(), column.c_str()));
+		return std::string();
+	}
 	return getStringDefaultForColumn(columnIndex);
 }
 
@@ -307,9 +359,16 @@ std::string DataTable::getStringDefaultForColumn(const std::string & column) con
 
 std::string DataTable::getStringDefaultForColumn(int column) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] getStringDefaultForColumn(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
-
-	DEBUG_FATAL(m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_String, ("Wrong data type for column %d.", column));
+	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringDefaultForColumn(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
+		return std::string();
+	}
+	if (m_types[static_cast<size_t>(column)]->getBasicType() != DataTableColumnType::DT_String)
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] getStringDefaultForColumn(): Wrong data type for column %d", m_name.c_str(), column));
+		return std::string();
+	}
 	std::string value;
 	IGNORE_RETURN( getDataTypeForColumn(column).mangleValue(value) );
 	return value;
@@ -606,7 +665,16 @@ void DataTable::load_0001(Iff & iff)
 
 int DataTable::searchColumnString( int column, const std::string & searchValue ) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] searchColumnString(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
+	// Bounds guard, compiled into Release. Under strictData=false,
+	// DataTableManager::getTable returns a 0-column empty sentinel on miss;
+	// without this check m_index[0] is undefined behaviour (AV). Common path:
+	// AvatarCustomize2::randomize -> CustomizationGroup::randomize ->
+	// searchColumnString(0, ...) when random_customization_ranges is missing.
+	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] searchColumnString(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
+		return -1;
+	}
 
 	int retval = -1;
 
@@ -645,7 +713,13 @@ int DataTable::searchColumnString( int column, const std::string & searchValue )
 
 int DataTable::searchColumnFloat( int column, float searchValue ) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] searchColumnFloat(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
+	// See searchColumnString above - bounds guard for the empty-DataTable
+	// sentinel returned by DataTableManager::getTable under strictData=false.
+	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] searchColumnFloat(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
+		return -1;
+	}
 
 	int retval = -1;
 
@@ -681,7 +755,13 @@ int DataTable::searchColumnFloat( int column, float searchValue ) const
 
 int DataTable::searchColumnInt( int column, int searchValue ) const
 {
-	DEBUG_FATAL(column < 0 || column >= getNumColumns(), ("DataTable [%s] searchColumnInt(): Invalid col number [%d].  Cols=[%d]\n", m_name.c_str(), column, getNumColumns()));
+	// See searchColumnString above - bounds guard for the empty-DataTable
+	// sentinel returned by DataTableManager::getTable under strictData=false.
+	if (column < 0 || column >= getNumColumns())
+	{
+		STRICT_DATA_FATAL(true, ("DataTable [%s] searchColumnInt(): Invalid col number [%d].  Cols=[%d]", m_name.c_str(), column, getNumColumns()));
+		return -1;
+	}
 
 	int retval = -1;
 	DataTableColumnType::DataType columnType = m_types[static_cast<size_t>(column)]->getBasicType();

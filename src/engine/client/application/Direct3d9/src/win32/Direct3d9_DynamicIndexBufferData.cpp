@@ -12,6 +12,8 @@
 #include "ConfigDirect3d9.h"
 #include "Direct3d9.h"
 #include "Direct3d9_Metrics.h"
+#include "sharedDebug/PerformanceTimer.h"
+#include "sharedFoundation/ConfigFile.h"
 #include "sharedFoundation/MemoryBlockManager.h"
 
 // ======================================================================
@@ -175,7 +177,22 @@ Index *Direct3d9_DynamicIndexBufferData::lock(int numberOfIndices)
 	ms_usedNumberOfIndices += numberOfIndices;
 
 	void *data = NULL;
+	// [Direct3d9] logDynamicBufferLockMs -- see the VB sibling in
+	// Direct3d9_DynamicVertexBufferData::lock for the probe rationale.
+	static int const s_logLockMs = ConfigFile::getKeyInt("Direct3d9", "logDynamicBufferLockMs", 0);
+	PerformanceTimer lockTimer;
+	if (s_logLockMs > 0)
+		lockTimer.start();
 	HRESULT const hresult = ms_d3dIndexBuffer->Lock(m_offset * sizeof(Index), length, &data, lockFlag);
+	if (s_logLockMs > 0)
+	{
+		lockTimer.stop();
+		float const lockMs = lockTimer.getElapsedTime() * 1000.f;
+		if (lockMs >= static_cast<float>(s_logLockMs))
+			REPORT_LOG(true, ("IBLOCK %8.3fms discard=%d offset=%d length=%d locks=%d/%d discards=%d/%d\n",
+				lockMs, discard, static_cast<int>(m_offset * sizeof(Index)), length, ms_locksSinceBeginFrame, ms_locksSinceResourceCreation,
+				ms_discardsSinceBeginFrame, ms_discardsSinceResourceCreation));
+	}
 	FATAL(FAILED(hresult), ("Could not lock dynamic %s %d=err %d=discard %d=offset %d=length %d/%d/%d=locks %d/%d/%d=discards", "ib", HRESULT_CODE(hresult), discard, m_offset * sizeof(Index), length, ms_locksSinceBeginFrame, ms_locksSinceResourceCreation, ms_locksEver, ms_discardsSinceBeginFrame, ms_discardsSinceResourceCreation, ms_discardsEver));
 	NOT_NULL(data);
 

@@ -20,6 +20,7 @@
 #include "sharedCollision/NeighborObject.h"
 #include "sharedCollision/SimpleExtent.h"
 
+#include "sharedDebug/Report.h"
 #include "sharedFoundation/ConfigFile.h"
 #include "sharedFoundation/CrcLowerString.h"
 
@@ -303,7 +304,27 @@ float DoorObject::alter ( float time )
 			m_portal->setClosed(false);
 		else
 			if (!m_isForceField)
-				m_portal->setClosed(!open);
+			{
+				// CONSULT-65 (2026-07-06): a door that RENDERS NOTHING must never close
+				// its portal. Portal::setClosed feeds exactly one consumer -- the dPVS
+				// visibility hook (portal ENABLED=false culls everything beyond) -- and
+				// its only visual purpose is skipping work hidden behind a CLOSED DOOR
+				// MESH. Archway "doors" have no drawn appearance, so a closed portal is
+				// a naked see-through hole (sky/wrong wall through the opening); the
+				// retail-era design masked this because the proximity trigger kept
+				// doors open whenever anyone was near, and the trigger chain
+				// (SpatialDatabase door-tree query -> capsule test -> hitBy -> alter
+				// scheduling) is demonstrably brittle here (probe: doors initialize
+				// closed and are frequently never re-triggered; capsule misses while
+				// standing at the door). Keeping a meshless door's portal permanently
+				// enabled is ALWAYS visually correct -- you can see through an open
+				// archway -- at the cost of not culling behind unobserved archways.
+				// Doors with real drawn meshes keep the original behavior. Barrier /
+				// passage semantics are untouched (they read the door helper, not the
+				// portal flag).
+				bool const rendersADoor = (m_drawnDoor[0] && m_drawnDoor[0]->getAppearance() != NULL);
+				m_portal->setClosed(rendersADoor ? !open : false);
+			}
 	}
 
 	// ----------
@@ -460,10 +481,44 @@ void DoorObject::hitBy( CollisionProperty const * collision )
 	CellProperty const * colliderCurrentCell = collision->getCell();
 	CellProperty const * colliderLastCell    = collision->getLastCell();
 
+	// CONSULT-64 round 4: probe the two suspected swallow points in the door wake
+	// chain. The convicted symptom: a door's portal goes CLOSED and never re-opens
+	// while the PLAYER walks through the doorway repeatedly (entrance portal pair
+	// stuck closed 14:31:05 onward, whole session). This filter early-out with a
+	// stale/wrong COLLISION cell (a separate tracker from render cells) is prime.
+	static bool const s_portalCullProbe = ConfigFile::getKeyBool("ClientGraphics", "portalCullProbe", false);
+
 	// ignore things not in or moving into or out of the cell of the door or the door's neighbor.
 	if ((colliderCurrentCell != doorCell) && (colliderLastCell != doorCell) && (colliderCurrentCell != doorNeighborCell) && (colliderLastCell != doorNeighborCell))
 	{
+		if (s_portalCullProbe && collision->isPlayer())
+		{
+			static int s_filteredLogBudget = 300;
+			if (s_filteredLogBudget > 0)
+			{
+				--s_filteredLogBudget;
+				REPORT_LOG(true, ("[PortalCullProbe] DOORHIT-FILTERED doorCell=%s neighbor=%s colliderCell=%s colliderLastCell=%s portalClosed=%d\n",
+					doorCell ? doorCell->getCellName() : "(null)",
+					doorNeighborCell ? doorNeighborCell->getCellName() : "(null)",
+					colliderCurrentCell ? colliderCurrentCell->getCellName() : "(null)",
+					colliderLastCell ? colliderLastCell->getCellName() : "(null)",
+					(m_portal && m_portal->isClosed()) ? 1 : 0));
+			}
+		}
 		return;
+	}
+
+	if (s_portalCullProbe && collision->isPlayer() && m_portal && m_portal->isClosed())
+	{
+		static int s_wakeLogBudget = 300;
+		if (s_wakeLogBudget > 0)
+		{
+			--s_wakeLogBudget;
+			REPORT_LOG(true, ("[PortalCullProbe] DOORHIT-WAKE doorCell=%s neighbor=%s passageAllowed=%d\n",
+				doorCell ? doorCell->getCellName() : "(null)",
+				doorNeighborCell ? doorNeighborCell->getCellName() : "(null)",
+				isPassageAllowed() ? 1 : 0));
+		}
 	}
 
 	scheduleForAlter();

@@ -5,6 +5,7 @@
 //-----------------------------------------------------------------------
 
 #include "AutoDeltaByteStream.h"
+#include <cstdint>
 #include <list>
 
 namespace Archive {
@@ -251,8 +252,9 @@ template<typename ValueType>
 inline void AutoDeltaQueue<ValueType>::pack(ByteStream &target) const
 {
 	const_iterator i;
-	Archive::put(target, container.size());
-	Archive::put(target, baselineCommandCount);
+	// Fixed 4-byte size on the wire (matches 32-bit server's size_t)
+	Archive::put(target, static_cast<uint32_t>(container.size()));
+	Archive::put(target, static_cast<uint32_t>(baselineCommandCount));
 	unsigned char cmd;
 	for (i = container.begin(); i != container.end(); ++i)
 	{
@@ -267,8 +269,8 @@ inline void AutoDeltaQueue<ValueType>::pack(ByteStream &target) const
 template<typename ValueType>
 inline void AutoDeltaQueue<ValueType>::packDelta(ByteStream &target) const
 {
-	Archive::put(target, changes.size());
-	Archive::put(target, baselineCommandCount);
+	Archive::put(target, static_cast<uint32_t>(changes.size()));
+	Archive::put(target, static_cast<uint32_t>(baselineCommandCount));
 	for (typename std::vector<ModifyCommand>::iterator i = changes.begin(); i != changes.end(); ++i)
 	{
 		const ModifyCommand &c = (*i);
@@ -322,12 +324,15 @@ inline void AutoDeltaQueue<ValueType>::unpack(ReadIterator &source)
 	clearDelta();
 
 	ModifyCommand c;
-	size_t commandCount;
+	// Fixed 4-byte size on the wire (matches 32-bit server's size_t)
+	uint32_t commandCount;
+	uint32_t bcc;
 
 	Archive::get(source, commandCount);
-	Archive::get(source, baselineCommandCount);
+	Archive::get(source, bcc);
+	baselineCommandCount = bcc;
 
-	for (size_t i = 0; i < commandCount; ++i)
+	for (uint32_t i = 0; i < commandCount; ++i)
 	{
 		Archive::get(source, c.cmd);
 		assert(c.cmd == ModifyCommand::PUSH); // only push valid for pack/unpack
@@ -342,12 +347,12 @@ template<typename ValueType>
 inline void AutoDeltaQueue<ValueType>::unpackDelta(ReadIterator &source)
 {
 	ModifyCommand c;
-	size_t skipCount, commandCount, targetBaselineCommandCount;
+	uint32_t skipCount, commandCount, targetBaselineCommandCount;
 
 	Archive::get(source, commandCount);
 	Archive::get(source, targetBaselineCommandCount);
 
-	skipCount = commandCount+baselineCommandCount-targetBaselineCommandCount;
+	skipCount = static_cast<uint32_t>(commandCount + baselineCommandCount - targetBaselineCommandCount);
 
 	// If this fails, it means that the deltas we are receiving are relative to baselines
 	// which are newer than what we currently have.  This usually means either we were not
@@ -356,7 +361,7 @@ inline void AutoDeltaQueue<ValueType>::unpackDelta(ReadIterator &source)
 	if (skipCount > commandCount)
 		skipCount = commandCount;
 
-	size_t i;
+	uint32_t i;
 	for (i = 0; i < skipCount; ++i)
 	{
 		Archive::get(source, c.cmd);

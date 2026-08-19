@@ -37,6 +37,7 @@
 #include "clientUserInterface/CuiTextManager.h"
 #include "sharedDebug/DebugFlags.h"
 #include "sharedDebug/InstallTimer.h"
+#include "sharedFile/TreeFile.h"
 #include "sharedFoundation/PointerDeleter.h"
 #include "sharedGame/GameObjectTypes.h"
 #include "sharedMessageDispatch/Transceiver.h"
@@ -160,42 +161,43 @@ void ClientObject::remove ()
 
 //-----------------------------------------------------------------------
 
-ClientObject::ClientObject(const SharedObjectTemplate* newTemplate, const ObjectNotification &notification) :
-	Object(newTemplate, NetworkId::cms_invalid),
-	m_arrangementDescriptor(0),
-	m_authoritativeClientServerPackage(),
-	m_authoritativeClientServerPackage_np(),
-	m_firstParentAuthClientServerPackage(),
-	m_firstParentAuthClientServerPackage_np(),
-	m_sharedPackage(),
-	m_sharedPackage_np(),
-	m_synchronizedUi(0),
-	m_transferInProgress(false),
+ClientObject::ClientObject(const SharedObjectTemplate *newTemplate, const ObjectNotification &notification) : Object(newTemplate, NetworkId::cms_invalid),
+																											  m_arrangementDescriptor(0),
+																											  m_authoritativeClientServerPackage(),
+																											  m_authoritativeClientServerPackage_np(),
+																											  m_firstParentAuthClientServerPackage(),
+																											  m_firstParentAuthClientServerPackage_np(),
+																											  m_sharedPackage(),
+																											  m_sharedPackage_np(),
+																											  m_synchronizedUi(0),
+																											  m_transferInProgress(false),
 #ifdef _DEBUG
-	m_startTransform_w(),
+																											  m_startTransform_w(),
 #endif
-	m_containedByChange(0),
-	m_arrangementChange(0),
-	m_beginBaselines(false),
-	m_initialized(false),
-	m_localizedName(),
-	m_localizedEnglishName(),
-	m_localizedNameDirty(true),
-	m_lastFlyTextWasInvalidTarget(false),
-	m_volume(0),
-	m_objectName(),
-	m_nameStringId(),
-	m_complexity(0.0f),
-	m_authServerProcessId(0),
-	m_cashBalance(0),
-	m_bankBalance(0),
-	m_clientCached(false),
-	m_uniqueId(ms_nextUniqueId++),
-	m_auxilliaryObjectVector(NULL),
-	m_lastFlyTextTime(0.f)
+																											  m_containedByChange(0),
+																											  m_arrangementChange(0),
+																											  m_beginBaselines(false),
+																											  m_initialized(false),
+																											  m_localizedName(),
+																											  m_localizedEnglishName(),
+																											  m_localizedNameDirty(true),
+																											  m_lastFlyTextWasInvalidTarget(false),
+																											  m_volume(0),
+																											  m_objectName(),
+																											  m_nameStringId(),
+																											  m_complexity(0.0f),
+																											  m_authServerProcessId(0),
+																											  m_cashBalance(0),
+																											  m_bankBalance(0),
+																											  m_clientCached(false),
+																											  m_clientDataFileWearablesApplied(false),
+																											  m_uniqueId(ms_nextUniqueId++),
+																											  m_auxilliaryObjectVector(NULL),
+																											  m_lastFlyTextTime(0.f)
 
 #ifdef _DEBUG
-	, m_warnedNotInitialized (false)
+																											  ,
+																											  m_warnedNotInitialized(false)
 #endif
 {
 	IGNORE_RETURN(ms_idObjectMap.insert (std::make_pair (m_uniqueId, this)));
@@ -305,10 +307,20 @@ ClientObject::ClientObject(const SharedObjectTemplate* newTemplate, const Object
 		const std::string &portalLayoutFileName = newTemplate->getPortalLayoutFilename();
 		if (!portalLayoutFileName.empty())
 		{
-			PortalProperty *portalProperty = new PortalProperty(*this, portalLayoutFileName.c_str());
-			addProperty(*portalProperty);
-			portalProperty->createAppearance();
-		} //lint !e429 // Custodial pointer has not been freed or returned // addProperty() absorbed the pointer
+			// Skip the portal property block when the .pob file isn't in the
+			// loaded TRE (post-NGE TRE may not have NPE/tutorial assets).
+			// Without this, PortalPropertyTemplate's Iff ctor FATALs.
+			if (!TreeFile::exists(portalLayoutFileName.c_str()))
+			{
+				WARNING(true, ("ClientObject: portal layout '%s' not found in TreeFile, skipping PortalProperty for [%s]", portalLayoutFileName.c_str(), newTemplate->getName()));
+			}
+			else
+			{
+				PortalProperty *portalProperty = new PortalProperty(*this, portalLayoutFileName.c_str());
+				addProperty(*portalProperty);
+				portalProperty->createAppearance();
+			} // lint !e429 // Custodial pointer has not been freed or returned // addProperty() absorbed the pointer
+		}
 	}
 
 	m_objectName.setSourceObject   (this);
@@ -1374,6 +1386,20 @@ void ClientObject::setClientCached ()
 bool ClientObject::isClientCached () const
 {
 	return m_clientCached;
+}
+
+//----------------------------------------------------------------------
+
+bool ClientObject::getClientDataFileWearablesApplied() const
+{
+	return m_clientDataFileWearablesApplied;
+}
+
+//----------------------------------------------------------------------
+
+void ClientObject::setClientDataFileWearablesApplied(bool const applied)
+{
+	m_clientDataFileWearablesApplied = applied;
 }
 
 //----------------------------------------------------------------------

@@ -40,7 +40,7 @@ void SkeletalAnimationDebuggingNamespace::remove()
 	s_installed = false;
 
 	delete s_focusObject;
-	s_focusObject = false;
+	s_focusObject = nullptr;
 }
 
 // ======================================================================

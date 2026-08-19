@@ -207,7 +207,7 @@ void SwgCuiBuffBuilderBuffer::OnButtonPressed( UIWidget *context )
 	//send the update packet
 	else if(context == m_acceptButton)
 	{
-		if(m_failedLastVerification || Random::random(1, 100) <= GameNetwork::getEntertainerCaptchaPercent())
+		if (m_failedLastVerification || Random::random(1, 100) <= GameNetwork::getEntertainerCaptchaPercent())
 		{
 			CuiStringVariablesData csvd;
 			Object const * sourceObj = Game::getPlayer();

@@ -79,7 +79,11 @@ public:
 		Matrix4x3			m_matrix;
 		const ImpObject*	m_owner;
 		UINT32				m_timeStamp;
+#if defined(_M_X64)
+		UINT32				m_padding[1];			// for alignment (x64: m_owner is 8 bytes -> 1 pad keeps Entry == 64)
+#else
 		UINT32				m_padding[2];			// for alignment
+#endif
 	};
 
 	static DPVS_FORCE_INLINE Entry&		getEntry	(int index)			

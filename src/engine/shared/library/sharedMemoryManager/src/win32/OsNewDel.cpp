@@ -9,172 +9,81 @@
 #include "sharedMemoryManager/FirstSharedMemoryManager.h"
 #include "sharedMemoryManager/OsNewDel.h"
 
-// ======================================================================
+// Disable "unreferenced parameter" warning for debug overloads
+#pragma warning(disable : 4100)
 
-// this is here because MSVC won't call MemoryManager::allocate() from asm directly
-static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
+// ----------------------------------------------------------------------
+// Local wrapper for MemoryManager::allocate()
+// (historically used by the old asm versions)
+static inline void *localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
 {
 	return MemoryManager::allocate(size, owner, array, leakTest);
 }
 
 // ----------------------------------------------------------------------
-
-// We are using the arguments (except for file and line), but MSVC can't tell that.
-#pragma warning(disable: 4100)
-
+// operator new overloads
 // ----------------------------------------------------------------------
 
-__declspec(naked) void *operator new(size_t size, MemoryManagerNotALeak)
+void *__cdecl operator new(size_t size, MemoryManagerNotALeak)
 {
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
+	return MemoryManager::allocate(size, 0, false, false);
+}
 
-		// MemoryManager::alloc(size, [return address], false, false)
-		push    0
-		push    0
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
+void *__cdecl operator new(size_t size)
+{
+	return MemoryManager::allocate(size, 0, false, true);
+}
 
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
+void *__cdecl operator new[](size_t size)
+{
+	return MemoryManager::allocate(size, 0, true, true);
+}
+
+void *__cdecl operator new(size_t size, const char *file, int line)
+{
+	UNREF(file);
+	UNREF(line);
+	return MemoryManager::allocate(size, 0, false, true);
+}
+
+void *__cdecl operator new[](size_t size, const char *file, int line)
+{
+	UNREF(file);
+	UNREF(line);
+	return MemoryManager::allocate(size, 0, true, true);
 }
 
 // ----------------------------------------------------------------------
-
-__declspec(naked) void *operator new(size_t size)
-{
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// MemoryManager::alloc(size, [return address], false, true)
-		push    1
-		push    0
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
-}
-
+// operator delete overloads (C++14-compliant, noexcept)
 // ----------------------------------------------------------------------
 
-__declspec(naked) void *operator new[](size_t size)
-{
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// MemoryManager::alloc(size, [return address], true, true)
-		push    1
-		push    1
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
-}
-
-// ----------------------------------------------------------------------
-
-__declspec(naked) void *operator new(size_t size, const char *file, int line)
-{
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// MemoryManager::alloc(size, [return address], false, true)
-		push    1
-		push    0
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
-}
-
-// ----------------------------------------------------------------------
-
-__declspec(naked) void *operator new[](size_t size, const char *file, int line)
-{
-	_asm
-	{
-		// setup local call stack
-		push    ebp
-		mov     ebp, esp
-
-		// MemoryManager::alloc(size, [return address], true, true)
-		push    1
-		push    1
-		mov     eax, dword ptr [ebp+4]
-		push    eax
-		mov     eax, dword ptr [ebp+8]
-		push    eax
-		call    localAllocate
-		add     esp, 12
-
-		mov     esp, ebp
-		pop     ebp
-		ret
-	}
-}
-
-// ----------------------------------------------------------------------
-
-#pragma warning(default: 4100)
-
-// ----------------------------------------------------------------------
-
-void operator delete(void *pointer)
+void __cdecl operator delete(void *pointer) noexcept
 {
 	if (pointer)
 		MemoryManager::free(pointer, false);
 }
 
-// ----------------------------------------------------------------------
-
-void operator delete[](void *pointer)
+void __cdecl operator delete[](void *pointer) noexcept
 {
 	if (pointer)
 		MemoryManager::free(pointer, true);
 }
 
-// ----------------------------------------------------------------------
+// "delete-size" overloads (added in C++14+ for matching new/delete pairs)
+void __cdecl operator delete(void *pointer, size_t) noexcept
+{
+	if (pointer)
+		MemoryManager::free(pointer, false);
+}
 
-void operator delete(void *pointer, const char *file, int line)
+void __cdecl operator delete[](void *pointer, size_t) noexcept
+{
+	if (pointer)
+		MemoryManager::free(pointer, true);
+}
+
+// Debug variants (file/line versions)
+void __cdecl operator delete(void *pointer, const char *file, int line) noexcept
 {
 	UNREF(file);
 	UNREF(line);
@@ -183,9 +92,7 @@ void operator delete(void *pointer, const char *file, int line)
 		MemoryManager::free(pointer, false);
 }
 
-// ----------------------------------------------------------------------
-
-void operator delete[](void *pointer, const char *file, int line)
+void __cdecl operator delete[](void *pointer, const char *file, int line) noexcept
 {
 	UNREF(file);
 	UNREF(line);
@@ -194,18 +101,7 @@ void operator delete[](void *pointer, const char *file, int line)
 		MemoryManager::free(pointer, true);
 }
 
-// ======================================================================
-// WARNING!!!!!!!
-// 
-// The init_seg pragma command is used to create certain static objects first, before other static objects are created.
-// However, multiple static variables that use the same init_seg category(i.e. compiler) are not guaranteed to destroy in any 
-// particular order. It is completely random based on how all the linking of static objects occurs. Since this command is being
-// used on our memory manager(to overwrite new/delete) - NO OTHER STATIC SHOULD EVER USE INIT_SEG(COMPILER)!!!! This static object
-// *MUST* be the final static object that is destroyed.
-//
-#pragma warning(disable: 4074)
-#pragma init_seg(compiler) // ^-Read warning above.-^
-static MemoryManager memoryManager;
-
-// ======================================================================
-
+// ----------------------------------------------------------------------
+// Re-enable warnings
+// ----------------------------------------------------------------------
+#pragma warning(default : 4100)

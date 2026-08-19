@@ -9,6 +9,10 @@
 #ifndef INCLUDED_Fatal_H
 #define INCLUDED_Fatal_H
 
+#include "sharedFoundationTypes/FoundationTypes.h"
+#include "sharedFoundation/MacroFoundation.h"
+#include "sharedFoundation/FirstPlatform.h"
+
 // ======================================================================
 
 void           FatalInstall();
@@ -27,6 +31,9 @@ DLLEXPORT void ConsoleWarning(const char *format, ...);
 void           SetWarningStrictFatal(bool fatal);
 bool           GetWarningStrictFatal();
 DLLEXPORT void WarningStrictFatal(const char *format, ...);
+
+DLLEXPORT bool StrictData();
+DLLEXPORT void StrictDataFatal(const char *format, ...);
 
 typedef void (*WarningCallback) (char const * const);
 void SetWarningCallback(WarningCallback);
@@ -62,6 +69,12 @@ void SetWarningCallback(WarningCallback);
 #endif
 
 #define WARNING_STRICT_FATAL(a, b) ((a) ? WarningStrictFatal b : NOP)
+
+// Data-strictness policy point. FATAL by default; a server operator running a
+// TRE pack that legitimately lacks post-launch tables/columns can opt out with
+// [SharedFoundation] strictData=false, which demotes these sites to WARNING and
+// lets the caller's degraded path (feature disabled / default value) run instead.
+#define STRICT_DATA_FATAL(a, b) ((a) ? StrictDataFatal b : NOP)
 
 #ifdef _DEBUG
 
@@ -159,4 +172,4 @@ struct _EXCEPTION_POINTERS;
 
 // ======================================================================
 
-#endif
+#endif // INCLUDED_Fatal_H

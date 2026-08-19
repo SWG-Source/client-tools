@@ -127,13 +127,13 @@ T VivoxClamp( T Min, T Cur, T Max )
 #define FIRE_EVENT( __fn, __args ) \
     do { \
         ++m_iFiringEvents; \
-        for ( EventHandlers::const_iterator __iter = m_aHandlers.begin(); __iter != m_aHandlers.end(); ++__iter ) \
+        for ( auto __iter = m_aHandlers.begin(); __iter != m_aHandlers.end(); ++__iter ) \
             (*__iter)-> __fn __args; \
         if ( --m_iFiringEvents == 0 && m_pNewHandlers ) \
         { \
             m_aHandlers.swap( *m_pNewHandlers ); \
             delete m_pNewHandlers; \
-            m_pNewHandlers = 0; \
+            m_pNewHandlers = nullptr; \
         } \
     } while( 0 )
 
@@ -533,7 +533,7 @@ Vivox<StrClass, Glue>::ProcessEvents()
 
                     if ( m_bNeedConnect )
                     {
-                        FIRE_EVENT(VivoxOnDisconnect,(true));
+                        FIRE_EVENT(VivoxOnDisconnect, (true));
 
                         m_bNeedConnect = false;
                         BeginConnect( m_sNextServer, m_iNextMinPort, m_iNextMaxPort, m_sNextServiceExe, m_sNextServiceIP );
@@ -580,7 +580,7 @@ Vivox<StrClass, Glue>::ProcessEvents()
                     if ( !m_mTextMessages.empty() )
                     {
                         bool bSent = false;
-                        for ( TextMessageMap::iterator iter( m_mTextMessages.begin() );
+                        for ( typename TextMessageMap::iterator iter( m_mTextMessages.begin() );
                               iter != m_mTextMessages.end() && !bSent;
                               /*in loop*/ )
                         {
@@ -914,7 +914,7 @@ template <typename StrClass, typename Glue>
 typename const Vivox<StrClass, Glue>::Session*
 Vivox<StrClass, Glue>::FindSession( const StrClass& sSession ) const
 {
-    SessionMap::const_iterator iter( m_mSessions.find( sSession ) );
+    typename SessionMap::const_iterator iter( m_mSessions.find( sSession ) );
     if ( iter != m_mSessions.end() )
     {
         return &(*iter).second;
@@ -934,7 +934,7 @@ template <typename StrClass, typename Glue>
 typename const Vivox<StrClass, Glue>::Session*
 Vivox<StrClass, Glue>::FindSessionByURI( const StrClass& sSessionURI ) const
 {
-    for ( SessionMap::const_iterator iter( m_mSessions.begin() );
+    for ( typename SessionMap::const_iterator iter( m_mSessions.begin() );
           iter != m_mSessions.end();
           ++iter )
     {
@@ -964,7 +964,7 @@ Vivox<StrClass, Glue>::FindParticipant( const StrClass& sURI, const StrClass& sS
     if ( 0 == pSession )
         return 0;
 
-    Session::ParticipantMap::const_iterator iter( pSession->mParticipants.find( sURI ) );
+    typename Session::ParticipantMap::const_iterator iter( pSession->mParticipants.find( sURI ) );
     if ( iter == pSession->mParticipants.end() )
         return 0;
 
@@ -1406,7 +1406,7 @@ Vivox<StrClass, Glue>::TerminateSessionGroup( const StrClass& sSessionGroup )
         if ( AreSessionsSuspended() )
         {
             // Need to remove all session info that matches this group
-            for ( SessionInfoMap::iterator iter( m_mSessionInfo.begin() );
+            for (typename SessionInfoMap::iterator iter( m_mSessionInfo.begin() );
                   iter != m_mSessionInfo.end();
                   /*in loop*/ )
             {
@@ -1489,7 +1489,7 @@ Vivox<StrClass, Glue>::BeginSession( const StrClass& sURI, const StrClass& sDisp
             if ( !info.vDeferred.empty() )
             {
                 bProcessImmediately = false;
-                for ( DeferredSessionList::iterator iter( info.vDeferred.begin() );
+                for (typename DeferredSessionList::iterator iter( info.vDeferred.begin() );
                       iter != info.vDeferred.end();
                       ++iter )
                 {
@@ -1624,7 +1624,7 @@ Vivox<StrClass, Glue>::TerminateSession( const StrClass& sSession )
         // Something else is processing
         bProcessImmediately = false;
 
-        for ( DeferredSessionList::iterator iter( info.vDeferred.begin() );
+        for (typename DeferredSessionList::iterator iter( info.vDeferred.begin() );
               iter != info.vDeferred.end();
               ++iter )
         {
@@ -1696,7 +1696,7 @@ Vivox<StrClass, Glue>::TerminateSessionByURI( const StrClass& sURI )
         // either still connecting or suspended.  If it's suspended, we'll
         // just erase it.  If it's still connecting, we'll mark that it
         // needs a disconnect.
-        SessionInfoMap::iterator iter( m_mSessionInfo.find( sURI ) );
+        typename SessionInfoMap::iterator iter( m_mSessionInfo.find( sURI ) );
         if ( iter != m_mSessionInfo.end() )
         {
             SessionInfo& info = (*iter).second;
@@ -1733,7 +1733,7 @@ Vivox<StrClass, Glue>::SendTextMessage( const StrClass& sSession, const StrClass
     if ( 0 == pSession )
         return false;
 
-    TextMessageMap::iterator iter( m_mTextMessages.find( sSession ) );
+    typename TextMessageMap::iterator iter( m_mTextMessages.find( sSession ) );
     TextMessageList* v = iter != m_mTextMessages.end() ? &(*iter).second : 0;
     if ( !pSession->bTextConnected || m_bTextMessagePending || ( v && !v->empty() ) )
     {
@@ -3056,7 +3056,7 @@ template <typename StrClass, typename Glue>
 bool
 Vivox<StrClass, Glue>::m_allSessionsSuspended() const
 {
-    for ( SessionInfoMap::const_iterator iter( m_mSessionInfo.begin() );
+    for (typename SessionInfoMap::const_iterator iter( m_mSessionInfo.begin() );
           iter != m_mSessionInfo.end();
           ++iter )
     {
@@ -3489,7 +3489,7 @@ Vivox<StrClass, Glue>::m_removeDeferred( GroupInfo& group, const StrClass& sURI,
 {
     vivox_db_fatal( !group.sHandle.empty() );
 
-    for ( DeferredSessionList::iterator iter( group.vDeferred.begin() );
+    for (typename DeferredSessionList::iterator iter( group.vDeferred.begin() );
           iter != group.vDeferred.end();
           ++iter )
     {
@@ -3528,14 +3528,14 @@ Vivox<StrClass, Glue>::m_suspendSessions( bool bInternal )
     if ( m_iSessionsSuspended++ > 0 )
         return;
 
-    for ( SessionMap::const_iterator iter( m_mSessions.begin() );
+    for (typename SessionMap::const_iterator iter( m_mSessions.begin() );
           iter != m_mSessions.end();
           ++iter )
     {
         const Session& ssn = (*iter).second;
 
         // Find the session in the session info map and mark as suspended
-        SessionInfoMap::iterator infoIter( m_mSessionInfo.find( ssn.sURI ) );
+        typename SessionInfoMap::iterator infoIter( m_mSessionInfo.find( ssn.sURI ) );
         if ( infoIter != m_mSessionInfo.end() )
         {
             SessionInfo& info = (*infoIter).second;
@@ -3546,20 +3546,20 @@ Vivox<StrClass, Glue>::m_suspendSessions( bool bInternal )
     }
 
     // Clear out all of the deferred sessions so that they don't try to connect
-    for ( GroupInfoMap::iterator iter( m_mGroupInfo.begin() );
+    for (typename GroupInfoMap::iterator iter( m_mGroupInfo.begin() );
           iter != m_mGroupInfo.end();
           ++iter )
     {
         GroupInfo& info = (*iter).second;
 
-        for ( DeferredSessionList::iterator defIter( info.vDeferred.begin() );
+        for (typename DeferredSessionList::iterator defIter( info.vDeferred.begin() );
               defIter != info.vDeferred.end();
               ++defIter )
         {
             DeferredSessionInfo& deferred = (*defIter);
 
             // Find the session in the session info map and mark as suspended
-            SessionInfoMap::iterator infoIter( m_mSessionInfo.find( deferred.sURI ) );
+            typename SessionInfoMap::iterator infoIter( m_mSessionInfo.find( deferred.sURI ) );
             if ( infoIter != m_mSessionInfo.end() )
             {
                 SessionInfo& sessionInfo = (*infoIter).second;
@@ -3604,7 +3604,7 @@ Vivox<StrClass, Glue>::m_unsuspendSessions( bool bInternal )
         // Swap the map out since BeginSession() adds things to the map
         // This also resets the bSuspended flag for each session
         SessionInfoMap siMap; siMap.swap( m_mSessionInfo );
-        for ( SessionInfoMap::const_iterator iter( siMap.begin() );
+        for (typename SessionInfoMap::const_iterator iter( siMap.begin() );
               iter != siMap.end();
               ++iter )
         {
@@ -3626,14 +3626,14 @@ Vivox<StrClass, Glue>::m_clearSessions( bool bFireSessionGroupEvents )
 {
     // Swap out the session maps and fire events notifying the app that they're gone
     SessionMap temp; temp.swap( m_mSessions );
-    for ( SessionMap::const_iterator iter( temp.begin() );
+    for (typename SessionMap::const_iterator iter( temp.begin() );
           iter != temp.end();
           ++iter )
     {
         const Session& s = (*iter).second;
 
         // Fire participant events
-        for ( Session::ParticipantMap::const_iterator pIter( s.mParticipants.begin() );
+        for (typename Session::ParticipantMap::const_iterator pIter( s.mParticipants.begin() );
               pIter != s.mParticipants.end();
               ++pIter )
         {
@@ -3655,7 +3655,7 @@ Vivox<StrClass, Glue>::m_clearSessions( bool bFireSessionGroupEvents )
     if ( bFireSessionGroupEvents )
     {
         // Make sure all groups are represented
-        for ( GroupInfoMap::const_iterator iter( m_mGroupInfo.begin() );
+        for (typename GroupInfoMap::const_iterator iter( m_mGroupInfo.begin() );
               iter != m_mGroupInfo.end();
               ++iter )
         {
@@ -3872,7 +3872,7 @@ template <typename StrClass, typename Glue>
 typename Vivox<StrClass, Glue>::Session*
 Vivox<StrClass, Glue>::m_findSession( const StrClass& sSession )
 {
-    SessionMap::iterator iter( m_mSessions.find( sSession ) );
+    typename SessionMap::iterator iter( m_mSessions.find( sSession ) );
     if ( iter != m_mSessions.end() )
     {
         return &(*iter).second;
@@ -3895,7 +3895,7 @@ Vivox<StrClass, Glue>::m_findParticipant( const StrClass& sURI, const StrClass& 
     if ( 0 == pSession )
         return 0;
 
-    Session::ParticipantMap::iterator iter( pSession->mParticipants.find( sURI ) );
+    typename Session::ParticipantMap::iterator iter( pSession->mParticipants.find( sURI ) );
     if ( iter == pSession->mParticipants.end() )
         return 0;
 
@@ -3998,7 +3998,7 @@ Vivox<StrClass, Glue>::m_processSessionGroupRemoved( const vx_evt_sessiongroup_r
 
     StrClass s( p.sessiongroup_handle );
 
-    for ( SessionMap::iterator iter( m_mSessions.begin() );
+    for (typename SessionMap::iterator iter( m_mSessions.begin() );
           iter != m_mSessions.end();
           /*in loop*/ )
     {
@@ -4007,7 +4007,7 @@ Vivox<StrClass, Glue>::m_processSessionGroupRemoved( const vx_evt_sessiongroup_r
         if ( ssn.sGroupHandle == s )
         {
             // Fire participant events
-            for ( Session::ParticipantMap::const_iterator pIter( ssn.mParticipants.begin() );
+            for (typename Session::ParticipantMap::const_iterator pIter( ssn.mParticipants.begin() );
                   pIter != ssn.mParticipants.end();
                   ++pIter )
             {
@@ -4066,7 +4066,7 @@ Vivox<StrClass, Glue>::m_processSessionAdded( const vx_evt_session_added& p )
     bool bNeedDisconnect = false;
 
     // Update the group handle in our sessioninfo
-    SessionInfoMap::iterator iter( m_mSessionInfo.find( session.sURI ) );
+    typename SessionInfoMap::iterator iter( m_mSessionInfo.find( session.sURI ) );
     if ( iter != m_mSessionInfo.end() )
     {
         SessionInfo& info = (*iter).second;
@@ -4113,7 +4113,7 @@ Vivox<StrClass, Glue>::m_processSessionRemoved( const vx_evt_session_removed& p 
     if ( pSession )
     {
         // Fire participant events
-        for ( Session::ParticipantMap::const_iterator pIter( pSession->mParticipants.begin() );
+        for (typename Session::ParticipantMap::const_iterator pIter( pSession->mParticipants.begin() );
               pIter != pSession->mParticipants.end();
               ++pIter )
         {
@@ -4123,7 +4123,7 @@ Vivox<StrClass, Glue>::m_processSessionRemoved( const vx_evt_session_removed& p 
         }
 
         // If the session isn't suspended, remove it
-        SessionInfoMap::iterator iter( m_mSessionInfo.find( pSession->sURI ) );
+        typename SessionInfoMap::iterator iter( m_mSessionInfo.find( pSession->sURI ) );
         if ( iter != m_mSessionInfo.end() )
         {
             SessionInfo& info = (*iter).second;
@@ -4213,7 +4213,7 @@ Vivox<StrClass, Glue>::m_processSessionNotification( const vx_evt_session_notifi
         // Convert to lowercase
         m_tolower( sURI );
 
-        Session::ParticipantMap::iterator iter( pSession->mParticipants.find( sURI ) );
+        typename Session::ParticipantMap::iterator iter( pSession->mParticipants.find( sURI ) );
         if ( iter != pSession->mParticipants.end() )
         {
             Participant& ppt = (*iter).second;
@@ -4351,7 +4351,7 @@ Vivox<StrClass, Glue>::m_processParticipantRemoved( const vx_evt_participant_rem
         // Convert to lowercase
         m_tolower( sURI );
 
-        Session::ParticipantMap::iterator iter( pSession->mParticipants.find( sURI ) );
+        typename Session::ParticipantMap::iterator iter( pSession->mParticipants.find( sURI ) );
         if ( iter != pSession->mParticipants.end() )
         {
             StrClass sSessionGroup( p.sessiongroup_handle );
@@ -4482,8 +4482,8 @@ Vivox<StrClass, Glue>::m_processMediaStreamUpdated( const vx_evt_media_stream_up
         vivox_ct_fatal( Session::MS_HOLD == session_media_hold );
         vivox_ct_fatal( Session::MS_REFER == session_media_refer );
 
-        Session::State oldState = pSession->eState;
-        pSession->eState = (Session::State)p.state;
+        typename Session::State oldState = pSession->eState;
+        pSession->eState = (typename Session::State)p.state;
 
         // If we were asked to disconnect this session before we had the media state,
         // we can disconnect it now.  Don't fire the media stream event.
@@ -4558,7 +4558,7 @@ Vivox<StrClass, Glue>::m_processTextStreamUpdated( const vx_evt_text_stream_upda
         if ( pSession->bTextConnected && !m_bTextMessagePending )
         {
             // Send first deferred text message
-            TextMessageMap::iterator iter = m_mTextMessages.find( pSession->sHandle );
+            typename TextMessageMap::iterator iter = m_mTextMessages.find( pSession->sHandle );
             if ( iter != m_mTextMessages.end() )
             {
                 TextMessageList& v = (*iter).second;
@@ -4598,7 +4598,7 @@ Vivox<StrClass, Glue>::m_processTextMessage( const vx_evt_message& p )
 
     // We can get text messages before participants are officially added, so defer until
     // we have the actual participant
-    std::pair< Session::ParticipantMap::iterator, bool > result =
+    std::pair< typename Session::ParticipantMap::iterator, bool > result =
         pSession->mParticipants.insert( std::make_pair( sURI, Participant() ) );
 
     Participant& participant = (*result.first).second;
@@ -5077,7 +5077,7 @@ Vivox<StrClass, Glue>::m_processDiagnosticStateDumpResp( const vx_resp_aux_diagn
 
                     FIRE_EVENT(VivoxOnLoginStateChange,("logged_in"));
 
-                    for ( std::vector< DiagSessionGroup >::const_iterator sgiter( acct.aSessionGroups.begin() );
+                    for ( typename std::vector< DiagSessionGroup >::const_iterator sgiter( acct.aSessionGroups.begin() );
                           sgiter != acct.aSessionGroups.end();
                           ++sgiter )
                     {
@@ -5090,7 +5090,7 @@ Vivox<StrClass, Glue>::m_processDiagnosticStateDumpResp( const vx_resp_aux_diagn
 
                         Session* pFocusedSession = 0;
 
-                        for ( std::vector< DiagSession >::const_iterator siter( sg.aSessions.begin() );
+                        for (typename std::vector< DiagSession >::const_iterator siter( sg.aSessions.begin() );
                               siter != sg.aSessions.end();
                               ++siter )
                         {
@@ -5121,7 +5121,7 @@ Vivox<StrClass, Glue>::m_processDiagnosticStateDumpResp( const vx_resp_aux_diagn
                                 FIRE_EVENT(VivoxOnSessionAdded,(session.sGroupHandle, session.sHandle, session));
                             }
 
-                            for ( std::vector< DiagParticipant >::const_iterator piter( s.aParticipants.begin() );
+                            for (typename std::vector< DiagParticipant >::const_iterator piter( s.aParticipants.begin() );
                                   piter != s.aParticipants.end();
                                   ++piter )
                             {
@@ -5155,7 +5155,7 @@ Vivox<StrClass, Glue>::m_processDiagnosticStateDumpResp( const vx_resp_aux_diagn
                         {
                             FIRE_EVENT(VivoxOnSessionAdded, (pFocusedSession->sGroupHandle, pFocusedSession->sHandle, *pFocusedSession));
 
-                            for ( Session::ParticipantMap::const_iterator piter( pFocusedSession->mParticipants.begin() );
+                            for (typename Session::ParticipantMap::const_iterator piter( pFocusedSession->mParticipants.begin() );
                                   piter != pFocusedSession->mParticipants.end();
                                   ++piter )
                             {
@@ -5307,7 +5307,7 @@ template <typename StrClass, typename Glue>
 bool
 Vivox<StrClass, Glue>::Session::SetLocalMute( bool bMute ) const
 {
-    if ( !LOAD_DLL() || 0 == pSession ) return false;
+    if ( !LOAD_DLL() || 0 == this->pSession ) return false;
 
     vx_req_session_mute_local_speaker* p = 0;
     vx_req_session_mute_local_speaker_create( &p );
@@ -5334,7 +5334,7 @@ template <typename StrClass, typename Glue>
 bool
 Vivox<StrClass, Glue>::Session::SetLocalVolume( float f ) const
 {
-    if ( !LOAD_DLL() || 0 == pSession ) return false;
+    if ( !LOAD_DLL() || 0 == this->pSession ) return false;
 
     vx_req_session_set_local_speaker_volume* p = 0;
     vx_req_session_set_local_speaker_volume_create( &p );
@@ -5343,7 +5343,7 @@ Vivox<StrClass, Glue>::Session::SetLocalVolume( float f ) const
 
     p->volume = static_cast< int >( m_fLocalVolume * 100.0f );
     Vivox<StrClass, Glue>::getInstance().m_generateID( p->base );
-    p->session_handle = vx_strdup( pSession->sHandle.c_str() );
+    p->session_handle = vx_strdup( this->pSession->sHandle.c_str() );
 
     Glue::log( VLS_DEBUG, "Sending Set Local Speaker Volume request" );
     return Vivox<StrClass, Glue>::getInstance().m_issueRequest( (vx_req_base*)p );

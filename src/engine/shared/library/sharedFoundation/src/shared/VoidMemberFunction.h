@@ -25,16 +25,20 @@
  */
 
 template <class Class>
-class VoidConstMemberFunctionNoArg: public std::unary_function<const Class*,void>
+class VoidConstMemberFunctionNoArg
 {
 private:
-
-  typedef void (Class:: *Function)(void) const;
+	using Function = void (Class::*)() const;
 
 public:
+	explicit VoidConstMemberFunctionNoArg(Function function) : m_function(function)
+	{
+	}
 
-  explicit VoidConstMemberFunctionNoArg(Function function) : m_function(function) {}
-  void operator ()(const Class* classArgument) const { (classArgument->*m_function)(); }
+	void operator()(const Class *classArgument) const
+	{
+		(classArgument->*m_function)();
+	}
 
 private:
   Function m_function;
@@ -43,7 +47,7 @@ private:
 // ----------------------------------------------------------------------
 
 template <class Class>
-class VoidMemberFunctionNoArg: public std::unary_function<Class*,void>
+class VoidMemberFunctionNoArg
 {
 private:
 
@@ -62,16 +66,25 @@ private:
 // ----------------------------------------------------------------------
 
 template <class Class, class ArgumentType>
-class VoidConstMemberFunctionOneArg: public std::binary_function<const Class*, ArgumentType, void>
+class VoidConstMemberFunctionOneArg
 {
 private:
+  using Function = void (Class::*)(ArgumentType) const;
 
-  typedef void (Class:: *Function)(ArgumentType) const;
+  public:
+  using first_argument_type = Class *;
+  using second_argument_type = ArgumentType;
+  using result_type = void;
 
-public:
+  explicit VoidConstMemberFunctionOneArg(Function function)
+	  : m_function(function)
+  {
+  }
 
-  explicit VoidConstMemberFunctionOneArg(Function function) : m_function(function) {}
-  void operator ()(const Class* classArgument, ArgumentType argument) const { (classArgument->*m_function)(argument); }
+  void operator()(const Class *classArgument, ArgumentType argument) const
+  {
+	  (classArgument->*m_function)(argument);
+  }
 
 private:
   Function m_function;
@@ -80,16 +93,26 @@ private:
 // ----------------------------------------------------------------------
 
 template <class Class, class ArgumentType>
-class VoidMemberFunctionOneArg: public std::binary_function<Class*, ArgumentType, void>
+class VoidMemberFunctionOneArg
 {
 private:
-
-  typedef void (Class:: *Function)(ArgumentType);
+	using Function = void (Class::*)(ArgumentType);
 
 public:
+	using first_argument_type = Class *;
+	using second_argument_type = ArgumentType;
 
-  explicit VoidMemberFunctionOneArg(Function function) : m_function(function) {}
-  void operator ()(Class* classArgument, ArgumentType argument) const { (classArgument->*m_function)(argument); }
+	using result_type = void;
+
+	explicit VoidMemberFunctionOneArg(Function function)
+		: m_function(function)
+	{
+	}
+
+  void operator()(Class *classArgument, ArgumentType argument) const
+  {
+	  (classArgument->*m_function)(argument);
+  }
 
 private:
   Function m_function;

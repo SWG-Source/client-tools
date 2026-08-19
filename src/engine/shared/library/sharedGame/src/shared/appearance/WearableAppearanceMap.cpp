@@ -1,4 +1,4 @@
-// ======================================================================
+﻿// ======================================================================
 //
 // WearableAppearanceMap.cpp
 // Copyright 2003 Sony Online Entertainment, Inc.
@@ -265,7 +265,7 @@ int WearableAppearanceMapNamespace::getRequiredColumnNumberFromNamedTable(char c
 	NOT_NULL(columnName);
 
 	int const columnNumber = table->findColumnNumber(columnName);
-	FATAL(columnNumber < 0, ("failed to find column name [%s] in MountValidScaleRangeTable file [%s].", columnName, filename));
+	STRICT_DATA_FATAL((columnNumber < 0), ("failed to find column name [%s] in MountValidScaleRangeTable file [%s].", columnName, filename));
 
 	return columnNumber;
 }

@@ -546,6 +546,13 @@ const Shader* ClientProceduralTerrainAppearance::ShaderSet::getShader () const
 
 //-------------------------------------------------------------------
 
+int ClientProceduralTerrainAppearance::ShaderSet::getNumberOfPrimitives () const
+{
+	return static_cast<int> (m_primitiveList.size ());
+}
+
+//-------------------------------------------------------------------
+
 void ClientProceduralTerrainAppearance::ShaderSet::render (const Camera* camera, 
 																			  const Shader* lotShader, 
 																			  const Shader* i_cloudShader

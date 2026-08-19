@@ -41,15 +41,16 @@ static FARPROC WINAPI DliHook(unsigned dliNotify, PDelayLoadInfo  pdli)
 	return 0;
 }
 
+// ----------------------------------------------------------------------
+// Newer Windows SDKs declare __pfnDliNotifyHook2 as `extern const PfnDliHook`.
+// We override it by providing our own definition at module scope rather than
+// assigning in DllMain (which the original x86 code did).
+extern "C" const PfnDliHook __pfnDliNotifyHook2 = DliHook;
+
 // ======================================================================
 
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID)
 {
-#if _MSC_VER < 1300
-	__pfnDliNotifyHook = DliHook;
-#else
-	__pfnDliNotifyHook2 = DliHook;
-#endif
 	return TRUE;
 }
 

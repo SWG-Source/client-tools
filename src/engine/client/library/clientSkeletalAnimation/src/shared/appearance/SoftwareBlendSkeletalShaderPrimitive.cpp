@@ -59,7 +59,12 @@
 
 //-----------------------------------
 #undef TRY_FOR_SSE
-#define TRY_FOR_SSE WIN32
+// Was `#define TRY_FOR_SSE WIN32`. The SSE fast path below
+// (_fillDot3VertexBufferHard_sse) is implemented in x86 inline asm
+// which MSVC doesn't accept on x64. Gate on _M_IX86 so the x64 build
+// uses the scalar reference implementation; rewriting with SSE
+// intrinsics is a future port.
+#define TRY_FOR_SSE _M_IX86
 
 #if TRY_FOR_SSE
 #include "sharedMath/SseMath.h"
@@ -902,10 +907,18 @@ void SoftwareBlendSkeletalShaderPrimitive::_initialize(const MeshConstructionHel
 	/////////////////////////////////////////////////////////////////////////////////////////
 	//-- Construct the constant static vertex buffer.  This format will contain
 	//   color and non-dot3 texture coordinates.
+	// x64/modern-d3d fix: the SOE vertex-lit pixel shader does
+	//   output.diffuse = vertex.diffuse (COLOR0 pass-through);
+	// modern D3D9 drivers default unbound vertex registers to (0,0,0,0) so a
+	// skinned mesh without baked vertex color renders BLACK. Force a COLOR0
+	// channel into the vertex format and write white (1,1,1,1) below when the
+	// mesh provides no argb, so the shader pass-through produces a normal
+	// texture*tfactor result.
+	bool const writeColor0 = true;
 	VertexBufferFormat  constantFormat;
 	if (multiStream)
 	{
-		constantFormat.setColor0(hasArgb);
+		constantFormat.setColor0(writeColor0);
 	}
 	/////////////////////////////////////////////////////////////////////////////////////////
 
@@ -951,6 +964,7 @@ void SoftwareBlendSkeletalShaderPrimitive::_initialize(const MeshConstructionHel
 			}
 		}
 	}
+
 	/////////////////////////////////////////////////////////////////////////////////////////
 
 	/////////////////////////////////////////////////////////////////////////////////////////
@@ -963,7 +977,7 @@ void SoftwareBlendSkeletalShaderPrimitive::_initialize(const MeshConstructionHel
 
 	if (!multiStream)
 	{
-		dynamicFormat.setColor0(hasArgb);
+		dynamicFormat.setColor0(writeColor0);
 		dynamicFormat.setNumberOfTextureCoordinateSets(tcSetCount);
 		{
 			for (int i = 0; i < tcSetCount; ++i)
@@ -1325,18 +1339,61 @@ void SoftwareBlendSkeletalShaderPrimitive::fillConstantVertexBufferData(const Me
 
 	//-- Extract data for each vertex.
 	float textureCoordinate[4];
+	int zeroArgbCount = 0;
+
 	for (int vertexIndex = 0; vertexIndex < m_vertexCount; ++vertexIndex, ++destVertexIt)
 	{
 		const MeshConstructionHelper::VertexData &vertexData = mesh.getVertexData(meshPerShaderData, vertexIndex);
 
-		// copy color
+		// copy color (or default to opaque white when the mesh provides no
+		// vertex color - the skeletal pixel shader does a COLOR0 pass-through
+		// and the texture*tfactor product needs the COLOR0 to be a real value,
+		// not the (0,0,0,0) modern drivers return for unbound vertex regs).
 		if (hasArgb)
 		{
 			const PackedArgb &argb = mesh.getDiffuseColor(vertexData);
-			destVertexIt.setColor0(argb.getArgb());
+			uint32 const packed = argb.getArgb();
+			if (packed == 0u)
+			{
+				// ARGB==0 with a colour stream PRESENT is almost always colour
+				// data that has not filled in yet: customization applies after
+				// the first build, and the rebuild it triggers carries the real
+				// values. Strict (default): pass the zeros through -- the first
+				// build renders dark for the frames until the rebuild, which is
+				// stock D3D9 behaviour. strictData=false: rewrite to opaque
+				// white, the compensation for data packs whose colours never
+				// arrive at all. On GOOD data that compensation paints every
+				// not-yet-filled character white for those same frames, and
+				// with the bloom post-process enabled it reads as a bright
+				// saturation flash on first sight -- worse the higher the frame
+				// rate, because a busier render loop starves the async fill.
+				++zeroArgbCount;
+				destVertexIt.setColor0(StrictData() ? packed : 0xffffffff);
+			}
+			else
+				destVertexIt.setColor0(packed);
+		}
+		else
+		{
+			destVertexIt.setColor0(0xffffffff);
 		}
 
 		// copy texture data
+		//
+		// x64/character-rendering FIX: the DESTINATION texcoord-set index must
+		// be a counter that SKIPS dot3 (4d) sets, because the constant vertex
+		// buffer FORMAT was built that way (its setup loop used its own
+		// constantTcIndex counter that only increments for non-dot3 sets).
+		// The original code used the raw mesh-set index `tcSetIndex` for the
+		// destination, so whenever a mesh's dot3 set was NOT last (e.g. mesh
+		// texcoord order [DOT3, MAIN, NRML]), the MAIN diffuse UV got written
+		// to the wrong destination slot and slot 0 was left uninitialised.
+		// The vertex shader then read tcs_MAIN from slot 0 = garbage, and
+		// every customizable humanoid (h_specmap_bump.eft, which has the
+		// 3-set MAIN/NRML/DOT3 layout) rendered as a pure-black silhouette.
+		// a_simple meshes (single texcoord set) were unaffected, which is
+		// why NPC armor rendered fine while player skin/clothing did not.
+		int destTcIndex = 0;
 		for (int tcSetIndex = 0; tcSetIndex < tcSetCount; ++tcSetIndex)
 		{
 			// Get texture set dimensionality.
@@ -1347,12 +1404,15 @@ void SoftwareBlendSkeletalShaderPrimitive::fillConstantVertexBufferData(const Me
 			{
 			case 2:
 				mesh.getTextureCoordinates(meshPerShaderData, vertexData, tcSetIndex, textureCoordinate[0], textureCoordinate[1]);
-				destVertexIt.setTextureCoordinates(tcSetIndex, textureCoordinate[0], textureCoordinate[1]);
+				destVertexIt.setTextureCoordinates(destTcIndex, textureCoordinate[0], textureCoordinate[1]);
+				++destTcIndex;
 				break;
 
 			case 4:
 			{
-				// Extract the dot3 coordinate.
+				// Extract the dot3 coordinate. A dot3 (4d) set is handled
+				// separately via m_sourceDot3Vectors and does NOT consume a
+				// destination texcoord slot - so destTcIndex is NOT advanced.
 				DEBUG_FATAL(!m_hasDot3Vector, ("we should not be receiving 4d texture coordinates."));
 				mesh.getTextureCoordinates(meshPerShaderData, vertexData, tcSetIndex, textureCoordinate[0], textureCoordinate[1], textureCoordinate[2], textureCoordinate[3]);
 
@@ -1370,6 +1430,14 @@ void SoftwareBlendSkeletalShaderPrimitive::fillConstantVertexBufferData(const Me
 			}
 		}
 	}
+
+	//-- fires per BUILD (and per customization-driven rebuild), not per frame,
+	//   so this cannot storm. On good data expect a handful of these at each
+	//   character/NPC first sight, then silence once the rebuild carries the
+	//   real colours; a build where they never stop is a data pack whose
+	//   colours never arrive (the case the lenient white rewrite exists for).
+	if (zeroArgbCount > 0)
+		WARNING(true, ("SoftwareBlendSkeletalShaderPrimitive: %d/%d vertices had ARGB==0 at build for shader [%s]%s", zeroArgbCount, m_vertexCount, mesh.getShaderTemplateName(meshPerShaderData).getString(), StrictData() ? "" : " - rewritten to white (strictData=false)"));
 }
 
 // ===========================================================================
@@ -1550,7 +1618,6 @@ void SoftwareBlendSkeletalShaderPrimitive::fillVertexBuffer(int transformCount, 
 			destVertexIt.setPosition(blendPosition);
 			destVertexIt.setNormal(blendNormal);
 			destVertexIt.setTextureCoordinates(m_dot3TextureCoordinateSetIndex, blendDot3.x, blendDot3.y, blendDot3.z, sourceDot3.m_flipState);
-
 #ifdef _DEBUG
 			if (GraphicsDebugFlags::renderVertexMatrices)
 			{

@@ -176,7 +176,15 @@ void ClientCommandQueue::determineTarget(Unicode::String const & params, Network
 		if (!Game::isSpace() && s_useCombatTargeting && CuiPreferences::getAutoAimToggle())
 			processedTarget = player->getIntendedTarget();
 		else
+		{
 			processedTarget = player->getLookAtTarget();
+			// Pre-CU restore: chat/macro combat commands don't set useCombatTargeting,
+			// so they fell through to the look-at (cursor) target and required the mob
+			// under the pointer. If nothing is under the cursor, fall back to the
+			// intended/selected (green) target so abilities fire at your locked target.
+			if (!processedTarget.isValid())
+				processedTarget = player->getIntendedTarget();
+		}
 	}
 }
 

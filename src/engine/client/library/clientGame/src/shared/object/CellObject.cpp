@@ -11,6 +11,7 @@
 
 #include "clientGame/ClientObjectTemplate.h"
 #include "clientGame/ConfigClientGame.h"
+#include "clientGame/WorldSnapshot.h"
 #include "clientGraphics/Light.h"
 #include "clientGraphics/RenderWorld.h"
 #include "clientObject/InteriorEnvironmentBlock.h"
@@ -130,9 +131,38 @@ void CellObject::endBaselines()
 	ContainedByProperty *containedByProperty = getContainedByProperty();
 	NetworkId networkId = containedByProperty->getContainedByNetworkId();
 	Object *container = containedByProperty->getContainedBy();
-	FATAL(container == NULL, ("CellObject container is NULL, cell=%s, container=%s", getNetworkId().getValueString().c_str(), networkId.getValueString().c_str()));
+	if (container == NULL)
+	{
+		// The container building isn't instantiated in the local NID map yet.
+		// For a server-sent cell whose container is a CLIENT-CACHED BUILDOUT
+		// building, WorldSnapshot may simply not have lazily instantiated the
+		// building before this cell's baselines arrived. Load it on demand from
+		// the buildout and retry -- rather than bailing (the prior behavior,
+		// which wrongly assumed a missing .pob and left the interior unrendered
+		// as a "phantom" cell -> black). isClientCached confirms the path.
+		bool const containerIsClientCached = WorldSnapshot::isClientCached(networkId.getValue());
+		WARNING(true, ("CellObject %s endBaselines: container %s not in NID map (isClientCached=%d); attempting WorldSnapshot::loadIfClientCached", getNetworkId().getValueString().c_str(), networkId.getValueString().c_str(), static_cast<int>(containerIsClientCached)));
+		WorldSnapshot::loadIfClientCached(networkId);
+		container = containedByProperty->getContainedBy();
+		if (container == NULL)
+		{
+			// Still unavailable: container genuinely absent (real missing
+			// .pob/template, or a server-only container not in client buildout).
+			WARNING(true, ("CellObject %s endBaselines: container %s STILL not in NID map after loadIfClientCached; skipping cell load", getNetworkId().getValueString().c_str(), networkId.getValueString().c_str()));
+			return;
+		}
+		WARNING(true, ("CellObject %s endBaselines: container %s loaded on demand; cell binding now proceeds", getNetworkId().getValueString().c_str(), networkId.getValueString().c_str()));
+	}
 	PortalProperty *portalProperty = container->getPortalProperty();
-	FATAL(portalProperty == NULL, ("CellObject's container's portal property is NULL"));
+	if (portalProperty == NULL)
+	{
+		// The container building was created without a PortalProperty (its
+		// .pob asset wasn't in the loaded TRE - e.g., NPE/tutorial assets
+		// missing from post-NGE TRE). Skip cell loading; the cell will
+		// remain uninitialized but won't crash the world load.
+		WARNING(true, ("CellObject %s endBaselines: container %s has no PortalProperty (pob missing); skipping cell load", getNetworkId().getValueString().c_str(), networkId.getValueString().c_str()));
+		return;
+	}
 	portalProperty->cellLoaded(m_cellNumber.get(), *this, true);
 
 	if (ConfigClientGame::getAmbientLightInCells())

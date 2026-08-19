@@ -80,6 +80,10 @@ protected:
 	Singleton();
 	virtual ~Singleton() = 0;
 
+	virtual void PostInstall()
+	{
+	}
+
 	static bool installed;
 	static ValueType * instance;
 };
@@ -137,6 +141,9 @@ inline ValueType & Singleton<ValueType>::getInstance()
 
 		static ValueType v;
 		instance = &v;
+
+		instance->Singleton::PostInstall();
+
 		installed = true;
 	}
 

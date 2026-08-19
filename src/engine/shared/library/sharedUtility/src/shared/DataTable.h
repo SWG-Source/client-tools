@@ -83,7 +83,7 @@ private:
 	void buildColumnIndexMap();
 
 	typedef std::vector<const DataTableColumnType *> DataTableColumnTypeVector;
-	typedef stdhash_map<std::string /*column name*/, int /*column index*/>::fwd ColumnIndexMap;
+	typedef stdhash_map<std::string /*column name*/, int /*column index*/> ColumnIndexMap;
 
 	int                           m_numRows;
 	int                           m_numCols;

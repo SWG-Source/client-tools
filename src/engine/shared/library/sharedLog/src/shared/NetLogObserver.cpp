@@ -11,12 +11,12 @@
 
 #include "sharedFoundation/Clock.h"
 #include "sharedFoundation/NetworkIdArchive.h"
+#include "sharedNetworkMessages/LogMessage.h"
 #include "sharedLog/LogManager.h"
 #include "sharedLog/ConfigSharedLog.h"
-#include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "sharedNetworkMessages/LogMessage.h"
 #include "Archive/ByteStream.h"
 #include "NetLogConnection.h"
+#include "sharedNetworkMessages/GameNetworkMessage.h"
 #include <string>
 #include <vector>
 

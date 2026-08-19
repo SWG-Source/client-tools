@@ -9,9 +9,9 @@
 #define __UIStlFwd_H__
 
 // ======================================================================
-
-// grab stlport configuration
-#include "stl/_config.h"
+#include <unordered_map>
+#include <unordered_set>
+#include <string>
 
 namespace std
 {
@@ -21,7 +21,7 @@ namespace std
 	template <class _T1>                                                                struct hash;
 	template <class _Tp>                                                                class  allocator;
 	template <class _CharT, class _Traits, class _Alloc>                                class  basic_string;
-	template <class _CharT>                                                             class  char_traits;
+	template <class _CharT>                                                             struct  char_traits;
 
 	template <size_t _Nb>                                                               class  bitset;
 	template <class _Tp, class _Alloc>                                                  class  deque;
@@ -55,10 +55,14 @@ template <class _Key, class _Tp, class _Compare = std::less<_Key>, class _Alloc 
 	typedef std::map<_Key, _Tp, _Compare, _Alloc> fwd;
 };
 
-template <class _Key, class _Tp, class _HashFcn = std::hash<_Key>, class _Compare = std::equal_to<_Key>, class _Alloc = std::allocator< std::pair <const _Key, _Tp> > > struct ui_stdhash_map
-{
-	typedef std::hash_map<_Key, _Tp, _HashFcn, _Compare, _Alloc> fwd;
-};
+template <
+	typename Key,
+	typename Value,
+	typename Hash = std::hash<Key>,
+	typename Equal = std::equal_to<Key>,
+	typename Alloc = std::allocator<std::pair<const Key, Value>>
+>
+using ui_stdhash_map = std::unordered_map<Key, Value, Hash, Equal, Alloc>;
 
 template <class _Key, class _Tp, class _Compare = std::less<_Key>, class _Alloc = std::allocator< std::pair <const _Key, _Tp> > > struct ui_stdmultimap
 {
@@ -70,10 +74,13 @@ template <class _Key, class _Compare = std::less<_Key>, class _Alloc = std::allo
 	typedef std::set<_Key, _Compare, _Alloc> fwd;
 };
 
-template <class _Key, class _HashFcn = std::hash<_Key>, class _Compare = std::equal_to<_Key>, class _Alloc = std::allocator<_Key> > struct ui_stdhash_set
-{
-	typedef std::hash_set<_Key, _HashFcn, _Compare, _Alloc> fwd;
-};
+template <
+	typename Key,
+	typename Hash = std::hash<Key>,
+	typename Equal = std::equal_to<Key>,
+	typename Alloc = std::allocator<Key>
+>
+using ui_stdhash_set = std::unordered_set<Key, Hash, Equal, Alloc>;
 
 template <class _Key, class _Compare = std::less<_Key>, class _Alloc = std::allocator<_Key> > struct ui_stdmultiset
 {
@@ -102,8 +109,8 @@ template <class _Tp, class _Sequence = ui_stddeque<_Tp>::fwd > struct ui_stdstac
 
 namespace Unicode
 {
-	typedef unsigned short unicode_char_t;
-	typedef std::basic_string<unicode_char_t, std::char_traits<unicode_char_t>, std::allocator<unicode_char_t> > String;
+	using unicode_char_t = char16_t;
+	using String = std::u16string;
 }
 
 // ======================================================================

@@ -8,51 +8,32 @@
 #include "sharedFoundation/FirstSharedFoundation.h"
 #include "sharedFoundation/ByteOrder.h"
 
+#include <intrin.h> // _byteswap_ulong, _byteswap_ushort
+
 // ======================================================================
+//
+// Was: x86 inline asm using `__declspec(naked)` + bswap. Both are
+// x86-only in MSVC. Replace with `_byteswap_*` intrinsics, which the
+// compiler lowers to a single bswap on both x86 and x64.
 
-// I'm using the arguments, but the compiler can't tell that
-#pragma warning(disable: 4100)
-
-__declspec(naked) ulong ntohl(ulong netLong)
+ulong ntohl(ulong netLong)
 {
-	_asm
-	{
-		mov     eax, [esp+4]
-		bswap   eax
-		ret
-	}
-} //lint !e533 !e715 // function should return a value, argument not referenced
+	return static_cast<ulong>(_byteswap_ulong(static_cast<unsigned long>(netLong)));
+}
 
-__declspec(naked) ulong htonl(ulong hostLong)
+ulong htonl(ulong hostLong)
 {
-	_asm
-	{
-		mov     eax, [esp+4]
-		bswap   eax
-		ret
-	}
-} //lint !e533 !e715 // function should return a value, argument not referenced
+	return static_cast<ulong>(_byteswap_ulong(static_cast<unsigned long>(hostLong)));
+}
 
-__declspec(naked) ushort ntohs(ushort netShort)
+ushort ntohs(ushort netShort)
 {
-	_asm
-	{
-		mov     eax, [esp+4]
-		bswap   eax
-		shr     eax, 16
-		ret
-	}
-} //lint !e533 !e715 // function should return a value, argument not referenced
+	return static_cast<ushort>(_byteswap_ushort(static_cast<unsigned short>(netShort)));
+}
 
-__declspec(naked) ushort htons(ushort hostShort)
+ushort htons(ushort hostShort)
 {
-	_asm
-	{
-		mov     eax, [esp+4]
-		bswap   eax
-		shr     eax, 16
-		ret
-	}
-} //lint !e533 !e715 // function should return a value, argument not referenced
+	return static_cast<ushort>(_byteswap_ushort(static_cast<unsigned short>(hostShort)));
+}
 
 // ======================================================================

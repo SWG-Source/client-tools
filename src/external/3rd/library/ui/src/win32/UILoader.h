@@ -10,7 +10,7 @@
 #include <map>
 #include <stack>
 #include <vector>
-#include <hash_set>
+#include <unordered_Set>
 
 struct UILoaderToken;
 class UICanvas;
@@ -51,7 +51,7 @@ private:
 	typedef std::vector <std::string> UINarrowStringVector;
 	UINarrowStringVector      mIncludes;
 
-	typedef std::hash_set<std::string> UINarrowStringHashSet;
+	typedef std::unordered_set<std::string> UINarrowStringHashSet;
 	UINarrowStringHashSet mIncludeHistory;
 
 	typedef std::vector<UIBaseObject *> ObjectVector;

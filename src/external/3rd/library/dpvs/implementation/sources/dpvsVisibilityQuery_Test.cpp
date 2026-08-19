@@ -46,10 +46,17 @@ using namespace DPVS;
  *
  *****************************************************************************/
 
+// SWG CONSULT-64 diagnostic counters (defined in dpvsVisibilityQuery_Traverse.cpp)
+extern "C" unsigned int g_swgDpvsPortalRejects[14];
+
 DPVS_FORCE_INLINE bool VisibilityQuery::isObjectVisible_INTERNAL (bool assumeVisible)
 {
 	ImpObject *o = VQData::get().getObject();
 	ImpCamera* c = VQData::get().getCamera();
+
+	// SWG CONSULT-64: count portals reaching the visibility test at all ([6]).
+	if (o->isPortal())
+		++g_swgDpvsPortalRejects[6];
 
 	//--------------------------------------------------------------------
 	// Test if the visibility parent of an object is hidden
@@ -59,7 +66,12 @@ DPVS_FORCE_INLINE bool VisibilityQuery::isObjectVisible_INTERNAL (bool assumeVis
 	{
 		DPVS_ASSERT(o->getVisibilityParent());
 		if(o->getVisibilityParent()->getHiddenTimeStamp() == c->getTimeStamp())
+		{
+			// SWG CONSULT-64: portal silently skipped -- visibility parent hidden ([5]).
+			if (o->isPortal())
+				++g_swgDpvsPortalRejects[5];
 			return false;
+		}
 	}
 
 	//--------------------------------------------------------------------
@@ -73,6 +85,9 @@ DPVS_FORCE_INLINE bool VisibilityQuery::isObjectVisible_INTERNAL (bool assumeVis
 		if (!o->backFaceCull(c))
 		{
 			DPVS_PROFILE (Statistics::incStatistic(Library::STAT_DATABASEOBSBACKFACECULLED,1));
+			// SWG CONSULT-64 diagnostic (see dpvsVisibilityQuery_Traverse.cpp)
+			if (o->isPortal())
+				++g_swgDpvsPortalRejects[0];
 			return false;
 		}
 	}

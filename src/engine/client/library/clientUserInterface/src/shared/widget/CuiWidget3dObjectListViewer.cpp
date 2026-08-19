@@ -637,6 +637,15 @@ void CuiWidget3dObjectListViewer::RenderStart   (UICanvas & canvas) const
 		m_lastViewportSize = viewportSize;
 	}
 
+	// UI scale (2026-05-16): m_viewport above is in LOGICAL canvas coords
+	// (built from widgetSize + canvasTranslation). m_camera->setViewport
+	// expects PHYSICAL render-target pixels because the 3D scene is drawn
+	// to the actual backbuffer. Multiply by uiCanvasScale here so the 3D
+	// model preview lands at the same physical pixel as the widget frame
+	// (which renders through the canvas Scale transform). Without this the
+	// preview/portrait/inventory icons floated at the un-scaled position
+	// in the upper-left at uiScale != 1.0.
+	const float uiScale = Graphics::getUiCanvasScale();
 	if (canvas.IsDeforming())
 	{
 		UIScalar const viewportWidth = m_viewport.Width();
@@ -645,11 +654,19 @@ void CuiWidget3dObjectListViewer::RenderStart   (UICanvas & canvas) const
 		UIScalar const diffx = clamp(static_cast<UIScalar>(1), static_cast<UIScalar>(widgetCenter.x * (1.0f - m_fitScale.x)), static_cast<UIScalar>(viewportWidth - 1));
 		UIScalar const diffy = clamp(static_cast<UIScalar>(1), static_cast<UIScalar>(widgetCenter.y * (1.0f - m_fitScale.y)), static_cast<UIScalar>(viewportHeight - 1));
 
-		m_camera->setViewport(m_viewport.left + diffx, m_viewport.top + diffy, viewportWidth - diffx, viewportHeight - diffy);
+		m_camera->setViewport(
+			static_cast<int>((m_viewport.left + diffx) * uiScale),
+			static_cast<int>((m_viewport.top + diffy) * uiScale),
+			static_cast<int>((viewportWidth - diffx) * uiScale),
+			static_cast<int>((viewportHeight - diffy) * uiScale));
 	}
 	else
 	{
-		m_camera->setViewport(m_viewport.left, m_viewport.top, m_viewport.Width(), m_viewport.Height());
+		m_camera->setViewport(
+			static_cast<int>(m_viewport.left * uiScale),
+			static_cast<int>(m_viewport.top * uiScale),
+			static_cast<int>(m_viewport.Width() * uiScale),
+			static_cast<int>(m_viewport.Height() * uiScale));
 	}
 
 	UISize visibleSize(m_viewport.Size());
@@ -2473,10 +2490,20 @@ bool CuiWidget3dObjectListViewer::findWorldLocation(UIPoint const & pointLocalTo
 
 	UIPoint const globalPoint(pointLocalToControl + m_viewport.Location ());
 
-	m_camera->setViewport(m_viewport.left, m_viewport.top, viewportWidth, viewportHeight);
+	// UI scale: setViewport + reverseProjectInScreenSpace both operate in
+	// PHYSICAL render-target pixels (the actual D3D viewport). m_viewport
+	// and globalPoint are in LOGICAL canvas coords. Scale both up.
+	const float uiScale = Graphics::getUiCanvasScale();
+	m_camera->setViewport(
+		static_cast<int>(m_viewport.left * uiScale),
+		static_cast<int>(m_viewport.top * uiScale),
+		static_cast<int>(viewportWidth * uiScale),
+		static_cast<int>(viewportHeight * uiScale));
 
 	begin_w = m_camera->getPosition_w();
-	end_w = begin_w + (10000.0f * m_camera->rotate_o2w(m_camera->reverseProjectInScreenSpace (globalPoint.x, globalPoint.y)));
+	end_w = begin_w + (10000.0f * m_camera->rotate_o2w(m_camera->reverseProjectInScreenSpace(
+									  static_cast<int>(globalPoint.x * uiScale),
+									  static_cast<int>(globalPoint.y * uiScale))));
 
 	Graphics::setViewport(0, 0, Graphics::getCurrentRenderTargetWidth (), Graphics::getCurrentRenderTargetHeight ());
 
@@ -2601,7 +2628,16 @@ bool CuiWidget3dObjectListViewer::findScreenLocation (const ClientObject & obj, 
 		if (m_viewport.Width () <= 0 || m_viewport.Height () <= 0)
 			return 0;
 
-		m_camera->setViewport (m_viewport.left, m_viewport.top, m_viewport.Width (), m_viewport.Height ());
+		// UI scale: setViewport + projectInWorldSpace operate in PHYSICAL
+		// pixels. m_viewport is in LOGICAL coords. Scale up for the camera
+		// op, then scale screenVect back to logical when computing
+		// widget-local screenLocation (caller expects logical).
+		const float uiScale = Graphics::getUiCanvasScale();
+		m_camera->setViewport(
+			static_cast<int>(m_viewport.left * uiScale),
+			static_cast<int>(m_viewport.top * uiScale),
+			static_cast<int>(m_viewport.Width() * uiScale),
+			static_cast<int>(m_viewport.Height() * uiScale));
 
 		Vector screenVect;
 		const Vector parentLocation (obj.rotateTranslate_o2w (objectLocation));
@@ -2611,9 +2647,13 @@ bool CuiWidget3dObjectListViewer::findScreenLocation (const ClientObject & obj, 
 		if (retval)
 		{
 			const UIPoint gpt = m_viewport.Location ();
-
-			screenLocation.x = static_cast<long>(screenVect.x - gpt.x);
-			screenLocation.y = static_cast<long>(screenVect.y - gpt.y);
+			// screenVect is in PHYSICAL pixels (from projectInWorldSpace),
+			// gpt is in LOGICAL. Convert screenVect to logical so the
+			// resulting widget-local screenLocation matches the rest of
+			// the UI's coordinate system.
+			const float invScale = (uiScale != 0.0f) ? (1.0f / uiScale) : 1.0f;
+			screenLocation.x = static_cast<long>(screenVect.x * invScale - gpt.x);
+			screenLocation.y = static_cast<long>(screenVect.y * invScale - gpt.y);
 			return true;
 		}
 
@@ -2752,7 +2792,7 @@ void CuiWidget3dObjectListViewer::removeObject (Object & obj)
 
 Object * CuiWidget3dObjectListViewer::getLastObject ()
 {
-	if (m_objectVector->empty ())
+	if (!m_objectVector || m_objectVector->empty())
 		return 0;
 	else
 		return m_objectVector->back ().first;

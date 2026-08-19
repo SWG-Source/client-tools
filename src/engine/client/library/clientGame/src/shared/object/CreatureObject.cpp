@@ -1116,10 +1116,41 @@ float CreatureObject::alter (float deltaTime)
 #endif
 	m_verifyAppearanceTimer.updateNoReset(deltaTime);
 
-	if((m_initAppearanceWearables || m_verifyAppearanceTimer.isExpired()) && getAppearanceInventoryObject())
+	// x64 fix: "dressed" NPC clothing comes from the NPC's ClientDataFile
+	// (the WEAR/MESH chunks), applied by ClientDataFile::apply() at
+	// endBaselines time - but the creature's skeletal appearance is usually
+	// not loaded yet at that point, so the wearables were silently dropped
+	// and the NPC rendered naked. Retry every alter until applyWearables()
+	// succeeds: it's idempotent and sets a flag on the ClientObject once it
+	// sticks, after which this is a cheap one-bool no-op.
+	if (!getClientDataFileWearablesApplied())
 	{
-		verifyWornAppearanceItems();
-		checkWearingUnderWear();
+		ClientDataFile const *const clientDataFile = getClientData();
+		if (clientDataFile)
+			IGNORE_RETURN(clientDataFile->applyWearables(this));
+		else
+			setClientDataFileWearablesApplied(true); // no client data file - nothing to apply
+	}
+
+	if (m_initAppearanceWearables || m_verifyAppearanceTimer.isExpired())
+	{
+		// x64 fix: re-attach regular worn clothing whose appearance was not
+		// loaded yet at container-add time. This must NOT be gated on the
+		// appearance-inventory object (getAppearanceInventoryObject) - that's
+		// the separate NGE cosmetic-overlay system. The player was rendering
+		// "naked" (clothing correctly equipped server-side, just not attached
+		// to the skeletal appearance) because the only periodic re-verify,
+		// verifyWornAppearanceItems(), bailed whenever the appearance-inventory
+		// object was null (and on this TRE set it fails to create). See
+		// CreatureObject::verifyWornItems.
+		verifyWornItems();
+
+		if (getAppearanceInventoryObject())
+		{
+			verifyWornAppearanceItems();
+			checkWearingUnderWear();
+		}
+
 		m_initAppearanceWearables = false;
 		m_verifyAppearanceTimer.reset();
 	}
@@ -1342,7 +1373,6 @@ void CreatureObject::endBaselines()
 			{
 				DEBUG_WARNING(ms_logAppearanceTabMessages, ("Failed to create wearable %s", cc.getString()));
 			}
-
 		}
 		
 		if(getAppearanceInventoryObject())
@@ -2848,7 +2878,6 @@ void CreatureObject::wearablesOnInsert (const unsigned , const WearableEntry &w)
 		{
 			DEBUG_WARNING(true, ("Failed to create wearable %s", cc.getString()));
 		}
-
 		this->setDupedCreaturesDirty(true);
 	}
 }
@@ -2923,7 +2952,7 @@ void CreatureObject::skillModsOnErase         (const std::string &, const std::p
 
 //----------------------------------------------------------------------
 
-void CreatureObject::attributesOnSet (const size_t elem, const Attributes::Value & oldValue, const Attributes::Value & newValue)
+void CreatureObject::attributesOnSet(const unsigned int elem, const Attributes::Value &oldValue, const Attributes::Value &newValue)
 {
 	if (newValue > oldValue)
 		return;
@@ -6634,7 +6663,7 @@ void CreatureObject::verifyWornAppearanceItems()
 			for(int i = 0; i < skeleAppearance->getWearableCount(); ++i)
 			{
 				TangibleObject const * currentItem = dynamic_cast<TangibleObject const *>(skeleAppearance->getWearableObject(i));
-				wornAppearanceMap.insert(std::make_pair<NetworkId, TangibleObject const *>(currentItem->getNetworkId(), currentItem));
+				wornAppearanceMap.insert(std::make_pair(currentItem->getNetworkId(), currentItem));
 			}
 
 			for (unsigned int k = 0; k < m_wearableAppearanceData.size(); ++k) // go through our streamed wearables
@@ -6911,4 +6940,65 @@ void CreatureObject::appearanceWearablesOnChanged ()
 			wearable->setAppearanceData(i->m_appearanceString);
 		}
 	}
+}
+
+// ======================================================================
+// Utinni Bucket A (2026-06-28) -- creatureObject::setTarget real-entry address provider.
+//
+// engine_advertise.cpp cannot #include CreatureObject.h (it transitively pulls
+// sharedSkillSystem/SkillObjectArchive.h, whose include dir is not on the exe project's
+// path), so the PMF real-entry is computed HERE -- CreatureObject's own TU, where the
+// header builds -- mirroring the engine_groundScene*RealEntry() accessors in GroundScene.cpp.
+//
+// The contract row creatureObject::setTarget maps (MISMATCH name) to the PUBLIC non-virtual
+// setLookAtTarget(const NetworkId&) [CreatureObject.h:311] -- the "current target" setter
+// (m_lookAtTarget). CreatureObject is MULTIPLE-INHERITANCE (TangibleObject : public
+// ClientObject, public CallbackReceiver) so &CreatureObject::setLookAtTarget is an inflated
+// PMF { void* pfn; int delta; }. It is an OWN method of the most-derived class -> primary
+// base at offset 0 -> delta MUST be 0 and pfn IS the real engine entry the engine's own call
+// reaches with `this` in ECX (the address Utinni detours). delta!=0 -> return nullptr so the
+// exe-side engine_verifyNoNullNoDup() fails loudly (never advertise a wrong/silent-dead entry).
+// Declared in the exe-local engine_creatureObject_forward.h. PUBLIC method -> no friend grant,
+// CreatureObject.h unchanged (no shared-header ABI cascade). Both platforms (x64 port
+// 2026-08-15): x64 MI-PMF keeps pfn at offset 0 / int adjustor at offset 8, so MiPmf reads
+// both correctly under either pointer size.
+// ======================================================================
+
+#include <cstring>   // memcpy -- MI-PMF real-entry code-component extraction
+
+void * engine_creatureSetTargetRealEntry()
+{
+	void (CreatureObject::* pmf)(const NetworkId &) = &CreatureObject::setLookAtTarget;   // PUBLIC [CreatureObject.h:311]
+	static_assert(sizeof(pmf) >= sizeof(void *) + sizeof(int), "PMF smaller than expected MI layout");
+	struct MiPmf { void * pfn; int delta; };
+	MiPmf m{};
+	std::memcpy(&m, &pmf, sizeof(MiPmf));
+	DEBUG_FATAL(m.delta != 0, ("engine: non-zero PMF delta for CreatureObject::setLookAtTarget real-entry row -- not directly detour-able"));
+	return (m.delta != 0) ? 0 : m.pfn;
+}
+
+// ----------------------------------------------------------------------
+// game::getPlayerLookAtTargetId shim (2026-07-09 lookAtTarget-accessor request, v16).
+//
+// Returns the PLAYER's lookAt/selection-target NetworkId VALUE (full 64 bits,
+// cluster-id bits included) -- the same m_lookAtTarget slot the advertised
+// creatureObject::setTarget row (setLookAtTarget, above) writes; NOT the NGE
+// intended/combat target (getIntendedTarget is a distinct member). 0 = no
+// player / no target (NetworkId::cms_invalid is NetworkId(0)).
+//
+// WHY an extern "C" primitive shim (the sysmsg rev-2 ABI RULE): only primitives
+// and pointers cross the advertised boundary on CALLED endpoints.
+// CreatureObject::getLookAtTarget() is INLINE [CreatureObject.h:882] (no ODR
+// address to advertise) and returns const CachedNetworkId& -- CachedNetworkId
+// embeds a mutable Watcher<Object> the consumer does not model; reading through
+// that reference is the sysmsg layout trap in the read direction. The shim
+// collapses it to an __int64 in EDX:EAX -- nothing but a primitive crosses.
+// Player-scoped -> no `this`, no MI real-entry subtlety. Lives HERE (not
+// engine_advertise.cpp) because the exe TU cannot include CreatureObject.h
+// (see the accessor note above). Game-thread-only, on-demand (not per-frame).
+// ----------------------------------------------------------------------
+extern "C" __int64 __cdecl engine_getPlayerLookAtTargetId(void)
+{
+	CreatureObject const * const player = Game::getPlayerCreature();
+	return player ? player->getLookAtTarget().getValue() : 0;
 }

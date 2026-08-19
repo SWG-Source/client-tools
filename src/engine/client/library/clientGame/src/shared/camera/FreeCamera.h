@@ -73,6 +73,7 @@ public:
 
 	void           setPivotPoint (const Vector & pt);
 	const Vector   getPivotPoint () const;
+	void setCurrentCell(CellProperty *cell);
 
 	const Info &   getInfo () const;
 	void           setInfo (const Info & info);

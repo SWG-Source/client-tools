@@ -20,6 +20,51 @@ bool ExitChain::ms_debugLogFlag;
 #endif
 
 // ======================================================================
+// Process-wide shutdown phase -- see the ExitChain.h block comment for why
+// this is NOT PerThreadData (isRunning() is per-THREAD and therefore useless
+// to an attached consumer polling from its own thread).
+//
+// Written only on the main thread, at 2-3 well-defined points; read from any
+// thread. An aligned int load/store is single-instruction on x86/x64, and the
+// value is monotonic, so a torn or stale read cannot produce a phase that was
+// never set -- the worst case is observing the previous phase for a moment,
+// which is fail-safe in the direction that matters (consumers only ever gate
+// MORE conservatively as the value rises). `volatile` keeps the compiler from
+// caching it in a polling loop.
+// ======================================================================
+
+namespace
+{
+	volatile int s_shutdownPhase = ExitChain::SP_running;
+}
+
+// ----------------------------------------------------------------------
+
+int ExitChain::getShutdownPhase(void)
+{
+	return s_shutdownPhase;
+}
+
+// ----------------------------------------------------------------------
+
+void ExitChain::raiseShutdownPhase(int phase)
+{
+	if (phase > s_shutdownPhase)
+	{
+		int const previous = s_shutdownPhase;
+		s_shutdownPhase = phase;
+
+		//-- PERMANENT, not a temporary probe. Fires at most twice per process, and
+		//   it is the only evidence either side can point at to answer "did the
+		//   shutdown signal actually fire, and on which exit path?". Without it,
+		//   the claim that a window-close raises SP_requested rests on source
+		//   reading alone -- and the 0->2 gap it guards against is invisible by
+		//   construction (a consumer that never sees phase 1 cannot report it).
+		REPORT_LOG(true, ("[shutdown] phase %d -> %d\n", previous, phase));
+	}
+}
+
+// ======================================================================
 
 void ExitChain::install()
 {
@@ -188,6 +233,12 @@ void ExitChain::run(void)
 
 	if (isRunning())
 		return;
+
+	// Process-wide teardown marker for attached external consumers (advertised
+	// as game::getShutdownPhase). Raised AFTER the re-entrancy guard so it is
+	// set exactly once, and BEFORE the first destructor runs. Every exit path
+	// funnels here -- both ExitChain::quit() and ExitChain::fatal() call run().
+	raiseShutdownPhase(SP_unwinding);
 
 	PerThreadData::setExitChainRunning(true);
 

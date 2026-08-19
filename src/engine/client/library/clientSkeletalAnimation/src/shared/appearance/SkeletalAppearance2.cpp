@@ -2261,7 +2261,7 @@ void SkeletalAppearance2::rebuildMesh(int lodIndex)
 	}
 
 	//-- Mark as clean.
-	m_appearanceDirty[static_cast<BoolVector::size_type>(lodIndex)] = false; //lint !e1058 // error 1058: (Error -- Initializing a non-const reference '_STL::_Bit_reference &' with a non-lvalue) // This is the class interface.
+	m_appearanceDirty[static_cast<BoolVector::size_type>(lodIndex)] = false; // lint !e1058 // error 1058: (Error -- Initializing a non-const reference 'std::_Bit_reference &' with a non-lvalue) // This is the class interface.
 
 	//-- Reset most recently used frame so we don't pitch it as soon as we create it.  Chances
 	//   are we created it because we're going to need it in the next few frames.
@@ -2673,8 +2673,8 @@ void SkeletalAppearance2::wear(Object *object)
 		m_wornAppearanceObjects = new WatcherObjectVectorVector;
 
 	// Add appearance to list of worn appearances.
-	m_wornAppearanceObjects->push_back();
-	ObjectWatcherVectorPair & back = m_wornAppearanceObjects->back();
+	m_wornAppearanceObjects->emplace_back();
+	ObjectWatcherVectorPair &back = m_wornAppearanceObjects->back();
 	back.first = object;
 
 	{
@@ -4009,7 +4009,7 @@ void SkeletalAppearance2::markAsDirty()
 	// with a single appearance rebuild.
 	const BoolVector::iterator endIt = m_appearanceDirty.end();
 	for (BoolVector::iterator it = m_appearanceDirty.begin(); it != endIt; ++it)
-		*it = true; //lint !e1058 // error 1058: (Error -- Initializing a non-const reference '_STL::_Bit_reference &' with a non-lvalue) // This is the class interface.
+		*it = true; // lint !e1058 // error 1058: (Error -- Initializing a non-const reference 'std::_Bit_reference &' with a non-lvalue) // This is the class interface.
 }
 
 // ----------------------------------------------------------------------
@@ -4406,7 +4406,7 @@ void SkeletalAppearance2::unloadUnusedResources()
 
 				//-- Mark this lod as dirty so we know we have to rebuild the shader primitives when needed.
 				VALIDATE_RANGE_INCLUSIVE_EXCLUSIVE(0, lodIndex, static_cast<int>(m_appearanceDirty.size()));
-				m_appearanceDirty[static_cast<BoolVector::size_type>(lodIndex)] = true; //lint !e1058 // error 1058: (Error -- Initializing a non-const reference '_STL::_Bit_reference &' with a non-lvalue) // This is the class interface. 
+				m_appearanceDirty[static_cast<BoolVector::size_type>(lodIndex)] = true; // lint !e1058 // error 1058: (Error -- Initializing a non-const reference 'std::_Bit_reference &' with a non-lvalue) // This is the class interface.
 
 				//-- If we're throwing out detail levels, set display lod index to something that exists
 				if (m_displayLodIndex == lodIndex)

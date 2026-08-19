@@ -206,8 +206,8 @@ void SwgCuiAuctionListView::requestUpdate (int startingIndex)
 	int              priceFilterMin = 0;
 	int              priceFilterMax = 0;
 	bool             priceFilterIncludesFee = false;
-	std::list<AuctionQueryHeadersMessage::SearchCondition> advancedSearch;
-	AuctionQueryHeadersMessage::AdvancedSearchMatchAllAny advancedSearchMatchAllAny = AuctionQueryHeadersMessage::ASMAA_match_all;
+	std::list<SearchCondition> advancedSearch;
+	AdvancedSearchMatchAllAny advancedSearchMatchAllAny = ASMAA_match_all;
 
 	if (m_filter)
 	{
@@ -226,7 +226,7 @@ void SwgCuiAuctionListView::requestUpdate (int startingIndex)
 			// server requires string used in attribute search to be lowercase
 			if (!advancedSearch.empty())
 			{
-				for (std::list<AuctionQueryHeadersMessage::SearchCondition>::iterator iter = advancedSearch.begin(); iter != advancedSearch.end(); ++iter)
+				for (std::list<SearchCondition>::iterator iter = advancedSearch.begin(); iter != advancedSearch.end(); ++iter)
 				{
 					if (!iter->stringValue.empty())
 						iter->stringValue = Unicode::toLower(iter->stringValue);

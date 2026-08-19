@@ -125,7 +125,7 @@ void GroupObject::membersOnChanged   ()
 
 //----------------------------------------------------------------------
 
-void GroupObject::membersOnInsert   (const size_t, const GroupMember & member)
+void GroupObject::membersOnInsert(const unsigned int, const GroupMember &member)
 {
 	Transceivers::memberAdded.emitMessage (Messages::MemberAdded::Payload (this, &member));
 
@@ -140,7 +140,7 @@ void GroupObject::membersOnInsert   (const size_t, const GroupMember & member)
 
 //----------------------------------------------------------------------
 
-void GroupObject::membersOnErase  (const size_t, const GroupMember & member)
+void GroupObject::membersOnErase(const unsigned int, const GroupMember &member)
 {
 	Transceivers::memberRemoved.emitMessage (Messages::MemberRemoved::Payload (this, &member));
 
@@ -162,14 +162,14 @@ void GroupObject::memberShipsOnChanged()
 
 //----------------------------------------------------------------------
 
-void GroupObject::memberShipsOnInsert(const size_t, const GroupShipFormationMember & member)
+void GroupObject::memberShipsOnInsert(const unsigned int, const GroupShipFormationMember &member)
 {
 	Transceivers::memberShipAdded.emitMessage (Messages::MemberShipAdded::Payload (this, &member));
 }
 
 //----------------------------------------------------------------------
 
-void GroupObject::memberShipsOnErase(const size_t, const GroupShipFormationMember & member)
+void GroupObject::memberShipsOnErase(const unsigned int, const GroupShipFormationMember &member)
 {
 	Transceivers::memberShipRemoved.emitMessage (Messages::MemberShipRemoved::Payload (this, &member));
 }

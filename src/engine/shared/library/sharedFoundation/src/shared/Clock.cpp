@@ -132,7 +132,10 @@ void Clock::install(bool newUseSleep, bool useRecalibrationThread)
 
 	time_t t = 0;
 	localtime(&t);
-	ms_timeZone = timezone;
+
+	long timeZone = 0;
+	_get_timezone(&timeZone);
+	ms_timeZone = timeZone;
 	if(ms_timeZone < (12 * 60 * 60))
 	{
 		ms_timeZone = -ms_timeZone;
@@ -264,7 +267,7 @@ void Clock::update(void)
 	static int bad = 0;
 
 	if (bad && ++bad > 64)
-		__asm int 3;
+		__debugbreak();   // was: `__asm int 3;` (x86-only)
 
 	if (ms_lastFrameTime > 3.0)
 		bad = 1;

@@ -5,6 +5,7 @@
 //
 // ======================================================================
 
+#include "NetworkIdArchive.h"
 #include "sharedFoundation/FirstSharedFoundation.h"
 #include "sharedFoundation/AutoDeltaNetworkIdPackedMap.h"
 

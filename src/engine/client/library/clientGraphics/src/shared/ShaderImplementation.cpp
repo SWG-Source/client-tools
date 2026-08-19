@@ -2158,6 +2158,7 @@ void ShaderImplementationPassVertexShader::reloadShaderProgram()
 		file->read(m_text, m_textLength);
 		m_text[m_textLength] = '\0';
 		delete file;
+
 		m_graphicsData = Graphics::createVertexShaderData(*this);
 	}
 
@@ -2282,7 +2283,13 @@ ShaderImplementationPassVertexShader::~ShaderImplementationPassVertexShader()
 
 void ShaderImplementationPassVertexShader::fetch() const
 {
-	++m_referenceCount;
+	using namespace ShaderImplementationPassVertexShaderNamespace;
+
+	// CONSULT-56 follow-up: release() already serializes on this mutex; an unlocked
+	// fetch racing a last-release can corrupt the count. Lock both sides.
+	ms_criticalSection.enter();
+		++m_referenceCount;
+	ms_criticalSection.leave();
 }
 
 // ----------------------------------------------------------------------
@@ -2749,11 +2756,12 @@ const ShaderImplementationPassPixelShaderProgram *ShaderImplementationPassPixelS
 // ----------------------------------------------------------------------
 
 ShaderImplementationPassPixelShaderProgram::ShaderImplementationPassPixelShaderProgram(CrcString const &fileName)
-:
-	m_referenceCount(1),
-	m_fileName(fileName),
-	m_exe(NULL),
-	m_graphicsData(NULL)
+	: m_referenceCount(1),
+	  m_fileName(fileName),
+	  m_exe(NULL),
+	  m_source(NULL),
+	  m_sourceLength(0),
+	  m_graphicsData(NULL)
 {
 	using namespace ShaderImplementationPassPixelShaderProgramNamespace;
 
@@ -2781,6 +2789,7 @@ ShaderImplementationPassPixelShaderProgram::~ShaderImplementationPassPixelShader
 	ms_programMap.erase(i);
 
 	delete [] m_exe;
+	delete[] m_source;
 	delete m_graphicsData;
 }
 
@@ -2795,7 +2804,13 @@ char const * ShaderImplementationPassPixelShaderProgram::getFileName() const
 
 void ShaderImplementationPassPixelShaderProgram::fetch() const
 {
-	++m_referenceCount;
+	using namespace ShaderImplementationPassPixelShaderProgramNamespace;
+
+	// CONSULT-56 follow-up: release() already serializes on this mutex; an unlocked
+	// fetch racing a last-release can corrupt the count. Lock both sides.
+	ms_criticalSection.enter();
+		++m_referenceCount;
+	ms_criticalSection.leave();
 }
 
 // ----------------------------------------------------------------------
@@ -2830,9 +2845,12 @@ void ShaderImplementationPassPixelShaderProgram::reload()
 		ms_programMap.erase(i);
 
 		delete [] m_exe;
+		delete[] m_source;
 		delete m_graphicsData;
 
 		m_exe = 0;
+		m_source = 0;
+		m_sourceLength = 0;
 		m_graphicsData = 0;
 	}
 
@@ -2896,16 +2914,26 @@ void ShaderImplementationPassPixelShaderProgram::load_0000(Iff &iff)
 {
 	iff.enterForm(TAG_0000);
 
-		// load the source code
-		iff.enterChunk(TAG_PSRC);
-		iff.exitChunk(TAG_PSRC, true);
+	// load the HLSL/asm source code (PSRC). x64 fix: the original code
+	// skipped this chunk and only used the precompiled PEXE bytecode, but
+	// our TRE set's PEXE is stale/mismatched (renders characters dark).
+	// Keep the source so the graphics layer can recompile it fresh.
+	iff.enterChunk(TAG_PSRC);
+	m_sourceLength = iff.getChunkLengthLeft(sizeof(char));
+	if (m_sourceLength > 0)
+	{
+		m_source = new char[m_sourceLength + 1];
+		iff.read_char(m_sourceLength, m_source);
+		m_source[m_sourceLength] = '\0';
+	}
+	iff.exitChunk(TAG_PSRC, true);
 
-		// load the d3d8 executable data
-		iff.enterChunk(TAG_PEXE);
-			const int exeLength = iff.getChunkLengthLeft(sizeof(DWORD));
-			m_exe = new DWORD[exeLength];
-			iff.read_uint32(exeLength, m_exe);
-		iff.exitChunk(TAG_PEXE);
+	// load the d3d8 executable data
+	iff.enterChunk(TAG_PEXE);
+	const int exeLength = iff.getChunkLengthLeft(sizeof(DWORD));
+	m_exe = new DWORD[exeLength];
+	iff.read_uint32(exeLength, m_exe);
+	iff.exitChunk(TAG_PEXE);
 
 	iff.exitForm(TAG_0000);
 }

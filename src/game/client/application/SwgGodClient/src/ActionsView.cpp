@@ -365,7 +365,7 @@ void ActionsView::onTurnOffSpheres() const
 //-----------------------------------------------------------------
 
 /**
- * Move the camera to the world cell, and to the avatar's world position.  A good command for when the camera get's whacked.
+ * Move the camera to the avatar's cell and world position.  A good command for when the camera gets whacked.
  */
 void ActionsView::onResetCamera() const
 {
@@ -375,11 +375,16 @@ void ActionsView::onResetCamera() const
 		return;
 
 	FreeCamera* const camera = NON_NULL(gs->getGodClientCamera());
-	camera->setParentCell(CellProperty::getWorldCellProperty());
 	const Object* player    = gs->getPlayer();
+	if (!player)
+		return;
+
+	CellProperty *const playerCell = player->getParentCell();
+	camera->setCurrentCell(playerCell ? playerCell : CellProperty::getWorldCellProperty());
 	const Vector& playerLoc = player->getPosition_w();
 	camera->setPivotPoint(playerLoc);
 	camera->setPivotDistance(1.0f);
+	camera->setInterpolating(false);
 }
 
 //-----------------------------------------------------------------

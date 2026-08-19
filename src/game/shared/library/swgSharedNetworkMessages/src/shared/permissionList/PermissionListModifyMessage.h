@@ -11,8 +11,8 @@
 //-----------------------------------------------------------------------
 
 #include "sharedNetworkMessages/GameNetworkMessage.h"
-#include "Unicode.h"
 #include "unicodeArchive/UnicodeArchive.h"
+#include "Unicode.h"
 
 //-----------------------------------------------------------------------
 

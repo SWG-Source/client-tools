@@ -12,7 +12,7 @@
 
 #include "sharedMath/Vector.h"
 
-#include <hash_map>
+#include <unordered_map>
 
 // ======================================================================
 
@@ -41,11 +41,10 @@ private:
 	PositionVertexIndexer & operator=(PositionVertexIndexer const &);
 
 private:
+  typedef std::unordered_multimap<uint32 /*crc*/, int /*index*/> VertexIndexMap;
 
-	typedef std::hash_multimap<uint32 /*crc*/, int /*index*/> VertexIndexMap;
-
-	VectorVector * m_vertices;
-	VertexIndexMap * m_indexMap;
+  VectorVector *m_vertices;
+  VertexIndexMap *m_indexMap;
 };
 
 // ======================================================================

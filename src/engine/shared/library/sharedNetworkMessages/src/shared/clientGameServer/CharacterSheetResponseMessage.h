@@ -11,11 +11,11 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedMathArchive/VectorArchive.h"
+#include "sharedMath/Vector.h"
+
 #include "Archive/AutoDeltaByteStream.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
-
-#include "sharedMath/Vector.h"
-#include "sharedMathArchive/VectorArchive.h"
 
 //-----------------------------------------------------------------------
 

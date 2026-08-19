@@ -218,7 +218,11 @@ void MissileManager::install()
 
 	{
 		DataTable const * const missileDataTable = DataTableManager::getTable("datatables/space/missiles.iff", true);
-		FATAL(!missileDataTable,("Missile data table could not be opened."));
+		if (!missileDataTable)
+		{
+			DEBUG_WARNING(true, ("MissileManager: datatables/space/missiles.iff missing - missiles disabled.\n"));
+			return;
+		}
 		int const numRows = missileDataTable->getNumRows();
 		for (int row=0; row<numRows; ++row)
 		{

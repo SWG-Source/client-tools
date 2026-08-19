@@ -22,6 +22,7 @@
 #include "sharedObject/CustomizationData.h"
 #include "sharedObject/SlotId.h"
 #include "sharedObject/SlotIdManager.h"
+#include "sharedObject/SlottedContainer.h"
 #include "sharedObject/SlottedContainmentProperty.h"
 
 // ======================================================================
@@ -318,6 +319,83 @@ void CreatureObject::handleAttachWearForContainerAdd(ClientObject &containedObje
 
 	if(usingAltAppearance)
 		useAlternateAppearance();
+}
+
+// ----------------------------------------------------------------------
+/**
+ * x64 catch-up fix: re-attach worn clothing whose appearance was not yet
+ * loaded when it was first slotted.
+ *
+ * The normal attach path is handleAttachWearForContainerAdd() (called from
+ * addedToContainer()). But the player's worn items arrive over the network
+ * and can be slotted into chest1/pants1/shoes/etc. BEFORE their own
+ * appearance has finished loading. At that point handleAttachWearForContainerAdd()
+ * sees a null / non-skeletal contained appearance, falls through to the
+ * hardpoint-attach branch, and the clothing is never worn - and there was no
+ * safety net for *regular* worn clothing (only the appearance-inventory items
+ * had verifyWornAppearanceItems(), which is itself gated behind
+ * getAppearanceInventoryObject()). Result: the player renders naked even
+ * though the clothing IS correctly equipped server-side.
+ *
+ * This pass is driven periodically from CreatureObject::alter (the
+ * m_verifyAppearanceTimer / m_initAppearanceWearables block). It walks the
+ * creature's own worn slots and wears any skeletal-appearance item that
+ * should be worn but isn't yet. It is idempotent (isWearing() guard) and
+ * naturally ignores non-skinned slot contents (weapons, the ghost/bank
+ * objects, etc. have no SkeletalAppearance2).
+ */
+
+void CreatureObject::verifyWornItems()
+{
+	Appearance *const baseAppearance = getAppearance();
+	SkeletalAppearance2 *const skeleAppearance = baseAppearance ? baseAppearance->asSkeletalAppearance2() : 0;
+	if (!skeleAppearance)
+		return;
+
+	if (isUsingAlternateAppearance())
+		return;
+
+	SlottedContainer *const slotted = ContainerInterface::getSlottedContainer(*this);
+	if (!slotted)
+		return;
+
+	std::vector<SlotId> slotList;
+	slotted->getSlotIdList(slotList);
+
+	for (std::vector<SlotId>::const_iterator it = slotList.begin(); it != slotList.end(); ++it)
+	{
+		Container::ContainerErrorCode err = Container::CEC_Success;
+		Object *const obj = slotted->getObjectInSlot(*it, err).getObject();
+		if (!obj)
+			continue;
+
+		ClientObject *const clientObj = obj->asClientObject();
+		if (!clientObj)
+			continue;
+
+		//-- never try to "wear" another creature (mounts/riders/vehicles)
+		if (clientObj->asCreatureObject())
+			continue;
+
+		//-- only skinned (MGN) wearables can be worn on the body; this also
+		//   naturally skips weapons / the ghost+bank objects, and skips items
+		//   whose appearance simply hasn't loaded yet (retried next tick)
+		Appearance *const itemBaseAppearance = clientObj->getAppearance();
+		SkeletalAppearance2 *const itemAppearance = itemBaseAppearance ? itemBaseAppearance->asSkeletalAppearance2() : 0;
+		bool const alreadyWearing = skeleAppearance->isWearing(clientObj);
+		if (!itemAppearance)
+			continue; // appearance not (yet) a skinned mesh - retry next tick
+
+		if (alreadyWearing)
+			continue;
+
+		//-- it's in a worn slot, it's skinned, and it isn't being worn yet:
+		//   attach it now, mirroring the core wear path of
+		//   handleAttachWearForContainerAdd()
+		CreatureObjectNamespace::attachWearableToOwnerCustomizationData(*skeleAppearance, *itemAppearance);
+		skeleAppearance->wear(clientObj);
+		setDupedCreaturesDirty(true);
+	}
 }
 
 // ----------------------------------------------------------------------

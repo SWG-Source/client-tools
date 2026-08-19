@@ -36,7 +36,7 @@ namespace DPVS
 {
 	template <> unsigned int HashKey<RecursionSolver::Transition>::getHashValue (const RecursionSolver::Transition& s)	
 	{ 
-		return (unsigned int)((signed int)(s.m_s) + (signed int)(s.m_d)*1937);	// ad-hoc hash function
+		return (unsigned int)((signed int)(UPTR)(s.m_s) + (signed int)(UPTR)(s.m_d)*1937);	// ad-hoc hash function (UPTR: pointer-width-safe on x64, low-32 hash intentional)
 	}
 } // DPVS
 

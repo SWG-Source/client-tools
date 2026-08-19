@@ -30,8 +30,8 @@ public:
 
 private:
 	static bool ms_installed;
-	static const std::string ClientBugReporting::ms_smtpServer;
-	static const std::string ClientBugReporting::ms_smtpPort;
+	static const std::string ms_smtpServer;
+	static const std::string ms_smtpPort;
 	static DWORD ms_processId;
 };
 

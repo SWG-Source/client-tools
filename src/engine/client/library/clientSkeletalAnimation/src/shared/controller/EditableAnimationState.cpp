@@ -483,7 +483,7 @@ void EditableAnimationState::addLink(EditableAnimationStateLink *link)
 void EditableAnimationState::removeLink(EditableAnimationStateLink *link)
 {
 	EditableAnimationStateLinkVector::iterator findIt = std::find(m_stateLinks.begin(), m_stateLinks.end(), link);
-	if (findIt)
+	if (findIt != m_stateLinks.end())
 		UNREF(m_stateLinks.erase(findIt));
 	else
 		WARNING(true, ("tried to remove EditableAnimationStateLink (0x%08x) but state doesn't know about link.", reinterpret_cast<int>(link)));

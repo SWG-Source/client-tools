@@ -4,6 +4,8 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedNetworkMessages/ChatAvatarIdArchive.h"
+#include "sharedNetworkMessages/ChatRoomDataArchive.h"
 #include "sharedNetworkMessages/FirstSharedNetworkMessages.h"
 #include "ChatQueryRoomResults.h"
 

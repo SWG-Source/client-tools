@@ -113,8 +113,22 @@ void DataTableManager::close(const std::string& table)
 }
 // ----------------------------------------------------------------------
 
+// Vanilla NGE-retail TRE pack omits many post-launch datatables. Lots of
+// `Manager::install()` paths read `getTable(name, true)` and immediately
+// dereference the result without a null check, crashing the client on
+// missing files. Hand back a static empty sentinel instead - callers see
+// 0 rows and skip their for-loops harmlessly. The sentinel is only used
+// for the missing-file path; real tables still load normally.
+namespace DataTableManagerNamespace
+{
+	DataTable *getEmptySentinel()
+	{
+		static DataTable s_empty;
+		return &s_empty;
+	}
+} // namespace DataTableManagerNamespace
 
-DataTable * DataTableManager::getTable(const std::string& table, bool openIfNotFound)
+DataTable *DataTableManager::getTable(const std::string &table, bool openIfNotFound)
 {
 //	FATAL(!m_installed, ("DataTableManager::getTable: not installed."));
 	if (m_cachedTableName == table)
@@ -128,7 +142,18 @@ DataTable * DataTableManager::getTable(const std::string& table, bool openIfNotF
 			DataTable * dt = open(table);
 			if (!dt)
 			{
-				DEBUG_WARNING(true, ("Could not find table [%s]", table.c_str()));
+				// Missing table. Strict (default): return NULL -- exact stock
+				// semantics. Callers that REQUIRE their table carry their own
+				// STRICT_DATA_FATALs at the install sites, while optional-content
+				// probes (e.g. the mahjong layout list names files that never
+				// shipped) handle NULL as they always did -- a FATAL here killed
+				// boot on the first such probe. strictData=false: hand back the
+				// static 0-row sentinel so even null-unaware callers fail soft.
+				// Either way, say so in the log: a missing table sailing silently
+				// is how data gaps go unnoticed.
+				WARNING(true, ("DataTableManager::getTable: could not open table [%s]%s", table.c_str(), StrictData() ? "" : " - returning empty sentinel (strictData=false)"));
+				if (!StrictData())
+					return DataTableManagerNamespace::getEmptySentinel();
 				return NULL;
 			}
 			else

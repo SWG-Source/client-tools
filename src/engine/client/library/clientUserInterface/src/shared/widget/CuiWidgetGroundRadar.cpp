@@ -171,10 +171,21 @@ void CuiWidgetGroundRadar::Render (UICanvas & ) const
 			UIFloatPoint (0.0f, 1.0f)
 		};
 
+		// UI scale (2026-05-16): widget bounds are in LOGICAL canvas coords,
+		// but format.setTransformed() sends vertices directly to D3D in
+		// PHYSICAL pixel coords (bypassing the canvas Scale transform that
+		// the regular UI render path applies). At uiScale != 1.0 this caused
+		// the radar map to render at the un-scaled widget position --
+		// floating upper-left of the radar circle. Multiply by canvas scale
+		// here so positions land at the same physical pixel where the rest
+		// of the (Scale-transformed) UI draws the widget frame.
+		const float uiScale = Graphics::getUiCanvasScale();
+
 		VertexBufferWriteIterator v = vertexBuffer.begin();
 		for (size_t i = 0; i < 4; ++i)
 		{
-			v.setPosition (m_quadPoints [i].x + center.x, m_quadPoints [i].y + center.y, 1.0f);
+			v.setPosition((m_quadPoints[i].x + center.x) * uiScale,
+						  (m_quadPoints[i].y + center.y) * uiScale, 1.0f);
 			v.setOoz (1.0f);
 			v.setTextureCoordinates (0, m_radarShaderInfo.m_quadUVs[i].x, m_radarShaderInfo.m_quadUVs[i].y);
 			v.setTextureCoordinates (1, normal_uvs [i].x, normal_uvs [i].y);
@@ -217,10 +228,16 @@ void CuiWidgetGroundRadar::Render (UICanvas & ) const
 			UIFloatPoint (0.0f, 1.0f)
 		};
 
+		// UI scale (2026-05-16): same logical->physical conversion as the
+		// shader-render path above. Without this the black-circle background
+		// also rendered at un-scaled coords (upper-left of the radar frame).
+		const float uiScale = Graphics::getUiCanvasScale();
+
 		VertexBufferWriteIterator v = vertexBuffer.begin();
 		for (size_t i = 0; i < 4; ++i)
 		{
-			v.setPosition (m_quadPoints [i].x + center.x, m_quadPoints [i].y + center.y, 1.0f);
+			v.setPosition((m_quadPoints[i].x + center.x) * uiScale,
+						  (m_quadPoints[i].y + center.y) * uiScale, 1.0f);
 			v.setOoz (1.0f);
 			v.setTextureCoordinates (0, normal_uvs[i].x, normal_uvs[i].y);
 			v.setTextureCoordinates (1, normal_uvs [i].x, normal_uvs [i].y);

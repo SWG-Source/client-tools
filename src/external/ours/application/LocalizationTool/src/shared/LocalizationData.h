@@ -13,7 +13,7 @@ class LocalizedStringTableRW;
 
 #include "LocalizedString.h"
 
-#include <hash_map>
+#include <unordered_map>
 #include <set>
 
 struct DataChangeListener;
@@ -24,54 +24,53 @@ class LocalizedStringTableRW;
 class LocalizationData
 {
 public:
+  typedef std::unordered_map<LocalizedString::id_type, LocalizedStringPair> StringMap_t;
 
-	typedef std::hash_map<LocalizedString::id_type, LocalizedStringPair> StringMap_t;
+  typedef StringMap_t::iterator iterator;
+  typedef StringMap_t::const_iterator const_iterator;
 
-	typedef StringMap_t::iterator iterator;
-	typedef StringMap_t::const_iterator const_iterator;
+  static void install();
+  static void remove();
 
-	static void                  install              ();
-	static void                  remove               ();
+  static LocalizationData &getData();
 
-	static LocalizationData &    getData              ();
+  const_iterator getConstIterators(const_iterator &end);
 
-	const_iterator               getConstIterators    (const_iterator & end);
+  const LocalizedStringPair *getEntryById(LocalizedString::id_type id) const;
+  const LocalizedStringPair *getEntryByName(const std::string &name) const;
 
-	const LocalizedStringPair *  getEntryById         (LocalizedString::id_type id) const;
-	const LocalizedStringPair *  getEntryByName       (const std::string & name) const;
+  void removeListener(DataChangeListener *listener);
+  void addListener(DataChangeListener *listener);
 
-	void                         removeListener       (DataChangeListener * listener);
-	void                         addListener          (DataChangeListener * listener);
+  const LocalizedStringPair *createNewEntry();
 
-	const LocalizedStringPair *  createNewEntry       ();
+  void deleteEntryById(LocalizedString::id_type id);
 
-	void                         deleteEntryById      (LocalizedString::id_type id);
+  void modifyEntry(const LocalizedStringPair &rhs);
+  void modifyEntryNoUpdate(const LocalizedStringPair &rhs);
 
-	void                         modifyEntry          (const LocalizedStringPair & rhs);
-	void                         modifyEntryNoUpdate  (const LocalizedStringPair & rhs);
+  int getCurrentEditId() const;
+  void setCurrentEditId(int id);
 
-	int                          getCurrentEditId     () const;
-	void                         setCurrentEditId     (int id);
+  void clear();
 
-	void                         clear                ();
+  bool populateStringTable(LocalizedStringTableRW &table, int which);
+  bool loadFromStringTable(LocalizedStringTableRW &table, int which);
 
-	bool                         populateStringTable  (LocalizedStringTableRW & table, int which);
-	bool                         loadFromStringTable  (LocalizedStringTableRW & table, int which);
+  bool getHasTranslatedData() const;
+  void setHasTranslatedData(bool b);
 
-	bool                         getHasTranslatedData () const;
-	void                         setHasTranslatedData (bool b);
+  bool isModified(int index) const;
+  void clearModified(int index);
 
-	bool                         isModified           (int index) const;
-	void                         clearModified        (int index);
+  void setReadOnly(int index, bool readonly);
+  bool getReadOnly(int index) const;
 
-	void                         setReadOnly          (int index, bool readonly);
-	bool                         getReadOnly          (int index) const;
+  void notifyListeners() const;
 
-	void                         notifyListeners      () const;
+  int fixupAllStringNames(bool showMessage);
 
-	int                          fixupAllStringNames  (bool showMessage);
-
-	void                         updateCrcs();
+  void updateCrcs();
 private:
 	                             LocalizationData     ();
 	                             LocalizationData     (const LocalizationData & rhs);

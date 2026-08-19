@@ -275,7 +275,7 @@ void SwgCuiRoadmap_Profession::performActivate()
 		sprintf(tmp, "long_title_%s_phase%d", m_parentMediator->getContextRoadmap().c_str(), i);
 		StringId phaseTitle(ROADMAP_STRING_FILE, tmp);
 		m_phaseTitles[i]->SetLocalText(phaseTitle.localize());
-		sprintf(tmp, "title_%s", m_parentMediator->getContextRoadmap().c_str(), i);
+		sprintf(tmp, "title_%s", m_parentMediator->getContextRoadmap().c_str());
 		StringId roadmapTitle(ROADMAP_STRING_FILE, tmp);
 		m_roadmapTitles[i]->SetLocalText(roadmapTitle.localize());
 		int track;

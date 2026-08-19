@@ -58,8 +58,7 @@ class LightningAppearance::LocalShaderPrimitive : public ShaderPrimitive
 friend class LightningAppearance;
 
 public:
-
-	static VertexBufferFormat LocalShaderPrimitive::getVertexBufferFormat();
+  static VertexBufferFormat getVertexBufferFormat();
 
 public:
 

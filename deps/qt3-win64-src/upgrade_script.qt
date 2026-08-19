@@ -1,0 +1,112 @@
+#!/bin/sh  
+# Script to upgrade to a new Qt.
+# Apply VERY carefully, step by step.
+#
+# David Faure <faure@kde.org>
+#
+
+SNAPSHOT=qt-x11-free-3.3.4.tar.bz2
+
+if [ ! -f $SNAPSHOT ]; then echo $SNAPSHOT not found ; fi
+
+TOPLEVEL=`tar tjf $SNAPSHOT | head -1 | sed -e 's,/$,,' `
+
+echo Found TOPLEVEL=$TOPLEVEL
+
+echo -n Cleaning qt-copy...
+# Do a make cvs-clean first
+if [ ! -d qt-copy ]; then echo You should have a qt-copy directory under here ; fi
+cd qt-copy
+cvs_clean=""
+if [ -f ../kdelibs/admin/cvs-clean.pl ] ; then common=../kdelibs/admin/cvs-clean.pl; fi
+if [ -f ../../kdelibs/admin/cvs-clean.pl ] ; then common=../../kdelibs/admin/cvs-clean.pl; fi
+if [ -z "$common" ]; then 
+  echo cvs-clean.pl not found ; 
+else
+  perl $common
+fi
+cd ..
+echo done
+
+# List of new stuff
+echo -n Creating to_add and to_remove...
+tar tjf $SNAPSHOT | sort > qtlist     || exit 1
+perl -pi -e "s/$TOPLEVEL/qt-copy/" qtlist
+
+# Plus stuff we added ourselves
+echo qt-copy/README.qt-copy >> qtlist
+echo qt-copy/Makefile.cvs >> qtlist
+echo qt-copy/upgrade_script.qt >> qtlist
+echo qt-copy/apply_patches >> qtlist
+
+# Prepare list of what's new (not includes, they're links)
+cp -f /dev/null to_add
+cat qtlist | grep -v include | while read a ; do
+  if [ ! -e "$a" ]; then
+     echo "$a" >> to_add
+  fi
+done
+
+# And what we don't want to see in our cvs
+perl -pi -e 'if (/^qt-copy\/src\/tools\/qmodules.h/) {$_ = "";}' to_add
+
+# Remove old stuff
+cp -f /dev/null to_remove
+find qt-copy | grep -v CVS | grep -v .cvsignore | grep -v debian | grep -v rpm | grep -v objprelink | grep -v distcc | grep -v patches | while read a ; do
+  if ! grep -q -F $a qtlist; then
+    echo $a >> to_remove
+  fi
+done
+echo done
+
+if [ ! -d qt-copy ]; then echo You should have a qt-copy directory under here ; fi # Better very safe than very sorry...
+cd qt-copy
+perl -pi -e "s/qt-copy\///" ../to_remove
+
+cat ../to_remove | while read a; do
+  echo Removing $a
+  cvs rm -f $a
+done
+
+cd ..
+
+# Untar
+echo -n Untarring snapshot over qt-copy...
+rm -rf $TOPLEVEL
+mv qt-copy $TOPLEVEL
+tar xjf $SNAPSHOT
+mv $TOPLEVEL qt-copy
+echo done
+
+cd qt-copy
+perl -pi -e "s/^.*qt-copy\///" ../to_add
+
+cat ../to_add | while read a ; do
+     echo Adding $a
+     cvs add $a
+done
+
+tar tjf ../$SNAPSHOT | sort > ../qtlist || exit 1
+perl -pi -e "s/$TOPLEVEL/qt-copy/" ../qtlist
+# defang $Id: upgrade_script.qt 1154 2005-04-09 10:35:41Z chehrlic $ tags
+cat ../qtlist | while read a ; do
+     if test -f ../$a; then
+       if ! grep -q "^/`basename $a`/.*/-kb" ../`dirname $a`/CVS/Entries; then
+         perl -pi -e 's/\$Id.*\$//' ../$a
+         perl -pi -e 's/<!-- \/\S+\/qt-x11-free\S+:\d+ -->//' ../$a
+       fi
+     fi
+done
+
+echo -n Updating from CVS...
+# Run an update - this is because tar x touches all files, even the ones
+# than haven't changed
+cvs up -A
+echo done
+
+# Now commit !
+# Better do it by hand (to choose a log, possibly silent)
+# and subdir by subdir (otherwise it takes ages)
+echo "Don't forget to commit, with CVS_SILENT and subdir by subdir (otherwise it takes ages)"
+
+

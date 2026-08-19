@@ -40,36 +40,35 @@ namespace GameNamespace
 class Game
 {
 public:
+  typedef Unicode::String UnicodeString;
+  struct Messages
+  {
+	  static const char *const SCENE_CHANGED;
 
-	typedef std::basic_string<unsigned short, std::char_traits<unsigned short>, std::allocator<unsigned short> > UnicodeString;
-	struct Messages
-	{
-		static const char * const SCENE_CHANGED;
+	  struct ChatStartInput
+	  {
+		  typedef Unicode::String Payload;
+	  };
 
-		struct ChatStartInput
-		{
-			typedef Unicode::String Payload;
-		};
+	  struct DebugPrintUi
+	  {
+		  typedef UnicodeString Payload;
+	  };
 
-		struct DebugPrintUi
-		{
-			typedef UnicodeString Payload;
-		};
+	  struct SceneChanged
+	  {
+		  typedef bool Payload;
+	  };
 
-		struct SceneChanged
-		{
-			typedef bool Payload;
-		};
+	  struct CollectionServerFirstChanged
+	  {
+		  typedef std::string Payload;
+	  };
 
-		struct CollectionServerFirstChanged
-		{
-			typedef std::string Payload;
-		};
-
-		struct CollectionShowServerFirstOptionChanged
-		{
-			typedef bool Payload;
-		};
+	  struct CollectionShowServerFirstOptionChanged
+	  {
+		  typedef bool Payload;
+	  };
 	};
 
 	enum Application
@@ -188,6 +187,9 @@ public:
 	static bool                isSceneLoading       ();
 
 	static int                 getLoopCount         ();
+	static int                 getMainLoopCount     ();   // out-of-line (ODR-emitted) twin of the inline getLoopCount(); exists so the engine-hookpoint advertisement contract can advertise the per-frame counter (game::g_mainLoopCounter) by &address -- see SwgClient/.../engine_advertise.cpp
+	static int                 getShutdownPhase     ();   // out-of-line forwarder to ExitChain::getShutdownPhase() so the advertisement contract can expose the process-wide shutdown phase by &address (game::getShutdownPhase, v26). 0=running 1=requested 2=unwinding. Unlike isOver() this stays safe to call during teardown -- see ExitChain.h
+	static void                setExternalTickCallback(void (*fn)());   // consumer tick callback (toolkit x64 round-2, advertised as game::registerTickCallback): invoked once at the TOP of runGameLoopOnce -- game thread, OUTSIDE any render call chain (previous frame fully presented). The consumer's drain point for deferred commands that must not run inside its frame callback. Single-slot; null clears
 
 	static void                setProfanityFiltered (bool profanityFiltered);
 	static bool                isProfanityFiltered  ();
