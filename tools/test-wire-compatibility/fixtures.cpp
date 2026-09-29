@@ -8,6 +8,12 @@
 #include "Archive/AutoDeltaPackedMap.h"
 #include "Archive/AutoDeltaVector.h"
 #include "Archive/AutoDeltaMap.h"
+#include "Archive/AutoDeltaSet.h"
+#include "Archive/AutoDeltaQueue.h"
+#include "sharedFoundation/AutoDeltaNetworkIdPackedMap.h"
+#include "sharedNetworkMessages/ChatOnRequestLog.h"
+#include "unicodeArchive/UnicodeArchive.h"
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -80,6 +86,88 @@ int main() {
   check(m.size()==2 && m.find(1)==m.end() && m.find(2)!=m.end() && m.find(3)!=m.end(),"map wrap through zero skips the one already-applied command");
   Archive::ByteStream mapBytes; m.pack(mapBytes);
   check(equal(mapBytes,literal({2,0,0,0, 0,0,0,0, 0,2,0,0,0,2,0,0,0, 0,3,0,0,0,3,0,0,0})),"map wrap resulting baseline 0 matches legacy32 bytes");
+ }
+ // Map, repeated deltas: two in-order deltas apply; replaying the second is skipped.
+ {
+  Archive::AutoDeltaMap<uint32,uint32> m;
+  auto b=literal({0,0,0,0, 0,0,0,0}); r=b.begin(); m.unpack(r);
+  auto d1=literal({1,0,0,0, 1,0,0,0, 0,1,0,0,0,1,0,0,0});
+  auto d2=literal({1,0,0,0, 2,0,0,0, 0,2,0,0,0,2,0,0,0});
+  r=d1.begin(); m.unpackDelta(r); r=d2.begin(); m.unpackDelta(r); r=d2.begin(); m.unpackDelta(r);
+  Archive::ByteStream bytes; m.pack(bytes);
+  check(equal(bytes,literal({2,0,0,0, 2,0,0,0, 0,1,0,0,0,1,0,0,0, 0,2,0,0,0,2,0,0,0})),"map repeated deltas apply once; a replayed delta is skipped");
+ }
+ // Set counters follow the same legacy unsigned arithmetic as the map. Deltas carry a
+ // command byte (INSERT=1); the baseline encoding is count, baseline, then bare values.
+ {
+  Archive::AutoDeltaSet<uint32> st;
+  auto b=literal({0,0,0,0, 0xf0,0xff,0xff,0x7f}); r=b.begin(); st.unpack(r);
+  auto d=literal({1,0,0,0, 5,0,0,0x80, 1,10,0,0,0}); r=d.begin(); st.unpackDelta(r);
+  Archive::ByteStream bytes; st.pack(bytes);
+  check(st.size()==1 && equal(bytes,literal({1,0,0,0, 5,0,0,0x80, 10,0,0,0})),"set behind across 2^31 applies the INSERT and catches up");
+ }
+ {
+  Archive::AutoDeltaSet<uint32> st;
+  auto b=literal({0,0,0,0, 0xfe,0xff,0xff,0xff}); r=b.begin(); st.unpack(r);
+  auto d=literal({3,0,0,0, 0,0,0,0, 1,1,0,0,0, 1,2,0,0,0, 1,3,0,0,0}); r=d.begin(); st.unpackDelta(r);
+  Archive::ByteStream bytes; st.pack(bytes);
+  check(equal(bytes,literal({2,0,0,0, 0,0,0,0, 2,0,0,0, 3,0,0,0})),"set wrap through zero skips the already-applied INSERT");
+ }
+ // Mirrored verbatim from SWG-Source/src#35 7ace7d51 (server counterpart of this repair).
+ // Queue uses unsigned subtraction and clamps the skip count, without map catch-up.
+ // baseline=0, one PUSH, target=2 => difference UINT32_MAX: skip the whole delta.
+ {
+  auto queueBaseline=literal({0,0,0,0, 0,0,0,0});
+  auto queueDelta=literal({1,0,0,0, 2,0,0,0, 0, 65,0,0,0});
+  Archive::AutoDeltaQueue<uint32_t> q;
+  r=queueBaseline.begin(); q.unpack(r); r=queueDelta.begin(); q.unpackDelta(r);
+  check(q.empty() && r.getSize()==0,"queue unsigned skip clamps and consumes an ahead delta");
+  Archive::ByteStream queueBytes; q.pack(queueBytes);
+  check(equal(queueBytes,queueBaseline),"queue skipped delta preserves legacy baseline zero");
+ }
+ // Two PUSHes wrap UINT32_MAX to 1; applying the same delta twice must not duplicate them.
+ {
+  auto queueBaseline=literal({0,0,0,0, 255,255,255,255});
+  auto queueDelta=literal({2,0,0,0, 1,0,0,0, 0,65,0,0,0, 0,66,0,0,0});
+  auto queueExpected=literal({2,0,0,0, 1,0,0,0, 0,65,0,0,0, 0,66,0,0,0});
+  Archive::AutoDeltaQueue<uint32_t> q;
+  r=queueBaseline.begin(); q.unpack(r); r=queueDelta.begin(); q.unpackDelta(r);
+  Archive::ByteStream queueBytes; q.pack(queueBytes);
+  check(equal(queueBytes,queueExpected) && r.getSize()==0,"queue wrap preserves both PUSHes and baseline one");
+  r=queueDelta.begin(); q.unpackDelta(r);
+  Archive::ByteStream repeatedBytes; q.pack(repeatedBytes);
+  check(equal(repeatedBytes,queueExpected) && r.getSize()==0,"queue duplicate delta is consumed without reapplying PUSHes");
+ }
+ // Packed maps with NetworkId (8-byte) and Unicode (uint32 length + UTF-16) values.
+ {
+  auto expected=literal({2,0,0,0, 0,0,0,0, 0,0xff,0xff,0xff,0xff,0,0,0,0,1,0,0,0, 0,7,0,0,0,42,0,0,0,0,0,0,0});
+  Archive::ByteStream bytes; Archive::AutoDeltaPackedMap<int,NetworkId>::pack(bytes,"-1 4294967296:7 42:");
+  check(equal(bytes,expected),"packed map <int, NetworkId> matches legacy32 bytes");
+  std::string text; auto rr=expected.begin(); Archive::AutoDeltaPackedMap<int,NetworkId>::unpack(rr,text);
+  check(text=="-1 4294967296:7 42:","packed map <int, NetworkId> decodes to the same text");
+ }
+ {
+  auto expected=literal({1,0,0,0, 0,0,0,0, 0,0,0,0,0,1,0,0,0, 0xfe,0xff,0xff,0xff});
+  Archive::ByteStream bytes; Archive::AutoDeltaPackedMap<NetworkId,int>::pack(bytes,"4294967296 -2:");
+  check(equal(bytes,expected),"packed map <NetworkId, int> matches legacy32 bytes");
+  std::string text; auto rr=expected.begin(); Archive::AutoDeltaPackedMap<NetworkId,int>::unpack(rr,text);
+  check(text=="4294967296 -2:","packed map <NetworkId, int> decodes to the same text");
+ }
+ {
+  auto expected=literal({1,0,0,0, 0,0,0,0, 0,3,0,0,0, 2,0,0,0, 0x68,0, 0xe9,0});
+  Archive::ByteStream bytes; Archive::AutoDeltaPackedMap<int,Unicode::String>::pack(bytes,"3 h\xc3\xa9:");
+  check(equal(bytes,expected),"packed map <int, Unicode::String> matches legacy32 bytes");
+  std::string text; auto rr=expected.begin(); Archive::AutoDeltaPackedMap<int,Unicode::String>::unpack(rr,text);
+  check(text=="3 h\xc3\xa9:","packed map <int, Unicode::String> decodes to the same UTF-8 text");
+ }
+ // A real timestamp through ChatLogEntry's own serializer: four empty strings, then 4 bytes.
+ {
+  ChatLogEntry e(Unicode::String(),Unicode::String(),Unicode::String(),Unicode::String(),static_cast<time_t>(0x80000001u));
+  auto expected=literal({0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0x80});
+  Archive::ByteStream bytes; Archive::put(bytes,e);
+  check(equal(bytes,expected),"ChatLogEntry timestamp encodes as 4 legacy32 bytes");
+  ChatLogEntry back; auto rr=expected.begin(); Archive::get(rr,back);
+  check(back.m_time==0x80000001u && rr.getSize()==0,"ChatLogEntry timestamp decodes with no trailing bytes");
  }
 #ifdef WIRE_TEST_MISSIONS
  MessageQueueMissionListResponse::DataVector missions;

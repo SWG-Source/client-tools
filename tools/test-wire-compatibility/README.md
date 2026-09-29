@@ -18,12 +18,16 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
 
 1. **Wire-width assertions** (`wire_types.cpp`, compile time): the time fields of
    `ImageDesignChangeMessage`, `BuffBuilderChangeMessage` and `ChatLogEntry` are 4 bytes.
-2. **Thirteen runtime fixtures** (`fixtures.cpp`), each checked against literal legacy32 bytes:
-   quest packed map (encode and decode), `AutoDeltaPackedMap<int, unsigned long>` (encode and
-   decode), `AutoDeltaVector` baseline counter wrap (decode and re-encode), `AutoDeltaMap`
-   counter boundaries (a client behind across 2^31 must apply the pending ADD and catch up; a
-   wrap through zero skips exactly the already-applied command), and
-   `MessageQueueMissionListResponse` (empty header, two entries, decode with no trailing bytes).
+2. **Twenty-eight runtime fixtures** (`fixtures.cpp`), each checked against literal legacy32 bytes:
+   - quest packed map and `AutoDeltaPackedMap<int, unsigned long>` (encode and decode);
+   - `AutoDeltaPackedMap` with `NetworkId` keys or values and with `Unicode::String` values
+     (encode and decode);
+   - `AutoDeltaVector` counter wrap; `AutoDeltaMap` behind across 2^31, wrap through zero and
+     repeated/replayed deltas; `AutoDeltaSet` behind across 2^31 and wrap through zero;
+     `AutoDeltaQueue` unsigned skip clamp, wrap and duplicate delta (mirrored verbatim from
+     SWG-Source/src#35 7ace7d51);
+   - `ChatLogEntry` timestamp through its real serializer (encode and decode);
+   - `MessageQueueMissionListResponse` (empty header, two entries, decode with no trailing bytes).
 
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
 `FAIL` or `NOT RUN`, and exactly `EXPECTED_RUNTIME_PASSES` checks report `PASS`. An exit code
@@ -60,18 +64,21 @@ projects no longer define it.
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
-| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 14/14 | fails: width check, 4 fixtures, then `ReadException` |
-| this branch | 14/14 | 14/14 |
-| SWG-Source/client-tools#21 head 46f6003a (`--no-32bit-time`) | fails: time fields are 8 bytes | fails: 6 fixtures, then crash |
+| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 29/29 | fails: width check, 4 fixtures, then `ReadException` |
+| this branch | 29/29 | 29/29 |
+| SWG-Source/client-tools#21 head 46f6003a (`--no-32bit-time`) | fails: time fields are 8 bytes (width check and `ChatLogEntry` bytes) | fails: 11 checks, then `bad_alloc` |
 
 The legacy counters were `size_t`, which is 32-bit unsigned on Win32, so delta arithmetic is
-modulo 2^32. Signed `int32_t` counters (as in SWG-Source/src#35 at 34092239) fail the map
-boundary fixtures: the skip count goes negative and the decoder reads past the delta.
+modulo 2^32. Signed `int32_t` counters (this branch before 1e62bab4) fail the map boundary
+fixtures: the skip count goes negative and the decoder reads past the delta. The server
+counterpart of this repair is SWG-Source/src#35 7ace7d51; the map and queue fixtures are
+shared byte for byte.
 
 ## Limits
 
 This is not MSVC and not a live client. It establishes the listed byte layouts on these two ABIs
 only: not every message, not gameplay, not a connection to a server. Other serialized
-messages are not covered here; `LoginClusterStatus` and the remaining `Archive` call sites need
-their own fixtures. The oracle is a manual transcription of the legacy32 format from src#35,
+messages are not covered here: `ImageDesignChangeMessage` and `BuffBuilderChangeMessage`
+timestamps are checked for width only, and `LoginClusterStatus` and the remaining `Archive`
+call sites need their own fixtures. The oracle is a manual transcription of the legacy32 format from src#35,
 not a captured packet trace.

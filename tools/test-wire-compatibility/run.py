@@ -9,7 +9,7 @@ MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-EXPECTED_RUNTIME_PASSES = 13  # check() calls in fixtures.cpp; a run must report exactly these
+EXPECTED_RUNTIME_PASSES = 28  # check() calls in fixtures.cpp; a run must report exactly these
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
 p = argparse.ArgumentParser()
@@ -37,6 +37,16 @@ SOURCES = [
     'external/ours/library/localizationArchive/src/shared/StringIdArchive.cpp',
     'external/ours/library/localization/src/shared/StringId.cpp',
     'external/ours/library/unicodeArchive/src/shared/UnicodeArchive.cpp',
+    'external/ours/library/unicodeArchive/src/shared/UnicodeAutoDeltaPackedMap.cpp',
+    'engine/shared/library/sharedUtility/src/shared/NetworkIdAutoDeltaPackedMap.cpp',
+    'engine/shared/library/sharedNetworkMessages/src/shared/chat/ChatOnRequestLog.cpp',
+    'external/ours/library/unicode/src/shared/UnicodeUtils.cpp',
+    'external/ours/library/unicode/src/shared/utf8.cpp',
+]
+# Serializers some checkouts keep in a separate file (e.g. SWG-Source/client-tools#21).
+OPTIONAL_SOURCES = [
+    'engine/shared/library/sharedNetworkMessages/src/shared/chat/ChatLogEntryArchive.cpp',
+    'engine/shared/library/sharedNetworkMessages/src/shared/chat/ChatLogEntry.cpp',
 ]
 LIBS = ['engine/shared/library', 'external/ours/library', 'game/shared/library']
 
@@ -61,6 +71,10 @@ def copy_tree(src, dst):
          r'^(\s*)inline void (AutoDeltaPackedMap<(?:int|unsigned long)[^>]*>::)', r'\1template<> inline void \2')
     edit(dst / 'engine/shared/library/sharedGame/src/shared/quest/PlayerQuestData.cpp',
          r'^(\s*)void (Archive::AutoDeltaPackedMap<uint32,\s*PlayerQuestData>::)', r'\1template<> void \2')
+    for f in ['engine/shared/library/sharedFoundation/src/shared/AutoDeltaNetworkIdPackedMap.h',
+              'engine/shared/library/sharedUtility/src/shared/NetworkIdAutoDeltaPackedMap.cpp',
+              'external/ours/library/unicodeArchive/src/shared/UnicodeAutoDeltaPackedMap.cpp']:
+        edit(dst / f, r'^(\s*)(?!template)((?:inline )?void AutoDeltaPackedMap<[^>]*>::(?:un)?pack\()', r'\1template<> \2')
     # dependent names need typename
     edit(arc / 'AutoDeltaSet.h', r'^(\s*)SetType::const_iterator i\(', r'\1typename SetType::const_iterator i(')
     # MSVC looked up friend parameter types in the befriended namespace
@@ -115,7 +129,7 @@ def main():
         if a.types_only:
             return 0 if types_ok else 1
         objs = []
-        for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + [tree / s for s in SOURCES]):
+        for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + [tree / s for s in SOURCES] + [tree / s for s in OPTIONAL_SOURCES if (tree / s).exists()]):
             obj = tmp / f'{i}.o'
             r = subprocess.run(cxx + ['-c', str(src), '-o', str(obj)], capture_output=True, text=True)
             if r.returncode:

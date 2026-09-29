@@ -17,3 +17,11 @@ LocalizationManager::StringValueCode LocalizationManager::getLocalizedStringValu
 MessageQueue::Data::Data() {}
 MessageQueue::Data::~Data() {}
 void MessageQueueMissionListResponse::operator delete(void *p) { ::operator delete(p); }
+// GameNetworkMessage is the base of ChatOnRequestLog, whose .cpp holds ChatLogEntry's
+// serializers. The message itself is never constructed here; these abort if it is.
+#include "sharedNetworkMessages/GameNetworkMessage.h"
+GameNetworkMessage::GameNetworkMessage(std::string const &) { std::abort(); }
+GameNetworkMessage::~GameNetworkMessage() {}
+#include "sharedMessageDispatch/Message.h"
+MessageDispatch::MessageBase::MessageBase(char const *) { std::abort(); }
+MessageDispatch::MessageBase::~MessageBase() {}
