@@ -10,6 +10,10 @@
 #include "Archive/AutoDeltaMap.h"
 #include "Archive/AutoDeltaSet.h"
 #include "Archive/AutoDeltaQueue.h"
+#if __has_include("Archive/ArchiveCount.h")
+#include "Archive/ArchiveCount.h"
+#define HAVE_ARCHIVE_COUNT 1
+#endif
 #include "sharedFoundation/AutoDeltaNetworkIdPackedMap.h"
 #include "sharedNetworkMessages/ChatOnRequestLog.h"
 #include "sharedNetworkMessages/ImageDesignChangeMessage.h"
@@ -238,6 +242,20 @@ int main() {
  } else {
   std::puts("SKIP: time_t is 32-bit; no out-of-range timestamp exists (6 checks)");
  }
+#ifdef HAVE_ARCHIVE_COUNT
+ // Container counts: ArchiveCount::fromSize keeps each field's legacy type and signedness and
+ // throws std::out_of_range, before any byte is written, when a host size_t does not fit.
+ check(ArchiveCount::fromSize<uint32_t>(static_cast<size_t>(0xffffffffu))==0xffffffffu,"unsigned count UINT32_MAX is representable");
+ check(ArchiveCount::fromSize<signed int>(static_cast<size_t>(2147483647))==2147483647,"signed count INT32_MAX is representable");
+ check(throwsOutOfRange([]{ (void)ArchiveCount::fromSize<signed int>(static_cast<size_t>(2147483648u)); }),"signed count INT32_MAX + 1 is rejected with std::out_of_range");
+ if (sizeof(size_t) > 4) {
+  check(throwsOutOfRange([]{ (void)ArchiveCount::fromSize<uint32_t>(static_cast<size_t>(0xffffffffull + 1)); }),"unsigned count UINT32_MAX + 1 is rejected with std::out_of_range");
+ } else {
+  std::puts("SKIP: size_t is 32-bit; UINT32_MAX + 1 is not a size (1 check)");
+ }
+#else
+ std::puts("ABSENT: ArchiveCount helper (checkout predates count checking) all=3 win64=1");
+#endif
 #ifdef WIRE_TEST_MISSIONS
  MessageQueueMissionListResponse::DataVector missions;
  MessageQueueMissionListResponse empty(missions, 7, true);

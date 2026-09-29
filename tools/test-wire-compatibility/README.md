@@ -37,6 +37,12 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
      previous value. On Win32 `time_t` is 32-bit and no out-of-range value exists; the run must
      print one `SKIP` line instead, and nothing is counted as a pass;
    - `MessageQueueMissionListResponse` (empty header, two entries, decode with no trailing bytes).
+3. **Container-count helper** (`ArchiveCount::fromSize<Count>`): `UINT32_MAX` and `INT32_MAX` are
+   representable in unsigned and signed counts; `INT32_MAX + 1` into a signed count and (Win64 only)
+   `UINT32_MAX + 1` into an unsigned count throw `std::out_of_range`. These test the helper only:
+   routing every call site through it is established by review, because an out-of-range size needs
+   a container with more than 2^32 elements. A checkout without the helper (e.g. the stock oracle)
+   prints `ABSENT:` naming the checks; they are deducted and reported, never counted as passes.
 
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
 `FAIL` or `NOT RUN`, and exactly `EXPECTED_RUNTIME_PASSES` checks report `PASS`. An exit code
@@ -80,8 +86,8 @@ projects no longer define it.
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
-| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 41/41 (out-of-range checks skipped) | fails: width check, 4 fixtures, then `ReadException` |
-| this branch | 41/41 (out-of-range checks skipped) | 47/47 |
+| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 41/41 (out-of-range skipped; 3 count-helper checks absent) | fails: width check, 4 fixtures, then `ReadException` |
+| this branch | 44/44 (out-of-range skipped) | 51/51 |
 | a65d8032 (`FATAL` helper) | 41/41 | not OK: the process aborts; a crash is not a pass |
 | 44652cba (unchecked narrowing) | 41/41 | 6 fail: silently truncated, previous value lost |
 | e4e6b7f1 timestamp types (`uint32_t`) | 7 fail: `INT32_MIN`/`-1` decode unsigned | same |

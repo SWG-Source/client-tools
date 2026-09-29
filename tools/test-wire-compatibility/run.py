@@ -9,8 +9,8 @@ MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-EXPECTED_RUNTIME_PASSES = 40  # check() calls that run on every ABI; a run must report exactly these
-EXPECTED_WIN64_ONLY_PASSES = 6  # out-of-range timestamp checks, which need a 64-bit time_t
+EXPECTED_RUNTIME_PASSES = 43  # check() calls that run on every ABI; a run must report exactly these
+EXPECTED_WIN64_ONLY_PASSES = 7  # out-of-range timestamp and count checks, which need 64-bit time_t/size_t
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
 p = argparse.ArgumentParser()
@@ -156,11 +156,20 @@ def main():
         # code alone cannot tell "all passed" from "the fixtures never ran".
         # Win64 adds the out-of-range timestamp checks; Win32 must report them as skipped instead.
         expected = EXPECTED_RUNTIME_PASSES + (EXPECTED_WIN64_ONLY_PASSES if a.bits == 64 else 0)
+        expected_skips = 0 if a.bits == 64 else 2
+        # A checkout that predates a helper (e.g. the stock oracle) reports exactly which checks
+        # cannot apply; they are deducted and named in the result, never counted as passes.
+        absent = [l for l in lines if l.startswith('ABSENT: ')]
+        for l in absent:
+            m = re.search(r'all=(\d+) win64=(\d+)', l)
+            expected -= int(m.group(1)) + (int(m.group(2)) if a.bits == 64 else 0)
+            expected_skips -= 0 if a.bits == 64 else int(m.group(2) != '0')
         skips = sum(l.startswith('SKIP: ') for l in lines)
-        if skips != (0 if a.bits == 64 else 1):
+        if skips != expected_skips:
             problems.append('skip')
         if run.returncode == 0 and not problems and passes == expected and types_ok:
-            print(f'OK: {passes + 1}/{expected + 1} checks passed')
+            note = f' ({len(absent)} helper absent: ' + '; '.join(l[8:] for l in absent) + ')' if absent else ''
+            print(f'OK: {passes + 1}/{expected + 1} checks passed{note}')
             return 0
         print(f'NOT OK: exit={run.returncode} runtime passes={passes}/{expected} '
               f'problems={len(problems)} types={"ok" if types_ok else "failed"}')
