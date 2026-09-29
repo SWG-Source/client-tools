@@ -9,7 +9,7 @@ MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-EXPECTED_RUNTIME_PASSES = 37  # check() calls in fixtures.cpp; a run must report exactly these
+EXPECTED_RUNTIME_PASSES = 40  # check() calls in fixtures.cpp; a run must report exactly these
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
 p = argparse.ArgumentParser()

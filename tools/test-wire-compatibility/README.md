@@ -18,15 +18,19 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
 
 1. **Wire-width assertions** (`wire_types.cpp`, compile time): the time fields of
    `ImageDesignChangeMessage`, `BuffBuilderChangeMessage` and `ChatLogEntry` are 4 bytes.
-2. **Twenty-eight runtime fixtures** (`fixtures.cpp`), each checked against literal legacy32 bytes:
+2. **Forty runtime fixtures** (`fixtures.cpp`), each checked against literal legacy32 bytes:
    - quest packed map and `AutoDeltaPackedMap<int, unsigned long>` (encode and decode);
    - `AutoDeltaPackedMap` with `NetworkId` keys or values and with `Unicode::String` values
      (encode and decode);
    - `AutoDeltaVector` counter wrap; `AutoDeltaMap` behind across 2^31, wrap through zero and
      repeated/replayed deltas; `AutoDeltaSet` behind across 2^31 and wrap through zero;
      `AutoDeltaQueue` unsigned skip clamp, wrap and duplicate delta (mirrored verbatim from
-     SWG-Source/src#35 7ace7d51);
-   - `ChatLogEntry` timestamp through its real serializer (encode and decode);
+     SWG-Source/src#35 7ace7d51). Every delta check also requires the delta to be fully consumed;
+   - timestamps: `ImageDesignChangeMessage` and `BuffBuilderChangeMessage` `startingTime` and
+     `ChatLogEntry` `m_time`, each through its real pack/unpack at `INT32_MIN`, `-1`, `0` and
+     `INT32_MAX`. The encoding may differ from the `0` encoding only in the four little-endian
+     bytes at the legacy offset, and the decoded value is compared as signed: legacy `time_t`
+     was signed 32-bit, so `FF FF FF FF` must decode as `-1`;
    - `MessageQueueMissionListResponse` (empty header, two entries, decode with no trailing bytes).
 
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
@@ -51,9 +55,16 @@ Replaced, and not under test:
   and FloatMath headers.
 - `shim/StlForwardDeclaration.h` uses the real standard containers instead of forward
   declarations of VC2013 internals.
-- `fatal.cpp`: `Fatal` prints and aborts. `mission_glue.cpp`: the trivial value-holder members of
-  `MessageQueueMissionListResponse` (its .cpp registers a controller-message factory), the
-  `MessageQueue::Data` base, and the display-only localization lookup.
+- `fatal.cpp`: `Fatal` prints and aborts.
+- `mission_glue.cpp` stubs runtime infrastructure only, never a serializer:
+  - the trivial value-holder members of `MessageQueueMissionListResponse` (its .cpp registers a
+    controller-message factory) and the `MessageQueue::Data` base;
+  - the display-only localization lookup (aborts if reached);
+  - `GameNetworkMessage` and `MessageDispatch::MessageBase` constructors (abort if reached; the
+    `ChatOnRequestLog` message is never constructed, only `ChatLogEntry`'s serializers are used);
+  - `MemoryBlockManager` as plain heap allocation of the pool's element size (kept in the
+    opaque `m_allocator` field), with `ControllerMessageFactory` registration and `ExitChain::add`
+    as no-ops. The fixtures call each message's `install()` to create its pool.
 
 `__MINGW_USE_VC2005_COMPAT` is set because MinGW's i686 headers otherwise define
 `_USE_32BIT_TIME_T` implicitly, which MSVC (VS2005 and later) does not. Win32 runs pass
@@ -64,21 +75,19 @@ projects no longer define it.
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
-| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 29/29 | fails: width check, 4 fixtures, then `ReadException` |
-| this branch | 29/29 | 29/29 |
-| SWG-Source/client-tools#21 head 46f6003a (`--no-32bit-time`) | fails: time fields are 8 bytes (width check and `ChatLogEntry` bytes) | fails: 11 checks, then `bad_alloc` |
+| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 41/41 | fails: width check, 4 fixtures, then `ReadException` |
+| this branch | 41/41 | 41/41 |
+| e4e6b7f1 timestamp types (`uint32_t`) | 7 fail: `INT32_MIN`/`-1` decode unsigned | same |
 
 The legacy counters were `size_t`, which is 32-bit unsigned on Win32, so delta arithmetic is
-modulo 2^32. Signed `int32_t` counters (this branch before 1e62bab4) fail the map boundary
-fixtures: the skip count goes negative and the decoder reads past the delta. The server
-counterpart of this repair is SWG-Source/src#35 7ace7d51; the map and queue fixtures are
-shared byte for byte.
+modulo 2^32; the legacy timestamps were `time_t`, which is 32-bit signed. Width alone is not
+enough: signed counters (before 1e62bab4) fail the map boundary fixtures, and unsigned
+timestamps (before 579db9f6) decode negative values as large positive ones.
 
 ## Limits
 
 This is not MSVC and not a live client. It establishes the listed byte layouts on these two ABIs
 only: not every message, not gameplay, not a connection to a server. Other serialized
-messages are not covered here: `ImageDesignChangeMessage` and `BuffBuilderChangeMessage`
-timestamps are checked for width only, and `LoginClusterStatus` and the remaining `Archive`
-call sites need their own fixtures. The oracle is a manual transcription of the legacy32 format from src#35,
+messages are not covered here: `LoginClusterStatus` and the remaining `Archive` call sites need
+their own fixtures. The oracle is a manual transcription of the legacy32 format from src#35,
 not a captured packet trace.

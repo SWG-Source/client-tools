@@ -87,7 +87,7 @@ int main() {
  auto delta=literal({2,0,0,0,1,0,0,0, 1,0,0,65,0,0,0, 1,1,0,66,0,0,0});
  Archive::AutoDeltaVector<uint32> v;
  r=baseline.begin(); v.unpack(r); r=delta.begin(); v.unpackDelta(r);
- check(v.size()==2 && v[0]==65 && v[1]==66,"legacy32 counter wrap decodes two inserts into [65,66]");
+ check(v.size()==2 && v[0]==65 && v[1]==66 && r.getSize()==0,"legacy32 counter wrap decodes two inserts into [65,66]");
  auto finalExpected=literal({2,0,0,0,1,0,0,0,65,0,0,0,66,0,0,0});
  Archive::ByteStream finalBytes; v.pack(finalBytes);
  check(equal(finalBytes,finalExpected),"counter wrap resulting baseline matches legacy32 bytes");
@@ -99,7 +99,7 @@ int main() {
   auto mapDelta=literal({1,0,0,0, 5,0,0,0x80, 0, 1,0,0,0, 10,0,0,0});
   Archive::AutoDeltaMap<uint32,uint32> m;
   r=mapBaseline.begin(); m.unpack(r); r=mapDelta.begin(); m.unpackDelta(r);
-  check(m.size()==1 && m.find(1)!=m.end() && m.find(1)->second==10,"map behind across 2^31 applies the pending ADD");
+  check(m.size()==1 && m.find(1)!=m.end() && m.find(1)->second==10 && r.getSize()==0,"map behind across 2^31 applies the pending ADD");
   Archive::ByteStream mapBytes; m.pack(mapBytes);
   check(equal(mapBytes,literal({1,0,0,0, 5,0,0,0x80, 0,1,0,0,0,10,0,0,0})),"map catches up to baseline 0x80000005 in legacy32 bytes");
  }
@@ -110,7 +110,7 @@ int main() {
   auto mapDelta=literal({3,0,0,0, 0,0,0,0, 0,1,0,0,0,1,0,0,0, 0,2,0,0,0,2,0,0,0, 0,3,0,0,0,3,0,0,0});
   Archive::AutoDeltaMap<uint32,uint32> m;
   r=mapBaseline.begin(); m.unpack(r); r=mapDelta.begin(); m.unpackDelta(r);
-  check(m.size()==2 && m.find(1)==m.end() && m.find(2)!=m.end() && m.find(3)!=m.end(),"map wrap through zero skips the one already-applied command");
+  check(m.size()==2 && m.find(1)==m.end() && m.find(2)!=m.end() && m.find(3)!=m.end() && r.getSize()==0,"map wrap through zero skips the one already-applied command");
   Archive::ByteStream mapBytes; m.pack(mapBytes);
   check(equal(mapBytes,literal({2,0,0,0, 0,0,0,0, 0,2,0,0,0,2,0,0,0, 0,3,0,0,0,3,0,0,0})),"map wrap resulting baseline 0 matches legacy32 bytes");
  }
@@ -120,9 +120,12 @@ int main() {
   auto b=literal({0,0,0,0, 0,0,0,0}); r=b.begin(); m.unpack(r);
   auto d1=literal({1,0,0,0, 1,0,0,0, 0,1,0,0,0,1,0,0,0});
   auto d2=literal({1,0,0,0, 2,0,0,0, 0,2,0,0,0,2,0,0,0});
-  r=d1.begin(); m.unpackDelta(r); r=d2.begin(); m.unpackDelta(r); r=d2.begin(); m.unpackDelta(r);
+  bool consumed=true;
+  r=d1.begin(); m.unpackDelta(r); consumed&=r.getSize()==0;
+  r=d2.begin(); m.unpackDelta(r); consumed&=r.getSize()==0;
+  r=d2.begin(); m.unpackDelta(r); consumed&=r.getSize()==0;
   Archive::ByteStream bytes; m.pack(bytes);
-  check(equal(bytes,literal({2,0,0,0, 2,0,0,0, 0,1,0,0,0,1,0,0,0, 0,2,0,0,0,2,0,0,0})),"map repeated deltas apply once; a replayed delta is skipped");
+  check(consumed && equal(bytes,literal({2,0,0,0, 2,0,0,0, 0,1,0,0,0,1,0,0,0, 0,2,0,0,0,2,0,0,0})),"map repeated deltas apply once; a replayed delta is skipped");
  }
  // Set counters follow the same legacy unsigned arithmetic as the map. Deltas carry a
  // command byte (INSERT=1); the baseline encoding is count, baseline, then bare values.
@@ -131,14 +134,14 @@ int main() {
   auto b=literal({0,0,0,0, 0xf0,0xff,0xff,0x7f}); r=b.begin(); st.unpack(r);
   auto d=literal({1,0,0,0, 5,0,0,0x80, 1,10,0,0,0}); r=d.begin(); st.unpackDelta(r);
   Archive::ByteStream bytes; st.pack(bytes);
-  check(st.size()==1 && equal(bytes,literal({1,0,0,0, 5,0,0,0x80, 10,0,0,0})),"set behind across 2^31 applies the INSERT and catches up");
+  check(st.size()==1 && r.getSize()==0 && equal(bytes,literal({1,0,0,0, 5,0,0,0x80, 10,0,0,0})),"set behind across 2^31 applies the INSERT and catches up");
  }
  {
   Archive::AutoDeltaSet<uint32> st;
   auto b=literal({0,0,0,0, 0xfe,0xff,0xff,0xff}); r=b.begin(); st.unpack(r);
   auto d=literal({3,0,0,0, 0,0,0,0, 1,1,0,0,0, 1,2,0,0,0, 1,3,0,0,0}); r=d.begin(); st.unpackDelta(r);
   Archive::ByteStream bytes; st.pack(bytes);
-  check(equal(bytes,literal({2,0,0,0, 0,0,0,0, 2,0,0,0, 3,0,0,0})),"set wrap through zero skips the already-applied INSERT");
+  check(r.getSize()==0 && equal(bytes,literal({2,0,0,0, 0,0,0,0, 2,0,0,0, 3,0,0,0})),"set wrap through zero skips the already-applied INSERT");
  }
  // Mirrored verbatim from SWG-Source/src#35 7ace7d51 (server counterpart of this repair).
  // Queue uses unsigned subtraction and clamps the skip count, without map catch-up.
@@ -188,16 +191,17 @@ int main() {
   check(text=="3 h\xc3\xa9:","packed map <int, Unicode::String> decodes to the same UTF-8 text");
  }
  // A real timestamp through ChatLogEntry's own serializer: four empty strings, then 4 bytes.
+ // 0x80000001 is -2147483647 as legacy signed time_t; compare as signed, not as an unsigned literal.
  {
-  ChatLogEntry e(Unicode::String(),Unicode::String(),Unicode::String(),Unicode::String(),static_cast<time_t>(0x80000001u));
+  ChatLogEntry e(Unicode::String(),Unicode::String(),Unicode::String(),Unicode::String(),static_cast<time_t>(-2147483647LL));
   auto expected=literal({0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0x80});
   Archive::ByteStream bytes; Archive::put(bytes,e);
   check(equal(bytes,expected),"ChatLogEntry timestamp encodes as 4 legacy32 bytes");
   ChatLogEntry back; auto rr=expected.begin(); Archive::get(rr,back);
-  check(back.m_time==0x80000001u && rr.getSize()==0,"ChatLogEntry timestamp decodes with no trailing bytes");
+  check(static_cast<long long>(back.m_time)==-2147483647LL && rr.getSize()==0,"ChatLogEntry timestamp decodes as signed with no trailing bytes");
  }
  ImageDesignChangeMessage::install(); BuffBuilderChangeMessage::install(); // creates their allocation pools
- for (long long t : {-1LL, 0LL, 2147483647LL}) {
+ for (long long t : {-2147483647LL-1, -1LL, 0LL, 2147483647LL}) {
   char name[128];
   std::snprintf(name,sizeof(name),"ImageDesignChangeMessage startingTime %lld round-trips as signed legacy32",t);
   check(timestampRoundTrip<ImageDesignChangeMessage>(33,t),name);
