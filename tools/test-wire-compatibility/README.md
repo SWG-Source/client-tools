@@ -18,10 +18,16 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
 
 1. **Wire-width assertions** (`wire_types.cpp`, compile time): the time fields of
    `ImageDesignChangeMessage`, `BuffBuilderChangeMessage` and `ChatLogEntry` are 4 bytes.
-2. **Nine runtime fixtures** (`fixtures.cpp`), each checked against literal legacy32 bytes:
+2. **Thirteen runtime fixtures** (`fixtures.cpp`), each checked against literal legacy32 bytes:
    quest packed map (encode and decode), `AutoDeltaPackedMap<int, unsigned long>` (encode and
-   decode), `AutoDeltaVector` baseline counter wrap (decode and re-encode), and
+   decode), `AutoDeltaVector` baseline counter wrap (decode and re-encode), `AutoDeltaMap`
+   counter boundaries (a client behind across 2^31 must apply the pending ADD and catch up; a
+   wrap through zero skips exactly the already-applied command), and
    `MessageQueueMissionListResponse` (empty header, two entries, decode with no trailing bytes).
+
+The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
+`FAIL` or `NOT RUN`, and exactly `EXPECTED_RUNTIME_PASSES` checks report `PASS`. An exit code
+alone is not trusted: it cannot distinguish "all passed" from "the fixtures never ran".
 
 The code under test is the checkout's own: Archive, AutoDelta containers, NetworkId,
 PlayerQuestData, the mission-list serializers, StringId and Unicode archives.
@@ -54,9 +60,13 @@ projects no longer define it.
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
-| SWG-Source/client-tools `master` 94945103 | 10/10 | 0/10: 7 fail, then `ReadException` |
-| this branch | 10/10 | 10/10 |
-| SWG-Source/client-tools#21 head 46f6003a (`--no-32bit-time`) | 9/10: time fields are 8 bytes | 2/10: 9 fail, then `bad_alloc` |
+| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 14/14 | fails: width check, 4 fixtures, then `ReadException` |
+| this branch | 14/14 | 14/14 |
+| SWG-Source/client-tools#21 head 46f6003a (`--no-32bit-time`) | fails: time fields are 8 bytes | fails: 6 fixtures, then crash |
+
+The legacy counters were `size_t`, which is 32-bit unsigned on Win32, so delta arithmetic is
+modulo 2^32. Signed `int32_t` counters (as in SWG-Source/src#35 at 34092239) fail the map
+boundary fixtures: the skip count goes negative and the decoder reads past the delta.
 
 ## Limits
 

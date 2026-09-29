@@ -258,8 +258,8 @@ namespace Archive
 		char temp[200];
 		
 		Command c;
-		int32_t commandCount;
-		int32_t baselineCommandCount; //lint !e578 hides a symbol elsewhere
+		uint32_t commandCount;
+		uint32_t baselineCommandCount; //lint !e578 hides a symbol elsewhere
 
 		Archive::get(source, commandCount);
 		Archive::get(source, baselineCommandCount);
@@ -313,7 +313,7 @@ namespace Archive
 		AutoDeltaMap<uint32, PlayerQuestData>::Command c;
 
 		Archive::put(target, countCharacter(buffer,':'));
-		Archive::put(target, static_cast<int32_t>(0)); // baselineCommandCount
+		Archive::put(target, static_cast<uint32_t>(0)); // baselineCommandCount
 		
 		int tempPos = 0;
 		for (std::string::const_iterator i=buffer.begin(); i!=buffer.end(); ++i)
