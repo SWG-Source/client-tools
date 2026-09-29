@@ -20,6 +20,10 @@ p.add_argument('--root', type=pathlib.Path, default=HERE.parents[1],
 p.add_argument('--no-32bit-time', action='store_true',
                help='omit _USE_32BIT_TIME_T on Win32 (for checkouts whose projects no longer define it)')
 p.add_argument('--types-only', action='store_true', help='run only the compile-time wire-width assertions')
+p.add_argument('--wine-arch', choices=['win32', 'win64', 'wow64'],
+               help='Wine prefix architecture (does not change the compiled PE architecture)')
+p.add_argument('--artifacts', type=pathlib.Path,
+               help='save the freshly linked fixture executable for CI inspection')
 p.add_argument('--keep', action='store_true', help='keep the temporary tree and print its path')
 a = p.parse_args()
 
@@ -159,7 +163,10 @@ def main():
         if r.returncode:
             sys.stderr.write(r.stderr[-3000:])
             return 2
-        env = dict(os.environ, WINEDEBUG='-all', WINEARCH='win32' if a.bits == 32 else 'win64',
+        if a.artifacts:
+            a.artifacts.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(exe, a.artifacts / f'fixtures-{a.bits}.exe')
+        env = dict(os.environ, WINEDEBUG='-all', WINEARCH=a.wine_arch or ('win32' if a.bits == 32 else 'win64'),
                    WINEPREFIX=os.environ.get(f'WINEPREFIX{a.bits}', str(pathlib.Path.home() / f'.wine-swg{a.bits}')))
         run = subprocess.run(['wine', str(exe)], env=env, capture_output=True, text=True)
         sys.stdout.write(run.stdout)

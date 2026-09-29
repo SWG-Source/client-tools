@@ -1,0 +1,55 @@
+name: Client wire compatibility
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [ci/client-wire, x64-fixed-width-wire]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wire:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        bits: [32, 64]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install compiler and Wine runtime
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y clang g++-mingw-w64-i686 g++-mingw-w64-x86-64 wine wine32:i386 wine64
+      - name: Record source and toolchain
+        run: |
+          mkdir -p artifacts
+          {
+            git rev-parse HEAD
+            clang++ --version
+            i686-w64-mingw32-g++ --version
+            x86_64-w64-mingw32-g++ --version
+            wine --version
+          } | tee artifacts/environment.txt
+      - name: Build and run real Windows fixtures
+        env:
+          WINEPREFIX32: ${{ runner.temp }}/swg-wine32
+          WINEPREFIX64: ${{ runner.temp }}/swg-wine64
+        run: |
+          set -o pipefail
+          python3 tools/test-wire-compatibility/run.py --bits ${{ matrix.bits }} --artifacts artifacts 2>&1 | tee artifacts/wire.log
+          sha256sum artifacts/*.exe > artifacts/binaries.sha256
+      - name: Retain logs and fresh fixture executable
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: client-wire-${{ matrix.bits }}-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
