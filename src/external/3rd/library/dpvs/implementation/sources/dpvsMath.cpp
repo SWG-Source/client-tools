@@ -3692,7 +3692,7 @@ void transformUnitBox (Vector3 dst[8], const Matrix4x3& m)
 
 static DPVS_FORCE_INLINE void reciprocal4 (float& w0, float& w1, float& w2, float& w3)
 {
-#if defined (DPVS_CPU_GAMECUBE) || defined (DPVS_CPU_X86)
+#if defined (DPVS_CPU_GAMECUBE) || defined (DPVS_CPU_X86) || defined (DPVS_CPU_X64)
 	float	a		= w0;
 	float	b		= w1;
 	float	c		= w2;
