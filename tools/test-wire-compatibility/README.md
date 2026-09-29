@@ -49,6 +49,12 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
 5. **Count-site compile coverage** (`count_sites.cpp`, mirrored verbatim from SWG-Source/src#35
    30cf4531): instantiates every generic count-writing overload changed to use `ArchiveCount`. It is
    compiled, never called; it is not an oversized-container test.
+6. **Per-message counts**: `ImageDesignChangeMessage` morph/index counts and `BuffBuilderChangeMessage`
+   component count with non-empty maps, compared byte for byte from the first count onward (legacy
+   offsets 66 and 29) and decoded with no trailing bytes. The other changed writers
+   (`DroidCommandProgrammingMessage`, `MessageQueueCraftExperiment`,
+   `MessageQueueDraftSlotsDataArchive`, `CustomerServiceCategoryArchive`) are compiled only
+   (`SYNTAX_ONLY` in `run.py`); a compile failure fails the run.
 
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
 `FAIL` or `NOT RUN`, and exactly `EXPECTED_RUNTIME_PASSES` checks report `PASS`. An exit code
@@ -92,8 +98,8 @@ projects no longer define it.
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
-| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 43/43 (out-of-range skipped; 3 count-helper checks absent) | fails: width check, 4 fixtures, then `ReadException` |
-| this branch | 46/46 (out-of-range skipped) | 53/53 |
+| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 47/47 (out-of-range skipped; 3 count-helper checks absent) | fails: width check, 4 fixtures, then `ReadException` |
+| this branch | 50/50 (out-of-range skipped) | 57/57 |
 | a65d8032 (`FATAL` helper) | 41/41 | not OK: the process aborts; a crash is not a pass |
 | 44652cba (unchecked narrowing) | 41/41 | 6 fail: silently truncated, previous value lost |
 | e4e6b7f1 timestamp types (`uint32_t`) | 7 fail: `INT32_MIN`/`-1` decode unsigned | same |
@@ -107,6 +113,12 @@ timestamps (before 579db9f6) decode negative values as large positive ones. 64-b
 `std::out_of_range`; this establishes the shared helper's policy, not graceful recovery at callers.
 
 ## Limits
+
+Count checks run before the first byte of each writer, but nested serializers
+(`MessageQueueDraftSlotsDataArchive`, `CustomerServiceCategoryArchive` subcategories) are called
+after their caller has written bytes: a rejection there cannot roll back the caller's partial
+output. Count representability also does not make large payloads safe; byte-buffer overflow is a
+separate repair.
 
 This is not MSVC and not a live client. It establishes the listed byte layouts on these two ABIs
 only: not every message, not gameplay, not a connection to a server. Other serialized

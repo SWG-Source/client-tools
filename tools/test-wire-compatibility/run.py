@@ -9,7 +9,7 @@ MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-EXPECTED_RUNTIME_PASSES = 45  # check() calls that run on every ABI; a run must report exactly these
+EXPECTED_RUNTIME_PASSES = 49  # check() calls that run on every ABI; a run must report exactly these
 EXPECTED_WIN64_ONLY_PASSES = 7  # out-of-range timestamp and count checks, which need 64-bit time_t/size_t
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
@@ -45,6 +45,13 @@ SOURCES = [
     'engine/shared/library/sharedNetworkMessages/src/shared/clientGameServer/BuffBuilderChangeMessage.cpp',
     'external/ours/library/unicode/src/shared/UnicodeUtils.cpp',
     'external/ours/library/unicode/src/shared/utf8.cpp',
+]
+# Changed per-message count writers compiled (syntax only) but not linked into the fixtures.
+SYNTAX_ONLY = [
+    'engine/shared/library/sharedNetworkMessages/src/shared/clientGameServer/DroidCommandProgrammingMessage.cpp',
+    'engine/shared/library/sharedNetworkMessages/src/shared/clientGameServer/MessageQueueCraftExperiment.cpp',
+    'engine/shared/library/sharedNetworkMessages/src/shared/clientGameServer/MessageQueueDraftSlotsDataArchive.cpp',
+    'engine/shared/library/sharedNetworkMessages/src/shared/customerService/CustomerServiceCategoryArchive.cpp',
 ]
 # Serializers some checkouts keep in a separate file (e.g. SWG-Source/client-tools#21).
 OPTIONAL_SOURCES = [
@@ -132,6 +139,13 @@ def main():
         if a.types_only:
             return 0 if types_ok else 1
         objs = []
+        # Compile coverage for changed message writers that the fixtures do not link.
+        for rel in SYNTAX_ONLY:
+            r = subprocess.run(cxx + ['-fsyntax-only', str(tree / rel)], capture_output=True, text=True)
+            if r.returncode:
+                sys.stderr.write(r.stderr[-3000:])
+                print(f'FAIL: {rel} does not compile')
+                return 2
         count_sites = [HERE / 'count_sites.cpp'] if (tree / 'external/ours/library/archive/src/shared/ArchiveCount.h').exists() else []
         for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + count_sites + [tree / s for s in SOURCES] + [tree / s for s in OPTIONAL_SOURCES if (tree / s).exists()]):
             obj = tmp / f'{i}.o'
