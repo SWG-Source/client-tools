@@ -72,7 +72,7 @@ private: // members
 	};
 
 	QueueType                    container;
-	size_t                       baselineCommandCount;
+	uint32_t                       baselineCommandCount;
 	mutable std::vector<ModifyCommand> changes;
 
 	AutoDeltaQueue &operator=(AutoDeltaQueue const &);
@@ -251,7 +251,7 @@ template<typename ValueType>
 inline void AutoDeltaQueue<ValueType>::pack(ByteStream &target) const
 {
 	const_iterator i;
-	Archive::put(target, container.size());
+	Archive::put(target, static_cast<int32_t>(container.size()));
 	Archive::put(target, baselineCommandCount);
 	unsigned char cmd;
 	for (i = container.begin(); i != container.end(); ++i)
@@ -267,7 +267,7 @@ inline void AutoDeltaQueue<ValueType>::pack(ByteStream &target) const
 template<typename ValueType>
 inline void AutoDeltaQueue<ValueType>::packDelta(ByteStream &target) const
 {
-	Archive::put(target, changes.size());
+	Archive::put(target, static_cast<int32_t>(changes.size()));
 	Archive::put(target, baselineCommandCount);
 	for (typename std::vector<ModifyCommand>::iterator i = changes.begin(); i != changes.end(); ++i)
 	{
@@ -322,7 +322,7 @@ inline void AutoDeltaQueue<ValueType>::unpack(ReadIterator &source)
 	clearDelta();
 
 	ModifyCommand c;
-	size_t commandCount;
+	int32_t commandCount;
 
 	Archive::get(source, commandCount);
 	Archive::get(source, baselineCommandCount);
@@ -342,7 +342,7 @@ template<typename ValueType>
 inline void AutoDeltaQueue<ValueType>::unpackDelta(ReadIterator &source)
 {
 	ModifyCommand c;
-	size_t skipCount, commandCount, targetBaselineCommandCount;
+	int32_t skipCount, commandCount, targetBaselineCommandCount;
 
 	Archive::get(source, commandCount);
 	Archive::get(source, targetBaselineCommandCount);

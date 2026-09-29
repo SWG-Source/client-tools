@@ -22,7 +22,7 @@ namespace Archive
 	void get (ReadIterator & source, MessageQueueMissionListResponse & target)
 	{
 		MessageQueueMissionListResponse::DataVector v;
-		size_t s = 0;
+		uint32_t s = 0;
 		unsigned char sequenceId = 0;
 		bool b = false;
 
@@ -48,7 +48,7 @@ namespace Archive
 	{ 
 		Archive::put(target, source.getSequenceId());
 		Archive::put(target, source.getBountyTerminal());
-		Archive::put(target, source.getResponse().size());
+		Archive::put(target, static_cast<uint32_t>(source.getResponse().size()));
 	
 		typedef MessageQueueMissionListResponse::DataVector DataVector;
 		const DataVector & v = source.getResponse();

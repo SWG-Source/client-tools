@@ -4,6 +4,7 @@
 //---------------------------------------------------------------------
 
 #include "ByteStream.h"
+#include <cstdint>
 #include <string>
 #include <map>
 #include <deque>
@@ -190,9 +191,9 @@ template<typename A> inline void get_ptr(ReadIterator & source, std::vector<cons
 
 template<typename Key, typename Value> inline void get(ReadIterator & source, std::map<Key, Value> & target)
 {
-	size_t numKeys;
+	int32_t numKeys;
 	get(source, numKeys);
-	size_t i;
+	int32_t i;
 	for(i = 0; i < numKeys; ++i)
 	{
 		Key k;
@@ -379,7 +380,7 @@ template<typename A> inline void put(ByteStream & target, const std::deque<A> & 
 
 template<typename Key, typename Value> inline void put(ByteStream & target, const std::map<Key, Value> & source)
 {
-	size_t numKeys = source.size();
+	int32_t numKeys = static_cast<int32_t>(source.size());
 	put(target, numKeys);
 	for (typename std::map<Key, Value>::const_iterator i = source.begin(); i != source.end(); ++i)
 	{
