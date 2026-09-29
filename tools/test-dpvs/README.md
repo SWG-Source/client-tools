@@ -123,3 +123,13 @@ This mode records the archive's Git commit metadata and SHA-256 in
 must come from the intended Git revision (the metadata is provenance, not a
 cryptographic signature). Direct `--source` runs retain full file hashes but
 record a null revision rather than inventing a commit ID for an arbitrary folder.
+
+The DLL parser rejects out-of-file spans, overlapping sections, virtual-only
+RVA ranges and metadata located in executable/writable sections. All normalized
+section metadata must lie wholly inside read-only `.rdata`; the COFF timestamp
+is separately bounded in the parsed header. Synthetic negative controls include
+forged debug directories and CodeView records pointing into instructions:
+
+```sh
+python tools/test-dpvs/test_compare_dll.py
+```
