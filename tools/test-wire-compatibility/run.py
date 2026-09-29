@@ -9,6 +9,7 @@ MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
+EXPECTED_RUNTIME_PASSES = 13  # check() calls in fixtures.cpp; a run must report exactly these
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
 p = argparse.ArgumentParser()
@@ -107,9 +108,12 @@ def main():
         cxx = flags(tree, a.bits)
         r = subprocess.run(cxx + ['-fsyntax-only', str(HERE / 'wire_types.cpp')], capture_output=True, text=True)
         errors = [l.split('error: ', 1)[1] for l in r.stderr.splitlines() if 'error: ' in l]
-        print(('FAIL: ' + '\nFAIL: '.join(errors)) if errors else 'PASS: time fields are 4 bytes on the wire')
+        if r.returncode and not errors:
+            errors = ['wire_types.cpp did not compile: ' + (r.stderr.strip().splitlines() or ['no diagnostics'])[-1]]
+        types_ok = r.returncode == 0 and not errors
+        print('PASS: time fields are 4 bytes on the wire' if types_ok else 'FAIL: ' + '\nFAIL: '.join(errors))
         if a.types_only:
-            return 1 if errors else 0
+            return 0 if types_ok else 1
         objs = []
         for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + [tree / s for s in SOURCES]):
             obj = tmp / f'{i}.o'
@@ -125,8 +129,20 @@ def main():
             return 2
         env = dict(os.environ, WINEDEBUG='-all', WINEARCH='win32' if a.bits == 32 else 'win64',
                    WINEPREFIX=os.environ.get(f'WINEPREFIX{a.bits}', str(pathlib.Path.home() / f'.wine-swg{a.bits}')))
-        run = subprocess.run(['wine', str(exe)], env=env)
-        return run.returncode or (1 if errors else 0)
+        run = subprocess.run(['wine', str(exe)], env=env, capture_output=True, text=True)
+        sys.stdout.write(run.stdout)
+        sys.stderr.write(run.stderr)
+        lines = run.stdout.splitlines()
+        passes = sum(l.startswith('PASS: ') for l in lines)
+        problems = [l for l in lines if l.startswith(('FAIL: ', 'NOT RUN'))]
+        # Success needs a clean exit AND every expected check reported as passing: an exit
+        # code alone cannot tell "all passed" from "the fixtures never ran".
+        if run.returncode == 0 and not problems and passes == EXPECTED_RUNTIME_PASSES and types_ok:
+            print(f'OK: {passes + 1}/{EXPECTED_RUNTIME_PASSES + 1} checks passed')
+            return 0
+        print(f'NOT OK: exit={run.returncode} runtime passes={passes}/{EXPECTED_RUNTIME_PASSES} '
+              f'problems={len(problems)} types={"ok" if types_ok else "failed"}')
+        return run.returncode or 1
     finally:
         if a.keep:
             print('kept', tmp)
