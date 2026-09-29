@@ -153,10 +153,25 @@ def main():
         problems = [l for l in lines if l.startswith(('FAIL: ', 'NOT RUN'))]
         # Success needs a clean exit AND every expected check reported as passing: an exit
         # code alone cannot tell "all passed" from "the fixtures never ran".
-        if run.returncode == 0 and not problems and passes == EXPECTED_RUNTIME_PASSES and types_ok:
-            print(f'OK: {passes + 1}/{EXPECTED_RUNTIME_PASSES + 1} checks passed')
+        # Out-of-range time_t must be rejected by toWireTime (FATAL aborts), one process per field.
+        probes_expected = probes_passed = 0
+        for field in ('image', 'buff', 'chat'):
+            pr = subprocess.run(['wine', str(exe), '--probe', field], env=env, capture_output=True, text=True)
+            if 'SKIP:' in pr.stdout:
+                print(f'SKIP: {field} out-of-range time probe (time_t is 32-bit)')
+                continue
+            probes_expected += 1
+            rejected = pr.returncode != 0 and 'does not fit the legacy signed 32-bit time field' in pr.stderr
+            probes_passed += rejected
+            print(('PASS: ' if rejected else 'FAIL: ') + f'{field} time 2147483648 is rejected, not truncated')
+        passes += probes_passed
+        expected = EXPECTED_RUNTIME_PASSES + probes_expected
+        if probes_passed != probes_expected:
+            problems.append('probe')
+        if run.returncode == 0 and not problems and passes == expected and types_ok:
+            print(f'OK: {passes + 1}/{expected + 1} checks passed')
             return 0
-        print(f'NOT OK: exit={run.returncode} runtime passes={passes}/{EXPECTED_RUNTIME_PASSES} '
+        print(f'NOT OK: exit={run.returncode} runtime passes={passes}/{expected} '
               f'problems={len(problems)} types={"ok" if types_ok else "failed"}')
         return run.returncode or 1
     finally:

@@ -59,7 +59,19 @@ static bool chatTimeRoundTrip(long long t) {
  return static_cast<long long>(back.m_time)==t && rr.getSize()==0;
 }
 
-int main() {
+// Probe mode: set one field to a time_t just past INT32_MAX. The conversion must reject it
+// (FATAL aborts the process), never truncate. Only meaningful where time_t is 64-bit.
+static int probe(char const *field) {
+ if (sizeof(time_t)==4) { std::puts("SKIP: time_t is 32-bit; no out-of-range value exists"); return 0; }
+ time_t const t=static_cast<time_t>(2147483648LL);
+ if (!std::strcmp(field,"image")) { ImageDesignChangeMessage::install(); ImageDesignChangeMessage m; m.setStartingTime(t); }
+ else if (!std::strcmp(field,"buff")) { BuffBuilderChangeMessage::install(); BuffBuilderChangeMessage m; m.setStartingTime(t); }
+ else if (!std::strcmp(field,"chat")) { ChatLogEntry e(Unicode::String(),Unicode::String(),Unicode::String(),Unicode::String(),t); (void)e; }
+ std::puts("NOT REJECTED"); return 0;
+}
+
+int main(int argc, char **argv) {
+ if (argc==3 && !std::strcmp(argv[1],"--probe")) return probe(argv[2]);
  // First quest use in this process: pack's Command constructs age 1;
  // active and completed values receive ages 2 and 3. This is a legacy32
  // fixture, including the non-persisted relative-age field (not normalized).

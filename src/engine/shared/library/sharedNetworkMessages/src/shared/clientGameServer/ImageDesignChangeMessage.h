@@ -8,6 +8,7 @@
 
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/MessageQueue.h"
 #include "sharedNetworkMessages/ControllerMessageMacros.h"
+#include "sharedNetworkMessages/WireTime.h"
 
 class MemoryBlockManager;
 
@@ -282,7 +283,7 @@ inline void ImageDesignChangeMessage::setDesignType(DesignType const & designTyp
 
 inline void ImageDesignChangeMessage::setStartingTime(time_t const startingTime)
 {
-	m_startingTime = startingTime;
+	m_startingTime = toWireTime(startingTime);
 }
 
 //-----------------------------------------------------------------------
