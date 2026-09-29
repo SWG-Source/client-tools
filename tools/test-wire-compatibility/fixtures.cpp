@@ -12,6 +12,8 @@
 #include "Archive/AutoDeltaQueue.h"
 #include "sharedFoundation/AutoDeltaNetworkIdPackedMap.h"
 #include "sharedNetworkMessages/ChatOnRequestLog.h"
+#include "sharedNetworkMessages/ImageDesignChangeMessage.h"
+#include "sharedNetworkMessages/BuffBuilderChangeMessage.h"
 #include "unicodeArchive/UnicodeArchive.h"
 #include <cstdint>
 #include <cstdio>
@@ -32,6 +34,31 @@ static Archive::ByteStream literal(std::initializer_list<unsigned char> bytes) {
 static bool equal(Archive::ByteStream const &a, Archive::ByteStream const &b) {
  return a.getSize()==b.getSize() && (!a.getSize() || !std::memcmp(a.getBuffer(),b.getBuffer(),a.getSize()));
 }
+// Legacy timestamps are signed 32-bit time_t (Win32 _USE_32BIT_TIME_T; Linux -m32).
+// Encode T with the message's real pack(); the result must differ from the T=0 encoding only
+// in the 4 little-endian bytes at the legacy offset, and unpack() must return T as signed.
+template<class Msg> static bool timestampRoundTrip(int offset, long long t) {
+ Msg zero, msg; zero.setStartingTime(0); msg.setStartingTime(static_cast<time_t>(t));
+ Archive::ByteStream a, b; Msg::pack(&zero,a); Msg::pack(&msg,b);
+ if (a.getSize()!=b.getSize() || b.getSize()<static_cast<unsigned>(offset+4)) return false;
+ unsigned const u=static_cast<unsigned>(static_cast<int>(t));
+ for (unsigned i=0;i<b.getSize();++i) {
+  unsigned char const want = (i>=static_cast<unsigned>(offset) && i<static_cast<unsigned>(offset+4)) ? static_cast<unsigned char>(u>>(8*(i-offset))) : a.getBuffer()[i];
+  if (b.getBuffer()[i]!=want) return false; }
+ auto rr=b.begin(); MessageQueue::Data *d=Msg::unpack(rr);
+ bool const ok = static_cast<long long>(static_cast<Msg*>(d)->getStartingTime())==t && rr.getSize()==0;
+ delete d; return ok;
+}
+static bool chatTimeRoundTrip(long long t) {
+ ChatLogEntry e(Unicode::String(),Unicode::String(),Unicode::String(),Unicode::String(),static_cast<time_t>(t));
+ unsigned const u=static_cast<unsigned>(static_cast<int>(t));
+ Archive::ByteStream bytes; Archive::put(bytes,e);
+ unsigned char const want[20]={0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, (unsigned char)u,(unsigned char)(u>>8),(unsigned char)(u>>16),(unsigned char)(u>>24)};
+ if (bytes.getSize()!=20 || std::memcmp(bytes.getBuffer(),want,20)) return false;
+ ChatLogEntry back; auto rr=bytes.begin(); Archive::get(rr,back);
+ return static_cast<long long>(back.m_time)==t && rr.getSize()==0;
+}
+
 int main() {
  // First quest use in this process: pack's Command constructs age 1;
  // active and completed values receive ages 2 and 3. This is a legacy32
@@ -168,6 +195,16 @@ int main() {
   check(equal(bytes,expected),"ChatLogEntry timestamp encodes as 4 legacy32 bytes");
   ChatLogEntry back; auto rr=expected.begin(); Archive::get(rr,back);
   check(back.m_time==0x80000001u && rr.getSize()==0,"ChatLogEntry timestamp decodes with no trailing bytes");
+ }
+ ImageDesignChangeMessage::install(); BuffBuilderChangeMessage::install(); // creates their allocation pools
+ for (long long t : {-1LL, 0LL, 2147483647LL}) {
+  char name[128];
+  std::snprintf(name,sizeof(name),"ImageDesignChangeMessage startingTime %lld round-trips as signed legacy32",t);
+  check(timestampRoundTrip<ImageDesignChangeMessage>(33,t),name);
+  std::snprintf(name,sizeof(name),"BuffBuilderChangeMessage startingTime %lld round-trips as signed legacy32",t);
+  check(timestampRoundTrip<BuffBuilderChangeMessage>(16,t),name);
+  std::snprintf(name,sizeof(name),"ChatLogEntry time %lld round-trips as signed legacy32",t);
+  check(chatTimeRoundTrip(t),name);
  }
 #ifdef WIRE_TEST_MISSIONS
  MessageQueueMissionListResponse::DataVector missions;

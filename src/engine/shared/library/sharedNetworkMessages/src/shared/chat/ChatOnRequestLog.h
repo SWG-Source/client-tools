@@ -38,7 +38,7 @@ struct ChatLogEntry
     Unicode::String m_to;
     Unicode::String m_channel;
     Unicode::String m_message;
-    uint32_t m_time;
+    int32_t m_time;
 };
 
 namespace Archive

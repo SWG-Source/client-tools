@@ -29,6 +29,7 @@ const float REAL_MIN = FLT_MIN; const float REAL_MAX = FLT_MAX;
 #define PI_TIMES_2 (PI*2.0f)
 #define PI_OVER_2 (PI*0.5f)
 #define INLINE inline
+#define DLLEXPORT
 void Fatal(char const *format, ...);
 #define FATAL(c,a) do{ if(c) Fatal a; }while(0)
 #define DEBUG_FATAL(c,a) ((void)0)

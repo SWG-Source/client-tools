@@ -25,3 +25,17 @@ GameNetworkMessage::~GameNetworkMessage() {}
 #include "sharedMessageDispatch/Message.h"
 MessageDispatch::MessageBase::MessageBase(char const *) { std::abort(); }
 MessageDispatch::MessageBase::~MessageBase() {}
+// Pooled allocation and message registration are runtime infrastructure. The harness keeps
+// each pool's element size in the opaque m_allocator field and uses plain heap blocks.
+#include "sharedFoundation/MemoryBlockManager.h"
+#include "sharedFoundation/ExitChain.h"
+#include "sharedNetworkMessages/ControllerMessageFactory.h"
+#include <cstdint>
+MemoryBlockManager::MemoryBlockManager(char const *name, bool shared, int elementSize, int, int, int)
+: m_name(name), m_shared(shared), m_currentNumberOfElements(0),
+  m_allocator(reinterpret_cast<Allocator *>(static_cast<intptr_t>(elementSize))) {}
+MemoryBlockManager::~MemoryBlockManager() {}
+void *MemoryBlockManager::allocate(bool) { return ::operator new(static_cast<size_t>(reinterpret_cast<intptr_t>(m_allocator))); }
+void MemoryBlockManager::free(void *p) { ::operator delete(p); }
+void ExitChain::add(Function, char const *, int, bool) {}
+void ControllerMessageFactory::registerControllerMessageHandler(int32, ControllerMessagePackFunction, ControllerMessageUnpackFunction, bool) {}
