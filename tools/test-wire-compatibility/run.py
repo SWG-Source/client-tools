@@ -20,6 +20,8 @@ p.add_argument('--root', type=pathlib.Path, default=HERE.parents[1],
 p.add_argument('--no-32bit-time', action='store_true',
                help='omit _USE_32BIT_TIME_T on Win32 (for checkouts whose projects no longer define it)')
 p.add_argument('--types-only', action='store_true', help='run only the compile-time wire-width assertions')
+p.add_argument('--require-current-coverage', action='store_true',
+               help='fail if a tested helper is absent (use in current-head CI, not stock comparisons)')
 p.add_argument('--wine-arch', choices=['win32', 'win64', 'wow64'],
                help='Wine prefix architecture (does not change the compiled PE architecture)')
 p.add_argument('--artifacts', type=pathlib.Path,
@@ -182,6 +184,8 @@ def main():
         # A checkout that predates a helper (e.g. the stock oracle) reports exactly which checks
         # cannot apply; they are deducted and named in the result, never counted as passes.
         absent = [l for l in lines if l.startswith('ABSENT: ')]
+        if a.require_current_coverage and absent:
+            problems.append('required helper absent')
         for l in absent:
             m = re.search(r'all=(\d+) win64=(\d+)', l)
             expected -= int(m.group(1)) + (int(m.group(2)) if a.bits == 64 else 0)

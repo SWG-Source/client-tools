@@ -142,3 +142,7 @@ installations which reject pure 32-bit prefixes, use `--wine-arch win64` and poi
 `WINEPREFIX32` at an initialized 64-bit prefix. This only selects the runtime
 prefix: `--bits 32` still compiles a Win32 executable. GitHub's Ubuntu Wine packages
 use separate default prefixes for the two jobs.
+
+CI adds `--require-current-coverage`: an `ABSENT` helper report is a failure,
+so removing a checked helper cannot silently lower the CI pass requirement.
+Stock-oracle comparisons omit that flag and retain the documented absent checks.
