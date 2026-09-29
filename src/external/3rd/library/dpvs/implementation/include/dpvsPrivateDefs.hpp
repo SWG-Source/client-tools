@@ -62,7 +62,10 @@ namespace DPVS
 #	include "dpvsDefs.hpp"
 #endif
 
-#include <cstddef>	
+#include <cstddef>
+#if defined(_WIN64)
+#include <stdint.h>
+#endif
 
 									// we need to include this (not all compilers have size_t as built-in)
 
@@ -127,7 +130,12 @@ namespace DPVS
 #endif
 
 #if defined (DPVS_OS_WIN32)
+# if defined(_WIN64)
+#  define DPVS_CPU_X64
+#  define DPVS_CPU_NAME "X64"
+# else
 #	define DPVS_CPU_X86										// x86 series CPU
+# endif
 #	define DPVS_LITTLE_ENDIAN								// x86 processors are little-endian
 #elif defined (DPVS_OS_MAC)									// Apple Macintosh
 #	define DPVS_CPU_PPC
@@ -429,7 +437,11 @@ namespace DPVS
 typedef unsigned char			UINT8;					// 8-bit unsigned integer
 typedef short int				INT16;                  // 16-bit signed integer
 typedef unsigned short int		UINT16;                 // 16-bit unsigned integer
+#if defined(DPVS_CPU_X64)
+typedef uintptr_t			UPTR;					// unsigned integer large enough to hold a void*
+#else
 typedef unsigned int			UPTR;					// unsigned integer large enough to hold a void*
+#endif
 
 //------------------------------------------------------------------------
 // Make sure that certain typedefs really do have the intended sizes
