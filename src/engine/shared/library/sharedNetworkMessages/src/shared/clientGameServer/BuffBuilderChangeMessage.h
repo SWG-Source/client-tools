@@ -6,9 +6,9 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedNetworkMessages/NetworkMessageTimestamp.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/MessageQueue.h"
 #include "sharedNetworkMessages/ControllerMessageMacros.h"
-#include "sharedNetworkMessages/WireTime.h"
 class MemoryBlockManager;
 
 //-----------------------------------------------------------------------
@@ -124,7 +124,7 @@ inline void BuffBuilderChangeMessage::setRecipientId(NetworkId const & recipient
 
 inline void BuffBuilderChangeMessage::setStartingTime(time_t const startingTime)
 {
-	m_startingTime = toWireTime(startingTime);
+	m_startingTime = NetworkMessageTimestamp::fromTime(startingTime);
 }
 
 //-----------------------------------------------------------------------

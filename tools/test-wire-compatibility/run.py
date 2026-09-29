@@ -9,7 +9,8 @@ MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-EXPECTED_RUNTIME_PASSES = 40  # check() calls in fixtures.cpp; a run must report exactly these
+EXPECTED_RUNTIME_PASSES = 40  # check() calls that run on every ABI; a run must report exactly these
+EXPECTED_WIN64_ONLY_PASSES = 6  # out-of-range timestamp checks, which need a 64-bit time_t
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
 p = argparse.ArgumentParser()
@@ -153,21 +154,11 @@ def main():
         problems = [l for l in lines if l.startswith(('FAIL: ', 'NOT RUN'))]
         # Success needs a clean exit AND every expected check reported as passing: an exit
         # code alone cannot tell "all passed" from "the fixtures never ran".
-        # Out-of-range time_t must be rejected by toWireTime (FATAL aborts), one process per field.
-        probes_expected = probes_passed = 0
-        for field in ('image', 'buff', 'chat'):
-            pr = subprocess.run(['wine', str(exe), '--probe', field], env=env, capture_output=True, text=True)
-            if 'SKIP:' in pr.stdout:
-                print(f'SKIP: {field} out-of-range time probe (time_t is 32-bit)')
-                continue
-            probes_expected += 1
-            rejected = pr.returncode != 0 and 'does not fit the legacy signed 32-bit time field' in pr.stderr
-            probes_passed += rejected
-            print(('PASS: ' if rejected else 'FAIL: ') + f'{field} time 2147483648 is rejected, not truncated')
-        passes += probes_passed
-        expected = EXPECTED_RUNTIME_PASSES + probes_expected
-        if probes_passed != probes_expected:
-            problems.append('probe')
+        # Win64 adds the out-of-range timestamp checks; Win32 must report them as skipped instead.
+        expected = EXPECTED_RUNTIME_PASSES + (EXPECTED_WIN64_ONLY_PASSES if a.bits == 64 else 0)
+        skips = sum(l.startswith('SKIP: ') for l in lines)
+        if skips != (0 if a.bits == 64 else 1):
+            problems.append('skip')
         if run.returncode == 0 and not problems and passes == expected and types_ok:
             print(f'OK: {passes + 1}/{expected + 1} checks passed')
             return 0

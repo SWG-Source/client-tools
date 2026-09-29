@@ -7,10 +7,10 @@
 
 //-----------------------------------------------------------------------
 
+#include "sharedNetworkMessages/NetworkMessageTimestamp.h"
 #include "sharedNetworkMessages/GameNetworkMessage.h"
 #include "unicodeArchive/UnicodeArchive.h"
 #include "UnicodeUtils.h"
-#include "sharedNetworkMessages/WireTime.h"
 
 //-----------------------------------------------------------------------
 
@@ -31,7 +31,7 @@ struct ChatLogEntry
 	 , m_to(to)
 	 , m_channel(channel)
 	 , m_message(message)
-	 , m_time(toWireTime(time))
+	 , m_time(NetworkMessageTimestamp::fromTime(time))
 	 {
 	 }
 

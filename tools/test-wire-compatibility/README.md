@@ -31,10 +31,11 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
      `INT32_MAX`. The encoding may differ from the `0` encoding only in the four little-endian
      bytes at the legacy offset, and the decoded value is compared as signed: legacy `time_t`
      was signed 32-bit, so `FF FF FF FF` must decode as `-1`;
-   - out-of-range timestamps (Win64 only): setting each field to `2147483648` must be rejected by
-     `toWireTime` (a `FATAL`, so each field runs in its own process), never truncated. On Win32
-     `time_t` is 32-bit and no out-of-range value exists; these probes are reported as `SKIP` and
-     are not counted as passes;
+   - out-of-range timestamps (Win64 only, 6 checks): `INT32_MIN - 1` and `INT32_MAX + 1` must make
+     `NetworkMessageTimestamp::fromTime` throw `std::out_of_range`, caught explicitly in-process:
+     any other exception, no exception, or a crash is a failure. A rejected setter must keep the
+     previous value. On Win32 `time_t` is 32-bit and no out-of-range value exists; the run must
+     print one `SKIP` line instead, and nothing is counted as a pass;
    - `MessageQueueMissionListResponse` (empty header, two entries, decode with no trailing bytes).
 
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
@@ -79,16 +80,19 @@ projects no longer define it.
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
-| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 41/41 (3 probes skipped) | fails: width check, 4 fixtures, then `ReadException` |
-| this branch | 41/41 (3 probes skipped) | 44/44 |
-| 44652cba (unchecked narrowing) | 41/41 | 3 probes fail: 2147483648 silently truncated |
+| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 41/41 (out-of-range checks skipped) | fails: width check, 4 fixtures, then `ReadException` |
+| this branch | 41/41 (out-of-range checks skipped) | 47/47 |
+| a65d8032 (`FATAL` helper) | 41/41 | not OK: the process aborts; a crash is not a pass |
+| 44652cba (unchecked narrowing) | 41/41 | 6 fail: silently truncated, previous value lost |
 | e4e6b7f1 timestamp types (`uint32_t`) | 7 fail: `INT32_MIN`/`-1` decode unsigned | same |
 
 The legacy counters were `size_t`, which is 32-bit unsigned on Win32, so delta arithmetic is
 modulo 2^32; the legacy timestamps were `time_t`, which is 32-bit signed. Width alone is not
 enough: signed counters (before 1e62bab4) fail the map boundary fixtures, and unsigned
 timestamps (before 579db9f6) decode negative values as large positive ones. 64-bit builds keep
-`time_t` internally and convert once, with a range check, in `sharedNetworkMessages/WireTime.h`.
+`time_t` internally and convert once, with a range check, in
+`sharedNetworkMessages/NetworkMessageTimestamp.h`, identical to SWG-Source/src#35 4889e6aa. It throws
+`std::out_of_range`; this establishes the shared helper's policy, not graceful recovery at callers.
 
 ## Limits
 

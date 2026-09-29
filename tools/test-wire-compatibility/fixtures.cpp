@@ -17,6 +17,7 @@
 #include "unicodeArchive/UnicodeArchive.h"
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -59,19 +60,19 @@ static bool chatTimeRoundTrip(long long t) {
  return static_cast<long long>(back.m_time)==t && rr.getSize()==0;
 }
 
-// Probe mode: set one field to a time_t just past INT32_MAX. The conversion must reject it
-// (FATAL aborts the process), never truncate. Only meaningful where time_t is 64-bit.
-static int probe(char const *field) {
- if (sizeof(time_t)==4) { std::puts("SKIP: time_t is 32-bit; no out-of-range value exists"); return 0; }
- time_t const t=static_cast<time_t>(2147483648LL);
- if (!std::strcmp(field,"image")) { ImageDesignChangeMessage::install(); ImageDesignChangeMessage m; m.setStartingTime(t); }
- else if (!std::strcmp(field,"buff")) { BuffBuilderChangeMessage::install(); BuffBuilderChangeMessage m; m.setStartingTime(t); }
- else if (!std::strcmp(field,"chat")) { ChatLogEntry e(Unicode::String(),Unicode::String(),Unicode::String(),Unicode::String(),t); (void)e; }
- std::puts("NOT REJECTED"); return 0;
+// NetworkMessageTimestamp::fromTime must throw std::out_of_range for a time_t outside int32_t.
+// Only std::out_of_range counts; any other exception, or none, is a failure.
+template<class F> static bool throwsOutOfRange(F f) {
+ try { f(); } catch (std::out_of_range const &) { return true; } catch (...) { return false; }
+ return false;
+}
+template<class Msg> static bool setterRejectsAndPreserves(long long bad) {
+ Msg m; m.setStartingTime(static_cast<time_t>(12345));
+ bool const threw = throwsOutOfRange([&]{ m.setStartingTime(static_cast<time_t>(bad)); });
+ return threw && m.getStartingTime()==12345;
 }
 
-int main(int argc, char **argv) {
- if (argc==3 && !std::strcmp(argv[1],"--probe")) return probe(argv[2]);
+int main() {
  // First quest use in this process: pack's Command constructs age 1;
  // active and completed values receive ages 2 and 3. This is a legacy32
  // fixture, including the non-persisted relative-age field (not normalized).
@@ -221,6 +222,21 @@ int main(int argc, char **argv) {
   check(timestampRoundTrip<BuffBuilderChangeMessage>(16,t),name);
   std::snprintf(name,sizeof(name),"ChatLogEntry time %lld round-trips as signed legacy32",t);
   check(chatTimeRoundTrip(t),name);
+ }
+ // Out-of-range timestamps (host time_t wider than 32 bits): reject with std::out_of_range and
+ // leave the previous value in place. With 32-bit time_t no such value exists.
+ if (sizeof(time_t) > 4) {
+  for (long long bad : {-2147483648LL-1, 2147483648LL}) {
+   char name[128];
+   std::snprintf(name,sizeof(name),"ImageDesignChangeMessage rejects %lld and keeps the previous time",bad);
+   check(setterRejectsAndPreserves<ImageDesignChangeMessage>(bad),name);
+   std::snprintf(name,sizeof(name),"BuffBuilderChangeMessage rejects %lld and keeps the previous time",bad);
+   check(setterRejectsAndPreserves<BuffBuilderChangeMessage>(bad),name);
+   std::snprintf(name,sizeof(name),"ChatLogEntry rejects %lld with std::out_of_range",bad);
+   check(throwsOutOfRange([&]{ ChatLogEntry e(Unicode::String(),Unicode::String(),Unicode::String(),Unicode::String(),static_cast<time_t>(bad)); (void)e; }),name);
+  }
+ } else {
+  std::puts("SKIP: time_t is 32-bit; no out-of-range timestamp exists (6 checks)");
  }
 #ifdef WIRE_TEST_MISSIONS
  MessageQueueMissionListResponse::DataVector missions;
