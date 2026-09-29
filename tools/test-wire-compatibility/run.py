@@ -9,7 +9,7 @@ MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-EXPECTED_RUNTIME_PASSES = 43  # check() calls that run on every ABI; a run must report exactly these
+EXPECTED_RUNTIME_PASSES = 45  # check() calls that run on every ABI; a run must report exactly these
 EXPECTED_WIN64_ONLY_PASSES = 7  # out-of-range timestamp and count checks, which need 64-bit time_t/size_t
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
@@ -132,7 +132,8 @@ def main():
         if a.types_only:
             return 0 if types_ok else 1
         objs = []
-        for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + [tree / s for s in SOURCES] + [tree / s for s in OPTIONAL_SOURCES if (tree / s).exists()]):
+        count_sites = [HERE / 'count_sites.cpp'] if (tree / 'external/ours/library/archive/src/shared/ArchiveCount.h').exists() else []
+        for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + count_sites + [tree / s for s in SOURCES] + [tree / s for s in OPTIONAL_SOURCES if (tree / s).exists()]):
             obj = tmp / f'{i}.o'
             r = subprocess.run(cxx + ['-c', str(src), '-o', str(obj)], capture_output=True, text=True)
             if r.returncode:

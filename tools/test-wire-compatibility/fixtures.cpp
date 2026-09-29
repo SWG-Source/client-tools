@@ -256,6 +256,18 @@ int main() {
 #else
  std::puts("ABSENT: ArchiveCount helper (checkout predates count checking) all=3 win64=1");
 #endif
+ // Both sides of the real string encoder's short/long marker boundary (mirrors src#35 30cf4531).
+ for (size_t length : {size_t(65534), size_t(65535)}) {
+  std::string input(length, 'x'), decoded;
+  Archive::ByteStream encoded;
+  Archive::put(encoded, input);
+  auto expectedHeader = length == 65534 ? literal({254,255}) : literal({255,255,255,255,0,0});
+  bool const headerMatches = encoded.getSize() == expectedHeader.getSize() + length &&
+   std::memcmp(encoded.getBuffer(), expectedHeader.getBuffer(), expectedHeader.getSize()) == 0;
+  auto reader = encoded.begin(); Archive::get(reader, decoded);
+  check(headerMatches && decoded == input && reader.getSize() == 0,
+   length == 65534 ? "string 65534 uses legacy short header" : "string 65535 uses legacy long header");
+ }
 #ifdef WIRE_TEST_MISSIONS
  MessageQueueMissionListResponse::DataVector missions;
  MessageQueueMissionListResponse empty(missions, 7, true);

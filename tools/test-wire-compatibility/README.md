@@ -43,6 +43,12 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
    routing every call site through it is established by review, because an out-of-range size needs
    a container with more than 2^32 elements. A checkout without the helper (e.g. the stock oracle)
    prints `ABSENT:` naming the checks; they are deducted and reported, never counted as passes.
+4. **String length boundary** (every checkout): 65,534-byte and 65,535-byte strings through the real
+   encoder must produce the legacy short (`FE FF`) and long (`FF FF` + 32-bit length) headers and
+   decode with no trailing bytes.
+5. **Count-site compile coverage** (`count_sites.cpp`, mirrored verbatim from SWG-Source/src#35
+   30cf4531): instantiates every generic count-writing overload changed to use `ArchiveCount`. It is
+   compiled, never called; it is not an oversized-container test.
 
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
 `FAIL` or `NOT RUN`, and exactly `EXPECTED_RUNTIME_PASSES` checks report `PASS`. An exit code
@@ -86,8 +92,8 @@ projects no longer define it.
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
-| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 41/41 (out-of-range skipped; 3 count-helper checks absent) | fails: width check, 4 fixtures, then `ReadException` |
-| this branch | 44/44 (out-of-range skipped) | 51/51 |
+| SWG-Source/client-tools `master` 94945103 (legacy oracle on Win32) | 43/43 (out-of-range skipped; 3 count-helper checks absent) | fails: width check, 4 fixtures, then `ReadException` |
+| this branch | 46/46 (out-of-range skipped) | 53/53 |
 | a65d8032 (`FATAL` helper) | 41/41 | not OK: the process aborts; a crash is not a pass |
 | 44652cba (unchecked narrowing) | 41/41 | 6 fail: silently truncated, previous value lost |
 | e4e6b7f1 timestamp types (`uint32_t`) | 7 fail: `INT32_MIN`/`-1` decode unsigned | same |
