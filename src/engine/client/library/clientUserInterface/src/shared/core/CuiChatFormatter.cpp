@@ -247,7 +247,7 @@ void CuiChatFormatter::formatStandard  (const MessageQueueSpatialChat & spatialC
 	if (position == TP_First)
 	{
 		Unicode::String prefix;
-		IGNORE_RETURN (str.insert (0U, 1U, '\"'));
+		IGNORE_RETURN (str.insert (Unicode::String::size_type(0), Unicode::String::size_type(1), Unicode::unicode_char_t('\"')));
 		IGNORE_RETURN (str.append (1, '\"'));
 		IGNORE_RETURN (str.append (1, ','));
 		IGNORE_RETURN (str.append (1, ' '));
