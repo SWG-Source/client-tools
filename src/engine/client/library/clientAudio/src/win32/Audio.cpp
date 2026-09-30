@@ -1294,7 +1294,9 @@ bool Audio::install()
 
 	// Initialize the audio driver
 
-	s_maxDigitalMixerChannels = AIL_get_preference(DIG_MIXER_CHANNELS);
+	SINTa const maxDigitalMixerChannels = AIL_get_preference(DIG_MIXER_CHANNELS);
+	FATAL(maxDigitalMixerChannels < (std::numeric_limits<int>::min)() || maxDigitalMixerChannels > (std::numeric_limits<int>::max)(), ("Miles mixer channel count exceeds int range"));
+	s_maxDigitalMixerChannels = static_cast<int>(maxDigitalMixerChannels);
 
 	s_digitalDevice2d = AIL_open_digital_driver(getFrequency(), getBits(), getProviderSpec(getCurrent3dProvider()), 0);
 
@@ -1392,21 +1394,21 @@ void Audio::remove()
 	Audio::stopAllSounds();
 
 #ifdef _DEBUG
-	unsigned int const sample2dMapSize = s_sampleIdToSample2dMap.size();
+	size_t const sample2dMapSize = s_sampleIdToSample2dMap.size();
 	UNREF(sample2dMapSize);
 	DEBUG_WARNING(!s_sampleIdToSample2dMap.empty(), ("Sample 2d map not empty"));
 #endif // _DEBUG
 	s_sampleIdToSample2dMap.clear();
 
 #ifdef _DEBUG
-	unsigned int const sample3dMapSize = s_sampleIdToSample3dMap.size();
+	size_t const sample3dMapSize = s_sampleIdToSample3dMap.size();
 	UNREF(sample3dMapSize);
 	DEBUG_WARNING(!s_sampleIdToSample3dMap.empty(), ("Sample 3d map not empty"));
 #endif // _DEBUG
 	s_sampleIdToSample3dMap.clear();
 
 #ifdef _DEBUG
-	unsigned int const streamMapSize = s_sampleIdToSampleStreamMap.size();
+	size_t const streamMapSize = s_sampleIdToSampleStreamMap.size();
 	UNREF(streamMapSize);
 	DEBUG_WARNING(!s_sampleIdToSampleStreamMap.empty(), ("Sample stream map not empty"));
 #endif // _DEBUG
@@ -1436,8 +1438,8 @@ void Audio::remove()
 	}
 
 #ifdef _DEBUG
-	int const fileMapCount = s_fileMap.size();
-	DEBUG_WARNING((fileMapCount > 0), ("File handles (%d) are still allocated.", fileMapCount));
+	size_t const fileMapCount = s_fileMap.size();
+	DEBUG_WARNING((fileMapCount > 0), ("File handles (%" PRIu64 ") are still allocated.", static_cast<uint64_t>(fileMapCount)));
 #endif // _DEBUG
 
 	clearMusicOffsets();
