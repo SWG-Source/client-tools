@@ -63,6 +63,9 @@
 
 #if TRY_FOR_SSE
 #include "sharedMath/SseMath.h"
+#if defined(_M_X64)
+#include <xmmintrin.h>
+#endif
 #endif
 
 // ==============================================================================
@@ -1612,6 +1615,99 @@ void SoftwareBlendSkeletalShaderPrimitive::fillVertexBuffer(int transformCount, 
 // ============================================================================
 #if TRY_FOR_SSE
 // ============================================================================
+#if defined(_M_X64)
+namespace
+{
+	void prefetchInitial(void const *begin, void const *end)
+	{
+		UINT_PTR const first = reinterpret_cast<UINT_PTR>(begin);
+		UINT_PTR const last = reinterpret_cast<UINT_PTR>(end);
+		if (last - first >= 256)
+			for (unsigned offset = 0; offset < 256; offset += 32)
+				_mm_prefetch(reinterpret_cast<char const *>(first + offset), _MM_HINT_NTA);
+	}
+
+	void prefetchNext(uint8 const *&next, void const *current, void const *end)
+	{
+		UINT_PTR cursor = reinterpret_cast<UINT_PTR>(next);
+		UINT_PTR const last = reinterpret_cast<UINT_PTR>(end);
+		if (cursor <= last && last - cursor >= 32)
+		{
+			UINT_PTR const limit = reinterpret_cast<UINT_PTR>(current) + 256;
+			while (cursor < limit)
+			{
+				_mm_prefetch(reinterpret_cast<char const *>(cursor), _MM_HINT_NTA);
+				cursor += 32;
+			}
+			next = reinterpret_cast<uint8 const *>(cursor);
+		}
+	}
+
+	__m128 rotateHard(PoseModelTransform const &transform, Vector const &v)
+	{
+		__m128 const x = _mm_mul_ps(_mm_load_ps(transform.matrix[0]), _mm_set1_ps(v.x));
+		__m128 const y = _mm_mul_ps(_mm_load_ps(transform.matrix[1]), _mm_set1_ps(v.y));
+		__m128 const z = _mm_mul_ps(_mm_load_ps(transform.matrix[2]), _mm_set1_ps(v.z));
+		return _mm_add_ps(_mm_add_ps(x, y), z);
+	}
+
+	template <bool dot3>
+	void fillHardX64(fill_vb_work const *w)
+	{
+		static_assert(sizeof(SourceVertex) == SOURCE_VERTEX_SIZE, "hard vertex layout");
+		static_assert(sizeof(Dot3Vector) == SOURCE_DOT3_SIZE, "dot3 layout");
+		static_assert(sizeof(PoseModelTransform) == 64, "pose matrix layout");
+		static_assert(sizeof(PaddedVector) == 16, "packed scratch layout");
+		prefetchInitial(w->m_sourceVectors, w->m_sourceVectorsEnd);
+		if (dot3)
+			prefetchInitial(w->m_sourceDot3Vectors, w->m_sourceDot3VectorsEnd);
+		unsigned const saved = _mm_getcsr();
+		_mm_setcsr(saved | MXCSR_FLUSH_TO_ZERO | MXCSR_PRECISION_MASK |
+			MXCSR_UNDERFLOW_MASK | MXCSR_OVERFLOW_MASK | MXCSR_DENORMAL_MASK);
+		while (w->m_sourceVectors != w->m_sourceVectorsEnd)
+		{
+			prefetchNext(w->m_sourceVectorPrefetch, w->m_sourceVectors, w->m_sourceVectorsEnd);
+			if (dot3)
+				prefetchNext(w->m_sourceVectorDot3Prefetch, w->m_sourceDot3Vectors, w->m_sourceDot3VectorsEnd);
+			SourceVertex const &source = *w->m_sourceVectors;
+			PoseModelTransform const &transform = w->transformArray[source.m_firstTransformData.m_transformIndex];
+			__m128 const x = _mm_mul_ps(_mm_load_ps(transform.matrix[0]), _mm_set1_ps(source.m_position.x));
+			__m128 const y = _mm_mul_ps(_mm_load_ps(transform.matrix[1]), _mm_set1_ps(source.m_position.y));
+			__m128 const z = _mm_mul_ps(_mm_load_ps(transform.matrix[2]), _mm_set1_ps(source.m_position.z));
+			// Keep the assembly's pairwise sum, including the translation's fourth lane.
+			__m128 const position = _mm_add_ps(_mm_add_ps(x, y), _mm_add_ps(z, _mm_load_ps(transform.matrix[3])));
+			_mm_store_ps(&w->position.x, position);
+			_mm_store_ps(&w->maxVector.x, _mm_max_ps(position, _mm_load_ps(&w->maxVector.x)));
+			_mm_store_ps(&w->minVector.x, _mm_min_ps(position, _mm_load_ps(&w->minVector.x)));
+			_mm_store_ps(&w->normal.x, rotateHard(transform, source.m_normal));
+			if (dot3)
+				_mm_store_ps(&w->dot3.x, rotateHard(transform, w->m_sourceDot3Vectors->m_dot3Vector));
+			memcpy(w->viter, &w->position.x, 3 * sizeof(float));
+			memcpy(w->viter + 12, &w->normal.x, 3 * sizeof(float));
+			if (dot3)
+			{
+				memcpy(w->dot3viter, &w->dot3.x, 3 * sizeof(float));
+				memcpy(w->dot3viter + 12, &w->m_sourceDot3Vectors->m_flipState, sizeof(float));
+				++w->m_sourceDot3Vectors;
+				w->dot3viter += w->vertexSize;
+			}
+			++w->m_sourceVectors;
+			w->viter += w->vertexSize;
+		}
+		_mm_setcsr(saved);
+	}
+}
+
+void _fillDot3VertexBufferHard_sse(fill_vb_work const *w)
+{
+	fillHardX64<true>(w);
+}
+
+void _fillVertexBufferHard_sse(fill_vb_work const *w)
+{
+	fillHardX64<false>(w);
+}
+#else
 void _fillDot3VertexBufferHard_sse(const fill_vb_work *const w)
 {
 	uint32 mxcsrSave, mxcsrTemp;
@@ -2115,6 +2211,7 @@ void _fillVertexBufferHard_sse(const fill_vb_work *const w)
 	//--------------------------------------------------------------------------------------------
 }
 // ============================================================================
+#endif // _M_X64
 #endif
 
 void fill_vb_work::fillDot3VertexBufferHard() const
