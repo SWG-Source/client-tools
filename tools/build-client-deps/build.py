@@ -24,6 +24,27 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def ensure_owner(output, owner):
+    """Validate or establish ownership while the caller holds .build-lock."""
+    owner_file = output / 'owner.json'
+    try:
+        saved = json.loads(owner_file.read_text())
+    except FileNotFoundError:
+        if any(path.name != '.build-lock' for path in output.iterdir()):
+            raise RuntimeError('Output contains unowned files; choose a new empty output directory; existing contents were preserved')
+    else:
+        if saved != owner:
+            raise RuntimeError('Output belongs to another checkout/platform/configuration; choose a private output directory')
+        return
+    # A failed write/publication leaves unowned staging data and blocks adoption.
+    pending = output / 'owner.pending'
+    with pending.open('x') as stream:
+        stream.write(json.dumps(owner, indent=2))
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(pending, owner_file)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
@@ -63,10 +84,7 @@ def main():
             time.sleep(0.5)
     try:
         owner = dict(checkout=str(ROOT.resolve()), platform=args.platform, configuration=args.configuration)
-        owner_file = output / 'owner.json'
-        if owner_file.exists() and json.loads(owner_file.read_text()) != owner:
-            raise RuntimeError('Output belongs to another checkout/platform/configuration; choose a private output directory')
-        owner_file.write_text(json.dumps(owner, indent=2))
+        ensure_owner(output, owner)
         build(args, archive, output)
     finally:
         lock.rmdir()
