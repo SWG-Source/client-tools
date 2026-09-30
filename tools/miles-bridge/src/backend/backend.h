@@ -32,12 +32,24 @@ struct Backend {
           metadataInvocations(0) {
         require(MilesImage93::validBudget(imageBudgetBytes), "explicit upload byte budget");
         driverId = MilesWire::Handle();
+        require(expectedPath && *expectedPath, "expected vendor module path");
+        char expectedAbsolute[MAX_PATH] = {};
+        const DWORD expectedLength = GetFullPathNameA(expectedPath, MAX_PATH, expectedAbsolute, 0);
+        require(expectedLength && expectedLength < MAX_PATH, "normalize expected vendor module path");
         require(GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                                    reinterpret_cast<LPCSTR>(&::AIL_startup), &module) != 0,
                 "hold actual imported vendor module");
         char loaded[MAX_PATH] = {};
         DWORD n = GetModuleFileNameA(module, loaded, MAX_PATH);
-        if (!n || n >= MAX_PATH || _stricmp(loaded, expectedPath)) {
+        char loadedAbsolute[MAX_PATH] = {};
+        const DWORD loadedLength = n && n < MAX_PATH ?
+            GetFullPathNameA(loaded, MAX_PATH, loadedAbsolute, 0) : 0;
+        if (!loadedLength || loadedLength >= MAX_PATH) {
+            FreeLibrary(module);
+            module = 0;
+            throw std::runtime_error("normalize imported vendor module path");
+        }
+        if (_stricmp(loadedAbsolute, expectedAbsolute)) {
             FreeLibrary(module);
             module = 0;
             throw std::runtime_error("imported module path mismatch");

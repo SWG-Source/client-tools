@@ -116,7 +116,7 @@ The actual Audio and listener sources compile against the facade in the
 development-only target. Explicit bootstrap, admitted file callbacks and paired
 shutdown are connected in that source path. A Debug-x64 development game relink
 has zero unresolved symbols; the default game build still selects direct Miles.
-Actual Audio startup and teardown remain untested. Media-format qualification, callback
+The bounded game startup below reaches Audio initialization, but startup and teardown are not qualified. Media-format qualification, callback
 scheduling in gameplay, device behavior and fidelity are still open. Do not
 use this helper as the game's audio backend yet.
 
@@ -481,3 +481,26 @@ and the owned sink and Wine server were cleaned up.
 The global engine bootstrap remains installed until test-process exit. This
 does not test real Audio/global ExitChain shutdown, native-device fidelity or a
 linked x64 game.
+
+## Relative module path and actual game startup — 2026-09-30
+
+The first Debug-x64 game startup failed before creating a window: the host
+compared the configured relative `helper-x86/Mss32.dll` with the loader's absolute
+path. Both paths now pass through `GetFullPathNameA` before the full-path
+comparison. Empty, failed, truncated and mismatching paths remain rejected.
+The client and host also preserve standard-exception diagnostics while retaining
+the existing terminal failure policy and callback ownership.
+
+VS2013 rebuilt the x86 host and x64 pipe archive with `/W4 /WX` and relinked
+the actual development game with zero warnings/errors. With the same relative
+configuration and original DLL under GE-Proton11-7, the game passed the previous
+handshake failure, reported `Audio: Finished initializing`, loaded DPVS and
+created its window. Game SHA-256:
+`1c0e27caa4a45af9fc0d28f67ccac01a0a82c655b14a5a21eb9af0c4d86dd0a5`.
+Host SHA-256: `dcaf9cb18a30a1b5e82ec759a7ac5851a2dfc15e63d2b4cdf8de26fc78bcd223`.
+
+**The overall startup/close check failed.** No login screen was verified, and
+the ordinary window-close request timed out. The helper also created an unwanted
+console window. The missing Bink DLL warning remains an unresolved media blocker.
+This private null-sink/headless run involved no login or gameplay and establishes
+no native-device or audio-fidelity claim. The original failed run is retained.

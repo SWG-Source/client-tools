@@ -123,6 +123,13 @@ void host(int argc,char **argv){
 }
 }
 int main(int argc,char **argv){
-    try {host(argc,argv);}catch(...){MilesHostRuntime50::fatal();}
+    try {host(argc,argv);}
+    catch(const std::exception &error){
+        OutputDebugStringA("Miles host failure: ");
+        OutputDebugStringA(error.what());
+        OutputDebugStringA("\n");
+        MilesHostRuntime50::fatal();
+    }
+    catch(...){MilesHostRuntime50::fatal();}
     return 0;
 }

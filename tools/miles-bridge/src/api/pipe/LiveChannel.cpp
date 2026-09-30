@@ -48,6 +48,9 @@ class LiveChannel : public ClientMilesPipe::Channel {
             exchange(MilesWire::Hello, MilesWire::Call(),
                      MilesTransport::Bytes(random.data(), random.size()), MilesTransport::Bytes(),std::vector<MilesWire::Handle>(),0);
         require(hello.result.transport_status == StartupBridge::Success, "Hello accepted");
+        }catch(const std::exception &error){
+            if(runtime_){runtime_->fail();ClientMilesPrivate52::fail(ClientMilesPrivate52::PrivateException,error.what());}
+            throw;
         }catch(...){if(runtime_){runtime_->fail();ClientMilesPrivate52::fail(ClientMilesPrivate52::PrivateException,"Miles connection failed after callback ownership transfer");}throw;}
     }
 
@@ -149,6 +152,9 @@ Session *connectSession(const char *host,const char *dll,std::shared_ptr<void> e
     try {
         Channel *channel=new LiveChannel(host,dll,enginePin,adopted,uploadBudgetBytes);
         return new Session(channel,*adopted,callbackPin,uploadBudgetBytes);
+    }catch(const std::exception &error){
+        if(adopted){adopted->fail();ClientMilesPrivate52::fail(ClientMilesPrivate52::PrivateException,error.what());}
+        throw;
     }catch(...){
         if(adopted){adopted->fail();ClientMilesPrivate52::fail(ClientMilesPrivate52::PrivateException,"Miles session composition failed after ownership transfer");} // retained roots
         throw;
