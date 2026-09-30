@@ -59,9 +59,16 @@ for `2d_texture.vsh`, `2d.vsh` and `ui.vsh`. Both the Wine builtin and signed
 modern compiler had rejected the same `point` syntax. The diagnostics are not
 part of the renderer source.
 
-This closes the observed syntax failure only. The client still showed a black
-window and timed out on ordinary close in that bounded startup check. No login,
-gameplay, shader-bytecode or visual-equivalence pass is claimed. The stock
-Win32 renderer embeds compiler 5.04.00.3900; `_31` is a different version.
+This closes the observed syntax failure only. The initial X11 window capture
+was black, but a subsequent compositor capture proved that the client was
+rendering a splash screen and a resolution warning. The X11 capture was not a
+valid rendering sensor. With a virtual desktop large enough for the client
+window and its borders, the rebuilt product (without trace instrumentation)
+reached the original login screen under Proton. No credentials or server
+connection were used. Ordinary-close completion and recurring sample-allocation
+warnings remain unresolved; there is no full runtime acceptance pass.
+
+The stock Win32 renderer embeds compiler 5.04.00.3900; `_31` is a different
+version. No gameplay, shader-bytecode or visual-equivalence pass is claimed.
 Representative shader/rendering comparison and native Windows runtime remain
 required before this path is qualified.
