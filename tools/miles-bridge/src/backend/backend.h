@@ -281,6 +281,8 @@ struct Backend {
             break;
         case MilesWire::AIL_startup:
         case MilesWire::AIL_shutdown:
+        case MilesWire::AIL_lock:
+        case MilesWire::AIL_unlock:
         case MilesWire::SessionClose:
             break;
         default:
@@ -308,6 +310,13 @@ struct Backend {
         }
         if (!started || shutdown)
             return out;
+        if (h.opcode == MilesWire::AIL_lock || h.opcode == MilesWire::AIL_unlock) {
+            // Genuine native counter operations. Neither return proves producer quiescence.
+            if (h.opcode == MilesWire::AIL_lock) ::AIL_lock();
+            else ::AIL_unlock();
+            out.result.transport_status = Success;
+            return out;
+        }
         if (h.opcode == MilesWire::AIL_open_digital_driver) {
             if (driver)
                 return out;

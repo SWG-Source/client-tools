@@ -21,12 +21,14 @@ public:
         ClientMiles::FileCloseCallback, ClientMiles::FileSeekCallback,
         ClientMiles::FileReadCallback, std::shared_ptr<void> callbackLifetime);
     // Before command send. Resources already verified by genuine forward registry.
-    // Fresh local admission chosen here; ordinary commands only, lease must be zero.
+    // Fresh local admission chosen here. Action is derived from the trusted opcode,
+    // and lease is the value returned after the previous settled command.
     bool publish(uint64_t wire, uint64_t lane,
-        const std::vector<MilesWire::Handle> &resources);
+        const std::vector<MilesWire::Handle> &resources,
+        MilesCoordinator::Action action=MilesCoordinator::Ordinary, uint64_t lease=0);
     // Only after full opcode-specific reply validation. Waits for causal ACK join
     // then consumes the settled command. This does not certify SDK semantic success.
-    bool returned(uint64_t wire);
+    bool returned(uint64_t wire, bool actionApplied=true, uint64_t *settledLease=0);
     void fail(); // async request; control thread alone mutates coordinator/Endpoint
     bool failed() const;
     HANDLE failureEvent() const; // borrowed; outer command wait must observe it

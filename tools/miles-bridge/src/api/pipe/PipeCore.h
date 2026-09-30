@@ -85,6 +85,8 @@ void set_listener_3D_orientation(HDIGDRIVER driver, float faceX, float faceY, fl
                                  float upX, float upY, float upZ);
 void set_3D_rolloff_factor(HDIGDRIVER driver, float factor);
 void serve();
+void lock();
+void unlock();
 int32_t active_sample_count(HDIGDRIVER driver);
 int32_t digital_CPU_percent(HDIGDRIVER driver);
 int32_t digital_latency(HDIGDRIVER driver);

@@ -11,8 +11,8 @@ public:
     enum CommandState { Empty, Executing, ReturnedWaiting, Settled };
     HostAssociationMapper(uint64_t session, uint64_t backgroundLane,
         MilesCoordinator::Coordinator &, SessionFileOwner &, size_t maxReverse);
-    // This slice accepts Ordinary actions only. Lock/unlock need a dispatcher
-    // outcome contract before they may change lease state at completion.
+    // Actions are chosen from trusted forward opcodes. A validated refusal must
+    // report actionApplied=false; it cannot acquire or release a lease.
     // Must succeed before the command is sent. Resources have already passed
     // the session's genuine registry checks. Wire and local IDs are distinct.
     MilesCoordinator::Error publishCommand(uint64_t wireRequest, uint64_t admission,
@@ -20,7 +20,8 @@ public:
         const std::vector<MilesWire::Handle> &resources, bool cleanup = false);
     // Forward reply has passed full opcode/envelope/value validation elsewhere.
     // true records it, even if causal ACKs still prevent settlement. Never waits.
-    bool observeForwardReturn(uint64_t authenticatedSession, uint64_t wireRequest);
+    bool observeForwardReturn(uint64_t authenticatedSession, uint64_t wireRequest,
+                              bool actionApplied=true);
     // Outer command result owner explicitly consumes a Settled result once.
     bool consumeCommand(uint64_t wireRequest);
     enum ControlResult { FileQueued, AckConsumed, ControlRejected, ControlFailedUnanswered };
@@ -55,7 +56,8 @@ private:
     struct Command {
         uint64_t wire, admission, lane, lease;
         CommandState state;
-        Command() : wire(0), admission(0), lane(0), lease(0), state(Empty) {}
+        bool actionApplied;
+        Command() : wire(0), admission(0), lane(0), lease(0), state(Empty), actionApplied(false) {}
     };
     uint64_t session, backgroundLane, lastWire, lastReverse, lastIntake;
     MilesCoordinator::Coordinator &coordinator;

@@ -20,8 +20,8 @@ template<class Result, class Action> Result guarded(Action action) {
     }
 }
 }
-// Partial plain surface: 56 guarded definitions backed by this selected Core.
-// Remaining public declarations are listed in composition113 coverage.json.
+// Partial plain surface: 58 guarded definitions backed by this selected Core.
+// EOS registration and both sample-file setters remain unimplemented.
 namespace ClientMiles {
 int32_t WAV_info(const void *fileImage,SampleInformation *result) {
     return guarded<int32_t>([=]() -> int32_t { return Core::WAV_info(fileImage,result); });
@@ -73,6 +73,12 @@ void set_listener_3D_orientation(HDIGDRIVER driver, float x, float y, float z, f
 }
 void set_3D_rolloff_factor(HDIGDRIVER driver, float factor) {
     guarded<void>([=]() -> void { Core::set_3D_rolloff_factor(driver, factor); });
+}
+void lock() {
+    guarded<void>([]() -> void { Core::lock(); });
+}
+void unlock() {
+    guarded<void>([]() -> void { Core::unlock(); });
 }
 void serve() {
     guarded<void>([=]() -> void { Core::serve(); });

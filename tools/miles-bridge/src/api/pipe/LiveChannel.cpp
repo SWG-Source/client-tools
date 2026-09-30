@@ -9,7 +9,7 @@ uint64_t incarnation(const std::string &text){uint64_t value=0;for(unsigned i=0;
 class LiveChannel : public ClientMilesPipe::Channel {
   public:
     LiveChannel(const char *hostExecutable,const char *originalDll,std::shared_ptr<void> enginePin,
-        MilesClientRuntime53::Runtime *&adopted, uint32_t uploadBudgetBytes) : runtime_(0),next_(0) {
+        MilesClientRuntime53::Runtime *&adopted, uint32_t uploadBudgetBytes) : runtime_(0),next_(0),lease_(0) {
         try {
         require(MilesImage93::validBudget(uploadBudgetBytes), "explicit upload byte budget");
         char budget[16];sprintf_s(budget,"%lu",static_cast<unsigned long>(uploadBudgetBytes));
@@ -64,7 +64,7 @@ class LiveChannel : public ClientMilesPipe::Channel {
     ChildProcess child_;
     std::unique_ptr<Endpoint> command_;
     MilesClientRuntime53::Runtime *runtime_;
-    uint64_t next_;
+    uint64_t next_,lease_;
 
     StartupBridge::OwnedReply exchange(uint32_t opcode,const MilesWire::Call &fields,
         MilesTransport::Bytes payload,MilesTransport::Bytes text,const std::vector<MilesWire::Handle> &resources,
@@ -72,10 +72,11 @@ class LiveChannel : public ClientMilesPipe::Channel {
       try {
         require(next_!=(std::numeric_limits<uint64_t>::max)(),"command ID exhausted");
         MilesWire::Header header={};header.magic=MilesWire::Magic;header.version=MilesWire::Version;
-        header.kind=MilesWire::Request;header.opcode=opcode;header.request=++next_;header.lane=1;
+        header.kind=MilesWire::Request;header.opcode=opcode;header.request=++next_;header.lane=1;header.lock_lease=lease_;
+        const MilesCoordinator::Action action=MilesCoordinator::actionForOpcode(opcode);
         std::vector<unsigned char> frame;
         require(MilesTransport::encodeCall(header,fields,payload,text,frame),"encode call");
-        if(opcode!=MilesWire::Hello)require(runtime_->publish(header.request,header.lane,resources),"publish before send");
+        if(opcode!=MilesWire::Hello)require(runtime_->publish(header.request,header.lane,resources,action,lease_),"publish before send");
         require(command_->send(bytes(frame)),"command send");
         ULONGLONG begin=GetTickCount64();
         for(;;){
@@ -99,7 +100,7 @@ class LiveChannel : public ClientMilesPipe::Channel {
         }else require(StartupBridge::decodeReply(bytes(frame),header,out),"typed reply/context");
         if(opcode!=MilesWire::Hello){
             require(replyOwner && replyOwner->validateReply(opcode,fields,out),"request and owner reply validation before settlement");
-            require(runtime_->returned(header.request),"forward and callback ACK join");
+            require(runtime_->returned(header.request,out.result.transport_status==StartupBridge::Success,&lease_),"forward and callback ACK join");
         }
         return out;
       }catch(...){runtime_->fail();throw;}

@@ -17,14 +17,17 @@ struct Ticket {
     enum Kind { Prepare, Publish, Returned } kind;
     Event done;
     bool begun,ok;
-    uint64_t wire,lane,registration;
+    uint64_t wire,lane,registration,lease;
+    MilesCoordinator::Action action;
+    bool actionApplied;
     ClientMiles::FileOpenCallback open;
     ClientMiles::FileCloseCallback close;
     ClientMiles::FileSeekCallback seek;
     ClientMiles::FileReadCallback read;
     std::shared_ptr<void> lifetime;
     std::vector<MilesWire::Handle> resources;
-    explicit Ticket(Kind k):kind(k),begun(false),ok(false),wire(0),lane(0),registration(0),
+    explicit Ticket(Kind k):kind(k),begun(false),ok(false),wire(0),lane(0),registration(0),lease(0),
+        action(MilesCoordinator::Ordinary),actionApplied(true),
         open(0),close(0),seek(0),read(0){}
 private:Ticket(const Ticket &);Ticket &operator=(const Ticket &);
 };
@@ -79,7 +82,7 @@ struct Runtime::State {
             if(t->kind!=Ticket::Returned || !mapper)throw std::runtime_error("pending observation");
             if(mapper->commandState()==HostAssociationMapper::Settled){
                 if(!mapper->consumeCommand(t->wire))throw std::runtime_error("consume");
-                activeWire=0;complete(t);
+                activeWire=0;t->lease=coordinator->lease();complete(t);
             }
             return;
         }
@@ -100,19 +103,19 @@ struct Runtime::State {
                 throw std::runtime_error("command identity");
             const uint64_t admission=lastAdmission+1;
             MilesCoordinator::Error e=mapper
-                ?mapper->publishCommand(t->wire,admission,t->lane,0,MilesCoordinator::Ordinary,t->resources)
-                :coordinator->admitGame(session,admission,t->lane,0,MilesCoordinator::Ordinary,t->resources);
+                ?mapper->publishCommand(t->wire,admission,t->lane,t->lease,t->action,t->resources)
+                :coordinator->admitGame(session,admission,t->lane,t->lease,t->action,t->resources);
             if(e!=MilesCoordinator::Ok)throw std::runtime_error("admit command");
             lastAdmission=admission;lastWire=t->wire;activeWire=t->wire;complete(t);
         }else{
             if(!activeWire || t->wire!=activeWire)throw std::runtime_error("return identity");
             if(mapper){
-                if(!mapper->observeForwardReturn(session,t->wire))throw std::runtime_error("forward return");
+                if(!mapper->observeForwardReturn(session,t->wire,t->actionApplied))throw std::runtime_error("forward return");
                 if(mapper->commandState()!=HostAssociationMapper::Settled)return;
                 if(!mapper->consumeCommand(t->wire))throw std::runtime_error("consume");
-            }else if(coordinator->completeAdmission(session,lastAdmission)!=MilesCoordinator::Ok)
+            }else if(coordinator->completeAdmission(session,lastAdmission,t->actionApplied)!=MilesCoordinator::Ok)
                 throw std::runtime_error("preparation-free return");
-            activeWire=0;complete(t);
+            activeWire=0;t->lease=coordinator->lease();complete(t);
         }
     }
     void run(){
@@ -179,10 +182,19 @@ bool Runtime::awaitReady(){HANDLE events[]={state->ready.h,state->terminal.h};DW
 bool Runtime::prepare(uint64_t r,ClientMiles::FileOpenCallback o,ClientMiles::FileCloseCallback c,ClientMiles::FileSeekCallback s,ClientMiles::FileReadCallback rd,std::shared_ptr<void> pin){
     try{std::shared_ptr<Ticket> t(new Ticket(Ticket::Prepare));t->registration=r;t->open=o;t->close=c;t->seek=s;t->read=rd;t->lifetime=pin;return state->post(t);}catch(...){fail();return false;}
 }
-bool Runtime::publish(uint64_t wire,uint64_t lane,const std::vector<MilesWire::Handle> &resources){
-    try{std::shared_ptr<Ticket> t(new Ticket(Ticket::Publish));t->wire=wire;t->lane=lane;t->resources=resources;return state->post(t);}catch(...){fail();return false;}
+bool Runtime::publish(uint64_t wire,uint64_t lane,const std::vector<MilesWire::Handle> &resources,
+    MilesCoordinator::Action action,uint64_t lease){
+    try{std::shared_ptr<Ticket> t(new Ticket(Ticket::Publish));t->wire=wire;t->lane=lane;t->resources=resources;t->action=action;t->lease=lease;return state->post(t);}catch(...){fail();return false;}
 }
-bool Runtime::returned(uint64_t wire){try{std::shared_ptr<Ticket> t(new Ticket(Ticket::Returned));t->wire=wire;return state->post(t);}catch(...){fail();return false;}}
+bool Runtime::returned(uint64_t wire,bool actionApplied,uint64_t *settledLease){
+    try {
+        std::shared_ptr<Ticket> t(new Ticket(Ticket::Returned));
+        t->wire=wire;t->actionApplied=actionApplied;
+        if(!state->post(t))return false;
+        if(settledLease)*settledLease=t->lease;
+        return true;
+    }catch(...){fail();return false;}
+}
 void Runtime::fail(){state->requestFailure();}
 bool Runtime::failed() const{return state->isFailed();}
 HANDLE Runtime::failureEvent() const{return state->terminal.h;}

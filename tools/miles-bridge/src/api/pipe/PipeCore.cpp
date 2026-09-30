@@ -133,7 +133,7 @@ intptr_t preferenceResult(const StartupBridge::OwnedReply &reply) {
 namespace ClientMilesPipe {
 Session::Session(Channel *channel, MilesClientRuntime53::Runtime &runtime,
     std::shared_ptr<void> callbackCodeLifetime, uint32_t uploadBudgetBytes)
-    : started(false), stopped(false), samples(new SampleState), channel_(channel), closed_(false),
+    : started(false), stopped(false), samples(new SampleState), commandThread_(GetCurrentThreadId()), channel_(channel), closed_(false),
       faulted_(false), runtime_(runtime), callbackCodeLifetime_(callbackCodeLifetime),
       filesPrepared_(false), filesInstalled_(false), uploadBudgetBytes_(uploadBudgetBytes),
       uploadPhase_(UploadIdle), uploadId_(), uploadBytes_(0), uploadOpcode_(0), sourceView_(0) {
@@ -153,6 +153,7 @@ Session &Session::selected() {
     MilesCallbackGuard47::requireForwardAllowed();
     if (!selectedSession)
         fail(ClientMilesPipeCore57::FailureReason::WrongState, "Miles implementation not selected");
+    selectedSession->requireCommandThread();
     return *selectedSession;
 }
 
@@ -163,7 +164,13 @@ void Session::rejectResult() {
     fail(ClientMilesPipeCore57::FailureReason::BackendFailed, "invalid sample reply; outcome uncertain");
 }
 
+void Session::requireCommandThread() const {
+    if(GetCurrentThreadId()!=commandThread_)
+        fail(ClientMilesPipeCore57::FailureReason::WrongState,"Miles command called from another thread");
+}
+
 void Session::requireAvailable() const {
+    requireCommandThread();
     if (faulted_)
         fail(ClientMilesPipeCore57::FailureReason::BackendFailed, "Miles session has an uncertain outcome");
     if (stopped || closed_)
@@ -179,6 +186,7 @@ void Session::requireRunning() const {
 StartupBridge::OwnedReply Session::request(uint32_t opcode, const MilesWire::Call &fields,
                                            MilesTransport::Bytes text, MilesTransport::Bytes payload) {
     MilesCallbackGuard47::requireForwardAllowed();
+    requireCommandThread();
     if (faulted_ || closed_)
         fail(ClientMilesPipeCore57::FailureReason::BackendFailed,
              "Miles session cannot issue another request");
@@ -526,6 +534,18 @@ void set_3D_rolloff_factor(HDIGDRIVER driver, float factor) {
     MilesWire::Call fields = driverCall(session, driver);
     fields.value[0] = floatBits(factor);
     session.request(MilesWire::AIL_set_3D_rolloff_factor, fields);
+}
+void lock() {
+    ClientMilesPipe::Session &session = ClientMilesPipe::Session::selected();
+    session.requireRunning();
+    const MilesWire::Call fields = {};
+    session.request(MilesWire::AIL_lock, fields);
+}
+void unlock() {
+    ClientMilesPipe::Session &session = ClientMilesPipe::Session::selected();
+    session.requireRunning();
+    const MilesWire::Call fields = {};
+    session.request(MilesWire::AIL_unlock, fields);
 }
 void serve() {
     ClientMilesPipe::Session &session = ClientMilesPipe::Session::selected();

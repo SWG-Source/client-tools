@@ -47,6 +47,8 @@ class Session {
     static Session &selected();
 
   private:
+    const DWORD commandThread_; // bound command caller; callback owner is separate
+    void requireCommandThread() const;
     Channel *channel_; // retained private root; no automatic teardown in59
     bool closed_;
     bool faulted_;

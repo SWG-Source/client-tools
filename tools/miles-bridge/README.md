@@ -55,9 +55,9 @@ to the include path to bypass missing includes.
 
 ## Remaining integration
 
-The pipe adapter currently defines 56 of the 62 public operations. Missing are
-`lock`, `unlock`, both EOS registrations, `set_sample_file`, and
-`set_named_sample_file`. There are no success stubs for them.
+The pipe adapter currently defines 58 of the 62 public operations. Both EOS
+registrations, `set_sample_file`, and `set_named_sample_file` remain missing.
+There are no success stubs for them.
 
 The engine file worker is now a build target, but still needs to be linked and
 exercised with the pipe adapter. Audio exposes separate admitted file callbacks
@@ -109,3 +109,26 @@ on an existing `Archive.h` narrowing warning; the final checks used the verified
 current engine mirror. No warning was suppressed. These results do not qualify
 the new callback path at runtime; current game registration still uses the
 legacy callbacks.
+
+## Lock command contract
+
+The command session is bound to its creating thread. `lock` and `unlock` call
+the genuine SDK counter operations in the x86 host. Both endpoints derive their
+scheduling action from the opcode and carry the current lease on every command.
+Nested locks retain the same lease until the final unlock. A validated refusal
+settles the command without changing depth; causal file acknowledgements still
+must arrive before settlement. Background file callbacks remain serviceable.
+Neither a counter operation nor a returned command proves callback quiescence.
+Shutdown while locked is refused before calling the SDK.
+
+The portable admission regression can run without the SDK:
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror tests/lock_admission.cpp src/admission/coordinator.cpp -o lock-admission
+./lock-admission
+```
+
+It checks nesting, refusal, stale/foreign leases, causal acknowledgement joins,
+background observations and terminal-state retention against the real
+coordinator. Its expected total is exactly 53 checks; it does not exercise the
+SDK, actual file worker or live pipe path.

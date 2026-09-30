@@ -53,13 +53,13 @@ bool Coordinator::causalPending(Id admissionOrdinal) const {
             if(c->second.kind==CausalReverseIo && c->second.cause==admissionOrdinal && !c->second.acknowledged)return true;
     return false;
 }
-Error Coordinator::completeAdmission(Id s,Id r) {
+Error Coordinator::completeAdmission(Id s,Id r,bool actionApplied) {
     if(s!=incarnation)return StaleSession;
     if(!r || admissionOrdinal!=r)return Unknown;
     if(causalPending(r))return PendingCallback;
     // Even in Failed, an actual completion observation may release request pins.
     // It does not restore a healthy session or turn an uncertain lease into success.
-    if(current!=Failed) {
+    if(current!=Failed && actionApplied) {
         if(admissionAction==AcquireLock) {
             if(!depth) { leaseId=++lastLease;ownerLane=admissionLane; }
             ++depth;

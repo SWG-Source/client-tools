@@ -7,6 +7,11 @@ namespace MilesCoordinator {
 typedef uint64_t Id;
 enum State { Active, Draining, Failed };
 enum Action { Ordinary, AcquireLock, ReleaseLock };
+// Both authenticated endpoints derive the transition; peers never select an action.
+inline Action actionForOpcode(uint32_t opcode) {
+    return opcode==MilesWire::AIL_lock ? AcquireLock :
+        opcode==MilesWire::AIL_unlock ? ReleaseLock : Ordinary;
+}
 enum CallbackKind { CausalReverseIo, Unsolicited };
 enum Error { Ok, StaleSession, InvalidIdentity, WrongState, Busy, WrongLease,
              Capacity, Unknown, PendingCallback, ClosingResource };
@@ -34,7 +39,8 @@ public:
     // Trusted coordinator API; never selected directly by an untrusted wire flag.
     Error admitCleanup(Id session,Id admissionOrdinal,Id lane,Id lease,Action action,
                        const std::vector<MilesWire::Handle> &resources);
-    Error completeAdmission(Id session,Id admissionOrdinal); // Observed return, NOT semantic vendor success; return value is carried elsewhere.
+    // A validated refusal settles request pins but must not apply a lock transition.
+    Error completeAdmission(Id session,Id admissionOrdinal,bool actionApplied=true);
     Error registerCallback(Id session,Id registration,const MilesWire::Handle &resource);
     // Trusted owner API: one session file table, before any driver/file exists.
     // Scope is internal; it is never selected by a wire flag or fake handle.

@@ -44,11 +44,11 @@ void host(int argc,char **argv){
         MilesWire::Header h={};MilesWire::Call c={};
         require(MilesTransport::decodeCall(bytes(frame),h,c),"decode command");
         require(last!=(std::numeric_limits<uint64_t>::max)() && h.request==last+1 &&
-            h.kind==MilesWire::Request && h.lane==1 && !h.lock_lease && !h.causal_request,"command correlation");
+            h.kind==MilesWire::Request && h.lane==1 && !h.causal_request,"command correlation");
         require(!backend->uploadFailed(),"terminal image upload cannot resume");
         last=h.request;StartupBridge::OwnedReply out;std::vector<unsigned char> encoded;
         if(!hello){
-            require(h.opcode==MilesWire::Hello && c.bytes.length==32 && !c.text.length &&
+            require(!h.lock_lease && h.opcode==MilesWire::Hello && c.bytes.length==32 && !c.text.length &&
                 nullHandle59(c.target)&&nullHandle59(c.resource)&&!c.output_mask&&!c.callback&&!c.reserved,"hello shape");
             for(unsigned i=0;i<8;++i)require(!c.value[i],"hello fields");
             require(!memcmp(&frame[c.bytes.offset],nonceText.data(),32),"full nonce");hello=true;
@@ -64,7 +64,8 @@ void host(int argc,char **argv){
             if(!live)out.result.transport_status=StartupBridge::InvalidResource;
             else {
                 require(ordinal!=(std::numeric_limits<uint64_t>::max)(),"admission exhausted");
-                require(coordinator.admitGame(session,ordinal+1,h.lane,0,MilesCoordinator::Ordinary,resources)==MilesCoordinator::Ok,"host admission");++ordinal;
+                require(coordinator.admitGame(session,ordinal+1,h.lane,h.lock_lease,
+                    MilesCoordinator::actionForOpcode(h.opcode),resources)==MilesCoordinator::Ok,"host admission");++ordinal;
                 MilesHostContext::Origin origin={session,h.request,h.lane,h.lock_lease,ordinal};
                 require(!backend->uploadActive() || h.opcode!=MilesWire::AIL_set_file_callbacks,
                     "file installation during image transaction refused before SDK effect");
@@ -83,9 +84,12 @@ void host(int argc,char **argv){
                 }else{
                     MilesHostContext::Scope scope(origin);
                     require(scope.result()==MilesHostContext::Entered,"admitted SDK origin");
-                    out=backend->execute(h,c,frame);
+                    // Shutdown cannot discard a held vendor counter or its lease.
+                    if(h.opcode==MilesWire::AIL_shutdown && coordinator.leaseDepth())
+                        out.result.transport_status=StartupBridge::LifecycleRefused;
+                    else out=backend->execute(h,c,frame);
                 }
-                require(coordinator.completeAdmission(session,ordinal)==MilesCoordinator::Ok,"observed SDK return");
+                require(coordinator.completeAdmission(session,ordinal,out.result.transport_status==StartupBridge::Success)==MilesCoordinator::Ok,"observed SDK return");
             }
         }
         backend->observeUploadRefusal(out.result.transport_status);

@@ -13,7 +13,7 @@ MilesCoordinator::Error HostAssociationMapper::publishCommand(uint64_t wire,
     uint64_t admission, uint64_t lane, uint64_t lease, MilesCoordinator::Action action,
     const std::vector<MilesWire::Handle> &resources, bool cleanup) {
     if (command.state != Empty) return MilesCoordinator::Busy;
-    if (!wire || wire <= lastWire || lane == backgroundLane || action != MilesCoordinator::Ordinary)
+    if (!wire || wire <= lastWire || lane == backgroundLane)
         return MilesCoordinator::InvalidIdentity;
     MilesCoordinator::Error error = cleanup
         ? coordinator.admitCleanup(session, admission, lane, lease, action, resources)
@@ -27,14 +27,15 @@ MilesCoordinator::Error HostAssociationMapper::publishCommand(uint64_t wire,
 }
 void HostAssociationMapper::settle() {
     if (command.state != ReturnedWaiting) return;
-    const MilesCoordinator::Error result = coordinator.completeAdmission(session, command.admission);
+    const MilesCoordinator::Error result = coordinator.completeAdmission(session, command.admission, command.actionApplied);
     if (result == MilesCoordinator::Ok) command.state = Settled;
     else if (result != MilesCoordinator::PendingCallback) fail();
 }
-bool HostAssociationMapper::observeForwardReturn(uint64_t s, uint64_t wire) {
+bool HostAssociationMapper::observeForwardReturn(uint64_t s, uint64_t wire, bool actionApplied) {
     if (s != session || command.state != Executing || wire != command.wire) {
         fail(); return false;
     }
+    command.actionApplied = actionApplied;
     command.state = ReturnedWaiting;
     settle();
     return true;
