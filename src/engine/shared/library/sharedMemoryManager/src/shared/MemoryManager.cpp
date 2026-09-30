@@ -21,6 +21,7 @@
 #include "sharedDebug/RemoteDebug.h"
 
 #include <cstdio>
+#include <stdint.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -403,7 +404,8 @@ inline Block const * Block::getNext() const
 
 inline void Block::setNext(Block *next)
 {
-	DEBUG_FATAL(next && reinterpret_cast<int>(next) - reinterpret_cast<int>(this) < cms_blockSize, ("too small"));
+	DEBUG_FATAL(next && (reinterpret_cast<uintptr_t>(next) < reinterpret_cast<uintptr_t>(this) ||
+		reinterpret_cast<uintptr_t>(next) - reinterpret_cast<uintptr_t>(this) < static_cast<uintptr_t>(cms_blockSize)), ("too small"));
 	m_next = next;
 }
 
