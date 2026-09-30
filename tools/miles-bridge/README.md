@@ -100,8 +100,11 @@ receipt to assess another build.
 
 The admitted Audio callback refactor compiled with zero warnings/errors in
 native Win32/x64 Debug/Release. The complete Win32 SwgClient incremental build
-and link also passed in Debug and Release: zero errors, with 30 linker PDB
-warnings in each run. An initial x64 compile against an older VM checkout failed
+and link also passed in Debug and Release: zero errors, with 30 build warnings
+in each run. These include PDB warnings and linker import/runtime-library or
+option warnings; the Debug link retains the project's `/FORCE` option. This
+corrects the "30 linker PDB warnings" shorthand in the callback commit message.
+No binary equivalence or clean-warning baseline is claimed. An initial x64 compile against an older VM checkout failed
 on an existing `Archive.h` narrowing warning; the final checks used the verified
 current engine mirror. No warning was suppressed. These results do not qualify
 the new callback path at runtime; current game registration still uses the
