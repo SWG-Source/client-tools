@@ -38,7 +38,7 @@ class LiveChannel : public ClientMilesPipe::Channel {
         require(GetNamedPipeClientProcessId(callback.pipe, &actual) &&
                     actual == child_.info.dwProcessId,
                 "child callback PID binding");
-        command_.reset(new Endpoint(command.take(), 23));
+        command_.reset(new Endpoint(command.take()));
         HANDLE raw=callback.take();
         try {runtime_=MilesClientRuntime53::Runtime::launch(raw,incarnation(random),999,enginePin);}
         catch(...){if(raw!=INVALID_HANDLE_VALUE)CloseHandle(raw);throw;}

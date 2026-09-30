@@ -40,7 +40,7 @@ void host(int argc,char **argv){
     require(GetNamedPipeServerProcessId(rawCallback,&pid)&&pid==expected,"callback parent PID");
     // Heap-retained owners prevent exception unwind from invoking emergency SDK
     // shutdown or Endpoint cleanup after callbacks may have been adopted.
-    Endpoint *command=new Endpoint(rawCommand,17);
+    Endpoint *command=new Endpoint(rawCommand);
     Backend *backend=new Backend(argv[6],uploadBudgetBytes);
     MilesHostRuntime50::Runtime *callbacks=0;
     const uint64_t session=incarnation(nonceText);

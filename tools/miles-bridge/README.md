@@ -520,3 +520,26 @@ close request instead; it also timed out, so shutdown remains unqualified.
 No login screen was verified. Debugger attachment was denied by the host OS;
 startup localization proceeds using the engine's existing install-timing logs.
 Neither the path correction nor console suppression is a full startup pass.
+
+### Command transport sizing
+
+The live client/host command channels no longer force 23/17-byte I/O segments.
+They use the existing Endpoint default (1 MiB per I/O operation); wire frame
+limits, partial-I/O handling, byte budgets and deadlines are unchanged. Small
+segments remain supported by Endpoint for explicit fragmentation tests.
+
+Native host/pipe rebuild and game relink had zero warnings/errors. With identical
+assets, configuration, original DLL and install-timing logging under Proton:
+
+| Initializer | Forced tiny segments | Default segments |
+| --- | ---: | ---: |
+| CollisionCallbacks | 6.0100 s | 0.0216 s |
+| ShipTargetAppearanceManager | 4.6186 s | 0.0234 s |
+| SpaceDeath | 16.3579 s | 0.0200 s |
+
+These are single diagnostic-run measurements, not general performance or fidelity
+claims. The new game (`39fb1e2db4270e26371d85751f470c3686abf1b9ced21eae4a0809799d377a46`)
+completed Game/UI installation but **startup still failed** at shader compilation:
+`vertex_program/2d_texture.vsh`, unexpected `KW_POINT`. The loader log identifies
+native `d3dx9_43.dll` calling Wine's built-in `d3dcompiler_43.dll`. No shader
+semantics, media feature or asset was changed to bypass this failure.
