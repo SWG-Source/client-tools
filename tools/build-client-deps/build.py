@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the original client JPEG6b and bundled STLport with native VS2013."""
+"""Build original JPEG6b, STLport and Vivox wrapper sources with native VS2013."""
 import argparse
 import hashlib
 import json
@@ -94,10 +94,17 @@ def build(args, archive, output):
     arch = 'amd64' if args.platform == 'x64' else 'x86'
     stl = ROOT / 'src/external/3rd/library/stlport453'
     headers = ROOT / 'src/external/3rd/library/libjpeg/include'
+    wrapper = ROOT / 'src/external/3rd/library/vivoxSharedWrapper'
+    vivox_headers = ROOT / 'src/external/3rd/library/vivox/include'
+    expected_outputs = {'jpeg.lib', 'stlport.lib', 'vivoxSharedWrapper.lib'}
     # Header-only changes must invalidate archives too. Exclude prebuilt artifacts.
     inputs = {str(p.relative_to(ROOT)): digest(p)
               for directory in [stl / 'src', stl / 'stlport', headers]
               for p in sorted(directory.rglob('*')) if p.is_file()}
+    inputs.update({str(p.relative_to(ROOT)): digest(p)
+                   for directory in [wrapper, vivox_headers]
+                   for p in sorted(directory.rglob('*'))
+                   if p.is_file() and p.suffix in ['.h', '.cpp', '.inl']})
     inputs['builder'] = digest(Path(__file__))
     with tempfile.TemporaryDirectory(prefix='deps-', dir=output) as temporary:
         work = Path(temporary)
@@ -144,7 +151,7 @@ def build(args, archive, output):
             saved = json.loads(manifest.read_text())
             if saved.get('identity') == identity and all(
                     (output / name).is_file() and digest(output / name) == sha
-                    for name, sha in saved.get('outputs', {}).items()) and len(saved.get('outputs', {})) == 2:
+                    for name, sha in saved.get('outputs', {}).items()) and set(saved.get('outputs', {})) == expected_outputs:
                 print('Verified dependency cache: ' + str(output))
                 return
         with tarfile.open(archive) as source:
@@ -200,17 +207,22 @@ def build(args, archive, output):
             sources.extend(matches)
         library('stlport', sources, ['/W3', '/GR', '/EHsc', '/Zc:wchar_t-', '/D_WINDOWS', '/D_MBCS',
                 '/D_STLP_NO_FORCE_INSTANTIATE', '/FI' + str(stl / 'src/vc_warning_disable.h'), '/I' + str(stl / 'stlport')])
+        # Match CuiVoiceChatManager.h's original VIVOX_VERSION=3 consumer API.
+        # This is the real dynamic-loader wrapper, not a replacement SDK DLL.
+        library('vivoxSharedWrapper', [wrapper / 'Vivox.cpp'],
+                ['/W3', '/GR', '/EHsc', '/Zc:wchar_t-', '/D_WINDOWS', '/D_MBCS',
+                 '/DVIVOX_VERSION=3', '/I' + str(stl / 'stlport'), '/I' + str(vivox_headers)])
         block = re.search(r'LIBSOURCES=(.*?)\n# memmgr', (jpeg / 'makefile.vc').read_text(), re.S).group(1)
         names = block.replace('\\', '').split() + ['jmemnobs.c']
         if len(names) != 46 or len(set(names)) != 46:
             raise RuntimeError('Unexpected official JPEG source inventory')
         library('jpeg', [jpeg / name for name in names], ['/TC', '/D_CRT_SECURE_NO_WARNINGS', '/FIwindows.h', '/I' + str(jpeg)])
-        # Publish only after both libraries succeeded; manifest is the completion marker.
-        for name in ['jpeg.lib', 'stlport.lib']:
+        # Publish only after every library succeeded; manifest is the completion marker.
+        for name in sorted(expected_outputs):
             os.replace(work / name, output / name)
         shutil.copyfile(jpeg / 'README', output / 'JPEG-README.txt')
         (output / 'commands.json').write_text(json.dumps(commands, indent=2))
-        data = dict(identity=identity, outputs={name: digest(output / name) for name in ['jpeg.lib', 'stlport.lib']})
+        data = dict(identity=identity, outputs={name: digest(output / name) for name in sorted(expected_outputs)})
         pending = output / 'manifest.pending'
         pending.write_text(json.dumps(data, indent=2))
         os.replace(pending, manifest)

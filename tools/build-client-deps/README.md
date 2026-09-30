@@ -70,3 +70,20 @@ metadata stayed unchanged; only the intended x64 executable provider selection
 changed. Both final x64 linker experiments progressed beyond the legacy STLport
 archive to a wrong-architecture Vivox wrapper. This is not a complete client link
 or proof that every remaining dependency is resolved.
+
+## Source-built Vivox loader wrapper
+
+The dependency builder also compiles the repository's original `Vivox.cpp` into
+`vivoxSharedWrapper.lib`, using `VIVOX_VERSION=3` to match
+`CuiVoiceChatManager.h`. It retains the original loader, function imports, mixer
+code and shutdown behavior. The bundled SDK headers and wrapper sources are part
+of the cache identity; all three archives must validate before cache reuse.
+
+Only SwgClient x64 links this archive. Its old explicit Win32 wrapper inputs are
+replaced; Win32 provider selection remains unchanged. Renderers share the stable
+three-output dependency cache but do not link the wrapper.
+
+This rebuild supplies the wrapper, **not the Vivox SDK DLL or service**. The code
+still loads `vivoxsdk.dll` dynamically and requires a compatible native provider.
+Compiling and resolving wrapper symbols does not establish SDK structure
+compatibility, authenticated voice, audio-device behavior or service availability.
