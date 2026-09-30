@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Miles x86 host or x64 pipe/native archive with Windows VS2013."""
+"""Build the Miles x86 host or x64 component archives with Windows VS2013."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parent
@@ -68,14 +69,54 @@ def compiler_environment(vcvars, arch, work, receipt):
     return env
 
 
+def engine_worker_flags(engine_root, receipt):
+    """Keep the legacy STLport engine TU separate from the modern pipe TUs."""
+    if engine_root is None:
+        raise ValueError('engine-worker requires --engine-root (actual engine checkout)')
+    engine_root = engine_root.resolve()
+    project = engine_root / 'src/engine/client/library/clientAudio/build/win32/clientAudio.vcxproj'
+    namespace = {'ms': 'http://schemas.microsoft.com/developer/msbuild/2003'}
+    tree = ET.parse(str(project))
+    compile_settings = None
+    for group in tree.findall('ms:ItemDefinitionGroup', namespace):
+        if group.get('Condition', '').replace(' ', '') == "'$(Configuration)|$(Platform)'=='Debug|x64'":
+            compile_settings = group.find('ms:ClCompile', namespace)
+            break
+    if compile_settings is None:
+        raise ValueError('Missing clientAudio Debug|x64 compiler settings')
+    # These ABI/runtime settings match clientAudio Debug-x64. PCH/minimal rebuild
+    # are disabled because this is one independent, freshly compiled engine TU.
+    flags = ['/nologo', '/c', '/EHsc', '/Y-', '/Gm-', '/Zc:wchar_t-',
+             '/Zc:forScope', '/GR', '/Gy', '/fp:precise', '/W4', '/Zi',
+             '/FC', '/showIncludes', '/MTd', '/Od', '/Ob1', '/RTC1', '/WX']
+    for setting, prefix in (('PreprocessorDefinitions', '/D'),
+                            ('AdditionalIncludeDirectories', '/I')):
+        values = compile_settings.findtext('ms:' + setting, '', namespace)
+        for value in values.split(';'):
+            value = value.strip()
+            if not value or value == '%(' + setting + ')':
+                continue
+            if '$(' in value or '%(' in value:
+                raise ValueError('Unresolved project setting: %s' % value)
+            if prefix == '/I':
+                value = str((project.parent / value.replace('\\', '/')).resolve())
+            flags.append(prefix + value)
+    stlport = engine_root / 'src/external/3rd/library/stlport453/stlport'
+    if not (stlport / 'string').is_file() or '/I' + str(stlport) not in flags:
+        raise ValueError('Actual engine STLport headers must be in the project include path')
+    receipt['engine_project'] = str(project)
+    receipt['engine_configuration'] = 'Debug|x64'
+    return flags
+
+
 def build(args, work, receipt):
     if os.name != 'nt':
         raise RuntimeError('Run this build with Python 3 on native Windows')
     vcvars = args.vcvars.resolve()
-    sdk = args.sdk.resolve()
+    sdk = args.sdk.resolve() if args.sdk else None
     if not vcvars.is_file():
         raise ValueError('Missing VS2013 vcvarsall.bat: %s' % vcvars)
-    if not (sdk / 'Mss.h').is_file():
+    if args.target != 'engine-worker' and (sdk is None or not (sdk / 'Mss.h').is_file()):
         raise ValueError('--sdk must be the SDK include directory containing Mss.h')
     sdk_lib = args.sdk_lib.resolve() if args.sdk_lib else None
     if args.target == 'host' and (sdk_lib is None or not sdk_lib.is_file()
@@ -103,9 +144,12 @@ def build(args, work, receipt):
         if not tools[name]:
             raise RuntimeError('Tool missing from VS2013 environment: %s' % name)
     objects = []
-    flags = ['/nologo', '/c', '/W4', '/WX', '/EHsc', '/MTd', '/Od', '/Ob0', '/Zi',
-             '/DWIN32', '/D_WIN32_WINNT=0x0601', '/DNOMINMAX',
-             '/I' + str(sdk), '/I' + str(source_root)]
+    if args.target == 'engine-worker':
+        flags = engine_worker_flags(args.engine_root, receipt)
+    else:
+        flags = ['/nologo', '/c', '/W4', '/WX', '/EHsc', '/MTd', '/Od', '/Ob0', '/Zi',
+                 '/DWIN32', '/D_WIN32_WINNT=0x0601', '/DNOMINMAX',
+                 '/I' + str(sdk), '/I' + str(source_root)]
     for index, source in enumerate(sources):
         stem = '%02d-%s' % (index, source.stem)
         obj = work / (stem + '.obj')
@@ -135,9 +179,11 @@ def build(args, work, receipt):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target', choices=('host', 'pipe', 'native'), required=True)
-    parser.add_argument('--sdk', type=Path, required=True,
-                        help='Miles SDK include directory containing Mss.h')
+    parser.add_argument('--target', choices=('host', 'pipe', 'native', 'engine-worker'), required=True)
+    parser.add_argument('--sdk', type=Path,
+                        help='Miles SDK include directory containing Mss.h (required except engine-worker)')
+    parser.add_argument('--engine-root', type=Path,
+                        help='actual engine checkout, required for engine-worker Debug-x64 archive')
     parser.add_argument('--sdk-lib', type=Path, help='real x86 Mss32.lib (host only)')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--vcvars', type=Path, default=Path(os.environ.get(

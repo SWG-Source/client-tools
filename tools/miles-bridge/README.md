@@ -17,6 +17,7 @@ No SDK headers, import libraries, DLLs or game assets are bundled here.
 python build.py --target host --sdk C:/SDK/Miles/include --sdk-lib C:/SDK/Miles/lib/win/Mss32.lib --out C:/build/miles
 python build.py --target pipe --sdk C:/SDK/Miles/include --out C:/build/miles
 python build.py --target native --sdk C:/SDK/Miles/include --out C:/build/miles
+python build.py --target engine-worker --engine-root C:/source/client-tools --out C:/build/miles
 ```
 
 `--vcvars` can select the installed VS2013 `vcvarsall.bat`. Outputs and complete
@@ -29,11 +30,14 @@ run the resulting binaries.
 | `host` | x86 `miles-host.exe` | Compiles the real command/file-callback host and links the genuine `Mss32.lib`. |
 | `pipe` | x64 `miles-pipe.lib` | Compiles the client adapter. An archive can contain unresolved references; this is not a client link. |
 | `native` | x64 `miles-native.lib` | Compiles direct calls against the SDK's Win64 declarations. A matching native vendor library is still required to link it. |
+| `engine-worker` | x64 `miles-engine-worker.lib` | Compiles the file executor using real engine headers, STLport and clientAudio's Debug-x64 definitions/include paths. |
 
 Choose exactly one client backend. The pipe and native archives implement the
 same public names and must not be linked together. Both currently use the debug
-static CRT for component development; application CRT/configuration integration
-is a separate build step.
+static CRT for component development. The engine worker is a separate
+translation unit with the legacy engine's STLport and `wchar_t` settings; its
+interface passes only plain values and function pointers. Application
+CRT/configuration integration is a separate build step.
 
 ## Source layout
 
@@ -55,8 +59,9 @@ The pipe adapter currently defines 56 of the 62 public operations. Missing are
 `lock`, `unlock`, both EOS registrations, `set_sample_file`, and
 `set_named_sample_file`. There are no success stubs for them.
 
-The engine file worker, Audio's image extents and callback/TLS handling still
-need integration. The paired channel refuses normal session close until its
+The engine file worker is now a build target, but still needs to be linked and
+exercised with the pipe adapter. Audio's image extents and callback/TLS handling
+also need integration. The paired channel refuses normal session close until its
 shutdown and callback lifetime protocol is implemented. Setter/rebinding
 ownership and callback quiescence remain open. Do not use this helper as the
 game's audio backend yet.
@@ -69,17 +74,20 @@ the newly combined executable behaves correctly.
 
 ## Build checkpoint — 2026-09-30
 
-All three commands above completed on native Windows with VS2013, `/W4 /WX`,
+The host, pipe and native commands completed on native Windows with VS2013, `/W4 /WX`,
 `/EHsc`, and `/MTd`: 19 host, 17 pipe and 9 native translation units, with zero
 compiler/linker warnings or errors. The host PE is x86 and imports `mss32.dll`,
 including the genuine `AIL_WAV_info`, `AIL_file_type` and `AIL_startup` exports.
-No runtime test was performed on these combined artifacts.
+The engine-worker target also compiled and archived cleanly against the verified
+`49d0eeed4` engine tree with its explicit legacy flags. No runtime test was
+performed on these combined artifacts.
 
 | Artifact | SHA-256 |
 | --- | --- |
 | `miles-host.exe` | `e32c0d18a263683383d59e77150366091c854b403a08281b7d2bfc57d7dc2ca7` |
 | `miles-pipe.lib` | `ef6f65c38368b05d9a1a91e16c87f3e56b2dec5398e5815ddfa8af393f26d123` |
 | `miles-native.lib` | `8ba853ac23ae37c31945ea1fd46d599e85d55b0b8d03e53b23c7c2b20781f07f` |
+| `miles-engine-worker.lib` | `6158ebdd173a624b1a207a0de1d50645d067dbbdc8c6cbb9e970d2ed5545d0b6` |
 
 SDK header SHA-256: `966e1e81046851295079e9709f9f358286c823e4403ec6b0ca972b5059725e6e`.
 The x86 import library SHA-256 is
