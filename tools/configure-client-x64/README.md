@@ -35,3 +35,33 @@ not silently replaced with repository Win32 libraries.
 Native validation must inspect effective settings, build Win32 Release as a
 regression baseline, then build Debug/Release x64. Compiler and vendor failures
 are evidence for separate fixes, not permission to remove features.
+
+## Legacy shader compiler at runtime
+
+The x64 renderer selects `D3DXSHADER_USE_LEGACY_D3DX9_31_DLL` for HLSL vertex
+shaders. The June 2010 compiler rejects the original shader include's `point`
+identifier under its newer HLSL grammar. The documented legacy selector compiles
+the unchanged assets with the Direct3D 9 compiler. Shader profiles, macros and
+include handling are retained; Win32 still uses flags zero. Pixel shaders use
+precompiled bytecode and the separate vertex assembly path is unchanged.
+
+An x64 runtime needs Microsoft's original AMD64 `d3dx9_31.dll` in addition to
+the newer SDK dependencies, available in `OCT2006_d3dx9_31_x64.cab` from the
+DirectX redistributable. SDK/vendor DLLs are not bundled here. See Microsoft's
+[D3DXSHADER flags documentation](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxshader-flags).
+
+Native VS2013 builds completed for Debug-x64 gl05/gl06/gl07 and Release-Win32
+gl07 with zero errors (5/2/5/4 warnings respectively: existing output-name,
+size-conversion and legacy PDB warnings remain). A diagnostic run of the actual
+Debug-x64 client under GE-Proton11-7, using original SWGSource v3.0 assets and
+the signed native compiler, observed successful compilation and GPU creation
+for `2d_texture.vsh`, `2d.vsh` and `ui.vsh`. Both the Wine builtin and signed
+modern compiler had rejected the same `point` syntax. The diagnostics are not
+part of the renderer source.
+
+This closes the observed syntax failure only. The client still showed a black
+window and timed out on ordinary close in that bounded startup check. No login,
+gameplay, shader-bytecode or visual-equivalence pass is claimed. The stock
+Win32 renderer embeds compiler 5.04.00.3900; `_31` is a different version.
+Representative shader/rendering comparison and native Windows runtime remain
+required before this path is qualified.
