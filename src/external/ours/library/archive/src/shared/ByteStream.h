@@ -8,6 +8,7 @@
 #endif
 
 #include <vector>
+#include <limits>
 
 //---------------------------------------------------------------------
 
@@ -136,7 +137,7 @@ public:
 
 private:
 	void                        get(void * target, ReadIterator & readIterator, const unsigned long int readSize) const;
-	void                        growToAtLeast(const unsigned int targetSize);
+	unsigned int                getAllocationSize(const unsigned int targetSize) const;
 	void                        reAllocate(const unsigned int newSize);
 
 private: // inner classes
@@ -271,7 +272,11 @@ inline void ReadIterator::get(void * target, const unsigned long int readSize)
 inline const unsigned int ReadIterator::getSize() const
 {
 	if(stream)
+	{
+		if (readPtr > stream->getSize())
+			throw ReadException("Archive::ReadIterator - position beyond end of buffer");
 		return stream->getSize() - readPtr;
+	}
 	return 0;
 }
 
@@ -295,6 +300,8 @@ inline const ReadIterator ByteStream::end() const
 
 inline void ReadIterator::advance(const unsigned int distance)
 {
+	if ((!stream && distance) || (stream && distance > getSize()))
+		throw ReadException("Archive::ReadIterator - advance beyond end of buffer");
 	readPtr += distance;
 }
 
@@ -309,8 +316,12 @@ inline const unsigned int ReadIterator::getReadPosition() const
 
 inline const unsigned char * const ReadIterator::getBuffer() const
 {
-	if(stream && stream->data)
-		return &stream->data->buffer[readPtr];
+	if (stream)
+	{
+		getSize(); // Validate an iterator whose stream may have been cleared.
+		if (stream->data && stream->data->buffer)
+			return &stream->data->buffer[readPtr];
+	}
 
 	return 0;
 }
@@ -377,29 +388,22 @@ inline const unsigned int ByteStream::getSize() const
 	@author Justin Randall
 */
 
-inline void ByteStream::growToAtLeast(const unsigned int targetSize)
+inline unsigned int ByteStream::getAllocationSize(const unsigned int targetSize) const
 {
-	if(allocatedSize < targetSize)
-	{
-		if(allocatedSize < 4096)
-		{
-			reAllocate(allocatedSize + allocatedSize + targetSize);
-		}
-		else
-		{
-			reAllocate(allocatedSize + targetSize);
-		}
-	}
+	if (allocatedSize >= targetSize)
+		return allocatedSize;
+	unsigned int const extra = allocatedSize < 4096 ? allocatedSize * 2 : allocatedSize;
+	return extra > (std::numeric_limits<unsigned int>::max)() - targetSize
+		? targetSize : targetSize + extra;
 }
 
 //---------------------------------------------------------------------
 
 inline void ByteStream::setAllocatedSizeLimit(const unsigned int limit)
 {
+	if (limit && allocatedSize < limit)
+		reAllocate(limit);
 	allocatedSizeLimit = limit;
-
-	if ((allocatedSizeLimit) && (allocatedSize < allocatedSizeLimit))
-		reAllocate(allocatedSizeLimit);
 }
 
 } // namespace Archive
