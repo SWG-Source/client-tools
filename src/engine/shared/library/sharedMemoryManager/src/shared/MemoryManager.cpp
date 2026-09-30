@@ -21,6 +21,7 @@
 #include "sharedDebug/RemoteDebug.h"
 
 #include <cstdio>
+#include <climits>
 #include <stdint.h>
 #include <inttypes.h>
 
@@ -216,6 +217,26 @@ namespace MemoryManagerNamespace
 
 	int const cms_systemAllocationRoundSize = 4 * 1024 * 1024;
 	int const cms_systemAllocationMinimumSize = 4 * 1024 * 1024;
+
+	// A region and every block within it retain signed-int sizes. Check in size_t
+	// before narrowing, including the region's three blocks and rounding slack.
+	bool calculateAllocationSize(size_t requestedSize, int &allocationSize)
+	{
+		static_assert((cms_blockSize % 16) == 0 && ((cms_allocatedBlockSize + 2 * cms_guardBandSize) % 16) == 0, "allocation bounds require aligned headers");
+		size_t maximumSize = static_cast<size_t>(INT_MAX - (cms_systemAllocationRoundSize - 1))
+			- 3 * cms_blockSize - cms_allocatedBlockSize - 2 * cms_guardBandSize;
+#if DO_TRACK || DO_GUARDS
+		size_t const maximumTrackedSize = (static_cast<size_t>(1) << Block::cms_requestedSizeBits) - 1;
+		if (maximumSize > maximumTrackedSize)
+			maximumSize = maximumTrackedSize;
+#endif
+		if (requestedSize > maximumSize)
+			return false;
+		size_t const size = requestedSize ? requestedSize : 1;
+		allocationSize = static_cast<int>((cms_allocatedBlockSize + 2 * cms_guardBandSize + size + 15) & ~static_cast<size_t>(15));
+		return true;
+	}
+
 
 	bool                  ms_installed;
 	bool                  ms_limitSet;
@@ -547,6 +568,7 @@ void MemoryManagerNamespace::outputDebugStringWrapper(char const * message)
 void  MemoryManager::setLimit(int megabytes, bool hardLimit, bool preallocate)
 {
 	DEBUG_FATAL(ms_limitSet, ("MemoryManager::setLimit may only be called once"));
+	FATAL(megabytes < 0, ("negative memory limit %d MiB", megabytes));
 	ms_limitSet = true;
 	ms_limitMegabytes = megabytes;
 	ms_hardLimit = hardLimit;
@@ -680,6 +702,7 @@ MemoryManager::~MemoryManager()
 
 int MemoryManagerNamespace::convertBytesToMegabytesForSystemAllocation(int systemAllocationSize)
 {
+	FATAL(systemAllocationSize < 0 || systemAllocationSize > INT_MAX - (cms_systemAllocationRoundSize - 1), ("system allocation size exceeds signed-int range"));
 	if (systemAllocationSize < cms_systemAllocationMinimumSize)
 		systemAllocationSize = cms_systemAllocationMinimumSize;
 
@@ -692,36 +715,47 @@ int MemoryManagerNamespace::convertBytesToMegabytesForSystemAllocation(int syste
 
 void MemoryManagerNamespace::allocateSystemMemory(int megabytes)
 {
-	if (ms_hardLimit && ms_systemMemoryAllocatedMegabytes + megabytes > ms_limitMegabytes)
+	FATAL(megabytes < 0, ("negative system allocation %d MiB", megabytes));
+	if (ms_hardLimit)
 	{
-		megabytes = ms_limitMegabytes - ms_systemMemoryAllocatedMegabytes;
-		if (megabytes <= 0)
+		int const remaining = ms_limitMegabytes - ms_systemMemoryAllocatedMegabytes;
+		if (remaining <= 0)
 			return;
+		if (megabytes > remaining)
+			megabytes = remaining;
 	}
+	FATAL(megabytes > INT_MAX - ms_systemMemoryAllocatedMegabytes, ("total system allocation exceeds signed-int MiB range"));
 
-	// allocate the system memory
-	size_t systemAllocationSize = static_cast<size_t>(megabytes) * 1024 * 1024;
-	void * data = OsMemory::commit(0, systemAllocationSize);
+	// A large preallocation is several bounded regions, never a truncated region.
+	int const maximumRegionMegabytes = INT_MAX / (1024 * 1024);
+	while (megabytes > 0)
+	{
+		int const regionMegabytes = megabytes > maximumRegionMegabytes ? maximumRegionMegabytes : megabytes;
+		// allocate the system memory
+		size_t systemAllocationSize = static_cast<size_t>(regionMegabytes) * 1024 * 1024;
+		void * data = OsMemory::commit(0, systemAllocationSize);
 
-	// failed to allocate virtual memory.  there is insufficient virtual memory or address space to satisfy systemAllocationSize.
-	if (!data)
-		return;
+		// failed to allocate virtual memory.  there is insufficient virtual memory or address space to satisfy systemAllocationSize.
+		if (!data)
+			return;
 
-	// Construct our tracking information
-	SystemAllocation * systemAllocation = new(data) SystemAllocation(systemAllocationSize);
-	++ms_numberOfSystemAllocations;
-	ms_systemMemoryAllocatedMegabytes += megabytes;
+		// Construct our tracking information
+		SystemAllocation * systemAllocation = new(data) SystemAllocation(static_cast<int>(systemAllocationSize));
+		++ms_numberOfSystemAllocations;
+		ms_systemMemoryAllocatedMegabytes += regionMegabytes;
 
-	// insert the memory into the sorted linked list of system allocations
-	SystemAllocation * back = NULL;
-	SystemAllocation * front = ms_firstSystemAllocation;
-	for ( ; front && front->getFirstMemoryBlock() < systemAllocation->getFirstMemoryBlock(); back = front, front = front->getNext())
-		{}
-	if (back)
-		back->setNext(systemAllocation);
-	else
-		ms_firstSystemAllocation = systemAllocation;
-	systemAllocation->setNext(front);
+		// insert the memory into the sorted linked list of system allocations
+		SystemAllocation * back = NULL;
+		SystemAllocation * front = ms_firstSystemAllocation;
+		for ( ; front && front->getFirstMemoryBlock() < systemAllocation->getFirstMemoryBlock(); back = front, front = front->getNext())
+			{}
+		if (back)
+			back->setNext(systemAllocation);
+		else
+			ms_firstSystemAllocation = systemAllocation;
+		systemAllocation->setNext(front);
+		megabytes -= regionMegabytes;
+	}
 }
 
 // ----------------------------------------------------------------------
@@ -1171,6 +1205,9 @@ void * MemoryManager::allocate(size_t size, MemoryManager::OwnerAddress owner, b
 
 	DEBUG_FATAL(!ms_installed, ("not installed"));
 
+	int requestedAllocationSize = 0;
+	FATAL(!calculateAllocationSize(size, requestedAllocationSize), ("allocation size %" PRIuPTR " exceeds memory manager range", static_cast<uintptr_t>(size)));
+
 #if PRODUCTION == 0
 	++ms_allocationsPerFrame;
 	ms_bytesAllocatedPerFrame += size;
@@ -1190,11 +1227,11 @@ void * MemoryManager::allocate(size_t size, MemoryManager::OwnerAddress owner, b
 		int line;
 		if (ms_allowNameLookup && DebugHelp::lookupAddress(owner, libName, fileName, sizeof(fileName), line))
 		{
-			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%s(%d): alloc %d=bytes %d=array\n", fileName, line, size, static_cast<int>(array)));
+			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%s(%d): alloc %" PRIuPTR "=bytes %d=array\n", fileName, line, static_cast<uintptr_t>(size), static_cast<int>(array)));
 		}
 		else
 		{
-			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%0*" PRIxPTR ": alloc %d=bytes %d=array\n", static_cast<int>(sizeof(uintptr_t) * 2), static_cast<uintptr_t>(owner), size, static_cast<int>(array)));
+			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%0*" PRIxPTR ": alloc %" PRIuPTR "=bytes %d=array\n", static_cast<int>(sizeof(uintptr_t) * 2), static_cast<uintptr_t>(owner), static_cast<uintptr_t>(size), static_cast<int>(array)));
 		}
 	}
 #endif
@@ -1202,7 +1239,7 @@ void * MemoryManager::allocate(size_t size, MemoryManager::OwnerAddress owner, b
 	ms_criticalSection->enter();
 
 		// get the size of the allocation
-		int allocSize = (cms_allocatedBlockSize + cms_guardBandSize + (size ? static_cast<int>(size) : 1) + cms_guardBandSize + 15) & ~15;
+		int allocSize = requestedAllocationSize;
 
 		FreeBlock * bestFreeBlock = NULL;
 		for (int tries = 0; !bestFreeBlock && tries < 2; ++tries)
@@ -1225,7 +1262,7 @@ void * MemoryManager::allocate(size_t size, MemoryManager::OwnerAddress owner, b
 			}
 
 			ms_criticalSection->leave();
-			FATAL(true, ("failed allocation attempt for %d (%d actual)", allocSize, size));
+			FATAL(true, ("failed allocation attempt for %d (%" PRIuPTR " actual)", allocSize, static_cast<uintptr_t>(size)));
 		}
 
 		removeFromFreeList(bestFreeBlock);
