@@ -69,11 +69,18 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
    defines the field order and widths; its real Win32 serializers were compiled and run against
    the same hand-transcribed literals. Expected data is never derived from candidate roundtrips.
 
+Ordinary `AutoArray` and `AutoList` also have 12 checks covering 0, 1 and 3 byte elements:
+encoding preserves a seeded destination prefix and matches literal legacy unsigned32 count bytes;
+decoding those independent literals preserves every element and consumes the entire input.
+These small-container checks do not establish oversized-container rejection at real call sites.
+The expanded suite was run on the count-check candidate: Win32 71/71 and Win64 78/78;
+stock `94945103` Win32 passed 68/68, including all 12 new legacy-byte checks.
+
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
-`FAIL` or `NOT RUN`, and exactly 58 common runtime checks plus 7 Win64-only checks report
-`PASS` (59/66 totals including the compile-time width check). Win32 requires exactly the two
+`FAIL` or `NOT RUN`, and exactly 70 common runtime checks plus 7 Win64-only checks report
+`PASS` (71/78 totals including the compile-time width check). Win32 requires exactly the two
 known `SKIP` notices. Stock Win32 requires one timestamp `SKIP` and the one known `ArchiveCount`
-`ABSENT` notice, yielding 56/56. Unknown or duplicate skip/absence notices fail; only that exact
+`ABSENT` notice, yielding 68/68. Unknown or duplicate skip/absence notices fail; only that exact
 known helper absence can reduce the expectation, and `--require-current-coverage` forbids it. An exit code
 alone is not trusted: it cannot distinguish "all passed" from "the fixtures never ran".
 

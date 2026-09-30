@@ -5,6 +5,7 @@
 #include "sharedFoundation/FirstSharedFoundation.h"
 #include "sharedFoundation/NetworkIdArchive.h"
 #include "sharedGame/PlayerQuestData.h"
+#include "Archive/AutoByteStream.h"
 #include "Archive/AutoDeltaPackedMap.h"
 #include "Archive/AutoDeltaVector.h"
 #include "Archive/AutoDeltaMap.h"
@@ -81,10 +82,42 @@ static bool tailEquals(Archive::ByteStream const &b, unsigned offset, Archive::B
  return b.getSize()==offset+want.getSize() && !std::memcmp(b.getBuffer()+offset,want.getBuffer(),want.getSize());
 }
 
+// Ordinary containers retain their legacy unsigned four-byte count. Literal expected
+// bytes include a pre-existing destination prefix; decode the expected bytes independently.
+static void ordinaryContainerFixtures() {
+ for (unsigned count : {0u, 1u, 3u}) {
+  Archive::AutoArray<unsigned char> array;
+  Archive::AutoList<unsigned char> list;
+  for (unsigned i=0; i<count; ++i) {
+   array.get().push_back(static_cast<unsigned char>(0x31+i));
+   list.get().push_back(static_cast<unsigned char>(0x31+i));
+  }
+  Archive::ByteStream expected = count==0 ? literal({0x7e,0,0,0,0}) :
+   count==1 ? literal({0x7e,1,0,0,0,0x31}) : literal({0x7e,3,0,0,0,0x31,0x32,0x33});
+  auto arrayBytes=literal({0x7e}), listBytes=literal({0x7e});
+  array.pack(arrayBytes); list.pack(listBytes);
+  char name[128];
+  std::sprintf(name,"AutoArray count %u preserves prefix and legacy unsigned32 bytes",count);
+  check(equal(arrayBytes,expected),name);
+  std::sprintf(name,"AutoList count %u preserves prefix and legacy unsigned32 bytes",count);
+  check(equal(listBytes,expected),name);
+  auto arrayRead=expected.begin(), listRead=expected.begin();
+  arrayRead.advance(1); listRead.advance(1);
+  Archive::AutoArray<unsigned char> arrayBack;
+  Archive::AutoList<unsigned char> listBack;
+  arrayBack.unpack(arrayRead); listBack.unpack(listRead);
+  std::sprintf(name,"AutoArray count %u decodes legacy bytes with no trailing bytes",count);
+  check(arrayBack.get()==array.get() && arrayRead.getSize()==0,name);
+  std::sprintf(name,"AutoList count %u decodes legacy bytes with no trailing bytes",count);
+  check(listBack.get()==list.get() && listRead.getSize()==0,name);
+ }
+}
+
 int loginClusterFixtures();
 
 int main() {
  failures += loginClusterFixtures();
+ ordinaryContainerFixtures();
  // First quest use in this process: pack's Command constructs age 1;
  // active and completed values receive ages 2 and 3. This is a legacy32
  // fixture, including the non-persisted relative-age field (not normalized).
