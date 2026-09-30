@@ -1,0 +1,123 @@
+#include "LiveChannel.h"
+#include "../../bootstrap/common.h"
+#include "../../file-protocol/file_protocol.h"
+#include <limits>
+#include "../../image/upload_policy.h"
+
+namespace {
+uint64_t incarnation(const std::string &text){uint64_t value=0;for(unsigned i=0;i<16;++i)value=(value<<4)|static_cast<uint64_t>(text[i]<='9'?text[i]-'0':text[i]-'a'+10);return value?value:1;}
+class LiveChannel : public ClientMilesPipe::Channel {
+  public:
+    LiveChannel(const char *hostExecutable,const char *originalDll,std::shared_ptr<void> enginePin,
+        MilesClientRuntime53::Runtime *&adopted, uint32_t uploadBudgetBytes) : runtime_(0),next_(0) {
+        try {
+        require(MilesImage93::validBudget(uploadBudgetBytes), "explicit upload byte budget");
+        char budget[16];sprintf_s(budget,"%lu",static_cast<unsigned long>(uploadBudgetBytes));
+        std::string random = nonce();
+        std::string base = "\\\\.\\pipe\\swg-facade24-" + random;
+        std::string commandName = base + "-cmd", callbackName = base + "-cb";
+        PSECURITY_DESCRIPTOR descriptor = userDescriptor();
+        SECURITY_ATTRIBUTES attributes = {sizeof attributes, descriptor, FALSE};
+        ServerPipe command(commandName, attributes), callback(callbackName, attributes);
+        LocalFree(descriptor);
+        char pid[32];
+        sprintf_s(pid, "%lu", GetCurrentProcessId());
+        std::string args = "\"" + std::string(hostExecutable) + "\" --host " + commandName + " " +
+                           callbackName + " " + random + " " + pid + " \"" + originalDll + "\" " + budget;
+        std::vector<char> line(args.begin(), args.end());
+        line.push_back(0);
+        child_.create(hostExecutable, &line[0]);
+        child_.assignAndResume(child_.job);
+        command.connected();
+        callback.connected();
+        ULONG actual = 0;
+        require(GetNamedPipeClientProcessId(command.pipe, &actual) &&
+                    actual == child_.info.dwProcessId,
+                "child command PID binding");
+        require(GetNamedPipeClientProcessId(callback.pipe, &actual) &&
+                    actual == child_.info.dwProcessId,
+                "child callback PID binding");
+        command_.reset(new Endpoint(command.take(), 23));
+        HANDLE raw=callback.take();
+        try {runtime_=MilesClientRuntime53::Runtime::launch(raw,incarnation(random),999,enginePin);}
+        catch(...){if(raw!=INVALID_HANDLE_VALUE)CloseHandle(raw);throw;}
+        adopted=runtime_; // outer catch must retain it even if Hello subsequently fails
+        require(runtime_->awaitReady(),"callback control owner ready");
+        StartupBridge::OwnedReply hello =
+            exchange(MilesWire::Hello, MilesWire::Call(),
+                     MilesTransport::Bytes(random.data(), random.size()), MilesTransport::Bytes(),std::vector<MilesWire::Handle>(),0);
+        require(hello.result.transport_status == StartupBridge::Success, "Hello accepted");
+        }catch(...){if(runtime_){runtime_->fail();std::terminate();}throw;}
+    }
+
+    StartupBridge::OwnedReply call(uint32_t opcode, const MilesWire::Call &fields,
+                                   MilesTransport::Bytes payload, MilesTransport::Bytes text,const std::vector<MilesWire::Handle> &resources,
+        const ClientMilesPipe::Session &replyOwner) override {
+        // Known validated refusals reach the facade; only fixture probes compare
+        // an expected status. Do not inherit Client.call's default-success throw.
+        return exchange(opcode, fields, payload, text,resources,&replyOwner);
+    }
+
+    void finish() override {throw std::runtime_error("paired clean shutdown is not implemented in59");}
+
+  private:
+    ChildProcess child_;
+    std::unique_ptr<Endpoint> command_;
+    MilesClientRuntime53::Runtime *runtime_;
+    uint64_t next_;
+
+    StartupBridge::OwnedReply exchange(uint32_t opcode,const MilesWire::Call &fields,
+        MilesTransport::Bytes payload,MilesTransport::Bytes text,const std::vector<MilesWire::Handle> &resources,
+        const ClientMilesPipe::Session *replyOwner){
+      try {
+        require(next_!=(std::numeric_limits<uint64_t>::max)(),"command ID exhausted");
+        MilesWire::Header header={};header.magic=MilesWire::Magic;header.version=MilesWire::Version;
+        header.kind=MilesWire::Request;header.opcode=opcode;header.request=++next_;header.lane=1;
+        std::vector<unsigned char> frame;
+        require(MilesTransport::encodeCall(header,fields,payload,text,frame),"encode call");
+        if(opcode!=MilesWire::Hello)require(runtime_->publish(header.request,header.lane,resources),"publish before send");
+        require(command_->send(bytes(frame)),"command send");
+        ULONGLONG begin=GetTickCount64();
+        for(;;){
+            require(!runtime_->failed(),"callback owner failed");
+            require(WaitForSingleObject(child_.info.hProcess,0)==WAIT_TIMEOUT,"host died during command");
+            command_->pump();healthy(*command_);
+            if(command_->takeFrame(frame))break;
+            require(GetTickCount64()-begin<30000,"active command deadline");
+            HANDLE events[3];DWORD count=0;events[count++]=runtime_->failureEvent();
+            if(command_->readPending())events[count++]=command_->readEvent();
+            if(command_->writePending())events[count++]=command_->writeEvent();
+            DWORD result=WaitForMultipleObjects(count,events,FALSE,2);
+            require(result!=WAIT_FAILED,"command I/O wait");
+        }
+        StartupBridge::OwnedReply out;
+        if(opcode==MilesWire::AIL_set_file_callbacks){
+            MilesFileProtocol48::InstallRequest expected;expected.header=header;expected.registration=fields.callback;
+            MilesFileProtocol48::InstallStatus status;
+            require(MilesFileProtocol48::decodeInstallReply(bytes(frame),expected,status),"exact install reply");
+            MilesWire::Header decoded={};require(MilesTransport::decodeResult(bytes(frame),decoded,out.result),"install result projection");
+        }else require(StartupBridge::decodeReply(bytes(frame),header,out),"typed reply/context");
+        if(opcode!=MilesWire::Hello){
+            require(replyOwner && replyOwner->validateReply(opcode,fields,out),"request and owner reply validation before settlement");
+            require(runtime_->returned(header.request),"forward and callback ACK join");
+        }
+        return out;
+      }catch(...){runtime_->fail();throw;}
+    }
+    LiveChannel(const LiveChannel &);
+    LiveChannel &operator=(const LiveChannel &);
+};
+} // namespace
+
+namespace ClientMilesPipe {
+Session *connectSession(const char *host,const char *dll,std::shared_ptr<void> enginePin,std::shared_ptr<void> callbackPin,uint32_t uploadBudgetBytes){
+    MilesClientRuntime53::Runtime *adopted=0;
+    try {
+        Channel *channel=new LiveChannel(host,dll,enginePin,adopted,uploadBudgetBytes);
+        return new Session(channel,*adopted,callbackPin,uploadBudgetBytes);
+    }catch(...){
+        if(adopted){adopted->fail();std::terminate();} // retained runtime; no clean-close claim
+        throw;
+    }
+}
+}
