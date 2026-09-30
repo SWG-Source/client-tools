@@ -29,12 +29,17 @@ public:
 		{return m_queue.CopyTo(target, STDMIN(MaxRetrievable(), copyMax));}
 
 	void MessageEnd(int=-1)
-		{m_lengths.push_back(0);}
+	{
+		// One entry always belongs to the unfinished message.
+		if (m_lengths.size()-1 >= UINT_MAX)
+			throw Exception("MessageQueue: message count exceeds unsigned int range");
+		m_lengths.push_back(0);
+	}
 
 	unsigned long TotalBytesRetrievable() const
 		{return m_queue.MaxRetrievable();}
 	unsigned int NumberOfMessages() const
-		{return m_lengths.size()-1;}
+		{return static_cast<unsigned int>(m_lengths.size()-1);}
 	bool RetrieveNextMessage();
 
 	unsigned int CopyMessagesTo(BufferedTransformation &target, unsigned int count=UINT_MAX) const;
