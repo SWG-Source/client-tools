@@ -135,7 +135,7 @@ int TCPQueue::Remove_Head( uint8* buffer, int maxlen )
         else
         {
             // bah, gotta do some shifting
-            memmove( vecptr->Buffer, vecptr->Buffer + copylen, vecptr->Size );
+            imemmove( vecptr->Buffer, vecptr->Buffer + copylen, vecptr->Size );
         }
 
         if ( maxlen == 0 )
@@ -210,7 +210,7 @@ int TCPQueue::Add_Head( const uint8* buffer_in, int length_in )
 
         // Move any old data out of the way
         if ( vecptr->Size )
-            memmove( vecptr->Buffer + copylen, vecptr->Buffer, vecptr->Size );
+            imemmove( vecptr->Buffer + copylen, vecptr->Buffer, vecptr->Size );
 
         // copy in the new stuff
         memcpy( vecptr->Buffer, buffer, copylen );
