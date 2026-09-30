@@ -45,6 +45,7 @@
 
 #if defined(CLIENT_MILES_DEV_FACADE)
 #include "dev/AudioSelection.h"
+#include "dev/AudioBootstrap.h"
 #endif
 
 #if 0
@@ -119,6 +120,13 @@ namespace AudioNamespace
 	SoundObject3d                s_listener;
 	SoundIdList                  s_localPurgeList;
 	bool                         s_installed = false;
+#if defined(CLIENT_MILES_DEV_FACADE)
+	bool                         s_devMilesStarted = false;
+	void devMilesFatal(uint32_t reason, char const *message)
+	{
+		FATAL(true, ("Development Miles failure %lu: %s", static_cast<unsigned long>(reason), message));
+	}
+#endif
 	int                          s_currentCacheSize = 0;
 	int                          s_cacheHitCount = 0;
 	int                          s_cacheMissCount = 0;
@@ -236,10 +244,12 @@ using namespace AudioNamespace;
 
 // Callbacks for Miles to the TreeFile system
 
+#if !defined(CLIENT_MILES_DEV_FACADE)
 static U32 __stdcall fileOpenCallBack(char const *fileName, UINTa *fileHandle);
 static void __stdcall fileCloseCallBack(UINTa fileHandle);
 static S32 __stdcall fileSeekCallBack(UINTa fileHandle, S32 offset, U32 type);
 static U32 __stdcall fileReadCallBack(UINTa fileHandle, void *buffer, U32 bytes);
+#endif
 
 static SoundId attachSound(SoundTemplate const *soundTemplate, Object const *object, char const *hardPointName=0);
 static bool cacheSound(SoundTemplate const *soundTemplate);
@@ -1287,15 +1297,34 @@ bool Audio::install()
 
 	// Set the miles directory
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	ClientMilesDevelopment::connectAudio(
+		ConfigFile::getKeyString("ClientAudio", "devMilesHost", ""),
+		ConfigFile::getKeyString("ClientAudio", "devMilesDll", ""),
+		ConfigFile::getKeyString("ClientAudio", "devMilesUploadBudget", ""), devMilesFatal);
+#endif
 	std::string redistDirectory(AIL_set_redist_directory("miles"));
 
 	// Initialize the Miles Sound System
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	if (!AIL_startup())
+		ClientMilesPrivate52::fail(ClientMilesPrivate52::InvalidComposition,
+			"development Miles startup returned zero; retaining session");
+	s_devMilesStarted = true;
+#else
 	AIL_startup();
+#endif
 
 	// Set the file system callbacks
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	// The facade worker already owns engine TLS for its complete thread lifetime.
+	AIL_set_file_callbacks(AudioFileCallbacks::openAdmitted, AudioFileCallbacks::closeAdmitted,
+		AudioFileCallbacks::seekAdmitted, AudioFileCallbacks::readAdmitted);
+#else
 	AIL_set_file_callbacks(fileOpenCallBack, fileCloseCallBack, fileSeekCallBack, fileReadCallBack);
+#endif
 
 	// Initialize the audio driver
 
@@ -1398,6 +1427,18 @@ void Audio::remove()
 
 	Audio::stopAllSounds();
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	// Driver initialization can fail before s_installed is set. Preserve callback
+	// maps and sample images until genuine shutdown and paired worker joins finish.
+	if (s_devMilesStarted)
+	{
+		ClientMilesDevelopment::shutdownAndCloseAudio();
+		s_devMilesStarted = false;
+		s_installed = false;
+		s_digitalDevice2d = 0;
+	}
+#endif
+
 #ifdef _DEBUG
 	size_t const sample2dMapSize = s_sampleIdToSample2dMap.size();
 	UNREF(sample2dMapSize);
@@ -1423,6 +1464,7 @@ void Audio::remove()
 
 	// Shutdown Miles
 
+#if !defined(CLIENT_MILES_DEV_FACADE)
 	if (s_installed)
 	{
 		s_installed = false;
@@ -1441,6 +1483,7 @@ void Audio::remove()
 
 		AIL_shutdown();
 	}
+#endif
 
 #ifdef _DEBUG
 	size_t const fileMapCount = s_fileMap.size();
@@ -4088,6 +4131,7 @@ U32 fileReadCommon(UINTa const fileHandle, void *buffer, U32 const bytes)
 
 }
 
+#if !defined(CLIENT_MILES_DEV_FACADE)
 static int once = true;
 
 //-----------------------------------------------------------------------------
@@ -4147,6 +4191,7 @@ U32 __stdcall fileReadCallBack(UINTa const fileHandle, void *buffer, U32 const b
 
 	return fileReadCommon(fileHandle, buffer, bytes);
 }
+#endif
 
 //-----------------------------------------------------------------------------
 uint32_t __stdcall AudioFileCallbacks::openAdmitted(char const *fileName, uintptr_t *fileHandle)

@@ -139,8 +139,9 @@ def build(args, work, receipt):
         raise ValueError('Duplicate sources in sources.json')
     receipt['sources'] = relative_sources
     if args.target == 'audio-dev':
-        sources.append(ROOT.parents[1] / 'src/engine/client/library/clientAudio/src/win32/Audio.cpp')
-        receipt['sources'] = [str(sources[0])]
+        audio_root = ROOT.parents[1] / 'src/engine/client/library/clientAudio/src/win32'
+        sources += [audio_root / name for name in ('Audio.cpp', 'SoundObject3d.cpp')]
+        receipt['sources'] = [str(source) for source in sources]
     if args.target == 'pipe-probe':
         sources.append(ROOT / 'tests/pipe_lock_probe.cpp')
         sources.append(ROOT / 'tests/engine_worker_context.cpp')
@@ -175,9 +176,9 @@ def build(args, work, receipt):
             work, env, receipt, stem)
         objects.append(str(obj))
     if args.target == 'audio-dev':
-        artifact = Path(objects[0])
-        receipt['artifact'] = {'path': str(artifact),
-                               'sha256': hashlib.sha256(artifact.read_bytes()).hexdigest()}
+        receipt['artifacts'] = [{'path': obj,
+                                'sha256': hashlib.sha256(Path(obj).read_bytes()).hexdigest()}
+                               for obj in objects]
         return
     artifact = work / ('miles-pipe-probe.exe' if args.target == 'pipe-probe'
                        else 'miles-host.exe' if args.target == 'host'

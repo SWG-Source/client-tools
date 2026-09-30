@@ -5,7 +5,7 @@ process bridge. `src/api/ClientMiles.h` uses the selected Miles SDK's handle and
 callback types. A future native x64 backend can replace the pipe backend at this
 boundary without exposing IPC to game code.
 
-The bridge is unfinished and is **not selected by SwgClient**. Building these
+The bridge is unfinished and is **not selected by the default SwgClient build**. Building these
 targets does not establish a playable x64 client or equivalent audio behavior.
 
 ## Build
@@ -34,7 +34,7 @@ run the resulting binaries.
 | `native` | x64 `miles-native.lib` | Compiles direct calls against the SDK's Win64 declarations. A matching native vendor library is still required to link it. |
 | `engine-worker` | x64 `miles-engine-worker.lib` | Compiles the file executor using real engine headers, STLport and clientAudio's Debug-x64 definitions/include paths. |
 | `pipe-probe` | x64 `miles-pipe-probe.exe` | Links the real pipe adapter and engine worker against previously built Debug-x64 engine libraries and rebuilt STLport. |
-| `audio-dev` | x64 `Audio.obj` | Compiles the real Audio source against the facade; no link or production selection. |
+| `audio-dev` | x64 `Audio.obj` and `SoundObject3d.obj` | Compiles both real Miles callers against the facade; no link or production selection. |
 
 Choose exactly one client backend. The pipe and native archives implement the
 same public names and must not be linked together. Both currently use the debug
@@ -63,10 +63,11 @@ Sample binding and typed sample/stream EOS registrations are implemented and
 have the bounded original-DLL observations below. Real engine worker execution
 and reverse file operations have been observed. There are no success stubs.
 
-The actual `Audio.cpp` now compiles against the facade in the development-only
-target, with its two source extents supplied. The game still selects direct
-Miles. Its admitted file callbacks, session bootstrap and normal paired shutdown
-remain to be connected and tested. Media-format qualification, callback
+The actual Audio and listener sources compile against the facade in the
+development-only target. Explicit bootstrap, admitted file callbacks and paired
+shutdown are connected in that source path. A Debug-x64 development game relink
+has zero unresolved symbols; the default game build still selects direct Miles.
+Actual Audio startup and teardown remain untested. Media-format qualification, callback
 scheduling in gameplay, device behavior and fidelity are still open. Do not
 use this helper as the game's audio backend yet.
 
@@ -291,9 +292,10 @@ process exit; only the separate worker prerequisite exercises drain/destruction.
 ### Development compilation of the real Audio source
 
 `--target audio-dev --engine-root <checkout>` compiles the maintained `Audio.cpp`
+and `SoundObject3d.cpp`
 with its real Debug x64 engine/STLport settings and an explicit
 `CLIENT_MILES_DEV_FACADE` define. It does not link or change any production
-project selection. The resulting object calls the facade rather than native
+project selection. The resulting objects call the facade rather than native
 `AIL_*` functions. The normal source path remains direct Miles.
 
 The two size-less operations receive lexical extents from their existing
@@ -303,10 +305,40 @@ the bound fatal reporter rather than throwing an adapter exception into engine
 code. Speaker configuration, the version macro and the seven WAV metadata
 fields used by Audio are explicitly adapted.
 
-The current source compiles with VS2013 `/W4 /WX` and no diagnostics. This proves
-source integration only. Session bootstrap, actual Audio file callbacks,
-callback scheduling in the game, shutdown and full-client behavior still need
-integration and runtime checks.
+The current sources compile with VS2013 `/W4 /WX` and no diagnostics.
+Development selection requires explicit `[ClientAudio]` keys `devMilesHost`,
+`devMilesDll` and `devMilesUploadBudget` (decimal bytes within the existing
+upload policy). There is no guessed budget or silent fallback. Modern adapter
+exceptions terminate through the engine reporter instead of crossing the STLport
+boundary. Module references preserve code; engine global state must still
+outlive the callback worker.
+
+The development path uses the existing admitted file callbacks, which do not
+repeat legacy TLS installation. It tracks successful SDK startup independently
+of Audio's installed flag, so driver-init failure can still shut down and close.
+Shutdown and worker joins precede callback-map and sample-image cleanup. Actual
+Audio runtime and global ExitChain ordering remain unverified.
+
+### Development game relink
+
+`link-client-dev.py` takes `--engine-root`, the actual Debug-x64
+`--baseline-log`, successful `--audio-receipt`, `--pipe-receipt` and
+`--worker-receipt`, plus a new `--out` directory. Supply the original drive
+mapping if the saved linker command uses one. It adds both Audio objects and the
+two bridge archives, preserves the baseline provider libraries, isolates its
+outputs and refuses `/FORCE`. This reuses engine archives; it is not a fresh
+whole-source build.
+
+The observed native VS2013 Debug-x64 game relink completed with zero unresolved
+symbols and no linker diagnostics. The PE is AMD64/PE32+ and has no direct Miles
+import. SHA-256: `fb36364e5900ee7d7bd7229ba79b6f1d1da20166f75a1358da1e1e40c9053e4d`.
+Other engine archives came from the `49d0eeed4` native build; the Audio objects,
+pipe/bootstrap and engine-worker archives were freshly compiled from this tree.
+The initial relink exposed three listener imports in `SoundObject3d.cpp`; its
+development selection removed those by calling the real facade implementation.
+The first tool invocation also exposed a linker/PDB-frontend mismatch, corrected
+by choosing the linker from the matching VS2013 environment. Failed logs remain
+preserved. Startup, media fidelity and gameplay acceptance are not established.
 
 
 ### Typed end-of-sample and stream callbacks

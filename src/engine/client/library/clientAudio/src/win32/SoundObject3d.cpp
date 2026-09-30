@@ -8,6 +8,10 @@
 #include "clientAudio/FirstClientAudio.h"
 #include "clientAudio/SoundObject3d.h"
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+#include "dev/AudioSelection.h"
+#endif
+
 // ============================================================================
 //
 // SoundObject3d

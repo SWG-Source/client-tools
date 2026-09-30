@@ -3,6 +3,7 @@
 #include "../../file-protocol/file_protocol.h"
 #include <limits>
 #include "../../image/upload_policy.h"
+#include "../../failure/failure_boundary.h"
 
 namespace {
 uint64_t incarnation(const std::string &text){uint64_t value=0;for(unsigned i=0;i<16;++i)value=(value<<4)|static_cast<uint64_t>(text[i]<='9'?text[i]-'0':text[i]-'a'+10);return value?value:1;}
@@ -47,7 +48,7 @@ class LiveChannel : public ClientMilesPipe::Channel {
             exchange(MilesWire::Hello, MilesWire::Call(),
                      MilesTransport::Bytes(random.data(), random.size()), MilesTransport::Bytes(),std::vector<MilesWire::Handle>(),0);
         require(hello.result.transport_status == StartupBridge::Success, "Hello accepted");
-        }catch(...){if(runtime_){runtime_->fail();std::terminate();}throw;}
+        }catch(...){if(runtime_){runtime_->fail();ClientMilesPrivate52::fail(ClientMilesPrivate52::PrivateException,"Miles connection failed after callback ownership transfer");}throw;}
     }
 
     StartupBridge::OwnedReply call(uint32_t opcode, const MilesWire::Call &fields,
@@ -149,7 +150,7 @@ Session *connectSession(const char *host,const char *dll,std::shared_ptr<void> e
         Channel *channel=new LiveChannel(host,dll,enginePin,adopted,uploadBudgetBytes);
         return new Session(channel,*adopted,callbackPin,uploadBudgetBytes);
     }catch(...){
-        if(adopted){adopted->fail();std::terminate();} // retained runtime; no clean-close claim
+        if(adopted){adopted->fail();ClientMilesPrivate52::fail(ClientMilesPrivate52::PrivateException,"Miles session composition failed after ownership transfer");} // retained roots
         throw;
     }
 }
