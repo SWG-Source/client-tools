@@ -1537,7 +1537,7 @@ bool Os::launchBrowser(std::string const & website)
 {
 	std::string URL("http://");
 	URL=website;
-	int result = reinterpret_cast<int>(ShellExecute(NULL, "open", URL.c_str(), NULL, NULL, SW_SHOWNORMAL));
+	INT_PTR result = reinterpret_cast<INT_PTR>(ShellExecute(NULL, "open", URL.c_str(), NULL, NULL, SW_SHOWNORMAL));
 	return (result > 32);
 }
 
