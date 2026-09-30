@@ -261,7 +261,7 @@ unsigned int BufferedTransformation::NumberOfMessages() const
 bool BufferedTransformation::AnyMessages() const
 {
 	if (AttachedTransformation())
-		return AttachedTransformation()->NumberOfMessages();
+		return AttachedTransformation()->NumberOfMessages() != 0;
 	else
 		return NumberOfMessages() != 0;
 }
