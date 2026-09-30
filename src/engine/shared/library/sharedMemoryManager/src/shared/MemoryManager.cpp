@@ -1718,7 +1718,7 @@ void MemoryManager::verify(bool guardPatterns, bool freePatterns)
 							if (*memory != cms_freeFillPattern)
 							{
 								corrupt = true;
-								DEBUG_REPORT_LOG_PRINT(true, ("corrupted free pattern at position %3d [membase=0x%x, memaddr=0x%x] = %02x\n", i, reinterpret_cast<unsigned int>(reinterpret_cast<byte *>(block) + cms_freeBlockSize), reinterpret_cast<unsigned int>(reinterpret_cast<byte *>(block) + cms_freeBlockSize + i), static_cast<int>(*memory)));
+								DEBUG_REPORT_LOG_PRINT(true, ("corrupted free pattern at position %3d [membase=%p, memaddr=%p] = %02x\n", i, static_cast<void *>(reinterpret_cast<byte *>(block) + cms_freeBlockSize), static_cast<void *>(reinterpret_cast<byte *>(block) + cms_freeBlockSize + i), static_cast<int>(*memory)));
 								DEBUG_OUTPUT_CHANNEL("Foundation\\MemoryManager", ("corrupted free pattern at position %3d = %02x\n", i, static_cast<int>(*memory)));
 							}
 
