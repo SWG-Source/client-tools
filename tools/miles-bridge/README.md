@@ -253,3 +253,35 @@ not a clean runtime result or audio-fidelity acceptance.
 No engine file worker or Audio bootstrap was started, no EOS callback was
 installed, and no paired teardown or native Windows device test was performed.
 The unchanged game still uses direct Miles.
+
+
+### Engine worker and reverse file-callback check
+
+The `pipe-probe` target also supports:
+
+```powershell
+miles-pipe-probe.exe C:/test/miles-host.exe C:/test/Mss32.dll --file-callbacks
+```
+
+This mode installs the engine's real Thread/PerThreadData setup. A separate
+worker receives 32 ordered jobs; each verifies engine TLS and a consistent
+worker identity. It drains, joins and destroys that worker, checking that the
+main thread's flags remain unchanged. The adapter then starts its own engine
+worker and uses the actual reverse channel to serve a generated PCM WAV to the
+original Miles DLL. The callbacks use Win32 file APIs and verify engine TLS;
+they are test callbacks, not `Audio.cpp`'s file callbacks.
+
+The native VS2013 `/W4 /WX` build completed without diagnostics. The runtime
+produced all seven expected markers and exited zero: file open/read/seek/close,
+stream duration and borrowed-sample lookup completed, followed by the prior
+lock checks. **The strict run failed** because stderr contained the same four
+ALSA `Invalid CTL hw:0/hw:1` diagnostics as the sample-binding check. The rule
+was unchanged; desktop audio defaults were unchanged and the owned sink and
+Wine server were cleaned up.
+
+The tested probe SHA-256 is
+`1dc7f8a26bf8bbd4b18fbca37a876f6e0c90c48e49393112b952a205d5df2265`.
+It used the host and original DLL hashes listed above. This tests real engine
+worker execution, not full Audio installation, global ExitChain teardown or
+sound fidelity. The runtime session and its worker remain retained until
+process exit; only the separate worker prerequisite exercises drain/destruction.

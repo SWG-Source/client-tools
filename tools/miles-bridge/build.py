@@ -140,7 +140,9 @@ def build(args, work, receipt):
     receipt['sources'] = relative_sources
     if args.target == 'pipe-probe':
         sources.append(ROOT / 'tests/pipe_lock_probe.cpp')
-        receipt['sources'] = relative_sources + ['../tests/pipe_lock_probe.cpp']
+        sources.append(ROOT / 'tests/engine_worker_context.cpp')
+        receipt['sources'] = relative_sources + ['../tests/pipe_lock_probe.cpp',
+                                                 '../tests/engine_worker_context.cpp']
     env = compiler_environment(vcvars, receipt['arch'], work, receipt)
     tools = {}
     for name in ('cl.exe', 'link.exe' if args.target in ('host', 'pipe-probe') else 'lib.exe'):
@@ -158,7 +160,8 @@ def build(args, work, receipt):
         stem = '%02d-%s' % (index, source.stem)
         obj = work / (stem + '.obj')
         unit_flags = (engine_worker_flags(args.engine_root, receipt)
-                      if args.target == 'pipe-probe' and source.name == 'EngineFileWorker.cpp'
+                      if args.target == 'pipe-probe' and source.name in
+                         ('EngineFileWorker.cpp', 'engine_worker_context.cpp')
                       else flags)
         run([tools['cl.exe']] + unit_flags + ['/Fo' + str(obj),
             '/Fd' + str(work / (stem + '.pdb')), str(source)],
