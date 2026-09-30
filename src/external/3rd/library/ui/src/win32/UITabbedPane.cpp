@@ -14,6 +14,10 @@
 #include "UIData.h"
 #include "UIPage.h"
 
+#if defined(_M_X64)
+#include <intrin.h>
+#endif
+
 #include <cassert>
 #include <list>
 #include <vector>
@@ -959,7 +963,11 @@ long UITabbedPane::GetTabFromPoint(const UIPoint & point) const
 {
 	if (mTabObject) 
 	{
+#if defined(_M_X64)
+		__nop();
+#else
 		_asm nop;
+#endif
 	}
 
 	UIWidget * const widget = GetWidgetFromPoint(point, false);
