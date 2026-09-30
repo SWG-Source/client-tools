@@ -123,7 +123,8 @@ def build(args, work, receipt):
                                   or sdk_lib.name.lower() != 'mss32.lib'):
         raise ValueError('host requires --sdk-lib pointing to the real x86 Mss32.lib')
     manifest = json.loads((ROOT / 'sources.json').read_text(encoding='utf-8'))
-    relative_sources = manifest[args.target]
+    relative_sources = (manifest['pipe'] + manifest['engine-worker']
+                        if args.target == 'pipe-probe' else manifest[args.target])
     if not isinstance(relative_sources, list) or not relative_sources:
         raise ValueError('sources.json target must contain a nonempty source list')
     source_root = ROOT / 'src'
@@ -137,9 +138,12 @@ def build(args, work, receipt):
     if len(set(sources)) != len(sources):
         raise ValueError('Duplicate sources in sources.json')
     receipt['sources'] = relative_sources
+    if args.target == 'pipe-probe':
+        sources.append(ROOT / 'tests/pipe_lock_probe.cpp')
+        receipt['sources'] = relative_sources + ['../tests/pipe_lock_probe.cpp']
     env = compiler_environment(vcvars, receipt['arch'], work, receipt)
     tools = {}
-    for name in ('cl.exe', 'link.exe' if args.target == 'host' else 'lib.exe'):
+    for name in ('cl.exe', 'link.exe' if args.target in ('host', 'pipe-probe') else 'lib.exe'):
         tools[name] = shutil.which(name, path=env.get('PATH'))
         if not tools[name]:
             raise RuntimeError('Tool missing from VS2013 environment: %s' % name)
@@ -153,11 +157,15 @@ def build(args, work, receipt):
     for index, source in enumerate(sources):
         stem = '%02d-%s' % (index, source.stem)
         obj = work / (stem + '.obj')
-        run([tools['cl.exe']] + flags + ['/Fo' + str(obj),
+        unit_flags = (engine_worker_flags(args.engine_root, receipt)
+                      if args.target == 'pipe-probe' and source.name == 'EngineFileWorker.cpp'
+                      else flags)
+        run([tools['cl.exe']] + unit_flags + ['/Fo' + str(obj),
             '/Fd' + str(work / (stem + '.pdb')), str(source)],
             work, env, receipt, stem)
         objects.append(str(obj))
-    artifact = work / ('miles-host.exe' if args.target == 'host'
+    artifact = work / ('miles-pipe-probe.exe' if args.target == 'pipe-probe'
+                       else 'miles-host.exe' if args.target == 'host'
                        else 'miles-%s.lib' % args.target)
     options = ['/NOLOGO', '/WX', '/OUT:' + str(artifact)]
     if args.target == 'host':
@@ -166,6 +174,38 @@ def build(args, work, receipt):
                     '/PDB:' + str(work / 'miles-host.pdb')]
         options += objects + [str(sdk_lib), 'user32.lib', 'kernel32.lib',
                               'advapi32.lib']
+    elif args.target == 'pipe-probe':
+        linker = tools['link.exe']
+        engine_root = args.engine_root.resolve()
+        names = ('sharedThread', 'sharedSynchronization', 'sharedFoundation',
+                 'sharedMemoryManager', 'sharedDebug', 'sharedMath', 'sharedRandom',
+                 'unicode', 'sharedFile', 'sharedCompression', 'fileInterface',
+                 'archive', 'zlib')
+        libraries = [engine_root / 'src/compile/x64' / name / 'Debug' / (name + '.lib')
+                     for name in names]
+        libraries.append(engine_root / 'src/compile/deps/v120/x64/Debug/stlport.lib')
+        for library in libraries:
+            if not library.is_file():
+                raise ValueError('Missing genuine Debug-x64 library: %s' % library)
+        receipt['engine_libraries'] = [str(path) for path in libraries]
+        # The maintained engine archives store compiler PDBs under obj/;
+        # LINK searches beside the library and in its working directory.
+        compiler_pdbs = []
+        for library in libraries:
+            for pdb in sorted((library.parent / 'obj').glob('*.pdb')):
+                if (work / pdb.name).exists():
+                    raise ValueError('Conflicting compiler PDB basename: %s' % pdb.name)
+                shutil.copyfile(str(pdb), str(work / pdb.name))
+                compiler_pdbs.append(str(pdb))
+        receipt['engine_compiler_pdbs'] = compiler_pdbs
+        options += ['/MACHINE:X64', '/DEBUG', '/INCREMENTAL:NO', '/OPT:REF',
+                    '/MAP:' + str(work / 'miles-pipe-probe.map'),
+                    '/PDB:' + str(work / 'miles-pipe-probe.pdb'),
+                    '/NODEFAULTLIB:stlport_vc71_static.lib',
+                    '/NODEFAULTLIB:stlport_vc71_stldebug_static.lib']
+        options += objects + [str(path) for path in libraries]
+        options += ['kernel32.lib', 'user32.lib', 'advapi32.lib', 'winmm.lib',
+                    'gdi32.lib', 'shell32.lib', 'ws2_32.lib', 'dbghelp.lib']
     else:
         linker = tools['lib.exe']
         options += ['/MACHINE:X64'] + objects
@@ -179,7 +219,7 @@ def build(args, work, receipt):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target', choices=('host', 'pipe', 'native', 'engine-worker'), required=True)
+    parser.add_argument('--target', choices=('host', 'pipe', 'native', 'engine-worker', 'pipe-probe'), required=True)
     parser.add_argument('--sdk', type=Path,
                         help='Miles SDK include directory containing Mss.h (required except engine-worker)')
     parser.add_argument('--engine-root', type=Path,

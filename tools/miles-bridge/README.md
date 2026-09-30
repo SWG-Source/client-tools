@@ -18,6 +18,7 @@ python build.py --target host --sdk C:/SDK/Miles/include --sdk-lib C:/SDK/Miles/
 python build.py --target pipe --sdk C:/SDK/Miles/include --out C:/build/miles
 python build.py --target native --sdk C:/SDK/Miles/include --out C:/build/miles
 python build.py --target engine-worker --engine-root C:/source/client-tools --out C:/build/miles
+python build.py --target pipe-probe --sdk C:/SDK/Miles/include --engine-root C:/source/client-tools --out C:/build/miles
 ```
 
 `--vcvars` can select the installed VS2013 `vcvarsall.bat`. Outputs and complete
@@ -31,6 +32,7 @@ run the resulting binaries.
 | `pipe` | x64 `miles-pipe.lib` | Compiles the client adapter. An archive can contain unresolved references; this is not a client link. |
 | `native` | x64 `miles-native.lib` | Compiles direct calls against the SDK's Win64 declarations. A matching native vendor library is still required to link it. |
 | `engine-worker` | x64 `miles-engine-worker.lib` | Compiles the file executor using real engine headers, STLport and clientAudio's Debug-x64 definitions/include paths. |
+| `pipe-probe` | x64 `miles-pipe-probe.exe` | Links the real pipe adapter and engine worker against previously built Debug-x64 engine libraries and rebuilt STLport. |
 
 Choose exactly one client backend. The pipe and native archives implement the
 same public names and must not be linked together. Both currently use the debug
@@ -59,8 +61,8 @@ The pipe adapter currently defines 58 of the 62 public operations. Both EOS
 registrations, `set_sample_file`, and `set_named_sample_file` remain missing.
 There are no success stubs for them.
 
-The engine file worker is now a build target, but still needs to be linked and
-exercised with the pipe adapter. Audio exposes separate admitted file callbacks
+The engine file worker now links with the pipe adapter in the development
+probe, but its execution remains unqualified. Audio exposes separate admitted file callbacks
 which reuse its file operations without installing TLS again; its existing
 direct-Miles registration is unchanged. Selecting those callbacks and supplying
 Audio's image extents still need integration. The paired channel refuses normal session close until its
@@ -74,7 +76,7 @@ Unused earlier adapter implementations are excluded. Existing component test
 records remain evidence for their original source versions; they do not prove
 the newly combined executable behaves correctly.
 
-## Build checkpoint — 2026-09-30
+## Initial build checkpoint — 2026-09-30, before lock integration
 
 The host, pipe and native commands completed on native Windows with VS2013, `/W4 /WX`,
 `/EHsc`, and `/MTd`: 19 host, 17 pipe and 9 native translation units, with zero
@@ -132,3 +134,53 @@ It checks nesting, refusal, stale/foreign leases, causal acknowledgement joins,
 background observations and terminal-state retention against the real
 coordinator. Its expected total is exactly 53 checks; it does not exercise the
 SDK, actual file worker or live pipe path.
+
+## Combined lock probe — 2026-09-30
+
+Build `host` and `pipe-probe` above. The latter requires the genuine engine
+Debug-x64 archives in `src/compile/x64` and rebuilt STLport in
+`src/compile/deps/v120/x64/Debug`; the receipt records all selected libraries.
+Compiler PDBs are copied from their `obj` directories for this link, without
+suppressing missing-PDB warnings. Put the original `Mss32.dll` beside the x86
+host, then run with full paths:
+
+```powershell
+miles-pipe-probe.exe C:/test/miles-host.exe C:/test/Mss32.dll
+```
+
+Both programs compiled and linked on native Windows with VS2013, with zero
+warnings/errors under `/WX`. The combined probe then ran under Wine with an
+owned prefix and null audio sink. It exited zero, with empty stderr and exactly
+these four lines; the desktop audio defaults were unchanged:
+
+```text
+PASS: malformed lock/unlock rejected; nested sequence completed
+PASS: secondary caller rejected; owner sequence completed
+PASS: startup, nested lock/unlock, ordinary preference, shutdown
+PASS: pipe lock transport probe; test-only process exit, no teardown claim
+```
+
+The initial combined executable failed before these checks, in
+`MemoryManager::free`. Its linked VS2013 ConcRT path contained an incompatible
+allocator pair: CRT debug-new allocation and engine global delete. The fault
+log did not establish the exact allocation that crashed. Replacing the control
+owner's `std::mutex` with inline Windows SRW locks removed that dependency; the
+rebuilt executable passed the same probe. The initial failure remains recorded.
+
+| Artifact | SHA-256 | Result |
+| --- | --- | --- |
+| x86 host | `511846fa7ebcd486e3eaeb4131569de1f1b1985b77a99c3e13bf76b2fdff6c86` | Genuine DLL host used by both runs |
+| Initial x64 probe | `9211a7b43a66d0736baf1f3818a1521750658f5dde74d0a48fc1061ed87fe206` | Failed in engine free before checks |
+| x64 probe with SRW locks | `bffbe8e9ac34a180949981a99c28d954e7ff395dcceb520388a51cbadeae3fed` | Four markers, exit 0 |
+
+The original DLL hash was
+`0785b5f2aa81e68c41778bea1aa92ed545e2392827d90745838af2b14f6954fe`.
+The portable 53-check regression also failed as expected when the refusal
+condition was deliberately disabled.
+
+This probes actual facade/host command transport and refusal handling. It does
+not install file callbacks or start the linked engine worker, open a digital
+driver, play media, or prove native Windows device behavior. The probe retains
+its session and exits the process after the genuine SDK shutdown call; paired
+channel/worker teardown remains unfinished. Full client integration, EOS/file
+binding and original audio fidelity are still outstanding.

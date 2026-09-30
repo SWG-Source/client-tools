@@ -1,12 +1,33 @@
 #include "client_file_runtime.h"
 #include <process.h>
-#include <mutex>
 #include <stdexcept>
 #include <new>
 namespace MilesClientRuntime53 {
 using namespace MilesFileOwner36;
 using MilesFileExecutor30::EngineFileWorker;
 namespace {
+// Keep synchronization storage inside this owner. VS2013 std::mutex uses
+// ConcRT's debug allocation with ordinary global delete, which the engine
+// replaces; that allocation/deallocation pair crosses incompatible heaps.
+class ControlMutex {
+public:
+    ControlMutex(){InitializeSRWLock(&lock_);}
+    void acquire(){AcquireSRWLockExclusive(&lock_);}
+    void release(){ReleaseSRWLockExclusive(&lock_);}
+private:
+    SRWLOCK lock_;
+    ControlMutex(const ControlMutex &);
+    ControlMutex &operator=(const ControlMutex &);
+};
+class ControlLock {
+public:
+    explicit ControlLock(ControlMutex &mutex):mutex_(mutex){mutex_.acquire();}
+    ~ControlLock(){mutex_.release();}
+private:
+    ControlMutex &mutex_;
+    ControlLock(const ControlLock &);
+    ControlLock &operator=(const ControlLock &);
+};
 struct Event {
     HANDLE h;
     Event():h(CreateEventA(0,TRUE,FALSE,0)){if(!h)throw std::runtime_error("event creation");}
@@ -37,7 +58,7 @@ struct Runtime::State {
     const uint64_t session,background;
     Event wake,ready,terminal;
     mutable volatile LONG failureRequested;
-    std::mutex slotMutex,callerMutex;
+    ControlMutex slotMutex,callerMutex;
     std::shared_ptr<Ticket> slot;
     std::shared_ptr<void> engineLifetime;
     // These owners are created/read/mutated only on the control thread. Retained
@@ -63,9 +84,9 @@ struct Runtime::State {
         SetEvent(terminal.h);
     }
     bool post(const std::shared_ptr<Ticket> &ticket){
-        std::lock_guard<std::mutex> caller(callerMutex);
+        ControlLock caller(callerMutex);
         if(isFailed())return false;
-        {std::lock_guard<std::mutex> lock(slotMutex);if(slot){requestFailure();return false;}slot=ticket;}
+        {ControlLock lock(slotMutex);if(slot){requestFailure();return false;}slot=ticket;}
         if(!SetEvent(wake.h)){requestFailure();return false;}
         HANDLE events[]={ticket->done.h,terminal.h};
         DWORD result=WaitForMultipleObjects(2,events,FALSE,INFINITE);
@@ -73,7 +94,7 @@ struct Runtime::State {
         return ticket->ok && !isFailed();
     }
     void complete(const std::shared_ptr<Ticket> &ticket){
-        {std::lock_guard<std::mutex> lock(slotMutex);slot.reset();}
+        {ControlLock lock(slotMutex);slot.reset();}
         ticket->ok=true;
         if(!SetEvent(ticket->done.h))requestFailure();
     }
@@ -132,7 +153,7 @@ struct Runtime::State {
                 if(isFailed())break;
                 ResetEvent(wake.h);
                 std::shared_ptr<Ticket> current;
-                {std::lock_guard<std::mutex> lock(slotMutex);current=slot;}
+                {ControlLock lock(slotMutex);current=slot;}
                 if(current)observation(current);
                 if(isFailed())break;
                 endpoint->pump();
