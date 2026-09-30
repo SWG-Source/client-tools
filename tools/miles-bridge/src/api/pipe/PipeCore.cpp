@@ -136,7 +136,8 @@ Session::Session(Channel *channel, MilesClientRuntime53::Runtime &runtime,
     : started(false), stopped(false), samples(new SampleState), commandThread_(GetCurrentThreadId()), channel_(channel), closed_(false),
       faulted_(false), runtime_(runtime), callbackCodeLifetime_(callbackCodeLifetime),
       filesPrepared_(false), filesInstalled_(false), uploadBudgetBytes_(uploadBudgetBytes),
-      uploadPhase_(UploadIdle), uploadId_(), uploadBytes_(0), uploadOpcode_(0), sourceView_(0) {
+      uploadPhase_(UploadIdle), uploadId_(), uploadBytes_(0), uploadOpcode_(0),
+      uploadTarget_(), uploadBlock_(0), sourceView_(0) {
     if (!MilesImage93::validBudget(uploadBudgetBytes_))
         fail(ClientMilesPipeCore57::FailureReason::InputLimit,"explicit upload byte budget required");
     if (selectedSession || !channel_)
@@ -213,6 +214,17 @@ bool Session::validateReply(uint32_t opcode,const MilesWire::Call &fields,
     // Wire decoder has already validated refusal shape/status. A known refusal
     // is still an observed return, and must settle before request() propagates it.
     if(!StartupBridge::knownStatus(r.transport_status))return false;
+    const bool setter=opcode==MilesWire::AIL_set_sample_file || opcode==MilesWire::AIL_set_named_sample_file;
+    if(setter) {
+        if(uploadPhase_!=UploadClassifying || opcode!=uploadOpcode_ ||
+           fields.value[0]!=uploadBytes_ || fields.value[1]!=uploadBlock_ ||
+           uploadTarget_.kind!=MilesWire::OwnedSample ||
+           fields.target.kind!=uploadTarget_.kind || fields.target.slot!=uploadTarget_.slot ||
+           fields.target.generation!=uploadTarget_.generation ||
+           uploadId_.kind!=MilesWire::Buffer || fields.resource.kind!=uploadId_.kind ||
+           fields.resource.slot!=uploadId_.slot || fields.resource.generation!=uploadId_.generation)
+            return false;
+    }
     if(r.transport_status!=StartupBridge::Success)return true;
     if(opcode==MilesWire::SessionVersion)
         return MilesSessionVersion::validCapacity(fields.value[0]) &&
@@ -227,8 +239,8 @@ bool Session::validateReply(uint32_t opcode,const MilesWire::Call &fields,
            fields.value[0]!=uploadBytes_)return false;
     }
     if(opcode==MilesWire::BufferChunk || opcode==MilesWire::BufferSeal ||
-       opcode==MilesWire::BufferRelease || opcode==MilesWire::AIL_file_type || opcode==MilesWire::AIL_WAV_info) {
-        const bool query=opcode==MilesWire::AIL_file_type || opcode==MilesWire::AIL_WAV_info;
+       opcode==MilesWire::BufferRelease || opcode==MilesWire::AIL_file_type || opcode==MilesWire::AIL_WAV_info || setter) {
+        const bool query=opcode==MilesWire::AIL_file_type || opcode==MilesWire::AIL_WAV_info || setter;
         const MilesWire::Handle &id=query ? fields.resource : fields.target;
         if(!uploadId_.kind || !same(uploadId_,id))return false;
         if((opcode==MilesWire::BufferChunk && uploadPhase_!=UploadChunks) ||
@@ -319,7 +331,31 @@ int32_t Session::queryWav(const void *image,ClientMiles::SampleInformation *resu
     }
     return status;
 }
-StartupBridge::OwnedReply Session::queryImage(const void *image,uint32_t count,uint32_t opcode) {
+int32_t Session::bindSampleImage(const MilesWire::Handle &sample,const void *image,
+    uint32_t count,uint32_t opcode,int32_t block,const char *suffix) {
+    MilesCallbackGuard47::requireForwardAllowed();requireRunning();
+    if(opcode==MilesWire::AIL_set_sample_file) {
+        if(!sourceView_ || sourceView_->base_!=image)
+            fail(ClientMilesPipeCore57::FailureReason::InvalidArgument,"live exact source view required for sample file");
+        count=sourceView_->bytes_;
+    } else if(opcode!=MilesWire::AIL_set_named_sample_file) {
+        fail(ClientMilesPipeCore57::FailureReason::InvalidArgument,"sample image setter required");
+    }
+    uint32_t textBytes=0;
+    if(suffix) {
+        if(opcode!=MilesWire::AIL_set_named_sample_file)
+            fail(ClientMilesPipeCore57::FailureReason::InvalidArgument,"unnamed sample file forbids suffix");
+        while(textBytes<MilesStartup::RequestTextLimit && suffix[textBytes])++textBytes;
+        if(textBytes==MilesStartup::RequestTextLimit)
+            fail(ClientMilesPipeCore57::FailureReason::InputLimit,"sample suffix exceeds request text limit");
+        ++textBytes; // Includes NUL; preserves nonnull empty versus null suffix.
+    }
+    const StartupBridge::OwnedReply reply=queryImage(image,count,opcode,sample,
+        static_cast<uint32_t>(block),MilesTransport::Bytes(suffix,textBytes));
+    return static_cast<int32_t>(MilesStartup::signedValue(reply.result.return_bits));
+}
+StartupBridge::OwnedReply Session::queryImage(const void *image,uint32_t count,uint32_t opcode,
+    const MilesWire::Handle &target,uint32_t block,MilesTransport::Bytes text) {
     MilesCallbackGuard47::requireForwardAllowed();requireRunning();
     if(uploadPhase_!=UploadIdle)
         fail(ClientMilesPipeCore57::FailureReason::WrongState,"one image transaction required");
@@ -328,7 +364,8 @@ StartupBridge::OwnedReply Session::queryImage(const void *image,uint32_t count,u
     if(!MilesImage93::allows(uploadBudgetBytes_,count))
         fail(ClientMilesPipeCore57::FailureReason::InputLimit,"image exceeds private upload budget");
     // Member state survives any uncertainty; no destructor RPC or implicit retry.
-    uploadBytes_=count;uploadOpcode_=opcode;uploadPhase_=UploadBeginning;
+    uploadBytes_=count;uploadOpcode_=opcode;uploadTarget_=target;uploadBlock_=block;
+    uploadPhase_=UploadBeginning;
     try {
         MilesWire::Call fields={};fields.value[0]=count;
         const StartupBridge::OwnedReply begin=request(MilesWire::BufferBegin,fields);
@@ -347,11 +384,13 @@ StartupBridge::OwnedReply Session::queryImage(const void *image,uint32_t count,u
         uploadPhase_=UploadSealing;fields=MilesWire::Call();fields.target=uploadId_;
         request(MilesWire::BufferSeal,fields);
         uploadPhase_=UploadClassifying;fields=MilesWire::Call();fields.resource=uploadId_;fields.value[0]=count;
+        fields.target=target;fields.value[1]=block;
         fields.output_mask=opcode==MilesWire::AIL_WAV_info ? 1u : 0u;
-        const StartupBridge::OwnedReply classified=request(opcode,fields);
+        const StartupBridge::OwnedReply classified=request(opcode,fields,text);
         uploadPhase_=UploadReleasing;fields=MilesWire::Call();fields.target=uploadId_;
         request(MilesWire::BufferRelease,fields);
-        uploadId_=MilesWire::Handle();uploadBytes_=0;uploadOpcode_=0;uploadPhase_=UploadIdle;
+        uploadId_=MilesWire::Handle();uploadBytes_=0;uploadOpcode_=0;
+        uploadTarget_=MilesWire::Handle();uploadBlock_=0;uploadPhase_=UploadIdle;
         return classified;
     } catch(...) { faulted_=true;runtime_.fail();throw; }
 }
@@ -869,8 +908,17 @@ void set_sample_obstruction(HSAMPLE sample, float value) {
     session.request(MilesWire::AIL_set_sample_obstruction, fields);
 }
 
-// set_named_sample_file is deliberately not defined: native rebind and failed-bind
-// input-lifetime rules plus actual sealed-upload/host ownership must be resolved.
+int32_t set_named_sample_file(HSAMPLE sample,const char *suffix,const void *image,
+    uint32_t bytes,int32_t block) {
+    ClientMilesPipe::Session &session=ClientMilesPipe::Session::selected();
+    const MilesWire::Handle target=ownedSample(session,sample).wire;
+    return session.bindSampleImage(target,image,bytes,MilesWire::AIL_set_named_sample_file,block,suffix);
+}
+int32_t set_sample_file(HSAMPLE sample,const void *image,int32_t block) {
+    ClientMilesPipe::Session &session=ClientMilesPipe::Session::selected();
+    const MilesWire::Handle target=ownedSample(session,sample).wire;
+    return session.bindSampleImage(target,image,0,MilesWire::AIL_set_sample_file,block,0);
+}
 } // namespace ClientMiles
 
 namespace ClientMilesPipeCore57 {

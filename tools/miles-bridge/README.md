@@ -48,7 +48,7 @@ CRT/configuration integration is a separate build step.
 - `wire/`, `protocol/`, `transport/`: byte encoding, resource identities and pipes.
 - `file-*`, `host-runtime/`, `client-runtime/`: reverse file callbacks and their
   ownership, admission and acknowledgement handling.
-- `buffer/`, `image/`, `upload/`: bounded image transfer for file-type/WAV queries.
+- `buffer/`, `image/`, `upload/`: bounded image transfer and sample-image ownership.
 - `metadata/`, `version/`: owned metadata and original module version queries.
 
 `sources.json` lists each target's translation units. Relative includes preserve
@@ -57,17 +57,16 @@ to the include path to bypass missing includes.
 
 ## Remaining integration
 
-The pipe adapter currently defines 58 of the 62 public operations. Both EOS
-registrations, `set_sample_file`, and `set_named_sample_file` remain missing.
-There are no success stubs for them.
+Both EOS registrations remain missing. The sample-file setters now execute
+through owned uploads, as tested below. There are no success stubs.
 
 The engine file worker now links with the pipe adapter in the development
 probe, but its execution remains unqualified. Audio exposes separate admitted file callbacks
 which reuse its file operations without installing TLS again; its existing
 direct-Miles registration is unchanged. Selecting those callbacks and supplying
 Audio's image extents still need integration. The paired channel refuses normal session close until its
-shutdown and callback lifetime protocol is implemented. Setter/rebinding
-ownership and callback quiescence remain open. Do not use this helper as the
+shutdown and callback lifetime protocol is implemented. Full media-format
+qualification and callback quiescence remain open. Do not use this helper as the
 game's audio backend yet.
 
 The maintained sources consolidate the previously reviewed pipe composition113
@@ -183,4 +182,74 @@ not install file callbacks or start the linked engine worker, open a digital
 driver, play media, or prove native Windows device behavior. The probe retains
 its session and exits the process after the genuine SDK shutdown call; paired
 channel/worker teardown remains unfinished. Full client integration, EOS/file
-binding and original audio fidelity are still outstanding.
+integration and original audio fidelity are still outstanding.
+
+## Sample-file binding — 2026-09-30
+
+Both setters reuse the sealed upload transaction. The host validates an owned
+sample, exact byte count, signed block argument and optional NUL-terminated
+suffix before calling the genuine SDK. Null and empty suffixes remain distinct.
+The size-less setter needs a matching private `ScopedSourceImage`; the adapter
+does not infer a readable allocation from an audio header.
+
+Image and suffix storage is attached to the sample before native effect and
+survives release of the temporary upload. A successful replacement discards that
+sample's earlier images. A zero return preserves both old and attempted inputs:
+failure is not a rollback guarantee. Genuine sample release or SDK shutdown
+discharges the remaining inputs. An uncertain call is terminal and retains its
+owners. This is sample-image ownership, not a claim of callback quiescence.
+
+The selected DLL identified below initializes sample state and disconnects old
+processors on its successful setter paths. This was checked against that
+binary; the supporting local RAD reference is version 9.3b, not a matching
+7.2e contract. RAD's [7.2a change history](https://www.radgametools.com/msshist.htm)
+also describes automatic initialization by these setters. Other vendor versions
+and codecs still require qualification.
+
+The explicit image budget includes retained input bytes, two copies of the
+incoming image and its suffix before replacement. It excludes allocator and
+container overhead. Repeated failures can exhaust that budget; refusal is a
+bridge policy limit, not transparent native behavior. Successful rebinds do not
+retain an ever-growing image history.
+
+Portable ownership tests (same-module modeled calls, no SDK exports):
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined tests/upload_binding.cpp src/wire/codec.cpp src/buffer/buffer_upload.cpp -o upload-binding
+./upload-binding
+```
+
+These passed with ASan/UBSan. They cover retained pointer readability, native
+zero/negative statuses, uncertain completion, release, malformed requests,
+owned/borrowed identities, 65 rebinds, and aggregate budget admission. Mutating
+the owner to retain on success or discard on zero makes the test fail.
+
+Build the existing `host` and `pipe-probe` targets, then run:
+
+```powershell
+miles-pipe-probe.exe C:/test/miles-host.exe C:/test/Mss32.dll --sample-bindings
+```
+
+Both programs built with VS2013 `/W4 /WX`, zero warnings/errors. Under an owned
+Wine prefix/null sink, the actual x64 adapter and original x86 DLL completed 65
+alternating named/unnamed binds on one handle, retained the expected duration
+after the caller buffer was overwritten, returned zero for an invalid WAV,
+accepted a subsequent valid replacement, and released the sample. The earlier
+lock checks also completed. Generated PCM silence is used; no game media is
+needed.
+
+**Strict run result: failed.** All six expected PASS markers appeared and the
+process exited zero, but stderr contained four ALSA `Invalid CTL hw:0/hw:1`
+diagnostics. The empty-stderr acceptance rule was not relaxed. Desktop audio
+defaults remained unchanged. This is evidence for the observed command sequence,
+not a clean runtime result or audio-fidelity acceptance.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| x86 host | `01519e140ec407939ac39a2414baf6eda08234533ae96cc8706c29f346168fe2` |
+| x64 probe | `fc0a50f1776277870e001f9c13e3f6d9e2c27ddce286b40bdc7a0641a8693cd4` |
+| original x86 DLL | `0785b5f2aa81e68c41778bea1aa92ed545e2392827d90745838af2b14f6954fe` |
+
+No engine file worker or Audio bootstrap was started, no EOS callback was
+installed, and no paired teardown or native Windows device test was performed.
+The unchanged game still uses direct Miles.

@@ -54,6 +54,15 @@ struct Backend {
     bool uploadFailed() const { return imageUpload.failed(); }
     bool uploadActive() const { return imageUpload.active(); }
     void observeUploadRefusal(uint32_t status) { imageUpload.observeRefusal(status); }
+    static int32_t bindImageNative(uint32_t opcode,void *sample,const char *suffix,
+                                  const void *image,uint32_t size,int32_t block) {
+        const S32 status=opcode==MilesWire::AIL_set_named_sample_file ?
+            ::AIL_set_named_sample_file(static_cast<HSAMPLE>(sample),suffix,image,size,block) :
+            ::AIL_set_sample_file(static_cast<HSAMPLE>(sample),image,block);
+        int32_t result=0;
+        static_assert(sizeof(status)==sizeof(result),"native sample file result width");
+        std::memcpy(&result,&status,sizeof(result));return result;
+    }
     static MilesHostUpload106::QueryResult queryImageNative(uint32_t opcode,const void *data,uint32_t size) {
         MilesHostUpload106::QueryResult out={};
         S32 status=0;
@@ -81,7 +90,7 @@ struct Backend {
         require(!streamOpenPending, "uncertain stream open cannot resume");
         OwnedReply uploadReply;
         if(imageUpload.intercept(h.opcode,c,frame,started,shutdown,
-                                &Backend::queryImageNative,&require,uploadReply))return uploadReply;
+                                &Backend::queryImageNative,&require,uploadReply,&Backend::bindImageNative))return uploadReply;
         OwnedReply out;
         out.result.transport_status = InvalidFields;
         // Narrow native25 non-callback slice; reuse reviewed SDK dispatcher.
@@ -233,6 +242,7 @@ struct Backend {
                 // Null allocation cancels its unpublished reservation on scope exit.
             } else {
                 ::AIL_release_sample_handle(static_cast<HSAMPLE>(local));
+                imageUpload.releasedSample(c.target);
                 require(registry.retire(c.target), "retire sample after confirmed release");
             }
             out.result.transport_status = Success;
@@ -336,6 +346,7 @@ struct Backend {
         }
         if (h.opcode == MilesWire::AIL_shutdown) {
             ::AIL_shutdown();
+            imageUpload.shutdownComplete();
             started = false;
             shutdown = true;
             if (driver) {

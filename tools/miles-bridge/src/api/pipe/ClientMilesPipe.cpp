@@ -20,8 +20,8 @@ template<class Result, class Action> Result guarded(Action action) {
     }
 }
 }
-// Partial plain surface: 58 guarded definitions backed by this selected Core.
-// EOS registration and both sample-file setters remain unimplemented.
+// Partial plain surface backed by this selected Core.
+// EOS registration remains unimplemented.
 namespace ClientMiles {
 int32_t WAV_info(const void *fileImage,SampleInformation *result) {
     return guarded<int32_t>([=]() -> int32_t { return Core::WAV_info(fileImage,result); });
@@ -31,6 +31,15 @@ void MSS_version(char *destination, int32_t capacity) {
 }
 int32_t file_type(const void *fileImage,uint32_t fileBytes) {
     return guarded<int32_t>([=]() -> int32_t { return Core::file_type(fileImage,fileBytes); });
+}
+int32_t set_named_sample_file(HSAMPLE sample,const char *suffix,const void *image,
+    uint32_t bytes,int32_t block) {
+    return guarded<int32_t>([=]() -> int32_t {
+        return Core::set_named_sample_file(sample,suffix,image,bytes,block);
+    });
+}
+int32_t set_sample_file(HSAMPLE sample,const void *image,int32_t block) {
+    return guarded<int32_t>([=]() -> int32_t { return Core::set_sample_file(sample,image,block); });
 }
 const char *last_error() {
     return guarded<const char *>([]() -> const char * { return Core::last_error(); });

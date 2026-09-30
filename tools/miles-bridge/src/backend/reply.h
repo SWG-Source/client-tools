@@ -83,7 +83,8 @@ inline bool decodeReply(MilesTransport::Bytes frame, const MilesWire::Header &ex
                h.opcode == MilesWire::AIL_digital_latency ||
                h.opcode == MilesWire::AIL_get_timer_highest_delay ||
                h.opcode == MilesWire::AIL_file_error || h.opcode == MilesWire::AIL_file_type ||
-               h.opcode == MilesWire::AIL_WAV_info);
+               h.opcode == MilesWire::AIL_WAV_info ||
+               h.opcode == MilesWire::AIL_set_sample_file || h.opcode == MilesWire::AIL_set_named_sample_file);
     const bool sampleAllocation = ok && h.opcode == MilesWire::AIL_allocate_sample_handle;
     const bool aliasOp=ok && h.opcode==MilesWire::AIL_stream_sample_handle;
     const bool streamOpen=ok && h.opcode==MilesWire::AIL_open_stream;

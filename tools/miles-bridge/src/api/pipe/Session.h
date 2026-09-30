@@ -36,6 +36,8 @@ class Session {
         ClientMiles::FileSeekCallback, ClientMiles::FileReadCallback);
     int32_t classifyImage(const void *image, uint32_t bytes);
     int32_t queryWav(const void *image, ClientMiles::SampleInformation *result);
+    int32_t bindSampleImage(const MilesWire::Handle &sample, const void *image,
+        uint32_t bytes, uint32_t opcode, int32_t block, const char *suffix);
     bool started;
     bool stopped;
     std::unique_ptr<DriverProxy> driver;
@@ -62,9 +64,13 @@ class Session {
     MilesWire::Handle uploadId_;
     uint32_t uploadBytes_;
     uint32_t uploadOpcode_;
+    MilesWire::Handle uploadTarget_;
+    uint32_t uploadBlock_;
     const ScopedSourceImage *sourceView_; // lexical borrow, never a pin or allocation owner
     friend class ScopedSourceImage;
-    StartupBridge::OwnedReply queryImage(const void *,uint32_t,uint32_t);
+    StartupBridge::OwnedReply queryImage(const void *,uint32_t,uint32_t,
+        const MilesWire::Handle &target = MilesWire::Handle(), uint32_t block = 0,
+        MilesTransport::Bytes text = MilesTransport::Bytes());
     std::vector<MilesWire::Handle> verifiedResources(const MilesWire::Call &) const;
     Session(const Session &);
     Session &operator=(const Session &);

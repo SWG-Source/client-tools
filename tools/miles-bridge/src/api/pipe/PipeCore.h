@@ -104,6 +104,7 @@ void set_room_type(HDIGDRIVER driver, int32_t room);
 HSAMPLE allocate_sample_handle(HDIGDRIVER driver);
 int32_t set_named_sample_file(HSAMPLE sample, const char *suffix,
                              const void *fileImage, uint32_t fileBytes, int32_t block);
+int32_t set_sample_file(HSAMPLE sample, const void *fileImage, int32_t block);
 void sample_ms_position(HSAMPLE sample, int32_t *totalMilliseconds,
                         int32_t *currentMilliseconds);
 void end_sample(HSAMPLE sample);
@@ -111,9 +112,10 @@ void end_sample(HSAMPLE sample);
 void release_sample_handle(HSAMPLE sample);
 
 // Allocation null and named-file scalar returns stay actual SDK values. Output
-// pointers preserve nullability and millisecond units. No image ownership moves:
-// the caller retains suffix/image storage through the documented vendor lifetime;
-// this candidate's usage excerpt conservatively keeps both stable through release.
+// pointers preserve nullability and millisecond units. The host retains each
+// image/suffix until successful replacement or genuine release; failed binds
+// retain both old and attempted inputs because native failure is not rollback.
+// The size-less setter requires a matching private ScopedSourceImage extent.
 // Binding, millisecond query and end in this subset require an owned allocation.
 // The common type also supports the explicitly documented shared stream controls.
 
