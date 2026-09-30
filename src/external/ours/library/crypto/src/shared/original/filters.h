@@ -446,16 +446,23 @@ class StringStore : public Store
 {
 public:
 	StringStore(const char *string)
-		: m_store((const byte *)string), m_length(strlen(string)), m_count(0) {}
+		: m_store((const byte *)string), m_length(CheckedLength(strlen(string))), m_count(0) {}
 	StringStore(const byte *string, unsigned int length)
 		: m_store(string), m_length(length), m_count(0) {}
 	template <class T> StringStore(const T &string)
-		: m_store((const byte *)string.data()), m_length(string.length()), m_count(0) {assert(sizeof(string[0])==1);}
+		: m_store((const byte *)string.data()), m_length(CheckedLength(string.length())), m_count(0) {assert(sizeof(string[0])==1);}
 
 	unsigned long TransferTo(BufferedTransformation &target, unsigned long transferMax=ULONG_MAX);
 	unsigned long CopyTo(BufferedTransformation &target, unsigned long copyMax=ULONG_MAX) const;
 
 private:
+	static unsigned int CheckedLength(size_t length)
+	{
+		if (length > UINT_MAX)
+			throw Exception("StringStore: input exceeds unsigned int length range");
+		return static_cast<unsigned int>(length);
+	}
+
 	const byte *m_store;
 	unsigned int m_length, m_count;
 };
