@@ -47,3 +47,26 @@ Win32 settings are unchanged; no SDK binaries are included in this repository.
 Evidence covers native property evaluation and linking the existing wrapper
 against this provider. It does not establish a full x64 client link, LCD device
 rendering, button delivery, hot-plug behavior or startup without Logitech software.
+
+## SwgClient x64 STLport provider
+
+The x64 executable uses the same configuration-owned, source-built STLport archive
+as the renderers. It builds all 33 source files listed by the bundled makefile,
+using `/MT` for Release and `/MTd` for Debug with `/Zc:wchar_t-`. Debug does not
+implicitly enable STLport's separate `_STLP_DEBUG` iterator/container mode; the
+client's existing preprocessor settings remain unchanged.
+
+The x64 link policy replaces the explicit legacy
+`stlport_vc71_stldebug_static.lib` input and ignores only the observed
+`stlport_vc71_static.lib` autolink name, while explicitly supplying the real
+`stlport.lib`. It does not ignore unresolved symbols or architecture errors.
+Win32 retains its original provider selection. Renderer dependency validation and
+source builds share a property sheet with the executable; renderer SDK checks
+still run before its dependency build.
+
+Native validation compared effective inputs, library directories, preprocessor
+definitions and ignored defaults in Debug/Release on both ABIs. Win32 and renderer
+metadata stayed unchanged; only the intended x64 executable provider selection
+changed. Both final x64 linker experiments progressed beyond the legacy STLport
+archive to a wrong-architecture Vivox wrapper. This is not a complete client link
+or proof that every remaining dependency is resolved.
