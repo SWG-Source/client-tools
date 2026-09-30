@@ -730,7 +730,7 @@ static void PlayAnimation (const SwgCuiCommandParserScene::StringVector_t & argv
 			{
 				//-- Apply regular expression to the animation filename.
 				NOT_NULL(regularExpression);
-				int const resultCode = pcre_exec(regularExpression, NULL, pathAsString.c_str(), pathAsString.length(), 0, 0, &captureData[0], sizeof(captureData));
+				int const resultCode = pcre_exec(regularExpression, NULL, pathAsString.c_str(), pathAsString.length(), 0, 0, &captureData[0], subscriptCount);
 				if (resultCode < 0)
 				{
 					//-- The animation name did not match.
@@ -5117,4 +5117,3 @@ bool TradeParser::performParsing (const NetworkId & userId, const StringVector_t
 }
 
 // ======================================================================
-
