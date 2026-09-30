@@ -81,8 +81,8 @@ namespace MemoryManagerNamespace
 
 		int m_size;
 		SystemAllocation * m_next;
-		int m_pad1;
-		int m_pad2;
+		size_t m_pad1;
+		size_t m_pad2;
 	};
 
 
@@ -204,6 +204,7 @@ namespace MemoryManagerNamespace
 	void   logMessageToFd(char const * message);
 
 	int const             cms_blockSize              = (sizeof(Block) + 15) & (~15);
+	static_assert(sizeof(SystemAllocation) == cms_blockSize, "SystemAllocation must occupy one block");
 	int const             cms_freeBlockSize          = (sizeof(FreeBlock) + 15) & (~15);
 	extern int const      cms_allocatedBlockSize     = (sizeof(AllocatedBlock) + 15) & (~15);
 	byte const            cms_guardFillPattern       = 0xAB;
