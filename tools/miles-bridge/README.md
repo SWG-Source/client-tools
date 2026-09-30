@@ -60,8 +60,10 @@ The pipe adapter currently defines 56 of the 62 public operations. Missing are
 `set_named_sample_file`. There are no success stubs for them.
 
 The engine file worker is now a build target, but still needs to be linked and
-exercised with the pipe adapter. Audio's image extents and callback/TLS handling
-also need integration. The paired channel refuses normal session close until its
+exercised with the pipe adapter. Audio exposes separate admitted file callbacks
+which reuse its file operations without installing TLS again; its existing
+direct-Miles registration is unchanged. Selecting those callbacks and supplying
+Audio's image extents still need integration. The paired channel refuses normal session close until its
 shutdown and callback lifetime protocol is implemented. Setter/rebinding
 ownership and callback quiescence remain open. Do not use this helper as the
 game's audio backend yet.
@@ -95,3 +97,12 @@ The x86 import library SHA-256 is
 Artifacts include build metadata; these hashes identify this run rather than
 specifying reproducible binary hashes. Use the script's per-invocation logs and
 receipt to assess another build.
+
+The admitted Audio callback refactor compiled with zero warnings/errors in
+native Win32/x64 Debug/Release. The complete Win32 SwgClient incremental build
+and link also passed in Debug and Release: zero errors, with 30 linker PDB
+warnings in each run. An initial x64 compile against an older VM checkout failed
+on an existing `Archive.h` narrowing warning; the final checks used the verified
+current engine mirror. No warning was suppressed. These results do not qualify
+the new callback path at runtime; current game registration still uses the
+legacy callbacks.
