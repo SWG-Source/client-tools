@@ -23,3 +23,27 @@ The builder checks archive identity before extraction, uses all 46 official JPEG
 JPEG public headers retain the repository's Windows INT32/FAR adaptations; the original license text is copied unchanged as `JPEG-README.txt`. Distribution must retain the license and attribution requirements in that file. No generated binaries or SDK packages belong in Git.
 
 Native scratch validation covered Debug/Release on both ABIs, opposite-header/library ABI probes, one RGB encoder fixture, 39 legacy/new DxErr names and all six x64 renderer project links. These checks do not prove every JPEG codec path, hostile image safety, Direct3D device creation or rendered frames. The original Win32 diagnostic API remains untouched; x64 uses June 2010's real `DXGetErrorStringA`.
+
+
+## Logitech legacy LCD library for x64
+
+The existing LCD wrapper uses the legacy low-level `lgLcd` API. Supply the original
+x64 SDK library separately and set `/p:SwgLogitechLcdSdkDir=C:\SDKs\LCDSDK` when
+building SwgClient x64. The expected file is `Lib\x64\lglcd.lib` beneath that root.
+Set `SwgPythonExecutable` to a Python executable if `python` is not on PATH.
+
+The verified provider is the legacy SDK in Logitech GamePanel Software 3.06 x64:
+[official package](https://download01.logi.com/web/ftp/pub/gaming/keyboards/lgps306_x64.exe).
+Extract the package, then `1b-GamePanel-x64/GPInst.msi`, its `LADPSDK_zip` payload,
+and the `LCDSDK` directory. Retain its license alongside the local SDK. The build
+does not install device software or download a replacement library.
+
+`validate-logitech-lcd.py` requires archive SHA-256
+`a48539793ceb80d68df27d5e913fc2d977d142a4e8e5cfb36d80725c034d17c4`.
+Missing or different input stops the x64 build before linking. The property sheet
+prepends the SDK library directory while retaining the existing `lgLcd.lib` input.
+Win32 settings are unchanged; no SDK binaries are included in this repository.
+
+Evidence covers native property evaluation and linking the existing wrapper
+against this provider. It does not establish a full x64 client link, LCD device
+rendering, button delivery, hot-plug behavior or startup without Logitech software.
