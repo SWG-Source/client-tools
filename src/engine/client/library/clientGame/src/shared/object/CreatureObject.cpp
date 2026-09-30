@@ -2923,7 +2923,7 @@ void CreatureObject::skillModsOnErase         (const std::string &, const std::p
 
 //----------------------------------------------------------------------
 
-void CreatureObject::attributesOnSet (const size_t elem, const Attributes::Value & oldValue, const Attributes::Value & newValue)
+void CreatureObject::attributesOnSet (const uint32_t elem, const Attributes::Value & oldValue, const Attributes::Value & newValue)
 {
 	if (newValue > oldValue)
 		return;

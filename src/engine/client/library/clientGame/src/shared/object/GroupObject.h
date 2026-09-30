@@ -11,6 +11,7 @@
 
 // ======================================================================
 
+#include <stdint.h>
 #include "Archive/AutoDeltaVector.h"
 #include "clientGame/UniverseObject.h"
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/NetworkIdArchive.h"
@@ -145,12 +146,12 @@ public:
 	int                         getIndexForMember (NetworkId const & id) const;
 
 	void                        membersOnChanged   ();
-	void                        membersOnErase     (const size_t n, const GroupMember & member);
-	void                        membersOnInsert    (const size_t n, const GroupMember & member);
+	void                        membersOnErase     (const uint32_t n, const GroupMember & member);
+	void                        membersOnInsert    (const uint32_t n, const GroupMember & member);
 
 	void memberShipsOnChanged();
-	void memberShipsOnErase(const size_t n, const GroupShipFormationMember & member);
-	void memberShipsOnInsert(const size_t n, const GroupShipFormationMember & member);
+	void memberShipsOnErase(const uint32_t n, const GroupShipFormationMember & member);
+	void memberShipsOnInsert(const uint32_t n, const GroupShipFormationMember & member);
 
 	int16                       getGroupLevel      () const;
 
