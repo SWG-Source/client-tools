@@ -36,6 +36,8 @@
 #include "sharedUtility/DataTable.h"
 #include "sharedUtility/LocalMachineOptionManager.h"
 
+#include <inttypes.h>
+#include <stdint.h>
 #include <limits>
 #include <list>
 #include <map>
@@ -83,7 +85,7 @@ namespace AudioNamespace
 
 	typedef std::map<CrcString const *, SampleCacheEntry, LessPointerComparator> SampleCache;
 	typedef std::map<CrcString const *, int, LessPointerComparator>              MusicOffsetMap;
-	typedef std::map<unsigned int, AbstractFile *>                               FileMap;
+	typedef std::map<UINTa, AbstractFile *>                               FileMap;
 	typedef std::map<SampleId, Sample2d>                                         SampleIdToSample2dMap;
 	typedef std::map<SampleId, Sample3d>                                         SampleIdToSample3dMap;
 	typedef std::map<SampleId, SampleStream>                                     SampleIdToSampleStreamMap;
@@ -118,7 +120,7 @@ namespace AudioNamespace
 	int                          s_instantRejectionCount = 0;
 	int                          s_nextSoundId = 1;
 	int                          s_nextSampleId = 1;
-	unsigned int                 s_nextFileHandle = 0;
+	UINTa                        s_nextFileHandle = 0;
 	float                        s_soundCategoryVolumes[Audio::SC_count];
 	float                        s_streamVolume = 1.0f;
 	bool                         s_audioEnabled = true;
@@ -202,21 +204,21 @@ namespace AudioNamespace
 #endif // _DEBUG
 
 #ifdef _DEBUG
-	typedef std::map<uint32, std::string> HandleNameMap;
+	typedef std::map<UINTa, std::string> HandleNameMap;
 	HandleNameMap ms_handleNameMap;
 
-	typedef std::set<uint32> HandleSet;
+	typedef std::set<UINTa> HandleSet;
 	HandleSet ms_fileCloseHandleSet;
 
-	void determineCallbackError(char const * const callbackName, uint32 const handle)
+	void determineCallbackError(char const * const callbackName, UINTa const handle)
 	{
 		HandleNameMap::iterator iter = ms_handleNameMap.find(handle);
 		bool const fileOpen = iter != ms_handleNameMap.end();
 		bool const fileClosed = ms_fileCloseHandleSet.find(handle) != ms_fileCloseHandleSet.end();
 
-		DEBUG_FATAL(true, ("Trying to file %s on a file that no longer exists. handle=%d, filename=%s, open=%d, still open=%d, closed=%d",
+		DEBUG_FATAL(true, ("Trying to file %s on a file that no longer exists. handle=%" PRIuPTR ", filename=%s, open=%d, still open=%d, closed=%d",
 			callbackName,
-			handle,
+			static_cast<uintptr_t>(handle),
 			fileOpen ? iter->second.c_str() : "invalid handle",
 			fileOpen ? 1 : 0,
 			s_fileMap.find(handle) != s_fileMap.end() ? 1 : 0,
@@ -229,10 +231,10 @@ using namespace AudioNamespace;
 
 // Callbacks for Miles to the TreeFile system
 
-static U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle);
-static void __stdcall fileCloseCallBack(U32 fileHandle);
-static S32 __stdcall fileSeekCallBack(U32 fileHandle, S32 offset, U32 type);
-static U32 __stdcall fileReadCallBack(U32 fileHandle, void *buffer, U32 bytes);
+static U32 __stdcall fileOpenCallBack(char const *fileName, UINTa *fileHandle);
+static void __stdcall fileCloseCallBack(UINTa fileHandle);
+static S32 __stdcall fileSeekCallBack(UINTa fileHandle, S32 offset, U32 type);
+static U32 __stdcall fileReadCallBack(UINTa fileHandle, void *buffer, U32 bytes);
 
 static SoundId attachSound(SoundTemplate const *soundTemplate, Object const *object, char const *hardPointName=0);
 static bool cacheSound(SoundTemplate const *soundTemplate);
@@ -3932,7 +3934,7 @@ float Audio::getSampleEffectsLevel(SampleId const &sampleId)
 static int once = true;
 
 //-----------------------------------------------------------------------------
-U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle)
+U32 __stdcall fileOpenCallBack(char const *fileName, UINTa *fileHandle)
 {
 	if (once && !Os::isMainThread())
 	{
@@ -3961,7 +3963,7 @@ U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle)
 }
 
 //-----------------------------------------------------------------------------
-void __stdcall fileCloseCallBack(U32 const fileHandle)
+void __stdcall fileCloseCallBack(UINTa const fileHandle)
 {
 	if (once && !Os::isMainThread())
 	{
@@ -4000,7 +4002,7 @@ void __stdcall fileCloseCallBack(U32 const fileHandle)
 }
 
 //-----------------------------------------------------------------------------
-S32 __stdcall fileSeekCallBack(U32 const fileHandle, S32 const offset, U32 const type)
+S32 __stdcall fileSeekCallBack(UINTa const fileHandle, S32 const offset, U32 const type)
 {
 	if (once && !Os::isMainThread())
 	{
@@ -4056,7 +4058,7 @@ S32 __stdcall fileSeekCallBack(U32 const fileHandle, S32 const offset, U32 const
 }
 
 //-----------------------------------------------------------------------------
-U32 __stdcall fileReadCallBack(U32 const fileHandle, void *buffer, U32 const bytes)
+U32 __stdcall fileReadCallBack(UINTa const fileHandle, void *buffer, U32 const bytes)
 {
 // miles crasher hack
 #if 0
