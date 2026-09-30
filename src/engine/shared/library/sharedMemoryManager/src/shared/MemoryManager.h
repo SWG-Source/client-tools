@@ -39,6 +39,13 @@ public:
 	typedef uintptr_t OwnerAddress;
 #endif
 
+	// Byte statistics retain the Win32 ABI and cover the x64 address space.
+#if defined(_WIN64)
+	typedef uint64_t ByteCount;
+#else
+	typedef unsigned long ByteCount;
+#endif
+
 	MemoryManager();
 	~MemoryManager();
 
@@ -52,10 +59,10 @@ public:
 	static bool            reportToFile(const char * fileName, bool leak);
 
 	static int             getCurrentNumberOfAllocations();
-	static unsigned long   getCurrentNumberOfBytesAllocated(const int processId = 0);
-	static unsigned long   getCurrentNumberOfBytesAllocatedNoLeakTest();
+	static ByteCount       getCurrentNumberOfBytesAllocated(const int processId = 0);
+	static ByteCount       getCurrentNumberOfBytesAllocatedNoLeakTest();
 	static int             getMaximumNumberOfAllocations();
-	static unsigned long   getMaximumNumberOfBytesAllocated();
+	static ByteCount       getMaximumNumberOfBytesAllocated();
 	static int             getSystemMemoryAllocatedMegabytes();
 
 #ifndef _WIN32

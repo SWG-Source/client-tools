@@ -8,6 +8,7 @@
 // ======================================================================
 
 #include "FirstViewer.h"
+#include <inttypes.h>
 #include "viewer.h"
 
 #include "viewerDoc.h"
@@ -1174,7 +1175,7 @@ BOOL CViewerDoc::load (LPCTSTR lpszPathName)
 		}
 	}
 
-	unsigned long const bytesBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount const bytesBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
 	bool const asynchronousLoaderEnabled = AsynchronousLoader::isEnabled();
 	if (!ms_buildingAsynchronousLoaderData)
 		AsynchronousLoader::disable();
@@ -1191,7 +1192,7 @@ BOOL CViewerDoc::load (LPCTSTR lpszPathName)
 	if (!ms_buildingAsynchronousLoaderData && asynchronousLoaderEnabled)
 		AsynchronousLoader::enable();
 
-	int const bytesTotal = MemoryManager::getCurrentNumberOfBytesAllocated() - bytesBefore;
+	int64_t const bytesTotal = static_cast<int64_t>(MemoryManager::getCurrentNumberOfBytesAllocated()) - static_cast<int64_t>(bytesBefore);
 
 	{
 		CString fileName(lpszPathName);
@@ -1199,7 +1200,7 @@ BOOL CViewerDoc::load (LPCTSTR lpszPathName)
 		if (index != -1)
 			fileName = fileName.Right(fileName.GetLength() - index - 1);
 
-		REPORT_LOG(true, ("CViewerDoc::load: [%s] tool %1.2f seconds to load and consumed %i bytes\n", fileName, static_cast<float>(totalTime) / 1000.f, bytesTotal));
+		REPORT_LOG(true, ("CViewerDoc::load: [%s] tool %1.2f seconds to load and consumed %" PRId64 " bytes\n", fileName, static_cast<float>(totalTime) / 1000.f, bytesTotal));
 	}
 
 	//-- add customization variables

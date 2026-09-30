@@ -217,7 +217,7 @@ void LogicalAnimationTableTemplateList::garbageCollect()
 	if (!s_templates)
 		return;
 
-	unsigned long const startAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount const startAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
 	unsigned long const startTimeMs = Clock::timeMs();
 #endif
 
@@ -230,9 +230,9 @@ void LogicalAnimationTableTemplateList::garbageCollect()
 
 #if PRODUCTION == 0
 	unsigned long const stopTimeMs = Clock::timeMs();
-	unsigned long const stopAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount const stopAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
 	float const collectTime = static_cast<float>(stopTimeMs - startTimeMs) / 1000.0f;
-	float const memoryPercentage = static_cast<float>(startAllocatedBytes - stopAllocatedBytes) / (1024.0f * 1024.0f);
+	float const memoryPercentage = static_cast<float>(static_cast<int64_t>(startAllocatedBytes) - static_cast<int64_t>(stopAllocatedBytes)) / (1024.0f * 1024.0f);
 
 	REPORT_LOG(memoryPercentage > 0.0f || collectTime > 0.0f, ("LogicalAnimationTableTemplateList::garbageCollect() took [%.2f] seconds and decreased memory usage by [%.2f] MB.\n",
 		collectTime,

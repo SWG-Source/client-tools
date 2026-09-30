@@ -293,8 +293,8 @@ void PlotterManager::draw()
 			s_memorySizePlotter.setColor(VectorArgb(1.0f, 1.0f, 0.5f, 0.0f));
 			s_memorySizePlotter.setRange(min, max);
 
-			static unsigned long previousMemoryAlocationCount = 0;
-			int const memoryAllocationCountThisFrame = MemoryManager::getCurrentNumberOfBytesAllocated() - previousMemoryAlocationCount;
+			static MemoryManager::ByteCount previousMemoryAlocationCount = 0;
+			int64_t const memoryAllocationCountThisFrame = static_cast<int64_t>(MemoryManager::getCurrentNumberOfBytesAllocated()) - static_cast<int64_t>(previousMemoryAlocationCount);
 			s_memorySizePlotter.addValue(static_cast<float>(memoryAllocationCountThisFrame));
 			previousMemoryAlocationCount = MemoryManager::getCurrentNumberOfBytesAllocated();
 

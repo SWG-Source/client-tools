@@ -63,7 +63,7 @@ namespace CachedFileManagerNamespace
 	typedef std::map<CrcString const *, CachedFileInfo *, LessPointerComparator> ExtensionMap;
 	ExtensionMap ms_extensionMap;
 
-	int ms_totalAllocatedBytes;
+	int64_t ms_totalAllocatedBytes;
 
 #endif
 
@@ -187,7 +187,7 @@ void CachedFileManager::preloadSomeAssets ()
 		unsigned long const startTime = Clock::timeMs ();
 
 #if PRODUCTION == 0
-		unsigned long const bytesBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
+		MemoryManager::ByteCount const bytesBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
 #endif
 
 		//-- preloading occurs in one second slices
@@ -230,7 +230,7 @@ void CachedFileManager::preloadSomeAssets ()
 		unsigned long const stopTime = Clock::timeMs ();
 		ms_totalTime += stopTime - startTime;
 
-		ms_totalAllocatedBytes += MemoryManager::getCurrentNumberOfBytesAllocated() - bytesBefore;
+		ms_totalAllocatedBytes += static_cast<int64_t>(MemoryManager::getCurrentNumberOfBytesAllocated()) - static_cast<int64_t>(bytesBefore);
 #endif
 
 		if (donePreloading ())

@@ -9,6 +9,7 @@
 
 //precompiled header includes
 #include "FirstMayaExporter.h"
+#include <inttypes.h>
 
 //module includes
 #include "ExportStaticMesh.h"
@@ -495,7 +496,7 @@ MStatus ExportStaticMesh::doIt(const MArgList &args)
 	const int seconds = exportTime - (hours * c_secondsPerHour) - (minutes * c_seondsPerMinute);
 	MESSENGER_LOG(("Total export time: %2ih %2im %2is\n", hours, minutes, seconds));
 
-	MESSENGER_LOG(("MemoryManager %lu/%lu=bytes %d/%d=allocs\n", MemoryManager::getCurrentNumberOfBytesAllocated(), MemoryManager::getMaximumNumberOfBytesAllocated(), MemoryManager::getCurrentNumberOfAllocations(), MemoryManager::getMaximumNumberOfAllocations()));
+	MESSENGER_LOG(("MemoryManager %" PRIu64 "/%" PRIu64 "=bytes %d/%d=allocs\n", static_cast<uint64_t>(MemoryManager::getCurrentNumberOfBytesAllocated()), static_cast<uint64_t>(MemoryManager::getMaximumNumberOfBytesAllocated()), MemoryManager::getCurrentNumberOfAllocations(), MemoryManager::getMaximumNumberOfAllocations()));
 
     std::stringstream text;
     text << "Export Complete: " << nodeName.asChar() << std::endl;

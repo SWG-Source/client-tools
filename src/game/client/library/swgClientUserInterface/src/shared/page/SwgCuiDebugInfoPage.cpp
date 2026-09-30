@@ -454,7 +454,7 @@ void SwgCuiDebugInfoPage::updateFps ()
 		{
 			m_lastFps = fps;
 
-			const int numberOfMegabytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated () / (1024 * 1024);
+			const int numberOfMegabytesAllocated = static_cast<int>(MemoryManager::getCurrentNumberOfBytesAllocated () / (1024 * 1024));
 			const int limit = MemoryManager::getLimit ();
 
 			char buf[128];

@@ -7,6 +7,7 @@
 // ======================================================================
 
 #include "sharedXml/FirstSharedXml.h"
+#include <inttypes.h>
 #include "sharedXml/XmlTreeDocumentList.h"
 
 #include "libxml/parser.h"
@@ -117,15 +118,15 @@ XmlTreeDocument const *XmlTreeDocumentList::fetch(CrcString const &filename)
 
 	//-- Create an XML DOM tree out of it.
 #ifdef _DEBUG
-	unsigned long const preDomBytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount const preDomBytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated();
 #endif
 
 	xmlDocPtr const xmlDocument = xmlParseMemory(reinterpret_cast<char const *>(fileContents), fileSize);
 	FATAL(!xmlDocument, ("xmlParseMemory() returned NULL when parsing contents of file [%s].", cPathName));
 
 #ifdef _DEBUG
-	unsigned long const postDomBytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated();
-	DEBUG_REPORT_LOG(s_logXmlDomTreeSize, ("XmlTreeDocumentList: XML tree file [%s]: XML DOM tree appears to have consumed [%d] bytes.\n", cPathName, static_cast<int>(postDomBytesAllocated - preDomBytesAllocated)));
+	MemoryManager::ByteCount const postDomBytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated();
+	DEBUG_REPORT_LOG(s_logXmlDomTreeSize, ("XmlTreeDocumentList: XML tree file [%s]: XML DOM tree appears to have consumed [%" PRId64 "] bytes.\n", cPathName, static_cast<int64_t>(postDomBytesAllocated) - static_cast<int64_t>(preDomBytesAllocated)));
 #endif
 
 	// Release initial file contents buffer.

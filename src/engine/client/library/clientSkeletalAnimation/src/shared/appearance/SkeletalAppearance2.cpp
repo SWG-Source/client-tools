@@ -6,6 +6,7 @@
 // ==================================================================
 
 #include "clientSkeletalAnimation/FirstClientSkeletalAnimation.h"
+#include <inttypes.h>
 #include "clientSkeletalAnimation/SkeletalAppearance2.h"
 
 #include "clientAnimation/PlaybackScriptManager.h"
@@ -151,9 +152,9 @@ namespace SkeletalAppearance2Namespace
 
 #endif
 
-	int  s_alterAllocationAmount;
-	int  s_rebuildMeshAllocationAmount;
-	int  s_shaderPrimitiveAllocationAmount;
+	MemoryManager::ByteCount s_alterAllocationAmount;
+	MemoryManager::ByteCount s_rebuildMeshAllocationAmount;
+	MemoryManager::ByteCount s_shaderPrimitiveAllocationAmount;
 
 	float  s_twoOverScreenLength;
 
@@ -257,7 +258,7 @@ bool                              SkeletalAppearance2::ms_renderTargetDirection;
 
 void SkeletalAppearance2Namespace::reportAllocations()
 {
-	DEBUG_REPORT_PRINT(true, ("SkelAppear:alter/rebuildMesh/shaderPrim mem alloc(KB):%d/%d/%d\n", s_alterAllocationAmount/1024, s_rebuildMeshAllocationAmount/1024, s_shaderPrimitiveAllocationAmount/1024));
+	DEBUG_REPORT_PRINT(true, ("SkelAppear:alter/rebuildMesh/shaderPrim mem alloc(KB):%" PRIu64 "/%" PRIu64 "/%" PRIu64 "\n", static_cast<uint64_t>(s_alterAllocationAmount/1024), static_cast<uint64_t>(s_rebuildMeshAllocationAmount/1024), static_cast<uint64_t>(s_shaderPrimitiveAllocationAmount/1024)));
 }
 
 // ----------------------------------------------------------------------
@@ -1454,7 +1455,7 @@ float SkeletalAppearance2::alter(float deltaTime)
 
 	//-- Start memory usage tracking.
 #ifdef _DEBUG
-	unsigned long const bytesAllocatedBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount const bytesAllocatedBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
 #endif
 
 	// alter the animation resolver.  this will move the animation forward
@@ -1464,8 +1465,8 @@ float SkeletalAppearance2::alter(float deltaTime)
 
 	//-- Stop memory usage tracking.
 #ifdef _DEBUG
-	unsigned long const bytesAllocatedAfter = MemoryManager::getCurrentNumberOfBytesAllocated();
-	s_alterAllocationAmount += std::max(0, static_cast<int>(bytesAllocatedAfter - bytesAllocatedBefore));
+	MemoryManager::ByteCount const bytesAllocatedAfter = MemoryManager::getCurrentNumberOfBytesAllocated();
+	s_alterAllocationAmount += (bytesAllocatedAfter > bytesAllocatedBefore ? bytesAllocatedAfter - bytesAllocatedBefore : 0);
 #endif
 
 	//-- Handle fade
@@ -2175,7 +2176,7 @@ void SkeletalAppearance2::rebuildMesh(int lodIndex)
 
 	//-- Start memory usage tracking.
 #ifdef _DEBUG
-	unsigned long bytesAllocatedBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount bytesAllocatedBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
 #endif
 
 	//-- Remove any wearables associated with deleted Object instances.
@@ -2235,18 +2236,18 @@ void SkeletalAppearance2::rebuildMesh(int lodIndex)
 
 		// Start tracking memory usage.
 #ifdef _DEBUG
-		unsigned long const spBytesAllocatedBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
+		MemoryManager::ByteCount const spBytesAllocatedBefore = MemoryManager::getCurrentNumberOfBytesAllocated();
 #endif
 
 		compositeMesh.addShaderPrimitives(*this, lodIndex, skeleton->getTransformNameMap(), workingShaderPrimitives);
 
 		// Stop tracking memory usage.
 #ifdef _DEBUG
-		unsigned long const spBytesAllocatedAfter = MemoryManager::getCurrentNumberOfBytesAllocated();
-		s_shaderPrimitiveAllocationAmount += std::max(0, static_cast<int>(spBytesAllocatedAfter - spBytesAllocatedBefore));
+		MemoryManager::ByteCount const spBytesAllocatedAfter = MemoryManager::getCurrentNumberOfBytesAllocated();
+		s_shaderPrimitiveAllocationAmount += (spBytesAllocatedAfter > spBytesAllocatedBefore ? spBytesAllocatedAfter - spBytesAllocatedBefore : 0);
 
 		// Compensate rebuildMesh alloc amount for shader prim alloc amount so we don't double count.
-		bytesAllocatedBefore += std::max(0, static_cast<int>(spBytesAllocatedAfter - spBytesAllocatedBefore));
+		bytesAllocatedBefore += (spBytesAllocatedAfter > spBytesAllocatedBefore ? spBytesAllocatedAfter - spBytesAllocatedBefore : 0);
 #endif
 
 		//-- swap the new and old --- now m_shaderPrimitives holds the valid shader primitives
@@ -2313,8 +2314,8 @@ void SkeletalAppearance2::rebuildMesh(int lodIndex)
 
 	//-- Stop memory usage tracking.
 #ifdef _DEBUG
-	unsigned long const bytesAllocatedAfter = MemoryManager::getCurrentNumberOfBytesAllocated();
-	s_rebuildMeshAllocationAmount += std::max(0, static_cast<int>(bytesAllocatedAfter - bytesAllocatedBefore));
+	MemoryManager::ByteCount const bytesAllocatedAfter = MemoryManager::getCurrentNumberOfBytesAllocated();
+	s_rebuildMeshAllocationAmount += (bytesAllocatedAfter > bytesAllocatedBefore ? bytesAllocatedAfter - bytesAllocatedBefore : 0);
 #endif
 }
 
