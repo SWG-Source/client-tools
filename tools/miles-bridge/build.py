@@ -140,7 +140,7 @@ def build(args, work, receipt):
     receipt['sources'] = relative_sources
     if args.target == 'audio-dev':
         audio_root = ROOT.parents[1] / 'src/engine/client/library/clientAudio/src/win32'
-        sources += [audio_root / name for name in ('Audio.cpp', 'SoundObject3d.cpp')]
+        sources += [audio_root / name for name in ('Audio.cpp', 'SoundObject3d.cpp', 'SetupClientAudio.cpp')]
         receipt['sources'] = [str(source) for source in sources]
     if args.target == 'pipe-probe':
         sources.append(ROOT / 'tests/pipe_lock_probe.cpp')

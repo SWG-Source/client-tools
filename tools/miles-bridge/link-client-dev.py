@@ -103,7 +103,7 @@ def receipt_artifact(path, target):
     if target == 'audio-dev' and not any('/DCLIENT_MILES_DEV_FACADE' in cmd for cmd in compiles):
         raise ValueError('Audio object lacks explicit development selection')
     outputs = receipt['artifacts'] if target == 'audio-dev' else [receipt['artifact']]
-    if len(outputs) != (2 if target == 'audio-dev' else 1):
+    if len(outputs) != (3 if target == 'audio-dev' else 1):
         raise ValueError('Unexpected number of built artifacts')
     artifacts, details = [], []
     for output in outputs:
@@ -152,7 +152,7 @@ def candidate(original, out, additions):
             result.append('/%s:%s' % (key, out / outputs[key]))
     return result, {'baseline_arguments': len(args), 'candidate_arguments': len(result),
                     'baseline_explicit_libraries': sum(not a.startswith('/') and a.lower().endswith('.lib') for a in args),
-                    'added_direct_objects': 2, 'added_archives': 2,
+                    'added_direct_objects': 3, 'added_archives': 2,
                     'removed_provider_inputs': 0}
 
 

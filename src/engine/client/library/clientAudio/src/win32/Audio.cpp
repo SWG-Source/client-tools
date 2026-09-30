@@ -46,6 +46,7 @@
 #if defined(CLIENT_MILES_DEV_FACADE)
 #include "dev/AudioSelection.h"
 #include "dev/AudioBootstrap.h"
+namespace ClientMilesDevelopment { void removeAudioCache(); }
 #endif
 
 #if 0
@@ -122,6 +123,7 @@ namespace AudioNamespace
 	bool                         s_installed = false;
 #if defined(CLIENT_MILES_DEV_FACADE)
 	bool                         s_devMilesStarted = false;
+	bool                         s_devAudioRemovalComplete = true;
 	void devMilesFatal(uint32_t reason, char const *message)
 	{
 		FATAL(true, ("Development Miles failure %lu: %s", static_cast<unsigned long>(reason), message));
@@ -238,6 +240,16 @@ namespace AudioNamespace
 			fileClosed ? 1 : 0));
 	}
 #endif
+	void clearSampleCache()
+	{
+		for (SampleCache::iterator i = s_sampleCache.begin(); i != s_sampleCache.end(); ++i)
+		{
+			delete i->first;
+			delete [] i->second.m_sampleRawData;
+		}
+		s_sampleCache.clear();
+	}
+
 }
 
 using namespace AudioNamespace;
@@ -1234,6 +1246,9 @@ bool Audio::install()
 		return false;
 	}
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	s_devAudioRemovalComplete = false;
+#endif
 #ifdef _DEBUG
 	DebugFlags::registerFlag(s_debugTimerDelay, "ClientAudio", "debugView_TimerDelay");
 	DebugFlags::registerFlag(s_debugVisuals, "ClientAudio", "debugVisuals");
@@ -1412,6 +1427,10 @@ bool Audio::install()
 //-----------------------------------------------------------------------------
 void Audio::remove()
 {
+#if defined(CLIENT_MILES_DEV_FACADE)
+	if (s_devAudioRemovalComplete)
+		return;
+#endif
 	setRoomType(RT_generic);
 
 #ifdef _DEBUG
@@ -1437,6 +1456,7 @@ void Audio::remove()
 		s_installed = false;
 		s_digitalDevice2d = 0;
 	}
+	AbstractFile::setAudioServe(0);
 #endif
 
 #ifdef _DEBUG
@@ -1495,26 +1515,27 @@ void Audio::remove()
 	delete s_musicDataTable;
 	s_musicDataTable = NULL;
 
-	// Delete all the reference counted samples
+#if !defined(CLIENT_MILES_DEV_FACADE)
+	clearSampleCache();
 
-	SampleCache::iterator iterSampleCache= s_sampleCache.begin();
-
-	for (; iterSampleCache != s_sampleCache.end(); ++iterSampleCache)
-	{
-		// Delete the CrcString
-
-		delete iterSampleCache->first;
-
-		// Delete the sample data
-
-		delete [] iterSampleCache->second.m_sampleRawData;
-	}
-
-	s_sampleCache.clear();
+#endif
 
 	delete s_audioServePerformanceTimer;
 	s_audioServePerformanceTimer = NULL;
+#if defined(CLIENT_MILES_DEV_FACADE)
+	s_devAudioRemovalComplete = true;
+#endif
 }
+
+#if defined(CLIENT_MILES_DEV_FACADE)
+// Final setup-owner operation, after SoundTemplateList released its cache paths.
+// Partial Audio failure keeps the registry/cache available to continuing UI code.
+void ClientMilesDevelopment::removeAudioCache()
+{
+	clearSampleCache();
+}
+
+#endif
 
 //-----------------------------------------------------------------------------
 bool Audio::isEnabled()
