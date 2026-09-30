@@ -19,6 +19,7 @@ python build.py --target pipe --sdk C:/SDK/Miles/include --out C:/build/miles
 python build.py --target native --sdk C:/SDK/Miles/include --out C:/build/miles
 python build.py --target engine-worker --engine-root C:/source/client-tools --out C:/build/miles
 python build.py --target pipe-probe --sdk C:/SDK/Miles/include --engine-root C:/source/client-tools --out C:/build/miles
+python build.py --target audio-dev --sdk C:/SDK/Miles/include --engine-root C:/source/client-tools --out C:/build/miles
 ```
 
 `--vcvars` can select the installed VS2013 `vcvarsall.bat`. Outputs and complete
@@ -33,6 +34,7 @@ run the resulting binaries.
 | `native` | x64 `miles-native.lib` | Compiles direct calls against the SDK's Win64 declarations. A matching native vendor library is still required to link it. |
 | `engine-worker` | x64 `miles-engine-worker.lib` | Compiles the file executor using real engine headers, STLport and clientAudio's Debug-x64 definitions/include paths. |
 | `pipe-probe` | x64 `miles-pipe-probe.exe` | Links the real pipe adapter and engine worker against previously built Debug-x64 engine libraries and rebuilt STLport. |
+| `audio-dev` | x64 `Audio.obj` | Compiles the real Audio source against the facade; no link or production selection. |
 
 Choose exactly one client backend. The pipe and native archives implement the
 same public names and must not be linked together. Both currently use the debug
@@ -57,17 +59,16 @@ to the include path to bypass missing includes.
 
 ## Remaining integration
 
-Both EOS registrations remain missing. The sample-file setters now execute
-through owned uploads, as tested below. There are no success stubs.
+Sample binding and typed sample/stream EOS registrations are implemented and
+have the bounded original-DLL observations below. Real engine worker execution
+and reverse file operations have been observed. There are no success stubs.
 
-The engine file worker now links with the pipe adapter in the development
-probe, but its execution remains unqualified. Audio exposes separate admitted file callbacks
-which reuse its file operations without installing TLS again; its existing
-direct-Miles registration is unchanged. Selecting those callbacks and supplying
-Audio's image extents still need integration. The paired channel refuses normal session close until its
-shutdown and callback lifetime protocol is implemented. Full media-format
-qualification and callback quiescence remain open. Do not use this helper as the
-game's audio backend yet.
+The actual `Audio.cpp` now compiles against the facade in the development-only
+target, with its two source extents supplied. The game still selects direct
+Miles. Its admitted file callbacks, session bootstrap and normal paired shutdown
+remain to be connected and tested. Media-format qualification, callback
+scheduling in gameplay, device behavior and fidelity are still open. Do not
+use this helper as the game's audio backend yet.
 
 The maintained sources consolidate the previously reviewed pipe composition113
 and native70 adapter. Folder names changed; the public header is unchanged.
@@ -306,3 +307,65 @@ The current source compiles with VS2013 `/W4 /WX` and no diagnostics. This prove
 source integration only. Session bootstrap, actual Audio file callbacks,
 callback scheduling in the game, shutdown and full-client behavior still need
 integration and runtime checks.
+
+
+### Typed end-of-sample and stream callbacks
+
+Both registration functions now return the callback represented by the actual
+native SDK return. A successful sample rebind can reset that callback; the
+client does not infer the previous function from its last registration request.
+Stable native thunks represent distinct typed functions, so repeated registration
+of the same function does not consume additional thunk slots.
+
+The callback captures a resource generation, invokes the exact client function
+on the engine worker, and waits for completion plus consumption acknowledgment
+before returning to Miles. File callbacks and EOS share one transport and one
+request sequence. Client proxy retirement waits for the native close/release
+and acknowledgment. No bridge table lock spans an SDK call or callback wait.
+Callback-driven forward Miles calls are refused before command mutation.
+
+Limits are explicit: 64 distinct functions per callback type per session;
+owned sample and stream registrations; no borrowed-sample EOS registration.
+This is not a general native-SDK equivalence claim. Retirement depends on the
+selected DLL's inspected timer/mixer callback paths holding the same native
+mutex as release/close, with mutex protection enabled. Other SDK versions and
+unexposed concurrent native APIs require separate qualification.
+
+```powershell
+miles-pipe-probe.exe C:/test/miles-host.exe C:/test/Mss32.dll --eos-callbacks
+```
+
+The native VS2013 host and x64 probe build with `/W4 /WX` and no diagnostics.
+The generated-WAV run against the original DLL observed:
+
+- 65 alternating sample callback registrations with exact prior returns;
+- synchronous sample completion on the engine worker with exact proxy identity;
+- genuine callback reset after sample rebind and no callback after unregister;
+- EOS initialization before file registration, then real reverse file operations;
+- 65 repeated stream registrations and a real stream end callback;
+- native sample release, stream close and SDK shutdown, plus the prior lock checks.
+
+All nine expected markers appeared and exit status was zero. **The strict run
+failed** its unchanged empty-stderr rule on four ALSA control-enumeration
+warnings. The earlier failed run is preserved: its new global sequence check
+incorrectly treated a file-consumption ACK as a new request. Excluding that ACK
+from new-request intake corrected the observed mixed file/EOS failure; the
+existing mapper still validates the original-ID ACK in full.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| x86 host | `da8c857820cb1c7c3f7f31570a4258175966449715cff19e4c89be462950de01` |
+| x64 EOS probe | `8f35bb495c778747662395d5f922644ac2bb8438d9f5900a8d9df38ee4eba62a` |
+| original x86 DLL | `0785b5f2aa81e68c41778bea1aa92ed545e2392827d90745838af2b14f6954fe` |
+
+Portable protocol checks, including wrong generation/function/envelope and
+forward-message rejection, run without a vendor SDK:
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined tests/eos_protocol.cpp src/eos/eos_protocol.cpp src/wire/codec.cpp -o eos-protocol
+./eos-protocol
+```
+
+All 298 checks pass; omitting generation comparison makes them fail. These
+protocol checks also run in CI. They do not substitute for the genuine-DLL
+runtime, paired session shutdown, actual Audio callbacks or gameplay acceptance.

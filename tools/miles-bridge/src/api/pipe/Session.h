@@ -10,7 +10,6 @@
 namespace ClientMilesPipe {
 struct DriverProxy;
 struct SampleState;
-class ScopedSourceImage;
 // Composition-root-only owner; not included by game policy. Bootstrap/Hello
 // occurs in the concrete channel before selecting this sole session. Explicit
 // normal close remains unavailable pending paired shutdown proof; no public protocol API.
@@ -35,6 +34,10 @@ class Session {
         const StartupBridge::OwnedReply &) const;
     void installFiles(ClientMiles::FileOpenCallback, ClientMiles::FileCloseCallback,
         ClientMiles::FileSeekCallback, ClientMiles::FileReadCallback);
+    void prepareEos(const MilesWire::Handle &, uint64_t, ClientMiles::HSAMPLE,
+        ClientMiles::SampleCallback, ClientMiles::HSTREAM, ClientMiles::StreamCallback);
+    void retireEos(const MilesWire::Handle &);
+    void retireAllEos();
     int32_t classifyImage(const void *image, uint32_t bytes);
     int32_t queryWav(const void *image, ClientMiles::SampleInformation *result);
     int32_t bindSampleImage(const MilesWire::Handle &sample, const void *image,

@@ -45,6 +45,8 @@ struct Reader {
 };
 bool opcode(uint32_t o) { return (o >= 1 && o <= 61) || (o >= Hello && o <= FileConsumptionAck); }
 bool envelopeOpcode(uint32_t o) { return opcode(o) && o != EndOfSample && o != EndOfStream; }
+bool resultOpcode(const Header &h) { return envelopeOpcode(h.opcode) ||
+    (h.kind==ReverseReply && (h.opcode==EndOfSample || h.opcode==EndOfStream)); }
 bool header(const Header &h) {
     return h.magic == Magic && h.version == Version && opcode(h.opcode);
 }
@@ -190,7 +192,7 @@ bool decodeCall(Bytes b, Header &outH, Call &outC) {
     return true;
 }
 bool encodeResult(Header h, const Result &c, Bytes a, Bytes b, std::vector<unsigned char> &out) {
-    if (!header(h) || !envelopeOpcode(h.opcode) || (h.kind != Reply && h.kind != ReverseReply) ||
+    if (!header(h) || !resultOpcode(h) || (h.kind != Reply && h.kind != ReverseReply) ||
         !validHandle(c.resource))
         return false;
     Span sa, sb;
@@ -202,7 +204,7 @@ bool encodeResult(Header h, const Result &c, Bytes a, Bytes b, std::vector<unsig
     return true;
 }
 bool encodeResultInto(Header h,const Result &c,Bytes a,Bytes b,unsigned char *buffer,size_t capacity,size_t &written) {
-    if(!header(h) || !envelopeOpcode(h.opcode) || (h.kind!=Reply && h.kind!=ReverseReply) || !validHandle(c.resource))return false;
+    if(!header(h) || !resultOpcode(h) || (h.kind!=Reply && h.kind!=ReverseReply) || !validHandle(c.resource))return false;
     Span sa,sb;
     if(!plan(h,128,a,b,sa,sb) || !buffer || capacity<h.bytes)return false;
     FixedWriter w(buffer);resultFields(w,h,c,sa,sb,a,b);written=h.bytes;return true;
@@ -212,7 +214,7 @@ bool decodeResult(Bytes b, Header &outH, Result &outC) {
         return false;
     Reader r(b);
     Header h = getHeader(r);
-    if (!header(h) || !envelopeOpcode(h.opcode) || h.bytes != b.size ||
+    if (!header(h) || !resultOpcode(h) || h.bytes != b.size ||
         (h.kind != Reply && h.kind != ReverseReply))
         return false;
     Result c;

@@ -21,8 +21,14 @@ template<class Result, class Action> Result guarded(Action action) {
 }
 }
 // Partial plain surface backed by this selected Core.
-// EOS registration remains unimplemented.
+// One private backend implements this selected source surface.
 namespace ClientMiles {
+SampleCallback register_EOS_callback(HSAMPLE sample,SampleCallback callback) {
+    return guarded<SampleCallback>([=]() -> SampleCallback { return Core::register_EOS_callback(sample,callback); });
+}
+StreamCallback register_stream_callback(HSTREAM stream,StreamCallback callback) {
+    return guarded<StreamCallback>([=]() -> StreamCallback { return Core::register_stream_callback(stream,callback); });
+}
 int32_t WAV_info(const void *fileImage,SampleInformation *result) {
     return guarded<int32_t>([=]() -> int32_t { return Core::WAV_info(fileImage,result); });
 }

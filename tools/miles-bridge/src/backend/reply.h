@@ -63,9 +63,13 @@ inline bool decodeReply(MilesTransport::Bytes frame, const MilesWire::Header &ex
     if (h.kind != MilesWire::Reply || h.opcode != expected.opcode ||
         h.request != expected.request || h.lane != expected.lane ||
         h.causal_request != expected.causal_request || h.lock_lease != expected.lock_lease ||
-        !knownStatus(r.transport_status) || r.callback)
+        !knownStatus(r.transport_status))
         return false;
     const bool ok = r.transport_status == Success;
+    const bool sampleRegistration=ok&&h.opcode==MilesWire::AIL_register_EOS_callback;
+    const bool streamRegistration=ok&&h.opcode==MilesWire::AIL_register_stream_callback;
+    if(r.callback && ((!sampleRegistration&&!streamRegistration) ||
+        (sampleRegistration?r.callback>64:(r.callback<65||r.callback>128))))return false;
     const bool textOp = ok && (h.opcode == MilesWire::AIL_set_redist_directory ||
                                h.opcode == MilesWire::AIL_last_error);
     const bool versionOp = ok && h.opcode == MilesWire::SessionVersion;

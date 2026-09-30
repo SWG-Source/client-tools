@@ -20,6 +20,14 @@ public:
     bool prepare(uint64_t registration, ClientMiles::FileOpenCallback,
         ClientMiles::FileCloseCallback, ClientMiles::FileSeekCallback,
         ClientMiles::FileReadCallback, std::shared_ptr<void> callbackLifetime);
+    // Publish stable typed-function identity and an already verified live proxy.
+    // Callback code remains pinned by this process-lifetime runtime.
+    bool prepareEos(const MilesWire::Handle &, uint64_t callback,
+        ClientMiles::HSAMPLE, ClientMiles::SampleCallback,
+        ClientMiles::HSTREAM, ClientMiles::StreamCallback, std::shared_ptr<void>);
+    // Only after genuine native release/close/shutdown and forward settlement.
+    bool retireEos(const MilesWire::Handle &);
+    bool retireAllEos();
     // Before command send. Resources already verified by genuine forward registry.
     // Fresh local admission chosen here. Action is derived from the trusted opcode,
     // and lease is the value returned after the previous settled command.

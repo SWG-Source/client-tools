@@ -3,6 +3,7 @@
 #include "../admission/coordinator.h"
 #include "../backend/backend.h"
 #include "../host-runtime/host_file_runtime.h"
+#include "../eos/host_eos.h"
 #include <limits>
 #ifdef _WIN64
 #error Original Miles host requires Win32
@@ -52,6 +53,9 @@ void host(int argc,char **argv){
                 nullHandle59(c.target)&&nullHandle59(c.resource)&&!c.output_mask&&!c.callback&&!c.reserved,"hello shape");
             for(unsigned i=0;i<8;++i)require(!c.value[i],"hello fields");
             require(!memcmp(&frame[c.bytes.offset],nonceText.data(),32),"full nonce");hello=true;
+            HANDLE transferred=rawCallback;rawCallback=INVALID_HANDLE_VALUE;
+            callbacks=new MilesHostRuntime50::Runtime(transferred,session,1,999,64);
+            MilesHostEos::initialize(*callbacks);
         }else{
             // SessionClose is deliberately unavailable: no inferred clean shutdown.
             require(h.opcode!=MilesWire::SessionClose,"paired teardown not implemented");
@@ -72,10 +76,7 @@ void host(int argc,char **argv){
                 if(h.opcode==MilesWire::AIL_set_file_callbacks){
                     MilesFileProtocol48::InstallRequest request;
                     require(MilesFileProtocol48::decodeInstall(bytes(frame),h,request),"exact install request");
-                    if(!callbacks){
-                        HANDLE transferred=rawCallback;rawCallback=INVALID_HANDLE_VALUE;
-                        callbacks=new MilesHostRuntime50::Runtime(transferred,session,request.registration,999,64);
-                    }
+                    require(callbacks && request.registration==callbacks->registration(),"immutable file registration");
                     encoded.resize(MilesFileProtocol48::InstallReplyBytes);size_t written=0;
                     // installAdmitted owns Scope41; do not nest another scope.
                     require(MilesHostRuntime50::installAdmitted(*callbacks,bytes(frame),h,origin,

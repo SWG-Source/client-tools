@@ -144,7 +144,22 @@ uint32_t __stdcall readFile(ClientMiles::FileHandle file,void *buffer,uint32_t b
     }
     InterlockedIncrement(&fileReads);return read;
 }
-void fileCallbacks()
+ClientMiles::HSAMPLE expectedSample=0;
+ClientMiles::HSTREAM expectedStream=0;
+volatile LONG sampleA=0,sampleB=0,streamEvents=0,eosFaults=0;
+void __stdcall onSampleA(ClientMiles::HSAMPLE sample) {
+    if(!engineProbeThreadReady() || sample!=expectedSample)InterlockedIncrement(&eosFaults);
+    InterlockedIncrement(&sampleA);
+}
+void __stdcall onSampleB(ClientMiles::HSAMPLE sample) {
+    if(!engineProbeThreadReady() || sample!=expectedSample)InterlockedIncrement(&eosFaults);
+    InterlockedIncrement(&sampleB);
+}
+void __stdcall onStream(ClientMiles::HSTREAM stream) {
+    if(!engineProbeThreadReady() || stream!=expectedStream)InterlockedIncrement(&eosFaults);
+    InterlockedIncrement(&streamEvents);
+}
+void fileCallbacks(ClientMiles::HDIGDRIVER driver=0,bool testEos=false)
 {
     const std::vector<unsigned char> bytes=wave();
     HANDLE file=CreateFileA("bridge-probe.wav",GENERIC_WRITE,0,0,CREATE_NEW,0,0);
@@ -152,7 +167,7 @@ void fileCallbacks()
     if(file==INVALID_HANDLE_VALUE || !WriteFile(file,bytes.data(),static_cast<DWORD>(bytes.size()),&written,0) ||
        written!=bytes.size() || !CloseHandle(file))finish(30,"FAIL: generated file creation");
     ClientMiles::set_file_callbacks(openFile,closeFile,seekFile,readFile);
-    ClientMiles::HDIGDRIVER driver=ClientMiles::open_digital_driver(22050,16,
+    if(!driver)driver=ClientMiles::open_digital_driver(22050,16,
         ClientMiles::StereoSpeakerConfiguration,0);
     if(!driver)finish(31,"FAIL: file probe digital driver");
     ClientMiles::HSTREAM stream=ClientMiles::open_stream(driver,"bridge-probe.wav",0);
@@ -161,7 +176,24 @@ void fileCallbacks()
     ClientMiles::stream_ms_position(stream,&total,&current);
     if(total<=0 || current!=0 || !ClientMiles::stream_sample_handle(stream))
         finish(33,"FAIL: streamed WAV position or borrowed sample");
+    if(testEos){
+        expectedStream=stream;
+        for(unsigned cycle=0;cycle<65;++cycle){
+            const ClientMiles::StreamCallback previous=ClientMiles::register_stream_callback(stream,onStream);
+            if(previous!=(cycle?onStream:0))finish(44,"FAIL: stream previous callback identity");
+        }
+        ClientMiles::set_stream_loop_count(stream,1);
+        ClientMiles::start_stream(stream);
+        const ULONGLONG start=GetTickCount64();
+        while(!InterlockedCompareExchange(&streamEvents,0,0) && GetTickCount64()-start<5000){
+            ClientMiles::serve();Sleep(10);
+        }
+        if(InterlockedCompareExchange(&streamEvents,0,0)!=1 || InterlockedCompareExchange(&eosFaults,0,0))
+            finish(45,"FAIL: genuine stream EOS or typed engine callback");
+        if(ClientMiles::register_stream_callback(stream,0)!=onStream)finish(46,"FAIL: stream unregister identity");
+    }
     ClientMiles::close_stream(stream);
+    expectedStream=0;
     const LONG opened=InterlockedCompareExchange(&fileOpens,0,0);
     const LONG closed=InterlockedCompareExchange(&fileCloses,0,0);
     const LONG reads=InterlockedCompareExchange(&fileReads,0,0);
@@ -172,17 +204,52 @@ void fileCallbacks()
     std::puts("PASS: real engine file callbacks opened/read/sought/closed generated WAV");
     std::puts("PASS: file callbacks ran with engine TLS; native stream and borrowed sample returned");
 }
+void eosCallbacks(){
+    ClientMiles::HDIGDRIVER driver=ClientMiles::open_digital_driver(22050,16,ClientMiles::StereoSpeakerConfiguration,0);
+    if(!driver)finish(37,"FAIL: EOS driver");
+    const std::vector<unsigned char> image=wave();
+    expectedSample=ClientMiles::allocate_sample_handle(driver);
+    if(!expectedSample || !ClientMiles::set_named_sample_file(expectedSample,".wav",image.data(),static_cast<uint32_t>(image.size()),0))
+        finish(38,"FAIL: EOS sample bind");
+    ClientMiles::SampleCallback last=0;
+    for(unsigned cycle=0;cycle<65;++cycle){
+        const ClientMiles::SampleCallback next=cycle%2?onSampleB:onSampleA;
+        if(ClientMiles::register_EOS_callback(expectedSample,next)!=last)finish(39,"FAIL: sample prior callback identity");
+        last=next;
+    }
+    ClientMiles::set_sample_loop_count(expectedSample,0);
+    ClientMiles::start_sample(expectedSample);ClientMiles::end_sample(expectedSample);
+    if(InterlockedCompareExchange(&sampleA,0,0)!=1 || InterlockedCompareExchange(&sampleB,0,0) ||
+       InterlockedCompareExchange(&eosFaults,0,0))finish(40,"FAIL: synchronous EOS completion or exact callback");
+    // Successful native rebinding resets the callback; genuine prior return must
+    // report null, even though the previous registration request selected A.
+    if(!ClientMiles::set_named_sample_file(expectedSample,".wav",image.data(),static_cast<uint32_t>(image.size()),0) ||
+       ClientMiles::register_EOS_callback(expectedSample,onSampleB)!=0)finish(41,"FAIL: genuine callback reset on rebind");
+    ClientMiles::set_sample_loop_count(expectedSample,0);
+    ClientMiles::start_sample(expectedSample);ClientMiles::end_sample(expectedSample);
+    if(InterlockedCompareExchange(&sampleB,0,0)!=1 || ClientMiles::register_EOS_callback(expectedSample,0)!=onSampleB)
+        finish(42,"FAIL: sample B completion or unregister identity");
+    ClientMiles::start_sample(expectedSample);ClientMiles::end_sample(expectedSample);
+    if(InterlockedCompareExchange(&sampleA,0,0)!=1 || InterlockedCompareExchange(&sampleB,0,0)!=1 ||
+       InterlockedCompareExchange(&eosFaults,0,0))finish(43,"FAIL: unregister or engine callback identity");
+    ClientMiles::release_sample_handle(expectedSample);expectedSample=0;
+    std::puts("PASS: 65 typed EOS registrations, synchronous completion, native rebind reset and unregister");
+    fileCallbacks(driver,true);
+    std::puts("PASS: genuine stream EOS, shared file/EOS transport and engine TLS");
+}
+
 }
 
 int main(int argc, char **argv)
 {
     const bool bindingMode=argc==4 && !std::strcmp(argv[3],"--sample-bindings");
     const bool fileMode=argc==4 && !std::strcmp(argv[3],"--file-callbacks");
-    if (argc != 3 && !bindingMode && !fileMode)
-        finish(2, "usage: miles-pipe-probe.exe <x86 host.exe> <original Mss32.dll> [--sample-bindings|--file-callbacks]");
+    const bool eosMode=argc==4 && !std::strcmp(argv[3],"--eos-callbacks");
+    if (argc != 3 && !bindingMode && !fileMode && !eosMode)
+        finish(2, "usage: miles-pipe-probe.exe <x86 host.exe> <original Mss32.dll> [--sample-bindings|--file-callbacks|--eos-callbacks]");
     try {
         ClientMilesPrivate52::bindFatalReporter(fatalReporter);
-        if(fileMode) {
+        if(fileMode || eosMode) {
             if(setupEngineProbe() || runEngineWorkerProbe())finish(36,"FAIL: engine worker prerequisite");
             std::puts("PASS: engine worker FIFO, TLS, drain/join and destruction");
         }
@@ -218,6 +285,7 @@ int main(int argc, char **argv)
             finish(15, "FAIL: owner preference after secondary caller");
         if(bindingMode)sampleBindings();
         if(fileMode)fileCallbacks();
+        if(eosMode)eosCallbacks();
         ClientMiles::shutdown();
         if (nested != expected || outer != expected || after != expected)
             finish(4, "FAIL: preference changed during nested lock/unlock");

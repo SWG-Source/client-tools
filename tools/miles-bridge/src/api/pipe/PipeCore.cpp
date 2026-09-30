@@ -31,6 +31,8 @@ struct SampleState {
     Proxies proxies;
     typedef std::list<std::unique_ptr<ClientMilesPipe::StreamProxy> > Streams;
     Streams streams;
+    std::vector<ClientMiles::SampleCallback> sampleCallbacks;
+    std::vector<ClientMiles::StreamCallback> streamCallbacks;
 };
 }
 
@@ -227,6 +229,9 @@ bool Session::validateReply(uint32_t opcode,const MilesWire::Call &fields,
             return false;
     }
     if(r.transport_status!=StartupBridge::Success)return true;
+    if(opcode==MilesWire::AIL_register_EOS_callback && r.callback>samples->sampleCallbacks.size())return false;
+    if(opcode==MilesWire::AIL_register_stream_callback && r.callback &&
+       (r.callback<65 || r.callback-64>samples->streamCallbacks.size()))return false;
     if(opcode==MilesWire::SessionVersion)
         return MilesSessionVersion::validCapacity(fields.value[0]) &&
             !reply.bytes.empty() && reply.bytes.size()<=fields.value[0] &&
@@ -414,6 +419,17 @@ void Session::installFiles(ClientMiles::FileOpenCallback open,ClientMiles::FileC
     request(MilesWire::AIL_set_file_callbacks,fields);
     filesInstalled_=true; // only exact validated success after causal settlement
 }
+void Session::prepareEos(const MilesWire::Handle &resource,uint64_t callback,ClientMiles::HSAMPLE sample,
+    ClientMiles::SampleCallback sc,ClientMiles::HSTREAM stream,ClientMiles::StreamCallback tc) {
+    requireRunning();
+    if(!runtime_.prepareEos(resource,callback,sample,sc,stream,tc,callbackCodeLifetime_))rejectResult();
+}
+void Session::retireEos(const MilesWire::Handle &resource) {
+    if(!runtime_.retireEos(resource))rejectResult();
+}
+void Session::retireAllEos() {
+    if(!runtime_.retireAllEos())rejectResult();
+}
 void Session::close() {
     MilesCallbackGuard47::requireForwardAllowed();
     fail(ClientMilesPipeCore57::FailureReason::Unsupported,"paired normal shutdown proof is not implemented in candidate59");
@@ -443,6 +459,7 @@ void shutdown() {
     ClientMilesPipe::Session &session = ClientMilesPipe::Session::selected();
     session.requireRunning();
     session.request(MilesWire::AIL_shutdown, MilesWire::Call());
+    session.retireAllEos();
     session.samples->proxies.clear(); // confirmed vendor shutdown, local handles expire
     session.samples->streams.clear();
     session.started = false;
@@ -662,6 +679,42 @@ static StreamProxy &liveStream(ClientMilesPipe::Session &session,HSTREAM stream)
     fail(FailureReason::InvalidArgument,"stream is not live in selected Session");
     throw std::logic_error("unreachable");
 }
+ClientMiles::SampleCallback register_EOS_callback(HSAMPLE sample,ClientMiles::SampleCallback callback) {
+    ClientMilesPipe::Session &session=ClientMilesPipe::Session::selected();
+    SampleProxy &proxy=ownedSample(session,sample);
+    uint64_t id=0;
+    if(callback){
+        std::vector<ClientMiles::SampleCallback> &functions=session.samples->sampleCallbacks;
+        size_t index=0;for(;index<functions.size();++index)if(functions[index]==callback)break;
+        if(index==functions.size()){
+            if(index==64)fail(FailureReason::InputLimit,"64 distinct sample callbacks per session");
+            functions.push_back(callback);
+        }
+        id=index+1;
+    }
+    session.prepareEos(proxy.wire,id,sample,callback,0,0);
+    MilesWire::Call fields={};fields.target=proxy.wire;fields.callback=id;
+    const uint64_t previous=session.request(MilesWire::AIL_register_EOS_callback,fields).result.callback;
+    return previous ? session.samples->sampleCallbacks[static_cast<size_t>(previous-1)] : 0;
+}
+ClientMiles::StreamCallback register_stream_callback(HSTREAM stream,ClientMiles::StreamCallback callback) {
+    ClientMilesPipe::Session &session=ClientMilesPipe::Session::selected();
+    StreamProxy &proxy=liveStream(session,stream);
+    uint64_t id=0;
+    if(callback){
+        std::vector<ClientMiles::StreamCallback> &functions=session.samples->streamCallbacks;
+        size_t index=0;for(;index<functions.size();++index)if(functions[index]==callback)break;
+        if(index==functions.size()){
+            if(index==64)fail(FailureReason::InputLimit,"64 distinct stream callbacks per session");
+            functions.push_back(callback);
+        }
+        id=index+65;
+    }
+    session.prepareEos(proxy.wire,id,0,0,stream,callback);
+    MilesWire::Call fields={};fields.target=proxy.wire;fields.callback=id;
+    const uint64_t previous=session.request(MilesWire::AIL_register_stream_callback,fields).result.callback;
+    return previous ? session.samples->streamCallbacks[static_cast<size_t>(previous-65)] : 0;
+}
 HSTREAM open_stream(HDIGDRIVER driver,const char *filename,int32_t streamMem) {
     ClientMilesPipe::Session &session=ClientMilesPipe::Session::selected();
     MilesWire::Call fields=driverCall(session,driver);
@@ -683,7 +736,9 @@ static MilesWire::Call streamCall(ClientMilesPipe::Session &session,HSTREAM stre
 }
 void close_stream(HSTREAM stream) {
     ClientMilesPipe::Session &session=ClientMilesPipe::Session::selected();
-    session.request(MilesWire::AIL_close_stream,streamCall(session,stream));
+    const MilesWire::Call close=streamCall(session,stream);
+    session.request(MilesWire::AIL_close_stream,close);
+    session.retireEos(close.target);
     for (ClientMilesPipe::SampleState::Streams::iterator i=session.samples->streams.begin();
          i!=session.samples->streams.end(); ++i)
         if (streamToken(i->get())==stream) {session.samples->streams.erase(i);break;}
@@ -775,6 +830,7 @@ void release_sample_handle(HSAMPLE sample) {
     MilesWire::Call fields = {};
     fields.target = owned.wire;
     session.request(MilesWire::AIL_release_sample_handle, fields);
+    session.retireEos(fields.target);
     // Native HSAMPLE lifetime ends here. Caller reuse of that raw pointer is invalid.
     // Wire generations are a separate host/callback obligation, not pointer tokens.
     for (ClientMilesPipe::SampleState::Proxies::iterator i=session.samples->proxies.begin();
@@ -784,7 +840,7 @@ void release_sample_handle(HSAMPLE sample) {
 }
 
 // Client control slice: five operations accept a live parent-owned borrowed proxy.
-// Current host Backend still admits only OwnedSample; stream integration is pending.
+// Host resolves borrowed sample identity through its live parent stream.
 static MilesWire::Call sampleCall(ClientMilesPipe::Session &session, HSAMPLE sample, bool borrowed=false) {
     MilesWire::Call fields = {};
     fields.target = controlSample(session, sample, borrowed).wire;

@@ -15,12 +15,13 @@ public:
     ~Runtime();
     uint64_t session() const { return session_; }
     uint64_t registration() const { return registration_; }
+    void invokeEos(const MilesWire::Handle &,uint64_t token);
     uint32_t invoke(uint32_t opcode,uint32_t token,const char *name,
                     int32_t offset,uint32_t countOrOrigin,void *destination,
                     uint32_t &openedToken);
 private:
     struct Ticket {
-        std::vector<unsigned char> request,reply;
+        std::vector<unsigned char> request,reply,eosAck;
         MilesHostFiles49::ReplyTransaction *transaction;
         Ticket():transaction(0){}
     };

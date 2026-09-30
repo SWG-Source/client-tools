@@ -1,4 +1,6 @@
 #include "client_file_runtime.h"
+#include "../eos/client_eos.h"
+#include "../eos/eos_protocol.h"
 #include <process.h>
 #include <stdexcept>
 #include <new>
@@ -35,7 +37,7 @@ struct Event {
 private:Event(const Event &);Event &operator=(const Event &);
 };
 struct Ticket {
-    enum Kind { Prepare, Publish, Returned } kind;
+    enum Kind { Prepare, PrepareEos, RetireEos, RetireAllEos, Publish, Returned } kind;
     Event done;
     bool begun,ok;
     uint64_t wire,lane,registration,lease;
@@ -45,12 +47,41 @@ struct Ticket {
     ClientMiles::FileCloseCallback close;
     ClientMiles::FileSeekCallback seek;
     ClientMiles::FileReadCallback read;
+    MilesWire::Handle resource;
+    ClientMiles::HSAMPLE sample;
+    ClientMiles::SampleCallback sampleCallback;
+    ClientMiles::HSTREAM stream;
+    ClientMiles::StreamCallback streamCallback;
     std::shared_ptr<void> lifetime;
     std::vector<MilesWire::Handle> resources;
     explicit Ticket(Kind k):kind(k),begun(false),ok(false),wire(0),lane(0),registration(0),lease(0),
         action(MilesCoordinator::Ordinary),actionApplied(true),
-        open(0),close(0),seek(0),read(0){}
+        open(0),close(0),seek(0),read(0),resource(),sample(0),sampleCallback(0),stream(0),streamCallback(0){}
 private:Ticket(const Ticket &);Ticket &operator=(const Ticket &);
+};
+}
+namespace {
+bool sameHandle(const MilesWire::Handle &a,const MilesWire::Handle &b) {
+    return a.kind==b.kind && a.slot==b.slot && a.generation==b.generation;
+}
+struct EosFunction {
+    ClientMiles::SampleCallback sample;
+    ClientMiles::StreamCallback stream;
+    std::shared_ptr<void> lifetime;
+    EosFunction():sample(0),stream(0){}
+};
+struct EosResource {
+    MilesWire::Handle wire;
+    ClientMiles::HSAMPLE sample;
+    ClientMiles::HSTREAM stream;
+};
+struct EosPending {
+    MilesWire::Header header;
+    MilesWire::Eos event;
+    std::shared_ptr<MilesEos::ClientJob> job;
+    std::vector<unsigned char> completion;
+    bool queued;
+    EosPending():header(),event(),queued(false){}
 };
 }
 struct Runtime::State {
@@ -69,10 +100,13 @@ struct Runtime::State {
     std::shared_ptr<FileSessionContext> context;
     SessionFileOwner *owner;
     HostAssociationMapper *mapper;
-    uint64_t lastWire,lastAdmission,activeWire;
+    uint64_t lastWire,lastAdmission,activeWire,activeLane,activeLease,lastReverse;
+    EosFunction functions[128];
+    std::vector<EosResource> eosResources;
+    std::unique_ptr<EosPending> eos;
     State(uint64_t s,uint64_t b,std::shared_ptr<void> pin):raw(INVALID_HANDLE_VALUE),thread(0),
         session(s),background(b),failureRequested(0),engineLifetime(pin),endpoint(0),
-        coordinator(0),worker(0),owner(0),mapper(0),lastWire(0),lastAdmission(0),activeWire(0){}
+        coordinator(0),worker(0),owner(0),mapper(0),lastWire(0),lastAdmission(0),activeWire(0),activeLane(0),activeLease(0),lastReverse(0){}
     void requestFailure(){InterlockedExchange(&failureRequested,1);SetEvent(wake.h);}
     bool isFailed() const {return InterlockedCompareExchange(&failureRequested,0,0)!=0;}
     void terminalFailure(){
@@ -98,7 +132,62 @@ struct Runtime::State {
         ticket->ok=true;
         if(!SetEvent(ticket->done.h))requestFailure();
     }
+    void ensureWorker(){
+        if(worker)return;
+        worker=EngineFileWorker::create();
+        if(!worker || worker->start()!=EngineFileWorker::Started)
+            throw std::runtime_error("engine worker start");
+    }
+    void prepareEos(const Ticket &t){
+        const bool sample=t.resource.kind==MilesWire::OwnedSample && t.sample && !t.stream && !t.streamCallback;
+        const bool stream=t.resource.kind==MilesWire::Stream && t.stream && !t.sample && !t.sampleCallback;
+        if((!sample && !stream) || !t.resource.slot || !t.resource.generation || !t.lifetime ||
+           (sample && (t.registration>64 || (!!t.registration != !!t.sampleCallback))) ||
+           (stream && (t.registration && (t.registration<65 || t.registration>128))) ||
+           (stream && (!!t.registration != !!t.streamCallback)))
+            throw std::runtime_error("typed EOS preparation");
+        if(t.registration){
+            EosFunction &function=functions[t.registration-1];
+            if((function.sample || function.stream) &&
+               (function.sample!=t.sampleCallback || function.stream!=t.streamCallback))
+                throw std::runtime_error("EOS function identity reused");
+            function.sample=t.sampleCallback;function.stream=t.streamCallback;function.lifetime=t.lifetime;
+        }
+        bool found=false;
+        for(size_t i=0;i<eosResources.size();++i)if(sameHandle(eosResources[i].wire,t.resource)){
+            if(eosResources[i].sample!=t.sample || eosResources[i].stream!=t.stream)
+                throw std::runtime_error("EOS proxy identity changed");
+            found=true;
+        }
+        if(!found){EosResource resource={t.resource,t.sample,t.stream};eosResources.push_back(resource);}
+        ensureWorker();
+    }
+    void receiveEos(const std::vector<unsigned char> &frame){
+        if(eos || !worker)throw std::runtime_error("overlapping or unprepared EOS");
+        std::unique_ptr<EosPending> pending(new EosPending);
+        if(!MilesTransport::decodeEos(MilesTransport::Bytes(frame.data(),frame.size()),pending->header,pending->event) ||
+           !MilesEos::validEvent(pending->header,pending->event))throw std::runtime_error("EOS envelope");
+        const MilesWire::Header &h=pending->header;
+        if(h.causal_request ? (!activeWire || h.causal_request!=activeWire || h.lane!=activeLane || h.lock_lease!=activeLease)
+                            : (h.lane!=background || h.lock_lease))throw std::runtime_error("EOS command association");
+        const MilesWire::Eos &event=pending->event;
+        const EosFunction &function=functions[event.registration-1];
+        const EosResource *resource=0;
+        for(size_t i=0;i<eosResources.size();++i)if(sameHandle(eosResources[i].wire,event.resource))resource=&eosResources[i];
+        if(!resource || !function.lifetime ||
+           (h.opcode==MilesWire::EndOfSample ? (!function.sample || !resource->sample) : (!function.stream || !resource->stream)))
+            throw std::runtime_error("EOS callback or live proxy unknown");
+        if(!MilesEos::encodeCompletion(h,event,pending->completion))throw std::runtime_error("EOS completion encoding");
+        // Capture immutable typed function/proxy before effect. Session retires
+        // proxy storage only after native release and this consumption ACK.
+        eos=std::move(pending);
+        eos->job=MilesEos::ClientJob::submit(*worker,resource->sample,function.sample,
+            resource->stream,function.stream,function.lifetime);
+    }
     void observation(const std::shared_ptr<Ticket> &t){
+        // Native completion and bridge consumption are distinct. Forward return,
+        // new admission and retirement wait for the EOS consumption ACK too.
+        if(eos)return;
         if(t->begun){
             if(t->kind!=Ticket::Returned || !mapper)throw std::runtime_error("pending observation");
             if(mapper->commandState()==HostAssociationMapper::Settled){
@@ -108,13 +197,22 @@ struct Runtime::State {
             return;
         }
         t->begun=true;
-        if(t->kind==Ticket::Prepare){
+        if(t->kind==Ticket::PrepareEos){
+            if(activeWire)throw std::runtime_error("EOS preparation during command");
+            prepareEos(*t);complete(t);
+        }else if(t->kind==Ticket::RetireEos || t->kind==Ticket::RetireAllEos){
+            if(activeWire)throw std::runtime_error("EOS retirement during command");
+            for(size_t i=0;i<eosResources.size();)
+                if(t->kind==Ticket::RetireAllEos || sameHandle(eosResources[i].wire,t->resource))
+                    eosResources.erase(eosResources.begin()+i);
+                else ++i;
+            complete(t);
+        }else if(t->kind==Ticket::Prepare){
             if(owner || activeWire || coordinator->activeAdmission() || !t->registration)
                 throw std::runtime_error("prepare transition");
             MilesFileChannel26::FileServices selected=MilesSelectedFileServices44::retain(
                 t->open,t->close,t->seek,t->read,t->lifetime);
-            worker=EngineFileWorker::create();
-            if(!worker || worker->start()!=EngineFileWorker::Started)throw std::runtime_error("engine worker start");
+            ensureWorker();
             context.reset(new FileSessionContext(*worker,engineLifetime,selected));
             owner=new SessionFileOwner(*coordinator,session,t->registration,context,64,64);
             mapper=new HostAssociationMapper(session,background,*coordinator,*owner,64);
@@ -127,7 +225,7 @@ struct Runtime::State {
                 ?mapper->publishCommand(t->wire,admission,t->lane,t->lease,t->action,t->resources)
                 :coordinator->admitGame(session,admission,t->lane,t->lease,t->action,t->resources);
             if(e!=MilesCoordinator::Ok)throw std::runtime_error("admit command");
-            lastAdmission=admission;lastWire=t->wire;activeWire=t->wire;complete(t);
+            lastAdmission=admission;lastWire=t->wire;activeWire=t->wire;activeLane=t->lane;activeLease=t->lease;complete(t);
         }else{
             if(!activeWire || t->wire!=activeWire)throw std::runtime_error("return identity");
             if(mapper){
@@ -160,10 +258,38 @@ struct Runtime::State {
                 if(endpoint->state()!=MilesPipe::Endpoint::Open)throw std::runtime_error("callback endpoint");
                 std::vector<unsigned char> frame;
                 if(endpoint->takeFrame(frame)){
-                    if(!mapper)throw std::runtime_error("reverse before table preparation");
-                    HostAssociationMapper::ControlResult r=mapper->receiveControl(session,MilesTransport::Bytes(frame.data(),frame.size()));
-                    if(r!=HostAssociationMapper::FileQueued && r!=HostAssociationMapper::AckConsumed)
-                        throw std::runtime_error("callback control rejected");
+                    MilesWire::Header header={};MilesWire::Call fields={};MilesWire::Eos event={};
+                    const MilesTransport::Bytes data(frame.data(),frame.size());
+                    const bool eventFrame=MilesTransport::decodeEos(data,header,event);
+                    if(!eventFrame && !MilesTransport::decodeCall(data,header,fields))throw std::runtime_error("reverse decode");
+                    // File consumption ACKs retain ReverseRequest kind but reuse
+                    // their original ID; they are not new reverse operations.
+                    if(eventFrame || (header.kind==MilesWire::ReverseRequest &&
+                       header.opcode!=MilesWire::FileConsumptionAck)){
+                        if(lastReverse==UINT64_MAX || header.request!=lastReverse+1)
+                            throw std::runtime_error("shared reverse sequence");
+                        lastReverse=header.request;
+                    }
+                    if(eventFrame)receiveEos(frame);
+                    else if(header.opcode==MilesWire::CallbackAck){
+                        if(!eos || !eos->queued || !MilesEos::validateConsumption(data,eos->header,eos->event))
+                            throw std::runtime_error("EOS consumption ACK");
+                        eos.reset();
+                    }else{
+                        if(!mapper || eos)throw std::runtime_error("file callback without prepared idle owner");
+                        HostAssociationMapper::ControlResult r=mapper->receiveControl(session,data);
+                        if(r!=HostAssociationMapper::FileQueued && r!=HostAssociationMapper::AckConsumed)
+                            throw std::runtime_error("callback control rejected");
+                    }
+                }
+                if(eos && !eos->queued){
+                    const MilesEos::ClientJob::Status status=eos->job->status();
+                    if(status==MilesEos::ClientJob::Failed)throw std::runtime_error("EOS callback failed");
+                    if(status==MilesEos::ClientJob::Completed && !endpoint->sendBusy()){
+                        if(!endpoint->send(MilesTransport::Bytes(eos->completion.data(),eos->completion.size())))
+                            throw std::runtime_error("EOS completion send");
+                        eos->queued=true;
+                    }
                 }
                 if(mapper){
                     mapper->poll();
@@ -202,6 +328,19 @@ Runtime::~Runtime(){} // only launch failure before thread ownership; State stay
 bool Runtime::awaitReady(){HANDLE events[]={state->ready.h,state->terminal.h};DWORD r=WaitForMultipleObjects(2,events,FALSE,INFINITE);if(r!=WAIT_OBJECT_0){state->requestFailure();return false;}return !failed();}
 bool Runtime::prepare(uint64_t r,ClientMiles::FileOpenCallback o,ClientMiles::FileCloseCallback c,ClientMiles::FileSeekCallback s,ClientMiles::FileReadCallback rd,std::shared_ptr<void> pin){
     try{std::shared_ptr<Ticket> t(new Ticket(Ticket::Prepare));t->registration=r;t->open=o;t->close=c;t->seek=s;t->read=rd;t->lifetime=pin;return state->post(t);}catch(...){fail();return false;}
+}
+bool Runtime::prepareEos(const MilesWire::Handle &resource,uint64_t id,ClientMiles::HSAMPLE sample,
+    ClientMiles::SampleCallback sc,ClientMiles::HSTREAM stream,ClientMiles::StreamCallback tc,std::shared_ptr<void> pin){
+    try{std::shared_ptr<Ticket> t(new Ticket(Ticket::PrepareEos));t->resource=resource;t->registration=id;
+        t->sample=sample;t->sampleCallback=sc;t->stream=stream;t->streamCallback=tc;t->lifetime=pin;
+        return state->post(t);}catch(...){fail();return false;}
+}
+bool Runtime::retireEos(const MilesWire::Handle &resource){
+    try{std::shared_ptr<Ticket> t(new Ticket(Ticket::RetireEos));t->resource=resource;return state->post(t);}
+    catch(...){fail();return false;}
+}
+bool Runtime::retireAllEos(){
+    try{return state->post(std::shared_ptr<Ticket>(new Ticket(Ticket::RetireAllEos)));}catch(...){fail();return false;}
 }
 bool Runtime::publish(uint64_t wire,uint64_t lane,const std::vector<MilesWire::Handle> &resources,
     MilesCoordinator::Action action,uint64_t lease){

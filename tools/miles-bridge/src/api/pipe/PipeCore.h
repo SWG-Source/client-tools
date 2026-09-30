@@ -75,8 +75,10 @@ int32_t speaker_configuration_spec(HDIGDRIVER driver);
 // Driver arguments retain their native scalar widths; only one live driver is owned.
 // Preference width follows the native pointer width; the pipe checks narrowing.
 // Driver identities are opaque, local to the selected implementation and valid
-// only through that startup lifetime. Typed EOS delivery remains unimplemented.
+// only through that startup lifetime. EOS callbacks use the admitted engine worker; forward reentry is refused.
 
+ClientMiles::SampleCallback register_EOS_callback(HSAMPLE, ClientMiles::SampleCallback);
+ClientMiles::StreamCallback register_stream_callback(HSTREAM, ClientMiles::StreamCallback);
 void set_file_callbacks(FileOpenCallback open, FileCloseCallback close,
                         FileSeekCallback seek, FileReadCallback read);
 void set_listener_3D_position(HDIGDRIVER driver, float x, float y, float z);
@@ -124,7 +126,7 @@ void release_sample_handle(HSAMPLE sample);
 // release. Borrowed stream samples remain valid only while their parent is live.
 // Borrowed use in this subset: set_sample_volume_levels, sample_volume_levels,
 // set_sample_reverb_levels, set_sample_playback_rate and sample_playback_rate.
-// Other sample controls here require owned samples. EOS is not implemented here.
+// Other sample controls here require owned samples. EOS registration requires owned samples.
 void start_sample(HSAMPLE sample);
 void stop_sample(HSAMPLE sample);
 uint32_t sample_status(HSAMPLE sample);
@@ -169,7 +171,7 @@ void stream_ms_position(HSTREAM stream, int32_t *totalMilliseconds,
 
 // Signed SDK values, native offsets and nullable output pointers pass unchanged.
 // Use the existing shared sample control names for borrowed samples; see
-// the plain public surface for this subset. EOS delivery remains unimplemented.
+// the plain public surface for this subset. EOS callbacks retain typed identity through native completion.
 
 }
 #endif

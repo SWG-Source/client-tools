@@ -5,6 +5,7 @@
 #include "reply.h"
 #include <Mss.h>
 #include "../upload/upload_state.h"
+#include "../eos/host_eos.h"
 #include <type_traits>
 static_assert(std::is_same<decltype(&::AIL_WAV_info),
     S32 (AILCALL *)(const void *, AILSOUNDINFO *)>::value,"exact native WAV_info declaration");
@@ -156,8 +157,20 @@ struct Backend {
         default:
             break;
         }
-        // No EOS registration exists in this slice. File callback owners remain
-        // active throughout native open/getter/close and the existing return join.
+        if(h.opcode==MilesWire::AIL_register_EOS_callback || h.opcode==MilesWire::AIL_register_stream_callback) {
+            const bool sample=h.opcode==MilesWire::AIL_register_EOS_callback;
+            if(c.reserved||c.output_mask||c.bytes.offset||c.bytes.length||c.text.offset||c.text.length||!nullHandle(c.resource))return out;
+            for(unsigned i=0;i<8;++i)if(c.value[i])return out;
+            if(c.callback&&(sample?(c.callback>64):(c.callback<65||c.callback>128)))return out;
+            if(!started||shutdown){out.result.transport_status=LifecycleRefused;return out;}
+            void *local=0;
+            if(!registry.resolve(c.target,sample?MilesWire::OwnedSample:MilesWire::Stream,local)){
+                out.result.transport_status=InvalidResource;return out;
+            }
+            out.result.callback=MilesHostEos::registerCallback(local,c.target,c.callback);
+            out.result.transport_status=Success;return out;
+        }
+        // Callback identities remain live throughout native close and its synchronous completion join.
         if (h.opcode == MilesWire::AIL_open_stream ||
             h.opcode == MilesWire::AIL_stream_sample_handle ||
             h.opcode == MilesWire::AIL_close_stream) {
@@ -207,6 +220,7 @@ struct Backend {
             } else {
                 require(registry.beginClose(c.target), "close stream identity before native effect");
                 ::AIL_close_stream(static_cast<HSTREAM>(local));
+                MilesHostEos::released(local,c.target);
                 require(registry.retire(c.target), "retire stream and aliases after native return");
             }
             out.result.transport_status = Success;
@@ -242,6 +256,7 @@ struct Backend {
                 // Null allocation cancels its unpublished reservation on scope exit.
             } else {
                 ::AIL_release_sample_handle(static_cast<HSAMPLE>(local));
+                MilesHostEos::released(local,c.target);
                 imageUpload.releasedSample(c.target);
                 require(registry.retire(c.target), "retire sample after confirmed release");
             }
@@ -346,6 +361,7 @@ struct Backend {
         }
         if (h.opcode == MilesWire::AIL_shutdown) {
             ::AIL_shutdown();
+            MilesHostEos::shutdownComplete();
             imageUpload.shutdownComplete();
             started = false;
             shutdown = true;

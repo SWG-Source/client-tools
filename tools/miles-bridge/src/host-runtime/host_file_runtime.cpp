@@ -1,4 +1,5 @@
 #include "host_file_runtime.h"
+#include "../eos/eos_protocol.h"
 #include <cstring>
 #include <limits>
 namespace MilesHostRuntime50 {
@@ -72,7 +73,7 @@ void Runtime::run() {
             continue;
         }
         if(!ResetEvent(work_))fatal();
-        Ticket *const current=ticket_;if(!current || !current->transaction)fatal();
+        Ticket *const current=ticket_;if(!current || (!current->transaction && current->eosAck.empty()))fatal();
         send(endpoint,bytes(current->request));
         const ULONGLONG start=GetTickCount64();
         while(!endpoint.takeFrame(current->reply)) {
@@ -85,11 +86,35 @@ void Runtime::run() {
         // Producer consumes on its own callback stack. It alone touches FileTokens.
         // No Endpoint access on that stack. This wait cannot hold a state mutex.
         await(consumed_);
-        send(endpoint,current->transaction->ack());
-        if(!current->transaction->observeAckWriteComplete())fatal();
+        if(current->transaction) {
+            send(endpoint,current->transaction->ack());
+            if(!current->transaction->observeAckWriteComplete())fatal();
+        } else send(endpoint,bytes(current->eosAck));
         ticket_=0; // last access to stack ticket precedes the release event
         signal(done_);
     }
+}
+void Runtime::invokeEos(const MilesWire::Handle &resource,uint64_t token) {
+    if(insideCallback)fatal();
+    insideCallback=true;
+    MilesHostContext::Origin origin={};
+    const MilesHostContext::SnapshotResult context=MilesHostContext::snapshot(session_,origin);
+    if(context!=MilesHostContext::Ready&&context!=MilesHostContext::Unsolicited)fatal();
+    EnterCriticalSection(&producer_);
+    if(lastRequest_==(std::numeric_limits<uint64_t>::max)())fatal();
+    MilesWire::Header h={};h.magic=MilesWire::Magic;h.version=MilesWire::Version;h.kind=MilesWire::Event;
+    h.opcode=resource.kind==MilesWire::Stream?MilesWire::EndOfStream:MilesWire::EndOfSample;
+    h.request=++lastRequest_;h.causal_request=context==MilesHostContext::Ready?origin.wireRequest:0;
+    h.lane=context==MilesHostContext::Ready?origin.lane:backgroundLane_;
+    h.lock_lease=context==MilesHostContext::Ready?origin.lease:0;
+    MilesWire::Eos e={};e.resource=resource;e.registration=token;e.event_sequence=h.request;
+    Ticket ticket;
+    if(!MilesEos::validEvent(h,e)||!MilesTransport::encodeEos(h,e,ticket.request)||
+       !MilesEos::encodeConsumption(h,e,ticket.eosAck))fatal();
+    ticket_=&ticket;signal(work_);await(reply_);
+    if(!MilesEos::validateCompletion(bytes(ticket.reply),h,e))fatal();
+    signal(consumed_);await(done_);
+    LeaveCriticalSection(&producer_);insideCallback=false;
 }
 uint32_t Runtime::invoke(uint32_t opcode,uint32_t token,const char *name,int32_t offset,
                         uint32_t countOrOrigin,void *destination,uint32_t &openedToken) {
