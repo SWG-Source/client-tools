@@ -1421,8 +1421,8 @@ void *MemoryManager::reallocate(void *userPointer, size_t newSize)
 	}
 
 #if DO_TRACK
-	MemoryManager::OwnerAddress owner = allocatedBlock->getOwner(0);
-	bool leakTest = allocatedBlock->checkForLeaks();
+	MemoryManager::OwnerAddress owner = allocatedBlock ? allocatedBlock->getOwner(0) : 0;
+	bool leakTest = allocatedBlock ? allocatedBlock->checkForLeaks() : false;
 #else
 	MemoryManager::OwnerAddress owner = 0;
 	bool leakTest = false;
