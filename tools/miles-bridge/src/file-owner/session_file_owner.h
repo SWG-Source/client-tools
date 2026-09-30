@@ -44,6 +44,7 @@ public:
     bool acknowledge(uint64_t session,uint64_t intake); // Actual reply-consumption ACK only.
     bool fileState(MilesWire::Handle,FileState &) const;
     size_t retainedOperations() const;
+    size_t retainedFiles() const;
 private:
     struct FileRecord;
     struct Operation;

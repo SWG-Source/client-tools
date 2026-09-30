@@ -39,8 +39,8 @@ bool Endpoint::send(MilesTransport::Bytes frame) {
  std::vector<unsigned char> copied(frame.data,frame.data+frame.size);
  writeBuffer.swap(copied);writeUsed=0;return true;
 }
-bool Endpoint::takeFrame(std::vector<unsigned char> &out) {
- if(!ready || current!=Open)return false;
+bool Endpoint::takeFrame(std::vector<unsigned char> &out,bool allowPeerClosed) {
+ if(!ready || (current!=Open && !(allowPeerClosed && current==Faulted && reason==PeerClosed)))return false;
  std::vector<unsigned char> completed;completed.swap(readBuffer);out.swap(completed);
  headerUsed=readUsed=0;ready=false;return true;
 }

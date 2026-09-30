@@ -62,6 +62,7 @@ void released(void *native,const MilesWire::Handle &resource){
         if(i->active)MilesHostRuntime50::fatal();rows.erase(i);return;
     }
 }
+bool empty(){Guard guard;return rows.empty();}
 void shutdownComplete(){
     Guard guard;for(std::list<Row>::const_iterator i=rows.begin();i!=rows.end();++i)if(i->active)MilesHostRuntime50::fatal();
     rows.clear();

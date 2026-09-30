@@ -15,7 +15,7 @@ class Channel {
                                            MilesTransport::Bytes payload, MilesTransport::Bytes text,
                                            const std::vector<MilesWire::Handle> &verifiedResources,
                                            const Session &replyOwner) = 0;
-    // Candidate64 refuses normal finish until paired shutdown proof exists.
+    // Explicit paired close after genuine SDK shutdown; retains roots on failure.
     virtual void finish() = 0;
 };
 } // namespace ClientMilesPipe

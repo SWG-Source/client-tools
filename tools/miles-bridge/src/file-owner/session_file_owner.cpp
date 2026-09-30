@@ -143,6 +143,9 @@ bool SessionFileOwner::fileState(MilesWire::Handle h,FileState &out) const {
         files[i]->identity.slot==h.slot && files[i]->identity.generation==h.generation){out=files[i]->state;return true;}
     return false;
 }
+size_t SessionFileOwner::retainedFiles() const {
+    size_t n=0;for(size_t i=0;i<files.size();++i)if(files[i])++n;return n;
+}
 size_t SessionFileOwner::retainedOperations() const {
     size_t n=0;for(size_t i=0;i<operations.size();++i)if(operations[i])++n;return n;
 }

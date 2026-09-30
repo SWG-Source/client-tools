@@ -7,6 +7,10 @@ bool same(const MilesWire::Handle &a,const MilesWire::Handle &b) {
 }
 FileTokens::FileTokens(uint32_t count):registry(count),records(new Record[count]),capacity(count),lastToken(0) {}
 FileTokens::~FileTokens() {}
+bool FileTokens::empty() const throw() {
+    for(uint32_t i=0;i<capacity;++i)if(records[i].state!=Free)return false;
+    return true;
+}
 FileTokens::Record *FileTokens::find(uint32_t token) throw() {
     if(!token)return 0;
     for(uint32_t i=0;i<capacity;++i)if(records[i].state!=Free && records[i].token==token)return &records[i];

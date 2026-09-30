@@ -19,8 +19,8 @@ void finish(unsigned code, const char *message)
     std::fprintf(code ? stderr : stdout, "%s\n", message);
     std::fflush(stdout);
     std::fflush(stderr);
-    // Session::close has no paired-close implementation. Retain all roots until
-    // process death; this does not claim callback/worker/allocator teardown.
+    // Failures retain roots until process death. Paired-close mode explicitly
+    // joins its bridge owners; no mode runs global engine/Audio teardown.
     ::ExitProcess(code);
 }
 void fatalReporter(uint32_t reason, const char *message)
@@ -244,9 +244,10 @@ int main(int argc, char **argv)
 {
     const bool bindingMode=argc==4 && !std::strcmp(argv[3],"--sample-bindings");
     const bool fileMode=argc==4 && !std::strcmp(argv[3],"--file-callbacks");
-    const bool eosMode=argc==4 && !std::strcmp(argv[3],"--eos-callbacks");
+    const bool closeMode=argc==4 && !std::strcmp(argv[3],"--paired-close");
+    const bool eosMode=closeMode || (argc==4 && !std::strcmp(argv[3],"--eos-callbacks"));
     if (argc != 3 && !bindingMode && !fileMode && !eosMode)
-        finish(2, "usage: miles-pipe-probe.exe <x86 host.exe> <original Mss32.dll> [--sample-bindings|--file-callbacks|--eos-callbacks]");
+        finish(2, "usage: miles-pipe-probe.exe <x86 host.exe> <original Mss32.dll> [--sample-bindings|--file-callbacks|--eos-callbacks|--paired-close]");
     try {
         ClientMilesPrivate52::bindFatalReporter(fatalReporter);
         if(fileMode || eosMode) {
@@ -258,10 +259,12 @@ int main(int argc, char **argv)
         // These tokens retain process-resident engine/callback code, not teardown.
         std::shared_ptr<void> engineLifetime(new int(1));
         std::shared_ptr<void> callbackLifetime(new int(1));
+        const std::weak_ptr<void> enginePin(engineLifetime),callbackPin(callbackLifetime);
         ClientMilesPipe::Session *session = ClientMilesPipe::connectSession(
             argv[1], argv[2], engineLifetime, callbackLifetime, 1024 * 1024);
         if (!session || !ClientMiles::startup())
             finish(3, "FAIL: session/startup");
+        engineLifetime.reset();callbackLifetime.reset();
         intptr_t const expected = ClientMiles::get_preference(ClientMiles::MixFragmentCount);
         if (!rejectedLockFields(*session, MilesWire::AIL_lock))
             finish(11, "FAIL: malformed lock not rejected as InvalidArgument");
@@ -292,6 +295,12 @@ int main(int argc, char **argv)
         std::puts("PASS: malformed lock/unlock rejected; nested sequence completed");
         std::puts("PASS: secondary caller rejected; owner sequence completed");
         std::puts("PASS: startup, nested lock/unlock, ordinary preference, shutdown");
+        if(closeMode){
+            session->close();delete session;session=0;
+            if(!enginePin.expired() || !callbackPin.expired())finish(47,"FAIL: paired close retained code lifetime roots");
+            std::puts("PASS: paired host exit, callback and engine worker joins, Session destruction and pin release");
+            finish(0,"PASS: standalone paired close; global engine bootstrap remains installed");
+        }
         finish(0, "PASS: pipe lock transport probe; test-only process exit, no teardown claim");
     } catch (const std::exception &error) {
         finish(5, error.what());

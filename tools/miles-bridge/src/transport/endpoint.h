@@ -15,7 +15,9 @@ public:
  // May block waiting for OS cancellation completion. Normal use drains explicitly.
  ~Endpoint();
  bool send(MilesTransport::Bytes frame);
- bool takeFrame(std::vector<unsigned char> &out);
+ bool takeFrame(std::vector<unsigned char> &out, bool allowPeerClosed=false);
+ // Includes incomplete inbound bytes; empty operation tables do not imply an empty pipe.
+ bool receiveBuffered() const { return ready || headerUsed!=0 || readUsed!=0; }
  void pump();
  void cancel();
  bool drain(DWORD timeoutMs); // Timeout leaves storage and handles alive.

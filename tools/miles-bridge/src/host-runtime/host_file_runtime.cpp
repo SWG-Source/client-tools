@@ -44,7 +44,7 @@ Runtime::Runtime(HANDLE pipe,uint64_t session,uint64_t registration,uint64_t bac
                  uint32_t liveFiles)
  :pipe_(pipe),thread_(0),ready_(0),work_(0),reply_(0),consumed_(0),done_(0),
   session_(session),registration_(registration),backgroundLane_(backgroundLane),
-  lastRequest_(0),files_(liveFiles),ticket_(0) {
+  lastRequest_(0),stopped_(0),files_(liveFiles),ticket_(0) {
     if(!session_ || !registration_ || !backgroundLane_)fatal();
     InitializeCriticalSection(&producer_);
     ready_=CreateEventA(0,FALSE,FALSE,0);work_=CreateEventA(0,TRUE,FALSE,0);
@@ -58,12 +58,23 @@ Runtime::Runtime(HANDLE pipe,uint64_t session,uint64_t registration,uint64_t bac
 Runtime::~Runtime(){fatal();}
 DWORD WINAPI Runtime::entry(void *context) {
     try {static_cast<Runtime *>(context)->run();}catch(...){fatal();}
-    fatal();
+    return 0;
 }
 void Runtime::run() {
     MilesPipe::Endpoint endpoint(pipe_); // construction, all I/O and lifetime here
     signal(ready_);
     for(;;) {
+        if(InterlockedCompareExchange(&stopped_,0,0)) {
+            // Collect completed reads before cancellation can discard their bytes.
+            endpoint.pump();
+            if(ticket_ || endpoint.sendBusy() || endpoint.receiveBuffered())fatal();
+            std::vector<unsigned char> unexpected;
+            if(endpoint.takeFrame(unexpected))fatal();
+            if(endpoint.state()!=MilesPipe::Endpoint::Open)fatal();
+            endpoint.cancel();
+            if(!endpoint.drain(ActiveTimeout))fatal();
+            return; // Endpoint destructor sees a drained, closed pipe.
+        }
         endpoint.pump();healthy(endpoint);
         std::vector<unsigned char> unexpected;
         if(endpoint.takeFrame(unexpected))fatal();
@@ -73,6 +84,7 @@ void Runtime::run() {
             continue;
         }
         if(!ResetEvent(work_))fatal();
+        if(InterlockedCompareExchange(&stopped_,0,0))continue;
         Ticket *const current=ticket_;if(!current || (!current->transaction && current->eosAck.empty()))fatal();
         send(endpoint,bytes(current->request));
         const ULONGLONG start=GetTickCount64();
@@ -94,13 +106,29 @@ void Runtime::run() {
         signal(done_);
     }
 }
+void Runtime::stopAfterSdkShutdown() {
+    if(insideCallback || InterlockedCompareExchange(&stopped_,0,0))fatal();
+    EnterCriticalSection(&producer_);
+    // A zero callback count alone is insufficient: caller supplies the native
+    // producer-stop proof. Serialization joins the last complete transaction.
+    if(ticket_ || !files_.empty())fatal();
+    InterlockedExchange(&stopped_,1);
+    signal(work_);
+    LeaveCriticalSection(&producer_);
+    await(thread_);
+    DWORD code=1;
+    if(!GetExitCodeThread(thread_,&code)||code)fatal();
+    // Retain Runtime and its synchronization roots until process exit. Late
+    // callbacks can still observe stopped_ and fail without touching freed state.
+}
 void Runtime::invokeEos(const MilesWire::Handle &resource,uint64_t token) {
-    if(insideCallback)fatal();
+    if(insideCallback || InterlockedCompareExchange(&stopped_,0,0))fatal();
     insideCallback=true;
     MilesHostContext::Origin origin={};
     const MilesHostContext::SnapshotResult context=MilesHostContext::snapshot(session_,origin);
     if(context!=MilesHostContext::Ready&&context!=MilesHostContext::Unsolicited)fatal();
     EnterCriticalSection(&producer_);
+    if(InterlockedCompareExchange(&stopped_,0,0))fatal();
     if(lastRequest_==(std::numeric_limits<uint64_t>::max)())fatal();
     MilesWire::Header h={};h.magic=MilesWire::Magic;h.version=MilesWire::Version;h.kind=MilesWire::Event;
     h.opcode=resource.kind==MilesWire::Stream?MilesWire::EndOfStream:MilesWire::EndOfSample;
@@ -118,12 +146,13 @@ void Runtime::invokeEos(const MilesWire::Handle &resource,uint64_t token) {
 }
 uint32_t Runtime::invoke(uint32_t opcode,uint32_t token,const char *name,int32_t offset,
                         uint32_t countOrOrigin,void *destination,uint32_t &openedToken) {
-    if(insideCallback)fatal(); // before producer mutex: same-thread reentry cannot deadlock
+    if(insideCallback || InterlockedCompareExchange(&stopped_,0,0))fatal(); // before producer mutex: same-thread reentry cannot deadlock
     insideCallback=true;
     MilesHostContext::Origin origin={};
     MilesHostContext::SnapshotResult context=MilesHostContext::snapshot(session_,origin);
     if(context!=MilesHostContext::Ready && context!=MilesHostContext::Unsolicited)fatal();
     EnterCriticalSection(&producer_);
+    if(InterlockedCompareExchange(&stopped_,0,0))fatal();
     if(lastRequest_==(std::numeric_limits<uint64_t>::max)())fatal();
     MilesWire::Header h={};h.magic=MilesWire::Magic;h.version=MilesWire::Version;h.kind=MilesWire::ReverseRequest;h.opcode=opcode;
     h.request=++lastRequest_;

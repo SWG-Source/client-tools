@@ -18,6 +18,7 @@ public:
     bool resolve(uint32_t opaqueToken,MilesWire::Handle &remoteFile) const throw();
     bool beginClose(uint32_t opaqueToken) throw();
     bool finishClose(uint32_t opaqueToken) throw();
+    bool empty() const throw();
 private:
     enum State { Free, Reserved, Live, Closing };
     struct Record {

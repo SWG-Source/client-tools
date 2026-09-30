@@ -8,8 +8,7 @@ namespace MilesClientRuntime53 {
 // Private modern-runtime composition. No object here crosses the engine STL boundary.
 // Caller authenticates raw callback pipe against session before launch; no I/O yet.
 // One command caller posts observations; a distinct callback thread owns all control.
-// This slice has NO destroy/normal-stop API: outer root must retain returned object
-// through process termination pending a future proven teardown implementation.
+// Failure retains the complete root. Only explicit paired close permits destruction.
 class Runtime {
 public:
     // Throws before ownership transfer on creation failure. On return handle is
@@ -37,6 +36,10 @@ public:
     // Only after full opcode-specific reply validation. Waits for causal ACK join
     // then consumes the settled command. This does not certify SDK semantic success.
     bool returned(uint64_t wire, bool actionApplied=true, uint64_t *settledLease=0);
+    // After genuine SDK shutdown and its causal joins, before SessionClose send.
+    bool armClose();
+    // Only after exact SessionClose success and child exit 0; consumes this on success.
+    bool finishClose();
     void fail(); // async request; control thread alone mutates coordinator/Endpoint
     bool failed() const;
     HANDLE failureEvent() const; // borrowed; outer command wait must observe it

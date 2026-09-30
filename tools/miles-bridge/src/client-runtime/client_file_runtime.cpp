@@ -37,7 +37,7 @@ struct Event {
 private:Event(const Event &);Event &operator=(const Event &);
 };
 struct Ticket {
-    enum Kind { Prepare, PrepareEos, RetireEos, RetireAllEos, Publish, Returned } kind;
+    enum Kind { Prepare, PrepareEos, RetireEos, RetireAllEos, ArmClose, FinishClose, Publish, Returned } kind;
     Event done;
     bool begun,ok;
     uint64_t wire,lane,registration,lease;
@@ -88,6 +88,7 @@ struct Runtime::State {
     HANDLE raw,thread;
     const uint64_t session,background;
     Event wake,ready,terminal;
+    bool closeArmed,peerClosed,cleanStopped;
     mutable volatile LONG failureRequested;
     ControlMutex slotMutex,callerMutex;
     std::shared_ptr<Ticket> slot;
@@ -105,7 +106,7 @@ struct Runtime::State {
     std::vector<EosResource> eosResources;
     std::unique_ptr<EosPending> eos;
     State(uint64_t s,uint64_t b,std::shared_ptr<void> pin):raw(INVALID_HANDLE_VALUE),thread(0),
-        session(s),background(b),failureRequested(0),engineLifetime(pin),endpoint(0),
+        session(s),background(b),closeArmed(false),peerClosed(false),cleanStopped(false),failureRequested(0),engineLifetime(pin),endpoint(0),
         coordinator(0),worker(0),owner(0),mapper(0),lastWire(0),lastAdmission(0),activeWire(0),activeLane(0),activeLease(0),lastReverse(0){}
     void requestFailure(){InterlockedExchange(&failureRequested,1);SetEvent(wake.h);}
     bool isFailed() const {return InterlockedCompareExchange(&failureRequested,0,0)!=0;}
@@ -123,7 +124,7 @@ struct Runtime::State {
         {ControlLock lock(slotMutex);if(slot){requestFailure();return false;}slot=ticket;}
         if(!SetEvent(wake.h)){requestFailure();return false;}
         HANDLE events[]={ticket->done.h,terminal.h};
-        DWORD result=WaitForMultipleObjects(2,events,FALSE,INFINITE);
+        DWORD result=WaitForMultipleObjects(2,events,FALSE,30000);
         if(result!=WAIT_OBJECT_0){requestFailure();return false;}
         return ticket->ok && !isFailed();
     }
@@ -184,7 +185,37 @@ struct Runtime::State {
         eos->job=MilesEos::ClientJob::submit(*worker,resource->sample,function.sample,
             resource->stream,function.stream,function.lifetime);
     }
+    bool quiescent() const {
+        return !activeWire && !coordinator->activeAdmission() && !coordinator->leaseDepth() &&
+            !eos && eosResources.empty() && (!mapper || !mapper->retainedReverse()) &&
+            (!owner || (!owner->retainedOperations() && !owner->retainedFiles()));
+    }
     void observation(const std::shared_ptr<Ticket> &t){
+        if(t->kind==Ticket::ArmClose){
+            if(closeArmed || !quiescent() || endpoint->sendBusy() || endpoint->receiveBuffered())
+                throw std::runtime_error("close requires settled shutdown and no live files");
+            closeArmed=true;complete(t);return;
+        }
+        if(t->kind==Ticket::FinishClose){
+            if(!closeArmed || !quiescent())throw std::runtime_error("close settlement missing");
+            if(!peerClosed)return;
+            // Drain only after SessionClose admission settled, so our own final
+            // command is not rejected as new game work by the coordinator.
+            if(coordinator->beginDrain(session)!=MilesCoordinator::Ok)
+                throw std::runtime_error("coordinator close drain");
+            if(!endpoint->drain(5000))throw std::runtime_error("callback close drain");
+            if(worker && !worker->drainAndJoin())throw std::runtime_error("engine worker join");
+            if(isFailed())throw std::runtime_error("close deadline expired");
+            // All these roots were created on this control thread. The worker
+            // has joined through actual engine TLS removal before their release.
+            delete mapper;mapper=0;delete owner;owner=0;context.reset();
+            if(worker){EngineFileWorker::destroy(worker);worker=0;}
+            for(size_t i=0;i<128;++i)functions[i].lifetime.reset();
+            engineLifetime.reset();delete coordinator;coordinator=0;
+            delete endpoint;endpoint=0;cleanStopped=true;complete(t);return;
+        }
+        if(closeArmed && t->kind!=Ticket::Publish && t->kind!=Ticket::Returned)
+            throw std::runtime_error("observation after close intent");
         // Native completion and bridge consumption are distinct. Forward return,
         // new admission and retirement wait for the EOS consumption ACK too.
         if(eos)return;
@@ -253,11 +284,19 @@ struct Runtime::State {
                 std::shared_ptr<Ticket> current;
                 {ControlLock lock(slotMutex);current=slot;}
                 if(current)observation(current);
+                if(cleanStopped)return;
                 if(isFailed())break;
                 endpoint->pump();
-                if(endpoint->state()!=MilesPipe::Endpoint::Open)throw std::runtime_error("callback endpoint");
+                if(closeArmed && endpoint->receiveBuffered())
+                    throw std::runtime_error("callback bytes after close intent");
+                if(endpoint->state()!=MilesPipe::Endpoint::Open){
+                    if(!closeArmed || endpoint->failure()!=MilesPipe::Endpoint::PeerClosed)
+                        throw std::runtime_error("callback endpoint");
+                    peerClosed=true;
+                }
                 std::vector<unsigned char> frame;
                 if(endpoint->takeFrame(frame)){
+                    if(closeArmed)throw std::runtime_error("callback after close intent");
                     MilesWire::Header header={};MilesWire::Call fields={};MilesWire::Eos event={};
                     const MilesTransport::Bytes data(frame.data(),frame.size());
                     const bool eventFrame=MilesTransport::decodeEos(data,header,event);
@@ -308,7 +347,7 @@ struct Runtime::State {
         }catch(...){requestFailure();}
         terminalFailure();
         // Retain control thread/Endpoint issuing lifetime and all engine ownership.
-        // No normal stop is implemented until quiescence/close proof is integrated.
+        // Only explicit paired close returns from run().
         for(;;){if(endpoint)endpoint->drain(0);Sleep(20);}
     }
     static unsigned __stdcall entry(void *p){static_cast<State *>(p)->run();return 0;}
@@ -324,8 +363,8 @@ Runtime *Runtime::launch(HANDLE &raw,uint64_t session,uint64_t background,std::s
     if(!thread){delete result;throw std::runtime_error("control thread creation");}
     s->thread=reinterpret_cast<HANDLE>(thread);raw=INVALID_HANDLE_VALUE;s.release();return result;
 }
-Runtime::~Runtime(){} // only launch failure before thread ownership; State stays local
-bool Runtime::awaitReady(){HANDLE events[]={state->ready.h,state->terminal.h};DWORD r=WaitForMultipleObjects(2,events,FALSE,INFINITE);if(r!=WAIT_OBJECT_0){state->requestFailure();return false;}return !failed();}
+Runtime::~Runtime(){} // launch failure, or explicit successful finishClose after join
+bool Runtime::awaitReady(){HANDLE events[]={state->ready.h,state->terminal.h};DWORD r=WaitForMultipleObjects(2,events,FALSE,30000);if(r!=WAIT_OBJECT_0){state->requestFailure();return false;}return !failed();}
 bool Runtime::prepare(uint64_t r,ClientMiles::FileOpenCallback o,ClientMiles::FileCloseCallback c,ClientMiles::FileSeekCallback s,ClientMiles::FileReadCallback rd,std::shared_ptr<void> pin){
     try{std::shared_ptr<Ticket> t(new Ticket(Ticket::Prepare));t->registration=r;t->open=o;t->close=c;t->seek=s;t->read=rd;t->lifetime=pin;return state->post(t);}catch(...){fail();return false;}
 }
@@ -353,6 +392,17 @@ bool Runtime::returned(uint64_t wire,bool actionApplied,uint64_t *settledLease){
         if(!state->post(t))return false;
         if(settledLease)*settledLease=t->lease;
         return true;
+    }catch(...){fail();return false;}
+}
+bool Runtime::armClose(){
+    try{return state->post(std::shared_ptr<Ticket>(new Ticket(Ticket::ArmClose)));}
+    catch(...){fail();return false;}
+}
+bool Runtime::finishClose(){
+    try{
+        if(!state->post(std::shared_ptr<Ticket>(new Ticket(Ticket::FinishClose))))return false;
+        if(WaitForSingleObject(state->thread,5000)!=WAIT_OBJECT_0){fail();return false;}
+        CloseHandle(state->thread);delete state;state=0;delete this;return true;
     }catch(...){fail();return false;}
 }
 void Runtime::fail(){state->requestFailure();}

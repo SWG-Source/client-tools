@@ -7,7 +7,7 @@ namespace MilesHostRuntime50 {
 __declspec(noreturn) void fatal() throw();
 // Dedicated-process lifetime for this initial source composition. Authenticated
 // connected callback handle transfers here; no other thread may operate it.
-// Destruction is deliberately forbidden until a paired shutdown proof is added.
+// Storage remains process-owned even after paired stop; no implicit SDK cleanup.
 class Runtime {
 public:
     Runtime(HANDLE authenticatedCallbackPipe,uint64_t session,uint64_t registration,
@@ -15,6 +15,8 @@ public:
     ~Runtime();
     uint64_t session() const { return session_; }
     uint64_t registration() const { return registration_; }
+    // Only after genuine SDK shutdown has stopped its producers. Failure is terminal.
+    void stopAfterSdkShutdown();
     void invokeEos(const MilesWire::Handle &,uint64_t token);
     uint32_t invoke(uint32_t opcode,uint32_t token,const char *name,
                     int32_t offset,uint32_t countOrOrigin,void *destination,
@@ -29,6 +31,7 @@ private:
     CRITICAL_SECTION producer_;
     const uint64_t session_,registration_,backgroundLane_;
     uint64_t lastRequest_;
+    volatile LONG stopped_;
     MilesHostFiles49::FileTokens files_;
     Ticket *ticket_;
     static DWORD WINAPI entry(void *);

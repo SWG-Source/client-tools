@@ -149,8 +149,8 @@ Session::Session(Channel *channel, MilesClientRuntime53::Runtime &runtime,
 }
 
 Session::~Session() {
-    // Temporary invariant guard, not final shutdown policy or implicit cleanup.
-    std::terminate();
+    // Destruction never manufactures shutdown or close proof.
+    if(!closed_)std::terminate();
 }
 
 Session &Session::selected() {
@@ -161,7 +161,7 @@ Session &Session::selected() {
     return *selectedSession;
 }
 
-size_t Session::sampleProxyCount() const { return samples->proxies.size(); }
+size_t Session::sampleProxyCount() const { return samples ? samples->proxies.size() : 0; }
 
 void Session::rejectResult() {
     faulted_ = true;runtime_.fail();
@@ -432,7 +432,17 @@ void Session::retireAllEos() {
 }
 void Session::close() {
     MilesCallbackGuard47::requireForwardAllowed();
-    fail(ClientMilesPipeCore57::FailureReason::Unsupported,"paired normal shutdown proof is not implemented in candidate59");
+    requireCommandThread();
+    if(closed_ || faulted_ || !stopped || started || sourceView_ || uploadPhase_!=UploadIdle || uploadId_.kind)
+        fail(ClientMilesPipeCore57::FailureReason::WrongState,"close requires stopped session without active source or upload");
+    try {channel_->finish();}
+    catch(...){faulted_=true;runtime_.fail();throw;}
+    // finish returned only after genuine SDK shutdown, exact paired close,
+    // child exit 0, callback I/O drain, and worker/control-thread joins.
+    delete channel_;channel_=0;
+    driver.reset();samples.reset();callbackCodeLifetime_.reset();
+    lastErrorSnapshot.clear();redistSnapshot.clear();
+    closed_=true;selectedSession=0;
 }
 
 } // namespace ClientMilesPipe

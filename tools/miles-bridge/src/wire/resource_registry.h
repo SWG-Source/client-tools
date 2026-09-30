@@ -88,6 +88,11 @@ class ResourceRegistry {
     }
 
   public:
+    bool empty() const {
+        for (size_t i = 0; i < entries.size(); ++i)
+            if (entries[i].state != 0 && entries[i].state != 3) return false;
+        return true;
+    }
     explicit ResourceRegistry(uint32_t maxSlots = 65536, uint32_t maxGeneration = UINT32_MAX)
         : capacity(maxSlots), generationLimit(maxGeneration) {
         if (!capacity || !generationLimit)

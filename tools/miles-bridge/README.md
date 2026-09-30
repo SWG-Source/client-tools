@@ -368,4 +368,35 @@ c++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined tests/eos_prot
 
 All 298 checks pass; omitting generation comparison makes them fail. These
 protocol checks also run in CI. They do not substitute for the genuine-DLL
-runtime, paired session shutdown, actual Audio callbacks or gameplay acceptance.
+runtime, actual Audio callbacks or gameplay acceptance.
+
+### Paired session close
+
+`Session::close()` follows SDK shutdown, then requires an exact final reply,
+helper exit zero, callback transport drain and engine/control-thread joins before
+releasing the client owners. A disconnect by itself is not success. Open files,
+unsettled callbacks, outstanding uploads and extra or partial incoming frames
+refuse closure. Failure retains uncertain roots until process termination.
+The helper retains its vendor module until process exit; this is not a DLL
+unload implementation. Producer-stop reasoning is scoped to the selected DLL's
+inspected timer, mixer and stream-service paths, not arbitrary SDK plugins.
+
+```powershell
+miles-pipe-probe.exe C:/test/miles-host.exe C:/test/Mss32.dll --paired-close
+```
+
+The VS2013 `/W4 /WX` host and probe built without diagnostics. The standalone
+original-DLL run repeated file/EOS operations, then SDK shutdown and paired close.
+All ten expected markers appeared, including session destruction and expiry of
+both code-lifetime pins, with exit zero. **The strict run failed** its empty-stderr
+rule on the same four ALSA enumeration warnings. Desktop defaults were unchanged
+and the owned sink and Wine server were cleaned up.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| x86 paired-close host | `b0edf55400869951883e2a483abfbfcba6f27e562c0e27ffb6eaa0630e5533ac` |
+| x64 paired-close probe | `f71678127eb59c41ee7d6e5fce94145e4b9f224ef1f8f8187a715e3eac931c98` |
+
+The global engine bootstrap remains installed until test-process exit. This
+does not test real Audio/global ExitChain shutdown, native-device fidelity or a
+linked x64 game.

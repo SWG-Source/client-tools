@@ -1,4 +1,4 @@
-// Paired x86 host. Normal teardown remains unavailable pending lifecycle integration.
+// Paired x86 host. SDK shutdown precedes explicit callback transport stop.
 #include "../bootstrap/common.h"
 #include "../admission/coordinator.h"
 #include "../backend/backend.h"
@@ -11,6 +11,12 @@
 namespace {
 uint64_t incarnation(const std::string &n){uint64_t value=0;for(unsigned i=0;i<16;++i)value=(value<<4)|static_cast<uint64_t>(n[i]<='9'?n[i]-'0':n[i]-'a'+10);return value?value:1;}
 bool nullHandle59(const MilesWire::Handle &h){return !h.kind&&!h.slot&&!h.generation;}
+bool emptyCloseCall(const MilesWire::Call &c){
+    if(!nullHandle59(c.target)||!nullHandle59(c.resource)||c.callback||c.reserved||c.output_mask||
+       c.bytes.offset||c.bytes.length||c.text.offset||c.text.length)return false;
+    for(unsigned i=0;i<8;++i)if(c.value[i])return false;
+    return true;
+}
 std::vector<unsigned char> nextCommand(Endpoint &command){
     for(;;){command.pump();healthy(command);std::vector<unsigned char> frame;
         if(command.takeFrame(frame))return frame;
@@ -47,7 +53,7 @@ void host(int argc,char **argv){
         require(last!=(std::numeric_limits<uint64_t>::max)() && h.request==last+1 &&
             h.kind==MilesWire::Request && h.lane==1 && !h.causal_request,"command correlation");
         require(!backend->uploadFailed(),"terminal image upload cannot resume");
-        last=h.request;StartupBridge::OwnedReply out;std::vector<unsigned char> encoded;
+        last=h.request;StartupBridge::OwnedReply out;std::vector<unsigned char> encoded;bool closing=false;
         if(!hello){
             require(!h.lock_lease && h.opcode==MilesWire::Hello && c.bytes.length==32 && !c.text.length &&
                 nullHandle59(c.target)&&nullHandle59(c.resource)&&!c.output_mask&&!c.callback&&!c.reserved,"hello shape");
@@ -57,8 +63,7 @@ void host(int argc,char **argv){
             callbacks=new MilesHostRuntime50::Runtime(transferred,session,1,999,64);
             MilesHostEos::initialize(*callbacks);
         }else{
-            // SessionClose is deliberately unavailable: no inferred clean shutdown.
-            require(h.opcode!=MilesWire::SessionClose,"paired teardown not implemented");
+
             std::vector<MilesWire::Handle> resources;bool live=true;
             const MilesWire::Handle handles[]={c.target,c.resource};
             for(unsigned i=0;i<2;++i)if(!nullHandle59(handles[i])){
@@ -73,7 +78,16 @@ void host(int argc,char **argv){
                 MilesHostContext::Origin origin={session,h.request,h.lane,h.lock_lease,ordinal};
                 require(!backend->uploadActive() || h.opcode!=MilesWire::AIL_set_file_callbacks,
                     "file installation during image transaction refused before SDK effect");
-                if(h.opcode==MilesWire::AIL_set_file_callbacks){
+                if(h.opcode==MilesWire::SessionClose){
+                    if(!emptyCloseCall(c))out.result.transport_status=StartupBridge::InvalidFields;
+                    else if(!backend->shutdown || backend->started || backend->driver || backend->streamOpenPending ||
+                            backend->uploadActive() || coordinator.leaseDepth() || !backend->registry.empty() || !MilesHostEos::empty())
+                        out.result.transport_status=StartupBridge::LifecycleRefused;
+                    else {
+                        require(callbacks!=0,"callback runtime exists before paired stop");
+                        callbacks->stopAfterSdkShutdown();closing=true;
+                    }
+                }else if(h.opcode==MilesWire::AIL_set_file_callbacks){
                     MilesFileProtocol48::InstallRequest request;
                     require(MilesFileProtocol48::decodeInstall(bytes(frame),h,request),"exact install request");
                     require(callbacks && request.registration==callbacks->registration(),"immutable file registration");
@@ -99,10 +113,16 @@ void host(int argc,char **argv){
             require(MilesTransport::encodeResult(reply,out.result,bytes(out.bytes),bytes(out.text),encoded),"result encoding");
         }
         require(command->send(bytes(encoded)),"command reply");sent(*command);
+        if(closing){
+            // Command reply is fully written before orderly process exit. Owners
+            // and vendor module remain heap-retained; this does not claim unload.
+            command->cancel();require(command->drain(30000),"command stop drain");
+            return;
+        }
     }
 }
 }
 int main(int argc,char **argv){
     try {host(argc,argv);}catch(...){MilesHostRuntime50::fatal();}
-    MilesHostRuntime50::fatal();
+    return 0;
 }

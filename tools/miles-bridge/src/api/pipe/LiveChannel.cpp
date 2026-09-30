@@ -58,7 +58,31 @@ class LiveChannel : public ClientMilesPipe::Channel {
         return exchange(opcode, fields, payload, text,resources,&replyOwner);
     }
 
-    void finish() override {throw std::runtime_error("paired clean shutdown is not implemented in59");}
+    void finish() override {
+      try {
+        require(runtime_->armClose(),"callback close intent");
+        StartupBridge::OwnedReply reply=exchange(MilesWire::SessionClose,MilesWire::Call(),
+            MilesTransport::Bytes(),MilesTransport::Bytes(),std::vector<MilesWire::Handle>(),0);
+        require(reply.result.transport_status==StartupBridge::Success,"SessionClose accepted");
+        require(WaitForSingleObject(child_.info.hProcess,30000)==WAIT_OBJECT_0,"host normal exit deadline");
+        DWORD code=STILL_ACTIVE;
+        require(GetExitCodeProcess(child_.info.hProcess,&code) && code==0,"host normal exit status");
+        // Command I/O is cancelled and drained by its issuing thread. Keep the
+        // complete root on any failure; neither an ACK nor PeerClosed is enough.
+        const ULONGLONG begin=GetTickCount64();
+        for(;;){
+            command_->pump();
+            require(!command_->receiveBuffered(),"extra command bytes after SessionClose reply");
+            if(command_->state()==Endpoint::Faulted && command_->failure()==Endpoint::PeerClosed)break;
+            healthy(*command_);
+            require(GetTickCount64()-begin<5000,"command peer close deadline");
+            Sleep(2);
+        }
+        require(command_->drain(5000),"command close drain");
+        require(runtime_->finishClose(),"callback owner and engine worker join");
+        runtime_=0;command_.reset();child_.close();
+      }catch(...){if(runtime_)runtime_->fail();throw;}
+    }
 
   private:
     ChildProcess child_;
@@ -81,8 +105,11 @@ class LiveChannel : public ClientMilesPipe::Channel {
         ULONGLONG begin=GetTickCount64();
         for(;;){
             require(!runtime_->failed(),"callback owner failed");
-            require(WaitForSingleObject(child_.info.hProcess,0)==WAIT_TIMEOUT,"host died during command");
-            command_->pump();healthy(*command_);
+            if(opcode!=MilesWire::SessionClose)
+                require(WaitForSingleObject(child_.info.hProcess,0)==WAIT_TIMEOUT,"host died during command");
+            command_->pump();
+            if(opcode==MilesWire::SessionClose && command_->takeFrame(frame,true))break;
+            healthy(*command_);
             if(command_->takeFrame(frame))break;
             require(GetTickCount64()-begin<30000,"active command deadline");
             HANDLE events[3];DWORD count=0;events[count++]=runtime_->failureEvent();
@@ -99,7 +126,12 @@ class LiveChannel : public ClientMilesPipe::Channel {
             MilesWire::Header decoded={};require(MilesTransport::decodeResult(bytes(frame),decoded,out.result),"install result projection");
         }else require(StartupBridge::decodeReply(bytes(frame),header,out),"typed reply/context");
         if(opcode!=MilesWire::Hello){
-            require(replyOwner && replyOwner->validateReply(opcode,fields,out),"request and owner reply validation before settlement");
+            if(opcode==MilesWire::SessionClose){
+                MilesWire::Header expected=header;expected.kind=MilesWire::Reply;
+                MilesWire::Result result={};std::vector<unsigned char> exact;
+                require(MilesTransport::encodeResult(expected,result,MilesTransport::Bytes(),MilesTransport::Bytes(),exact) &&
+                    frame==exact,"exact zero SessionClose reply");
+            }else require(replyOwner && replyOwner->validateReply(opcode,fields,out),"request and owner reply validation before settlement");
             require(runtime_->returned(header.request,out.result.transport_status==StartupBridge::Success,&lease_),"forward and callback ACK join");
         }
         return out;

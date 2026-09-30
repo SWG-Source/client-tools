@@ -8,5 +8,6 @@ void initialize(MilesHostRuntime50::Runtime &);
 uint64_t registerCallback(void *,const MilesWire::Handle &,uint64_t token);
 void released(void *,const MilesWire::Handle &);
 void shutdownComplete();
+bool empty();
 }
 #endif

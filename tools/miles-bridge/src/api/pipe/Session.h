@@ -12,7 +12,7 @@ struct DriverProxy;
 struct SampleState;
 // Composition-root-only owner; not included by game policy. Bootstrap/Hello
 // occurs in the concrete channel before selecting this sole session. Explicit
-// normal close remains unavailable pending paired shutdown proof; no public protocol API.
+// close follows genuine SDK shutdown and paired joins; no public protocol API.
 class Session {
   public:
     Session(Channel *channel, MilesClientRuntime53::Runtime &,
@@ -47,7 +47,7 @@ class Session {
     std::unique_ptr<DriverProxy> driver;
     std::unique_ptr<SampleState> samples;
     // Caller must serialize text access with the existing Session command path.
-    // Retained with this owner; normal paired destruction remains unavailable.
+    // Retained with this owner until explicit paired close.
     std::string lastErrorSnapshot;
     std::string redistSnapshot;
     static Session &selected();
@@ -55,10 +55,10 @@ class Session {
   private:
     const DWORD commandThread_; // bound command caller; callback owner is separate
     void requireCommandThread() const;
-    Channel *channel_; // retained private root; no automatic teardown in59
+    Channel *channel_; // retained on failure; explicit close only
     bool closed_;
     bool faulted_;
-    MilesClientRuntime53::Runtime &runtime_; // retained by private root, never deleted here
+    MilesClientRuntime53::Runtime &runtime_; // consumed by channel finish on successful close
     std::shared_ptr<void> callbackCodeLifetime_;
     bool filesPrepared_, filesInstalled_;
     uint32_t uploadBudgetBytes_;
