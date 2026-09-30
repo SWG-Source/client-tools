@@ -34,7 +34,7 @@ run the resulting binaries.
 | `native` | x64 `miles-native.lib` | Compiles direct calls against the SDK's Win64 declarations. A matching native vendor library is still required to link it. |
 | `engine-worker` | x64 `miles-engine-worker.lib` | Compiles the file executor using real engine headers, STLport and clientAudio's Debug-x64 definitions/include paths. |
 | `pipe-probe` | x64 `miles-pipe-probe.exe` | Links the real pipe adapter and engine worker against previously built Debug-x64 engine libraries and rebuilt STLport. |
-| `audio-dev` | x64 `Audio.obj` and `SoundObject3d.obj` | Compiles both real Miles callers against the facade; no link or production selection. |
+| `audio-dev` | x64 `Audio.obj`, `SoundObject3d.obj`, `SetupClientAudio.obj` | Compiles the real Miles callers and setup/teardown together; no link or production selection. |
 
 Choose exactly one client backend. The pipe and native archives implement the
 same public names and must not be linked together. Both currently use the debug
@@ -42,6 +42,55 @@ static CRT for component development. The engine worker is a separate
 translation unit with the legacy engine's STLport and `wchar_t` settings; its
 interface passes only plain values and function pointers. Application
 CRT/configuration integration is a separate build step.
+
+## Explicit development project build
+
+After building the `pipe` and `engine-worker` targets against the same engine
+checkout, add these properties to the existing **Debug|x64 v120** solution build:
+
+```text
+/p:ClientMilesDevelopment=true
+/p:ClientMilesPipeLibrary=C:/build/miles/pipe/x64/<invocation>/miles-pipe.lib
+/p:ClientMilesWorkerLibrary=C:/build/miles/engine-worker/x64/<invocation>/miles-engine-worker.lib
+```
+
+Keep the DirectX and source-dependency properties described in
+`tools/configure-client-x64/README.md` and `tools/build-client-deps/README.md`.
+Build the solution's `SwgClient` target, including its solution dependencies.
+If building project files individually, build `clientAudio` first with the same
+properties: the project files themselves do not contain `ProjectReference` edges.
+
+This opt-in compiles the actual `clientAudio` project with the facade, including
+its setup/teardown source. Audio and game intermediates and outputs go under
+`src/compile/miles-dev/x64/<project>/Debug/`, separate from the direct-Miles
+build. The game names that exact Audio archive, so a missing development archive
+cannot silently fall back to the ordinary one. The two genuine bridge archives
+are additional link inputs; other provider inputs remain unchanged.
+
+The opt-in is experimental and restricted to Debug x64. Ordinary builds continue
+to use direct Miles. A completed build does not qualify actual game startup,
+Audio/global ExitChain shutdown, devices, media or gameplay fidelity.
+
+The native VS2013 `SwgClient:Rebuild` check completed with zero errors and
+3,319 warnings across the solution; those warnings are not waived. All 20,554
+selected source/build files matched the input manifest before and after the run.
+After aligning the development target name with `SwgClient_d.exe`, the game
+project build completed with zero warnings/errors. The direct-Miles Win32
+Release `clientAudio` rebuild also completed with zero warnings/errors. An
+explicit Release-x64 development selection was rejected as intended.
+
+The resulting Debug-x64 game SHA-256 is
+`84de2516126f7cc183a0c14b7fc1d35e951e43d10e6e0e7f3ce8e2de9bd77a3c`.
+The game and its solution dependencies were rebuilt from source. The pipe and
+engine-worker archives were separately compiled by `build.py` at the preceding
+composition checkpoint; this is not a rebuild of every external SDK binary.
+
+Development shutdown stops sounds while their templates exist, performs the
+paired SDK/worker close, then detaches the file-serving hook. The setup owner
+removes templates before freeing cache-owned path strings. Failed driver startup
+closes operational Audio state once but retains templates/cache for continuing
+disabled-audio UI use. These source-order repairs do not establish the cause of
+the earlier standalone engine teardown fault or qualify actual game shutdown.
 
 ## Source layout
 
