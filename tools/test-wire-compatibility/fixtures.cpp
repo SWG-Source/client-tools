@@ -81,7 +81,10 @@ static bool tailEquals(Archive::ByteStream const &b, unsigned offset, Archive::B
  return b.getSize()==offset+want.getSize() && !std::memcmp(b.getBuffer()+offset,want.getBuffer(),want.getSize());
 }
 
+int loginClusterFixtures();
+
 int main() {
+ failures += loginClusterFixtures();
  // First quest use in this process: pack's Command constructs age 1;
  // active and completed values receive ages 2 and 3. This is a legacy32
  // fixture, including the non-persisted relative-age field (not normalized).

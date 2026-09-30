@@ -18,7 +18,7 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
 
 1. **Wire-width assertions** (`wire_types.cpp`, compile time): the time fields of
    `ImageDesignChangeMessage`, `BuffBuilderChangeMessage` and `ChatLogEntry` are 4 bytes.
-2. **Forty runtime fixtures** (`fixtures.cpp`), each checked against literal legacy32 bytes:
+2. **Forty existing runtime fixtures** (`fixtures.cpp`), checked against legacy32 bytes:
    - quest packed map and `AutoDeltaPackedMap<int, unsigned long>` (encode and decode);
    - `AutoDeltaPackedMap` with `NetworkId` keys or values and with `Unicode::String` values
      (encode and decode);
@@ -56,12 +56,29 @@ Set `WINEPREFIX32` / `WINEPREFIX64` to choose prefixes (default `~/.wine-swg32`,
    `MessageQueueDraftSlotsDataArchive`, `CustomerServiceCategoryArchive`) are compiled only
    (`SYNTAX_ONLY` in `run.py`); a compile failure fails the run.
 
+7. **LoginClusterStatus** (`login_cluster.cpp`, nine checks): two distinct galaxies, each
+   encoded against literal stock Win32 bytes and independently decoded from those literals;
+   both together through the real message constructors, `AutoByteStream`, and `AutoArray`;
+   a following sentinel to check the exact iterator boundary; and an empty list in both directions.
+   Every decoded record field is compared. Cases include population `-1`/`INT32_MAX`, timezone
+   `INT32_MIN`/`-3600`, `UINT32_MAX`/high-bit IDs and limits, ports `0`/`65535`, enum endpoints,
+   two different nonempty addresses, and opposite boolean flags. No large counts or random data.
+   The base constructor shim omits the command CRC, so the literal message prefix is
+   `01 00` (one registered member) + a four-byte unsigned array count. This is **bounded
+   serializer coverage, not a complete stock packet**. The stock source at `94945103` independently
+   defines the field order and widths; its real Win32 serializers were compiled and run against
+   the same hand-transcribed literals. Expected data is never derived from candidate roundtrips.
+
 The run succeeds only if the width check compiles cleanly, the fixtures exit 0, no line reports
-`FAIL` or `NOT RUN`, and exactly `EXPECTED_RUNTIME_PASSES` checks report `PASS`. An exit code
+`FAIL` or `NOT RUN`, and exactly 58 common runtime checks plus 7 Win64-only checks report
+`PASS` (59/66 totals including the compile-time width check). Win32 requires exactly the two
+known `SKIP` notices. Stock Win32 requires one timestamp `SKIP` and the one known `ArchiveCount`
+`ABSENT` notice, yielding 56/56. Unknown or duplicate skip/absence notices fail; only that exact
+known helper absence can reduce the expectation, and `--require-current-coverage` forbids it. An exit code
 alone is not trusted: it cannot distinguish "all passed" from "the fixtures never ran".
 
 The code under test is the checkout's own: Archive, AutoDelta containers, NetworkId,
-PlayerQuestData, the mission-list serializers, StringId and Unicode archives.
+PlayerQuestData, the mission-list and login-cluster serializers, StringId and Unicode archives.
 
 ## How it builds
 
@@ -83,8 +100,10 @@ Replaced, and not under test:
   - the trivial value-holder members of `MessageQueueMissionListResponse` (its .cpp registers a
     controller-message factory) and the `MessageQueue::Data` base;
   - the display-only localization lookup (aborts if reached);
-  - `GameNetworkMessage` and `MessageDispatch::MessageBase` constructors (abort if reached; the
-    `ChatOnRequestLog` message is never constructed, only `ChatLogEntry`'s serializers are used);
+  - `GameNetworkMessage` allows only `LoginClusterStatus` construction and registers no command
+    CRC; `MessageDispatch::MessageBase` initializes type to zero. This lets the real
+    `LoginClusterStatus.cpp` register its array and unpack it. No pack/unpack/put/get is stubbed.
+    `ChatOnRequestLog` is still never constructed; only `ChatLogEntry` serializers are used;
   - `MemoryBlockManager` as plain heap allocation of the pool's element size (kept in the
     opaque `m_allocator` field), with `ControllerMessageFactory` registration and `ExitChain::add`
     as no-ops. The fixtures call each message's `install()` to create its pool.
@@ -94,7 +113,22 @@ Replaced, and not under test:
 `_USE_32BIT_TIME_T` as the stock projects do; use `--no-32bit-time` for a checkout whose
 projects no longer define it.
 
-## Results (2026-09-29)
+## Results (2026-09-30)
+
+With the nine LoginClusterStatus checks: stock `94945103` Win32 **56/56**, detached
+`d0fea5bc7` plus these test changes Win32 **59/59**, Win64 **66/66**. An encode-only private
+negative control writes `m_onlinePlayerLimit` as native `size_t`: Win32 passes **59/59**,
+Win64 fails exactly the two element encodings and the containing message encoding. No
+production file is changed by the test harness. Decode inputs remain fixed stock literals,
+so the negative control cannot introduce large counts or string allocations.
+
+The available local PR21 snapshot retains the stock LoginClusterStatus widths and signedness.
+Its optional admin/secret decode checks remaining bytes in the entire iterator, which can
+consume bytes from the next galaxy when those flags are absent per record. That is a record
+boundary issue, not evidence of a LoginClusterStatus signedness/width change. These fixtures
+cover the original 14-field format; they do not establish compatibility with a 12-field variant.
+
+Historical results below predate the new login-cluster fixtures and were not rerun as a matrix:
 
 | Checkout | Win32 | Win64 |
 |---|---|---|
@@ -122,9 +156,11 @@ separate repair.
 
 This is not MSVC and not a live client. It establishes the listed byte layouts on these two ABIs
 only: not every message, not gameplay, not a connection to a server. Other serialized
-messages are not covered here: `LoginClusterStatus` and the remaining `Archive` call sites need
-their own fixtures. The oracle is a manual transcription of the legacy32 format from src#35,
-not a captured packet trace.
+messages and the remaining `Archive` call sites need their own fixtures. LoginClusterStatus
+coverage includes its 14-field records, list count, and registration under the base shim; it
+excludes the command CRC, real message base, packet framing, dispatch, and live login. Its
+oracle is a manual transcription from original client-tools `94945103`, confirmed by running
+that original source on Win32. Other literals derive from src#35. None is a captured packet trace.
 
 ## Automated builds
 
@@ -137,7 +173,11 @@ binary is downloaded. Fork workflows may need maintainer approval; absence of a
 run is not a passing result. This is a head-revision check, not a simulated merge
 or a native MSVC/gameplay test.
 
-Use `--artifacts PATH` to retain the linked executable locally. On new Wine WoW64
+Use `--artifacts PATH` to retain the linked executable, exact compiler/linker/Wine commands,
+raw command diagnostics and exits (`commands-<bits>.jsonl`), actual compiled translation-unit
+paths and hashes, and a hash manifest of the staged shared sources after syntax shims.
+These artifacts include syntax-only units separately; source presence alone is not execution
+coverage. Use a fresh artifact directory per run. On new Wine WoW64
 installations which reject pure 32-bit prefixes, use `--wine-arch win64` and point
 `WINEPREFIX32` at an initialized 64-bit prefix. This only selects the runtime
 prefix: `--bits 32` still compiles a Win32 executable. GitHub's Ubuntu Wine packages

@@ -17,13 +17,17 @@ LocalizationManager::StringValueCode LocalizationManager::getLocalizedStringValu
 MessageQueue::Data::Data() {}
 MessageQueue::Data::~Data() {}
 void MessageQueueMissionListResponse::operator delete(void *p) { ::operator delete(p); }
-// GameNetworkMessage is the base of ChatOnRequestLog, whose .cpp holds ChatLogEntry's
-// serializers. The message itself is never constructed here; these abort if it is.
+// Base infrastructure only: allow LoginClusterStatus construction, with NO command CRC
+// registration. Its real .cpp and all AutoByteStream/AutoArray/element serializers run.
+// This deliberately tests bounded message data, not the complete network packet.
+// ChatOnRequestLog is still not constructed.
 #include "sharedNetworkMessages/GameNetworkMessage.h"
-GameNetworkMessage::GameNetworkMessage(std::string const &) { std::abort(); }
+GameNetworkMessage::GameNetworkMessage(std::string const &name) {
+ if (name != "LoginClusterStatus") std::abort();
+}
 GameNetworkMessage::~GameNetworkMessage() {}
 #include "sharedMessageDispatch/Message.h"
-MessageDispatch::MessageBase::MessageBase(char const *) { std::abort(); }
+MessageDispatch::MessageBase::MessageBase(char const *) : type(0) {}
 MessageDispatch::MessageBase::~MessageBase() {}
 // Pooled allocation and message registration are runtime infrastructure. The harness keeps
 // each pool's element size in the opaque m_allocator field and uses plain heap blocks.

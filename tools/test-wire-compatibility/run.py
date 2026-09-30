@@ -6,10 +6,10 @@ checkout's own Archive, AutoDelta, NetworkId, PlayerQuestData and MissionListRes
 serializers with clang in MSVC-compatibility mode against MinGW-w64 headers, links with
 MinGW-w64 and runs the result under Wine. See README.md for scope and limits.
 """
-import argparse, os, pathlib, re, shutil, subprocess, sys, tempfile
+import argparse, hashlib, json, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-EXPECTED_RUNTIME_PASSES = 49  # check() calls that run on every ABI; a run must report exactly these
+EXPECTED_RUNTIME_PASSES = 58  # check() calls that run on every ABI; a run must report exactly these
 EXPECTED_WIN64_ONLY_PASSES = 7  # out-of-range timestamp and count checks, which need 64-bit time_t/size_t
 TRIPLE = {32: 'i686-w64-mingw32', 64: 'x86_64-w64-mingw32'}
 
@@ -30,6 +30,7 @@ p.add_argument('--keep', action='store_true', help='keep the temporary tree and 
 a = p.parse_args()
 
 SOURCES = [
+    'engine/shared/library/sharedNetworkMessages/src/shared/clientLoginServer/LoginClusterStatus.cpp',
     'external/ours/library/archive/src/shared/ByteStream.cpp',
     'external/ours/library/archive/src/shared/AutoByteStream.cpp',
     'external/ours/library/archive/src/shared/AutoDeltaByteStream.cpp',
@@ -130,13 +131,37 @@ def flags(tree, bits):
             '-DWIRE_TEST_MISSIONS=1', *time32, '-O1', *inc]
 
 
+def run_logged(command, **kwargs):
+    result = subprocess.run(command, **kwargs)
+    if a.artifacts:
+        a.artifacts.mkdir(parents=True, exist_ok=True)
+        entry = dict(command=command, returncode=result.returncode,
+                     stdout=result.stdout, stderr=result.stderr)
+        # The exact source path and post-shim bytes actually passed to clang.
+        if '-c' in command or '-fsyntax-only' in command:
+            flag = '-c' if '-c' in command else '-fsyntax-only'
+            source = pathlib.Path(command[command.index(flag) + 1])
+            entry.update(translation_unit=str(source), mode=flag,
+                         sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+        with (a.artifacts / f'commands-{a.bits}.jsonl').open('a') as out:
+            out.write(json.dumps(entry) + '\n')
+    return result
+
+
 def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix='swg-wire-'))
     try:
         tree = tmp / 'src'
         copy_tree(a.root.resolve() / 'src', tree)
         cxx = flags(tree, a.bits)
-        r = subprocess.run(cxx + ['-fsyntax-only', str(HERE / 'wire_types.cpp')], capture_output=True, text=True)
+        if a.artifacts:
+            a.artifacts.mkdir(parents=True, exist_ok=True)
+            (a.artifacts / f'commands-{a.bits}.jsonl').write_text('')
+            # Includes staged production headers after the documented syntax shims.
+            hashes = {str(f.relative_to(tree)): hashlib.sha256(f.read_bytes()).hexdigest()
+                      for lib in LIBS for f in sorted((tree / lib).rglob('*')) if f.is_file()}
+            (a.artifacts / f'staged-source-{a.bits}.json').write_text(json.dumps(hashes, indent=2) + '\n')
+        r = run_logged(cxx + ['-fsyntax-only', str(HERE / 'wire_types.cpp')], capture_output=True, text=True)
         errors = [l.split('error: ', 1)[1] for l in r.stderr.splitlines() if 'error: ' in l]
         if r.returncode and not errors:
             errors = ['wire_types.cpp did not compile: ' + (r.stderr.strip().splitlines() or ['no diagnostics'])[-1]]
@@ -147,21 +172,21 @@ def main():
         objs = []
         # Compile coverage for changed message writers that the fixtures do not link.
         for rel in SYNTAX_ONLY:
-            r = subprocess.run(cxx + ['-fsyntax-only', str(tree / rel)], capture_output=True, text=True)
+            r = run_logged(cxx + ['-fsyntax-only', str(tree / rel)], capture_output=True, text=True)
             if r.returncode:
                 sys.stderr.write(r.stderr[-3000:])
                 print(f'FAIL: {rel} does not compile')
                 return 2
         count_sites = [HERE / 'count_sites.cpp'] if (tree / 'external/ours/library/archive/src/shared/ArchiveCount.h').exists() else []
-        for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + count_sites + [tree / s for s in SOURCES] + [tree / s for s in OPTIONAL_SOURCES if (tree / s).exists()]):
+        for i, src in enumerate([HERE / 'fixtures.cpp', HERE / 'login_cluster.cpp', HERE / 'fatal.cpp', HERE / 'mission_glue.cpp'] + count_sites + [tree / s for s in SOURCES] + [tree / s for s in OPTIONAL_SOURCES if (tree / s).exists()]):
             obj = tmp / f'{i}.o'
-            r = subprocess.run(cxx + ['-c', str(src), '-o', str(obj)], capture_output=True, text=True)
+            r = run_logged(cxx + ['-c', str(src), '-o', str(obj)], capture_output=True, text=True)
             if r.returncode:
                 sys.stderr.write(r.stderr[-3000:])
                 return 2
             objs.append(str(obj))
         exe = tmp / 'fixtures.exe'
-        r = subprocess.run([TRIPLE[a.bits] + '-g++', '-static', *objs, '-o', str(exe)], capture_output=True, text=True)
+        r = run_logged([TRIPLE[a.bits] + '-g++', '-static', *objs, '-o', str(exe)], capture_output=True, text=True)
         if r.returncode:
             sys.stderr.write(r.stderr[-3000:])
             return 2
@@ -170,7 +195,7 @@ def main():
             shutil.copy2(exe, a.artifacts / f'fixtures-{a.bits}.exe')
         env = dict(os.environ, WINEDEBUG='-all', WINEARCH=a.wine_arch or ('win32' if a.bits == 32 else 'win64'),
                    WINEPREFIX=os.environ.get(f'WINEPREFIX{a.bits}', str(pathlib.Path.home() / f'.wine-swg{a.bits}')))
-        run = subprocess.run(['wine', str(exe)], env=env, capture_output=True, text=True)
+        run = run_logged(['wine', str(exe)], env=env, capture_output=True, text=True)
         sys.stdout.write(run.stdout)
         sys.stderr.write(run.stderr)
         lines = run.stdout.splitlines()
@@ -180,19 +205,23 @@ def main():
         # code alone cannot tell "all passed" from "the fixtures never ran".
         # Win64 adds the out-of-range timestamp checks; Win32 must report them as skipped instead.
         expected = EXPECTED_RUNTIME_PASSES + (EXPECTED_WIN64_ONLY_PASSES if a.bits == 64 else 0)
-        expected_skips = 0 if a.bits == 64 else 2
-        # A checkout that predates a helper (e.g. the stock oracle) reports exactly which checks
-        # cannot apply; they are deducted and named in the result, never counted as passes.
-        absent = [l for l in lines if l.startswith('ABSENT: ')]
-        if a.require_current_coverage and absent:
-            problems.append('required helper absent')
-        for l in absent:
-            m = re.search(r'all=(\d+) win64=(\d+)', l)
-            expected -= int(m.group(1)) + (int(m.group(2)) if a.bits == 64 else 0)
-            expected_skips -= 0 if a.bits == 64 else int(m.group(2) != '0')
-        skips = sum(l.startswith('SKIP: ') for l in lines)
-        if skips != expected_skips:
-            problems.append('skip')
+        # Only the known stock helper omission may reduce coverage. Never trust counts
+        # parsed from arbitrary ABSENT text, duplicate notices, or unknown SKIP lines.
+        absent = [l for l in lines if l.startswith('ABSENT:')]
+        known_absent = 'ABSENT: ArchiveCount helper (checkout predates count checking) all=3 win64=1'
+        helper_absent = absent == [known_absent]
+        if absent and (a.require_current_coverage or not helper_absent):
+            problems.append('unexpected or required helper absent')
+        expected_skip_lines = []
+        if a.bits == 32:
+            expected_skip_lines.append('SKIP: time_t is 32-bit; no out-of-range timestamp exists (6 checks)')
+            if not helper_absent:
+                expected_skip_lines.append('SKIP: size_t is 32-bit; UINT32_MAX + 1 is not a size (1 check)')
+        if helper_absent:
+            expected -= 3 + (1 if a.bits == 64 else 0)
+        skips = [l for l in lines if l.startswith('SKIP:')]
+        if sorted(skips) != sorted(expected_skip_lines):
+            problems.append('unexpected skip notices')
         if run.returncode == 0 and not problems and passes == expected and types_ok:
             note = f' ({len(absent)} helper absent: ' + '; '.join(l[8:] for l in absent) + ')' if absent else ''
             print(f'OK: {passes + 1}/{expected + 1} checks passed{note}')
