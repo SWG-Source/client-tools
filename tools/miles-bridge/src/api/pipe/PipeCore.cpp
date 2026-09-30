@@ -1,5 +1,6 @@
 #include "Session.h"
 #include "../../callback-guard/invocation_guard.h"
+#include "../../failure/failure_boundary.h"
 #include "../../protocol/pair_outputs.h"
 #include <list>
 #include <cstring>
@@ -297,14 +298,19 @@ std::vector<MilesWire::Handle> Session::verifiedResources(const MilesWire::Call 
     }
     return out;
 }
-ScopedSourceImage::ScopedSourceImage(const void *base,uint32_t bytes)
+ScopedSourceImage::ScopedSourceImage(const void *base,uint32_t bytes) try
     : owner_(Session::selected()),base_(base),bytes_(bytes) {
     owner_.requireRunning();
     if(!base_ || !bytes_)
         fail(ClientMilesPipeCore57::FailureReason::InvalidArgument,"positive exact source view required");
     if(owner_.sourceView_ || owner_.uploadPhase_!=Session::UploadIdle)
         fail(ClientMilesPipeCore57::FailureReason::WrongState,"nested or active source view refused");
+    ClientMilesPrivate52::requireFatalReporter();
     owner_.sourceView_=this; // publish only after every check; failed nesting preserves outer token
+}catch(const std::exception &error){
+    ClientMilesPrivate52::fail(ClientMilesPrivate52::PrivateException,error.what());
+}catch(...){
+    ClientMilesPrivate52::fail(ClientMilesPrivate52::UnknownException,"source extent setup failed");
 }
 ScopedSourceImage::~ScopedSourceImage() {
     if(owner_.sourceView_!=this)std::terminate();

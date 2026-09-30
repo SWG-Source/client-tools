@@ -2,6 +2,7 @@
 #define CLIENT_MILES_PIPE_SESSION_H
 
 #include "PipeCore.h"
+#include "ScopedSourceImage.h"
 #include "Channel.h"
 #include <memory>
 #include "../../client-runtime/client_file_runtime.h"
@@ -74,20 +75,6 @@ class Session {
     std::vector<MilesWire::Handle> verifiedResources(const MilesWire::Call &) const;
     Session(const Session &);
     Session &operator=(const Session &);
-};
-// Private root/adoption only. Caller keeps allocation readable/stable and uses
-// the same serialized owner through scope destruction. Not part of public70.
-class ScopedSourceImage {
-public:
-    ScopedSourceImage(const void *base,uint32_t bytes);
-    ~ScopedSourceImage(); // clears only this token; never calls transport
-private:
-    Session &owner_;
-    const void *base_;
-    uint32_t bytes_;
-    friend class Session;
-    ScopedSourceImage(const ScopedSourceImage &);
-    ScopedSourceImage &operator=(const ScopedSourceImage &);
 };
 } // namespace ClientMilesPipe
 #endif

@@ -43,6 +43,10 @@
 #include <list>
 #include <map>
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+#include "dev/AudioSelection.h"
+#endif
+
 #if 0
 #include "clientAudio/SwgAudioCapture.h"
 #endif // PRODUCTION
@@ -2923,7 +2927,16 @@ void Audio::startSample(Sound2 &sound)
 			void *sampleRawData = iterSample->second.m_sampleRawData;
 			HSAMPLE hSample3d = iterSampleIdToSample3dMap->second.m_sample;
 
-			S32 resultSet3dSampleFile = AIL_set_sample_file(hSample3d, sampleRawData, 0);
+			S32 resultSet3dSampleFile;
+#if defined(CLIENT_MILES_DEV_FACADE)
+			{
+				ClientMilesPipe::ScopedSourceImage sourceImage(sampleRawData,
+					static_cast<uint32_t>(iterSample->second.m_fileSize));
+				resultSet3dSampleFile = AIL_set_sample_file(hSample3d, sampleRawData, 0);
+			}
+#else
+			resultSet3dSampleFile = AIL_set_sample_file(hSample3d, sampleRawData, 0);
+#endif
 
 			if (resultSet3dSampleFile != 0)
 			{
@@ -3708,7 +3721,15 @@ AudioSampleInformation Audio::getSampleInformation(std::string const &path)
 				byte *fileImage = file->readEntireFileAndClose();
 				delete file;
 
-				S32 result = AIL_WAV_info(fileImage, &soundInfo);
+				S32 result;
+#if defined(CLIENT_MILES_DEV_FACADE)
+				{
+					ClientMilesPipe::ScopedSourceImage sourceImage(fileImage, static_cast<uint32_t>(fileSize));
+					result = AIL_WAV_info(fileImage, &soundInfo);
+				}
+#else
+				result = AIL_WAV_info(fileImage, &soundInfo);
+#endif
 
 				if (result)
 				{

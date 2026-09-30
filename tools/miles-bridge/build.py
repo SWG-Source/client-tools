@@ -123,9 +123,9 @@ def build(args, work, receipt):
                                   or sdk_lib.name.lower() != 'mss32.lib'):
         raise ValueError('host requires --sdk-lib pointing to the real x86 Mss32.lib')
     manifest = json.loads((ROOT / 'sources.json').read_text(encoding='utf-8'))
-    relative_sources = (manifest['pipe'] + manifest['engine-worker']
+    relative_sources = ([] if args.target == 'audio-dev' else manifest['pipe'] + manifest['engine-worker']
                         if args.target == 'pipe-probe' else manifest[args.target])
-    if not isinstance(relative_sources, list) or not relative_sources:
+    if not isinstance(relative_sources, list) or (not relative_sources and args.target != 'audio-dev'):
         raise ValueError('sources.json target must contain a nonempty source list')
     source_root = ROOT / 'src'
     sources = []
@@ -138,6 +138,9 @@ def build(args, work, receipt):
     if len(set(sources)) != len(sources):
         raise ValueError('Duplicate sources in sources.json')
     receipt['sources'] = relative_sources
+    if args.target == 'audio-dev':
+        sources.append(ROOT.parents[1] / 'src/engine/client/library/clientAudio/src/win32/Audio.cpp')
+        receipt['sources'] = [str(sources[0])]
     if args.target == 'pipe-probe':
         sources.append(ROOT / 'tests/pipe_lock_probe.cpp')
         sources.append(ROOT / 'tests/engine_worker_context.cpp')
@@ -150,8 +153,12 @@ def build(args, work, receipt):
         if not tools[name]:
             raise RuntimeError('Tool missing from VS2013 environment: %s' % name)
     objects = []
-    if args.target == 'engine-worker':
+    if args.target in ('engine-worker', 'audio-dev'):
         flags = engine_worker_flags(args.engine_root, receipt)
+        if args.target == 'audio-dev':
+            flags += ['/DCLIENT_MILES_DEV_FACADE', '/I' + str(source_root),
+                      '/I' + str(args.engine_root.resolve() /
+                                 'src/engine/client/library/clientAudio/src/win32')]
     else:
         flags = ['/nologo', '/c', '/W4', '/WX', '/EHsc', '/MTd', '/Od', '/Ob0', '/Zi',
                  '/DWIN32', '/D_WIN32_WINNT=0x0601', '/DNOMINMAX',
@@ -167,6 +174,11 @@ def build(args, work, receipt):
             '/Fd' + str(work / (stem + '.pdb')), str(source)],
             work, env, receipt, stem)
         objects.append(str(obj))
+    if args.target == 'audio-dev':
+        artifact = Path(objects[0])
+        receipt['artifact'] = {'path': str(artifact),
+                               'sha256': hashlib.sha256(artifact.read_bytes()).hexdigest()}
+        return
     artifact = work / ('miles-pipe-probe.exe' if args.target == 'pipe-probe'
                        else 'miles-host.exe' if args.target == 'host'
                        else 'miles-%s.lib' % args.target)
@@ -222,7 +234,7 @@ def build(args, work, receipt):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target', choices=('host', 'pipe', 'native', 'engine-worker', 'pipe-probe'), required=True)
+    parser.add_argument('--target', choices=('host', 'pipe', 'native', 'engine-worker', 'pipe-probe', 'audio-dev'), required=True)
     parser.add_argument('--sdk', type=Path,
                         help='Miles SDK include directory containing Mss.h (required except engine-worker)')
     parser.add_argument('--engine-root', type=Path,

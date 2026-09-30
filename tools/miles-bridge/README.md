@@ -285,3 +285,24 @@ It used the host and original DLL hashes listed above. This tests real engine
 worker execution, not full Audio installation, global ExitChain teardown or
 sound fidelity. The runtime session and its worker remain retained until
 process exit; only the separate worker prerequisite exercises drain/destruction.
+
+
+### Development compilation of the real Audio source
+
+`--target audio-dev --engine-root <checkout>` compiles the maintained `Audio.cpp`
+with its real Debug x64 engine/STLport settings and an explicit
+`CLIENT_MILES_DEV_FACADE` define. It does not link or change any production
+project selection. The resulting object calls the facade rather than native
+`AIL_*` functions. The normal source path remains direct Miles.
+
+The two size-less operations receive lexical extents from their existing
+allocation owners: the 3D sample-cache file size and the WAV query's file length.
+The private extent declaration includes no modern STL; setup failures go through
+the bound fatal reporter rather than throwing an adapter exception into engine
+code. Speaker configuration, the version macro and the seven WAV metadata
+fields used by Audio are explicitly adapted.
+
+The current source compiles with VS2013 `/W4 /WX` and no diagnostics. This proves
+source integration only. Session bootstrap, actual Audio file callbacks,
+callback scheduling in the game, shutdown and full-client behavior still need
+integration and runtime checks.
