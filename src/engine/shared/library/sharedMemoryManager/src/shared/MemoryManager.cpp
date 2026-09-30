@@ -234,6 +234,9 @@ namespace MemoryManagerNamespace
 			return false;
 		size_t const size = requestedSize ? requestedSize : 1;
 		allocationSize = static_cast<int>((cms_allocatedBlockSize + 2 * cms_guardBandSize + size + 15) & ~static_cast<size_t>(15));
+		// Every allocated block must also fit the free-list node after release.
+		if (allocationSize < cms_freeBlockSize)
+			allocationSize = cms_freeBlockSize;
 		return true;
 	}
 
@@ -1271,7 +1274,8 @@ void * MemoryManager::allocate(size_t size, MemoryManager::OwnerAddress owner, b
 		bestFreeBlock->setFree(false);
 
 		// check to see if we should subdivide this block
-		if (bestFreeBlock->getSize() > (allocSize + cms_allocatedBlockSize + cms_guardBandSize + 1 + cms_guardBandSize))
+		if (bestFreeBlock->getSize() > (allocSize + cms_allocatedBlockSize + cms_guardBandSize + 1 + cms_guardBandSize)
+			&& bestFreeBlock->getSize() - allocSize >= cms_freeBlockSize)
 		{
 			Block *block = reinterpret_cast<Block *>(reinterpret_cast<byte *>(bestFreeBlock) + allocSize);
 			block->setPrevious(bestFreeBlock);
