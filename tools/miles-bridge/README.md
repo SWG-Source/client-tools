@@ -504,3 +504,19 @@ the ordinary window-close request timed out. The helper also created an unwanted
 console window. The missing Bink DLL warning remains an unresolved media blocker.
 This private null-sink/headless run involved no login or gameplay and establishes
 no native-device or audio-fidelity claim. The original failed run is retained.
+
+### Helper window and startup follow-up
+
+The private worker is now launched with `CREATE_NO_WINDOW` while remaining
+suspended until job assignment. The next native host/pipe rebuild and game
+relink again had zero warnings/errors. A bounded Proton run confirmed only the
+game window was visible, verified game focus, and reached Audio initialization.
+The game SHA-256 was
+`410df8ac7bf95b32bcc6a465a8d6ab62491183ec013743b0eafddc4d1757f894`.
+
+The earlier Alt+F4 check was not a valid teardown test: SWG deliberately ignores
+that key combination in `Os.cpp`. The follow-up used a graceful window-manager
+close request instead; it also timed out, so shutdown remains unqualified.
+No login screen was verified. Debugger attachment was denied by the host OS;
+startup localization proceeds using the engine's existing install-timing logs.
+Neither the path correction nor console suppression is a full startup pass.

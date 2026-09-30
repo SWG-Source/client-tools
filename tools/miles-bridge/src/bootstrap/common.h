@@ -70,7 +70,8 @@ struct ChildProcess {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
   require(SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof limits)!=0,"job limit");
   STARTUPINFOA si={};si.cb=sizeof si;
-  require(CreateProcessA(executable,command,0,0,FALSE,CREATE_SUSPENDED,0,0,&si,&info)!=0,"launch child");
+  // The private audio worker must not create a second UI or steal game focus.
+  require(CreateProcessA(executable,command,0,0,FALSE,CREATE_SUSPENDED|CREATE_NO_WINDOW,0,0,&si,&info)!=0,"launch child");
  }
  void assignAndResume(HANDLE destinationJob) {
   require(AssignProcessToJobObject(destinationJob,info.hProcess)!=0,"assign child");
