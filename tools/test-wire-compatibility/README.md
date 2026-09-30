@@ -125,3 +125,24 @@ only: not every message, not gameplay, not a connection to a server. Other seria
 messages are not covered here: `LoginClusterStatus` and the remaining `Archive` call sites need
 their own fixtures. The oracle is a manual transcription of the legacy32 format from src#35,
 not a captured packet trace.
+
+## Automated builds
+
+`.github/workflows/wire-compatibility.yml` checks out the submitted PR head SHA,
+not a fresh clone of upstream. Its Ubuntu 24.04 Win32/Win64 matrix installs clang,
+MinGW-w64 and Wine, builds the fixtures from that checkout, and runs the same
+strict pass/skip checks described above. It retains the source/tool versions,
+console log and newly linked fixture executable. No prebuilt game or fixture
+binary is downloaded. Fork workflows may need maintainer approval; absence of a
+run is not a passing result. This is a head-revision check, not a simulated merge
+or a native MSVC/gameplay test.
+
+Use `--artifacts PATH` to retain the linked executable locally. On new Wine WoW64
+installations which reject pure 32-bit prefixes, use `--wine-arch win64` and point
+`WINEPREFIX32` at an initialized 64-bit prefix. This only selects the runtime
+prefix: `--bits 32` still compiles a Win32 executable. GitHub's Ubuntu Wine packages
+use separate default prefixes for the two jobs.
+
+CI adds `--require-current-coverage`: an `ABSENT` helper report is a failure,
+so removing a checked helper cannot silently lower the CI pass requirement.
+Stock-oracle comparisons omit that flag and retain the documented absent checks.
