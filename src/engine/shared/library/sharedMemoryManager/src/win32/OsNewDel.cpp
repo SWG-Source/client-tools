@@ -11,6 +11,42 @@
 
 // ======================================================================
 
+#if defined(_M_X64)
+#include <intrin.h>
+#include <stdint.h>
+#pragma intrinsic(_ReturnAddress)
+
+// Capture the allocating caller here, before entering any helper frame.
+__declspec(noinline) void *operator new(size_t size, MemoryManagerNotALeak)
+{
+	return MemoryManager::allocate(size, reinterpret_cast<uintptr_t>(_ReturnAddress()), false, false);
+}
+
+__declspec(noinline) void *operator new(size_t size)
+{
+	return MemoryManager::allocate(size, reinterpret_cast<uintptr_t>(_ReturnAddress()), false, true);
+}
+
+__declspec(noinline) void *operator new[](size_t size)
+{
+	return MemoryManager::allocate(size, reinterpret_cast<uintptr_t>(_ReturnAddress()), true, true);
+}
+
+__declspec(noinline) void *operator new(size_t size, const char *file, int line)
+{
+	UNREF(file);
+	UNREF(line);
+	return MemoryManager::allocate(size, reinterpret_cast<uintptr_t>(_ReturnAddress()), false, true);
+}
+
+__declspec(noinline) void *operator new[](size_t size, const char *file, int line)
+{
+	UNREF(file);
+	UNREF(line);
+	return MemoryManager::allocate(size, reinterpret_cast<uintptr_t>(_ReturnAddress()), true, true);
+}
+
+#else
 // this is here because MSVC won't call MemoryManager::allocate() from asm directly
 static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
 {
@@ -155,6 +191,8 @@ __declspec(naked) void *operator new[](size_t size, const char *file, int line)
 // ----------------------------------------------------------------------
 
 #pragma warning(default: 4100)
+
+#endif
 
 // ----------------------------------------------------------------------
 

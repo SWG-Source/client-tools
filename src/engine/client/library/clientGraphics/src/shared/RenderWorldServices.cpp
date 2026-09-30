@@ -12,6 +12,10 @@
 #include "sharedFoundation/ExitChain.h"
 #include "sharedSynchronization/Mutex.h"
 
+#if defined(_M_X64)
+#include <intrin.h>
+#endif
+
 // ======================================================================
 
 RenderWorldServices::RenderWorldServices()
@@ -38,6 +42,12 @@ void RenderWorldServices::error(const char * message)
 
 // ----------------------------------------------------------------------
 
+#if defined(_M_X64)
+static __declspec(noinline) void * dpvsAllocate(size_t size)
+{
+	return MemoryManager::allocate(size, reinterpret_cast<uintptr_t>(_ReturnAddress()), false, true);
+}
+#else
 static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
 {
 	return MemoryManager::allocate(size, owner, array, leakTest);
@@ -66,6 +76,8 @@ static __declspec(naked) void * dpvsAllocate(size_t)
 		ret
 	}
 }
+
+#endif
 
 // ----------------------------------------------------------------------
 

@@ -149,7 +149,7 @@ void TextureFormatInfo::setSupported(TextureFormat, bool)
 
 // ======================================================================
 
-void *MemoryManager::allocate(size_t, uint32, bool, bool)
+void *MemoryManager::allocate(size_t, MemoryManager::OwnerAddress, bool, bool)
 {
 	__debugbreak();
 	return NULL;
