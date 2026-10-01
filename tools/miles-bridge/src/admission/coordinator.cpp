@@ -6,7 +6,7 @@ bool same(const MilesWire::Handle &a,const MilesWire::Handle &b) {
     return a.kind==b.kind && a.slot==b.slot && a.generation==b.generation;
 }
 bool valid(const MilesWire::Handle &h) {
-    return h.kind>=MilesWire::Driver && h.kind<=MilesWire::File && h.slot && h.generation;
+    return h.kind>=MilesWire::Driver && h.kind<=MilesWire::Video && h.slot && h.generation;
 }
 }
 Coordinator::Coordinator(Id id,const Limits &limits)
