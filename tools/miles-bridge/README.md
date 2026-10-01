@@ -18,19 +18,35 @@ copies validated complete frames and keeps vendor pointers inside the host.
 No SDK upgrade or alternative codec is used. Place the matching `binkw32.dll`
 beside `miles-host.exe`; it is not bundled in this repository.
 
-The latest VS2013 builds produced zero errors: host, pipe, game link and default
-Win32 Release graphics had zero warnings; isolated Debug-x64 graphics had26
-existing narrowing/packing warnings. The game links the new isolated graphics
-archive. Native reply validation passed24 cases, and its stale-identity mutation
-failed as expected. Protocol sanitizer checks passed1,047 cases. These results
-establish compilation and bounded protocol behavior, **not movie playback or
-media fidelity**; runtime qualification is the next check. The zero-return sound
-initialization cleanup is source/build checked, not induced against the real SDK.
+The VS2013 Debug builds produced zero errors: host, pipe, game link and default
+Win32 Release graphics had zero warnings; isolated Debug-x64 graphics had 26
+existing narrowing/packing warnings. Native reply validation passed 24 cases,
+its stale-identity mutation failed, and portable protocol checks passed 1,047.
+The first actual movie run nevertheless failed: the real session coordinator
+still rejected Video resources. Commit `a904e489b` repairs that admission rule;
+its 22-case regression fails when the old ceiling is restored.
 
-The retained DLL/IO roots are process-owned. Actual close/callback ordering,
-timing, repeated playback and audio/video equivalence remain runtime gates.
-The existing renderer is1024x1024 and the development pixel staging budget is
-4MiB; this is not a claim of arbitrary movie dimensions or concurrency support.
+On that repaired product, the original `video/npe_falcon.bik` visibly advanced
+through distinct frames and returned to the login UI. An ordinary close produced
+game and compositor exit 0 after the normal 77-warning dialog. The owned audio
+sink recorded finite nonzero output, but other game audio was not independently
+excluded and no waveform/fidelity comparison was made. This was GE-Proton11-7,
+Debug-x64, original SWGSource v3.0 assets and the genuine x86 Bink/Miles DLLs.
+Private run: `scene-5762d4a5`. Game SHA-256:
+`eb7ef36744322e9fc4b0b4e87f9a10b59e89b08660ea24c8c403f4ddc14d4585`.
+Host SHA-256:
+`6f276dab2330d14ad235ad3dc7720a1be6d104925200cbe9e1949bfcd5c1dcab`.
+
+Repeated playback remains open: a follow-up did not visibly start the second
+movie. Successful input delivery does not establish parser acceptance; that
+failure is retained while the cause is investigated. Shutdown during playback,
+controls, timing and Win32 audiovisual equivalence are still required. A normal
+close after a completed movie does not settle those checks. The retained DLL/IO
+roots remain process-owned, and zero-return sound initialization cleanup is
+source/build checked, not induced against the real SDK.
+
+The existing renderer is 1024x1024 and the development pixel staging budget is
+4 MiB; arbitrary movie dimensions or concurrency are not qualified.
 
 ## Build
 
@@ -56,13 +72,13 @@ run the resulting binaries.
 | `host` | x86 `miles-host.exe` | Compiles the real command/file-callback host and links the genuine `Mss32.lib`. |
 | `pipe` | x64 `miles-pipe.lib` | Compiles the client adapter. An archive can contain unresolved references; this is not a client link. |
 | `native` | x64 `miles-native.lib` | Compiles direct calls against the SDK's Win64 declarations. A matching native vendor library is still required to link it. |
-| `engine-worker` | x64 `miles-engine-worker.lib` | Compiles the file executor using real engine headers, STLport and clientAudio's Debug-x64 definitions/include paths. |
-| `pipe-probe` | x64 `miles-pipe-probe.exe` | Links the real pipe adapter and engine worker against previously built Debug-x64 engine libraries and rebuilt STLport. |
+| `engine-worker` | x64 `miles-engine-worker.lib` | Compiles the file executor using real engine headers, STLport and clientAudio's selected x64 configuration definitions/include paths. |
+| `pipe-probe` | x64 `miles-pipe-probe.exe` | Links the real pipe adapter and engine worker against matching-configuration x64 engine libraries and rebuilt STLport. |
 | `audio-dev` | x64 `Audio.obj`, `SoundObject3d.obj`, `SetupClientAudio.obj` | Compiles the real Miles callers and setup/teardown together; no link or production selection. |
 
 Choose exactly one client backend. The pipe and native archives implement the
-same public names and must not be linked together. Both currently use the debug
-static CRT for component development. The engine worker is a separate
+same public names and must not be linked together. Use `--configuration Debug` (the default) or `--configuration Release` for
+matching `/MTd` or `/MT` archives; do not mix them in one client link. The engine worker is a separate
 translation unit with the legacy engine's STLport and `wchar_t` settings; its
 interface passes only plain values and function pointers. Application
 CRT/configuration integration is a separate build step.
@@ -70,7 +86,9 @@ CRT/configuration integration is a separate build step.
 ## Explicit development project build
 
 After building the `pipe` and `engine-worker` targets against the same engine
-checkout, add these properties to the existing **Debug|x64 v120** solution build:
+checkout, add these properties to the matching **Debug|x64 or Release|x64 v120**
+solution build. Supply `--configuration Release` to every bridge target when
+building Release:
 
 ```text
 /p:ClientMilesDevelopment=true
@@ -87,12 +105,12 @@ properties: the project files themselves do not contain `ProjectReference` edges
 This opt-in compiles the actual `clientAudio` and `clientGraphics` projects with
 the private adapters, including setup/teardown and video presentation. Their
 intermediates and game outputs go under
-`src/compile/miles-dev/x64/<project>/Debug/`, separate from the direct-Miles
+`src/compile/miles-dev/x64/<project>/<configuration>/`, separate from the direct-Miles
 build. The game names those exact Audio and Graphics archives, so a missing development archive
 cannot silently fall back to the ordinary one. The two genuine bridge archives
 are additional link inputs; other provider inputs remain unchanged.
 
-The opt-in is experimental and restricted to Debug x64. Ordinary builds continue
+The opt-in is experimental and restricted to Debug or Release x64. Ordinary builds continue
 to use direct Miles. A completed build does not qualify actual game startup,
 Audio/global ExitChain shutdown, devices, media or gameplay fidelity.
 
@@ -101,8 +119,8 @@ The native VS2013 `SwgClient:Rebuild` check completed with zero errors and
 selected source/build files matched the input manifest before and after the run.
 After aligning the development target name with `SwgClient_d.exe`, the game
 project build completed with zero warnings/errors. The direct-Miles Win32
-Release `clientAudio` rebuild also completed with zero warnings/errors. An
-explicit Release-x64 development selection was rejected as intended.
+Release `clientAudio` rebuild also completed with zero warnings/errors. At that earlier checkpoint, Release-x64 development selection was rejected.
+The Release support described below is a later, separately built change.
 
 The resulting Debug-x64 game SHA-256 is
 `84de2516126f7cc183a0c14b7fc1d35e951e43d10e6e0e7f3ce8e2de9bd77a3c`.
@@ -116,6 +134,25 @@ removes templates before freeing cache-owned path strings. Failed driver startup
 closes operational Audio state once but retains templates/cache for continuing
 disabled-audio UI use. These source-order repairs do not establish the cause of
 the earlier standalone engine teardown fault or qualify actual game shutdown.
+
+### Release rebuild checkpoint
+
+The isolated Release selection builds the actual Audio and Graphics projects,
+engine file worker, x64 pipe archive and `SwgClient_r.exe`. The bridge uses `/MT`
+and the worker derives the real Release engine settings; Debug output paths and
+flags remain separate. The callback runtime is explicitly non-destructible;
+SDK shutdown joins its producer but retains callback roots until process exit.
+
+VS2013 `SwgClient:Rebuild` completed with **zero errors and 3,274 warnings**.
+All 20,616 recorded source/build inputs matched before and after. This rebuild
+includes the repaired FileManifest; the preliminary relink had used an older
+Release archive and is not the final product. Host Debug and Release builds pass
+`/W4 /WX`, and the forbidden-destruction compile probe fails with C2280.
+The complete client build is not warning-free, and Release runtime is not yet
+qualified. Final Release EXE SHA-256:
+`307042f7569c0c386070c124cd61ddc3243f307dbc7d9eb59dbb2b3e0d978228`.
+The private build record is `miles-maintained-build/release/release-evidence.zip`;
+it includes commands, logs and source/provider identities, not a fidelity claim.
 
 ## Development runtime packaging
 
@@ -207,7 +244,7 @@ multiplayer gameplay, space flight, native Windows behavior, media or shader
 fidelity, or performance. Bink and Vivox remain unresolved feature blockers.
 
 
-### Bink host groundwork (not connected to playback)
+### Historical Bink host groundwork at `3636d63fe`
 
 `src/host-bink` adds the original Bink decoder owner inside the x86 Miles host.
 It accepts that host's genuine digital driver. The native decoder, BINKIO
@@ -228,8 +265,8 @@ The complete VS2013 x86 host compiled/linked all 23 translation units with
 `/W4 /WX`, zero errors/warnings. The source manifest and raw receipt were checked
 against this tree. Host SHA-256:
 `835046becced257b6f20035db451ad76e78896e81e9e2f1731cbfd6428887d6f`.
-This establishes compilation/linkage only. Movie commands, client texture
-presentation and runtime playback are **not yet connected**. The actual ground
+That checkpoint established compilation/linkage only. Movie commands, client
+texture presentation and runtime playback were not yet connected at that commit. The actual ground
 and space results above used the earlier host, not these new units.
 
 Before using this owner, the integration must close every movie and establish
@@ -252,7 +289,11 @@ frame timing and close ordering still require the original-DLL runtime test.
 which private implementation each target uses; do not add every source directory
 to the include path to bypass missing includes.
 
-## Remaining integration
+## Earlier component integration checkpoints
+
+The records below describe their named artifacts and earlier development stages.
+They are retained evidence, including failed checks; they do not override the
+current Bink/runtime status above or qualify a newer binary automatically.
 
 Sample binding and typed sample/stream EOS registrations are implemented and
 have the bounded original-DLL observations below. Real engine worker execution
