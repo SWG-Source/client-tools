@@ -8,6 +8,30 @@ boundary without exposing IPC to game code.
 The bridge is unfinished and is **not selected by the default SwgClient build**. Building these
 targets does not establish a playable x64 client or equivalent audio behavior.
 
+## Bink development integration
+
+The opt-in Video factory uses `ClientBink` while the original x86 Bink 1.9c DLL
+runs beside its genuine Miles driver. Existing TreeFile operations run through
+the engine file worker. The game retains its texture shader, quad rendering,
+frame scheduling, controls and supported backbuffer formats. The private adapter
+copies validated complete frames and keeps vendor pointers inside the host.
+No SDK upgrade or alternative codec is used. Place the matching `binkw32.dll`
+beside `miles-host.exe`; it is not bundled in this repository.
+
+The latest VS2013 builds produced zero errors: host, pipe, game link and default
+Win32 Release graphics had zero warnings; isolated Debug-x64 graphics had26
+existing narrowing/packing warnings. The game links the new isolated graphics
+archive. Native reply validation passed24 cases, and its stale-identity mutation
+failed as expected. Protocol sanitizer checks passed1,047 cases. These results
+establish compilation and bounded protocol behavior, **not movie playback or
+media fidelity**; runtime qualification is the next check. The zero-return sound
+initialization cleanup is source/build checked, not induced against the real SDK.
+
+The retained DLL/IO roots are process-owned. Actual close/callback ordering,
+timing, repeated playback and audio/video equivalence remain runtime gates.
+The existing renderer is1024x1024 and the development pixel staging budget is
+4MiB; this is not a claim of arbitrary movie dimensions or concurrency support.
+
 ## Build
 
 Use Windows, Python 3, Visual Studio 2013 (v120), and the existing Miles SDK.
@@ -57,13 +81,14 @@ checkout, add these properties to the existing **Debug|x64 v120** solution build
 Keep the DirectX and source-dependency properties described in
 `tools/configure-client-x64/README.md` and `tools/build-client-deps/README.md`.
 Build the solution's `SwgClient` target, including its solution dependencies.
-If building project files individually, build `clientAudio` first with the same
+If building project files individually, build `clientAudio` and `clientGraphics` first with the same
 properties: the project files themselves do not contain `ProjectReference` edges.
 
-This opt-in compiles the actual `clientAudio` project with the facade, including
-its setup/teardown source. Audio and game intermediates and outputs go under
+This opt-in compiles the actual `clientAudio` and `clientGraphics` projects with
+the private adapters, including setup/teardown and video presentation. Their
+intermediates and game outputs go under
 `src/compile/miles-dev/x64/<project>/Debug/`, separate from the direct-Miles
-build. The game names that exact Audio archive, so a missing development archive
+build. The game names those exact Audio and Graphics archives, so a missing development archive
 cannot silently fall back to the ordinary one. The two genuine bridge archives
 are additional link inputs; other provider inputs remain unchanged.
 
