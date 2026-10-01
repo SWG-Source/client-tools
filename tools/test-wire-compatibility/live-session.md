@@ -101,6 +101,32 @@ disconnect path from the client's exit code. The recorded server output had no
 matched protocol, fatal or movement-rejection markers; it does not log every
 movement or disconnect event.
 
+## Release x64 follow-up: 2026-10-01
+
+One additional run, `scene-b974d50e`, passed the bounded normal-login,
+existing-character, Mos Eisley rendering, one-second movement, persistence and
+ordinary-close procedure with the Release x64 client against the same unchanged
+64-bit Linux server at `8e57911e`, under GE-Proton 11-7. This adds one Release
+client/server combination; it is not a complete Release matrix.
+
+The game uses source-verified `33efad160` inputs, SHA-256
+`307042f7569c0c386070c124cd61ddc3243f307dbc7d9eb59dbb2b3e0d978228`,
+with matching Release renderer/DPVS/libxml and the repaired `da9c56054` Release
+media host, SHA-256
+`67c2c17c0ea9ae78d0a8167bff3967453f1d34142783690bf3052b76433fc32f`.
+An initial post-close database sample retained the old position; a subsequent
+sample confirmed movement about 164 seconds after the close request, within the
+planned 240-second limit. Both observations remain preserved; the save path was
+not traced.
+
+Game and compositor exited 0 through ordinary close. Routed PCM was finite and
+nonzero, host audio defaults were unchanged, and staged runtime/configuration
+files were restored and hash-checked. Subsequent Wine cleanup returned 1; the
+media host exit code was not independently observed. Existing local server
+policy accepted the saved account without password verification, so this is not
+external-authentication evidence. No server configuration, account creation or
+additional gameplay/media test was performed.
+
 ## Remaining acceptance
 
 This checkpoint covers one galaxy, one existing character, one ground location
@@ -108,7 +134,7 @@ and a bounded movement/save/exit sequence. It does not establish combat,
 inventory/trading, mission progression, space flight, transitions, representative
 scene coverage, performance or long-session stability. The two-galaxy byte
 fixtures still provide coverage that this one-galaxy live session does not.
-Release gameplay and native Windows/GPU operation remain separate gates.
+Broader Release gameplay and native Windows/GPU operation remain separate gates.
 Full audiovisual fidelity and the media host's separately observed exit status
 are not proven by the game's exit code. Private raw artifacts require the
 matching local environment; this document is a reproducible procedure and scoped
