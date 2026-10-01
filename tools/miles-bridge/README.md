@@ -53,6 +53,14 @@ after the same 77-warning dialog. Default audio endpoints were unchanged; the
 post-exit wineserver cleanup returned 1 and is retained in the record. See the
 [actual-client regression procedure](tests/bink-replay.md).
 
+The freshly rebuilt Win32 direct-Miles client passed the same two-completions
+and third-play close procedure with identical original media DLLs and assets
+(`scene-7504efd8`, game SHA-256
+`c356d0e76f6460d154f52d8d3c74eac7ef8688e460665ea1f0e645e2f41a9fb4`).
+Both game and compositor exited 0 after the normal warning dialog. This checks
+the paired lifecycle; the captured frames and PCM were not aligned for a
+fidelity comparison.
+
 This is a Debug-x64 GE-Proton11-7 lifecycle result, not native Windows or
 waveform/fidelity acceptance. Skipping, other controls, timing and Win32
 audiovisual equivalence remain required. The retained DLL/IO roots remain
@@ -162,11 +170,20 @@ All 20,616 recorded source/build inputs matched before and after. This rebuild
 includes the repaired FileManifest; the preliminary relink had used an older
 Release archive and is not the final product. Host Debug and Release builds pass
 `/W4 /WX`, and the forbidden-destruction compile probe fails with C2280.
-The complete client build is not warning-free, and Release runtime is not yet
-qualified. Final Release EXE SHA-256:
+The complete client build is not warning-free. Final Release EXE SHA-256:
 `307042f7569c0c386070c124cd61ddc3243f307dbc7d9eb59dbb2b3e0d978228`.
 The private build record is `miles-maintained-build/release/release-evidence.zip`;
 it includes commands, logs and source/provider identities, not a fidelity claim.
+
+This uninstrumented Release game, matching Release renderer/DPVS/libxml2 and
+the repaired host (`67c2c17c0ea9ae78d0a8167bff3967453f1d34142783690bf3052b76433fc32f`)
+reached the login UI, produced finite nonzero routed audio and closed through
+an ordinary Windows close request. Game and compositor exited 0; default audio
+endpoints were unchanged (`startup-d9c97121`, GE-Proton11-7). The post-exit
+wineserver cleanup status 1 is retained. This establishes that startup and close
+only: Release movies, gameplay, native Windows and fidelity remain unqualified.
+An earlier run's X11/compositor failure remains unexplained and preserved;
+this passing run does not establish its cause or resolution.
 
 ## Development runtime packaging
 
