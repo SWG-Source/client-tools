@@ -69,7 +69,7 @@ def compiler_environment(vcvars, arch, work, receipt):
     return env
 
 
-def engine_worker_flags(engine_root, receipt):
+def engine_worker_flags(engine_root, receipt, configuration):
     """Keep the legacy STLport engine TU separate from the modern pipe TUs."""
     if engine_root is None:
         raise ValueError('engine-worker requires --engine-root (actual engine checkout)')
@@ -79,16 +79,21 @@ def engine_worker_flags(engine_root, receipt):
     tree = ET.parse(str(project))
     compile_settings = None
     for group in tree.findall('ms:ItemDefinitionGroup', namespace):
-        if group.get('Condition', '').replace(' ', '') == "'$(Configuration)|$(Platform)'=='Debug|x64'":
+        if group.get('Condition', '').replace(' ', '') == "'$(Configuration)|$(Platform)'=='%s|x64'" % configuration:
             compile_settings = group.find('ms:ClCompile', namespace)
             break
     if compile_settings is None:
-        raise ValueError('Missing clientAudio Debug|x64 compiler settings')
-    # These ABI/runtime settings match clientAudio Debug-x64. PCH/minimal rebuild
+        raise ValueError('Missing clientAudio %s|x64 compiler settings' % configuration)
+    # These ABI/runtime settings match the selected clientAudio configuration. PCH/minimal rebuild
     # are disabled because this is one independent, freshly compiled engine TU.
     flags = ['/nologo', '/c', '/EHsc', '/Y-', '/Gm-', '/Zc:wchar_t-',
              '/Zc:forScope', '/GR', '/Gy', '/fp:precise', '/W4', '/Zi',
-             '/FC', '/showIncludes', '/MTd', '/Od', '/Ob1', '/RTC1', '/WX']
+             '/FC', '/showIncludes', '/WX']
+    expected_runtime = 'MultiThreadedDebug' if configuration == 'Debug' else 'MultiThreaded'
+    if compile_settings.findtext('ms:RuntimeLibrary', '', namespace) != expected_runtime:
+        raise ValueError('Unsupported engine CRT selection')
+    flags += (['/MTd', '/Od', '/Ob1', '/RTC1'] if configuration == 'Debug'
+              else ['/MT', '/O2', '/Ob1', '/Oi', '/Ot', '/Oy', '/GF'])
     for setting, prefix in (('PreprocessorDefinitions', '/D'),
                             ('AdditionalIncludeDirectories', '/I')):
         values = compile_settings.findtext('ms:' + setting, '', namespace)
@@ -105,7 +110,7 @@ def engine_worker_flags(engine_root, receipt):
     if not (stlport / 'string').is_file() or '/I' + str(stlport) not in flags:
         raise ValueError('Actual engine STLport headers must be in the project include path')
     receipt['engine_project'] = str(project)
-    receipt['engine_configuration'] = 'Debug|x64'
+    receipt['engine_configuration'] = configuration + '|x64'
     return flags
 
 
@@ -155,15 +160,17 @@ def build(args, work, receipt):
             raise RuntimeError('Tool missing from VS2013 environment: %s' % name)
     objects = []
     if args.target in ('engine-worker', 'audio-dev'):
-        flags = engine_worker_flags(args.engine_root, receipt)
+        flags = engine_worker_flags(args.engine_root, receipt, args.configuration)
         if args.target == 'audio-dev':
             flags += ['/DCLIENT_MILES_DEV_FACADE', '/I' + str(source_root),
                       '/I' + str(args.engine_root.resolve() /
                                  'src/engine/client/library/clientAudio/src/win32')]
     else:
-        flags = ['/nologo', '/c', '/W4', '/WX', '/EHsc', '/MTd', '/Od', '/Ob0', '/Zi',
+        flags = ['/nologo', '/c', '/W4', '/WX', '/EHsc', '/Zi',
                  '/DWIN32', '/D_WIN32_WINNT=0x0601', '/DNOMINMAX',
                  '/I' + str(sdk), '/I' + str(source_root)]
+        flags += (['/MTd', '/Od', '/Ob0'] if args.configuration == 'Debug'
+                  else ['/MT', '/O2', '/Ob2', '/DNDEBUG'])
     if args.target == 'host':
         if args.bink_sdk is None or not (args.bink_sdk / 'bink.h').is_file():
             raise ValueError('--bink-sdk must contain genuine Bink 1.9c bink.h')
@@ -171,7 +178,7 @@ def build(args, work, receipt):
     for index, source in enumerate(sources):
         stem = '%02d-%s' % (index, source.stem)
         obj = work / (stem + '.obj')
-        unit_flags = (engine_worker_flags(args.engine_root, receipt)
+        unit_flags = (engine_worker_flags(args.engine_root, receipt, args.configuration)
                       if args.target == 'pipe-probe' and source.name in
                          ('EngineFileWorker.cpp', 'engine_worker_context.cpp')
                       else flags)
@@ -201,12 +208,12 @@ def build(args, work, receipt):
                  'sharedMemoryManager', 'sharedDebug', 'sharedMath', 'sharedRandom',
                  'unicode', 'sharedFile', 'sharedCompression', 'fileInterface',
                  'archive', 'zlib')
-        libraries = [engine_root / 'src/compile/x64' / name / 'Debug' / (name + '.lib')
+        libraries = [engine_root / 'src/compile/x64' / name / args.configuration / (name + '.lib')
                      for name in names]
-        libraries.append(engine_root / 'src/compile/deps/v120/x64/Debug/stlport.lib')
+        libraries.append(engine_root / 'src/compile/deps/v120/x64' / args.configuration / 'stlport.lib')
         for library in libraries:
             if not library.is_file():
-                raise ValueError('Missing genuine Debug-x64 library: %s' % library)
+                raise ValueError('Missing genuine selected-configuration x64 library: %s' % library)
         receipt['engine_libraries'] = [str(path) for path in libraries]
         # The maintained engine archives store compiler PDBs under obj/;
         # LINK searches beside the library and in its working directory.
@@ -240,10 +247,11 @@ def build(args, work, receipt):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target', choices=('host', 'pipe', 'native', 'engine-worker', 'pipe-probe', 'audio-dev'), required=True)
+    parser.add_argument('--configuration', choices=('Debug', 'Release'), default='Debug')
     parser.add_argument('--sdk', type=Path,
                         help='Miles SDK include directory containing Mss.h (required except engine-worker)')
     parser.add_argument('--engine-root', type=Path,
-                        help='actual engine checkout, required for engine-worker Debug-x64 archive')
+                        help='actual engine checkout, required for engine-worker x64 archive')
     parser.add_argument('--bink-sdk', type=Path,
                         default=ROOT.parents[1] / 'src/external/3rd/library/bink/include',
                         help='genuine Bink 1.9c include directory (host; defaults to repository SDK)')
@@ -255,10 +263,12 @@ def main():
     args = parser.parse_args()
     arch = 'x86' if args.target == 'host' else 'x64'
     output = args.out.resolve() / args.target / arch
+    if args.configuration != 'Debug':
+        output /= args.configuration
     output.mkdir(parents=True, exist_ok=True)
     # A fresh directory preserves previous evidence and prevents stale products.
     work = Path(tempfile.mkdtemp(prefix='build-', dir=str(output)))
-    receipt = {'target': args.target, 'arch': arch, 'command': sys.argv,
+    receipt = {'target': args.target, 'arch': arch, 'configuration': args.configuration, 'command': sys.argv,
                'started_utc': datetime.now(timezone.utc).isoformat(),
                'steps': [], 'artifact': None, 'exit_code': 1}
     try:
