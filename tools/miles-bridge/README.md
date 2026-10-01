@@ -147,6 +147,40 @@ standalone teardown failure. Bink and Vivox remain unresolved. Earlier failures
 are retained, including the manifest crash, invalid audio routing and a separate
 compositor screenshot-thread crash after an already-successful game exit.
 
+
+### Local ground and space scene checkpoint
+
+The same unmodified game and host artifacts above were then exercised through
+**Load Scene** with the original assets, without credentials or a server. These
+were separate bounded GE-Proton11-7 processes, not diagnostic game builds.
+
+| Observation | Tatooine ground | Tatooine space |
+| --- | --- | --- |
+| Terrain selected and logged | `terrain/tatooine.trn` | `terrain/space_tatooine.trn` |
+| Rendered | Terrain, sky, HUD | Asteroid field, sky, HUD |
+| Input | One-second forward input: HUD Z changed 0 to 6 | No ship/flight claim |
+| Client / compositor exit | 0 / 0 | 0 / 0 |
+| Nonzero finite PCM samples | 15,139,912 | 13,843,958 |
+| Owned-sink route observations | 183 | 248 |
+
+Both ordinary close requests acknowledged only the same-process **85 warnings
+logged** dialog. Desktop audio defaults were unchanged. The post-exit
+`wineserver -k` status 1 remains in each cleanup record. Private run identifiers:
+`scene-00cdba0f` and `scene-1ab9a607`; their assessments retain artifact hashes,
+input receipts, captures, routes, warnings and the original failed attempts.
+No vendor media, binaries or SDK content is included here.
+
+The scene-selection list and filename field rendered blank, although selecting
+list rows populated the internal filename and description. Filename text entry
+did not work; using the list required no product change. A private diagnostic
+run established that the list contained 26 entries, but its observations are not
+substituted for these product runs. This legacy debug UI issue remains open.
+
+These observations extend the startup result to local ground rendering/movement
+and space rendering/ordinary exit. They do **not** establish representative
+multiplayer gameplay, space flight, native Windows behavior, media or shader
+fidelity, or performance. Bink and Vivox remain unresolved feature blockers.
+
 ## Source layout
 
 - `api/`: the game-facing declarations, direct native adapter and pipe adapter.
