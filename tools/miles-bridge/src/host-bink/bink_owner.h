@@ -32,6 +32,8 @@ private:
     std::unique_ptr<Api> api_;
     HMODULE module_;
     DWORD thread_;
+    BINKIOOPEN io_;
+    uint32_t ioBytes_;
     uint32_t budget_, used_, live_;
     bool attempted_, initialized_;
     void check() const;

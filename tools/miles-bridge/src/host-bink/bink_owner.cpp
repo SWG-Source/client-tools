@@ -47,7 +47,7 @@ struct Runtime::Api {
 };
 Runtime::Runtime(const wchar_t *path, uint32_t pixelBudget)
     : api_(new Api()), module_(0), thread_(GetCurrentThreadId()),
-      budget_(pixelBudget), used_(0), live_(0), attempted_(false), initialized_(false) {
+      io_(0), ioBytes_(0), budget_(pixelBudget), used_(0), live_(0), attempted_(false), initialized_(false) {
     require(!active && path && *path && pixelBudget,
             "Bink explicit path/budget and single owner required");
     require((wcslen(path) >= 3 && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) ||
@@ -73,8 +73,8 @@ int32_t Runtime::initialize(HDIGDRIVER driver, BINKIOOPEN io, uint32_t ioBytes) 
     api_->setMemory(&allocate, &release);
     int32_t const status = api_->sound(api_->miles, reinterpret_cast<UINTa>(driver));
     if (!status) return status; // Keep owner/module and caller's roots on uncertain failure.
-    api_->setIo(io);
-    api_->setIoSize(ioBytes);
+    io_ = io;
+    ioBytes_ = ioBytes;
     initialized_ = true;
     return status;
 }
@@ -87,6 +87,10 @@ TimerRead Runtime::timerRead() const { check(); return api_->timer; }
 std::unique_ptr<Video> Runtime::open(const char *name) {
     check(); require(initialized_ && name && *name, "Bink initialized/filename required");
     std::unique_ptr<Video> video(new Video(*this));
+    // BinkOpen consumes these settings. Match BinkVideo's per-open setup so
+    // later movies still use the engine's TreeFile callbacks and IO buffer.
+    api_->setIo(io_);
+    api_->setIoSize(ioBytes_);
     video->handle_ = api_->open(name, BINKIOPROCESSOR | BINKIOSIZE);
     if (!video->handle_) return std::unique_ptr<Video>();
     ++live_;

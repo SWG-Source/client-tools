@@ -37,13 +37,27 @@ Private run: `scene-5762d4a5`. Game SHA-256:
 Host SHA-256:
 `6f276dab2330d14ad235ad3dc7720a1be6d104925200cbe9e1949bfcd5c1dcab`.
 
-Repeated playback remains open: a follow-up did not visibly start the second
-movie. Successful input delivery does not establish parser acceptance; that
-failure is retained while the cause is investigated. Shutdown during playback,
-controls, timing and Win32 audiovisual equivalence are still required. A normal
-close after a completed movie does not settle those checks. The retained DLL/IO
-roots remain process-owned, and zero-return sound initialization cleanup is
-source/build checked, not induced against the real SDK.
+The follow-up replay failure was traced to native open: the second request
+reached Bink, which returned `Error opening file.` Bink consumes its custom IO
+callback and buffer-size settings on each open. The host now retains those
+settings and reapplies both before every open, matching the original client.
+The earlier failure remains preserved; no file-token retirement changes were
+needed. Debug and Release hosts built with `/W4 /WX`, zero errors/warnings.
+
+Private run `scene-28f3d65f` kept the same uninstrumented game above and changed
+the host to SHA-256
+`161ccccd4119176f8edfb91555a8c598112dfb7920d23233304f9350fec87df8`.
+Two consecutive original Falcon movies visibly advanced and completed. A third
+opened and ordinary close during playback produced game/compositor exit 0
+after the same 77-warning dialog. Default audio endpoints were unchanged; the
+post-exit wineserver cleanup returned 1 and is retained in the record. See the
+[actual-client regression procedure](tests/bink-replay.md).
+
+This is a Debug-x64 GE-Proton11-7 lifecycle result, not native Windows or
+waveform/fidelity acceptance. Skipping, other controls, timing and Win32
+audiovisual equivalence remain required. The retained DLL/IO roots remain
+process-owned, and zero-return sound initialization cleanup is source/build
+checked, not induced against the real SDK.
 
 The existing renderer is 1024x1024 and the development pixel staging budget is
 4 MiB; arbitrary movie dimensions or concurrency are not qualified.
