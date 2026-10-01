@@ -155,6 +155,10 @@ timestamps (before 579db9f6) decode negative values as large positive ones. 64-b
 
 ## Limits
 
+For the separate actual-client/server procedure and its artifact-specific
+results, see [Live client/server acceptance](live-session.md). Passing that
+bounded scenario does not expand the fixture coverage described here.
+
 Count checks run before the first byte of each writer, but nested serializers
 (`MessageQueueDraftSlotsDataArchive`, `CustomerServiceCategoryArchive` subcategories) are called
 after their caller has written bytes: a rejection there cannot roll back the caller's partial
