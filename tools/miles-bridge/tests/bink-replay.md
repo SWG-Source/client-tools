@@ -31,8 +31,31 @@ The console prints “Playing cut-scene” regardless of whether the start succe
 that text and successful key delivery are not playback evidence. Record routed
 audio separately. Nonzero audio alone cannot identify the movie track or prove
 audiovisual fidelity, synchronization, volume correctness or native-Windows parity.
-Skipping in a ground/space scene is a separate check: the login UI does not supply
-the same scene input handler.
+Skipping is a separate check in a loading or character-creation screen that
+actually calls `Game::skipCutScene`. The ordinary login UI and an already loaded
+ground scene do not provide a general Escape-to-skip contract.
+
+## Return to a loaded ground scene
+
+Use the same pinned Debug package and original assets. From the existing Load
+Scene UI, select `terrain/tatooine.trn` and wait for terrain, player and HUD to
+render. Record the HUD position before proceeding; a loading screen alone is
+not scene acceptance.
+
+1. Open the console, issue the same Falcon movie command and close the console.
+   Capture distinct advancing movie frames.
+2. Let the movie complete without another command. Require the terrain, player
+   and HUD to return. This exercises `Game::_endCutScene` restoring scene drawing.
+3. Hold the normal forward-movement input for one second. Require a changed HUD
+   position and rendered scene; successful key injection alone is not evidence.
+4. Request ordinary window close and record game/host exit, dialogs and audio
+   routing as above. Preserve any new assertion, crash or failed return to play.
+
+The uninstrumented x64 Debug client and repaired host passed this bounded
+procedure under GE-Proton11-7 (`scene-7b7dd4cd`): distinct movie frames, restored
+terrain/HUD, position Z changing from 0 to 5 after movement, and game/compositor
+exit 0 after the normal 85-warning dialog. This is not a skip, server gameplay,
+native-Windows, sound-volume or audiovisual-equivalence result.
 
 ## Failure discrimination
 
