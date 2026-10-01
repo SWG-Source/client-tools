@@ -181,6 +181,38 @@ and space rendering/ordinary exit. They do **not** establish representative
 multiplayer gameplay, space flight, native Windows behavior, media or shader
 fidelity, or performance. Bink and Vivox remain unresolved feature blockers.
 
+
+### Bink host groundwork (not connected to playback)
+
+`src/host-bink` adds the original Bink decoder owner inside the x86 Miles host.
+It accepts that host's genuine digital driver. The native decoder, BINKIO
+buffering state and pixel buffers stay in x86; file operations use the existing
+reverse-file worker and opaque tokens. No client pointer is passed to Bink.
+The IO adapter is adapted from the repository's `BinkTreeFileIO.cpp` and retains
+its read-ahead/suspend/idle behavior. Large logical reads are split only at the
+private transport limit, and stop on the first short read.
+
+The possessed DLL is PE x86 Bink **1.9c**, matching the repository header and
+required decorated exports. Its SHA-256 is
+`e67e0319f9929c024a6d0757de50c65257f686f6711cb0efb7ad53afc3405dd4`.
+The existing host build defaults to the repository's Bink include directory;
+`--bink-sdk` can select another matching include location. Nothing downloads or
+redistributes the DLL or SDK.
+
+The complete VS2013 x86 host compiled/linked all 23 translation units with
+`/W4 /WX`, zero errors/warnings. The source manifest and raw receipt were checked
+against this tree. Host SHA-256:
+`835046becced257b6f20035db451ad76e78896e81e9e2f1731cbfd6428887d6f`.
+This establishes compilation/linkage only. Movie commands, client texture
+presentation and runtime playback are **not yet connected**. The actual ground
+and space results above used the earlier host, not these new units.
+
+Before using this owner, the integration must close every movie and establish
+Bink producer quiescence before releasing its file service or Miles driver.
+The immutable IO binding remains process-owned; a local live-resource count is
+not proof that native background callbacks have stopped. Video/audio fidelity,
+frame timing and close ordering still require the original-DLL runtime test.
+
 ## Source layout
 
 - `api/`: the game-facing declarations, direct native adapter and pipe adapter.

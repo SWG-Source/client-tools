@@ -164,6 +164,10 @@ def build(args, work, receipt):
         flags = ['/nologo', '/c', '/W4', '/WX', '/EHsc', '/MTd', '/Od', '/Ob0', '/Zi',
                  '/DWIN32', '/D_WIN32_WINNT=0x0601', '/DNOMINMAX',
                  '/I' + str(sdk), '/I' + str(source_root)]
+    if args.target == 'host':
+        if args.bink_sdk is None or not (args.bink_sdk / 'bink.h').is_file():
+            raise ValueError('--bink-sdk must contain genuine Bink 1.9c bink.h')
+        flags += ['/I' + str(args.bink_sdk.resolve())]
     for index, source in enumerate(sources):
         stem = '%02d-%s' % (index, source.stem)
         obj = work / (stem + '.obj')
@@ -240,6 +244,9 @@ def main():
                         help='Miles SDK include directory containing Mss.h (required except engine-worker)')
     parser.add_argument('--engine-root', type=Path,
                         help='actual engine checkout, required for engine-worker Debug-x64 archive')
+    parser.add_argument('--bink-sdk', type=Path,
+                        default=ROOT.parents[1] / 'src/external/3rd/library/bink/include',
+                        help='genuine Bink 1.9c include directory (host; defaults to repository SDK)')
     parser.add_argument('--sdk-lib', type=Path, help='real x86 Mss32.lib (host only)')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--vcvars', type=Path, default=Path(os.environ.get(
