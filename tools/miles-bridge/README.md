@@ -92,6 +92,61 @@ closes operational Audio state once but retains templates/cache for continuing
 disabled-audio UI use. These source-order repairs do not establish the cause of
 the earlier standalone engine teardown fault or qualify actual game shutdown.
 
+## Development runtime packaging
+
+Keep the matching original x86 redistributables with the private worker:
+
+```text
+game/
+  SwgClient_d.exe
+  helper-x86/
+    miles-host.exe
+    Mss32.dll
+    miles/          (original matching .asi and .flt providers)
+```
+
+The private development configuration selects `helper-x86/miles-host.exe` and
+`helper-x86/Mss32.dll` with `ClientAudio/devMilesHost` and `devMilesDll`.
+In the tested runtime, the existing relative `miles` redist path loads providers
+under the helper directory. Placing them only in `game/miles` allowed driver
+initialization but made title-MP3 stream opening fail with the native error
+`Error getting sound format.` The helper-local layout loaded the original
+providers and allowed stream opening and playback. No vendor files are bundled.
+
+For a Linux/Proton test, the x86 worker also needs the runtime's i386 audio
+dependencies. A missing `libpulse.so.0` caused ALSA fallback: a silent capture
+from the intended null sink did **not** establish silent playback. Check the
+actual producer route, not just unchanged desktop default device names. The
+private test supplied cached dependencies through a process-local library path
+and disabled ALSA fallback; it did not modify system audio settings.
+
+### Actual startup and ordinary exit checkpoint
+
+At source commit `4953206a2`, the product Debug-x64 development client reached
+the login UI with original SWGSource v3.0 assets and no credentials or connection.
+The manifest ownership repair in that commit removes an observed normal-exit
+use-after-free. VS2013 built `sharedFile` for Debug-x64 and Release-Win32 and
+relinked the game with zero errors; six existing x64 narrowing warnings remain.
+
+The bounded GE-Proton11-7 run used the product game, renderer and host, without
+the earlier private source tracing. It captured 2,917,889 nonzero finite audio
+samples, with 56 observations binding the worker to the owned null sink. The
+exact-target Windows close request produced **client exit 0** after acknowledging
+only the normal `78 warnings logged` dialog; **compositor exit was also 0**.
+No owned processes remained and desktop audio defaults were unchanged. The
+post-exit `wineserver -k` command returned 1; that cleanup record is retained.
+
+Game SHA-256: `2f5d846fa330a8464fb00e4b9c6ea0a2be26d539e67cb7a313dddd7017147216`.
+Host SHA-256: `80a8c4d99876ea98243fb936076c21692329a2431ebd2825cc3b5204a4dd897b`.
+Private run identifier: `startup-4c257792`.
+
+This establishes startup, routed audio output and ordinary exit in that setup.
+It does not establish audio/shader fidelity, native Windows rendering, ground or
+space gameplay, mixed-width network acceptance, or the cause of the old separate
+standalone teardown failure. Bink and Vivox remain unresolved. Earlier failures
+are retained, including the manifest crash, invalid audio routing and a separate
+compositor screenshot-thread crash after an already-successful game exit.
+
 ## Source layout
 
 - `api/`: the game-facing declarations, direct native adapter and pipe adapter.
