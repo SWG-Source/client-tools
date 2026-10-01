@@ -12,7 +12,7 @@ class Runtime {
 public:
     Runtime(HANDLE authenticatedCallbackPipe,uint64_t session,uint64_t registration,
             uint64_t backgroundLane,uint32_t liveFiles);
-    ~Runtime();
+    ~Runtime() = delete; // Process-owned; explicit stop does not authorize destruction.
     uint64_t session() const { return session_; }
     uint64_t registration() const { return registration_; }
     // Only after genuine SDK shutdown has stopped its producers. Failure is terminal.

@@ -55,7 +55,7 @@ Runtime::Runtime(HANDLE pipe,uint64_t session,uint64_t registration,uint64_t bac
     if(!thread_)fatal();
     await(ready_);
 }
-Runtime::~Runtime(){fatal();}
+
 DWORD WINAPI Runtime::entry(void *context) {
     try {static_cast<Runtime *>(context)->run();}catch(...){fatal();}
     return 0;
