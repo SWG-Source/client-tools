@@ -43,9 +43,11 @@ struct Reader {
         return s;
     }
 };
-bool opcode(uint32_t o) { return (o >= 1 && o <= 61) || (o >= Hello && o <= FileConsumptionAck); }
+bool opcode(uint32_t o) { return (o >= 1 && o <= 61) || (o >= Hello && o <= FileConsumptionAck) || (o >= BinkInitialize && o <= BinkShutdown); }
 bool envelopeOpcode(uint32_t o) { return opcode(o) && o != EndOfSample && o != EndOfStream; }
-bool resultOpcode(const Header &h) { return envelopeOpcode(h.opcode) ||
+bool binkOpcode(uint32_t o) { return o >= BinkInitialize && o <= BinkShutdown; }
+bool callOpcode(const Header &h) { return envelopeOpcode(h.opcode) && (!binkOpcode(h.opcode) || h.kind == Request); }
+bool resultOpcode(const Header &h) { return (envelopeOpcode(h.opcode) && (!binkOpcode(h.opcode) || h.kind == Reply)) ||
     (h.kind==ReverseReply && (h.opcode==EndOfSample || h.opcode==EndOfStream)); }
 bool header(const Header &h) {
     return h.magic == Magic && h.version == Version && opcode(h.opcode);
@@ -147,7 +149,7 @@ bool eosValid(const Header &h, const Eos &e) {
 }
 } // namespace
 bool encodeCall(Header h, const Call &c, Bytes a, Bytes b, std::vector<unsigned char> &out) {
-    if (!header(h) || !envelopeOpcode(h.opcode) ||
+    if (!header(h) || !callOpcode(h) ||
         (h.kind != Request && h.kind != ReverseRequest) || c.reserved || !validHandle(c.target) ||
         !validHandle(c.resource))
         return false;
@@ -160,7 +162,7 @@ bool encodeCall(Header h, const Call &c, Bytes a, Bytes b, std::vector<unsigned 
     return true;
 }
 bool encodeCallInto(Header h,const Call &c,Bytes a,Bytes b,unsigned char *buffer,size_t capacity,size_t &written) {
-    if(!header(h) || !envelopeOpcode(h.opcode) || (h.kind!=Request && h.kind!=ReverseRequest) ||
+    if(!header(h) || !callOpcode(h) || (h.kind!=Request && h.kind!=ReverseRequest) ||
        c.reserved || !validHandle(c.target) || !validHandle(c.resource))return false;
     Span sa,sb;
     if(!plan(h,136,a,b,sa,sb) || !buffer || capacity<h.bytes)return false;
@@ -171,7 +173,7 @@ bool decodeCall(Bytes b, Header &outH, Call &outC) {
         return false;
     Reader r(b);
     Header h = getHeader(r);
-    if (!header(h) || !envelopeOpcode(h.opcode) || h.bytes != b.size ||
+    if (!header(h) || !callOpcode(h) || h.bytes != b.size ||
         (h.kind != Request && h.kind != ReverseRequest))
         return false;
     Call c;

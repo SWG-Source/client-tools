@@ -14,7 +14,7 @@ struct Metadata {
 };
 class Video;
 // Command-thread owner. The caller retains driver and real IO callback state
-// until every Video is explicitly closed and this Runtime is explicitly closed.
+// until every Video is explicitly closed. Runtime/DLL remain until process exit.
 // The budget bounds aggregate copied pixel buffers, not Bink's internal heap.
 class Runtime {
 public:
@@ -24,7 +24,6 @@ public:
     int32_t initialize(HDIGDRIVER driver, BINKIOOPEN io, uint32_t ioBytes);
     ~Runtime();
     std::unique_ptr<Video> open(const char *name);
-    void closeAfterProducerQuiescence();
     const char *error() const;
     TimerRead timerRead() const;
 private:
@@ -49,10 +48,12 @@ public:
     void next();
     void service();
     int32_t pause(bool paused);
+    int32_t videoOnOff(bool enabled);
+    int32_t soundOnOff(bool enabled);
     void setVolume(uint32_t track, int32_t volume);
-    // BINKSURFACE32A | BINKCOPYALL, tight width*4 pitch. Native signed status
+    // Native 32A/565/5551 with BINKCOPYALL and tight pitch. Native signed status
     // is preserved, including zero. Pixel view is invalidated by next copy/close.
-    int32_t copyFrame32();
+    int32_t copyFrame(uint32_t format);
     const std::vector<unsigned char> &pixels() const;
     void close();
 private:

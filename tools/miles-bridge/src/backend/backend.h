@@ -6,6 +6,7 @@
 #include <Mss.h>
 #include "../upload/upload_state.h"
 #include "../eos/host_eos.h"
+#include "../host-bink/bink_service.h"
 #include <type_traits>
 static_assert(std::is_same<decltype(&::AIL_WAV_info),
     S32 (AILCALL *)(const void *, AILSOUNDINFO *)>::value,"exact native WAV_info declaration");
@@ -23,11 +24,14 @@ struct Backend {
     HSTREAM pendingStream;
     bool streamOpenPending;
     MilesHostUpload106::UploadState imageUpload;
+    MilesHostBink::Service bink;
+    MilesHostRuntime50::Runtime *callbacks;
+    bool filesInstalled;
     bool started, shutdown;
     unsigned metadataInvocations;
     explicit Backend(const char *expectedPath, uint32_t imageBudgetBytes)
         : resolver(registry), module(0), driver(0), pendingStream(0), streamOpenPending(false),
-          imageUpload(registry,imageBudgetBytes),
+          imageUpload(registry,imageBudgetBytes), bink(registry), callbacks(0),filesInstalled(false),
           started(false), shutdown(false),
           metadataInvocations(0) {
         require(MilesImage93::validBudget(imageBudgetBytes), "explicit upload byte budget");
@@ -101,6 +105,8 @@ struct Backend {
                                       const std::vector<unsigned char> &frame) {
         using namespace StartupBridge;
         require(!streamOpenPending, "uncertain stream open cannot resume");
+        OwnedReply binkReply;
+        if(bink.intercept(h,c,frame,started,shutdown,callbacks,filesInstalled,binkReply))return binkReply;
         OwnedReply uploadReply;
         if(imageUpload.intercept(h.opcode,c,frame,started,shutdown,
                                 &Backend::queryImageNative,&require,uploadReply,&Backend::bindImageNative))return uploadReply;
@@ -372,6 +378,7 @@ struct Backend {
             return out;
         }
         if (h.opcode == MilesWire::AIL_shutdown) {
+            if(!bink.permitsMilesShutdown())return out;
             ::AIL_shutdown();
             MilesHostEos::shutdownComplete();
             imageUpload.shutdownComplete();

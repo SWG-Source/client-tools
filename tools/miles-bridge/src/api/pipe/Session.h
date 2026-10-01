@@ -10,6 +10,7 @@
 namespace ClientMilesPipe {
 struct DriverProxy;
 struct SampleState;
+struct VideoState;
 // Composition-root-only owner; not included by game policy. Bootstrap/Hello
 // occurs in the concrete channel before selecting this sole session. Explicit
 // close follows genuine SDK shutdown and paired joins; no public protocol API.
@@ -42,10 +43,13 @@ class Session {
     int32_t queryWav(const void *image, ClientMiles::SampleInformation *result);
     int32_t bindSampleImage(const MilesWire::Handle &sample, const void *image,
         uint32_t bytes, uint32_t opcode, int32_t block, const char *suffix);
+    MilesWire::Handle verifiedDriver(ClientMiles::HDIGDRIVER);
+    bool fileCallbacksInstalled() const { return filesInstalled_; }
     bool started;
     bool stopped;
     std::unique_ptr<DriverProxy> driver;
     std::unique_ptr<SampleState> samples;
+    std::unique_ptr<VideoState> videos;
     // Caller must serialize text access with the existing Session command path.
     // Retained with this owner until explicit paired close.
     std::string lastErrorSnapshot;

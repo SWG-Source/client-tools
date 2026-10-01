@@ -4,12 +4,12 @@
 #include <stdint.h>
 #include <stddef.h>
 namespace MilesWire {
-// Private paired-endpoint version3; unrelated to the SWG network protocol.
+// Private paired-endpoint version4; unrelated to the SWG network protocol.
 // Encode/decode fields explicitly little-endian; these structs are schema/layout
 // checks, NOT permission to send native padding or dereference received bytes.
-enum { Magic=0x31534d57, Version=3, MaxFrameBytes=1048576 };
+enum { Magic=0x31534d57, Version=4, MaxFrameBytes=1048576 };
 enum Kind { Request=1, Reply=2, Event=3, ReverseRequest=4, ReverseReply=5 };
-enum ResourceKind { Null=0, Driver=1, OwnedSample=2, Stream=3, BorrowedSample=4, Buffer=5, File=6 };
+enum ResourceKind { Null=0, Driver=1, OwnedSample=2, Stream=3, BorrowedSample=4, Buffer=5, File=6, Video=7 };
 struct Handle { uint32_t kind, slot, generation; }; // all zero is vendor null
 struct Span { uint32_t offset, length; }; // offset from frame start; checked subtraction
 struct Header { uint32_t magic; uint16_t version, kind; uint32_t opcode, bytes;
@@ -31,6 +31,12 @@ enum Control { Hello=0x1000, BufferBegin, BufferChunk, BufferSeal, BufferRelease
  CallbackAck, SessionClose, FileConsumptionAck=0x100e };
 static_assert(CallbackAck==0x100c && SessionClose==0x100d && FileConsumptionAck==0x100e,
               "append-only private control opcodes");
+// Private Bink controls share the paired command transport, not the SWG protocol.
+enum BinkControl { BinkInitialize=0x2000, BinkOpen, BinkClose, BinkInfo,
+ BinkDoFrame, BinkNextFrame, BinkWait, BinkShouldSkip, BinkService, BinkPause,
+ BinkVideoOnOff, BinkSoundOnOff, BinkVolume, BinkPixelsBegin, BinkPixelsChunk,
+ BinkLastError, BinkShutdown };
+static_assert(BinkShutdown==0x2010, "Bink control sequence");
 enum Opcode {
  AIL_WAV_info = 1,
  AIL_active_sample_count = 2,

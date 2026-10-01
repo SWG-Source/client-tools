@@ -35,6 +35,8 @@ struct Runtime::Api {
     decltype(&::BinkNextFrame) next;
     decltype(&::BinkService) service;
     decltype(&::BinkPause) pause;
+    decltype(&::BinkSetVideoOnOff) video;
+    decltype(&::BinkSetSoundOnOff) soundOn;
     decltype(&::BinkSetVolume) volume;
     decltype(&::BinkCopyToBuffer) copy;
     decltype(&::BinkSetIO) setIo;
@@ -57,7 +59,8 @@ Runtime::Runtime(const wchar_t *path, uint32_t pixelBudget)
         B(timer,"_RADTimerRead@0"); B(setMemory,"_BinkSetMemory@8");
         B(open,"_BinkOpen@8"); B(close,"_BinkClose@4"); B(doFrame,"_BinkDoFrame@4");
         B(wait,"_BinkWait@4"); B(shouldSkip,"_BinkShouldSkip@4"); B(next,"_BinkNextFrame@4");
-        B(service,"_BinkService@4"); B(pause,"_BinkPause@8"); B(volume,"_BinkSetVolume@12");
+        B(service,"_BinkService@4"); B(pause,"_BinkPause@8");
+        B(video,"_BinkSetVideoOnOff@8"); B(soundOn,"_BinkSetSoundOnOff@8"); B(volume,"_BinkSetVolume@12");
         B(copy,"_BinkCopyToBuffer@28"); B(setIo,"_BinkSetIO@4"); B(setIoSize,"_BinkSetIOSize@4");
         B(sound,"_BinkSetSoundSystem@8"); B(miles,"_BinkOpenMiles@4"); B(error,"_BinkGetError@0");
 #undef B
@@ -89,13 +92,6 @@ std::unique_ptr<Video> Runtime::open(const char *name) {
     ++live_;
     return video;
 }
-void Runtime::closeAfterProducerQuiescence() {
-    check(); require(!live_ && !used_ && (!attempted_ || initialized_), "Bink live videos or uncertain initialization");
-    // Caller must establish callback-producer quiescence before releasing IO
-    // roots. A returned file Close callback is not itself that proof.
-    require(FreeLibrary(module_) != 0, "Bink DLL release failed");
-    module_ = 0; active = 0;
-}
 Video::Video(Runtime &owner) : owner_(owner), handle_(0), copiedWidth_(0), copiedHeight_(0) {}
 Video::~Video() { if (handle_) std::terminate(); }
 void Video::check() const { owner_.check(); require(handle_ != 0, "Bink video closed"); }
@@ -110,10 +106,13 @@ int32_t Video::shouldSkip() { check(); return owner_.api_->shouldSkip(handle_); 
 void Video::next() { check(); owner_.api_->next(handle_); }
 void Video::service() { check(); owner_.api_->service(handle_); }
 int32_t Video::pause(bool paused) { check(); return owner_.api_->pause(handle_, paused ? 1 : 0); }
+int32_t Video::videoOnOff(bool on) { check(); return owner_.api_->video(handle_,on?1:0); }
+int32_t Video::soundOnOff(bool on) { check(); return owner_.api_->soundOn(handle_,on?1:0); }
 void Video::setVolume(uint32_t track, int32_t volume) { check(); owner_.api_->volume(handle_,track,volume); }
-int32_t Video::copyFrame32() {
+int32_t Video::copyFrame(uint32_t format) {
     check();
-    uint64_t const pitch = uint64_t(handle_->Width) * 4;
+    require(format==BINKSURFACE32A || format==BINKSURFACE565 || format==BINKSURFACE5551, "Bink native surface format");
+    uint64_t const pitch = uint64_t(handle_->Width) * (format==BINKSURFACE32A ? 4 : 2);
     require(pitch && handle_->Height && pitch <= INT32_MAX, "Bink pixel dimensions");
     uint64_t const bytes = pitch * handle_->Height; // bounded pitch makes multiplication safe
     require(bytes <= owner_.budget_, "Bink pixel budget");
@@ -121,14 +120,18 @@ int32_t Video::copyFrame32() {
     require(bytes <= owner_.budget_ - (owner_.used_ - old), "Bink aggregate pixel budget");
     require(!old || (handle_->Width == copiedWidth_ && handle_->Height == copiedHeight_),
             "Bink frame dimensions changed");
-    if (!old) {
+    if (bytes != old) {
+        // No transfer is active when the command owner changes format. Release
+        // the previous buffer first so even transient allocations obey budget.
+        std::vector<unsigned char>().swap(pixels_);
+        owner_.used_ -= old;
         std::vector<unsigned char> replacement(static_cast<size_t>(bytes));
         pixels_.swap(replacement);
         copiedWidth_ = handle_->Width; copiedHeight_ = handle_->Height;
-        owner_.used_ = owner_.used_ - old + static_cast<uint32_t>(bytes);
+        owner_.used_ += static_cast<uint32_t>(bytes);
     }
     return owner_.api_->copy(handle_, &pixels_[0], static_cast<S32>(pitch),handle_->Height,0,0,
-                             BINKSURFACE32A | BINKCOPYALL);
+                             format | BINKCOPYALL);
 }
 const std::vector<unsigned char> &Video::pixels() const { check(); return pixels_; }
 void Video::close() {

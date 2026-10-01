@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <vector>
 namespace MilesTransport {
-inline bool knownResource(uint32_t k) { return k >= MilesWire::Driver && k <= MilesWire::File; }
+inline bool knownResource(uint32_t k) { return k >= MilesWire::Driver && k <= MilesWire::Video; }
 inline bool validHandle(const MilesWire::Handle &h) {
     return (h.kind == 0 && h.slot == 0 && h.generation == 0) ||
            (knownResource(h.kind) && h.slot && h.generation);
@@ -104,9 +104,9 @@ class ResourceRegistry {
     // later cancel is safe and cannot affect a replacement generation.
     bool reserve(MilesWire::ResourceKind kind, const MilesWire::Handle &parent,
                  Reservation &token) {
-        if (token.owner || (kind != MilesWire::Driver && kind != MilesWire::OwnedSample && kind != MilesWire::Stream && kind != MilesWire::File && kind != MilesWire::Buffer))
+        if (token.owner || (kind != MilesWire::Driver && kind != MilesWire::OwnedSample && kind != MilesWire::Stream && kind != MilesWire::File && kind != MilesWire::Buffer && kind != MilesWire::Video))
             return false;
-        if (kind == MilesWire::OwnedSample || kind == MilesWire::Stream) {
+        if (kind == MilesWire::OwnedSample || kind == MilesWire::Stream || kind == MilesWire::Video) {
             void *driver = 0;
             if (!resolve(parent, MilesWire::Driver, driver)) return false;
         } else if (parent.kind || parent.slot || parent.generation) return false;
@@ -149,8 +149,8 @@ class ResourceRegistry {
         return true;
     }
     bool insert(MilesWire::ResourceKind kind, void *local, MilesWire::Handle &out) {
-        if (kind == MilesWire::BorrowedSample || kind == MilesWire::Stream)
-            return false; // Stream identity requires a reserved, validated Driver parent.
+        if (kind == MilesWire::BorrowedSample || kind == MilesWire::Stream || kind == MilesWire::Video)
+            return false; // Stream/Video identities require a reserved, validated Driver parent.
         return insertEntry(kind, local, out);
     }
     bool insertBorrowed(const MilesWire::Handle &parent, void *local, MilesWire::Handle &out) {
@@ -183,7 +183,7 @@ class ResourceRegistry {
         const Entry &e = entries[h.slot - 1];
         if (e.state != 1 || e.kind != h.kind || e.generation != h.generation || !e.local)
             return false;
-        if (e.kind == MilesWire::Stream || (e.kind == MilesWire::OwnedSample && e.parent.kind)) {
+        if (e.kind == MilesWire::Stream || e.kind == MilesWire::Video || (e.kind == MilesWire::OwnedSample && e.parent.kind)) {
             void *driver = 0;
             if (!resolve(e.parent, MilesWire::Driver, driver)) return false;
         }
@@ -210,7 +210,7 @@ class ResourceRegistry {
             for (size_t i = 0; i < entries.size(); ++i) {
                 Entry &child = entries[i];
                 if ((child.state == 1 || child.state == 2 || child.state == 4) &&
-                    (child.kind == MilesWire::OwnedSample || child.kind == MilesWire::Stream) &&
+                    (child.kind == MilesWire::OwnedSample || child.kind == MilesWire::Stream || child.kind == MilesWire::Video) &&
                     same(child.parent, h)) {
                     if (child.kind == MilesWire::Stream) {
                         const MilesWire::Handle stream = {MilesWire::Stream,

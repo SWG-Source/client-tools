@@ -2,6 +2,7 @@
 #define STARTUP_BRIDGE23_REPLY_H
 #include "../version/session_version.h"
 #include "../metadata/metadata.h"
+#include "../bink/bink_protocol.h"
 #include <cstring>
 #include <stdexcept>
 namespace StartupBridge {
@@ -65,6 +66,14 @@ inline bool decodeReply(MilesTransport::Bytes frame, const MilesWire::Header &ex
         h.causal_request != expected.causal_request || h.lock_lease != expected.lock_lease ||
         !knownStatus(r.transport_status))
         return false;
+    if (MilesBinkProtocol::opcode(h.opcode)) {
+        if (!MilesBinkProtocol::validResult(h,r,frame)) return false;
+        if (r.bytes.length) candidate.bytes.assign(frame.data+r.bytes.offset,frame.data+r.bytes.offset+r.bytes.length);
+        if (r.text.length) candidate.text.assign(frame.data+r.text.offset,frame.data+r.text.offset+r.text.length);
+        r.bytes=MilesWire::Span(); r.text=MilesWire::Span();
+        out.bytes.swap(candidate.bytes); out.text.swap(candidate.text); out.result=r;
+        return true;
+    }
     const bool ok = r.transport_status == Success;
     const bool sampleRegistration=ok&&h.opcode==MilesWire::AIL_register_EOS_callback;
     const bool streamRegistration=ok&&h.opcode==MilesWire::AIL_register_stream_callback;

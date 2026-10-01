@@ -1,4 +1,5 @@
 #include "Session.h"
+#include "VideoState.h"
 #include "../../callback-guard/invocation_guard.h"
 #include "../../failure/failure_boundary.h"
 #include "../../protocol/pair_outputs.h"
@@ -136,7 +137,7 @@ intptr_t preferenceResult(const StartupBridge::OwnedReply &reply) {
 namespace ClientMilesPipe {
 Session::Session(Channel *channel, MilesClientRuntime53::Runtime &runtime,
     std::shared_ptr<void> callbackCodeLifetime, uint32_t uploadBudgetBytes)
-    : started(false), stopped(false), samples(new SampleState), commandThread_(GetCurrentThreadId()), channel_(channel), closed_(false),
+    : started(false), stopped(false), samples(new SampleState), videos(new VideoState), commandThread_(GetCurrentThreadId()), channel_(channel), closed_(false),
       faulted_(false), runtime_(runtime), callbackCodeLifetime_(callbackCodeLifetime),
       filesPrepared_(false), filesInstalled_(false), uploadBudgetBytes_(uploadBudgetBytes),
       uploadPhase_(UploadIdle), uploadId_(), uploadBytes_(0), uploadOpcode_(0),
@@ -162,6 +163,8 @@ Session &Session::selected() {
 }
 
 size_t Session::sampleProxyCount() const { return samples ? samples->proxies.size() : 0; }
+
+MilesWire::Handle Session::verifiedDriver(ClientMiles::HDIGDRIVER driver) { return driverCall(*this,driver).target; }
 
 void Session::rejectResult() {
     faulted_ = true;runtime_.fail();
@@ -229,6 +232,7 @@ bool Session::validateReply(uint32_t opcode,const MilesWire::Call &fields,
             return false;
     }
     if(r.transport_status!=StartupBridge::Success)return true;
+    if(!videos->validate(opcode,fields,reply))return false;
     if(opcode==MilesWire::AIL_register_EOS_callback && r.callback>samples->sampleCallbacks.size())return false;
     if(opcode==MilesWire::AIL_register_stream_callback && r.callback &&
        (r.callback<65 || r.callback-64>samples->streamCallbacks.size()))return false;
@@ -293,7 +297,7 @@ std::vector<MilesWire::Handle> Session::verifiedResources(const MilesWire::Call 
         const MilesWire::Handle &h=values[n];
         if(!h.kind && !h.slot && !h.generation)continue;
         const auto same=[&](const MilesWire::Handle &v){return h.kind==v.kind && h.slot==v.slot && h.generation==v.generation;};
-        bool found=(uploadId_.kind && same(uploadId_)) || (driver && same(driver->wire));
+        bool found=(uploadId_.kind && same(uploadId_)) || (driver && same(driver->wire)) || videos->owns(h);
         for(auto i=samples->proxies.begin();i!=samples->proxies.end();++i)
             if((*i)->live && same((*i)->wire))found=true;
         for(auto i=samples->streams.begin();i!=samples->streams.end();++i)
@@ -440,7 +444,7 @@ void Session::close() {
     // finish returned only after genuine SDK shutdown, exact paired close,
     // child exit 0, callback I/O drain, and worker/control-thread joins.
     delete channel_;channel_=0;
-    driver.reset();samples.reset();callbackCodeLifetime_.reset();
+    driver.reset();samples.reset();videos.reset();callbackCodeLifetime_.reset();
     lastErrorSnapshot.clear();redistSnapshot.clear();
     closed_=true;selectedSession=0;
 }
@@ -468,6 +472,8 @@ int32_t startup() {
 void shutdown() {
     ClientMilesPipe::Session &session = ClientMilesPipe::Session::selected();
     session.requireRunning();
+    if(session.videos->attempted && !session.videos->stopped)
+        fail(FailureReason::WrongState,"Bink must close before Miles shutdown");
     session.request(MilesWire::AIL_shutdown, MilesWire::Call());
     session.retireAllEos();
     session.samples->proxies.clear(); // confirmed vendor shutdown, local handles expire

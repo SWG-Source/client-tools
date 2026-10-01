@@ -62,6 +62,7 @@ void host(int argc,char **argv){
             HANDLE transferred=rawCallback;rawCallback=INVALID_HANDLE_VALUE;
             callbacks=new MilesHostRuntime50::Runtime(transferred,session,1,999,64);
             MilesHostEos::initialize(*callbacks);
+            backend->callbacks=callbacks;
         }else{
 
             std::vector<MilesWire::Handle> resources;bool live=true;
@@ -78,7 +79,9 @@ void host(int argc,char **argv){
                 MilesHostContext::Origin origin={session,h.request,h.lane,h.lock_lease,ordinal};
                 require(!backend->uploadActive() || h.opcode!=MilesWire::AIL_set_file_callbacks,
                     "file installation during image transaction refused before SDK effect");
-                if(h.opcode==MilesWire::SessionClose){
+                if(backend->bink.transferActive() && h.opcode!=MilesWire::BinkPixelsChunk)
+                    out.result.transport_status=StartupBridge::LifecycleRefused;
+                else if(h.opcode==MilesWire::SessionClose){
                     if(!emptyCloseCall(c))out.result.transport_status=StartupBridge::InvalidFields;
                     else if(!backend->shutdown || backend->started || backend->driver || backend->streamOpenPending ||
                             backend->uploadActive() || coordinator.leaseDepth() || !backend->registry.empty() || !MilesHostEos::empty())
@@ -96,6 +99,9 @@ void host(int argc,char **argv){
                     require(MilesHostRuntime50::installAdmitted(*callbacks,bytes(frame),h,origin,
                         backend->started,backend->shutdown,encoded.data(),encoded.size(),written),"admitted installation");
                     encoded.resize(written);
+                    MilesFileProtocol48::InstallStatus installStatus;
+                    require(MilesFileProtocol48::decodeInstallReply(bytes(encoded),request,installStatus),"host install result");
+                    if(installStatus==MilesFileProtocol48::Installed)backend->filesInstalled=true;
                 }else{
                     MilesHostContext::Scope scope(origin);
                     require(scope.result()==MilesHostContext::Entered,"admitted SDK origin");
