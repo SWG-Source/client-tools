@@ -41,6 +41,9 @@ static dvoid *mallocHook(dvoid *, size_t size)
 
 static dvoid *reallocHook(dvoid *, dvoid *memptr, size_t newsize)
 {
+	if (!memptr && newsize)
+		return mallocHook(0, newsize);
+
 	return reinterpret_cast<dvoid *>(MemoryManager::reallocate(memptr, newsize));
 }
 

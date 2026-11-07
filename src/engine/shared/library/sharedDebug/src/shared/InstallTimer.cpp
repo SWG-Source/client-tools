@@ -7,6 +7,7 @@
 // ======================================================================
 
 #include "sharedDebug/FirstSharedDebug.h"
+#include <inttypes.h>
 #include "sharedDebug/InstallTimer.h"
 
 #include "sharedFoundation/ConfigFile.h"
@@ -61,9 +62,9 @@ void InstallTimer::manualExit()
 	if (m_description)
 	{
 		m_performanceTimer.stop();
-		unsigned long const endingNumberOfBytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated();
+		MemoryManager::ByteCount const endingNumberOfBytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated();
 		--ms_indent;
-		REPORT_LOG_PRINT(ms_enabled, ("InstallTimer:%*c%6.4f %d %s\n", ms_indent * 2, ' ', m_performanceTimer.getElapsedTime(), static_cast<int>(endingNumberOfBytesAllocated - m_startingNumberOfBytesAllocated), m_description));
+		REPORT_LOG_PRINT(ms_enabled, ("InstallTimer:%*c%6.4f %" PRId64 " %s\n", ms_indent * 2, ' ', m_performanceTimer.getElapsedTime(), static_cast<int64_t>(endingNumberOfBytesAllocated) - static_cast<int64_t>(m_startingNumberOfBytesAllocated), m_description));
 		m_description = NULL;
 	}
 }

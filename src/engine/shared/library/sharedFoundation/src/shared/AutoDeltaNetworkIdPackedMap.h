@@ -33,7 +33,7 @@ namespace Archive
 		AutoDeltaMap<NetworkId, int>::Command c;
 
 		Archive::put(target, countCharacter(buffer,':'));
-		Archive::put(target, static_cast<size_t>(0)); // baselineCommandCount
+		Archive::put(target, static_cast<uint32_t>(0)); // baselineCommandCount
 		
 		int tempPos = 0;
 		for (std::string::const_iterator i=buffer.begin(); i!=buffer.end(); ++i)
@@ -63,8 +63,8 @@ namespace Archive
 		char temp[200];
 		
 		AutoDeltaMap<NetworkId, int>::Command c;
-		size_t commandCount;
-		size_t baselineCommandCount;
+		uint32_t commandCount;
+		uint32_t baselineCommandCount;
 
 		Archive::get(source, commandCount);
 		Archive::get(source, baselineCommandCount);

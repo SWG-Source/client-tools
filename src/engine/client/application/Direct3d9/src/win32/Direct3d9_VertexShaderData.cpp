@@ -430,7 +430,12 @@ IDirect3DVertexShader9 * Direct3d9_VertexShaderData::createVertexShader(uint32 t
 
 		IncludeHandler includeHandler;
 		ID3DXBuffer *error = NULL;
-		HRESULT result = D3DXCompileShader(m_compileText, m_compileTextLength, &(ms_defines.front()), &includeHandler, "main", target, 0, &compiledShader, &error, NULL);
+		DWORD compileFlags = 0;
+#ifdef _WIN64
+		// The x64 SDK defaults to the newer HLSL language; stock assets use D3D9 syntax.
+		compileFlags = D3DXSHADER_USE_LEGACY_D3DX9_31_DLL;
+#endif
+		HRESULT result = D3DXCompileShader(m_compileText, m_compileTextLength, &(ms_defines.front()), &includeHandler, "main", target, compileFlags, &compiledShader, &error, NULL);
 
 		//-----------------------------------------------------------------------------------
 		// DBE - I was getting strange Float Invalid Operation Exceptions (0xC0000090) in the 

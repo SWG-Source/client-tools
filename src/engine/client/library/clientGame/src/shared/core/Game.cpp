@@ -8,6 +8,7 @@
 // ======================================================================
 
 #include "clientGame/FirstClientGame.h"
+#include <inttypes.h>
 #include "clientGame/Game.h"
 
 #include "clientAnimation/PlaybackScriptManager.h"
@@ -369,7 +370,7 @@ namespace GameNamespace
 
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-	unsigned long ms_bytesAllocated[5];
+	MemoryManager::ByteCount ms_bytesAllocated[5];
 	char ms_bytesAllocatedBuffer[256];
 
 	char   ms_loopCountBuffer[64];
@@ -439,10 +440,10 @@ void verifyUpdateRanges (const char* filename);
 
 void Game::garbageCollect (bool const immediate)
 {
-	const int numberOfMegabytesAllocated = MemoryManager::getCurrentNumberOfBytesAllocated () / (1024 * 1024);
+	const int numberOfMegabytesAllocated = static_cast<int>(MemoryManager::getCurrentNumberOfBytesAllocated () / (1024 * 1024));
 	const int limit = MemoryManager::getLimit() ;
 
-	if (ms_garbageCollectNextFrame || immediate || numberOfMegabytesAllocated > (limit * 9) / 10)
+	if (ms_garbageCollectNextFrame || immediate || numberOfMegabytesAllocated > (static_cast<int64_t>(limit) * 9) / 10)
 	{
 		ms_garbageCollectNextFrame = false;
 
@@ -460,8 +461,8 @@ void Game::garbageCollect (bool const immediate)
 
 //		LocalizationManager::getManager ().garbageCollectUnused ();
 #ifdef _DEBUG
-		size_t const memorySaved = numberOfMegabytesAllocated - MemoryManager::getCurrentNumberOfBytesAllocated () / (1024 * 1024);
-		DEBUG_REPORT_LOG(memorySaved > 0, ("GameNamespace::garbageCollect: just freed %i MB\n", memorySaved));
+		int64_t const memorySaved = numberOfMegabytesAllocated - static_cast<int64_t>(MemoryManager::getCurrentNumberOfBytesAllocated () / (1024 * 1024));
+		DEBUG_REPORT_LOG(memorySaved > 0, ("GameNamespace::garbageCollect: just freed %" PRId64 " MB\n", memorySaved));
 #endif
 	}
 }
@@ -567,17 +568,17 @@ void GameNamespace::preloadAssets ()
 	if (ConfigFile::getKeyBool ("ClientGame", "disablePreloadedAssetManager", false))
 		return;
 
-	unsigned long const startAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount const startAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
 	unsigned long const startTimeMs = Clock::timeMs();
 
 	PreloadedAssetManager::install ();
 
 	unsigned long const stopTimeMs = Clock::timeMs();
-	unsigned long const stopAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
+	MemoryManager::ByteCount const stopAllocatedBytes = MemoryManager::getCurrentNumberOfBytesAllocated();
 
 	REPORT_LOG(true, ("Preloading took [%.2f] seconds and increased memory usage by [%.2f] MB.\n",
 		static_cast<float>(stopTimeMs - startTimeMs) / 1000.0f,
-		static_cast<float>(stopAllocatedBytes - startAllocatedBytes) / (1024.0f * 1024.0f)));
+		static_cast<float>(static_cast<int64_t>(stopAllocatedBytes) - static_cast<int64_t>(startAllocatedBytes)) / (1024.0f * 1024.0f)));
 }
 
 //-------------------------------------------------------------------
@@ -1101,7 +1102,7 @@ void Game::runGameLoopOnce(bool presentToWindow, HWND hwnd, int width, int heigh
 		ms_bytesAllocated[2] = ms_bytesAllocated[3];
 		ms_bytesAllocated[3] = ms_bytesAllocated[4];
 		ms_bytesAllocated[4] = MemoryManager::getCurrentNumberOfBytesAllocated();
-		sprintf(ms_bytesAllocatedBuffer, "BytesAllocated: %lu %lu %lu %lu %lu\n", ms_bytesAllocated[0], ms_bytesAllocated[1], ms_bytesAllocated[2], ms_bytesAllocated[3], ms_bytesAllocated[4]);
+		sprintf(ms_bytesAllocatedBuffer, "BytesAllocated: %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 "\n", static_cast<uint64_t>(ms_bytesAllocated[0]), static_cast<uint64_t>(ms_bytesAllocated[1]), static_cast<uint64_t>(ms_bytesAllocated[2]), static_cast<uint64_t>(ms_bytesAllocated[3]), static_cast<uint64_t>(ms_bytesAllocated[4]));
 
 #if 0
 		NP_PROFILER_NAMED_AUTO_BLOCK_TRANSFER(profilerMainLoop, "debug");

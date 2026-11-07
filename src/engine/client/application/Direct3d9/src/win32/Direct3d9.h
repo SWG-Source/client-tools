@@ -22,7 +22,11 @@ class  Vector;
 class  VertexBufferVector;
 
 #include <d3d9.h>
+#if defined(_M_X64)
+#include <DxErr.h>
+#else
 #include <dxerr9.h>
+#endif
 
 #include "../../../../../../engine/shared/library/sharedFoundation/include/public/sharedFoundation/Tag.h"
 #include "clientGraphics/Texture.def"
@@ -31,7 +35,11 @@ class VectorRgba;
 
 // ======================================================================
 // Fancy FATAL_DX_HR macro with debug string.
+#if defined(_M_X64)
+#define FATAL_DX_HR(a,b)       FATAL(FAILED(b), (a, DXGetErrorStringA(b)))
+#else
 #define FATAL_DX_HR(a,b)       FATAL(FAILED(b), (a, DXGetErrorString9(b)))
+#endif
 
 class Direct3d9
 {

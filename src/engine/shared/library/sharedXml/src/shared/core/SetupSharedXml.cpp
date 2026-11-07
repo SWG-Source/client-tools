@@ -71,6 +71,9 @@ char *SetupSharedXmlNamespace::xmlDuplicateString(char const *source)
 
 void *SetupSharedXmlNamespace::xmlReAllocate(void *memory, size_t byteCount)
 {
+	if (!memory && byteCount)
+		return xmlAllocate(byteCount);
+
 	return MemoryManager::reallocate(memory, byteCount);
 }
 

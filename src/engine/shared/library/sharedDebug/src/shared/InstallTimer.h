@@ -12,6 +12,7 @@
 // ======================================================================
 
 #include "sharedDebug/PerformanceTimer.h"
+#include "sharedMemoryManager/MemoryManager.h"
 
 // ======================================================================
 
@@ -38,7 +39,7 @@ private:
 
 	char const * m_description;
 	PerformanceTimer m_performanceTimer;
-	unsigned long const m_startingNumberOfBytesAllocated;
+	MemoryManager::ByteCount const m_startingNumberOfBytesAllocated;
 };
 
 // ======================================================================

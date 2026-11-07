@@ -17,6 +17,7 @@
 // ======================================================================
 
 #include <new>
+#include <stdint.h>
 #include "../../../../../../engine/shared/library/sharedMemoryManager/include/public/sharedMemoryManager/OsNewDel.h"
 
 // ======================================================================
@@ -32,6 +33,19 @@ class MemoryManager
 {
 public:
 
+#if defined(_WIN32) && !defined(_WIN64)
+	typedef uint32 OwnerAddress; // Preserve the legacy Win32 exported signature.
+#else
+	typedef uintptr_t OwnerAddress;
+#endif
+
+	// Byte statistics retain the Win32 ABI and cover the x64 address space.
+#if defined(_WIN64)
+	typedef uint64_t ByteCount;
+#else
+	typedef unsigned long ByteCount;
+#endif
+
 	MemoryManager();
 	~MemoryManager();
 
@@ -45,17 +59,17 @@ public:
 	static bool            reportToFile(const char * fileName, bool leak);
 
 	static int             getCurrentNumberOfAllocations();
-	static unsigned long   getCurrentNumberOfBytesAllocated(const int processId = 0);
-	static unsigned long   getCurrentNumberOfBytesAllocatedNoLeakTest();
+	static ByteCount       getCurrentNumberOfBytesAllocated(const int processId = 0);
+	static ByteCount       getCurrentNumberOfBytesAllocatedNoLeakTest();
 	static int             getMaximumNumberOfAllocations();
-	static unsigned long   getMaximumNumberOfBytesAllocated();
+	static ByteCount       getMaximumNumberOfBytesAllocated();
 	static int             getSystemMemoryAllocatedMegabytes();
 
 #ifndef _WIN32
 	static int             getProcessVmSizeKBytes(const int processId = 0);
 #endif
 
-	static DLLEXPORT void *allocate(size_t size, uint32 owner, bool array, bool leakTest);
+	static DLLEXPORT void *allocate(size_t size, OwnerAddress owner, bool array, bool leakTest);
 	static DLLEXPORT void  free(void *pointer, bool array);
 	static DLLEXPORT void  own(void *pointer);
 	static void *          reallocate(void *userPointer, size_t newSize);

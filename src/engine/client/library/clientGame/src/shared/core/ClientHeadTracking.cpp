@@ -25,6 +25,12 @@ namespace ClientHeadTrackingNamespace
 {
 	char const * const ms_npClientLocation = "Software\\NaturalPoint\\NATURALPOINT\\NPClient Location";
 
+#if defined(_WIN64)
+	char const * const ms_npClientLibrary = "NPClient64.dll";
+#else
+	char const * const ms_npClientLibrary = "NPClient.dll";
+#endif
+
 	unsigned short const c_developerId = 6001;
 
 	bool ms_installed;
@@ -58,9 +64,12 @@ void ClientHeadTracking::install()
 	if (currentUserRegistryKey && currentUserRegistryKey->subKeyExists(ms_npClientLocation))
 	{
 		RegistryKey * const npClientLocationRegistryKey = currentUserRegistryKey->openSubkey(ms_npClientLocation);
-		if (npClientLocationRegistryKey && npClientLocationRegistryKey->getStringValue("Path", "", libraryName, sizeof(libraryName), true))
+		// Reserve the separator and DLL name, including the final terminator.
+		DWORD const pathCapacity = static_cast<DWORD>(sizeof(libraryName) - strlen(ms_npClientLibrary) - 2);
+		if (npClientLocationRegistryKey && npClientLocationRegistryKey->getStringValue("Path", "", libraryName, pathCapacity, true) && strlen(libraryName) <= pathCapacity)
 		{
-			strcat(libraryName, "\\NPClient.dll");
+			strcat(libraryName, "\\");
+			strcat(libraryName, ms_npClientLibrary);
 			ms_npClientDll = LoadLibrary(libraryName);
 			if (ms_npClientDll)
 			{
@@ -130,7 +139,7 @@ void ClientHeadTracking::install()
 		DebugFlags::registerFlag(ms_debugReport, "ClientHeadTracking", "debugReport");
 	}
 	else
-		DEBUG_REPORT_LOG(true, ("ClientHeadTracking::install: failed to load NPClient.DLL\n"));
+		DEBUG_REPORT_LOG(true, ("ClientHeadTracking::install: failed to load %s\n", ms_npClientLibrary));
 
 	ExitChain::add(remove, "ClientHeadTrackingNamespace::remove");
 }

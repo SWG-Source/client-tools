@@ -12,6 +12,7 @@
 
 // ======================================================================
 
+#include <stdint.h>
 #include "Archive/AutoDeltaMap.h"
 #include "Archive/AutoDeltaSet.h"
 #include "clientGame/TangibleObject.h"
@@ -574,7 +575,7 @@ private:
 	
 	void maxAttributesOnChanged   ();
 
-	void attributesOnSet          (const size_t elem, const Attributes::Value & oldValue, const Attributes::Value & newValue);
+	void attributesOnSet          (const uint32_t elem, const Attributes::Value & oldValue, const Attributes::Value & newValue);
 
 	void setAppearanceTransformModifiers ();
 

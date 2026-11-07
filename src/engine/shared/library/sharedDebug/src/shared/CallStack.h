@@ -40,7 +40,7 @@ private:
 
 private:
 
-	uint32 m_callStack[S_callStack];
+	uint64 m_callStack[S_callStack];
 };
 
 // ======================================================================

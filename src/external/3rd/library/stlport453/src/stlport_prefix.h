@@ -10,6 +10,16 @@
 #  endif
 #  if !(defined (__CYGWIN__) || defined(_WIN32_WCE))
 #   define _STLP_REAL_LOCALE_IMPLEMENTED
+// Modified for native Windows source builds: use SDK declarations for debug output.
+#   ifndef NOMINMAX
+#    define NOMINMAX
+#   endif
+#   include <windows.h>
+#   define _STLP_WINDOWS_H_INCLUDED
+// Legacy SDK SAL short names collide with this library's iterator variables.
+// Limit removal to the vendor source build; retain the SDK declarations above.
+#   undef __in
+#   undef __out
 #  endif
 # endif
 

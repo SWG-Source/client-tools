@@ -281,7 +281,6 @@ void FileManifest::addNewManifestEntry(const char *fileName, int fileSize)
 		// delete the new entry we created
 		delete entry;
 	}
-	delete entry;
 #else
 	return;
 #endif
@@ -300,7 +299,8 @@ void FileManifest::addStoredManifestEntry(const char *fileName, const char * sce
 
 	std::pair<ManifestMap::iterator, bool> insertReturn = s_manifest.insert(std::pair<const uint32, FileManifestEntry*>(crc, entry));
 
-	delete entry;
+	if (!insertReturn.second)
+		delete entry;
 }
 
 // -----------------------------------------------------------------------

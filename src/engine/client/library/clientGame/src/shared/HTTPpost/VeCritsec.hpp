@@ -3,6 +3,10 @@
 
 #ifdef _WIN32
 
+#if defined(_M_X64)
+#include <intrin.h>
+#endif
+
 #pragma warning( disable : 4740 ) // disable warning C4740: flow in or out of inline asm code suppresses global optimization
 
 // Explicit declaration to avoid having to #include <windows.h>
@@ -39,6 +43,10 @@ public:
             return( true );
         }
 
+#if defined(_M_X64)
+        if ( _interlockedbittestandset( &m_iLock, 0 ) )
+            return( false );
+#else
         volatile unsigned int* p_i_lock = &m_iLock;
         __asm 
         {
@@ -49,6 +57,7 @@ public:
         return( false );
         
         Locked:
+#endif
         m_uThreadID = uCallingThread;
         m_uLockCount = 1;
         return( true );    
@@ -92,7 +101,11 @@ public:
         if ( m_uLockCount == 0 )
         {
             m_uThreadID = 0xFFFFFFFF;
+#if defined(_M_X64)
+            _InterlockedExchange( &m_iLock, 0 );
+#else
             m_iLock = 0;  // This actually releases the lock
+#endif
         }
     }
     
@@ -118,7 +131,11 @@ public:
     void yield_thread(void);
     
 private:
+#if defined(_M_X64)
+    volatile long m_iLock;
+#else
     volatile unsigned int m_iLock;
+#endif
     volatile uint32 m_uThreadID;
     volatile uint32 m_uLockCount;
 };

@@ -474,7 +474,7 @@ void CollisionWorld::update ( float time )
 	PerformanceTimer timer;
 	timer.start();
 
-#ifdef _MSC_VER
+#if defined(_M_IX86) // Only x87 has a selectable intermediate precision.
 
 	FloatingPointUnit::Precision oldPrecision = FloatingPointUnit::getPrecision();
 	FloatingPointUnit::setPrecision(FloatingPointUnit::P_64);
@@ -516,7 +516,7 @@ void CollisionWorld::update ( float time )
 	// ----------
 
 
-#ifdef _MSC_VER
+#if defined(_M_IX86)
 
 	FloatingPointUnit::setPrecision(oldPrecision);
 

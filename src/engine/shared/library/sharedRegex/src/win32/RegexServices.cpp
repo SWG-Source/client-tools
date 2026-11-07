@@ -9,8 +9,18 @@
 #include "sharedRegex/FirstSharedRegex.h"
 #include "sharedRegex/RegexServices.h"
 
+#if defined(_M_X64)
+#include <intrin.h>
+#endif
+
 // ======================================================================
 
+#if defined(_M_X64)
+static __declspec(noinline) void * regexAllocate(size_t size)
+{
+	return MemoryManager::allocate(size, reinterpret_cast<uintptr_t>(_ReturnAddress()), false, true);
+}
+#else
 static void * __cdecl localAllocate(size_t size, uint32 owner, bool array, bool leakTest)
 {
 	return MemoryManager::allocate(size, owner, array, leakTest);
@@ -39,6 +49,8 @@ static __declspec(naked) void * regexAllocate(size_t)
 		ret
 	}
 }
+
+#endif
 
 // ----------------------------------------------------------------------
 

@@ -10,7 +10,11 @@
 #include "clientGraphics/VideoList.h"
 
 #include "clientGraphics/Video.h"
+#ifdef CLIENT_MILES_DEV_FACADE
+#include "../Bink/PipeBinkVideo.h"
+#else
 #include "clientGraphics/BinkVideo.h"
+#endif
 #include "sharedFoundation/ExitChain.h"
 #include "sharedFoundation/StringCompare.h"
 #include "sharedSynchronization/RecursiveMutex.h"
@@ -60,7 +64,11 @@ namespace BinkVideoNamespace
 
 void VideoList::install(void *hMilesDigitalDriver)
 {
+#ifdef CLIENT_MILES_DEV_FACADE
+	bool binkInstalled = PipeBinkVideoNamespace::install(hMilesDigitalDriver);
+#else
 	bool binkInstalled = BinkVideoNamespace::install(hMilesDigitalDriver);
+#endif
 	if (!binkInstalled)
 	{
 		return;
@@ -79,7 +87,11 @@ void VideoListNamespace::remove()
 	delete s_videoMap;
 	s_videoMap = NULL;
 
+#ifdef CLIENT_MILES_DEV_FACADE
+	PipeBinkVideoNamespace::remove();
+#else
 	BinkVideoNamespace::remove();
+#endif
 }
 	
 // ----------------------------------------------------------------------
@@ -115,7 +127,11 @@ Video *VideoList::fetch(const char *name)
 		}
 		else
 		{
+#ifdef CLIENT_MILES_DEV_FACADE
+			result = PipeBinkVideo::create(name);
+#else
 			result = BinkVideo::newBinkVideo(name);
+#endif
 
 			if (result)
 			{

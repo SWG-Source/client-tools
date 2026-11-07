@@ -1,0 +1,89 @@
+# Native renderer dependencies
+
+The x64 Direct3d9 projects build original JPEG6b and the repository's STLport 4.5.3 source with VS2013 v120. Win32 projects retain their existing libraries. This does not provide the other client vendor SDKs or establish runtime rendering correctness.
+
+Install VS2013/v120, the Windows 8.1 SDK and the genuine DirectX SDK June 2010. Set `DXSDK_DIR` to the DirectX SDK root. Obtain the [official IJG JPEG6b archive](https://www.ijg.org/files/jpegsrc.v6b.tar.gz); its required SHA256 is:
+
+`75c3ec241e9996504fe02a9ed4d12f16b74ade713972f3db9e65ce95cd27e35d`
+
+Pass `/p:SwgJpegArchive=C:\downloads\jpegsrc.v6b.tar.gz` and, if needed, `/p:SwgPythonExecutable=C:\Python\python.exe` to MSBuild. Python 3.8 or newer is required. Builds do not download dependencies. An explicit standalone invocation can download the pinned archive:
+
+```bat
+python tools\build-client-deps\build.py --platform x64 --configuration Release --vcvars "%VS120COMNTOOLS%..\..\VC\vcvarsall.bat" --jpeg-archive C:\downloads\jpegsrc.v6b.tar.gz --download --output C:\build\client-deps\x64\Release
+```
+
+Omit `--download` for offline use. Generated libraries, logs, commands, source identities and the retained JPEG README/license go to the output directory. Default project outputs are under `src/compile/deps/v120/<Platform>/<Configuration>`. Override `SwgClientDepsDir` for a private build directory. Do not share one directory across checkouts, architectures or configurations; the builder rejects an output-owner mismatch. Do not edit source/toolchain inputs while builds from that checkout are running. This is an incremental per-checkout build directory, not a shared cross-checkout artifact cache. Failed/overlapping builds report a lock; remove a stale `.build-lock` only after confirming its process stopped.
+
+An absent `owner.json` is created only in an empty output directory (excluding the current `.build-lock`). Unowned contents, malformed/incomplete owner records and mismatched owners fail without deleting existing output. Choose a new empty directory for unowned output. Ownership is published by atomic rename after the staged write is flushed; an interrupted owner publication can leave `owner.pending`, which also blocks adoption. A matching owner is left unchanged and permits retrying an interrupted build after its process has stopped and any stale lock has been handled.
+
+Run the bounded ownership tests with `python -B -m unittest discover -s tools/build-client-deps/tests -v`. They exercise real temporary-directory ownership and entry ordering with the native build boundary mocked; they do not compile or run a renderer.
+
+The builder checks archive identity before extraction, uses all 46 official JPEG library translation units and all 33 bundled STLport library translation units, checks v120 and object architecture, and publishes the completion manifest after both libraries succeed. Cache validation covers source/header and builder content, compiler binaries/frontends, compiler include-tree contents and output archive hashes. Delete `manifest.json` to force a rebuild. CRT libraries are not embedded in these object archives; the consuming renderer link selects and validates its own CRT providers. Logs contain compiler commands/output, never a dumped process environment.
+
+JPEG public headers retain the repository's Windows INT32/FAR adaptations; the original license text is copied unchanged as `JPEG-README.txt`. Distribution must retain the license and attribution requirements in that file. No generated binaries or SDK packages belong in Git.
+
+Native scratch validation covered Debug/Release on both ABIs, opposite-header/library ABI probes, one RGB encoder fixture, 39 legacy/new DxErr names and all six x64 renderer project links. These checks do not prove every JPEG codec path, hostile image safety, Direct3D device creation or rendered frames. The original Win32 diagnostic API remains untouched; x64 uses June 2010's real `DXGetErrorStringA`.
+
+
+## Logitech legacy LCD library for x64
+
+The existing LCD wrapper uses the legacy low-level `lgLcd` API. Supply the original
+x64 SDK library separately and set `/p:SwgLogitechLcdSdkDir=C:\SDKs\LCDSDK` when
+building SwgClient x64. The expected file is `Lib\x64\lglcd.lib` beneath that root.
+Set `SwgPythonExecutable` to a Python executable if `python` is not on PATH.
+
+The verified provider is the legacy SDK in Logitech GamePanel Software 3.06 x64:
+[official package](https://download01.logi.com/web/ftp/pub/gaming/keyboards/lgps306_x64.exe).
+Extract the package, then `1b-GamePanel-x64/GPInst.msi`, its `LADPSDK_zip` payload,
+and the `LCDSDK` directory. Retain its license alongside the local SDK. The build
+does not install device software or download a replacement library.
+
+`validate-logitech-lcd.py` requires archive SHA-256
+`a48539793ceb80d68df27d5e913fc2d977d142a4e8e5cfb36d80725c034d17c4`.
+Missing or different input stops the x64 build before linking. The property sheet
+prepends the SDK library directory while retaining the existing `lgLcd.lib` input.
+Win32 settings are unchanged; no SDK binaries are included in this repository.
+
+Evidence covers native property evaluation and linking the existing wrapper
+against this provider. It does not establish a full x64 client link, LCD device
+rendering, button delivery, hot-plug behavior or startup without Logitech software.
+
+## SwgClient x64 STLport provider
+
+The x64 executable uses the same configuration-owned, source-built STLport archive
+as the renderers. It builds all 33 source files listed by the bundled makefile,
+using `/MT` for Release and `/MTd` for Debug with `/Zc:wchar_t-`. Debug does not
+implicitly enable STLport's separate `_STLP_DEBUG` iterator/container mode; the
+client's existing preprocessor settings remain unchanged.
+
+The x64 link policy replaces the explicit legacy
+`stlport_vc71_stldebug_static.lib` input and ignores only the observed
+`stlport_vc71_static.lib` autolink name, while explicitly supplying the real
+`stlport.lib`. It does not ignore unresolved symbols or architecture errors.
+Win32 retains its original provider selection. Renderer dependency validation and
+source builds share a property sheet with the executable; renderer SDK checks
+still run before its dependency build.
+
+Native validation compared effective inputs, library directories, preprocessor
+definitions and ignored defaults in Debug/Release on both ABIs. Win32 and renderer
+metadata stayed unchanged; only the intended x64 executable provider selection
+changed. Both final x64 linker experiments progressed beyond the legacy STLport
+archive to a wrong-architecture Vivox wrapper. This is not a complete client link
+or proof that every remaining dependency is resolved.
+
+## Source-built Vivox loader wrapper
+
+The dependency builder also compiles the repository's original `Vivox.cpp` into
+`vivoxSharedWrapper.lib`, using `VIVOX_VERSION=3` to match
+`CuiVoiceChatManager.h`. It retains the original loader, function imports, mixer
+code and shutdown behavior. The bundled SDK headers and wrapper sources are part
+of the cache identity; all three archives must validate before cache reuse.
+
+Only SwgClient x64 links this archive. Its old explicit Win32 wrapper inputs are
+replaced; Win32 provider selection remains unchanged. Renderers share the stable
+three-output dependency cache but do not link the wrapper.
+
+This rebuild supplies the wrapper, **not the Vivox SDK DLL or service**. The code
+still loads `vivoxsdk.dll` dynamically and requires a compatible native provider.
+Compiling and resolving wrapper symbols does not establish SDK structure
+compatibility, authenticated voice, audio-device behavior or service availability.

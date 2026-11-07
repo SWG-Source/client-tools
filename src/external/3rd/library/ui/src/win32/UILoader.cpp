@@ -190,7 +190,7 @@ bool UILoader::LoadFromString( const UINarrowString &data, UIObjectList &TopLeve
 				continue;
 			else
 			{
-				*GetUIOutputStream() << " :: Bad data at position " << std::distance (data.begin (), p) << "\n";
+				*GetUIOutputStream() << " :: Bad data at position " << static_cast<size_t>(std::distance (data.begin (), p)) << "\n";
 				*GetUIOutputStream() << " :: " << ParseError << '\n';
 				return false;
 			}

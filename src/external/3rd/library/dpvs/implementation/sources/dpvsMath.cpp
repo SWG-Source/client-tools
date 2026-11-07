@@ -958,6 +958,10 @@ skip:
 		fcompp
 		fcompp
 	}
+#elif defined (DPVS_CPU_X64)
+	// Approximate the legacy x87 PC64 evaluation; double is not extended precision.
+	for (int i = 0; i < N; i++)
+		dst[i] = static_cast<float>((static_cast<double>(src[i].x) * p.x + static_cast<double>(src[i].y) * p.y) + (static_cast<double>(src[i].z) * p.z + static_cast<double>(src[i].w) * p.w));
 #else // DPVS_X86_ASSEMBLY
 	register float px = p.x, py = p.y, pz = p.z, pw = p.w;
 	for (int i = 0; i < N; i++)
@@ -1451,6 +1455,13 @@ void rasterToFixed (Vector2i* dst, const Vector2* src, const Vector2& scale, int
 #endif
 */
 
+#elif defined (DPVS_CPU_X64)
+	// Preserve the exact float product until floor, as in the legacy x87 path.
+	for (int i = 0; i < N; i++)
+	{
+		dst[i][0] = static_cast<INT32>(::floor(static_cast<double>(scale.x) * src[i].x));
+		dst[i][1] = static_cast<INT32>(::floor(static_cast<double>(scale.y) * src[i].y));
+	}
 #else
 	float scaleX = scale.x;
 	float scaleY = scale.y;
@@ -3692,7 +3703,7 @@ void transformUnitBox (Vector3 dst[8], const Matrix4x3& m)
 
 static DPVS_FORCE_INLINE void reciprocal4 (float& w0, float& w1, float& w2, float& w3)
 {
-#if defined (DPVS_CPU_GAMECUBE) || defined (DPVS_CPU_X86)
+#if defined (DPVS_CPU_GAMECUBE) || defined (DPVS_CPU_X86) || defined (DPVS_CPU_X64)
 	float	a		= w0;
 	float	b		= w1;
 	float	c		= w2;

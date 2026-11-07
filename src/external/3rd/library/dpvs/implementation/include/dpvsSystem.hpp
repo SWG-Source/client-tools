@@ -28,6 +28,11 @@
 #	include "dpvsX86.hpp"
 #endif
 
+#if defined(DPVS_CPU_X64)
+#include <intrin.h>
+#include <xmmintrin.h>
+#endif
+
 namespace DPVS
 {
 /******************************************************************************
@@ -56,7 +61,10 @@ public:
 // Prefetch memory at location 'mem'. This prefetch *MUST* be made a 
 // memory location that is valid (i.e. read access exists!!)
 
-#if defined (DPVS_CPU_X86)
+#if defined(DPVS_CPU_X64)
+ DPVS_FORCE_INLINE void System::prefetch(const void* mem) { _mm_prefetch(static_cast<const char*>(mem), _MM_HINT_T0); }
+ DPVS_FORCE_INLINE double System::getCycleCount(void) { return static_cast<double>(__rdtsc()); }
+#elif defined (DPVS_CPU_X86)
 	DPVS_FORCE_INLINE void		System::prefetch		(const void* mem)				{ X86::prefetch(mem);			}
 	DPVS_FORCE_INLINE double	System::getCycleCount	(void)							{ return X86::getCycleCount();	}
 #else

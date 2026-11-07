@@ -24,6 +24,10 @@
 //
 // ============================================================================
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+namespace ClientMilesDevelopment { void removeAudioCache(); }
+#endif
+
 //-----------------------------------------------------------------------------
 void SetupClientAudio::install()
 {
@@ -43,8 +47,14 @@ void SetupClientAudio::install()
 //-----------------------------------------------------------------------------
 void SetupClientAudio::remove()
 {
+#if defined(CLIENT_MILES_DEV_FACADE)
+	Audio::remove(); // paired stop; may already have run on driver-init failure
+	SoundTemplateList::remove(); // registry remains installed throughout disabled gameplay
+	ClientMilesDevelopment::removeAudioCache(); // templates no longer borrow cache keys
+#else
 	SoundTemplateList::remove();
 	Audio::remove();
+#endif
 	SoundId::remove();
 }
 

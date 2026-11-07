@@ -21,6 +21,9 @@
 #include "sharedDebug/RemoteDebug.h"
 
 #include <cstdio>
+#include <climits>
+#include <stdint.h>
+#include <inttypes.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -81,8 +84,8 @@ namespace MemoryManagerNamespace
 
 		int m_size;
 		SystemAllocation * m_next;
-		int m_pad1;
-		int m_pad2;
+		size_t m_pad1;
+		size_t m_pad2;
 	};
 
 
@@ -161,8 +164,8 @@ namespace MemoryManagerNamespace
 		bool  checkForLeaks() const;
 		void  setCheckForLeaks(bool checkForLeaks);
 
-		uint32 getOwner(int index) const;
-		void   setOwner(int index, uint32 owner);
+		MemoryManager::OwnerAddress getOwner(int index) const;
+		void   setOwner(int index, MemoryManager::OwnerAddress owner);
 		void   fillOwnerWithFreePattern();
 
 #endif
@@ -175,7 +178,7 @@ namespace MemoryManagerNamespace
 	private:
 
 #if DO_TRACK
-		uint32         m_owner[DO_TRACK];
+		MemoryManager::OwnerAddress m_owner[DO_TRACK];
 #endif
 	};
 
@@ -204,6 +207,7 @@ namespace MemoryManagerNamespace
 	void   logMessageToFd(char const * message);
 
 	int const             cms_blockSize              = (sizeof(Block) + 15) & (~15);
+	static_assert(sizeof(SystemAllocation) == cms_blockSize, "SystemAllocation must occupy one block");
 	int const             cms_freeBlockSize          = (sizeof(FreeBlock) + 15) & (~15);
 	extern int const      cms_allocatedBlockSize     = (sizeof(AllocatedBlock) + 15) & (~15);
 	byte const            cms_guardFillPattern       = 0xAB;
@@ -213,6 +217,29 @@ namespace MemoryManagerNamespace
 
 	int const cms_systemAllocationRoundSize = 4 * 1024 * 1024;
 	int const cms_systemAllocationMinimumSize = 4 * 1024 * 1024;
+
+	// A region and every block within it retain signed-int sizes. Check in size_t
+	// before narrowing, including the region's three blocks and rounding slack.
+	bool calculateAllocationSize(size_t requestedSize, int &allocationSize)
+	{
+		static_assert((cms_blockSize % 16) == 0 && ((cms_allocatedBlockSize + 2 * cms_guardBandSize) % 16) == 0, "allocation bounds require aligned headers");
+		size_t maximumSize = static_cast<size_t>(INT_MAX - (cms_systemAllocationRoundSize - 1))
+			- 3 * cms_blockSize - cms_allocatedBlockSize - 2 * cms_guardBandSize;
+#if DO_TRACK || DO_GUARDS
+		size_t const maximumTrackedSize = (static_cast<size_t>(1) << Block::cms_requestedSizeBits) - 1;
+		if (maximumSize > maximumTrackedSize)
+			maximumSize = maximumTrackedSize;
+#endif
+		if (requestedSize > maximumSize)
+			return false;
+		size_t const size = requestedSize ? requestedSize : 1;
+		allocationSize = static_cast<int>((cms_allocatedBlockSize + 2 * cms_guardBandSize + size + 15) & ~static_cast<size_t>(15));
+		// Every allocated block must also fit the free-list node after release.
+		if (allocationSize < cms_freeBlockSize)
+			allocationSize = cms_freeBlockSize;
+		return true;
+	}
+
 
 	bool                  ms_installed;
 	bool                  ms_limitSet;
@@ -251,7 +278,7 @@ namespace MemoryManagerNamespace
 	FreeBlock *           ms_firstFreeBlock;
 
 	int                   ms_allocateCalls;
-	unsigned long         ms_allocateBytesTotal;
+	MemoryManager::ByteCount ms_allocateBytesTotal;
 #ifndef _WIN32
 	int                   ms_processVmSizeKBytes;
 #endif
@@ -267,13 +294,13 @@ namespace MemoryManagerNamespace
 #endif
 
 #if DO_TRACK || DO_GUARDS
-	unsigned long         ms_currentBytesRequested;
+	MemoryManager::ByteCount ms_currentBytesRequested;
 #endif
-	unsigned long         ms_currentBytesAllocated;
+	MemoryManager::ByteCount ms_currentBytesAllocated;
 #if DO_TRACK
-	unsigned long         ms_currentBytesAllocatedNoLeakTest;
+	MemoryManager::ByteCount ms_currentBytesAllocatedNoLeakTest;
 #endif
-	unsigned long         ms_maxBytesAllocated;
+	MemoryManager::ByteCount ms_maxBytesAllocated;
 
 	bool                  ms_allowNameLookup = true;
 	int                   ms_logMessageFd = -1;
@@ -402,7 +429,8 @@ inline Block const * Block::getNext() const
 
 inline void Block::setNext(Block *next)
 {
-	DEBUG_FATAL(next && reinterpret_cast<int>(next) - reinterpret_cast<int>(this) < cms_blockSize, ("too small"));
+	DEBUG_FATAL(next && (reinterpret_cast<uintptr_t>(next) < reinterpret_cast<uintptr_t>(this) ||
+		reinterpret_cast<uintptr_t>(next) - reinterpret_cast<uintptr_t>(this) < static_cast<uintptr_t>(cms_blockSize)), ("too small"));
 	m_next = next;
 }
 
@@ -463,14 +491,14 @@ inline void AllocatedBlock::setCheckForLeaks(bool checkForLeaks)
 
 // ----------------------------------------------------------------------
 
-inline uint32 AllocatedBlock::getOwner(int index) const
+inline MemoryManager::OwnerAddress AllocatedBlock::getOwner(int index) const
 {
 	return m_owner[index];
 }
 
 // ----------------------------------------------------------------------
 
-inline void AllocatedBlock::setOwner(int index, uint32 owner)
+inline void AllocatedBlock::setOwner(int index, MemoryManager::OwnerAddress owner)
 {
 	m_owner[index] = owner;
 }
@@ -543,6 +571,7 @@ void MemoryManagerNamespace::outputDebugStringWrapper(char const * message)
 void  MemoryManager::setLimit(int megabytes, bool hardLimit, bool preallocate)
 {
 	DEBUG_FATAL(ms_limitSet, ("MemoryManager::setLimit may only be called once"));
+	FATAL(megabytes < 0, ("negative memory limit %d MiB", megabytes));
 	ms_limitSet = true;
 	ms_limitMegabytes = megabytes;
 	ms_hardLimit = hardLimit;
@@ -635,8 +664,8 @@ MemoryManager::~MemoryManager()
 
 	ms_criticalSection->enter();
 
-		DEBUG_REPORT_LOG_PRINT(true, ("MM::remove %lu/%lu=bytes %d/%d=allocs\n", getCurrentNumberOfBytesAllocated(), getMaximumNumberOfBytesAllocated(), getCurrentNumberOfAllocations(), getMaximumNumberOfAllocations()));
-		DEBUG_OUTPUT_CHANNEL("Foundation\\MemoryManager", ("MM::remove %lu/%lu=bytes %d/%d=allocs\n", getCurrentNumberOfBytesAllocated(), getMaximumNumberOfBytesAllocated(), getCurrentNumberOfAllocations(), getMaximumNumberOfAllocations()));
+		DEBUG_REPORT_LOG_PRINT(true, ("MM::remove %" PRIu64 "/%" PRIu64 "=bytes %d/%d=allocs\n", static_cast<uint64_t>(getCurrentNumberOfBytesAllocated()), static_cast<uint64_t>(getMaximumNumberOfBytesAllocated()), getCurrentNumberOfAllocations(), getMaximumNumberOfAllocations()));
+		DEBUG_OUTPUT_CHANNEL("Foundation\\MemoryManager", ("MM::remove %" PRIu64 "/%" PRIu64 "=bytes %d/%d=allocs\n", static_cast<uint64_t>(getCurrentNumberOfBytesAllocated()), static_cast<uint64_t>(getMaximumNumberOfBytesAllocated()), getCurrentNumberOfAllocations(), getMaximumNumberOfAllocations()));
 
 #if DO_TRACK
 		if (!ConfigSharedFoundation::getDemoMode() && ms_allocations && ms_reportAllocations)
@@ -676,6 +705,7 @@ MemoryManager::~MemoryManager()
 
 int MemoryManagerNamespace::convertBytesToMegabytesForSystemAllocation(int systemAllocationSize)
 {
+	FATAL(systemAllocationSize < 0 || systemAllocationSize > INT_MAX - (cms_systemAllocationRoundSize - 1), ("system allocation size exceeds signed-int range"));
 	if (systemAllocationSize < cms_systemAllocationMinimumSize)
 		systemAllocationSize = cms_systemAllocationMinimumSize;
 
@@ -688,41 +718,52 @@ int MemoryManagerNamespace::convertBytesToMegabytesForSystemAllocation(int syste
 
 void MemoryManagerNamespace::allocateSystemMemory(int megabytes)
 {
-	if (ms_hardLimit && ms_systemMemoryAllocatedMegabytes + megabytes > ms_limitMegabytes)
+	FATAL(megabytes < 0, ("negative system allocation %d MiB", megabytes));
+	if (ms_hardLimit)
 	{
-		megabytes = ms_limitMegabytes - ms_systemMemoryAllocatedMegabytes;
-		if (megabytes <= 0)
+		int const remaining = ms_limitMegabytes - ms_systemMemoryAllocatedMegabytes;
+		if (remaining <= 0)
 			return;
+		if (megabytes > remaining)
+			megabytes = remaining;
 	}
+	FATAL(megabytes > INT_MAX - ms_systemMemoryAllocatedMegabytes, ("total system allocation exceeds signed-int MiB range"));
 
-	// allocate the system memory
-	size_t systemAllocationSize = static_cast<size_t>(megabytes) * 1024 * 1024;
-	void * data = OsMemory::commit(0, systemAllocationSize);
+	// A large preallocation is several bounded regions, never a truncated region.
+	int const maximumRegionMegabytes = INT_MAX / (1024 * 1024);
+	while (megabytes > 0)
+	{
+		int const regionMegabytes = megabytes > maximumRegionMegabytes ? maximumRegionMegabytes : megabytes;
+		// allocate the system memory
+		size_t systemAllocationSize = static_cast<size_t>(regionMegabytes) * 1024 * 1024;
+		void * data = OsMemory::commit(0, systemAllocationSize);
 
-	// failed to allocate virtual memory.  there is insufficient virtual memory or address space to satisfy systemAllocationSize.
-	if (!data)
-		return;
+		// failed to allocate virtual memory.  there is insufficient virtual memory or address space to satisfy systemAllocationSize.
+		if (!data)
+			return;
 
-	// Construct our tracking information
-	SystemAllocation * systemAllocation = new(data) SystemAllocation(systemAllocationSize);
-	++ms_numberOfSystemAllocations;
-	ms_systemMemoryAllocatedMegabytes += megabytes;
+		// Construct our tracking information
+		SystemAllocation * systemAllocation = new(data) SystemAllocation(static_cast<int>(systemAllocationSize));
+		++ms_numberOfSystemAllocations;
+		ms_systemMemoryAllocatedMegabytes += regionMegabytes;
 
-	// insert the memory into the sorted linked list of system allocations
-	SystemAllocation * back = NULL;
-	SystemAllocation * front = ms_firstSystemAllocation;
-	for ( ; front && front->getFirstMemoryBlock() < systemAllocation->getFirstMemoryBlock(); back = front, front = front->getNext())
-		{}
-	if (back)
-		back->setNext(systemAllocation);
-	else
-		ms_firstSystemAllocation = systemAllocation;
-	systemAllocation->setNext(front);
+		// insert the memory into the sorted linked list of system allocations
+		SystemAllocation * back = NULL;
+		SystemAllocation * front = ms_firstSystemAllocation;
+		for ( ; front && front->getFirstMemoryBlock() < systemAllocation->getFirstMemoryBlock(); back = front, front = front->getNext())
+			{}
+		if (back)
+			back->setNext(systemAllocation);
+		else
+			ms_firstSystemAllocation = systemAllocation;
+		systemAllocation->setNext(front);
+		megabytes -= regionMegabytes;
+	}
 }
 
 // ----------------------------------------------------------------------
 
-unsigned long MemoryManager::getCurrentNumberOfBytesAllocated(const int processId)
+MemoryManager::ByteCount MemoryManager::getCurrentNumberOfBytesAllocated(const int processId)
 {	
 	UNREF(processId);
 	return ms_currentBytesAllocated;
@@ -730,7 +771,7 @@ unsigned long MemoryManager::getCurrentNumberOfBytesAllocated(const int processI
 
 // ----------------------------------------------------------------------
 
-unsigned long MemoryManager::getCurrentNumberOfBytesAllocatedNoLeakTest()
+MemoryManager::ByteCount MemoryManager::getCurrentNumberOfBytesAllocatedNoLeakTest()
 {
 #if DO_TRACK
 	return ms_currentBytesAllocatedNoLeakTest;
@@ -741,7 +782,7 @@ unsigned long MemoryManager::getCurrentNumberOfBytesAllocatedNoLeakTest()
 
 // ----------------------------------------------------------------------
 
-unsigned long MemoryManager::getMaximumNumberOfBytesAllocated()
+MemoryManager::ByteCount MemoryManager::getMaximumNumberOfBytesAllocated()
 {
 	return ms_maxBytesAllocated;
 }
@@ -809,7 +850,7 @@ void MemoryManager::debugReport()
 	DEBUG_FATAL(!ms_installed, ("not installed"));
 	DEBUG_REPORT_PRINT(ms_limitSet, ("MM: %9dmb (%s limit)\n", ms_limitMegabytes, ms_hardLimit ? "hard" : "soft"));
 	DEBUG_REPORT_PRINT(true,        ("MM: %9d/%9d/%9d  cur/max/tot allocs\n", ms_allocations, ms_maxAllocations, ms_allocateCalls));
-	DEBUG_REPORT_PRINT(true,        ("MM: %9lu/%9lu/%9lu  cur/max/tot bytes\n",  ms_currentBytesAllocated, ms_maxBytesAllocated, ms_allocateBytesTotal));
+	DEBUG_REPORT_PRINT(true,        ("MM: %9" PRIu64 "/%9" PRIu64 "/%9" PRIu64 "  cur/max/tot bytes\n",  static_cast<uint64_t>(ms_currentBytesAllocated), static_cast<uint64_t>(ms_maxBytesAllocated), static_cast<uint64_t>(ms_allocateBytesTotal)));
 #endif
 }
 
@@ -1152,7 +1193,7 @@ FreeBlock *MemoryManagerNamespace::searchFreeList(int blockSize)
  * @param array  True if the array form of operator new was used, false if the scalar form was used
  */
 
-void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakTest)
+void * MemoryManager::allocate(size_t size, MemoryManager::OwnerAddress owner, bool array, bool leakTest)
 {
 	if (!ms_installed)
 		new(ms_memoryManagerBuffer) MemoryManager;
@@ -1166,6 +1207,9 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 #else
 
 	DEBUG_FATAL(!ms_installed, ("not installed"));
+
+	int requestedAllocationSize = 0;
+	FATAL(!calculateAllocationSize(size, requestedAllocationSize), ("allocation size %" PRIuPTR " exceeds memory manager range", static_cast<uintptr_t>(size)));
 
 #if PRODUCTION == 0
 	++ms_allocationsPerFrame;
@@ -1186,11 +1230,11 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 		int line;
 		if (ms_allowNameLookup && DebugHelp::lookupAddress(owner, libName, fileName, sizeof(fileName), line))
 		{
-			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%s(%d): alloc %d=bytes %d=array\n", fileName, line, size, static_cast<int>(array)));
+			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%s(%d): alloc %" PRIuPTR "=bytes %d=array\n", fileName, line, static_cast<uintptr_t>(size), static_cast<int>(array)));
 		}
 		else
 		{
-			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%08x: alloc %d=bytes %d=array\n", static_cast<int>(owner), size, static_cast<int>(array)));
+			DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("%0*" PRIxPTR ": alloc %" PRIuPTR "=bytes %d=array\n", static_cast<int>(sizeof(uintptr_t) * 2), static_cast<uintptr_t>(owner), static_cast<uintptr_t>(size), static_cast<int>(array)));
 		}
 	}
 #endif
@@ -1198,7 +1242,7 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 	ms_criticalSection->enter();
 
 		// get the size of the allocation
-		int allocSize = (cms_allocatedBlockSize + cms_guardBandSize + (size ? static_cast<int>(size) : 1) + cms_guardBandSize + 15) & ~15;
+		int allocSize = requestedAllocationSize;
 
 		FreeBlock * bestFreeBlock = NULL;
 		for (int tries = 0; !bestFreeBlock && tries < 2; ++tries)
@@ -1221,7 +1265,7 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 			}
 
 			ms_criticalSection->leave();
-			FATAL(true, ("failed allocation attempt for %d (%d actual)", allocSize, size));
+			FATAL(true, ("failed allocation attempt for %d (%" PRIuPTR " actual)", allocSize, static_cast<uintptr_t>(size)));
 		}
 
 		removeFromFreeList(bestFreeBlock);
@@ -1230,7 +1274,8 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 		bestFreeBlock->setFree(false);
 
 		// check to see if we should subdivide this block
-		if (bestFreeBlock->getSize() > (allocSize + cms_allocatedBlockSize + cms_guardBandSize + 1 + cms_guardBandSize))
+		if (bestFreeBlock->getSize() > (allocSize + cms_allocatedBlockSize + cms_guardBandSize + 1 + cms_guardBandSize)
+			&& bestFreeBlock->getSize() - allocSize >= cms_freeBlockSize)
 		{
 			Block *block = reinterpret_cast<Block *>(reinterpret_cast<byte *>(bestFreeBlock) + allocSize);
 			block->setPrevious(bestFreeBlock);
@@ -1256,12 +1301,12 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 #if DO_TRACK > 1
 		{
 			enum { OFFSET = 3 };
-			uint32 owners[DO_TRACK + OFFSET];
+			uint64 owners[DO_TRACK + OFFSET];
 			DebugHelp::getCallStack(owners, DO_TRACK + OFFSET);
 
 			for (int i = 1; i < DO_TRACK; ++i)
 			{
- 				best->setOwner(i, owners[i + OFFSET]);
+				best->setOwner(i, static_cast<MemoryManager::OwnerAddress>(owners[i + OFFSET]));
 
 #ifdef _DEBUG
 				if (ms_debugReportAllocations || ms_debugLogAllocations)
@@ -1275,7 +1320,7 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 					}
 					else
 					{
-						DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("  %08x: caller %d\n", static_cast<int>(owners[i + OFFSET]), i));
+						DEBUG_REPORT(true, (ms_debugReportAllocations ? Report::RF_print : 0) | (ms_debugLogAllocations ? Report::RF_log : 0), ("  %0*" PRIxPTR ": caller %d\n", static_cast<int>(sizeof(uintptr_t) * 2), static_cast<uintptr_t>(owners[i + OFFSET]), i));
 					}
 				}
 #endif
@@ -1326,7 +1371,7 @@ void * MemoryManager::allocate(size_t size, uint32 owner, bool array, bool leakT
 
 	ms_criticalSection->leave();
 
-	DEBUG_REPORT_LOG_PRINT(ms_debugReportLogMemoryAllocFreePointers, ("MM::alloc %08x\n", reinterpret_cast<int>(memory)));
+	DEBUG_REPORT_LOG_PRINT(ms_debugReportLogMemoryAllocFreePointers, ("MM::alloc %0*" PRIxPTR "\n", static_cast<int>(sizeof(uintptr_t) * 2), reinterpret_cast<uintptr_t>(memory)));
 
 #ifdef _DEBUG
 	if (ms_debugProfileAllocate)
@@ -1376,10 +1421,10 @@ void *MemoryManager::reallocate(void *userPointer, size_t newSize)
 	}
 
 #if DO_TRACK
-	uint32 owner = allocatedBlock->getOwner(0);
-	bool leakTest = allocatedBlock->checkForLeaks();
+	MemoryManager::OwnerAddress owner = allocatedBlock ? allocatedBlock->getOwner(0) : 0;
+	bool leakTest = allocatedBlock ? allocatedBlock->checkForLeaks() : false;
 #else
-	uint32 owner = 0;
+	MemoryManager::OwnerAddress owner = 0;
 	bool leakTest = false;
 #endif
 
@@ -1423,7 +1468,7 @@ void MemoryManager::free(void * userPointer, bool array)
 		verify(ms_debugVerifyGuardPatterns, ms_debugVerifyFreePatterns);
 #endif
 
-	DEBUG_REPORT_LOG_PRINT(ms_debugReportLogMemoryAllocFreePointers, ("MM::free %08x\n", reinterpret_cast<int>(userPointer)));
+	DEBUG_REPORT_LOG_PRINT(ms_debugReportLogMemoryAllocFreePointers, ("MM::free %0*" PRIxPTR "\n", static_cast<int>(sizeof(uintptr_t) * 2), reinterpret_cast<uintptr_t>(userPointer)));
 
 	UNREF(array);
 
@@ -1520,7 +1565,7 @@ void MemoryManager::free(void * userPointer, bool array)
 		++ms_freeCalls;
 		--ms_allocations;
 
-		DEBUG_FATAL((ms_currentBytesAllocated < static_cast<unsigned long>(memorySize)), ("currentBytesAllocated underflow"));
+		DEBUG_FATAL((ms_currentBytesAllocated < static_cast<ByteCount>(memorySize)), ("currentBytesAllocated underflow"));
 		ms_currentBytesAllocated -= memorySize;
 #if DO_TRACK
 		if (!allocatedBlock->checkForLeaks())
@@ -1635,11 +1680,11 @@ void MemoryManager::own(void * userPointer)
 		// update the owners
 		{
 			enum { OFFSET = 2 };
-			uint32 owners[DO_TRACK + OFFSET];
+			uint64 owners[DO_TRACK + OFFSET];
 			DebugHelp::getCallStack(owners, DO_TRACK + OFFSET);
 
 			for (int i = 0; i < DO_TRACK; ++i)
- 				block->setOwner(i, owners[i + OFFSET]);
+				block->setOwner(i, static_cast<MemoryManager::OwnerAddress>(owners[i + OFFSET]));
 		}
 
 	ms_criticalSection->leave();
@@ -1673,7 +1718,7 @@ void MemoryManager::verify(bool guardPatterns, bool freePatterns)
 							if (*memory != cms_freeFillPattern)
 							{
 								corrupt = true;
-								DEBUG_REPORT_LOG_PRINT(true, ("corrupted free pattern at position %3d [membase=0x%x, memaddr=0x%x] = %02x\n", i, reinterpret_cast<unsigned int>(reinterpret_cast<byte *>(block) + cms_freeBlockSize), reinterpret_cast<unsigned int>(reinterpret_cast<byte *>(block) + cms_freeBlockSize + i), static_cast<int>(*memory)));
+								DEBUG_REPORT_LOG_PRINT(true, ("corrupted free pattern at position %3d [membase=%p, memaddr=%p] = %02x\n", i, static_cast<void *>(reinterpret_cast<byte *>(block) + cms_freeBlockSize), static_cast<void *>(reinterpret_cast<byte *>(block) + cms_freeBlockSize + i), static_cast<int>(*memory)));
 								DEBUG_OUTPUT_CHANNEL("Foundation\\MemoryManager", ("corrupted free pattern at position %3d = %02x\n", i, static_cast<int>(*memory)));
 							}
 
@@ -1736,9 +1781,9 @@ void MemoryManager::verify(bool guardPatterns, bool freePatterns)
 void MemoryManagerNamespace::report(AllocatedBlock const * block, bool leak)
 {
 #if DO_TRACK
-	uint32 const owner = block->getOwner(0);
+	MemoryManager::OwnerAddress const owner = block->getOwner(0);
 #else
-	uint32 const owner = 0;
+	MemoryManager::OwnerAddress const owner = 0;
 #endif
 #if DO_TRACK || DO_GUARDS
 	int const requestedSize = block->getRequestedSize();;
@@ -1750,15 +1795,15 @@ void MemoryManagerNamespace::report(AllocatedBlock const * block, bool leak)
 	char      libName[256];
 	char      fileName[256];
 	int       line = 0;
-	int const memory = reinterpret_cast<int>(reinterpret_cast<byte const *>(block) + cms_allocatedBlockSize + cms_guardBandSize);
+	void const * const memory = reinterpret_cast<byte const *>(block) + cms_allocatedBlockSize + cms_guardBandSize;
 
 	if (ms_allowNameLookup && DebugHelp::lookupAddress(owner, libName, fileName, sizeof(fileName), line))
 	{
-		sprintf(buffer, "%s(%d) : %08X memory %s, %d bytes\n", fileName, line, memory, leak ? "leak" : "allocation", static_cast<int>(requestedSize));
+		sprintf(buffer, "%s(%d) : %p memory %s, %d bytes\n", fileName, line, memory, leak ? "leak" : "allocation", static_cast<int>(requestedSize));
 	}
 	else
 	{
-		sprintf(buffer, "unknown(0x%08X) : %08X memory %s, %d bytes\n", static_cast<unsigned int>(owner), memory, leak ? "leak" : "allocation", static_cast<int>(requestedSize));
+		sprintf(buffer, "unknown(0x%0*" PRIXPTR ") : %p memory %s, %d bytes\n", static_cast<int>(sizeof(uintptr_t) * 2), static_cast<uintptr_t>(owner), memory, leak ? "leak" : "allocation", static_cast<int>(requestedSize));
 	}
 
 	(*LogMessage)(buffer);
@@ -1771,7 +1816,7 @@ void MemoryManagerNamespace::report(AllocatedBlock const * block, bool leak)
 				if (ms_allowNameLookup && DebugHelp::lookupAddress(block->getOwner(i), libName, fileName, sizeof(fileName), line))
 					sprintf(buffer, "  %s(%d) : caller %d\n", fileName, line, i);
 				else
-					sprintf(buffer, "  0x%08X : caller %d\n", static_cast<int>(block->getOwner(i)), i);
+					sprintf(buffer, "  0x%0*" PRIXPTR " : caller %d\n", static_cast<int>(sizeof(uintptr_t) * 2), static_cast<uintptr_t>(block->getOwner(i)), i);
 				(*LogMessage)(buffer);
 			}
 	}
@@ -1870,11 +1915,11 @@ namespace MemoryManagerNamespace
 	// in disabled mode for linux
 	int                   ms_allocateCalls;
 	int                   ms_freeCalls;
-	unsigned long         ms_allocateBytesTotal;
+	MemoryManager::ByteCount ms_allocateBytesTotal;
 #ifndef _WIN32
 	int                   ms_processVmSizeKBytes;
 #endif
-	unsigned long         ms_maxBytesAllocated;	
+	MemoryManager::ByteCount ms_maxBytesAllocated;
 	int                   ms_allocations;
 	int                   ms_maxAllocations;
 	bool                  ms_installed;
@@ -1946,7 +1991,7 @@ void MemoryManager::verify(bool, bool)
 
 // ----------------------------------------------------------------------
 
-unsigned long MemoryManager::getCurrentNumberOfBytesAllocated(const int processId)
+MemoryManager::ByteCount MemoryManager::getCurrentNumberOfBytesAllocated(const int processId)
 {
 	
 #ifdef _WIN32
@@ -2008,14 +2053,14 @@ unsigned long MemoryManager::getCurrentNumberOfBytesAllocated(const int processI
 
 // ----------------------------------------------------------------------
 
-unsigned long MemoryManager::getCurrentNumberOfBytesAllocatedNoLeakTest()
+MemoryManager::ByteCount MemoryManager::getCurrentNumberOfBytesAllocatedNoLeakTest()
 {
 	return 0;
 }
 
 // ----------------------------------------------------------------------
 
-unsigned long MemoryManager::getMaximumNumberOfBytesAllocated()
+MemoryManager::ByteCount MemoryManager::getMaximumNumberOfBytesAllocated()
 {
 #ifdef _WIN32
 	return 0;
@@ -2094,7 +2139,7 @@ void MemoryManager::report()
 
 // ----------------------------------------------------------------------
 
-void * MemoryManager::allocate(size_t size, uint32, bool, bool)
+void * MemoryManager::allocate(size_t size, MemoryManager::OwnerAddress, bool, bool)
 {
 #ifdef _WIN32
 	return _malloc_dbg(size, _NORMAL_BLOCK, __FILE__, __LINE__);

@@ -16,7 +16,6 @@
 #include "clientGraphics/Graphics.h"
 #include "clientGraphics/PostProcessingEffectsManager.h"
 #include "clientGraphics/ShaderTemplateList.h"
-#include "clientGraphics/SwgVideoCapture.h"
 #include "clientObject/MouseCursor.h"
 #include "clientUserInterface/ConfigClientUserInterface.h"
 #include "clientUserInterface/CuiActionManager.h"
@@ -204,10 +203,6 @@ void CuiIoWin::draw () const
 	Bloom::preSceneRender();
 
 	IoWin::draw ();
-
-#if PRODUCTION == 0
-	VideoCapture::SingleUse::run();
-#endif // PRODUCTION
 
 	Bloom::postSceneRender();
 	PostProcessingEffectsManager::postSceneRender();

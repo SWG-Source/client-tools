@@ -50,7 +50,7 @@ namespace UiMemoryBlockManagerNamespace
 		free(--iptr);
 	}
 
-	size_t const s_alignment = 4;
+	size_t const s_alignment = sizeof(size_t);
 }
 
 using namespace UiMemoryBlockManagerNamespace;

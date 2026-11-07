@@ -7,6 +7,7 @@
 
 #include "clientAudio/FirstClientAudio.h"
 #include "clientAudio/Audio.h"
+#include "AudioFileCallbacks.h"
 
 #include "clientAudio/AudioSampleInformation.h"
 #include "clientAudio/ConfigClientAudio.h"
@@ -36,9 +37,17 @@
 #include "sharedUtility/DataTable.h"
 #include "sharedUtility/LocalMachineOptionManager.h"
 
+#include <inttypes.h>
+#include <stdint.h>
 #include <limits>
 #include <list>
 #include <map>
+
+#if defined(CLIENT_MILES_DEV_FACADE)
+#include "dev/AudioSelection.h"
+#include "dev/AudioBootstrap.h"
+namespace ClientMilesDevelopment { void removeAudioCache(); }
+#endif
 
 #if 0
 #include "clientAudio/SwgAudioCapture.h"
@@ -83,7 +92,7 @@ namespace AudioNamespace
 
 	typedef std::map<CrcString const *, SampleCacheEntry, LessPointerComparator> SampleCache;
 	typedef std::map<CrcString const *, int, LessPointerComparator>              MusicOffsetMap;
-	typedef std::map<unsigned int, AbstractFile *>                               FileMap;
+	typedef std::map<UINTa, AbstractFile *>                               FileMap;
 	typedef std::map<SampleId, Sample2d>                                         SampleIdToSample2dMap;
 	typedef std::map<SampleId, Sample3d>                                         SampleIdToSample3dMap;
 	typedef std::map<SampleId, SampleStream>                                     SampleIdToSampleStreamMap;
@@ -112,13 +121,21 @@ namespace AudioNamespace
 	SoundObject3d                s_listener;
 	SoundIdList                  s_localPurgeList;
 	bool                         s_installed = false;
+#if defined(CLIENT_MILES_DEV_FACADE)
+	bool                         s_devMilesStarted = false;
+	bool                         s_devAudioRemovalComplete = true;
+	void devMilesFatal(uint32_t reason, char const *message)
+	{
+		FATAL(true, ("Development Miles failure %lu: %s", static_cast<unsigned long>(reason), message));
+	}
+#endif
 	int                          s_currentCacheSize = 0;
 	int                          s_cacheHitCount = 0;
 	int                          s_cacheMissCount = 0;
 	int                          s_instantRejectionCount = 0;
 	int                          s_nextSoundId = 1;
 	int                          s_nextSampleId = 1;
-	unsigned int                 s_nextFileHandle = 0;
+	UINTa                        s_nextFileHandle = 0;
 	float                        s_soundCategoryVolumes[Audio::SC_count];
 	float                        s_streamVolume = 1.0f;
 	bool                         s_audioEnabled = true;
@@ -202,37 +219,49 @@ namespace AudioNamespace
 #endif // _DEBUG
 
 #ifdef _DEBUG
-	typedef std::map<uint32, std::string> HandleNameMap;
+	typedef std::map<UINTa, std::string> HandleNameMap;
 	HandleNameMap ms_handleNameMap;
 
-	typedef std::set<uint32> HandleSet;
+	typedef std::set<UINTa> HandleSet;
 	HandleSet ms_fileCloseHandleSet;
 
-	void determineCallbackError(char const * const callbackName, uint32 const handle)
+	void determineCallbackError(char const * const callbackName, UINTa const handle)
 	{
 		HandleNameMap::iterator iter = ms_handleNameMap.find(handle);
 		bool const fileOpen = iter != ms_handleNameMap.end();
 		bool const fileClosed = ms_fileCloseHandleSet.find(handle) != ms_fileCloseHandleSet.end();
 
-		DEBUG_FATAL(true, ("Trying to file %s on a file that no longer exists. handle=%d, filename=%s, open=%d, still open=%d, closed=%d",
+		DEBUG_FATAL(true, ("Trying to file %s on a file that no longer exists. handle=%" PRIuPTR ", filename=%s, open=%d, still open=%d, closed=%d",
 			callbackName,
-			handle,
+			static_cast<uintptr_t>(handle),
 			fileOpen ? iter->second.c_str() : "invalid handle",
 			fileOpen ? 1 : 0,
 			s_fileMap.find(handle) != s_fileMap.end() ? 1 : 0,
 			fileClosed ? 1 : 0));
 	}
 #endif
+	void clearSampleCache()
+	{
+		for (SampleCache::iterator i = s_sampleCache.begin(); i != s_sampleCache.end(); ++i)
+		{
+			delete i->first;
+			delete [] i->second.m_sampleRawData;
+		}
+		s_sampleCache.clear();
+	}
+
 }
 
 using namespace AudioNamespace;
 
 // Callbacks for Miles to the TreeFile system
 
-static U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle);
-static void __stdcall fileCloseCallBack(U32 fileHandle);
-static S32 __stdcall fileSeekCallBack(U32 fileHandle, S32 offset, U32 type);
-static U32 __stdcall fileReadCallBack(U32 fileHandle, void *buffer, U32 bytes);
+#if !defined(CLIENT_MILES_DEV_FACADE)
+static U32 __stdcall fileOpenCallBack(char const *fileName, UINTa *fileHandle);
+static void __stdcall fileCloseCallBack(UINTa fileHandle);
+static S32 __stdcall fileSeekCallBack(UINTa fileHandle, S32 offset, U32 type);
+static U32 __stdcall fileReadCallBack(UINTa fileHandle, void *buffer, U32 bytes);
+#endif
 
 static SoundId attachSound(SoundTemplate const *soundTemplate, Object const *object, char const *hardPointName=0);
 static bool cacheSound(SoundTemplate const *soundTemplate);
@@ -1009,8 +1038,8 @@ void Audio::showAudioDebug()
 	DEBUG_REPORT_PRINT(true, ("Sound Instant Rejections   - %d\n", s_instantRejectionCount));
 	DEBUG_REPORT_PRINT(true, ("Next sampleId/soundId      - %d/%d\n", s_nextSampleId, s_nextSoundId));
 	DEBUG_REPORT_PRINT(true, ("Timer Delay (ms)           - %d/%d peak (%.1f) avg\n", s_timerCurrentDelay, s_timerHighestDelay, s_averageTimerDelay));
-	DEBUG_REPORT_PRINT(true, ("User Speaker Setting       - %s\n", getCurrent3dProvider()));
-	DEBUG_REPORT_PRINT(true, ("Miles Speaker Setting      - %s\n", getSpeakerSpec()));
+	DEBUG_REPORT_PRINT(true, ("User Speaker Setting       - %s\n", getCurrent3dProvider().c_str()));
+	DEBUG_REPORT_PRINT(true, ("Miles Speaker Setting      - %s\n", getSpeakerSpec().c_str()));
 	DEBUG_REPORT_PRINT(true, ("Environmental Reverb       - %s\n", getRoomTypeString()));
 	DEBUG_REPORT_PRINT(true, ("Obstruction (interiors)    - %d%%\n", static_cast<int>(getObstruction() * 100.0f + 0.5f)));
 	DEBUG_REPORT_PRINT(true, ("Occlusion (inside vs out)  - %d%%\n", static_cast<int>(getOcclusion() * 100.0f + 0.5f)));
@@ -1217,6 +1246,9 @@ bool Audio::install()
 		return false;
 	}
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	s_devAudioRemovalComplete = false;
+#endif
 #ifdef _DEBUG
 	DebugFlags::registerFlag(s_debugTimerDelay, "ClientAudio", "debugView_TimerDelay");
 	DebugFlags::registerFlag(s_debugVisuals, "ClientAudio", "debugVisuals");
@@ -1280,19 +1312,40 @@ bool Audio::install()
 
 	// Set the miles directory
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	ClientMilesDevelopment::connectAudio(
+		ConfigFile::getKeyString("ClientAudio", "devMilesHost", ""),
+		ConfigFile::getKeyString("ClientAudio", "devMilesDll", ""),
+		ConfigFile::getKeyString("ClientAudio", "devMilesUploadBudget", ""), devMilesFatal);
+#endif
 	std::string redistDirectory(AIL_set_redist_directory("miles"));
 
 	// Initialize the Miles Sound System
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	if (!AIL_startup())
+		ClientMilesPrivate52::fail(ClientMilesPrivate52::InvalidComposition,
+			"development Miles startup returned zero; retaining session");
+	s_devMilesStarted = true;
+#else
 	AIL_startup();
+#endif
 
 	// Set the file system callbacks
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	// The facade worker already owns engine TLS for its complete thread lifetime.
+	AIL_set_file_callbacks(AudioFileCallbacks::openAdmitted, AudioFileCallbacks::closeAdmitted,
+		AudioFileCallbacks::seekAdmitted, AudioFileCallbacks::readAdmitted);
+#else
 	AIL_set_file_callbacks(fileOpenCallBack, fileCloseCallBack, fileSeekCallBack, fileReadCallBack);
+#endif
 
 	// Initialize the audio driver
 
-	s_maxDigitalMixerChannels = AIL_get_preference(DIG_MIXER_CHANNELS);
+	SINTa const maxDigitalMixerChannels = AIL_get_preference(DIG_MIXER_CHANNELS);
+	FATAL(maxDigitalMixerChannels < (std::numeric_limits<int>::min)() || maxDigitalMixerChannels > (std::numeric_limits<int>::max)(), ("Miles mixer channel count exceeds int range"));
+	s_maxDigitalMixerChannels = static_cast<int>(maxDigitalMixerChannels);
 
 	s_digitalDevice2d = AIL_open_digital_driver(getFrequency(), getBits(), getProviderSpec(getCurrent3dProvider()), 0);
 
@@ -1322,7 +1375,7 @@ bool Audio::install()
 	AIL_speaker_configuration(s_digitalDevice2d, NULL, NULL, NULL, &s_speakers);
 
 	REPORT_LOG(true, ("Audio: %s\n", getCurrent3dProvider().c_str()));
-	REPORT_LOG(true, ("Audio: Miles speakers are %s\n", getSpeakerSpec()));
+	REPORT_LOG(true, ("Audio: Miles speakers are %s\n", getSpeakerSpec().c_str()));
 	REPORT_LOG(true, ("Audio: Miles Max DIG_MIXER_CHANNELS(%d)\n", getMaxDigitalMixerChannels()));
 
 	// This disables any reberb from a previous product
@@ -1374,6 +1427,10 @@ bool Audio::install()
 //-----------------------------------------------------------------------------
 void Audio::remove()
 {
+#if defined(CLIENT_MILES_DEV_FACADE)
+	if (s_devAudioRemovalComplete)
+		return;
+#endif
 	setRoomType(RT_generic);
 
 #ifdef _DEBUG
@@ -1389,22 +1446,35 @@ void Audio::remove()
 
 	Audio::stopAllSounds();
 
+#if defined(CLIENT_MILES_DEV_FACADE)
+	// Driver initialization can fail before s_installed is set. Preserve callback
+	// maps and sample images until genuine shutdown and paired worker joins finish.
+	if (s_devMilesStarted)
+	{
+		ClientMilesDevelopment::shutdownAndCloseAudio();
+		s_devMilesStarted = false;
+		s_installed = false;
+		s_digitalDevice2d = 0;
+	}
+	AbstractFile::setAudioServe(0);
+#endif
+
 #ifdef _DEBUG
-	unsigned int const sample2dMapSize = s_sampleIdToSample2dMap.size();
+	size_t const sample2dMapSize = s_sampleIdToSample2dMap.size();
 	UNREF(sample2dMapSize);
 	DEBUG_WARNING(!s_sampleIdToSample2dMap.empty(), ("Sample 2d map not empty"));
 #endif // _DEBUG
 	s_sampleIdToSample2dMap.clear();
 
 #ifdef _DEBUG
-	unsigned int const sample3dMapSize = s_sampleIdToSample3dMap.size();
+	size_t const sample3dMapSize = s_sampleIdToSample3dMap.size();
 	UNREF(sample3dMapSize);
 	DEBUG_WARNING(!s_sampleIdToSample3dMap.empty(), ("Sample 3d map not empty"));
 #endif // _DEBUG
 	s_sampleIdToSample3dMap.clear();
 
 #ifdef _DEBUG
-	unsigned int const streamMapSize = s_sampleIdToSampleStreamMap.size();
+	size_t const streamMapSize = s_sampleIdToSampleStreamMap.size();
 	UNREF(streamMapSize);
 	DEBUG_WARNING(!s_sampleIdToSampleStreamMap.empty(), ("Sample stream map not empty"));
 #endif // _DEBUG
@@ -1414,6 +1484,7 @@ void Audio::remove()
 
 	// Shutdown Miles
 
+#if !defined(CLIENT_MILES_DEV_FACADE)
 	if (s_installed)
 	{
 		s_installed = false;
@@ -1432,10 +1503,11 @@ void Audio::remove()
 
 		AIL_shutdown();
 	}
+#endif
 
 #ifdef _DEBUG
-	int const fileMapCount = s_fileMap.size();
-	DEBUG_WARNING((fileMapCount > 0), ("File handles (%d) are still allocated.", fileMapCount));
+	size_t const fileMapCount = s_fileMap.size();
+	DEBUG_WARNING((fileMapCount > 0), ("File handles (%" PRIu64 ") are still allocated.", static_cast<uint64_t>(fileMapCount)));
 #endif // _DEBUG
 
 	clearMusicOffsets();
@@ -1443,26 +1515,27 @@ void Audio::remove()
 	delete s_musicDataTable;
 	s_musicDataTable = NULL;
 
-	// Delete all the reference counted samples
+#if !defined(CLIENT_MILES_DEV_FACADE)
+	clearSampleCache();
 
-	SampleCache::iterator iterSampleCache= s_sampleCache.begin();
-
-	for (; iterSampleCache != s_sampleCache.end(); ++iterSampleCache)
-	{
-		// Delete the CrcString
-
-		delete iterSampleCache->first;
-
-		// Delete the sample data
-
-		delete [] iterSampleCache->second.m_sampleRawData;
-	}
-
-	s_sampleCache.clear();
+#endif
 
 	delete s_audioServePerformanceTimer;
 	s_audioServePerformanceTimer = NULL;
+#if defined(CLIENT_MILES_DEV_FACADE)
+	s_devAudioRemovalComplete = true;
+#endif
 }
+
+#if defined(CLIENT_MILES_DEV_FACADE)
+// Final setup-owner operation, after SoundTemplateList released its cache paths.
+// Partial Audio failure keeps the registry/cache available to continuing UI code.
+void ClientMilesDevelopment::removeAudioCache()
+{
+	clearSampleCache();
+}
+
+#endif
 
 //-----------------------------------------------------------------------------
 bool Audio::isEnabled()
@@ -2918,7 +2991,16 @@ void Audio::startSample(Sound2 &sound)
 			void *sampleRawData = iterSample->second.m_sampleRawData;
 			HSAMPLE hSample3d = iterSampleIdToSample3dMap->second.m_sample;
 
-			S32 resultSet3dSampleFile = AIL_set_sample_file(hSample3d, sampleRawData, 0);
+			S32 resultSet3dSampleFile;
+#if defined(CLIENT_MILES_DEV_FACADE)
+			{
+				ClientMilesPipe::ScopedSourceImage sourceImage(sampleRawData,
+					static_cast<uint32_t>(iterSample->second.m_fileSize));
+				resultSet3dSampleFile = AIL_set_sample_file(hSample3d, sampleRawData, 0);
+			}
+#else
+			resultSet3dSampleFile = AIL_set_sample_file(hSample3d, sampleRawData, 0);
+#endif
 
 			if (resultSet3dSampleFile != 0)
 			{
@@ -3703,7 +3785,15 @@ AudioSampleInformation Audio::getSampleInformation(std::string const &path)
 				byte *fileImage = file->readEntireFileAndClose();
 				delete file;
 
-				S32 result = AIL_WAV_info(fileImage, &soundInfo);
+				S32 result;
+#if defined(CLIENT_MILES_DEV_FACADE)
+				{
+					ClientMilesPipe::ScopedSourceImage sourceImage(fileImage, static_cast<uint32_t>(fileSize));
+					result = AIL_WAV_info(fileImage, &soundInfo);
+				}
+#else
+				result = AIL_WAV_info(fileImage, &soundInfo);
+#endif
 
 				if (result)
 				{
@@ -3929,17 +4019,11 @@ float Audio::getSampleEffectsLevel(SampleId const &sampleId)
 }
 
 
-static int once = true;
-
-//-----------------------------------------------------------------------------
-U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle)
+namespace
 {
-	if (once && !Os::isMainThread())
-	{
-		once = false;
-		PerThreadData::threadInstall(false);
-	}
-
+//-----------------------------------------------------------------------------
+U32 fileOpenCommon(char const *fileName, UINTa *fileHandle)
+{
 	AbstractFile *abstractFile = TreeFile::open(fileName, AbstractFile::PriorityAudioVideo, true);
 
 	if (abstractFile != NULL)
@@ -3961,14 +4045,8 @@ U32 __stdcall fileOpenCallBack(char const *fileName, U32 *fileHandle)
 }
 
 //-----------------------------------------------------------------------------
-void __stdcall fileCloseCallBack(U32 const fileHandle)
+void fileCloseCommon(UINTa const fileHandle)
 {
-	if (once && !Os::isMainThread())
-	{
-		once = false;
-		PerThreadData::threadInstall(false);
-	}
-
 	FileMap::iterator fileMapIter = s_fileMap.find(fileHandle);
 
 	if (fileMapIter != s_fileMap.end())
@@ -4000,14 +4078,8 @@ void __stdcall fileCloseCallBack(U32 const fileHandle)
 }
 
 //-----------------------------------------------------------------------------
-S32 __stdcall fileSeekCallBack(U32 const fileHandle, S32 const offset, U32 const type)
+S32 fileSeekCommon(UINTa const fileHandle, S32 const offset, U32 const type)
 {
-	if (once && !Os::isMainThread())
-	{
-		once = false;
-		PerThreadData::threadInstall(false);
-	}
-
 	int result = 0;
 	FileMap::iterator fileMapIter = s_fileMap.find(fileHandle);
 
@@ -4056,24 +4128,8 @@ S32 __stdcall fileSeekCallBack(U32 const fileHandle, S32 const offset, U32 const
 }
 
 //-----------------------------------------------------------------------------
-U32 __stdcall fileReadCallBack(U32 const fileHandle, void *buffer, U32 const bytes)
+U32 fileReadCommon(UINTa const fileHandle, void *buffer, U32 const bytes)
 {
-// miles crasher hack
-#if 0
-	static bool trashMiles = false;
-
-	if(trashMiles)
-	{
-		buffer = (void *)0xdeadbeef;
-	}
-#endif
-// end miles crasher hack
-	if (once && !Os::isMainThread())
-	{
-		once = false;
-		PerThreadData::threadInstall(false);
-	}
-
 	int bytesRead = 0;
 
 	FileMap::iterator fileMapIter = s_fileMap.find(fileHandle);
@@ -4092,6 +4148,98 @@ U32 __stdcall fileReadCallBack(U32 const fileHandle, void *buffer, U32 const byt
 	}
 
 	return static_cast<U32>(bytesRead);
+}
+
+}
+
+#if !defined(CLIENT_MILES_DEV_FACADE)
+static int once = true;
+
+//-----------------------------------------------------------------------------
+U32 __stdcall fileOpenCallBack(char const *fileName, UINTa *fileHandle)
+{
+	if (once && !Os::isMainThread())
+	{
+		once = false;
+		PerThreadData::threadInstall(false);
+	}
+
+	return fileOpenCommon(fileName, fileHandle);
+}
+
+//-----------------------------------------------------------------------------
+void __stdcall fileCloseCallBack(UINTa const fileHandle)
+{
+	if (once && !Os::isMainThread())
+	{
+		once = false;
+		PerThreadData::threadInstall(false);
+	}
+
+	fileCloseCommon(fileHandle);
+}
+
+//-----------------------------------------------------------------------------
+S32 __stdcall fileSeekCallBack(UINTa const fileHandle, S32 const offset, U32 const type)
+{
+	if (once && !Os::isMainThread())
+	{
+		once = false;
+		PerThreadData::threadInstall(false);
+	}
+
+	return fileSeekCommon(fileHandle, offset, type);
+}
+
+//-----------------------------------------------------------------------------
+U32 __stdcall fileReadCallBack(UINTa const fileHandle, void *buffer, U32 const bytes)
+{
+// miles crasher hack
+#if 0
+	static bool trashMiles = false;
+
+	if(trashMiles)
+	{
+		buffer = (void *)0xdeadbeef;
+	}
+#endif
+// end miles crasher hack
+	if (once && !Os::isMainThread())
+	{
+		once = false;
+		PerThreadData::threadInstall(false);
+	}
+
+	return fileReadCommon(fileHandle, buffer, bytes);
+}
+#endif
+
+//-----------------------------------------------------------------------------
+uint32_t __stdcall AudioFileCallbacks::openAdmitted(char const *fileName, uintptr_t *fileHandle)
+{
+	// UINTa and uintptr_t need not be the same C++ type on Win32.
+	UINTa nativeHandle = 0;
+	U32 const status = fileOpenCommon(fileName, &nativeHandle);
+	*fileHandle = static_cast<uintptr_t>(nativeHandle);
+	return static_cast<uint32_t>(status);
+}
+
+//-----------------------------------------------------------------------------
+void __stdcall AudioFileCallbacks::closeAdmitted(uintptr_t const fileHandle)
+{
+	fileCloseCommon(static_cast<UINTa>(fileHandle));
+}
+
+//-----------------------------------------------------------------------------
+int32_t __stdcall AudioFileCallbacks::seekAdmitted(uintptr_t const fileHandle, int32_t const offset, uint32_t const type)
+{
+	return static_cast<int32_t>(fileSeekCommon(static_cast<UINTa>(fileHandle), static_cast<S32>(offset), static_cast<U32>(type)));
+}
+
+//-----------------------------------------------------------------------------
+uint32_t __stdcall AudioFileCallbacks::readAdmitted(uintptr_t const fileHandle, void *buffer, uint32_t const bytes)
+{
+	return static_cast<uint32_t>(fileReadCommon(static_cast<UINTa>(fileHandle), buffer, static_cast<U32>(bytes)));
 }
 
 //-----------------------------------------------------------------------------
